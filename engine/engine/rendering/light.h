@@ -203,8 +203,9 @@ struct light
     point point_data;
     /// Data specific to directional lights.
     directional directional_data;
-    /// The color of the light.
-    math::color color = math::color(255, 244, 214, 255);
+    /// The color of the light. Pure white by default: warmth is an artistic choice
+    /// per light, and a tinted default skews every material's perceived albedo.
+    math::color color = math::color(255, 255, 255, 255);
     /// The intensity of the light.
     float intensity = 5.0f;
 

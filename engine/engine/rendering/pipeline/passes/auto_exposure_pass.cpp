@@ -141,7 +141,7 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const settings& co
     float params0[4] = {min_log_lum, log_range, config.low_percentile, config.high_percentile};
     gfx::set_uniform(average_program_.u_average_params0, params0);
 
-    float params1[4] = {config.min_ev, config.max_ev, config.compensation, 0.0f};
+    float params1[4] = {config.min_ev, config.max_ev, config.compensation, config.dark_adaptation};
     gfx::set_uniform(average_program_.u_average_params1, params1);
 
     float effective_dt = dt;

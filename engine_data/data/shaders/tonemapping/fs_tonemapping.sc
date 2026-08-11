@@ -6,6 +6,10 @@ $input v_texcoord0
 uniform vec4 u_tonemapping;
 uniform vec4 u_grading;
 uniform vec4 u_wb_lms;
+uniform vec4 u_vignette;
+uniform vec4 u_lift;
+uniform vec4 u_gamma_inv;
+uniform vec4 u_gain;
 
 SAMPLER2D(s_input, 0);
 SAMPLER2D(s_exposure, 1);
@@ -15,6 +19,21 @@ SAMPLER2D(s_exposure, 1);
 #define u_dithering           u_tonemapping.z
 #define u_contrast            u_grading.x
 #define u_saturation          u_grading.y
+#define u_grain_amount        u_grading.z
+#define u_grain_seed          u_grading.w
+#define u_vignette_intensity  u_vignette.x
+#define u_vignette_smoothness u_vignette.y
+
+// Per-pixel, per-frame white noise for film grain. The tiled ign16x16 lookup is
+// deliberately NOT used here: it is a static 16x16 pattern (right for dithering,
+// where a stable pattern is the point) and sliding it around reads as texture,
+// not grain. Grain needs decorrelated noise every pixel, every frame.
+float grain_hash(vec2 p)
+{
+    vec3 p3 = fract(vec3(p.x, p.y, p.x) * 0.1031);
+    p3 += dot(p3, p3.yzx + vec3_splat(33.33));
+    return fract((p3.x + p3.y) * p3.z);
+}
 
 // Color grading in LINEAR space, on post-exposure values (the contrast pivot
 // only means "18% mid-gray" after exposure has normalized the scene).
@@ -63,7 +82,35 @@ void main()
     // then the tone curve (apply_tonemapping gets a neutral exposure of 1).
     color *= exposure;
     color = apply_color_grading(color);
+
+    // Vignette in linear: behaves like lens light falloff, so darkened
+    // highlights still roll through the tone curve instead of graying out.
+    if (u_vignette_intensity > 0.0)
+    {
+        float dist = length((v_texcoord0 - 0.5) * 2.0);
+        float start = mix(0.8, 0.05, saturate(u_vignette_smoothness));
+        float falloff = smoothstep(start, 1.55, dist);
+        color *= 1.0 - u_vignette_intensity * falloff;
+    }
+
     color = apply_tonemapping(color, u_tonemappingMode, 1.0);
+
+    // Lift/gamma/gain on the display-referred image (classic video grading):
+    // lift offsets the toe and fades toward white, gain scales the top end,
+    // gamma bends the mids. Neutral uniforms make this an exact identity.
+    color = max(color * u_gain.xyz + u_lift.xyz * (1.0 - color), vec3_splat(0.0));
+    color = pow(color, u_gamma_inv.xyz);
+
+    // Animated, luma-weighted film grain: strongest in mids/shadows, reduced (but
+    // not erased) in highlights, matching photographic grain response.
+    if (u_grain_amount > 0.0)
+    {
+        vec2 grain_seed_offset = vec2(u_grain_seed * 127.1, u_grain_seed * 311.7);
+        float noise = grain_hash(gl_FragCoord.xy + grain_seed_offset) - 0.5;
+        float display_luma = saturate(dot(color, vec3(0.2126, 0.7152, 0.0722)));
+        float response = 1.0 - 0.8 * display_luma;
+        color += vec3_splat(noise * u_grain_amount * response);
+    }
 
     // Triangular-PDF dither: +-1 LSB of noise decorrelates quantization error,
     // removing banding in smooth gradients at zero visible cost. Applied to the

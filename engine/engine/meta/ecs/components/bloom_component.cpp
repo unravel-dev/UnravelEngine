@@ -1,5 +1,6 @@
 #include "bloom_component.hpp"
 #include <engine/rendering/pipeline/passes/bloom_pass.h>
+#include <engine/meta/assets/asset_handle.hpp>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 #include "engine/meta/core/math/vector.hpp"
@@ -20,7 +21,10 @@ REFLECT_INLINE(bloom_pass::settings)
             entt::attribute{"pretty_name", "Threshold"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.1f},
-            entt::attribute{"tooltip", "Minimum brightness (HDR luminance) for a pixel to contribute to bloom. Higher values restrict bloom to only the brightest highlights. 0 = all pixels bloom (not recommended). Typical range: 0.5 - 2.0."},
+            entt::attribute{"tooltip", "0 (default) = SCATTER mode: thresholdless, energy-conserving bloom "
+                "where everything blooms slightly and Intensity is the scattered-light fraction. "
+                "> 0 = LEGACY mode: only pixels above this post-exposure luminance bloom, added on "
+                "top of the scene scaled by Intensity (the pre-retune behavior)."},
         })
         .data<&bloom_pass::settings::soft_knee>("soft_knee"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -44,8 +48,22 @@ REFLECT_INLINE(bloom_pass::settings)
             entt::attribute{"name", "intensity"},
             entt::attribute{"pretty_name", "Intensity"},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"step", 0.1f},
-            entt::attribute{"tooltip", "Global multiplier for the entire bloom effect. Scales all per-mip contributions uniformly. 0 = no bloom, 1 = standard, >1 = exaggerated glow. This is the main knob for overall bloom strength."},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Main bloom strength: the blur pyramid is added on top of the sharp "
+                "scene scaled by this. Scatter mode (Threshold 0): 0.1-0.3 is a typical filmic glow; the "
+                "base image stays sharp at any value. Legacy mode: additive multiplier on the thresholded "
+                "bloom as before."},
+        })
+        .data<&bloom_pass::settings::scatter>("scatter"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "scatter"},
+            entt::attribute{"pretty_name", "Scatter"},
+            entt::attribute{"min", 0.05f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Scatter mode only: how much energy each upsample step hands to the "
+                "wider mip. Low = tight halo close to bright sources, high = big soft atmospheric veil. "
+                "0.7 is the balanced default."},
         })
         .data<&bloom_pass::settings::mip_count>("mip_count"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -103,7 +121,18 @@ REFLECT_INLINE(bloom_pass::settings)
             entt::attribute{"pretty_name", "Dirt Intensity"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.1f},
-            entt::attribute{"tooltip", "Strength of the lens dirt mask effect. Modulates bloom through a screen-space dirt texture to simulate smudges and scratches on the camera lens. 0 = disabled. Requires a dirt mask texture to be assigned (future feature)."},
+            entt::attribute{"group", "Lens Dirt"},
+            entt::attribute{"tooltip", "Strength of the lens dirt mask effect. Modulates bloom through the "
+                "assigned screen-space dirt texture to simulate smudges and scratches on the lens. "
+                "0 = disabled. Typical range 0.5 - 3 with a dark mask."},
+        })
+        .data<&bloom_pass::settings::dirt_texture>("dirt_texture"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "dirt_texture"},
+            entt::attribute{"pretty_name", "Dirt Texture"},
+            entt::attribute{"group", "Lens Dirt"},
+            entt::attribute{"tooltip", "Screen-space smudge/scratch mask for the lens dirt effect. Bright "
+                "areas of the mask catch bloom; unassigned = no dirt."},
         });
 }
 
@@ -113,6 +142,7 @@ SAVE_INLINE(bloom_pass::settings)
     try_save(ar, ser20::make_nvp("soft_knee", obj.soft_knee));
     try_save(ar, ser20::make_nvp("clamp", obj.clamp));
     try_save(ar, ser20::make_nvp("intensity", obj.intensity));
+    try_save(ar, ser20::make_nvp("scatter", obj.scatter));
     try_save(ar, ser20::make_nvp("mip_count", obj.mip_count));
     try_save(ar, ser20::make_nvp("mip0_tint", obj.mip0_tint));
     try_save(ar, ser20::make_nvp("mip1_tint", obj.mip1_tint));
@@ -121,6 +151,7 @@ SAVE_INLINE(bloom_pass::settings)
     try_save(ar, ser20::make_nvp("mip4_tint", obj.mip4_tint));
     try_save(ar, ser20::make_nvp("mip5_tint", obj.mip5_tint));
     try_save(ar, ser20::make_nvp("dirt_intensity", obj.dirt_intensity));
+    try_save(ar, ser20::make_nvp("dirt_texture", obj.dirt_texture));
 }
 SAVE_INSTANTIATE(bloom_pass::settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(bloom_pass::settings, ser20::oarchive_binary_t);
@@ -131,6 +162,7 @@ LOAD_INLINE(bloom_pass::settings)
     try_load(ar, ser20::make_nvp("soft_knee", obj.soft_knee));
     try_load(ar, ser20::make_nvp("clamp", obj.clamp));
     try_load(ar, ser20::make_nvp("intensity", obj.intensity));
+    try_load(ar, ser20::make_nvp("scatter", obj.scatter));
     try_load(ar, ser20::make_nvp("mip_count", obj.mip_count));
     try_load(ar, ser20::make_nvp("mip0_tint", obj.mip0_tint));
     try_load(ar, ser20::make_nvp("mip1_tint", obj.mip1_tint));
@@ -139,6 +171,7 @@ LOAD_INLINE(bloom_pass::settings)
     try_load(ar, ser20::make_nvp("mip4_tint", obj.mip4_tint));
     try_load(ar, ser20::make_nvp("mip5_tint", obj.mip5_tint));
     try_load(ar, ser20::make_nvp("dirt_intensity", obj.dirt_intensity));
+    try_load(ar, ser20::make_nvp("dirt_texture", obj.dirt_texture));
 }
 LOAD_INSTANTIATE(bloom_pass::settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(bloom_pass::settings, ser20::iarchive_binary_t);

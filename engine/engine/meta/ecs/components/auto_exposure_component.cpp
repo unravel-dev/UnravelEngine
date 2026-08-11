@@ -46,8 +46,9 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"tooltip", "Lower clamp for metered scene brightness (EV100). "
                 "Controls how much the system can BRIGHTEN dark scenes: a LOWER value allows "
                 "more brightening (more upward adaptation headroom when moving into shadow/interiors). "
-                "Default -6 gives interiors/night scenes real headroom. Only engages when the "
-                "scene meters below this value."},
+                "Default -3 keeps genuinely dark rooms dark; -5..-6 gives deep night adaptation "
+                "but will also surface small GI residuals in sealed spaces toward visibility. "
+                "Only engages when the scene meters below this value."},
         })
         .data<&auto_exposure_pass::settings::max_ev>("max_ev"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -73,9 +74,23 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"tooltip", "Global exposure bias in EV stops, applied on top of the auto-exposure result. "
                 "Use this to make the scene uniformly brighter or darker: "
                 "+1 = twice as bright, -1 = half as bright. "
-                "The default +1 anchors the metered average at ~18% mid-gray (the tone curves' "
-                "linear section); 0 would land it at ~10%. "
+                "The default +3 anchors the metered bright band at ~83% pre-tonemap, which drives "
+                "sunlit whites to display white through the AgX curve; lower values read moodier. "
                 "This is the main knob for adjusting overall scene brightness."},
+        })
+        .data<&auto_exposure_pass::settings::dark_adaptation>("dark_adaptation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "dark_adaptation"},
+            entt::attribute{"pretty_name", "Dark Adaptation"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"tooltip", "How much of a dark scene's darkness the eye adapts away "
+                "(the slope of UE's Exposure Compensation Curve / Unity's Curve Remapping, as one "
+                "slider). 1 = dark rooms get lifted all the way to the mid-gray anchor (reads "
+                "bright). 0 = no lift, dark scenes render at true relative darkness. Default 0.1 "
+                "keeps adaptation subtle: darkness reads as darkness, with just enough lift to "
+                "stay readable. Bright scenes are unaffected."},
         })
         .data<&auto_exposure_pass::settings::adaptation_speed_up>("adaptation_speed_up"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -150,6 +165,7 @@ SAVE_INLINE(auto_exposure_pass::settings)
     try_save(ar, ser20::make_nvp("min_ev", obj.min_ev));
     try_save(ar, ser20::make_nvp("max_ev", obj.max_ev));
     try_save(ar, ser20::make_nvp("compensation", obj.compensation));
+    try_save(ar, ser20::make_nvp("dark_adaptation", obj.dark_adaptation));
     try_save(ar, ser20::make_nvp("adaptation_speed_up", obj.adaptation_speed_up));
     try_save(ar, ser20::make_nvp("adaptation_speed_down", obj.adaptation_speed_down));
     try_save(ar, ser20::make_nvp("low_percentile", obj.low_percentile));
@@ -165,6 +181,7 @@ LOAD_INLINE(auto_exposure_pass::settings)
     try_load(ar, ser20::make_nvp("min_ev", obj.min_ev));
     try_load(ar, ser20::make_nvp("max_ev", obj.max_ev));
     try_load(ar, ser20::make_nvp("compensation", obj.compensation));
+    try_load(ar, ser20::make_nvp("dark_adaptation", obj.dark_adaptation));
     try_load(ar, ser20::make_nvp("adaptation_speed_up", obj.adaptation_speed_up));
     try_load(ar, ser20::make_nvp("adaptation_speed_down", obj.adaptation_speed_down));
     try_load(ar, ser20::make_nvp("low_percentile", obj.low_percentile));

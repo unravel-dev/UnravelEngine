@@ -15,6 +15,58 @@ uniform vec4 u_taa_params;
 #define u_depth_reject_scale   u_taa_params.z
 #define u_variance_clip_scale  u_taa_params.w
 
+// YCoCg: chroma bounds are much tighter than RGB's, so a variance box built there
+// rejects colored ghosting an RGB box lets through.
+vec3 TAA_RGBToYCoCg(vec3 c)
+{
+    return vec3( 0.25 * c.r + 0.5 * c.g + 0.25 * c.b,
+                 0.5  * c.r             - 0.5  * c.b,
+                -0.25 * c.r + 0.5 * c.g - 0.25 * c.b);
+}
+
+vec3 TAA_YCoCgToRGB(vec3 c)
+{
+    return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
+}
+
+// Ray-clip toward the box center instead of a per-axis clamp: a clamp projects
+// history onto box corners and skews hue; the clip preserves the color direction.
+vec3 TAA_ClipToAABB(vec3 value, vec3 center, vec3 extents)
+{
+    vec3 dir = value - center;
+    vec3 t = abs(extents / max(abs(dir), vec3_splat(1e-6)));
+    float t_min = min(1.0, min(t.x, min(t.y, t.z)));
+    return center + dir * t_min;
+}
+
+// 5-fetch Catmull-Rom (Jimenez): bilinear history resampling under sub-pixel jitter
+// low-passes the accumulation every frame, so the history converges blurry no matter
+// how good the rest of the filter is. Bicubic reconstruction keeps it sharp.
+vec3 TAA_SampleHistoryCatmullRom(vec2 uv, vec2 texel_size)
+{
+    vec2 sample_pos = uv / texel_size;
+    vec2 tex_pos1 = floor(sample_pos - 0.5) + 0.5;
+    vec2 f = sample_pos - tex_pos1;
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    vec2 w3 = f * f * (-0.5 + 0.5 * f);
+    vec2 w12 = w1 + w2;
+    vec2 offset12 = w2 / w12;
+    vec2 tex_pos0 = (tex_pos1 - vec2_splat(1.0)) * texel_size;
+    vec2 tex_pos3 = (tex_pos1 + vec2_splat(2.0)) * texel_size;
+    vec2 tex_pos12 = (tex_pos1 + offset12) * texel_size;
+    vec3 result =
+        texture2DLod(s_history, vec2(tex_pos12.x, tex_pos0.y), 0.0).rgb * (w12.x * w0.y) +
+        texture2DLod(s_history, vec2(tex_pos0.x, tex_pos12.y), 0.0).rgb * (w0.x * w12.y) +
+        texture2DLod(s_history, vec2(tex_pos12.x, tex_pos12.y), 0.0).rgb * (w12.x * w12.y) +
+        texture2DLod(s_history, vec2(tex_pos3.x, tex_pos12.y), 0.0).rgb * (w3.x * w12.y) +
+        texture2DLod(s_history, vec2(tex_pos12.x, tex_pos3.y), 0.0).rgb * (w12.x * w3.y);
+    float weight = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+    // Renormalize for the dropped corner taps; negative lobes can undershoot, clamp to valid HDR.
+    return max(result / weight, vec3_splat(0.0));
+}
+
 vec2 TAA_PreviousUV(vec2 uv, float depth01)
 {
     vec3 vs_pos = computeViewSpacePosition(uv, depth01);
@@ -69,6 +121,9 @@ void main()
     float edge_blend = mix(0.35, 1.0, silhouette);
 
     float k = max(0.75, u_variance_clip_scale);
+    // RGB mean/min/max feed the sharpen path below; the variance box for history
+    // rejection is built in YCoCg where chroma bounds are tight.
+    vec3 m1_rgb = vec3_splat(0.0);
     vec3 m1 = vec3_splat(0.0);
     vec3 m2 = vec3_splat(0.0);
     vec3 nb_min = vec3_splat(1e10);
@@ -79,25 +134,34 @@ void main()
         {
             vec2 suv = clamp(uv + vec2(float(x), float(y)) * texel, vec2_splat(0.0), vec2_splat(1.0));
             vec3 c = texture2D(s_curr, suv).rgb;
-            m1 += c;
-            m2 += c * c;
+            vec3 yc = TAA_RGBToYCoCg(c);
+            m1_rgb += c;
+            m1 += yc;
+            m2 += yc * yc;
             nb_min = min(nb_min, c);
             nb_max = max(nb_max, c);
         }
     }
     const float inv9 = 1.0 / 9.0;
-    vec3 mu = m1 * inv9;
-    vec3 sigma = sqrt(max(m2 * inv9 - mu * mu, vec3_splat(1e-8)));
-    vec3 cmin = mu - sigma * k;
-    vec3 cmax = mu + sigma * k;
+    vec3 mu = m1_rgb * inv9;
+    vec3 mu_yc = m1 * inv9;
+    vec3 sigma_yc = sqrt(max(m2 * inv9 - mu_yc * mu_yc, vec3_splat(1e-8)));
 
     vec2 half_texel = texel * 0.5;
     vec2 hist_uv = clamp(prev_uv, half_texel, vec2(1.0, 1.0) - half_texel);
-    vec3 hist_rgb = texture2D(s_history, hist_uv).rgb;
-    vec3 clamped_hist = clamp(hist_rgb, cmin, cmax);
+    vec3 hist_rgb = TAA_SampleHistoryCatmullRom(hist_uv, texel);
+    vec3 hist_yc = TAA_RGBToYCoCg(hist_rgb);
+    vec3 clipped_yc = TAA_ClipToAABB(hist_yc, mu_yc, sigma_yc * k);
+    vec3 clamped_hist = max(TAA_YCoCgToRGB(clipped_yc), vec3_splat(0.0));
 
     float blend = u_history_blend * edge_fade * depth_ok * edge_blend * screen_border_w * history_border_w;
-    vec3 resolved = mix(curr.rgb, clamped_hist, blend);
+    // Karis-weighted resolve: weighting both terms by 1/(1+luma) evaluates the blend in
+    // a tonemapped domain, so a single HDR firefly cannot dominate the average and
+    // flicker as the jitter walks it on and off a sample position.
+    const vec3 taa_luma_w = vec3(0.2126, 0.7152, 0.0722);
+    float w_curr = (1.0 - blend) / (1.0 + dot(curr.rgb, taa_luma_w));
+    float w_hist = blend / (1.0 + dot(clamped_hist, taa_luma_w));
+    vec3 resolved = (curr.rgb * w_curr + clamped_hist * w_hist) / max(w_curr + w_hist, 1e-6);
 
     if(u_sharpen > 0.001)
     {

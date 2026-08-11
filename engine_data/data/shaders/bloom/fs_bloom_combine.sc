@@ -10,18 +10,30 @@ $input v_texcoord0
 
 SAMPLER2D(s_scene, 0);
 SAMPLER2D(s_bloom, 1);
+SAMPLER2D(s_dirt, 2);
 
 uniform vec4 u_combineParams;
 #define u_bloom_intensity u_combineParams.x
+#define u_dirt_intensity  u_combineParams.z
 
 void main()
 {
     vec3 scene_color = texture2D(s_scene, v_texcoord0).rgb;
     vec3 bloom_color = texture2D(s_bloom, v_texcoord0).rgb;
 
-    // Global bloom intensity applied exactly once, here; the upsample cascade
-    // only applies per-mip weights.
+    // One combine for both modes; they differ only in what the pyramid holds
+    // (scatter: energy-normalized blur of the whole scene; legacy: thresholded
+    // highlights). Additive keeps the base image SHARP at any intensity -- a
+    // mix() formulation was tried and rejected: it couples halo strength to
+    // full-screen blur, so halos vanish at low intensity and the image frosts
+    // at high. The small mean-energy add in scatter mode is absorbed by the
+    // scale-invariant auto exposure.
     vec3 hdr_color = scene_color + bloom_color * u_bloom_intensity;
+
+    // Lens dirt: bloom modulated by the screen-space mask, added on top. A black
+    // (unassigned) mask makes this an exact no-op.
+    hdr_color += bloom_color * texture2D(s_dirt, v_texcoord0).rgb * u_dirt_intensity;
+
     hdr_color = min(max(hdr_color, vec3_splat(0.0)), vec3_splat(65504.0));
 
     gl_FragColor = vec4(hdr_color, 1.0);

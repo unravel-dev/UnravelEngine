@@ -197,8 +197,15 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         downsample_program_.program->end();
     }
 
-    // Clear MIP_0 before upsample accumulation so the result is purely
-    // the multi-scale bloom contribution from smaller mips.
+    // SCATTER mode (threshold == 0): the pyramid is an energy-conserving blur of the
+    // scene. Each upsample hop LERPS the coarser level into the finer one, so MIP_0
+    // keeps its own downsampled content as the recursion base and total energy stays
+    // at scene level while the halo widens.
+    //
+    // LEGACY mode (threshold > 0): only thresholded highlights entered the pyramid;
+    // MIP_0 is cleared so the additive accumulation is purely the multi-scale bloom.
+    const bool scatter_mode = config.threshold <= 0.0f;
+    if(!scatter_mode)
     {
         const auto& mip0_fbo = get_mip_fbo(rview, 0);
         gfx::render_pass clear_pass("Bloom/Clear MIP0 Pass");
@@ -207,7 +214,8 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         clear_pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
     }
 
-    // Upsample and accumulate from smallest mip back to MIP_0.
+    // Upsample from smallest mip back to MIP_0: lerp-blend in scatter mode,
+    // additive accumulation in legacy mode.
     for(int i = 0; i < mip_count - 1; ++i)
     {
         int src_idx = mip_count - 1 - i;
@@ -237,12 +245,24 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         float tint[4] = {mip_tint.value.x, mip_tint.value.y, mip_tint.value.z, mip_tint.value.w};
         gfx::set_uniform(upsample_program_.u_tint, tint);
 
+        // Scatter mode: per-hop lerp factor (mip alpha modulates it); the shader emits
+        // premultiplied (rgb * s, s) and ONE/INV_SRC_ALPHA blending realizes
+        // dst = mix(dst, src, s) exactly. Legacy: 0 selects the additive path.
+        const float hop_scatter =
+            scatter_mode ? math::clamp(config.scatter * mip_tint.value.w, 0.0f, 1.0f) : 0.0f;
+        float upsample_params[4] = {hop_scatter, 0.0f, 0.0f, 0.0f};
+        gfx::set_uniform(upsample_program_.u_upsample_params, upsample_params);
+
         gfx::set_texture(upsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(src_idx)));
 
         irect32_t rect(0, 0, out_w, out_h);
         gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
         auto topology = gfx::clip_quad(1.0f);
-        gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
+        const uint64_t blend_state =
+            scatter_mode
+                ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA)
+                : BGFX_STATE_BLEND_ADD;
+        gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | blend_state);
         gfx::submit(pass.id, upsample_program_.program->native_handle());
         gfx::set_state(BGFX_STATE_DEFAULT);
         upsample_program_.program->end();
@@ -258,11 +278,19 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
     combine_program_.program->begin();
 
-    float combine_params[4] = {config.intensity, 0.0f, 0.0f, 0.0f};
+    // x = intensity (mix fraction in scatter mode, additive multiplier in legacy),
+    // y = scatter-mode flag, z = lens dirt intensity.
+    float combine_params[4] = {config.intensity,
+                               scatter_mode ? 1.0f : 0.0f,
+                               config.dirt_intensity,
+                               0.0f};
     gfx::set_uniform(combine_program_.u_combine_params, combine_params);
 
     gfx::set_texture(combine_program_.s_scene, 0, input->get_texture());
     gfx::set_texture(combine_program_.s_bloom, 1, rview.tex_get("BLOOM_MIP_0"));
+    // Black fallback keeps the dirt term an exact no-op when no mask is assigned.
+    auto dirt_tex = config.dirt_texture.get();
+    gfx::set_texture(combine_program_.s_dirt, 2, dirt_tex ? dirt_tex : default_textures::get().black_texture());
 
     const auto output_size = output->get_size();
     irect32_t rect(0, 0, output_size.width, output_size.height);

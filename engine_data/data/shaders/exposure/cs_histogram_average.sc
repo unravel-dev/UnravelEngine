@@ -28,6 +28,7 @@ uniform vec4 u_average_params2;
 #define u_min_ev             u_average_params1.x
 #define u_max_ev             u_average_params1.y
 #define u_compensation       u_average_params1.z
+#define u_dark_adaptation    u_average_params1.w
 
 #define u_delta_time         u_average_params2.x
 #define u_speed_up           u_average_params2.y
@@ -124,6 +125,15 @@ void main()
     float avg_ev100 = avg_log_lum + 3.0;
 
     float clamped_ev = clamp(avg_ev100, u_min_ev, u_max_ev);
+
+    // PARTIAL dark adaptation (the single-slope version of UE's Exposure Compensation
+    // Curve / Unity HDRP's Curve Remapping): below the neutral point -- the metered EV
+    // at which exposure lands at exactly 1 -- only u_dark_adaptation of the deficit is
+    // adapted away, so a dark scene keeps (1 - slope) of its true relative darkness
+    // instead of being lifted to the mid-gray anchor. Min EV still hard-stops below.
+    float neutral_ev = u_compensation - 0.263034; // exposure == 1 at this metered EV
+    float dark_deficit = max(0.0, neutral_ev - clamped_ev);
+    clamped_ev += dark_deficit * (1.0 - clamp(u_dark_adaptation, 0.0, 1.0));
 
     // Industry-standard exposure from EV100 (Frostbite/Unreal/Unity):
     // exposure = exp2(-EV100) / 1.2. We adapt in log2 space, so work with the

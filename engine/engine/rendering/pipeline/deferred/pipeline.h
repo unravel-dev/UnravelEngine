@@ -84,8 +84,7 @@ public:
                                gfx::render_view& rview,
                                delta_t dt) -> gfx::frame_buffer::ptr;
 
-    void run_ssr_pass(const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& previous_frame_source,
-                       const run_params& rparams);
+    void run_ssr_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 
     void run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 
@@ -139,11 +138,10 @@ public:
     /// See gi_resolve_pass.
     /// @return true when the pass produced a result, which also means it needs PREV_DEPTH
     ///         snapshotted this frame for its temporal accumulation.
-    /// @param previous_frame_source Last frame's composited output (the SSR convention, same
-    ///        source): the gather's far-field radiance for hits beyond the cascades.
+    /// Far-field radiance for hits beyond the cascades comes from @c PREV_SCENE_HDR
+    /// (last frame's post-TAA linear scene color -- the SSR convention, same source).
     auto run_gi_resolve_pass(const camera& camera,
                              gfx::render_view& rview,
-                             const gfx::frame_buffer::ptr& previous_frame_source,
                              const run_params& rparams) -> bool;
 
     void build_reflections(scene& scn, const camera& camera, delta_t dt);
@@ -381,6 +379,12 @@ public:
 private:
     /// After SSIL/SSR; copies G-buffer depth into @c PREV_DEPTH for next-frame reprojection.
     void snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size);
+
+    /// After TAA; copies the SCENE-REFERRED linear HDR target into @c PREV_SCENE_HDR for
+    /// next frame's SSR trace and GI far-field. Deliberately pre-bloom/tonemap/UI: the old
+    /// source (final OBUFFER) fed display-encoded values back into linear lighting, which
+    /// with free-floating auto exposure formed a brightness feedback loop in dark scenes.
+    void snapshot_prev_scene_color(gfx::render_view& rview, const gfx::frame_buffer::ptr& source);
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     int debug_pass_{-1};

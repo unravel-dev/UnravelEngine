@@ -37,6 +37,7 @@ public:
         result.soft_knee = std::lerp(result.soft_knee, from.soft_knee, contribution);
         result.clamp = std::lerp(result.clamp, from.clamp, contribution);
         result.intensity = std::lerp(result.intensity, from.intensity, contribution);
+        result.scatter = std::lerp(result.scatter, from.scatter, contribution);
         result.mip_count = static_cast<int>(std::lround(std::lerp(float(result.mip_count), float(from.mip_count), contribution)));
 
         lerp_color(result.mip0_tint, from.mip0_tint, contribution);
@@ -47,6 +48,11 @@ public:
         lerp_color(result.mip5_tint, from.mip5_tint, contribution);
 
         result.dirt_intensity = std::lerp(result.dirt_intensity, from.dirt_intensity, contribution);
+        // Asset references cannot lerp; the dominant contributor wins, like the tonemap method.
+        if(contribution >= 0.5f)
+        {
+            result.dirt_texture = from.dirt_texture;
+        }
     }
 };
 

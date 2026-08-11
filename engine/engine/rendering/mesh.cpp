@@ -1606,10 +1606,15 @@ auto mesh::get_vertex_count() const -> uint32_t
 auto mesh::runtime_sdf_bake_settings() -> mesh_sdf_bake_settings
 {
     mesh_sdf_bake_settings settings;
-    // Coarser than the asset compiler's default. This bake runs synchronously while the mesh is
-    // being created, and primitives are simple convex-ish shapes that a low resolution already
-    // represents well, so the extra detail would cost load time for no visible gain.
-    settings.resolution = 32;
+    // This bake runs synchronously while the mesh is being created, and primitive FACES are
+    // exactly representable at any resolution (distance to a plane is linear under trilinear
+    // interpolation). Resolution buys EDGES and CORNERS: the field rounds them by about one
+    // voxel, and the voxel scales with the entity transform - a unit cube scaled to room size
+    // at 32^3 rounded its corners by ~0.5 m, opening grazing-angle gaps that leaked direct sun
+    // into sealed interiors through the GI's traced shadow rays (measured: the sealed-box
+    // energy-injection hunt). 64^3 halves the rounding, bakes 12-triangle primitives in
+    // negligible time, and sits exactly at the importer's default voxel budget (64^3 = 262144).
+    settings.resolution = 64;
     return settings;
 }
 

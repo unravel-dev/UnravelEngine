@@ -847,9 +847,11 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         }
     }
 
-    // SSR samples the previous visible output before this frame overwrites it, so traced
-    // reflections use the same resolved scene color that was presented last frame.
-    run_ssr_pass(camera, rview, output, params);
+    // SSR samples last frame's PREV_SCENE_HDR snapshot (post-TAA, scene-referred linear).
+    // It must NOT sample the final OBUFFER: that image is tonemapped, sRGB-encoded and has
+    // UI composited on it -- display-referred values injected into linear lighting, which
+    // auto exposure then meters and re-amplifies (runaway brightening in dark scenes).
+    run_ssr_pass(camera, rview, params);
 
     // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
     target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, dt);
@@ -860,9 +862,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     bool gi_resolve_active = false;
     if(is_camera_run)
     {
-        // `output` still holds LAST frame's composited image here (this frame overwrites it
-        // at the TAA/composite stage further down) - the same history SSR consumed above.
-        gi_resolve_active = run_gi_resolve_pass(camera, rview, output, params);
+        // Far-field fallback reads PREV_SCENE_HDR (last frame's post-TAA linear scene
+        // color) - the same history SSR consumed above.
+        gi_resolve_active = run_gi_resolve_pass(camera, rview, params);
     }
 
     // SSIL pass
@@ -892,6 +894,21 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     }
 
     target = run_taa_pass(camera, rview, target, output, params);
+
+    // Scene-referred history for next frame's SSR trace and GI far-field. Taken after TAA
+    // (temporally stable) and before bloom/tonemap/UI (still linear HDR, no display encode,
+    // no interface pixels). Only kept while a consumer exists.
+    const bool wants_scene_history =
+        is_camera_run &&
+        ((reflection_screen_stack_enabled(params) && params.fill_ssr_params) || params.fill_gi_params);
+    if(wants_scene_history)
+    {
+        snapshot_prev_scene_color(rview, target);
+    }
+    else
+    {
+        rview.tex_remove("PREV_SCENE_HDR");
+    }
 
     run_auto_exposure_pass(rview, target, params, dt);
 
@@ -935,6 +952,38 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // Clear batch collector for this frame
     batch_collector_.clear();
 
+}
+
+void deferred::snapshot_prev_scene_color(gfx::render_view& rview, const gfx::frame_buffer::ptr& source)
+{
+    if(!source)
+    {
+        return;
+    }
+    auto src_tex = source->get_texture();
+    if(!src_tex)
+    {
+        return;
+    }
+    // Match the source format exactly: bgfx blit requires identical formats, and the
+    // source can be RGBA16F (HDR pipeline) or RGBA8 (LDR fallback).
+    const auto format = static_cast<gfx::texture_format>(src_tex->info.format);
+    const auto size = src_tex->get_size();
+    auto& prev = rview.tex_get_or_emplace("PREV_SCENE_HDR");
+    if(gfx::needs_recreate(prev, size, format))
+    {
+        prev.reset();
+        prev = std::make_shared<gfx::texture>(size.width,
+                                              size.height,
+                                              false,
+                                              1,
+                                              format,
+                                              BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    }
+    gfx::render_pass blit_pass("History/Prev Scene Color Blit Pass");
+    gfx::blit(blit_pass.id,
+              prev->native_handle(), 0, 0,
+              src_tex->native_handle(), 0, 0);
 }
 
 void deferred::snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size)
@@ -1336,26 +1385,19 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                     sun_weight = 1.0f;
                     exposition = 1.0f;
                 }
-                else if(!is_skybox && directional)
-                {
-                    use_perez = true;
-                    compute_irradiance_perez_params(light_dir, skylight.get_turbidity(), dominant.perez);
-                    compute_perez_luminance(light_dir, dominant.perez.sky_luminance_rgb, dominant.perez.sun_luminance_rgb);
-                    irradiance_color = glm::mix(dominant.perez.sky_luminance_rgb, dominant.perez.sun_luminance_rgb, sun_weight);
-                    exposition = dominant.perez.exposition;
-                }
                 else if(!is_skybox)
                 {
-                    // Flat ambient but the sky still contributes: collapse the Perez sky to one color.
-                    // Perez integral (sky + circumsolar + sun disc) yields ~4-5x zenith luminance.
-                    // mix(sky, sun, sun_weight * 0.25) empirically matches the directional result at same intensity.
-                    math::vec3 sky_luminance_rgb;
-                    math::vec3 sun_luminance_rgb;
-                    compute_perez_luminance(light_dir, sky_luminance_rgb, sun_luminance_rgb);
-                    irradiance_color = glm::mix(sky_luminance_rgb, sun_luminance_rgb, sun_weight * 0.25f);
-                    float sun_altitude = -light_dir.y;
-                    float altitude_factor = bx::lerp(0.6f, 1.0f, bx::clamp(bx::abs(sun_altitude), 0.0f, 1.0f));
-                    exposition = 0.1f * altitude_factor;
+                    // Sky contributes: one full Perez projection either way. `directional` only
+                    // decides whether the SH bake keeps all bands (mode 1) or truncates to the
+                    // L0 average (mode 5) -- the flat ambient is the SAME integral by
+                    // construction. This replaced an empirical CPU-side collapse
+                    // (mix(sky, sun, sun_weight * 0.25), a hand-calibrated match) with math.
+                    use_perez = true;
+                    compute_irradiance_perez_params(light_dir, skylight.get_turbidity(), dominant.perez);
+                    irradiance_color = glm::mix(dominant.perez.sky_luminance_rgb, dominant.perez.sun_luminance_rgb, sun_weight);
+                    // The shared Perez -> engine conversion (perez_luminance.h); the sky dome
+                    // pass uses this same value, so ambient and dome cannot drift apart.
+                    exposition = dominant.perez.exposition;
                 }
                 // skybox + wants_sky: irradiance_color stays white; the cubemap supplies the color in-shader.
 
@@ -1410,14 +1452,13 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         const bool use_cubemap = dominant.is_skybox && dominant.use_sky && cubemap_tex && cubemap_tex->info.cubeMap;
 
         // Perez sky modes use physical luminance (exposition-scaled); cubemaps are typically
-        // pre-baked in display range. Boost intensity for sky-derived non-cubemap modes so shadow
-        // fill matches cubemap at the same user-facing intensity. The flat tint-only ambient is
-        // already in display range, so it gets no boost.
-        constexpr float ambient_intensity_boost = 2.0f;
+        // pre-baked in display range. The parity constant (perez_luminance.h) keeps the two
+        // source types comparable at the same user-facing intensity slider. The flat
+        // tint-only ambient is already in display range, so it gets no boost.
         if(use_cubemap)
             ambient_vec[3] *= dominant.sky_brightness;
         else if(dominant.use_sky)
-            ambient_vec[3] *= ambient_intensity_boost;
+            ambient_vec[3] *= sky_ambient_cubemap_parity;
 
         gfx::set_uniform(irradiance_compute_program_.u_irradiance_tint_intensity, ambient_vec);
 
@@ -1428,7 +1469,9 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
 
         if(dominant.intensity > 0.0f && dominant.use_perez)
         {
-            mode = 1;
+            // mode 1 = full directional SH, mode 5 = flat (the SAME Perez integration
+            // truncated to L0), mirroring the cubemap pair below.
+            mode = dominant.directional ? 1 : 5;
             gfx::set_uniform(irradiance_compute_program_.u_sun_direction, dominant.perez.sun_direction);
             gfx::set_uniform(irradiance_compute_program_.u_sun_luminance, dominant.perez.sun_luminance_rgb);
             gfx::set_uniform(irradiance_compute_program_.u_sky_luminance_xyz, dominant.perez.sky_luminance_xyz);
@@ -1950,7 +1993,6 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
 
 void deferred::run_ssr_pass(const camera& camera,
                             gfx::render_view& rview,
-                            const gfx::frame_buffer::ptr& previous_frame_source,
                             const run_params& rparams)
 {
     if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_ssr_params)
@@ -1964,8 +2006,10 @@ void deferred::run_ssr_pass(const camera& camera,
     ssr_params.output = rview.fbo_get("RBUFFER");
     ssr_params.g_buffer = rview.fbo_get("GBUFFER");
 
-    ssr_params.previous_frame =
-        previous_frame_source ? previous_frame_source->get_texture() : rview.fbo_get("LBUFFER")->get_texture();
+    // Last frame's post-TAA linear scene color; LBUFFER (still holding last frame's lit
+    // scene at this point in the frame) covers the first frame before a snapshot exists.
+    auto prev_scene = rview.tex_safe_get("PREV_SCENE_HDR");
+    ssr_params.previous_frame = prev_scene ? prev_scene : rview.fbo_get("LBUFFER")->get_texture();
 
     ssr_params.cam = &camera;
 
@@ -2175,7 +2219,6 @@ auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -
 
 auto deferred::run_gi_resolve_pass(const camera& camera,
                                    gfx::render_view& rview,
-                                   const gfx::frame_buffer::ptr& previous_frame_source,
                                    const run_params& rparams) -> bool
 {
     auto& ctx = engine::context();
@@ -2196,9 +2239,9 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
         params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
         // This frame's Hi-Z pyramid (built earlier in the frame) for the screen-trace tier.
         params.hiz = rview.tex_safe_get("HIZBUFFER");
-        // Last frame's composited output for the far-field fallback; null (first frame,
-        // probe captures) degrades those hits to the sky SH.
-        params.prev_color = previous_frame_source ? previous_frame_source->get_texture() : nullptr;
+        // Last frame's post-TAA linear scene color for the far-field fallback; null
+        // (first frame, probe captures) degrades those hits to the sky SH.
+        params.prev_color = rview.tex_safe_get("PREV_SCENE_HDR");
         params.cam = &camera;
         params.surface_cache = &ctx.get_cached<surface_cache_system>();
         params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);

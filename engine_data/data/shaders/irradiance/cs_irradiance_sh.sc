@@ -7,6 +7,10 @@
  * Mode 2: environment cubemap - sample textureCube(s_env, L), full L0-L2 SH.
  * Mode 3: environment cubemap flat - average cubemap into L0 only (no normal variation).
  * Mode 4: tint gradient - hemisphere gradient from tint color only (no sky), L0 + vertical L1.
+ * Mode 5: perez flat - the SAME Perez integration as mode 1, kept only in L0 (the exact
+ *         analog of mode 3 for mode 2). The flat sky ambient therefore equals the average
+ *         of the directional one BY CONSTRUCTION - this replaced a hand-calibrated
+ *         CPU-side collapse of the sky to one color.
  */
 
 #include "../bgfx_compute.sh"
@@ -200,6 +204,39 @@ void process_perez_mode(float sun_weight)
     store_sh_coeffs(sh_coeff);
 }
 
+// Mode 5: Perez sky, flat - the SAME hemisphere integration as mode 1, truncated to the
+// constant band. L0 = integral(L * Y0) with Y0 = 0.282095, exactly what mode 1's first
+// coefficient converges to, so switching irradiance quality can never shift the average
+// energy - only remove the directional variation.
+void process_perez_flat_mode(float sun_weight)
+{
+    const int num_samples = 64;
+    const float PI = 3.14159265;
+    const float d_omega = (2.0 * PI) / float(num_samples);
+    vec3 tint_scale = u_irradiance_tint_intensity.xyz * u_irradiance_tint_intensity.w * sun_weight;
+
+    vec3 light_dir = normalize(u_sun_direction.xyz);
+    vec3 sky_dir = vec3(0.0, 1.0, 0.0);
+    float cosgammas = clamp(dot(sky_dir, light_dir), -0.9999, 0.9999);
+    vec3 P0 = Perez(u_perez_coeff[0].xyz, u_perez_coeff[1].xyz, u_perez_coeff[2].xyz,
+                    u_perez_coeff[3].xyz, u_perez_coeff[4].xyz, 1.0, cosgammas);
+    vec3 P0_inv = vec3_splat(1.0) / max(P0, vec3_splat(0.0001));
+    float denom = max(dot(u_sky_luminance_xyz.xyz, vec3_splat(1.0)), 0.0001);
+    vec3 sky_color_xyY = vec3(u_sky_luminance_xyz.x / denom, u_sky_luminance_xyz.y / denom, u_sky_luminance_xyz.y);
+
+    vec3 l0 = vec3_splat(0.0);
+    for(int i = 0; i < num_samples; i++)
+    {
+        vec2 E = Hammersley(i, num_samples);
+        vec3 dir = HammersleyToHemisphere(E);
+        vec3 radiance = sample_perez_sky(dir, P0_inv, sky_color_xyY, light_dir);
+        l0 += radiance * tint_scale * 0.282095 * d_omega;
+    }
+    imageStore(i_output, ivec2(0, 0), vec4(l0, 0.0));
+    for(int i = 1; i < 9; i++)
+        imageStore(i_output, ivec2(i, 0), vec4(0.0, 0.0, 0.0, 0.0));
+}
+
 // Mode 2: environment cubemap - full-sphere sampling (map may include ground).
 void process_environment_mode(float sun_weight)
 {
@@ -291,6 +328,8 @@ void main()
         process_environment_mode(sun_weight);
     else if(mode == 3)
         process_environment_flat_mode(sun_weight);
+    else if(mode == 5)
+        process_perez_flat_mode(sun_weight);
     else
         process_tint_gradient_mode(sun_weight);
 }

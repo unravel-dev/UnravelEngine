@@ -1,5 +1,6 @@
 #pragma once
 
+#include <engine/assets/asset_handle.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
 #include <graphics/render_view.h>
@@ -13,10 +14,23 @@ class bloom_pass
 public:
     struct settings
     {
-        float threshold = 5.0f;
+        /// 0 (default) selects SCATTER mode: no threshold, the pyramid is an
+        /// energy-normalized blur of the whole scene (recursive lerp, Unity/CoD
+        /// style), added on top scaled by `intensity` -- everything blooms in
+        /// proportion to its energy, the base image stays sharp, and the small
+        /// mean-energy add is absorbed by auto exposure.
+        /// > 0 selects the LEGACY mode: only pixels above this post-exposure
+        /// luminance enter the pyramid (existing scenes keep their look).
+        float threshold = 0.0f;
         float soft_knee = 0.5f;
         float clamp = 100.0f;
-        float intensity = 1.0f;
+        /// Bloom strength: the pyramid is added as `scene + pyramid * intensity`.
+        /// Scatter mode: 0.1-0.3 is a typical filmic glow (the pyramid carries
+        /// scene-level energy). Legacy mode: additive multiplier as before.
+        float intensity = 0.15f;
+        /// Scatter mode only: per-hop lerp factor of the upsample recursion.
+        /// Higher pushes energy toward the wider mips (bigger, softer halo).
+        float scatter = 0.7f;
         int mip_count = 8;
 
         // Per-mip tint (RGB) and weight (alpha). Applied during upsample cascade.
@@ -28,7 +42,12 @@ public:
         math::color mip4_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/32 res
         math::color mip5_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/64 res - widest bloom
 
+        /// Lens dirt: the bloom pyramid is additionally modulated by this
+        /// screen-space mask and added on top (classic smudged-lens glow).
+        /// 0 disables; requires @ref dirt_texture to be assigned.
         float dirt_intensity = 0.0f;
+        /// Screen-space dirt/smudge mask for @ref dirt_intensity.
+        asset_handle<gfx::texture> dirt_texture;
 
         auto get_mip_tint(int idx) const -> const math::color&
         {
@@ -94,10 +113,12 @@ private:
         {
             cache_uniform(program.get(), u_pixel_size, "u_pixelSize", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_tint, "u_tint", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_upsample_params, "u_upsampleParams", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_tex, "s_tex", gfx::uniform_type::Sampler);
         }
         gfx::program::uniform_ptr u_pixel_size;
         gfx::program::uniform_ptr u_tint;
+        gfx::program::uniform_ptr u_upsample_params;
         gfx::program::uniform_ptr s_tex;
         std::unique_ptr<gpu_program> program;
     } upsample_program_;
@@ -109,10 +130,12 @@ private:
             cache_uniform(program.get(), u_combine_params, "u_combineParams", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_scene, "s_scene", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_bloom, "s_bloom", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_dirt, "s_dirt", gfx::uniform_type::Sampler);
         }
         gfx::program::uniform_ptr u_combine_params;
         gfx::program::uniform_ptr s_scene;
         gfx::program::uniform_ptr s_bloom;
+        gfx::program::uniform_ptr s_dirt;
         std::unique_ptr<gpu_program> program;
     } combine_program_;
 };

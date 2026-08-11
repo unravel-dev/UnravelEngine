@@ -25,9 +25,81 @@ contrasty scenes. Now [0.80, 0.98]: highlight-protecting bright-band metering
 "lit content near mid-gray, shadows fall dark". Phase 3 step 1 landed: color
 grading in the tonemap pass (white balance via CAT02 LMS von Kries, log
 contrast around 0.18, Rec.709 saturation -- linear space, post-exposure,
-pre-curve) + TPDF dither before UNORM8 quantization (default on). Remaining
-Phase 3: bake grade+curve+encode into a 32^3 LUT once the stack grows
-(lift/gamma/gain, color wheels, external LUT import), vignette/grain.
+pre-curve) + TPDF dither before UNORM8 quantization (default on).
+BUG FOUND+FIXED via sealed-box test: SSR and gi_resolve consumed the previous
+frame's FINAL OBUFFER (post-tonemap sRGB RGBA8, UI included) as scene radiance.
+Display-referred feedback into linear lighting + free-floating exposure =
+runaway brightening in dark scenes. Now a PREV_SCENE_HDR snapshot (post-TAA,
+pre-bloom/tonemap/UI, format-matched blit) feeds both consumers. Residual
+brightening of sealed interiors under auto exposure is eye adaptation
+revealing REAL ambient leaks (unoccluded skylight SH / env probe without GI)
+-- per-scene remedies: enable GI, local probe, or raise Min EV.
+Phase 3 step 2 landed: per-channel lift/gamma/gain (display-referred, neutral
+mid-gray 0.5 authoring, color-cast capable), linear-space vignette
+(intensity/smoothness), animated luma-weighted film grain -- all neutral by
+default, zero visual change until dialed in. Remaining Phase 3: bake
+grade+curve+encode into a 32^3 LUT (perf + external .cube LUT import) now that
+the op stack is settled; optional shadows/mids/highlights color wheels.
+STATUS 2026-08-11: Phase 4a TAA resolve quality landed WITHOUT motion vectors
+(they do not exist in the engine; parked as separate research -- depth
+reprojection covers camera motion on static scenes, so these fixes are fully
+effective today): Catmull-Rom 5-fetch history reconstruction (kills the
+accumulation blur), YCoCg variance box + ray-clip-toward-mean (replaces RGB
+clamp; less hue-skewed ghosting), Karis 1/(1+luma)-weighted resolve (kills HDR
+firefly flicker). fs_taa.sc only; sharpen path still uses RGB moments.
+Auto exposure min_ev default -6 -> -3 (dark reads dark; deep adaptation
+surfaces GI residuals -- see memory gi-sealed-box-leak). Sealed-box GI leak
+hunt PARKED: dominant source unidentified (floor-bleed model falsified);
+next step is a per-tier sun-visibility debug view (spawn task created).
+Phase 4b bloom retune landed: SCATTER mode is the new default (threshold 0) --
+thresholdless: recursive lerp pyramid (per-hop ONE/INV_SRC_ALPHA premultiplied
+blend realizes mix(dst, up, s) exactly; MIP0 keeps its own downsample as
+recursion base; pyramid carries scene-level energy). COMBINE REVISED after
+visual test: pure mix(scene, pyramid, i) was rejected -- it couples halo
+strength to full-screen blur (no halo at 0.05, frosted at 1.0). Now UNIFIED
+additive combine `scene + pyramid * intensity` for both modes (they differ
+only in pyramid content); base stays sharp at any intensity, the small mean
+add is absorbed by scale-invariant auto exposure (UE's model). Defaults:
+intensity 0.15, scatter 0.7. LEGACY thresholded mode preserved behind
+threshold > 0 (old scenes serialize threshold 5 + intensity 1 -> identical
+look). Lens dirt wired: dirt_texture asset slot + dirt_intensity; black
+fallback = exact no-op. Karis prefilter + soft clamp retained in both modes.
+Tuning notes: Scatter shapes the halo (low = tight/bright near sources,
+high = wide veil); Intensity scales the whole glow linearly.
+Phase 2 close-out (sky-scale consolidation) landed: ONE named conversion
+`perez_luminance_to_engine = 0.1` + `perez_horizon_dim = 0.6` in
+perez_luminance.h, produced by compute_perez_exposition(sun_altitude) and
+consumed by the sky dome, the irradiance bake and the flat ambient (ratios
+hold by construction). The flat Perez ambient's hand-calibrated collapse
+(mix(sky, sun, sun_weight*0.25) at exposition 0.1*altitude) was DELETED and
+replaced by irradiance shader mode 5 = the SAME hemisphere integration as
+mode 1 truncated to L0 (exact analog of cubemap modes 2/3). The 2.0 ambient
+boost became the documented `sky_ambient_cubemap_parity` constant (UI parity
+between analytic sky and display-referred cubemaps; not derivable).
+Fixes 2026-08-11 (late): film grain rewritten -- ign16x16 is a STATIC tiled
+16x16 lookup (right for dither, wrong for grain: sliding a fixed tile is not
+noise); grain now uses a per-pixel per-frame white-noise hash, amplitude scale
+0.12 -> 0.25, highlights keep 20% response. Auto exposure gained
+`dark_adaptation` (default 0.5): the single-slope version of UE's Exposure
+Compensation Curve / Unity HDRP's Curve Remapping -- only that fraction of a
+dark scene's EV deficit below the neutral point is adapted away, so interiors
+keep (1 - slope) of their true relative darkness; Min EV remains the hard
+stop; bright scenes unaffected (deficit clamped at 0).
+LOOK CALIBRATION 2026-08-11, FINAL (user-chosen after A/B vs Unreal incl.
+ACES/ACES-Lum/AgX+contrast comparisons): tonemapping method = AGX (hue
+robustness won over ACES's built-in punch), auto exposure compensation = +3
+(bright band anchored ~83% pre-tonemap -- the brighter anchor is what drives
+AgX's flat mid to white whites, substituting for ACES's S-curve contrast),
+dark_adaptation = 0.1 (darkness reads as darkness; a scene 5 stops under
+neutral lifts only half a stop), min_ev -3. Default light color changed
+(255,244,214) warm -> pure white (light.h + defaults.cpp): warmth is per-light
+artistic choice, a tinted default skews perceived albedo everywhere.
+Insight worth keeping: AgX-with-bright-anchor and ACES-with-mid-anchor reach
+similar "lit looks lit" endpoints by different routes; anchor and curve trade
+off against each other.
+Remaining: 32^3 LUT bake + .cube import (Phase 3 close-out; deferred until
+.cube import is wanted -- see decision note), motion vectors (research:
+G-buffer velocity target, skinned/instanced prev-transform plumbing).
 KEY INSIGHT recorded: with the meter unclamped, exposure is scale-invariant --
 multiplying the whole scene by any constant is fully compensated. So the rest
 of Phase 2's "physical units" reduces to RELATIVE balance: fold the sky

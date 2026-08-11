@@ -765,7 +765,7 @@ void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
 
 
 #ifndef APPLY_AO_TO_DIRECT
-#define APPLY_AO_TO_DIRECT 1
+#define APPLY_AO_TO_DIRECT 0
 #endif
 
 #define PI 3.1415926535

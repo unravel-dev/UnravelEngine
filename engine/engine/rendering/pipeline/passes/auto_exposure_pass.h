@@ -31,9 +31,13 @@ public:
     {
         /// Lower clamp for metered scene brightness in EV100. A LOWER value lets the
         /// system BRIGHTEN dark scenes more (eye adaptation walking into shadow).
-        /// -6 gives interiors/night scenes real adaptation headroom (~2^6 gain over
-        /// the mid anchor) without amplifying pitch black into visible noise.
-        float min_ev = -6.0f;
+        /// -3 (~8x max gain with the default +1 compensation -> ~13x) keeps genuinely
+        /// dark interiors reading dark: probe-GI leaks are bounded but never zero, and
+        /// deeper adaptation exposes whatever tiny residual a sealed room contains
+        /// toward mid-gray (measured on the sealed-box test: -6 turned a sub-percent
+        /// leak into a full wash). Lower this per volume only for content where deep
+        /// night adaptation is the point, accepting that it will surface GI residuals.
+        float min_ev = -3.0f;
         /// Upper clamp for metered scene brightness in EV100. A HIGHER value lets the
         /// system DARKEN bright scenes more. Since the linear-color pipeline landed,
         /// the meter is trusted to float freely: 16 covers physical daylight (EV100
@@ -42,11 +46,22 @@ public:
         float max_ev = 16.0f;
         /// Exposure bias in EV stops applied on top of the metered result (+1 = 2x brighter).
         /// With this pass's K=12.5 / exp2(-EV)/1.2 formulation, an unclamped meter pins
-        /// the metered band at ~10.4% post-exposure; +1 EV anchors it at ~21%. Combined
-        /// with the bright-band percentiles below, this exposes FOR the highlights: lit
-        /// surfaces land near mid-gray and shadows fall naturally dark, instead of the
-        /// meter lifting shadows until the whole image washes out.
-        float compensation = 1.0f;
+        /// the metered band at ~10.4% post-exposure; +3 anchors it at ~83%, which drives
+        /// sunlit whites through the tone curve's shoulder to display white (calibrated
+        /// visually against UE on a gray-box exterior, paired with the AgX default).
+        /// Interiors don't wash out at this bright anchor because dark_adaptation keeps
+        /// them from chasing it.
+        float compensation = 3.0f;
+        /// Fraction of a dark scene's EV deficit the eye adapts away (the single-slope
+        /// version of UE's Exposure Compensation Curve / Unity HDRP's Curve Remapping).
+        /// 1 = full adaptation: any dark scene is lifted back to the mid-gray anchor
+        /// (until Min EV stops it) and dark rooms read bright. 0 = no adaptation: dark
+        /// scenes render at their true relative darkness. The 0.1 default keeps
+        /// adaptation subtle -- a scene 5 stops under neutral is lifted only half a
+        /// stop, so darkness reads as darkness (chosen with the bright +3 compensation
+        /// anchor, which would otherwise drag interiors up hard). Applies only BELOW
+        /// the neutral point; bright-scene metering is unaffected.
+        float dark_adaptation = 0.1f;
         /// Time constant in seconds for the exposure to INCREASE (scene getting darker).
         /// Larger = slower adaptation. Adaptation is performed in log2/EV space.
         float adaptation_speed_up = 3.0f;

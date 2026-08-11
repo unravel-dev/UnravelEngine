@@ -936,7 +936,7 @@ auto defaults::create_light_entity(rtti::context& ctx, scene& scn, light_type ty
   
 
     light light_data;
-    light_data.color = math::color(255, 244, 214, 255);
+    light_data.color = math::color(255, 255, 255, 255);
     light_data.type = type;
 
     auto& light_comp = object.get_or_emplace<light_component>();

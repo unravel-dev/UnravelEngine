@@ -4,6 +4,7 @@
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 #include <math/math.h>
+#include <algorithm>
 
 namespace unravel
 {
@@ -157,12 +158,37 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
                         0.0f};
     gfx::set_uniform(tonemapping_program_.u_tonemapping, tonemap);
 
-    float grading[4] = {params.config.contrast, params.config.saturation, 0.0f, 0.0f};
+    // z = grain amount (slider scaled so 0.1-0.3 is a filmic range and 1.0 is heavy
+    // stylized grain), w = animation seed.
+    frame_ = (frame_ + 1u) % 1024u;
+    float grading[4] = {params.config.contrast,
+                        params.config.saturation,
+                        params.config.grain_intensity * 0.25f,
+                        static_cast<float>(frame_)};
     gfx::set_uniform(tonemapping_program_.u_grading, grading);
 
     const auto wb_lms = compute_white_balance_lms(params.config.temperature, params.config.tint);
     float wb[4] = {wb_lms.x, wb_lms.y, wb_lms.z, 0.0f};
     gfx::set_uniform(tonemapping_program_.u_wb_lms, wb);
+
+    float vignette[4] = {params.config.vignette_intensity, params.config.vignette_smoothness, 0.0f, 0.0f};
+    gfx::set_uniform(tonemapping_program_.u_vignette, vignette);
+
+    // Lift/gamma/gain map from their neutral-gray (0.5) authoring space:
+    // lift: +-0.15 additive at black; gain: 0..2x at white; gamma: per-channel
+    // exponent uploaded pre-inverted so the shader does a single pow.
+    const auto& lift_c = params.config.lift.value;
+    const auto& gamma_c = params.config.gamma.value;
+    const auto& gain_c = params.config.gain.value;
+    float lift[4] = {(lift_c.x - 0.5f) * 0.3f, (lift_c.y - 0.5f) * 0.3f, (lift_c.z - 0.5f) * 0.3f, 0.0f};
+    float gamma_inv[4] = {1.0f / std::max(gamma_c.x * 2.0f, 0.05f),
+                          1.0f / std::max(gamma_c.y * 2.0f, 0.05f),
+                          1.0f / std::max(gamma_c.z * 2.0f, 0.05f),
+                          0.0f};
+    float gain[4] = {gain_c.x * 2.0f, gain_c.y * 2.0f, gain_c.z * 2.0f, 0.0f};
+    gfx::set_uniform(tonemapping_program_.u_lift, lift);
+    gfx::set_uniform(tonemapping_program_.u_gamma_inv, gamma_inv);
+    gfx::set_uniform(tonemapping_program_.u_gain, gain);
 
     gfx::set_texture(tonemapping_program_.s_input, 0, input->get_texture());
     gfx::set_texture(tonemapping_program_.s_exposure, 1, params.exposure_texture ? params.exposure_texture : default_textures::get().white_texture());
