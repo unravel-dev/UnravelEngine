@@ -273,12 +273,37 @@ bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int
 		    (vec2(tile) + vec2_splat(1.0) + depth_oct * float(GI_WORLD_PROBE_OCT_DEPTH)) *
 		    u_gi_world_probe_atlas.xy;
 		vec2 moments = texture2DLod(s_world_probe_depth, depth_uv, 0.0).xy;
+		// DEAD probe (the dead-probe gate zeroed it): no data is not a verdict - skip without
+		// counting toward covered_sum, so an all-dead cage still reports false and the
+		// cascade falls through to a level that HAS data, never to blackness.
+		if(moments.x <= 1e-4)
+		{
+			continue;
+		}
+		// The moments' trustworthiness decides everything below: low variance means the
+		// depth lobe saw ONE thing (a wall, or open space) and can be trusted BOTH ways;
+		// high variance means a silhouette wedge - the 8x8 oct texel mixes near-wall with
+		// far-open, the mean lands anywhere, Chebyshev saturates, and only the field march
+		// can answer (the measured sealed-box import channel).
+		float variance = abs(moments.y - moments.x * moments.x);
+		bool moments_ambiguous = variance > GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE *
+		                                        GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE * spacing * spacing;
 		if(distance_to_probe > moments.x)
 		{
-			float variance = abs(moments.y - moments.x * moments.x);
 			float difference = distance_to_probe - moments.x;
 			float chebyshev = variance / (variance + difference * difference);
 			chebyshev = chebyshev * chebyshev * chebyshev;
+			// CONFIDENTLY blocked: a low-variance lobe whose weight would have sat at the
+			// floor is a wall the probe actually measured - contribute exactly nothing.
+			// The floor exists so STATISTICAL rejection cannot zero a cage, but flooring
+			// confident blocks lets normalisation launder an all-blocked cage's texels back
+			// to full amplitude; the covered_sum contract makes the zeroed cage safe (it
+			// answers sealed-dark, not sky).
+			if(!moments_ambiguous && chebyshev < GI_CHEBYSHEV_WEIGHT_FLOOR)
+			{
+				covered_sum += weight;
+				continue;
+			}
 			weight *= max(chebyshev, GI_CHEBYSHEV_WEIGHT_FLOOR);
 		}
 		// Perception crush [DDGI19]: fade dim contributions faster than linear, which is what
@@ -289,11 +314,13 @@ bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int
 			weight *= (weight * weight) / (GI_PERCEPTION_CRUSH_THRESHOLD * GI_PERCEPTION_CRUSH_THRESHOLD);
 		}
 		covered_sum += weight;
-		// Field visibility LAST, unfloored and never renormalised around: the floors above
-		// exist so statistical rejection cannot zero a cage, but a wall the clipmap itself
-		// reports between the pair is not statistics - a blocked probe contributes exactly
-		// nothing, no matter how loud its moments say otherwise (the silhouette-wedge leak).
-		if(GiWorldProbeCageVisibility(biased, probe_position, spacing) <= 0.0)
+		// Field visibility for the AMBIGUOUS band only, unfloored and never renormalised
+		// around: a wall the clipmap itself reports between the pair is not statistics - a
+		// blocked probe contributes exactly nothing, no matter how loud its moments say
+		// otherwise (the silhouette-wedge leak). Gating the march to this band is what keeps
+		// the pass affordable: ungated it walked 8 probes per query and tripled the
+		// light-voxel pass, while flat-wall and open lobes never needed it.
+		if(moments_ambiguous && GiWorldProbeCageVisibility(biased, probe_position, spacing) <= 0.0)
 		{
 			continue;
 		}
@@ -429,12 +456,28 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 			                 GiOctEncode(to_query / query_distance) * float(GI_WORLD_PROBE_OCT_DEPTH)) *
 			                u_gi_world_probe_atlas.xy;
 			vec2 moments = texture2DLod(s_world_probe_depth, depth_uv, 0.0).xy;
+			// DEAD probe: no data, not a verdict - and no covered_sum, so all-dead cages fall
+			// through to the coarser level (see the irradiance cage).
+			if(moments.x <= 1e-4)
+			{
+				continue;
+			}
+			float variance = abs(moments.y - moments.x * moments.x);
+			bool moments_ambiguous = variance > GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE *
+			                                        GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE * spacing * spacing;
 			if(query_distance > moments.x)
 			{
-				float variance = abs(moments.y - moments.x * moments.x);
 				float difference = query_distance - moments.x;
 				float chebyshev = variance / (variance + difference * difference);
 				chebyshev = chebyshev * chebyshev * chebyshev;
+				// CONFIDENTLY blocked - zero, never floored: this reader has no perception
+				// crush, so floored probes renormalise to FULL amplitude when the whole cage
+				// is blocked, completing interior rays with the sunlit far side of the wall.
+				if(!moments_ambiguous && chebyshev < GI_CHEBYSHEV_WEIGHT_FLOOR)
+				{
+					covered_sum += weight;
+					continue;
+				}
 				weight *= max(chebyshev, GI_CHEBYSHEV_WEIGHT_FLOOR);
 			}
 			if(weight <= 1e-5)
@@ -442,11 +485,13 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 				continue;
 			}
 			covered_sum += weight;
-			// Field visibility, unfloored (see the irradiance cage): the depth moments blur
-			// silhouettes into ~22-degree wedges that pass exterior probes at full weight, and
-			// a completed ray carries that import into every gather cone - the dominant sealed
-			// -room leak once the trace side was watertight.
-			if(GiWorldProbeCageVisibility(position, probe_position, spacing) <= 0.0)
+			// Field visibility for the AMBIGUOUS band only, unfloored (see the irradiance
+			// cage): the depth moments blur silhouettes into ~22-degree wedges that pass
+			// exterior probes at full weight, and a completed ray carries that import into
+			// every gather cone - the dominant sealed-room leak once the trace side was
+			// watertight. The gate keeps completions affordable: most miss-ray cages are
+			// open-lobe or flat-wall cases the moments already answer.
+			if(moments_ambiguous && GiWorldProbeCageVisibility(position, probe_position, spacing) <= 0.0)
 			{
 				continue;
 			}

@@ -163,3 +163,38 @@ gate) - that is the quality contract, not a regression. Remaining no-quality-los
 light-voxel ambiguous-face trim (~0.15-0.2 ms, flat), denoise variance early-out. Quality
 trades if 4K budgets ever demand them: probe_spacing, quarter-res gather, second adaptive
 hierarchy level (evens vs stride-4 grandparents).
+
+## Sealed-box leak-defence capture (2026-08-12, Bistro, user-recorded)
+
+After the leak hunt landed: field-visibility cage weighting (variance-gated to the
+Chebyshev-ambiguous band, confident blocks zeroed, dead probes skipped), the buried-hit
+guard in the gather, and the handover suppression fix (rays that used to suppress-walk at
+the mesh<->clipmap handover now hit immediately - a step-count WIN on every near-geometry
+ray).
+
+| Pass | 4K GPU ms | FHD GPU ms |
+|---|---|---|
+| Light Voxels | 0.991 | 0.973 |
+| World Probe Trace | 0.066 | 0.065 |
+| World Probe Convolve | 0.151 | 0.151 |
+| ReflectionsTrace | 1.093 | 0.535 |
+| ReflectionsTemporal + Composite | 0.284 | 0.095 |
+| Probe Place + Classify + Args | 0.053 | 0.018 |
+| Probe Trace (v2) | 2.452 | 0.954 |
+| Probe Interp | 0.021 | 0.009 |
+| Probe Filter + Integrate | 0.390 | 0.154 |
+| Temporal | 0.118 | 0.026 |
+| Denoise x3 | 1.176 | 0.342 |
+| Upsample | 0.165 | 0.054 |
+| **Total** | **6.958** | **3.376** |
+
+Versus the 2026-08-09 close-out (5.786 / 2.570): +1.17 ms 4K, +0.81 ms FHD - the price of
+the leak defence, concentrated exactly in the three cage-read consumers and resolution-flat
+where world-scale (Light Voxels +0.50, Probe Trace +0.42/+0.22, Integrate +0.20/+0.08;
+reflections and denoise unchanged). The ungated march had cost 2.0 ms in Light Voxels ALONE;
+the variance gate reclaimed ~70% of that. R6 (<= 4.5 ms FHD-class): still met with 1.1 ms
+headroom. Remaining reclaim levers, in value order: (1) per-face visibility-mask cache for
+the bounce term, keyed on content epoch + probe-window scroll - geometry-static verdicts
+never re-march, expected to return most of the +0.5 ms flat cost; (2) variance gate 0.15 ->
+0.2 spacings (cheaper trace completions, slightly wider leak margin on small-mixture
+wedges); (3) the pre-existing ambiguous-face trim above.

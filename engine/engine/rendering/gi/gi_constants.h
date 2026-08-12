@@ -161,6 +161,19 @@
       " hugging the OPEN side of a wall must stay readable from the room it serves; one voxel"     \
       " excludes both contact zones while any wall that actually separates the pair still"         \
       " crosses the tested middle")                                                                \
+    X(GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE, 0.15f,                                                \
+      "probe spacings (std of the depth lobe)", "derived: the march runs ONLY where the depth"     \
+      " moments are statistically ambiguous - std above this fraction of the probe spacing."      \
+      " The measured leak channel was the SILHOUETTE WEDGE: an 8x8 oct texel mixing wall-at-w"     \
+      " with beyond-the-1.5-spacing depth clamp has std >= ~0.2 spacings for any mixture that"     \
+      " carries visible energy (p(1-p)(span)^2 with span >= 0.5 spacing, p >= 0.05), while a"      \
+      " flat wall or an open lobe under the cos^50 depth lobe measures well under a tenth."       \
+      " Low-variance moments are trusted BOTH ways: confidently-visible probes skip the march"     \
+      " at full weight, confidently-blocked ones (chebyshev below the floor) are ZEROED"           \
+      " rather than floored - the floor plus renormalisation otherwise launders an"                \
+      " all-blocked cage's texels back to full amplitude (the radiance reader has no crush)."      \
+      " Ungated, the march tripled the light-voxel pass: interiors defeat the mid-segment"         \
+      " clearance proof, so every relit face paid 8 walks (measured 0.5 -> 2.0 ms)")               \
     X(GI_PERCEPTION_CRUSH_THRESHOLD, 0.2f,                                                         \
       "weight", "published: [DDGI19] w *= w^2/threshold^2 below this - suppresses dim leaks the"   \
       " eye's log response would otherwise amplify")                                               \
