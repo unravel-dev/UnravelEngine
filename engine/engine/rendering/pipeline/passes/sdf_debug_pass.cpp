@@ -87,7 +87,10 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
         gfx::set_texture(debug_program_.s_world_probe_depth, 15, clipmap_gpu.get_world_probe_depth());
         const float base_spacing = params.view_cache->get_clipmap().get_level(0).voxel_size *
                                    float(gi::GI_WORLD_PROBE_DIVISOR);
-        const float probe_params[4] = {base_spacing, 0.0f, 1.0f, 0.0f};
+        const float probe_params[4] = {base_spacing,
+                                       0.0f,
+                                       1.0f,
+                                       params.settings.probe_visibility_variance_gate};
         gfx::set_uniform(debug_program_.u_gi_world_probe_params, probe_params);
         gfx::set_uniform(debug_program_.u_gi_world_probe_atlas, clipmap_gpu.get_world_probe_atlas_params());
     }

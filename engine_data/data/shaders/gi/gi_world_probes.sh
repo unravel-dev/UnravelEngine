@@ -51,11 +51,15 @@ vec3 GiFiniteOrZero(vec3 v)
 #define GI_WORLD_PROBE_AXIS 9
 
 /// x = probe spacing of level 0 in world units (doubles per level), y = frame index,
-/// z = non-zero when the probe atlases are resident, w reserved.
+/// z = non-zero when the probe atlases are resident, w = the cage-visibility variance gate
+/// in probe spacings (std of the depth lobe; 0 = march every probe). The shipped default is
+/// GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE - a consumer that never sets the lane gets 0, the
+/// march-always safe-slow extreme, never a leak.
 uniform vec4 u_gi_world_probe_params;
-#define u_world_probe_base_spacing u_gi_world_probe_params.x
-#define u_world_probe_frame        uint(u_gi_world_probe_params.y)
-#define u_world_probe_ready        (u_gi_world_probe_params.z > 0.0)
+#define u_world_probe_base_spacing  u_gi_world_probe_params.x
+#define u_world_probe_frame         uint(u_gi_world_probe_params.y)
+#define u_world_probe_ready         (u_gi_world_probe_params.z > 0.0)
+#define u_world_probe_cage_vis_gate u_gi_world_probe_params.w
 
 float GiWorldProbeSpacing(int level)
 {
@@ -205,37 +209,102 @@ float GiWorldProbeCageVisibility(vec3 from, vec3 to, float spacing)
 	return 1.0;
 }
 
+/// Self-shadow bias [DDGI21 Eq.2]: move the query toward the surface's clear side before any
+/// visibility test. CAPPED at field-voxel scale: the spacing-proportional magnitude DDGI
+/// publishes (0.225 x spacing = 0.45 m at the 2 m lattice) TUNNELS THROUGH any wall thinner
+/// than it - the biased point lands outside, Chebyshev sees the exterior probe unoccluded,
+/// and a sunlit exterior floods a closed room (measured on the thick-walled test room; the
+/// documented DDGI thin-wall failure). Clearing the query surface's own field shadow is a
+/// VOXEL-scale need, so two voxels of the level's field is enough - and stays below any
+/// wall the field itself can resolve. Shared by the cage read and the bounce memo's mask
+/// fill - the mask's bits must describe exactly the biased point the read walks from.
+/// CPU transcription in gi_tests.cpp (world_probe_biased_query): keep in step by hand.
+vec3 GiWorldProbeBiasedQuery(vec3 position, vec3 normal, vec3 view_direction, float spacing)
+{
+	float bias_magnitude = min(GI_SELF_SHADOW_BIAS_SCALE * GI_SELF_SHADOW_BIAS_K * spacing,
+	                           GI_SELF_SHADOW_BIAS_MAX_VOXELS * spacing / float(GI_WORLD_PROBE_DIVISOR));
+	return position + (normal * GI_SELF_SHADOW_BIAS_NORMAL + view_direction * GI_SELF_SHADOW_BIAS_VIEW) *
+	                      bias_magnitude;
+}
+
+/**
+ * The bounce memo's FILL: the field's verdict for every corner of the cage that
+ * GiWorldProbeIrradiance would walk at @p level - bit i set when cage corner i (the read's
+ * corner enumeration: offset = (i & 1, i >> 1 & 1, i >> 2 & 1) from the biased point's base
+ * cell) is field-visible from the biased query. Marches ALL 8 corners, deliberately ungated:
+ * the fill is amortised across the memo's lifetime, and an honest bit for every corner is
+ * what lets the masked read apply the verdicts to every probe (a strictly wider leak margin
+ * than gated marching). CPU transcription in gi_tests.cpp (cage_mask): keep in step by hand.
+ */
+uint GiWorldProbeCageMask(vec3 position, vec3 normal, vec3 view_direction, int level)
+{
+	float spacing = GiWorldProbeSpacing(level);
+	vec3 biased = GiWorldProbeBiasedQuery(position, normal, view_direction, spacing);
+	ivec3 base_cell = ivec3(floor(biased / spacing));
+	uint mask = 0u;
+	LOOP for(int corner = 0; corner < 8; ++corner)
+	{
+		ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
+		vec3 probe_position = GiWorldProbeCellPosition(base_cell + offset, level);
+		if(GiWorldProbeCageVisibility(biased, probe_position, spacing) > 0.0)
+		{
+			mask |= 1u << uint(corner);
+		}
+	}
+	return mask;
+}
+
+/// Bounce visibility-memo texel layout (stored in an R32U volume, low 16 bits used): low
+/// byte = the 8-bit cage mask above, bits 8-13 = a wrapping generation tag (0 reserved as
+/// "never stamped" - the volume clears to 0 and the CPU hands out generations 1..63), bits
+/// 14-15 = the probe LEVEL the mask was computed for. These four functions are the layout's
+/// single source of truth; the CPU transcriptions in gi_tests.cpp pin them by hand.
+uint GiWorldProbeVisMemoPack(uint mask, uint generation, int level)
+{
+	return (mask & 0xFFu) | ((generation & 0x3Fu) << 8u) | (uint(level) << 14u);
+}
+
+uint GiWorldProbeVisMemoMask(uint texel_value)
+{
+	return texel_value & 0xFFu;
+}
+
+uint GiWorldProbeVisMemoGeneration(uint texel_value)
+{
+	return (texel_value >> 8u) & 0x3Fu;
+}
+
+int GiWorldProbeVisMemoLevel(uint texel_value)
+{
+	return int((texel_value >> 14u) & 0x3u);
+}
+
 #ifndef GI_WORLD_PROBE_SKIP_IRRADIANCE
 /**
  * Irradiance around @p normal at @p position from the 8-probe cage of @p level, with the full
  * DDGI weight chain: trilinear x wrap-shading backface x Chebyshev visibility (cubed, floored)
  * x perception crush, evaluated at the self-shadow-biased point - then the field's own verdict,
- * GiWorldProbeCageVisibility, which a blocked probe does not survive. Returns false when the
- * level's window does not cover the position or the cage never carried weight; a cage whose
- * every probe the FIELD blocked returns TRUE with zero irradiance - sealed is a measurement,
- * and it must not fall through to a coarser cage or the environment term.
+ * which a blocked probe does not survive. Returns false when the level's window does not cover
+ * the position or the cage never carried weight; a cage whose every probe the FIELD blocked
+ * returns TRUE with zero irradiance - sealed is a measurement, and it must not fall through to
+ * a coarser cage or the environment term.
+ *
+ * The field verdict has two forms, chosen by @p use_mask: marched here for the statistically
+ * ambiguous band (every consumer's default - see GiWorldProbeIrradiance), or SUPPLIED by the
+ * caller as a per-corner bitmask (the light-voxel bounce memo - see
+ * GiWorldProbeIrradianceMasked). Everything else in the chain is identical between the two.
  *
  * All the constants are the published DDGI/RTXGI values, owned by gi_constants
  * (tasks/research/research_probe_systems.md section 1.3 quotes the chain verbatim).
  */
-bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int level,
-                            out vec3 out_irradiance, out float out_sky_fraction)
+bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direction, int level,
+                                    bool use_mask, uint visibility_mask,
+                                    out vec3 out_irradiance, out float out_sky_fraction)
 {
 	out_irradiance = vec3_splat(0.0);
 	out_sky_fraction = 0.0;
 	float spacing = GiWorldProbeSpacing(level);
-	// Self-shadow bias [DDGI21 Eq.2]: move the query toward the surface's clear side before any
-	// visibility test. CAPPED at field-voxel scale: the spacing-proportional magnitude DDGI
-	// publishes (0.225 x spacing = 0.45 m at the 2 m lattice) TUNNELS THROUGH any wall thinner
-	// than it - the biased point lands outside, Chebyshev sees the exterior probe unoccluded,
-	// and a sunlit exterior floods a closed room (measured on the thick-walled test room; the
-	// documented DDGI thin-wall failure). Clearing the query surface's own field shadow is a
-	// VOXEL-scale need, so two voxels of the level's field is enough - and stays below any
-	// wall the field itself can resolve.
-	float bias_magnitude = min(GI_SELF_SHADOW_BIAS_SCALE * GI_SELF_SHADOW_BIAS_K * spacing,
-	                           GI_SELF_SHADOW_BIAS_MAX_VOXELS * spacing / float(GI_WORLD_PROBE_DIVISOR));
-	vec3 biased = position + (normal * GI_SELF_SHADOW_BIAS_NORMAL + view_direction * GI_SELF_SHADOW_BIAS_VIEW) *
-	                             bias_magnitude;
+	vec3 biased = GiWorldProbeBiasedQuery(position, normal, view_direction, spacing);
 	vec3 grid = biased / spacing;
 	ivec3 base_cell = ivec3(floor(grid));
 	vec3 frac = grid - vec3(base_cell);
@@ -284,10 +353,11 @@ bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int
 		// depth lobe saw ONE thing (a wall, or open space) and can be trusted BOTH ways;
 		// high variance means a silhouette wedge - the 8x8 oct texel mixes near-wall with
 		// far-open, the mean lands anywhere, Chebyshev saturates, and only the field march
-		// can answer (the measured sealed-box import channel).
+		// can answer (the measured sealed-box import channel). The gate is the live setting
+		// carried in u_gi_world_probe_params.w (default: the constant of the same name).
 		float variance = abs(moments.y - moments.x * moments.x);
-		bool moments_ambiguous = variance > GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE *
-		                                        GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE * spacing * spacing;
+		bool moments_ambiguous = variance > u_world_probe_cage_vis_gate *
+		                                        u_world_probe_cage_vis_gate * spacing * spacing;
 		if(distance_to_probe > moments.x)
 		{
 			float difference = distance_to_probe - moments.x;
@@ -314,13 +384,21 @@ bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int
 			weight *= (weight * weight) / (GI_PERCEPTION_CRUSH_THRESHOLD * GI_PERCEPTION_CRUSH_THRESHOLD);
 		}
 		covered_sum += weight;
-		// Field visibility for the AMBIGUOUS band only, unfloored and never renormalised
-		// around: a wall the clipmap itself reports between the pair is not statistics - a
-		// blocked probe contributes exactly nothing, no matter how loud its moments say
-		// otherwise (the silhouette-wedge leak). Gating the march to this band is what keeps
-		// the pass affordable: ungated it walked 8 probes per query and tripled the
+		// Field visibility, unfloored and never renormalised around: a wall the clipmap
+		// itself reports between the pair is not statistics - a blocked probe contributes
+		// exactly nothing, no matter how loud its moments say otherwise (the silhouette-wedge
+		// leak). Masked callers apply their pre-paid verdicts to EVERY probe (strictly wider
+		// leak margin); marching callers gate to the ambiguous band, which is what keeps the
+		// pass affordable - ungated the march walked 8 probes per query and tripled the
 		// light-voxel pass, while flat-wall and open lobes never needed it.
-		if(moments_ambiguous && GiWorldProbeCageVisibility(biased, probe_position, spacing) <= 0.0)
+		if(use_mask)
+		{
+			if((visibility_mask & (1u << uint(corner))) == 0u)
+			{
+				continue;
+			}
+		}
+		else if(moments_ambiguous && GiWorldProbeCageVisibility(biased, probe_position, spacing) <= 0.0)
 		{
 			continue;
 		}
@@ -345,10 +423,30 @@ bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int
 	return true;
 }
 
+/// The default cage read: field verdicts marched here, gated to the Chebyshev-ambiguous band.
+bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int level,
+                            out vec3 out_irradiance, out float out_sky_fraction)
+{
+	return GiWorldProbeIrradianceInternal(position, normal, view_direction, level, false, 0u,
+	                                      out_irradiance, out_sky_fraction);
+}
+
+/// The memoised cage read (light-voxel bounce): field verdicts supplied as the per-corner
+/// bitmask GiWorldProbeCageMask filled, applied to every probe in place of the gated march.
+bool GiWorldProbeIrradianceMasked(vec3 position, vec3 normal, vec3 view_direction, int level,
+                                  uint visibility_mask,
+                                  out vec3 out_irradiance, out float out_sky_fraction)
+{
+	return GiWorldProbeIrradianceInternal(position, normal, view_direction, level, true,
+	                                      visibility_mask, out_irradiance, out_sky_fraction);
+}
+
 /**
  * As @ref GiWorldProbeIrradiance, choosing the finest level whose window covers the position
  * and cross-fading into the next over the outermost probe cell - the DDGI 2021 cascade blend,
- * tightened by one cell so a scrolled plane cannot pop.
+ * tightened by one cell so a scrolled plane cannot pop. The light-voxel bounce runs its own
+ * memoised twin of this walk (GiBounceProbeIrradiance, gi_light_voxels_kernel.sh): coverage
+ * test, all-dead fall-through and blend band must stay in step BY HAND.
  */
 bool GiWorldProbeIrradianceCascade(vec3 position, vec3 normal, vec3 view_direction,
                                    vec3 window_center,
@@ -463,8 +561,8 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 				continue;
 			}
 			float variance = abs(moments.y - moments.x * moments.x);
-			bool moments_ambiguous = variance > GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE *
-			                                        GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE * spacing * spacing;
+			bool moments_ambiguous = variance > u_world_probe_cage_vis_gate *
+			                                        u_world_probe_cage_vis_gate * spacing * spacing;
 			if(query_distance > moments.x)
 			{
 				float difference = query_distance - moments.x;

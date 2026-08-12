@@ -1805,6 +1805,7 @@ void scene_panel::draw_visualization_menu()
         ImGui::RadioButton("SDF (World Probes)", &visualize_passes_, 25);
         ImGui::RadioButton("SDF (Sun Tiers)", &visualize_passes_, 26);
         ImGui::RadioButton("SDF (Probe Sky)", &visualize_passes_, 27);
+        ImGui::RadioButton("SDF (Vis Memo)", &visualize_passes_, 28);
 
         ImGui::EndMenu();
     }

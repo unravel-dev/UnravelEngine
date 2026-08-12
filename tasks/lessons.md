@@ -2,6 +2,16 @@
 
 Patterns worth keeping, distilled from corrections during debugging sessions. Newest first.
 
+## Shaders (vis-memo perf hunt, 2026-08-13)
+
+- **HLSL's `?:` is a SELECT, not control flow - never put an expensive call in a ternary
+  arm.** Both operands may be evaluated and the loser discarded; a memo whose fill march sat
+  on the false arm classified perfectly (debug view solid green) while the pass paid
+  march-every-face prices - the entire saving the memo existed for, silently burned. Use an
+  explicit `BRANCH if/else` around any arm with texture reads or loops. The discriminating
+  signature: an instrument showing the LOGIC correct while the COST matches the eliminated
+  path means execution semantics, not algorithm.
+
 ## GI / SDF (sealed-box leak hunt, 2026-08-12)
 
 - **An occlusion acceptance over probe-cage segments must be a conviction depth (inside

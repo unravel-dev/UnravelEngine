@@ -40,17 +40,29 @@
 #define GI_WORLD_PROBE_READ
 #include "gi/gi_world_probes.sh"
 
-/// Surface-voxel list + per-level counts, written by cs_gi_clipmap_attributes. The count sits
-/// at a high stage ON PURPOSE: OpenGL guarantees only eight image units (bindings 0-7), so the
-/// light-volume IMAGE below must live in that range while buffers and samplers tolerate the
-/// high stages.
-BUFFER_RO(b_surface_list, uint, 6);
-BUFFER_RO(b_surface_count, uint, 10);
+/// Surface-voxel list, written by cs_gi_clipmap_attributes: a SDF_CLIPMAP_LEVEL_COUNT-entry
+/// header of per-level counts (index = level), then one capacity-sized entry segment per
+/// level. ONE buffer at a high stage ON PURPOSE: OpenGL guarantees only eight image units
+/// (bindings 0-7), so the low stages are reserved for this pass's 3D IMAGES while buffers
+/// and samplers tolerate the high ones - the old split count buffer occupied this pass's
+/// last free stage.
+BUFFER_RO(b_surface_list, uint, 10);
 /// Attribute volumes: what the surface looks like.
 SAMPLER3D(s_attr_albedo, 8);
 SAMPLER3D(s_attr_emissive, 9);
 /// The light volume this pass owns.
 IMAGE3D_WO(s_light_voxels_out, rgba16f, 7);
+/// The bounce's cage-visibility memo: one texel per light-volume texel (same
+/// GiLightVoxelTexel addressing), holding mask + generation + probe level in the low 16
+/// bits (GiWorldProbeVisMemoPack). R32U because 32-bit typed UAV loads are the only ones
+/// every backend guarantees - a 16-bit load on hardware without the optional cap silently
+/// reads zero, which never matches a live generation and turns the memo into a permanent
+/// miss. The cage verdicts are geometry-static per face, so they are marched once and
+/// reused until the generation moves (field content changed, probe window scrolled) or the
+/// answering probe level flips (the level tag) - see GiBounceProbeIrradiance. Stage 6 is an
+/// IMAGE on purpose: OpenGL guarantees only eight image units (bindings 0-7), which is why
+/// the surface list vacated it.
+UIMAGE3D_RW(s_gi_vis_memo, r32ui, 6);
 
 /// Defined locally rather than taken from lighting.sh, which this shader does not include. The
 /// D3D backend happens to supply one anyway, so relying on it compiles there and fails on GLSL.
@@ -60,6 +72,11 @@ IMAGE3D_WO(s_light_voxels_out, rgba16f, 7);
 /// needs the same centre the trace pass used. w mirrors the sun-tier debug state for GPU-debugger
 /// inspection ONLY - the kernel does not read it.
 uniform vec4 u_gi_light_voxel_camera;
+/// x = the bounce visibility-memo generation (1..63; 0 = memo unavailable, fall back to the
+/// gated march every other consumer runs). The CPU bumps it when the clipmap content epoch
+/// changes or any probe window scrolls, so a stale texel can never serve.
+uniform vec4 u_gi_vis_memo_params;
+#define u_vis_memo_generation uint(u_gi_vis_memo_params.x)
 /// COMPILE-TIME variant switch, deliberately NOT a uniform. The debug write spent two hunts
 /// dead behind runtime flags that provably left the CPU (two independent lanes, current
 /// binaries, one camera, per-submit capture semantics) yet never steered the kernel - never
@@ -72,6 +89,18 @@ uniform vec4 u_gi_light_voxel_camera;
 #	define u_light_voxel_debug_sun_tiers true
 #else
 #	define u_light_voxel_debug_sun_tiers false
+#endif
+/// Third compiled variant (cs_gi_light_voxels_vis_memo_debug.sc): paints the LIVE bounce
+/// visibility-memo transaction per face into the light volume instead of radiance - the
+/// instrument for "is the memo hitting" (measured 2026-08-13: Light Voxels +0.5 ms over the
+/// pre-memo build = the miss-every-rotation cost signature; the CPU-side links all verified,
+/// exactly the situation the sun-tier saga taught to settle with a compiled variant, never a
+/// runtime flag). It runs the real memo path - load, miss-march, restamp - so the view shows
+/// the mechanism itself, not a simulation of it.
+#ifdef GI_VIS_MEMO_DEBUG_VARIANT
+#	define u_light_voxel_debug_vis_memo true
+#else
+#	define u_light_voxel_debug_vis_memo false
 #endif
 
 /*
@@ -87,22 +116,162 @@ uniform vec4 u_gi_light_voxel_camera;
  */
 float GiBounceCavityVisibility(vec3 position, vec3 direction, float attr_voxel)
 {
-	float occlusion = 0.0;
-	float weight = 1.0;
-	float weight_sum = 0.0;
 	float t = attr_voxel;
-	LOOP for(int i = 0; i < GI_BOUNCE_AO_STEPS; ++i)
+	float d1 = SdfSampleClipmap(position + direction * t);
+	// EXACT early-outs from the field's 1-Lipschitz bound. The samples sit on one line at
+	// t_i = 1/2/4 attribute voxels, so |d_i - d1| <= t_i - t1 and a sample's occlusion term
+	// saturates to zero exactly when d_i >= t_i:
+	//  - d1 >= 2*t_last - t1 (= 2*4 - 1 = 7 attribute voxels at the shipped 3 steps): then
+	//    d_i >= d1 - (t_i - t1) >= t_i for EVERY farther sample - all terms provably zero,
+	//    the march answers fully visible from this one sample. Open exteriors resolve here.
+	//  - d1 <= 0: the first sample sits inside composed geometry - the face is buried, the
+	//    march answers fully occluded.
+	// In between, the remaining samples run exactly as before; the bounds trade nothing but
+	// the redundant samples.
+	float t_last = t * float(1 << (GI_BOUNCE_AO_STEPS - 1));
+	if(d1 >= 2.0 * t_last - t)
 	{
-		// Field >= travel distance: the cone is clear at this scale, no contribution. Field
-		// negative (inside geometry): fully occluded. The weights halve so near encroachment
-		// - the strongest visibility signal - dominates.
+		return 1.0;
+	}
+	if(d1 <= 0.0)
+	{
+		return 0.0;
+	}
+	// Field >= travel distance: the cone is clear at this scale, no contribution. Field
+	// negative (inside geometry): fully occluded. The weights halve so near encroachment
+	// - the strongest visibility signal - dominates.
+	float occlusion = saturate(1.0 - d1 / t);
+	float weight = 0.5;
+	float weight_sum = 1.0;
+	LOOP for(int i = 1; i < GI_BOUNCE_AO_STEPS; ++i)
+	{
+		t *= 2.0;
 		float d = SdfSampleClipmap(position + direction * t);
 		occlusion += weight * saturate(1.0 - d / t);
 		weight_sum += weight;
 		weight *= 0.5;
-		t *= 2.0;
 	}
 	return saturate(1.0 - occlusion / weight_sum);
+}
+
+/*
+ * The bounce's world-probe read, memoised: the twin of GiWorldProbeIrradianceCascade
+ * (gi_world_probes.sh - coverage test, all-dead fall-through and blend band kept in step BY
+ * HAND) whose per-cage field verdicts come from the visibility memo instead of being marched
+ * per rotation. The verdicts are geometry-static: they depend only on the field and on the
+ * cage's lattice positions, both of which the generation tag tracks - so a face pays the
+ * 8-corner march once per generation instead of once per relight.
+ *
+ *  - Memo HIT (generation and probe level match): the stored mask answers for every probe -
+ *    verdicts this cheap need no variance gate, a strictly wider leak margin than gated
+ *    marching (a confidently-wrong Chebyshev lobe cannot slip a wall past a stored verdict).
+ *  - Memo MISS: march all 8 corners once (GiWorldProbeCageMask, ungated - the fill is
+ *    amortised), and restamp the texel with the level that actually ANSWERED, so an all-dead
+ *    finest cage never pins the tag to a level that returns nothing (its cage costs no
+ *    marches anyway: dead probes exit before the field verdict).
+ *  - Generation 0: the memo was never seeded (its clear shader missing) - run exactly the
+ *    gated read every other consumer runs. Safe-slow, never a leak.
+ *
+ * The far-blend read (the outer half-cell of the window) keeps the plain gated march: one
+ * texel holds one level's mask, and the band is a minority of voxels.
+ *
+ * @p out_memo_state reports the transaction for the vis-memo debug variant:
+ * GI_VIS_MEMO_STATE_OFF = generation 0 (memo unavailable, gated fallback ran),
+ * _HIT = stored verdicts served, _MISS = marched and restamped, _NONE = no covering cage
+ * answered (nothing added). Costs nothing in the radiance variant - dead writes fold away.
+ */
+#define GI_VIS_MEMO_STATE_OFF  0
+#define GI_VIS_MEMO_STATE_HIT  1
+#define GI_VIS_MEMO_STATE_MISS 2
+#define GI_VIS_MEMO_STATE_NONE 3
+bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texel,
+                             out vec3 out_irradiance, out float out_sky_fraction,
+                             out int out_memo_state)
+{
+	out_irradiance = vec3_splat(0.0);
+	out_sky_fraction = 0.0;
+	out_memo_state = GI_VIS_MEMO_STATE_NONE;
+	bool memo_live = u_vis_memo_generation != 0u;
+	uint memo_value = 0u;
+	if(memo_live)
+	{
+		memo_value = imageLoad(s_gi_vis_memo, memo_texel).x;
+	}
+	LOOP for(int level = 0; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
+	{
+		float spacing = GiWorldProbeSpacing(level);
+		float half_extent = (float(GI_WORLD_PROBE_AXIS - 1) * 0.5 - 1.0) * spacing;
+		vec3 delta = abs(position - u_gi_light_voxel_camera.xyz);
+		float largest = max(delta.x, max(delta.y, delta.z));
+		if(largest > half_extent)
+		{
+			continue;
+		}
+		vec3 near_irradiance;
+		float near_sky;
+		bool answered;
+		bool restamp = false;
+		uint mask = 0u;
+		if(!memo_live)
+		{
+			answered = GiWorldProbeIrradiance(position, face_direction, face_direction, level,
+			                                  near_irradiance, near_sky);
+		}
+		else
+		{
+			bool hit = GiWorldProbeVisMemoGeneration(memo_value) == u_vis_memo_generation &&
+			           GiWorldProbeVisMemoLevel(memo_value) == level;
+			// A real BRANCH, never a ternary: HLSL's ?: is a SELECT that may evaluate BOTH
+			// operands, and with the 8-corner march on the miss side the fill executed on
+			// every face and was discarded on hits - the memo classified perfectly (view 28
+			// solid green) while the pass still paid march-every-rotation prices (measured:
+			// the entire +0.5 ms the memo was built to reclaim).
+			BRANCH if(hit)
+			{
+				mask = GiWorldProbeVisMemoMask(memo_value);
+			}
+			else
+			{
+				mask = GiWorldProbeCageMask(position, face_direction, face_direction, level);
+			}
+			restamp = !hit;
+			answered = GiWorldProbeIrradianceMasked(position, face_direction, face_direction,
+			                                        level, mask, near_irradiance, near_sky);
+		}
+		if(!answered)
+		{
+			// All-dead cage: no data is not a verdict - the coarser level answers, marched
+			// and sealed like this one (the round-2 fall-through contract).
+			continue;
+		}
+		out_memo_state = !memo_live ? GI_VIS_MEMO_STATE_OFF
+		                            : (restamp ? GI_VIS_MEMO_STATE_MISS : GI_VIS_MEMO_STATE_HIT);
+		if(restamp)
+		{
+			imageStore(s_gi_vis_memo, memo_texel,
+			           uvec4(GiWorldProbeVisMemoPack(mask, u_vis_memo_generation, level),
+			                 0u, 0u, 0u));
+		}
+		// Blend toward the next level over the outer half of the last usable cell, exactly as
+		// the cascade read does.
+		float band = 0.5 * spacing;
+		float blend = saturate((largest - (half_extent - band)) / band);
+		if(blend > 0.0 && level + 1 < SDF_CLIPMAP_LEVEL_COUNT)
+		{
+			vec3 far_irradiance;
+			float far_sky;
+			if(GiWorldProbeIrradiance(position, face_direction, face_direction, level + 1,
+			                          far_irradiance, far_sky))
+			{
+				near_irradiance = mix(near_irradiance, far_irradiance, blend);
+				near_sky = mix(near_sky, far_sky, blend);
+			}
+		}
+		out_irradiance = GiFiniteOrZero(near_irradiance);
+		out_sky_fraction = near_sky;
+		return true;
+	}
+	return false;
 }
 
 /*
@@ -189,7 +358,7 @@ void main()
 	{
 		return;
 	}
-	if(entry >= b_surface_count[level])
+	if(entry >= b_surface_list[level])
 	{
 		return;
 	}
@@ -201,7 +370,7 @@ void main()
 	}
 	// packed_slot, not `packed`: that word is a GLSL layout-qualifier keyword and a variable
 	// named after it fails the OpenGL backend outright.
-	uint packed_slot = b_surface_list[level * capacity + entry];
+	uint packed_slot = b_surface_list[uint(SDF_CLIPMAP_LEVEL_COUNT) + level * capacity + entry];
 	ivec3 slot = ivec3(int(packed_slot & 0xFFu),
 	                   int((packed_slot >> 8u) & 0xFFu),
 	                   int((packed_slot >> 16u) & 0xFFu));
@@ -288,6 +457,39 @@ void main()
 			                               u_gi_shadow_near_field * near_scale));
 			continue;
 		}
+		// VIS-MEMO DEBUG: run the real memo transaction and paint its outcome (categorical,
+		// displayed nearest through the sun-tiers view path). GREEN = stored verdicts served
+		// (healthy steady state), RED = miss -> marched + restamped (one red sweep right
+		// after a generation bump is the fill; PERSISTENT red with a quiet generation log is
+		// the defect), BLUE = the kernel sees generation 0 (memo never seeded, or the
+		// uniform never arrived), DARK GREY = no covering cage answered. Alpha carries the
+		// same 0.5 provenance marker as the sun-tier writes.
+		if(u_light_voxel_debug_vis_memo)
+		{
+			vec4 memo_color = vec4(0.15, 0.15, 0.15, GI_SUN_TIER_DEBUG_ALPHA);
+			if(u_world_probe_ready)
+			{
+				vec3 memo_irradiance;
+				float memo_sky;
+				int memo_state;
+				GiBounceProbeIrradiance(position, direction, texel, memo_irradiance, memo_sky,
+				                        memo_state);
+				if(memo_state == GI_VIS_MEMO_STATE_OFF)
+				{
+					memo_color = vec4(0.1, 0.3, 1.0, GI_SUN_TIER_DEBUG_ALPHA);
+				}
+				else if(memo_state == GI_VIS_MEMO_STATE_HIT)
+				{
+					memo_color = vec4(0.0, 0.8, 0.0, GI_SUN_TIER_DEBUG_ALPHA);
+				}
+				else if(memo_state == GI_VIS_MEMO_STATE_MISS)
+				{
+					memo_color = vec4(1.0, 0.0, 0.0, GI_SUN_TIER_DEBUG_ALPHA);
+				}
+			}
+			imageStore(s_light_voxels_out, texel, memo_color);
+			continue;
+		}
 		vec3 irradiance = GiEvalDirectLighting(position,
 		                                       direction,
 		                                       max(level_data.w, 0.01),
@@ -299,9 +501,10 @@ void main()
 		// and biasing purely along the face normal is the direction that clears its own surface.
 		vec3 probe_value;
 		float sky_fraction;
+		int memo_state_unused;
 		if(u_world_probe_ready &&
-		   GiWorldProbeIrradianceCascade(position, direction, direction,
-		                                 u_gi_light_voxel_camera.xyz, probe_value, sky_fraction))
+		   GiBounceProbeIrradiance(position, direction, texel, probe_value, sky_fraction,
+		                           memo_state_unused))
 		{
 			// Attenuated by the face's own sub-probe-spacing visibility: the probes' ambient
 			// is measured on a lattice that cannot see this cavity. The SAME value gated the

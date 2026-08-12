@@ -129,8 +129,10 @@ public:
     static constexpr int debug_pass_sdf_world_probes = 25;
     static constexpr int debug_pass_sdf_sun_tiers = 26;
     static constexpr int debug_pass_sdf_probe_sky = 27;
+    static constexpr int debug_pass_sdf_vis_memo = 28;
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,
+                            const run_params& rparams,
                             const gfx::frame_buffer::ptr& output);
 
     /// Resolves the blended gi_settings for this run from the volume hooks; false = GI off.

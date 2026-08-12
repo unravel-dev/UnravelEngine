@@ -210,6 +210,28 @@ private:
         }
     } atlas_clear_program_;
 
+    /// One-time zero of the bounce visibility memo (cs_gi_vis_memo_clear.sc): generation 0
+    /// means "never stamped", which only holds if the texels actually start at 0. Its own
+    /// program because the volume clear writes rgba16f and the memo is an R16U uint image.
+    struct vis_memo_clear_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_vis_memo_clear_params;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(),
+                          u_gi_vis_memo_clear_params,
+                          "u_gi_vis_memo_clear_params",
+                          gfx::uniform_type::Vec4);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } vis_memo_clear_program_;
+
     /// One-time diagnostics: captures flowing is the positive signal, helper shaders failing
     /// to compile is the silent-failure mode worth a loud line.
     bool capture_log_emitted_ = false;

@@ -757,9 +757,13 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                 light_params.view_cache = &view_cache;
                 light_params.frame = light_voxel_frame_;
                 light_params.camera_position = camera.get_position();
-                // The sun-tier view is a WRITER-side diagnostic: the compute pass stamps tier
-                // colors into the light volume and the debug pass merely displays them.
+                light_params.probe_visibility_variance_gate =
+                    gi.resolve.probe_visibility_variance_gate;
+                // The sun-tier and vis-memo views are WRITER-side diagnostics: the compute
+                // pass stamps categorical colors into the light volume and the debug pass
+                // merely displays them.
                 light_params.sun_tier_debug = debug_pass_ == debug_pass_sdf_sun_tiers;
+                light_params.vis_memo_debug = debug_pass_ == debug_pass_sdf_vis_memo;
                 // The sun's CSM was rendered above (build_shadows), so its cascade 0 can answer
                 // sun visibility for the voxels it covers - the raster's own mesh-exact shadows,
                 // which the traced field cannot reproduce through openings the bake fattened.
@@ -927,7 +931,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
         if(debug_pass_ >= debug_pass_sdf_normals)
         {
-            run_sdf_debug_pass(camera, rview, output);
+            run_sdf_debug_pass(camera, rview, params, output);
         }
         else if(debug_pass_ >= 0)
         {
@@ -2269,6 +2273,7 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
 
 void deferred::run_sdf_debug_pass(const camera& camera,
                                   gfx::render_view& rview,
+                                  const run_params& rparams,
                                   const gfx::frame_buffer::ptr& output)
 {
     auto& ctx = engine::context();
@@ -2279,6 +2284,14 @@ void deferred::run_sdf_debug_pass(const camera& camera,
     params.cam = &camera;
     params.surface_cache = &surface_cache;
     params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+    // The world-probe debug views must read the cages exactly as the lit path does, so the
+    // authored variance gate rides along; the constant default covers the no-gi_component
+    // case (these views stay usable while GI itself is off).
+    gi_settings gi;
+    if(resolve_gi_settings(rparams, gi))
+    {
+        params.settings.probe_visibility_variance_gate = gi.resolve.probe_visibility_variance_gate;
+    }
     params.settings.mode = sdf_debug_pass::debug_mode::normals;
     if(debug_pass_ == debug_pass_sdf_step_count)
     {
@@ -2327,6 +2340,13 @@ void deferred::run_sdf_debug_pass(const camera& camera,
     else if(debug_pass_ == debug_pass_sdf_probe_sky)
     {
         params.settings.mode = sdf_debug_pass::debug_mode::probe_sky;
+    }
+    else if(debug_pass_ == debug_pass_sdf_vis_memo)
+    {
+        // The vis-memo variant stamps its categorical colors into the light volume; the
+        // sun-tiers display mode is exactly the nearest-fetch categorical reader of that
+        // volume, so it shows them verbatim - no second display path needed.
+        params.settings.mode = sdf_debug_pass::debug_mode::sun_tiers;
     }
     sdf_debug_pass_.run(rview, params);
 }

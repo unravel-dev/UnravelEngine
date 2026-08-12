@@ -106,6 +106,47 @@ public:
         return light_voxel_texture_;
     }
 
+    /// The bounce's cage-visibility memo: R32U (32-bit so typed UAV loads are mandatory on
+    /// every backend), one texel per light-volume texel (same layout), holding mask +
+    /// generation + probe level in the low 16 bits (GiWorldProbeVisMemoPack in
+    /// gi_world_probes.sh). Read and restamped by cs_gi_light_voxels' bounce path alone.
+    auto get_bounce_vis_memo() const -> const gfx::texture::ptr&
+    {
+        return bounce_vis_memo_;
+    }
+
+    /// True until the compose pass zeroes the memo (generation 0 = "never stamped" relies on
+    /// it; allocation garbage could otherwise masquerade as a stamped mask). Kept separate
+    /// from the other one-time clears so a missing helper shader only costs the memo itself:
+    /// an unseeded memo hands the kernel generation 0, the safe-slow gated-march path.
+    auto needs_bounce_vis_memo_seed() const -> bool
+    {
+        return static_cast<bool>(bounce_vis_memo_) && !bounce_vis_memo_seeded_;
+    }
+
+    void mark_bounce_vis_memo_seeded()
+    {
+        bounce_vis_memo_seeded_ = true;
+    }
+
+    /**
+     * @brief The bounce visibility-memo generation for this frame, advancing it when any
+     *        memoised verdict may have changed.
+     *
+     * A stored verdict depends on the composed field (tracked by @p content_epoch, the
+     * clipmap's camera-independent content counter) and on the cage lattice positions the
+     * probe windows expose (tracked per level as the camera's window cell - a scroll re-fills
+     * probe slots, so the stored masks conservatively die with it). Camera motion WITHIN a
+     * cell can flip which cascade level answers a query without moving either tracker; the
+     * memo's per-texel LEVEL tag catches that, so it needs no invalidation here.
+     *
+     * Returns 0 - "memo unavailable, use the gated march" - until the memo is seeded. Live
+     * generations wrap 1..63 (the texel stores 6 bits, 0 reserved for "never stamped").
+     */
+    auto refresh_bounce_vis_generation(uint64_t content_epoch,
+                                       const math::vec3& camera_position,
+                                       float base_spacing) -> uint32_t;
+
     /// World probes per cascade axis. MUST equal GI_WORLD_PROBE_AXIS in gi_world_probes.sh;
     /// derived as resolution / GI_WORLD_PROBE_DIVISOR + 1 at the runtime resolution of 128, and
     /// the probe resources are only created when that derivation holds, because the shader
@@ -197,17 +238,13 @@ public:
         return world_probe_atlas_params_.data();
     }
 
-    /// Packed surface-voxel entries, one attr_resolution^3 segment per level
-    /// (global_sdf_clipmap::pack_surface_voxel layout).
+    /// Surface-voxel list WITH ITS COUNTS: a level_count-entry header of append cursors
+    /// (index = level), then one attr_resolution^3 segment of packed entries per level
+    /// (global_sdf_clipmap::pack_surface_voxel layout). One buffer on purpose - the split
+    /// count buffer cost cs_gi_light_voxels its last free bgfx stage.
     auto get_surface_list_buffer() const -> gfx::dynamic_index_buffer_handle
     {
         return surface_list_;
-    }
-
-    /// One append cursor per level, index = level.
-    auto get_surface_count_buffer() const -> gfx::dynamic_index_buffer_handle
-    {
-        return surface_count_;
     }
 
     /**
@@ -235,11 +272,16 @@ private:
     gfx::texture::ptr attr_albedo_texture_;
     gfx::texture::ptr attr_emissive_texture_;
     gfx::texture::ptr light_voxel_texture_;
+    gfx::texture::ptr bounce_vis_memo_;
     gfx::texture::ptr world_probe_radiance_;
     gfx::texture::ptr world_probe_irradiance_;
     gfx::texture::ptr world_probe_depth_;
+    /// Bounce visibility-memo invalidation state (see refresh_bounce_vis_generation).
+    bool bounce_vis_memo_seeded_ = false;
+    uint32_t bounce_vis_generation_ = 0;
+    uint64_t bounce_vis_content_epoch_ = 0;
+    std::array<std::array<int32_t, 3>, global_sdf_clipmap::level_count> bounce_vis_window_cells_{};
     gfx::dynamic_index_buffer_handle surface_list_{bgfx::kInvalidHandle};
-    gfx::dynamic_index_buffer_handle surface_count_{bgfx::kInvalidHandle};
     gfx::dynamic_index_buffer_handle attr_cells_{bgfx::kInvalidHandle};
     gfx::dynamic_index_buffer_handle world_probe_cells_{bgfx::kInvalidHandle};
     uint32_t world_probe_cell_count_ = 0;

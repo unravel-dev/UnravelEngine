@@ -6,6 +6,7 @@
 
 #include <bx/math.h>
 
+#include <cmath>
 #include <vector>
 
 namespace unravel
@@ -87,17 +88,38 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
                                                           false,
                                                           gfx::texture_format::RGBA16F,
                                                           light_flags);
+    // The bounce's cage-visibility memo mirrors the light volume texel for texel (mask +
+    // generation + probe level in the low 16 bits; see gi_light_voxels_kernel.sh). Image
+    // access only, never sampled. R32U rather than R16U DELIBERATELY: typed UAV LOADS of
+    // 32-bit formats are mandatory on every backend, while 16-bit typed loads are an
+    // optional capability - unsupported, the load silently returns zero, which never
+    // matches a live generation and turns the memo into a permanent miss (the failure is
+    // invisible except as light-voxel cost). ~25 MB at the runtime default - half the
+    // light volume.
+    bounce_vis_memo_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
+                                                      static_cast<uint16_t>(attr_resolution),
+                                                      static_cast<uint16_t>(light_depth),
+                                                      false,
+                                                      gfx::texture_format::R32U,
+                                                      BGFX_TEXTURE_COMPUTE_WRITE);
+    bounce_vis_memo_seeded_ = false;
+    bounce_vis_generation_ = 0;
     const uint32_t segment = attr_resolution * attr_resolution * attr_resolution;
-    // The surface list/count flags follow the COMPOSER: the GPU compose pass writes them from
+    // The surface list flags follow the COMPOSER: the GPU compose pass writes it from
     // compute (needs COMPUTE_WRITE, and bgfx forbids CPU updates on such buffers), while the
-    // CPU composer uploads them with gfx::update (which requires COMPUTE_WRITE absent). The
-    // consumers only ever read them from compute, which both flag sets allow.
+    // CPU composer uploads it with gfx::update (which requires COMPUTE_WRITE absent). The
+    // consumers only ever read it from compute, which both flag sets allow.
+    //
+    // ONE buffer holds counts AND entries: a level_count-entry HEADER of append cursors
+    // (index = level), then the per-level entry segments. Folding the old count buffer in
+    // freed a bgfx stage in cs_gi_light_voxels - the pass occupied all 16 and the bounce
+    // visibility memo needed an image stage in OpenGL's 0-7 image-unit range.
     const uint64_t surface_flags =
         (compose_on_gpu_ ? BGFX_BUFFER_COMPUTE_READ_WRITE : BGFX_BUFFER_COMPUTE_READ) |
         BGFX_BUFFER_INDEX32;
-    surface_list_ = gfx::create_dynamic_index_buffer(segment * global_sdf_clipmap::level_count,
-                                                     surface_flags);
-    surface_count_ = gfx::create_dynamic_index_buffer(global_sdf_clipmap::level_count, surface_flags);
+    surface_list_ = gfx::create_dynamic_index_buffer(
+        global_sdf_clipmap::level_count + segment * global_sdf_clipmap::level_count,
+        surface_flags);
     attr_cells_ = gfx::create_dynamic_index_buffer(segment * global_sdf_clipmap::level_count,
                                                    BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
     // Sentinel cell ids (no real cell packs to ~0u, so every slot claims and zeroes its light
@@ -107,17 +129,18 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
     // buffers in both modes.
     needs_buffer_seed_ = true;
     needs_texture_clear_ = true;
-    // A CPU-composed count buffer cannot be seeded by that dispatch (no COMPUTE_WRITE), and it
-    // does not need to be: it is CPU-writable, so the zeroes upload right here. Uncomposed
-    // levels then read an empty list rather than allocation garbage.
-    if(!compose_on_gpu_ && bgfx::isValid(surface_count_))
+    // A CPU-composed list header cannot be seeded by that dispatch (no COMPUTE_WRITE), and it
+    // does not need to be: it is CPU-writable, so the zeroed cursors upload right here.
+    // Uncomposed levels then read an empty list rather than allocation garbage.
+    if(!compose_on_gpu_ && bgfx::isValid(surface_list_))
     {
         const std::array<uint32_t, global_sdf_clipmap::level_count> zero_counts{};
-        gfx::update(surface_count_, 0, gfx::copy(zero_counts.data(), sizeof(zero_counts)));
+        gfx::update(surface_list_, 0, gfx::copy(zero_counts.data(), sizeof(zero_counts)));
     }
     if(!attr_albedo_texture_ || !attr_albedo_texture_->is_valid() || !attr_emissive_texture_ ||
        !attr_emissive_texture_->is_valid() || !light_voxel_texture_ || !light_voxel_texture_->is_valid() ||
-       !bgfx::isValid(surface_list_) || !bgfx::isValid(surface_count_) || !bgfx::isValid(attr_cells_))
+       !bounce_vis_memo_ || !bounce_vis_memo_->is_valid() || !bgfx::isValid(surface_list_) ||
+       !bgfx::isValid(attr_cells_))
     {
         APPLOG_ERROR("[SurfaceCache] Failed to create the clipmap attribute resources.");
         shutdown();
@@ -198,6 +221,9 @@ void global_sdf_clipmap_gpu::shutdown()
     attr_albedo_texture_.reset();
     attr_emissive_texture_.reset();
     light_voxel_texture_.reset();
+    bounce_vis_memo_.reset();
+    bounce_vis_memo_seeded_ = false;
+    bounce_vis_generation_ = 0;
     world_probe_radiance_.reset();
     world_probe_irradiance_.reset();
     world_probe_depth_.reset();
@@ -218,11 +244,6 @@ void global_sdf_clipmap_gpu::shutdown()
     {
         gfx::destroy(surface_list_);
         surface_list_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
-    }
-    if(bgfx::isValid(surface_count_))
-    {
-        gfx::destroy(surface_count_);
-        surface_count_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
     }
     resolution_ = 0;
     level_params_.fill(0.0f);
@@ -327,16 +348,47 @@ void global_sdf_clipmap_gpu::upload(global_sdf_clipmap& clipmap)
                                    static_cast<uint16_t>(attr_resolution),
                                    gfx::copy(half_emissive.data(), uint32_t(half_emissive.size() * sizeof(uint16_t))));
             const uint32_t count = uint32_t(lvl.attr_surface_list.size());
-            gfx::update(surface_count_, i, gfx::copy(&count, sizeof(count)));
+            gfx::update(surface_list_, i, gfx::copy(&count, sizeof(count)));
             if(count > 0u)
             {
                 gfx::update(surface_list_,
-                            i * uint32_t(attr_count),
+                            global_sdf_clipmap::level_count + i * uint32_t(attr_count),
                             gfx::copy(lvl.attr_surface_list.data(), count * uint32_t(sizeof(uint32_t))));
             }
         }
     }
     clipmap.clear_dirty_levels();
+}
+
+auto global_sdf_clipmap_gpu::refresh_bounce_vis_generation(uint64_t content_epoch,
+                                                           const math::vec3& camera_position,
+                                                           float base_spacing) -> uint32_t
+{
+    if(!bounce_vis_memo_seeded_ || !(base_spacing > 0.0f))
+    {
+        return 0u;
+    }
+    bool moved = content_epoch != bounce_vis_content_epoch_;
+    std::array<std::array<int32_t, 3>, global_sdf_clipmap::level_count> cells{};
+    for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
+    {
+        const float spacing = base_spacing * float(1u << level);
+        cells[level] = {int32_t(std::floor(camera_position.x / spacing)),
+                        int32_t(std::floor(camera_position.y / spacing)),
+                        int32_t(std::floor(camera_position.z / spacing))};
+        moved = moved || cells[level] != bounce_vis_window_cells_[level];
+    }
+    if(moved || bounce_vis_generation_ == 0u)
+    {
+        bounce_vis_content_epoch_ = content_epoch;
+        bounce_vis_window_cells_ = cells;
+        // 6-bit tag with 0 reserved as "never stamped" (the memo clears to 0), so live
+        // generations wrap 1..63. A 63-bump-old texel could collide with the wrapped tag and
+        // serve one stale verdict set for one rotation - bounded, and it self-heals on the
+        // next bump.
+        bounce_vis_generation_ = bounce_vis_generation_ % 63u + 1u;
+    }
+    return bounce_vis_generation_;
 }
 
 } // namespace unravel

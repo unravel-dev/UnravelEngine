@@ -1,5 +1,6 @@
 #pragma once
 
+#include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
@@ -36,6 +37,9 @@ public:
         uint32_t frame = 0;
         /// The world-probe windows are centred here; the bounce term must agree with the trace.
         math::vec3 camera_position{0.0f};
+        /// The cage-visibility variance gate (gi_resolve_pass::settings), carried in
+        /// u_gi_world_probe_params.w for the bounce term's world-probe reads.
+        float probe_visibility_variance_gate = gi::GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE;
         /// The sun's CSM generator, when the scene has a shadow-casting directional light with
         /// maps rendered this frame. Cascade 0 then answers sun visibility for voxels it
         /// covers - the traced field cannot thread openings the bake fattened shut, and the
@@ -52,6 +56,12 @@ public:
         /// GI consumers ingest the colors while this is set; the volume relights within its
         /// usual rotation once cleared.
         bool sun_tier_debug = false;
+        /// Diagnostic: dispatch the VIS-MEMO debug PROGRAM
+        /// (cs_gi_light_voxels_vis_memo_debug.sc), which paints the live bounce
+        /// visibility-memo transaction per face (green hit / red miss / blue generation-0)
+        /// instead of radiance, for the vis_memo debug view. Same compiled-variant
+        /// discipline as sun_tier_debug; takes precedence over it when both are set.
+        bool vis_memo_debug = false;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -70,6 +80,15 @@ private:
     bool debug_invalid_warning_emitted_ = false;
     /// Last logged state of run_params::sun_tier_debug; see the flip log in run().
     bool sun_tier_debug_logged_ = false;
+    /// One-time "vis-memo variant requested but its program never built" diagnostic.
+    bool vis_memo_invalid_warning_emitted_ = false;
+    /// Last logged state of run_params::vis_memo_debug; see the flip log in run().
+    bool vis_memo_debug_logged_ = false;
+    /// Last logged bounce vis-memo generation. Changes are logged: they are legitimate on
+    /// scene edits and window scrolls, but a STREAM of them with a parked camera in a
+    /// static scene means an invalidation tracker is churning and the memo can never hit -
+    /// the CPU-side discriminator for the measured miss-every-rotation cost signature.
+    uint32_t vis_memo_generation_logged_ = uint32_t(-1);
 
 private:
     struct light_voxel_program : uniforms_cache
@@ -79,6 +98,8 @@ private:
         /// (bgfx uniforms are name-global), so the cached handles below serve both. Optional:
         /// when it failed to build, run() keeps the radiance program and warns once.
         gpu_program::ptr debug_program;
+        /// The GI_VIS_MEMO_DEBUG_VARIANT sibling, same arrangement.
+        gpu_program::ptr vis_memo_debug_program;
         gfx::program::uniform_ptr u_gi_light_voxel_params;
         gfx::program::uniform_ptr u_sdf_params;
         gfx::program::uniform_ptr u_sdf_grid_params;
@@ -88,6 +109,7 @@ private:
         gfx::program::uniform_ptr u_gi_shadow_params;
         gfx::program::uniform_ptr u_gi_shadow_params2;
         gfx::program::uniform_ptr u_gi_light_voxel_camera;
+        gfx::program::uniform_ptr u_gi_vis_memo_params;
         gfx::program::uniform_ptr u_gi_world_probe_params;
         gfx::program::uniform_ptr u_gi_world_probe_atlas;
         gfx::program::uniform_ptr s_sdf_atlas;
@@ -109,6 +131,7 @@ private:
                           gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_gi_sun_shadowmap, "s_gi_sun_shadowmap", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_gi_light_voxel_camera, "u_gi_light_voxel_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_vis_memo_params, "u_gi_vis_memo_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", gfx::uniform_type::Vec4);
             cache_uniform(program.get(),

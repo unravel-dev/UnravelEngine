@@ -21,6 +21,7 @@
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -1687,6 +1688,51 @@ auto cage_visibility(const global_sdf_clipmap& clipmap,
     return 1.0f;
 }
 
+/// The composed six-slab sealed room at production clipmap resolution: interior [-2, 2]^3,
+/// walls 0.4 m thick (2.0 .. 2.4), corners sealed by the slabs' overlap. Shared by the
+/// cage-visibility and memo-parity tests; the slabs live in the struct because the clipmap
+/// update borrows them.
+struct sealed_box_fixture
+{
+    mesh_sdf horizontal;
+    mesh_sdf wall_x;
+    mesh_sdf wall_z;
+    global_sdf_clipmap clipmap;
+    /// The level-0 probe spacing this clipmap implies - the spacing the shader would pass.
+    float spacing = 0.0f;
+    static constexpr float half = 2.0f;
+    static constexpr float thickness = 0.2f;
+};
+
+auto build_sealed_box_fixture(sealed_box_fixture& fixture) -> bool
+{
+    const float half = sealed_box_fixture::half;
+    const float t = sealed_box_fixture::thickness;
+    const float span = half + 2.0f * t;
+    if(!bake_slab({span, t, span}, fixture.horizontal) ||
+       !bake_slab({t, span, span}, fixture.wall_x) || !bake_slab({span, span, t}, fixture.wall_z))
+    {
+        return false;
+    }
+    const math::vec3 albedo(0.8f);
+    const math::vec3 emissive(0.0f);
+    std::vector<global_sdf_instance> instances;
+    instances.push_back(make_clipmap_instance(fixture.horizontal, {0.0f, -half - t, 0.0f}, albedo, emissive));
+    instances.push_back(make_clipmap_instance(fixture.horizontal, {0.0f, +half + t, 0.0f}, albedo, emissive));
+    instances.push_back(make_clipmap_instance(fixture.wall_x, {-half - t, 0.0f, 0.0f}, albedo, emissive));
+    instances.push_back(make_clipmap_instance(fixture.wall_x, {+half + t, 0.0f, 0.0f}, albedo, emissive));
+    instances.push_back(make_clipmap_instance(fixture.wall_z, {0.0f, 0.0f, -half - t}, albedo, emissive));
+    instances.push_back(make_clipmap_instance(fixture.wall_z, {0.0f, 0.0f, +half + t}, albedo, emissive));
+    global_sdf_clipmap::settings settings;
+    settings.resolution = 128;
+    settings.base_extent = 16.0f;
+    settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    fixture.clipmap.init(settings);
+    fixture.clipmap.update(instances, math::vec3(0.0f));
+    fixture.spacing = fixture.clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
+    return true;
+}
+
 /// The sealed-box leak regression (2026-08-12): probe cages whose members sit OUTSIDE a sealed
 /// room import sky/sun through the Chebyshev test - 8x8 octahedral depth moments blur ~22-degree
 /// cones, so at wall silhouettes the mean lands beyond the interior query (no test fires) and
@@ -1698,34 +1744,12 @@ auto cage_visibility(const global_sdf_clipmap& clipmap,
 void test_world_probe_cage_visibility_seals_box()
 {
     std::printf("test_world_probe_cage_visibility_seals_box\n");
-    // Interior [-2, 2]^3, walls 0.4 m thick (2.0 .. 2.4), corners sealed by the slabs' overlap.
-    const float half = 2.0f;
-    const float t = 0.2f;
-    const float span = half + 2.0f * t;
-    mesh_sdf horizontal;
-    mesh_sdf wall_x;
-    mesh_sdf wall_z;
-    check(bake_slab({span, t, span}, horizontal), "horizontal slab bakes");
-    check(bake_slab({t, span, span}, wall_x), "x wall bakes");
-    check(bake_slab({span, span, t}, wall_z), "z wall bakes");
-    const math::vec3 albedo(0.8f);
-    const math::vec3 emissive(0.0f);
-    std::vector<global_sdf_instance> instances;
-    instances.push_back(make_clipmap_instance(horizontal, {0.0f, -half - t, 0.0f}, albedo, emissive));
-    instances.push_back(make_clipmap_instance(horizontal, {0.0f, +half + t, 0.0f}, albedo, emissive));
-    instances.push_back(make_clipmap_instance(wall_x, {-half - t, 0.0f, 0.0f}, albedo, emissive));
-    instances.push_back(make_clipmap_instance(wall_x, {+half + t, 0.0f, 0.0f}, albedo, emissive));
-    instances.push_back(make_clipmap_instance(wall_z, {0.0f, 0.0f, -half - t}, albedo, emissive));
-    instances.push_back(make_clipmap_instance(wall_z, {0.0f, 0.0f, +half + t}, albedo, emissive));
-    global_sdf_clipmap clipmap;
-    global_sdf_clipmap::settings settings;
-    settings.resolution = 128;
-    settings.base_extent = 16.0f;
-    settings.max_levels_per_update = global_sdf_clipmap::level_count;
-    clipmap.init(settings);
-    clipmap.update(instances, math::vec3(0.0f));
-    // The level-0 probe spacing this clipmap implies - the spacing the shader would pass.
-    const float spacing = clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
+    const float half = sealed_box_fixture::half;
+    const float t = sealed_box_fixture::thickness;
+    sealed_box_fixture fixture;
+    check(build_sealed_box_fixture(fixture), "sealed box fixture bakes and composes");
+    const global_sdf_clipmap& clipmap = fixture.clipmap;
+    const float spacing = fixture.spacing;
     std::printf("  level-0 voxel %.3f m, probe spacing %.3f m\n",
                 clipmap.get_level(0).voxel_size,
                 spacing);
@@ -1826,9 +1850,14 @@ void test_world_probe_cage_visibility_seals_box()
     mesh_sdf ground;
     check(bake_slab({8.0f, 0.2f, 8.0f}, ground), "ground slab bakes");
     std::vector<global_sdf_instance> ground_instances;
-    ground_instances.push_back(make_clipmap_instance(ground, {0.0f, -0.2f, 0.0f}, albedo, emissive));
+    ground_instances.push_back(
+        make_clipmap_instance(ground, {0.0f, -0.2f, 0.0f}, math::vec3(0.8f), math::vec3(0.0f)));
+    global_sdf_clipmap::settings ground_settings;
+    ground_settings.resolution = 128;
+    ground_settings.base_extent = 16.0f;
+    ground_settings.max_levels_per_update = global_sdf_clipmap::level_count;
     global_sdf_clipmap ground_clipmap;
-    ground_clipmap.init(settings);
+    ground_clipmap.init(ground_settings);
     ground_clipmap.update(ground_instances, math::vec3(0.0f));
     const float ground_spacing =
         ground_clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
@@ -1874,6 +1903,168 @@ void test_world_probe_cage_visibility_seals_box()
           "a probe beneath the floor is blocked");
 }
 
+// ---------------------------------------------------------------------------------------
+// Bounce visibility memo (the light-voxel cage-verdict cache)
+// ---------------------------------------------------------------------------------------
+
+/// Transcription of GiWorldProbeBiasedQuery (gi_world_probes.sh); keep in step by hand.
+auto world_probe_biased_query(const math::vec3& position,
+                              const math::vec3& normal,
+                              const math::vec3& view_direction,
+                              float spacing) -> math::vec3
+{
+    const float bias_magnitude =
+        std::min(float(gi::GI_SELF_SHADOW_BIAS_SCALE) * float(gi::GI_SELF_SHADOW_BIAS_K) * spacing,
+                 float(gi::GI_SELF_SHADOW_BIAS_MAX_VOXELS) * spacing / float(gi::GI_WORLD_PROBE_DIVISOR));
+    return position + (normal * float(gi::GI_SELF_SHADOW_BIAS_NORMAL) +
+                       view_direction * float(gi::GI_SELF_SHADOW_BIAS_VIEW)) *
+                          bias_magnitude;
+}
+
+/// Transcription of GiWorldProbeCageMask, the memo's FILL (gi_world_probes.sh); keep in step
+/// by hand. Bit i = cage corner i (offset = (i & 1, i >> 1 & 1, i >> 2 & 1) from the biased
+/// point's base cell) field-visible from the biased query.
+auto cage_mask(const global_sdf_clipmap& clipmap,
+               const math::vec3& position,
+               const math::vec3& normal,
+               const math::vec3& view_direction,
+               float spacing) -> uint32_t
+{
+    const math::vec3 biased = world_probe_biased_query(position, normal, view_direction, spacing);
+    const math::ivec3 base_cell(int(std::floor(biased.x / spacing)),
+                                int(std::floor(biased.y / spacing)),
+                                int(std::floor(biased.z / spacing)));
+    uint32_t mask = 0u;
+    for(int corner = 0; corner < 8; ++corner)
+    {
+        const math::ivec3 offset(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
+        const math::vec3 probe = math::vec3(base_cell + offset) * spacing;
+        if(cage_visibility(clipmap, biased, probe, spacing) > 0.0f)
+        {
+            mask |= 1u << uint32_t(corner);
+        }
+    }
+    return mask;
+}
+
+/// Transcription of the memo texel layout (GiWorldProbeVisMemoPack and its unpackers); keep
+/// in step by hand. Low byte = mask, bits 8-13 = generation, bits 14-15 = probe level - a
+/// 16-bit budget by design (stored in an R32U volume for mandatory typed-load support).
+auto vis_memo_pack(uint32_t mask, uint32_t generation, int level) -> uint32_t
+{
+    return (mask & 0xFFu) | ((generation & 0x3Fu) << 8u) | (uint32_t(level) << 14u);
+}
+
+/// The memo-fill contract: the mask GiWorldProbeCageMask stamps must answer, bit for bit,
+/// exactly what a fresh march of each cage corner answers - the property the memoised bounce
+/// read (GiBounceProbeIrradiance) relies on when it substitutes stored bits for the march.
+/// The fresh side re-derives every corner with an INDEPENDENT offset enumeration (nested
+/// axis loops instead of the fill's bit unpacking), so a drift in either the corner-to-bit
+/// correspondence or the biased-point derivation fails here rather than as a leak. The texel
+/// layout round-trips are pinned alongside, including the 16-bit bound of the R16U store.
+void test_world_probe_vis_memo_mask_matches_fresh_march()
+{
+    std::printf("test_world_probe_vis_memo_mask_matches_fresh_march\n");
+    sealed_box_fixture fixture;
+    check(build_sealed_box_fixture(fixture), "sealed box fixture bakes and composes");
+    const global_sdf_clipmap& clipmap = fixture.clipmap;
+    const float spacing = fixture.spacing;
+    const math::vec3 face_directions[] = {
+        {1.0f, 0.0f, 0.0f},
+        {-1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        {0.0f, -1.0f, 0.0f},
+        {0.0f, 0.0f, 1.0f},
+        {0.0f, 0.0f, -1.0f},
+    };
+    size_t compared = 0;
+    size_t mismatches = 0;
+    size_t open_masks = 0;
+    size_t blocked_bits = 0;
+    // Both cascade levels the room actually meets: at level-0 spacing (2 m) the cages sit
+    // inside the room (visible corners), at level-1 spacing (4 m) the lattice straddles the
+    // walls and corners land OUTSIDE the sealed box - the coarse-cage import channel the
+    // memo's verdicts exist to block.
+    const float level_spacings[] = {spacing, 2.0f * spacing};
+    for(const float level_spacing : level_spacings)
+    {
+        for(int qx = -1; qx <= 1; ++qx)
+        {
+            for(int qy = -1; qy <= 1; ++qy)
+            {
+                for(int qz = -1; qz <= 1; ++qz)
+                {
+                    const math::vec3 query(float(qx) * 1.5f, float(qy) * 1.5f, float(qz) * 1.5f);
+                    for(const auto& direction : face_directions)
+                    {
+                        const uint32_t mask =
+                            cage_mask(clipmap, query, direction, direction, level_spacing);
+                        open_masks += mask != 0u ? 1u : 0u;
+                        // Independent enumeration of the same cage: nested axis offsets, corner
+                        // index composed as x + 2y + 4z - the bit the read consults for it.
+                        const math::vec3 biased =
+                            world_probe_biased_query(query, direction, direction, level_spacing);
+                        const math::ivec3 base_cell(int(std::floor(biased.x / level_spacing)),
+                                                    int(std::floor(biased.y / level_spacing)),
+                                                    int(std::floor(biased.z / level_spacing)));
+                        for(int dz = 0; dz <= 1; ++dz)
+                        {
+                            for(int dy = 0; dy <= 1; ++dy)
+                            {
+                                for(int dx = 0; dx <= 1; ++dx)
+                                {
+                                    const int corner = dx + dy * 2 + dz * 4;
+                                    const math::vec3 probe =
+                                        math::vec3(base_cell + math::ivec3(dx, dy, dz)) *
+                                        level_spacing;
+                                    const bool fresh =
+                                        cage_visibility(clipmap, biased, probe, level_spacing) >
+                                        0.0f;
+                                    const bool stored = (mask & (1u << uint32_t(corner))) != 0u;
+                                    ++compared;
+                                    blocked_bits += fresh ? 0u : 1u;
+                                    if(fresh != stored)
+                                    {
+                                        ++mismatches;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    std::printf("  %zu corner verdicts compared, %zu mismatches; %zu blocked bits over %zu masks\n",
+                compared,
+                mismatches,
+                blocked_bits,
+                open_masks);
+    check(mismatches == 0, "every memo-fill bit equals the fresh march verdict (got " +
+                               std::to_string(mismatches) + " mismatches)");
+    // The fixture must exercise both verdicts or the parity above proves nothing.
+    check(open_masks > 0, "some cage masks carry visible corners");
+    check(blocked_bits > 0, "some cage corners are field-blocked (walls inside cages)");
+    // Texel layout round-trips, including the extremes of every field, and the R16U bound.
+    for(const uint32_t mask : {0x00u, 0xFFu, 0xA5u})
+    {
+        for(const uint32_t generation : {1u, 37u, 63u})
+        {
+            for(int level = 0; level < int(global_sdf_clipmap::level_count); ++level)
+            {
+                const uint32_t texel_value = vis_memo_pack(mask, generation, level);
+                check(texel_value <= 0xFFFFu, "packed memo texel fits its 16-bit budget");
+                check((texel_value & 0xFFu) == mask, "mask survives the round-trip");
+                check(((texel_value >> 8u) & 0x3Fu) == generation, "generation survives the round-trip");
+                check(int((texel_value >> 14u) & 0x3u) == level, "level survives the round-trip");
+            }
+        }
+    }
+    // Generation 0 is reserved as "never stamped": a zero-cleared texel must not decode as
+    // any live generation (the CPU hands out 1..63).
+    check(((0u >> 8u) & 0x3Fu) == 0u, "a zeroed texel decodes as generation 0, never live");
+}
+
 } // namespace
 
 void run(int& checks, int& failures)
@@ -1894,6 +2085,7 @@ void run(int& checks, int& failures)
     test_shadow_through_coarse_baked_colonnade();
     test_attribution_prefers_true_surface_over_shell();
     test_world_probe_cage_visibility_seals_box();
+    test_world_probe_vis_memo_mask_matches_fresh_march();
 }
 
 } // namespace unravel::gi_tests

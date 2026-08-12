@@ -21,9 +21,12 @@ auto gi_light_voxel_pass::init(rtti::context& ctx) -> bool
     auto& am = ctx.get_cached<asset_manager>();
     auto cs = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_light_voxels.sc");
     auto cs_debug = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_light_voxels_debug.sc");
+    auto cs_vis_memo_debug =
+        am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_light_voxels_vis_memo_debug.sc");
     program_.cache_uniforms();
     program_.program = std::make_unique<gpu_program>(cs);
     program_.debug_program = std::make_unique<gpu_program>(cs_debug);
+    program_.vis_memo_debug_program = std::make_unique<gpu_program>(cs_vis_memo_debug);
     return program_.is_valid();
 }
 
@@ -74,7 +77,19 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         APPLOG_WARNING("[SurfaceCache] Sun-tier debug program is not valid on this backend; "
                        "the sun_tiers view will keep showing radiance provenance (magenta).");
     }
-    auto& active_program = (want_debug && debug_available) ? *program_.debug_program : *program_.program;
+    const bool want_vis_memo_debug = params.vis_memo_debug;
+    const bool vis_memo_debug_available =
+        program_.vis_memo_debug_program && program_.vis_memo_debug_program->is_valid();
+    if(want_vis_memo_debug && !vis_memo_debug_available && !vis_memo_invalid_warning_emitted_)
+    {
+        vis_memo_invalid_warning_emitted_ = true;
+        APPLOG_WARNING("[SurfaceCache] Vis-memo debug program is not valid on this backend; "
+                       "the vis_memo view will keep showing radiance provenance (magenta).");
+    }
+    auto& active_program = (want_vis_memo_debug && vis_memo_debug_available)
+                               ? *program_.vis_memo_debug_program
+                               : ((want_debug && debug_available) ? *program_.debug_program
+                                                                  : *program_.program);
     gfx::render_pass pass("GI/Light Voxels");
     active_program.begin();
     gfx::set_texture(program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
@@ -86,10 +101,10 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     {
         gfx::set_buffer(5, light_buffer.get_buffer(), gfx::access::Read);
     }
-    gfx::set_buffer(6, clipmap_gpu.get_surface_list_buffer(), gfx::access::Read);
-    // The count sits at stage 10 so the light-volume IMAGE can take stage 7: OpenGL
-    // guarantees only eight image units (bindings 0-7).
-    gfx::set_buffer(10, clipmap_gpu.get_surface_count_buffer(), gfx::access::Read);
+    // The surface list (header cursors + entries in one buffer) sits at stage 10 - a buffer
+    // tolerates the high stages, which keeps stage 6 free as an IMAGE unit: OpenGL guarantees
+    // only eight image units (bindings 0-7) and this pass binds two 3D images.
+    gfx::set_buffer(10, clipmap_gpu.get_surface_list_buffer(), gfx::access::Read);
     gfx::set_texture(program_.s_attr_albedo, 8, clipmap_gpu.get_attr_albedo_texture());
     gfx::set_texture(program_.s_attr_emissive, 9, clipmap_gpu.get_attr_emissive_texture());
     gfx::set_image_3d(7,
@@ -186,8 +201,48 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     const bool probes_ready = clipmap_gpu.has_world_probes();
     const float base_spacing =
         view_clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
-    const float probe_params[4] = {base_spacing, float(params.frame), probes_ready ? 1.0f : 0.0f, 0.0f};
+    const float probe_params[4] = {base_spacing,
+                                   float(params.frame),
+                                   probes_ready ? 1.0f : 0.0f,
+                                   params.probe_visibility_variance_gate};
     gfx::set_uniform(program_.u_gi_world_probe_params, probe_params);
+    // The bounce's cage-visibility memo (stage 6, read+write - gfx::set_image_3d for the GL
+    // layered-binding rule). The generation refresh compares the clipmap's content epoch and
+    // the per-level probe-window cells against what the memo was stamped under; 0 means the
+    // memo is not yet seeded and the kernel takes the plain gated-march path.
+    uint32_t vis_memo_generation = 0;
+    const auto& vis_memo = clipmap_gpu.get_bounce_vis_memo();
+    if(vis_memo && vis_memo->is_valid())
+    {
+        vis_memo_generation =
+            view_cache.get_clipmap_gpu_mutable().refresh_bounce_vis_generation(
+                view_clipmap.get_content_epoch(), params.camera_position, base_spacing);
+        gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
+    }
+    // Every change is logged: bumps are legitimate on edits and window scrolls, but a stream
+    // of these with a parked camera in a static scene means an invalidation tracker churns
+    // and the memo can never hit - the CPU-side discriminator for a miss-shaped cost.
+    if(vis_memo_generation != vis_memo_generation_logged_)
+    {
+        APPLOG_INFO("[SurfaceCache] Bounce vis-memo generation {} -> {} (frame {}, epoch {}).",
+                    vis_memo_generation_logged_,
+                    vis_memo_generation,
+                    params.frame,
+                    view_clipmap.get_content_epoch());
+        vis_memo_generation_logged_ = vis_memo_generation;
+    }
+    if(params.vis_memo_debug != vis_memo_debug_logged_)
+    {
+        vis_memo_debug_logged_ = params.vis_memo_debug;
+        APPLOG_INFO("[SurfaceCache] Vis-memo debug write {} (frame {}, program {}).",
+                    params.vis_memo_debug ? "ENABLED" : "disabled",
+                    params.frame,
+                    params.vis_memo_debug
+                        ? (vis_memo_debug_available ? "vis-memo variant" : "MISSING - radiance fallback")
+                        : "radiance");
+    }
+    const float vis_memo_params[4] = {float(vis_memo_generation), 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(program_.u_gi_vis_memo_params, vis_memo_params);
     if(probes_ready)
     {
         gfx::set_texture(program_.s_world_probe_irradiance, 11, clipmap_gpu.get_world_probe_irradiance());

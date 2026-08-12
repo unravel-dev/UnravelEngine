@@ -198,3 +198,101 @@ the bounce term, keyed on content epoch + probe-window scroll - geometry-static 
 never re-march, expected to return most of the +0.5 ms flat cost; (2) variance gate 0.15 ->
 0.2 spacings (cheaper trace completions, slightly wider leak margin on small-mixture
 wedges); (3) the pre-existing ambiguous-face trim above.
+
+## Cage-visibility perf reclaim (2026-08-13, tasks/gi_cage_visibility_perf_plan.md)
+
+All three plan items landed:
+1. Variance gate -> inspector setting (`probe_visibility_variance_gate`, default = the
+   constant 0.15, 0 = march-always) riding u_gi_world_probe_params.w to the light-voxel,
+   resolve (trace + integrate) and sdf-debug consumers.
+2. Per-face R16U visibility-mask memo for the bounce: mask + 6-bit generation + probe-level
+   tag per light-volume texel; generation bumps on clipmap content_epoch change or any
+   probe-window cell change; memo hit replaces the gated march with stored verdicts applied
+   to EVERY probe; miss marches all 8 corners once and restamps. Prerequisite landed with
+   it: b_surface_count merged into the surface list (header cursors), freeing kernel stage 6
+   for the memo image.
+3. Exact 1-Lipschitz early-outs in GiBounceCavityVisibility (d1 >= 2*t_last - t1 = 7 attr
+   voxels => one sample fully visible; d1 <= 0 => buried, fully occluded).
+
+Gates run: gi_tests 636 checks / 0 failures both configs (incl. the new memo-parity test:
+2592 corner verdicts, 0 mismatches), 26 shaders x (SM5.0 + GLSL440), spirv on all touched
+consumers, editor + engine_data built and deployed in both trees.
+
+### First recapture (2026-08-13, Bistro, user-recorded): Light Voxels REGRESSED
+
+| Pass | 4K GPU ms | FHD GPU ms |
+|---|---|---|
+| Light Voxels | 1.480 | 1.535 |
+| World Probe Trace | 0.065 | 0.066 |
+| World Probe Convolve | 0.165 | 0.149 |
+| ReflectionsTrace | 1.111 | 0.591 |
+| ReflectionsTemporal + Composite | 0.257 | 0.134 |
+| Probe Place + Classify + Args | 0.037 | 0.020 |
+| Probe Trace (v2) | 2.449 | 0.868 |
+| Probe Interp | 0.021 | 0.009 |
+| Probe Filter + Integrate | 0.398 | 0.156 |
+| Temporal | 0.115 | 0.027 |
+| Denoise x3 | 1.185 | 0.291 |
+| Upsample | 0.160 | 0.037 |
+| **Total** | **7.441** | **3.884** |
+
+Reading: everything EXCEPT Light Voxels held or improved slightly (Probe Trace 0.954 ->
+0.868 FHD, Integrate share down - the item-1 gate wiring is live and healthy). Light Voxels
+went 0.973 -> 1.535 FHD / 0.991 -> 1.480 4K: +0.5 ms flat, the OPPOSITE of the memo's
+promise - and the magnitude matches the miss-every-rotation cost model almost exactly
+(primary-level ungated 8-corner fill per relit face ~ the round-7 ungated march minus the
+far-blend share and the item-3 cavity savings). A working memo converges to all-hits within
+one rotation of a generation bump and cannot cost this much; conclusion: THE MEMO IS NOT
+HITTING. Candidate mechanisms: (a) the generation churns every frame (CPU side - content
+epoch or window-cell trackers unstable), (b) the R16U imageLoad silently returns zero
+(16-bit typed UAV loads are an OPTIONAL cap; a zero load never matches a live generation and
+the texel restamps forever), (c) the generation uniform never reaches the kernel (the
+unexplained uniform-lane ghost of the sun-tier saga). Instrument round shipped per the
+lessons file: generation flip LOG (discriminates a from b/c from the console alone), memo
+volume R16U -> R32U (32-bit typed UAV loads are mandatory everywhere - kills b outright,
++12.6 MB), and a THIRD compiled kernel variant "SDF (Vis Memo)" (view 28) painting the live
+memo transaction per face - green = hit, red = miss+restamp, blue = generation 0 at the
+kernel, dark = no covering cage (categorical display via the sun-tiers nearest-fetch path).
+
+Instrument verdict (2026-08-13, user screenshots + recapture on the instrument build): view
+28 SOLID GREEN - the memo hits nearly everywhere (navy slivers = the usual gate-culled
+faces) - yet Light Voxels stayed at 1.472 FHD / 1.482 4K (totals 3.809 / 7.335). Hits
+classified correctly + march-shaped cost has exactly one mechanical reading, and it was in
+the code: the fill sat on the false arm of a TERNARY -
+`mask = hit ? stored : GiWorldProbeCageMask(...)` - and HLSL's ?: is a SELECT that may
+evaluate BOTH operands, so the 8-corner ungated march executed on EVERY face and was
+discarded on hits. (Also explains the R16U -> R32U swap changing nothing: the loads were
+fine all along.) FIX: explicit BRANCH if/else around the fill. The instrument stays - it is
+the standing memo-health view.
+
+### Final capture (2026-08-13, Bistro, user-recorded, after the BRANCH fix)
+
+| Pass | 4K GPU ms | FHD GPU ms |
+|---|---|---|
+| Light Voxels | 0.564 | 0.563 |
+| World Probe Trace | 0.066 | 0.066 |
+| World Probe Convolve | 0.151 | 0.160 |
+| ReflectionsTrace | 1.090 | 0.543 |
+| ReflectionsTemporal + Composite | 0.274 | 0.108 |
+| Probe Place + Classify + Args | 0.041 | 0.019 |
+| Probe Trace (v2) | 2.511 | 0.852 |
+| Probe Interp | 0.024 | 0.009 |
+| Probe Filter + Integrate | 0.407 | 0.155 |
+| Temporal | 0.127 | 0.025 |
+| Denoise x3 | 1.128 | 0.288 |
+| Upsample | 0.161 | 0.037 |
+| **Total** | **6.546** | **2.826** |
+
+ACCEPTED. Light Voxels 0.563 / 0.564 - flat, dead centre of the 0.5-0.6 target, reclaiming
+the leak defence's entire +0.5 ms in that pass (0.973/0.991 -> 0.56) and even edging under
+the pre-defence 2026-08-09 value at 4K. Versus the leak-defence capture: -0.55 FHD / -0.41
+4K total. Versus the 2026-08-09 close-out: FHD +0.256 (within the ~0.3 target); 4K +0.76,
+of which ~0.7 sits in Probe Trace (+0.48) and Filter+Integrate (+0.21) - the GATHER-side
+cage reads this plan explicitly scoped out (completions and the integrate fallback keep the
+gated march; unchanged-to-better vs the leak-defence capture). The listed lever for that
+share is now a slider: probe_visibility_variance_gate 0.15 -> 0.2 trades trace-completion
+cost against leak margin, per scene.
+
+Sealed-box smoke (user-verified): Probe Sky near-only (27) dark green over the sealed room,
+and opening the door relights the interior correctly - the memo's content-epoch/window
+invalidation works. R6 (<= 4.5 ms FHD-class): met with 1.7 ms headroom.

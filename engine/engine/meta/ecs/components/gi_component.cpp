@@ -66,6 +66,21 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "Hi-Z screen tier: gather rays march the depth pyramid first and commit "
                             "pixel-precise on-screen hits before the SDF answers."},
         })
+        .data<&settings::probe_visibility_variance_gate>("probe_visibility_variance_gate"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "probe_visibility_variance_gate"},
+            entt::attribute{"pretty_name", "Probe Visibility Variance Gate"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 0.5f},
+            entt::attribute{"tooltip",
+                            "How statistically ambiguous a world probe's depth estimate must be "
+                            "before its visibility is settled by marching the distance field "
+                            "(std of the depth lobe, in probe spacings). 0 marches every probe: "
+                            "maximum leak protection, slowest. Higher trusts the depth "
+                            "statistics over a wider band: faster, with a wider leak margin "
+                            "through silhouette gaps."},
+        })
         .data<&settings::adaptive_probes>("adaptive_probes"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "adaptive_probes"},
@@ -362,6 +377,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
     // debug_view is deliberately NOT saved: a scene must never load with a diagnostic view on.
     try_save(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
+    try_save(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
     try_save(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
@@ -387,6 +403,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("resolution", obj.resolution));
     try_load(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
     try_load(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
+    try_load(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
     try_load(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));

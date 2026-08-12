@@ -46,6 +46,13 @@ public:
         /// pixel-precise on-screen hits before the SDF answers. Needs the pyramid (built when
         /// GI or the reflection stack is on); off degrades to pure SDF tracing.
         bool enable_screen_trace = true;
+        /// Depth-lobe std (in probe spacings) above which a world-probe cage member's
+        /// visibility is settled by the field march instead of its Chebyshev moments. 0
+        /// marches every probe - the maximum-quality, slowest extreme (a debugging
+        /// baseline); raising it trusts the moments over a wider band - cheaper, with a
+        /// wider leak margin on small-mixture silhouette wedges. The constant is the
+        /// derivation-carrying default (the reflection_temporal_frames precedent).
+        float probe_visibility_variance_gate = gi::GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE;
         /// Adaptive gather: odd-lattice probes whose anchor lies on their even-lattice
         /// parents' plane (and faces within one octahedral texel of them) skip the 64-ray
         /// trace and reconstruct from the parents in probe space - flat regions run on a

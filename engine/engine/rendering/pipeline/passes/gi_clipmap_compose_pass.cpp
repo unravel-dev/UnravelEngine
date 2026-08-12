@@ -42,6 +42,9 @@ auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
     auto cs_atlas_clear = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_atlas_clear.sc");
     atlas_clear_program_.cache_uniforms();
     atlas_clear_program_.program = std::make_unique<gpu_program>(cs_atlas_clear);
+    auto cs_vis_memo_clear = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_vis_memo_clear.sc");
+    vis_memo_clear_program_.cache_uniforms();
+    vis_memo_clear_program_.program = std::make_unique<gpu_program>(cs_vis_memo_clear);
     return compose_program_.is_valid();
 }
 
@@ -82,17 +85,19 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     // The silent failure mode worth a loud line: a helper shader that never compiled leaves
     // the sentinels unseeded and the bounce albedo factor-only, with nothing else to notice.
     if((!texture_mean_program_.is_valid() || !fill_program_.is_valid() ||
-        !volume_clear_program_.is_valid() || !atlas_clear_program_.is_valid()) &&
+        !volume_clear_program_.is_valid() || !atlas_clear_program_.is_valid() ||
+        !vis_memo_clear_program_.is_valid()) &&
        !helper_warning_emitted_)
     {
         helper_warning_emitted_ = true;
         APPLOG_WARNING("[SurfaceCache] GI helper shaders not ready (texture mean valid: {}, "
-                       "buffer fill valid: {}, volume clear valid: {}, atlas clear valid: {}). "
-                       "If this persists, check their compile errors.",
+                       "buffer fill valid: {}, volume clear valid: {}, atlas clear valid: {}, "
+                       "vis memo clear valid: {}). If this persists, check their compile errors.",
                        texture_mean_program_.is_valid(),
                        fill_program_.is_valid(),
                        volume_clear_program_.is_valid(),
-                       atlas_clear_program_.is_valid());
+                       atlas_clear_program_.is_valid(),
+                       vis_memo_clear_program_.is_valid());
     }
     // One-time GPU seed of the compute-writable cell/cursor buffers (CPU updates on those are
     // forbidden): claim sentinels for the attribute and world-probe cell ids, zeroed append
@@ -121,9 +126,11 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         fill(clipmap_gpu.get_world_probe_cells(), clipmap_gpu.get_world_probe_cell_count(), 0xFFFFFFFFu);
         // Only when the GPU owns the counts: the CPU-composed variant carries no COMPUTE_WRITE
         // (a compute fill would be invalid on it) and was zero-seeded from the CPU at creation.
+        // The cursors are the surface list's HEADER (first level_count entries), so the fill
+        // stops there and leaves the entry segments alone - reads of those are count-gated.
         if(clipmap_gpu.is_composed_on_gpu())
         {
-            fill(clipmap_gpu.get_surface_count_buffer(), global_sdf_clipmap::level_count, 0u);
+            fill(clipmap_gpu.get_surface_list_buffer(), global_sdf_clipmap::level_count, 0u);
         }
         clipmap_gpu.mark_seed_done();
     }
@@ -181,6 +188,29 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             atlas_clear_program_.program->end();
         }
         clipmap_gpu.mark_texture_clear_done();
+    }
+    // One-time zero of the bounce visibility memo. Its own gate rather than a rider on the
+    // texture-clear block: it retries until its program is ready, and while it never runs the
+    // memo simply stays off (generation 0 = the kernel's gated-march fallback) - a missing
+    // helper costs performance here, never correctness.
+    if(clipmap_gpu.needs_bounce_vis_memo_seed() && vis_memo_clear_program_.is_valid())
+    {
+        const auto& memo = clipmap_gpu.get_bounce_vis_memo();
+        gfx::render_pass memo_pass("GI/Vis Memo Clear");
+        vis_memo_clear_program_.program->begin();
+        gfx::set_image_3d(0, memo->native_handle(), 0, gfx::access::Write, gfx::texture_format::R32U);
+        const float memo_params[4] = {float(memo->info.width),
+                                      float(memo->info.height),
+                                      float(memo->info.depth),
+                                      0.0f};
+        gfx::set_uniform(vis_memo_clear_program_.u_gi_vis_memo_clear_params, memo_params);
+        gfx::dispatch(memo_pass.id,
+                      vis_memo_clear_program_.program->native_handle(),
+                      (memo->info.width + 3u) / 4u,
+                      (memo->info.height + 3u) / 4u,
+                      (memo->info.depth + 3u) / 4u);
+        vis_memo_clear_program_.program->end();
+        clipmap_gpu.mark_bounce_vis_memo_seeded();
     }
     // Pending texture-mean captures drain here regardless of dirty levels: each is a one-time
     // 1x1x1 dispatch, and the fingerprint flip it causes is what marks the affected levels
@@ -302,7 +332,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             reset_program_.program->begin();
             const float reset_params[4] = {float(level), 0.0f, 0.0f, 0.0f};
             gfx::set_uniform(reset_program_.u_surface_reset_params, reset_params);
-            gfx::set_buffer(8, clipmap_gpu.get_surface_count_buffer(), gfx::access::ReadWrite);
+            gfx::set_buffer(8, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
             gfx::dispatch(pass.id, reset_program_.program->native_handle(), 1, 1, 1);
             reset_program_.program->end();
             attributes_program_.program->begin();
@@ -321,10 +351,10 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
                               0,
                               gfx::access::Write,
                               gfx::texture_format::RGBA16F);
-            // The surface list sits at stage 9 so the light-volume IMAGE can take stage 7:
-            // OpenGL guarantees only eight image units (bindings 0-7).
+            // The surface list (header cursors + entries in one buffer) sits at stage 9 so the
+            // light-volume IMAGE can take stage 7: OpenGL guarantees only eight image units
+            // (bindings 0-7).
             gfx::set_buffer(9, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
-            gfx::set_buffer(8, clipmap_gpu.get_surface_count_buffer(), gfx::access::ReadWrite);
             gfx::set_buffer(11, clipmap_gpu.get_attr_cells(), gfx::access::ReadWrite);
             gfx::set_buffer(10, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
             const float light_voxel_params[4] = {float(attr_resolution), 0.0f, 0.0f, 1.0f};

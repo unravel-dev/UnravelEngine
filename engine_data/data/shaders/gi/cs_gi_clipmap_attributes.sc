@@ -28,12 +28,13 @@
 IMAGE3D_WO(s_attr_albedo_out, rgba8, 5);
 /// rgb = winning emissive (radiance units), a unused.
 IMAGE3D_WO(s_attr_emissive_out, rgba16f, 6);
-/// Packed surface-voxel coordinates, one segment of attr_resolution^3 entries per level. At a
-/// high stage ON PURPOSE: OpenGL guarantees only eight image units (bindings 0-7), so the
-/// light-volume IMAGE below takes the low slot while buffers tolerate the high ones.
+/// The surface-voxel list: a SDF_CLIPMAP_LEVEL_COUNT-entry header of append cursors (index =
+/// level, reset by cs_gi_surface_count_reset before this dispatch), then one segment of
+/// attr_resolution^3 packed entries per level. One buffer so the light-voxel kernel spends
+/// one stage on both. At a high stage ON PURPOSE: OpenGL guarantees only eight image units
+/// (bindings 0-7), so the light-volume IMAGE below takes the low slot while buffers tolerate
+/// the high ones.
 BUFFER_RW(b_surface_list, uint, 9);
-/// One append cursor per level, reset by cs_gi_surface_count_reset before this dispatch.
-BUFFER_RW(b_surface_count, uint, 8);
 /// The light volume (gi_light_voxels.sh layout). Addressing is TOROIDAL: this pass zeroes a
 /// slot's six face slabs only when the slot's world CELL changed hands (detected through
 /// b_attr_cells) - a surviving cell keeps the radiance it accumulated across any number of
@@ -258,7 +259,7 @@ void main()
 	imageStore(s_attr_albedo_out, texel, vec4(blended_albedo, 1.0));
 	imageStore(s_attr_emissive_out, texel, vec4(blended_emissive, 0.0));
 	uint cursor;
-	atomicFetchAndAdd(b_surface_count[uint(u_attr_level)], 1u, cursor);
+	atomicFetchAndAdd(b_surface_list[uint(u_attr_level)], 1u, cursor);
 	uint capacity = uint(resolution * resolution * resolution);
 	// Cannot overflow by construction - the segment holds one entry per voxel and each thread
 	// appends at most once - so this clamp is a guard against a mis-sized buffer, not policy.
@@ -268,6 +269,7 @@ void main()
 		// name on the OpenGL backend.
 		uint packed_slot = uint(slot.x) | (uint(slot.y) << 8u) | (uint(slot.z) << 16u) |
 		                   (uint(u_attr_level) << 24u);
-		b_surface_list[uint(u_attr_level) * capacity + cursor] = packed_slot;
+		b_surface_list[uint(SDF_CLIPMAP_LEVEL_COUNT) + uint(u_attr_level) * capacity + cursor] =
+		    packed_slot;
 	}
 }

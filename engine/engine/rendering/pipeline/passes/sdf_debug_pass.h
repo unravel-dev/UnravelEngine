@@ -1,6 +1,7 @@
 #pragma once
 
 #include <engine/rendering/camera.h>
+#include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
@@ -106,6 +107,9 @@ public:
         /// reach here made the image worse, so the honest default is the exact trace with its
         /// known falloff, and this stays available to experiment with.
         float step_relaxation = 0.0f;
+        /// The cage-visibility variance gate (gi_resolve_pass::settings), so the world-probe
+        /// debug views (world_probes, probe_sky) read the cages exactly as the lit path does.
+        float probe_visibility_variance_gate = gi::GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE;
     };
 
     struct run_params

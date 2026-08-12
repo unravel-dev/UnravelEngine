@@ -333,7 +333,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             const auto& view_clipmap = params.view_cache->get_clipmap();
             const float wp_base_spacing =
                 view_clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
-            const float wp_params[4] = {wp_base_spacing, float(gfx::get_render_frame()), 1.0f, 0.0f};
+            const float wp_params[4] = {wp_base_spacing,
+                                        float(gfx::get_render_frame()),
+                                        1.0f,
+                                        s.probe_visibility_variance_gate};
             const auto radiance_atlas_tex = clipmap_gpu.get_world_probe_radiance();
             const float wp_radiance_atlas[4] = {1.0f / float(radiance_atlas_tex->info.width),
                                                 1.0f / float(radiance_atlas_tex->info.height),
