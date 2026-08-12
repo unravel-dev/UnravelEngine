@@ -127,6 +127,8 @@ public:
     static constexpr int debug_pass_sdf_attr_albedo = 23;
     static constexpr int debug_pass_sdf_light_voxels = 24;
     static constexpr int debug_pass_sdf_world_probes = 25;
+    static constexpr int debug_pass_sdf_sun_tiers = 26;
+    static constexpr int debug_pass_sdf_probe_sky = 27;
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,
                             const gfx::frame_buffer::ptr& output);

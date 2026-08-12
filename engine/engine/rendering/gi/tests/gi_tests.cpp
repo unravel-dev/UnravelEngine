@@ -1622,6 +1622,258 @@ void test_attribution_prefers_true_surface_over_shell()
           "no box cell wears the sheet's albedo (got " + std::to_string(sheet_dominated) + ")");
 }
 
+// ---------------------------------------------------------------------------------------
+// World-probe cage field visibility (the sealed-box silhouette leak)
+// ---------------------------------------------------------------------------------------
+
+/// The march's field read - the finest covering level, deliberately UNBLENDED (transcription
+/// of GiCageVisibilitySample; the blend is for tracing continuity, and inside the cross-fade
+/// band its coarse contamination floats thin walls above the conviction depth and dips
+/// on-surface queries below it).
+auto cage_visibility_sample(const global_sdf_clipmap& clipmap, const math::vec3& position) -> float
+{
+    float blend = 0.0f;
+    const uint32_t level = clipmap.find_level(position, blend);
+    if(level >= global_sdf_clipmap::level_count)
+    {
+        return global_sdf_clipmap::outside_distance;
+    }
+    return clipmap.sample_level(level, position);
+}
+
+/// Faithful CPU transcription of GiWorldProbeCageVisibility (gi_world_probes.sh); keep in step
+/// with the shader by hand. Same contract: 1 when the field stays open along the guarded
+/// segment, 0 when a closed surface separates query from probe.
+auto cage_visibility(const global_sdf_clipmap& clipmap,
+                     const math::vec3& from,
+                     const math::vec3& to,
+                     float spacing) -> float
+{
+    const math::vec3 delta = to - from;
+    const float segment_length = math::length(delta);
+    const float field_voxel = spacing / float(gi::GI_WORLD_PROBE_DIVISOR);
+    const float guard = float(gi::GI_WORLD_PROBE_CAGE_VIS_GUARD_VOXELS) * field_voxel;
+    float t = guard;
+    const float t_end = segment_length - guard;
+    if(t >= t_end)
+    {
+        return 1.0f;
+    }
+    const math::vec3 direction = delta / segment_length;
+    const float half_length = 0.5f * segment_length;
+    if(cage_visibility_sample(clipmap, from + direction * half_length) >= half_length)
+    {
+        return 1.0f;
+    }
+    const float accept = float(gi::GI_WORLD_PROBE_CAGE_VIS_ACCEPT_VOXELS) * field_voxel;
+    const float base_step = (t_end - t) / float(gi::GI_WORLD_PROBE_CAGE_VIS_STEPS);
+    for(int i = 0; i < int(gi::GI_WORLD_PROBE_CAGE_VIS_STEPS); ++i)
+    {
+        const float d = cage_visibility_sample(clipmap, from + direction * t);
+        if(d < accept)
+        {
+            return 0.0f;
+        }
+        if(d >= t_end - t)
+        {
+            break;
+        }
+        t += std::max(d, base_step);
+        if(t >= t_end)
+        {
+            break;
+        }
+    }
+    return 1.0f;
+}
+
+/// The sealed-box leak regression (2026-08-12): probe cages whose members sit OUTSIDE a sealed
+/// room import sky/sun through the Chebyshev test - 8x8 octahedral depth moments blur ~22-degree
+/// cones, so at wall silhouettes the mean lands beyond the interior query (no test fires) and
+/// the variance explodes (the test passes when it does fire). The field march is the defence:
+/// this pins, over a composed six-slab sealed room at production clipmap resolution, that every
+/// exterior probe is BLOCKED from every interior query (the leak), that interior probes stay
+/// VISIBLE (no self-inflicted darkness), that a probe hugging the wall's room side survives the
+/// arrival guard, and that open-air segments prove visible cheaply (the midpoint early-out).
+void test_world_probe_cage_visibility_seals_box()
+{
+    std::printf("test_world_probe_cage_visibility_seals_box\n");
+    // Interior [-2, 2]^3, walls 0.4 m thick (2.0 .. 2.4), corners sealed by the slabs' overlap.
+    const float half = 2.0f;
+    const float t = 0.2f;
+    const float span = half + 2.0f * t;
+    mesh_sdf horizontal;
+    mesh_sdf wall_x;
+    mesh_sdf wall_z;
+    check(bake_slab({span, t, span}, horizontal), "horizontal slab bakes");
+    check(bake_slab({t, span, span}, wall_x), "x wall bakes");
+    check(bake_slab({span, span, t}, wall_z), "z wall bakes");
+    const math::vec3 albedo(0.8f);
+    const math::vec3 emissive(0.0f);
+    std::vector<global_sdf_instance> instances;
+    instances.push_back(make_clipmap_instance(horizontal, {0.0f, -half - t, 0.0f}, albedo, emissive));
+    instances.push_back(make_clipmap_instance(horizontal, {0.0f, +half + t, 0.0f}, albedo, emissive));
+    instances.push_back(make_clipmap_instance(wall_x, {-half - t, 0.0f, 0.0f}, albedo, emissive));
+    instances.push_back(make_clipmap_instance(wall_x, {+half + t, 0.0f, 0.0f}, albedo, emissive));
+    instances.push_back(make_clipmap_instance(wall_z, {0.0f, 0.0f, -half - t}, albedo, emissive));
+    instances.push_back(make_clipmap_instance(wall_z, {0.0f, 0.0f, +half + t}, albedo, emissive));
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings settings;
+    settings.resolution = 128;
+    settings.base_extent = 16.0f;
+    settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(settings);
+    clipmap.update(instances, math::vec3(0.0f));
+    // The level-0 probe spacing this clipmap implies - the spacing the shader would pass.
+    const float spacing = clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
+    std::printf("  level-0 voxel %.3f m, probe spacing %.3f m\n",
+                clipmap.get_level(0).voxel_size,
+                spacing);
+    // Every exterior probe is blocked from every interior query: a 3^3 grid of queries against
+    // probes past each wall and on the corner diagonals - the octahedral-wedge directions the
+    // depth moments could not reject.
+    int blocked = 0;
+    int wrongly_visible = 0;
+    const float probe_distance = half + 2.0f;
+    for(int qx = -1; qx <= 1; ++qx)
+    {
+        for(int qy = -1; qy <= 1; ++qy)
+        {
+            for(int qz = -1; qz <= 1; ++qz)
+            {
+                const math::vec3 query(float(qx) * 1.5f, float(qy) * 1.5f, float(qz) * 1.5f);
+                for(int px = -1; px <= 1; ++px)
+                {
+                    for(int py = -1; py <= 1; ++py)
+                    {
+                        for(int pz = -1; pz <= 1; ++pz)
+                        {
+                            if(px == 0 && py == 0 && pz == 0)
+                            {
+                                continue;
+                            }
+                            const math::vec3 probe(float(px) * probe_distance,
+                                                   float(py) * probe_distance,
+                                                   float(pz) * probe_distance);
+                            if(cage_visibility(clipmap, query, probe, spacing) > 0.0f)
+                            {
+                                ++wrongly_visible;
+                            }
+                            else
+                            {
+                                ++blocked;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    std::printf("  exterior segments: %d blocked, %d leaked\n", blocked, wrongly_visible);
+    check(wrongly_visible == 0,
+          "every exterior probe is field-blocked from every interior query (leaked " +
+              std::to_string(wrongly_visible) + ")");
+    // Interior probes stay visible: the defence must not buy its seal with a dark room.
+    int visible = 0;
+    int wrongly_blocked = 0;
+    const math::vec3 interior_probes[] = {
+        {1.0f, 1.0f, 1.0f},
+        {-1.0f, 1.0f, -1.0f},
+        {1.5f, -1.5f, 0.0f},
+        {0.0f, 0.0f, 0.0f},
+        {-1.5f, -1.5f, 1.5f},
+    };
+    for(int qx = -1; qx <= 1; ++qx)
+    {
+        for(int qy = -1; qy <= 1; ++qy)
+        {
+            for(int qz = -1; qz <= 1; ++qz)
+            {
+                const math::vec3 query(float(qx) * 1.5f, float(qy) * 1.5f, float(qz) * 1.5f);
+                for(const auto& probe : interior_probes)
+                {
+                    if(cage_visibility(clipmap, query, probe, spacing) > 0.0f)
+                    {
+                        ++visible;
+                    }
+                    else
+                    {
+                        ++wrongly_blocked;
+                    }
+                }
+            }
+        }
+    }
+    std::printf("  interior segments: %d visible, %d wrongly blocked\n", visible, wrongly_blocked);
+    check(wrongly_blocked == 0,
+          "no interior probe is wrongly blocked (got " + std::to_string(wrongly_blocked) + ")");
+    // The arrival guard: a probe on the ROOM side of a wall, closer to it than one cage voxel,
+    // must stay readable - it is the probe carrying that wall's bounce.
+    check(cage_visibility(clipmap, {0.0f, 0.0f, 0.0f}, {half - 0.1f, 0.0f, 0.0f}, spacing) > 0.0f,
+          "a probe hugging the wall's room side survives the arrival guard");
+    // And the guard must not excuse the wall itself: a probe just PAST the far face is blocked.
+    check(cage_visibility(clipmap, {0.0f, 0.0f, 0.0f}, {half + 2.0f * t + 0.2f, 0.0f, 0.0f}, spacing) <= 0.0f,
+          "a probe just past the wall's far side is blocked");
+    // Open air: both endpoints outside, nothing between - the midpoint clearance proof.
+    check(cage_visibility(clipmap, {5.0f, 0.0f, 0.0f}, {5.0f, 2.0f, 2.0f}, spacing) > 0.0f,
+          "an open-air segment is visible");
+    // Flat ground - the regression that forced the NEGATIVE acceptance: cage segments over a
+    // floor run parallel to it at grazing height by construction (the biased query clears the
+    // surface by ~0.4 voxel via the view-dominant bias, and four of the eight cage probes lie
+    // in the floor plane itself, world lattices being what they are). Any positive acceptance
+    // convicts those segments on proximity and the all-blocked contract then paints black
+    // rings/donuts on open ground (measured in-editor, 2026-08-12).
+    mesh_sdf ground;
+    check(bake_slab({8.0f, 0.2f, 8.0f}, ground), "ground slab bakes");
+    std::vector<global_sdf_instance> ground_instances;
+    ground_instances.push_back(make_clipmap_instance(ground, {0.0f, -0.2f, 0.0f}, albedo, emissive));
+    global_sdf_clipmap ground_clipmap;
+    ground_clipmap.init(settings);
+    ground_clipmap.update(ground_instances, math::vec3(0.0f));
+    const float ground_spacing =
+        ground_clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
+    const float hug = 0.02f;
+    int ground_visible = 0;
+    int ground_blocked = 0;
+    const math::vec3 ground_queries[] = {
+        {0.3f, hug, -0.7f},
+        {1.1f, hug, 1.3f},
+        {-2.6f, hug, 0.4f},
+    };
+    for(const auto& query : ground_queries)
+    {
+        const math::vec3 cage_probes[] = {
+            {query.x + ground_spacing, 0.0f, query.z},
+            {query.x - ground_spacing, 0.0f, query.z},
+            {query.x, 0.0f, query.z + ground_spacing},
+            {query.x + ground_spacing, 0.0f, query.z + ground_spacing},
+            {query.x, ground_spacing, query.z},
+            {query.x + ground_spacing, ground_spacing, query.z},
+        };
+        for(const auto& probe : cage_probes)
+        {
+            if(cage_visibility(ground_clipmap, query, probe, ground_spacing) > 0.0f)
+            {
+                ++ground_visible;
+            }
+            else
+            {
+                ++ground_blocked;
+            }
+        }
+    }
+    std::printf("  flat-ground segments: %d visible, %d wrongly blocked\n",
+                ground_visible,
+                ground_blocked);
+    check(ground_blocked == 0,
+          "no flat-ground cage segment is wrongly blocked (got " + std::to_string(ground_blocked) +
+              ")");
+    // The floor still occludes DOWNWARD: a probe beneath it must not complete rays up through.
+    check(cage_visibility(ground_clipmap, {0.3f, hug, -0.7f}, {0.3f, -2.0f, -0.7f}, ground_spacing) <=
+              0.0f,
+          "a probe beneath the floor is blocked");
+}
+
 } // namespace
 
 void run(int& checks, int& failures)
@@ -1641,6 +1893,7 @@ void run(int& checks, int& failures)
     test_shadow_through_colonnade();
     test_shadow_through_coarse_baked_colonnade();
     test_attribution_prefers_true_surface_over_shell();
+    test_world_probe_cage_visibility_seals_box();
 }
 
 } // namespace unravel::gi_tests

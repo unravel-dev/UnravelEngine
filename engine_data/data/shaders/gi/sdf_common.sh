@@ -880,7 +880,8 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 }
 
 SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
-                          float surface_bias, float relaxation, bool want_normal, float expand_start)
+                          float surface_bias, float relaxation, bool want_normal, float expand_start,
+                          bool expand_full)
 {
 	SdfRayHit result = SdfMakeMiss();
 	if(!u_sdf_clipmap_enabled || t_min >= t_max)
@@ -906,6 +907,8 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 	// into one negative region, and without this test the escape tunnels through the wall and
 	// exits into the light on the far side. Occluding on re-descent errs dark, never leaks.
 	float suppress_best = -1e8;
+	// Distance walked while suppressed; probe rays (expand_full) bound it - see the walk.
+	float suppress_travel = 0.0;
 	bool first_sample = true;
 	bool from_origin = t_min <= 0.0;
 	for(int step = 0; step < max_steps; ++step)
@@ -946,7 +949,7 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		// Bistro: raising the shadow step budget (which converts exhaustion-hits back into
 		// resolved rays) restored the bounce, which is what identified the expand as the term
 		// starving them.
-		if(expand_start >= 0.0 && t > expand_start)
+		if(expand_start >= 0.0 && (expand_full || t > expand_start))
 		{
 			// The ramp measures travel PAST expand_start: radiance rays pass 0 (expand from
 			// launch, as always), occlusion rays pass their mesh-exact range - within it the
@@ -954,9 +957,21 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 			// beyond it only this voxel-resolution field answers, where a sub-voxel wall reads
 			// as a dip the acceptance can step across (measured: sun shafts through thin test-
 			// room walls beyond 2 m, amplified into a lit room by a white-walled enclosure).
+			//
+			// expand_full SKIPS the ramp: full fattening from the very first step. The ramp's
+			// grace zone exists for rays born ON surfaces, whose contact shadows the launch
+			// lift already defends; world-probe rays are born in OPEN space with no mesh tier
+			// under them, and their first metres are exactly where the sealed-box leak lived -
+			// a sub-voxel wall crossed at t ~ 1-2 m reads a dip the ramped expand (still near
+			// zero there) never closed, and because the porous field OVERESTIMATES distance
+			// the march can hop the dip without ever sampling it, which no acceptance raise
+			// can catch. Subtracting from the step as well as the test is what makes the
+			// expand the watertight defence, so probes take it whole from launch.
 			float diagonal = voxel * 1.7320508;
-			float expand = GI_EXPAND_MAX_VOXEL_DIAGONALS * diagonal *
-			               saturate((t - expand_start) / (GI_EXPAND_RAMP_VOXEL_DIAGONALS * diagonal));
+			float ramp = expand_full
+			                 ? 1.0
+			                 : saturate((t - expand_start) / (GI_EXPAND_RAMP_VOXEL_DIAGONALS * diagonal));
+			float expand = GI_EXPAND_MAX_VOXEL_DIAGONALS * diagonal * ramp;
 			d -= expand;
 		}
 		float base_threshold = max(surface_bias * voxel, 1e-6);
@@ -978,7 +993,18 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		if(first_sample)
 		{
 			first_sample = false;
-			suppressed = d < (from_origin ? accept : 0.0);
+			// The continuation test must use the RAW reading. The expand is a hit-test
+			// artifice fattening surfaces AHEAD of the ray, and arming on the expanded
+			// reading turned the whole fattening band at the tier handover into "launch
+			// overhang": every ray arriving at the handover within an expand of a surface
+			// it was ABOUT TO HIT armed the walk instead, which then stepped by |d| INTO
+			// the solid - accelerating - until the re-descent tolerance released it up to
+			// half a voxel deep. Measured as the camera-locked seam ring at exactly
+			// GI_MESH_SDF_TRACE_RANGE: a band of buried hits whose face-slab and probe-cage
+			// reads answer the wrong side of the surface. Raw-negative means what the
+			// comment above promises: strictly inside composed solid the near tier vouched
+			// clear - the one case that genuinely is launch overhang.
+			suppressed = from_origin ? (d < accept) : (d_raw < 0.0);
 		}
 		if(suppressed)
 		{
@@ -986,10 +1012,20 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 			{
 				suppressed = false;
 			}
-			else if(d < suppress_best - voxel)
+			else if(d < suppress_best - (expand_full ? 0.15 * voxel : voxel))
 			{
 				// Re-descent: the walk rose toward its exit and dropped again -- a new occluder's
 				// slab, not the launch surface. Fall through to the hit test and occlude.
+				//
+				// The tolerance is a FULL voxel for surface-born rays, whose own slab legitimately
+				// wobbles at that scale, but a PROBE ray (expand_full) has no launch surface at
+				// all -- its suppression only ever means "the probe sits near geometry", and the
+				// walk crossing a porous sub-voxel wall reads as a shallow dip (~0.2-0.5 voxel)
+				// the one-voxel tolerance swallowed whole: the walk tunnelled out of sealed rooms
+				// through their own roofs, hits never firing because suppression bypasses the hit
+				// test (the sealed-box leak's last channel). 0.15 voxel sits above trilinear
+				// wobble and below every real wall dip; the cost is grazing probe rays near the
+				// cross-fade shell occluding early - the safe direction.
 				suppressed = false;
 			}
 			else
@@ -997,9 +1033,23 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 				// Walking out of the launch band. |d| is the distance to the slab boundary, so
 				// stepping by it converges on the exit without crossing it (1-Lipschitz), and the
 				// floor keeps a zero reading from stalling.
-				suppress_best = max(suppress_best, d);
-				t += max(abs(d), base_threshold);
-				continue;
+				float walk_step = max(abs(d), base_threshold);
+				// A probe ray's launch band cannot exceed the acceptance plus the full expand
+				// (about two voxels of the answering level): suppressed travel beyond that is a
+				// walk THROUGH something real - the monotonic-rise tunnel the descent test above
+				// cannot see, a probe sitting closer to a porous wall than the wall's own
+				// through-field minimum. Occlude; for probe rays dark is the safe direction.
+				if(expand_full && suppress_travel + walk_step > 3.0 * voxel)
+				{
+					suppressed = false;
+				}
+				else
+				{
+					suppress_best = max(suppress_best, d);
+					suppress_travel += walk_step;
+					t += walk_step;
+					continue;
+				}
 			}
 		}
 		if(d < accept)
@@ -1099,6 +1149,15 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		result.normal = len > 1e-8 ? n / len : vec3(0.0, 1.0, 0.0);
 	}
 	return result;
+}
+
+/// The ramped-expand form every pre-existing caller means: full-from-launch is opt-in for
+/// consumers with no mesh tier under their first steps (see expand_full above).
+SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
+                          float surface_bias, float relaxation, bool want_normal, float expand_start)
+{
+	return SdfTraceClipmap(origin, direction, t_min, t_max, max_steps, surface_bias, relaxation,
+	                       want_normal, expand_start, false);
 }
 
 /**

@@ -106,7 +106,16 @@
     X(GI_PROBE_TRACE_SURFACE_BIAS, 0.5f,                                                           \
       "voxels of the answering level", "derived: half-voxel hit acceptance - the midpoint of the"  \
       " voxel the field cannot resolve below; the tracing default for settings-less consumers"     \
-      " (world probes, debug), matching the shadow-ray default")                                   \
+      " (screen gather, reflections, debug), matching the shadow-ray default")                     \
+    X(GI_WORLD_PROBE_TRACE_BIAS, 1.0f,                                                             \
+      "voxels of the answering level", "derived: FULL-voxel acceptance for world-probe rays"       \
+      " alone, the acceptance cap - they are the one consumer tracing the cascade with no mesh"    \
+      " tier (near_field 0) while launching inside rooms, and a sub-voxel wall's through-field"    \
+      " minimum reaches ~0.87 voxel on diagonal crossings while the far-field expand is still"     \
+      " inside its ramp: at the half-voxel default probe rays threaded sealed geometry along the"  \
+      " level cross-fade shell (the sealed-box leak: camera-locked porosity fans in the Probe"     \
+      " Sky debug view, escaped rays ingesting env SH / sunlit exterior). One voxel covers the"    \
+      " worst case; probe reads over-occlude by at most one voxel - the graceful direction")       \
     X(GI_PROBE_TRACE_RELAXATION, 0.05f,                                                            \
       "acceptance growth per unit t", "derived: the cone that bounds grazing-ray cost; carried"    \
       " from the measured resolve-pass default (audit: bounds the near-parallel case that"         \
@@ -119,9 +128,39 @@
       "frames", "derived: GI_WORLD_PROBE_OCT_RADIANCE^2 / GI_WORLD_PROBE_RAYS_PER_FRAME - one"     \
       " full refresh of every direction per window; also the far-field reaction latency (R4:"      \
       " within the 30-frame far-field target)")                                                    \
-    X(GI_CHEBYSHEV_WEIGHT_FLOOR, 0.05f,                                                            \
-      "weight", "published: [RTXGI] visibility weight floor - never fully zero, a fallback is"     \
-      " needed when no probe has visibility")                                                      \
+    X(GI_CHEBYSHEV_WEIGHT_FLOOR, 0.005f,                                                           \
+      "weight", "published [RTXGI] ships 0.05; lowered 10x measured: the floor is the"             \
+      " through-wall bleed knob (floor x crush of an exterior sunlit probe reaches every"          \
+      " interior query regardless of depth moments) - 0.05 leaked ~0.1-0.5% of sun into sealed"    \
+      " rooms, amplified ~10x by the closed-room bounce under auto exposure; 0.005 cuts it"        \
+      " below perception while the weight_sum fallback still catches fully-dead cages")            \
+    X(GI_WORLD_PROBE_CAGE_VIS_STEPS, 40,                                                           \
+      "field samples", "derived: ceil(sqrt(3) x GI_WORLD_PROBE_DIVISOR / 0.7) - the march's"       \
+      " uniform fallback step, (segment - guards) / steps, is then at most 0.7 cage voxels on"     \
+      " the longest cage diagonal, inside the ~0.8-voxel sub-conviction core of the thinnest"      \
+      " wall a level can seal (one voxel: interior reaches -0.5, conviction at -0.1 leaves 0.8),"  \
+      " so the walk cannot step across a sealing wall it is responsible for; the sphere-trace"     \
+      " acceleration (step = max(field, base)) keeps the typical cost at a few samples and the"    \
+      " mid-segment clearance proof settles open cages with one")                                  \
+    X(GI_WORLD_PROBE_CAGE_VIS_ACCEPT_VOXELS, -0.1f,                                                \
+      "SDF voxels of the cage's level", "derived: conviction depth - NEGATIVE, so a probe is"      \
+      " rejected only where the segment passes INSIDE geometry, with a tenth of a voxel of"        \
+      " noise margin. Any positive acceptance convicts on PROXIMITY, and legitimate cage"          \
+      " segments run parallel to the query's own surface at grazing height by construction:"      \
+      " on a flat floor four of the eight cage probes lie in the floor plane and the biased"       \
+      " query clears it by only ~0.4 voxel (the view-dominant bias's 0.2 normal share), so a"      \
+      " half-voxel acceptance blocked whole flat-ground cages and the all-blocked contract"       \
+      " painted black rings/donuts on open ground (measured, 2026-08-12 screenshots). Walls"       \
+      " that actually seal have negative cores in the finest field covering the sample, which"     \
+      " the march reads; sub-voxel-porous walls at coarse-only coverage stay the documented"       \
+      " residual either way")                                                                      \
+    X(GI_WORLD_PROBE_CAGE_VIS_GUARD_VOXELS, 1.0f,                                                  \
+      "SDF voxels of the cage's level", "derived: endpoint slabs the march does not test - the"    \
+      " query end sits at the self-shadow-biased point, whose own surface legitimately reads"      \
+      " near zero (the bias clears at most GI_SELF_SHADOW_BIAS_MAX_VOXELS = 2), and a probe"       \
+      " hugging the OPEN side of a wall must stay readable from the room it serves; one voxel"     \
+      " excludes both contact zones while any wall that actually separates the pair still"         \
+      " crosses the tested middle")                                                                \
     X(GI_PERCEPTION_CRUSH_THRESHOLD, 0.2f,                                                         \
       "weight", "published: [DDGI19] w *= w^2/threshold^2 below this - suppresses dim leaks the"   \
       " eye's log response would otherwise amplify")                                               \

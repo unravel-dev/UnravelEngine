@@ -757,6 +757,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                 light_params.view_cache = &view_cache;
                 light_params.frame = light_voxel_frame_;
                 light_params.camera_position = camera.get_position();
+                // The sun-tier view is a WRITER-side diagnostic: the compute pass stamps tier
+                // colors into the light volume and the debug pass merely displays them.
+                light_params.sun_tier_debug = debug_pass_ == debug_pass_sdf_sun_tiers;
                 // The sun's CSM was rendered above (build_shadows), so its cascade 0 can answer
                 // sun visibility for the voxels it covers - the raster's own mesh-exact shadows,
                 // which the traced field cannot reproduce through openings the bake fattened.
@@ -2316,6 +2319,14 @@ void deferred::run_sdf_debug_pass(const camera& camera,
     else if(debug_pass_ == debug_pass_sdf_world_probes)
     {
         params.settings.mode = sdf_debug_pass::debug_mode::world_probes;
+    }
+    else if(debug_pass_ == debug_pass_sdf_sun_tiers)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::sun_tiers;
+    }
+    else if(debug_pass_ == debug_pass_sdf_probe_sky)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::probe_sky;
     }
     sdf_debug_pass_.run(rview, params);
 }

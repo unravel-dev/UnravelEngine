@@ -45,6 +45,14 @@ public:
         light_voxels = 9,
         ///< GI v2: world probe irradiance interpolated at the traced hit.
         world_probes = 10,
+        ///< GI v2: which tier answered SUN visibility per voxel face. Needs the light-voxel
+        ///< pass's matching debug write (gi_light_voxel_pass::run_params::sun_tier_debug),
+        ///< which replaces the volume's radiance with tier colors while active.
+        sun_tiers = 11,
+        ///< GI v2: SKY FRACTION of the world-probe answer at the traced hit. Sealed interiors
+        ///< must read zero; warm colors mean probe rays complete with sky - the bounce-path
+        ///< injection channel the sun-tier view cannot see. Pure read, no debug write needed.
+        probe_sky = 12,
     };
 
     struct settings

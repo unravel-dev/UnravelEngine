@@ -45,6 +45,8 @@ uniform vec4 u_gi_debug_camera;
 #define SDF_DEBUG_ATTR_ALBEDO 8
 #define SDF_DEBUG_LIGHT_VOXELS 9
 #define SDF_DEBUG_WORLD_PROBES 10
+#define SDF_DEBUG_SUN_TIERS 11
+#define SDF_DEBUG_PROBE_SKY 12
 
 #define GI_WORLD_PROBE_READ
 #include "gi/gi_world_probes.sh"
@@ -247,7 +249,8 @@ void main()
 		return;
 	}
 
-	if(u_debug_mode == SDF_DEBUG_ATTR_ALBEDO || u_debug_mode == SDF_DEBUG_LIGHT_VOXELS)
+	if(u_debug_mode == SDF_DEBUG_ATTR_ALBEDO || u_debug_mode == SDF_DEBUG_LIGHT_VOXELS ||
+	   u_debug_mode == SDF_DEBUG_SUN_TIERS)
 	{
 		// GI scene representation, read exactly as a gather ray will read it: the traced hit
 		// mapped to its attribute voxel in the finest covering cascade.
@@ -269,6 +272,8 @@ void main()
 		// surface band covers the hit. Yellow now means NO level attributed it.
 		int attr_res = u_light_voxel_resolution;
 		vec4 albedo = vec4_splat(0.0);
+		int attributed_level = SDF_CLIPMAP_LEVEL_COUNT;
+		float attributed_voxel = 0.0;
 		for(int probe_level = attr_level; probe_level < SDF_CLIPMAP_LEVEL_COUNT; ++probe_level)
 		{
 			vec4 level_data = u_sdf_clipmap_levels[probe_level];
@@ -282,12 +287,68 @@ void main()
 			if(candidate.a > 0.0)
 			{
 				albedo = candidate;
+				attributed_level = probe_level;
+				attributed_voxel = attr_voxel_size;
 				break;
 			}
 		}
 		if(albedo.a <= 0.0)
 		{
 			gl_FragColor = vec4(1.0, 0.9, 0.0, 1.0);
+			return;
+		}
+		if(u_debug_mode == SDF_DEBUG_SUN_TIERS)
+		{
+			// The tier color the lighting pass wrote for the DOMINANT face of the attributed
+			// voxel, fetched NEAREST: the colors are categorical, so the shared reader's
+			// trilinear + face blending would mix green into blue across every edge and paint
+			// tiers no face was assigned. Colors are documented at GiDebugSunTierColor
+			// (gi_light_voxels_kernel.sh); the write is the debug PROGRAM VARIANT
+			// (cs_gi_light_voxels_debug.sc), dispatched while this same debug pass id is up.
+			//
+			// ALPHA is the provenance marker (see the writer): tier writes carry 0.5,
+			// radiance writes carry 1, the gates write 0. Classifying by it separates
+			// "which tier answered" from "the writer never visited this texel at all".
+			//
+			//   DARK BLUE -> alpha 0: culled by the lighting pass's gates (tunnel guard,
+			//                cavity visibility) or zeroed on cell handover.
+			//   MAGENTA   -> alpha 1: STALE RADIANCE - the lighting pass has not rewritten
+			//                this texel since the view was enabled. On its own a finding:
+			//                a texel outside the relight rotation keeps emitting whatever
+			//                light it last captured, into every consumer, forever.
+			int axis = 0;
+			float component = hit.normal.x;
+			if(abs(hit.normal.y) > abs(component))
+			{
+				axis = 1;
+				component = hit.normal.y;
+			}
+			if(abs(hit.normal.z) > abs(component))
+			{
+				axis = 2;
+				component = hit.normal.z;
+			}
+			int face = axis * 2 + (component < 0.0 ? 1 : 0);
+			ivec3 slot = GiLightVoxelSlot(GiLightVoxelCell(hit_position, attributed_voxel));
+			vec4 tier = texelFetch(s_light_voxels, GiLightVoxelTexel(slot, attributed_level, face), 0);
+			if(tier.a <= 0.25)
+			{
+				gl_FragColor = vec4(0.0, 0.05, 0.35, 1.0);
+				return;
+			}
+			if(tier.a >= 0.75)
+			{
+				gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+				return;
+			}
+			// Mid alpha with black rgb is the debug-mode gate cull (see the writer): same
+			// dark blue as the never-written case - both mean "this face injects nothing".
+			if(dot(tier.xyz, vec3_splat(1.0)) < 0.01)
+			{
+				gl_FragColor = vec4(0.0, 0.05, 0.35, 1.0);
+				return;
+			}
+			gl_FragColor = vec4(tier.xyz, 1.0);
 			return;
 		}
 		if(u_debug_mode == SDF_DEBUG_ATTR_ALBEDO)
@@ -312,7 +373,7 @@ void main()
 		return;
 	}
 
-	if(u_debug_mode == SDF_DEBUG_WORLD_PROBES)
+	if(u_debug_mode == SDF_DEBUG_WORLD_PROBES || u_debug_mode == SDF_DEBUG_PROBE_SKY)
 	{
 		// World probe irradiance interpolated AT THE TRACED HIT through the full DDGI weight
 		// chain - exactly what the light voxels' bounce term and a shortened gather ray's
@@ -322,6 +383,88 @@ void main()
 		vec3 hit_position = ray_origin + ray_dir * hit.t;
 		vec3 probe_irradiance;
 		float sky_fraction;
+		if(u_debug_mode == SDF_DEBUG_PROBE_SKY)
+		{
+			// How much of the cage's answer at this point is SKY - but from the FINEST covering
+			// level ALONE, deliberately without the cascade's far blend. The full cascade read
+			// could not distinguish the two remaining entry channels: level-N probes' own rays
+			// escaping (writer) versus the blend band importing the next level's cage, whose
+			// probes straddle the walls and legitimately see sky (reader). This view separates
+			// them: warm colors here mean the covering level's OWN probes carry sky; a shell
+			// that is warm in the cascade view but dark green here convicts the far blend.
+			//
+			//   DARK GREEN -> zero sky in the covering level's answer.
+			//   RED -> YELLOW/WHITE -> rising sky fraction, 4x scaled.
+			//   BLUE TINT -> inside the blend band (the camera-locked shell), where the real
+			//   reader would be mixing the next level in - the region under suspicion.
+			//   MAGENTA -> no level's cage answered.
+			//   PURE BLUE -> HIT-HEALTH marker: this pixel's traced hit landed measurably
+			//   INSIDE the composed field (unblended reading below a quarter voxel under the
+			//   surface). The cage answer at such a point is meaningless - a point inside a
+			//   floor sees no sky by definition - so a warm/dark ring or arc that turns blue
+			//   here is an artifact of the TRACE (launch suppression releasing through thin
+			//   geometry at the mesh<->clipmap handover shell), not a cage leak. The real
+			//   gather guards these hits into honest darkness; this lane exists so seam
+			//   artifacts stop masquerading as reader leaks in this view.
+			{
+				float hit_blend;
+				float hit_voxel;
+				int hit_level = SdfFindClipmapLevel(hit_position, hit_blend, hit_voxel);
+				if(hit_level < SDF_CLIPMAP_LEVEL_COUNT &&
+				   SdfSampleClipmapLevel(hit_level, hit_position) < -0.25 * hit_voxel)
+				{
+					gl_FragColor = vec4(0.1, 0.3, 1.0, 1.0);
+					return;
+				}
+			}
+			float sky = 0.0;
+			bool answered = false;
+			bool in_blend_band = false;
+			for(int probe_level = 0; probe_level < SDF_CLIPMAP_LEVEL_COUNT; ++probe_level)
+			{
+				float spacing = GiWorldProbeSpacing(probe_level);
+				float half_extent = (float(GI_WORLD_PROBE_AXIS - 1) * 0.5 - 1.0) * spacing;
+				vec3 delta = abs(hit_position - u_gi_debug_camera.xyz);
+				float largest = max(delta.x, max(delta.y, delta.z));
+				if(largest > half_extent)
+				{
+					continue;
+				}
+				vec3 near_irradiance;
+				float near_sky;
+				if(!GiWorldProbeIrradiance(hit_position, hit.normal, -ray_dir, probe_level,
+				                           near_irradiance, near_sky))
+				{
+					continue;
+				}
+				float band = 0.5 * spacing;
+				in_blend_band =
+				    largest > (half_extent - band) && probe_level + 1 < SDF_CLIPMAP_LEVEL_COUNT;
+				sky = saturate(near_sky);
+				answered = true;
+				break;
+			}
+			if(!answered)
+			{
+				gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+				return;
+			}
+			vec3 color;
+			if(sky <= 0.0)
+			{
+				color = vec3(0.0, 0.08, 0.0);
+			}
+			else
+			{
+				color = mix(vec3(0.5, 0.0, 0.0), vec3(1.0, 1.0, 0.2), saturate(sky * 4.0));
+			}
+			if(in_blend_band)
+			{
+				color.z = max(color.z, 0.5);
+			}
+			gl_FragColor = vec4(color, 1.0);
+			return;
+		}
 		if(!GiWorldProbeIrradianceCascade(hit_position,
 		                                  hit.normal,
 		                                  -ray_dir,

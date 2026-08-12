@@ -44,6 +44,14 @@ public:
         /// The sun's slot in the GPU light buffer, so the shader applies the map to exactly
         /// the light it was rendered for. Negative disables the tier.
         int sun_light_index = -1;
+        /// Diagnostic: dispatch the SUN-TIER debug PROGRAM (cs_gi_light_voxels_debug.sc),
+        /// which writes tier-attribution colors into the light volume instead of radiance
+        /// (see GiDebugSunTierColor in gi_light_voxels_kernel.sh), for the sun_tiers debug
+        /// view. A compiled variant selected here on the CPU, not a shader flag: two hunts
+        /// lost to a runtime flag that left the CPU but never steered the kernel. Downstream
+        /// GI consumers ingest the colors while this is set; the volume relights within its
+        /// usual rotation once cleared.
+        bool sun_tier_debug = false;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -58,11 +66,19 @@ public:
 private:
     /// One-time "the program never became valid" diagnostic; see run().
     bool invalid_warning_emitted_ = false;
+    /// One-time "debug variant requested but its program never built" diagnostic; see run().
+    bool debug_invalid_warning_emitted_ = false;
+    /// Last logged state of run_params::sun_tier_debug; see the flip log in run().
+    bool sun_tier_debug_logged_ = false;
 
 private:
     struct light_voxel_program : uniforms_cache
     {
         gpu_program::ptr program;
+        /// The GI_SUN_TIER_DEBUG_VARIANT sibling; shares every uniform name with `program`
+        /// (bgfx uniforms are name-global), so the cached handles below serve both. Optional:
+        /// when it failed to build, run() keeps the radiance program and warns once.
+        gpu_program::ptr debug_program;
         gfx::program::uniform_ptr u_gi_light_voxel_params;
         gfx::program::uniform_ptr u_sdf_params;
         gfx::program::uniform_ptr u_sdf_grid_params;

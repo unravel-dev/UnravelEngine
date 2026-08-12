@@ -260,6 +260,8 @@ void game_panel::draw_menubar(rtti::context& ctx)
             ImGui::RadioButton("SDF (Attr Albedo)", &visualize_passes_, 23);
             ImGui::RadioButton("SDF (Light Voxels)", &visualize_passes_, 24);
             ImGui::RadioButton("SDF (World Probes)", &visualize_passes_, 25);
+            ImGui::RadioButton("SDF (Sun Tiers)", &visualize_passes_, 26);
+            ImGui::RadioButton("SDF (Probe Sky)", &visualize_passes_, 27);
             ImGui::EndMenu();
         }
         ImGui::SetItemTooltipEx("%s", "Visualize Render Passes");

@@ -49,8 +49,18 @@ clamp; less hue-skewed ghosting), Karis 1/(1+luma)-weighted resolve (kills HDR
 firefly flicker). fs_taa.sc only; sharpen path still uses RGB moments.
 Auto exposure min_ev default -6 -> -3 (dark reads dark; deep adaptation
 surfaces GI residuals -- see memory gi-sealed-box-leak). Sealed-box GI leak
-hunt PARKED: dominant source unidentified (floor-bleed model falsified);
-next step is a per-tier sun-visibility debug view (spawn task created).
+hunt: dominant source unidentified (floor-bleed model falsified). The
+per-tier sun-visibility debug view now EXISTS (2026-08-11): editor
+"SDF (Sun Tiers)" visualize pass (id 26) drives a debug write in
+cs_gi_light_voxels (tier colors replace radiance in the light volume;
+GiDebugSunTierColor) displayed raw by fs_sdf_debug mode 11. Colors:
+green = CSM cascade-0 quadrature answered (brightness = lit fraction;
+BRIGHT green on a sealed interior = the shadow-map tier leaking), red =
+traced resolved hit (occluded, innocent), white/grey = traced answered
+lit (field threading / clearance penumbra), blue = sun never queried
+(faces away / no sun), dark blue = face culled by the pass's gates.
+All red/dim-green interior => no tier stamps sun directly; energy enters
+via bounce path (probe completions / screen-trace commits) instead.
 Phase 4b bloom retune landed: SCATTER mode is the new default (threshold 0) --
 thresholdless: recursive lerp pyramid (per-hop ONE/INV_SRC_ALPHA premultiplied
 blend realizes mix(dst, up, s) exactly; MIP0 keeps its own downsample as

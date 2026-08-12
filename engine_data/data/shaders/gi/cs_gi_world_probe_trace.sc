@@ -160,10 +160,19 @@ void main()
 		}
 		vec2 tile_uv = (vec2(texel - tile) + vec2_splat(0.5)) / float(GI_WORLD_PROBE_OCT_RADIANCE);
 		vec3 direction = GiOctDecode(tile_uv);
-		// Coarse world structure: cascade tier only (near_field 0), the shared trace defaults
-		// for acceptance and budget - all owned by gi_constants, no settings.
-		SdfRayHit hit = SdfTraceRay(origin, direction, t_max, 0.0, GI_TRACE_MAX_STEPS,
-		                            GI_PROBE_TRACE_SURFACE_BIAS, GI_PROBE_TRACE_RELAXATION, true);
+		// Coarse world structure: cascade tier only, called DIRECTLY (near_field 0 makes the
+		// tiered entry point equivalent), with two probe-specific hardenings against the
+		// sealed-box leak. Acceptance at the FULL voxel cap, and - the part acceptance alone
+		// cannot do, because the porous field overestimates distance and the march can hop a
+		// sub-voxel wall's dip without sampling it - the surface expand at FULL strength from
+		// launch. These rays have no mesh tier backing their first metres and are born in open
+		// space, so the ramp's contact-zone grace protects nothing here and its blind zone was
+		// exactly where rays threaded the level cross-fade shell out of sealed rooms (the
+		// camera-locked porosity fans; measured chain at GI_WORLD_PROBE_TRACE_BIAS in
+		// gi_constants.h).
+		SdfRayHit hit = SdfTraceClipmap(origin, direction, 0.0, t_max, GI_TRACE_MAX_STEPS,
+		                                GI_WORLD_PROBE_TRACE_BIAS, GI_PROBE_TRACE_RELAXATION,
+		                                true, 0.0, true);
 		vec3 radiance;
 		float hit_t;
 		if(!hit.hit)

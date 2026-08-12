@@ -317,7 +317,24 @@ void main()
 				{
 					hit_normal = -hit_normal;
 				}
-				if(!GiLightVoxelRead(hit_position, hit_normal, radiance))
+				// Sub-surface hit guard: a hit the field itself reports as INSIDE geometry
+				// (beyond half the covering voxel under the surface - normal acceptance stops
+				// strictly above it) is a trace pathology: the launch-suppression walk can
+				// release through thin geometry around the mesh<->clipmap handover shell.
+				// Reading ANYTHING there imports the far side - the light-voxel read selects
+				// a face slab by normal, and a tunneled hit inside a sunlit wall hands the
+				// EXTERIOR face's radiance to an interior ray. Honest darkness is the only
+				// answer that cannot leak. Unblended finest-level reading, for the same
+				// reason the cage-visibility march uses it: a verdict, not a surface resolve.
+				float hit_blend;
+				float hit_voxel;
+				int hit_level = SdfFindClipmapLevel(hit_position, hit_blend, hit_voxel);
+				if(hit_level < SDF_CLIPMAP_LEVEL_COUNT &&
+				   SdfSampleClipmapLevel(hit_level, hit_position) < -0.5 * hit_voxel)
+				{
+					radiance = vec3_splat(0.0);
+				}
+				else if(!GiLightVoxelRead(hit_position, hit_normal, radiance))
 				{
 					// Occluded but unmeasured: honest darkness within the cascades (the
 					// sealed-room branch); past them - exhaustion at the boundary, coarse

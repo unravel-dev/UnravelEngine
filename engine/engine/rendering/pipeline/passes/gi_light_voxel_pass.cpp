@@ -12,7 +12,7 @@ namespace unravel
 {
 namespace
 {
-/// Must match NUM_THREADS in cs_gi_light_voxels.sc.
+/// Must match NUM_THREADS in gi_light_voxels_kernel.sh (both compiled variants share it).
 constexpr uint32_t light_voxel_group_size = 64u;
 } // namespace
 
@@ -20,8 +20,10 @@ auto gi_light_voxel_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto cs = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_light_voxels.sc");
+    auto cs_debug = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_light_voxels_debug.sc");
     program_.cache_uniforms();
     program_.program = std::make_unique<gpu_program>(cs);
+    program_.debug_program = std::make_unique<gpu_program>(cs_debug);
     return program_.is_valid();
 }
 
@@ -59,8 +61,22 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     }
     auto& atlas = surface_cache.get_atlas();
     const auto& instances = surface_cache.get_instances();
+    // The sun-tier debug write is a compiled VARIANT of the kernel, selected here - program
+    // choice is the one switch no uniform stomp or stale constant buffer can undo (the
+    // runtime-flag approach died twice with every CPU-side link verified). Falls back to the
+    // radiance program, loudly, if the variant never built: the view then shows all-magenta
+    // provenance, which is at least an honest "the write is not happening".
+    const bool want_debug = params.sun_tier_debug;
+    const bool debug_available = program_.debug_program && program_.debug_program->is_valid();
+    if(want_debug && !debug_available && !debug_invalid_warning_emitted_)
+    {
+        debug_invalid_warning_emitted_ = true;
+        APPLOG_WARNING("[SurfaceCache] Sun-tier debug program is not valid on this backend; "
+                       "the sun_tiers view will keep showing radiance provenance (magenta).");
+    }
+    auto& active_program = (want_debug && debug_available) ? *program_.debug_program : *program_.program;
     gfx::render_pass pass("GI/Light Voxels");
-    program_.program->begin();
+    active_program.begin();
     gfx::set_texture(program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
     gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
     gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
@@ -139,15 +155,30 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     }
     gfx::set_uniform(program_.u_gi_sun_shadowmap_params, sun_params);
     const uint32_t attr_resolution = clipmap_gpu.get_attr_resolution();
+    // y and camera.w mirror the debug state as TELEMETRY only - the kernel decides by which
+    // program was compiled in (see the variant note in gi_light_voxels_kernel.sh). The lanes
+    // stay so a GPU-debugger capture can finally answer whether these uniforms ever arrive,
+    // the question two hunts could not settle from the CPU side.
     const float voxel_params[4] = {float(attr_resolution),
-                                   0.0f,
+                                   params.sun_tier_debug ? 1.0f : 0.0f,
                                    float(params.frame),
                                    1.0f};
     gfx::set_uniform(program_.u_gi_light_voxel_params, voxel_params);
+    // Logged on every flip: the one question a screenshot cannot answer is whether the flag
+    // reached the pass at all.
+    if(params.sun_tier_debug != sun_tier_debug_logged_)
+    {
+        sun_tier_debug_logged_ = params.sun_tier_debug;
+        APPLOG_INFO("[SurfaceCache] Sun-tier debug write {} (frame {}, program {}).",
+                    params.sun_tier_debug ? "ENABLED" : "disabled",
+                    params.frame,
+                    params.sun_tier_debug ? (debug_available ? "debug variant" : "MISSING - radiance fallback")
+                                          : "radiance");
+    }
     const float camera[4] = {params.camera_position.x,
                              params.camera_position.y,
                              params.camera_position.z,
-                             0.0f};
+                             params.sun_tier_debug ? 1.0f : 0.0f};
     gfx::set_uniform(program_.u_gi_light_voxel_camera, camera);
     // Bounce inputs: LAST frame's world probes. Absent (wrong resolution, first frames), the
     // ready flag stays zero and the shader takes direct light alone.
@@ -180,11 +211,11 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     const uint32_t capacity = attr_resolution * attr_resolution * attr_resolution;
     const uint32_t total = capacity * global_sdf_clipmap::level_count;
     gfx::dispatch(pass.id,
-                  program_.program->native_handle(),
+                  active_program.native_handle(),
                   (total + light_voxel_group_size - 1u) / light_voxel_group_size,
                   1,
                   1);
-    program_.program->end();
+    active_program.end();
     return true;
 }
 

@@ -116,12 +116,104 @@ SAMPLER2D(s_world_probe_depth, 15);
 /// xy = 1 / atlas size of the irradiance+depth atlases (they share a layout).
 uniform vec4 u_gi_world_probe_atlas;
 
+/**
+ * Straight-segment visibility between a query point and one cage probe, asked of the global
+ * SDF clipmap itself (every GI_WORLD_PROBE_READ consumer includes sdf_common.sh first, so
+ * SdfSampleClipmap is in scope). Returns 1 when the field stays open along the segment, 0 when
+ * a closed surface separates the pair.
+ *
+ * This is the reader-side defence the depth moments cannot provide at silhouettes: an 8x8
+ * octahedral depth texel averages a ~22-degree cone, so from a probe OUTSIDE a room a
+ * direction grazing a wall edge mixes "wall at 3 m" with "open to 12 m" - the mean lands
+ * beyond the interior query (no Chebyshev test at all) and the variance explodes (Chebyshev
+ * ~1 when tested). Measured: a sealed box read the exterior cage's sky at full weight through
+ * exactly those texel wedges, at every level whose probes straddle the walls. The clipmap has
+ * the wall itself; asking it is exact where the moments are statistical.
+ *
+ * Cost shape: one mid-segment sample proves an open cage (the common case); a blocked segment
+ * convicts in the few samples it takes the sphere trace to reach the wall. The uniform
+ * fallback step derived from GI_WORLD_PROBE_CAGE_VIS_STEPS keeps the walk skip-proof (it can
+ * never cross the acceptance band around a sealing wall between samples), so exhaustion is
+ * unreachable and the loop bound is a formality. Endpoint guards excuse the query's own
+ * surface and a wall-hugging probe's contact zone; over-occlusion beyond that is the SAFE
+ * direction - a wrongly-rejected probe renormalises the cage toward its visible members,
+ * while a wrongly-accepted one imports the outdoors into a sealed room.
+ */
+
+/// The march's field read: the FINEST covering level, deliberately UNBLENDED. The cross-fade
+/// SdfSampleClipmapEx applies is what TRACING wants - one continuous function so consumers
+/// resolve one surface - and exactly wrong for an occlusion VERDICT: inside the blend band the
+/// coarse level contaminates the reading, so along the camera-locked handover shell a thin
+/// wall's blended through-minimum floats above any conviction depth (measured: sky arcs on
+/// sealed walls tracking the shell) and an on-surface query's blended reading dips below it
+/// (measured: a dark low-sky ring on open ground at the shell radius). Each level alone is
+/// conservative (test_clipmap_is_conservative), so the unblended verdict stays sound; the
+/// step discontinuity between samples that the blend exists to remove is harmless to a walk
+/// that never resolves a surface.
+float GiCageVisibilitySample(vec3 position)
+{
+	float blend;
+	float voxel;
+	int level = SdfFindClipmapLevel(position, blend, voxel);
+	if(level >= SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		return SDF_CLIPMAP_OUTSIDE;
+	}
+	return SdfSampleClipmapLevel(level, position);
+}
+
+float GiWorldProbeCageVisibility(vec3 from, vec3 to, float spacing)
+{
+	vec3 delta = to - from;
+	float segment_length = length(delta);
+	float field_voxel = spacing / float(GI_WORLD_PROBE_DIVISOR);
+	float guard = GI_WORLD_PROBE_CAGE_VIS_GUARD_VOXELS * field_voxel;
+	float t = guard;
+	float t_end = segment_length - guard;
+	if(t >= t_end)
+	{
+		return 1.0;
+	}
+	vec3 direction = delta / segment_length;
+	// One conservative sphere centred on the segment's midpoint covering both halves proves
+	// the whole segment open - the field is an under-estimate, so this cannot false-pass.
+	float half_length = 0.5 * segment_length;
+	if(GiCageVisibilitySample(from + direction * half_length) >= half_length)
+	{
+		return 1.0;
+	}
+	float accept = GI_WORLD_PROBE_CAGE_VIS_ACCEPT_VOXELS * field_voxel;
+	float base_step = (t_end - t) / float(GI_WORLD_PROBE_CAGE_VIS_STEPS);
+	LOOP for(int i = 0; i < GI_WORLD_PROBE_CAGE_VIS_STEPS; ++i)
+	{
+		float d = GiCageVisibilitySample(from + direction * t);
+		if(d < accept)
+		{
+			return 0.0;
+		}
+		// The rest of the segment fits in this sample's clearance sphere: open, done.
+		if(d >= t_end - t)
+		{
+			break;
+		}
+		t += max(d, base_step);
+		if(t >= t_end)
+		{
+			break;
+		}
+	}
+	return 1.0;
+}
+
 #ifndef GI_WORLD_PROBE_SKIP_IRRADIANCE
 /**
  * Irradiance around @p normal at @p position from the 8-probe cage of @p level, with the full
  * DDGI weight chain: trilinear x wrap-shading backface x Chebyshev visibility (cubed, floored)
- * x perception crush, evaluated at the self-shadow-biased point. Returns false when the level's
- * window does not cover the position or every weight died.
+ * x perception crush, evaluated at the self-shadow-biased point - then the field's own verdict,
+ * GiWorldProbeCageVisibility, which a blocked probe does not survive. Returns false when the
+ * level's window does not cover the position or the cage never carried weight; a cage whose
+ * every probe the FIELD blocked returns TRUE with zero irradiance - sealed is a measurement,
+ * and it must not fall through to a coarser cage or the environment term.
  *
  * All the constants are the published DDGI/RTXGI values, owned by gi_constants
  * (tasks/research/research_probe_systems.md section 1.3 quotes the chain verbatim).
@@ -152,6 +244,10 @@ bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int
 	vec3 sum = vec3_splat(0.0);
 	float sky_sum = 0.0;
 	float weight_sum = 0.0;
+	// What the DDGI chain alone would have granted the cage. Diverging from weight_sum only
+	// through the field-visibility term below, it distinguishes "no cage here" from "the cage
+	// is here and every probe of it is behind a wall" - two failures with opposite answers.
+	float covered_sum = 0.0;
 	for(int corner = 0; corner < 8; ++corner)
 	{
 		ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
@@ -192,6 +288,15 @@ bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int
 		{
 			weight *= (weight * weight) / (GI_PERCEPTION_CRUSH_THRESHOLD * GI_PERCEPTION_CRUSH_THRESHOLD);
 		}
+		covered_sum += weight;
+		// Field visibility LAST, unfloored and never renormalised around: the floors above
+		// exist so statistical rejection cannot zero a cage, but a wall the clipmap itself
+		// reports between the pair is not statistics - a blocked probe contributes exactly
+		// nothing, no matter how loud its moments say otherwise (the silhouette-wedge leak).
+		if(GiWorldProbeCageVisibility(biased, probe_position, spacing) <= 0.0)
+		{
+			continue;
+		}
 		vec2 irradiance_uv =
 		    (vec2(tile) + vec2_splat(1.0) + oct_uv * float(GI_WORLD_PROBE_OCT_IRRADIANCE)) *
 		    u_gi_world_probe_atlas.xy;
@@ -202,7 +307,11 @@ bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int
 	}
 	if(weight_sum <= 1e-5)
 	{
-		return false;
+		// The window covers the query and the cage carried weight, but the field blocked every
+		// probe: the point is SEALED off from its entire cage. The measured answer is darkness
+		// - returning false instead would hand the query to a coarser cage or the environment
+		// SH, which is precisely the import this term exists to stop.
+		return covered_sum > 1e-5;
 	}
 	out_irradiance = sum / weight_sum;
 	out_sky_fraction = sky_sum / weight_sum;
@@ -276,7 +385,10 @@ uniform vec4 u_gi_world_probe_radiance_atlas;
  * is intersected with a sphere of the probe's stored hit distance around the probe, and the
  * texel toward that intersection is read - removing the positional gap between the ray's origin
  * and the probe's at the price of directional error, which is the trade Lumen ships. Cage
- * weights are trilinear x Chebyshev (no facing terms: radiance has no receiver normal).
+ * weights are trilinear x Chebyshev (no facing terms: radiance has no receiver normal), then
+ * the field-visibility verdict, exactly as the irradiance cage applies it - and the same
+ * all-blocked contract: TRUE with zero radiance, so a sealed completion answers darkness
+ * rather than handing the ray to the environment fallback.
  */
 bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out vec3 out_radiance)
 {
@@ -295,6 +407,10 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 		vec3 frac = grid - vec3(base_cell);
 		vec3 sum = vec3_splat(0.0);
 		float weight_sum = 0.0;
+		// Same bookkeeping as the irradiance cage: the weight the statistical chain granted,
+		// before the field's verdict, so an all-blocked cage can answer darkness instead of
+		// falling through to the environment term.
+		float covered_sum = 0.0;
 		for(int corner = 0; corner < 8; ++corner)
 		{
 			ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
@@ -325,6 +441,15 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 			{
 				continue;
 			}
+			covered_sum += weight;
+			// Field visibility, unfloored (see the irradiance cage): the depth moments blur
+			// silhouettes into ~22-degree wedges that pass exterior probes at full weight, and
+			// a completed ray carries that import into every gather cone - the dominant sealed
+			// -room leak once the trace side was watertight.
+			if(GiWorldProbeCageVisibility(position, probe_position, spacing) <= 0.0)
+			{
+				continue;
+			}
 			// Sphere parallax: read toward where the ray meets the probe's visibility sphere.
 			// The stored mean depth toward the RAY direction is the sphere radius estimate.
 			ivec2 tile = GiWorldProbeTileBase(slot, level, GI_WORLD_PROBE_OCT_RADIANCE);
@@ -347,7 +472,19 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 		}
 		if(weight_sum <= 1e-5)
 		{
-			return false;
+			// Cage present but field-blocked in every direction: the completion is darkness
+			// (out_radiance stays zero), never the environment fallback - the ray is INSIDE
+			// something sealed.
+			if(covered_sum > 1e-5)
+			{
+				return true;
+			}
+			// The cage never carried weight at all - every probe DEAD (buried lattice points
+			// near dense geometry). No data is not an answer: let the next level's cage try,
+			// marched and sealed like this one. Returning false here handed these queries to
+			// the environment SH - measured as sky patches inside sealed rooms wherever the
+			// finest covering cage was fully buried.
+			continue;
 		}
 		out_radiance = GiFiniteOrZero(sum / weight_sum);
 		return true;

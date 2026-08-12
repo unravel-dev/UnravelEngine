@@ -31,6 +31,7 @@
 #define GI_WORLD_PROBE_OCT_DEPTH        8
 #define GI_WORLD_PROBE_DEPTH_SHARPNESS  50.0
 #define GI_PROBE_TRACE_SURFACE_BIAS     0.5
+#define GI_WORLD_PROBE_TRACE_BIAS       1.0
 #define GI_PROBE_TRACE_RELAXATION       0.05
 #define GI_WORLD_PROBE_DEPTH_CLAMP      1.5
 #define GI_WORLD_PROBE_WINDOW           16
@@ -43,6 +44,9 @@
 // then takes it to ~1e-6) while the weight_sum <= 1e-5 fallback still catches
 // fully-dead cages, and ITS consumers fail toward darkness, the safe direction.
 #define GI_CHEBYSHEV_WEIGHT_FLOOR       0.005
+#define GI_WORLD_PROBE_CAGE_VIS_STEPS   40
+#define GI_WORLD_PROBE_CAGE_VIS_ACCEPT_VOXELS -0.1
+#define GI_WORLD_PROBE_CAGE_VIS_GUARD_VOXELS  1.0
 #define GI_PERCEPTION_CRUSH_THRESHOLD   0.2
 #define GI_SELF_SHADOW_BIAS_NORMAL      0.2
 #define GI_SELF_SHADOW_BIAS_VIEW        0.8

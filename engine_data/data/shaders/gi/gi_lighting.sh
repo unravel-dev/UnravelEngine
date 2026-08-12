@@ -59,6 +59,62 @@ float GiUnpackShadowDepth(vec4 rgba)
 	const vec4 shift = vec4(1.0 / (256.0 * 256.0 * 256.0), 1.0 / (256.0 * 256.0), 1.0 / 256.0, 1.0);
 	return dot(rgba, shift);
 }
+
+/**
+ * Sun visibility from the bound cascade-0 map, when it covers @p world_position.
+ *
+ * AREA average, not a point sample: the receiver is a whole attribute-voxel FACE (up to
+ * metres at coarse levels), and sun pools at that scale are cell-sized - a single centre
+ * tap answers "is this exact point lit" and quantises a 40%-sunlit cell to all-or-nothing,
+ * which erased every pool beyond the finest window (measured: the injected pools stopped
+ * at level 0's edge). A 2x2 quadrature over the face integrates fractional coverage, which
+ * is exactly the energy the cell re-emits. The face is axis-aligned, so its tangents are
+ * axis permutations, and the projection is affine, so the four coords are two vector adds
+ * each.
+ *
+ * Split out of GiEvalLight so the sun-tier debug view (cs_gi_light_voxels) attributes
+ * coverage through EXACTLY the code the lighting takes - a parallel implementation would
+ * drift and the attribution would lie.
+ *
+ * @param voxel_size Voxel of the answering cascade level: the quadrature half-extent.
+ * @return true when the map answered; @p out_lit then holds the lit fraction. False means
+ *         out of cascade-0 coverage, and the traced field must answer instead.
+ */
+bool GiSunShadowmapVisibility(vec3 world_position, vec3 world_normal, float voxel_size, out float out_lit)
+{
+	out_lit = 0.0;
+	vec4 shadow_coord = mul(u_gi_sun_shadowmap_mtx, vec4(world_position, 1.0));
+	if(shadow_coord.w <= 1e-6)
+	{
+		return false;
+	}
+	vec2 texcoord = shadow_coord.xy / shadow_coord.w;
+	if(any(lessThanEqual(texcoord, vec2_splat(u_gi_sun_border))) ||
+	   any(greaterThanEqual(texcoord, vec2_splat(1.0 - u_gi_sun_border))))
+	{
+		return false;
+	}
+	// Quadrature points at the quarter-marks of the face: half-extent is one LEVEL voxel
+	// (the attribute voxel spans two), taps at half that.
+	float h = 0.5 * voxel_size;
+	vec3 tangent = world_normal.yzx * h;
+	vec3 bitangent = world_normal.zxy * h;
+	vec4 delta_t = mul(u_gi_sun_shadowmap_mtx, vec4(tangent, 0.0));
+	vec4 delta_b = mul(u_gi_sun_shadowmap_mtx, vec4(bitangent, 0.0));
+	float lit = 0.0;
+	for(int tap = 0; tap < 4; ++tap)
+	{
+		vec4 tap_coord = shadow_coord +
+		                 (tap < 2 ? delta_t : -delta_t) +
+		                 ((tap & 1) != 0 ? delta_b : -delta_b);
+		float receiver = (tap_coord.z - u_gi_sun_bias) / tap_coord.w;
+		float occluder = GiUnpackShadowDepth(
+		    texture2DLod(s_gi_sun_shadowmap, tap_coord.xy / tap_coord.w, 0.0));
+		lit += step(receiver, occluder);
+	}
+	out_lit = lit * 0.25;
+	return true;
+}
 #endif // GI_SUN_SHADOWMAP_TIER
 
 /// x = shadow ray max distance, y = normal offset in VOXELS of the answering level,
@@ -191,44 +247,12 @@ vec3 GiEvalLight(GpuLight light, int light_index, vec3 world_position, vec3 worl
 #if defined(GI_SUN_SHADOWMAP_TIER)
 		// The sun's own map answers inside cascade 0 (see the tier note above); four taps
 		// replace the whole sphere trace. Out of bounds falls through to the trace.
-		//
-		// AREA average, not a point sample: the receiver is a whole attribute-voxel FACE
-		// (up to metres at coarse levels), and sun pools at that scale are cell-sized - a
-		// single centre tap answers "is this exact point lit" and quantises a 40%-sunlit
-		// cell to all-or-nothing, which erased every pool beyond the finest window
-		// (measured: the injected pools stopped at level 0's edge). A 2x2 quadrature over
-		// the face integrates fractional coverage, which is exactly the energy the cell
-		// re-emits. The face is axis-aligned, so its tangents are axis permutations, and
-		// the projection is affine, so the four coords are two vector adds each.
 		if(u_gi_sun_index >= 0.0 && float(light_index) == u_gi_sun_index)
 		{
-			vec4 shadow_coord = mul(u_gi_sun_shadowmap_mtx, vec4(world_position, 1.0));
-			if(shadow_coord.w > 1e-6)
+			float lit;
+			if(GiSunShadowmapVisibility(world_position, world_normal, voxel_size, lit))
 			{
-				vec2 texcoord = shadow_coord.xy / shadow_coord.w;
-				if(all(greaterThan(texcoord, vec2_splat(u_gi_sun_border))) &&
-				   all(lessThan(texcoord, vec2_splat(1.0 - u_gi_sun_border))))
-				{
-					// Quadrature points at the quarter-marks of the face: half-extent is one
-					// LEVEL voxel (the attribute voxel spans two), taps at half that.
-					float h = 0.5 * voxel_size;
-					vec3 tangent = world_normal.yzx * h;
-					vec3 bitangent = world_normal.zxy * h;
-					vec4 delta_t = mul(u_gi_sun_shadowmap_mtx, vec4(tangent, 0.0));
-					vec4 delta_b = mul(u_gi_sun_shadowmap_mtx, vec4(bitangent, 0.0));
-					float lit = 0.0;
-					for(int tap = 0; tap < 4; ++tap)
-					{
-						vec4 tap_coord = shadow_coord +
-						                 (tap < 2 ? delta_t : -delta_t) +
-						                 ((tap & 1) != 0 ? delta_b : -delta_b);
-						float receiver = (tap_coord.z - u_gi_sun_bias) / tap_coord.w;
-						float occluder = GiUnpackShadowDepth(
-						    texture2DLod(s_gi_sun_shadowmap, tap_coord.xy / tap_coord.w, 0.0));
-						lit += step(receiver, occluder);
-					}
-					return unshadowed * (lit * 0.25);
-				}
+				return unshadowed * lit;
 			}
 		}
 #endif // GI_SUN_SHADOWMAP_TIER
