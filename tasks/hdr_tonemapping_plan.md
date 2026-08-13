@@ -25,7 +25,12 @@ verified correct against references) found and FIXED a second round of bugs:
 - Irradiance SH bake scaled the sun disc by exposition TWICE (exposition^2, ~10x
   weak vs the dome; quadratic in sky_brightness) -> applied once, with sky.
 - Auto exposure histogram buffer was never zero-initialized -> first-frame snap
-  converged onto garbage; zero-seeded at init.
+  converged onto garbage. CPU seeding is impossible (bgfx asserts on update()
+  for COMPUTE_WRITE buffers, same constraint as the GI surface-list buffers);
+  instead run_average discards the first measurement after buffer creation
+  (histogram_bins_valid_, dt=0 holds the seeded exposure) -- the pass zeroes
+  the bins after reading, so every later frame is clean and the snap lands on
+  the first clean histogram.
 - Particles bypassed the linear pipeline: CPU gradient samples and GPU LUT bake
   now to_linear() the picker colors BEFORE the HDR intensity multiply (textures
   assigned to particles remain author-tagged via the importer color_space).

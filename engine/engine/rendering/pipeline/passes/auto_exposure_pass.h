@@ -146,6 +146,11 @@ private:
     } average_program_;
 
     bgfx::DynamicIndexBufferHandle histogram_buffer_ = BGFX_INVALID_HANDLE;
+    /// False until the first average dispatch has consumed (and zeroed) the histogram.
+    /// The buffer's initial contents are undefined and cannot be seeded from the CPU
+    /// (bgfx forbids update() on COMPUTE_WRITE buffers), so run_average discards the
+    /// first measurement instead of adapting toward it.
+    bool histogram_bins_valid_ = false;
 };
 
 } // namespace unravel

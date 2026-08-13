@@ -54,3 +54,15 @@ Patterns worth keeping, distilled from corrections during debugging sessions. Ne
   VARIANTS selected on the CPU (gi_light_voxels_kernel.sh + two thin .sc entries) - program
   choice cannot be stomped by shared uniform names or stale constant buffers. Keep the dead
   uniform lanes as GPU-debugger telemetry.
+
+- **Never bgfx::update() a buffer created with BGFX_BUFFER_COMPUTE_WRITE - it asserts at
+  runtime ("Can't update GPU write buffer from CPU"), and the assert only fires when the
+  code path runs, not at compile time.** The GI surface-list buffers already documented
+  this exact constraint (global_sdf_clipmap_gpu.cpp: flags follow the composer; CPU
+  uploads require COMPUTE_WRITE absent). Before seeding/uploading any buffer, check its
+  creation flags. For undefined initial contents in a compute-written buffer, either
+  (a) tolerate-and-discard the first frame's result CPU-side (auto_exposure_pass:
+  histogram_bins_valid_ discards the first metering; the consumer pass zeroes bins after
+  reading), or (b) seed it from a compute dispatch (GI bounce vis-memo pattern). Grep the
+  repo for existing handling of a constraint before writing new code against it - this
+  one was documented twice in-tree.
