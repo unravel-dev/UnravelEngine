@@ -253,9 +253,13 @@ public:
     auto get_prev_view_projection_relative() const -> math::transform;
 
     /**
-     * @brief View-projection used for the previous rendered frame (before the latest jitter sample).
+     * @brief View-projection the PREVIOUS frame rendered with, jitter removed.
      *
-     * Updated inside set_aa_data(); use for temporal reprojection (TAA) so history aligns with jittered projection.
+     * Updated inside set_aa_data() by promoting the matrices recorded on the previous
+     * call. The projection is unjittered because the TAA history is the resolved,
+     * pixel-center-aligned image; unprojecting the current pixel with the jittered
+     * current matrices and reprojecting with this one yields the correct history UV
+     * under camera motion (standard TAA formulation).
      */
     auto get_taa_prev_view_projection() const -> math::transform;
     /**
@@ -555,9 +559,14 @@ protected:
     /// Cached "previous" projection matrix.
     math::transform last_projection_;
 
-    /// Snapshot for temporal reprojection: view/projection before advancing jitter (see set_aa_data).
+    /// Temporal reprojection state (see set_aa_data): matrices the previous frame
+    /// rendered with (projection unjittered), plus the recording of this frame's
+    /// pair that becomes "previous" on the next call.
     math::transform taa_prev_view_;
     math::transform taa_prev_projection_;
+    math::transform taa_frame_view_;
+    math::transform taa_frame_projection_;
+    bool taa_frame_valid_ = false;
     /// Details regarding the camera frustum.
     mutable math::frustum frustum_;
     /// The near clipping volume (area of space between the camera position and the near plane).

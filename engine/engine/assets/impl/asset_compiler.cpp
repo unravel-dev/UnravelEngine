@@ -521,11 +521,18 @@ auto compile_texture_to_file(const fs::path& input_path,
     // matter the tag: normal maps are vectors, and float sources (.hdr/.exr) have
     // no display encoding to begin with. Everything else honors the meta, with
     // `automatic` meaning raw/linear (legacy behavior -- UI textures, icons and
-    // untagged content keep sampling exactly as before).
+    // untagged content keep sampling exactly as before). One exception: LDR
+    // equirect imports are display-encoded by construction (authored/rendered sky
+    // panoramas feeding the skybox dome and the irradiance bake), and no other
+    // stage can tag them (the mesh importer only classifies material slots) -- so
+    // `automatic` resolves to sRGB for those. An explicit `linear` tag still wins.
     const auto source_ext = string_utils::to_lower(compile_input.extension().string());
     const bool source_is_float = source_ext == ".hdr" || source_ext == ".exr";
     const bool is_normal_map = importer.type == texture_importer_meta::texture_type::normal_map;
-    const bool resolved_srgb = importer.colorspace == texture_importer_meta::color_space::srgb &&
+    const bool auto_srgb_equirect = importer.colorspace == texture_importer_meta::color_space::automatic &&
+                                    importer.type == texture_importer_meta::texture_type::equirect;
+    const bool resolved_srgb = (importer.colorspace == texture_importer_meta::color_space::srgb ||
+                                auto_srgb_equirect) &&
                                !is_normal_map && !source_is_float;
 
     const bool needs_format_conversion = input_info.format != format;

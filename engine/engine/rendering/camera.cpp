@@ -771,9 +771,6 @@ void camera::set_aa_data(const usize32_t& viewport_size,
                          float jitter_amplitude,
                          float jitter_temporal_phase_scale)
 {
-    taa_prev_view_ = get_view();
-    taa_prev_projection_ = get_projection();
-
     if(temporal_aa_samples > 1)
     {
         float SampleX = 0.0f;
@@ -853,6 +850,27 @@ void camera::set_aa_data(const usize32_t& viewport_size,
     }
 
     projection_dirty_ = true;
+
+    // Matrices THIS frame renders with; set_aa_data runs after the camera has been
+    // moved to the current transform, so get_view() here is the frame's real view.
+    // The projection is recorded with the fresh jitter subtracted back out: the TAA
+    // history is the resolved, pixel-center-aligned image, so reprojection must
+    // target unjittered NDC.
+    const math::transform frame_view = get_view();
+    math::mat4 frame_proj = get_projection().get_matrix();
+    frame_proj[2][0] -= aa_data_.z;
+    frame_proj[2][1] -= aa_data_.w;
+
+    // Promote the pair recorded on the previous call: those are the matrices the
+    // previous frame actually rendered with. Snapshotting get_view() directly here
+    // would capture the CURRENT view (the camera already moved), which cancels the
+    // view term in the TAA reprojection and reduces it to a jitter-only offset.
+    taa_prev_view_ = taa_frame_valid_ ? taa_frame_view_ : frame_view;
+    taa_prev_projection_ = taa_frame_valid_ ? taa_frame_projection_ : math::transform(frame_proj);
+
+    taa_frame_view_ = frame_view;
+    taa_frame_projection_ = frame_proj;
+    taa_frame_valid_ = true;
 }
 
 auto camera::get_aa_data() const -> const math::vec4&

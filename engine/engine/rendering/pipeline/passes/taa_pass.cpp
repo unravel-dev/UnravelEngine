@@ -105,6 +105,10 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     gfx::set_texture(program_.s_curr, 0, input->get_texture(0), k_taa_sampler_flags);
     gfx::set_texture(program_.s_history, 1, history_tex, k_taa_sampler_flags);
     gfx::set_texture(program_.s_depth, 2, params.g_buffer->get_texture(4), k_taa_sampler_flags);
+    gfx::set_texture(program_.s_prev_depth,
+                     3,
+                     params.prev_depth ? params.prev_depth : params.g_buffer->get_texture(4),
+                     k_taa_sampler_flags);
 
     const auto prev_vp = params.cam->get_taa_prev_view_projection();
     gfx::set_uniform(program_.u_prev_view_proj, prev_vp.get_matrix());

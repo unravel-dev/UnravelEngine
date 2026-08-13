@@ -31,8 +31,9 @@ public:
     {
         /// Lower clamp for metered scene brightness in EV100. A LOWER value lets the
         /// system BRIGHTEN dark scenes more (eye adaptation walking into shadow).
-        /// -3 (~8x max gain with the default +1 compensation -> ~13x) keeps genuinely
-        /// dark interiors reading dark: probe-GI leaks are bounded but never zero, and
+        /// -3 keeps genuinely dark interiors reading dark (how much lift actually
+        /// happens is further limited by dark_adaptation, which scales the deficit
+        /// below the neutral point): probe-GI leaks are bounded but never zero, and
         /// deeper adaptation exposes whatever tiny residual a sealed room contains
         /// toward mid-gray (measured on the sealed-box test: -6 turned a sub-percent
         /// leak into a full wash). Lower this per volume only for content where deep

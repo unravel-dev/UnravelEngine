@@ -16,6 +16,9 @@
 
 namespace unravel
 {
+class surface_cache_system;
+class surface_cache_view;
+
 namespace rendering
 {
 
@@ -137,6 +140,32 @@ public:
 
     /// Resolves the blended gi_settings for this run from the volume hooks; false = GI off.
     auto resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool;
+
+    /// GI world-state preparation for a camera run: surface-cache residency, the
+    /// viewer-snapped clipmap cascade and its compose (also kept alive for the SDF
+    /// debug views), then -- when a gi_component asks for GI -- voxel lighting and
+    /// world-probe tracing. No-op for probe captures and when neither GI nor the
+    /// SDF debug views need the cache.
+    void run_gi_scene_passes(scene& scn, const camera& camera, gfx::render_view& rview, const run_params& params);
+
+    /// Lights the resident surface voxels (GI v2 plan 3.2), with sun visibility
+    /// answered by the sun's CSM cascade 0 when one was rendered this frame.
+    void run_gi_light_voxel_pass(scene& scn,
+                                 const camera& camera,
+                                 gfx::render_view& rview,
+                                 surface_cache_system& surface_cache,
+                                 surface_cache_view& view_cache,
+                                 const gi_settings& gi);
+
+    /// Traces world probes against the freshly lit voxels (GI v2 plan 3.3).
+    void run_gi_world_probe_pass(const camera& camera,
+                                 gfx::render_view& rview,
+                                 surface_cache_system& surface_cache,
+                                 surface_cache_view& view_cache);
+
+    /// World-space specular tier into RBUFFER, layered UNDER SSR. No-op unless a
+    /// camera run with GI reflections enabled.
+    void run_gi_reflection_pass(const camera& camera, gfx::render_view& rview, const run_params& params);
 
     /// Gathers the world structures into a screen-space indirect diffuse buffer.
     /// See gi_resolve_pass.

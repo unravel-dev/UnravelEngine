@@ -41,6 +41,10 @@ public:
         gfx::frame_buffer::ptr output;
         const camera* cam = nullptr;
         gfx::frame_buffer::ptr g_buffer;
+        /// Previous frame's depth (PREV_DEPTH snapshot) for disocclusion rejection.
+        /// Null (first frame) falls back to the current depth, which degrades the
+        /// test to a benign approximation for that frame.
+        gfx::texture::ptr prev_depth;
         settings config{};
     };
 
@@ -64,6 +68,7 @@ private:
             cache_uniform(program.get(), s_curr, "s_curr", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_history, "s_history", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_prev_depth, "s_prev_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_taa_params, "u_taa_params", gfx::uniform_type::Vec4);
         }
@@ -71,6 +76,7 @@ private:
         gfx::program::uniform_ptr s_curr;
         gfx::program::uniform_ptr s_history;
         gfx::program::uniform_ptr s_depth;
+        gfx::program::uniform_ptr s_prev_depth;
         gfx::program::uniform_ptr u_prev_view_proj;
         gfx::program::uniform_ptr u_taa_params;
         std::unique_ptr<gpu_program> program;

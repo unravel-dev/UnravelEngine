@@ -62,9 +62,6 @@ auto tonemapping_pass::create_or_update_output_fb(gfx::render_view& rview,
         return output;
     }
     auto input_sz = input->get_size();
-    // This is presumably your engine’s method to get the bgfx::TextureFormat.
-    // If your engine uses something else, adapt accordingly.
-
     auto& output_tex = rview.tex_get_or_emplace("TONEMAPPING_OUTPUT");
     if(gfx::needs_recreate(output_tex, input_sz))
     {
@@ -88,60 +85,6 @@ auto tonemapping_pass::create_or_update_output_fb(gfx::render_view& rview,
 
 auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr
 {
-    // {
-    //     {
-    //         // Calculate luminance.
-    //         setOffsets2x2Lum(u_offset, 128, 128);
-    //         bgfx::setTexture(0, s_texColor, m_fbtextures[0]);
-    //         bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);
-    //         screenSpaceQuad(m_caps->originBottomLeft);
-    //         bgfx::submit(hdrLuminance, m_lumProgram);
-
-    //                // Downscale luminance 0.
-    //         setOffsets4x4Lum(u_offset, 128, 128);
-    //         bgfx::setTexture(0, s_texColor, bgfx::getTexture(m_lum[0]) );
-    //         bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);
-    //         screenSpaceQuad(m_caps->originBottomLeft);
-    //         bgfx::submit(hdrLumScale0, m_lumAvgProgram);
-
-    //                // Downscale luminance 1.
-    //         setOffsets4x4Lum(u_offset, 64, 64);
-    //         bgfx::setTexture(0, s_texColor, bgfx::getTexture(m_lum[1]) );
-    //         bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);
-    //         screenSpaceQuad(m_caps->originBottomLeft);
-    //         bgfx::submit(hdrLumScale1, m_lumAvgProgram);
-
-    //                // Downscale luminance 2.
-    //         setOffsets4x4Lum(u_offset, 16, 16);
-    //         bgfx::setTexture(0, s_texColor, bgfx::getTexture(m_lum[2]) );
-    //         bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);
-    //         screenSpaceQuad(m_caps->originBottomLeft);
-    //         bgfx::submit(hdrLumScale2, m_lumAvgProgram);
-
-    //                // Downscale luminance 3.
-    //         setOffsets4x4Lum(u_offset, 4, 4);
-    //         bgfx::setTexture(0, s_texColor, bgfx::getTexture(m_lum[3]) );
-    //         bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);
-    //         screenSpaceQuad(m_caps->originBottomLeft);
-    //         bgfx::submit(hdrLumScale3, m_lumAvgProgram);
-
-    //                // m_bright pass m_threshold is tonemap[3].
-    //         setOffsets4x4Lum(u_offset, m_width/2, m_height/2);
-    //         bgfx::setTexture(0, s_texColor, m_fbtextures[0]);
-    //         bgfx::setTexture(1, s_texLum, bgfx::getTexture(m_lum[4]) );
-    //         bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);
-    //         bgfx::setUniform(u_tonemap, tonemap);
-    //         screenSpaceQuad(m_caps->originBottomLeft);
-    //         bgfx::submit(hdrBrightness, m_brightProgram);
-
-    //                // m_blur m_bright pass vertically.
-    //         bgfx::setTexture(0, s_texColor, bgfx::getTexture(m_bright) );
-    //         bgfx::setState(BGFX_STATE_WRITE_RGB|BGFX_STATE_WRITE_A);
-    //         bgfx::setUniform(u_tonemap, tonemap);
-    //         screenSpaceQuad(m_caps->originBottomLeft);
-    //         bgfx::submit(hdrVBlur, m_blurProgram);
-    //     }
-    // }
     const auto& input = params.input;
     auto output = create_or_update_output_fb(rview, params.input, params.output);
 

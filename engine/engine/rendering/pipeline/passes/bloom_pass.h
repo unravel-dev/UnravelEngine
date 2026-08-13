@@ -33,9 +33,13 @@ public:
         float scatter = 0.7f;
         int mip_count = 8;
 
-        // Per-mip tint (RGB) and weight (alpha). Applied during upsample cascade.
-        // Tint controls color, alpha controls contribution weight (0 = disabled, 1 = full).
-        math::color mip0_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/2 res  - tightest halo
+        // Per-mip tint (RGB) and weight (alpha). Tints 1..5 are applied during the
+        // upsample cascade (indexed by SOURCE mip). Legacy mode: alpha is that band's
+        // additive weight (0 = band disabled). Scatter mode: alpha scales the hop's
+        // lerp factor; 0 makes the hop an identity, truncating the WIDER bands above it.
+        // mip0_tint is applied in the combine pass to the assembled pyramid (the
+        // half-res band never has a hop of its own): overall bloom tint and weight.
+        math::color mip0_tint{1.0f, 1.0f, 1.0f, 1.0f};  // assembled pyramid (combine)
         math::color mip1_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/4 res
         math::color mip2_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/8 res
         math::color mip3_tint{1.0f, 1.0f, 1.0f, 1.0f};  // 1/16 res
@@ -128,11 +132,13 @@ private:
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_combine_params, "u_combineParams", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_combine_tint0, "u_combineTint0", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_scene, "s_scene", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_bloom, "s_bloom", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_dirt, "s_dirt", gfx::uniform_type::Sampler);
         }
         gfx::program::uniform_ptr u_combine_params;
+        gfx::program::uniform_ptr u_combine_tint0;
         gfx::program::uniform_ptr s_scene;
         gfx::program::uniform_ptr s_bloom;
         gfx::program::uniform_ptr s_dirt;

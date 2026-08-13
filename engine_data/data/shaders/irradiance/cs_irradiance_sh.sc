@@ -108,12 +108,16 @@ vec3 sample_perez_sky(vec3 dir, vec3 P0_inv, vec3 sky_color_xyY, vec3 light_dir)
     vec3 sky_color = max(irradiance_convertXYZ2RGB(sky_color_xyz), vec3_splat(0.0));
     float sun_cos = dot(dir, light_dir);
     float sun_disc = exp(-2.0 * (1.0 - sun_cos) / 0.02);
-    vec3 sun_color = u_sun_luminance.xyz * u_exposition.x * sun_disc;
+    // Exposition is applied ONCE to sky and sun together below, matching the sky
+    // dome (vs_sky applies it to the sky, fs_sky to the sun disc, each once).
+    // Scaling the sun here as well squared it (exposition^2), breaking the
+    // sun/sky ratio contract from perez_luminance.h.
+    vec3 sun_color = u_sun_luminance.xyz * sun_disc;
     vec3 irradiance = (sky_color + sun_color) * u_exposition.x;
     // NON-PHYSICAL art-directed saturation boost: pushes color away from luma to better
     // match the perceived vividness of the visible sky (1.15 at horizon, 1.45 at zenith).
     // This intentionally diverges from true radiometric irradiance.
-    float luma = dot(irradiance, vec3(0.299, 0.587, 0.114));
+    float luma = dot(irradiance, vec3(0.2126, 0.7152, 0.0722));
     float zenith_factor = max(dir.y, 0.0);
     float saturation = mix(1.15, 1.45, zenith_factor);
     irradiance = mix(vec3_splat(luma), irradiance, saturation);

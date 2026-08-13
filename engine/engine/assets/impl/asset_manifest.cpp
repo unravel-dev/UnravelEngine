@@ -34,27 +34,45 @@ void asset_manifest::compute_source_fingerprint(const fs::path& source_key,
     try
     {
         fingerprint_version = fs::current_source_fingerprint_version;
-        if(dependency_paths.empty())
-        {
-            source_fingerprint = hash_file(source_file_path);
-            if(source_fingerprint.empty())
-            {
-                APPLOG_ERROR("Failed to fingerprint source file: {}", source_file_path.string());
-            }
-            return;
-        }
 
         // Source is watched separately and omitted from dependency_paths;
         // still include it so the combined fingerprint tracks root edits.
         std::vector<std::string> fingerprints;
-        fingerprints.reserve(dependency_paths.size() + 1);
+        fingerprints.reserve(dependency_paths.size() + 2);
         {
             const auto source_fingerprint_part = hash_file(source_file_path);
-            if(!source_fingerprint_part.empty())
+            if(source_fingerprint_part.empty())
+            {
+                APPLOG_ERROR("Failed to fingerprint source file: {}", source_file_path.string());
+            }
+            else
             {
                 fingerprints.push_back(source_fingerprint_part);
             }
         }
+
+        // The .meta sidecar carries the compile parameters (color space, compression,
+        // max size, importer type ...), so it must participate in the fingerprint: a
+        // meta-only change -- e.g. pulling a committed color-space migration onto a
+        // warm compiled cache -- otherwise leaves stale compiled containers at startup.
+        // (The live file watcher recompiles on meta edits; the startup check used to
+        // compare source contents only.)
+        {
+            fs::path meta_key = fs::convert_to_protocol(source_key);
+            meta_key = fs::replace(meta_key, ex::get_data_directory(), ex::get_meta_directory());
+            auto meta_file_path = fs::resolve_protocol(meta_key);
+            meta_file_path += ".meta";
+            fs::error_code meta_ec;
+            if(fs::exists(meta_file_path, meta_ec) && !meta_ec)
+            {
+                const auto meta_fingerprint_part = hash_file(meta_file_path);
+                if(!meta_fingerprint_part.empty())
+                {
+                    fingerprints.push_back(meta_fingerprint_part);
+                }
+            }
+        }
+
         for(const auto& dep_path : dependency_paths)
         {
             fs::error_code dep_ec;

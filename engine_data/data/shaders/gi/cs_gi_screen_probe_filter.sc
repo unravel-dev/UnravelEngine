@@ -122,7 +122,7 @@ void main()
 				ivec2 texel_in_block = block_base + ivec2(t % 2, t / 2);
 				vec3 radiance_texel =
 				    s_filtered[texel_in_block.y * GI_PROBE_DIR_EDGE + texel_in_block.x].xyz;
-				luminance_sum += dot(radiance_texel, vec3(0.299, 0.587, 0.114));
+				luminance_sum += dot(radiance_texel, vec3(0.2126, 0.7152, 0.0722));
 			}
 			block_luminance[b] = luminance_sum * 0.25;
 		}

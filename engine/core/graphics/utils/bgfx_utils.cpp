@@ -20,6 +20,8 @@ namespace stl = tinystl;
 
 #include "bgfx_utils.h"
 
+#include "../graphics.h"
+
 #include <bimg/bimg.h>
 #include <bimg/decode.h>
 
@@ -258,6 +260,17 @@ static uint64_t applyContainerSrgbFlag(const bimg::ImageContainer* imageContaine
     {
         return _flags | BGFX_TEXTURE_SRGB;
     }
+
+    // The texture is tagged sRGB but this backend has no sRGB view for the
+    // format/dimension: it will sample GAMMA-ENCODED texels as if linear (whole
+    // scene lights too bright). There is no shader-side fallback decode, so at
+    // least make the cause diagnosable instead of failing silently.
+    gfx::log("warning",
+             std::string("sRGB-tagged texture sampled RAW: no sRGB view for format ") +
+                 bimg::getName(bimg::TextureFormat::Enum(imageContainer->m_format)) +
+                 " on this backend; colors from this texture will be too bright.",
+             __FILE__,
+             uint16_t(__LINE__));
 
     return _flags;
 }

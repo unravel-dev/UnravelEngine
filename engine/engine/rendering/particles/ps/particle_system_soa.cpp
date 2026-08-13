@@ -518,7 +518,9 @@ void update_particle_basic(particle_soa& particles,
                            const emitter_sim_constants& constants)
 {
     const float life = particles.life[index];
-    math::color sampled_color = desc.appearance.color_gradient.sample(life);
+    // Gradient keys are picker (sRGB) colors; particles render into the LINEAR HDR
+    // scene buffer, so decode before the HDR intensity multiplies linear radiance.
+    math::color sampled_color = desc.appearance.color_gradient.sample(life).to_linear();
     sampled_color.value.a *= constants.opacity;
     sampled_color.value.r *= constants.color_intensity;
     sampled_color.value.g *= constants.color_intensity;
@@ -555,14 +557,16 @@ void update_particle_full(particle_soa& particles,
                                                   tt_pos);
         particles.cached_speed[index] = particle_speed;
     }
-    math::color sampled_color = desc.appearance.color_gradient.sample(life);
+    // Gradient keys are picker (sRGB) colors; decode to linear before combining
+    // (matches the GPU path, whose LUTs are linearized at bake).
+    math::color sampled_color = desc.appearance.color_gradient.sample(life).to_linear();
     if(has_feature(constants.features, emitter_feature::color_by_speed))
     {
         const float speed_factor = math::clamp(
             (particle_speed - constants.color_by_speed_velocity_range.min) * constants.inv_color_by_speed_velocity_span,
             0.0f,
             1.0f);
-        const math::color speed_color = desc.appearance.color_by_speed_gradient.sample(speed_factor);
+        const math::color speed_color = desc.appearance.color_by_speed_gradient.sample(speed_factor).to_linear();
         sampled_color.value *= speed_color.value;
     }
     sampled_color.value.a *= constants.opacity;
@@ -757,7 +761,9 @@ struct emitter
         for(uint32_t i = 0; i < k_gpu_lut_size; ++i)
         {
             const float t = float(i) / float(k_gpu_lut_size - 1);
-            const math::color c = gradient.sample(t);
+            // Decode picker (sRGB) gradient samples to linear at bake time, so the
+            // GPU sim consumes linear radiance (mirrors to_linear() in the CPU path).
+            const math::color c = gradient.sample(t).to_linear();
             out_lut[i] = math::vec4(c.value.r, c.value.g, c.value.b, c.value.a);
         }
     }

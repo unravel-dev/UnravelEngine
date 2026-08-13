@@ -6,6 +6,7 @@ $input v_texcoord0
 SAMPLER2D(s_curr, 0);
 SAMPLER2D(s_history, 1);
 SAMPLER2D(s_depth, 2);
+SAMPLER2D(s_prev_depth, 3);
 
 uniform mat4 u_prev_view_proj;
 
@@ -67,14 +68,27 @@ vec3 TAA_SampleHistoryCatmullRom(vec2 uv, vec2 texel_size)
     return max(result / weight, vec3_splat(0.0));
 }
 
-vec2 TAA_PreviousUV(vec2 uv, float depth01)
+// Inverse of toClipSpaceDepth: NDC z back to depth-texture range.
+float TAA_FromClipSpaceDepth(float clip_z)
+{
+#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
+    return clip_z;
+#else
+    return clip_z * 0.5 + 0.5;
+#endif
+}
+
+// Reprojects the current pixel into the previous frame. Returns the history UV in
+// xy and the EXPECTED previous depth01 of this surface in z, so disocclusion can
+// compare it against what the previous depth buffer actually stored there.
+vec3 TAA_PreviousScreenPos(vec2 uv, float depth01)
 {
     vec3 vs_pos = computeViewSpacePosition(uv, depth01);
     vec4 ws_pos = mul(u_invView, vec4(vs_pos, 1.0));
     vec4 prev_clip4 = mul(u_prev_view_proj, vec4(ws_pos.xyz, 1.0));
     vec3 prev_clip = prev_clip4.xyz / prev_clip4.w;
     prev_clip = clipTransform(prev_clip);
-    return prev_clip.xy * 0.5 + 0.5;
+    return vec3(prev_clip.xy * 0.5 + 0.5, TAA_FromClipSpaceDepth(prev_clip.z));
 }
 
 float TAA_LinearViewDepthFrom01(float depth01)
@@ -95,7 +109,8 @@ void main()
 
     float depth_edge = max(abs(dFdx(depth01)), abs(dFdy(depth01)));
 
-    vec2 prev_uv = TAA_PreviousUV(uv, depth01);
+    vec3 prev_pos = TAA_PreviousScreenPos(uv, depth01);
+    vec2 prev_uv = prev_pos.xy;
 
     vec4 curr = texture2D(s_curr, uv);
 
@@ -109,16 +124,27 @@ void main()
     float prev_inset = min(min(prev_uv.x, prev_uv.y), min(1.0 - prev_uv.x, 1.0 - prev_uv.y));
     float history_border_w = smoothstep(0.0, 3.0 * max(texel.x, texel.y), prev_inset);
 
+    // Disocclusion test: the reprojection also yields how deep THIS surface was in
+    // the previous frame (prev_pos.z); if the previous depth buffer stored something
+    // significantly different at that position, the history pixel belongs to another
+    // surface (an occluder or a since-revealed background) and must not be blended.
+    // Comparing against the PREVIOUS depth buffer is essential: the current depth at
+    // the reprojected position cannot detect disocclusion and false-fires on grazing
+    // surfaces under camera motion.
     ivec2 tprev = clamp(ivec2(prev_uv * ddimf - vec2_splat(0.499)), ivec2(0, 0), ddim - ivec2(1, 1));
-    float depth01_prev = texelFetch(s_depth, tprev, 0).x;
+    float depth01_prev_stored = texelFetch(s_prev_depth, tprev, 0).x;
 
-    float z_curr = TAA_LinearViewDepthFrom01(depth01);
-    float z_prev = TAA_LinearViewDepthFrom01(depth01_prev);
-    float depth_diff = abs(z_curr - z_prev) / max(1.0, abs(z_curr));
+    float z_expected = abs(TAA_LinearViewDepthFrom01(prev_pos.z));
+    float z_stored = abs(TAA_LinearViewDepthFrom01(depth01_prev_stored));
+    float depth_diff = abs(z_expected - z_stored) / max(1.0, z_expected);
     float depth_ok = 1.0 - smoothstep(0.001, 0.035 * max(0.25, u_depth_reject_scale), depth_diff);
 
+    // Depth-edge history damping. This is an anti-ghosting lever for moving objects
+    // (no motion vectors), but silhouettes are also exactly where jitter accumulation
+    // is needed; the working reprojection + prev-depth disocclusion test above now
+    // catch most real mismatches, so the floor stays moderate instead of aggressive.
     float silhouette = 1.0 - smoothstep(0.0, 0.02, depth_edge);
-    float edge_blend = mix(0.35, 1.0, silhouette);
+    float edge_blend = mix(0.6, 1.0, silhouette);
 
     float k = max(0.75, u_variance_clip_scale);
     // RGB mean/min/max feed the sharpen path below; the variance box for history

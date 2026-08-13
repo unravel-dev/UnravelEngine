@@ -247,10 +247,11 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
         // Scatter mode: per-hop lerp factor (mip alpha modulates it); the shader emits
         // premultiplied (rgb * s, s) and ONE/INV_SRC_ALPHA blending realizes
-        // dst = mix(dst, src, s) exactly. Legacy: 0 selects the additive path.
+        // dst = mix(dst, src, s) exactly -- including s == 0, which the mode flag in
+        // .y keeps on the premultiplied path (an identity hop, not the legacy output).
         const float hop_scatter =
             scatter_mode ? math::clamp(config.scatter * mip_tint.value.w, 0.0f, 1.0f) : 0.0f;
-        float upsample_params[4] = {hop_scatter, 0.0f, 0.0f, 0.0f};
+        float upsample_params[4] = {hop_scatter, scatter_mode ? 1.0f : 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(upsample_program_.u_upsample_params, upsample_params);
 
         gfx::set_texture(upsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(src_idx)));
@@ -286,11 +287,21 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
                                0.0f};
     gfx::set_uniform(combine_program_.u_combine_params, combine_params);
 
+    // mip0_tint: tint * weight of the assembled pyramid (the upsample cascade indexes
+    // tints by source mip 1..N-1, so the half-res band has no hop of its own).
+    const auto& tint0 = config.mip0_tint.value;
+    float combine_tint0[4] = {tint0.x * tint0.w, tint0.y * tint0.w, tint0.z * tint0.w, 0.0f};
+    gfx::set_uniform(combine_program_.u_combine_tint0, combine_tint0);
+
     gfx::set_texture(combine_program_.s_scene, 0, input->get_texture());
     gfx::set_texture(combine_program_.s_bloom, 1, rview.tex_get("BLOOM_MIP_0"));
-    // Black fallback keeps the dirt term an exact no-op when no mask is assigned.
+    // Black fallback keeps the dirt term an exact no-op when no mask is assigned or
+    // it failed to load. asset_handle::get() never returns null (misses resolve to
+    // the canonical empty asset, whose invalid bgfx handle would bind the MAGENTA
+    // debug fallback at draw time), so the validity check must be on the texture.
     auto dirt_tex = config.dirt_texture.get();
-    gfx::set_texture(combine_program_.s_dirt, 2, dirt_tex ? dirt_tex : default_textures::get().black_texture());
+    const bool dirt_ok = dirt_tex && dirt_tex->is_valid();
+    gfx::set_texture(combine_program_.s_dirt, 2, dirt_ok ? dirt_tex : default_textures::get().black_texture());
 
     const auto output_size = output->get_size();
     irect32_t rect(0, 0, output_size.width, output_size.height);

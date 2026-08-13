@@ -13,13 +13,17 @@ SAMPLER2D(s_bloom, 1);
 SAMPLER2D(s_dirt, 2);
 
 uniform vec4 u_combineParams;
+// Assembled-pyramid tint * weight (mip0_tint.rgb * mip0_tint.a): the upsample
+// cascade indexes tints by SOURCE mip (1..N-1), so the half-res band has no hop
+// of its own -- its tint applies here, to the assembled pyramid.
+uniform vec4 u_combineTint0;
 #define u_bloom_intensity u_combineParams.x
 #define u_dirt_intensity  u_combineParams.z
 
 void main()
 {
     vec3 scene_color = texture2D(s_scene, v_texcoord0).rgb;
-    vec3 bloom_color = texture2D(s_bloom, v_texcoord0).rgb;
+    vec3 bloom_color = texture2D(s_bloom, v_texcoord0).rgb * u_combineTint0.rgb;
 
     // One combine for both modes; they differ only in what the pyramid holds
     // (scatter: energy-normalized blur of the whole scene; legacy: thresholded

@@ -224,22 +224,22 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     // and the memo can never hit - the CPU-side discriminator for a miss-shaped cost.
     if(vis_memo_generation != vis_memo_generation_logged_)
     {
-        APPLOG_INFO("[SurfaceCache] Bounce vis-memo generation {} -> {} (frame {}, epoch {}).",
-                    vis_memo_generation_logged_,
-                    vis_memo_generation,
-                    params.frame,
-                    view_clipmap.get_content_epoch());
+        // APPLOG_INFO("[SurfaceCache] Bounce vis-memo generation {} -> {} (frame {}, epoch {}).",
+        //             vis_memo_generation_logged_,
+        //             vis_memo_generation,
+        //             params.frame,
+        //             view_clipmap.get_content_epoch());
         vis_memo_generation_logged_ = vis_memo_generation;
     }
     if(params.vis_memo_debug != vis_memo_debug_logged_)
     {
         vis_memo_debug_logged_ = params.vis_memo_debug;
-        APPLOG_INFO("[SurfaceCache] Vis-memo debug write {} (frame {}, program {}).",
-                    params.vis_memo_debug ? "ENABLED" : "disabled",
-                    params.frame,
-                    params.vis_memo_debug
-                        ? (vis_memo_debug_available ? "vis-memo variant" : "MISSING - radiance fallback")
-                        : "radiance");
+        // APPLOG_INFO("[SurfaceCache] Vis-memo debug write {} (frame {}, program {}).",
+        //             params.vis_memo_debug ? "ENABLED" : "disabled",
+        //             params.frame,
+        //             params.vis_memo_debug
+        //                 ? (vis_memo_debug_available ? "vis-memo variant" : "MISSING - radiance fallback")
+        //                 : "radiance");
     }
     const float vis_memo_params[4] = {float(vis_memo_generation), 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_gi_vis_memo_params, vis_memo_params);

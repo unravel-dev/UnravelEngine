@@ -4,6 +4,7 @@
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 #include <algorithm>
+#include <cstring>
 
 namespace unravel
 {
@@ -28,6 +29,18 @@ auto auto_exposure_pass::init(rtti::context& ctx) -> bool
 
     histogram_buffer_ = bgfx::createDynamicIndexBuffer(histogram_bins,
                                                        BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
+
+    if(bgfx::isValid(histogram_buffer_))
+    {
+        // Dynamic buffers are created with undefined contents. The average pass zeroes
+        // the bins after consuming them, but the very first histogram dispatch would
+        // accumulate into garbage -- and the first-frame snap then converges exposure
+        // fully onto that garbage-influenced target, which takes the 1-3 s adaptation
+        // constants to decay. Seed the bins to zero once instead.
+        const bgfx::Memory* zeroed = bgfx::alloc(histogram_bins * sizeof(std::uint32_t));
+        std::memset(zeroed->data, 0, zeroed->size);
+        bgfx::update(histogram_buffer_, 0, zeroed);
+    }
 
     return histogram_program_.program->is_valid() &&
            average_program_.program->is_valid() &&

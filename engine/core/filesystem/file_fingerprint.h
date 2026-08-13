@@ -8,7 +8,9 @@ namespace fs
 {
 
 /// xxHash3 128-bit fingerprints (hex). Bump when the hashing or dependency-ordering scheme changes.
-inline constexpr uint64_t current_source_fingerprint_version = 1;
+/// v2: the source's .meta sidecar (compile parameters: color space, compression, ...) joined the
+/// combined fingerprint, so meta-only changes invalidate compiled outputs at startup.
+inline constexpr uint64_t current_source_fingerprint_version = 2;
 
 /// Hash a file's contents. Text assets normalize CRLF to LF before hashing.
 auto hash_file_fingerprint(const path& file_path, bool normalize_text_line_endings) -> std::string;

@@ -2,6 +2,54 @@
 
 Audit date: 2026-08-10 (branch feature/gi).
 
+STATUS 2026-08-13: full-code re-review of the landed overhaul (tonemap curves all
+verified correct against references) found and FIXED a second round of bugs:
+- TAA reprojection was dead: set_aa_data snapshotted taa_prev_view_ AFTER look_at
+  had moved the camera, so the "previous" VP carried the CURRENT view and
+  reprojection reduced to a jitter-only offset. Now set_aa_data promotes the pair
+  recorded on the previous call (self-contained, no dependence on
+  record_current_matrices call order) and records the frame's view + UNJITTERED
+  projection (history is pixel-center aligned). Depth reject rewritten to compare
+  the reprojection's EXPECTED previous depth against the PREV_DEPTH snapshot
+  (TAA added as a third consumer of it; current-depth-only compare could not see
+  disocclusion and would false-fire on grazing angles once reprojection worked).
+  Silhouette history floor relaxed 0.35 -> 0.6 (was masking the dead reprojection;
+  NEEDS VISUAL A/B for moving-object ghosting).
+- Bloom: dirt-texture "black fallback" was dead code (asset_handle::get() never
+  returns null; the invalid handle bound the MAGENTA debug fallback) -> validity
+  check on the texture. Scatter-mode branch keyed on s > 0 selected the legacy
+  alpha=1 output under the scatter blend (scatter=0 / tint.a=0 inverted the lerp
+  to dst=src or zeroed the mip) -> explicit mode flag in u_upsampleParams.y.
+  mip0_tint was inert (cascade indexes tints by source mip 1..N-1) -> now applied
+  in the combine to the assembled pyramid (overall bloom tint/weight; documented).
+- Irradiance SH bake scaled the sun disc by exposition TWICE (exposition^2, ~10x
+  weak vs the dome; quadratic in sky_brightness) -> applied once, with sky.
+- Auto exposure histogram buffer was never zero-initialized -> first-frame snap
+  converged onto garbage; zero-seeded at init.
+- Particles bypassed the linear pipeline: CPU gradient samples and GPU LUT bake
+  now to_linear() the picker colors BEFORE the HDR intensity multiply (textures
+  assigned to particles remain author-tagged via the importer color_space).
+- LDR equirect imports with color_space=automatic now resolve to sRGB in the
+  compiler (authored sky panoramas are display-encoded; nothing else could tag
+  them). Float sources stay linear; explicit linear tag still wins.
+- The .meta sidecar now participates in the compile fingerprint (meta-only
+  changes -- e.g. a pulled color-space migration -- invalidate stale compiled
+  KTX2 at startup); fingerprint_version bumped 1 -> 2 = one-time full recompile.
+- sRGB caps-gate fallback now logs a warning naming the format instead of
+  silently sampling gamma texels as linear.
+- Perez clobber: multi-skylight iteration stomped dominant.perez before the
+  intensity guard -> candidate-local struct. Parity boost no longer applied to
+  the missing-cubemap flat fallback (gate on use_perez, not use_sky). SSR
+  first-frame fallback now black (LBUFFER was unwritten at that point in frame
+  0). Hardcoded 0.1f expositions -> perez_luminance_to_engine. Rec.601 luma
+  stragglers unified to Rec.709 (vs_sky saturation boost MUST match
+  cs_irradiance_sh's -- both changed together; gi screen probe filter weights).
+KNOWN REMAINING (deliberate): editor/UI draws sRGB-tagged textures dark (no
+re-encode in the raw-backbuffer UI path; needs a UI-shader change, cosmetic);
+dome uses FIRST active skylight while irradiance uses STRONGEST (only diverges
+in the already-warned multi-skylight configuration); particle TEXTURES need
+explicit importer tagging (no automatic classification is possible).
+
 STATUS 2026-08-10: Phase 0 (A1-A8) and Phase 1 are IMPLEMENTED (see git log).
 A9 documented in-shader (1.8 pre-scale stays off until Phase 3 mid-gray anchoring);
 A10 (BRDF LUT) deferred — default path is the analytic Lazarov fit, LUT unused.
