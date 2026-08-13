@@ -91,6 +91,17 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "neighbours; geometry breaks keep full probe density. Flat scenes "
                             "trace a fraction of the rays for the same image."},
         })
+        .data<&settings::probe_space_temporal>("probe_space_temporal"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "probe_space_temporal"},
+            entt::attribute{"pretty_name", "Probe-Space Temporal"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip",
+                            "Each probe traces 16 of 64 directions per frame and reuses the rest "
+                            "from last frame's reprojected tile (Lumen TemporalFilterProbes). "
+                            "Off traces all 64 every frame - noisier motion vs cheaper gather; "
+                            "the A/B for the probe-space temporal cut."},
+        })
         .data<&settings::enable_reflections>("enable_reflections"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_reflections"},
@@ -379,6 +390,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
     try_save(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
     try_save(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
+    try_save(ar, ser20::make_nvp("probe_space_temporal", obj.probe_space_temporal));
     try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_save(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
@@ -405,6 +417,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
     try_load(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
     try_load(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
+    try_load(ar, ser20::make_nvp("probe_space_temporal", obj.probe_space_temporal));
     try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_load(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));

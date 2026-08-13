@@ -296,3 +296,34 @@ cost against leak margin, per scene.
 Sealed-box smoke (user-verified): Probe Sky near-only (27) dark green over the sealed room,
 and opening the door relights the interior correctly - the memo's content-epoch/window
 invalidation works. R6 (<= 4.5 ms FHD-class): met with 1.7 ms headroom.
+
+## Probe-space temporal (2026-08-13, Bistro, user-recorded)
+
+16-ray Bayer stratum + history copy vs the previous 64-ray-every-frame gather.
+Inspector A/B: `probe_space_temporal`. History pass is absent when off.
+
+| Pass | FHD OFF | FHD ON | 4K OFF | 4K ON |
+|---|---|---|---|---|
+| Light Voxels | 0.577 | 0.575 | 0.577 | 0.576 |
+| World Probe Trace | 0.064 | 0.064 | 0.065 | 0.069 |
+| World Probe Convolve | 0.143 | 0.143 | 0.148 | 0.151 |
+| ReflectionsTrace | 0.563 | 0.572 | 1.083 | 1.088 |
+| ReflectionsTemporal + Composite | 0.082 | 0.089 | 0.257 | 0.264 |
+| Probe Place + Classify + Args | 0.019 | 0.018 | 0.050 | 0.043 |
+| Probe History | — | 0.010 | — | 0.016 |
+| Probe Trace | 0.859 | 0.535 | 2.372 | 1.470 |
+| Probe Interp | 0.009 | 0.009 | 0.021 | 0.021 |
+| Probe Filter + Integrate | 0.153 | 0.156 | 0.395 | 0.385 |
+| Temporal | 0.026 | 0.029 | 0.115 | 0.115 |
+| Denoise x3 | 0.305 | 0.324 | 1.185 | 1.140 |
+| Upsample | 0.039 | 0.037 | 0.178 | 0.177 |
+| **Total** | **2.839** | **2.563** | **6.445** | **5.515** |
+
+Probe Trace -38% both resolutions (0.859 -> 0.535 FHD, 2.372 -> 1.470 4K). GI total
+-0.28 FHD / -0.93 4K. History copy is 0.01-0.016 ms. Not a 4x pass cut: the 8x8 group
+still launches and 48 lanes early-out, so wave occupancy still tracks the 16 remaining
+SDF rays. World-side and reflections unchanged, as designed.
+
+Quality (user): SSIL/indirect view shows a little extra grain, a little darkening, and
+stratum-cycle movement. Lit view: not really noticeable. That is the expected A/B -
+the raw gather sees 16 fresh cones per frame; albedo * direct * exposure hide it.

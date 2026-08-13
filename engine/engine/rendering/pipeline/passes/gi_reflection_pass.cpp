@@ -115,7 +115,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     (void)raw_created;
     (void)write_created;
     const bool history_valid = !read_created && params.temporal_frames > 1;
-    gfx::render_pass pass("GI/ReflectionsTrace");
+    gfx::render_pass pass("GI/Reflections Trace");
     pass.bind(raw_fbo.get());
     // World positions reconstruct from depth, and the Hi-Z projection needs the view state.
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
@@ -170,7 +170,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     gfx::discard();
     // TEMPORAL: integrate this frame's stochastic sample into the reprojected running mean.
     {
-        gfx::render_pass tpass("GI/ReflectionsTemporal");
+        gfx::render_pass tpass("GI/Reflections Temporal");
         tpass.bind(write_fbo.get());
         tpass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
         temporal_program_.program->begin();
@@ -194,7 +194,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     // COMPOSITE: full-weight OVER the authored probe layer (energy constant across
     // roughness). SSR composites the sharp on-screen result on top afterwards.
     {
-        gfx::render_pass cpass("GI/ReflectionsComposite");
+        gfx::render_pass cpass("GI/Reflections Composite");
         cpass.bind(params.output.get());
         composite_program_.program->begin();
         gfx::set_texture(composite_program_.s_refl_acc, 0, write_tex);

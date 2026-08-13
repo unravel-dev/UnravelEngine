@@ -60,6 +60,11 @@ public:
         /// classification is exactly the interpolation test the integrate pass applies per
         /// pixel, so a skipped probe's tile is one the pixels would have blended to anyway.
         bool adaptive_probes = true;
+        /// Probe-space temporal: each traced probe fires 16 of 64 octahedral rays per frame
+        /// (a 2x2 Bayer stratum) and copies the rest from last frame's reprojected tile.
+        /// Converged stills match the 64-ray path; fast camera motion is noisier until the
+        /// window (4 frames) and the pixel temporal catch up. Off traces all 64 every frame.
+        bool probe_space_temporal = true;
         /// World-space specular tier (plan phase 9), layered under SSR: rough lobes read the
         /// world-probe radiance atlas, sharp ones trace (screen first, SDF + light voxels
         /// beyond) - contributing the off-screen reflections SSR cannot have.
@@ -184,7 +189,12 @@ private:
     /// lattice descriptors, the camera, and the world-structure bindings.
     struct trace_program : uniforms_cache
     {
+        /// Compacted 16-thread group (cs_gi_screen_probe_trace.sc). Used while
+        /// probe-space temporal is on: one thread per Bayer-stratum ray.
         gpu_program::ptr program;
+        /// 8x8 group (cs_gi_screen_probe_trace_full.sc). A/B-off and the first
+        /// untrusted frame: all 64 octahedral rays in parallel.
+        gpu_program::ptr full_program;
         gfx::program::uniform_ptr u_gi_camera;
         gfx::program::uniform_ptr u_gi_screen_trace;
         gfx::program::uniform_ptr u_gi_prev_view_proj;
@@ -247,7 +257,26 @@ private:
 
         auto is_valid() const -> bool
         {
-            return program && program->is_valid();
+            return (program && program->is_valid()) || (full_program && full_program->is_valid());
+        }
+
+        /// Compact when temporal is on and that program linked; otherwise the 8x8
+        /// full path; last resort the compact program (window 1 walks 4 phases).
+        auto select(bool want_compact) const -> gpu_program*
+        {
+            if(want_compact && program && program->is_valid())
+            {
+                return program.get();
+            }
+            if(full_program && full_program->is_valid())
+            {
+                return full_program.get();
+            }
+            if(program && program->is_valid())
+            {
+                return program.get();
+            }
+            return nullptr;
         }
     } trace_program_;
 
@@ -346,6 +375,37 @@ private:
             return program && program->is_valid();
         }
     } args_program_;
+
+    /// Probe-space temporal: copies the reprojected previous radiance tile into this
+    /// frame's atlas so the trace can overwrite only its 16-ray stratum.
+    struct history_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_camera;
+        gfx::program::uniform_ptr u_gi_prev_view_proj;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr s_probe_radiance_history;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_camera, "u_gi_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", gfx::uniform_type::Mat4);
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          s_probe_radiance_history,
+                          "s_probe_radiance_history",
+                          gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } history_program_;
 
     /// Reconstruction (adaptive gather): fills interpolated probes' tiles from their parents
     /// between the trace and the filter - and clears dead probes' tiles, which the compacted

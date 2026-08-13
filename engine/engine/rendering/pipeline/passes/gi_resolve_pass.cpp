@@ -126,9 +126,31 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
     auto cs_args = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_args.sc");
     args_program_.cache_uniforms();
     args_program_.program = std::make_unique<gpu_program>(cs_args);
+    auto cs_history = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_history.sc");
+    history_program_.cache_uniforms();
+    history_program_.program = std::make_unique<gpu_program>(cs_history);
+    if(!history_program_.is_valid())
+    {
+        APPLOG_WARNING("[SurfaceCache] GI probe-history program failed to load. Probe-space "
+                       "temporal is disabled; the gather traces every octahedral direction "
+                       "each frame.");
+    }
     auto cs_trace = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_trace.sc");
+    auto cs_trace_full =
+        am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_trace_full.sc");
     trace_program_.cache_uniforms();
     trace_program_.program = std::make_unique<gpu_program>(cs_trace);
+    trace_program_.full_program = std::make_unique<gpu_program>(cs_trace_full);
+    if(!trace_program_.program || !trace_program_.program->is_valid())
+    {
+        APPLOG_WARNING("[SurfaceCache] GI compacted probe-trace program failed to load. "
+                       "Probe-space temporal falls back to the 8x8 group (48 idle lanes).");
+    }
+    if(!trace_program_.full_program || !trace_program_.full_program->is_valid())
+    {
+        APPLOG_WARNING("[SurfaceCache] GI full probe-trace program failed to load. The "
+                       "A/B-off path serializes 4 rays per compacted thread.");
+    }
     auto cs_interp = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_interp.sc");
     interp_program_.cache_uniforms();
     interp_program_.program = std::make_unique<gpu_program>(cs_interp);
@@ -223,9 +245,9 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                        float(target_size.height),
                                        1.0f / float(target_size.width),
                                        1.0f / float(target_size.height)};
-        // Radiance atlases: one 8x8 octahedral tile per probe, PING-PONGED so this frame's trace
-        // can blend each texel into last frame's -- the probe-space history that stabilises the
-        // whole architecture (see cs_gi_probe_trace.sc).
+        // Radiance atlases: one 8x8 octahedral tile per probe, PING-PONGED so this frame's
+        // history pass can copy last frame's reprojected tile and the trace can overwrite
+        // only its 16-ray stratum (cs_gi_screen_probe_history.sc).
         const usize32_t atlas_size{probes_x * probe_dir_edge, probes_y * probe_layers * probe_dir_edge};
         const auto ensure_atlas = [&](const char* name) -> gfx::texture::ptr
         {
@@ -247,14 +269,13 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             }
             return tex;
         };
-        // ONE radiance atlas: the gather rewrites every texel each frame and its history (the
-        // importance mip) lives in the record buffer, so the v1 ping-pong pair collapsed.
-        auto write_atlas = ensure_atlas("GI_PROBE_ATLAS");
-        // Derived data, fully rewritten by the filter each frame: no ping-pong needed.
-        auto irradiance_atlas = ensure_atlas("GI_PROBE_IRRADIANCE");
         auto& probe_parity = rview.data_get_or_emplace("GI_PROBE_PARITY", 0u);
         const bool even_probe_frame = (probe_parity & 1u) == 0u;
         ++probe_parity;
+        auto write_atlas = ensure_atlas(even_probe_frame ? "GI_PROBE_ATLAS_A" : "GI_PROBE_ATLAS_B");
+        auto read_atlas = ensure_atlas(even_probe_frame ? "GI_PROBE_ATLAS_B" : "GI_PROBE_ATLAS_A");
+        // Derived data, fully rewritten by the filter each frame: no ping-pong needed.
+        auto irradiance_atlas = ensure_atlas("GI_PROBE_IRRADIANCE");
         // DOUBLE buffered: reprojection needs last frame's meta and counts resident alongside
         // this frame's, and the halves swap with the atlas parity. Each half holds every LAYER's
         // full lattice.
@@ -302,14 +323,15 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         }
         const uint32_t write_probe_offset = even_probe_frame ? 0u : records_per_half;
         const uint32_t read_probe_offset = even_probe_frame ? records_per_half : 0u;
-        // x = the history CAP (the shader grows a per-probe count toward it and blends at
-        // 1/count -- a true mean, which settles, never a fixed-weight EMA, which shimmers
-        // forever). Forced to 1 while the buffers are untrusted so garbage cannot blend in.
-        // y = the probe debug view mode, consumed by the integrate pass.
+        const bool probe_temporal_active =
+            s.probe_space_temporal && history_program_.is_valid() && records_trusted_;
+        const float probe_window =
+            probe_temporal_active ? float(gi::GI_SCREEN_PROBE_WINDOW) : 1.0f;
         // x = whether the record halves hold trusted data (gates importance reprojection),
+        // y = the probe-space temporal window,
         // zw = the double-buffered record offsets.
         const float probe_temporal[4] = {records_trusted_ ? 1.0f : 0.0f,
-                                         0.0f,
+                                         probe_window,
                                          float(write_probe_offset),
                                          float(read_probe_offset)};
         // The one gather (plan phase 8: the v1 paths and the radiance hash are gone). Without
@@ -348,6 +370,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             const auto hiz_or_depth = screen_trace ? params.hiz : params.g_buffer->get_texture(4);
             const bool adaptive = s.adaptive_probes;
             const bool has_prev_color = params.prev_color && params.prev_color->is_valid();
+            const auto gather_prev_view_proj = params.cam->get_prev_view_projection();
             const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
                                                   float(s.debug_view),
                                                   adaptive ? 1.0f : 0.0f,
@@ -406,10 +429,34 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
                 args_program_.program->end();
             }
+            if(probe_temporal_active)
+            {
+                // HISTORY COPY: last frame's reprojected tile into this atlas so the trace
+                // can skip 48 of 64 texels. Same compacted group count as the trace.
+                gfx::render_pass pass("GI/Probe History");
+                pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+                history_program_.program->begin();
+                gfx::set_texture(history_program_.s_probe_radiance_history, 0, read_atlas);
+                gfx::set_image(5, write_atlas->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
+                gfx::set_buffer(7, probe_buffer_, gfx::access::Read);
+                gfx::set_uniform(history_program_.u_gi_camera, gi_camera);
+                gfx::set_uniform(history_program_.u_gi_prev_view_proj, gather_prev_view_proj.get_matrix());
+                gfx::set_uniform(history_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(history_program_.u_gi_probe_screen, probe_screen);
+                gfx::set_uniform(history_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::dispatch_indirect(pass.id, history_program_.program->native_handle(), probe_args_, 0, 1);
+                history_program_.program->end();
+            }
             {
                 gfx::render_pass pass("GI/Probe Trace");
                 pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-                trace_program_.program->begin();
+                gpu_program* trace_cs = trace_program_.select(probe_temporal_active);
+                if(trace_cs == nullptr)
+                {
+                    gfx::discard();
+                    return trace_tex;
+                }
+                trace_cs->begin();
                 gfx::set_texture(trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
                 gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
                 gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
@@ -450,15 +497,14 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(trace_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(trace_program_.u_gi_camera, gi_camera);
                 gfx::set_uniform(trace_program_.u_gi_screen_trace, screen_trace_params);
-                const auto gather_prev_view_proj = params.cam->get_prev_view_projection();
                 gfx::set_uniform(trace_program_.u_gi_prev_view_proj, gather_prev_view_proj.get_matrix());
                 gfx::set_uniform(trace_program_.u_gi_light_voxel_params, light_voxel_params);
                 gfx::set_uniform(trace_program_.u_gi_world_probe_params, wp_params);
                 gfx::set_uniform(trace_program_.u_gi_world_probe_atlas,
                                  clipmap_gpu.get_world_probe_atlas_params());
                 gfx::set_uniform(trace_program_.u_gi_world_probe_radiance_atlas, wp_radiance_atlas);
-                gfx::dispatch_indirect(pass.id, trace_program_.program->native_handle(), probe_args_, 0, 1);
-                trace_program_.program->end();
+                gfx::dispatch_indirect(pass.id, trace_cs->native_handle(), probe_args_, 0, 1);
+                trace_cs->end();
                 records_trusted_ = true;
             }
             {

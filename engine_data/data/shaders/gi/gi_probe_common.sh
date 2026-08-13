@@ -48,17 +48,19 @@ uniform vec4 u_gi_probe_params;
 /// xy = trace-resolution target size in pixels, zw = 1 / that size.
 uniform vec4 u_gi_probe_screen;
 
-/// x = history cap in frames (1 disables history, also sent while the buffers hold garbage),
-/// y = debug view mode (consumed by the integrate pass),
+/// x = 1 when the record halves hold trusted data (gates importance reprojection),
+/// y = probe-space temporal WINDOW in frames (1 = trace every octahedral texel this
+///     frame, the A/B-off path; GI_SCREEN_PROBE_WINDOW = 4 traces a 16-ray Bayer
+///     stratum and copies the rest from last frame's reprojected tile),
 /// z = WRITE half offset into the probe buffer, w = READ half offset -- both in PROBES.
 ///
 /// The probe buffer is double buffered because history is REPROJECTED: this frame's probe needs
 /// last frame's meta and radiance for the probe that covered its anchor's world position THEN,
 /// which is generally a different probe index. Without both halves resident there is nothing to
-/// reproject from.
+/// reproject from. The radiance atlas is ping-ponged for the same reason.
 uniform vec4 u_gi_probe_temporal;
 #define u_gi_probe_history_cap   u_gi_probe_temporal.x
-#define u_gi_probe_debug_mode    int(u_gi_probe_temporal.y)
+#define u_gi_probe_window        uint(max(u_gi_probe_temporal.y, 1.0))
 #define u_gi_probe_write_offset  uint(u_gi_probe_temporal.z)
 #define u_gi_probe_read_offset   uint(u_gi_probe_temporal.w)
 
@@ -231,6 +233,39 @@ uint GiProbeRecord(int px, int py, int layer)
 ivec2 GiProbeAtlasBase(int px, int py, int layer)
 {
 	return ivec2(px, py + layer * u_gi_probe_count_y) * GI_PROBE_DIR_EDGE;
+}
+
+/**
+ * Whether octahedral texel @p local is in this frame's traced stratum.
+ *
+ * Window 1 traces every texel (the A/B-off path, identical to the pre-temporal gather).
+ * Window 4 is a 2x2 Bayer phase: 16 of 64 texels, exhaustive over GI_SCREEN_PROBE_WINDOW
+ * frames, spatially distributed so the probe-space filter always has a nearby fresh sample.
+ */
+bool GiScreenProbeInStratum(ivec2 local, uint frame, uint window)
+{
+	if(window <= 1u)
+	{
+		return true;
+	}
+	uint phase = frame % window;
+	return (uint(local.x) & 1u) == (phase & 1u) &&
+	       (uint(local.y) & 1u) == ((phase >> 1u) & 1u);
+}
+
+/**
+ * Compacted-trace inverse of GiScreenProbeInStratum: thread t in
+ * [0, GI_SCREEN_PROBE_RAYS_PER_FRAME) plus Bayer phase -> octahedral texel.
+ * The 16 threads are a 4x4 coarse grid; phase selects which of the 2x2 sub-texels
+ * each coarse cell traces this frame. Window 1 walks phase 0..3 so the same
+ * 16-thread group still covers the whole atlas.
+ */
+ivec2 GiScreenProbeStratumLocal(int thread, uint phase)
+{
+	int coarse = GI_PROBE_DIR_EDGE / 2;
+	int cx = (thread % coarse) * 2;
+	int cy = (thread / coarse) * 2;
+	return ivec2(cx + int(phase & 1u), cy + int((phase >> 1u) & 1u));
 }
 
 #endif // __GI_PROBE_COMMON_SH__

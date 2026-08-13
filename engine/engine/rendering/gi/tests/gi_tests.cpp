@@ -221,6 +221,95 @@ void test_gi_shaders_compile_sm50()
 #endif
 }
 
+/// Probe-space temporal Bayer: 16 of 64 octahedral texels per frame, exhaustive over
+/// GI_SCREEN_PROBE_WINDOW, matching GiScreenProbeInStratum / GiScreenProbeStratumLocal.
+void test_screen_probe_stratum_covers_the_atlas()
+{
+    std::printf("test_screen_probe_stratum_covers_the_atlas\n");
+    check(gi::GI_SCREEN_PROBE_RAYS_PER_FRAME * gi::GI_SCREEN_PROBE_WINDOW == 64,
+          "rays-per-frame x window equals the 8x8 octahedral atlas");
+    check(gi::GI_SCREEN_PROBE_WINDOW == 4, "window is the 2x2 Bayer period");
+    check(gi::GI_SCREEN_PROBE_RAYS_PER_FRAME == 16, "compact group is 16 threads");
+    const auto in_stratum = [](int x, int y, uint32_t frame, uint32_t window) -> bool
+    {
+        if(window <= 1u)
+        {
+            return true;
+        }
+        const uint32_t phase = frame % window;
+        return (uint32_t(x) & 1u) == (phase & 1u) && (uint32_t(y) & 1u) == ((phase >> 1u) & 1u);
+    };
+    const auto stratum_local_x = [](int thread, uint32_t phase) -> int
+    {
+        const int coarse = 8 / 2;
+        return (thread % coarse) * 2 + int(phase & 1u);
+    };
+    const auto stratum_local_y = [](int thread, uint32_t phase) -> int
+    {
+        const int coarse = 8 / 2;
+        return (thread / coarse) * 2 + int((phase >> 1u) & 1u);
+    };
+    int seen[64];
+    for(int i = 0; i < 64; ++i)
+    {
+        seen[i] = 0;
+    }
+    for(uint32_t frame = 0; frame < uint32_t(gi::GI_SCREEN_PROBE_WINDOW); ++frame)
+    {
+        int this_frame = 0;
+        int compact_seen[64];
+        for(int i = 0; i < 64; ++i)
+        {
+            compact_seen[i] = 0;
+        }
+        for(int y = 0; y < 8; ++y)
+        {
+            for(int x = 0; x < 8; ++x)
+            {
+                if(in_stratum(x, y, frame, uint32_t(gi::GI_SCREEN_PROBE_WINDOW)))
+                {
+                    ++seen[y * 8 + x];
+                    ++this_frame;
+                }
+            }
+        }
+        check(this_frame == gi::GI_SCREEN_PROBE_RAYS_PER_FRAME,
+              "each frame traces exactly rays-per-frame texels");
+        for(int thread = 0; thread < gi::GI_SCREEN_PROBE_RAYS_PER_FRAME; ++thread)
+        {
+            const int x = stratum_local_x(thread, frame % uint32_t(gi::GI_SCREEN_PROBE_WINDOW));
+            const int y = stratum_local_y(thread, frame % uint32_t(gi::GI_SCREEN_PROBE_WINDOW));
+            check(x >= 0 && x < 8 && y >= 0 && y < 8, "compact thread maps inside the tile");
+            check(in_stratum(x, y, frame, uint32_t(gi::GI_SCREEN_PROBE_WINDOW)),
+                  "compact thread maps to this frame's Bayer stratum");
+            check(compact_seen[y * 8 + x] == 0, "compact threads do not collide");
+            compact_seen[y * 8 + x] = 1;
+        }
+    }
+    for(int i = 0; i < 64; ++i)
+    {
+        check(seen[i] == 1, "each octahedral texel is traced exactly once per window");
+    }
+    int window_off[64];
+    for(int i = 0; i < 64; ++i)
+    {
+        window_off[i] = 0;
+    }
+    for(int thread = 0; thread < gi::GI_SCREEN_PROBE_RAYS_PER_FRAME; ++thread)
+    {
+        for(uint32_t phase = 0; phase < uint32_t(gi::GI_SCREEN_PROBE_WINDOW); ++phase)
+        {
+            const int x = stratum_local_x(thread, phase);
+            const int y = stratum_local_y(thread, phase);
+            ++window_off[y * 8 + x];
+        }
+    }
+    for(int i = 0; i < 64; ++i)
+    {
+        check(window_off[i] == 1, "window-1 compact walk covers each texel once");
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Golden scene fixtures
 // ---------------------------------------------------------------------------------------
@@ -2073,6 +2162,7 @@ void run(int& checks, int& failures)
     g_failures = &failures;
     test_shader_constants_match_cpp();
     test_gi_shaders_compile_sm50();
+    test_screen_probe_stratum_covers_the_atlas();
     test_attribute_voxels_mark_the_surface_band();
     test_clipmap_attribute_transcription_matches_cpu();
     test_reference_is_deterministic();

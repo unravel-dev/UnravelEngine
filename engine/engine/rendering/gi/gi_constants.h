@@ -197,6 +197,16 @@
     X(GI_SCREEN_PROBE_SPACING, 16,                                                                 \
       "trace-resolution pixels", "published: [S21 s34][CVar] ScreenProbeGather.DownsampleFactor;"  \
       " the gi_resolve_pass::settings::probe_spacing default")                                     \
+    X(GI_SCREEN_PROBE_RAYS_PER_FRAME, 16,                                                          \
+      "rays per traced probe per frame", "published: [S22] 64 rays per texel is too expensive;"    \
+      " Lumen TracingOctahedronResolution=4 is 4x4=16, temporally filtered in probe space."        \
+      " The 8x8 world-anchored atlas keeps all 64 directions; each frame traces a 2x2 Bayer"       \
+      " stratum of 16 and copies the other 48 from the reprojected previous tile")                 \
+    X(GI_SCREEN_PROBE_WINDOW, 4,                                                                   \
+      "frames", "derived: 64 octahedral texels / GI_SCREEN_PROBE_RAYS_PER_FRAME - every"           \
+      " direction is measured exactly once per window (the world-probe windowed-mean property"     \
+      " at screen-probe resolution). 4 frames sits inside GI_TEMPORAL_MAX_FRAMES so the pixel"     \
+      " filter still sees several complete spheres")                                               \
     X(GI_ADAPTIVE_PLANE_TOLERANCE, 0.05f,                                                          \
       "fraction of view distance", "derived: the adaptive gather may substitute a probe's tile"    \
       " with its even-lattice parents' blend only where the integrate pass would have blended"     \
