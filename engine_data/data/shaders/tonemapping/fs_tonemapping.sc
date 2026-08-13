@@ -2,6 +2,7 @@ $input v_texcoord0
 
 #include "../common.sh"
 #include "tonemapping.sh"
+#include "output_noise.sh"
 
 uniform vec4 u_tonemapping;
 uniform vec4 u_grading;
@@ -17,23 +18,13 @@ SAMPLER2D(s_exposure, 1);
 #define u_tonemappingExposure u_tonemapping.x
 #define u_tonemappingMode     int(u_tonemapping.y)
 #define u_dithering           u_tonemapping.z
+#define u_midgray_match       u_tonemapping.w
 #define u_contrast            u_grading.x
 #define u_saturation          u_grading.y
 #define u_grain_amount        u_grading.z
 #define u_grain_seed          u_grading.w
 #define u_vignette_intensity  u_vignette.x
 #define u_vignette_smoothness u_vignette.y
-
-// Per-pixel, per-frame white noise for film grain. The tiled ign16x16 lookup is
-// deliberately NOT used here: it is a static 16x16 pattern (right for dithering,
-// where a stable pattern is the point) and sliding it around reads as texture,
-// not grain. Grain needs decorrelated noise every pixel, every frame.
-float grain_hash(vec2 p)
-{
-    vec3 p3 = fract(vec3(p.x, p.y, p.x) * 0.1031);
-    p3 += dot(p3, p3.yzx + vec3_splat(33.33));
-    return fract((p3.x + p3.y) * p3.z);
-}
 
 // Color grading in LINEAR space, on post-exposure values (the contrast pivot
 // only means "18% mid-gray" after exposure has normalized the scene).
@@ -78,8 +69,9 @@ void main()
     }
     exposure *= max(adapted, 1e-5);
 
-    // Exposure first so grading operates in normalized scene-referred space,
-    // then the tone curve (apply_tonemapping gets a neutral exposure of 1).
+    // Exposure first so grading operates in post-AE space, then the tone curve.
+    // u_midgray_match stays 1: operators keep their native response. Display-white
+    // comes from Auto Exposure Compensation, not from remapping curves onto AgX.
     color *= exposure;
     color = apply_color_grading(color);
 
@@ -93,7 +85,7 @@ void main()
         color *= 1.0 - u_vignette_intensity * falloff;
     }
 
-    color = apply_tonemapping(color, u_tonemappingMode, 1.0);
+    color = apply_tonemapping(color, u_tonemappingMode, u_midgray_match);
 
     // Lift/gamma/gain on the display-referred image (classic video grading):
     // lift offsets the toe and fades toward white, gain scales the top end,
@@ -101,27 +93,9 @@ void main()
     color = max(color * u_gain.xyz + u_lift.xyz * (1.0 - color), vec3_splat(0.0));
     color = pow(color, u_gamma_inv.xyz);
 
-    // Animated, luma-weighted film grain: strongest in mids/shadows, reduced (but
-    // not erased) in highlights, matching photographic grain response.
-    if (u_grain_amount > 0.0)
-    {
-        vec2 grain_seed_offset = vec2(u_grain_seed * 127.1, u_grain_seed * 311.7);
-        float noise = grain_hash(gl_FragCoord.xy + grain_seed_offset) - 0.5;
-        float display_luma = saturate(dot(color, vec3(0.2126, 0.7152, 0.0722)));
-        float response = 1.0 - 0.8 * display_luma;
-        color += vec3_splat(noise * u_grain_amount * response);
-    }
-
-    // Triangular-PDF dither: +-1 LSB of noise decorrelates quantization error,
-    // removing banding in smooth gradients at zero visible cost. Applied to the
-    // display-encoded value right before the UNORM8 write rounds it.
-    if (u_dithering > 0.5)
-    {
-        float n1 = ign16x16(gl_FragCoord.xy);
-        float n2 = ign16x16(gl_FragCoord.xy + vec2(5.588238, 5.588238));
-        float tpdf = (n1 + n2) - 1.0;
-        color += vec3_splat(tpdf * (1.0 / 255.0));
-    }
+    // Grain and TPDF dither: skipped (uniforms zeroed) when FXAA follows so
+    // the AA filter does not smear them; FXAA applies the same helper after.
+    color = apply_output_noise(color, gl_FragCoord.xy, u_grain_amount, u_grain_seed, u_dithering);
 
     gl_FragColor = vec4(color, 1.0f);
 }

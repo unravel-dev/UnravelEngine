@@ -1,8 +1,8 @@
 #include "fxaa_pass.h"
 
-// These includes match your engine’s style. Adapt as needed:
 #include <bx/math.h>
 #include <engine/assets/asset_manager.h>
+#include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 
@@ -18,7 +18,7 @@ auto fxaa_pass::init(rtti::context& ctx) -> bool
     auto vs_clip_quad_ex = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
     auto fs_fxaa = am.get_asset<gfx::shader>("engine:/data/shaders/fxaa/fs_fxaa.sc");
 
-    // Cache the uniforms (only "s_input" for FXAA).
+    // Cache uniforms before the program is created (GL >= 400 contract).
     fxaa_program_.cache_uniforms();
 
     // Create the GPU program
@@ -83,6 +83,12 @@ auto fxaa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
 
         // Bind "s_input" sampler to slot 0
         gfx::set_texture(fxaa_program_.s_input, 0, color_tex);
+
+        float output_noise[4] = {params.grain_intensity * 0.25f,
+                                 static_cast<float>(gfx::get_render_frame() % 1024u),
+                                 params.dithering ? 1.0f : 0.0f,
+                                 0.0f};
+        gfx::set_uniform(fxaa_program_.u_output_noise, output_noise);
 
         // Set scissor to the entire output area
         irect32_t rect(0, 0, output_size.width, output_size.height);

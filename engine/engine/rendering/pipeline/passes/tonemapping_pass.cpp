@@ -1,6 +1,7 @@
 #include "tonemapping_pass.h"
 #include <engine/assets/asset_manager.h>
 #include <engine/rendering/default_textures.h>
+#include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 #include <math/math.h>
@@ -95,19 +96,20 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 
     tonemapping_program_.program->begin();
 
+    const bool apply_output_noise = !params.defer_output_noise;
     float tonemap[4] = {params.config.exposure,
                         static_cast<float>(params.config.method),
-                        params.config.dithering ? 1.0f : 0.0f,
-                        0.0f};
+                        (apply_output_noise && params.config.dithering) ? 1.0f : 0.0f,
+                        1.0f};
     gfx::set_uniform(tonemapping_program_.u_tonemapping, tonemap);
 
     // z = grain amount (slider scaled so 0.1-0.3 is a filmic range and 1.0 is heavy
-    // stylized grain), w = animation seed.
-    frame_ = (frame_ + 1u) % 1024u;
+    // stylized grain), w = animation seed. Deferred to FXAA when that pass follows.
+    const float grain_amount = apply_output_noise ? params.config.grain_intensity * 0.25f : 0.0f;
     float grading[4] = {params.config.contrast,
                         params.config.saturation,
-                        params.config.grain_intensity * 0.25f,
-                        static_cast<float>(frame_)};
+                        grain_amount,
+                        static_cast<float>(gfx::get_render_frame() % 1024u)};
     gfx::set_uniform(tonemapping_program_.u_grading, grading);
 
     const auto wb_lms = compute_white_balance_lms(params.config.temperature, params.config.tint);

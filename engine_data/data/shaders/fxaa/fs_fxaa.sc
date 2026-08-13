@@ -1,6 +1,7 @@
 $input v_texcoord0
 
 #include "../common.sh"
+#include "../tonemapping/output_noise.sh"
 
 /*============================================================================
 
@@ -146,6 +147,10 @@ A. In the last opaque pass prior to FXAA,
 // 3) Sampler for the scene color
 //------------------------------------------------------
 SAMPLER2D(s_input, 0);
+uniform vec4 u_output_noise;
+#define u_grain_amount u_output_noise.x
+#define u_grain_seed   u_output_noise.y
+#define u_dithering    u_output_noise.z
 
 //------------------------------------------------------
 // 4) The original big chunk of FXAA code from "Fxaa3_11.h",
@@ -932,6 +937,5 @@ void main()
                                      fxaaQualityEdgeThreshold,
                                      fxaaQualityEdgeThresholdMin);
     fxaaColor.a = 1.0f;
-    // Done
-    gl_FragColor = fxaaColor;
+    gl_FragColor = vec4(apply_output_noise(fxaaColor.rgb, gl_FragCoord.xy, u_grain_amount, u_grain_seed, u_dithering), 1.0);
 }

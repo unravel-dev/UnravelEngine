@@ -35,12 +35,11 @@ public:
     {
         float exposure = 1.0f;
         /// AgX is the default: hue-robust under bright light (no red->orange /
-        /// blue->cyan skew), no per-channel clipping, and with the bright +3
-        /// auto-exposure anchor its flat mid-section is compensated -- sunlit whites
-        /// reach display white while saturated colors stay true (final calibration
-        /// chosen by eye against UE on gray-box + colored scenes). aces/aces_lum give
-        /// the punchier UE-family S-curve at the cost of hue skews; grading Contrast
-        /// adds punch to AgX without leaving the hue-safe transform.
+        /// blue->cyan skew) and no per-channel clipping. Display-white / punch
+        /// comes from Auto Exposure Compensation (default +3 with this lighting
+        /// scale), not from remapping operators onto each other. AgX Punchy,
+        /// ACES, or grading Contrast add more punch on top. aces/aces_lum give
+        /// the UE-family S-curve at the cost of hue skews.
         tonemapping_method method = tonemapping_method::agx;
 
         // -- Color grading, evaluated in LINEAR space after exposure, before the
@@ -89,6 +88,9 @@ public:
         gfx::texture::ptr exposure_texture;
 
         settings config{};
+        /// When FXAA runs after this pass, grain and TPDF dither are deferred to
+        /// the FXAA shader so the AA filter does not smear them.
+        bool defer_output_noise = false;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -128,8 +130,5 @@ private:
         std::unique_ptr<gpu_program> program;
 
     } tonemapping_program_;
-
-    /// Monotonic frame counter used to animate the film grain.
-    uint32_t frame_ = 0;
 };
 } // namespace unravel

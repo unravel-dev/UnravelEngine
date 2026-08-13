@@ -2,6 +2,13 @@
 
 Patterns worth keeping, distilled from corrections during debugging sessions. Newest first.
 
+## 2026-08-13 — Inspector tooltips are for the user, not design notes
+
+**Context:** Auto exposure / tonemapping / bloom inspector strings
+**Mistake:** Tooltips explained metering math, AgX calibration, Unreal/Unity equivalents, pass order, and "default +3 is display-white at ~83%"
+**Correct pattern:** Tooltip says what the control does and what the values mean. Implementation and calibration notes stay in code comments, not `entt::attribute{"tooltip", ...}`
+**Files:** `engine/engine/meta/ecs/components/auto_exposure_component.cpp`, `tonemapping_component.cpp`, `bloom_component.cpp`
+
 ## Shaders (vis-memo perf hunt, 2026-08-13)
 
 - **HLSL's `?:` is a SELECT, not control flow - never put an expensive call in a ternary

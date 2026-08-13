@@ -30,8 +30,8 @@ void main()
     // highlights). Additive keeps the base image SHARP at any intensity -- a
     // mix() formulation was tried and rejected: it couples halo strength to
     // full-screen blur, so halos vanish at low intensity and the image frosts
-    // at high. The small mean-energy add in scatter mode is absorbed by the
-    // scale-invariant auto exposure.
+    // at high. Auto-exposure meters BEFORE this pass, so scatter intensity is
+    // a small global lift on top of the locked exposure (part of the look).
     vec3 hdr_color = scene_color + bloom_color * u_bloom_intensity;
 
     // Lens dirt: bloom modulated by the screen-space mask, added on top. A black

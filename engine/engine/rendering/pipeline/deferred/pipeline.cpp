@@ -2033,6 +2033,14 @@ auto deferred::run_fxaa_pass(gfx::render_view& rview,
 
     rparams.fill_fxaa_params(params);
 
+    if(rparams.fill_hdr_params)
+    {
+        tonemapping_pass::run_params hdr;
+        rparams.fill_hdr_params(hdr);
+        params.grain_intensity = hdr.config.grain_intensity;
+        params.dithering = hdr.config.dithering;
+    }
+
     return fxaa_pass_.run(rview, params);
 }
 
@@ -2089,10 +2097,12 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     tonemapping_pass::run_params params;
     params.input = input;
 
-    if(!rparams.fill_fxaa_params || rparams.fill_taa_params)
+    const bool fxaa_follows = static_cast<bool>(rparams.fill_fxaa_params) && !rparams.fill_taa_params;
+    if(!fxaa_follows)
     {
         params.output = output;
     }
+    params.defer_output_noise = fxaa_follows;
 
     rparams.fill_hdr_params(params);
 

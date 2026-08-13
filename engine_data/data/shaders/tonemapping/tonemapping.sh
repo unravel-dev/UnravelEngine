@@ -176,11 +176,9 @@ vec3 tonemap_aces(vec3 color)
     );
 
     // The reference (BakingLab/ToneMapping.hlsl) pre-scales input by 1.8 so the
-    // fit matches full ACES brightness. Deliberately left OFF here to preserve the
-    // engine's current calibration; revisit together with mid-gray anchoring when
-    // the grading/tonemap unification lands (see tasks/hdr_tonemapping_plan.md,
-    // Phase 3) rather than as an isolated brightness change.
-    //color *= 1.8;
+    // fit matches full ACES brightness. This is internal to ACES, not a remap
+    // onto AgX -- other operators keep their native mid-gray.
+    color *= 1.8;
     vec3 result = mul(ACESInputMat, color);
 
     // RRT and ODT
@@ -367,12 +365,14 @@ vec3 tonemap_neutral(vec3 color)
 // MAIN TONEMAPPING FUNCTIONS
 // ============================================================================
 
-// Apply tonemapping with exposure and method
+// Apply tonemapping. The exposure argument is an extra input scale; AE and the
+// exposure slider are already applied by the caller, which passes 1.0 here so
+// each operator keeps its native mid-gray (no remap onto AgX).
 vec3 apply_tonemapping(vec3 color, int method, float exposure)
 {
-    // Apply exposure first
+    // Reject tiny lighting negatives: Lottes/Uchimura pow() would NaN them.
+    color = max(color, vec3_splat(0.0));
     color *= exposure;
-    
     vec3 tonemapped_color;
     
 	BRANCH

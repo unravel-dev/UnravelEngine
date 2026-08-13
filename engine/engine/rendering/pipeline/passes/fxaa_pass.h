@@ -16,6 +16,10 @@ public:
     {
         gfx::frame_buffer::ptr input;
         gfx::frame_buffer::ptr output;
+        /// Display-referred grain/dither applied after FXAA so the filter does
+        /// not smear them. Zeroed when the tonemap pass already wrote them.
+        float grain_intensity = 0.0f;
+        bool dithering = false;
     };
 
     // Initialize the pass (load shaders, create GPU program).
@@ -38,12 +42,12 @@ private:
         // For FXAA we really only need to set up the sampler uniform (s_input).
         void cache_uniforms()
         {
-            // 'u_viewTexel' is built-in. We do NOT need to manually cache it.
-            // We just need the sampler2D "s_input".
             cache_uniform(program.get(), s_input, "s_input", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_output_noise, "u_output_noise", gfx::uniform_type::Vec4);
         }
 
         gfx::program::uniform_ptr s_input;
+        gfx::program::uniform_ptr u_output_noise;
         std::unique_ptr<gpu_program> program;
     } fxaa_program_;
 };

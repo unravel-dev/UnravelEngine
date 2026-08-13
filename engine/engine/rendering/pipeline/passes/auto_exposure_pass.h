@@ -47,11 +47,10 @@ public:
         float max_ev = 16.0f;
         /// Exposure bias in EV stops applied on top of the metered result (+1 = 2x brighter).
         /// With this pass's K=12.5 / exp2(-EV)/1.2 formulation, an unclamped meter pins
-        /// the metered band at ~10.4% post-exposure; +3 anchors it at ~83%, which drives
-        /// sunlit whites through the tone curve's shoulder to display white (calibrated
-        /// visually against UE on a gray-box exterior, paired with the AgX default).
-        /// Interiors don't wash out at this bright anchor because dark_adaptation keeps
-        /// them from chasing it.
+        /// the metered band at ~10.4% post-exposure. +3 (~83%) is the look that reaches
+        /// AgX display-white with this engine's lighting scale: the boost sits before
+        /// grading and the tone curve, which is punchier than baking the same 2 stops
+        /// into the operator. Use this slider for scene-to-scene bias around that look.
         float compensation = 3.0f;
         /// Fraction of a dark scene's EV deficit the eye adapts away (the single-slope
         /// version of UE's Exposure Compensation Curve / Unity HDRP's Curve Remapping).
@@ -59,9 +58,8 @@ public:
         /// (until Min EV stops it) and dark rooms read bright. 0 = no adaptation: dark
         /// scenes render at their true relative darkness. The 0.1 default keeps
         /// adaptation subtle -- a scene 5 stops under neutral is lifted only half a
-        /// stop, so darkness reads as darkness (chosen with the bright +3 compensation
-        /// anchor, which would otherwise drag interiors up hard). Applies only BELOW
-        /// the neutral point; bright-scene metering is unaffected.
+        /// stop, so darkness reads as darkness. Applies only BELOW the neutral point;
+        /// bright-scene metering is unaffected.
         float dark_adaptation = 0.1f;
         /// Time constant in seconds for the exposure to INCREASE (scene getting darker).
         /// Larger = slower adaptation. Adaptation is performed in log2/EV space.

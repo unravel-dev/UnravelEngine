@@ -123,8 +123,7 @@ REFLECT_INLINE(tonemapping_pass::settings)
             entt::attribute{"min", -1.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "White balance temperature shift: positive = warmer (orange), "
-                "negative = cooler (blue). Applied in linear space before the tone curve."},
+            entt::attribute{"tooltip", "White balance: positive is warmer (orange), negative is cooler (blue)."},
         })
         .data<&tonemapping_pass::settings::tint>("tint"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -133,8 +132,7 @@ REFLECT_INLINE(tonemapping_pass::settings)
             entt::attribute{"min", -1.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "White balance tint shift: positive = magenta, negative = green. "
-                "Applied in linear space before the tone curve."},
+            entt::attribute{"tooltip", "White balance: positive is magenta, negative is green."},
         })
         .data<&tonemapping_pass::settings::contrast>("contrast"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -143,8 +141,7 @@ REFLECT_INLINE(tonemapping_pass::settings)
             entt::attribute{"min", 0.3f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Log-space contrast around 18% mid-gray: mids keep their exposure "
-                "while stops above/below expand (>1) or compress (<1). 1 = neutral."},
+            entt::attribute{"tooltip", "Increases or decreases contrast. 1 is neutral."},
         })
         .data<&tonemapping_pass::settings::saturation>("saturation"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -153,31 +150,28 @@ REFLECT_INLINE(tonemapping_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Color saturation around Rec.709 luma. 0 = grayscale, 1 = neutral."},
+            entt::attribute{"tooltip", "Color intensity. 0 is grayscale, 1 is neutral."},
         })
         .data<&tonemapping_pass::settings::lift>("lift"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "lift"},
             entt::attribute{"pretty_name", "Lift (Shadows)"},
-            entt::attribute{"tooltip", "Shadow color offset (video-grading lift). Neutral is mid-gray "
-                "(0.5, 0.5, 0.5): brighter lifts blacks, darker crushes them; pushing a channel tints "
-                "the shadows (e.g. slightly blue lift = teal shadows)."},
+            entt::attribute{"tooltip", "Shadow color. Neutral is mid-gray (0.5, 0.5, 0.5). "
+                "Brighter lifts blacks; a color tint tints the shadows."},
         })
         .data<&tonemapping_pass::settings::gamma>("gamma"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gamma"},
             entt::attribute{"pretty_name", "Gamma (Midtones)"},
-            entt::attribute{"tooltip", "Midtone response (video-grading gamma). Neutral is mid-gray "
-                "(0.5, 0.5, 0.5): brighter raises mids, darker deepens them; per-channel shifts tint "
-                "the midtones."},
+            entt::attribute{"tooltip", "Midtone color. Neutral is mid-gray (0.5, 0.5, 0.5). "
+                "Brighter raises mids; a color tint tints the midtones."},
         })
         .data<&tonemapping_pass::settings::gain>("gain"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gain"},
             entt::attribute{"pretty_name", "Gain (Highlights)"},
-            entt::attribute{"tooltip", "Highlight multiplier (video-grading gain). Neutral is mid-gray "
-                "(0.5, 0.5, 0.5): brighter boosts highlights, darker pulls them down; per-channel shifts "
-                "tint the highlights (e.g. warm gain = golden highlights)."},
+            entt::attribute{"tooltip", "Highlight color. Neutral is mid-gray (0.5, 0.5, 0.5). "
+                "Brighter boosts highlights; a color tint tints the highlights."},
         })
         .data<&tonemapping_pass::settings::vignette_intensity>("vignette_intensity"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -186,9 +180,7 @@ REFLECT_INLINE(tonemapping_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Lens vignette strength. Applied in linear light before the tone "
-                "curve, so darkened edges keep natural highlight response. 0 = off; 0.2-0.4 is a typical "
-                "subtle cinematic amount."},
+            entt::attribute{"tooltip", "Darkens the image toward the edges. 0 is off."},
         })
         .data<&tonemapping_pass::settings::vignette_smoothness>("vignette_smoothness"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -207,15 +199,13 @@ REFLECT_INLINE(tonemapping_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Animated film grain, luma-weighted so highlights stay clean. "
-                "0 = off; 0.1-0.3 is a typical subtle amount."},
+            entt::attribute{"tooltip", "Film grain. 0 is off; 0.1-0.3 is a typical subtle amount."},
         })
         .data<&tonemapping_pass::settings::dithering>("dithering"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "dithering"},
             entt::attribute{"pretty_name", "Dithering"},
-            entt::attribute{"tooltip", "Triangular-PDF dither before 8-bit quantization. Removes banding "
-                "in smooth gradients (skies, walls) at zero visible cost. Leave on."},
+            entt::attribute{"tooltip", "Reduces banding in smooth gradients (skies, walls). Leave on."},
         });
 }
 

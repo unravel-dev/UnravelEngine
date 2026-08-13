@@ -17,8 +17,10 @@ public:
         /// 0 (default) selects SCATTER mode: no threshold, the pyramid is an
         /// energy-normalized blur of the whole scene (recursive lerp, Unity/CoD
         /// style), added on top scaled by `intensity` -- everything blooms in
-        /// proportion to its energy, the base image stays sharp, and the small
-        /// mean-energy add is absorbed by auto exposure.
+        /// proportion to its energy and the base image stays sharp. The meter
+        /// runs before bloom, so scatter intensity is a small global lift
+        /// (~0.15 EV at the default) on top of the locked exposure; treat it as
+        /// part of the look, not as energy-neutral.
         /// > 0 selects the LEGACY mode: only pixels above this post-exposure
         /// luminance enter the pyramid (existing scenes keep their look).
         float threshold = 0.0f;

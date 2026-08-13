@@ -21,10 +21,8 @@ REFLECT_INLINE(bloom_pass::settings)
             entt::attribute{"pretty_name", "Threshold"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.1f},
-            entt::attribute{"tooltip", "0 (default) = SCATTER mode: thresholdless, energy-conserving bloom "
-                "where everything blooms slightly and Intensity is the scattered-light fraction. "
-                "> 0 = LEGACY mode: only pixels above this post-exposure luminance bloom, added on "
-                "top of the scene scaled by Intensity (the pre-retune behavior)."},
+            entt::attribute{"tooltip", "Minimum brightness that blooms. 0 blooms everything softly. "
+                "Raise it so only brighter highlights glow."},
         })
         .data<&bloom_pass::settings::soft_knee>("soft_knee"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -33,7 +31,7 @@ REFLECT_INLINE(bloom_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "Controls the transition width around the threshold. 0 = hard cutoff (sharp bloom boundary, can cause flickering), 1 = maximum smoothing (gradual fade-in, reduces specular flicker). Keep at 1.0 unless you specifically want a harder cutoff."},
+            entt::attribute{"tooltip", "How hard the threshold cutoff is. 0 is a sharp edge, 1 is a smooth fade. Keep at 1 unless you want a harder cutoff."},
         })
         .data<&bloom_pass::settings::clamp>("clamp"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -41,7 +39,7 @@ REFLECT_INLINE(bloom_pass::settings)
             entt::attribute{"pretty_name", "Clamp"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 1.0f},
-            entt::attribute{"tooltip", "Soft compression limit for pixel brightness before bloom processing. Uses Reinhard-style compression to smoothly attenuate extreme values. Prevents firefly artifacts from very bright sub-pixel highlights (e.g. sun reflections, emissives). 0 = disabled. Typical range: 5 - 50."},
+            entt::attribute{"tooltip", "Caps extremely bright pixels so tiny highlights do not explode into fireflies. 0 is off."},
         })
         .data<&bloom_pass::settings::intensity>("intensity"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -49,10 +47,7 @@ REFLECT_INLINE(bloom_pass::settings)
             entt::attribute{"pretty_name", "Intensity"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Main bloom strength: the blur pyramid is added on top of the sharp "
-                "scene scaled by this. Scatter mode (Threshold 0): 0.1-0.3 is a typical filmic glow; the "
-                "base image stays sharp at any value. Legacy mode: additive multiplier on the thresholded "
-                "bloom as before."},
+            entt::attribute{"tooltip", "Bloom strength. Higher is a stronger glow."},
         })
         .data<&bloom_pass::settings::scatter>("scatter"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -61,9 +56,7 @@ REFLECT_INLINE(bloom_pass::settings)
             entt::attribute{"min", 0.05f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Scatter mode only: how much energy each upsample step hands to the "
-                "wider mip. Low = tight halo close to bright sources, high = big soft atmospheric veil. "
-                "0.7 is the balanced default."},
+            entt::attribute{"tooltip", "How far the glow spreads. Low is a tight halo, high is a wide soft veil."},
         })
         .data<&bloom_pass::settings::mip_count>("mip_count"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -71,7 +64,7 @@ REFLECT_INLINE(bloom_pass::settings)
             entt::attribute{"pretty_name", "Mip Count"},
             entt::attribute{"min", 2},
             entt::attribute{"max", 10},
-            entt::attribute{"tooltip", "Number of downsample levels in the bloom pyramid. More mips = wider bloom spread but more GPU cost. 5-7 is typical. Each additional mip doubles the maximum bloom radius."},
+            entt::attribute{"tooltip", "How many blur sizes to mix. More levels spread bloom farther, at a higher GPU cost."},
         })
         .data<&bloom_pass::settings::mip0_tint>("mip0_tint"_hs)
         .custom<entt::attributes>(entt::attributes{

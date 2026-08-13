@@ -28,6 +28,7 @@ public:
         result.min_ev = std::lerp(result.min_ev, from.min_ev, contribution);
         result.max_ev = std::lerp(result.max_ev, from.max_ev, contribution);
         result.compensation = std::lerp(result.compensation, from.compensation, contribution);
+        result.dark_adaptation = std::lerp(result.dark_adaptation, from.dark_adaptation, contribution);
         result.adaptation_speed_up = std::lerp(result.adaptation_speed_up, from.adaptation_speed_up, contribution);
         result.adaptation_speed_down = std::lerp(result.adaptation_speed_down, from.adaptation_speed_down, contribution);
         result.low_percentile = std::lerp(result.low_percentile, from.low_percentile, contribution);
