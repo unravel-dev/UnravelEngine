@@ -317,22 +317,31 @@ _get_all_cmake_targets(all_targets ${CMAKE_CURRENT_LIST_DIR})
 set(exec_targets "")
 foreach(target ${all_targets})
   get_target_property(target_type ${target} TYPE)
-
-  if(target_type STREQUAL "EXECUTABLE")
-    list(APPEND exec_targets ${target})
+  if(NOT target_type STREQUAL "EXECUTABLE")
+    continue()
   endif()
+  # EXCLUDE_FROM_ALL harnesses (gi_tests, etc.) are not part of the default build
+  # and must not be packaged. install(PROGRAMS $<TARGET_FILE:...>) fails CPack
+  # when the binary was never produced.
+  get_target_property(exclude_from_all ${target} EXCLUDE_FROM_ALL)
+  if(exclude_from_all)
+    continue()
+  endif()
+  list(APPEND exec_targets ${target})
 endforeach()
 
-# Now install the remaining files from the directory, skipping those executables.
+# Runtime tree (data, clrpp, default-build tools). Test binaries stay out even
+# if someone built them locally next to the editor.
 install(DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/
         COMPONENT UnravelEngine
         DESTINATION .
         FILES_MATCHING PATTERN "*"
+        PATTERN "gi_tests" EXCLUDE
+        PATTERN "gi_tests.exe" EXCLUDE
         )
 
-# Install each executable using its generator expression for its file path.
+# Install each shipped executable using its generator expression for its file path.
 foreach(exec ${exec_targets})
-
   install(PROGRAMS "$<TARGET_FILE:${exec}>"
           COMPONENT UnravelEngine
           DESTINATION .
