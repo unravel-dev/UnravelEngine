@@ -33,12 +33,11 @@
  * never disagree on energy - the screen buys geometry, not a second lighting source. Anything
  * else - miss, left the screen, low confidence - falls through to the SDF trace unchanged.
  *
- * PROBE-SPACE TEMPORAL [S22, GI-1.0 TemporalFilterProbes]: each frame traces a 16-ray
- * 2x2 Bayer stratum (GI_SCREEN_PROBE_RAYS_PER_FRAME) and the history pass has already
- * copied the other 48 texels from last frame's reprojected tile. Window 1 disables
- * this and traces every texel, the A/B-off path. Lighting in a cone appears within
- * GI_SCREEN_PROBE_WINDOW frames; the pixel temporal still integrates the jittered
- * sub-cone samples across GI_TEMPORAL_MAX_FRAMES.
+ * PROBE-SPACE TEMPORAL (windowed): each frame traces a 16-ray 2x2 Bayer stratum
+ * and blends those texels (1/n) into this probe's own previous tile. The other 48
+ * stay as that tile. Placement stays sticky while the origin is still in-tile so
+ * the sphere is one visibility field; a Halton walk resets the blend count.
+ * A miss copies the previous tile (never black). Window 1 traces every texel.
  *
  * Everything here is owned by gi_constants - the pass has no tuning surface beyond
  * gi_resolve_pass::settings::probe_space_temporal.
@@ -67,7 +66,8 @@
 SAMPLER2D(s_gi_prev_color, 11);
 
 /// rgb = radiance, a = hitT (negative = completed/sky). One 8x8 tile per probe.
-IMAGE2D_WO(s_probe_radiance_out, rgba16f, 5);
+/// RW: the history pass writes the previous tile first; traced texels blend on top.
+IMAGE2D_RW(s_probe_radiance_out, rgba16f, 5);
 /// Probe records: reuses the existing layout (gi_probe_common.sh) so downstream plumbing holds.
 BUFFER_RW(b_gi_probes, vec4, 7);
 
@@ -103,6 +103,7 @@ SHARED vec3 s_vs_origin;
 /// Base record index of the reprojected PREVIOUS probe, or -1 when reprojection failed.
 SHARED int s_history_record;
 SHARED float s_importance_mean;
+SHARED float s_blend_alpha;
 
 /*
  * Radiance for a hit whose light-voxel read failed. WITHIN the cascades that is honest
@@ -139,6 +140,18 @@ vec3 GiFarFieldFallback(vec3 hit_position, vec3 sample_dir)
 	return eval_radiance_sh(s_gi_env_sh, sample_dir);
 }
 
+void GiStoreScreenProbeRay(ivec2 texel, vec3 radiance, float hit_t)
+{
+	vec3 averaged = min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
+	BRANCH
+	if(u_gi_probe_blend && s_blend_alpha < 0.999)
+	{
+		vec4 hist = imageLoad(s_probe_radiance_out, texel);
+		averaged = mix(hist.xyz, averaged, s_blend_alpha);
+	}
+	imageStore(s_probe_radiance_out, texel, vec4(averaged, hit_t));
+}
+
 /// One octahedral texel: Hi-Z then SDF then world-probe completion, written to the atlas.
 void GiTraceScreenProbeRay(ivec2 probe, ivec2 local)
 {
@@ -152,7 +165,7 @@ void GiTraceScreenProbeRay(ivec2 probe, ivec2 local)
 	// a small tolerance so grazing directions still trace (the integration weights by cosine).
 	if(dot(direction, s_anchor_normal) < -0.2)
 	{
-		imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
+		GiStoreScreenProbeRay(texel, vec3_splat(0.0), -1.0);
 		return;
 	}
 	// IMPORTANCE-DRIVEN SUPERSAMPLING: a cone whose reprojected history reads brighter than
@@ -318,8 +331,7 @@ void GiTraceScreenProbeRay(ivec2 probe, ivec2 local)
 		}
 		radiance_sum += radiance;
 	}
-	vec3 averaged = min(radiance_sum / float(sample_count), vec3_splat(GI_MAX_RAY_RADIANCE));
-	imageStore(s_probe_radiance_out, texel, vec4(averaged, hit_t));
+	GiStoreScreenProbeRay(texel, radiance_sum / float(sample_count), hit_t);
 }
 
 #if defined(GI_SCREEN_PROBE_TRACE_COMPACT)
@@ -341,6 +353,7 @@ void main()
 	{
 		s_history_record = -1;
 		s_importance_mean = 0.0;
+		s_blend_alpha = 1.0;
 		// Placement computed the anchor, classification put this probe on the traced list -
 		// the records are valid by construction; this thread only unpacks them and
 		// reprojects the anchor for the importance mip.
@@ -388,6 +401,18 @@ void main()
 					s_importance_mean = total / 16.0;
 				}
 			}
+		}
+		BRANCH
+		if(u_gi_probe_blend)
+		{
+			vec4 hist = b_gi_probes[record + uint(GI_PROBE_HISTORY)];
+			float count = 1.0;
+			if(hist.w > 0.5)
+			{
+				count = min(hist.x + 1.0, u_gi_probe_max_accum);
+			}
+			b_gi_probes[record + uint(GI_PROBE_HISTORY)] = vec4(count, 1.0 / count, 0.0, hist.w);
+			s_blend_alpha = 1.0 / count;
 		}
 	}
 	barrier();

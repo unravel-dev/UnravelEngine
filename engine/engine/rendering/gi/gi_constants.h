@@ -198,15 +198,25 @@
       "trace-resolution pixels", "published: [S21 s34][CVar] ScreenProbeGather.DownsampleFactor;"  \
       " the gi_resolve_pass::settings::probe_spacing default")                                     \
     X(GI_SCREEN_PROBE_RAYS_PER_FRAME, 16,                                                          \
-      "rays per traced probe per frame", "published: [S22] 64 rays per texel is too expensive;"    \
-      " Lumen TracingOctahedronResolution=4 is 4x4=16, temporally filtered in probe space."        \
-      " The 8x8 world-anchored atlas keeps all 64 directions; each frame traces a 2x2 Bayer"       \
-      " stratum of 16 and copies the other 48 from the reprojected previous tile")                 \
+      "rays per traced probe per frame", "derived: the 8x8 atlas keeps 64 world-anchored"          \
+      " directions; each frame traces a 2x2 Bayer stratum of 16 and blends them into that"         \
+      " probe's own previous tile (the world-probe windowed-mean recipe). Lumen's 16-ray"          \
+      " path is a 4x4 octahedron, not a hole-filled 8x8")                                          \
     X(GI_SCREEN_PROBE_WINDOW, 4,                                                                   \
       "frames", "derived: 64 octahedral texels / GI_SCREEN_PROBE_RAYS_PER_FRAME - every"           \
-      " direction is measured exactly once per window (the world-probe windowed-mean property"     \
-      " at screen-probe resolution). 4 frames sits inside GI_TEMPORAL_MAX_FRAMES so the pixel"     \
-      " filter still sees several complete spheres")                                               \
+      " direction is measured exactly once per window. 4 frames sits inside"                       \
+      " GI_TEMPORAL_MAX_FRAMES so the pixel filter still sees several complete spheres")           \
+    X(GI_SCREEN_PROBE_HISTORY_TILE, 0.25f,                                                         \
+      "of the probe tile in world units", "derived: the running-mean COUNT is kept only for the"   \
+      " sticky reconstruct (sub-pixel). A Halton walk inside the tile must reset the count or"    \
+      " the 16 new cones collage onto 48 from a different origin and a still camera shimmers."    \
+      " The tile is still COPIED on a miss - writing black is what darkened pans")                \
+    X(GI_SCREEN_PROBE_WALK_WINDOWS, 1,                                                             \
+      "complete spheres", "derived: stay sticky for one window so the 16/64 stratum fills"        \
+      " a single sphere (per-frame Halton is the shimmer). Then the whole lattice Halton-walks"   \
+      " together (OFF's shared offset - staggering froze neighbours on different points and"      \
+      " printed blotches) and keeps the 1/n count so the walk is a fade. Halton is indexed by"    \
+      " walk count so the 8-cycle is fully used. No extra rays")                                  \
     X(GI_ADAPTIVE_PLANE_TOLERANCE, 0.05f,                                                          \
       "fraction of view distance", "derived: the adaptive gather may substitute a probe's tile"    \
       " with its even-lattice parents' blend only where the integrate pass would have blended"     \

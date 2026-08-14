@@ -11,10 +11,13 @@
  *   even-lattice probes -> always traced (the coarse base everything else leans on);
  *   phased revalidation -> traced regardless, because an interpolated probe's own history
  *     is derived from its parents and no test below can see what the substitution erased;
- *   coplanarity of the parent anchors (cell plane / collinearity at parent scale);
- *   parents' radiance agreement + own-history deviation (the importance mips, last frame's
- *     half) - geometry sameness is necessary, radiance sameness is what makes the
- *     substitution invisible.
+ *   coplanarity of the parent anchors (cell plane / collinearity at parent scale).
+ *
+ * Importance-mip radiance agreement is not a live gate. It was written for a
+ * history_cap encoding that never shipped (x was 0/1, the test was > 1.5).
+ * Turning it on vetoes every flat-wall substitution: windowed temporal's
+ * sticky origins and 16-ray mips disagree across a cell even when the
+ * geometry test is right. Revalidation is the miss catch.
  */
 
 #include "bgfx_compute.sh"
@@ -97,49 +100,6 @@ void main()
 					vec3 off_axis = delta - axis * (dot(delta, axis) / axis_len2);
 					interpolated = dot(off_axis, off_axis) <= tolerance * tolerance;
 				}
-			}
-		}
-		BRANCH
-		if(interpolated && u_gi_probe_history_cap > 1.5)
-		{
-			// Two disagreements end the substitution: the parents among THEMSELVES
-			// (structure crossing the cell), and this probe's OWN last-frame mip against
-			// the parents' predicted blend (sub-cell structure only the probe itself ever
-			// measured). The own test goes blind one revalidation period after a
-			// substitution starts; the revalidation cadence refreshes its evidence.
-			uint own_history =
-			    (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_read_offset) *
-			    uint(GI_PROBE_STRIDE);
-			float luminance_sum = 0.0;
-			vec4 spread = vec4_splat(0.0);
-			vec4 deviation = vec4_splat(0.0);
-			LOOP for(int m = 0; m < 4; ++m)
-			{
-				vec4 lo = vec4_splat(1e9);
-				vec4 hi = vec4_splat(-1e9);
-				vec4 parent_sum = vec4_splat(0.0);
-				LOOP for(int p = 0; p < 4; ++p)
-				{
-					uint history_record =
-					    (GiProbeRecord(parents[p].x, parents[p].y, 0) + u_gi_probe_read_offset) *
-					    uint(GI_PROBE_STRIDE);
-					vec4 mip = b_gi_probes[history_record + uint(m)];
-					lo = min(lo, mip);
-					hi = max(hi, mip);
-					parent_sum += mip;
-					luminance_sum += mip.x + mip.y + mip.z + mip.w;
-				}
-				spread = max(spread, hi - lo);
-				vec4 own_mip = b_gi_probes[own_history + uint(m)];
-				deviation = max(deviation, abs(own_mip - parent_sum * 0.25));
-			}
-			float mean = luminance_sum / 64.0;
-			float limit = GI_ADAPTIVE_RADIANCE_TOLERANCE * max(mean, 1e-3);
-			float worst = max(max(max(spread.x, spread.y), max(spread.z, spread.w)),
-			                  max(max(deviation.x, deviation.y), max(deviation.z, deviation.w)));
-			if(worst > limit)
-			{
-				interpolated = false;
 			}
 		}
 	}

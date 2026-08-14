@@ -97,10 +97,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Probe-Space Temporal"},
             entt::attribute{"group", "Gather"},
             entt::attribute{"tooltip",
-                            "Each probe traces 16 of 64 directions per frame and reuses the rest "
-                            "from last frame's reprojected tile (Lumen TemporalFilterProbes). "
-                            "Off traces all 64 every frame - noisier motion vs cheaper gather; "
-                            "the A/B for the probe-space temporal cut."},
+                            "Each probe traces 16 of 64 directions per frame and blends them "
+                            "into that probe's own previous tile. A still camera keeps the same "
+                            "origin for one window so the sphere fills, then walks to a new "
+                            "Halton so blotches dissolve. Off traces all 64 every frame."},
         })
         .data<&settings::enable_reflections>("enable_reflections"_hs)
         .custom<entt::attributes>(entt::attributes{

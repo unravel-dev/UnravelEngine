@@ -1,6 +1,8 @@
 #ifndef __GI_PROBE_COMMON_SH__
 #define __GI_PROBE_COMMON_SH__
 
+#include "gi_constants.sh"
+
 /*
  * Screen-space radiance probes: shared layout and maths.
  *
@@ -18,12 +20,15 @@
  *  - Probe buffer: GI_PROBE_STRIDE vec4s per probe, probe-major:
  *      [0..3]  the 4x4 importance mip the filter writes for next frame's ray allocation
  *      [4]     xyz = lifted trace origin, w = shortened-ray range (placement pass)
- *      [5]     xy = anchor uv, z = anchor device depth, w unused (placement pass)
+ *      [5]     xy = anchor uv, z = anchor device depth, w = 1 on a scheduled
+ *              in-tile Halton walk (history keeps the 1/n count)
  *      [9]     xyz = anchor world position, w = the probe MODE: 0 = no geometry, 1 = traced,
  *              2 = interpolated from its even-lattice parents (adaptive gather). Consumers
  *              that only care about validity keep testing w > 0.5.
  *      [10]    xyz = anchor world normal, w = anchor view distance
- *      [11]    x = accumulated history count, y = this frame's blend weight
+ *      [11]    x = accumulated history count, w = 1 to keep the running mean
+ *              (sticky reconstruct, or a scheduled in-tile walk). w = 0 resets
+ *              so an unscheduled Halton does not collage; the tile is still copied.
  */
 
 #define GI_PROBE_DIR_EDGE   8
@@ -33,6 +38,7 @@
 #define GI_PROBE_ANCHOR     5
 #define GI_PROBE_META       9
 #define GI_PROBE_META2      10
+#define GI_PROBE_HISTORY    11
 /// Single layer: the gather anchors one probe per tile (Phase 8 removed the v1
 /// two-layer machinery); the record indexing keeps the parameter for layout stability.
 #define GI_PROBE_LAYERS     1
@@ -48,18 +54,21 @@ uniform vec4 u_gi_probe_params;
 /// xy = trace-resolution target size in pixels, zw = 1 / that size.
 uniform vec4 u_gi_probe_screen;
 
-/// x = 1 when the record halves hold trusted data (gates importance reprojection),
+/// x = 0 untrusted, 1 trusted with no probe-space blend (A/B-off), >= 2 trusted AND
+///     blending (the value is the 1/n cap). Gates importance at > 0.5 and the
+///     running-mean blend at > 1.5.
 /// y = probe-space temporal WINDOW in frames (1 = trace every octahedral texel this
 ///     frame, the A/B-off path; GI_SCREEN_PROBE_WINDOW = 4 traces a 16-ray Bayer
-///     stratum and copies the rest from last frame's reprojected tile),
+///     stratum and keeps the other 48 from this probe's own previous tile).
 /// z = WRITE half offset into the probe buffer, w = READ half offset -- both in PROBES.
 ///
-/// The probe buffer is double buffered because history is REPROJECTED: this frame's probe needs
-/// last frame's meta and radiance for the probe that covered its anchor's world position THEN,
-/// which is generally a different probe index. Without both halves resident there is nothing to
-/// reproject from. The radiance atlas is ping-ponged for the same reason.
+/// The probe buffer is double buffered because windowed history is the SAME
+/// probe index's previous tile. Without both halves resident there is nothing
+/// to blend. The radiance atlas is ping-ponged for the same reason.
 uniform vec4 u_gi_probe_temporal;
 #define u_gi_probe_history_cap   u_gi_probe_temporal.x
+#define u_gi_probe_blend         (u_gi_probe_temporal.x > 1.5)
+#define u_gi_probe_max_accum     max(u_gi_probe_temporal.x, 1.0)
 #define u_gi_probe_window        uint(max(u_gi_probe_temporal.y, 1.0))
 #define u_gi_probe_write_offset  uint(u_gi_probe_temporal.z)
 #define u_gi_probe_read_offset   uint(u_gi_probe_temporal.w)
@@ -240,7 +249,7 @@ ivec2 GiProbeAtlasBase(int px, int py, int layer)
  *
  * Window 1 traces every texel (the A/B-off path, identical to the pre-temporal gather).
  * Window 4 is a 2x2 Bayer phase: 16 of 64 texels, exhaustive over GI_SCREEN_PROBE_WINDOW
- * frames, spatially distributed so the probe-space filter always has a nearby fresh sample.
+ * frames. Untraced texels keep this probe's own previous tile.
  */
 bool GiScreenProbeInStratum(ivec2 local, uint frame, uint window)
 {
@@ -266,6 +275,50 @@ ivec2 GiScreenProbeStratumLocal(int thread, uint phase)
 	int cx = (thread % coarse) * 2;
 	int cy = (thread / coarse) * 2;
 	return ivec2(cx + int(phase & 1u), cy + int((phase >> 1u) & 1u));
+}
+
+/**
+ * Whether two world points are still the sticky reconstruct.
+ *
+ * A Halton walk inside the tile must fail: blending 16 new cones onto 48 from a
+ * different origin is the still-camera shimmer. A scheduled walk keeps the
+ * count via ANCHOR.w instead. The previous tile is still copied on a miss.
+ */
+bool GiScreenProbeSameOrigin(vec3 current_world, vec3 history_world, float view_distance)
+{
+	float tile_world = max(view_distance, 0.1) * u_gi_probe_spacing * u_gi_probe_screen.w;
+	return length(current_world - history_world) < GI_SCREEN_PROBE_HISTORY_TILE * tile_world;
+}
+
+/**
+ * Scheduled in-tile Halton: true once per GI_SCREEN_PROBE_WALK_WINDOWS complete
+ * spheres, for EVERY probe on the same frame. Staggering left neighbours on
+ * different Halton points, which printed as stable blotches (OFF uses one
+ * shared offset). Soft 1/n makes the coherent walk a few-percent fade, not a
+ * flash. The Halton index is the walk count so all 8 cycle points are used
+ * (raw frame % 8 on a 4-frame period only hit 2 points).
+ */
+uint GiScreenProbeWalkPeriod()
+{
+	return max(u_gi_probe_window * uint(GI_SCREEN_PROBE_WALK_WINDOWS), 1u);
+}
+
+bool GiScreenProbeWalkThisFrame()
+{
+	if(u_gi_probe_window <= 1u)
+	{
+		return false;
+	}
+	return (u_gi_probe_frame % GiScreenProbeWalkPeriod()) == 0u;
+}
+
+/**
+ * Whether a trace-resolution UV still lands in this probe's tile.
+ */
+bool GiScreenProbeUvInTile(ivec2 probe, vec2 uv)
+{
+	vec2 tile = floor(uv * u_gi_probe_screen.xy / u_gi_probe_spacing);
+	return int(tile.x) == probe.x && int(tile.y) == probe.y;
 }
 
 #endif // __GI_PROBE_COMMON_SH__

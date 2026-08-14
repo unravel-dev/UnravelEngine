@@ -60,10 +60,12 @@ public:
         /// classification is exactly the interpolation test the integrate pass applies per
         /// pixel, so a skipped probe's tile is one the pixels would have blended to anyway.
         bool adaptive_probes = true;
-        /// Probe-space temporal: each traced probe fires 16 of 64 octahedral rays per frame
-        /// (a 2x2 Bayer stratum) and copies the rest from last frame's reprojected tile.
-        /// Converged stills match the 64-ray path; fast camera motion is noisier until the
-        /// window (4 frames) and the pixel temporal catch up. Off traces all 64 every frame.
+        /// Windowed probe-space temporal: each traced probe fires 16 of 64 octahedral rays
+        /// per frame (a 2x2 Bayer stratum) and blends them into that probe's own previous
+        /// tile. Placement stays sticky while the origin is still in-tile so a still camera
+        /// fills one sphere; probes walk to a new Halton after a few complete spheres so
+        /// blotches can dissolve. A miss copies the previous tile (never black).
+        /// Off traces all 64 every frame.
         bool probe_space_temporal = true;
         /// World-space specular tier (plan phase 9), layered under SSR: rough lobes read the
         /// world-probe radiance atlas, sharp ones trace (screen first, SDF + light voxels
@@ -376,13 +378,11 @@ private:
         }
     } args_program_;
 
-    /// Probe-space temporal: copies the reprojected previous radiance tile into this
-    /// frame's atlas so the trace can overwrite only its 16-ray stratum.
+    /// Windowed probe-space temporal: copies this probe's previous radiance tile into
+    /// this frame's atlas so the trace can blend only its 16-ray stratum.
     struct history_program : uniforms_cache
     {
         gpu_program::ptr program;
-        gfx::program::uniform_ptr u_gi_camera;
-        gfx::program::uniform_ptr u_gi_prev_view_proj;
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
@@ -390,8 +390,6 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_camera, "u_gi_camera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);

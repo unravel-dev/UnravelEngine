@@ -246,8 +246,8 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                        1.0f / float(target_size.width),
                                        1.0f / float(target_size.height)};
         // Radiance atlases: one 8x8 octahedral tile per probe, PING-PONGED so this frame's
-        // history pass can copy last frame's reprojected tile and the trace can overwrite
-        // only its 16-ray stratum (cs_gi_screen_probe_history.sc).
+        // history pass can copy this probe's previous tile and the trace can blend only
+        // its 16-ray stratum (cs_gi_screen_probe_history.sc).
         const usize32_t atlas_size{probes_x * probe_dir_edge, probes_y * probe_layers * probe_dir_edge};
         const auto ensure_atlas = [&](const char* name) -> gfx::texture::ptr
         {
@@ -327,10 +327,12 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             s.probe_space_temporal && history_program_.is_valid() && records_trusted_;
         const float probe_window =
             probe_temporal_active ? float(gi::GI_SCREEN_PROBE_WINDOW) : 1.0f;
-        // x = whether the record halves hold trusted data (gates importance reprojection),
+        // x = 0 untrusted, 1 trusted no-blend, >= 2 trusted + 1/n cap (the blend gate),
         // y = the probe-space temporal window,
         // zw = the double-buffered record offsets.
-        const float probe_temporal[4] = {records_trusted_ ? 1.0f : 0.0f,
+        const float temporal_x = !records_trusted_ ? 0.0f
+                                 : (probe_temporal_active ? math::max(s.max_accum_frames, 2.0f) : 1.0f);
+        const float probe_temporal[4] = {temporal_x,
                                          probe_window,
                                          float(write_probe_offset),
                                          float(read_probe_offset)};
@@ -431,16 +433,14 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             }
             if(probe_temporal_active)
             {
-                // HISTORY COPY: last frame's reprojected tile into this atlas so the trace
-                // can skip 48 of 64 texels. Same compacted group count as the trace.
+                // HISTORY COPY: this probe's previous tile into this atlas so the trace
+                // can blend 16 of 64 texels. Same compacted group count as the trace.
                 gfx::render_pass pass("GI/Probe History");
                 pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
                 history_program_.program->begin();
                 gfx::set_texture(history_program_.s_probe_radiance_history, 0, read_atlas);
                 gfx::set_image(5, write_atlas->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
-                gfx::set_buffer(7, probe_buffer_, gfx::access::Read);
-                gfx::set_uniform(history_program_.u_gi_camera, gi_camera);
-                gfx::set_uniform(history_program_.u_gi_prev_view_proj, gather_prev_view_proj.get_matrix());
+                gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
                 gfx::set_uniform(history_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(history_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(history_program_.u_gi_probe_temporal, probe_temporal);
@@ -462,7 +462,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
                 gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
                 gfx::set_texture(trace_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
-                gfx::set_image(5, write_atlas->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
+                gfx::set_image(5,
+                                 write_atlas->native_handle(),
+                                 0,
+                                 gfx::access::ReadWrite,
+                                 gfx::texture_format::RGBA16F);
                 gfx::set_texture(trace_program_.s_world_probe_radiance_read,
                                  6,
                                  clipmap_gpu.get_world_probe_radiance());

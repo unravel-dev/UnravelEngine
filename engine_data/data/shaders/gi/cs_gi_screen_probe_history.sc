@@ -1,13 +1,11 @@
 /*
- * GI probe-space temporal: copy last frame's reprojected radiance tile into this
- * frame's atlas BEFORE the stratum trace overwrites 16 of the 64 texels.
+ * GI probe-space temporal: copy THIS probe's previous radiance tile into this
+ * frame's atlas BEFORE the stratum trace blends 16 of the 64 texels.
  *
- * Screen probes are a SCREEN lattice - probe (x, y) this frame is a different world
- * point than (x, y) last frame - so the copy reprojects the anchor into last frame's
- * lattice (the same plane-gated test the trace uses for the importance mip) rather
- * than copying the same index. A failed reprojection writes the sky marker: the
- * 3x3 probe-space filter and the pixel temporal cover the hole, which is the
- * Lumen TemporalFilterProbes miss path.
+ * A valid previous tile is always copied. Writing the sky marker on a miss is
+ * what made camera motion flash the whole image dark (48 of 64 cones went
+ * black at once). The running-mean count is kept for the sticky reconstruct
+ * and for a scheduled in-tile walk (ANCHOR.w). An unscheduled Halton resets it.
  *
  * Compacted dispatch: one 8x8 group per traced probe, same indirect args as the
  * trace. Interpolated and dead tiles are the interp pass's job.
@@ -20,10 +18,7 @@
 
 SAMPLER2D(s_probe_radiance_history, 0);
 IMAGE2D_WO(s_probe_radiance_out, rgba16f, 5);
-BUFFER_RO(b_gi_probes, vec4, 7);
-
-uniform vec4 u_gi_camera;
-uniform mat4 u_gi_prev_view_proj;
+BUFFER_RW(b_gi_probes, vec4, 7);
 
 SHARED int s_history_x;
 SHARED int s_history_y;
@@ -38,38 +33,32 @@ void main()
 	if(local.x == 0 && local.y == 0)
 	{
 		s_history_valid = 0;
-		s_history_x = 0;
-		s_history_y = 0;
-		uint record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_write_offset) *
-		              uint(GI_PROBE_STRIDE);
-		vec4 meta = b_gi_probes[record + uint(GI_PROBE_META)];
-		vec4 meta2 = b_gi_probes[record + uint(GI_PROBE_META2)];
-		vec3 world_position = meta.xyz;
-		vec3 world_normal = meta2.xyz;
-		vec4 prev_clip4 = mul(u_gi_prev_view_proj, vec4(world_position, 1.0));
+		s_history_x = probe.x;
+		s_history_y = probe.y;
+		uint write_record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_write_offset) *
+		                    uint(GI_PROBE_STRIDE);
+		uint read_record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_read_offset) *
+		                   uint(GI_PROBE_STRIDE);
+		vec4 current_meta = b_gi_probes[write_record + uint(GI_PROBE_META)];
+		vec4 current_meta2 = b_gi_probes[write_record + uint(GI_PROBE_META2)];
+		vec4 current_anchor = b_gi_probes[write_record + uint(GI_PROBE_ANCHOR)];
+		vec4 history_meta = b_gi_probes[read_record + uint(GI_PROBE_META)];
 		BRANCH
-		if(u_gi_probe_history_cap > 0.5 && prev_clip4.w > 0.0)
+		if(u_gi_probe_history_cap > 0.5 && history_meta.w > 0.5)
 		{
-			vec3 prev_clip = clipTransform(prev_clip4.xyz / prev_clip4.w);
-			vec2 prev_uv = prev_clip.xy * 0.5 + 0.5;
-			if(all(greaterThanEqual(prev_uv, vec2_splat(0.0))) &&
-			   all(lessThanEqual(prev_uv, vec2_splat(1.0))))
-			{
-				vec2 prev_probe = floor(prev_uv * u_gi_probe_screen.xy / u_gi_probe_spacing);
-				int hx = int(clamp(prev_probe.x, 0.0, float(u_gi_probe_count_x - 1)));
-				int hy = int(clamp(prev_probe.y, 0.0, float(u_gi_probe_count_y - 1)));
-				uint history_base =
-				    (GiProbeRecord(hx, hy, 0) + u_gi_probe_read_offset) * uint(GI_PROBE_STRIDE);
-				vec4 history_meta = b_gi_probes[history_base + uint(GI_PROBE_META)];
-				float plane = abs(dot(history_meta.xyz - world_position, world_normal));
-				if(history_meta.w > 0.5 &&
-				   plane < 0.05 * max(length(world_position - u_gi_camera.xyz), 0.1))
-				{
-					s_history_x = hx;
-					s_history_y = hy;
-					s_history_valid = 1;
-				}
-			}
+			s_history_valid = 1;
+			vec4 prev_count = b_gi_probes[read_record + uint(GI_PROBE_HISTORY)];
+			float keep_count =
+			    (GiScreenProbeSameOrigin(current_meta.xyz, history_meta.xyz, current_meta2.w) ||
+			     current_anchor.w > 0.5)
+			        ? 1.0
+			        : 0.0;
+			b_gi_probes[write_record + uint(GI_PROBE_HISTORY)] =
+			    vec4(keep_count > 0.5 ? prev_count.x : 0.0, 0.0, 0.0, keep_count);
+		}
+		else
+		{
+			b_gi_probes[write_record + uint(GI_PROBE_HISTORY)] = vec4_splat(0.0);
 		}
 	}
 	barrier();

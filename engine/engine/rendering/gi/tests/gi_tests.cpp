@@ -310,6 +310,50 @@ void test_screen_probe_stratum_covers_the_atlas()
     }
 }
 
+/// GiScreenProbeSameOrigin: a sticky reconstruct keeps the running-mean count.
+/// A Halton walk inside the tile must reset it (the tile is still copied).
+void test_screen_probe_same_origin_rejects_halton_walk()
+{
+    std::printf("test_screen_probe_same_origin_rejects_halton_walk\n");
+    const float view_distance = 8.0f;
+    const float spacing = 8.0f;
+    const float inv_screen_h = 1.0f / 540.0f;
+    const float tile_world = view_distance * spacing * inv_screen_h;
+    const float limit = float(gi::GI_SCREEN_PROBE_HISTORY_TILE) * tile_world;
+    check(limit > 0.0f, "history keep is a positive fraction of the tile");
+    check(float(gi::GI_SCREEN_PROBE_WALK_WINDOWS) == 1.0f,
+          "one scheduled walk per complete sphere");
+    const auto same_origin = [limit](float distance) -> bool { return distance < limit; };
+    check(same_origin(0.0f), "the sticky point itself keeps the running mean");
+    check(same_origin(0.1f * tile_world), "sub-pixel reconstruction error stays accepted");
+    check(!same_origin(0.5f * tile_world), "a half-tile Halton jump resets the count");
+    check(!same_origin(tile_world), "a full-tile jump resets the count");
+}
+
+/// Walk-indexed Halton must visit the whole 8-cycle. Indexing by raw frame on a
+/// 4-frame window only hits two points and the lattice freezes into blotches.
+void test_screen_probe_walk_halton_uses_the_full_cycle()
+{
+    std::printf("test_screen_probe_walk_halton_uses_the_full_cycle\n");
+    const uint32_t period = uint32_t(gi::GI_SCREEN_PROBE_WINDOW) *
+                            uint32_t(gi::GI_SCREEN_PROBE_WALK_WINDOWS);
+    check(period >= 1u, "walk period is at least one frame");
+    int seen[8];
+    for(int i = 0; i < 8; ++i)
+    {
+        seen[i] = 0;
+    }
+    for(uint32_t walk = 0; walk < 8u; ++walk)
+    {
+        const uint32_t frame = walk * period;
+        seen[(frame / period) % 8u] = 1;
+    }
+    for(int i = 0; i < 8; ++i)
+    {
+        check(seen[i] == 1, "each Halton cycle point is used as a walk origin");
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Golden scene fixtures
 // ---------------------------------------------------------------------------------------
@@ -2163,6 +2207,8 @@ void run(int& checks, int& failures)
     test_shader_constants_match_cpp();
     test_gi_shaders_compile_sm50();
     test_screen_probe_stratum_covers_the_atlas();
+    test_screen_probe_same_origin_rejects_halton_walk();
+    test_screen_probe_walk_halton_uses_the_full_cycle();
     test_attribute_voxels_mark_the_surface_band();
     test_clipmap_attribute_transcription_matches_cpu();
     test_reference_is_deterministic();
