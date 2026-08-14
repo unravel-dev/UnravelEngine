@@ -46,9 +46,12 @@ vec3 apply_color_grading(vec3 color)
 
     // Log-space contrast around 18% gray: mids keep their exposure while the
     // stops above/below expand (>1) or compress (<1).
+    // The exponent must be a vec3: glsl-optimizer folds exp2(log2(x) * y)
+    // back into pow(x, y), and a scalar y yields pow(vec3, float) - an
+    // overload GLSL does not have (C1115 on NVIDIA GL at runtime).
     const float mid_gray = 0.18;
     vec3 log_c = log2(max(color, vec3_splat(1e-6)) / mid_gray);
-    color = exp2(log_c * u_contrast) * mid_gray;
+    color = exp2(log_c * vec3_splat(u_contrast)) * mid_gray;
 
     // Saturation around Rec.709 luma, still in linear.
     float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
