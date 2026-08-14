@@ -49,6 +49,21 @@ struct script_system
     auto get_engine_assembly() const -> dotnet::assembly;
     auto get_app_assembly() const -> dotnet::assembly;
 
+    /// Blittable frame payloads for the managed SystemManager hooks (layouts
+    /// mirror the managed UpdateInfo structs).
+    struct frame_update_data
+    {
+        float time{};
+        float delta_time{};
+        float time_scale{};
+        uint64_t frame_count{};
+    };
+
+    struct fixed_update_data
+    {
+        float fixed_delta_time{};
+    };
+
     /// Cached engine-assembly types/methods. Valid between load_engine_domain
     /// and unload_engine_domain.
     struct engine_script_cache
@@ -63,6 +78,14 @@ struct script_system
         dotnet::method update_method;
         dotnet::method fixed_update_method;
         dotnet::method late_update_method;
+
+        // Frame-hook invokers, constructed (and signature-checked) once per
+        // engine domain load; building one per frame costs bridge round-trips
+        // for the signature validation alone. Default-constructed instances
+        // are invalid until load_engine_domain assigns them.
+        dotnet::method_invoker<void(frame_update_data)> update_invoker;
+        dotnet::method_invoker<void(fixed_update_data)> fixed_update_invoker;
+        dotnet::method_invoker<void()> late_update_invoker;
 
         // Component / ScriptComponent lifecycle (resolved once per engine domain)
         dotnet::method set_entity_method;

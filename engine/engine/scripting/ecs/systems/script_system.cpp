@@ -406,6 +406,13 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     cache_.fixed_update_method = cache_.update_manager_type.get_method("internal_n2m_fixed_update", 1);
     cache_.late_update_method = cache_.update_manager_type.get_method("internal_n2m_late_update", 0);
 
+    // Build the frame-hook invokers once: this runs the signature check here
+    // instead of on every frame (each check costs bridge round-trips).
+    cache_.update_invoker = dotnet::make_method_invoker<void(frame_update_data)>(cache_.update_method);
+    cache_.fixed_update_invoker =
+        dotnet::make_method_invoker<void(fixed_update_data)>(cache_.fixed_update_method);
+    cache_.late_update_invoker = dotnet::make_method_invoker<void()>(cache_.late_update_method);
+
     cache_.set_entity_method = cache_.component_type.get_method("internal_n2m_set_entity", 1);
     cache_.on_create_method = cache_.script_component_type.get_method("internal_n2m_on_create", 0);
     cache_.on_enable_method = cache_.script_component_type.get_method("internal_n2m_on_enable", 0);
@@ -755,15 +762,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
                 }
             });
 
-        struct update_data
-        {
-            float time{};
-            float delta_time{};
-            float time_scale{};
-            uint64_t frame_count{};
-        };
-
-        if(play.is_simulation_running() && !play.is_paused())
+        if(play.is_simulation_running() && !play.is_paused() && cache_.update_invoker.valid())
         {
             // Mid-frame enter_running: process() could not zero dt. Start()
             // above still runs; skip integrating motion on this first frame.
@@ -775,7 +774,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
             auto& sim = ctx.get_cached<simulation>();
             auto time_scale = sim.get_time_scale();
 
-            update_data data;
+            frame_update_data data;
             data.time = elapsed_time_.count();
             data.delta_time = dt.count();
             data.time_scale = time_scale;
@@ -783,9 +782,7 @@ void script_system::on_frame_update(rtti::context& ctx, delta_t dt)
 
             {
                 APP_SCOPE_PERF("Script/System Update Managed");
-                // Use cached method to avoid repeated allocations
-                auto method_thunk = dotnet::make_method_invoker<void(update_data)>(cache_.update_method);
-                method_thunk(data);
+                cache_.update_invoker(data);
             }
 
             elapsed_time_ += dt;
@@ -821,21 +818,15 @@ void script_system::on_frame_fixed_update(rtti::context& ctx, delta_t dt)
                 comp.process_pending_deletions();
             });
 
-        struct update_data
+        if(play.is_simulation_running() && play.frames_running() > 0 && dt > delta_t::zero() &&
+           cache_.fixed_update_invoker.valid())
         {
-            float fixed_delta_time{};
-        };
-
-        if(play.is_simulation_running() && play.frames_running() > 0 && dt > delta_t::zero())
-        {
-            update_data data;
+            fixed_update_data data;
             data.fixed_delta_time = dt.count();
 
             {
                 APP_SCOPE_PERF("Script/System Fixed Update Managed");
-                // Use cached method to avoid repeated allocations
-                auto method_thunk = dotnet::make_method_invoker<void(update_data)>(cache_.fixed_update_method);
-                method_thunk(data);
+                cache_.fixed_update_invoker(data);
             }
         }
     }
@@ -863,12 +854,11 @@ void script_system::on_frame_late_update(rtti::context& ctx, delta_t dt)
             auto& scn = ec.get_scene();
             auto& registry = *scn.registry;
     
-            if(play.is_simulation_running() && play.frames_running() > 0 && dt > delta_t::zero())
+            if(play.is_simulation_running() && play.frames_running() > 0 && dt > delta_t::zero() &&
+               cache_.late_update_invoker.valid())
             {
                 APP_SCOPE_PERF("Script/System Late Update Managed");
-                // Use cached method to avoid repeated allocations
-                auto method_thunk = dotnet::make_method_invoker<void()>(cache_.late_update_method);
-                method_thunk();
+                cache_.late_update_invoker();
             }
         }
         catch(const dotnet::exception& e)

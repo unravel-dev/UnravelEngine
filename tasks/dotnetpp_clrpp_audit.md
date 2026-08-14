@@ -1,5 +1,35 @@
 # dotnetpp / clrpp / monopp audit (2026-08-13)
 
+> **Status update (same day): fixes applied.** Everything in §8's safety list
+> except the monopp architectural items is fixed in the working tree, plus the
+> engine per-frame invoker caching. Verified: dotnetpp suite 428/428 (coreclr,
+> JIT and `DOTNET_InterpMode=1` on the .NET 10 runtime), 425/425 (mono,
+> vendored 6.12), perf harness within noise of the pre-fix baseline on every
+> row, and the perf domain now passes its unload leak check (it leaked a
+> pinned `Perf.Vec2[]` before — live proof of the S2 bug). Additional findings
+> made during the fix pass:
+> - `get_args_signature` had a second, masking bug on both backends: the
+>   lambda took the `for_each_tuple_type` index constant's `::type` (the
+>   constant itself), so no argument type was ever "known" and the
+>   by-signature lookup path was dead code. Fixed together with the OR/AND
+>   accumulation; `make_method_invoker(type, name)` now tries the exact
+>   signature and falls back to name+arity (enums declared as integers on the
+>   C++ side have no signature-name mapping).
+> - `ConcurrentDictionary.IsEmpty` acquires every bucket lock when the
+>   dictionary IS empty - using it as a FreeHandle fast-path guard cost +630ns
+>   per released object (found via A/B against the perf baseline; §5's
+>   "guard with IsEmpty" suggestion is retracted).
+> - monopp additionally got: mono_string ToString exception checks (was
+>   `exc=nullptr` = process abort), field invoker size guards + managed-
+>   representation reads (converted POD fields read straight into the smaller
+>   native type = stack overflow), meta-cache mutexes, static regex.
+> - Still open (monopp, architectural): raw `MonoObject*` heap storage
+>   without GC handles, hand-forged `_MonoGenericInst`, `mono_array`
+>   raw-bytes fallback + char stride, `mono_raise_exception` longjmp,
+>   `mono_object` ctor `mono_runtime_object_init` unchecked, global
+>   `current_domain`. The mono backend remains dormant; treat as
+>   do-not-enable-without-fixing.
+
 In-depth review of the scripting-host libraries under `deps/dotnetpp/dotnetpp/`:
 safety, performance, API-neutral optimization opportunities, and the JIT vs
 interpreter story. Line references are against the current working tree.

@@ -73,3 +73,30 @@ Patterns worth keeping, distilled from corrections during debugging sessions. Ne
   reading), or (b) seed it from a compute dispatch (GI bounce vis-memo pattern). Grep the
   repo for existing handling of a constraint before writing new code against it - this
   one was documented twice in-tree.
+
+## 2026-08-13 - dotnetpp bridge fix pass
+
+- **`ConcurrentDictionary.IsEmpty` is not a cheap guard - it acquires every
+  bucket lock when the dictionary IS empty** (AreAllBucketsEmpty passes, then
+  AcquireAllLocks re-verifies). Used as a FreeHandle fast-path pre-check it
+  cost +630ns per released object (2.2x on n2m string invokes). A missing-key
+  `TryRemove` takes at most one bucket lock; just call it.
+- **Never trust that a perf "optimization" is one without an A/B run.** The
+  IsEmpty guard came from the audit's own suggestion list; only the
+  baseline-vs-after perf table exposed it. Keep `tests/dotnetpp_perf.cpp`
+  runs (same build config, 2-3 repeats) around any bridge hot-path change,
+  and bisect with `git stash push -- <subtree>` when a row moves >10%
+  consistently.
+- **`for_each_tuple_type` hands the lambda an index constant, not a type
+  tag.** `std::decay_t<decltype(tag)>::type` on an `integral_constant` names
+  the constant itself - it compiles and silently yields the wrong type. Two
+  bugs canceled out in get_args_signature for years (dead signature path hid
+  the OR/AND accumulation bug); fixing one exposed the other, and the revived
+  path then needed an enum fallback (mono-style signatures have no name for
+  enums declared as C++ integers - try exact signature, fall back to
+  name+arity).
+- **GCHandle structs must never be cached in thread-local or per-caller
+  state.** `IsAllocated` on a stale copy tests recycled-slot bits, so a freed
+  slot reused by another Alloc reads as "still mine" and Free/AddrOf touch an
+  unrelated object. Cache the immutable data (pointer, sizes) in a
+  claim-once object (Interlocked flag) keyed in one registry instead.
