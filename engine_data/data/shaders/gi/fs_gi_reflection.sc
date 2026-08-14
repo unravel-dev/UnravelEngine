@@ -11,8 +11,10 @@ $input v_texcoord0
  * reuse LAST frame's resolved GI - the temporally filtered, denoised per-pixel gather - and
  * pay no ray (the Lumen recipe: rough specular comes from your own gather, never from a raw
  * world lattice, whose 2 m granularity reads as mottling). Sharper lobes trace the SDF world
- * tier (mesh-exact within GI_REFLECTION_MESH_SDF_RANGE, light voxels at hits, the sky past
- * everything).
+ * tier: mesh-exact out to a roughness-adaptive range, clipmap as a far-field FINDER with a
+ * short mesh-SDF refine at the hit, light voxels at mesh-snapped hits. An unrefined clipmap
+ * hit is not an image on sharp pixels - coverage goes to zero so the authored probe layer
+ * shows through. The sky answers a true miss.
  *
  * NO SCREEN TIER: screen space belongs to SSR, which composites over this pass with its own
  * stochastic spread, denoise, and fades. Two screen tracers on the same pixel gave two
@@ -31,8 +33,8 @@ $input v_texcoord0
  * interpolation pattern stamps into the image as blotches, not blur (measured twice, rounds
  * 2 and 8). Output = incoming radiance along the sampled ray at FULL weight - energy is
  * constant across roughness (fading the sharp end read as brightness rising with roughness,
- * round 10); the composite fully covers the authored probe layer where this pass runs, and
- * SSR composites on top.
+ * round 10). Alpha is coverage: mesh-exact and refined hits cover the probe layer, an
+ * unrefined clipmap hit on a sharp pixel does not. SSR composites on top.
  */
 
 #include "../common.sh"
@@ -79,6 +81,47 @@ vec3 SampleGGXVNDF(vec3 view_ts, float alpha, float u1, float u2)
 	p2 = (1.0 - s) * sqrt(max(0.0, 1.0 - p1 * p1)) + s * p2;
 	vec3 nh = p1 * t1 + p2 * t2 + sqrt(max(0.0, 1.0 - p1 * p1 - p2 * p2)) * vh;
 	return normalize(vec3(alpha * nh.x, alpha * nh.y, max(1e-6, nh.z)));
+}
+
+/// Mesh-exact walk length: mirrors pay the long range, gloss pays less than the old flat 16 m.
+float GiReflectionMeshRange(float roughness)
+{
+	float range_t = saturate(roughness / max(GI_REFLECTION_GATHER_FADE_START, 1e-4));
+	return min(mix(GI_REFLECTION_MESH_SDF_RANGE_SHARP, GI_REFLECTION_MESH_SDF_RANGE_GLOSS, range_t),
+	           GI_SHADOW_DISTANCE);
+}
+
+/// Snap a clipmap hit back onto a mesh SDF in a short window around the fattened t.
+/// The window is sized to the COARSER of the covering pair so a cascade-border hit,
+/// whose isosurface can sit a coarse voxel off the mesh, still contains the surface.
+SdfRayHit GiReflectionRefine(vec3 origin, vec3 direction, SdfRayHit clipmap_hit)
+{
+	vec3 hit_position = origin + direction * clipmap_hit.t;
+	float field_blend;
+	float voxel;
+	int level = SdfFindClipmapLevel(hit_position, field_blend, voxel);
+	float edge = max(field_blend, SdfClipmapEdgeBlend(level, hit_position, GI_REFLECTION_CASCADE_FADE_VOXELS));
+	if(edge > 0.0 && level + 1 < SDF_CLIPMAP_LEVEL_COUNT &&
+	   u_sdf_clipmap_levels[level + 1].w > 0.0)
+	{
+		voxel = max(voxel, u_sdf_clipmap_levels[level + 1].w);
+	}
+	voxel = max(voxel, 0.01);
+	float window = GI_REFLECTION_REFINE_VOXELS * voxel;
+	float t_min = max(clipmap_hit.t - window, 0.0);
+	float t_max = min(clipmap_hit.t + window, GI_SHADOW_DISTANCE);
+	if(t_min >= t_max)
+	{
+		return clipmap_hit;
+	}
+	SdfRayHit refined = SdfTraceInstances(origin, direction, t_min, t_max, GI_REFLECTION_REFINE_STEPS,
+	                                      GI_REFLECTION_TRACE_SURFACE_BIAS,
+	                                      GI_REFLECTION_TRACE_RELAXATION, true);
+	if(refined.hit)
+	{
+		return refined;
+	}
+	return clipmap_hit;
 }
 
 void main()
@@ -162,29 +205,27 @@ void main()
 	voxel = max(voxel, 0.01);
 	float lift = max(0.0, -field) + GI_PROBE_TRACE_SURFACE_BIAS * voxel;
 	vec3 origin = world_position + normal * lift;
-	// Beyond the outermost cascade a world ray has nothing left to test against - the same
-	// bound the shadow rays derive (GI_SHADOW_DISTANCE); the probe cage answers past it.
-	//
-	// DIRECT two-tier call rather than SdfTraceRayEx: that helper hard-caps its detail tier
-	// at GI_MESH_SDF_TRACE_RANGE (2 m, the gather's cost bound), and clipmap-tier hits
-	// inflate silhouettes by design - acceptable inside an irradiance estimate, directly
-	// visible in a mirror IMAGE (fattened boxes and silhouette halos, measured round 5).
-	// Reflection rays therefore run mesh-exact SDFs to the finest cascade's full extent and
-	// touch the clipmap only past it, where the confidence formula below guarantees the lobe
-	// footprint already spans multiple voxels. Expansion NEVER (-1) on the clipmap segment:
-	// the same image-vs-estimate argument (round 3); shadow rays made the same trade, and the
-	// visibility-gated light voxels at the hit remain the leak defence.
-	SdfRayHit hit = SdfTraceInstances(origin, reflected, 0.0,
-	                                  min(GI_REFLECTION_MESH_SDF_RANGE, GI_SHADOW_DISTANCE),
-	                                  GI_TRACE_MAX_STEPS, GI_PROBE_TRACE_SURFACE_BIAS,
-	                                  GI_PROBE_TRACE_RELAXATION, true);
+	// Adaptive mesh-exact range, then clipmap as a FINDER (expand never: image vs estimate,
+	// round 3). A clipmap hit is refined in a short instance-grid window so distant
+	// silhouettes snap back to the mesh; an unrefined clipmap hit is not drawn on sharp
+	// pixels (coverage 0, authored probes show through). Acceptance is contact-only -
+	// the gather cone is what fattened the 16 m handover into boxes.
+	float mesh_range = GiReflectionMeshRange(roughness);
+	SdfRayHit hit = SdfTraceInstances(origin, reflected, 0.0, mesh_range, GI_TRACE_MAX_STEPS,
+	                                  GI_REFLECTION_TRACE_SURFACE_BIAS,
+	                                  GI_REFLECTION_TRACE_RELAXATION, true);
 	if(!hit.hit)
 	{
-		hit = SdfTraceClipmap(origin, reflected, GI_REFLECTION_MESH_SDF_RANGE, GI_SHADOW_DISTANCE,
-		                      GI_TRACE_MAX_STEPS, GI_PROBE_TRACE_SURFACE_BIAS,
-		                      GI_PROBE_TRACE_RELAXATION, true, -1.0);
+		hit = SdfTraceClipmap(origin, reflected, mesh_range, GI_SHADOW_DISTANCE, GI_TRACE_MAX_STEPS,
+		                      GI_REFLECTION_TRACE_SURFACE_BIAS, GI_REFLECTION_TRACE_RELAXATION, true,
+		                      -1.0);
+		if(hit.hit && !hit.exhausted)
+		{
+			hit = GiReflectionRefine(origin, reflected, hit);
+		}
 	}
 	vec3 radiance;
+	float coverage = 1.0;
 	if(hit.hit)
 	{
 		vec3 hit_position = origin + reflected * hit.t;
@@ -193,7 +234,9 @@ void main()
 		{
 			hit_normal = -hit_normal;
 		}
-		if(hit.exhausted || !GiLightVoxelRead(hit_position, hit_normal, radiance))
+		if(hit.exhausted ||
+		   !GiLightVoxelReadFade(hit_position, hit_normal, rough_value,
+		                         GI_REFLECTION_CASCADE_FADE_VOXELS, radiance))
 		{
 			// A gave-up march ("hits" mid-air when a grazing far ray exhausts its budget) or
 			// an unmeasured coarse face must NOT answer with black. The gather's
@@ -204,11 +247,15 @@ void main()
 			// energy-plausible stand-in; faces MEASURED dark stay honestly dark.
 			radiance = rough_value;
 		}
-		// NO cage blend for gloss: the light-voxel read above is already the world tier's
-		// prefilter (25 cm blocks, naturally soft), and per-pixel cage reads stamp the 2 m
-		// lattice's interpolation pattern into the image - blotches, not blur, nothing like
-		// SSR's filtered spread (measured rounds 2 and 8). Blur beyond voxel scale comes from
-		// the stochastic lobe integration and the continuity fade into the gather value.
+		if(hit.instance_index == SDF_NO_INSTANCE && !hit.exhausted)
+		{
+			// Unrefined clipmap isosurface: legitimate lighting for satin, a wrong silhouette
+			// on a mirror. Fade coverage out so the probe layer replaces the blob.
+			float shape_ok = smoothstep(GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF * 0.5,
+			                            GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF, roughness);
+			coverage = shape_ok;
+			radiance = mix(eval_radiance_sh(s_gi_env_sh, reflected), radiance, shape_ok);
+		}
 	}
 	else
 	{
@@ -223,8 +270,6 @@ void main()
 	// (mirror fade, footprint confidence) removed energy at the sharp end, which read as
 	// "brightness rises with roughness" next to SSR's constant-energy blur (measured, round
 	// 10). Roughness now changes only WHERE the stochastic rays go, exactly as it should.
-	// Coarse voxel detail at mirror roughness is bounded by mesh-exact silhouettes and the
-	// temporal integration rather than hidden by darkness, and SSR still composites its
-	// crisp result on top.
-	gl_FragColor = vec4(mix(radiance, rough_value, gloss_blend), 1.0);
+	// Alpha is coverage for the probe-layer composite, not energy.
+	gl_FragColor = vec4(mix(radiance, rough_value, gloss_blend), coverage);
 }

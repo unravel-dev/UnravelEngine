@@ -4,9 +4,11 @@ $input v_texcoord0
  * GI reflection temporal integrator: folds each frame's single stochastic GGX sample into a
  * reprojected running mean, so the lobe genuinely integrates over
  * GI_REFLECTION_TEMPORAL_FRAMES instead of shimmering. History is clamped to the 3x3
- * neighbourhood bounds of THIS frame's samples - the standard TAA guard - so disoccluded or
- * moved reflections cannot ghost past one frame, while in-lobe jitter noise averages out.
- * Alpha carries the accumulated confidence for the composite blend.
+ * neighbourhood bounds of THIS frame's GEOMETRIC samples - the standard TAA guard - so
+ * disoccluded or moved reflections cannot ghost past one frame, while in-lobe jitter noise
+ * averages out. Raw alpha is coverage (mesh-exact / refined hit). A coverage-0 sample is
+ * not an image: history is held so a refined mean is not bleached by sky, and a zero count
+ * lets the composite reveal the authored probe layer.
  */
 
 #include "../common.sh"
@@ -29,7 +31,10 @@ void main()
 	BRANCH
 	if(depth >= 1.0 || u_gi_refl_temporal.x < 0.5)
 	{
-		gl_FragColor = curr;
+		// No history: alpha is coverage. A geometric sample starts the running mean at 1;
+		// a coverage-0 sample stays 0 so the composite reveals probes.
+		float start = curr.w >= 0.5 ? 1.0 : curr.w;
+		gl_FragColor = vec4(curr.xyz, start);
 		return;
 	}
 	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(depth)));
@@ -40,19 +45,38 @@ void main()
 	BRANCH
 	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
 	{
-		gl_FragColor = curr;
+		float start = curr.w >= 0.5 ? 1.0 : curr.w;
+		gl_FragColor = vec4(curr.xyz, start);
 		return;
 	}
 	vec2 texel = u_gi_refl_temporal.yz;
+	vec4 history_texel = texture2DLod(s_refl_history, prev_uv, 0.0);
+	BRANCH
+	if(curr.w < 0.5)
+	{
+		// Not an image this frame. Hold the geometric mean we already have; do not clamp
+		// against a sky/empty neighbourhood that would bleach a refined history.
+		gl_FragColor = vec4(history_texel.xyz, history_texel.w);
+		return;
+	}
+	// Neighbourhood bounds from geometric samples only, so a coverage-0 neighbour cannot
+	// shrink the AABB of a refined hit.
 	vec4 lo = curr;
 	vec4 hi = curr;
 	for(int y = -1; y <= 1; ++y)
 	{
 		for(int x = -1; x <= 1; ++x)
 		{
+			if(x == 0 && y == 0)
+			{
+				continue;
+			}
 			vec4 s = texture2DLod(s_refl_raw, uv + vec2(float(x), float(y)) * texel, 0.0);
-			lo = min(lo, s);
-			hi = max(hi, s);
+			if(s.w >= 0.5)
+			{
+				lo = min(lo, s);
+				hi = max(hi, s);
+			}
 		}
 	}
 	// RUNNING MEAN, not a fixed EMA: alpha carries the accumulated frame count (the SSR
@@ -60,8 +84,8 @@ void main()
 	// about a quarter of the sample spread at weight 1/8 - which read as reflections that
 	// never converge exactly where the stochastic spread is widest (measured, round 13).
 	// The count clamp keeps steady-state responsiveness at one over the settings window.
-	vec4 history_texel = texture2DLod(s_refl_history, prev_uv, 0.0);
-	vec3 history_rgb = clamp(history_texel.xyz, lo.xyz, hi.xyz);
-	float count = min(history_texel.w, max(u_gi_refl_temporal.w - 1.0, 1.0)) + 1.0;
+	vec3 history_rgb = history_texel.w >= 0.5 ? clamp(history_texel.xyz, lo.xyz, hi.xyz) : curr.xyz;
+	float prev_count = history_texel.w >= 0.5 ? history_texel.w : 0.0;
+	float count = min(prev_count, max(u_gi_refl_temporal.w - 1.0, 1.0)) + 1.0;
 	gl_FragColor = vec4(mix(history_rgb, curr.xyz, 1.0 / count), count);
 }

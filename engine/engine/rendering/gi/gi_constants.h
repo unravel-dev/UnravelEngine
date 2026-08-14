@@ -294,16 +294,45 @@
       " must track moving content faster than irradiance, so one cycle, ~130 ms at 60 Hz."         \
       " The temporal pass clamps history to the 3x3 neighbourhood of the current frame's"         \
       " samples, so stale content cannot outlive a frame regardless of this length")               \
-    X(GI_REFLECTION_MESH_SDF_RANGE, 16.0f,                                                         \
-      "meters", "derived: the mesh-SDF detail tier for REFLECTION rays runs to the finest"         \
-      " cascade's full extent (128 voxels x 0.125 m = 16 m). The gather caps its detail tier"     \
-      " at 2 m (GI_MESH_SDF_TRACE_RANGE) because 64 cones amortize the cost and irradiance"        \
-      " hides silhouette error - a reflection is ONE ray per pixel presenting an IMAGE, where"     \
-      " clipmap-tier inflation is directly visible at any distance (measured: fattened box"        \
-      " reflections + silhouette halos on a mirror floor, round 5). Past level 0's extent any"    \
-      " lobe wide enough to carry confidence has a cone footprint spanning multiple voxels,"       \
-      " so the clipmap legitimately answers. The instance grid walk is the cost knob: only"        \
-      " sharp-tier pixels whose screen trace missed pay it")                                       \
+    X(GI_REFLECTION_MESH_SDF_RANGE_SHARP, 40.0f,                                                   \
+      "meters", "derived: a mirror is one image-ray, not 64 gather cones, so the mesh-exact"       \
+      " walk may run past level 0 (16 m). 40 m covers the 32 m level-1 cube with margin and"      \
+      " stays inside GI_SHADOW_DISTANCE. Average cost is held by the gloss end dropping"           \
+      " below the old flat 16 m, so only sharp pixels pay the long grid walk")                     \
+    X(GI_REFLECTION_MESH_SDF_RANGE_GLOSS, 8.0f,                                                    \
+      "meters", "derived: at GI_REFLECTION_GATHER_FADE_START the GGX lobe already spans"           \
+      " clipmap voxels, so mesh-exact silhouettes stop mattering. 8 m is 4x the gather's"          \
+      " 2 m contact bound and half the old flat 16 m - the budget that funds the sharp end")       \
+    X(GI_REFLECTION_TRACE_SURFACE_BIAS, 0.25f,                                                     \
+      "voxels of the answering field", "derived: half of GI_PROBE_TRACE_SURFACE_BIAS."             \
+      " Lumen prefers a bit of leak over fattened silhouettes on reflections [S22 p695];"          \
+      " a quarter-voxel still clears quantisation without the half-voxel halo the image"           \
+      " showed past the mesh-SDF handover")                                                       \
+    X(GI_REFLECTION_TRACE_RELAXATION, 0.0f,                                                        \
+      "acceptance growth per unit t", "derived: zero - a reflection is an IMAGE. The gather"      \
+      " cone fattens distant surfaces by construction (the 16 m blob); exhaustion already"        \
+      " falls back to the gather, which is the safe miss for this pass")                           \
+    X(GI_REFLECTION_REFINE_VOXELS, 2.0f,                                                           \
+      "voxels of the answering clipmap level", "derived: a conservative clipmap hit sits"         \
+      " within about one voxel of the mesh surface it fattened; two voxels is the window"         \
+      " that still contains that surface, so a short instance-grid walk can snap the"             \
+      " silhouette without re-tracing the whole ray")                                              \
+    X(GI_REFLECTION_REFINE_STEPS, 16,                                                              \
+      "steps", "derived: the refine window is a few metres (2 x coarsest-in-range voxel);"        \
+      " 16 sphere-trace steps cover it with margin and leave the 64-step budget on the"           \
+      " long clipmap finder")                                                                     \
+    X(GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF, 0.15f,                                                   \
+      "GGX roughness", "derived: below this the lobe is tight enough that a clipmap voxel"        \
+      " (25 cm at the 16 m handover) is a visible wrong silhouette. Unrefined clipmap hits"       \
+      " then write zero coverage so the authored probe layer shows through. Above it the"         \
+      " stochastic spread hides voxel-scale error and the clipmap may still light the pixel")     \
+    X(GI_REFLECTION_CASCADE_FADE_VOXELS, 8.0f,                                                     \
+      "voxels of the finer covering level", "derived: the distance field already fades over"      \
+      " blend_voxels = 4, but lighting does not - GiLightVoxelRead returns the first measured"    \
+      " level, so a mirror shows a knife-edge where resolution doubles and occupancy holes"      \
+      " pop in as dark spots (camera-centred cascade boxes projected through the floor)."        \
+      " Twice the field band is 1 m at level 0 / 2 m at level 1: wide enough to hide one"        \
+      " coarse voxel of isosurface disagreement. Extra taps only inside that band")              \
     X(GI_REFLECTION_GATHER_FADE_START, 0.3f,                                                       \
       "GGX roughness", "derived: 0.75 x GI_REFLECTION_ROUGH_CUTOFF. The traced tiers now"          \
       " SPREAD with roughness (screen hits average a GGX-cone disk, world hits blend toward"       \

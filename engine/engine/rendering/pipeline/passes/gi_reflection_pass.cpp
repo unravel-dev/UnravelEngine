@@ -191,8 +191,10 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::set_state(BGFX_STATE_DEFAULT);
         temporal_program_.program->end();
     }
-    // COMPOSITE: full-weight OVER the authored probe layer (energy constant across
-    // roughness). SSR composites the sharp on-screen result on top afterwards.
+    // COMPOSITE: src-alpha OVER the authored probe layer. Coverage is 1 for mesh-exact
+    // / refined hits and 0 for an unrefined clipmap on a sharp pixel, so probes remain
+    // the far-field image where the clipmap isosurface would be a wrong silhouette.
+    // SSR composites the sharp on-screen result on top afterwards.
     {
         gfx::render_pass cpass("GI/Reflections Composite");
         cpass.bind(params.output.get());

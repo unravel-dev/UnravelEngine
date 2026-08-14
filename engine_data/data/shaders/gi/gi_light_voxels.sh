@@ -110,6 +110,71 @@ ivec3 GiLightVoxelTexel(ivec3 voxel, int level, int face)
 /// owns keeping stage 10 free.
 SAMPLER3D(s_light_voxels, 10);
 
+/// One cascade level's light-voxel read. False when that level has no measured face here.
+bool GiLightVoxelReadLevel(vec3 position, vec3 normal, int level, out vec3 out_radiance)
+{
+	out_radiance = vec3_splat(0.0);
+	vec4 level_data = u_sdf_clipmap_levels[level];
+	if(!(level_data.w > 0.0))
+	{
+		return false;
+	}
+	int res = u_light_voxel_resolution;
+	float attr_voxel_size = level_data.w * 2.0;
+	// TRILINEAR over the 2x2x2 cell neighbourhood: a nearest read hands neighbouring rays
+	// voxel-quantised radiance, which the gather turns into probe-tile blotches around any
+	// strong local emitter. The volume stores premultiplied measurements (rgb = 0 wherever
+	// a = 0), so interpolating (rgb, a) and normalising by the filtered alpha afterwards is
+	// the weight-correct mean over measured cells - empty neighbours cost weight, never
+	// energy. Hardware REPEAT in xy lands the continuous cell coordinate on the toroidal
+	// slot space (slot = cell mod res) including across the wrap seam; z is packed in face
+	// slabs, so its two taps are fetched at texel centres and lerped manually. The
+	// window-edge clamp keeps the neighbourhood inside this level's resident cells - past
+	// it the wrap would answer with cells from the far side of the window. The level origin
+	// is snapped to attribute-voxel multiples, so base_cell is exact.
+	vec3 base_cell = floor(level_data.xyz / attr_voxel_size + vec3_splat(0.5));
+	vec3 cell = clamp(position / attr_voxel_size,
+	                  base_cell + vec3_splat(0.5),
+	                  base_cell + vec3_splat(float(res) - 0.5));
+	vec2 uv = cell.xy / float(res);
+	float z_cell = cell.z - 0.5;
+	float z_base = floor(z_cell);
+	float z_frac = z_cell - z_base;
+	int z_biased = int(z_base) + 1048576;
+	int z0 = z_biased % res;
+	int z1 = (z_biased + 1) % res;
+	float depth_texels = float(res * SDF_CLIPMAP_LEVEL_COUNT * 6);
+	vec3 radiance = vec3_splat(0.0);
+	float weight_sum = 0.0;
+	// Only the sign-matching face of each axis can face the normal (its facing weight is
+	// |n[axis]|, the opposite face's is zero), so index the three candidates directly
+	// instead of testing all six.
+	for(int axis = 0; axis < 3; ++axis)
+	{
+		float component = axis == 0 ? normal.x : (axis == 1 ? normal.y : normal.z);
+		float facing = abs(component);
+		if(facing <= 0.0)
+		{
+			continue;
+		}
+		int face = axis * 2 + (component < 0.0 ? 1 : 0);
+		int slab = (level * 6 + face) * res;
+		vec4 s0 =
+		    texture3DLod(s_light_voxels, vec3(uv, (float(slab + z0) + 0.5) / depth_texels), 0.0);
+		vec4 s1 =
+		    texture3DLod(s_light_voxels, vec3(uv, (float(slab + z1) + 0.5) / depth_texels), 0.0);
+		vec4 filtered = mix(s0, s1, z_frac);
+		radiance += filtered.xyz * facing;
+		weight_sum += filtered.a * facing;
+	}
+	if(weight_sum <= 1e-4)
+	{
+		return false;
+	}
+	out_radiance = GiFiniteOrZero(radiance / weight_sum);
+	return true;
+}
+
 /**
  * Outgoing radiance the light voxels hold at a surface point: three face slabs facing
  * @p normal, blended by facing x exposure and renormalised over what was measured.
@@ -135,64 +200,65 @@ bool GiLightVoxelRead(vec3 position, vec3 normal, out vec3 out_radiance)
 	{
 		return false;
 	}
-	int res = u_light_voxel_resolution;
-	float depth_texels = float(res * SDF_CLIPMAP_LEVEL_COUNT * 6);
 	for(int level = finest; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
 	{
-		vec4 level_data = u_sdf_clipmap_levels[level];
-		if(!(level_data.w > 0.0))
+		if(GiLightVoxelReadLevel(position, normal, level, out_radiance))
 		{
-			continue;
+			return true;
 		}
-		float attr_voxel_size = level_data.w * 2.0;
-		// TRILINEAR over the 2x2x2 cell neighbourhood: a nearest read hands neighbouring rays
-		// voxel-quantised radiance, which the gather turns into probe-tile blotches around any
-		// strong local emitter. The volume stores premultiplied measurements (rgb = 0 wherever
-		// a = 0), so interpolating (rgb, a) and normalising by the filtered alpha afterwards is
-		// the weight-correct mean over measured cells - empty neighbours cost weight, never
-		// energy. Hardware REPEAT in xy lands the continuous cell coordinate on the toroidal
-		// slot space (slot = cell mod res) including across the wrap seam; z is packed in face
-		// slabs, so its two taps are fetched at texel centres and lerped manually. The
-		// window-edge clamp keeps the neighbourhood inside this level's resident cells - past
-		// it the wrap would answer with cells from the far side of the window. The level origin
-		// is snapped to attribute-voxel multiples, so base_cell is exact.
-		vec3 base_cell = floor(level_data.xyz / attr_voxel_size + vec3_splat(0.5));
-		vec3 cell = clamp(position / attr_voxel_size,
-		                  base_cell + vec3_splat(0.5),
-		                  base_cell + vec3_splat(float(res) - 0.5));
-		vec2 uv = cell.xy / float(res);
-		float z_cell = cell.z - 0.5;
-		float z_base = floor(z_cell);
-		float z_frac = z_cell - z_base;
-		int z_biased = int(z_base) + 1048576;
-		int z0 = z_biased % res;
-		int z1 = (z_biased + 1) % res;
-		vec3 radiance = vec3_splat(0.0);
-		float weight_sum = 0.0;
-		// Only the sign-matching face of each axis can face the normal (its facing weight is
-		// |n[axis]|, the opposite face's is zero), so index the three candidates directly
-		// instead of testing all six.
-		for(int axis = 0; axis < 3; ++axis)
+	}
+	return false;
+}
+
+/**
+ * Reflection-safe cascade read: cross-fades the finer and coarser light voxels over
+ * @p fade_voxels of the finer level. The gather's first-success walk is correct for
+ * irradiance (a hole must not leak), but an IMAGE shows that walk as a knife-edge seam
+ * and as dark spots the moment the finer occupancy misses the blended isosurface.
+ *
+ * When only the coarser level is measured, the result fades in from @p fallback rather
+ * than slamming to the coarse voxel - that is the occupancy-hole pop.
+ */
+bool GiLightVoxelReadFade(vec3 position, vec3 normal, vec3 fallback, float fade_voxels,
+                          out vec3 out_radiance)
+{
+	out_radiance = vec3_splat(0.0);
+	float field_blend;
+	float answered_voxel;
+	int finest = SdfFindClipmapLevel(position, field_blend, answered_voxel);
+	if(finest >= SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		return false;
+	}
+	float fade = SdfClipmapEdgeBlend(finest, position, fade_voxels);
+	fade = fade * fade * (3.0 - 2.0 * fade);
+	vec3 fine_radiance;
+	bool ok_fine = GiLightVoxelReadLevel(position, normal, finest, fine_radiance);
+	vec3 coarse_radiance;
+	bool ok_coarse = false;
+	if(fade > 0.0 && (finest + 1) < SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		ok_coarse = GiLightVoxelReadLevel(position, normal, finest + 1, coarse_radiance);
+	}
+	if(ok_fine && ok_coarse)
+	{
+		out_radiance = mix(fine_radiance, coarse_radiance, fade);
+		return true;
+	}
+	if(ok_fine)
+	{
+		out_radiance = fine_radiance;
+		return true;
+	}
+	if(ok_coarse)
+	{
+		out_radiance = mix(fallback, coarse_radiance, fade);
+		return true;
+	}
+	for(int level = finest + 2; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
+	{
+		if(GiLightVoxelReadLevel(position, normal, level, out_radiance))
 		{
-			float component = axis == 0 ? normal.x : (axis == 1 ? normal.y : normal.z);
-			float facing = abs(component);
-			if(facing <= 0.0)
-			{
-				continue;
-			}
-			int face = axis * 2 + (component < 0.0 ? 1 : 0);
-			int slab = (level * 6 + face) * res;
-			vec4 s0 =
-			    texture3DLod(s_light_voxels, vec3(uv, (float(slab + z0) + 0.5) / depth_texels), 0.0);
-			vec4 s1 =
-			    texture3DLod(s_light_voxels, vec3(uv, (float(slab + z1) + 0.5) / depth_texels), 0.0);
-			vec4 filtered = mix(s0, s1, z_frac);
-			radiance += filtered.xyz * facing;
-			weight_sum += filtered.a * facing;
-		}
-		if(weight_sum > 1e-4)
-		{
-			out_radiance = GiFiniteOrZero(radiance / weight_sum);
 			return true;
 		}
 	}

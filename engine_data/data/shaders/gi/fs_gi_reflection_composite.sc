@@ -33,7 +33,8 @@ void main()
 	BRANCH
 	if(center_depth >= 1.0)
 	{
-		// History alpha carries the accumulation COUNT; RBUFFER wants coverage.
+		// History alpha is the accumulation COUNT, or 0 when no geometric sample has
+		// landed (unrefined clipmap on a sharp pixel). RBUFFER wants coverage.
 		gl_FragColor = vec4(center.xyz, saturate(center.w));
 		return;
 	}

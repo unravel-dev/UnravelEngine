@@ -23,8 +23,9 @@ namespace unravel
  * off screen or behind the camera. Screen space belongs to SSR, which composites over this
  * pass with its own spread and fades - this pass never traces the screen. Roughness-tiered:
  * wide lobes reuse last frame's resolved gather, sharper ones trace the SDF world tier
- * (mesh-exact near range, light voxels at hits). Everything is
- * owned by gi_constants; the pass has no tuning surface beyond its enable.
+ * (roughness-adaptive mesh-exact range, clipmap finder + mesh refine, light voxels
+ * at snapped hits; unrefined clipmap hits on sharp pixels leave the authored probes).
+ * Everything is owned by gi_constants; the pass has no tuning surface beyond its enable.
  */
 class gi_reflection_pass
 {

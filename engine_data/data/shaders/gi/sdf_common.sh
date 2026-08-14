@@ -414,6 +414,33 @@ int SdfFindClipmapLevel(vec3 world_position, out float out_blend, out float out_
 	return SDF_CLIPMAP_LEVEL_COUNT;
 }
 
+/// How far @p world_position sits into the cross-fade out of @p index, for a caller-chosen
+/// band width. 0 = well inside the level, 1 = on the face (about to lose coverage).
+/// The field fade uses u_sdf_clipmap_blend_voxels; reflection lighting uses a wider band
+/// so a doubled voxel size does not read as a seam.
+float SdfClipmapEdgeBlend(int index, vec3 world_position, float fade_voxels)
+{
+	if(fade_voxels <= 0.0 || (index + 1) >= SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		return 0.0;
+	}
+	if(!(u_sdf_clipmap_levels[index + 1].w > 0.0))
+	{
+		return 0.0;
+	}
+	vec4 level = u_sdf_clipmap_levels[index];
+	if(!(level.w > 0.0))
+	{
+		return 0.0;
+	}
+	vec3 grid = (world_position - level.xyz) / level.w;
+	vec3 to_low = grid - vec3_splat(0.5);
+	vec3 to_high = vec3_splat(u_sdf_clipmap_resolution - 0.5) - grid;
+	vec3 nearest_face = min(to_low, to_high);
+	float edge_distance = min(nearest_face.x, min(nearest_face.y, nearest_face.z));
+	return 1.0 - clamp(edge_distance / fade_voxels, 0.0, 1.0);
+}
+
 /**
  * Samples the global clipmap at a WORLD position, returning a world-space distance, and reports
  * the voxel size of the cascade that answered.
