@@ -107,7 +107,7 @@ auto editing_manager::init(rtti::context& ctx) -> bool
     ev.on_play_before_begin.connect(sentinel_, 1000, this, &editing_manager::on_play_before_begin);
     ev.on_play_begin.connect(sentinel_, 1000, this, &editing_manager::on_play_begin);
     ev.on_play_after_end.connect(sentinel_, -1000, this, &editing_manager::on_play_after_end);
-    ev.on_frame_update.connect(sentinel_, 1000, this, &editing_manager::on_frame_update);
+    ev.on_frame_update.connect(sentinel_, frame_update_priority::editing, this, &editing_manager::on_frame_update);
     ev.on_script_recompile.connect(sentinel_, 1000, this, &editing_manager::on_script_recompile);
 
     return true;

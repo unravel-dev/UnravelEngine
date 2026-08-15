@@ -16,7 +16,7 @@ auto play_mode::init(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
     auto& ev = ctx.get_cached<events>();
-    ev.on_frame_update.connect(sentinel_, 10000, this, &play_mode::on_frame_update);
+    ev.on_frame_update.connect(sentinel_, frame_update_priority::play_mode, this, &play_mode::on_frame_update);
     return true;
 }
 

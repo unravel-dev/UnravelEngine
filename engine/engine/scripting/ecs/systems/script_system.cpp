@@ -264,9 +264,16 @@ auto script_system::init(rtti::context& ctx, const cmd_line::parser& parser) -> 
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
     auto& ev = ctx.get_cached<events>();
-    ev.on_frame_update.connect(sentinel_, this, &script_system::on_frame_update);
+    // Scripts run after the scene-system band on purpose: animation_system
+    // rewrites every animated bone's local transform, so IK and other bone
+    // writes issued from OnUpdate must come after it to survive the frame.
+    // See frame_update_priority in engine/events.h.
+    ev.on_frame_update.connect(sentinel_, frame_update_priority::scripts, this, &script_system::on_frame_update);
     ev.on_frame_fixed_update.connect(sentinel_, this, &script_system::on_frame_fixed_update);
-    ev.on_frame_update.connect(sentinel_, -100000, this, &script_system::on_frame_late_update);
+    ev.on_frame_update.connect(sentinel_,
+                               frame_update_priority::scripts_late,
+                               this,
+                               &script_system::on_frame_late_update);
     ev.on_play_begin.connect(sentinel_, -1000, this, &script_system::on_play_begin);
     ev.on_play_end.connect(sentinel_, 1000, this, &script_system::on_play_end);
     ev.on_pause.connect(sentinel_, 100, this, &script_system::on_pause);

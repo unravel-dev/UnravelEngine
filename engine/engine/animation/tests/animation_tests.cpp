@@ -8,8 +8,10 @@
  * These pin the correctness fixes from the 2026-08 animation review:
  * blend-space blending (the in-place alias bug produced the last clip's raw
  * pose), blend-space time advance, root-motion loop/wrap accounting, the
- * stop()/replay teleport, weight blending of root motion results, and the
+ * stop()/replay teleport, weight blending of root motion results, the
  * blend space parameter edge cases.
+ *
+ * The IK solvers have their own harness - see the ik_tests target.
  */
 
 #include <engine/animation/animation_blend_space.h>

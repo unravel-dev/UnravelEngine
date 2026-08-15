@@ -786,30 +786,43 @@ auto handle_inverse_kinematics(entt::handle selection, entt::handle center, edit
     }
 
     auto& center_transform_comp = center.get<transform_component>();
+    const math::vec3 target = center_transform_comp.get_position_global();
+
+    // No pole: the solvers keep the chain's current bend plane, so dragging
+    // rotates the limb the way the artist expects.
+    //
+    // A pole must NOT be derived from the gizmo here. setup_gizmo_pivot copies
+    // the active selection's whole global transform - rotation included - onto
+    // the gizmo every frame, and during IK the active selection is the end
+    // effector. A position solve rotates the effector (its parents turn and it
+    // rides along), the gizmo re-copies that rotation next frame, and the pole
+    // it feeds back rotates the chain further: the limb spins. Past ~90 degrees
+    // of bend it spins hard, because that is where the pole's component
+    // perpendicular to the root->end axis collapses and flips sign.
+    const ik_pole pole{};
+
+    if(em.ik_data.num_nodes <= 0)
+    {
+        return false;
+    }
+    const auto num_bones = size_t(em.ik_data.num_nodes);
+
+    ik_solver_params params;
+    // Interactive dragging: iterate harder than the runtime default, the cost is
+    // paid only while a shortcut is held.
+    params.max_iterations = 100;
 
     if(ImGui::IsKeyDown(shortcuts::ik_ccd))
     {
-        return ik_set_position_ccd(selection,
-                                   center_transform_comp.get_position_global(),
-                                   math::vec3(0.f),
-                                   em.ik_data.num_nodes,
-                                   100);
+        return ik_set_position_ccd(selection, target, pole, num_bones, params).applied;
     }
     if(ImGui::IsKeyDown(shortcuts::ik_fabrik))
     {
-        return ik_set_position_fabrik(selection,
-                                      center_transform_comp.get_position_global(),
-                                      math::vec3(0.f),
-                                      em.ik_data.num_nodes,
-                                      100);
+        return ik_set_position_fabrik(selection, target, pole, num_bones, params).applied;
     }
     if(ImGui::IsKeyDown(shortcuts::ik_two_bone))
     {
-        return ik_set_position_two_bone(selection,
-                                        center_transform_comp.get_position_global(),
-                                        center_transform_comp.get_z_axis_global(),
-                                        1.0f,
-                                        1.0f);
+        return ik_set_position_two_bone(selection, target, pole).applied;
     }
     return false;
 }

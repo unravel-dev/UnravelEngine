@@ -123,7 +123,7 @@ public class SampleCharacterController : ScriptComponent
     [Tooltip("Whether foot and hip IK should be evaluated.")]
     public bool ApplyFootIK = true;
 
-    [Tooltip("Bone chain length (root -> foot) used by FABRIK for legs.")]
+    [Tooltip("Unused by two-bone foot IK (always hip-knee-foot). Kept for inspector compatibility.")]
     public int FootChainLength = 2;
 
     [Tooltip("Foot height above the hips at which foot IK starts blending out.")]
@@ -175,8 +175,20 @@ public class SampleCharacterController : ScriptComponent
     [Range(0, 180)]
     public float MaxAimForwardAngle = 110.0f;
 
-    [Tooltip("Hand bone chain length (shoulder -> hand) used by FABRIK for arms.")]
+    [Tooltip("Unused by two-bone arm IK (always shoulder-elbow-hand). Kept for inspector compatibility.")]
     public int HandChainLength = 2;
+
+    [Tooltip("Ask the rig at startup which of the spine bone's local axes currently points " +
+             "along the character's forward, and aim along that. Rigs disagree about this " +
+             "and importers do not normalise it, so deriving it beats guessing. Uncheck to " +
+             "use SpineAimAxis exactly as authored.")]
+    public bool AutoResolveSpineAimAxis = true;
+
+    [Tooltip("Bone-local axis of the spine that should FACE the aim target, used when " +
+             "AutoResolveSpineAimAxis is off. Note this is NOT the axis the bone runs along " +
+             "(local +Y on Mixamo rigs): aiming a spine along its own length points the " +
+             "torso at the target and folds the character in half.")]
+    public Vector3 SpineAimAxis = Vector3.forward;
 
     // ---------------------------------------------------------------------
     // Bone references
@@ -236,6 +248,12 @@ public class SampleCharacterController : ScriptComponent
 
         ResolveBones();
         ResolveCamera();
+
+        // Which local axis is the chest's "front" is a property of how the rig was
+        // authored, not of the engine, so read it off the rig in its rest pose
+        // rather than assuming a convention.
+        if (AutoResolveSpineAimAxis && Spine.IsValid())
+            SpineAimAxis = IK.GetFacingAxis(Spine, transform.forward);
     }
 
     public override void OnUpdate()
@@ -500,43 +518,66 @@ public class SampleCharacterController : ScriptComponent
     // ---------------------------------------------------------------------
     // Foot IK
     // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// A resolved ground contact for one foot: where to put it, how to orient it,
+    /// and how strongly to apply both.
+    /// </summary>
+    private struct FootGoal
+    {
+        public Vector3 position;
+        public Vector3 normal;
+        public float verticalOffset;
+        public float weight;
+    }
+
     private void UpdateFootIK(float dt)
     {
         if (!Hips.IsValid())
             return;
 
-        bool leftHit = ProcessFoot(LeftFoot, ref leftFootBlend, dt, out Vector3 leftTarget, out float leftOffset);
-        bool rightHit = ProcessFoot(RightFoot, ref rightFootBlend, dt, out Vector3 rightTarget, out float rightOffset);
+        bool leftHit = ProcessFoot(LeftFoot, ref leftFootBlend, dt, out FootGoal left);
+        bool rightHit = ProcessFoot(RightFoot, ref rightFootBlend, dt, out FootGoal right);
 
         // Lower the hips by the deepest foot drop so bent knees look correct
         // on steps and slopes.
         float targetOffset = 0.0f;
-        if (leftHit) targetOffset = Mathf.Min(targetOffset, leftOffset);
-        if (rightHit) targetOffset = Mathf.Min(targetOffset, rightOffset);
-        hipsOffset = Mathf.Lerp(hipsOffset, targetOffset, HipsSmoothing);
+        if (leftHit) targetOffset = Mathf.Min(targetOffset, left.verticalOffset);
+        if (rightHit) targetOffset = Mathf.Min(targetOffset, right.verticalOffset);
+        hipsOffset = Mathf.Lerp(hipsOffset, targetOffset, SmoothingAlpha(HipsSmoothing, dt));
 
         Vector3 hipsPos = Hips.transform.position;
         Hips.transform.position = new Vector3(hipsPos.x, hipsPos.y + hipsOffset, hipsPos.z);
 
-
-        if (leftHit && LeftFoot.IsValid())
-        {
-            Vector3 kneePole = LeftFoot.transform.position + transform.forward + transform.up * 0.5f;
-            IK.SetIKPositionFabrik(LeftFoot, leftTarget, kneePole, FootChainLength);
-        }
-        if (rightHit && RightFoot.IsValid())
-        {
-            Vector3 kneePole = RightFoot.transform.position + transform.forward + transform.up * 0.5f;
-            IK.SetIKPositionFabrik(RightFoot, rightTarget, kneePole, FootChainLength);
-        }
-        
+        if (leftHit) ApplyFootGoal(LeftFoot, left);
+        if (rightHit) ApplyFootGoal(RightFoot, right);
     }
 
-    private bool ProcessFoot(Entity foot, ref float blend, float dt,
-                             out Vector3 target, out float verticalOffset)
+    private void ApplyFootGoal(Entity foot, FootGoal goal)
     {
-        target = Vector3.zero;
-        verticalOffset = 0.0f;
+        if (!foot.IsValid() || goal.weight <= 0.0f)
+            return;
+
+        // Pole in front of and above the foot so the knee always bends forward.
+        Vector3 kneePole = foot.transform.position + transform.forward + transform.up * 0.5f;
+
+        // Two-bone rather than FABRIK: hip-knee-foot is exactly the analytical
+        // case, so it lands on the target in a single pass instead of iterating
+        // toward it, and it cannot pick a different bend from one frame to the next.
+        if (!IK.SetIKPositionTwoBone(foot, goal.position, kneePole, goal.weight))
+            return;
+
+        // A position solve orients the thigh and shin, never the foot itself, so
+        // on its own the foot keeps the flat-ground orientation animation gave it
+        // and buries its toe in any slope. Tilt that animated orientation onto
+        // the ground normal.
+        Quaternion align = Quaternion.FromToRotation(Vector3.up, goal.normal);
+        IK.SetIKRotation(foot, align * foot.transform.rotation, goal.weight);
+    }
+
+    private bool ProcessFoot(Entity foot, ref float blend, float dt, out FootGoal goal)
+    {
+        goal = new FootGoal();
 
         if (!foot.IsValid())
             return false;
@@ -559,8 +600,13 @@ public class SampleCharacterController : ScriptComponent
         if (!hit.HasValue)
             return false;
 
-        target = hit.Value.point + Vector3.up * FootTargetYOffset;
-        verticalOffset = (target.y - footPos.y) * effectiveBlend;
+        goal.position = hit.Value.point + Vector3.up * FootTargetYOffset;
+        goal.normal = hit.Value.normal;
+        goal.verticalOffset = (goal.position.y - footPos.y) * effectiveBlend;
+        // Fade the IK weight rather than dragging the target part of the way
+        // down: a part-way target is a point in mid-air, so the foot would hover
+        // instead of planting.
+        goal.weight = effectiveBlend;
         return true;
     }
 
@@ -613,7 +659,16 @@ public class SampleCharacterController : ScriptComponent
         }
 
         if (spineIKWeight > 0.0f && Spine.IsValid())
-            IK.SetIKLookAtPosition(Spine, hitPoint, spineIKWeight);
+        {
+            // SpineAimAxis is the chest's FACING, not the axis the bone runs
+            // along - aiming a spine along its length points the torso at the
+            // target like a lance and folds the character in half. No up
+            // reference is passed, so the animated spine roll is preserved
+            // rather than overwritten. The cone limit is measured against the
+            // animated pose each frame, so the chest eases to a stop at it.
+            IK.SetIKAim(Spine, hitPoint, SpineAimAxis, Vector3.up, Vector3.zero,
+                        MaxAimForwardAngle, spineIKWeight);
+        }
 
         // Blend between leading / trailing hand as the aim direction sweeps
         // past the forward axis - avoids the "crossed arms" look.
@@ -638,25 +693,24 @@ public class SampleCharacterController : ScriptComponent
         rightHandWeight = Mathf.MoveTowards(rightHandWeight, targetRight, HandIKSpeed * dt);
         leftHandWeight  = Mathf.MoveTowards(leftHandWeight,  targetLeft,  HandIKSpeed * dt);
 
-            // Elbow poles. We bias slightly outward (character's right/left) and
-        // downward so the elbow always tucks sideways when aiming, instead of
-        // flipping behind the back or clipping through the chest.
+        // Elbow poles. We bias outward (character's right/left) and downward so
+        // the elbow always tucks sideways when aiming, instead of flipping
+        // behind the back or clipping through the chest.
         Vector3 rightElbowPole = transform.position + transform.right * 1.5f - transform.up * 0.25f;
         Vector3 leftElbowPole  = transform.position - transform.right * 1.5f - transform.up * 0.25f;
 
-
+        // Aim at the hit point at partial WEIGHT rather than solving toward a
+        // lerped target. Lerping the target points the arm at a spot in mid-air,
+        // so the elbow travels through poses the arm never actually holds; a
+        // weight blends between the animated pose and the fully aimed one.
         if (rightHandWeight > 0.0f && RightHand.IsValid())
         {
-            Vector3 current = RightHand.transform.position;
-            Vector3 blended = Vector3.Lerp(current, hitPoint, rightHandWeight);
-            IK.SetIKPositionFabrik(RightHand, blended, rightElbowPole, HandChainLength);
+            IK.SetIKPositionTwoBone(RightHand, hitPoint, rightElbowPole, rightHandWeight);
         }
 
         if (leftHandWeight > 0.0f && LeftHand.IsValid())
         {
-            Vector3 current = LeftHand.transform.position;
-            Vector3 blended = Vector3.Lerp(current, hitPoint, leftHandWeight);
-            IK.SetIKPositionFabrik(LeftHand, blended, leftElbowPole, HandChainLength);
+            IK.SetIKPositionTwoBone(LeftHand, hitPoint, leftElbowPole, leftHandWeight);
         }
     }
 
@@ -682,6 +736,18 @@ public class SampleCharacterController : ScriptComponent
                 return e;
         }
         return Entity.Invalid;
+    }
+
+    /// <summary>
+    /// Frame-rate independent equivalent of a fixed Lerp factor. A raw
+    /// Lerp(a, b, k) converges k per FRAME, so the hips dip is visibly stiffer
+    /// at 144Hz than at 60Hz; this converts k into the same rate per second.
+    /// </summary>
+    private static float SmoothingAlpha(float factorPerFrameAt60, float dt)
+    {
+        if (factorPerFrameAt60 <= 0.0f) return 0.0f;
+        if (factorPerFrameAt60 >= 1.0f) return 1.0f;
+        return 1.0f - Mathf.Pow(1.0f - factorPerFrameAt60, dt * 60.0f);
     }
 
     private void ResolveCamera()

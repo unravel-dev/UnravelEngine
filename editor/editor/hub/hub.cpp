@@ -374,7 +374,9 @@ hub::hub(rtti::context& ctx)
     auto& ev = ctx.get_cached<events>();
 
     ev.on_project_opened.connect(sentinel_, this, &hub::on_project_opened);
-    ev.on_frame_update.connect(sentinel_, this, &hub::on_frame_update);
+    // Drives the scene systems (animation included), so it must stay ahead of
+    // the script band - see frame_update_priority in engine/events.h.
+    ev.on_frame_update.connect(sentinel_, frame_update_priority::scene_systems, this, &hub::on_frame_update);
     ev.on_frame_before_render.connect(sentinel_, this, &hub::on_frame_before_render);
     ev.on_frame_render.connect(sentinel_, this, &hub::on_frame_render);
     ev.on_play_before_begin.connect(sentinel_, -998, this, &hub::on_play_before_begin);

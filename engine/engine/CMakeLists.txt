@@ -15,6 +15,12 @@ if(animation_tests_src)
     list(REMOVE_ITEM libsrc ${animation_tests_src})
 endif()
 
+set(IK_TESTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/rendering/ecs/systems/tests")
+file(GLOB_RECURSE ik_tests_src "${IK_TESTS_DIR}/*.cpp" "${IK_TESTS_DIR}/*.h")
+if(ik_tests_src)
+    list(REMOVE_ITEM libsrc ${ik_tests_src})
+endif()
+
 set(target_name engine)
 
 add_library(${target_name} ${libsrc} ${shader_files})
@@ -123,6 +129,23 @@ endif()
 if(animation_tests_src)
     set(target_name animation_tests)
     add_executable(${target_name} EXCLUDE_FROM_ALL ${animation_tests_src})
+
+    set_target_properties(${target_name} PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+    )
+
+    target_link_libraries(${target_name} PRIVATE engine)
+endif()
+
+###############################################################################################
+# IK solver validation harness. Not built by default; run it explicitly:
+#   cmake --build <build-dir> --target ik_tests
+#   <build-dir>/bin/ik_tests
+if(ik_tests_src)
+    set(target_name ik_tests)
+    add_executable(${target_name} EXCLUDE_FROM_ALL ${ik_tests_src})
 
     set_target_properties(${target_name} PROPERTIES
         CXX_STANDARD 20

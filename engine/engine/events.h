@@ -9,6 +9,40 @@
 namespace unravel
 {
 
+/**
+ * @brief Slot priorities for the frame events.
+ *
+ * hpp::event stores slots in a multimap ordered by descending priority, so a
+ * higher value runs earlier. Slots that share a priority fall back to
+ * registration order, which depends on whether a system connects from its
+ * constructor (ctx.add<>) or from init() - a distinction no caller should have
+ * to reason about. Anything with a real ordering contract states it here.
+ */
+struct frame_update_priority
+{
+    /// Play-mode state transitions. Must observe the frame before anyone else.
+    static constexpr int64_t play_mode = 10000;
+
+    /// Editor selection / gizmo bookkeeping.
+    static constexpr int64_t editing = 1000;
+
+    /// Default band: scene systems (transforms, cameras, models, animation,
+    /// probes), physics and audio. Ordering within the band is registration
+    /// order and is deliberately not contractual.
+    static constexpr int64_t scene_systems = 0;
+
+    /// Gameplay scripts. Runs AFTER the scene-system band so script code sees a
+    /// fully evaluated animation pose: animation_system rewrites every animated
+    /// bone's local transform, so bone writes made before it (IK, procedural
+    /// offsets) would be discarded in the same frame. Writes made here still
+    /// land before model_system's skinning pass, which runs in
+    /// on_frame_before_render.
+    static constexpr int64_t scripts = -1000;
+
+    /// Script LateUpdate - after every other frame-update consumer.
+    static constexpr int64_t scripts_late = -100000;
+};
+
 struct events
 {
     /// engine loop events
