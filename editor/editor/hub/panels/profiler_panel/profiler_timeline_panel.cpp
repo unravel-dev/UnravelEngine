@@ -26,7 +26,9 @@ namespace
 {
 
 constexpr float row_height = 20.0f;
-constexpr float lane_header_width = 120.0f;
+/// Floor for the thread label column, which otherwise sizes itself to the widest
+/// label. Keeps short names from cramping the lanes against the ruler.
+constexpr float lane_header_min_width = 120.0f;
 /// Total vertical space reserved for the frame histogram row (background + bars).
 constexpr float frame_bar_height = 92.0f;
 /// Stacked rows for managed heap and GPU memory (aligned to frame index axis).
@@ -1599,17 +1601,6 @@ void profiler_timeline_panel::draw_timeline()
         view_start_ns_ = center - view_duration_ns_ / 2.0;
     }
 
-    // -- Layout ----------------------------------------------------------
-    auto region = ImGui::GetContentRegionAvail();
-    float lane_content_width = region.x - lane_header_width;
-    if(lane_content_width < 10.0f)
-    {
-        return;
-    }
-
-    double ns_per_pixel = view_duration_ns_ / static_cast<double>(lane_content_width);
-    double view_end_ns = view_start_ns_ + view_duration_ns_;
-
     // -- Gather visible frames -------------------------------------------
     std::vector<const frame_snapshot*> visible_frames;
     gather_visible_frames(profiler, frame_count, selected_snap, visible_frames);
@@ -1630,17 +1621,86 @@ void profiler_timeline_panel::draw_timeline()
         return;
     }
 
-    // -- Compute total height (must match layout below + spacing between lanes) --
-    float total_height = ruler_height;
-    for(const auto& t : threads)
+    // Threads sharing a name collapse into one row, so a worker pool does not push
+    // everything under it off screen. Collected before layout because the label column
+    // sizes itself to them.
+    std::vector<thread_group> groups;
+    group_threads_by_name(threads, groups);
+
+    // -- Layout ----------------------------------------------------------
+    auto region = ImGui::GetContentRegionAvail();
+
+    // Size the label column to the widest label rather than hoping a fixed width fits:
+    // a pool label carries an arrow and a member count on top of the thread name, and
+    // "Physics Thread (15)" does not fit in the old 120px.
+    float widest_label = 0.0f;
+    for(const auto& group : groups)
+    {
+        // Always measured with the expanded arrow so the column does not jump width
+        // when a group is toggled.
+        const std::string label = group.members.size() > 1
+                                      ? fmt::format("v {} ({})", group.name, group.members.size())
+                                      : threads[group.members.front()].name;
+        widest_label = std::max(widest_label, ImGui::CalcTextSize(label.c_str()).x);
+    }
+
+    const float header_padding = ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetStyle().ItemSpacing.x + 6.0f;
+    // Upper bound keeps one long thread name from eating the timeline; the max() around
+    // it keeps the clamp well-formed in a very narrow panel.
+    const float header_width_max = std::max(lane_header_min_width, region.x * 0.35f);
+    const float header_width =
+        std::clamp(widest_label + header_padding, lane_header_min_width, header_width_max);
+
+    float lane_content_width = region.x - header_width;
+    if(lane_content_width < 10.0f)
+    {
+        return;
+    }
+
+    double ns_per_pixel = view_duration_ns_ / static_cast<double>(lane_content_width);
+    double view_end_ns = view_start_ns_ + view_duration_ns_;
+
+    // Depth is derived from timestamps and is not cheap; compute it once per thread and
+    // reuse it for both the height pass and the draw pass.
+    std::vector<float> lane_heights(threads.size(), 0.0f);
+    for(size_t i = 0; i < threads.size(); ++i)
     {
         const uint16_t layout_depth =
-            max_nesting_depth_for_thread_in_view(visible_frames, t.index, view_start_ns_, view_end_ns);
-        total_height += lane_height_for_depth(layout_depth);
+            max_nesting_depth_for_thread_in_view(visible_frames, threads[i].index, view_start_ns_, view_end_ns);
+        lane_heights[i] = lane_height_for_depth(layout_depth);
     }
-    if(threads.size() > 1)
+
+    // A group's summary strip is a single row; individual lanes keep their own depth.
+    const float merged_lane_height = lane_height_for_depth(0);
+
+    // -- Compute total height (must match layout below + spacing between lanes) --
+    float total_height = ruler_height;
+    size_t drawn_rows = 0;
+    for(const auto& group : groups)
     {
-        total_height += thread_lane_spacing * static_cast<float>(threads.size() - 1);
+        if(group.members.size() > 1)
+        {
+            total_height += merged_lane_height;
+            ++drawn_rows;
+
+            if(is_group_expanded(group.name))
+            {
+                for(const size_t member : group.members)
+                {
+                    total_height += lane_heights[member];
+                    ++drawn_rows;
+                }
+            }
+        }
+        else
+        {
+            total_height += lane_heights[group.members.front()];
+            ++drawn_rows;
+        }
+    }
+    if(drawn_rows > 1)
+    {
+        total_height += thread_lane_spacing * static_cast<float>(drawn_rows - 1);
     }
 
     float timeline_height = std::min(region.y * 0.65f,
@@ -1656,41 +1716,110 @@ void profiler_timeline_panel::draw_timeline()
     // Time ruler
     draw_time_ruler(view_start_ns_, sel_start, ns_per_pixel,
                     lane_content_width,
-                    ImVec2(base_pos.x + lane_header_width, base_pos.y));
+                    ImVec2(base_pos.x + header_width, base_pos.y));
     ImGui::Dummy(ImVec2(0, ruler_height));
 
     // -- Thread lanes ----------------------------------------------------
-    for(size_t ti = 0; ti < threads.size(); ++ti)
+    size_t row_index = 0;
+    const auto begin_row = [&](float lane_height) -> lane_context
     {
-        const auto& thread = threads[ti];
-        const uint16_t layout_depth =
-            max_nesting_depth_for_thread_in_view(visible_frames, thread.index, view_start_ns_, view_end_ns);
-        const float lane_height = lane_height_for_depth(layout_depth);
-
-        ImGui::Text("%s", thread.name.c_str());
-        ImGui::SameLine(lane_header_width);
-
+        ImGui::SameLine(header_width);
         ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
-
         draw_list->AddRectFilled(canvas_pos,
-            ImVec2(canvas_pos.x + lane_content_width, canvas_pos.y + lane_height),
-            IM_COL32(30, 30, 30, 255));
-
-        lane_context lc{canvas_pos, lane_content_width, lane_height,
-                        view_start_ns_, view_end_ns, ns_per_pixel};
-
-        draw_list->PushClipRect(canvas_pos,
-                                ImVec2(canvas_pos.x + lane_content_width, canvas_pos.y + lane_height),
-                                true);
-        draw_lane_events(lc, visible_frames, visible_hist_indices, selected_snap,
-                         thread.index, thread.name);
-        draw_lane_frame_boundaries(lc, visible_frames, selected_snap);
-        draw_list->PopClipRect();
-
+                                 ImVec2(canvas_pos.x + lane_content_width, canvas_pos.y + lane_height),
+                                 IM_COL32(30, 30, 30, 255));
+        return lane_context{canvas_pos, lane_content_width, lane_height,
+                            view_start_ns_, view_end_ns, ns_per_pixel};
+    };
+    const auto end_row = [&](float lane_height)
+    {
         ImGui::Dummy(ImVec2(0, lane_height));
-        if(ti + 1 < threads.size())
+        ++row_index;
+        if(row_index < drawn_rows)
         {
             ImGui::Dummy(ImVec2(0, thread_lane_spacing));
+        }
+    };
+
+    for(const auto& group : groups)
+    {
+        const bool is_pool = group.members.size() > 1;
+
+        if(!is_pool)
+        {
+            const auto& thread = threads[group.members.front()];
+            const float lane_height = lane_heights[group.members.front()];
+
+            ImGui::Text("%s", thread.name.c_str());
+
+            const lane_context lc = begin_row(lane_height);
+            draw_list->PushClipRect(lc.canvas_pos,
+                                    ImVec2(lc.canvas_pos.x + lane_content_width, lc.canvas_pos.y + lane_height),
+                                    true);
+            draw_lane_events(lc, visible_frames, visible_hist_indices, selected_snap,
+                             thread.index, thread.name);
+            draw_lane_frame_boundaries(lc, visible_frames, selected_snap);
+            draw_list->PopClipRect();
+
+            end_row(lane_height);
+            continue;
+        }
+
+        // Group header row: clicking anywhere in the label column toggles it, and the
+        // lane beside it always shows the combined activity so a collapsed pool still
+        // reads at a glance.
+        const bool expanded = is_group_expanded(group.name);
+        ImGui::PushID(group.name.c_str());
+        
+        const std::string header = fmt::format("{} {} ({})", expanded ? ICON_MDI_CHEVRON_DOWN : ICON_MDI_CHEVRON_RIGHT, group.name, group.members.size());
+        if(ImGui::Selectable(header.c_str(), false, ImGuiSelectableFlags_None,
+                             ImVec2(header_width - 4.0f, 0.0f)))
+        {
+            toggle_group_expanded(group.name);
+        }
+        ImGui::PopID();
+        if(ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%zu threads named \"%s\".\nClick to %s.\nThe strip shows how many were busy.",
+                              group.members.size(),
+                              group.name.c_str(),
+                              expanded ? "collapse" : "expand");
+        }
+
+        const lane_context group_lc = begin_row(merged_lane_height);
+        draw_list->PushClipRect(group_lc.canvas_pos,
+                                ImVec2(group_lc.canvas_pos.x + lane_content_width,
+                                       group_lc.canvas_pos.y + merged_lane_height),
+                                true);
+        draw_merged_lane(group_lc, visible_frames, threads, group);
+        draw_lane_frame_boundaries(group_lc, visible_frames, selected_snap);
+        draw_list->PopClipRect();
+        end_row(merged_lane_height);
+
+        if(!expanded)
+        {
+            continue;
+        }
+
+        for(size_t mi = 0; mi < group.members.size(); ++mi)
+        {
+            const auto& thread = threads[group.members[mi]];
+            const float lane_height = lane_heights[group.members[mi]];
+
+            // Every thread in a pool carries the same name, so the ordinal is the only
+            // thing that tells them apart.
+            ImGui::TextDisabled("  %zu", mi);
+
+            const lane_context lc = begin_row(lane_height);
+            draw_list->PushClipRect(lc.canvas_pos,
+                                    ImVec2(lc.canvas_pos.x + lane_content_width, lc.canvas_pos.y + lane_height),
+                                    true);
+            draw_lane_events(lc, visible_frames, visible_hist_indices, selected_snap,
+                             thread.index, thread.name);
+            draw_lane_frame_boundaries(lc, visible_frames, selected_snap);
+            draw_list->PopClipRect();
+
+            end_row(lane_height);
         }
     }
 
@@ -1716,7 +1845,7 @@ void profiler_timeline_panel::draw_timeline()
                 const ImGuiWindow* win = ImGui::GetCurrentWindowRead();
                 const double graph_left_d =
                     win != nullptr
-                        ? static_cast<double>(win->InnerRect.Min.x + lane_header_width)
+                        ? static_cast<double>(win->InnerRect.Min.x + header_width)
                         : static_cast<double>(io.MousePos.x);
                 double mouse_x = static_cast<double>(io.MousePos.x) - graph_left_d;
                 mouse_x = std::clamp(mouse_x, 0.0, static_cast<double>(lane_content_width));
@@ -1809,6 +1938,123 @@ void profiler_timeline_panel::collect_unique_threads(
                 out.push_back({ts.name, ts.thread_index, local_max});
             }
         }
+    }
+}
+
+void profiler_timeline_panel::group_threads_by_name(const std::vector<thread_entry>& threads,
+                                                    std::vector<thread_group>& out)
+{
+    out.reserve(threads.size());
+
+    for(size_t i = 0; i < threads.size(); ++i)
+    {
+        auto it = std::find_if(out.begin(),
+                               out.end(),
+                               [&](const thread_group& g) -> bool
+                               {
+                                   return g.name == threads[i].name;
+                               });
+
+        if(it != out.end())
+        {
+            it->members.push_back(i);
+        }
+        else
+        {
+            out.push_back(thread_group{threads[i].name, {i}});
+        }
+    }
+}
+
+void profiler_timeline_panel::draw_merged_lane(const lane_context& lc,
+                                               const std::vector<const frame_snapshot*>& visible_frames,
+                                               const std::vector<thread_entry>& threads,
+                                               const thread_group& group)
+{
+    const int columns = std::max(1, static_cast<int>(lc.lane_content_width));
+    merged_lane_occupancy_.assign(static_cast<size_t>(columns), 0);
+
+    for(const frame_snapshot* frame : visible_frames)
+    {
+        if(frame == nullptr)
+        {
+            continue;
+        }
+
+        for(const auto& ts : frame->threads)
+        {
+            const bool in_group = std::any_of(group.members.begin(),
+                                              group.members.end(),
+                                              [&](size_t m) -> bool
+                                              {
+                                                  return threads[m].index == ts.thread_index;
+                                              });
+            if(!in_group)
+            {
+                continue;
+            }
+
+            for(const auto& ev : ts.events)
+            {
+                // Top level only: a nested scope describes time the thread was already
+                // counted as busy for, and would push the column over the thread count.
+                if(ev.depth != 0 || ev.end_ns <= ev.start_ns)
+                {
+                    continue;
+                }
+
+                // Clamped as doubles before narrowing: a visible frame can still hold
+                // events far outside the view, and converting an out-of-range double to
+                // int is undefined rather than merely wrong.
+                const double max_column = static_cast<double>(columns);
+                const double x0 =
+                    std::clamp((static_cast<double>(ev.start_ns) - lc.view_start_ns) / lc.ns_per_pixel,
+                               -1.0,
+                               max_column + 1.0);
+                const double x1 =
+                    std::clamp((static_cast<double>(ev.end_ns) - lc.view_start_ns) / lc.ns_per_pixel,
+                               -1.0,
+                               max_column + 1.0);
+
+                const int first = std::clamp(static_cast<int>(std::floor(x0)), 0, columns);
+                const int last = std::clamp(static_cast<int>(std::ceil(x1)), 0, columns);
+
+                for(int c = first; c < last; ++c)
+                {
+                    ++merged_lane_occupancy_[static_cast<size_t>(c)];
+                }
+            }
+        }
+    }
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const auto member_count = static_cast<float>(group.members.size());
+
+    // Runs of equal occupancy become one rect; a busy pool is otherwise a thousand
+    // one-pixel draws per frame.
+    int run_start = 0;
+    while(run_start < columns)
+    {
+        const uint16_t busy = merged_lane_occupancy_[static_cast<size_t>(run_start)];
+        int run_end = run_start + 1;
+        while(run_end < columns && merged_lane_occupancy_[static_cast<size_t>(run_end)] == busy)
+        {
+            ++run_end;
+        }
+
+        if(busy > 0)
+        {
+            const float frac = std::min(1.0f, static_cast<float>(busy) / member_count);
+            const float height = std::max(2.0f, lc.lane_height * frac);
+            const auto alpha = static_cast<int>(110.0f + 130.0f * frac);
+
+            draw_list->AddRectFilled(
+                ImVec2(lc.canvas_pos.x + static_cast<float>(run_start), lc.canvas_pos.y + lc.lane_height - height),
+                ImVec2(lc.canvas_pos.x + static_cast<float>(run_end), lc.canvas_pos.y + lc.lane_height),
+                IM_COL32(90, 170, 110, alpha));
+        }
+
+        run_start = run_end;
     }
 }
 

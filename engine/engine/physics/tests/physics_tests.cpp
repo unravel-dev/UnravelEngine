@@ -467,6 +467,41 @@ void test_graph_live_list()
     check_eq(graph.live().size(), 0, "the backwards sweep drains the live list");
 }
 
+void test_graph_step_stamp()
+{
+    std::printf("test_graph_step_stamp\n");
+
+    graph_fixture fx;
+    test_graph graph(&resolve_test_links);
+
+    auto a = fx.spawn_body();
+    auto b = fx.spawn_body();
+    auto c = fx.spawn_body();
+
+    const uint32_t first = graph.advance_stamp();
+    check(first != 0, "a step stamp is never zero, so a value-initialised slot cannot look seen");
+    check_eq(graph.stamp(), first, "stamp() reports the open step");
+
+    const uint32_t id = graph.insert(a, b, false);
+    check_eq(graph.get(id).seen_stamp, first, "a pair inserted during a step counts as seen in it");
+
+    // Opening the next step is what makes last step's pairs stale - no pass over the
+    // pool, just a counter bump.
+    const uint32_t second = graph.advance_stamp();
+    check(second != first, "each step gets a distinct stamp");
+    check(graph.get(id).seen_stamp != second, "a pair not seen again is stale in the new step");
+
+    graph.get(id).seen_stamp = graph.stamp();
+    check_eq(graph.get(id).seen_stamp, second, "refreshing a pair marks it seen in the current step");
+
+    // A recycled slot must not inherit a stale stamp from its previous life.
+    graph.erase(id);
+    graph.advance_stamp();
+    const uint32_t recycled = graph.insert(a, c, false);
+    check_eq(recycled, id, "the pool recycles the freed slot");
+    check_eq(graph.get(recycled).seen_stamp, graph.stamp(), "a recycled slot is stamped for the current step");
+}
+
 void test_graph_clear_and_unresolvable()
 {
     std::printf("test_graph_clear_and_unresolvable\n");
@@ -1303,6 +1338,7 @@ int main()
     test_graph_erase_during_visit();
     test_graph_generation_guard();
     test_graph_live_list();
+    test_graph_step_stamp();
     test_graph_clear_and_unresolvable();
 
     test_entt_destroys_in_reverse_pool_order();

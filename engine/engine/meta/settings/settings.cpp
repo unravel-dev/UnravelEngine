@@ -487,6 +487,16 @@ REFLECT_INLINE(settings::physics_settings)
             entt::attribute{"tooltip",
                             "A cap for framerate-independent worst case scenario. No more than this many fixed "
                             "updates per frame."},
+        })
+        .data<&settings::physics_settings::solver_iterations>("solver_iterations"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "solver_iterations"},
+            entt::attribute{"pretty_name", "Solver Iterations"},
+            entt::attribute{"min", 1},
+            entt::attribute{"tooltip",
+                            "Constraint solver iterations per step. Solver time scales close to linearly with "
+                            "this. Lower values settle stacks less crisply; 4-6 is usually indistinguishable "
+                            "for piles of primitives."},
         });
 }
 
@@ -495,6 +505,7 @@ SAVE_INLINE(settings::physics_settings)
     try_save(ar, ser20::make_nvp("backend", obj.backend));
     try_save(ar, ser20::make_nvp("fixed_timestep", obj.fixed_timestep));
     try_save(ar, ser20::make_nvp("max_fixed_steps", obj.max_fixed_steps));
+    try_save(ar, ser20::make_nvp("solver_iterations", obj.solver_iterations));
 }
 
 LOAD_INLINE(settings::physics_settings)
@@ -502,6 +513,7 @@ LOAD_INLINE(settings::physics_settings)
     try_load(ar, ser20::make_nvp("backend", obj.backend));
     try_load(ar, ser20::make_nvp("fixed_timestep", obj.fixed_timestep));
     try_load(ar, ser20::make_nvp("max_fixed_steps", obj.max_fixed_steps));
+    try_load(ar, ser20::make_nvp("solver_iterations", obj.solver_iterations));
 }
 
 REFLECT_INLINE(settings::layer_settings)

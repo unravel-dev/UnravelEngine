@@ -40,6 +40,7 @@
 // #endif
 
 #ifdef BULLET_MT
+#include "LinearMath/btQuickprof.h"
 #include "LinearMath/btThreads.h"
 #include <thread>
 #endif
@@ -388,6 +389,74 @@ void cleanup_task_scheduler()
 #endif
 }
 
+// --- Bullet internal profiling ----------------------------------------------------
+//
+// Every BT_PROFILE inside Bullet expands to a CProfileSample, whose constructor calls
+// through btEnterProfileZone -> a function pointer that defaults to an empty function.
+// That indirection is present even in this BT_NO_PROFILE build, so redirecting it
+// surfaces stepSimulation's internal breakdown - predictUnconstraintMotion,
+// dispatchAllCollisionPairs, solveConstraints, integrateTransforms - without rebuilding
+// Bullet or defining BT_ENABLE_PROFILE.
+//
+// Cost when the profiler is not capturing is one relaxed atomic load per zone, because
+// profile_begin gates on the process capture flag before touching thread-local state.
+
+/// Bullet nests zones several levels deep, and the innermost ones fire per manifold and
+/// per solver iteration. Recording those would swamp the timeline and cost more than it
+/// measures, so only the top levels are kept - enough to attribute the step.
+constexpr int max_profile_zone_depth = 4;
+
+thread_local int t_profile_zone_depth = 0;
+thread_local uint32_t t_profile_zone_stack[max_profile_zone_depth]{};
+
+void enter_profile_zone(const char* name)
+{
+    const int depth = t_profile_zone_depth++;
+    if(depth < max_profile_zone_depth)
+    {
+        // The lane name is only consumed the first time a given thread reports, so this
+        // labels Bullet's worker threads and is ignored on the main thread, which
+        // already has a lane.
+        t_profile_zone_stack[depth] = unravel::profile_begin(name, "Physics Thread");
+    }
+}
+
+void leave_profile_zone()
+{
+    if(t_profile_zone_depth <= 0)
+    {
+        return;
+    }
+
+    const int depth = --t_profile_zone_depth;
+    if(depth < max_profile_zone_depth)
+    {
+        // profile_end ignores UINT32_MAX, which is what profile_begin returns while the
+        // profiler is idle, so depth tracking stays balanced either way.
+        unravel::profile_end(t_profile_zone_stack[depth]);
+    }
+}
+
+void noop_enter_profile_zone(const char* /*name*/)
+{
+}
+
+void noop_leave_profile_zone()
+{
+}
+
+void install_profile_zone_hooks()
+{
+    btSetCustomEnterProfileZoneFunc(&enter_profile_zone);
+    btSetCustomLeaveProfileZoneFunc(&leave_profile_zone);
+}
+
+void remove_profile_zone_hooks()
+{
+    btSetCustomEnterProfileZoneFunc(&noop_enter_profile_zone);
+    btSetCustomLeaveProfileZoneFunc(&noop_leave_profile_zone);
+}
+
 auto get_entity_from_user_index(unravel::ecs& ec, int index) -> entt::handle
 {
     auto id = static_cast<entt::entity>(index);
@@ -458,12 +527,50 @@ auto effective_contact_flags(entt::handle a, entt::handle b, manifold_type type)
 }
 
 /**
- * @brief Whether a pair should be tracked at all.
+ * @brief Whether an entity can receive a contact callback at all.
  *
- * Gated on the flags alone, never on whether a script happens to be attached right
- * now: a script added after the overlap began would otherwise silently miss both the
- * enter and the exit. The defaults enable both event kinds, so this only skips work
- * somebody explicitly opted out of.
+ * process_manifold dispatches only into script_system, which needs a script_component
+ * to hand the event to. Without one on either side, every bit of bookkeeping a tracked
+ * pair costs - a pooled slot, a contact-point buffer, a per-step diff, an enter and an
+ * exit - produces nothing observable.
+ */
+auto can_observe_contacts(entt::handle entity) -> bool
+{
+    if(entity)
+    {
+        auto* script = entity.try_get<unravel::script_component>();
+        if(script)
+        {
+            return script->has_script_components();
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Whether anyone is listening for this pair.
+ *
+ * Sensor callbacks only ever reach the sensor, which is always the `a` side. Collision
+ * callbacks reach both participants.
+ *
+ * A script attached after an overlap has already begun will not receive that overlap's
+ * enter, and therefore never its exit either - consistent, and the same rule Unity
+ * applies. That is the price of not maintaining state for bodies nobody is watching.
+ */
+auto has_contact_listener(entt::handle a, entt::handle b, manifold_type type) -> bool
+{
+    if(can_observe_contacts(a))
+    {
+        return true;
+    }
+    return type == manifold_type::collision && can_observe_contacts(b);
+}
+
+/**
+ * @brief Whether a pair should be tracked at all, given someone is listening.
+ *
+ * Gated on the flags alone, never on the script list: the defaults enable both event
+ * kinds, so this only skips work somebody explicitly opted out of.
  */
 auto should_track_contact(unravel::contact_event_flags flags, manifold_type type) -> bool
 {
@@ -894,7 +1001,8 @@ struct world
                            // that pair never happened.
                            if(wants_events && slot.flush_on_destroy && slot.enter_dispatched)
                            {
-                               pending.push_back(slot.payload);
+                               // Moved, not copied: the slot is erased two lines down.
+                               pending.push_back(std::move(slot.payload));
 
                                auto& cm = pending.back();
                                cm.event = event_type::exit;
@@ -999,10 +1107,20 @@ struct world
      */
     void touch_pair(btPersistentManifold* m, entt::handle a, entt::handle b, manifold_type type, bool swap_sides)
     {
+        // Cheapest gate first: one or two sparse-set probes and out. A pile of
+        // unscripted debris never reaches the graph at all, so it costs no slots, no
+        // contact-point buffers and no per-step diffing. If a listener disappears from
+        // an already-tracked pair, skipping the refresh here lets the next sweep expire
+        // the slot.
+        if(!has_contact_listener(a, b, type))
+        {
+            return;
+        }
+
         const uint32_t existing = find_slot_for_pair(a, b, type);
         if(existing != unravel::contact_links::npos)
         {
-            contacts.get(existing).active_this_frame = true;
+            contacts.get(existing).seen_stamp = contacts.stamp();
             return;
         }
 
@@ -1039,17 +1157,21 @@ struct world
         auto* dispatcher = dynamics_world->getDispatcher();
         const int nm = dispatcher->getNumManifolds();
 
-        // Phase 0: nothing survives a step it was not seen in.
-        for(const uint32_t id : contacts.live())
-        {
-            contacts.get(id).active_this_frame = false;
-        }
+        // Opening a step is a counter bump. Pairs seen during it record the stamp;
+        // anything still carrying an older one has separated. Replaces a full pass over
+        // every live contact just to clear a flag.
+        const uint32_t stamp = contacts.advance_stamp();
 
         to_enter.clear();
         to_exit.clear();
 
+        // Nothing in the scene can receive a contact callback, so there is nothing to
+        // fold in. Existing pairs still expire below, which drains the graph.
+        auto& registry = *ec.get_scene().registry;
+        const bool any_listeners = !registry.storage<unravel::script_component>().empty();
+
         // Phase 1: fold every current manifold into the graph.
-        for(int i = 0; i < nm; ++i)
+        for(int i = 0; any_listeners && i < nm; ++i)
         {
             auto* m = dispatcher->getManifoldByIndexInternal(i);
             if(m->getNumContacts() == 0)
@@ -1094,14 +1216,16 @@ struct world
         {
             const uint32_t id = live[i - 1];
             auto& slot = contacts.get(id);
-            if(slot.active_this_frame)
+            if(slot.seen_stamp == stamp)
             {
                 continue;
             }
 
             if(slot.enter_dispatched)
             {
-                to_exit.push_back(slot.payload);
+                // Moved, not copied: the slot is freed on the next line, so its contact
+                // buffer can be handed over instead of duplicated.
+                to_exit.push_back(std::move(slot.payload));
                 to_exit.back().event = event_type::exit;
                 to_exit.back().reason = unravel::contact_end_reason::separated;
             }
@@ -2441,10 +2565,26 @@ void bullet_backend::init()
 {
     bullet::setup_task_scheduler();
     bullet::override_combine_callbacks();
+    bullet::install_profile_zone_hooks();
+
+    if(auto* scheduler = btGetTaskScheduler())
+    {
+        // Worth stating once. btCreateDefaultTaskScheduler returns null unless Bullet
+        // was built thread-safe, and the fallback under it is sequential - a solver
+        // silently running on one thread is otherwise indistinguishable from a slow one.
+        APPLOG_INFO("bullet: task scheduler '{}', {} threads",
+                    scheduler->getName(),
+                    scheduler->getNumThreads());
+    }
+    else
+    {
+        APPLOG_WARNING("bullet: no task scheduler - simulation runs single threaded");
+    }
 }
 
 void bullet_backend::deinit()
 {
+    bullet::remove_profile_zone_hooks();
     bullet::cleanup_task_scheduler();
 }
 
@@ -2975,6 +3115,19 @@ void bullet_backend::simulate(delta_t step_dt)
     auto& ec = ctx.get_cached<ecs>();
     auto& registry = *ec.get_scene().registry;
     auto& world = registry.ctx().get<bullet::world>();
+
+    if(ctx.has<settings>())
+    {
+        // Cheap enough to re-apply per step, and doing so means the editor slider takes
+        // effect without restarting play.
+        auto& info = world.dynamics_world->getSolverInfo();
+        const int iterations = std::max(1, ctx.get<settings>().physics.solver_iterations);
+        if(info.m_numIterations != iterations)
+        {
+            info.m_numIterations = iterations;
+        }
+    }
+
     const float dt = step_dt.count();
     world.simulate(dt, dt, 1);
 }

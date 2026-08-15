@@ -163,6 +163,11 @@ struct settings
         float fixed_timestep{0.02f};
         int max_fixed_steps{3};
 
+        /// Constraint solver iterations per step. Bullet's default is 10; a pile of
+        /// primitives is usually indistinguishable at 4-6, and solver time scales
+        /// close to linearly with this.
+        int solver_iterations{10};
+
         friend auto operator==(const physics_settings& lhs, const physics_settings& rhs) -> bool = default;
     } physics;
 

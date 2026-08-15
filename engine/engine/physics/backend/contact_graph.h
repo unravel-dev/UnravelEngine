@@ -81,8 +81,10 @@ public:
         uint32_t generation{1};
 
         bool in_use{false};
-        /// Seen in the current step. Anything left false has separated.
-        bool active_this_frame{false};
+        /// Step this pair was last observed in. Compared against contact_graph::stamp()
+        /// rather than cleared each step, so a scene with thousands of live contacts
+        /// does not pay a full pass over the pool just to reset a flag.
+        uint32_t seen_stamp{0};
         /// Precomputed from both sides' policy when the pair is inserted, so the
         /// destroy path never reads a component.
         bool flush_on_destroy{false};
@@ -249,6 +251,27 @@ public:
         return id < slots_.size() && slots_[id].in_use && slots_[id].generation == generation;
     }
 
+    /**
+     * @brief Opens a new step and returns its stamp.
+     *
+     * Pairs observed during the step record this value; anything still carrying an
+     * older one has separated. Zero is skipped so a freshly value-initialised slot can
+     * never be mistaken for one seen this step.
+     */
+    auto advance_stamp() -> uint32_t
+    {
+        if(++stamp_ == 0)
+        {
+            stamp_ = 1;
+        }
+        return stamp_;
+    }
+
+    auto stamp() const -> uint32_t
+    {
+        return stamp_;
+    }
+
 private:
     auto allocate() -> uint32_t
     {
@@ -266,7 +289,7 @@ private:
 
         auto& s = slots_[id];
         s.in_use = true;
-        s.active_this_frame = true;
+        s.seen_stamp = stamp_;
         s.enter_dispatched = false;
         s.flush_on_destroy = false;
         s.next_a = s.prev_a = s.next_b = s.prev_b = npos;
@@ -357,6 +380,8 @@ private:
     }
 
     links_resolver resolve_{};
+    /// Never zero; see advance_stamp.
+    uint32_t stamp_{1};
     std::vector<slot> slots_;
     std::vector<uint32_t> free_;
     std::vector<uint32_t> live_;

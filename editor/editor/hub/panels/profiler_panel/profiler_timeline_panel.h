@@ -5,6 +5,8 @@
 #include <context/context.hpp>
 #include <engine/profiler/profiler.h>
 
+#include <unordered_set>
+
 namespace unravel
 {
 
@@ -93,6 +95,53 @@ private:
     static void collect_unique_threads(const std::vector<const frame_snapshot*>& frames,
                                        std::vector<thread_entry>& out);
 
+    /**
+     * @brief Threads sharing a name, shown as one collapsible row.
+     *
+     * Worker pools register every thread under the same label, so a machine with many
+     * cores pushes everything below them off screen. Grouping by name keeps the pool
+     * to one row until it is worth looking at.
+     */
+    struct thread_group
+    {
+        std::string name;
+        /// Indices into the thread list, in first-seen order.
+        std::vector<size_t> members;
+    };
+
+    static void group_threads_by_name(const std::vector<thread_entry>& threads,
+                                      std::vector<thread_group>& out);
+
+    [[nodiscard]] auto is_group_expanded(const std::string& name) const -> bool
+    {
+        return expanded_groups_.find(name) != expanded_groups_.end();
+    }
+
+    void toggle_group_expanded(const std::string& name)
+    {
+        auto it = expanded_groups_.find(name);
+        if(it != expanded_groups_.end())
+        {
+            expanded_groups_.erase(it);
+        }
+        else
+        {
+            expanded_groups_.insert(name);
+        }
+    }
+
+    /**
+     * @brief Draws a group's combined activity as a single occupancy strip.
+     *
+     * Per pixel column, how many of the group's threads were busy. Answers the question
+     * a collapsed pool is actually asked - "was anything running here" - without needing
+     * one row per thread.
+     */
+    void draw_merged_lane(const lane_context& lc,
+                          const std::vector<const frame_snapshot*>& visible_frames,
+                          const std::vector<thread_entry>& threads,
+                          const thread_group& group);
+
     void draw_aggregate_section();
     void draw_frame_histogram(performance_profiler* profiler, uint32_t frame_count, float bar_width);
     void draw_live_histogram_stack(float bar_width);
@@ -131,6 +180,13 @@ private:
 
     bool show_request_{};
     bool show_{false};
+
+    /// Groups the user opened. Multi-thread groups start collapsed, which is the whole
+    /// point - a 14-thread pool should not have to be scrolled past.
+    std::unordered_set<std::string> expanded_groups_;
+    /// Per-pixel busy counts for the merged lane, kept across frames to avoid a
+    /// per-draw allocation.
+    std::vector<uint16_t> merged_lane_occupancy_;
 
     bool has_timeline_scope_selection_{false};
     uint32_t selected_scope_hist_frame_{0};
