@@ -36,11 +36,16 @@ struct animation_state
 
     asset_handle<animation_clip> clip{};
     animation_clip::seconds_t elapsed{};
+    /// Number of times the state's time has wrapped since (re)start. Root
+    /// motion uses this to account for every loop, even when several loops
+    /// pass between two pose samples (long hitches, renderer-based culling).
+    uint64_t loop_count{};
     bool loop{false};
     // Add blend space support
     std::shared_ptr<blend_space_def> blend_space{};
     std::vector<std::pair<asset_handle<animation_clip>, float>> blend_clips{};
     std::vector<animation_pose> blend_poses{};
+    std::vector<float> blend_weights{};
 };
 
 struct blend_over_time
@@ -50,6 +55,12 @@ struct blend_over_time
 
     auto get_progress() const -> float
     {
+        // A degenerate blend duration completes immediately (avoids 0/0 -> NaN,
+        // which would never satisfy the >= 1 completion check).
+        if(duration.count() <= 0.0f)
+        {
+            return 1.0f;
+        }
         // Compute the normalized blending time (clamped between 0 and 1)
         auto normalized_blend_time = static_cast<float>(elapsed.count() / duration.count());
         normalized_blend_time = std::clamp(normalized_blend_time, 0.0f, 1.0f);
@@ -129,10 +140,11 @@ public:
     void stop();
 
     /**
-     * @brief Updates the animation player, advancing the animation time and applying transformations.
+     * @brief Advances the animation time of every layer.
      *
      * @param delta_time The time to advance the animation by.
-     * @param set_transform_callback The callback function to set the transform of a node.
+     * @param force Advance even when not playing or paused (editor frame stepping).
+     * @return True if time advanced and poses should be updated.
      */
     auto update_time(seconds_t delta_time, bool force = false) -> bool;
     void update_poses(const animation_pose& ref_pose,
@@ -192,10 +204,12 @@ private:
 
     void sample_animation(const animation_clip* anim_clip,
                           seconds_t time,
+                          uint64_t loop_count,
                           animation_retargeting_mode retargeting_mode,
-                          animation_pose& pose) const noexcept;
-    auto compute_blend_factor(const animation_layer& layer, float normalized_blend_time) noexcept -> float;
+                          animation_pose& pose) const;
+    auto compute_blend_factor(const animation_layer& layer, float normalized_blend_time) -> float;
     void update_state(seconds_t delta_time, animation_state& state);
+    static auto get_state_duration(const animation_state& state) -> seconds_t;
     auto get_blend_progress(const animation_layer& layer) const -> float;
     auto update_pose(animation_layer_state& layer, animation_retargeting_mode retargeting_mode) -> bool;
 

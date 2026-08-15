@@ -9,6 +9,12 @@ if(gi_tests_src)
     list(REMOVE_ITEM libsrc ${gi_tests_src})
 endif()
 
+set(ANIMATION_TESTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/animation/tests")
+file(GLOB_RECURSE animation_tests_src "${ANIMATION_TESTS_DIR}/*.cpp" "${ANIMATION_TESTS_DIR}/*.h")
+if(animation_tests_src)
+    list(REMOVE_ITEM libsrc ${animation_tests_src})
+endif()
+
 set(target_name engine)
 
 add_library(${target_name} ${libsrc} ${shader_files})
@@ -108,4 +114,21 @@ if(gi_tests_src)
         GI_TESTS_SHADER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../engine_data/data/shaders"
         GI_TESTS_SHADERC="$<TARGET_FILE_DIR:${target_name}>/shaderc.exe"
     )
+endif()
+
+###############################################################################################
+# Animation validation harness. Not built by default; run it explicitly:
+#   cmake --build <build-dir> --target animation_tests
+#   <build-dir>/bin/animation_tests
+if(animation_tests_src)
+    set(target_name animation_tests)
+    add_executable(${target_name} EXCLUDE_FROM_ALL ${animation_tests_src})
+
+    set_target_properties(${target_name} PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+    )
+
+    target_link_libraries(${target_name} PRIVATE engine)
 endif()

@@ -22,7 +22,7 @@ REFLECT(root_motion_params)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "keep_position_y"},
             entt::attribute{"pretty_name", "Keep Position Y"},
-            entt::attribute{"tooltip", "Root position t components are not affected by animation."},
+            entt::attribute{"tooltip", "Root position y component is not affected by animation."},
         })
         .data<&root_motion_params::keep_position_xz>("keep_position_xz"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -34,7 +34,7 @@ REFLECT(root_motion_params)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "keep_rotation"},
             entt::attribute{"pretty_name", "Keep Rotation"},
-            entt::attribute{"tooltip", "Root rotation is not affected by animaation."},
+            entt::attribute{"tooltip", "Root rotation is not affected by animation."},
         })
         .data<&root_motion_params::keep_in_place>("keep_in_place"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -96,7 +96,7 @@ REFLECT(animation_channel)
             entt::attribute{"name", "rotation_keys_count"},
             entt::attribute{"pretty_name", "Rotations"},
         })
-        .data<nullptr, &animation_channel::get_position_keys_count>("scaling_keys_count"_hs)
+        .data<nullptr, &animation_channel::get_scaling_keys_count>("scaling_keys_count"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "scaling_keys_count"},
             entt::attribute{"pretty_name", "Scalings"},

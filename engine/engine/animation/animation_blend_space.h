@@ -8,7 +8,17 @@ namespace unravel
 
 auto blend(const math::transform& lhs, const math::transform& rhs, float factor) -> math::transform;
 
+auto blend(const animation_pose::root_motion_result& r1, const animation_pose::root_motion_result& r2, float factor)
+    -> animation_pose::root_motion_result;
+
+/// Blends two poses sorted by node index. `result_pose` must not alias either input.
 void blend_poses(const animation_pose& pose1, const animation_pose& pose2, float factor, animation_pose& result_pose);
+
+/// Weighted multiway blend of poses sorted by node index. Weights need not be
+/// normalized. `result_pose` must not alias any input.
+void blend_poses(const std::vector<animation_pose>& poses,
+                 const std::vector<float>& weights,
+                 animation_pose& result_pose);
 
 auto blend_additive(const math::transform& base,
                     const math::transform& additive,

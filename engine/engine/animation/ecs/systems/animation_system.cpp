@@ -18,6 +18,9 @@
 #define POOLSTL_STD_SUPPLEMENT 1
 #include <poolstl/poolstl.hpp>
 
+#include <algorithm>
+#include <utility>
+
 namespace unravel
 {
 
@@ -154,12 +157,52 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
     // Create a view for entities with transform_component and submesh_component
     auto view = scn.registry->view<model_component, animation_component, transform_component>();
 
-    // this code should be thread safe as each task works with a whole hierarchy and
-    // there is no interleaving between tasks.
-    std::for_each(poolstl::par,//std::execution::par,
-                  view.begin(),
-                  view.end(),
-                  [&](entt::entity entity)
+    // Pose application writes armature transforms, and transform dirty flags
+    // propagate down the hierarchy. Two animated entities whose hierarchies
+    // overlap (e.g. an animated prop parented under another character's bone)
+    // must therefore be updated by the same task. Tag every animated entity
+    // with its topmost animated ancestor and turn runs of equal roots into
+    // tasks - disjoint hierarchies (the common case) still run fully in
+    // parallel. The scratch buffers are members reused across frames, so the
+    // steady state performs no heap allocations here.
+    grouping_scratch_.clear();
+    bool any_nested = false;
+    for(auto entity : view)
+    {
+        entt::entity group_root = entity;
+        auto parent = view.get<transform_component>(entity).get_parent();
+        while(parent)
+        {
+            if(parent.all_of<model_component, animation_component, transform_component>())
+            {
+                group_root = parent.entity();
+            }
+            parent = parent.get<transform_component>().get_parent();
+        }
+        any_nested |= group_root != entity;
+        grouping_scratch_.emplace_back(group_root, entity);
+    }
+
+    if(any_nested)
+    {
+        // Bring equal roots together. Entities can only share a root when
+        // nesting exists, so most frames skip the sort entirely.
+        std::sort(grouping_scratch_.begin(), grouping_scratch_.end());
+    }
+
+    group_ranges_.clear();
+    for(size_t begin = 0; begin < grouping_scratch_.size();)
+    {
+        size_t end = begin + 1;
+        while(end < grouping_scratch_.size() && grouping_scratch_[end].first == grouping_scratch_[begin].first)
+        {
+            ++end;
+        }
+        group_ranges_.emplace_back(begin, end);
+        begin = end;
+    }
+
+    auto update_entity = [&](entt::entity entity)
                   {
                       APP_SCOPE_PERF_THREAD("Animation/Update Poses", "Pool Thread");
 
@@ -209,11 +252,14 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                                       // Name-based: use cached name lookup
                                       int name_based_armature_index =
                                           model_comp.get_armature_index_by_name_cached(desc.name);
-                                      if(name_based_armature_index >= 0 &&
-                                         name_based_armature_index != static_cast<int>(armature_index))
+                                      if(name_based_armature_index < 0)
                                       {
-                                          armature_index = name_based_armature_index;
+                                          // The target skeleton has no bone with this name.
+                                          // Skip the node rather than falling back to the
+                                          // clip's index, which would write an unrelated bone.
+                                          return;
                                       }
+                                      armature_index = size_t(name_based_armature_index);
                                   }
 
                                   auto armature = model_comp.get_armature_by_index(armature_index);
@@ -233,7 +279,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                                       else
                                       {
                                           is_root_position_node = desc.index == motion_result.root_position_node_index;
-                                          is_root_rotation_node = desc.index == motion_result.root_position_node_index;
+                                          is_root_rotation_node = desc.index == motion_result.root_rotation_node_index;
                                       }
 
                                       if(apply_root_motion && is_root_position_node)
@@ -318,6 +364,17 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                                       APPLOG_WARNING("Cannot find armature with index {}", desc.index);
                                   }
                               });
+                      }
+                  };
+
+    std::for_each(poolstl::par,
+                  group_ranges_.begin(),
+                  group_ranges_.end(),
+                  [&](const std::pair<size_t, size_t>& range)
+                  {
+                      for(size_t i = range.first; i < range.second; ++i)
+                      {
+                          update_entity(grouping_scratch_[i].second);
                       }
                   });
 }

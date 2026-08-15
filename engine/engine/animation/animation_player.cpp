@@ -1,5 +1,8 @@
 #include "animation_player.h"
 #include <hpp/utility/overload.hpp>
+
+#include <limits>
+
 namespace unravel
 {
 
@@ -50,8 +53,16 @@ auto interpolate(const std::vector<animation_channel::key<T>>& keys, animation_p
     const auto& key1 = keys[low];
     const auto& key2 = keys[low + 1];
 
+    // Importers can emit keys with identical timestamps - avoid dividing by zero.
+    const float denom = key2.time.count() - key1.time.count();
+    if(denom <= std::numeric_limits<float>::epsilon())
+    {
+        return key2.value;
+    }
+
     // Compute the interpolation factor (0.0 to 1.0)
-    float factor = (time.count() - key1.time.count()) / (key2.time.count() - key1.time.count());
+    float factor = (time.count() - key1.time.count()) / denom;
+    factor = math::clamp(factor, 0.0f, 1.0f);
 
     // Perform the interpolation
     if constexpr(std::is_same_v<T, math::vec3>)
@@ -91,10 +102,9 @@ void animation_player::blend_to(size_t layer_idx,
     auto& layer = get_layer(layer_idx);
     if(!clip)
     {
-        if(layer.current_state.state.clip)
-        {
-            layer.current_state = {};
-        }
+        // A null clip means "stop animating this layer" - clear the in-flight
+        // crossfade target as well, not just the current state.
+        layer = {};
         return;
     }
 
@@ -155,15 +165,30 @@ void animation_player::blend_to(size_t layer_idx,
     }
 
     // Fresh blend: start a new crossfade from current to the requested clip.
+    auto phase = phase_sync ? layer.current_state.state.get_progress() : 0.0f;
+
+    // If a crossfade is already in flight, freeze the currently visible
+    // blended pose as the new source so retargeting mid-blend does not pop.
+    if(layer.target_state.is_valid())
+    {
+        layer.current_state.state = {};
+        layer.current_state.parameters.clear();
+        layer.current_state.pose = layer.blend_pose;
+        // The frozen pose is static: zero its root-motion delta so the last
+        // frame's motion is not re-applied every frame while it fades out.
+        layer.current_state.pose.motion_result.root_transform_delta = {};
+        layer.current_state.pose.motion_state = {};
+    }
+
+    layer.target_state = {};
     layer.target_state.state.clip = clip;
     layer.target_state.state.loop = loop;
-
-    auto phase = phase_sync ? layer.current_state.state.get_progress() : 0.0f;
     layer.target_state.state.set_progress(phase);
 
-    if(duration > clip.get()->duration)
+    auto clip_ptr = clip.get();
+    if(clip_ptr && duration > clip_ptr->duration)
     {
-        duration = clip.get()->duration;
+        duration = clip_ptr->duration;
     }
 
     layer.blending_state.state = blend_over_time{duration};
@@ -183,6 +208,10 @@ void animation_player::set_blend_space(size_t layer_idx, const std::shared_ptr<b
 
     layer.current_state.state.blend_space = blend_space;
     layer.current_state.state.elapsed = seconds_t(0);
+    layer.current_state.state.loop_count = 0;
+    layer.current_state.state.blend_clips.clear();
+    layer.current_state.state.blend_poses.clear();
+    layer.current_state.state.blend_weights.clear();
     // Clear target state if any
     layer.target_state = {};
     layer.blending_state = {};
@@ -224,13 +253,21 @@ void animation_player::stop()
     for(auto& layer : layers_)
     {
         layer.current_state.state.elapsed = seconds_t(0);
+        layer.current_state.state.loop_count = 0;
+        // Reset root-motion tracking, otherwise the first sample of the next
+        // playback computes a delta against the stale end-of-play position and
+        // teleports the entity.
+        layer.current_state.pose.motion_state = {};
         layer.target_state.state.elapsed = seconds_t(0);
+        layer.target_state.state.loop_count = 0;
+        layer.target_state.pose.motion_state = {};
     }
 }
 
 auto animation_player::update_time(seconds_t delta_time, bool force) -> bool
 {
-    if(!is_playing())
+    // `force` steps time even when stopped or paused (editor frame stepping).
+    if(!is_playing() && !force)
     {
         return false;
     }
@@ -252,31 +289,26 @@ auto animation_player::update_time(seconds_t delta_time, bool force) -> bool
         return false;
     }
 
-    // Update times
-    if(playing_ && !paused_)
+    for(auto& layer : layers_)
     {
-        for(auto& layer : layers_)
-        {
-            update_state(delta_time, layer.current_state.state);
+        update_state(delta_time, layer.current_state.state);
 
-            update_state(delta_time, layer.target_state.state);
+        update_state(delta_time, layer.target_state.state);
 
-            // update overtime parameters
-            hpp::visit(hpp::overload(
-                           [&](blend_over_time& state)
-                           {
-                               state.elapsed += delta_time;
-                           },
-                           [](auto& state)
-                           {
+        // update overtime parameters
+        hpp::visit(hpp::overload(
+                       [&](blend_over_time& state)
+                       {
+                           state.elapsed += delta_time;
+                       },
+                       [](auto& state)
+                       {
 
-                           }),
-                       layer.blending_state.state);
-        }
-
-        return true;
+                       }),
+                   layer.blending_state.state);
     }
-    return false;
+
+    return true;
 }
 
 void animation_player::update_poses(const animation_pose& ref_pose, animation_retargeting_mode retargeting_mode, const update_callback_t& set_transform_callback)
@@ -354,37 +386,36 @@ auto animation_player::update_pose(animation_layer_state& layer, animation_retar
         // Compute blending weights based on current parameters (e.g., speed and direction)
         state.blend_space->compute_blend(parameters, state.blend_clips);
 
-        // Sample animations and blend poses
+        // Sample animations and blend poses. The per-clip poses persist across
+        // frames so each keeps its own root-motion tracking state.
         state.blend_poses.resize(state.blend_clips.size());
+        state.blend_weights.resize(state.blend_clips.size());
         for(size_t i = 0; i < state.blend_clips.size(); ++i)
         {
             const auto& clip_weight_pair = state.blend_clips[i];
-            sample_animation(clip_weight_pair.first.get().get(), state.elapsed, retargeting_mode, state.blend_poses[i]);
+            sample_animation(clip_weight_pair.first.get().get(),
+                             state.elapsed,
+                             state.loop_count,
+                             retargeting_mode,
+                             state.blend_poses[i]);
+            state.blend_weights[i] = clip_weight_pair.second;
         }
 
-        // Blend all poses based on their weights
-        pose.nodes.clear();
-        if(!state.blend_poses.empty())
+        if(state.blend_poses.empty())
         {
-            // Initialize with the first pose
-            pose = state.blend_poses[0];
-            float total_weight = state.blend_clips[0].second;
-
-            for(size_t i = 1; i < state.blend_poses.size(); ++i)
-            {
-                blend_poses(pose,
-                            state.blend_poses[i],
-                            state.blend_clips[i].second / (total_weight + state.blend_clips[i].second),
-                            pose);
-                total_weight += state.blend_clips[i].second;
-            }
+            pose.nodes.clear();
+            return true;
         }
+
+        // Multiway merge into a pose that does not alias any input - blending
+        // in place would clear the accumulator before it is read.
+        blend_poses(state.blend_poses, state.blend_weights, pose);
         return true;
     }
 
     if(state.clip)
     {
-        sample_animation(state.clip.get().get(), state.elapsed, retargeting_mode, pose);
+        sample_animation(state.clip.get().get(), state.elapsed, state.loop_count, retargeting_mode, pose);
         return true;
     }
 
@@ -393,26 +424,53 @@ auto animation_player::update_pose(animation_layer_state& layer, animation_retar
 
 void animation_player::update_state(seconds_t delta_time, animation_state& state)
 {
+    if(!state.clip && !state.blend_space)
+    {
+        return;
+    }
+    state.elapsed += delta_time;
+    const auto duration = get_state_duration(state);
+    if(duration <= seconds_t(0))
+    {
+        // Blend-space duration is unknown until the first pose update fills
+        // blend_clips - keep accumulating and wrap on a later frame.
+        return;
+    }
+    if(state.elapsed > duration)
+    {
+        if(state.loop)
+        {
+            // Count every wrap so root motion stays exact even when several
+            // loops pass between two pose samples.
+            state.loop_count += uint64_t(state.elapsed.count() / duration.count());
+            state.elapsed = seconds_t(std::fmod(state.elapsed.count(), duration.count()));
+        }
+        else
+        {
+            state.elapsed = duration;
+        }
+    }
+}
+
+auto animation_player::get_state_duration(const animation_state& state) -> seconds_t
+{
     if(state.clip)
     {
-        state.elapsed += delta_time;
-        auto target_anim = state.clip.get();
-        if(target_anim)
-        {
-            if(state.elapsed > target_anim->duration)
-            {
-                if(state.loop)
-                {
-                    state.elapsed = seconds_t(std::fmod(state.elapsed.count(), target_anim->duration.count()));
-                }
-                else
-                {
-                    state.elapsed = target_anim->duration;
-                }
-            }
-        }
-
+        auto clip = state.clip.get();
+        return clip ? clip->duration : seconds_t(0);
     }
+    // A blend space plays as long as its longest active clip; shorter clips
+    // clamp to their last key when sampled beyond their duration.
+    seconds_t duration{0};
+    for(const auto& clip_weight_pair : state.blend_clips)
+    {
+        auto clip = clip_weight_pair.first.get();
+        if(clip)
+        {
+            duration = std::max(duration, clip->duration);
+        }
+    }
+    return duration;
 }
 
 auto animation_player::get_blend_progress(const animation_layer& layer) const -> float
@@ -429,7 +487,7 @@ auto animation_player::get_blend_progress(const animation_layer& layer) const ->
                       layer.blending_state.state);
 }
 
-auto animation_player::compute_blend_factor(const animation_layer& layer, float normalized_blend_time) noexcept -> float
+auto animation_player::compute_blend_factor(const animation_layer& layer, float normalized_blend_time) -> float
 {
     float blend_factor = 0.0f;
 
@@ -448,8 +506,9 @@ auto animation_player::compute_blend_factor(const animation_layer& layer, float 
 
 void animation_player::sample_animation(const animation_clip* anim_clip,
                                         seconds_t time,
+                                        uint64_t loop_count,
                                         animation_retargeting_mode retargeting_mode,
-                                        animation_pose& pose) const noexcept
+                                        animation_pose& pose) const
 {
     if(!anim_clip)
     {
@@ -460,9 +519,14 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
 
     for(const auto& channel : anim_clip->channels)
     {
-        math::vec3 position = interpolate(channel.position_keys, time);
-        math::quat rotation = interpolate(channel.rotation_keys, time);
-        math::vec3 scaling = interpolate(channel.scaling_keys, time);
+        // Empty tracks need explicit defaults: a value-initialized quat is all
+        // zeros (NaN after normalize) and a zero scale collapses the bone.
+        math::vec3 position = channel.position_keys.empty() ? math::vec3{0.0f, 0.0f, 0.0f}
+                                                            : interpolate(channel.position_keys, time);
+        math::quat rotation = channel.rotation_keys.empty() ? math::identity<math::quat>()
+                                                            : interpolate(channel.rotation_keys, time);
+        math::vec3 scaling = channel.scaling_keys.empty() ? math::vec3{1.0f, 1.0f, 1.0f}
+                                                          : interpolate(channel.scaling_keys, time);
 
         auto& node = pose.nodes.emplace_back();
         
@@ -503,32 +567,34 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
             }
         }
 
-        if(is_root_position_node)
+        if(is_root_position_node && !channel.position_keys.empty())
         {
             pose.motion_result.root_position_node_index = anim_clip->root_motion.position_node_index;
             pose.motion_result.root_position_node_name = anim_clip->root_motion.position_node_name;
 
-            const auto& clip_start_pos = channel.position_keys.front().value;
-            const auto& clip_end_pos = channel.position_keys.back().value;
-
             pose.motion_result.root_position_weights = {1.0f, 1.0f, 1.0f};
             pose.motion_result.bone_position_weights = {0.0f, 0.0f, 0.0f};
 
-            if(pose.motion_state.root_position_time == seconds_t(0))
+            auto& motion_state = pose.motion_state;
+            if(!motion_state.root_position_initialized)
             {
-                pose.motion_state.root_position_time = time;
-                pose.motion_state.root_position_at_time = clip_start_pos;
+                // First sample: no motion yet. Baselining against the current
+                // position (not the clip start) keeps phase-synced blend
+                // starts from producing a start-to-phase teleport.
+                motion_state.root_position_initialized = true;
+                motion_state.root_position_at_time = position;
+                motion_state.root_position_loop_count = loop_count;
             }
 
-            auto delta_position = position - pose.motion_state.root_position_at_time;
+            auto delta_position = position - motion_state.root_position_at_time;
 
-            if(time < pose.motion_state.root_position_time)
+            const auto wraps = loop_count - motion_state.root_position_loop_count;
+            if(wraps > 0)
             {
-                auto loop_pos_offset = clip_end_pos - clip_start_pos;
-                delta_position = delta_position + loop_pos_offset;
+                const auto& clip_start_pos = channel.position_keys.front().value;
+                const auto& clip_end_pos = channel.position_keys.back().value;
+                delta_position += float(wraps) * (clip_end_pos - clip_start_pos);
             }
-
-
 
             if(anim_clip->root_motion.keep_position_y)
             {
@@ -557,35 +623,47 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
                 pose.motion_result.bone_position_weights.z = 0.0f;
             }
 
-            pose.motion_state.root_position_time = time;
-            pose.motion_state.root_position_at_time = position;
+            motion_state.root_position_at_time = position;
+            motion_state.root_position_loop_count = loop_count;
             pose.motion_result.root_transform_delta.set_position(delta_position);
         }
 
-        if(is_root_rotation_node)
+        if(is_root_rotation_node && !channel.rotation_keys.empty())
         {
             pose.motion_result.root_rotation_node_index = anim_clip->root_motion.rotation_node_index;
             pose.motion_result.root_rotation_node_name = anim_clip->root_motion.rotation_node_name;
 
-            const auto& clip_start_rotation = channel.rotation_keys.front().value;
-            const auto& clip_end_rotation = channel.rotation_keys.back().value;
-
             pose.motion_result.root_rotation_weight = {1.0f};
             pose.motion_result.bone_rotation_weight = {0.0f};
 
-            if(pose.motion_state.root_rotation_time == seconds_t(0))
+            auto& motion_state = pose.motion_state;
+            if(!motion_state.root_rotation_initialized)
             {
-                pose.motion_state.root_rotation_time = time;
-
-                pose.motion_state.root_rotation_at_time = clip_start_rotation;
+                motion_state.root_rotation_initialized = true;
+                motion_state.root_rotation_at_time = rotation;
+                motion_state.root_rotation_loop_count = loop_count;
             }
 
-            auto delta_rotation = rotation * glm::inverse(pose.motion_state.root_rotation_at_time);
-
-            if(time < pose.motion_state.root_rotation_time)
+            math::quat delta_rotation;
+            const auto wraps = loop_count - motion_state.root_rotation_loop_count;
+            if(wraps == 0)
             {
-                auto loop_rotation_offset = clip_end_rotation * glm::inverse(clip_start_rotation);
-                delta_rotation = loop_rotation_offset * delta_rotation;
+                delta_rotation = rotation * glm::inverse(motion_state.root_rotation_at_time);
+            }
+            else
+            {
+                const auto& clip_start_rotation = channel.rotation_keys.front().value;
+                const auto& clip_end_rotation = channel.rotation_keys.back().value;
+                // Compose the delta across the wrap(s) in playback order:
+                // previous sample -> clip end, then (wraps - 1) full loops,
+                // then clip start -> current sample.
+                const auto loop_rotation_offset = clip_end_rotation * glm::inverse(clip_start_rotation);
+                delta_rotation = clip_end_rotation * glm::inverse(motion_state.root_rotation_at_time);
+                for(uint64_t i = 1; i < wraps; ++i)
+                {
+                    delta_rotation = loop_rotation_offset * delta_rotation;
+                }
+                delta_rotation = (rotation * glm::inverse(clip_start_rotation)) * delta_rotation;
             }
 
             if(anim_clip->root_motion.keep_rotation)
@@ -601,8 +679,8 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
                 pose.motion_result.bone_rotation_weight = 1.0f;
             }
 
-            pose.motion_state.root_rotation_time = time;
-            pose.motion_state.root_rotation_at_time = rotation;
+            motion_state.root_rotation_at_time = rotation;
+            motion_state.root_rotation_loop_count = loop_count;
             pose.motion_result.root_transform_delta.set_rotation(delta_rotation);
         }
     }

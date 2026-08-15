@@ -5,6 +5,9 @@
 #include <engine/ecs/scene.h>
 #include <hpp/span.hpp>
 
+#include <utility>
+#include <vector>
+
 namespace unravel
 {
 class animation_system
@@ -71,6 +74,11 @@ private:
 
     void on_update(scene& scn, delta_t dt, bool force);
 
+    /// Per-frame grouping scratch, kept as members so steady-state frames do
+    /// not allocate: (group_root, entity) pairs and [begin, end) runs of equal
+    /// group_root into that list. Only touched from the main-thread update.
+    std::vector<std::pair<entt::entity, entt::entity>> grouping_scratch_;
+    std::vector<std::pair<size_t, size_t>> group_ranges_;
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 };

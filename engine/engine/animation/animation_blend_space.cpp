@@ -1,5 +1,9 @@
 #include "animation_player.h"
 #include <hpp/utility/overload.hpp>
+#include <logging/logging.h>
+
+#include <limits>
+
 namespace unravel
 {
 
@@ -130,23 +134,71 @@ auto blend(const math::transform& lhs, const math::transform& rhs, float factor)
     return result;
 }
 
+namespace
+{
+auto has_root_position(const animation_pose::root_motion_result& r) -> bool
+{
+    return r.root_position_node_index >= 0 || !r.root_position_node_name.empty();
+}
+
+auto has_root_rotation(const animation_pose::root_motion_result& r) -> bool
+{
+    return r.root_rotation_node_index >= 0 || !r.root_rotation_node_name.empty();
+}
+} // namespace
+
 auto blend(const animation_pose::root_motion_result& r1, const animation_pose::root_motion_result& r2, float factor)
     -> animation_pose::root_motion_result
 {
     animation_pose::root_motion_result result;
     result.root_transform_delta = blend(r1.root_transform_delta, r2.root_transform_delta, factor);
-    result.root_position_weights = r1.root_position_weights * r2.root_position_weights;
-    result.bone_position_weights = r1.bone_position_weights * r2.bone_position_weights;
 
-    result.root_rotation_weight = r1.root_rotation_weight * r2.root_rotation_weight;
-    result.bone_rotation_weight = r1.bone_rotation_weight * r2.bone_rotation_weight;
+    // Weights of a pose without root motion are meaningless defaults - use the
+    // other pose's weights outright, and lerp only when both have root motion.
+    // Multiplying (the old behavior) could zero BOTH the root and the bone
+    // weight of an axis, leaving it neither animated nor moved.
+    const bool r1_has_position = has_root_position(r1);
+    const bool r2_has_position = has_root_position(r2);
+    if(r1_has_position && r2_has_position)
+    {
+        result.root_position_weights = math::lerp(r1.root_position_weights, r2.root_position_weights, factor);
+        result.bone_position_weights = math::lerp(r1.bone_position_weights, r2.bone_position_weights, factor);
+    }
+    else if(r1_has_position)
+    {
+        result.root_position_weights = r1.root_position_weights;
+        result.bone_position_weights = r1.bone_position_weights;
+    }
+    else if(r2_has_position)
+    {
+        result.root_position_weights = r2.root_position_weights;
+        result.bone_position_weights = r2.bone_position_weights;
+    }
 
-    if(r1.root_position_node_index == -1)
+    const bool r1_has_rotation = has_root_rotation(r1);
+    const bool r2_has_rotation = has_root_rotation(r2);
+    if(r1_has_rotation && r2_has_rotation)
+    {
+        result.root_rotation_weight = math::lerp(r1.root_rotation_weight, r2.root_rotation_weight, factor);
+        result.bone_rotation_weight = math::lerp(r1.bone_rotation_weight, r2.bone_rotation_weight, factor);
+    }
+    else if(r1_has_rotation)
+    {
+        result.root_rotation_weight = r1.root_rotation_weight;
+        result.bone_rotation_weight = r1.bone_rotation_weight;
+    }
+    else if(r2_has_rotation)
+    {
+        result.root_rotation_weight = r2.root_rotation_weight;
+        result.bone_rotation_weight = r2.bone_rotation_weight;
+    }
+
+    if(!r1_has_position)
     {
         result.root_position_node_index = r2.root_position_node_index;
         result.root_position_node_name = r2.root_position_node_name;
     }
-    else if(r2.root_position_node_index == -1)
+    else if(!r2_has_position)
     {
         result.root_position_node_index = r1.root_position_node_index;
         result.root_position_node_name = r1.root_position_node_name;
@@ -157,12 +209,12 @@ auto blend(const animation_pose::root_motion_result& r1, const animation_pose::r
         result.root_position_node_name = factor < 0.5f ? r1.root_position_node_name : r2.root_position_node_name;
     }
 
-    if(r1.root_rotation_node_index == -1)
+    if(!r1_has_rotation)
     {
         result.root_rotation_node_index = r2.root_rotation_node_index;
         result.root_rotation_node_name = r2.root_rotation_node_name;
     }
-    else if(r2.root_rotation_node_index == -1)
+    else if(!r2_has_rotation)
     {
         result.root_rotation_node_index = r1.root_rotation_node_index;
         result.root_rotation_node_name = r1.root_rotation_node_name;
@@ -246,6 +298,14 @@ void blend_poses_by_node_index_sorted_multiway(const std::vector<animation_pose>
                                                const std::vector<float>& weights,
                                                animation_pose& result)
 {
+    result.nodes.clear();
+    result.motion_result = {};
+
+    if(poses.empty() || weights.size() < poses.size())
+    {
+        return;
+    }
+
     // 1) If there's only 1 pose, it's trivial
     if(poses.size() == 1)
     {
@@ -253,12 +313,33 @@ void blend_poses_by_node_index_sorted_multiway(const std::vector<animation_pose>
         return;
     }
 
+    // Blend the root motion results once, with incremental weight normalization.
+    {
+        float total_weight{0.0f};
+        bool first_motion_set{false};
+        for(size_t p = 0; p < poses.size(); ++p)
+        {
+            const float w = weights[p];
+            if(!first_motion_set)
+            {
+                result.motion_result = poses[p].motion_result;
+                total_weight = w;
+                first_motion_set = true;
+            }
+            else
+            {
+                const float denom = total_weight + w;
+                const float factor = denom > 0.0f ? w / denom : 0.0f;
+                result.motion_result = blend(result.motion_result, poses[p].motion_result, factor);
+                total_weight += w;
+            }
+        }
+    }
+
     // We'll assume each pose is sorted by node.index in ascending order
     // We'll keep a pointer array "idx[]" for each pose
     size_t k = poses.size();
     std::vector<size_t> idx(k, 0);
-
-    result.nodes.clear();
 
     // We'll do a loop while there's at least one pose not at end
     while(true)
@@ -291,8 +372,8 @@ void blend_poses_by_node_index_sorted_multiway(const std::vector<animation_pose>
 
         // 3) Collect transforms from all poses that have this minIndex
         float total_weight{0.0f};
-        math::transform accum_transform{}; // maybe identity or something
-        bool first_transform_set{false};
+        math::transform accum_transform{};
+        const animation_pose::node_desc* first_desc{nullptr};
 
         for(size_t p = 0; p < k; ++p)
         {
@@ -303,21 +384,18 @@ void blend_poses_by_node_index_sorted_multiway(const std::vector<animation_pose>
                 {
                     // We want to blend node.transform into accumTransform
                     float w = weights[p];
-                    if(!first_transform_set)
+                    if(!first_desc)
                     {
                         accum_transform = node.transform; // first
                         total_weight = w;
-                        first_transform_set = true;
-
-                        result.motion_result = poses[p].motion_result;
+                        first_desc = &node.desc;
                     }
                     else
                     {
                         // Blend accumTransform w/ node.transform
-                        float factor = w / (total_weight + w);
+                        const float denom = total_weight + w;
+                        const float factor = denom > 0.0f ? w / denom : 0.0f;
                         accum_transform = blend(accum_transform, node.transform, factor);
-                        result.motion_result = blend(result.motion_result, poses[p].motion_result, factor);
-
                         total_weight += w;
                     }
                     // advance pointer in pose p
@@ -326,12 +404,11 @@ void blend_poses_by_node_index_sorted_multiway(const std::vector<animation_pose>
             }
         }
 
-        // 4) Push the final blended node into result
+        // 4) Push the final blended node into result. Carry the full desc
+        // (including the name) - name-based retargeting resolves bones by it.
         auto& out = result.nodes.emplace_back();
-        out.desc.index = min_index;
+        out.desc = *first_desc;
         out.transform = accum_transform;
-        // name can be optional or from whichever pose you prefer
-        // out.name = ?
     }
 
     // Now result has the union of all node_index across all poses, blended by weight.
@@ -346,6 +423,13 @@ void blend_poses(const std::vector<animation_pose>& poses,
 
 void blend_space_def::add_clip(const parameters_t& params, const asset_handle<animation_clip>& clip)
 {
+    if(!points_.empty() && params.size() != parameter_count_)
+    {
+        APPLOG_WARNING("blend_space_def::add_clip: point with {} parameters rejected, blend space has {}",
+                       params.size(),
+                       parameter_count_);
+        return;
+    }
     points_.emplace_back(blend_space_point{params, clip});
     parameter_count_ = params.size(); // Ensure all points have the same number of parameters
 }
@@ -355,6 +439,19 @@ void blend_space_def::compute_blend(const parameters_t& current_params,
 {
     // Clear the output vector
     out_clips.clear();
+
+    if(points_.empty())
+    {
+        return;
+    }
+
+    if(current_params.size() < parameter_count_)
+    {
+        // Parameters were never (fully) supplied - fall back to the first
+        // point instead of reading out of bounds / silently freezing.
+        out_clips.emplace_back(points_.front().clip, 1.0f);
+        return;
+    }
 
     if(parameter_count_ == 1)
     {
@@ -404,6 +501,10 @@ void blend_space_def::compute_blend_1d(const parameters_t& current_params,
     //    that’s between indices 0 and 1
     auto find_index_1d = [&](float p)
     {
+        // Below range clamps to the FIRST interval (the loop below would fall
+        // through to the last one and pick the wrong clip).
+        if(p <= sorted_values.front())
+            return size_t(0);
         for(size_t i = 0; i < sorted_values.size() - 1; ++i)
         {
             if(p >= sorted_values[i] && p <= sorted_values[i + 1])
@@ -490,9 +591,43 @@ void blend_space_def::compute_blend_2d(const parameters_t& current_params,
     std::vector<float> param0_vector(param0_values.begin(), param0_values.end());
     std::vector<float> param1_vector(param1_values.begin(), param1_values.end());
 
+    // Fall back to the closest point whenever bilinear interpolation is not
+    // possible - an empty result would silently freeze the pose.
+    auto emit_nearest_point = [&]()
+    {
+        const blend_space_point* best = nullptr;
+        float best_distance = std::numeric_limits<float>::max();
+        for(const auto& point : points_)
+        {
+            const float d0 = point.parameters[0] - current_params[0];
+            const float d1 = point.parameters[1] - current_params[1];
+            const float distance = d0 * d0 + d1 * d1;
+            if(distance < best_distance)
+            {
+                best_distance = distance;
+                best = &point;
+            }
+        }
+        if(best)
+        {
+            out_clips.emplace_back(best->clip, 1.0f);
+        }
+    };
+
+    // A degenerate axis (all points share one value) cannot form a grid cell.
+    if(param0_vector.size() < 2 || param1_vector.size() < 2)
+    {
+        emit_nearest_point();
+        return;
+    }
+
     // Find indices along each axis
     auto find_index = [](const std::vector<float>& values, float param) -> size_t
     {
+        if(param <= values.front())
+        {
+            return 0; // Below range clamps to the first cell
+        }
         for(size_t i = 0; i < values.size() - 1; ++i)
         {
             if(param >= values[i] && param <= values[i + 1])
@@ -532,12 +667,19 @@ void blend_space_def::compute_blend_2d(const parameters_t& current_params,
     for(const auto* cp : corner_points)
     {
         if(!cp)
-            return; // Cannot interpolate without all corner points
+        {
+            // Sparse grid cell - cannot interpolate, use the closest point.
+            emit_nearest_point();
+            return;
+        }
     }
 
-    // Compute interpolation factors
-    float tx = (current_params[0] - p00) / (p01 - p00);
-    float ty = (current_params[1] - p10) / (p11 - p10);
+    // Compute interpolation factors, clamped so parameters outside the grid
+    // do not extrapolate into negative weights.
+    float tx = (p01 - p00) > 1e-5f ? (current_params[0] - p00) / (p01 - p00) : 0.0f;
+    float ty = (p11 - p10) > 1e-5f ? (current_params[1] - p10) / (p11 - p10) : 0.0f;
+    tx = math::clamp(tx, 0.0f, 1.0f);
+    ty = math::clamp(ty, 0.0f, 1.0f);
 
     // Compute weights
     float w_bl = (1 - tx) * (1 - ty); // Bottom-left
