@@ -359,6 +359,43 @@ REFLECT(physics_component)
             entt::attribute{"pretty_name", "Is Auto Scaled"},
             entt::attribute{"tooltip", "Enables/Disables shape auto scale with transform."},
         })
+        .data<&physics_component::set_sensor_events_enabled, &physics_component::is_sensor_events_enabled>(
+            "sensor_events"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sensor_events"},
+            entt::attribute{"pretty_name", "Sensor Events"},
+            entt::attribute{"tooltip",
+                            "Track sensor overlaps involving this body and deliver OnSensorEnter/OnSensorExit. "
+                            "Overlaps neither side asks for are never tracked."},
+        })
+        .data<&physics_component::set_collision_events_enabled, &physics_component::is_collision_events_enabled>(
+            "collision_events"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "collision_events"},
+            entt::attribute{"pretty_name", "Collision Events"},
+            entt::attribute{"tooltip",
+                            "Track solid contacts involving this body and deliver "
+                            "OnCollisionEnter/OnCollisionExit."},
+        })
+        .data<&physics_component::set_sensor_exit_on_destroy, &physics_component::is_sensor_exit_on_destroy>(
+            "sensor_exit_on_destroy"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "sensor_exit_on_destroy"},
+            entt::attribute{"pretty_name", "Sensor Exit On Destroy"},
+            entt::attribute{"tooltip",
+                            "Deliver OnSensorExit when this body is destroyed or deactivated while still "
+                            "overlapping. Without it, an object that dies inside a sensor reports no exit."},
+        })
+        .data<&physics_component::set_collision_exit_on_destroy, &physics_component::is_collision_exit_on_destroy>(
+            "collision_exit_on_destroy"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "collision_exit_on_destroy"},
+            entt::attribute{"pretty_name", "Collision Exit On Destroy"},
+            entt::attribute{"tooltip",
+                            "Deliver OnCollisionExit when this body is destroyed or deactivated while still "
+                            "touching. Off by default: bodies in permanent contact would pay teardown cost "
+                            "for an event nobody consumes."},
+        })
         .data<&physics_component::set_mass, &physics_component::get_mass>("mass"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "mass"},
@@ -426,6 +463,10 @@ SAVE(physics_component)
     try_save(ar, ser20::make_nvp("body_type", obj.get_body_type()));
     try_save(ar, ser20::make_nvp("is_sensor", obj.is_sensor()));
     try_save(ar, ser20::make_nvp("is_autoscaled", obj.is_autoscaled()));
+    try_save(ar, ser20::make_nvp("sensor_events", obj.is_sensor_events_enabled()));
+    try_save(ar, ser20::make_nvp("collision_events", obj.is_collision_events_enabled()));
+    try_save(ar, ser20::make_nvp("sensor_exit_on_destroy", obj.is_sensor_exit_on_destroy()));
+    try_save(ar, ser20::make_nvp("collision_exit_on_destroy", obj.is_collision_exit_on_destroy()));
     try_save(ar, ser20::make_nvp("mass", obj.get_mass()));
     try_save(ar, ser20::make_nvp("include_layers", obj.get_collision_include_mask()));
     try_save(ar, ser20::make_nvp("exclude_layers", obj.get_collision_exclude_mask()));
@@ -471,6 +512,32 @@ LOAD(physics_component)
     if(try_load(ar, ser20::make_nvp("is_autoscaled", is_autoscaled)))
     {
         obj.set_is_autoscaled(is_autoscaled);
+    }
+
+    // Absent keys keep contact_event_flags_default, so assets authored before the
+    // contact policy existed behave as if they had opted into sensor exit on destroy.
+    bool sensor_events{};
+    if(try_load(ar, ser20::make_nvp("sensor_events", sensor_events)))
+    {
+        obj.set_sensor_events_enabled(sensor_events);
+    }
+
+    bool collision_events{};
+    if(try_load(ar, ser20::make_nvp("collision_events", collision_events)))
+    {
+        obj.set_collision_events_enabled(collision_events);
+    }
+
+    bool sensor_exit_on_destroy{};
+    if(try_load(ar, ser20::make_nvp("sensor_exit_on_destroy", sensor_exit_on_destroy)))
+    {
+        obj.set_sensor_exit_on_destroy(sensor_exit_on_destroy);
+    }
+
+    bool collision_exit_on_destroy{};
+    if(try_load(ar, ser20::make_nvp("collision_exit_on_destroy", collision_exit_on_destroy)))
+    {
+        obj.set_collision_exit_on_destroy(collision_exit_on_destroy);
     }
 
     float mass{1};

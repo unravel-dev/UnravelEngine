@@ -11,6 +11,7 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/engine.h>
+#include <engine/physics/backend/contact_graph.h>
 #include <engine/physics/ecs/components/character_controller_component.h>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
@@ -28,7 +29,6 @@
 #include <BulletDynamics/Character/btKinematicCharacterController.h>
 #include <BulletCollision/CollisionDispatch/btGhostObject.h>
 
-#include <hpp/flat_map.hpp>
 #include <logging/logging.h>
 
 #include <algorithm>
@@ -43,34 +43,6 @@
 #include "LinearMath/btThreads.h"
 #include <thread>
 #endif
-
-namespace
-{
-struct contact_key
-{
-    entt::handle a, b;
-    bool operator<(contact_key const& o) const
-    {
-        return a < o.a || (a == o.a && b < o.b);
-    }
-    bool operator==(contact_key const& o) const
-    {
-        return a == o.a && b == o.b;
-    }
-};
-} // namespace
-namespace std
-{
-template<>
-struct hash<contact_key>
-{
-    size_t operator()(contact_key const& k) const noexcept
-    {
-        // simple 64-bit combine
-        return (uint64_t)k.a.entity() * 0x9e3779b97f4a7c15ULL ^ ((uint64_t)k.b.entity() << 1);
-    }
-};
-} // namespace std
 
 namespace bullet
 {
@@ -97,6 +69,8 @@ struct contact_manifold
     event_type event{};
     entt::handle a{};
     entt::handle b{};
+    /// Only meaningful on exit. Always stated relative to `a`.
+    unravel::contact_end_reason reason{unravel::contact_end_reason::separated};
 
     std::vector<unravel::manifold_point> contacts;
 };
@@ -445,39 +419,68 @@ auto resolve_entity_from_collision_object(const btCollisionObject* obj) -> entt:
     return get_entity_id_from_user_index(user_index);
 }
 
-auto has_scripting(entt::handle a) -> bool
+/**
+ * @brief Contact policy for one participant.
+ *
+ * Character controllers carry no physics_component, so they take the default policy.
+ * That keeps controller-vs-sensor working without authoring anything.
+ */
+auto resolve_contact_flags(entt::handle entity) -> unravel::contact_event_flags
 {
-    if(!a)
+    if(!entity)
     {
-        return false;
+        return unravel::contact_event_flags::none;
     }
-    auto a_scirpt_comp = a.try_get<unravel::script_component>();
-    bool a_has_scripting = a_scirpt_comp && a_scirpt_comp->has_script_components();
-    return a_has_scripting;
+    if(const auto* comp = entity.try_get<unravel::physics_component>())
+    {
+        return comp->get_contact_event_flags();
+    }
+    return unravel::contact_event_flags_default;
 }
 
-auto should_record_collision_event(entt::handle a, entt::handle b) -> bool
+/**
+ * @brief The policy governing a pair, taken from whoever can actually hear about it.
+ *
+ * Sensor callbacks only ever reach the sensor, so only the sensor's policy decides
+ * whether a sensor pair is worth tracking or reporting. Collision callbacks reach both
+ * participants, so either one may ask for them - which is what makes an unscripted
+ * projectile dying inside a scripted sensor still produce the sensor's exit.
+ */
+auto effective_contact_flags(entt::handle a, entt::handle b, manifold_type type) -> unravel::contact_event_flags
 {
-    if(has_scripting(a))
+    const auto flags_a = resolve_contact_flags(a);
+    if(type == manifold_type::sensor)
     {
-        return true;
+        // `a` is always the sensor for sensor pairs.
+        return flags_a;
     }
-    if(has_scripting(b))
-    {
-        return true;
-    }
-
-    return false;
+    return flags_a | resolve_contact_flags(b);
 }
 
-auto should_record_sensor_event(entt::handle a, entt::handle b) -> bool
+/**
+ * @brief Whether a pair should be tracked at all.
+ *
+ * Gated on the flags alone, never on whether a script happens to be attached right
+ * now: a script added after the overlap began would otherwise silently miss both the
+ * enter and the exit. The defaults enable both event kinds, so this only skips work
+ * somebody explicitly opted out of.
+ */
+auto should_track_contact(unravel::contact_event_flags flags, manifold_type type) -> bool
 {
-    if(has_scripting(a))
-    {
-        return true;
-    }
+    const auto mask = (type == manifold_type::sensor) ? unravel::contact_event_flags::sensor_events
+                                                      : unravel::contact_event_flags::collision_events;
+    return unravel::has_any(flags, mask);
+}
 
-    return false;
+/**
+ * @brief Whether removing a participant should synthesize an exit for this pair.
+ */
+auto should_flush_on_destroy(unravel::contact_event_flags flags, manifold_type type) -> bool
+{
+    const auto mask = (type == manifold_type::sensor)
+                          ? unravel::contact_event_flags::sensor_exit_on_destroy
+                          : unravel::contact_event_flags::collision_exit_on_destroy;
+    return unravel::has_any(flags, mask);
 }
 
 template<typename Callback>
@@ -686,6 +689,7 @@ struct rigidbody
     std::shared_ptr<btCollisionShape> internal_shape{};
     int collision_filter_group{};
     int collision_filter_mask{};
+    unravel::contact_links links{};
 };
 
 struct character_controller
@@ -697,7 +701,32 @@ struct character_controller
     int collision_filter_mask{};
     // Accumulated Move() displacement; flushed once per simulate then cleared.
     math::vec3 pending_displacement{};
+    unravel::contact_links links{};
 };
+
+/**
+ * @brief Resolves a participant's contact list head.
+ *
+ * A contact side is either a rigid body or a character controller ghost, and both
+ * appear in the dispatcher's manifolds. Rigid bodies are checked first because they
+ * vastly outnumber controllers.
+ */
+inline auto find_contact_links(entt::handle entity) -> unravel::contact_links*
+{
+    if(!entity)
+    {
+        return nullptr;
+    }
+    if(auto* body = entity.try_get<rigidbody>())
+    {
+        return &body->links;
+    }
+    if(auto* cc = entity.try_get<character_controller>())
+    {
+        return &cc->links;
+    }
+    return nullptr;
+}
 
 struct world
 {
@@ -710,19 +739,19 @@ struct world
     std::shared_ptr<btDefaultCollisionConfiguration> collision_config;
     std::shared_ptr<btDiscreteDynamicsWorld> dynamics_world;
 
-    struct contact_record
-    {
-        contact_record()
-        {
-            // Reserve a small typical number of contacts to avoid per-frame reallocation
-            cm.contacts.reserve(4);
-        }
+    using contact_store = unravel::contact_graph<contact_manifold>;
+    using contact_slot = contact_store::slot;
 
-        contact_manifold cm;
-        bool active_this_frame = false;
+    /// Identifies a slot across re-entrant script calls that may have freed it.
+    struct slot_ref
+    {
+        uint32_t slot{unravel::contact_links::npos};
+        uint32_t generation{0};
     };
-    hpp::flat_map<contact_key, contact_record> contacts_cache;
-    unravel::physics_vector<contact_manifold> to_enter;
+
+    contact_store contacts{&find_contact_links};
+
+    unravel::physics_vector<slot_ref> to_enter;
     unravel::physics_vector<contact_manifold> to_exit;
 
     bool in_simulate{};
@@ -778,7 +807,7 @@ struct world
                 }
                 else
                 {
-                    scripting.on_sensor_exit(manifold.a, manifold.b, manifold.contacts);
+                    scripting.on_sensor_exit(manifold.a, manifold.b, manifold.contacts, manifold.reason);
                 }
 
                 break;
@@ -792,7 +821,7 @@ struct world
                 }
                 else
                 {
-                    scripting.on_collision_exit(manifold.a, manifold.b, manifold.contacts);
+                    scripting.on_collision_exit(manifold.a, manifold.b, manifold.contacts, manifold.reason);
                 }
                 break;
             }
@@ -804,6 +833,202 @@ struct world
         }
     }
 
+    // --- contact graph -----------------------------------------------------------
+
+    /**
+     * @brief Finds an existing slot for a pair by walking one participant's list.
+     *
+     * Sensor pairs are directional (the sensor is always `a`, and two overlapping
+     * sensors report each other independently). Collision pairs are matched unordered,
+     * because Bullet is free to present body0/body1 either way across manifold rebuilds.
+     */
+    auto find_slot_for_pair(entt::handle a, entt::handle b, manifold_type type) -> uint32_t
+    {
+        return contacts.visit(a,
+                              [&](uint32_t, const contact_slot& slot)
+                              {
+                                  if(slot.payload.type != type)
+                                  {
+                                      return false;
+                                  }
+                                  if(type == manifold_type::sensor)
+                                  {
+                                      return slot.a == a && slot.b == b;
+                                  }
+                                  return (slot.a == a && slot.b == b) || (slot.a == b && slot.b == a);
+                              });
+    }
+
+    /**
+     * @brief Drops every pair involving an entity, reporting the ones that were owed.
+     *
+     * Detach-then-notify: the graph is made fully consistent BEFORE any script runs, so
+     * a callback that destroys further entities re-enters with `flush_pending == 0` on
+     * this body and can neither observe nor re-emit what is being reported here.
+     *
+     * @param reason Stated relative to @p entity, which is the side going away.
+     * @param notify False during teardown, where the exits are noise or have already
+     *               been reported by the pre-destroy phase.
+     */
+    void release_contacts_for(entt::handle entity, unravel::contact_end_reason reason, bool notify)
+    {
+        auto* links = find_contact_links(entity);
+        if(links == nullptr || links->head == unravel::contact_links::npos)
+        {
+            return;
+        }
+
+        const bool wants_events = notify && links->flush_pending != 0;
+
+        unravel::physics_vector<contact_manifold, 8> pending;
+        if(wants_events)
+        {
+            pending.reserve(links->flush_pending);
+        }
+
+        contacts.visit(entity,
+                       [&](uint32_t id, contact_slot& slot)
+                       {
+                           // An enter that never reached script code must not be
+                           // answered with an exit; as far as gameplay is concerned
+                           // that pair never happened.
+                           if(wants_events && slot.flush_on_destroy && slot.enter_dispatched)
+                           {
+                               pending.push_back(slot.payload);
+
+                               auto& cm = pending.back();
+                               cm.event = event_type::exit;
+                               // process_manifold states the reason relative to `a`.
+                               cm.reason = (slot.a == entity) ? reason : unravel::mirror_contact_end_reason(reason);
+                           }
+
+                           contacts.erase(id);
+                           return false;
+                       });
+
+        if(pending.empty())
+        {
+            return;
+        }
+
+        auto& ctx = unravel::engine::context();
+        auto& scripting = ctx.get_cached<unravel::script_system>();
+        for(const auto& cm : pending)
+        {
+            process_manifold(scripting, cm);
+        }
+    }
+
+    /**
+     * @brief Re-applies the contact policy to a body's existing pairs.
+     *
+     * The policy is latched per pair at insert so the hot paths never read a component.
+     * Changing the flags at runtime therefore has to walk that one body's list - O(k),
+     * and only when the dirty flag says the flags actually moved. Pairs that are no
+     * longer tracked at all are dropped silently; pairs that become trackable are
+     * picked up by touch_pair on the next step, which re-tests the gate anyway.
+     */
+    void refresh_contact_policy_for(entt::handle entity)
+    {
+        contacts.visit(entity,
+                       [&](uint32_t id, contact_slot& slot)
+                       {
+                           const auto flags = effective_contact_flags(slot.a, slot.b, slot.payload.type);
+
+                           if(!should_track_contact(flags, slot.payload.type))
+                           {
+                               contacts.erase(id);
+                           }
+                           else
+                           {
+                               contacts.set_flush_on_destroy(id, should_flush_on_destroy(flags, slot.payload.type));
+                           }
+
+                           return false;
+                       });
+    }
+
+    void clear_contacts()
+    {
+        contacts.clear();
+        to_enter.clear();
+        to_exit.clear();
+    }
+
+    static void copy_manifold_points(btPersistentManifold* m,
+                                     std::vector<unravel::manifold_point>& out,
+                                     bool swap_sides)
+    {
+        const int count = m->getNumContacts();
+        out.clear();
+        out.reserve(static_cast<size_t>(count));
+
+        for(int j = 0; j < count; ++j)
+        {
+            const auto& p = m->getContactPoint(j);
+
+            unravel::manifold_point mp;
+            if(swap_sides)
+            {
+                mp.a = from_bullet(p.getPositionWorldOnB());
+                mp.b = from_bullet(p.getPositionWorldOnA());
+                mp.normal_on_a = from_bullet(p.m_normalWorldOnB);
+                mp.normal_on_b = -mp.normal_on_a;
+            }
+            else
+            {
+                mp.a = from_bullet(p.getPositionWorldOnA());
+                mp.b = from_bullet(p.getPositionWorldOnB());
+                mp.normal_on_b = from_bullet(p.m_normalWorldOnB);
+                mp.normal_on_a = -mp.normal_on_b;
+            }
+            mp.impulse = p.getAppliedImpulse();
+            mp.distance = p.getDistance();
+
+            out.push_back(mp);
+        }
+    }
+
+    /**
+     * @brief Marks a pair as still touching, inserting and queueing it when it is new.
+     *
+     * Points are captured once, when the pair is created. Both natural and synthesized
+     * exits therefore report the geometry of the moment the overlap began; refreshing
+     * every pair every step would add a copy to the hot path for data almost nobody
+     * reads.
+     */
+    void touch_pair(btPersistentManifold* m, entt::handle a, entt::handle b, manifold_type type, bool swap_sides)
+    {
+        const uint32_t existing = find_slot_for_pair(a, b, type);
+        if(existing != unravel::contact_links::npos)
+        {
+            contacts.get(existing).active_this_frame = true;
+            return;
+        }
+
+        const auto flags = effective_contact_flags(a, b, type);
+        if(!should_track_contact(flags, type))
+        {
+            return;
+        }
+
+        const uint32_t id = contacts.insert(a, b, should_flush_on_destroy(flags, type));
+        if(id == unravel::contact_links::npos)
+        {
+            return;
+        }
+
+        auto& slot = contacts.get(id);
+        slot.payload.type = type;
+        slot.payload.event = event_type::enter;
+        slot.payload.reason = unravel::contact_end_reason::separated;
+        slot.payload.a = a;
+        slot.payload.b = b;
+        copy_manifold_points(m, slot.payload.contacts, swap_sides);
+
+        to_enter.push_back(slot_ref{id, slot.generation});
+    }
+
     void process_manifolds()
     {
         APP_SCOPE_PERF("Physics/Bullet/Process Manifolds");
@@ -812,166 +1037,94 @@ struct world
         auto& ec = ctx.get_cached<unravel::ecs>();
 
         auto* dispatcher = dynamics_world->getDispatcher();
-        int nm = dispatcher->getNumManifolds();
+        const int nm = dispatcher->getNumManifolds();
 
-        // Phase 0: clear active flags
-        for(auto& kv : contacts_cache)
-            kv.second.active_this_frame = false;
+        // Phase 0: nothing survives a step it was not seen in.
+        for(const uint32_t id : contacts.live())
+        {
+            contacts.get(id).active_this_frame = false;
+        }
 
         to_enter.clear();
         to_exit.clear();
-        to_enter.reserve(nm);
-        to_exit.reserve(contacts_cache.size());
 
-        // Phase 1: scan all current manifolds
+        // Phase 1: fold every current manifold into the graph.
         for(int i = 0; i < nm; ++i)
         {
             auto* m = dispatcher->getManifoldByIndexInternal(i);
             if(m->getNumContacts() == 0)
-                continue;
-
-            // Identify entities and sensor flags
-            auto* objA = m->getBody0();
-            auto* objB = m->getBody1();
-            bool isSensorA = objA->getCollisionFlags() & btCollisionObject::CF_NO_CONTACT_RESPONSE;
-            bool isSensorB = objB->getCollisionFlags() & btCollisionObject::CF_NO_CONTACT_RESPONSE;
-            auto eA = get_entity_from_user_index(ec, objA->getUserIndex());
-            auto eB = get_entity_from_user_index(ec, objB->getUserIndex());
-
-            // Handle trigger overlaps: A->B and B->A
-            if(isSensorA || isSensorB)
             {
-                // A->B if A is sensor
-                if(isSensorA)
+                continue;
+            }
+
+            const auto* obj_a = m->getBody0();
+            const auto* obj_b = m->getBody1();
+            const bool is_sensor_a = (obj_a->getCollisionFlags() & btCollisionObject::CF_NO_CONTACT_RESPONSE) != 0;
+            const bool is_sensor_b = (obj_b->getCollisionFlags() & btCollisionObject::CF_NO_CONTACT_RESPONSE) != 0;
+
+            auto entity_a = get_entity_from_user_index(ec, obj_a->getUserIndex());
+            auto entity_b = get_entity_from_user_index(ec, obj_b->getUserIndex());
+            if(!entity_a || !entity_b)
+            {
+                continue;
+            }
+
+            if(is_sensor_a || is_sensor_b)
+            {
+                // Sensor pairs are directional - the sensor is always the `a` side,
+                // and two overlapping sensors each report the other.
+                if(is_sensor_a)
                 {
-                    contact_key key{eA, eB};
-                    auto it = contacts_cache.find(key);
-                    if(it != contacts_cache.end())
-                    {
-                        it->second.active_this_frame = true;
-                    }
-                    else
-                    {
-                        contact_manifold cm;
-                        cm.type = manifold_type::sensor;
-                        cm.event = event_type::enter;
-                        cm.a = eA;
-                        cm.b = eB;
-                        cm.contacts.reserve(m->getNumContacts());
-                        for(int j = 0; j < m->getNumContacts(); ++j)
-                        {
-                            auto const& p = m->getContactPoint(j);
-                            unravel::manifold_point mp;
-                            mp.a = from_bullet(p.getPositionWorldOnA());
-                            mp.b = from_bullet(p.getPositionWorldOnB());
-                            mp.normal_on_b = from_bullet(p.m_normalWorldOnB);
-                            mp.normal_on_a = -mp.normal_on_b;
-                            mp.impulse = p.getAppliedImpulse();
-                            mp.distance = p.getDistance();
-                            cm.contacts.push_back(mp);
-                        }
-                        to_enter.push_back(cm);
-                        auto& rec = contacts_cache.emplace(key, contact_record{}).first->second;
-                        rec.cm = cm;
-                        rec.active_this_frame = true;
-                    }
+                    touch_pair(m, entity_a, entity_b, manifold_type::sensor, false);
                 }
-                // B->A if B is sensor
-                if(isSensorB)
+                if(is_sensor_b)
                 {
-                    contact_key key{eB, eA};
-                    auto it = contacts_cache.find(key);
-                    if(it != contacts_cache.end())
-                    {
-                        it->second.active_this_frame = true;
-                    }
-                    else
-                    {
-                        contact_manifold cm;
-                        cm.type = manifold_type::sensor;
-                        cm.event = event_type::enter;
-                        cm.a = eB;
-                        cm.b = eA;
-                        cm.contacts.reserve(m->getNumContacts());
-                        for(int j = 0; j < m->getNumContacts(); ++j)
-                        {
-                            auto const& p = m->getContactPoint(j);
-                            unravel::manifold_point mp;
-                            mp.a = from_bullet(p.getPositionWorldOnB());
-                            mp.b = from_bullet(p.getPositionWorldOnA());
-                            mp.normal_on_a = from_bullet(p.m_normalWorldOnB);
-                            mp.normal_on_b = -mp.normal_on_a;
-                            mp.impulse = p.getAppliedImpulse();
-                            mp.distance = p.getDistance();
-                            cm.contacts.push_back(mp);
-                        }
-                        to_enter.push_back(cm);
-                        auto& rec = contacts_cache.emplace(key, contact_record{}).first->second;
-                        rec.cm = cm;
-                        rec.active_this_frame = true;
-                    }
+                    touch_pair(m, entity_b, entity_a, manifold_type::sensor, true);
                 }
                 continue;
             }
 
-            // Handle collisions: only new ones cause ENTER
-            contact_key key{eA, eB};
-            auto it = contacts_cache.find(key);
-            if(it != contacts_cache.end())
-            {
-                // existing: refresh
-                it->second.active_this_frame = true;
-            }
-            else
-            {
-                // new collision
-                contact_manifold cm;
-                cm.type = manifold_type::collision;
-                cm.event = event_type::enter;
-                cm.a = eA;
-                cm.b = eB;
-                cm.contacts.reserve(m->getNumContacts());
-                for(int j = 0; j < m->getNumContacts(); ++j)
-                {
-                    auto const& p = m->getContactPoint(j);
-                    unravel::manifold_point mp;
-                    mp.a = from_bullet(p.getPositionWorldOnA());
-                    mp.b = from_bullet(p.getPositionWorldOnB());
-                    mp.normal_on_b = from_bullet(p.m_normalWorldOnB);
-                    mp.normal_on_a = -mp.normal_on_b;
-                    mp.impulse = p.getAppliedImpulse();
-                    mp.distance = p.getDistance();
-                    cm.contacts.push_back(mp);
-                }
-                to_enter.push_back(cm);
-                auto& rec = contacts_cache.emplace(key, contact_record{}).first->second;
-                rec.cm = cm;
-                rec.active_this_frame = true;
-            }
+            touch_pair(m, entity_a, entity_b, manifold_type::collision, false);
         }
 
-        // Phase 2: EXIT for stale entries
-        for(auto it = contacts_cache.begin(); it != contacts_cache.end();)
+        // Phase 2: whatever was not seen has separated. Walking backwards keeps the
+        // swap-and-pop inside contact_graph::erase from skipping an entry.
+        const auto& live = contacts.live();
+        for(size_t i = live.size(); i != 0; --i)
         {
-            if(!it->second.active_this_frame)
+            const uint32_t id = live[i - 1];
+            auto& slot = contacts.get(id);
+            if(slot.active_this_frame)
             {
-                auto cm = it->second.cm;
-                cm.event = event_type::exit;
-                to_exit.push_back(cm);
-                it = contacts_cache.erase(it);
+                continue;
             }
-            else
+
+            if(slot.enter_dispatched)
             {
-                ++it;
+                to_exit.push_back(slot.payload);
+                to_exit.back().event = event_type::exit;
+                to_exit.back().reason = unravel::contact_end_reason::separated;
             }
+
+            contacts.erase(id);
         }
 
-        // Phase 3: dispatch
-        for(auto& cm : to_enter)
+        // Phase 3: dispatch. Script code called here may destroy entities, which frees
+        // slots via release_contacts_for, so every queued enter is revalidated against
+        // the slot generation before use. Exits carry their own copy and cannot dangle.
+        for(const auto& ref : to_enter)
         {
-            process_manifold(scripting, cm);
+            if(!contacts.is_live(ref.slot, ref.generation))
+            {
+                continue;
+            }
+
+            auto& slot = contacts.get(ref.slot);
+            slot.enter_dispatched = true;
+            process_manifold(scripting, slot.payload);
         }
-        for(auto& cm : to_exit)
+
+        for(const auto& cm : to_exit)
         {
             process_manifold(scripting, cm);
         }
@@ -1731,9 +1884,35 @@ void destroy_phyisics_body(bullet::world& world, entt::handle entity, bool from_
 {
     auto body = entity.try_get<bullet::rigidbody>();
 
-    if(body && body->internal)
+    if(body)
     {
-        world.remove_rigidbody(*body);
+        // Anything this body was still touching leaves the graph with it either way: a
+        // slot outliving its participant would later report an exit against a dead
+        // handle, which is the failure this whole path exists to remove.
+        //
+        // Whether that is worth telling anyone about depends on why we are here.
+        // Suppression is raised only for the span of entt::registry::destroy, so:
+        //
+        //   suppressed  -> entity teardown. The pre-destroy phase already reported
+        //                  these while the whole subtree was intact; saying it twice
+        //                  would be wrong and running script code from inside
+        //                  registry::destroy would be worse.
+        //   not         -> the component is being taken off an entity that lives on
+        //                  (inspector, RemoveComponent, a body swap). The overlap has
+        //                  genuinely ended and nobody else will ever say so.
+        //
+        // A raw handle.destroy() that skipped scene::destroy_entity also lands in the
+        // second case. The physics layer cannot tell it apart from a plain component
+        // removal from in here, and reporting from a slightly riskier context beats
+        // dropping the event, so it takes the same path.
+        const bool notify = !scene::is_destroy_suppressed();
+
+        world.release_contacts_for(entity, unravel::contact_end_reason::other_disabled, notify);
+
+        if(body->internal)
+        {
+            world.remove_rigidbody(*body);
+        }
     }
 
     if(from_physics_component)
@@ -1777,6 +1956,11 @@ void sync_physics_body(bullet::world& world, physics_component& comp, bool force
             if(comp.is_property_dirty(physics_property::sensor))
             {
                 update_rigidbody_sensor(body, comp);
+            }
+
+            if(comp.is_property_dirty(physics_property::contact_events))
+            {
+                world.refresh_contact_policy_for(owner);
             }
 
             if(comp.is_property_dirty(physics_property::constraints))
@@ -2047,6 +2231,13 @@ void destroy_character_controller_body(bullet::world& world,
     auto cc = entity.try_get<bullet::character_controller>();
     if(cc)
     {
+        // Same contract as rigid bodies: the ghost's tracked pairs leave the graph with
+        // it, and are reported unless we are inside an entity teardown that already
+        // reported them. See destroy_phyisics_body.
+        const bool notify = !scene::is_destroy_suppressed();
+
+        world.release_contacts_for(entity, unravel::contact_end_reason::other_disabled, notify);
+
         cc->pending_displacement = math::vec3{0.0f};
         if(cc->controller)
         {
@@ -2391,6 +2582,28 @@ void bullet_backend::sync_character_runtime_state(character_controller_component
     comp.set_velocity_internal(bullet::from_bullet(cc->controller->getLinearVelocity()));
 }
 
+void bullet_backend::on_pre_destroy_entity(entt::registry& r, entt::entity e)
+{
+    auto world = r.ctx().find<bullet::world>();
+    if(world == nullptr)
+    {
+        return;
+    }
+
+    entt::handle entity(r, e);
+
+    // The fast path the whole design exists to protect. A body with no tracked pairs,
+    // or whose pairs all opted out of exit-on-destroy, leaves after one compare - no
+    // graph walk, no component reads, no allocation.
+    auto* links = bullet::find_contact_links(entity);
+    if(links == nullptr || links->flush_pending == 0)
+    {
+        return;
+    }
+
+    world->release_contacts_for(entity, contact_end_reason::other_destroyed, true);
+}
+
 void bullet_backend::on_create_active_component(entt::registry& r, entt::entity e)
 {
     auto world = r.ctx().find<bullet::world>();
@@ -2416,6 +2629,18 @@ void bullet_backend::on_destroy_active_component(entt::registry& r, entt::entity
     if(world)
     {
         entt::handle entity(r, e);
+
+        // Deactivating pulls the body out of the world exactly like destroying does,
+        // so it owes the same exits. Reported here rather than inferred a step later,
+        // which is what makes disable and destroy behave identically.
+        //
+        // Entity teardown also removes active_component, and there the exits were
+        // already reported by the pre-destroy phase. Suppression tells the two apart:
+        // it is raised only for the duration of entt::registry::destroy, and script
+        // code must not run from in there.
+        const bool notify = !scene::is_destroy_suppressed();
+        world->release_contacts_for(entity, contact_end_reason::other_disabled, notify);
+
         auto body = entity.try_get<bullet::rigidbody>();
         if(body)
         {
@@ -2669,6 +2894,10 @@ void bullet_backend::on_play_begin(rtti::context& ctx)
     registry.on_construct<active_component>().connect<&on_create_active_component>();
     registry.on_destroy<active_component>().connect<&on_destroy_active_component>();
 
+    // Connected only for the duration of play, so scene::destroy_entity finds an empty
+    // signal in edit mode and skips its subtree walk entirely.
+    on_pre_destroy(registry).connect<&on_pre_destroy_entity>();
+
     registry.view<physics_component>().each(
         [&](auto e, auto&& comp)
         {
@@ -2688,6 +2917,10 @@ void bullet_backend::on_play_end(rtti::context& ctx)
 
     auto& world = registry.ctx().get<bullet::world>();
 
+    // Drop the whole graph before the bodies go. Play end is a bulk teardown, so no
+    // exits are owed, and clearing first keeps the per-body destroy assert honest.
+    world.clear_contacts();
+
     registry.view<character_controller_component>().each(
         [&](auto e, auto&& comp)
         {
@@ -2699,6 +2932,7 @@ void bullet_backend::on_play_end(rtti::context& ctx)
             destroy_phyisics_body(world, comp.get_owner(), true);
         });
 
+    on_pre_destroy(registry).disconnect<&on_pre_destroy_entity>();
     registry.on_construct<active_component>().disconnect<&on_create_active_component>();
     registry.on_destroy<active_component>().disconnect<&on_destroy_active_component>();
     registry.on_destroy<bullet::character_controller>().disconnect<&on_destroy_bullet_cc_component>();

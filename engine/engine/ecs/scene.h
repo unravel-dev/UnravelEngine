@@ -61,6 +61,43 @@ inline void emit_on_load(entt::registry& reg, entt::entity e)
     }
 }
 
+/**
+ * @struct on_pre_destroy_bus
+ * @brief Announces every entity of a subtree that is about to be destroyed.
+ *
+ * Published from scene::destroy_entity strictly BEFORE entt::registry::destroy is
+ * entered, and before any component is removed. That is the only point where such work
+ * can legally happen: registry::destroy removes components in reverse pool-registration
+ * order - an accident of which type's storage was assured first - and EnTT documents
+ * that adding or removing elements on an entity being destroyed is undefined behaviour.
+ *
+ * Inside a slot the whole subtree is still intact: every component present, script
+ * objects still pinned. Slots may add or remove components, run script code, and
+ * destroy other entities, including the one being announced.
+ *
+ * Two rules for subscribers:
+ *   - Mutate your own state BEFORE notifying anyone, so a re-entrant destroy of the
+ *     same entity finds no remaining work.
+ *   - Be idempotent. A slot that destroys the entity currently being announced causes
+ *     a second pass over the same subtree.
+ */
+struct on_pre_destroy_bus
+{
+    using sink_t = typename entt::sink<entt::sigh<void(entt::registry&, entt::entity)>>;
+    entt::sigh<void(entt::registry&, entt::entity)> sig;
+};
+
+inline auto on_pre_destroy(entt::registry& reg) -> typename on_pre_destroy_bus::sink_t
+{
+    auto& ctx = reg.ctx();
+    if(!ctx.contains<on_pre_destroy_bus>())
+    {
+        return typename on_pre_destroy_bus::sink_t(ctx.emplace<on_pre_destroy_bus>().sig);
+    }
+    return typename on_pre_destroy_bus::sink_t(ctx.get<on_pre_destroy_bus>().sig);
+}
+
+
 #define ENTT_TAG(name) entt::tag<name##_hs>
 /**
  * @struct scene
@@ -107,6 +144,43 @@ struct scene
     auto instantiate(const asset_handle<prefab>& pfb, entt::handle parent, bool call_callbacks = true) -> entt::handle;
 
     void clear_entity(entt::handle& handle);
+
+    /**
+     * @brief Destroys an entity and its subtree.
+     *
+     * The single funnel for entity destruction. Announces the whole subtree on
+     * on_pre_destroy - children before parents, with everything still intact - and only
+     * then destroys. Safe to call re-entrantly from a slot.
+     *
+     * Prefer this over entt::handle::destroy anywhere gameplay can observe the entity.
+     * A raw destroy skips the announcement, so subsystems holding per-entity state get
+     * no chance to settle it while the entity is still readable.
+     */
+    static void destroy_entity(entt::handle entity);
+
+    /**
+     * @struct scoped_destroy_suppression
+     * @brief Skips the pre-destroy announcement for bulk teardown.
+     *
+     * Scene unload, play end and editor scratch entities all destroy en masse, where
+     * exit callbacks are noise at best and reentrancy hazards at worst. Nested-safe.
+     */
+    struct scoped_destroy_suppression
+    {
+        scoped_destroy_suppression();
+        ~scoped_destroy_suppression();
+
+        scoped_destroy_suppression(const scoped_destroy_suppression&) = delete;
+        scoped_destroy_suppression(scoped_destroy_suppression&&) = delete;
+        auto operator=(const scoped_destroy_suppression&) -> scoped_destroy_suppression& = delete;
+        auto operator=(scoped_destroy_suppression&&) -> scoped_destroy_suppression& = delete;
+    };
+
+    /**
+     * @brief Whether a scoped_destroy_suppression is currently active.
+     */
+    static auto is_destroy_suppressed() -> bool;
+
     /**
      * @brief Creates an entity in the scene.
      * @param e The entity identifier.

@@ -7,6 +7,30 @@ using System.Buffers;
 
 namespace Unravel.Core
 {
+    /// <summary>
+    /// Why a contact or sensor overlap ended.
+    /// </summary>
+    /// <remarks>
+    /// Logic that only decrements a counter can ignore this. Logic that reacts to the other
+    /// side leaving under its own power - spawning a trail, re-targeting, playing an exit
+    /// cue - should check for <see cref="Separated"/> first.
+    /// </remarks>
+    public enum ContactEndReason : byte
+    {
+        /// <summary>The pair moved apart. The only reason an enter event ever carries.</summary>
+        Separated = 0,
+        /// <summary>
+        /// The other entity is being destroyed. It is still fully valid for the duration of
+        /// this callback and invalid immediately afterwards.
+        /// </summary>
+        OtherDestroyed = 1,
+        /// <summary>The other entity was deactivated.</summary>
+        OtherDisabled = 2,
+        /// <summary>This entity is being destroyed.</summary>
+        SelfDestroyed = 3,
+        /// <summary>This entity was deactivated.</summary>
+        SelfDisabled = 4,
+    }
 
     /// <summary>
     /// Represents a collision that occurs between two entities.
@@ -22,6 +46,15 @@ namespace Unravel.Core
         /// Gets the array of contact points where the collision occurred.
         /// </summary>
         public ContactPoint[] contacts;
+
+        /// <summary>
+        /// Why the overlap ended. Always <see cref="ContactEndReason.Separated"/> for enter events.
+        /// </summary>
+        /// <remarks>
+        /// Exits synthesized because one side is going away carry the last known contact points
+        /// rather than fresh ones - the manifold no longer exists by the time they are reported.
+        /// </remarks>
+        public ContactEndReason reason;
 
         /// <summary>
         /// Converts the collision to its string representation.

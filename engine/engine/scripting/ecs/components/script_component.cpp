@@ -120,14 +120,16 @@ void script_component::on_sensor_enter(entt::handle other, const std::vector<man
                  });
 }
 
-void script_component::on_sensor_exit(entt::handle other, const std::vector<manifold_point>& manifolds)
+void script_component::on_sensor_exit(entt::handle other,
+                                      const std::vector<manifold_point>& manifolds,
+                                      contact_end_reason reason)
 {
     auto managed_manifolds = to_managed_contact_points(manifolds, true);
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
                      auto obj = script.pinned->get_object();
-                     on_sensor_exit(obj, other, managed_manifolds);
+                     on_sensor_exit(obj, other, managed_manifolds, reason);
                  });
 }
 
@@ -142,14 +144,17 @@ void script_component::on_collision_enter(entt::handle b, const std::vector<mani
                  });
 }
 
-void script_component::on_collision_exit(entt::handle b, const std::vector<manifold_point>& manifolds, bool use_b)
+void script_component::on_collision_exit(entt::handle b,
+                                         const std::vector<manifold_point>& manifolds,
+                                         bool use_b,
+                                         contact_end_reason reason)
 {
     auto managed_manifolds = to_managed_contact_points(manifolds, use_b);
     safe_foreach(script_components_,
                  [&](auto& script)
                  {
                      auto obj = script.pinned->get_object();
-                     on_collision_exit(obj, b, managed_manifolds);
+                     on_collision_exit(obj, b, managed_manifolds, reason);
                  });
 }
 
@@ -322,14 +327,17 @@ void script_component::on_sensor_enter(const dotnet::object& obj, entt::handle o
     }
 }
 
-void script_component::on_sensor_exit(const dotnet::object& obj, entt::handle other, const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds)
+void script_component::on_sensor_exit(const dotnet::object& obj,
+                                      entt::handle other,
+                                      const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds,
+                                      contact_end_reason reason)
 {
     try
     {
         auto method = dotnet::make_method_invoker<void(
-            entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(
+            entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&, uint8_t)>(
             engine_script_cache().on_sensor_exit_method, false);
-        method(obj, other.entity(), manifolds);
+        method(obj, other.entity(), manifolds, static_cast<uint8_t>(reason));
     }
     catch(const dotnet::exception& e)
     {
@@ -356,14 +364,15 @@ void script_component::on_collision_enter(const dotnet::object& obj,
 
 void script_component::on_collision_exit(const dotnet::object& obj,
                                          entt::handle other,
-                                         const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds)
+                                         const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds,
+                                         contact_end_reason reason)
 {
     try
     {
         auto method = dotnet::make_method_invoker<void(
-            entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&)>(
+            entt::entity, const std::vector<dotnetpp_backend::managed_interface::manifold_point>&, uint8_t)>(
             engine_script_cache().on_collision_exit_method, false);
-        method(obj, other.entity(), manifolds);
+        method(obj, other.entity(), manifolds, static_cast<uint8_t>(reason));
     }
     catch(const dotnet::exception& e)
     {

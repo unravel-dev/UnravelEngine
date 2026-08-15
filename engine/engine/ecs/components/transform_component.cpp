@@ -89,11 +89,38 @@ void transform_component::on_destroy_component(entt::registry& r, entt::entity e
         }
     }
 
-    for(auto& child : component.children_)
+    // The second and last raw destroy in the codebase; everywhere outside these two
+    // calls scene::destroy_entity. Raw on purpose here: the funnel already announced
+    // this whole subtree on on_pre_destroy before entering registry::destroy, so
+    // routing children back through it would announce every one of them a second time.
+    //
+    // This loop is also what keeps a raw handle.destroy() from anywhere else correct -
+    // the subtree goes with its root regardless of how the teardown was started.
+    //
+    // The list is consumed rather than iterated. Destroying a child runs its own
+    // teardown, which calls remove_child on THIS component - a std::erase_if over the
+    // very children_ we are walking. A range-for caches end() once and then reads past
+    // the shrunk range, and copying the vector first would allocate on every non-leaf
+    // teardown in the scene.
+    //
+    // Children a slot reparented away during the announcement are already gone from
+    // this list, which is how "drop what I am carrying before I die" survives.
+    while(!component.children_.empty())
     {
+        auto child = component.children_.back();
+        const auto count_before = component.children_.size();
+
         if(child)
         {
             child.destroy();
+        }
+
+        // A child unlinks itself from here during its own teardown. If it did not -
+        // already invalid, or its parent link pointed elsewhere - drop it so the loop
+        // still terminates.
+        if(component.children_.size() == count_before)
+        {
+            component.children_.pop_back();
         }
     }
 }

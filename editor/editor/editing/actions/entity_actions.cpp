@@ -29,6 +29,11 @@ auto restore_root_from_serialized_subtree(entt::registry& registry, std::string_
     {
         return {};
     }
+    // Scratch entity for deserialization. Gameplay never sees it, so its teardown must
+    // not announce anything - but it still goes through the funnel, so a partially
+    // loaded subtree under it is disposed of the same way as any other.
+    scene::scoped_destroy_suppression no_announce;
+
     entt::entity stub = registry.create();
     entt::handle handle(registry, stub);
     try
@@ -37,18 +42,18 @@ auto restore_root_from_serialized_subtree(entt::registry& registry, std::string_
     }
     catch(const std::exception&)
     {
-        registry.destroy(stub);
+        scene::destroy_entity(entt::handle(registry, stub));
         return {};
     }
     if(handle)
     {
         if(handle.entity() != stub)
         {
-            registry.destroy(stub);
+            scene::destroy_entity(entt::handle(registry, stub));
         }
         return handle;
     }
-    registry.destroy(stub);
+    scene::destroy_entity(entt::handle(registry, stub));
     return {};
 }
 
@@ -258,7 +263,7 @@ void create_entities_action_t::undo_action()
 
         em.unselect(target);
         prefab_override_context::mark_entity_as_removed(target);
-        target.destroy();
+        scene::destroy_entity(target);
     }
 }
 
@@ -365,7 +370,7 @@ void delete_entities_action_t::do_action()
         }
         em.unselect(target);
         prefab_override_context::mark_entity_as_removed(target);
-        target.destroy();
+        scene::destroy_entity(target);
     }
 }
 

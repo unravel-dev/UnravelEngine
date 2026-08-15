@@ -26,6 +26,8 @@
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/profiler/profiler.h>
 
+#include <hpp/small_vector.hpp>
+
 #include <logging/logging.h>
 
 namespace unravel
@@ -91,6 +93,39 @@ void unregister_scene(scene* scn)
     scenes.erase(std::remove(scenes.begin(), scenes.end(), scn), scenes.end());
 }
 
+
+auto destroy_suppression_depth() -> int&
+{
+    static int depth = 0;
+    return depth;
+}
+
+/**
+ * @brief Collects a subtree depth-first, children before parents.
+ *
+ * Children first so a child's slot still observes an intact parent.
+ *
+ * Iterated by reference on purpose: this walk runs no user code, so nothing can
+ * reparent or destroy anything while it is in progress. The snapshot it fills exists
+ * because the publish pass afterwards does run user code.
+ */
+void collect_subtree_post_order(entt::handle entity, hpp::small_vector<entt::handle, 16>& out)
+{
+    if(!entity)
+    {
+        return;
+    }
+
+    if(const auto* transform = entity.try_get<transform_component>())
+    {
+        for(const auto& child : transform->get_children())
+        {
+            collect_subtree_post_order(child, out);
+        }
+    }
+
+    out.push_back(entity);
+}
 
 template<typename ...Ts>
 void destroy_dependent_components(entt::registry& r, entt::entity e)
@@ -199,6 +234,15 @@ scene::~scene()
 
 void scene::unload()
 {
+    // Bulk teardown: every entity goes at once, so contact exit callbacks would be
+    // noise - the guard turns them off for the duration.
+    scoped_destroy_suppression no_pre_destroy;
+
+    // Same order the single-entity path uses: physics leaves the world before the
+    // scripts that might otherwise be called back into, and both before the untyped
+    // clear() tears down everything else in whatever order the pools happen to sit in.
+    registry->clear<physics_component>();
+    registry->clear<character_controller_component>();
     registry->clear<script_component>();
     registry->clear();
     auto reserved_entity = registry->create();
@@ -422,6 +466,69 @@ void scene::clone_scene(const scene& src_scene, scene& dst_scene, bool call_call
 void scene::clear_entity(entt::handle& handle)
 {
     remove_all_components(handle);
+}
+
+scene::scoped_destroy_suppression::scoped_destroy_suppression()
+{
+    ++destroy_suppression_depth();
+}
+
+scene::scoped_destroy_suppression::~scoped_destroy_suppression()
+{
+    --destroy_suppression_depth();
+}
+
+auto scene::is_destroy_suppressed() -> bool
+{
+    return destroy_suppression_depth() > 0;
+}
+
+void scene::destroy_entity(entt::handle entity)
+{
+    if(!entity)
+    {
+        return;
+    }
+
+    if(!is_destroy_suppressed())
+    {
+        auto* bus = entity.registry()->ctx().find<on_pre_destroy_bus>();
+
+        // Nobody listening is the common case - edit mode, and play mode with no
+        // physics world - and it must cost nothing.
+        if(bus != nullptr && !bus->sig.empty())
+        {
+            // Announce the entire subtree BEFORE anything is torn down, so every slot
+            // sees a whole entity with whole ancestors. Snapshot first: a slot may
+            // destroy entities, including ones still ahead in this walk.
+            hpp::small_vector<entt::handle, 16> subtree;
+            collect_subtree_post_order(entity, subtree);
+
+            for(const auto& node : subtree)
+            {
+                if(node)
+                {
+                    bus->sig.publish(*node.registry(), node.entity());
+                }
+            }
+        }
+    }
+
+    // A slot may already have destroyed the root out from under us.
+    if(entity)
+    {
+        // Suppressed for the teardown itself. Destroy hooks run inside
+        // entt::registry::destroy, where reaching script code is exactly what the
+        // announcement above exists to avoid; anything that needed to talk to gameplay
+        // has already had its turn.
+        scoped_destroy_suppression teardown;
+
+        // One of only two raw destroys in the codebase - this one, and the child
+        // cascade in transform_component::on_destroy_component. Everywhere else calls
+        // scene::destroy_entity, so that nothing can be torn down without the
+        // subsystems holding per-entity state getting a chance to settle it first.
+        entity.destroy();
+    }
 }
 
 

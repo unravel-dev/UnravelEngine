@@ -200,12 +200,13 @@ namespace Unravel.Core
         /// Internal method invoked when another entity exits a sensor attached to this entity. Calls <see cref="OnSensorExit"/>.
         /// </summary>
         /// <param name="entity">The entity that exited the sensor.</param>
-        private void internal_n2m_on_sensor_exit(Entity entity, byte[] contactData)
+        private void internal_n2m_on_sensor_exit(Entity entity, byte[] contactData, byte reason)
         {
             Collision collision = new Collision
             {
                 entity = entity,
-                contacts = contactData.ToStructArray<ContactPoint>()
+                contacts = contactData.ToStructArray<ContactPoint>(),
+                reason = (ContactEndReason)reason
             };
 
             OnSensorExit(collision);
@@ -232,12 +233,13 @@ namespace Unravel.Core
         /// </summary>
         /// <param name="entity">The other entity involved in the collision.</param>
         /// <param name="contactData">The serialized contact data for the collision.</param>
-        private void internal_n2m_on_collision_exit(Entity entity, byte[] contactData)
+        private void internal_n2m_on_collision_exit(Entity entity, byte[] contactData, byte reason)
         {
             Collision collision = new Collision
             {
                 entity = entity,
-                contacts = contactData.ToStructArray<ContactPoint>()
+                contacts = contactData.ToStructArray<ContactPoint>(),
+                reason = (ContactEndReason)reason
             };
 
             OnCollisionExit(collision);

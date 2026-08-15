@@ -117,10 +117,21 @@ struct script_system
     auto has_compilation_errors() const -> bool;
 
     void on_sensor_enter(entt::handle sensor, entt::handle other, const std::vector<manifold_point>& manifolds);
-    void on_sensor_exit(entt::handle sensor, entt::handle other, const std::vector<manifold_point>& manifolds);
+    void on_sensor_exit(entt::handle sensor,
+                        entt::handle other,
+                        const std::vector<manifold_point>& manifolds,
+                        contact_end_reason reason);
 
     void on_collision_enter(entt::handle a, entt::handle b, const std::vector<manifold_point>& manifolds);
-    void on_collision_exit(entt::handle a, entt::handle b, const std::vector<manifold_point>& manifolds);
+
+    /**
+     * @brief Dispatches a collision exit to both participants.
+     * @param reason Stated relative to @p a. @p b receives the mirrored reason.
+     */
+    void on_collision_exit(entt::handle a,
+                           entt::handle b,
+                           const std::vector<manifold_point>& manifolds,
+                           contact_end_reason reason);
 
     /**
      * @brief Called when a physics component is created.

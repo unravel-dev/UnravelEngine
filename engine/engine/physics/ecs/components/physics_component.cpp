@@ -122,6 +122,74 @@ void physics_component::on_change_sensor()
     set_property_dirty(physics_property::sensor, true);
 }
 
+auto physics_component::get_contact_event_flags() const noexcept -> contact_event_flags
+{
+    return contact_events_;
+}
+
+void physics_component::set_contact_event_flags(contact_event_flags flags)
+{
+    if(contact_events_ == flags)
+    {
+        return;
+    }
+
+    contact_events_ = flags;
+
+    on_change_contact_events();
+}
+
+void physics_component::set_contact_event_flag(contact_event_flags flag, bool enabled)
+{
+    set_contact_event_flags(enabled ? (contact_events_ | flag) : (contact_events_ & ~flag));
+}
+
+void physics_component::set_sensor_events_enabled(bool enabled)
+{
+    set_contact_event_flag(contact_event_flags::sensor_events, enabled);
+}
+
+auto physics_component::is_sensor_events_enabled() const noexcept -> bool
+{
+    return has_any(contact_events_, contact_event_flags::sensor_events);
+}
+
+void physics_component::set_collision_events_enabled(bool enabled)
+{
+    set_contact_event_flag(contact_event_flags::collision_events, enabled);
+}
+
+auto physics_component::is_collision_events_enabled() const noexcept -> bool
+{
+    return has_any(contact_events_, contact_event_flags::collision_events);
+}
+
+void physics_component::set_sensor_exit_on_destroy(bool enabled)
+{
+    set_contact_event_flag(contact_event_flags::sensor_exit_on_destroy, enabled);
+}
+
+auto physics_component::is_sensor_exit_on_destroy() const noexcept -> bool
+{
+    return has_any(contact_events_, contact_event_flags::sensor_exit_on_destroy);
+}
+
+void physics_component::set_collision_exit_on_destroy(bool enabled)
+{
+    set_contact_event_flag(contact_event_flags::collision_exit_on_destroy, enabled);
+}
+
+auto physics_component::is_collision_exit_on_destroy() const noexcept -> bool
+{
+    return has_any(contact_events_, contact_event_flags::collision_exit_on_destroy);
+}
+
+void physics_component::on_change_contact_events()
+{
+    dirty_.set();
+    set_property_dirty(physics_property::contact_events, true);
+}
+
 auto physics_component::is_dirty(uint8_t id) const noexcept -> bool
 {
     return dirty_[id];

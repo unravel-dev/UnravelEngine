@@ -128,6 +128,24 @@ public:
     void set_is_sensor(bool sensor);
     auto is_sensor() const noexcept -> bool;
 
+    /**
+     * @brief Raw contact policy. Read once per pair when it enters the contact store.
+     */
+    auto get_contact_event_flags() const noexcept -> contact_event_flags;
+    void set_contact_event_flags(contact_event_flags flags);
+
+    void set_sensor_events_enabled(bool enabled);
+    auto is_sensor_events_enabled() const noexcept -> bool;
+
+    void set_collision_events_enabled(bool enabled);
+    auto is_collision_events_enabled() const noexcept -> bool;
+
+    void set_sensor_exit_on_destroy(bool enabled);
+    auto is_sensor_exit_on_destroy() const noexcept -> bool;
+
+    void set_collision_exit_on_destroy(bool enabled);
+    auto is_collision_exit_on_destroy() const noexcept -> bool;
+
     auto is_dirty(uint8_t id) const noexcept -> bool;
     void set_dirty(uint8_t id, bool dirty) noexcept;
 
@@ -186,12 +204,16 @@ private:
     void on_change_shape();
     void on_change_material();
     void on_change_sensor();
+    void on_change_contact_events();
+    void set_contact_event_flag(contact_event_flags flag, bool enabled);
 
     rigidbody_type body_type_{rigidbody_type::static_body};
     bool is_using_gravity_{};
     bool is_sensor_{};
     bool is_autoscaled_{true};
     float mass_{1};
+
+    contact_event_flags contact_events_{contact_event_flags_default};
 
     layer_mask collision_include_mask_{layer_reserved::everything_layer};
     layer_mask collision_exclude_mask_{layer_reserved::nothing_layer};

@@ -1526,7 +1526,7 @@ void scene_panel::reset_camera(rtti::context& ctx)
     auto camera = get_camera();
     if(camera)
     {
-        camera.destroy();
+        scene::destroy_entity(camera);
     }
     defaults::create_camera_entity(ctx, panel_scene_, "Scene Camera");
 }

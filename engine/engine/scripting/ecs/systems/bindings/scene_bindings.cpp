@@ -270,7 +270,7 @@ auto internal_m2n_destroy_entity_immediate(entt::entity id) -> bool
     auto e = get_entity_from_id(id);
     if(e)
     {
-        e.destroy();
+        scene::destroy_entity(e);
         return true;
     }
     return false;

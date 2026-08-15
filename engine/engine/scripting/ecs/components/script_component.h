@@ -151,10 +151,13 @@ public:
     void disable();
 
     void on_sensor_enter(entt::handle other, const std::vector<manifold_point>& manifolds);
-    void on_sensor_exit(entt::handle other, const std::vector<manifold_point>& manifolds);
+    void on_sensor_exit(entt::handle other, const std::vector<manifold_point>& manifolds, contact_end_reason reason);
 
     void on_collision_enter(entt::handle other, const std::vector<manifold_point>& manifolds, bool use_b);
-    void on_collision_exit(entt::handle other, const std::vector<manifold_point>& manifolds, bool use_b);
+    void on_collision_exit(entt::handle other,
+                           const std::vector<manifold_point>& manifolds,
+                           bool use_b,
+                           contact_end_reason reason);
 
 private:
     void enable(script_object& script_obj, bool check_order);
@@ -164,14 +167,18 @@ private:
     void destroy(script_object& script_obj);
     void set_entity(const dotnet::object& obj, entt::handle e);
     void on_sensor_enter(const dotnet::object& obj, entt::handle other, const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds);
-    void on_sensor_exit(const dotnet::object& obj, entt::handle other, const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds);
+    void on_sensor_exit(const dotnet::object& obj,
+                        entt::handle other,
+                        const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds,
+                        contact_end_reason reason);
 
     void on_collision_enter(const dotnet::object& obj,
-                            entt::handle other, 
+                            entt::handle other,
                             const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds);
     void on_collision_exit(const dotnet::object& obj,
                            entt::handle other,
-                           const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds);
+                           const std::vector<dotnetpp_backend::managed_interface::manifold_point>& manifolds,
+                           contact_end_reason reason);
 
     template<typename F>
     auto safe_foreach(script_components_t& components, F&& f)

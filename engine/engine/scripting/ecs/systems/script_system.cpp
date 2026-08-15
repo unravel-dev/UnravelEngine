@@ -427,11 +427,12 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     cache_.on_start_method = cache_.script_component_type.get_method("internal_n2m_on_start", 0);
     cache_.on_destroy_method = cache_.script_component_type.get_method("internal_n2m_on_destroy", 0);
     cache_.on_sensor_enter_method = cache_.script_component_type.get_method("internal_n2m_on_sensor_enter", 2);
-    cache_.on_sensor_exit_method = cache_.script_component_type.get_method("internal_n2m_on_sensor_exit", 2);
+    // Exits carry a contact_end_reason on top of (entity, contacts); enters do not.
+    cache_.on_sensor_exit_method = cache_.script_component_type.get_method("internal_n2m_on_sensor_exit", 3);
     cache_.on_collision_enter_method =
         cache_.script_component_type.get_method("internal_n2m_on_collision_enter", 2);
     cache_.on_collision_exit_method =
-        cache_.script_component_type.get_method("internal_n2m_on_collision_exit", 2);
+        cache_.script_component_type.get_method("internal_n2m_on_collision_exit", 3);
 
     cache_.ui_dispatch_event_method =
         cache_.ui_event_manager_type.get_method("InternalDispatchEvent", 1);
@@ -1121,8 +1122,13 @@ void script_system::on_sensor_enter(entt::handle sensor, entt::handle other, con
     }
 }
 
-void script_system::on_sensor_exit(entt::handle sensor, entt::handle other, const std::vector<manifold_point>& manifolds)
+void script_system::on_sensor_exit(entt::handle sensor,
+                                   entt::handle other,
+                                   const std::vector<manifold_point>& manifolds,
+                                   contact_end_reason reason)
 {
+    // Exits synthesized at removal run in the pre-destroy phase, so both sides are
+    // still valid here. This guard only catches genuinely stale pairs.
     if(!other || !sensor)
     {
         return;
@@ -1136,7 +1142,7 @@ void script_system::on_sensor_exit(entt::handle sensor, entt::handle other, cons
 
     try
     {
-        comp->on_sensor_exit(other, manifolds);
+        comp->on_sensor_exit(other, manifolds, reason);
     }
     catch(const dotnet::exception& e)
     {
@@ -1175,12 +1181,20 @@ void script_system::on_collision_enter(entt::handle a, entt::handle b, const std
     }
 }
 
-void script_system::on_collision_exit(entt::handle a, entt::handle b, const std::vector<manifold_point>& manifolds)
+void script_system::on_collision_exit(entt::handle a,
+                                      entt::handle b,
+                                      const std::vector<manifold_point>& manifolds,
+                                      contact_end_reason reason)
 {
     if(!a || !b)
     {
         return;
     }
+
+    // The reason is stated from the receiver's point of view, so the side that is
+    // going away sees "self", the survivor sees "other".
+    const auto reason_for_a = reason;
+    const auto reason_for_b = mirror_contact_end_reason(reason);
 
     try
     {
@@ -1188,7 +1202,7 @@ void script_system::on_collision_exit(entt::handle a, entt::handle b, const std:
             auto comp = a.try_get<script_component>();
             if(comp)
             {
-                comp->on_collision_exit(b, manifolds, true);
+                comp->on_collision_exit(b, manifolds, true, reason_for_a);
             }
         }
 
@@ -1196,7 +1210,7 @@ void script_system::on_collision_exit(entt::handle a, entt::handle b, const std:
             auto comp = b.try_get<script_component>();
             if(comp)
             {
-                comp->on_collision_exit(a, manifolds, false);
+                comp->on_collision_exit(a, manifolds, false, reason_for_b);
             }
         }
     }

@@ -51,8 +51,111 @@ enum class physics_property : uint8_t
     velocity,
     angular_velocity,
     layer,
+    contact_events,
     count
 };
+
+/**
+ * @enum contact_event_flags
+ * @brief Per-body opt-in for contact bookkeeping.
+ *
+ * A pair is tracked only when at least one side opts into that event kind, and an
+ * exit is synthesized on removal only when at least one side opts into it. Pairs
+ * nobody asked for are never inserted into the contact store, so they cost nothing
+ * to maintain and nothing to tear down.
+ */
+enum class contact_event_flags : uint8_t
+{
+    none = 0,
+    /// Track sensor overlaps and deliver enter/exit while both sides live.
+    sensor_events = 1 << 0,
+    /// Track solid contacts and deliver enter/exit while both sides live.
+    collision_events = 1 << 1,
+    /// Synthesize a sensor exit when either side is destroyed or deactivated.
+    sensor_exit_on_destroy = 1 << 2,
+    /// Synthesize a collision exit when either side is destroyed or deactivated.
+    collision_exit_on_destroy = 1 << 3,
+};
+
+/**
+ * @brief Default contact policy.
+ *
+ * Sensors report exit when the other side dies, because that is what sensor logic
+ * almost always needs and getting it wrong is silent. Collision exit on destroy is
+ * opt-in: a body in permanent contact with the world (a projectile, a ragdoll part)
+ * would otherwise pay teardown cost for an event nobody consumes.
+ */
+inline constexpr auto contact_event_flags_default =
+    static_cast<contact_event_flags>(static_cast<uint8_t>(contact_event_flags::sensor_events) |
+                                     static_cast<uint8_t>(contact_event_flags::collision_events) |
+                                     static_cast<uint8_t>(contact_event_flags::sensor_exit_on_destroy));
+
+constexpr auto operator|(contact_event_flags lhs, contact_event_flags rhs) noexcept -> contact_event_flags
+{
+    return static_cast<contact_event_flags>(static_cast<uint8_t>(lhs) | static_cast<uint8_t>(rhs));
+}
+
+constexpr auto operator&(contact_event_flags lhs, contact_event_flags rhs) noexcept -> contact_event_flags
+{
+    return static_cast<contact_event_flags>(static_cast<uint8_t>(lhs) & static_cast<uint8_t>(rhs));
+}
+
+constexpr auto operator~(contact_event_flags value) noexcept -> contact_event_flags
+{
+    return static_cast<contact_event_flags>(~static_cast<uint8_t>(value));
+}
+
+constexpr auto has_any(contact_event_flags value, contact_event_flags test) noexcept -> bool
+{
+    return static_cast<uint8_t>(value & test) != 0;
+}
+
+/**
+ * @enum contact_end_reason
+ * @brief Why an exit event was produced.
+ *
+ * Mirrors the distinction PhysX draws with eREMOVED_SHAPE_OTHER: gameplay that only
+ * decrements a counter treats every reason alike, but anything that reacts to the
+ * other side leaving (spawning a trail, re-targeting) must not fire on a death.
+ */
+enum class contact_end_reason : uint8_t
+{
+    /// The pair moved apart. The only reason an enter event ever carries.
+    separated,
+    /// The other entity is being destroyed. Still valid for this callback only.
+    other_destroyed,
+    /// The other entity was deactivated.
+    other_disabled,
+    /// This entity is being destroyed.
+    self_destroyed,
+    /// This entity was deactivated.
+    self_disabled,
+};
+
+/**
+ * @brief Restates a reason from the other participant's point of view.
+ *
+ * A collision exit is delivered to both sides, and each must be told what happened
+ * relative to itself: the body being destroyed sees self_destroyed, the survivor sees
+ * other_destroyed.
+ */
+constexpr auto mirror_contact_end_reason(contact_end_reason reason) noexcept -> contact_end_reason
+{
+    switch(reason)
+    {
+        case contact_end_reason::other_destroyed:
+            return contact_end_reason::self_destroyed;
+        case contact_end_reason::self_destroyed:
+            return contact_end_reason::other_destroyed;
+        case contact_end_reason::other_disabled:
+            return contact_end_reason::self_disabled;
+        case contact_end_reason::self_disabled:
+            return contact_end_reason::other_disabled;
+        case contact_end_reason::separated:
+        default:
+            return contact_end_reason::separated;
+    }
+}
 
 /**
  * @enum force_mode

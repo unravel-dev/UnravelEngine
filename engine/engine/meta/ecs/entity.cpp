@@ -8,6 +8,7 @@
 #include <serialization/serialization.h>
 #include "components/all_components.h"
 #include <engine/assets/impl/asset_writer.h>
+#include <engine/ecs/scene.h>
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/rendering/ecs/systems/rendering_system.h>
@@ -176,14 +177,17 @@ void add_to_uid_mapping(entt::handle& obj, bool recursive = true)
 
 void cleanup_uid_mapping()
 {
-    
+    // Unconsumed load stubs. They were never visible to gameplay, so they must not
+    // produce pre-destroy notifications on the way out.
+    scene::scoped_destroy_suppression no_pre_destroy;
+
     auto& load_ctx = get_load_context();
     for(auto& [uid, mapping] : load_ctx.mapping_by_prefab_uid)
     {
         if(!mapping.consumed && mapping.handle)
         {
             // APPLOG_TRACE("destroying entity: {}", uid.to_string());
-            mapping.handle.destroy();
+            scene::destroy_entity(mapping.handle);
         }
     }
 }

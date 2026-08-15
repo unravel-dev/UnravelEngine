@@ -86,6 +86,14 @@ public:
 
     static void on_create_active_component(entt::registry& r, entt::entity e);
     static void on_destroy_active_component(entt::registry& r, entt::entity e);
+
+    /**
+     * @brief Reports the exits an entity still owes, while it is still whole.
+     *
+     * Subscribed to scene::on_pre_destroy for the duration of play. Returns after a
+     * single integer compare for a body that owes nothing.
+     */
+    static void on_pre_destroy_entity(entt::registry& r, entt::entity e);
     static void on_destroy_bullet_rigidbody_component(entt::registry& r, entt::entity e);
     static void on_destroy_bullet_cc_component(entt::registry& r, entt::entity e);
 };

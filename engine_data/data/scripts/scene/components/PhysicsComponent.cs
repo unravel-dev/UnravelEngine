@@ -7,11 +7,33 @@ using System.Runtime.InteropServices;
 namespace Unravel.Core
 {
     /// <summary>
+    /// Per-body opt-in for contact bookkeeping.
+    /// </summary>
+    /// <remarks>
+    /// A pair is tracked only when at least one side opts into that event kind, and an exit is
+    /// synthesized on removal only when at least one side opts into it. Pairs nobody asks for are
+    /// never tracked, so they cost nothing to maintain and nothing to tear down.
+    /// </remarks>
+    [Flags]
+    public enum ContactEventFlags : byte
+    {
+        None = 0,
+        /// <summary>Track sensor overlaps and deliver OnSensorEnter/OnSensorExit while both sides live.</summary>
+        SensorEvents = 1 << 0,
+        /// <summary>Track solid contacts and deliver OnCollisionEnter/OnCollisionExit while both sides live.</summary>
+        CollisionEvents = 1 << 1,
+        /// <summary>Deliver OnSensorExit when either side is destroyed or deactivated while overlapping.</summary>
+        SensorExitOnDestroy = 1 << 2,
+        /// <summary>Deliver OnCollisionExit when either side is destroyed or deactivated while touching.</summary>
+        CollisionExitOnDestroy = 1 << 3,
+    }
+
+    /// <summary>
     /// Provides physics functionality for an entity.
     /// </summary>
     public class PhysicsComponent : Component
     {
-    
+
         /// <summary>
         /// Layers that this body should collide with (include filter).
         /// </summary>
@@ -65,6 +87,66 @@ namespace Unravel.Core
             {
                 internal_m2n_physics_set_is_sensor(owner, value);
             }
+        }
+
+        /// <summary>
+        /// Which contact events this body takes part in, and whether removing it while still
+        /// overlapping synthesizes an exit.
+        /// </summary>
+        public ContactEventFlags contactEventFlags
+        {
+            get
+            {
+                return (ContactEventFlags)internal_m2n_physics_get_contact_event_flags(owner);
+            }
+            set
+            {
+                internal_m2n_physics_set_contact_event_flags(owner, (byte)value);
+            }
+        }
+
+        /// <summary>
+        /// Whether sensor overlaps involving this body are tracked and reported.
+        /// </summary>
+        public bool sensorEventsEnabled
+        {
+            get { return (contactEventFlags & ContactEventFlags.SensorEvents) != 0; }
+            set { SetContactEventFlag(ContactEventFlags.SensorEvents, value); }
+        }
+
+        /// <summary>
+        /// Whether solid contacts involving this body are tracked and reported.
+        /// </summary>
+        public bool collisionEventsEnabled
+        {
+            get { return (contactEventFlags & ContactEventFlags.CollisionEvents) != 0; }
+            set { SetContactEventFlag(ContactEventFlags.CollisionEvents, value); }
+        }
+
+        /// <summary>
+        /// Whether destroying or deactivating this body while it overlaps a sensor still delivers
+        /// <see cref="ScriptComponent.OnSensorExit"/>.
+        /// </summary>
+        public bool sensorExitOnDestroy
+        {
+            get { return (contactEventFlags & ContactEventFlags.SensorExitOnDestroy) != 0; }
+            set { SetContactEventFlag(ContactEventFlags.SensorExitOnDestroy, value); }
+        }
+
+        /// <summary>
+        /// Whether destroying or deactivating this body while it is touching something still
+        /// delivers <see cref="ScriptComponent.OnCollisionExit"/>. Off by default.
+        /// </summary>
+        public bool collisionExitOnDestroy
+        {
+            get { return (contactEventFlags & ContactEventFlags.CollisionExitOnDestroy) != 0; }
+            set { SetContactEventFlag(ContactEventFlags.CollisionExitOnDestroy, value); }
+        }
+
+        private void SetContactEventFlag(ContactEventFlags flag, bool enabled)
+        {
+            ContactEventFlags flags = contactEventFlags;
+            contactEventFlags = enabled ? (flags | flag) : (flags & ~flag);
         }
 
         /// <summary>
@@ -226,6 +308,12 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_physics_set_is_sensor(Entity eid, bool sensor);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern byte internal_m2n_physics_get_contact_event_flags(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_physics_set_contact_event_flags(Entity eid, byte flags);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_physics_get_mass(Entity eid);

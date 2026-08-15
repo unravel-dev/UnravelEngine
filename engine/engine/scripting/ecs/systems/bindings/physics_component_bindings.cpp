@@ -140,6 +140,24 @@ void internal_m2n_physics_set_is_sensor(entt::entity id, bool sensor)
     }
 }
 
+auto internal_m2n_physics_get_contact_event_flags(entt::entity id) -> uint8_t
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        return static_cast<uint8_t>(comp->get_contact_event_flags());
+    }
+
+    return static_cast<uint8_t>(contact_event_flags::none);
+}
+
+void internal_m2n_physics_set_contact_event_flags(entt::entity id, uint8_t flags)
+{
+    if(auto comp = safe_get_component<physics_component>(id))
+    {
+        comp->set_contact_event_flags(static_cast<contact_event_flags>(flags));
+    }
+}
+
 auto internal_m2n_physics_get_mass(entt::entity id) -> float
 {
     if(auto comp = safe_get_component<physics_component>(id))
@@ -227,6 +245,10 @@ void register_physics_component_script_bindings()
                             dotnet_internal_call(internal_m2n_physics_get_is_sensor));
     reg.add_internal_call("internal_m2n_physics_set_is_sensor",
                             dotnet_internal_call(internal_m2n_physics_set_is_sensor));
+    reg.add_internal_call("internal_m2n_physics_get_contact_event_flags",
+                            dotnet_internal_call(internal_m2n_physics_get_contact_event_flags));
+    reg.add_internal_call("internal_m2n_physics_set_contact_event_flags",
+                            dotnet_internal_call(internal_m2n_physics_set_contact_event_flags));
     reg.add_internal_call("internal_m2n_physics_get_mass",
                             dotnet_internal_call(internal_m2n_physics_get_mass));
     reg.add_internal_call("internal_m2n_physics_set_mass",
