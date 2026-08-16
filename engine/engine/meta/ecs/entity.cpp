@@ -1276,6 +1276,9 @@ void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
     save_ctx.clone_mode = clone_mode;
     std::stringstream ss;
     {
+        // This buffer is written and read back a few lines below and then discarded, so
+        // there is nobody to indent it for.
+        serialization::scoped_output_format compact(serialization::output_format::compact);
         save_to_stream(ss, src_obj);
     }
     save_ctx.to_prefab = false;
@@ -1469,6 +1472,33 @@ void clone_scene_from_stream(const scene& src_scene, scene& dst_scene)
 
     // APPLOG_INFO_PERF(std::chrono::microseconds);
 
+    // Every root goes through a throwaway buffer on its way across. Indenting those is
+    // pure cost: this is the edit-scene -> play-scene path, so it runs on every play press.
+    serialization::scoped_output_format compact(serialization::output_format::compact);
+
+    // One load context for the whole scene, not one per root.
+    //
+    // The roots are serialized separately, but an entity link that crosses from one root
+    // into another is written as the target's uid and resolved through the context's uid
+    // map. With a context per root that map only ever held the root being loaded, so a
+    // cross-root link found nothing, fell through to "create a new entity", and the link
+    // ended up aimed at an empty entity nothing else referenced - silently, on every play
+    // press.
+    //
+    // Sharing the context turns the same path into a forward reference: the first mention
+    // creates the entity and records its uid, and the record that actually defines it -
+    // loaded with whichever root owns it - resolves to that same entity and fills it in.
+    // That is already how a parent's "children" list works within a single root; it just
+    // never spanned roots before.
+    //
+    // load_from_archive_start still pushes per root, but push_load_context returns false
+    // when one is already active and the matching pop is then a no-op, so the inner calls
+    // join this context instead of replacing it.
+    //
+    // A side effect worth knowing: the post-load callbacks now fire once with every
+    // entity, the way a scene loaded from file does, instead of once per root.
+    const bool pushed = push_load_context(*dst);
+
     src->view<root_component, transform_component>().each(
         [&](auto e, auto&& comp1, auto&& comp2)
         {
@@ -1478,5 +1508,7 @@ void clone_scene_from_stream(const scene& src_scene, scene& dst_scene)
             entt::registry& reg = *dst;
             load_from(ss, reg);
         });
+
+    pop_load_context(pushed);
 }
 } // namespace unravel

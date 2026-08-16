@@ -35,6 +35,7 @@
 #include <engine/meta/ecs/entity.hpp>
 
 #include <logging/logging.h>
+#include <serialization/associative_archive.h>
 #include <serialization/serialization.h>
 #include <spdlog/sinks/stdout_sinks.h>
 #include <threadpp/thread_pool.h>
@@ -283,9 +284,20 @@ auto make_prefab_asset(std::vector<uint8_t> bytes, const std::string& id) -> ass
     return handle;
 }
 
+auto minify_json(const std::string& text) -> std::string;
+
+/**
+ * @brief Builds the prefab asset the way the pipeline does.
+ *
+ * asset_compiler's compile<prefab> minifies the source before it ever becomes a loadable
+ * asset, so an asset built here has to be minified too or every prefab measurement is
+ * taken against a document the runtime never sees.
+ */
 auto make_prefab_from(entt::const_handle root, const std::string& id) -> asset_handle<prefab>
 {
-    return make_prefab_asset(serialize_as_prefab(root), id);
+    const auto bytes = serialize_as_prefab(root);
+    const auto compiled = minify_json(std::string(bytes.begin(), bytes.end()));
+    return make_prefab_asset(std::vector<uint8_t>(compiled.begin(), compiled.end()), id);
 }
 
 /**
@@ -748,6 +760,72 @@ static_assert(can_probe_names<ser20::iarchive_associative_t>,
               "the archive in use must take the non-throwing path");
 } // namespace probe_concept_check
 
+void test_output_format_scope()
+{
+    begin_test("output format scope selects indentation without changing what is written");
+
+    scene src("src");
+    build_sample_tree(src);
+
+    const auto save = [&]() -> std::string
+    {
+        std::stringstream ss;
+        save_to_stream(ss, src);
+        return ss.str();
+    };
+
+    // Silence must mean "files stay readable". A site that forgets to opt in should keep
+    // the old behaviour, never produce unreadable output on disk.
+    check(serialization::get_output_format() == serialization::output_format::readable,
+          "the default is readable");
+    const auto readable = save();
+
+    std::string compact;
+    {
+        serialization::scoped_output_format guard(serialization::output_format::compact);
+        check(serialization::get_output_format() == serialization::output_format::compact,
+              "the guard selects compact");
+
+        {
+            serialization::scoped_output_format inner(serialization::output_format::readable);
+            check(serialization::get_output_format() == serialization::output_format::readable,
+                  "nesting works, innermost wins");
+        }
+        check(serialization::get_output_format() == serialization::output_format::compact,
+              "leaving a nested scope restores the outer one");
+
+        compact = save();
+    }
+    check(serialization::get_output_format() == serialization::output_format::readable,
+          "the format is restored on scope exit");
+
+    check(compact.size() < readable.size(), "compact output is smaller");
+    check(compact.find('\n') != std::string::npos,
+          "compact still breaks lines, so the output stays greppable and diffable");
+    check(readable.find("\n ") != std::string::npos, "readable output is indented");
+    check(compact.find("\n ") == std::string::npos, "compact output is not");
+
+    // The point of the whole mechanism: only whitespace differs. Anything else would make
+    // a clone or a checkpoint a different document from the one it snapshots.
+    check_eq_str(minify_json(compact), minify_json(readable), "both carry identical data");
+
+    // And both round-trip to the same scene.
+    const auto load_names = [](const std::string& blob) -> std::vector<std::string>
+    {
+        scene dst("dst");
+        std::stringstream ss(blob);
+        load_from_stream(ss, dst);
+        std::vector<std::string> names;
+        dst.registry->view<tag_component>().each([&](auto, auto&& tag) { names.push_back(tag.name); });
+        std::sort(names.begin(), names.end());
+        return names;
+    };
+    const auto from_readable = load_names(readable);
+    const auto from_compact = load_names(compact);
+    check(!from_compact.empty(), "the compact blob loads");
+    check(from_readable == from_compact, "both load to the same entities");
+}
+
 void test_absent_components_do_not_throw()
 {
     begin_test("probing for an absent component does not throw");
@@ -1197,6 +1275,40 @@ void test_remove_entity_clears_all_of_its_overrides()
 // Scene cloning (the edit-scene -> play-scene path)
 // ---------------------------------------------------------------------------------
 
+void test_clone_scene_uses_one_load_context()
+{
+    begin_test("cloning a scene resolves every root in one load context");
+
+    scene src("src");
+    build_sample_tree(src);
+    auto root_b = build_sample_tree(src);
+    root_b.get<tag_component>().name = "root_b";
+    const size_t expected = count_real_entities(*src.registry);
+
+    scene dst("dst");
+
+    // The load context is not directly observable, but the post-load callback is: it
+    // fires from pop_load_context, so one invocation carrying every entity means one
+    // context spanned the whole clone.
+    size_t invocations = 0;
+    size_t announced = 0;
+    push_on_load_callbacks({[&](hpp::span<const entt::handle> entities)
+                            {
+                                ++invocations;
+                                announced += entities.size();
+                            }});
+    scene::clone_scene(src, dst, false);
+    pop_on_load_callbacks();
+
+    // Why this matters beyond tidiness: the uid map lives on the load context. A context
+    // per root means a link from root A to an entity under root B resolves against a map
+    // that does not contain it, so the loader creates an empty entity and aims the link
+    // at that instead. One shared context makes it a forward reference that the real
+    // record later fills in.
+    check_eq(invocations, 1, "the clone announces its entities once, not once per root");
+    check_eq(announced, expected, "and the announcement covers every entity in the scene");
+}
+
 void test_clone_scene_preserves_structure_and_uids()
 {
     begin_test("cloning a scene preserves structure and uids");
@@ -1319,21 +1431,32 @@ void bench_scene_save_load(size_t target, int reps)
     save_to_stream(blob, src);
     const auto text = blob.str();
 
-    double best_load = 1e30;
-    uint64_t lookups = 0;
-    uint64_t thrown = 0;
-    for(int i = 0; i < reps; ++i)
+    // What the runtime actually parses: asset_compiler minifies prefabs and scenes on
+    // compile (write_minified_file -> simdjson::minify), so the indentation the editor
+    // writes never reaches a released load.
+    const auto compiled = minify_json(text);
+
+    const auto time_load = [&](const std::string& blob_text, const char* label, size_t bytes)
     {
-        scene dst("bench_dst");
-        std::stringstream ss(text);
-        serialization::reset_failed_lookup_count();
-        const auto t0 = clock_t_::now();
-        load_from_stream(ss, dst);
-        best_load = std::min(best_load, ms_since(t0));
-        lookups = serialization::failed_lookup_count();
-        thrown = serialization::thrown_lookup_count();
-    }
-    record("scene load", n, best_load, text.size(), lookups, thrown);
+        double best = 1e30;
+        uint64_t lookups = 0;
+        uint64_t thrown = 0;
+        for(int i = 0; i < reps; ++i)
+        {
+            scene dst("bench_dst");
+            std::stringstream ss(blob_text);
+            serialization::reset_failed_lookup_count();
+            const auto t0 = clock_t_::now();
+            load_from_stream(ss, dst);
+            best = std::min(best, ms_since(t0));
+            lookups = serialization::failed_lookup_count();
+            thrown = serialization::thrown_lookup_count();
+        }
+        record(label, n, best, bytes, lookups, thrown);
+    };
+
+    time_load(compiled, "scene load (compiled)", compiled.size());
+    time_load(text, "scene load (editor src)", text.size());
 }
 
 void bench_clone_scene(size_t target, int reps)
@@ -1528,9 +1651,119 @@ void bench_lookup_attribution()
     std::printf("  a delta of 1.00 confirms the absent-component probe loop is the source\n");
 }
 
+/**
+ * @brief Minifies a document the way the asset pipeline does.
+ *
+ * Deliberately the same two calls as asset_compiler's write_minified_file - parse, then
+ * simdjson::minify - rather than a whitespace stripper written for the tests. Anything
+ * measured against a document the compiler would not have produced is measuring the wrong
+ * document, which is the mistake these benchmarks were already making once.
+ *
+ * Returns the input unchanged if it does not parse. That cannot pass silently: the callers
+ * either compare two minified documents for equality, or feed the result to a loader.
+ */
+auto minify_json(const std::string& text) -> std::string
+{
+    simdjson::dom::parser parser;
+    simdjson::dom::element doc;
+
+    const auto err = parser.parse(text.data(), text.size()).get(doc);
+    if(err)
+    {
+        std::printf("  minify_json: %s\n", simdjson::error_message(err));
+        return text;
+    }
+
+    return simdjson::minify(doc);
+}
+
+/**
+ * @brief Splits load into "parse the document" and "walk it", and shows what the output
+ *        archive's pretty-printing costs in bytes.
+ *
+ * The two halves of the associative archive are different libraries: reading is simdjson,
+ * writing is RapidJSON's PrettyWriter (simdjson has no serializer). They have to be
+ * measured separately to know which one to attack.
+ */
+void bench_archive_internals()
+{
+    constexpr size_t target = 10000;
+
+    scene src("internals_src");
+    build_bench_scene(src, target);
+    const size_t n = count_real_entities(*src.registry);
+
+    std::stringstream ss;
+    save_to_stream(ss, src);
+    const auto text = ss.str();
+    const auto minified = minify_json(text);
+
+    // Bare simdjson DOM parse of the document the archive would read, with no ser20
+    // involvement: everything above this is the archive walking the tree.
+    const auto parse_of = [](const std::string& blob) -> double
+    {
+        double best = 1e30;
+        for(int i = 0; i < 5; ++i)
+        {
+            simdjson::dom::parser parser;
+            const auto t0 = clock_t_::now();
+            simdjson::dom::element doc;
+            const auto err = parser.parse(blob.data(), blob.size()).get(doc);
+            const double ms = ms_since(t0);
+            if(err)
+            {
+                return -1.0;
+            }
+            best = std::min(best, ms);
+        }
+        return best;
+    };
+
+    const double parse_pretty = parse_of(text);
+    const double parse_min = parse_of(minified);
+
+    double best_load = 1e30;
+    for(int i = 0; i < 3; ++i)
+    {
+        scene dst("internals_dst");
+        std::stringstream in(text);
+        const auto t0 = clock_t_::now();
+        load_from_stream(in, dst);
+        best_load = std::min(best_load, ms_since(t0));
+    }
+
+    const double whitespace_pct = 100.0 * double(text.size() - minified.size()) / double(text.size());
+
+    size_t newlines = 0;
+    for(char c : text)
+    {
+        newlines += (c == '\n') ? 1 : 0;
+    }
+
+    std::printf("\narchive internals (%zu entities)\n", n);
+    std::printf("  first 160 bytes of the document, so the shape is on the record:\n    |%s|\n",
+                text.substr(0, 160).c_str());
+    std::printf("  %zu lines for %zu entities (%.1f per entity)\n",
+                newlines,
+                n,
+                double(newlines) / double(n));
+    std::printf("  output is RapidJSON PrettyWriter (SmallIndent, 1 space); input is simdjson DOM\n");
+    std::printf("  document              %zu bytes pretty, %zu minified (%.1f%% is whitespace)\n",
+                text.size(),
+                minified.size(),
+                whitespace_pct);
+    std::printf("  simdjson parse        %.3f ms pretty, %.3f ms minified\n", parse_pretty, parse_min);
+    std::printf("  full load             %.3f ms  -> parse is %.0f%% of it, archive walk is %.0f%%\n",
+                best_load,
+                100.0 * parse_pretty / best_load,
+                100.0 * (best_load - parse_pretty) / best_load);
+}
+
 void run_benchmarks()
 {
     std::printf("\n================================ benchmarks ================================\n");
+
+    bench_archive_internals();
 
     bench_exception_cost();
     bench_lookup_attribution();
@@ -1635,6 +1868,7 @@ int main(int argc, char** argv)
 
         test_instantiate_assigns_fresh_uids_per_instance();
         test_instantiate_sets_prefab_source();
+        test_output_format_scope();
         test_absent_components_do_not_throw();
         test_prefab_asset_does_not_store_prefab_component();
 
@@ -1653,6 +1887,7 @@ int main(int argc, char** argv)
         test_add_override_collapses_nested_paths();
         test_remove_entity_clears_all_of_its_overrides();
 
+        test_clone_scene_uses_one_load_context();
         test_clone_scene_preserves_structure_and_uids();
     }
 

@@ -3,7 +3,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <map>
 #include <array>
 #include <string>
 #include <vector>
@@ -175,7 +174,7 @@ struct thread_profile_buffer
 
 /// @brief Double-buffered per-thread profiling state.
 /// One buffer is being written by the owning thread while the other
-/// is read by the main thread for display and aggregation.
+/// is read by the main thread for display.
 struct thread_profile_data
 {
     std::array<thread_profile_buffer, 2> buffers{};
@@ -240,53 +239,6 @@ enum class recording_state : uint8_t
 class performance_profiler
 {
 public:
-    /// @brief Per-name aggregate timing data with rolling history.
-    struct per_frame_data
-    {
-        float time_since_swap = 0.0f;
-        uint32_t samples_since_swap = 0;
-        sample_data history;
-
-        per_frame_data() = default;
-        per_frame_data(float t) : time_since_swap(t), samples_since_swap(1)
-        {
-            history.push_sample(t);
-        }
-
-        operator float() const { return time_since_swap; }
-
-        auto operator+=(float t) -> per_frame_data&
-        {
-            time_since_swap += t;
-            return *this;
-        }
-
-        auto get_time_since_swap() const -> float { return time_since_swap; }
-        auto get_samples_since_swap() const -> uint32_t { return samples_since_swap; }
-        auto get_avg() const -> float { return history.get_average(); }
-        auto get_min() const -> float { return history.get_min(); }
-        auto get_max() const -> float { return history.get_max(); }
-        auto get_history() const -> const sample_data& { return history; }
-
-        void add_sample(float t)
-        {
-            time_since_swap += t;
-            samples_since_swap++;
-        }
-
-        void reset()
-        {
-            if(samples_since_swap > 0)
-            {
-                history.push_sample(time_since_swap);
-            }
-            samples_since_swap = 0;
-            time_since_swap = 0.0f;
-        }
-    };
-
-    using record_data_t = std::map<std::string, per_frame_data, std::less<>>;
-
     struct thread_info
     {
         std::string name;
@@ -298,11 +250,8 @@ public:
     /// Thread must already be registered (e.g. native code or prior ensure_thread_registered).
     void add_record(hpp::string_view name, float time_ms);
 
-    /// @brief End-of-frame: flip buffers, compute aggregates, advance history.
+    /// @brief End-of-frame: flip buffers and capture a snapshot when recording.
     void swap();
-
-    /// @brief Aggregate per-name data for the statistics panel.
-    auto get_per_frame_data_read() const -> const record_data_t&;
 
     /// @brief Register the calling thread for timeline profiling.
     /// @return Pointer to the thread's profiling data (stable for the thread's lifetime).
@@ -348,8 +297,6 @@ public:
 private:
     std::vector<thread_info> threads_;
     std::mutex registration_mutex_;
-
-    record_data_t aggregate_data_;
 
     int64_t frame_start_ns_{0};
     int64_t frame_end_ns_{0};

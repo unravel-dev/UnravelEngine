@@ -57,6 +57,26 @@ void note_thrown_lookup()
     thrown_lookups.fetch_add(1, std::memory_order_relaxed);
 }
 
+namespace
+{
+thread_local output_format current_output_format = output_format::readable;
+} // namespace
+
+auto get_output_format() -> output_format
+{
+    return current_output_format;
+}
+
+scoped_output_format::scoped_output_format(output_format format) : previous_(current_output_format)
+{
+    current_output_format = format;
+}
+
+scoped_output_format::~scoped_output_format()
+{
+    current_output_format = previous_;
+}
+
 auto get_path_context() -> path_context*
 {
     return current_path_context;

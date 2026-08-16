@@ -142,7 +142,6 @@ private:
                           const std::vector<thread_entry>& threads,
                           const thread_group& group);
 
-    void draw_aggregate_section();
     void draw_frame_histogram(performance_profiler* profiler, uint32_t frame_count, float bar_width);
     void draw_live_histogram_stack(float bar_width);
 

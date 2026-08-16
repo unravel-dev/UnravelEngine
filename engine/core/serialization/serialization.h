@@ -74,6 +74,48 @@ private:
     std::vector<std::size_t> segment_ends_;
 };
 
+/**
+ * @brief What a document is being written for.
+ *
+ * Read by create_oarchive_associative when it builds the writer, so the choice travels
+ * with the operation rather than through every save signature on the way down.
+ */
+enum class output_format
+{
+    /// Indented and diffable. Project source - scenes, prefabs, materials: files that live
+    /// in version control and get read, reviewed and occasionally hand-edited.
+    readable,
+
+    /// No indentation. For documents no human will ever see: clone buffers, undo
+    /// snapshots, editor checkpoints - written and read back within one session, often
+    /// many times a second.
+    compact,
+};
+
+/// Defaults to readable, so a site that has not opted in keeps writing files people can
+/// read. Silence means "no change", never "unreadable output on disk".
+auto get_output_format() -> output_format;
+
+/**
+ * @brief Selects the output format for the writers created inside this scope.
+ *
+ * Nested-safe; the innermost scope wins and the previous value is restored on exit.
+ * Thread-local, matching the save/load contexts it sits alongside.
+ */
+struct scoped_output_format
+{
+    explicit scoped_output_format(output_format format);
+    ~scoped_output_format();
+
+    scoped_output_format(const scoped_output_format&) = delete;
+    scoped_output_format(scoped_output_format&&) = delete;
+    auto operator=(const scoped_output_format&) -> scoped_output_format& = delete;
+    auto operator=(scoped_output_format&&) -> scoped_output_format& = delete;
+
+private:
+    output_format previous_;
+};
+
 auto get_path_context() -> path_context*;
 void set_path_context(path_context* ctx);
 

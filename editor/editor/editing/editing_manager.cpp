@@ -363,6 +363,9 @@ void editing_manager::save_checkpoint(rtti::context& ctx, scene_cache& cache)
     // first save scene
     // APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "save_to_stream");
 
+    // An in-memory snapshot that load_checkpoint reads back and then drops. Nobody sees
+    // it, and it is written on play start, play stop and every script recompile.
+    serialization::scoped_output_format compact(serialization::output_format::compact);
     save_to_stream(cache.cache, *cache.scn);
 }
 

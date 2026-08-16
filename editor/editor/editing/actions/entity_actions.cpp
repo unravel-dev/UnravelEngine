@@ -162,7 +162,11 @@ void create_entities_action_t::do_action()
             }
 
             std::stringstream ss;
-            save_to_stream(ss, static_cast<entt::const_handle>(root));
+            {
+                // Undo snapshot: replayed by this process and never shown to anyone.
+                serialization::scoped_output_format compact(serialization::output_format::compact);
+                save_to_stream(ss, static_cast<entt::const_handle>(root));
+            }
             serialized_roots.emplace_back(ss.str());
             root_entities.emplace_back(entt::make_uhandle(root));
             parent_entities.emplace_back(parent_uh);
@@ -257,7 +261,10 @@ void create_entities_action_t::undo_action()
         if(i < serialized_roots.size())
         {
             std::stringstream ss;
-            save_to_stream(ss, static_cast<entt::const_handle>(target));
+            {
+                serialization::scoped_output_format compact(serialization::output_format::compact);
+                save_to_stream(ss, static_cast<entt::const_handle>(target));
+            }
             serialized_roots[i] = ss.str();
         }
 
@@ -346,7 +353,10 @@ delete_entities_action_t::delete_entities_action_t(std::vector<entt::handle> ent
             continue;
         }
         std::stringstream ss;
-        save_to_stream(ss, static_cast<entt::const_handle>(root));
+        {
+            serialization::scoped_output_format compact(serialization::output_format::compact);
+            save_to_stream(ss, static_cast<entt::const_handle>(root));
+        }
         serialized_roots.emplace_back(ss.str());
         root_entities.emplace_back(entt::make_uhandle(root));
         parent_entities.emplace_back(parent_uh);

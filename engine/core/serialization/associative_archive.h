@@ -71,7 +71,18 @@ using iarchive_associative_t = simd::JSONInputArchive;
 
 inline auto create_oarchive_associative(std::ostream& stream)
 {
-    return oarchive_associative_t(stream, oarchive_associative_t::Options::SmallIndent());
+    using options_t = oarchive_associative_t::Options;
+
+    // Indented by default: these are the source files, they live in the project under
+    // version control, and people read and diff them. The copies the runtime parses are
+    // minified by asset_compiler's write_minified_file, so that whitespace costs editor
+    // save time and repository size, not load time.
+    //
+    // A serialization::scoped_output_format(compact) around the save opts out, for
+    // documents nobody reads - clone buffers, undo snapshots, editor checkpoints.
+    // NoIndent still emits one token per line, so even those stay greppable.
+    const bool compact = serialization::get_output_format() == serialization::output_format::compact;
+    return oarchive_associative_t(stream, compact ? options_t::NoIndent() : options_t::SmallIndent());
 }
 
 inline auto create_iarchive_associative(std::istream& stream)
@@ -101,7 +112,10 @@ using iarchive_associative_t = JSONInputArchive;
 inline auto create_oarchive_associative(std::ostream& stream)
 {
     using json_writer_t = SER20_RAPIDJSON_NAMESPACE::PrettyWriter<SER20_RAPIDJSON_NAMESPACE::OStreamWrapper>;
-    oarchive_associative_t::Options opts(json_writer_t::kDefaultMaxDecimalPlaces, oarchive_associative_t::Options::IndentChar::space, 2);
+    const bool compact = serialization::get_output_format() == serialization::output_format::compact;
+    oarchive_associative_t::Options opts(json_writer_t::kDefaultMaxDecimalPlaces,
+                                         oarchive_associative_t::Options::IndentChar::space,
+                                         compact ? 0u : 2u);
     return oarchive_associative_t(stream, opts);
 }
 

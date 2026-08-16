@@ -121,7 +121,7 @@ void pipeline::gather_visible_models(scene& scn,
     const camera* lod_reference_cam)
 {
     
-    APP_SCOPE_PERF(cam ? "Rendering/Cull   Models" : "Rendering/Gather Models");
+    APP_SCOPE_PERF(cam ? "Rendering/Cull Models" : "Rendering/Gather Models");
     static const std::string thread_name = "Rendering/Gather Models Thread";
     tpp::this_thread::register_this_thread(thread_name, true);
     auto view = scn.registry->view<transform_component, model_component, layer_component, active_component>();

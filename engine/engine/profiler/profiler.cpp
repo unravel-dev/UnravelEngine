@@ -176,47 +176,11 @@ void performance_profiler::swap()
     prev_frame_start_ns_ = frame_start_ns_;
     prev_frame_end_ns_ = get_time_ns();
 
-    for(auto& [n, data] : aggregate_data_)
-    {
-        (void)n;
-        data.reset();
-    }
-
     {
         std::lock_guard lock(registration_mutex_);
         for(auto& thread : threads_)
         {
             thread.data->flip();
-        }
-    }
-
-    {
-        std::lock_guard lock(registration_mutex_);
-        for(const auto& thread : threads_)
-        {
-            auto& buf = thread.data->read_buffer();
-            for(uint32_t i = 0; i < buf.count; ++i)
-            {
-                auto& ev = buf.events[i];
-                if(ev.end_ns <= ev.start_ns)
-                {
-                    continue;
-                }
-
-                float ms = static_cast<float>(ev.end_ns - ev.start_ns) / 1'000'000.0f;
-                auto name_view = hpp::string_view(ev.name());
-                auto it = aggregate_data_.find(name_view);
-                if(it != aggregate_data_.end())
-                {
-                    it->second.add_sample(ms);
-                }
-                else
-                {
-                    per_frame_data pfd;
-                    pfd.add_sample(ms);
-                    aggregate_data_.emplace(std::string(ev.name()), pfd);
-                }
-            }
         }
     }
 
@@ -304,11 +268,6 @@ void performance_profiler::capture_frame_snapshot()
         history_write_idx_ = (history_write_idx_ + 1) % max_frame_history_;
         history_count_ = max_frame_history_;
     }
-}
-
-auto performance_profiler::get_per_frame_data_read() const -> const record_data_t&
-{
-    return aggregate_data_;
 }
 
 auto performance_profiler::get_threads() const -> const std::vector<thread_info>&
