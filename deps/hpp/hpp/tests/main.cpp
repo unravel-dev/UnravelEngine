@@ -1,35 +1,14 @@
 #include <hpp/type_traits.hpp>
 #include <hpp/utility.hpp>
-#include <hpp/type_name.hpp>
-#include <hpp/type_index.hpp>
 
 #include <iostream>
 
-namespace test
-{
-struct my_struct
-{
-
-};
-}
-
-namespace test2
-{
-template<typename T>
-struct my_struct2
-{
-
-};
-}
+/// Defined in type_name_tests.cpp, where the type name checks live.
+void run_type_name_tests();
 
 int main()
 {
-    static_assert(hpp::type_name<int>() == "int", "not working");
-    static_assert(hpp::type_name<test::my_struct>() == "test::my_struct", "not working");
-	static_assert(hpp::type_name_unqualified<test::my_struct>() == "my_struct", "not working");
-	static_assert(hpp::type_name_unqualified<test2::my_struct2<test::my_struct>>() == "my_struct2", "not working");
-	static_assert(hpp::type_id_constexpr<test::my_struct>().name() == "test::my_struct", "not working");
-
+	run_type_name_tests();
 
 	constexpr int i = 0;
 	if_constexpr(i == 0)
