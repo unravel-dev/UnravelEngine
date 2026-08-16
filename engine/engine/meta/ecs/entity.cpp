@@ -54,8 +54,6 @@ auto as_span(const std::vector<entity_data<entt::handle>>& entities) -> hpp::spa
 thread_local load_context* load_ctx_ptr{};
 thread_local save_context* save_ctx_ptr{};
 thread_local post_load_callbacks* post_load_callbacks_ptr{};
-std::atomic_bool writing = false;
-std::atomic_bool reading = false;
 
 auto push_load_context(entt::registry& registry) -> bool
 {
@@ -503,6 +501,41 @@ auto should_save_component(const entt::const_handle& obj) -> bool
     return true;
 }
 
+/**
+ * @brief The serialization keys for one component type, derived once.
+ *
+ * entt::get_name looks the name up in a std::map<std::string, meta_any> keyed by
+ * const char*, so each call built a temporary std::string for the lookup and returned a
+ * copy - and both the save and load paths asked for it once per component type per
+ * entity, then concatenated "has_" onto the result. With 32 serializable types that was
+ * ~100 allocations per entity before any data moved.
+ *
+ * Held by reference-returning statics rather than computed inline: NameValuePair stores
+ * name.c_str() as a bare pointer, so a stable string is also safer than the temporary
+ * these call sites used to build.
+ *
+ * Initialised on first use, which is the first save or load - long after the REFLECT
+ * blocks have run at static-init time, so the reflected name is available rather than
+ * entt::get_name's mangled fallback.
+ */
+template<typename Component>
+struct component_keys
+{
+    static auto get() -> const component_keys&
+    {
+        static const component_keys instance{};
+        return instance;
+    }
+
+    std::string name;
+    std::string has_name;
+
+private:
+    component_keys() : name(entt::get_name(entt::resolve<Component>())), has_name("has_" + name)
+    {
+    }
+};
+
 template<typename Component>
 auto should_load_component(const entt::handle& obj) -> bool
 {
@@ -614,16 +647,15 @@ SAVE(entity_components<entt::const_handle>)
             }
            
             auto component = obj.entity.try_get<ctype>();
-
-            const auto type = entt::resolve<ctype>();
-            auto name = entt::get_name(type);
-    
-            if(component)
+            if(!component)
             {
-                try_save(ar, ser20::make_nvp("has_" + name, true));
-                try_save(ar, ser20::make_nvp(name, *component));
+                return;
             }
-                      
+
+            const auto& keys = component_keys<ctype>::get();
+
+            try_save(ar, ser20::make_nvp(keys.has_name, true));
+            try_save(ar, ser20::make_nvp(keys.name, *component));
         });
 }
 SAVE_INSTANTIATE(entity_components<entt::const_handle>, ser20::oarchive_associative_t);
@@ -642,52 +674,24 @@ LOAD(entity_components<entt::handle>)
             }
 
 
-            auto component_type = entt::resolve<ctype>();
-            auto name = entt::get_name(component_type);
-            auto pretty_name = entt::get_pretty_name(component_type);
-
-            auto has_name = "has_" + name;
-            auto pretty_has_name = "Has" + pretty_name;
-
+            const auto& keys = component_keys<ctype>::get();
 
             bool has_component = false;
-            {
-                bool success_has_component = false;
-
-                // success_has_component |= serialize_check(has_name, [&]() -> bool
-                // {
-                //     return try_serialize_direct(ar, ser20::make_nvp(pretty_has_name, has_component));
-                // });
-
-                if(!success_has_component)
-                {
-                    success_has_component |= serialize_check(has_name, [&]() -> bool
-                    {
-                        return try_serialize_direct(ar, ser20::make_nvp(has_name, has_component));
-                    });
-                }
-            }
+            serialize_check(keys.has_name,
+                            [&]() -> bool
+                            {
+                                return try_serialize_direct(ar, ser20::make_nvp(keys.has_name, has_component));
+                            });
 
             if(has_component)
             {
                 auto& component = obj.entity.get_or_emplace<ctype>();
 
-                bool success_component = false;
-                {
-                    // Legacy support with pretty name
-                    // success_component |= serialize_check(name, [&]() -> bool
-                    // {
-                    //     return try_serialize_direct(ar, ser20::make_nvp(pretty_name, component));
-                    // });
-                }
-             
-                if(!success_component)
-                {
-                    success_component |= serialize_check(name, [&]() -> bool
-                    {
-                        return try_serialize_direct(ar, ser20::make_nvp(name, component));
-                    });
-                }
+                serialize_check(keys.name,
+                                [&]() -> bool
+                                {
+                                    return try_serialize_direct(ar, ser20::make_nvp(keys.name, component));
+                                });
 
                 emit_on_load<ctype>(*obj.entity.registry(), obj.entity.entity());
 
@@ -894,9 +898,11 @@ void load_from_archive(Archive& ar, entt::registry& reg)
 
     for(size_t i = 0; i < count; ++i)
     {
-        entt::handle e(reg, reg.create());
-
-        load_from_archive(ar, e);
+        // No scratch entity. load_from_archive_impl creates the entities it needs and
+        // returns the root; the loaders reassign the handle they are given rather than
+        // filling it in, so one handed in here is simply abandoned - a componentless
+        // entity per root, on every scene load.
+        load_from_archive_impl(ar, reg);
     }
 
     pop_load_context(pushed);
@@ -924,7 +930,6 @@ void save_to_stream(std::ostream& stream, entt::const_handle obj)
 
 void save_to_file(const std::string& absolute_path, entt::const_handle obj)
 {
-    writing = true;
     {
         std::ofstream stream(absolute_path);
 
@@ -939,7 +944,6 @@ void save_to_file(const std::string& absolute_path, entt::const_handle obj)
         save_ctx.save_source = {};
         pop_save_context(pushed);
     }
-    writing = false;
 }
 
 namespace asset_writer
@@ -1073,7 +1077,6 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
                           entt::registry& registry,
                           entt::handle& obj) -> bool
 {
-    reading = true;
     bool result = true;
 
     // copy here to keep it alive
@@ -1110,13 +1113,10 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
         catch(const std::exception& e)
         {
             result = false;
-            bool r = reading;
-            bool w = writing;
-            APPLOG_ERROR("Broken prefab {}", pfb.id());
+            APPLOG_ERROR("Broken prefab {}: {}", pfb.id(), e.what());
         }
     }
 
-    reading = false;
     return result;
 }
 
@@ -1135,7 +1135,6 @@ void regenerate_entity_uids(entt::handle obj)
 
 auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry) -> entt::handle
 {
-    reading = true;
     entt::handle obj;
 
     // copy here to keep it alive
@@ -1161,13 +1160,10 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
         }
         catch(const std::exception& e)
         {
-            bool r = reading;
-            bool w = writing;
-            APPLOG_ERROR("Broken prefab {}", pfb.id());
+            APPLOG_ERROR("Broken prefab {}: {}", pfb.id(), e.what());
         }
     }
 
-    reading = false;
 
     return obj;
 }
@@ -1442,10 +1438,24 @@ void clone_scene_from_stream(const scene& src_scene, scene& dst_scene)
             std::stringstream ss;
             save_to_stream(ss, src_scene.create_handle(e));
 
-            auto e_clone = dst_scene.registry->create();
-            auto e_clone_obj = dst_scene.create_handle(e_clone);
+            // Loaded straight into the destination registry rather than through
+            // load_from(stream, handle&), which would need a scratch entity only to carry
+            // the registry - and then abandon it, one per root per clone.
+            const auto view = ss.view();
+            if(view.empty())
+            {
+                return;
+            }
 
-            load_from(ss, e_clone_obj);
+            try
+            {
+                auto ar = ser20::create_iarchive_associative(view.data(), view.size());
+                load_from_archive_start(ar, *dst);
+            }
+            catch(const std::exception& ex)
+            {
+                APPLOG_ERROR("Failed to clone entity into scene: {}", ex.what());
+            }
         });
 }
 } // namespace unravel

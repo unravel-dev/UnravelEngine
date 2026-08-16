@@ -1,4 +1,5 @@
 #include "serialization.h"
+#include <atomic>
 #include <sstream>
 
 namespace serialization
@@ -23,6 +24,39 @@ void log_warning(const std::string& log_msg, const hpp::source_location& loc)
         logger(log_msg, loc);
 }
 
+namespace
+{
+// Relaxed: these are diagnostic tallies, not synchronisation points.
+std::atomic<uint64_t> failed_lookups{0};
+std::atomic<uint64_t> thrown_lookups{0};
+} // namespace
+
+auto failed_lookup_count() -> uint64_t
+{
+    return failed_lookups.load(std::memory_order_relaxed);
+}
+
+auto thrown_lookup_count() -> uint64_t
+{
+    return thrown_lookups.load(std::memory_order_relaxed);
+}
+
+void reset_failed_lookup_count()
+{
+    failed_lookups.store(0, std::memory_order_relaxed);
+    thrown_lookups.store(0, std::memory_order_relaxed);
+}
+
+void note_failed_lookup()
+{
+    failed_lookups.fetch_add(1, std::memory_order_relaxed);
+}
+
+void note_thrown_lookup()
+{
+    thrown_lookups.fetch_add(1, std::memory_order_relaxed);
+}
+
 auto get_path_context() -> path_context*
 {
     return current_path_context;
@@ -35,7 +69,7 @@ void set_path_context(path_context* ctx)
 
 auto path_context::push_segment(const std::string& segment) -> bool
 {
-    
+
     if(ignore_next_push)
     {
         ignore_next_push = false;
@@ -44,7 +78,16 @@ auto path_context::push_segment(const std::string& segment) -> bool
 
     if (recording_enabled)
     {
-        path_segments.push_back(segment);
+        // Array indices join without a separator, so "position" + "[0]" reads as
+        // "position[0]". Matches the old rebuild's `i > 0 && segment[0] != '['`, including
+        // its treatment of an empty segment (operator[](0) on an empty std::string yields
+        // '\0', which is not '[', so a separator was added).
+        if(!segment_ends_.empty() && (segment.empty() || segment.front() != '['))
+        {
+            path_ += '/';
+        }
+        path_ += segment;
+        segment_ends_.push_back(path_.size());
         return true;
     }
     return false;
@@ -52,31 +95,18 @@ auto path_context::push_segment(const std::string& segment) -> bool
 
 void path_context::pop_segment()
 {
-    if (recording_enabled && !path_segments.empty())
+    if (recording_enabled && !segment_ends_.empty())
     {
-        if(path_segments.back().ends_with("]"))
-        {
-            int a = 0;
-            a++;
-        }
-        path_segments.pop_back();
+        segment_ends_.pop_back();
+        // Back to the end of the previous segment, which drops this segment and the
+        // separator that was written before it in one step.
+        path_.resize(segment_ends_.empty() ? 0u : segment_ends_.back());
     }
 }
 
-auto path_context::get_current_path() const -> std::string
+auto path_context::get_current_path() const -> const std::string&
 {
-    if (path_segments.empty())
-        return "";
-    
-    std::stringstream ss;
-    for (size_t i = 0; i < path_segments.size(); ++i)
-    {
-        // For array indices, don't add a separator
-        if (i > 0 && path_segments[i][0] != '[')
-            ss << "/";
-        ss << path_segments[i];
-    }
-    return ss.str();
+    return path_;
 }
 
 void path_context::enable_recording()
@@ -96,7 +126,8 @@ auto path_context::is_recording() const -> bool
 
 void path_context::clear()
 {
-    path_segments.clear();
+    path_.clear();
+    segment_ends_.clear();
     recording_enabled = false;
 }
 

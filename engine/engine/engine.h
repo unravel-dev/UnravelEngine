@@ -30,5 +30,18 @@ struct engine
     static auto process() -> int;
 
     static auto context() -> rtti::context&;
+
+    /**
+     * @brief Installs the ambient context without constructing any subsystem.
+     *
+     * create() does this as one step of building the whole engine. Headless tools and test
+     * harnesses need only the pointer: asset_handle deserialization reaches for
+     * engine::context() to resolve a uid, so anything that loads an entity needs an
+     * ambient context even when it has no renderer, audio device or script domain.
+     *
+     * Not for use inside a running application - create() owns the pointer there. Pass
+     * nullptr to clear.
+     */
+    static void set_context(rtti::context* ctx);
 };
 } // namespace unravel

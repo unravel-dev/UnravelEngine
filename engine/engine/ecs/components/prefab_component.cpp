@@ -2,7 +2,7 @@
 #include <sstream>
 #include <string_view>
 #include <uuid/uuid.h>
-#include <string_utils/utils.h>
+#include <string_view>
 
 namespace unravel
 {
@@ -107,13 +107,15 @@ void prefab_component::remove_entity(const hpp::uuid& entity_uuid)
 {
     removed_entities.insert(entity_uuid);
 
-    for(auto& override : property_overrides)
+    // operator< orders by (entity_uuid, component_path), so every override belonging to one
+    // entity is a contiguous range and an empty component_path sorts before all of them.
+    //
+    // Erasing through the range-for would be undefined: std::set::erase invalidates the
+    // iterator to the erased element, which is the one the loop then increments.
+    auto it = property_overrides.lower_bound(prefab_property_override_data{entity_uuid, std::string{}});
+    while(it != property_overrides.end() && it->entity_uuid == entity_uuid)
     {
-        if(override.entity_uuid == entity_uuid)
-        {
-            property_overrides.erase(override);
-            return;
-        }
+        it = property_overrides.erase(it);
     }
 }
 
@@ -125,55 +127,55 @@ auto prefab_component::get_all_overrides() const -> const std::set<prefab_proper
 
 auto prefab_component::has_serialization_override(const std::string& serialization_path) const -> bool
 {
-    // Parse serialization path: "entities/uuid/components/component_type/property_path"
-    auto segments = string_utils::tokenize(serialization_path, "/");
-    
-    if (segments.size() < 4)
+    // Called once per property of every entity during a prefab resync, so it runs tens of
+    // times per entity and overwhelmingly answers "no". Nothing below allocates until the
+    // path has actually been recognised as addressing an overridable property.
+
+    // Nothing is overridden: the common case by a wide margin, and the whole answer.
+    if(property_overrides.empty())
     {
         return false;
     }
-    
-    bool starts_with_entities = hpp::string_view(segments[0]).starts_with("entities");
-    if(!starts_with_entities)
+
+    // Split "entities[i]/<uuid>/components/<component_path>" on its first three
+    // separators. Previously this tokenized the whole path into a vector<string> and then
+    // rejoined the tail into another string, for every property.
+    const std::string_view path(serialization_path);
+
+    const auto first = path.find('/');
+    if(first == std::string_view::npos)
     {
         return false;
     }
-    
-    bool starts_with_components = hpp::string_view(segments[2]).starts_with("components");
-    if(!starts_with_components)
+    const auto second = path.find('/', first + 1);
+    if(second == std::string_view::npos)
     {
         return false;
     }
-    
-    // Extract UUID and component path
-    std::string_view uuid_str = segments[1];
-    auto uuid_opt = hpp::uuid::from_string(uuid_str);
-    if (!uuid_opt.has_value())
+    const auto third = path.find('/', second + 1);
+    if(third == std::string_view::npos || third + 1 >= path.size())
+    {
+        // No component path after "components/" - the old tokenize produced fewer than
+        // the four segments it required and bailed out here too.
+        return false;
+    }
+
+    if(!path.substr(0, first).starts_with("entities"))
     {
         return false;
     }
-    
-    // Build component path from remaining segments, skipping Script/script_components/ if present
-    std::string component_path;
-    bool first_segment = true;
-    
-    for (size_t i = 3; i < segments.size(); ++i)
-    {        
-        if (!first_segment)
-        {
-            component_path += "/";
-        }
-        component_path += segments[i];
-        first_segment = false;
-    }
-    
-    // APPLOG_TRACE("Checking for serialization override for property: {}", serialization_path);
-    if(has_override(uuid_opt.value(), component_path))
+    if(!path.substr(second + 1, third - second - 1).starts_with("components"))
     {
-        // APPLOG_TRACE("Serialization override found for property: {}", serialization_path);
-        return true;
+        return false;
     }
-    return false;
+
+    const auto uuid_opt = hpp::uuid::from_string(path.substr(first + 1, second - first - 1));
+    if(!uuid_opt.has_value())
+    {
+        return false;
+    }
+
+    return has_override(uuid_opt.value(), std::string(path.substr(third + 1)));
 }
 
 } // namespace unravel

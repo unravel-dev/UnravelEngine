@@ -131,6 +131,11 @@ auto engine::context() -> rtti::context&
     return *context_ptr();
 }
 
+void engine::set_context(rtti::context* ctx)
+{
+    context_ptr() = ctx;
+}
+
 auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
 {
 

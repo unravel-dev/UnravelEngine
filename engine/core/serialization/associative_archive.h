@@ -1,5 +1,6 @@
 #pragma once
 #include "cereal_optional_nvp.h"
+#include "serialization.h"
 
 
 #define SER20_ASSOCIATIVE_ARCHIVE_XML 0
@@ -156,3 +157,23 @@ inline auto create_iarchive_associative(const char* buf, size_t len)
 }
 } // namespace ser20
 #endif
+
+// The input archive must be able to answer "is this name present" without throwing.
+//
+// It is not a correctness requirement - try_serialize_direct falls back to catching the
+// exception - which is exactly why it needs asserting. Loading an entity probes every
+// serializable component type by name and most of those miss, so on an archive without
+// hasNextName the fallback costs a full stack unwind per absent component: measured at
+// ~2us each, ~30 per entity, and a 6x slowdown on every scene load, play start and script
+// recompile. Nothing would fail; it would just quietly get slow.
+//
+// If this fires after switching SER20_ASSOCIATIVE_ARCHIVE, give the newly selected archive
+// a hasNextName(const char*) const -> bool. It is a membership test over the current
+// level, not a comparison against getNodeName(): readers skip fields without consuming
+// them, so the name being asked for is often ahead of the cursor. See
+// simd::JSONInputArchive::hasNextName for the reference implementation.
+static_assert(is_loading_archive<ser20::iarchive_associative_t>(),
+              "iarchive_associative_t must be an input archive");
+static_assert(can_probe_names<ser20::iarchive_associative_t>,
+              "The selected associative input archive has no non-throwing hasNextName(). "
+              "See the comment above this assertion.");

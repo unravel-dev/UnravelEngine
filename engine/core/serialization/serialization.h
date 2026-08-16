@@ -6,6 +6,8 @@
 #include <hpp/source_location.hpp>
 #include <hpp/concepts.hpp>
 
+#include <concepts>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -34,13 +36,22 @@ void init(const init_data& data = {});
 struct path_context
 {
     std::function<bool(const std::string&)> should_serialize_property_callback;
-    std::vector<std::string> path_segments;
     bool recording_enabled = false;
     bool ignore_next_push = false;
-    
+
     auto push_segment(const std::string& segment) -> bool;
     void pop_segment();
-    auto get_current_path() const -> std::string;
+
+    /**
+     * @brief The joined path, e.g. "entities[0]/<uuid>/components/transform_component/x".
+     *
+     * Maintained incrementally by push_segment/pop_segment rather than rebuilt on demand:
+     * during a prefab resync this is read once per property of every entity, and building
+     * it there through a stringstream was the largest single cost on that path. Returned
+     * by reference for the same reason - the caller must not outlive the next push or pop.
+     */
+    auto get_current_path() const -> const std::string&;
+
     void enable_recording();
     void disable_recording();
     auto is_recording() const -> bool;
@@ -54,10 +65,42 @@ struct path_context
         }
         return true;
     }
+
+private:
+    /// The joined path itself, always current.
+    std::string path_;
+    /// One entry per pushed segment: the offset just past it in path_, so a pop is a
+    /// resize back to the previous entry (which also drops the separator).
+    std::vector<std::size_t> segment_ends_;
 };
 
 auto get_path_context() -> path_context*;
 void set_path_context(path_context* ctx);
+
+/**
+ * @brief Counts NVP lookups that did not find their name.
+ *
+ * Loading an entity probes every serializable component type by name, so most lookups
+ * miss - an absent optional field is the normal case, not an error. This counts all of
+ * them, however they were detected.
+ *
+ * Diagnostic only; nothing branches on it. Costs nothing on a successful lookup.
+ */
+auto failed_lookup_count() -> uint64_t;
+
+/**
+ * @brief Of those, how many were detected by catching an exception.
+ *
+ * Archives satisfying can_probe_names answer "absent" with a scan, so this should stay
+ * near zero on the associative path. If it climbs back towards failed_lookup_count(), the
+ * cheap probe has stopped being used - which is a several-fold slowdown on every scene
+ * load, and is exactly what the benchmark table exists to catch.
+ */
+auto thrown_lookup_count() -> uint64_t;
+
+void reset_failed_lookup_count();
+void note_failed_lookup();
+void note_thrown_lookup();
 
 // Convenience function to get current deserialization path
 auto get_current_deserialization_path() -> std::string;
@@ -168,17 +211,46 @@ inline auto try_serialize_sequence_container(Archive& ar,
                                              ser20::NameValuePair<T>&& t,
                                              const hpp::source_location& loc = hpp::source_location::current()) -> bool;
 
+/**
+ * @brief Archives that can be asked whether a name exists without throwing.
+ *
+ * The associative archives report "no such name at this level" by throwing, which is the
+ * expected answer for every optional field - and loading an entity probes every
+ * serializable component type by name, so most answers are misses. A throw costs
+ * microseconds on Windows; asking first costs a scan. Archives that expose hasNextName
+ * get the cheap path, everything else keeps the original behaviour.
+ */
+template<typename Archive>
+concept can_probe_names = requires(const Archive& ar, const char* name) {
+    {
+        ar.hasNextName(name)
+    } -> std::same_as<bool>;
+};
+
 template<typename Archive, typename T>
 inline auto try_serialize_direct(Archive& ar,
                           ser20::NameValuePair<T>&& t,
                           const hpp::source_location& loc = hpp::source_location::current()) -> bool
 {
+    if constexpr(is_loading_archive<Archive>() && can_probe_names<Archive>)
+    {
+        // Absent is ordinary, not exceptional. Answering it here keeps the throw for
+        // what it is meant for: a name that is present but whose contents will not load.
+        if(!ar.hasNextName(t.name))
+        {
+            serialization::note_failed_lookup();
+            return false;
+        }
+    }
+
     try
     {
         ar(std::forward<ser20::NameValuePair<T>>(t));
     }
     catch(const std::exception& e)
     {
+        serialization::note_failed_lookup();
+        serialization::note_thrown_lookup();
         if constexpr(is_binary_archive<Archive>())
         {
             serialization::log_warning(e.what(), loc);
@@ -246,7 +318,9 @@ inline auto serialize_check(const std::string& name, F&& serialize_callback) -> 
     if(path_ctx)
     {
         serialization::path_segment_guard guard(name);
-        auto path = path_ctx->get_current_path();
+        // By reference: the path is maintained incrementally and lives until the guard
+        // pops. Copying it here cost an allocation per property of every entity.
+        const auto& path = path_ctx->get_current_path();
         if(!path_ctx->should_serialize_property(path))
         {
             return false;

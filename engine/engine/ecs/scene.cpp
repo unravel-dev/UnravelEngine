@@ -444,8 +444,22 @@ auto scene::clone_entity(entt::handle clone_from, bool keep_parent, bool call_ca
     APP_SCOPE_PERF("Clone Entity To");
 
     auto* reg = clone_from.registry();
-    entt::handle clone_to(*reg, reg->create());
+
+    // clone_entity_from_stream takes a handle, and the loader behind it reassigns that
+    // handle to entities it creates itself rather than filling in the one it was given.
+    // So this scratch entity exists only to carry the registry through that API, and is
+    // then left over - a componentless entity per clone unless it is cleaned up here.
+    const auto stub = reg->create();
+    entt::handle clone_to(*reg, stub);
     clone_entity(clone_to, clone_from, keep_parent, call_callbacks);
+
+    if(reg->valid(stub) && (!clone_to || clone_to.entity() != stub))
+    {
+        // Never visible to gameplay, so its teardown must not announce anything.
+        scoped_destroy_suppression no_announce;
+        destroy_entity(entt::handle(*reg, stub));
+    }
+
     return clone_to;
 }
 

@@ -487,17 +487,29 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
             auto rot = trans_comp->get_rotation_local();
 
             auto& prefab_comp = entity.get<prefab_component>();
-            // Enable path recording for prefab loading
-            serialization::path_context path_ctx;
-            path_ctx.should_serialize_property_callback = [&](const std::string& property_path) -> bool
-            {
-                return !prefab_comp.has_serialization_override(property_path);
-            };
-            path_ctx.enable_recording();
-            serialization::path_context* old_ctx = serialization::get_path_context();
-            serialization::set_path_context(&path_ctx);
 
-            
+            // The path context exists solely to answer "is this property overridden". With
+            // no overrides recorded the answer is always no, which is exactly what happens
+            // when no context is installed at all - and installing one makes every
+            // property of every entity build a path and run a callback to be told so.
+            // Most instances in a scene have no overrides, and this path also runs on play
+            // start and after every script recompile.
+            const bool needs_override_tracking = !prefab_comp.get_all_overrides().empty();
+
+            serialization::path_context path_ctx;
+            serialization::path_context* old_ctx = serialization::get_path_context();
+
+            if(needs_override_tracking)
+            {
+                // Enable path recording for prefab loading
+                path_ctx.should_serialize_property_callback = [&](const std::string& property_path) -> bool
+                {
+                    return !prefab_comp.has_serialization_override(property_path);
+                };
+                path_ctx.enable_recording();
+                serialization::set_path_context(&path_ctx);
+            }
+
             if(scene::instantiate_out(*entity.registry(), pfb, entity))
             {
                 auto& new_trans = entity.get<transform_component>();
@@ -507,9 +519,11 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
                 new_trans.set_parent(parent, false);
             }
 
-            
             // Restore previous path context
-            serialization::set_path_context(old_ctx);
+            if(needs_override_tracking)
+            {
+                serialization::set_path_context(old_ctx);
+            }
         }
 
     });

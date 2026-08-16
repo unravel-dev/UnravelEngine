@@ -478,6 +478,50 @@ private:
             throw Exception("YAML Parsing failed - provided NVP (" + std::string(searchName) + ") not found");
         }
 
+        //! Is there a member with this name at this level? Does not move the iterator.
+        /*! The non-throwing counterpart to the lookup half of search(). Callers that treat
+            a missing name as ordinary - an absent optional field - can ask first rather
+            than pay for a throw to find out.
+
+            Deliberately a membership test over the whole level, not a comparison against
+            the current node: readers legitimately skip fields without consuming them
+            (a suppressed prefab override, a component the loader declines to read), which
+            leaves the cursor behind the name being asked for. Starts at the cursor, since
+            members are normally read in the order they were written, then wraps.
+
+            Answers true for non-Member nodes, where names are not used for lookup. */
+        auto contains(const char* searchName) const -> bool
+        {
+            if(itsType != Member)
+            {
+                return true;
+            }
+
+            const auto matches = [searchName](const YAMLIterator& it) -> bool
+            {
+                // Scalar() is the stored key by reference; as<std::string>() would copy
+                // one out per key examined, and this runs per probe.
+                const auto& key = it->first.Scalar();
+                return key == searchName;
+            };
+
+            for(auto it = itsItCurrent; it != itsItEnd; ++it)
+            {
+                if(matches(it))
+                {
+                    return true;
+                }
+            }
+            for(auto it = itsItBegin; it != itsItCurrent; ++it)
+            {
+                if(matches(it))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
     private:
         YAMLIterator itsItBegin, itsItEnd; //!< Member or value iterator (object/array)
         YAMLIterator itsItCurrent;         //!< Current iterator
@@ -551,6 +595,28 @@ public:
     const char* getNodeName() const
     {
         return itsIteratorStack.back().name();
+    }
+
+    //! Is a member with this name available at the current level?
+    /*! Lets a caller distinguish "absent" from "present" without provoking the exception
+        that search() throws, which is otherwise the only way this archive can report a
+        miss. Intended for genuinely optional fields, where absence is expected rather than
+        exceptional. Does not move the read position, so a true answer must still be
+        followed by the normal load.
+
+        Note this is a membership test, not a comparison against getNodeName(): a caller
+        that skips a field without reading it leaves the cursor behind, and the next name
+        it asks for is then legitimately ahead of the cursor.
+
+        Returns true when the current node is not a mapping, where names are not used to
+        address elements. */
+    auto hasNextName(const char* name) const -> bool
+    {
+        if(!name || itsIteratorStack.empty())
+        {
+            return true;
+        }
+        return itsIteratorStack.back().contains(name);
     }
 
     //! Sets the name for the next node created with startNode

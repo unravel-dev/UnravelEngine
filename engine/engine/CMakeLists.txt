@@ -27,6 +27,12 @@ if(physics_tests_src)
     list(REMOVE_ITEM libsrc ${physics_tests_src})
 endif()
 
+set(ECS_SERIALIZATION_TESTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ecs/tests")
+file(GLOB_RECURSE ecs_serialization_tests_src "${ECS_SERIALIZATION_TESTS_DIR}/*.cpp" "${ECS_SERIALIZATION_TESTS_DIR}/*.h")
+if(ecs_serialization_tests_src)
+    list(REMOVE_ITEM libsrc ${ecs_serialization_tests_src})
+endif()
+
 set(target_name engine)
 
 add_library(${target_name} ${libsrc} ${shader_files})
@@ -168,6 +174,25 @@ endif()
 if(physics_tests_src)
     set(target_name physics_tests)
     add_executable(${target_name} EXCLUDE_FROM_ALL ${physics_tests_src})
+
+    set_target_properties(${target_name} PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+    )
+
+    target_link_libraries(${target_name} PRIVATE engine)
+endif()
+
+###############################################################################################
+# Entity serialization / prefab / clone harness. Not built by default; run it explicitly:
+#   cmake --build <build-dir> --target ecs_serialization_tests
+#   <build-dir>/bin/ecs_serialization_tests              # correctness
+#   <build-dir>/bin/ecs_serialization_tests --bench      # correctness + timings
+#   <build-dir>/bin/ecs_serialization_tests --bench-only
+if(ecs_serialization_tests_src)
+    set(target_name ecs_serialization_tests)
+    add_executable(${target_name} EXCLUDE_FROM_ALL ${ecs_serialization_tests_src})
 
     set_target_properties(${target_name} PROPERTIES
         CXX_STANDARD 20
