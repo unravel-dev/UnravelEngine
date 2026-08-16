@@ -1475,7 +1475,7 @@ void clone_scene_from_stream(const scene& src_scene, scene& dst_scene)
             std::stringstream ss;
             save_to_stream(ss, src_scene.create_handle(e));
 
-            load_from(ss, dst);
+            load_from(ss, *dst);
         });
 }
 } // namespace unravel
