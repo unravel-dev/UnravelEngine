@@ -19,8 +19,7 @@
 #include <memory>
 #include <vector>
 
-#define POOLSTL_STD_SUPPLEMENT 1
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 namespace unravel
 {
@@ -33,8 +32,8 @@ constexpr float k_min_particle_lifespan = 1.0e-4f;
 constexpr float k_emit_dir_zero_len_sq = 1.0e-12f;
 // pos+pivotX | rotation | scale3d+pivotY | uv | color | renderMode
 constexpr uint16_t k_instance_stride = 96;
-// Emitter updates already run under poolstl::par in particle_system.
-// Do not nest poolstl::par inside update — it oversubscribes the pool and
+// Emitter updates already run under for_each_par_if in particle_system.
+// Do not nest a parallel range inside update - it oversubscribes the pool and
 // inflates both wall time and summed "Update Emitter" thread time.
 constexpr uint32_t k_parallel_particle_threshold = 512;
 constexpr uint32_t k_min_rows_per_job = 256;
@@ -2159,7 +2158,7 @@ struct particle_system_soa
             {
                 // Few large emitters: parallelize by particle rows across the batch.
                 const uint32_t num_jobs = (total + k_min_rows_per_job - 1) / k_min_rows_per_job;
-                std::for_each(poolstl::par,
+                poolstl::for_each_par_if(true,
                               poolstl::iota_iter<uint32_t>(0),
                               poolstl::iota_iter<uint32_t>(num_jobs),
                               [&](uint32_t job)
@@ -2189,7 +2188,7 @@ struct particle_system_soa
             else if(count >= k_parallel_emitter_threshold)
             {
                 const uint32_t num_jobs = (count + k_min_emitters_per_job - 1) / k_min_emitters_per_job;
-                std::for_each(poolstl::par,
+                poolstl::for_each_par_if(true,
                               poolstl::iota_iter<uint32_t>(0),
                               poolstl::iota_iter<uint32_t>(num_jobs),
                               [&](uint32_t job)
@@ -2248,7 +2247,7 @@ struct particle_system_soa
             return;
         }
         const uint32_t num_jobs = (count + k_min_rows_per_job - 1) / k_min_rows_per_job;
-        std::for_each(poolstl::par,
+        poolstl::for_each_par_if(true,
                       poolstl::iota_iter<uint32_t>(0),
                       poolstl::iota_iter<uint32_t>(num_jobs),
                       [&](uint32_t job)
@@ -2298,7 +2297,7 @@ struct particle_system_soa
             return;
         }
         const uint32_t num_jobs = (emitter_count + k_min_emitters_per_job - 1) / k_min_emitters_per_job;
-        std::for_each(poolstl::par,
+        poolstl::for_each_par_if(true,
                       poolstl::iota_iter<uint32_t>(0),
                       poolstl::iota_iter<uint32_t>(num_jobs),
                       [&](uint32_t job)

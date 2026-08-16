@@ -8,11 +8,27 @@
 
 #include <logging/logging.h>
 
-#define POOLSTL_STD_SUPPLEMENT 1
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 namespace unravel
 {
+
+template<typename ...Ts>
+void process_armatures(scene& scn, bool recreate_armature)
+{
+    // this pass can create new entities so we cannot parallelize it
+    constexpr bool parallel = false;
+    auto view = scn.registry->view<Ts...>();
+    poolstl::for_each_par_if(parallel,
+                 view.begin(),
+                 view.end(),
+                 [&](entt::entity entity)
+                 {
+                     auto& model_comp = view.template get<model_component>(entity);
+                     model_comp.init_armature(recreate_armature);
+                 });
+}
+
 
 auto model_system::init(rtti::context& ctx) -> bool
 {
@@ -38,44 +54,28 @@ void model_system::on_play_begin(rtti::context& ctx)
     auto& ec = ctx.get_cached<ecs>();
     auto& scn = ec.get_scene();
 
-    auto view = scn.registry->view<model_component>();
-
-    // this pass can create new entities so we cannot parallelize it
-    std::for_each(view.begin(),
-                  view.end(),
-                  [&](entt::entity entity)
-                  {
-                      auto& model_comp = view.get<model_component>(entity);
-                      model_comp.init_armature(true);
-                  });
+    constexpr bool recreate_armature = true;
+    process_armatures<model_component>(scn, recreate_armature);
 }
 
 void model_system::on_frame_update(scene& scn, delta_t dt)
 {
     APP_SCOPE_PERF("Model/System Update");
 
-    auto view = scn.registry->view<transform_component, model_component, active_component>();
-
-    // this pass can create new entities so we cannot parallelize it
-    std::for_each(view.begin(),
-                  view.end(),
-                  [&](entt::entity entity)
-                  {
-                      auto& model_comp = view.get<model_component>(entity);
-                      model_comp.init_armature(false);
-                  });
+    constexpr bool recreate_armature = false;
+    process_armatures<model_component, active_component>(scn, recreate_armature);
 }
 
 void model_system::on_frame_before_render(scene& scn, delta_t dt)
 {
-    APP_SCOPE_PERF("Model/Skinning");
-    static const std::string thread_name = "Model/Skinning Pool Thread";
+    APP_SCOPE_PERF("Model/System Before Render");
+    static const std::string thread_name = "Model/Pool Thread";
     auto view = scn.registry->view<transform_component, model_component, active_component>();
 
     auto frame = gfx::get_render_frame();
     // this code should be thread safe as each task works with a whole hierarchy and
     // there is no interleaving between tasks.
-    std::for_each(poolstl::par,//std::execution::par,
+    poolstl::for_each_par_if(true,
                   view.begin(),
                   view.end(),
                   [&](entt::entity entity)

@@ -6,8 +6,7 @@
 
 #include <logging/logging.h>
 
-#define POOLSTL_STD_SUPPLEMENT 1
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 namespace unravel
 {
@@ -33,8 +32,7 @@ void transform_system::on_frame_update(scene& scn, delta_t dt)
     // Create a view for entities with transform_component and submesh_component
     auto view_root = scn.registry->view<transform_component, root_component>();
 
-    // Use std::for_each with the view's iterators
-    std::for_each(poolstl::par,//std::execution::par,
+    poolstl::for_each_par_if(true,
                   view_root.begin(),
                   view_root.end(),
                   [&view_root](entt::entity entity)

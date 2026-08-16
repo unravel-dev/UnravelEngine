@@ -15,8 +15,7 @@
 #include <engine/threading/threader.h>
 #include <logging/logging.h>
 
-#define POOLSTL_STD_SUPPLEMENT 1
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 #include <algorithm>
 #include <utility>
@@ -367,7 +366,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                       }
                   };
 
-    std::for_each(poolstl::par,
+    poolstl::for_each_par_if(true,
                   group_ranges_.begin(),
                   group_ranges_.end(),
                   [&](const std::pair<size_t, size_t>& range)

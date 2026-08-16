@@ -10,6 +10,10 @@ target_include_directories(${target_name}
 		${CMAKE_CURRENT_SOURCE_DIR}/..
 )
 
+# parallel.h is the engine's only entry point to the parallel algorithms, so poolSTL is reached
+# through this target rather than linked at each consumer.
+target_link_libraries(${target_name} INTERFACE poolSTL::poolSTL)
+
 # set_target_properties(${target_name} PROPERTIES
 #     CXX_STANDARD 20
 #     CXX_STANDARD_REQUIRED YES

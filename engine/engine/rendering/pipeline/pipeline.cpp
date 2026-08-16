@@ -29,8 +29,7 @@
 #include <graphics/vertex_decl.h>
 
 #include <engine/profiler/profiler.h>
-#define POOLSTL_STD_SUPPLEMENT 1
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 #include <concurrency/concurrentqueue.h>
 
@@ -139,8 +138,8 @@ void pipeline::gather_visible_models(scene& scn,
 
     //get_lod_data_for_camera is not thread safe but we are only operating on a single model once
     //so we can use parallel execution here
-    std::for_each(poolstl::par,//std::execution::par,
-        view.begin(), 
+    poolstl::for_each_par_if(true,
+        view.begin(),
         view.end(),
         [&](auto entity)
         {

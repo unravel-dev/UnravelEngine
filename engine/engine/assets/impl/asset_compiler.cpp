@@ -39,7 +39,7 @@
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/profiler/profiler.h>
 
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 #include <cmath>
 #include <numeric>
@@ -1215,8 +1215,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         const bool parallel_submeshes = data.submeshes.size() >= worker_count;
         const auto threading =
             parallel_submeshes ? sdf_bake_threading::serial : sdf_bake_threading::parallel;
-        std::vector<size_t> submesh_indices(data.submeshes.size());
-        std::iota(submesh_indices.begin(), submesh_indices.end(), size_t(0));
+
         // Junk geometry is worth a number rather than silence: a submesh made ENTIRELY of slivers
         // renders nothing and now bakes nothing, so without this it would simply be absent from GI
         // with no trace of why.
@@ -1231,38 +1230,39 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                                                                   }));
         // One slot per submesh, each written by exactly one task, so this needs no synchronisation.
         std::vector<sdf_component_summary> component_summaries(data.submeshes.size());
-        std::for_each(poolstl::par.par_if(parallel_submeshes),
-                      submesh_indices.begin(),
-                      submesh_indices.end(),
-                      [&](size_t i)
-                      {
-                          // Skinned submeshes are refused a field. The bake reads bind-pose
-                          // vertices and skinning rewrites the surface every frame, so the field
-                          // could only ever occlude as a rigid bind-pose statue pinned to the
-                          // entity's root transform -- wrong shape, wrong place. Deforming
-                          // geometry still receives GI through the screen-space resolve; it just
-                          // does not contribute occlusion or bounce, the same contract every
-                          // SDF/voxel GI ships with. Mirrored at runtime in
-                          // surface_cache_system::update_world for assets compiled before this.
-                          if(data.submeshes[i].skinned)
-                          {
-                              return;
-                          }
-                          sdf_source_geometry sdf_geometry;
-                          const bool extracted = extract_sdf_source_geometry(data, lod_index, i, sdf_geometry);
-                          discarded_triangles += sdf_geometry.discarded_triangles;
-                          if(!extracted)
-                          {
-                              return;
-                          }
-                          component_summaries[i] = summarize_connected_components(sdf_geometry);
-                          mesh_sdf field;
-                          if(!bake_mesh_sdf(sdf_geometry, sdf_settings, field, threading))
-                          {
-                              return;
-                          }
-                          data.submesh_sdfs[i] = std::move(field);
-                      });
+        poolstl::for_each_par_if(
+            parallel_submeshes,
+            poolstl::iota_iter<size_t>(0),
+            poolstl::iota_iter<size_t>(data.submeshes.size()),
+            [&](size_t i)
+            {
+                // Skinned submeshes are refused a field. The bake reads bind-pose
+                // vertices and skinning rewrites the surface every frame, so the field
+                // could only ever occlude as a rigid bind-pose statue pinned to the
+                // entity's root transform -- wrong shape, wrong place. Deforming
+                // geometry still receives GI through the screen-space resolve; it just
+                // does not contribute occlusion or bounce, the same contract every
+                // SDF/voxel GI ships with. Mirrored at runtime in
+                // surface_cache_system::update_world for assets compiled before this.
+                if(data.submeshes[i].skinned)
+                {
+                    return;
+                }
+                sdf_source_geometry sdf_geometry;
+                const bool extracted = extract_sdf_source_geometry(data, lod_index, i, sdf_geometry);
+                discarded_triangles += sdf_geometry.discarded_triangles;
+                if(!extracted)
+                {
+                    return;
+                }
+                component_summaries[i] = summarize_connected_components(sdf_geometry);
+                mesh_sdf field;
+                if(!bake_mesh_sdf(sdf_geometry, sdf_settings, field, threading))
+                {
+                    return;
+                }
+                data.submesh_sdfs[i] = std::move(field);
+            });
         // Totalled after the loop rather than inside it, so the reported numbers do not depend
         // on thread interleaving and the loop needs no atomics. A bake only succeeds when it
         // produced at least one surface brick, so that is the test for "this submesh baked".

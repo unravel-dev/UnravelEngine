@@ -7,7 +7,7 @@
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
 
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 #include <algorithm>
 #include <atomic>
@@ -366,13 +366,10 @@ void global_sdf_clipmap::compose_level(uint32_t index, const std::vector<global_
     // be its own measurement problem.
     std::atomic<uint64_t> candidate_tests{0};
     std::atomic<uint64_t> field_samples{0};
-    // One task per slice keeps the parallel granularity coarse enough to amortise scheduling
-    // while still using every core on a large level.
-    std::vector<uint32_t> slices(resolution);
-    std::iota(slices.begin(), slices.end(), 0u);
-    std::for_each(poolstl::par,
-                  slices.begin(),
-                  slices.end(),
+
+    poolstl::for_each_par_if(true,
+                  poolstl::iota_iter<uint32_t>(0),
+                  poolstl::iota_iter<uint32_t>(resolution),
                   [&](uint32_t z)
                   {
                       // On the POOL thread's own lane. The enclosing scope runs on the main

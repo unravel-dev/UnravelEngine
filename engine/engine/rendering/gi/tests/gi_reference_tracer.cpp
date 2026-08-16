@@ -2,7 +2,7 @@
 
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 #include <algorithm>
 #include <cmath>
@@ -293,11 +293,9 @@ auto integrate_irradiance(const reference_scene& scene,
     // Direct at the evaluation point itself, once - it is not sample-dependent.
     const math::vec3 direct = direct_irradiance(scene, lifted, normal);
     std::vector<math::vec3> samples(params.sample_count, math::vec3(0.0f));
-    std::vector<uint32_t> indices(params.sample_count);
-    std::iota(indices.begin(), indices.end(), 0u);
-    std::for_each(poolstl::par,
-                  indices.begin(),
-                  indices.end(),
+    poolstl::for_each_par_if(true,
+                  poolstl::iota_iter<uint32_t>(0),
+                  poolstl::iota_iter<uint32_t>(params.sample_count),
                   [&](uint32_t sample_index)
                   {
                       uint32_t rng = hash_combine(hash_uint(params.seed), sample_index);

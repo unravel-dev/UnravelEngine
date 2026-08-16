@@ -30,7 +30,7 @@
 
 #include <spdlog/sinks/stdout_sinks.h>
 
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 #include <algorithm>
 #include <array>
@@ -3763,26 +3763,25 @@ void test_parallel_submesh_bake_matches_serial()
         -> std::vector<mesh_sdf>
     {
         std::vector<mesh_sdf> fields(submesh_count);
-        std::vector<size_t> order(submesh_count);
-        std::iota(order.begin(), order.end(), size_t(0));
         const auto start = std::chrono::steady_clock::now();
-        std::for_each(poolstl::par.par_if(parallel_submeshes),
-                      order.begin(),
-                      order.end(),
-                      [&](size_t i)
-                      {
-                          sdf_source_geometry g;
-                          if(!extract_sdf_source_geometry(data, data.submeshes[i], g))
-                          {
-                              return;
-                          }
-                          mesh_sdf field;
-                          if(!bake_mesh_sdf(g, settings, field, threading))
-                          {
-                              return;
-                          }
-                          fields[i] = std::move(field);
-                      });
+        poolstl::for_each_par_if(
+            parallel_submeshes,
+            poolstl::iota_iter<size_t>(0),
+            poolstl::iota_iter<size_t>(submesh_count),
+            [&](size_t i)
+            {
+                sdf_source_geometry g;
+                if(!extract_sdf_source_geometry(data, data.submeshes[i], g))
+                {
+                    return;
+                }
+                mesh_sdf field;
+                if(!bake_mesh_sdf(g, settings, field, threading))
+                {
+                    return;
+                }
+                fields[i] = std::move(field);
+            });
         std::printf("  %-34s %7.1f ms\n",
                     label,
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());

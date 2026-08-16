@@ -10,8 +10,6 @@
 #include <utility>
 #include <base/platform/thread.hpp>
 #include <hpp/event.hpp>
-#define POOLSTL_STD_SUPPLEMENT 1
-#include <poolstl/poolstl.hpp>
 
 namespace fs
 {

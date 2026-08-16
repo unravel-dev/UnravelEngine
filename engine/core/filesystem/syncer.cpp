@@ -7,8 +7,7 @@
 #include <unordered_set>
 #include <vector>
 
-#define POOLSTL_STD_SUPPLEMENT 1
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 #include <logging/logging.h>
 namespace fs
@@ -261,7 +260,7 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
         {
             if(!needs_per_folder_ordering(begin, end))
             {
-                std::for_each(poolstl::par, begin, end, process_entry);
+                poolstl::for_each_par_if(true, begin, end, process_entry);
                 return;
             }
 
@@ -289,7 +288,7 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
                 }
             };
 
-            std::for_each(poolstl::par, group_list.begin(), group_list.end(), process_group);
+            poolstl::for_each_par_if(true, group_list.begin(), group_list.end(), process_group);
         };
 
         if(entries.empty())

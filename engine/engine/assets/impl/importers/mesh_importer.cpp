@@ -44,8 +44,7 @@
 #include <unordered_set>
 #include <unordered_map>
 
-#define POOLSTL_STD_SUPPLEMENT 1
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 namespace unravel
 {
@@ -3182,12 +3181,9 @@ void run_texture_jobs_parallel(texture_job_store& store,
 
     std::vector<composite_result_t> composite_results(composites.size());
 
-    std::vector<size_t> composite_order(composites.size());
-    std::iota(composite_order.begin(), composite_order.end(), size_t{0});
-
-    std::for_each(poolstl::par,
-                  composite_order.begin(),
-                  composite_order.end(),
+    poolstl::for_each_par_if(true,
+                  poolstl::iota_iter<size_t>(0),
+                  poolstl::iota_iter<size_t>(composites.size()),
                   [&](const size_t composite_index)
                   {
                       auto& result = composite_results[composite_index];

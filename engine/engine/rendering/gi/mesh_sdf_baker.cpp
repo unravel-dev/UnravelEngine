@@ -5,7 +5,7 @@
 
 #include <engine/profiler/profiler.h>
 
-#include <poolstl/poolstl.hpp>
+#include <concurrency/parallel.h>
 
 #include <algorithm>
 #include <cmath>
@@ -650,10 +650,10 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
                    sdf_bake_threading threading) -> bool
 {
     APP_SCOPE_PERF("GI/Bake/Mesh SDF");
-    // Both voxel passes below run under this policy. par_if(false) makes poolstl run the range
-    // inline on the calling thread, which is what keeps a caller that is already on the pool
-    // from deadlocking against itself -- see sdf_bake_threading.
-    const auto policy = poolstl::par.par_if(threading == sdf_bake_threading::parallel);
+    // Both voxel passes below run under this flag. When it is false the range runs inline on the
+    // calling thread, which is what keeps a caller that is already inside a parallel range from
+    // nesting one dispatch inside another -- see sdf_bake_threading.
+    const bool parallel_voxels = (threading == sdf_bake_threading::parallel);
     out = {};
     if(!geometry.is_valid() || !geometry.bounds.is_populated() || geometry.bounds.is_degenerate())
     {
@@ -823,21 +823,20 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
     const float shell_reach = (mesh_sdf::encode_range + float(mesh_sdf::brick_border)) * voxel_size;
     const float surface_brick_radius = brick_half_diagonal + shell_reach;
     std::vector<float> brick_center_distance(brick_count, 0.0f);
-    std::vector<uint32_t> brick_scan(brick_count);
-    std::iota(brick_scan.begin(), brick_scan.end(), 0u);
-    std::for_each(policy,
-                  brick_scan.begin(),
-                  brick_scan.end(),
-                  [&](uint32_t brick_index)
-                  {
-                      const uint32_t bx = brick_index % brick_dim.x;
-                      const uint32_t by = (brick_index / brick_dim.x) % brick_dim.y;
-                      const uint32_t bz = brick_index / (brick_dim.x * brick_dim.y);
-                      const math::vec3 center =
-                          padded_min + (math::vec3(float(bx), float(by), float(bz)) + math::vec3(0.5f)) *
-                                           brick_world_size;
-                      brick_center_distance[brick_index] = accelerator.signed_distance(center, use_unsigned);
-                  });
+    poolstl::for_each_par_if(
+        parallel_voxels,
+        poolstl::iota_iter<uint32_t>(0),
+        poolstl::iota_iter<uint32_t>(brick_count),
+        [&](uint32_t brick_index)
+        {
+            const uint32_t bx = brick_index % brick_dim.x;
+            const uint32_t by = (brick_index / brick_dim.x) % brick_dim.y;
+            const uint32_t bz = brick_index / (brick_dim.x * brick_dim.y);
+            const math::vec3 center =
+                padded_min + (math::vec3(float(bx), float(by), float(bz)) + math::vec3(0.5f)) *
+                                 brick_world_size;
+            brick_center_distance[brick_index] = accelerator.signed_distance(center, use_unsigned);
+        });
     // Pass 2: assign storage slots to surface bricks, and give every other brick a
     // conservative distance valid for all points inside it.
     std::vector<uint32_t> surface_bricks;
@@ -877,45 +876,46 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
     }
     // Pass 3: fill the surface bricks, including their filter borders.
     out.brick_voxels.assign(size_t(surface_bricks.size()) * mesh_sdf::brick_voxel_count, 0u);
-    std::for_each(policy,
-                  surface_bricks.begin(),
-                  surface_bricks.end(),
-                  [&](uint32_t brick_index)
-                  {
-                      const uint32_t slot = out.indirection[brick_index];
-                      const uint32_t bx = brick_index % brick_dim.x;
-                      const uint32_t by = (brick_index / brick_dim.x) % brick_dim.y;
-                      const uint32_t bz = brick_index / (brick_dim.x * brick_dim.y);
-                      const math::vec3 brick_origin =
-                          padded_min + math::vec3(float(bx), float(by), float(bz)) * brick_world_size;
-                      uint8_t* dst = out.brick_voxels.data() + size_t(slot) * mesh_sdf::brick_voxel_count;
-                      for(uint32_t lz = 0; lz < mesh_sdf::brick_stride; ++lz)
-                      {
-                          for(uint32_t ly = 0; ly < mesh_sdf::brick_stride; ++ly)
-                          {
-                              for(uint32_t lx = 0; lx < mesh_sdf::brick_stride; ++lx)
-                              {
-                                  // Local 0 is the border voxel, so interior voxel i sits at
-                                  // i + brick_border and samples at the voxel centre.
-                                  const math::vec3 voxel_offset(float(lx) - float(mesh_sdf::brick_border) + 0.5f,
-                                                                float(ly) - float(mesh_sdf::brick_border) + 0.5f,
-                                                                float(lz) - float(mesh_sdf::brick_border) + 0.5f);
-                                  const math::vec3 p = brick_origin + voxel_offset * voxel_size;
-                                  float distance = accelerator.signed_distance(p, use_unsigned);
-                                  if(use_unsigned)
-                                  {
-                                      // Unsigned shell: the surface is treated as a slab of the
-                                      // authored thickness so a single-quad leaf still occludes.
-                                      distance -= out.two_sided_thickness;
-                                  }
-                                  const uint32_t local =
-                                      lx + ly * mesh_sdf::brick_stride +
-                                      lz * mesh_sdf::brick_stride * mesh_sdf::brick_stride;
-                                  dst[local] = encode_sdf_distance(distance / voxel_size);
-                              }
-                          }
-                      }
-                  });
+    poolstl::for_each_par_if(
+        parallel_voxels,
+        surface_bricks.begin(),
+        surface_bricks.end(),
+        [&](uint32_t brick_index)
+        {
+            const uint32_t slot = out.indirection[brick_index];
+            const uint32_t bx = brick_index % brick_dim.x;
+            const uint32_t by = (brick_index / brick_dim.x) % brick_dim.y;
+            const uint32_t bz = brick_index / (brick_dim.x * brick_dim.y);
+            const math::vec3 brick_origin =
+                padded_min + math::vec3(float(bx), float(by), float(bz)) * brick_world_size;
+            uint8_t* dst = out.brick_voxels.data() + size_t(slot) * mesh_sdf::brick_voxel_count;
+            for(uint32_t lz = 0; lz < mesh_sdf::brick_stride; ++lz)
+            {
+                for(uint32_t ly = 0; ly < mesh_sdf::brick_stride; ++ly)
+                {
+                    for(uint32_t lx = 0; lx < mesh_sdf::brick_stride; ++lx)
+                    {
+                        // Local 0 is the border voxel, so interior voxel i sits at
+                        // i + brick_border and samples at the voxel centre.
+                        const math::vec3 voxel_offset(float(lx) - float(mesh_sdf::brick_border) + 0.5f,
+                                                      float(ly) - float(mesh_sdf::brick_border) + 0.5f,
+                                                      float(lz) - float(mesh_sdf::brick_border) + 0.5f);
+                        const math::vec3 p = brick_origin + voxel_offset * voxel_size;
+                        float distance = accelerator.signed_distance(p, use_unsigned);
+                        if(use_unsigned)
+                        {
+                            // Unsigned shell: the surface is treated as a slab of the
+                            // authored thickness so a single-quad leaf still occludes.
+                            distance -= out.two_sided_thickness;
+                        }
+                        const uint32_t local =
+                            lx + ly * mesh_sdf::brick_stride +
+                            lz * mesh_sdf::brick_stride * mesh_sdf::brick_stride;
+                        dst[local] = encode_sdf_distance(distance / voxel_size);
+                    }
+                }
+            }
+        });
     return true;
 }
 
