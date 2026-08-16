@@ -1001,6 +1001,42 @@ void save_to_file_bin(const std::string& absolute_path, entt::const_handle obj)
     pop_save_context(pushed);
 }
 
+
+void load_from_view(std::string_view view, entt::registry& obj)
+{
+    if(!view.empty())
+    {
+        // APPLOG_INFO_PERF(std::chrono::microseconds);
+
+        try
+        {
+            auto ar = ser20::create_iarchive_associative(view.data(), view.size());
+            load_from_archive_start(ar, obj);
+        }
+        catch(const std::exception& e)
+        {
+            APPLOG_ERROR("Failed to load entity from view: {}", e.what());
+        }
+    }
+}
+
+void load_from_stream(std::istream& stream, entt::registry& obj)
+{
+    if(stream.good())
+    {
+        // APPLOG_INFO_PERF(std::chrono::microseconds);
+        try
+        {
+            auto ar = ser20::create_iarchive_associative(stream);
+            load_from_archive_start(ar, obj);
+        }
+        catch(const std::exception& e)
+        {
+            APPLOG_ERROR("Failed to load entity from stream: {}", e.what());
+        }
+    }
+}
+
 void load_from_view(std::string_view view, entt::handle& obj)
 {
     if(!view.empty())
@@ -1306,6 +1342,7 @@ void save_to_file_bin(const std::string& absolute_path, const scene& scn)
     save_to_stream_bin(stream, scn);
 }
 
+
 void load_from_view(std::string_view view, scene& scn)
 {
     if(!view.empty())
@@ -1438,24 +1475,7 @@ void clone_scene_from_stream(const scene& src_scene, scene& dst_scene)
             std::stringstream ss;
             save_to_stream(ss, src_scene.create_handle(e));
 
-            // Loaded straight into the destination registry rather than through
-            // load_from(stream, handle&), which would need a scratch entity only to carry
-            // the registry - and then abandon it, one per root per clone.
-            const auto view = ss.view();
-            if(view.empty())
-            {
-                return;
-            }
-
-            try
-            {
-                auto ar = ser20::create_iarchive_associative(view.data(), view.size());
-                load_from_archive_start(ar, *dst);
-            }
-            catch(const std::exception& ex)
-            {
-                APPLOG_ERROR("Failed to clone entity into scene: {}", ex.what());
-            }
+            load_from(ss, dst);
         });
 }
 } // namespace unravel

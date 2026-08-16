@@ -178,6 +178,7 @@ void load_from(Stream& stream, T& scn)
         load_from_stream(stream, scn);
     }
 }
+
 } // namespace unravel
 
 namespace ser20
