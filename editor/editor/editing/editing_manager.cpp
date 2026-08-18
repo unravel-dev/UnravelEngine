@@ -465,81 +465,55 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
     queue_action("Sync Prefab Entity",
         [&ctx, entity, pfb]() mutable
     {
-        auto& ev = ctx.get_cached<events>();
-    
         auto& play = ctx.get_cached<play_mode>();
-    if(play.is_active())
+        if(play.is_active())
         {
             return;
         }
 
-        if(!entity.valid())
+        if(!entity.valid() || !pfb.is_valid())
         {
             return;
         }
 
-        if(!pfb.is_valid())
+        // The sync itself lives in the engine. It is the version that knows about nesting:
+        // it snapshots each nested instance's locally-made overrides and removals before the
+        // replay and puts them back after, filters the document's snapshot of a nested
+        // instance through that instance's override set, and copies the prefab_component
+        // rather than holding a reference across a load that adds and removes them (the pool
+        // swap-and-pops). The editor used to keep its own pre-nesting copy of this dance,
+        // which replayed stale snapshots over live nested instances.
+        if(auto* prefab_comp = entity.try_get<prefab_component>())
         {
-            return;
+            prefab_comp->source = pfb;
         }
 
-        if(auto trans_comp = entity.template try_get<transform_component>())
-        {
-            auto parent = trans_comp->get_parent();
-            auto pos = trans_comp->get_position_local();
-            auto rot = trans_comp->get_rotation_local();
-
-            auto& prefab_comp = entity.get<prefab_component>();
-
-            // The path context exists solely to answer "is this property overridden". With
-            // no overrides recorded the answer is always no, which is exactly what happens
-            // when no context is installed at all - and installing one makes every
-            // property of every entity build a path and run a callback to be told so.
-            // Most instances in a scene have no overrides, and this path also runs on play
-            // start and after every script recompile.
-            const bool needs_override_tracking = !prefab_comp.get_all_overrides().empty();
-
-            serialization::path_context path_ctx;
-            serialization::path_context* old_ctx = serialization::get_path_context();
-
-            if(needs_override_tracking)
-            {
-                // Enable path recording for prefab loading
-                path_ctx.should_serialize_property_callback = [&](const std::string& property_path) -> bool
-                {
-                    return !prefab_comp.has_serialization_override(property_path);
-                };
-                path_ctx.enable_recording();
-                serialization::set_path_context(&path_ctx);
-            }
-
-            if(scene::instantiate_out(*entity.registry(), pfb, entity))
-            {
-                auto& new_trans = entity.get<transform_component>();
-                new_trans.set_position_local(pos);
-                new_trans.set_rotation_local(rot);
-
-                new_trans.set_parent(parent, false);
-            }
-
-            // Restore previous path context
-            if(needs_override_tracking)
-            {
-                serialization::set_path_context(old_ctx);
-            }
-        }
-
+        sync_prefab_instance(entity);
     });
 }
 
 void editing_manager::sync_prefab_instances(rtti::context& ctx, scene* scn)
 {
+    // Top-level instances only. An instance nested inside another is refreshed by its
+    // container's sync - load_from_prefab_out cascades into everything nested - so syncing
+    // it from here as well repeated the whole replay once per nesting level.
     scn->registry->view<prefab_component>().each(
     [&](auto e, auto&& comp)
     {
-        sync_prefab_entity(ctx, comp.get_owner(), comp.source);
+        auto owner = comp.get_owner();
+        const auto* trans_comp = owner.template try_get<transform_component>();
+        auto parent = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
+        while(parent)
+        {
+            if(parent.all_of<prefab_component>())
+            {
+                return;
+            }
+            const auto* parent_trans = parent.try_get<transform_component>();
+            parent = parent_trans != nullptr ? parent_trans->get_parent() : entt::handle{};
+        }
+        sync_prefab_entity(ctx, owner, comp.source);
     });
-    
 }
 
 auto editing_manager::get_select_mode() const -> select_mode

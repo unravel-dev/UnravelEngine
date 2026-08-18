@@ -225,7 +225,18 @@ void process_drag_drop_target(const fs::path& absolute_path)
 
                                 auto& am = ctx.get_cached<asset_manager>();
                                 auto key = fs::convert_to_protocol(prefab_path);
-                                dropped.get_or_emplace<prefab_component>().source = am.get_asset<prefab>(key.generic_string());
+
+                                // The entity may already be an instance of a different prefab.
+                                // Its old bookkeeping is keyed by uids that also exist in the
+                                // file just written (prefab uids survive the save), so keeping
+                                // it would suppress those properties from the new asset on
+                                // every resync - and a stale instance_id would claim a slot in
+                                // a document that never wrote this instance. Becoming the
+                                // source of a new prefab leaves nothing overridden by
+                                // definition. Replaced rather than removed and re-added: the
+                                // on_destroy hook strips prefab ids from the whole subtree.
+                                auto& prefab_comp = dropped.emplace_or_replace<prefab_component>();
+                                prefab_comp.source = am.get_asset<prefab>(key.generic_string());
                             };
 
 

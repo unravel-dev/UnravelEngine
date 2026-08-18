@@ -518,6 +518,57 @@ void take_entity_overrides(std::set<prefab_property_override_data>& from,
         ++it;
     }
 }
+
+/**
+ * @brief Records a deleted subtree on the instance that contained it, entity by entity.
+ *
+ * The whole subtree, not just its root: a resync recreates any record it cannot match to a
+ * live entity or a removal entry, so a removal that only named the root would bring the
+ * root's children back as orphans. Runs while the subtree is still alive - the caller
+ * destroys it next, and the uids are unreadable after that.
+ *
+ * A nested instance root inside the subtree is recorded as a removed *instance*: its prefab
+ * uid is the nested asset's, shared with every other instance of that prefab, so listing it
+ * as an entity would read as "remove all of them". Its content is not walked - it belongs to
+ * the nested asset, and removing the instance covers it. One with no instance id was added
+ * where it stands; nothing will bring it back, so nothing is recorded.
+ */
+void mark_subtree_removed(entt::handle entity, prefab_component& container_prefab, prefab_removal_record& record)
+{
+    if(!entity)
+    {
+        return;
+    }
+
+    if(const auto* own_prefab = entity.try_get<prefab_component>())
+    {
+        if(!own_prefab->instance_id.is_nil())
+        {
+            container_prefab.remove_instance(own_prefab->instance_id);
+            record.removed_instances.push_back(own_prefab->instance_id);
+        }
+        return;
+    }
+
+    const auto entity_uuid = prefab_override_context::get_entity_prefab_uuid(entity);
+    if(!entity_uuid.is_nil())
+    {
+        // Captured before the removal, which drops them along with the entity.
+        take_entity_overrides(container_prefab.property_overrides, entity_uuid, record.erased_overrides);
+        take_entity_overrides(container_prefab.inherited_overrides, entity_uuid, record.erased_inherited_overrides);
+
+        container_prefab.remove_entity(entity_uuid);
+        record.removed_entities.push_back(entity_uuid);
+    }
+
+    if(const auto* transform = entity.try_get<transform_component>())
+    {
+        for(auto child : transform->get_children())
+        {
+            mark_subtree_removed(child, container_prefab, record);
+        }
+    }
+}
 } // namespace
 
 auto prefab_override_context::mark_entity_as_removed(entt::handle entity) -> prefab_removal_record
@@ -554,7 +605,7 @@ auto prefab_override_context::mark_entity_as_removed(entt::handle entity) -> pre
                 container_prefab->remove_instance(own_prefab->instance_id);
 
                 record.container = entt::make_uhandle(container);
-                record.removed_instance = own_prefab->instance_id;
+                record.removed_instances.push_back(own_prefab->instance_id);
             }
         }
         return record;
@@ -566,20 +617,11 @@ auto prefab_override_context::mark_entity_as_removed(entt::handle entity) -> pre
         auto prefab_comp = prefab_root.try_get<prefab_component>();
         if(prefab_comp)
         {
-            auto entity_uuid = get_entity_prefab_uuid(entity);
-            if(entity_uuid.is_nil())
+            mark_subtree_removed(entity, *prefab_comp, record);
+            if(!record.removed_entities.empty() || !record.removed_instances.empty())
             {
-                return record;
+                record.container = entt::make_uhandle(prefab_root);
             }
-
-            // Captured before the removal, which drops them along with the entity.
-            take_entity_overrides(prefab_comp->property_overrides, entity_uuid, record.erased_overrides);
-            take_entity_overrides(prefab_comp->inherited_overrides, entity_uuid, record.erased_inherited_overrides);
-
-            prefab_comp->remove_entity(entity_uuid);
-
-            record.container = entt::make_uhandle(prefab_root);
-            record.removed_entity = entity_uuid;
         }
     }
 
@@ -600,14 +642,14 @@ void prefab_override_context::restore_entity_removal(const prefab_removal_record
         return;
     }
 
-    if(!record.removed_instance.is_nil())
+    for(const auto& removed : record.removed_instances)
     {
-        prefab_comp->removed_instances.erase(record.removed_instance);
+        prefab_comp->removed_instances.erase(removed);
     }
 
-    if(!record.removed_entity.is_nil())
+    for(const auto& removed : record.removed_entities)
     {
-        prefab_comp->removed_entities.erase(record.removed_entity);
+        prefab_comp->removed_entities.erase(removed);
     }
 
     prefab_comp->property_overrides.insert(record.erased_overrides.begin(), record.erased_overrides.end());

@@ -389,6 +389,78 @@ void sync_prefab_instance_with(entt::handle instance, const asset_handle<prefab>
 }
 
 /**
+ * @brief Overwrites an asset's payload behind its existing handle, keeping the uid.
+ *
+ * make_prefab_asset re-registers under a fresh uid, so a document that recorded the old uid
+ * never sees content published that way. Editing the buffer in place is what an editor
+ * recompile amounts to, and it is what lets a test exercise the paths that resolve a source
+ * by the uid a document carries: the automatic nested refresh inside load_from_prefab, and
+ * the cycle guard.
+ */
+void republish_in_place(const asset_handle<prefab>& pfb, entt::const_handle root)
+{
+    const auto bytes = serialize_as_prefab(root);
+    const auto compiled = minify_json(std::string(bytes.begin(), bytes.end()));
+    pfb.get()->buffer.data = std::vector<uint8_t>(compiled.begin(), compiled.end());
+}
+
+auto count_entities_named(entt::registry& registry, const std::string& name) -> size_t
+{
+    size_t count = 0;
+    registry.view<tag_component>().each(
+        [&](auto, const auto& tag)
+        {
+            count += tag.name == name ? 1u : 0u;
+        });
+    return count;
+}
+
+void record_subtree_removal(entt::handle entity, prefab_component& container_prefab)
+{
+    if(!entity)
+    {
+        return;
+    }
+    if(const auto* own_prefab = entity.try_get<prefab_component>())
+    {
+        if(!own_prefab->instance_id.is_nil())
+        {
+            container_prefab.remove_instance(own_prefab->instance_id);
+        }
+        return;
+    }
+    if(const auto* id_comp = entity.try_get<prefab_id_component>())
+    {
+        if(!id_comp->id.is_nil())
+        {
+            container_prefab.remove_entity(id_comp->id);
+        }
+    }
+    if(const auto* trans_comp = entity.try_get<transform_component>())
+    {
+        for(auto child : trans_comp->get_children())
+        {
+            record_subtree_removal(child, container_prefab);
+        }
+    }
+}
+
+/**
+ * @brief Deletes an entity from an instance the way the editor does.
+ *
+ * mark_entity_as_removed records the whole live subtree on the containing instance before
+ * the destroy: entities by prefab uid, nested instance roots by instance id (their content
+ * belongs to their own asset, so the instance entry covers it). The whole subtree matters -
+ * a resync recreates any record it cannot match, so a removal naming only the subtree's
+ * root would bring the root's children back as orphans.
+ */
+void delete_like_the_editor(entt::handle container, entt::handle victim)
+{
+    record_subtree_removal(victim, container.get<prefab_component>());
+    scene::destroy_entity(victim);
+}
+
+/**
  * @brief root -> {child_a -> grandchild, child_b}, each tagged and displaced.
  *
  * Deep enough to exercise parent links, child lists and the pre-order flattening, small
@@ -1186,6 +1258,37 @@ void test_resync_honours_removed_entities()
     check(static_cast<bool>(find_child_by_name(fix.instance, "child_a")), "its sibling is still there");
 }
 
+void test_removing_an_entity_with_children_stays_removed()
+{
+    begin_test("a removed entity's children stay removed with it");
+
+    // The victim has a child of its own, which is what the leaf test above cannot see: a
+    // resync recreates any record it cannot match to a live entity or a removal entry, so a
+    // removal naming only child_a would bring grandchild back - as a root, since its parent
+    // link resolves to the null the removed parent maps to. The editor therefore records
+    // the whole subtree, and this pins that a subtree-complete record survives the replay.
+    prefab_fixture fix;
+    fix.build();
+    if(!fix.instance)
+    {
+        check(false, "instance was created");
+        return;
+    }
+
+    auto victim = find_child_by_name(fix.instance, "child_a");
+    check(static_cast<bool>(find_child_by_name(victim, "grandchild")), "the victim has a child");
+
+    delete_like_the_editor(fix.instance, victim);
+
+    fix.republish_and_sync();
+
+    check(!find_child_by_name(fix.instance, "child_a"), "the resync does not resurrect the entity");
+    check_eq(count_entities_named(*fix.world.registry, "grandchild"),
+             0,
+             "and its child did not come back as an orphan");
+    check(static_cast<bool>(find_child_by_name(fix.instance, "child_b")), "its sibling is still there");
+}
+
 void test_resync_keeps_user_added_children()
 {
     begin_test("entities the user added to an instance survive a resync");
@@ -1665,18 +1768,80 @@ void test_editing_the_inner_asset_reaches_new_outer_instances()
                "and so did its authored scale, which is not an implicit override");
 }
 
-// NOT covered here: the nesting-cycle guard (scoped_prefab_expansion), and the automatic
-// sync_nested_prefab_instances call inside load_from_prefab / load_from_prefab_out.
-//
-// Both need prefab_component::source to resolve, and it cannot in this harness:
-// LOAD(asset_handle<T>) goes through asset_manager::get_asset(uid), and with no asset
-// database registered that returns an empty handle. So a loaded instance has no source,
-// sync_prefab_instance returns early, and a prefab cannot be made to contain itself.
-//
-// A cycle test was written and then removed - it passed with the guard deliberately
-// disabled, which made it worse than no test. Those two paths need verifying in the editor.
-// What *is* covered is sync_prefab_instance itself, by the test above, which assigns the
-// source by hand.
+void test_a_fresh_instantiate_pulls_the_inner_asset_edit()
+{
+    begin_test("a fresh instantiate refreshes nested instances without a manual sync");
+
+    // The automatic sync_nested_prefab_instances call inside load_from_prefab, through the
+    // uid the outer document actually recorded. The manual-sync test above bypasses that
+    // resolution by assigning the source by hand; this one republishes the inner asset
+    // behind its existing handle - the shape of an editor recompile - so the instantiate
+    // has to find the new content on its own.
+    scene inner_authoring("inner_authoring");
+    auto inner_source = build_sample_tree(inner_authoring);
+    auto inner_pfb = make_prefab_from(inner_source, "test:/inner.pfb");
+
+    scene outer_authoring("outer_authoring");
+    auto outer_root = outer_authoring.create_entity("outer_root");
+    outer_authoring.instantiate(inner_pfb, outer_root, false);
+    auto outer_pfb = make_prefab_from(outer_root, "test:/outer.pfb");
+
+    // Inner is edited after outer was saved, so outer's snapshot of it is stale.
+    find_child_by_name(inner_source, "child_a").get<tag_component>().name = "edited_after_outer_saved";
+    republish_in_place(inner_pfb, inner_source);
+
+    scene world("world");
+    auto outer_instance = world.instantiate(outer_pfb, false);
+    auto nested = find_child_by_name(outer_instance, "root");
+    check(static_cast<bool>(nested), "the nested instance is there");
+    if(!nested)
+    {
+        return;
+    }
+
+    check(static_cast<bool>(find_child_by_name(nested, "edited_after_outer_saved")),
+          "the instantiate refreshed the nested instance against its own asset");
+}
+
+void test_nesting_cycle_is_refused()
+{
+    begin_test("a prefab that contains itself through another prefab is refused, not recursed");
+
+    // Outer contains an instance of inner; inner is then edited to contain an instance of
+    // outer. The republish happens behind inner's existing handle, because the cycle only
+    // exists if the uid outer's document references is the uid that serves the new content.
+    scene inner_authoring("inner_authoring");
+    auto inner_source = build_sample_tree(inner_authoring);
+    auto inner_pfb = make_prefab_from(inner_source, "test:/inner.pfb");
+
+    scene outer_authoring("outer_authoring");
+    auto outer_root = outer_authoring.create_entity("outer_root");
+    outer_authoring.instantiate(inner_pfb, outer_root, false);
+    auto outer_pfb = make_prefab_from(outer_root, "test:/outer.pfb");
+
+    scene inner_edit("inner_edit");
+    auto inner_v2 = build_sample_tree(inner_edit);
+    inner_edit.instantiate(outer_pfb, inner_v2, false);
+    republish_in_place(inner_pfb, inner_v2);
+
+    // Expanding outer reaches inner, whose content carries outer again - which is on the
+    // expansion stack and gets refused. The test finishing at all is the core assertion;
+    // without the guard this recursion has no floor.
+    scene world("world");
+    auto outer_instance = world.instantiate(outer_pfb, false);
+    check(static_cast<bool>(outer_instance), "the outer instance still instantiates");
+    if(!outer_instance)
+    {
+        return;
+    }
+
+    // What the refusal leaves behind is bounded: the outer instance, its nested inner, and
+    // inner v2's unexpandable snapshot of outer with its own nested inner - four instance
+    // roots, not a chain to the depth cap.
+    size_t instance_roots = 0;
+    world.registry->view<prefab_component>().each([&](auto, auto&&) { ++instance_roots; });
+    check_eq(instance_roots, 4, "the expansion stops at the cycle instead of unwinding to the depth cap");
+}
 
 void test_outer_resync_preserves_nested_instance_edits()
 {
@@ -2687,6 +2852,130 @@ void test_a_locally_deleted_nested_instance_stays_deleted()
     // Which the second resync is what actually proves.
     fix.republish_and_sync();
     check_eq(fix.live_nested().size(), 1, "a second resync does not bring it back either");
+}
+
+void test_deleting_the_only_nested_instance_stays_deleted()
+{
+    begin_test("deleting the only nested instance survives a resync");
+
+    // The single-instance shape matters: with nothing nested left alive, the resolver's
+    // fast path used to skip reading instance ids entirely, and the removed-instance check
+    // with them - so the deleted instance came back on every other resync, alternating with
+    // cleanup destroying it again. The two-instance test above never sees this, because the
+    // surviving instance keeps the slow path active.
+    scene inner_authoring("inner_authoring");
+    auto inner_source = build_sample_tree(inner_authoring);
+    auto inner_pfb = make_prefab_from(inner_source, "test:/inner.pfb");
+
+    scene outer_authoring("outer_authoring");
+    auto outer_root = outer_authoring.create_entity("outer_root");
+    outer_authoring.instantiate(inner_pfb, outer_root, false);
+    auto outer_pfb = make_prefab_from(outer_root, "test:/outer.pfb");
+
+    scene world("world");
+    auto outer_instance = world.instantiate(outer_pfb, false);
+    auto live = nested_instances_of(outer_instance);
+    check_eq(live.size(), 1, "the live instance starts with the one nested instance");
+    if(live.size() != 1)
+    {
+        return;
+    }
+
+    const auto deleted_uid = instance_uid_of(live[0]);
+    check(!deleted_uid.is_nil(), "it can be named");
+
+    // What the editor records on delete: remove_instance on the container, nothing else
+    // (mark_entity_as_removed deliberately refuses remove_entity for instance roots - the
+    // prefab uid is shared with every other instance of that prefab).
+    outer_instance.get<prefab_component>().remove_instance(deleted_uid);
+    scene::destroy_entity(live[0]);
+    check_eq(nested_instances_of(outer_instance).size(), 0, "it is gone");
+
+    sync_prefab_instance_with(outer_instance, outer_pfb);
+    check_eq(nested_instances_of(outer_instance).size(), 0,
+             "a resync does not bring the deleted instance back");
+
+    // The old failure alternated - revived on one resync, destroyed on the next - so one
+    // clean resync proves nothing without a second.
+    sync_prefab_instance_with(outer_instance, outer_pfb);
+    check_eq(nested_instances_of(outer_instance).size(), 0, "nor does a second resync");
+}
+
+void test_removing_an_entity_two_levels_down_stays_removed()
+{
+    begin_test("an entity deleted two instances deep stays deleted through the outer resync");
+
+    // A holds an instance of B, B holds an instance of C. The deletion happens in the world
+    // instance, inside C - recorded on C, the nearest instance root, the way the editor
+    // records it. The resync replayed is A's, so the removal has to hold while A's document
+    // reaches through B into C, and again while the cascade resyncs B and C against their
+    // own assets.
+    scene c_authoring("c_authoring");
+    auto c_source = build_sample_tree(c_authoring);
+    auto c_pfb = make_prefab_from(c_source, "test:/c.pfb");
+
+    scene b_authoring("b_authoring");
+    auto b_root = b_authoring.create_entity("b_root");
+    b_authoring.instantiate(c_pfb, b_root, false);
+    auto b_pfb = make_prefab_from(b_root, "test:/b.pfb");
+
+    scene a_authoring("a_authoring");
+    auto a_root = a_authoring.create_entity("a_root");
+    a_authoring.instantiate(b_pfb, a_root, false);
+    auto a_pfb = make_prefab_from(a_root, "test:/a.pfb");
+
+    scene world("world");
+    auto a_instance = world.instantiate(a_pfb, false);
+
+    const auto find_c_instance = [&]() -> entt::handle
+    {
+        auto b_instances = nested_instances_of(a_instance);
+        if(b_instances.size() != 1)
+        {
+            return {};
+        }
+        auto c_instances = nested_instances_of(b_instances[0]);
+        return c_instances.size() == 1 ? c_instances[0] : entt::handle{};
+    };
+
+    auto c_instance = find_c_instance();
+    check(static_cast<bool>(c_instance), "the chain instantiated: A holds B holds C");
+    if(!c_instance)
+    {
+        return;
+    }
+
+    auto victim = find_child_by_name(c_instance, "child_a");
+    check(static_cast<bool>(victim), "the entity to delete is there");
+    if(!victim)
+    {
+        return;
+    }
+
+    delete_like_the_editor(c_instance, victim);
+    check(!find_child_by_name(c_instance, "child_a"), "it is gone");
+
+    sync_prefab_instance_with(a_instance, a_pfb);
+
+    c_instance = find_c_instance();
+    check(static_cast<bool>(c_instance), "the B and C instances survived the resync");
+    if(!c_instance)
+    {
+        return;
+    }
+
+    check(!find_child_by_name(c_instance, "child_a"), "the deleted entity stays deleted");
+    check_eq(count_entities_named(*world.registry, "grandchild"),
+             0,
+             "and its child did not come back as an orphan");
+    check(static_cast<bool>(find_child_by_name(c_instance, "child_b")), "its sibling is untouched");
+
+    // Twice, because the machinery has already had one bug that alternated between resyncs.
+    sync_prefab_instance_with(a_instance, a_pfb);
+    c_instance = find_c_instance();
+    check(static_cast<bool>(c_instance), "everything survives a second resync");
+    check(!c_instance || !find_child_by_name(c_instance, "child_a"), "and the deletion still holds");
+    check_eq(count_entities_named(*world.registry, "grandchild"), 0, "with no orphan either");
 }
 
 void test_a_locally_deleted_nested_instance_survives_the_prefab_changing_it()
@@ -3828,6 +4117,7 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_resync_adds_entities_added_to_the_prefab();
         test_resync_removes_entities_deleted_from_the_prefab();
         test_resync_honours_removed_entities();
+        test_removing_an_entity_with_children_stays_removed();
         test_resync_keeps_user_added_children();
 
         test_build_order();
@@ -3836,6 +4126,8 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_prefab_dependency_enumeration();
         test_nested_prefab_instance_keeps_its_link();
         test_editing_the_inner_asset_reaches_new_outer_instances();
+        test_a_fresh_instantiate_pulls_the_inner_asset_edit();
+        test_nesting_cycle_is_refused();
         test_outer_resync_preserves_nested_instance_edits();
         test_removing_a_nested_instance_from_the_asset_propagates();
         test_a_nested_instance_added_in_the_scene_survives_resync();
@@ -3855,6 +4147,8 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_a_named_live_instance_survives_an_unnamed_prefab();
         test_a_locally_cloned_nested_instance_is_not_claimed_by_the_prefab();
         test_a_locally_deleted_nested_instance_stays_deleted();
+        test_deleting_the_only_nested_instance_stays_deleted();
+        test_removing_an_entity_two_levels_down_stays_removed();
         test_a_locally_deleted_nested_instance_survives_the_prefab_changing_it();
         test_authored_override_two_levels_down();
         test_cloning_a_nested_instance_makes_it_the_users();

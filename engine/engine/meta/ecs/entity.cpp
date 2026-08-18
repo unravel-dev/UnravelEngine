@@ -966,8 +966,11 @@ auto load_entity_from_prefab_uid(Archive& ar, entt::handle& obj, entity_flags fl
     }
 
     // Nothing nested here, so nothing can be scoped to an instance: the two lookups below
-    // would miss on every record.
-    if(frame->nested_scopes.empty() && frame->shadowed_roots.empty())
+    // would miss on every record. Deleted nested instances count as nested state even though
+    // nothing of them is live - their records still carry instance ids, and skipping the
+    // instance-id reads here would skip the removed-path check with them, recreating an
+    // instance whose only remaining trace is the removal entry.
+    if(frame->nested_scopes.empty() && frame->shadowed_roots.empty() && frame->removed_instance_paths.empty())
     {
         auto plain_it = frame->mapping_by_prefab_uid.find(uid);
         if(plain_it == frame->mapping_by_prefab_uid.end())
