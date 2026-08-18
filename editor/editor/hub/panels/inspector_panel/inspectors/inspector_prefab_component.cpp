@@ -164,33 +164,60 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
 
             const auto disabled_colour = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
 
-            // A leaf row: the property itself, what states it, and a way to drop it.
-            const auto draw_leaf = [&](const override_node& node, const entity_overrides& entity)
+            // The control at the end of a leaf row. Right-aligned, and drawn after a node that
+            // spans the full row width - so the node has to allow it to overlap, or the row
+            // takes the click and the button never sees it.
+            const auto draw_leaf_control = [&](const override_node& node)
             {
                 const auto& override_data = *node.leaf;
+                const auto& style = ImGui::GetStyle();
 
                 if(node.leaf_is_inherited)
                 {
-                    ImGui::SameLine();
-                    ImGui::TextColored(disabled_colour, "(from prefab)");
+                    const char* label = "from prefab";
+                    const float width = ImGui::CalcTextSize(label).x;
 
-                    // No revert: the prefab that contains this instance states this override
-                    // and states it again on every resync, so dropping it here would not last
-                    // past the next one.
-                    ImGui::SetItemTooltipEx("Stated by the prefab that contains this instance.\n"
-                                            "Change it there, or override it here to take it over.");
-                }
-                else
-                {
-                    ImGui::SameLine();
-                    ImGui::PushID(override_data.component_path.c_str());
-                    if(ImGui::SmallButton("Revert"))
-                    {
-                        to_revert = &override_data;
-                    }
-                    ImGui::PopID();
+                    ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+                    ImGui::AlignedItem(1.0f,
+                                       ImGui::GetContentRegionAvail().x - style.FramePadding.x,
+                                       width,
+                                       [&]()
+                                       {
+                                           // No revert offered: the prefab containing this
+                                           // instance states this override and states it again
+                                           // on every resync, so dropping it here would not
+                                           // last past the next one.
+                                           ImGui::TextColored(disabled_colour, "%s", label);
+                                           ImGui::SetItemTooltipEx(
+                                               "Stated by the prefab that contains this instance.\n"
+                                               "Change it there, or override it here to take it over.");
+                                       });
+                    return;
                 }
 
+                const char* label = "Revert";
+                const float width = ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
+
+                ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+                ImGui::AlignedItem(1.0f,
+                                   ImGui::GetContentRegionAvail().x - style.FramePadding.x,
+                                   width,
+                                   [&]()
+                                   {
+                                       ImGui::PushID(override_data.component_path.c_str());
+                                       if(ImGui::SmallButton(label))
+                                       {
+                                           to_revert = &override_data;
+                                       }
+                                       ImGui::PopID();
+                                   });
+            };
+
+            // Where the override actually points, on the row itself rather than on the control,
+            // so it reads the same whether the row can be reverted or not.
+            const auto set_leaf_tooltip = [&](const override_node& node, const entity_overrides& entity)
+            {
+                const auto& override_data = *node.leaf;
                 ImGui::SetItemTooltipEx("Entity: %s\nUUID: %s\nComponent Path: %s",
                                         entity.name.c_str(),
                                         hpp::to_string(override_data.entity_uuid).c_str(),
@@ -213,7 +240,7 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
                 {
                     ImGui::TreeNodeEx(text.c_str(),
                                       ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
-                                          ImGuiTreeNodeFlags_SpanAvailWidth);
+                                          ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowOverlap);
                     if(all_inherited)
                     {
                         ImGui::PopStyleColor();
@@ -221,12 +248,15 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
 
                     if(node.leaf != nullptr)
                     {
-                        draw_leaf(node, entity);
+                        set_leaf_tooltip(node, entity);
+                        draw_leaf_control(node);
                     }
                     return;
                 }
 
-                const bool open = ImGui::TreeNodeEx(text.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
+                const bool open = ImGui::TreeNodeEx(text.c_str(),
+                                                    ImGuiTreeNodeFlags_SpanAvailWidth |
+                                                        ImGuiTreeNodeFlags_AllowOverlap);
                 if(all_inherited)
                 {
                     ImGui::PopStyleColor();
@@ -236,7 +266,8 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
                 // as "Position/X" - so its own row still carries the controls.
                 if(node.leaf != nullptr)
                 {
-                    draw_leaf(node, entity);
+                    set_leaf_tooltip(node, entity);
+                    draw_leaf_control(node);
                 }
 
                 if(open)
@@ -261,7 +292,9 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
 
                 const std::string entity_label = entity.name + describe_counts(entity.root);
                 const bool open = ImGui::TreeNodeEx(entity_label.c_str(),
-                                                    ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth);
+                                                    ImGuiTreeNodeFlags_DefaultOpen |
+                                                        ImGuiTreeNodeFlags_SpanAvailWidth |
+                                                        ImGuiTreeNodeFlags_AllowOverlap);
                 if(all_inherited)
                 {
                     ImGui::PopStyleColor();
