@@ -50,6 +50,19 @@ auto capture_thumbnail_snapshot(const gfx::frame_buffer::ptr& source) -> gfx::te
     }
 
     const auto src_size = source->get_size();
+
+    // The preview camera is built at k_thumbnail_size, so anything else means the capture came
+    // from a target that is not the one the preview set up - which is what produces a small
+    // correct image in the corner of an otherwise empty thumbnail.
+    if(src_size.width != k_thumbnail_size.width || src_size.height != k_thumbnail_size.height)
+    {
+        APPLOG_WARNING("Thumbnail captured at {}x{}, expected {}x{}.",
+                       src_size.width,
+                       src_size.height,
+                       k_thumbnail_size.width,
+                       k_thumbnail_size.height);
+    }
+
     const auto blit_width = static_cast<uint16_t>(std::min(src_size.width, k_thumbnail_size.width));
     const auto blit_height = static_cast<uint16_t>(std::min(src_size.height, k_thumbnail_size.height));
     if(blit_width == 0 || blit_height == 0)
@@ -57,8 +70,11 @@ auto capture_thumbnail_snapshot(const gfx::frame_buffer::ptr& source) -> gfx::te
         return nullptr;
     }
 
-    auto snapshot = std::make_shared<gfx::texture>(k_thumbnail_size.width,
-                                                 k_thumbnail_size.height,
+    // Sized to what is actually copied, not to a fixed 256. A source smaller than that used
+    // to be blitted into the corner of a 256 texture and the rest left as it came - which is
+    // the black thumbnail with a small correct image in the top-left.
+    auto snapshot = std::make_shared<gfx::texture>(blit_width,
+                                                 blit_height,
                                                  false,
                                                  1,
                                                  gfx::texture_format::RGBA8,
@@ -82,25 +98,40 @@ auto capture_thumbnail_snapshot(const gfx::frame_buffer::ptr& source) -> gfx::te
     return snapshot;
 }
 
-auto render_thumbnail_preview_scene(rendering_system& rpath, scene& scn, delta_t dt, int frames) -> gfx::frame_buffer::ptr
+/// Rendered through the camera the preview was built with, not through whichever camera the
+/// scene happens to contain last. An asset that carries a camera of its own - a prefab with one
+/// in it, or one nested inside it - otherwise decided the capture, at whatever viewport size it
+/// was authored with.
+auto render_thumbnail_preview_scene(rendering_system& rpath,
+                                    scene& scn,
+                                    entt::handle camera_entity,
+                                    delta_t dt,
+                                    int frames) -> gfx::frame_buffer::ptr
 {
+    if(!camera_entity)
+    {
+        return {};
+    }
+
+    auto* camera_comp = camera_entity.try_get<camera_component>();
+    if(camera_comp == nullptr)
+    {
+        return {};
+    }
+
     gfx::frame_buffer::ptr captured;
-    scn.registry->view<camera_component>().each(
-        [&](auto e, auto&& camera_comp)
+    for(int i = 0; i < frames; ++i)
+    {
+        rpath.on_frame_before_render(scn, dt);
+        auto new_fbo = rpath.render_scene(camera_entity, *camera_comp, scn, dt, false);
+        if(new_fbo)
         {
-            auto handle = scn.create_handle(e);
-            for(int i = 0; i < frames; ++i)
-            {
-                rpath.on_frame_before_render(scn, dt);
-                auto new_fbo = rpath.render_scene(handle, camera_comp, scn, dt, false);
-                if(new_fbo)
-                {
-                    captured = std::move(new_fbo);
-                }
-            }
-        });
+            captured = std::move(new_fbo);
+        }
+    }
     return captured;
 }
+
 
 template<typename T>
 auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& asset, int frames = 2, delta_t dt = delta_t(0.016667f)) -> gfx::texture::ptr
@@ -128,7 +159,16 @@ auto make_thumbnail(thumbnail_manager::generator& gen, const asset_handle<T>& as
 
             defaults::focus_camera_on_3d_scene_for_asset_preview<T>(ctx, result);
 
-            if(auto captured = render_thumbnail_preview_scene(rpath, scn, dt, frames))
+            auto captured = render_thumbnail_preview_scene(rpath, scn, result.camera, dt, frames);
+            if(!captured)
+            {
+                APPLOG_WARNING("Thumbnail for {} produced no output (camera valid: {}, object valid: {}).",
+                               asset.id(),
+                               static_cast<bool>(result.camera),
+                               static_cast<bool>(result.object));
+            }
+
+            if(captured)
             {
                 if(auto snapshot = capture_thumbnail_snapshot(captured))
                 {
@@ -615,7 +655,15 @@ void thumbnail_manager::generated_thumbnail::set(gfx::texture::ptr tex)
 auto thumbnail_manager::generator::get_scene() -> scene&
 {
     reset_wait();
-    return scenes[0];
+
+    // A different scene per generation in this cycle. make_thumbnail releases a scene's
+    // pipeline resources and unloads it before building in it, so handing the same one to
+    // three generations in a frame tears down the render view that the first two captures
+    // were taken from, while their blits are still queued against it. Three scenes and a
+    // budget of three exist exactly so that does not have to happen.
+    const auto count = static_cast<int>(scenes.size());
+    const auto used = count - std::clamp(remaining, 0, count);
+    return scenes[static_cast<size_t>(std::clamp(used, 0, count - 1))];
 }
 
 void thumbnail_manager::generator::reset(rendering_system& rpath)
