@@ -123,7 +123,9 @@ struct editor_actions
      *
      * @return the report from the validation pass, plus how many assets were rewritten.
      */
-    static auto bake_prefab_nesting(rtti::context& ctx, size_t* baked_count = nullptr)
+    static auto bake_prefab_nesting(rtti::context& ctx,
+                                    const fs::path& staging_root,
+                                    size_t* baked_count = nullptr)
         -> prefab_graph_report;
 
     /**

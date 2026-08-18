@@ -44,6 +44,8 @@ void prefab_component::clear_overrides()
     inherited_overrides.clear();
     removed_entities.clear();
     removed_instances.clear();
+    inherited_removed_entities.clear();
+    inherited_removed_instances.clear();
 }
 
 void prefab_component::add_override(const hpp::uuid& entity_uuid, const std::string& component_path)

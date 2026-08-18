@@ -96,6 +96,18 @@ struct prefab_component : public component_crtp<prefab_component, owned_componen
     std::set<hpp::uuid> removed_instances;
 
     /**
+     * @brief The halves of removed_entities / removed_instances that the containing document
+     *        stated, mirroring inherited_overrides.
+     *
+     * Same two-author problem: the document's record replaces the sets on every replay and
+     * the local removals are unioned back, so without the memo an authored removal and one
+     * made here are indistinguishable - which makes a removal impossible to attribute in the
+     * UI and impossible for the containing document to retract.
+     */
+    std::set<hpp::uuid> inherited_removed_entities;
+    std::set<hpp::uuid> inherited_removed_instances;
+
+    /**
      * @brief Entities under this instance that its own asset does not own.
      *
      * The document that contains an instance can add entities inside it - an effect parented

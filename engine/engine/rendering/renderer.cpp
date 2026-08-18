@@ -336,7 +336,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
         }
     };
     const auto cache_dir =
-        fs::resolve_protocol("binary:/cache/gfx") / renderer_slug(gfx::get_renderer_type());
+        fs::resolve_protocol("binary:/.cache/gfx") / renderer_slug(gfx::get_renderer_type());
     gfx::set_cache_directory(cache_dir.string());
 
     APPLOG_TRACE("DebugDraw Init.");

@@ -28,7 +28,10 @@ struct deploy_settings
      * does. Slower to run, but it cannot serve stale content, and it is the safe choice if
      * a bake ever looks wrong.
      */
-    bool bake_prefab_nesting{true};
+    /// Cook assets while deploying: resolve prefab nesting into the shipped copies and mark
+    /// them, so the deployed runtime instantiates flat with no sync logic. The cooked files
+    /// exist only in the deploy destination - the editor's compiled cache is never touched.
+    bool deploy_cooked_assets{true};
 };
 
 

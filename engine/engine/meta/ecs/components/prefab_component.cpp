@@ -105,6 +105,8 @@ SAVE(prefab_component)
     try_save(ar, ser20::make_nvp("inherited_overrides", obj.inherited_overrides));
     try_save(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
     try_save(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
+    try_save(ar, ser20::make_nvp("inherited_removed_entities", obj.inherited_removed_entities));
+    try_save(ar, ser20::make_nvp("inherited_removed_instances", obj.inherited_removed_instances));
     try_save(ar, ser20::make_nvp("foreign_entities", obj.foreign_entities));
     try_save(ar, ser20::make_nvp("instance_id", obj.instance_id));
 }
@@ -118,6 +120,8 @@ LOAD(prefab_component)
     try_load(ar, ser20::make_nvp("inherited_overrides", obj.inherited_overrides));
     try_load(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
     try_load(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
+    try_load(ar, ser20::make_nvp("inherited_removed_entities", obj.inherited_removed_entities));
+    try_load(ar, ser20::make_nvp("inherited_removed_instances", obj.inherited_removed_instances));
     try_load(ar, ser20::make_nvp("foreign_entities", obj.foreign_entities));
     try_load(ar, ser20::make_nvp("instance_id", obj.instance_id));
 }

@@ -2378,6 +2378,81 @@ void test_the_containing_prefab_can_take_its_override_back()
     // claiming the property any more, the inner prefab's value is no longer held off.
 }
 
+void test_local_and_authored_removals_are_distinguishable()
+{
+    begin_test("a removal made here and one authored by the containing prefab stay apart");
+
+    // Same two-author problem as overrides, one operation over. The containing document's
+    // record replaces the removal sets on every replay and the local half is unioned back,
+    // so without a memo the two merge - and then neither the UI can attribute a removal nor
+    // a revert restore only the local one.
+    nested_fixture fix;
+    fix.build();
+
+    // The author removes child_a from the first nested instance and re-saves.
+    auto authored_child = find_child_by_name(fix.first, "child_a");
+    check(static_cast<bool>(authored_child), "the authoring scene has child_a");
+    if(!authored_child)
+    {
+        return;
+    }
+    fix.first.get<prefab_component>().remove_entity(prefab_uid_of(authored_child));
+    scene::destroy_entity(authored_child);
+    fix.republish_and_sync();
+
+    auto live = fix.live_nested();
+    if(live.size() != 2)
+    {
+        check(false, "both nested instances are live");
+        return;
+    }
+
+    // The user removes child_b from the same live instance, in the scene.
+    auto live_child = find_child_by_name(live[0], "child_b");
+    check(static_cast<bool>(live_child), "child_b is there to remove");
+    if(!live_child)
+    {
+        return;
+    }
+    live[0].get<prefab_component>().remove_entity(prefab_uid_of(live_child));
+    scene::destroy_entity(live_child);
+
+    // Replay against the unchanged asset: both removals survive it, attributed differently.
+    fix.republish_and_sync();
+
+    auto after = fix.live_nested();
+    if(after.size() != 2)
+    {
+        check(false, "still both nested instances");
+        return;
+    }
+    auto& after_prefab = after[0].get<prefab_component>();
+    check_eq(after_prefab.removed_entities.size(), 2, "both removals are recorded");
+    check_eq(after_prefab.inherited_removed_entities.size(),
+             1,
+             "exactly one is attributed to the containing prefab");
+    check(!find_child_by_name(after[0], "child_a"), "the authored removal holds");
+    check(!find_child_by_name(after[0], "child_b"), "and so does the local one");
+
+    // What the inspector's revert does: collapse the sets to the inherited halves. The local
+    // removal returns from the inner prefab on the next sync; the authored one stays gone.
+    after_prefab.removed_entities = after_prefab.inherited_removed_entities;
+    after_prefab.removed_instances = after_prefab.inherited_removed_instances;
+    after_prefab.changed = true;
+    fix.republish_and_sync();
+
+    auto reverted = fix.live_nested();
+    if(reverted.size() != 2)
+    {
+        check(false, "still both after the revert");
+        return;
+    }
+    check(static_cast<bool>(find_child_by_name(reverted[0], "child_b")), "the locally removed entity returns");
+    check(!find_child_by_name(reverted[0], "child_a"), "while the authored removal still holds");
+    check(static_cast<bool>(find_child_by_name(reverted[1], "child_b")),
+          "and the other instance of the same prefab was never affected");
+}
+
 void test_removing_an_entity_inside_a_nested_instance_propagates()
 {
     begin_test("an entity removed from one nested instance goes from existing instances too");
@@ -3776,6 +3851,7 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_authored_override_on_one_nested_instance_reaches_existing_instances();
         test_a_local_edit_survives_the_containing_prefab_being_replayed();
         test_the_containing_prefab_can_take_its_override_back();
+        test_local_and_authored_removals_are_distinguishable();
         test_removing_an_entity_inside_a_nested_instance_propagates();
         test_adding_an_entity_under_a_nested_instance_propagates();
         test_an_unnamed_live_instance_is_adopted_not_duplicated();

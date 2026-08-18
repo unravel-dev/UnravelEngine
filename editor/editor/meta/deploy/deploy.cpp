@@ -34,10 +34,10 @@ REFLECT(deploy_settings)
             entt::attribute{"pretty_name", "Deploy & Run"},
             entt::attribute{"tooltip", "Run the application after the deploy."},
         })
-        .data<&deploy_settings::bake_prefab_nesting>("bake_prefab_nesting"_hs)
+        .data<&deploy_settings::deploy_cooked_assets>("deploy_cooked_assets"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "bake_prefab_nesting"},
-            entt::attribute{"pretty_name", "Bake Prefab Nesting"},
+            entt::attribute{"name", "deploy_cooked_assets"},
+            entt::attribute{"pretty_name", "Deploy Cooked Assets"},
             entt::attribute{"tooltip",
                             "Resolve nested prefab instances once, at deploy time, so the game\n"
                             "does not refresh them on every load.\n\n"
@@ -53,7 +53,7 @@ SAVE(deploy_settings)
     try_save(ar, ser20::make_nvp("deploy_location", obj.deploy_location.generic_string()));
     try_save(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_save(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
-    try_save(ar, ser20::make_nvp("bake_prefab_nesting", obj.bake_prefab_nesting));
+    try_save(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
 }
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_binary_t);
@@ -68,7 +68,7 @@ LOAD(deploy_settings)
 
     try_load(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_load(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
-    try_load(ar, ser20::make_nvp("bake_prefab_nesting", obj.bake_prefab_nesting));
+    try_load(ar, ser20::make_nvp("deploy_cooked_assets", obj.deploy_cooked_assets));
 }
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_binary_t);

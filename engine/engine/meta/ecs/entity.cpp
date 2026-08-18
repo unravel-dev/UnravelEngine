@@ -1945,10 +1945,11 @@ void collect_nested_instance_roots(entt::handle obj, std::vector<entt::handle>& 
  * is what happened, first in the editor and then in a deployed build.
  *
  * What makes it safe here is that deploying is the only way to produce a deployed build,
- * and the deploy rewrites this on every run: it either bakes and sets the marker, or clears
- * it (editor_actions::deploy_project). So a marker seen at runtime was written by the build
- * being run, describing that build. The freshness comes from the pipeline's ordering, the
- * same way any build system guarantees it - not from anything the document knows.
+ * and only the deploy writes marked documents at all: the cook stages them and overlays the
+ * deploy destination, never the editor's compiled cache (editor_actions::deploy_project). So
+ * a marker seen at runtime was written by the deploy that produced the build being run,
+ * describing that build. The freshness comes from the pipeline's ordering, the same way any
+ * build system guarantees it - not from anything the document knows.
  *
  * In the editor, assets change under a marker that was written earlier, so it is ignored
  * and nested instances are refreshed on load. That costs an asset load per instance and is
@@ -2108,8 +2109,9 @@ struct nested_override_state
 
     std::set<prefab_property_override_data> scene_only;
 
-    /// What this instance had removed before the replay. The document's record replaces both
-    /// sets outright, and a deletion made here is not in it.
+    /// The *locally made* half of this instance's removals - the full sets minus what the
+    /// containing document stated last time. The document's record replaces the sets outright,
+    /// and only this half has to survive it.
     std::set<hpp::uuid> removed_entities;
     std::set<hpp::uuid> removed_instances;
 };
@@ -2136,8 +2138,16 @@ void collect_nested_override_state_impl(entt::handle obj,
             nested_override_state state;
             state.root = obj;
             state.depth = depth;
-            state.removed_entities = prefab_comp->removed_entities;
-            state.removed_instances = prefab_comp->removed_instances;
+            std::set_difference(prefab_comp->removed_entities.begin(),
+                                prefab_comp->removed_entities.end(),
+                                prefab_comp->inherited_removed_entities.begin(),
+                                prefab_comp->inherited_removed_entities.end(),
+                                std::inserter(state.removed_entities, state.removed_entities.end()));
+            std::set_difference(prefab_comp->removed_instances.begin(),
+                                prefab_comp->removed_instances.end(),
+                                prefab_comp->inherited_removed_instances.begin(),
+                                prefab_comp->inherited_removed_instances.end(),
+                                std::inserter(state.removed_instances, state.removed_instances.end()));
             std::set_difference(prefab_comp->property_overrides.begin(),
                                 prefab_comp->property_overrides.end(),
                                 prefab_comp->inherited_overrides.begin(),
@@ -2196,6 +2206,11 @@ void apply_nested_override_state(const std::vector<nested_override_state>& state
         if(state.depth <= 1)
         {
             prefab_comp->inherited_overrides = prefab_comp->property_overrides;
+
+            // Same memo for removals: what the sets hold right now is exactly what the
+            // document stated, and the local halves are about to be unioned back in.
+            prefab_comp->inherited_removed_entities = prefab_comp->removed_entities;
+            prefab_comp->inherited_removed_instances = prefab_comp->removed_instances;
         }
 
         prefab_comp->property_overrides.insert(state.scene_only.begin(), state.scene_only.end());

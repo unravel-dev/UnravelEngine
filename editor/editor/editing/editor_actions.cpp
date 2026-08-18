@@ -1126,7 +1126,8 @@ auto count_roots(entt::registry& registry) -> size_t
     return count;
 }
 
-auto bake_one_asset(rtti::context& ctx, scene& scratch, const hpp::uuid& uid) -> bool
+auto bake_one_asset(rtti::context& ctx, scene& scratch, const hpp::uuid& uid, const fs::path& staging_root)
+    -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
@@ -1146,10 +1147,24 @@ auto bake_one_asset(rtti::context& ctx, scene& scratch, const hpp::uuid& uid) ->
     const auto source_path = fs::resolve_protocol(id);
     const auto extension = source_path.extension().generic_string();
 
-    // Written to the **compiled** copy, never to the source. Compiled assets are derived
-    // data - regenerating them is what the pipeline does anyway - whereas rewriting a .pfb
-    // or .spfb puts churn into version control and risks the user's actual content.
-    const auto path = asset_reader::resolve_compiled_path(id);
+    // Written to a staging mirror of the compiled layout, never to the source and never to
+    // the editor's compiled cache. The cache has to stay a pure function of the source - a
+    // bake written into it is transient (any recompile clobbers it) or stale (nothing does),
+    // and either way it is a state the cache is not supposed to have. The deploy's data jobs
+    // overlay the staged files onto the destination after the cache copy, so the cooked
+    // variants exist only where they are consumed.
+    const auto compiled_path = asset_reader::resolve_compiled_path(id);
+    const auto protocol = fs::extract_protocol(fs::path(id)).generic_string();
+    const auto compiled_root = fs::resolve_protocol(ex::get_compiled_directory(protocol));
+
+    fs::error_code rel_ec;
+    const auto relative = fs::relative(compiled_path, compiled_root, rel_ec);
+    if(rel_ec || relative.empty())
+    {
+        APPLOG_ERROR("Bake: {} compiles outside its protocol's compiled directory; skipped.", id);
+        return false;
+    }
+    const auto path = staging_root / protocol / relative;
 
     const bool is_scene = ex::is_format<scene_prefab>(extension);
     const bool is_prefab = ex::is_format<prefab>(extension);
@@ -1262,6 +1277,7 @@ auto bake_one_asset(rtti::context& ctx, scene& scratch, const hpp::uuid& uid) ->
     }
 
     fs::error_code err;
+    fs::create_directories(path.parent_path(), err);
     asset_writer::atomic_write_file(path,
                                     [&](const fs::path& temp)
                                     {
@@ -1355,7 +1371,9 @@ auto editor_actions::clear_prefab_nesting_marker(rtti::context& ctx) -> size_t
     return cleared;
 }
 
-auto editor_actions::bake_prefab_nesting(rtti::context& ctx, size_t* baked_count) -> prefab_graph_report
+auto editor_actions::bake_prefab_nesting(rtti::context& ctx,
+                                         const fs::path& staging_root,
+                                         size_t* baked_count) -> prefab_graph_report
 {
     if(baked_count != nullptr)
     {
@@ -1391,7 +1409,7 @@ auto editor_actions::bake_prefab_nesting(rtti::context& ctx, size_t* baked_count
     size_t written = 0;
     for(const auto& uid : order.ordered)
     {
-        if(bake_one_asset(ctx, scratch, uid))
+        if(bake_one_asset(ctx, scratch, uid, staging_root))
         {
             ++written;
         }
@@ -1726,28 +1744,37 @@ auto editor_actions::deploy_project(rtti::context& ctx,
     auto project_name = pm.get_name();
     auto executable_path = params.deploy_location / (project_name + fs::executable_extension());
 
-    // Runs before anything is scheduled, and synchronously. The bake builds scenes and
+    // Runs before anything is scheduled, and synchronously. The cook builds scenes and
     // drives asset loads, neither of which is safe off the main thread - scene registration
-    // alone appends to a global vector with no locking - and the copy jobs below must not
-    // start until the compiled assets are in their final state.
+    // alone appends to a global vector with no locking.
     //
-    // Whichever branch runs, the deploy leaves every compiled asset agreeing with what the
-    // runtime will assume of it. That is the whole basis for trusting the marker in a
-    // deployed build: this step rewrites it on every deploy, so it describes this build.
-    if(params.bake_prefab_nesting)
+    // Cooked output goes to a staging mirror, not to the editor's compiled cache: the cache
+    // stays a pure function of the source, and the data jobs below overlay the staged files
+    // onto the destination after the cache copy. The runtime's basis for trusting the marker
+    // is unchanged - only a deploy produces the files a deployed build reads, and it either
+    // cooks them or ships them unmarked.
+    const fs::path cook_staging = fs::temp_directory_path() / "unravel-deploy-cook";
+    {
+        fs::error_code stage_ec;
+        fs::remove_all(cook_staging, stage_ec);
+    }
+    if(params.deploy_cooked_assets)
     {
         size_t baked = 0;
-        const auto report = bake_prefab_nesting(ctx, &baked);
+        const auto report = bake_prefab_nesting(ctx, cook_staging, &baked);
         if(!report.is_valid())
         {
             APPLOG_ERROR("Deploy aborted: the prefab graph contains a nesting cycle. "
-                         "Fix it, or turn off 'Bake Prefab Nesting' to deploy without it.");
+                         "Fix it, or turn off 'Deploy Cooked Assets' to deploy without it.");
             return {};
         }
-        APPLOG_INFO("Deploy: baked prefab nesting into {} compiled asset(s).", baked);
+        APPLOG_INFO("Deploy: cooked {} asset(s) into staging.", baked);
     }
     else
     {
+        // Transitional: builds of this editor before the staging move wrote the marker into
+        // the local compiled cache, and an uncooked deploy would ship those files as if they
+        // were current. Scrubs the cache once; dies when no cache predating the move is left.
         clear_prefab_nesting_marker(ctx);
     }
 
@@ -1824,7 +1851,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
             th.pool
                 ->schedule(
                     "Deploying Project Data",
-                    [params, &am]()
+                    [params, &am, cook_staging]()
                     {
                         APPLOG_INFO("Deploying Project Data...");
 
@@ -1842,6 +1869,20 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             fs::copy(data, cached_data, fs::copy_options::recursive, ec);
 
                             remove_unreferenced_files(cached_data);
+
+                            // The cooked variants replace their plain-compiled counterparts,
+                            // in the destination only.
+                            const fs::path staged = cook_staging / "app";
+                            if(fs::exists(staged, ec))
+                            {
+                                APPLOG_TRACE("Overlaying cooked assets {} -> {}",
+                                             staged.generic_string(),
+                                             cached_data.generic_string());
+                                fs::copy(staged,
+                                         cached_data,
+                                         fs::copy_options::recursive | fs::copy_options::overwrite_existing,
+                                         ec);
+                            }
                         }
 
                         {
@@ -1863,7 +1904,7 @@ auto editor_actions::deploy_project(rtti::context& ctx,
             th.pool
                 ->schedule(
                     "Deploying Engine Data",
-                    [params, &am]()
+                    [params, &am, cook_staging]()
                     {
                         APPLOG_INFO("Deploying Engine Data...");
 
@@ -1881,6 +1922,18 @@ auto editor_actions::deploy_project(rtti::context& ctx,
                             fs::copy(data, cached_data, fs::copy_options::recursive, ec);
 
                             remove_unreferenced_files(cached_data);
+
+                            const fs::path staged = cook_staging / "engine";
+                            if(fs::exists(staged, ec))
+                            {
+                                APPLOG_TRACE("Overlaying cooked assets {} -> {}",
+                                             staged.generic_string(),
+                                             cached_data.generic_string());
+                                fs::copy(staged,
+                                         cached_data,
+                                         fs::copy_options::recursive | fs::copy_options::overwrite_existing,
+                                         ec);
+                            }
                         }
 
                         {
