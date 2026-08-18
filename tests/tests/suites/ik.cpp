@@ -1,9 +1,9 @@
 /*
- * Validation harness for the IK solvers.
+ * Validation suite for the IK solvers.
  *
- * Not part of the default build. Run it explicitly:
- *   cmake --build <build-dir> --target ik_tests
- *   <build-dir>/bin/ik_tests
+ * Runs inside the unravel-tests runner:
+ *   cmake --build <build-dir> --target tests
+ *   <build-dir>/bin/unravel-tests --suite ik
  *
  * These pin the correctness fixes from the 2026-08 IK review:
  *   - the pole constraint rotating each intermediate joint by its own angle,
@@ -17,12 +17,13 @@
  *   - unvalidated goals writing NaN into the skeleton.
  */
 
+#include "../tests.h"
+
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/systems/ik_solvers.h>
 
 #include <logging/logging.h>
-#include <spdlog/sinks/stdout_sinks.h>
 
 #include <cmath>
 #include <cstdio>
@@ -643,19 +644,10 @@ void test_aim_up_reference()
 
 } // namespace
 
-int main()
+// ---------------------------------------------------------------------------------
+
+auto run_ik_suite(rtti::context& /*ctx*/) -> int
 {
-    // Unbuffered stdout: a mid-suite crash must not swallow the progress output
-    // that tells us which test it happened in.
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
-
-    // APPLOG_* expands to spdlog::get("Log")->log(...) - register a real sink so
-    // engine code that logs does not null-dereference mid-suite.
-    if(!spdlog::get(APPLOG))
-    {
-        spdlog::create<spdlog::sinks::stdout_sink_mt>(APPLOG);
-    }
-
     test_rejects_invalid_input();
     test_two_bone_reaches_and_honors_pole();
     test_two_bone_soften_costs_reach();
@@ -674,5 +666,7 @@ int main()
     test_aim_up_reference();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures == 0 ? 0 : 1;
+    return g_failures;
 }
+
+REGISTER_TEST_SUITE("ik solvers", run_ik_suite)

@@ -1,9 +1,9 @@
 /*
- * Validation harness for the surface cache GI bake (USC-GI Phase 1).
+ * Validation suite for the surface cache GI bake (USC-GI Phase 1).
  *
- * Not part of the default build. Run it explicitly:
- *   cmake --build <build-dir> --target gi_tests
- *   <build-dir>/bin/gi_tests
+ * Runs inside the unravel-tests runner:
+ *   cmake --build <build-dir> --target tests
+ *   <build-dir>/bin/unravel-tests --suite "gi bake"
  *
  * These are correctness invariants, not smoke tests. The two that matter most are
  * test_conservative_empty_bricks (a sphere trace tunnels through geometry if an empty brick
@@ -11,7 +11,7 @@
  * puts a discontinuity in the field at every brick boundary). Both caught real bugs.
  */
 
-#include "gi_tests.h"
+#include "../tests.h"
 
 #include <engine/meta/rendering/gi/mesh_sdf.hpp>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
@@ -27,8 +27,6 @@
 
 #include <logging/logging.h>
 #include <serialization/binary_archive.h>
-
-#include <spdlog/sinks/stdout_sinks.h>
 
 #include <concurrency/parallel.h>
 
@@ -3826,18 +3824,10 @@ void test_degenerate_inputs()
 
 } // namespace
 
-int main()
+// ---------------------------------------------------------------------------------
+
+auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
 {
-    // APPLOG_* expands to spdlog::get("Log")->log(...), and spdlog::get returns a NULL shared_ptr
-    // when nothing registered that name. Engine code that logs therefore null-dereferences the
-    // moment a test calls it -- a hard crash mid-suite with no failing assertion, which reads as a
-    // bug in the code under test rather than a missing harness dependency. Registering a real sink
-    // keeps that output visible too, since a warning is often exactly what a test wants to observe.
-    // create() registers the logger itself; registering the result again throws for a duplicate name.
-    if(!spdlog::get(APPLOG))
-    {
-        spdlog::create<spdlog::sinks::stdout_sink_mt>(APPLOG);
-    }
     test_sphere_accuracy();
     test_field_is_conservative();
     test_sign_correctness();
@@ -3886,7 +3876,8 @@ int main()
     test_bake_cost_is_dominated_by_voxels_not_triangles();
     test_parallel_submesh_bake_matches_serial();
     test_degenerate_inputs();
-    gi_tests::run(g_checks, g_failures);
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures == 0 ? 0 : 1;
+    return g_failures;
 }
+
+REGISTER_TEST_SUITE("gi bake / sdf / clipmap", run_gi_bake_suite)

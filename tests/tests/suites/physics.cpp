@@ -1,9 +1,9 @@
 /*
- * Validation harness for contact tracking and the entity destroy funnel.
+ * Validation suite for contact tracking and the entity destroy funnel.
  *
- * Not part of the default build. Run it explicitly:
- *   cmake --build <build-dir> --target physics_tests
- *   <build-dir>/bin/physics_tests
+ * Runs inside the unravel-tests runner:
+ *   cmake --build <build-dir> --target tests
+ *   <build-dir>/bin/unravel-tests --suite physics
  *
  * These pin the 2026-08 contact-exit-on-destroy work (tasks/contact_exit_on_destroy_plan.md):
  *   - a body destroyed inside a sensor produced no OnSensorExit, because exit was
@@ -20,6 +20,8 @@
  * data-structure code with no Bullet dependency.
  */
 
+#include "../tests.h"
+
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
@@ -30,7 +32,6 @@
 #include <engine/physics/physics_types.h>
 
 #include <logging/logging.h>
-#include <spdlog/sinks/stdout_sinks.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -1318,19 +1319,10 @@ void test_destroy_without_subscribers()
 
 } // namespace
 
-int main()
+// ---------------------------------------------------------------------------------
+
+auto run_physics_suite(rtti::context& /*ctx*/) -> int
 {
-    // Unbuffered stdout: a mid-suite crash must not swallow the progress output that
-    // tells us which test it happened in.
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
-
-    // APPLOG_* expands to spdlog::get("Log")->log(...) - register a real sink so engine
-    // code that logs does not null-dereference mid-suite.
-    if(!spdlog::get(APPLOG))
-    {
-        spdlog::create<spdlog::sinks::stdout_sink_mt>(APPLOG);
-    }
-
     test_graph_insert_and_erase();
     test_graph_list_integrity();
     test_graph_body_on_both_sides();
@@ -1363,5 +1355,7 @@ int main()
     test_destroy_without_subscribers();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures == 0 ? 0 : 1;
+    return g_failures;
 }
+
+REGISTER_TEST_SUITE("physics contacts / destroy funnel", run_physics_suite)

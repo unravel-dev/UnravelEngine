@@ -19,16 +19,10 @@ target_link_libraries(${target_name} PUBLIC
     filedialog 
     httplib
 )
-if(WIN32)
-  set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "UnravelEditor")
-  add_definitions(-DEDITOR_NAME="UnravelEditor")
-  add_definitions(-DPLAYER_NAME="UnravelPlayer")
 
-else()
-  set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-editor")
-  add_definitions(-DEDITOR_NAME="unravel-editor")
-  add_definitions(-DPLAYER_NAME="unravel-player")
-endif()
+set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-editor")
+add_definitions(-DEDITOR_NAME="unravel-editor")
+add_definitions(-DPLAYER_NAME="unravel-player")
 
 set_target_properties(${target_name} PROPERTIES
     CXX_STANDARD 20

@@ -11,7 +11,7 @@
  *
  * The shader mirror is engine_data/data/shaders/gi/gi_constants.sh. shaderc cannot consume this
  * header, so the mirror is plain #defines - and the pair is kept honest by a TEST, not a comment:
- * gi_tests parses the .sh for `#define GI_*` and asserts every table entry matches and no
+ * the GI test suite parses the .sh for `#define GI_*` and asserts every table entry matches and no
  * shader-side constant is missing from this table. Editing one side alone fails the suite.
  *
  * Source abbreviations:

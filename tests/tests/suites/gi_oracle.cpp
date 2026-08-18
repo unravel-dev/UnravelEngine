@@ -1,5 +1,9 @@
 /*
- * GI Phase 0: the validation harness itself (plan: tasks/gi_rewrite_plan.md, sections 9-10).
+ * GI Phase 0: the validation suite itself (plan: tasks/gi_rewrite_plan.md, sections 9-10).
+ *
+ * Runs inside the unravel-tests runner:
+ *   cmake --build <build-dir> --target tests
+ *   <build-dir>/bin/unravel-tests --suite "gi constants"
  *
  * Two halves:
  *  - The constants contract: gi_constants.h is the single owner of every cross-pass constant,
@@ -12,7 +16,7 @@
  *    with the oracle itself above suspicion.
  */
 
-#include "gi_tests.h"
+#include "../tests.h"
 #include "gi_reference_tracer.h"
 
 #include <engine/rendering/gi/gi_constants.h>
@@ -38,25 +42,25 @@ namespace unravel::gi_tests
 namespace
 {
 
-int* g_checks = nullptr;
-int* g_failures = nullptr;
+int g_checks = 0;
+int g_failures = 0;
 
 void check(bool condition, const std::string& what)
 {
-    ++(*g_checks);
+    ++g_checks;
     if(!condition)
     {
-        ++(*g_failures);
+        ++g_failures;
         std::printf("  FAIL: %s\n", what.c_str());
     }
 }
 
 void check_near(double actual, double expected, double tolerance, const std::string& what)
 {
-    ++(*g_checks);
+    ++g_checks;
     if(!(std::fabs(actual - expected) <= tolerance))
     {
-        ++(*g_failures);
+        ++g_failures;
         std::printf("  FAIL: %s (got %.5f, expected %.5f +/- %.5f)\n", what.c_str(), actual, expected, tolerance);
     }
 }
@@ -2200,10 +2204,8 @@ void test_world_probe_vis_memo_mask_matches_fresh_march()
 
 } // namespace
 
-void run(int& checks, int& failures)
+auto run_gi_oracle_suite(rtti::context& /*ctx*/) -> int
 {
-    g_checks = &checks;
-    g_failures = &failures;
     test_shader_constants_match_cpp();
     test_gi_shaders_compile_sm50();
     test_screen_probe_stratum_covers_the_atlas();
@@ -2222,6 +2224,10 @@ void run(int& checks, int& failures)
     test_attribution_prefers_true_surface_over_shell();
     test_world_probe_cage_visibility_seals_box();
     test_world_probe_vis_memo_mask_matches_fresh_march();
+    std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
+    return g_failures;
 }
+
+REGISTER_TEST_SUITE("gi constants / reference oracle", run_gi_oracle_suite)
 
 } // namespace unravel::gi_tests

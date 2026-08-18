@@ -1,9 +1,9 @@
 /*
- * Validation harness for the animation player, pose blending and blend spaces.
+ * Validation suite for the animation player, pose blending and blend spaces.
  *
- * Not part of the default build. Run it explicitly:
- *   cmake --build <build-dir> --target animation_tests
- *   <build-dir>/bin/animation_tests
+ * Runs inside the unravel-tests runner:
+ *   cmake --build <build-dir> --target tests
+ *   <build-dir>/bin/unravel-tests --suite animation
  *
  * These pin the correctness fixes from the 2026-08 animation review:
  * blend-space blending (the in-place alias bug produced the last clip's raw
@@ -11,8 +11,10 @@
  * stop()/replay teleport, weight blending of root motion results, the
  * blend space parameter edge cases.
  *
- * The IK solvers have their own harness - see the ik_tests target.
+ * The IK solvers have their own suite - see ik.cpp.
  */
+
+#include "../tests.h"
 
 #include <engine/animation/animation_blend_space.h>
 #include <engine/animation/animation_player.h>
@@ -20,7 +22,6 @@
 #include <uuid/uuid.h>
 
 #include <logging/logging.h>
-#include <spdlog/sinks/stdout_sinks.h>
 
 #include <cmath>
 #include <cstdio>
@@ -59,9 +60,9 @@ void check_near(float actual, float expected, float tolerance, const std::string
     }
 }
 
-// Owned by main(): tpp::init must run before the pool exists and the pool must
-// be destroyed before tpp::shutdown - mirror the engine's threader lifecycle.
-std::unique_ptr<tpp::thread_pool> g_pool;
+// The runner's threader owns the pool (and the tpp lifecycle around it); the
+// suite entry point borrows it for the duration of the run.
+tpp::thread_pool* g_pool = nullptr;
 
 auto pool() -> tpp::thread_pool&
 {
@@ -506,22 +507,11 @@ void test_empty_tracks_have_sane_defaults()
 
 } // namespace
 
-int main()
+// ---------------------------------------------------------------------------------
+
+auto run_animation_suite(rtti::context& ctx) -> int
 {
-    // Unbuffered stdout: a mid-suite crash must not swallow the progress
-    // output that tells us which test it happened in.
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
-
-    // APPLOG_* expands to spdlog::get("Log")->log(...) - register a real sink
-    // so engine code that logs does not null-dereference mid-suite.
-    if(!spdlog::get(APPLOG))
-    {
-        spdlog::create<spdlog::sinks::stdout_sink_mt>(APPLOG);
-    }
-
-    tpp::init_data init_data{};
-    tpp::init(init_data);
-    g_pool = std::make_unique<tpp::thread_pool>();
+    g_pool = ctx.get_cached<threader>().pool.get();
 
     test_pairwise_blend_merges_sorted_nodes();
     test_multiway_blend_weighted_average_and_names();
@@ -539,9 +529,10 @@ int main()
     test_root_motion_result_weight_blending();
     test_empty_tracks_have_sane_defaults();
 
-    g_pool.reset();
-    tpp::shutdown();
+    g_pool = nullptr;
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
-    return g_failures == 0 ? 0 : 1;
+    return g_failures;
 }
+
+REGISTER_TEST_SUITE("animation", run_animation_suite)

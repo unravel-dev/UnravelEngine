@@ -1,11 +1,11 @@
 /*
- * Behaviour harness for entity serialization, prefabs, cloning and prefab overrides.
+ * Behaviour suite for entity serialization, prefabs, cloning and prefab overrides.
  *
- * Not part of the default build. Run it explicitly:
- *   cmake --build <build-dir> --target ecs_serialization_tests
- *   <build-dir>/bin/ecs_serialization_tests           # correctness
- *   <build-dir>/bin/ecs_serialization_tests --bench   # correctness + timings
- *   <build-dir>/bin/ecs_serialization_tests --bench-only
+ * Runs inside the unravel-tests runner:
+ *   cmake --build <build-dir> --target tests
+ *   <build-dir>/bin/unravel-tests --suite serialization           # correctness
+ *   <build-dir>/bin/unravel-tests --suite serialization --bench   # correctness + timings
+ *   <build-dir>/bin/unravel-tests --suite serialization --bench-only
  *
  * Purpose: pin the CURRENT behaviour of the system before it is changed, so that a
  * refactor of the save/load path can be shown not to have altered semantics. Where the
@@ -41,7 +41,6 @@
 #include <logging/logging.h>
 #include <serialization/associative_archive.h>
 #include <serialization/serialization.h>
-#include <spdlog/sinks/stdout_sinks.h>
 #include <threadpp/thread_pool.h>
 #include <uuid/uuid.h>
 
@@ -3794,8 +3793,6 @@ void run_benchmarks()
 
 auto run_ecs_serialization_suite(rtti::context& ctx) -> int
 {
-    std::setvbuf(stdout, nullptr, _IONBF, 0);
-
     // The context comes from the test runner, which boots the engine the way the editor and
     // the game do. That is the whole point of running here: the asset_manager is real, so a
     // prefab registered below resolves through asset_handle and a prefab instance can reach

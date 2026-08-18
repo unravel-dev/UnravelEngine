@@ -1,6 +1,7 @@
 // This translation unit depends only on math and the standard library, so the grid can be built
 // and validated in isolation from the graphics and ECS layers -- the same arrangement the SDF
-// baker and the clipmap use, and what lets gi_tests compare it against a brute-force reference.
+// baker and the clipmap use, and what lets the GI test suite compare it against a brute-force
+// reference.
 #include "sdf_instance_grid.h"
 
 #include <algorithm>

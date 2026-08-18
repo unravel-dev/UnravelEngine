@@ -10,6 +10,7 @@
 #include <reflection/registration.h>
 #include <service/service.h>
 
+#include <cstdio>
 #include <map>
 
 #include <entt/core/hashed_string.hpp>
@@ -125,6 +126,10 @@ auto tests::process() -> int
         return SERVICE_RESULT_EXIT;
     }
     has_run = true;
+
+    // Unbuffered stdout: a mid-suite crash must not swallow the progress output that
+    // tells us which test it happened in.
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
 
     auto& ctx = engine::context();
 

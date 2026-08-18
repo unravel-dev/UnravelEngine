@@ -9,7 +9,7 @@
  *
  * The static_assert in associative_archive.h guards the *selected* archive. This file
  * guards the rest, by pulling them into a translation unit that is compiled on every
- * build of ecs_serialization_tests.
+ * build of the unravel-tests runner.
  *
  * Why it matters: try_serialize_direct falls back to catching search()'s exception when an
  * archive lacks hasNextName, so a missing implementation is not a correctness bug - which

@@ -9,8 +9,8 @@
  * against it therefore measures the runtime's approximations (clipmap coarseness, budgets,
  * filters), while representation error itself stays pinned by the existing bake accuracy tests.
  *
- * Deliberately test-only code: lives in the tests directory, is compiled into gi_tests alone,
- * and favours clarity and physical correctness over speed.
+ * Deliberately test-only code: lives in the tests directory, is compiled into the unravel-tests
+ * runner alone, and favours clarity and physical correctness over speed.
  */
 
 #include <engine/rendering/gi/mesh_sdf.h>
