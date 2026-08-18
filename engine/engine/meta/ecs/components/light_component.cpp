@@ -39,9 +39,15 @@ SAVE_INSTANTIATE(light_component, ser20::oarchive_binary_t);
 
 LOAD(light_component)
 {
-    light l;
-    try_load(ar, ser20::make_nvp("light", l));
-    obj.set_light(l);
+    // Seeded from the current value and applied only if the document carried one. A record
+    // may legitimately omit this: a suppressed prefab override, or a sparse instance diff
+    // that only carries the properties the user changed. Loading into a default-constructed
+    // local and applying it regardless turned "not mentioned" into "reset to default".
+    light l = obj.get_light();
+    if(try_load(ar, ser20::make_nvp("light", l)))
+    {
+        obj.set_light(l);
+    }
 }
 LOAD_INSTANTIATE(light_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(light_component, ser20::iarchive_binary_t);

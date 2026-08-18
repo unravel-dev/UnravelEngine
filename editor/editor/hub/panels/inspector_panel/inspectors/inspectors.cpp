@@ -506,6 +506,39 @@ void prefab_override_context::mark_property_as_changed(entt::handle entity,
 
 void prefab_override_context::mark_entity_as_removed(entt::handle entity)
 {
+    if(!entity)
+    {
+        return;
+    }
+
+    // A prefab instance being deleted is a special case twice over. find_prefab_root_entity
+    // starts at the entity itself, so for an instance root it answers "you are your own
+    // instance" - and recording the removal there puts it on the thing about to be destroyed.
+    // The instance that has to remember is the one *containing* it.
+    //
+    // And it cannot be recorded by prefab uid, the way an ordinary child is: an instance root
+    // carries the nested asset's uid, shared with every other instance of that prefab, so
+    // "remove this one" would read as "remove all of them".
+    if(const auto* own_prefab = entity.try_get<prefab_component>())
+    {
+        if(own_prefab->instance_id.is_nil())
+        {
+            // Added here rather than coming from a document. Nothing will bring it back.
+            return;
+        }
+
+        const auto* transform = entity.try_get<transform_component>();
+        auto container = transform != nullptr ? find_prefab_root_entity(transform->get_parent()) : entt::handle{};
+        if(container)
+        {
+            if(auto* container_prefab = container.try_get<prefab_component>())
+            {
+                container_prefab->remove_instance(own_prefab->instance_id);
+            }
+        }
+        return;
+    }
+
     auto prefab_root = find_prefab_root_entity(entity);
     if(prefab_root)
     {

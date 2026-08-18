@@ -141,6 +141,8 @@ auto renderer::init(rtti::context& ctx, const cmd_line::parser& parser) -> bool
         return false;
     }
 
+    is_initialized_ = true;
+
     return true;
 }
 
@@ -424,6 +426,14 @@ auto renderer::get_reset_flags(bool vsync) const -> uint32_t
 
 renderer::~renderer()
 {
+    // Constructed by engine::create, initialised separately - and a headless run never does.
+    // Everything below talks to bgfx or the OS layer, which would assert or crash if init
+    // never ran.
+    if(!is_initialized_)
+    {
+        return;
+    }
+
     gfx::frames(2, BGFX_FRAME_FLUSH);
     render_window_.reset();
 

@@ -185,20 +185,9 @@ if(physics_tests_src)
 endif()
 
 ###############################################################################################
-# Entity serialization / prefab / clone harness. Not built by default; run it explicitly:
-#   cmake --build <build-dir> --target ecs_serialization_tests
-#   <build-dir>/bin/ecs_serialization_tests              # correctness
-#   <build-dir>/bin/ecs_serialization_tests --bench      # correctness + timings
-#   <build-dir>/bin/ecs_serialization_tests --bench-only
-if(ecs_serialization_tests_src)
-    set(target_name ecs_serialization_tests)
-    add_executable(${target_name} EXCLUDE_FROM_ALL ${ecs_serialization_tests_src})
-
-    set_target_properties(${target_name} PROPERTIES
-        CXX_STANDARD 20
-        CXX_STANDARD_REQUIRED YES
-        CXX_EXTENSIONS NO
-    )
-
-    target_link_libraries(${target_name} PRIVATE engine)
-endif()
+# The entity serialization / prefab / clone suite moved to the `tests` executable, which boots
+# the engine so asset handles resolve:
+#   cmake --build <build-dir> --target tests
+#   <build-dir>/bin/unravel-tests                        # every suite
+#   <build-dir>/bin/unravel-tests --suite serialization  # one of them
+#   <build-dir>/bin/unravel-tests --bench                # checks + timings

@@ -70,6 +70,27 @@ REFLECT(prefab_component)
             entt::attribute{"name", "property_overrides"},
             entt::attribute{"pretty_name", "Property Overrides"},
         })
+        .data<nullptr, &prefab_component::instance_id>("instance_id"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "instance_id"},
+            entt::attribute{"pretty_name", "Instance Id"},
+            entt::attribute{"tooltip", "Identifies which nested instance of the containing prefab this is."},
+        })
+        .data<&prefab_component::foreign_entities>("foreign_entities"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "foreign_entities"},
+            entt::attribute{"pretty_name", "Foreign Entities"},
+        })
+        .data<&prefab_component::removed_instances>("removed_instances"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "removed_instances"},
+            entt::attribute{"pretty_name", "Removed Instances"},
+        })
+        .data<&prefab_component::inherited_overrides>("inherited_overrides"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "inherited_overrides"},
+            entt::attribute{"pretty_name", "Inherited Overrides"},
+        })
         .data<&prefab_component::removed_entities>("removed_entities"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "removed_entities"},
@@ -81,7 +102,11 @@ SAVE(prefab_component)
 {
     try_save(ar, ser20::make_nvp("source", obj.source));
     try_save(ar, ser20::make_nvp("property_overrides", obj.property_overrides));
+    try_save(ar, ser20::make_nvp("inherited_overrides", obj.inherited_overrides));
     try_save(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
+    try_save(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
+    try_save(ar, ser20::make_nvp("foreign_entities", obj.foreign_entities));
+    try_save(ar, ser20::make_nvp("instance_id", hpp::to_string(obj.instance_id)));
 }
 SAVE_INSTANTIATE(prefab_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(prefab_component, ser20::oarchive_binary_t);
@@ -90,7 +115,16 @@ LOAD(prefab_component)
 {
     try_load(ar, ser20::make_nvp("source", obj.source));
     try_load(ar, ser20::make_nvp("property_overrides", obj.property_overrides));
+    try_load(ar, ser20::make_nvp("inherited_overrides", obj.inherited_overrides));
     try_load(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
+    try_load(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
+    try_load(ar, ser20::make_nvp("foreign_entities", obj.foreign_entities));
+
+    std::string instance_suuid;
+    if(try_load(ar, ser20::make_nvp("instance_id", instance_suuid)))
+    {
+        obj.instance_id = hpp::uuid::from_string(instance_suuid).value_or(hpp::uuid{});
+    }
 }
 LOAD_INSTANTIATE(prefab_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(prefab_component, ser20::iarchive_binary_t);

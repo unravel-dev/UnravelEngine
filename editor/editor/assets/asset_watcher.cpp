@@ -305,6 +305,7 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
                             // references — instead the cascade conservatively
                             // marks every loaded prefab thumbnail dirty when
                             // one of these renderable types changes.
+
                             constexpr bool affects_prefabs =
                                 std::is_same_v<T, gfx::texture> ||
                                 std::is_same_v<T, material> ||

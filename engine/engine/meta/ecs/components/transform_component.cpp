@@ -129,12 +129,21 @@ LOAD(transform_component)
         obj.set_transform_local(local_transform);
     }
 
+    // Applied only if the document carried a parent. A null handle that was *written* is a
+    // real answer - it is how a root entity is encoded - but a parent key that is absent
+    // means "not mentioned", and re-parenting to null on that would tear the entity out of
+    // its hierarchy. Records can legitimately omit it: a suppressed prefab override, or a
+    // sparse instance diff carrying only what the user changed.
     entt::handle parent;
-    try_load(ar, ser20::make_nvp("parent", parent));
+    if(try_load(ar, ser20::make_nvp("parent", parent)))
+    {
+        obj.set_parent(parent, false);
+    }
 
-    obj.set_parent(parent, false);
-
-    // not really used but needed to preserve binary archive integrity
+    // Read for its side effects, not its value. Resolving each child handle creates the
+    // entity if this is the first mention of it and records it in the load context's
+    // mappings, so the child's own record - which comes later, since the hierarchy is
+    // flattened parents-first - resolves to the same entity instead of a second one.
     std::vector<entt::handle> children;
     try_load(ar, ser20::make_nvp("children", children));
 

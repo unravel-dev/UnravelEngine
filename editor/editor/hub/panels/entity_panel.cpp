@@ -116,6 +116,72 @@ auto entity_panel::get_entity_icon(entt::handle entity) -> std::string
     return icon;
 }
 
+auto entity_panel::get_entity_prefab_role(entt::handle entity) -> prefab_role
+{
+    if(!entity)
+    {
+        return prefab_role::none;
+    }
+
+    const auto* prefab_comp = entity.try_get<prefab_component>();
+
+    // Whatever instance contains this one, if any. Nothing without one is local *to* anything
+    // - an instance placed straight into a scene is just an instance, and the most common
+    // thing on screen, so it must not be flagged as an exception.
+    const auto* trans_comp = entity.try_get<transform_component>();
+    auto current = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
+    while(current && !current.all_of<prefab_component>())
+    {
+        const auto* parent_trans = current.try_get<transform_component>();
+        current = parent_trans != nullptr ? parent_trans->get_parent() : entt::handle{};
+    }
+    const bool is_nested = static_cast<bool>(current);
+
+    if(prefab_comp != nullptr)
+    {
+        if(!is_nested)
+        {
+            return prefab_role::instance;
+        }
+
+        // A nil instance id is the whole distinction: an instance the containing prefab
+        // supplies is a slot in that file and carries its id, while one added or cloned here
+        // is nobody's slot and never gets one until this subtree is itself saved as a prefab.
+        return prefab_comp->instance_id.is_nil() ? prefab_role::local_instance : prefab_role::linked_instance;
+    }
+
+    if(!is_nested)
+    {
+        return prefab_role::none;
+    }
+
+    // Inside an instance: the asset's entities arrived with a prefab id, anything else was
+    // added here.
+    return entity.all_of<prefab_id_component>() ? prefab_role::asset_content : prefab_role::local_content;
+}
+
+auto entity_panel::describe_prefab_role(prefab_role role) -> const char*
+{
+    switch(role)
+    {
+        case prefab_role::instance:
+            return "An instance of a prefab.";
+        case prefab_role::linked_instance:
+            return "Comes from the prefab that contains it.\n"
+                   "Edits to that prefab reach it, and it goes if the prefab drops it.";
+        case prefab_role::local_instance:
+            return "Added here, not part of any prefab file.\n"
+                   "No prefab above it will replace or remove it.";
+        case prefab_role::asset_content:
+            return "Comes from this instance's prefab.";
+        case prefab_role::local_content:
+            return "Added inside this instance. Its prefab knows nothing about it.";
+        case prefab_role::none:
+            break;
+    }
+    return "";
+}
+
 auto entity_panel::get_entity_display_color(entt::handle entity) -> ImVec4
 {
     auto& trans_comp = entity.get<transform_component>();
@@ -136,7 +202,14 @@ auto entity_panel::get_entity_display_color(entt::handle entity) -> ImVec4
 
     auto col = ImGui::GetStyleColorVec4(ImGuiCol_Text);
 
-    col = ImLerp(col, ImVec4(0.5f, 0.85f, 1.0f, 1.0f), float(has_source) * 0.5f);
+    // Blue for anything a prefab supplies, amber for anything added where it stands. The
+    // second is the one worth spotting: it is what no prefab above will ever update, and what
+    // used to be indistinguishable from the rest of a prefab subtree.
+    const auto role = get_entity_prefab_role(entity);
+    const bool is_local = role == prefab_role::local_instance || role == prefab_role::local_content;
+
+    col = ImLerp(col, ImVec4(0.5f, 0.85f, 1.0f, 1.0f), float(has_source && !is_local) * 0.5f);
+    col = ImLerp(col, ImVec4(1.0f, 0.78f, 0.35f, 1.0f), float(is_local) * 0.55f);
     col = ImLerp(col, ImVec4(1.0f, 0.0f, 0.0f, 1.0f), float(has_broken_source) * 0.5f);
     col = ImLerp(col, ImVec4(0.5f, 0.85f, 1.0f, 1.0f), float(is_bone) * 0.5f);
     col = ImLerp(col, ImVec4(0.8f, 0.4f, 0.4f, 1.0f), float(is_submesh) * 0.5f);

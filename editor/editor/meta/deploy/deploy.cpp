@@ -33,6 +33,18 @@ REFLECT(deploy_settings)
             entt::attribute{"name", "deploy_and_run"},
             entt::attribute{"pretty_name", "Deploy & Run"},
             entt::attribute{"tooltip", "Run the application after the deploy."},
+        })
+        .data<&deploy_settings::bake_prefab_nesting>("bake_prefab_nesting"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "bake_prefab_nesting"},
+            entt::attribute{"pretty_name", "Bake Prefab Nesting"},
+            entt::attribute{"tooltip",
+                            "Resolve nested prefab instances once, at deploy time, so the game\n"
+                            "does not refresh them on every load.\n\n"
+                            "The deploy rewrites this marker on every run, so what it says is\n"
+                            "always what this build produced.\n\n"
+                            "Off: the marker is cleared and the game refreshes nested instances\n"
+                            "as it loads them - slower, but it cannot serve stale content."},
         });
 }
 
@@ -41,6 +53,7 @@ SAVE(deploy_settings)
     try_save(ar, ser20::make_nvp("deploy_location", obj.deploy_location.generic_string()));
     try_save(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_save(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
+    try_save(ar, ser20::make_nvp("bake_prefab_nesting", obj.bake_prefab_nesting));
 }
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(deploy_settings, ser20::oarchive_binary_t);
@@ -55,6 +68,7 @@ LOAD(deploy_settings)
 
     try_load(ar, ser20::make_nvp("deploy_dependencies", obj.deploy_dependencies));
     try_load(ar, ser20::make_nvp("deploy_and_run", obj.deploy_and_run));
+    try_load(ar, ser20::make_nvp("bake_prefab_nesting", obj.bake_prefab_nesting));
 }
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(deploy_settings, ser20::iarchive_binary_t);

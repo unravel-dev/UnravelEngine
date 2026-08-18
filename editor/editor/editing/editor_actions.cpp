@@ -11,6 +11,7 @@
 #include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/imgui/integration/imgui_notify.h>
 #include <editor/system/project_manager.h>
+#include <engine/assets/asset_dependency_graph.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_reader.h>
@@ -1029,6 +1030,383 @@ void remove_unreferenced_files(const fs::path& root)
 
 } // namespace
 
+auto editor_actions::validate_prefab_graph(rtti::context& ctx) -> prefab_graph_report
+{
+    auto& am = ctx.get_cached<asset_manager>();
+
+    prefab_graph_report report;
+
+    // Resolves a uid to something a person can act on. The uid alone is useless in an
+    // error about a cycle - you need to know which file to open.
+    const auto describe = [&am](const hpp::uuid& uid) -> std::string
+    {
+        auto as_prefab = am.get_asset<prefab>(uid);
+        if(as_prefab.is_valid() && !as_prefab.id().empty())
+        {
+            return as_prefab.id();
+        }
+        auto as_scene = am.get_asset<scene_prefab>(uid);
+        if(as_scene.is_valid() && !as_scene.id().empty())
+        {
+            return as_scene.id();
+        }
+        return hpp::to_string(uid);
+    };
+
+    const auto uids = asset_deps::collect_prefab_asset_uids(am);
+    const auto resolve = asset_deps::make_prefab_dependency_resolver(am);
+    const auto order = asset_deps::compute_build_order(uids, resolve);
+
+    report.asset_count = order.ordered.size() + order.cyclic.size();
+
+    // Depth of each asset = one more than its deepest dependency. The order guarantees
+    // every dependency was seen first, so a single forward pass is enough.
+    std::unordered_map<hpp::uuid, size_t> depth;
+    for(const auto& uid : order.ordered)
+    {
+        size_t deepest = 0;
+        const auto deps = resolve(uid);
+        if(!deps.empty())
+        {
+            ++report.nesting_count;
+            for(const auto& dep : deps)
+            {
+                const auto it = depth.find(dep);
+                deepest = std::max(deepest, it == depth.end() ? size_t(1) : it->second + 1);
+            }
+        }
+        depth[uid] = deepest;
+        report.max_depth = std::max(report.max_depth, deepest);
+    }
+
+    report.cyclic_ids.reserve(order.cyclic.size());
+    for(const auto& uid : order.cyclic)
+    {
+        report.cyclic_ids.push_back(describe(uid));
+    }
+
+    if(report.is_valid())
+    {
+        APPLOG_INFO("Prefab graph: {} assets, {} containing nested prefabs, deepest nesting {}.",
+                    report.asset_count,
+                    report.nesting_count,
+                    report.max_depth);
+    }
+    else
+    {
+        APPLOG_ERROR("Prefab graph: {} of {} assets cannot be ordered for a build - they take "
+                     "part in a nesting cycle, or depend on one:",
+                     report.cyclic_ids.size(),
+                     report.asset_count);
+        for(const auto& id : report.cyclic_ids)
+        {
+            APPLOG_ERROR("  {}", id);
+        }
+    }
+
+    return report;
+}
+
+namespace
+{
+
+//------------------------------------------------------------------------------
+// Loads one asset into `scratch`, resolves its prefab instances against their own
+// assets, and writes it back with the resolved marker set.
+//
+// Prefab and scene differ only in how they are written: a prefab is a scene with a
+// single root, and its save additionally strips the root's own prefab_component
+// and stamps prefab uids. The resolve in between is identical, which is why both
+// go through the same scene here.
+//------------------------------------------------------------------------------
+auto count_roots(entt::registry& registry) -> size_t
+{
+    size_t count = 0;
+    registry.view<root_component, transform_component>().each([&](auto, auto&&, auto&&) { ++count; });
+    return count;
+}
+
+auto bake_one_asset(rtti::context& ctx, scene& scratch, const hpp::uuid& uid) -> bool
+{
+    auto& am = ctx.get_cached<asset_manager>();
+
+    // Typed by **extension**, never by asking the asset_manager for a typed handle.
+    // get_asset<T>(uid) resolves the uid to a file location through type-agnostic metadata
+    // and then hands back a T-typed handle for whatever it found - so get_asset<prefab> on
+    // a scene's uid returns a perfectly valid handle to the scene file. Trusting that
+    // rewrote scenes through the prefab writer, and since a scene document repeats
+    // "entities" once per root, reading one as a prefab keeps only the first.
+    const auto meta = am.get_metadata(uid);
+    if(meta.location.empty())
+    {
+        return false;
+    }
+
+    const std::string id = meta.location;
+    const auto source_path = fs::resolve_protocol(id);
+    const auto extension = source_path.extension().generic_string();
+
+    // Written to the **compiled** copy, never to the source. Compiled assets are derived
+    // data - regenerating them is what the pipeline does anyway - whereas rewriting a .pfb
+    // or .spfb puts churn into version control and risks the user's actual content.
+    const auto path = asset_reader::resolve_compiled_path(id);
+
+    const bool is_scene = ex::is_format<scene_prefab>(extension);
+    const bool is_prefab = ex::is_format<prefab>(extension);
+    if(!is_scene && !is_prefab)
+    {
+        return false;
+    }
+
+    scratch.unload();
+
+    entt::handle root{};
+    if(is_prefab)
+    {
+        // load_from_prefab_out rather than instantiate: instantiate regenerates every
+        // id_component, which would rewrite the file with new uids on every bake and make
+        // the output churn even when nothing changed.
+        auto handle = am.get_asset<prefab>(id);
+        if(!load_from_prefab_out(handle, *scratch.registry, root) || !root)
+        {
+            APPLOG_ERROR("Bake: could not load prefab {}", id);
+            return false;
+        }
+    }
+    else
+    {
+        auto handle = am.get_asset<scene_prefab>(id);
+        if(!load_from_prefab(handle, scratch))
+        {
+            APPLOG_ERROR("Bake: could not load scene {}", id);
+            return false;
+        }
+    }
+
+    // Nothing loaded means something is wrong with the asset or the load path, and an
+    // empty document must never be written over content that is presumably fine.
+    const size_t roots_loaded = count_roots(*scratch.registry);
+    if(roots_loaded == 0)
+    {
+        APPLOG_ERROR("Bake: {} loaded no root entities; leaving it untouched.", id);
+        return false;
+    }
+    if(is_prefab && roots_loaded != 1)
+    {
+        APPLOG_ERROR("Bake: prefab {} loaded {} roots, expected 1; leaving it untouched.",
+                     id,
+                     roots_loaded);
+        return false;
+    }
+
+    // load_from_prefab_out already refreshed what was nested inside the root; this catches
+    // instances that are roots in their own right, which is the scene case.
+    const size_t synced = sync_all_prefab_instances(*scratch.registry);
+
+    // Serialize to memory and read it back before touching the file. This is what catches a
+    // writer/reader mismatch - the failure that motivated it wrote scenes in the prefab
+    // format, which round-trips to a different root count.
+    std::stringstream buffer;
+    {
+        serialization::scoped_output_format compact(serialization::output_format::compact);
+
+        bool pushed = push_save_context();
+        get_save_context().nesting_resolved = true;
+
+        if(is_prefab)
+        {
+            auto& save_ctx = get_save_context();
+            save_ctx.save_source = root;
+            save_ctx.to_prefab = true;
+            save_to_stream(buffer, entt::const_handle{root});
+            save_ctx.to_prefab = false;
+            save_ctx.save_source = {};
+        }
+        else
+        {
+            save_to_stream(buffer, scratch);
+        }
+
+        get_save_context().nesting_resolved = false;
+        pop_save_context(pushed);
+    }
+
+    {
+        scene verify("prefab_bake_verify");
+        std::stringstream in(buffer.str());
+
+        // Read back with the reader that matches the writer used above. These overloads are
+        // one argument apart and read *different formats*: load_from_stream(stream, scene&)
+        // expects a scene document, load_from_stream(stream, registry&) a single-root one.
+        // Verifying a scene with the single-root reader finds its first root and stops,
+        // which reports a 5-root scene as 1 and refuses a write that was actually fine.
+        if(is_scene)
+        {
+            load_from_stream(in, verify);
+        }
+        else
+        {
+            load_from_stream(in, *verify.registry);
+        }
+
+        const size_t roots_after = count_roots(*verify.registry);
+        if(roots_after != roots_loaded)
+        {
+            APPLOG_ERROR("Bake: {} would round-trip to {} roots instead of {}; leaving it "
+                         "untouched.",
+                         id,
+                         roots_after,
+                         roots_loaded);
+            return false;
+        }
+    }
+
+    fs::error_code err;
+    asset_writer::atomic_write_file(path,
+                                    [&](const fs::path& temp)
+                                    {
+                                        std::ofstream out(temp.string());
+                                        out << buffer.str();
+                                    },
+                                    err);
+    if(err)
+    {
+        APPLOG_ERROR("Bake: could not write {} -> {}", id, path.generic_string());
+        return false;
+    }
+
+    // Logged per asset rather than summarised: the two things that go wrong here are
+    // writing to a path the deploy does not copy, and resolving nothing to sync. Both are
+    // invisible in a total.
+    APPLOG_INFO("Bake: {} ({} root(s), {} instance(s) synced) -> {}",
+                id,
+                roots_loaded,
+                synced,
+                path.generic_string());
+    return true;
+}
+
+} // namespace
+
+auto editor_actions::clear_prefab_nesting_marker(rtti::context& ctx) -> size_t
+{
+    auto& am = ctx.get_cached<asset_manager>();
+
+    // The marker is written by exactly one place, as a JSON boolean, so flipping the
+    // literal is enough. Reading each asset back through the entity serializer just to
+    // clear a flag would risk the content for no gain - and this is the path taken when
+    // the user has decided not to trust the bake.
+    static const std::string marker_true_min = "\"nesting_resolved\":true";
+    static const std::string marker_true_pretty = "\"nesting_resolved\": true";
+    static const std::string marker_false_min = "\"nesting_resolved\":false";
+    static const std::string marker_false_pretty = "\"nesting_resolved\": false";
+
+    size_t cleared = 0;
+    for(const auto& uid : asset_deps::collect_prefab_asset_uids(am))
+    {
+        const auto meta = am.get_metadata(uid);
+        if(meta.location.empty())
+        {
+            continue;
+        }
+
+        const auto path = asset_reader::resolve_compiled_path(meta.location);
+        fs::error_code ec;
+        if(!fs::exists(path, ec))
+        {
+            continue;
+        }
+
+        std::string contents;
+        {
+            std::ifstream in(path.string(), std::ios::binary);
+            if(!in.good())
+            {
+                continue;
+            }
+            contents.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        }
+
+        const auto original_size = contents.size();
+        contents = string_utils::replace(contents, marker_true_min, marker_false_min);
+        contents = string_utils::replace(contents, marker_true_pretty, marker_false_pretty);
+        if(contents.size() == original_size)
+        {
+            continue;
+        }
+
+        asset_writer::atomic_write_file(path,
+                                        [&](const fs::path& temp)
+                                        {
+                                            std::ofstream out(temp.string(), std::ios::binary);
+                                            out << contents;
+                                        },
+                                        ec);
+        if(!ec)
+        {
+            ++cleared;
+        }
+    }
+
+    if(cleared > 0)
+    {
+        APPLOG_INFO("Cleared the nesting-resolved marker from {} compiled asset(s).", cleared);
+    }
+    return cleared;
+}
+
+auto editor_actions::bake_prefab_nesting(rtti::context& ctx, size_t* baked_count) -> prefab_graph_report
+{
+    if(baked_count != nullptr)
+    {
+        *baked_count = 0;
+    }
+
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
+    {
+        APPLOG_ERROR("Bake: refusing to run during play mode.");
+        prefab_graph_report refused;
+        refused.cyclic_ids.emplace_back("<play mode active>");
+        return refused;
+    }
+
+    auto report = validate_prefab_graph(ctx);
+    if(!report.is_valid())
+    {
+        // Deliberately before any write: a half-baked set, where some assets claim their
+        // nesting is resolved and others do not, is harder to reason about than one that
+        // was never baked.
+        APPLOG_ERROR("Bake: aborted, the prefab graph contains a cycle. Nothing was written.");
+        return report;
+    }
+
+    auto& am = ctx.get_cached<asset_manager>();
+    const auto order = asset_deps::compute_build_order(asset_deps::collect_prefab_asset_uids(am),
+                                                       asset_deps::make_prefab_dependency_resolver(am));
+
+    // One scratch scene reused for every asset - each bake unloads it first.
+    scene scratch("prefab_bake");
+
+    size_t written = 0;
+    for(const auto& uid : order.ordered)
+    {
+        if(bake_one_asset(ctx, scratch, uid))
+        {
+            ++written;
+        }
+    }
+    scratch.unload();
+
+    if(baked_count != nullptr)
+    {
+        *baked_count = written;
+    }
+
+    APPLOG_INFO("Bake: resolved nesting in {} of {} assets.", written, order.ordered.size());
+    return report;
+}
+
 auto editor_actions::new_scene(rtti::context& ctx) -> bool
 {
     auto& play = ctx.get_cached<play_mode>();
@@ -1347,6 +1725,31 @@ auto editor_actions::deploy_project(rtti::context& ctx,
     auto& pm = ctx.get_cached<project_manager>();
     auto project_name = pm.get_name();
     auto executable_path = params.deploy_location / (project_name + fs::executable_extension());
+
+    // Runs before anything is scheduled, and synchronously. The bake builds scenes and
+    // drives asset loads, neither of which is safe off the main thread - scene registration
+    // alone appends to a global vector with no locking - and the copy jobs below must not
+    // start until the compiled assets are in their final state.
+    //
+    // Whichever branch runs, the deploy leaves every compiled asset agreeing with what the
+    // runtime will assume of it. That is the whole basis for trusting the marker in a
+    // deployed build: this step rewrites it on every deploy, so it describes this build.
+    if(params.bake_prefab_nesting)
+    {
+        size_t baked = 0;
+        const auto report = bake_prefab_nesting(ctx, &baked);
+        if(!report.is_valid())
+        {
+            APPLOG_ERROR("Deploy aborted: the prefab graph contains a nesting cycle. "
+                         "Fix it, or turn off 'Bake Prefab Nesting' to deploy without it.");
+            return {};
+        }
+        APPLOG_INFO("Deploy: baked prefab nesting into {} compiled asset(s).", baked);
+    }
+    else
+    {
+        clear_prefab_nesting_marker(ctx);
+    }
 
     // am.get_database("engine:/")
 

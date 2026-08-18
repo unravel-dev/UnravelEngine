@@ -36,8 +36,14 @@ auto prefab_property_override_data::operator<(const prefab_property_override_dat
 // prefab_component implementation
 void prefab_component::clear_overrides()
 {
+    // The inherited half goes too. Reverting means "put this instance back the way its asset
+    // has it", and an override stated by the document that contains this instance is not this
+    // instance's to keep - though it will be stated again the next time that document is
+    // replayed, which is correct: it is that document's answer, not this one's.
     property_overrides.clear();
+    inherited_overrides.clear();
     removed_entities.clear();
+    removed_instances.clear();
 }
 
 void prefab_component::add_override(const hpp::uuid& entity_uuid, const std::string& component_path)
@@ -103,6 +109,16 @@ void prefab_component::remove_override(const hpp::uuid& entity_uuid, const std::
     property_overrides.erase(prefab_property_override_data{entity_uuid, component_path});
 }
 
+void prefab_component::remove_instance(const hpp::uuid& instance_id)
+{
+    removed_instances.insert(instance_id);
+}
+
+auto prefab_component::is_instance_removed(const hpp::uuid& instance_id) const -> bool
+{
+    return removed_instances.count(instance_id) != 0u;
+}
+
 void prefab_component::remove_entity(const hpp::uuid& entity_uuid)
 {
     removed_entities.insert(entity_uuid);
@@ -123,6 +139,47 @@ void prefab_component::remove_entity(const hpp::uuid& entity_uuid)
 auto prefab_component::get_all_overrides() const -> const std::set<prefab_property_override_data>&
 {
     return property_overrides;
+}
+
+auto prefab_component::has_override_touching(const hpp::uuid& entity_uuid,
+                                             std::string_view component_path) const -> bool
+{
+    if(property_overrides.empty())
+    {
+        return false;
+    }
+
+    // Below: ordered by (entity_uuid, component_path), so anything sharing the prefix sorts
+    // immediately after it - if the first entry not less than it does not share it, none do.
+    const auto it =
+        property_overrides.lower_bound(prefab_property_override_data{entity_uuid, std::string(component_path)});
+    if(it != property_overrides.end() && it->entity_uuid == entity_uuid)
+    {
+        const std::string_view candidate(it->component_path);
+        if(candidate.starts_with(component_path) &&
+           (candidate.size() == component_path.size() || candidate[component_path.size()] == '/'))
+        {
+            return true;
+        }
+    }
+
+    // Above: an override on a whole property covers everything inside it. Walked segment by
+    // segment rather than searched, since a property path is only a few deep.
+    auto ancestor = component_path;
+    while(true)
+    {
+        const auto separator = ancestor.rfind('/');
+        if(separator == std::string_view::npos)
+        {
+            return false;
+        }
+
+        ancestor = ancestor.substr(0, separator);
+        if(has_override(entity_uuid, std::string(ancestor)))
+        {
+            return true;
+        }
+    }
 }
 
 auto prefab_component::has_serialization_override(const std::string& serialization_path) const -> bool

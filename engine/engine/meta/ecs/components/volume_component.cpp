@@ -88,7 +88,7 @@ REFLECT(volume_component)
 
 SAVE(volume_component)
 {
-    try_save(ar, ser20::make_nvp("mode", static_cast<std::underlying_type_t<volume_mode>>(obj.mode)));
+    try_save(ar, ser20::make_nvp("mode", obj.mode));
     try_save(ar, ser20::make_nvp("priority", obj.priority));
     try_save(ar, ser20::make_nvp("weight", obj.weight));
     try_save(ar, ser20::make_nvp("blend_distance", obj.blend_distance));
@@ -99,17 +99,7 @@ SAVE_INSTANTIATE(volume_component, ser20::oarchive_binary_t);
 
 LOAD(volume_component)
 {
-    bool is_global = false;
-    if(try_load(ar, ser20::make_nvp("is_global", is_global)))
-    {
-        obj.mode = is_global ? volume_mode::global : volume_mode::local;
-    }
-    else
-    {
-        std::underlying_type_t<volume_mode> mode_val = 0;
-        try_load(ar, ser20::make_nvp("mode", mode_val));
-        obj.mode = static_cast<volume_mode>(mode_val);
-    }
+    try_load(ar, ser20::make_nvp("mode", obj.mode));
     try_load(ar, ser20::make_nvp("priority", obj.priority));
     try_load(ar, ser20::make_nvp("weight", obj.weight));
     try_load(ar, ser20::make_nvp("blend_distance", obj.blend_distance));

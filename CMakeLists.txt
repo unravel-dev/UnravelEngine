@@ -178,6 +178,7 @@ add_subdirectory(deps)
 add_subdirectory(engine)
 add_subdirectory(editor)
 add_subdirectory(game)
+add_subdirectory(tests)
 
 
 file(GLOB_RECURSE SOURCES ${PROJECT_SOURCE_DIR}/engine_data/data/shaders/* ${PROJECT_SOURCE_DIR}/engine_data/data/scripts/*)

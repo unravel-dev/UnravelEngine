@@ -24,6 +24,14 @@ struct ENGINE_EXPORT renderer
     ~renderer();
 
     auto init(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
+
+    /// Whether init() got as far as bringing the graphics backend up. Teardown has to know:
+    /// the renderer is constructed by engine::create, and a headless run - the test runner -
+    /// never initialises it, so its destructor must not talk to a library that is not there.
+    auto is_initialized() const -> bool
+    {
+        return is_initialized_;
+    }
     auto deinit(rtti::context& ctx) -> bool;
 
     auto create_window_for_display(int index, const std::string& title, uint32_t flags)
@@ -77,6 +85,9 @@ protected:
     std::unique_ptr<os::window> init_window_{};
     std::unique_ptr<render_window> render_window_{};
     std::string request_screenshot_{};
+
+    /// Set once init() has brought the backend up; read by the destructor.
+    bool is_initialized_{};
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 };

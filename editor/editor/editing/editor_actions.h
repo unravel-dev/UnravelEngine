@@ -69,8 +69,78 @@ struct import_files_result
     tpp::shared_future<bool> future;
 };
 
+/**
+ * @brief Outcome of checking the prefab nesting graph.
+ */
+struct prefab_graph_report
+{
+    /// Prefabs and scenes examined.
+    size_t asset_count{};
+    /// Assets that reference at least one other prefab.
+    size_t nesting_count{};
+    /// Deepest chain in the dependency order, in assets.
+    size_t max_depth{};
+    /// Human-readable ids of assets that take part in, or depend on, a nesting cycle.
+    std::vector<std::string> cyclic_ids;
+
+    auto is_valid() const -> bool
+    {
+        return cyclic_ids.empty();
+    }
+};
+
 struct editor_actions
 {
+    /**
+     * @brief Checks that every prefab and scene can be ordered for a build.
+     *
+     * A prefab that instances another has to be baked after it, so the set has to be
+     * topologically orderable. A cycle - A instancing B instancing A - has no valid order
+     * and would recurse forever if expanded, so it is reported here rather than left to
+     * fail at load.
+     *
+     * Read-only: nothing is written, and no asset is modified.
+     */
+    static auto validate_prefab_graph(rtti::context& ctx) -> prefab_graph_report;
+
+    /**
+     * @brief Resolves nested prefab instances in every prefab and scene, and re-saves them.
+     *
+     * A prefab that instances another stores a snapshot of it, taken when that prefab was
+     * last saved - so the snapshot goes stale the moment the inner asset is edited. The
+     * editor hides that by refreshing nested instances on every load, which costs an extra
+     * asset load per instance, at runtime as well.
+     *
+     * This bakes the refresh in: each asset is loaded, its instances resolved against their
+     * own assets, and written back with a marker that tells the loader the work is done.
+     * Assets are processed dependency-first, so an inner prefab is current before anything
+     * nesting it is baked.
+     *
+     * **Writes to the source assets.** A cycle aborts the whole run before anything is
+     * written, because a partially baked set is worse than an unbaked one.
+     *
+     * Refuses to run during play mode.
+     *
+     * @return the report from the validation pass, plus how many assets were rewritten.
+     */
+    static auto bake_prefab_nesting(rtti::context& ctx, size_t* baked_count = nullptr)
+        -> prefab_graph_report;
+
+    /**
+     * @brief Clears the "nesting already resolved" claim from every compiled asset.
+     *
+     * The inverse of bake_prefab_nesting, and the safe half of the pair: a runtime that
+     * finds no claim refreshes nested instances as it loads them, which is slower but can
+     * never serve content the bake did not actually resolve.
+     *
+     * Deliberately **not** a load-and-re-save. It rewrites the one boolean in place, so it
+     * cannot lose data the way a full round-trip through the entity serializer can - which
+     * matters most precisely when something about the bake is already suspect.
+     *
+     * @return how many compiled assets were changed.
+     */
+    static auto clear_prefab_nesting_marker(rtti::context& ctx) -> size_t;
+
     static auto new_scene(rtti::context& ctx) -> bool;
     static auto open_scene(rtti::context& ctx) -> bool;
     static auto open_scene_from_asset(rtti::context& ctx, const asset_handle<scene_prefab>& asset) -> bool;

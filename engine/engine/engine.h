@@ -32,6 +32,15 @@ struct engine
     static auto context() -> rtti::context&;
 
     /**
+     * @brief The ambient context, or nullptr when none is installed.
+     *
+     * context() dereferences unconditionally. Use this where "there may be no engine here"
+     * is a legitimate state - headless tools, test harnesses, or code that only wants to
+     * ask the context a question if one exists.
+     */
+    static auto try_context() -> rtti::context*;
+
+    /**
      * @brief Installs the ambient context without constructing any subsystem.
      *
      * create() does this as one step of building the whole engine. Headless tools and test

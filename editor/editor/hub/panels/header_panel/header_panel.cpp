@@ -244,6 +244,35 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
 
             if(ImGui::BeginMenu("Assets"))
             {
+                if(ImGui::MenuItem("Validate Prefab Graph"))
+                {
+                    const auto report = editor_actions::validate_prefab_graph(ctx);
+                    if(report.is_valid())
+                    {
+                        ImGui::PushNotification(
+                            ImGuiToast(ImGuiToastType_Success,
+                                       4000,
+                                       "Prefab graph is buildable.\n%zu assets, %zu with nesting, "
+                                       "deepest nesting %zu.",
+                                       report.asset_count,
+                                       report.nesting_count,
+                                       report.max_depth));
+                    }
+                    else
+                    {
+                        ImGui::PushNotification(ImGuiToast(ImGuiToastType_Error,
+                                                           6000,
+                                                           "%zu asset(s) take part in a prefab "
+                                                           "nesting cycle. See the log.",
+                                                           report.cyclic_ids.size()));
+                    }
+                }
+                ImGui::SetItemTooltip(
+                    "Check that every prefab and scene can be ordered for a build.\n"
+                    "A prefab instancing another must be built after it, so a cycle -\n"
+                    "A inside B inside A - has no valid order and is reported here.\n"
+                    "Read-only: nothing is written.");
+
                 if(ImGui::BeginMenu("Regenerate"))
                 {
                     if(ImGui::MenuItem("Meta(Engine)"))

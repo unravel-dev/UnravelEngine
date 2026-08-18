@@ -133,6 +133,44 @@ void destroy_dependent_components(entt::registry& r, entt::entity e)
     r.remove<Ts...>(e);
 }
 
+/**
+ * @brief Strips components down a subtree, stopping at nested prefab instances.
+ *
+ * Wired to on_destroy<prefab_component> to clear prefab ids when an instance is unpacked.
+ * The recursion stops at any child that is itself an instance root: that child belongs to
+ * a different asset, and stripping its ids would silently sever its own link while the
+ * user was only unpacking the outer one.
+ */
+template<typename ...Ts>
+void destroy_dependent_components_in_children(entt::registry& r, entt::entity e)
+{
+    if(!r.valid(e))
+    {
+        return;
+    }
+
+    // A child that is itself an instance root belongs to a different asset. Unpacking the
+    // outer instance must not reach into it: stripping its prefab ids would sever its own
+    // link too, silently and with nothing in the UI to say so.
+    if(r.try_get<prefab_component>(e) != nullptr)
+    {
+        return;
+    }
+
+    destroy_dependent_components<Ts...>(r, e);
+
+    auto transform = r.try_get<transform_component>(e);
+    if(transform)
+    {
+        for(auto child : transform->get_children())
+        {
+            destroy_dependent_components_in_children<Ts...>(r, child);
+        }
+    }
+}
+
+/// Entry point for on_destroy<prefab_component>. Kept at exactly (registry&, entity) so
+/// entt's connect<> can bind it.
 template<typename ...Ts>
 void destroy_dependent_components_recursive(entt::registry& r, entt::entity e)
 {
@@ -140,15 +178,17 @@ void destroy_dependent_components_recursive(entt::registry& r, entt::entity e)
     {
         return;
     }
-    destroy_dependent_components<Ts...>(r, e);
 
+    // The entity whose prefab_component is going away: strip it, then descend. The
+    // instance-root check is deliberately not applied here - this *is* the instance root.
+    destroy_dependent_components<Ts...>(r, e);
 
     auto transform = r.try_get<transform_component>(e);
     if(transform)
     {
         for(auto child : transform->get_children())
         {
-            destroy_dependent_components_recursive<Ts...>(r, child);
+            destroy_dependent_components_in_children<Ts...>(r, child);
         }
     }
 }

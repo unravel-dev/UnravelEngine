@@ -23,26 +23,26 @@ const preset_card_info presets[] = {
     {"preset_low",
      ICON_MDI_LIGHTNING_BOLT_OUTLINE,
      "Low End",
-     "Basic lighting and minimal post-processing.\n"
-     "Best for low-end hardware or mobile targets.",
+     "Sky lighting, Soft shadows, Tonemapping and FXAA.\n"
+     "Best for low-end or mobile.",
      defaults::scene_preset::low},
     {"preset_medium",
      ICON_MDI_LAYERS,
      "Standard",
-     "Balanced lighting, soft shadows and post-processing.\n"
+     "Flat clouds, SSR, TAA, ASSAO, Bloom and Auto-Exposure, Soft Shadows.\n"
      "Recommended for most projects.",
      defaults::scene_preset::medium},
     {"preset_high",
      ICON_MDI_DIAMOND_STONE,
      "High End",
-     "Full Lighting, SSR, Bloom, Volumetric Clouds, Soft Shadows and Post-Processing.\n"
-     "Best for high-end desktop builds.",
+     "Volumetric clouds, World GI, SSR, TAA, ASSAO, Bloom, Auto-Exposure and Contact Shadows.\n"
+     "Best for high-end desktop.",
      defaults::scene_preset::high},
     {"preset_showcase",
      ICON_MDI_GIFT,
      "Showcase",
-     "Full Lighting, SSIL, SSR, Bloom, TAA, Volumetric Clouds, Soft Shadows and Post-Processing.\n"
-     "Best for showcase builds. Requires a powerful GPU.",
+     "Volumetric clouds, World GI, SSR, TAA, ASSAO, Bloom, Auto-Exposure and Contact Shadows.\n"
+     "Highest quality lighting and shadows. Requires a powerful GPU.",
      defaults::scene_preset::showcase},
 };
 

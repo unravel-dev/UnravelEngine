@@ -20,6 +20,109 @@ namespace unravel
 namespace
 {
 
+/**
+ * @brief One node of the override tree: a path segment, and whatever sits under it.
+ *
+ * Overrides are stored flat, as one entry per property path, which reads as an undifferentiated
+ * list once there are more than a handful. The paths are already hierarchical - "Transform/
+ * Position/X" - so they are regrouped here into the tree they describe.
+ *
+ * A node can be both: "Transform/Position" may be overridden and so may "Transform/Position/X".
+ */
+struct override_node
+{
+    std::map<std::string, override_node> children;
+
+    /// Set when an override ends exactly here.
+    const prefab_property_override_data* leaf{};
+    bool leaf_is_inherited{};
+
+    /// Everything at or below this node, so a collapsed branch can still say what it holds.
+    size_t local_count{};
+    size_t inherited_count{};
+};
+
+struct entity_overrides
+{
+    entt::handle handle;
+    std::string name;
+    override_node root;
+};
+
+auto split_path(const std::string& path) -> std::vector<std::string>
+{
+    std::vector<std::string> segments;
+    size_t start = 0;
+    while(start <= path.size())
+    {
+        const auto separator = path.find('/', start);
+        const auto end = separator == std::string::npos ? path.size() : separator;
+        if(end > start)
+        {
+            segments.emplace_back(path.substr(start, end - start));
+        }
+        if(separator == std::string::npos)
+        {
+            break;
+        }
+        start = separator + 1;
+    }
+    return segments;
+}
+
+/// Which of the two authors an override came from. Inherited ones are stated by the prefab
+/// that contains this instance, and it re-states them every time it is replayed - so they are
+/// shown, and are not the user's to revert here.
+auto build_override_tree(const prefab_component& data, entt::handle root_prefab_entity)
+    -> std::map<hpp::uuid, entity_overrides>
+{
+    std::map<hpp::uuid, entity_overrides> by_entity;
+
+    for(const auto& override_data : data.get_all_overrides())
+    {
+        const bool inherited = data.inherited_overrides.count(override_data) != 0u;
+
+        auto& entry = by_entity[override_data.entity_uuid];
+        if(!entry.handle && entry.name.empty())
+        {
+            entry.handle = scene::find_entity_by_prefab_uuid(root_prefab_entity, override_data.entity_uuid);
+            entry.name = entry.handle ? entity_panel::get_entity_name(entry.handle) : "Entity Not Found";
+        }
+
+        const auto& display_path =
+            override_data.pretty_component_path.empty() ? override_data.component_path : override_data.pretty_component_path;
+
+        auto* node = &entry.root;
+        node->local_count += inherited ? 0u : 1u;
+        node->inherited_count += inherited ? 1u : 0u;
+
+        for(const auto& segment : split_path(display_path))
+        {
+            node = &node->children[segment];
+            node->local_count += inherited ? 0u : 1u;
+            node->inherited_count += inherited ? 1u : 0u;
+        }
+
+        node->leaf = &override_data;
+        node->leaf_is_inherited = inherited;
+    }
+
+    return by_entity;
+}
+
+/// Appended to a collapsed branch so it still says what it is holding.
+auto describe_counts(const override_node& node) -> std::string
+{
+    if(node.inherited_count == 0u)
+    {
+        return {};
+    }
+    if(node.local_count == 0u)
+    {
+        return fmt::format(" ({} from prefab)", node.inherited_count);
+    }
+    return fmt::format(" ({} here, {} from prefab)", node.local_count, node.inherited_count);
+}
 
 } // anonymous namespace
 
@@ -38,94 +141,203 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
     const auto& overrides = data.get_all_overrides();
     
     if(!overrides.empty())
-    {       
-        std::string header_id = fmt::format("Property Overrides: {}###Override Details", overrides.size());
+    {
+        const size_t inherited_total = data.inherited_overrides.size();
+        const size_t local_total = overrides.size() - std::min(inherited_total, overrides.size());
+
+        const std::string header_id =
+            inherited_total > 0u
+                ? fmt::format("Property Overrides: {} here, {} from prefab###Override Details",
+                              local_total,
+                              inherited_total)
+                : fmt::format("Property Overrides: {}###Override Details", overrides.size());
+
         if(ImGui::CollapsingHeader(header_id.c_str()))
         {
             ImGui::Indent();
-            
-            // Display overrides - show pretty paths to users
-            std::string serialization_path_to_remove;
-            
-            // Display overrides from the new structure
-            const auto& property_overrides = data.get_all_overrides();
-            for(const auto& override_data : property_overrides)
+
+            const auto tree = build_override_tree(data, root_prefab_entity);
+
+            // Collected while drawing and acted on afterwards, so the set being iterated is
+            // not modified underneath.
+            const prefab_property_override_data* to_revert{};
+
+            const auto disabled_colour = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+
+            // A leaf row: the property itself, what states it, and a way to drop it.
+            const auto draw_leaf = [&](const override_node& node, const entity_overrides& entity)
             {
-                // Build full display path with entity name
-                std::string display_path;
-                
-                // Find the entity by UUID and get its name
-                auto found_entity = scene::find_entity_by_prefab_uuid(root_prefab_entity, override_data.entity_uuid);
-                if (found_entity)
+                const auto& override_data = *node.leaf;
+
+                if(node.leaf_is_inherited)
                 {
-                    std::string entity_name = entity_panel::get_entity_name(found_entity);
-                    display_path = entity_name + "/" + override_data.pretty_component_path;
+                    ImGui::SameLine();
+                    ImGui::TextColored(disabled_colour, "(from prefab)");
+
+                    // No revert: the prefab that contains this instance states this override
+                    // and states it again on every resync, so dropping it here would not last
+                    // past the next one.
+                    ImGui::SetItemTooltipEx("Stated by the prefab that contains this instance.\n"
+                                            "Change it there, or override it here to take it over.");
                 }
                 else
                 {
-                    // Fallback if entity not found
-                    display_path = override_data.pretty_component_path;
+                    ImGui::SameLine();
+                    ImGui::PushID(override_data.component_path.c_str());
+                    if(ImGui::SmallButton("Revert"))
+                    {
+                        to_revert = &override_data;
+                    }
+                    ImGui::PopID();
                 }
-                
-                ImGui::BeginGroup();
-                ImGui::BulletText("%s", display_path.c_str());
-                ImGui::SameLine();
-                
-                // Add a revert button for each override
-                std::string override_id = hpp::to_string(override_data.entity_uuid) + ":" + override_data.component_path;
-                ImGui::PushID(override_id.c_str());
-                if(ImGui::SmallButton("Revert"))
+
+                ImGui::SetItemTooltipEx("Entity: %s\nUUID: %s\nComponent Path: %s",
+                                        entity.name.c_str(),
+                                        hpp::to_string(override_data.entity_uuid).c_str(),
+                                        override_data.component_path.c_str());
+            };
+
+            const std::function<void(const std::string&, const override_node&, const entity_overrides&)> draw_node =
+                [&](const std::string& label, const override_node& node, const entity_overrides& entity)
+            {
+                const bool is_leaf_only = node.children.empty();
+                const std::string text = label + describe_counts(node);
+
+                const bool all_inherited = node.local_count == 0u;
+                if(all_inherited)
                 {
-                    // Store the UUID and component path for removal
-                    serialization_path_to_remove = override_id;
+                    ImGui::PushStyleColor(ImGuiCol_Text, disabled_colour);
                 }
-                ImGui::PopID();
-                ImGui::EndGroup();
 
+                if(is_leaf_only)
+                {
+                    ImGui::TreeNodeEx(text.c_str(),
+                                      ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
+                                          ImGuiTreeNodeFlags_SpanAvailWidth);
+                    if(all_inherited)
+                    {
+                        ImGui::PopStyleColor();
+                    }
 
-                if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip) && found_entity)
+                    if(node.leaf != nullptr)
+                    {
+                        draw_leaf(node, entity);
+                    }
+                    return;
+                }
+
+                const bool open = ImGui::TreeNodeEx(text.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth);
+                if(all_inherited)
+                {
+                    ImGui::PopStyleColor();
+                }
+
+                // A node can be overridden *and* have overridden children - "Position" as well
+                // as "Position/X" - so its own row still carries the controls.
+                if(node.leaf != nullptr)
+                {
+                    draw_leaf(node, entity);
+                }
+
+                if(open)
+                {
+                    for(const auto& [child_label, child] : node.children)
+                    {
+                        draw_node(child_label, child, entity);
+                    }
+                    ImGui::TreePop();
+                }
+            };
+
+            for(const auto& [entity_uuid, entity] : tree)
+            {
+                ImGui::PushID(hpp::to_string(entity_uuid).c_str());
+
+                const bool all_inherited = entity.root.local_count == 0u;
+                if(all_inherited)
+                {
+                    ImGui::PushStyleColor(ImGuiCol_Text, disabled_colour);
+                }
+
+                const std::string entity_label = entity.name + describe_counts(entity.root);
+                const bool open = ImGui::TreeNodeEx(entity_label.c_str(),
+                                                    ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_SpanAvailWidth);
+                if(all_inherited)
+                {
+                    ImGui::PopStyleColor();
+                }
+
+                if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip) && entity.handle)
                 {
                     auto& em = ctx.get_cached<editing_manager>();
-
-                    em.focus(found_entity);
+                    em.focus(entity.handle);
                 }
-                
-                // Show technical details as tooltip
-                std::string entity_name = found_entity ? entity_panel::get_entity_name(found_entity) : "Entity Not Found";
-                ImGui::SetItemTooltipEx("Entity: %s\nUUID: %s\nComponent Path: %s\nPretty Path: %s", 
-                                    entity_name.c_str(),
-                                    hpp::to_string(override_data.entity_uuid).c_str(),
-                                    override_data.component_path.c_str(),
-                                    override_data.pretty_component_path.c_str());
-                
-            }
 
-            // Process removal outside the loop to avoid iterator invalidation
-            if(!serialization_path_to_remove.empty())
-            {
-                // Parse the stored override ID to extract UUID and component path
-                auto colon_pos = serialization_path_to_remove.find(':');
-                if (colon_pos != std::string::npos)
+                if(open)
                 {
-                    std::string uuid_str = serialization_path_to_remove.substr(0, colon_pos);
-                    std::string component_path = serialization_path_to_remove.substr(colon_pos + 1);
-                    
-                    auto uuid_opt = hpp::uuid::from_string(uuid_str);
-                    if (uuid_opt.has_value())
+                    for(const auto& [child_label, child] : entity.root.children)
                     {
-                        data.remove_override(uuid_opt.value(), component_path);
-                        data.changed = true;
-                        result.changed = true;
-
-                        auto& em = ctx.get_cached<editing_manager>();
-                        em.sync_prefab_entity(ctx, root_prefab_entity, data.source);
+                        draw_node(child_label, child, entity);
                     }
+                    ImGui::TreePop();
                 }
+
+                ImGui::PopID();
             }
-            
+
+            if(to_revert != nullptr)
+            {
+                data.remove_override(to_revert->entity_uuid, to_revert->component_path);
+                data.changed = true;
+                result.changed = true;
+
+                auto& em = ctx.get_cached<editing_manager>();
+                em.sync_prefab_entity(ctx, root_prefab_entity, data.source);
+            }
+
             ImGui::Unindent();
         }
         ImGui::Separator();
+    }
+
+    if(!data.removed_instances.empty())
+    {
+        std::string header_id =
+            fmt::format("Removed Nested Instances: {}###Removed Instances", data.removed_instances.size());
+        if(ImGui::CollapsingHeader(header_id.c_str()))
+        {
+            ImGui::Indent();
+
+            hpp::uuid instance_to_restore;
+            for(const auto& instance_id : data.removed_instances)
+            {
+                const auto id_str = hpp::to_string(instance_id);
+                ImGui::BulletText("%s", id_str.c_str());
+                ImGui::SetItemTooltipEx("A prefab instance nested in this one that was deleted here.\n"
+                                        "Identified by its slot in the containing prefab rather than by\n"
+                                        "its own prefab id, which every instance of that prefab shares.");
+                ImGui::SameLine();
+
+                ImGui::PushID(id_str.c_str());
+                if(ImGui::SmallButton("Restore"))
+                {
+                    instance_to_restore = instance_id;
+                }
+                ImGui::PopID();
+            }
+
+            if(!instance_to_restore.is_nil())
+            {
+                data.removed_instances.erase(instance_to_restore);
+                data.changed = true;
+                result.changed = true;
+
+                auto& em = ctx.get_cached<editing_manager>();
+                em.sync_prefab_entity(ctx, root_prefab_entity, data.source);
+            }
+
+            ImGui::Unindent();
+        }
     }
 
     if(!data.removed_entities.empty())
