@@ -106,7 +106,7 @@ SAVE(prefab_component)
     try_save(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
     try_save(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
     try_save(ar, ser20::make_nvp("foreign_entities", obj.foreign_entities));
-    try_save(ar, ser20::make_nvp("instance_id", hpp::to_string(obj.instance_id)));
+    try_save(ar, ser20::make_nvp("instance_id", obj.instance_id));
 }
 SAVE_INSTANTIATE(prefab_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(prefab_component, ser20::oarchive_binary_t);
@@ -119,12 +119,7 @@ LOAD(prefab_component)
     try_load(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
     try_load(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
     try_load(ar, ser20::make_nvp("foreign_entities", obj.foreign_entities));
-
-    std::string instance_suuid;
-    if(try_load(ar, ser20::make_nvp("instance_id", instance_suuid)))
-    {
-        obj.instance_id = hpp::uuid::from_string(instance_suuid).value_or(hpp::uuid{});
-    }
+    try_load(ar, ser20::make_nvp("instance_id", obj.instance_id));
 }
 LOAD_INSTANTIATE(prefab_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(prefab_component, ser20::iarchive_binary_t);
@@ -154,20 +149,14 @@ REFLECT(prefab_id_component)
 
 SAVE(prefab_id_component)
 {
-    try_save(ar, ser20::make_nvp("id", hpp::to_string(obj.id)));
+    try_save(ar, ser20::make_nvp("id", obj.id));
 }
 SAVE_INSTANTIATE(prefab_id_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(prefab_id_component, ser20::oarchive_binary_t);
 
 LOAD(prefab_id_component)
 {
-    std::string suuid;
-
-    if(try_load(ar, ser20::make_nvp("id", suuid)))
-    {
-        auto id = hpp::uuid::from_string(suuid);
-        obj.id = id.value_or(hpp::uuid{});
-    }
+    try_load(ar, ser20::make_nvp("id", obj.id));
 }
 
 LOAD_INSTANTIATE(prefab_id_component, ser20::iarchive_associative_t);

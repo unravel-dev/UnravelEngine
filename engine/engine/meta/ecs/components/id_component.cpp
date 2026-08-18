@@ -3,6 +3,7 @@
 #include <engine/ecs/components/basic_component.h>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <engine/meta/core/common/basetypes.hpp>
 
 namespace unravel
 {
@@ -31,20 +32,14 @@ REFLECT(id_component)
 
 SAVE(id_component)
 {
-    try_save(ar, ser20::make_nvp("id", hpp::to_string(obj.id)));
+    try_save(ar, ser20::make_nvp("id", obj.id));
 }
 SAVE_INSTANTIATE(id_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(id_component, ser20::oarchive_binary_t);
 
 LOAD(id_component)
 {
-    std::string suuid;
-
-    if(try_load(ar, ser20::make_nvp("id", suuid)))
-    {
-        auto id = hpp::uuid::from_string(suuid);
-        obj.id = id.value_or(hpp::uuid{});
-    }
+    try_load(ar, ser20::make_nvp("id", obj.id));
 }
 
 LOAD_INSTANTIATE(id_component, ser20::iarchive_associative_t);
