@@ -128,11 +128,21 @@ void prefab_component::remove_entity(const hpp::uuid& entity_uuid)
     //
     // Erasing through the range-for would be undefined: std::set::erase invalidates the
     // iterator to the erased element, which is the one the loop then increments.
-    auto it = property_overrides.lower_bound(prefab_property_override_data{entity_uuid, std::string{}});
-    while(it != property_overrides.end() && it->entity_uuid == entity_uuid)
+    const auto erase_entity_range = [&entity_uuid](std::set<prefab_property_override_data>& overrides)
     {
-        it = property_overrides.erase(it);
-    }
+        auto it = overrides.lower_bound(prefab_property_override_data{entity_uuid, std::string{}});
+        while(it != overrides.end() && it->entity_uuid == entity_uuid)
+        {
+            it = overrides.erase(it);
+        }
+    };
+
+    erase_entity_range(property_overrides);
+
+    // The inherited half too. An entity that is gone cannot still be attributed to the prefab
+    // that contains this instance, and leaving it there would make the next resync compute the
+    // local set by subtracting entries nothing holds.
+    erase_entity_range(inherited_overrides);
 }
 
 

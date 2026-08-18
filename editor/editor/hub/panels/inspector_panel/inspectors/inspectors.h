@@ -5,6 +5,7 @@
 #include "property_path_generator.h"
 #include <context/context.hpp>
 #include <engine/meta/ecs/entity.hpp>
+#include <editor/editing/prefab_removal_record.h>
 
 namespace unravel
 {
@@ -268,8 +269,14 @@ struct prefab_override_context
     /**
      * @brief Marks an entity as removed from the prefab instance
      * @param entity Entity that was removed
+     * @return What was changed, to hand to restore_entity_removal on undo
      */
-    static void mark_entity_as_removed(entt::handle entity);
+    static auto mark_entity_as_removed(entt::handle entity) -> prefab_removal_record;
+
+    /**
+     * @brief Undoes exactly what mark_entity_as_removed recorded.
+     */
+    static void restore_entity_removal(const prefab_removal_record& record);
 };
 
 auto add_property_action(rtti::context& ctx,

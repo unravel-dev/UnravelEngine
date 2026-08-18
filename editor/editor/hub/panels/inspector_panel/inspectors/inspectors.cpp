@@ -504,11 +504,29 @@ void prefab_override_context::mark_property_as_changed(entt::handle entity,
     }
 }
 
-void prefab_override_context::mark_entity_as_removed(entt::handle entity)
+namespace
 {
+/// Moves the overrides belonging to one entity out of a set, so a removal can be undone.
+void take_entity_overrides(std::set<prefab_property_override_data>& from,
+                           const hpp::uuid& entity_uuid,
+                           std::set<prefab_property_override_data>& into)
+{
+    auto it = from.lower_bound(prefab_property_override_data{entity_uuid, std::string{}});
+    while(it != from.end() && it->entity_uuid == entity_uuid)
+    {
+        into.insert(*it);
+        ++it;
+    }
+}
+} // namespace
+
+auto prefab_override_context::mark_entity_as_removed(entt::handle entity) -> prefab_removal_record
+{
+    prefab_removal_record record;
+
     if(!entity)
     {
-        return;
+        return record;
     }
 
     // A prefab instance being deleted is a special case twice over. find_prefab_root_entity
@@ -524,7 +542,7 @@ void prefab_override_context::mark_entity_as_removed(entt::handle entity)
         if(own_prefab->instance_id.is_nil())
         {
             // Added here rather than coming from a document. Nothing will bring it back.
-            return;
+            return record;
         }
 
         const auto* transform = entity.try_get<transform_component>();
@@ -534,9 +552,12 @@ void prefab_override_context::mark_entity_as_removed(entt::handle entity)
             if(auto* container_prefab = container.try_get<prefab_component>())
             {
                 container_prefab->remove_instance(own_prefab->instance_id);
+
+                record.container = entt::make_uhandle(container);
+                record.removed_instance = own_prefab->instance_id;
             }
         }
-        return;
+        return record;
     }
 
     auto prefab_root = find_prefab_root_entity(entity);
@@ -548,12 +569,50 @@ void prefab_override_context::mark_entity_as_removed(entt::handle entity)
             auto entity_uuid = get_entity_prefab_uuid(entity);
             if(entity_uuid.is_nil())
             {
-                return;
+                return record;
             }
 
+            // Captured before the removal, which drops them along with the entity.
+            take_entity_overrides(prefab_comp->property_overrides, entity_uuid, record.erased_overrides);
+            take_entity_overrides(prefab_comp->inherited_overrides, entity_uuid, record.erased_inherited_overrides);
+
             prefab_comp->remove_entity(entity_uuid);
+
+            record.container = entt::make_uhandle(prefab_root);
+            record.removed_entity = entity_uuid;
         }
     }
+
+    return record;
+}
+
+void prefab_override_context::restore_entity_removal(const prefab_removal_record& record)
+{
+    auto container = record.container.resolve();
+    if(!container)
+    {
+        return;
+    }
+
+    auto* prefab_comp = container.try_get<prefab_component>();
+    if(prefab_comp == nullptr)
+    {
+        return;
+    }
+
+    if(!record.removed_instance.is_nil())
+    {
+        prefab_comp->removed_instances.erase(record.removed_instance);
+    }
+
+    if(!record.removed_entity.is_nil())
+    {
+        prefab_comp->removed_entities.erase(record.removed_entity);
+    }
+
+    prefab_comp->property_overrides.insert(record.erased_overrides.begin(), record.erased_overrides.end());
+    prefab_comp->inherited_overrides.insert(record.erased_inherited_overrides.begin(),
+                                            record.erased_inherited_overrides.end());
 }
 
 auto prefab_override_context::exists_in_prefab(scene& cache_scene,

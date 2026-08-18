@@ -216,6 +216,13 @@ void create_entities_action_t::do_action()
         {
             tr->set_parent(desired_parent, false);
         }
+
+        // After reparenting, because the record names the instance that contained it and that
+        // is only knowable once the entity is back where it was.
+        if(i < removal_records.size())
+        {
+            prefab_override_context::restore_entity_removal(removal_records[i]);
+        }
     }
 }
 
@@ -228,6 +235,8 @@ void create_entities_action_t::undo_action()
 
     auto& ctx = engine::context();
     auto& em = ctx.get_cached<editing_manager>();
+
+    removal_records.assign(root_entities.size(), {});
 
     // Re-snapshot each root before destroying it so that any out-of-band edits made since creation
     // (or since the last redo) are preserved on the next redo - parent may also have changed.
@@ -269,7 +278,14 @@ void create_entities_action_t::undo_action()
         }
 
         em.unselect(target);
-        prefab_override_context::mark_entity_as_removed(target);
+
+        // Destroying an entity inside a prefab instance records it on that instance. The
+        // record has to be kept, because the entity coming back on redo does not bring it
+        // back - it lives on the container, not on the entity.
+        if(i < removal_records.size())
+        {
+            removal_records[i] = prefab_override_context::mark_entity_as_removed(target);
+        }
         scene::destroy_entity(target);
     }
 }
@@ -371,15 +387,23 @@ void delete_entities_action_t::do_action()
     }
     auto& ctx = engine::context();
     auto& em = ctx.get_cached<editing_manager>();
-    for(const auto& root_uh : root_entities)
+
+    removal_records.assign(root_entities.size(), {});
+
+    for(size_t i = 0; i < root_entities.size(); ++i)
     {
-        auto target = root_uh.resolve();
+        auto target = root_entities[i].resolve();
         if(!target)
         {
             continue;
         }
         em.unselect(target);
-        prefab_override_context::mark_entity_as_removed(target);
+
+        // Kept so undo can put it back. Deleting an entity inside a prefab instance records
+        // it on that instance - as a removed entity, or as a removed nested instance - and
+        // restoring the entity restores none of that, so the instance would go on listing
+        // something that is there again and the next resync would delete it a second time.
+        removal_records[i] = prefab_override_context::mark_entity_as_removed(target);
         scene::destroy_entity(target);
     }
 }
@@ -422,6 +446,14 @@ void delete_entities_action_t::undo_action()
         if(!current_parent || current_parent != desired_parent)
         {
             tr->set_parent(desired_parent, false);
+        }
+
+        // After reparenting: the record names the instance that contained the entity, which is
+        // only reachable once it is back where it was. Without this the entity returns while
+        // its instance still lists it as removed, and the next resync deletes it again.
+        if(i < removal_records.size())
+        {
+            prefab_override_context::restore_entity_removal(removal_records[i]);
         }
     }
 }

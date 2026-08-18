@@ -1,5 +1,7 @@
 #pragma once
 
+#include <editor/editing/prefab_removal_record.h>
+
 #include "editing_action.h"
 #include "entt/meta/meta.hpp"
 #include <engine/assets/asset_handle.h>
@@ -39,6 +41,9 @@ struct create_entities_action_t : crtp_meta_type<create_entities_action_t, editi
     std::vector<entt::uhandle> parent_entities{};
     /// Preorder UUIDs per root subtree (same ordering as save_to_stream / flatten_hierarchy).
     std::vector<std::vector<hpp::uuid>> subtree_uuids{};
+    /// What destroying each root recorded on the prefab instance that contained it. Restoring
+    /// the entity does not restore this - it lives on the container, not on the entity.
+    std::vector<prefab_removal_record> removal_records{};
 
     /// True once the initial factory-driven creation has run and the snapshot is populated.
     bool captured{false};
@@ -65,6 +70,9 @@ struct delete_entities_action_t : crtp_meta_type<delete_entities_action_t, editi
     std::vector<entt::uhandle> parent_entities{};
     /// Preorder UUIDs per root subtree (same order as save_to_stream / flatten_hierarchy).
     std::vector<std::vector<hpp::uuid>> subtree_uuids{};
+    /// What the deletion recorded on the prefab instance that contained each root. Restoring
+    /// the entity does not restore this - it lives on the container, not on the entity.
+    std::vector<prefab_removal_record> removal_records{};
 
     explicit delete_entities_action_t(std::vector<entt::handle> entities);
 
