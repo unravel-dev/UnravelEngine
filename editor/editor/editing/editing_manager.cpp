@@ -505,11 +505,11 @@ void editing_manager::sync_prefab_instances(rtti::context& ctx, scene* scn)
         auto parent = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
         while(parent)
         {
-            if(parent.all_of<prefab_component>())
+            if(parent.template all_of<prefab_component>())
             {
                 return;
             }
-            const auto* parent_trans = parent.try_get<transform_component>();
+            const auto* parent_trans = parent.template try_get<transform_component>();
             parent = parent_trans != nullptr ? parent_trans->get_parent() : entt::handle{};
         }
         sync_prefab_entity(ctx, owner, comp.source);
