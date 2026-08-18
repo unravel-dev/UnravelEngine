@@ -40,6 +40,12 @@ public:
         gfx::texture::ptr hiz;
         /// Last frame's environment SH, the past-everything fallback.
         gfx::texture::ptr irradiance_sh;
+        /// The authored probe layer - RBUFFER's texture right after the probe pass drew into
+        /// it - the sky answer for trace misses (multi-probe blended, holds cloud/sun detail
+        /// an SH cannot). Must be null when the probe stack did not run this frame: RBUFFER
+        /// is then stale with last frame's composite + SSR, and reading it would feed the
+        /// pass its own output. Null binds transparent black, degrading misses to the SH.
+        gfx::texture::ptr probe_layer;
         /// Last frame's resolved GI (temporally filtered, denoised E/pi per pixel) - the rough
         /// specular source: a wide lobe converges to the diffuse irradiance, and this is the
         /// smoothest per-pixel estimate the engine owns (the Lumen recipe - reuse the gather,
@@ -77,6 +83,7 @@ private:
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_gi_normal;
+        gfx::program::uniform_ptr s_gi_probe_layer;
         gfx::program::uniform_ptr s_hiz;
         gfx::program::uniform_ptr s_gi_diffuse;
         gfx::program::uniform_ptr s_light_voxels;
@@ -95,6 +102,7 @@ private:
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_probe_layer, "s_gi_probe_layer", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);

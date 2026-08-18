@@ -2261,6 +2261,15 @@ void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
     grp.output = rview.fbo_safe_get("RBUFFER");
     grp.hiz = rview.tex_safe_get("HIZBUFFER");
     grp.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
+    // Sky-miss fallback: RBUFFER holds exactly the freshly drawn authored probe layer at
+    // this point (cleared and rebuilt by run_reflection_probe_pass earlier this frame; the
+    // GI composite and SSR write into it later). Without the probe stack this frame the
+    // buffer is stale with last frame's composite + SSR - reading it would feed the pass
+    // its own output - so the pass falls back to the sky SH instead.
+    if(reflection_screen_stack_enabled(params) && grp.output)
+    {
+        grp.probe_layer = grp.output->get_texture(0);
+    }
     // This pass runs before the frame's GI resolve, so the stored texture still holds
     // LAST frame's denoised result - the rough-specular source (one frame of lag, the
     // same convention as prev_color).

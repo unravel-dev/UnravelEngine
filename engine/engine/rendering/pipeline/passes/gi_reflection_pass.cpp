@@ -126,6 +126,12 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
     gfx::set_texture(program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
     gfx::set_texture(program_.s_gi_normal, 5, params.g_buffer->get_texture(1));
+    // Transparent black (alpha 0) when the probe layer is absent collapses the shader's
+    // mix(sky_sh, probe, probe.a) to the SH - the opaque-black default would answer every
+    // sky miss with black instead.
+    gfx::set_texture(program_.s_gi_probe_layer,
+                     6,
+                     params.probe_layer ? params.probe_layer : default_textures::get().transparent_texture());
     gfx::set_texture(program_.s_hiz, 8, params.hiz);
     const bool has_gi_diffuse = params.gi_diffuse != nullptr;
     gfx::set_texture(program_.s_gi_diffuse,

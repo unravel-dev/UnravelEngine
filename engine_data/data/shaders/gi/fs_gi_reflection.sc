@@ -14,7 +14,9 @@ $input v_texcoord0
  * tier: mesh-exact out to a roughness-adaptive range, clipmap as a far-field FINDER with a
  * short mesh-SDF refine at the hit, light voxels at mesh-snapped hits. An unrefined clipmap
  * hit is not an image on sharp pixels - coverage goes to zero so the authored probe layer
- * shows through. The sky answers a true miss.
+ * shows through. A true miss answers with the authored probe layer itself - the multi-probe
+ * blended, parallax-projected sky capture at this pixel - and with the sky SH only where no
+ * probe reaches (an L2 SH cannot hold clouds or a sun disk; the probes can).
  *
  * NO SCREEN TIER: screen space belongs to SSR, which composites over this pass with its own
  * stochastic spread, denoise, and fades. Two screen tracers on the same pixel gave two
@@ -45,6 +47,11 @@ $input v_texcoord0
 #include "gi/gi_light_voxels.sh"
 
 SAMPLER2D(s_gi_normal, 5);
+/// The authored probe layer (RBUFFER right after the probe pass): at trace time it holds
+/// exactly the freshly drawn reflection probes - the GI composite and SSR write into it
+/// later in the frame. Bound as transparent black when the probe stack did not run this
+/// frame, so the read never sees this pass's own previous output.
+SAMPLER2D(s_gi_probe_layer, 6);
 SAMPLER2D(s_hiz, 8);
 /// LAST frame's resolved GI (E/pi per pixel, temporally filtered and denoised): the rough
 /// specular source, exactly as Lumen reuses its own gather - a wide lobe converges to the
@@ -81,6 +88,18 @@ vec3 SampleGGXVNDF(vec3 view_ts, float alpha, float u1, float u2)
 	p2 = (1.0 - s) * sqrt(max(0.0, 1.0 - p1 * p1)) + s * p2;
 	vec3 nh = p1 * t1 + p2 * t2 + sqrt(max(0.0, 1.0 - p1 * p1 - p2 * p2)) * vh;
 	return normalize(vec3(alpha * nh.x, alpha * nh.y, max(1e-6, nh.z)));
+}
+
+/// Sky answer for rays our own geometry data calls OPEN: the authored probe layer at this
+/// pixel, already multi-probe blended and parallax projected - frequency content an L2 SH
+/// cannot hold (clouds, sun disk, horizon). Probe alpha is the layer's own coverage, so
+/// unprobed pixels keep the SH answer instead of going black (RBUFFER.rgb is consumed flat
+/// by the indirect pass - a hole here IS the final specular).
+vec3 GiReflectionSkyFallback(vec2 uv, vec3 direction)
+{
+	vec4 probe_layer = texture2DLod(s_gi_probe_layer, uv, 0.0);
+	vec3 sky_sh = eval_radiance_sh(s_gi_env_sh, direction);
+	return mix(sky_sh, probe_layer.xyz, saturate(probe_layer.w));
 }
 
 /// Mesh-exact walk length: mirrors pay the long range, gloss pays less than the old flat 16 m.
@@ -254,16 +273,19 @@ void main()
 			float shape_ok = smoothstep(GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF * 0.5,
 			                            GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF, roughness);
 			coverage = shape_ok;
-			radiance = mix(eval_radiance_sh(s_gi_env_sh, reflected), radiance, shape_ok);
+			radiance = mix(GiReflectionSkyFallback(uv, reflected), radiance, shape_ok);
 		}
 	}
 	else
 	{
 		// MISS means OPEN by our own geometry data - the SDF found nothing within 100 m along
-		// this ray, so the sky answers directly. The cage was tried here twice and both reads
-		// were wrong: 100 m out it leaves the lattice (dead code), at the receiver it stamps
-		// the 2 m interpolation pattern into smooth reflections (round 8).
-		radiance = eval_radiance_sh(s_gi_env_sh, reflected);
+		// this ray, so the sky answers: the authored probe layer at this pixel, SH where no
+		// probe reaches. Coverage stays 1 so the miss remains an image and the temporal mean
+		// integrates hit and sky fractions of the lobe together - dropping coverage instead
+		// would make the composite full-cover the probes with a geometry-only mean on every
+		// glossy silhouette. (The cage was tried here twice and both reads were wrong: 100 m
+		// out it leaves the lattice, at the receiver it stamps the 2 m pattern - round 8.)
+		radiance = GiReflectionSkyFallback(uv, reflected);
 	}
 	// CONSTANT ENERGY across roughness: the lobe's incoming radiance barely changes from a
 	// mirror to satin, so the tier serves full weight at EVERY roughness - the early fades
