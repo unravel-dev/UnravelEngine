@@ -75,9 +75,12 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         last_light_hash_ = params.light_hash;
         fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
     }
-    if(clipmap.get_content_epoch() != last_content_epoch_)
+    // COMPOSED epoch: the probes trace the composed field and read the light voxels, so the
+    // fast window keys on content actually landing - during an edit drag the target epoch
+    // churns every frame while recomposes coalesce, and each landing re-arms the window.
+    if(clipmap.get_composed_content_epoch() != last_content_epoch_)
     {
-        last_content_epoch_ = clipmap.get_content_epoch();
+        last_content_epoch_ = clipmap.get_composed_content_epoch();
         fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
     }
     const uint32_t strata_per_frame = fast_frames_ > 0 ? 2u : 1u;
@@ -85,7 +88,14 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
     {
         --fast_frames_;
     }
-    const float probe_params[4] = {base_spacing, float(params.frame), 1.0f, float(strata_per_frame)};
+    // w carries the cage-visibility variance gate, its documented meaning for every reading
+    // consumer. The trace's strata-per-frame rides the trace-only seed-atlas uniform's z lane
+    // instead (see cs_gi_world_probe_trace.sc) - the old aliasing was one #define away from
+    // the gate silently becoming the stratum count.
+    const float probe_params[4] = {base_spacing,
+                                   float(params.frame),
+                                   1.0f,
+                                   gi::GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE};
     const auto env_sh =
         params.irradiance_sh ? params.irradiance_sh : default_textures::get().black_texture();
     {
@@ -106,8 +116,10 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_texture(trace_program_.s_world_probe_irradiance_seed,
                          11,
                          clipmap_gpu.get_world_probe_irradiance());
-        gfx::set_uniform(trace_program_.u_gi_world_probe_seed_atlas,
-                         clipmap_gpu.get_world_probe_atlas_params());
+        float seed_atlas[4] = {};
+        std::memcpy(seed_atlas, clipmap_gpu.get_world_probe_atlas_params(), sizeof(seed_atlas));
+        seed_atlas[2] = float(strata_per_frame);
+        gfx::set_uniform(trace_program_.u_gi_world_probe_seed_atlas, seed_atlas);
         gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
         gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
         gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh);

@@ -22,6 +22,15 @@
 
 IMAGE3D_WO(s_clipmap_out, r8, 5);
 
+/// The surface-voxel list (cursor header + entries; see cs_gi_clipmap_attributes.sc). This
+/// pass only RESETS its level's append cursor - folded in here, rather than in a separate
+/// one-thread dispatch, because the attribute pass that appends SAMPLES the distance volume
+/// this pass writes as an image: that read-after-write is a genuine resource transition on
+/// every backend, and it is what orders the reset ahead of the appends. The old standalone
+/// reset relied on submission order alone, which D3D12 does not turn into a barrier for
+/// same-state UAV->UAV access - the appends could begin before the reset landed.
+BUFFER_RW(b_surface_list, uint, 9);
+
 /// x = level index, y = voxels per axis, z = this level's voxel size, w = reach in world units
 /// (encode_range * voxel_size), the distance beyond a voxel at which an instance cannot change
 /// the byte written here.
@@ -38,6 +47,12 @@ NUM_THREADS(4, 4, 4)
 void main()
 {
 	ivec3 voxel = ivec3(gl_GlobalInvocationID.xyz);
+	if(all(equal(voxel, ivec3(0, 0, 0))))
+	{
+		// This level's surface-list append cursor, reset for the attribute pass that follows
+		// (see the buffer's note above for why the reset lives here).
+		b_surface_list[uint(u_compose_level)] = 0u;
+	}
 	int resolution = int(u_compose_resolution);
 	if(voxel.x >= resolution || voxel.y >= resolution || voxel.z >= resolution)
 	{

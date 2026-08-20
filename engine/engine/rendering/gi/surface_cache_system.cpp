@@ -196,6 +196,12 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid, const mesh& 
     }
     record.attempt_generation = generation;
     record.header_index = atlas_.upload(sdf);
+    if(record.header_index != sdf_atlas::invalid_index)
+    {
+        // Residency moved: a level fingerprint hashes the sdf pointer, which the packed
+        // instance bytes do not carry.
+        ++content_revision_;
+    }
     return record.header_index;
 }
 
@@ -211,6 +217,8 @@ void surface_cache_system::release_unused_fields()
         }
         if(it->second.header_index != sdf_atlas::invalid_index)
         {
+            // Residency moved (see the matching bump in acquire_field).
+            ++content_revision_;
             atlas_.release(it->second.header_index);
         }
         it = residency_.erase(it);
@@ -311,6 +319,9 @@ auto surface_cache_system::take_texture_mean_captures(uint32_t budget)
                 entry.captured = true;
             }
         }
+        // A landed capture changes the clipmap-level fingerprints (mean_captured is hashed
+        // into them) without touching the packed instance bytes.
+        ++content_revision_;
         captures.push_back(std::move(capture));
     }
     return captures;
@@ -459,7 +470,10 @@ void surface_cache_system::upload_instance_grid()
 void surface_cache_system::upload_instances()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Upload Instances");
-    instance_data_.assign(size_t(instances_.size()) * instance_vec4_stride * 4u, 0.0f);
+    // resize, not assign: every one of the 40 floats per instance is written below (including
+    // the trailing pad), so the quarter-megabyte zero-fill assign did at Bistro scale was
+    // fully overwritten every frame.
+    instance_data_.resize(size_t(instances_.size()) * instance_vec4_stride * 4u);
     for(size_t i = 0; i < instances_.size(); ++i)
     {
         const auto& inst = instances_[i];
@@ -487,13 +501,26 @@ void surface_cache_system::upload_instances()
         dst[38] = inst.emissive.z;
         dst[39] = 0.0f;
     }
-    // FNV-1a over the exact bytes the GPU receives, the light buffer's convention: any change
-    // to a transform, material colour, bounds, or field index flips it.
+    // Content hash over the exact bytes the GPU receives: any change to a transform, material
+    // colour, bounds, or field index flips it. Eight bytes per round instead of the byte-serial
+    // FNV chain this used to run - the old loop was ~256K dependent multiplies at Bistro scale,
+    // ~100 us of main thread per frame spent deciding to skip an upload. FNV-1a over 64-bit
+    // lanes keeps the same "any byte flips it" property at an eighth of the rounds.
     uint64_t fingerprint = 1469598103934665603ull;
-    const auto* bytes = reinterpret_cast<const uint8_t*>(instance_data_.data());
-    for(size_t i = 0; i < instance_data_.size() * sizeof(float); ++i)
     {
-        fingerprint = (fingerprint ^ bytes[i]) * 1099511628211ull;
+        const auto* bytes = reinterpret_cast<const uint8_t*>(instance_data_.data());
+        const size_t total = instance_data_.size() * sizeof(float);
+        size_t i = 0;
+        for(; i + 8u <= total; i += 8u)
+        {
+            uint64_t lane;
+            std::memcpy(&lane, bytes + i, sizeof(lane));
+            fingerprint = (fingerprint ^ lane) * 1099511628211ull;
+        }
+        for(; i < total; ++i)
+        {
+            fingerprint = (fingerprint ^ bytes[i]) * 1099511628211ull;
+        }
     }
     const uint32_t required_vec4 = math::max(uint32_t(instances_.size()) * instance_vec4_stride, 1u);
     bool recreated = false;
@@ -518,6 +545,10 @@ void surface_cache_system::upload_instances()
         gfx::update(instance_buffer_,
                     0,
                     gfx::copy(instance_data_.data(), uint32_t(instance_data_.size() * sizeof(float))));
+    }
+    if(fingerprint != instance_fingerprint_)
+    {
+        ++content_revision_;
     }
     instance_fingerprint_ = fingerprint;
 }

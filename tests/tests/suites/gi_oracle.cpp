@@ -907,8 +907,26 @@ void test_clipmap_attribute_transcription_matches_cpu()
                         if(best_index >= 0)
                         {
                             const auto& first = instances[size_t(best_index)];
+                            // Emissive area-fraction scaling, exactly as both composers
+                            // apply it (a small emitter must not emit through a coarse
+                            // voxel's whole cross-section).
+                            const auto emissive_area_fraction =
+                                [&](const global_sdf_instance& inst) -> float
+                            {
+                                const math::vec3 extent =
+                                    inst.world_bounds.max - inst.world_bounds.min;
+                                const float volume = (extent.x * extent.y) * extent.z;
+                                const float smallest =
+                                    math::min(extent.x, math::min(extent.y, extent.z));
+                                const float silhouette = volume / math::max(smallest, 1e-4f);
+                                return math::clamp(silhouette / (attr_voxel * attr_voxel),
+                                                   0.0f,
+                                                   1.0f);
+                            };
+                            const math::vec3 first_emissive =
+                                first.emissive * emissive_area_fraction(first);
                             math::vec3 blended_albedo = first.albedo;
-                            math::vec3 blended_emissive = first.emissive;
+                            math::vec3 blended_emissive = first_emissive;
                             if(second_index >= 0)
                             {
                                 // Shell coverage scaling, exactly as both composers apply it.
@@ -923,6 +941,9 @@ void test_clipmap_attribute_transcription_matches_cpu()
                                                        0.0f,
                                                        1.0f);
                                 };
+                                const math::vec3 second_emissive =
+                                    instances[size_t(second_index)].emissive *
+                                    emissive_area_fraction(instances[size_t(second_index)]);
                                 const float w1 = (attr_reach - best_magnitude) *
                                                  shell_coverage(instances[size_t(best_index)]);
                                 const float w2 = (attr_reach - second_magnitude) *
@@ -931,8 +952,7 @@ void test_clipmap_attribute_transcription_matches_cpu()
                                 blended_albedo = (first.albedo * w1 +
                                                   instances[size_t(second_index)].albedo * w2) /
                                                  w_sum;
-                                blended_emissive = (first.emissive * w1 +
-                                                    instances[size_t(second_index)].emissive * w2) /
+                                blended_emissive = (first_emissive * w1 + second_emissive * w2) /
                                                    w_sum;
                             }
                             const auto quantize = [](float v) -> uint32_t
@@ -2084,12 +2104,30 @@ auto cage_mask(const global_sdf_clipmap& clipmap,
     return mask;
 }
 
-/// Transcription of the memo texel layout (GiWorldProbeVisMemoPack and its unpackers); keep
-/// in step by hand. Low byte = mask, bits 8-13 = generation, bits 14-15 = probe level - a
-/// 16-bit budget by design (stored in an R32U volume for mandatory typed-load support).
-auto vis_memo_pack(uint32_t mask, uint32_t generation, int level) -> uint32_t
+/// Transcriptions of the memo texel layout (GiWorldProbeVisMemoPack* and the unpackers in
+/// gi_world_probes.sh); keep in step by hand. Bits 0-7 = near cage mask, 8-13 = generation,
+/// 14-15 = near probe level, 16-21 = quantised face cavity visibility (0 doubles as the
+/// CULLED sentinel - a stored non-culled face passed the 0.25 visibility gate, so its
+/// quantised value is >= 16), 22 = the far mask is filled (lazily, on the first probe hit),
+/// 23 = probe half populated, 24-31 = the far-blend cage mask (always near level + 1).
+auto vis_memo_pack_probe(uint32_t mask, uint32_t generation, int level, uint32_t far_mask,
+                         bool far_filled) -> uint32_t
 {
-    return (mask & 0xFFu) | ((generation & 0x3Fu) << 8u) | (uint32_t(level) << 14u);
+    return (mask & 0xFFu) | ((generation & 0x3Fu) << 8u) | (uint32_t(level) << 14u) |
+           (1u << 23u) | (far_filled ? (1u << 22u) : 0u) | ((far_mask & 0xFFu) << 24u);
+}
+
+auto vis_memo_pack_face(float visibility, bool culled) -> uint32_t
+{
+    const auto quantised =
+        culled ? 0u
+               : uint32_t(std::min(std::max(visibility, 0.0f), 1.0f) * 63.0f + 0.5f);
+    return quantised << 16u;
+}
+
+auto vis_memo_pack_face_only(uint32_t face_half, uint32_t generation) -> uint32_t
+{
+    return face_half | ((generation & 0x3Fu) << 8u);
 }
 
 /// The memo-fill contract: the mask GiWorldProbeCageMask stamps must answer, bit for bit,
@@ -2182,24 +2220,74 @@ void test_world_probe_vis_memo_mask_matches_fresh_march()
     // The fixture must exercise both verdicts or the parity above proves nothing.
     check(open_masks > 0, "some cage masks carry visible corners");
     check(blocked_bits > 0, "some cage corners are field-blocked (walls inside cages)");
-    // Texel layout round-trips, including the extremes of every field, and the R16U bound.
+    // Texel layout round-trips, including the extremes of every field. Both halves ride one
+    // 32-bit word: a full probe stamp carries a face half OR-ed on top, and neither half's
+    // fields may bleed into the other's bits.
     for(const uint32_t mask : {0x00u, 0xFFu, 0xA5u})
     {
         for(const uint32_t generation : {1u, 37u, 63u})
         {
             for(int level = 0; level < int(global_sdf_clipmap::level_count); ++level)
             {
-                const uint32_t texel_value = vis_memo_pack(mask, generation, level);
-                check(texel_value <= 0xFFFFu, "packed memo texel fits its 16-bit budget");
-                check((texel_value & 0xFFu) == mask, "mask survives the round-trip");
-                check(((texel_value >> 8u) & 0x3Fu) == generation, "generation survives the round-trip");
-                check(int((texel_value >> 14u) & 0x3u) == level, "level survives the round-trip");
+                for(const uint32_t far_mask : {0x00u, 0xFFu, 0x5Au})
+                {
+                    for(const float visibility : {0.30f, 0.37f, 1.0f})
+                    {
+                        for(const bool far_filled : {false, true})
+                        {
+                            const uint32_t face_half = vis_memo_pack_face(visibility, false);
+                            const uint32_t texel_value =
+                                vis_memo_pack_probe(mask, generation, level, far_mask, far_filled) |
+                                face_half;
+                            check((texel_value & 0xFFu) == mask, "near mask survives the round-trip");
+                            check(((texel_value >> 8u) & 0x3Fu) == generation,
+                                  "generation survives the round-trip");
+                            check(int((texel_value >> 14u) & 0x3u) == level,
+                                  "level survives the round-trip");
+                            check(((texel_value >> 24u) & 0xFFu) == far_mask,
+                                  "far mask survives the round-trip");
+                            check((texel_value & (1u << 23u)) != 0u,
+                                  "a probe stamp decodes as probe-half populated");
+                            check(((texel_value & (1u << 22u)) != 0u) == far_filled,
+                                  "the far-filled bit survives the round-trip");
+                            // The 6-bit visibility round-trips within its own quantisation,
+                            // and a stored (gate-passing) face never decodes as culled.
+                            const uint32_t quantised = (texel_value >> 16u) & 0x3Fu;
+                            const float decoded = float(quantised) / 63.0f;
+                            check(std::abs(decoded - visibility) <= 0.5f / 63.0f + 1e-6f,
+                                  "face visibility survives within 6-bit quantisation");
+                            check(quantised != 0u,
+                                  "a gate-passing visibility never hits the culled sentinel");
+                        }
+                    }
+                }
             }
         }
     }
+    // The culled sentinel's separation: the smallest visibility the gate can pass (0.25)
+    // quantises far above 0, so the two encodings can never collide.
+    check((vis_memo_pack_face(0.25f, false) >> 16u) == 16u,
+          "the visibility gate's floor quantises to 16, clear of the culled sentinel");
+    // A face-only stamp (culled and zero-radiance faces): generation + face payload, probe
+    // half unpopulated - it must NOT decode as a valid level-0 all-dead verdict.
+    {
+        const uint32_t culled_value =
+            vis_memo_pack_face_only(vis_memo_pack_face(0.0f, true), 42u);
+        check(((culled_value >> 8u) & 0x3Fu) == 42u, "face-only stamp carries the generation");
+        check(((culled_value >> 16u) & 0x3Fu) == 0u,
+              "face-only culled stamp decodes as the culled sentinel");
+        check((culled_value & (1u << 23u)) == 0u,
+              "face-only stamp leaves the probe half unpopulated");
+        check((culled_value & (1u << 22u)) == 0u,
+              "face-only stamp leaves the far mask unfilled");
+        check((culled_value & 0xFFu) == 0u, "face-only stamp writes no near mask");
+    }
     // Generation 0 is reserved as "never stamped": a zero-cleared texel must not decode as
-    // any live generation (the CPU hands out 1..63).
+    // any live generation (the CPU hands out 1..63), and it must not read as a valid probe
+    // half or a filled far mask.
     check(((0u >> 8u) & 0x3Fu) == 0u, "a zeroed texel decodes as generation 0, never live");
+    check((0u & (1u << 23u)) == 0u, "a zeroed texel decodes as probe-half unpopulated");
+    check((0u & (1u << 22u)) == 0u, "a zeroed texel decodes as far-mask-unfilled");
 }
 
 } // namespace

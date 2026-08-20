@@ -56,6 +56,11 @@ void global_sdf_clipmap::init(const settings& settings)
     settings_.resolution = math::max(settings_.resolution, 8u);
     settings_.base_extent = math::max(settings_.base_extent, 0.01f);
     settings_.level_scale = math::max(settings_.level_scale, 1.5f);
+    // Level geometry is changing, so cached fingerprints describe boxes that no longer exist.
+    cached_instances_revision_ = 0;
+    update_counter_ = 0;
+    last_compose_counter_.fill(-int64_t(gi::GI_CLIPMAP_EDIT_THROTTLE_FRAMES));
+    last_content_seen_.fill(-int64_t(gi::GI_CLIPMAP_EDIT_THROTTLE_FRAMES));
     for(uint32_t i = 0; i < level_count; ++i)
     {
         auto& lvl = levels_[i];
@@ -190,9 +195,16 @@ auto global_sdf_clipmap::apply_settings(const settings& new_settings) -> bool
 }
 
 auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instances,
-                                const math::vec3& camera_position) -> uint32_t
+                                const math::vec3& camera_position,
+                                uint64_t instances_revision) -> uint32_t
 {
     APP_SCOPE_PERF("GI/Clipmap/Update");
+    // One tick per update call - the clock the edit-coalescing window below runs on.
+    ++update_counter_;
+    // Whether the per-level fingerprint cache below may answer: only against the same
+    // instance-content revision it was filled under, and never for revision 0 (unknown).
+    const bool revision_cached =
+        instances_revision != 0 && instances_revision == cached_instances_revision_;
     // Pass one: decide what each level SHOULD be, and how stale it is. Nothing is composed here,
     // so the budget below chooses between levels knowing all of them.
     std::array<math::vec3, level_count> target_origin{};
@@ -213,15 +225,57 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
         // re-snaps. (The resolution is even, so a half extent is a whole number of attribute
         // voxels and the origin inherits the alignment.)
         const float extent = get_level_extent(i);
-        const float snap_size = lvl.voxel_size * float(attr_downsample);
+        // Snap COARSENING (still a multiple of the attribute voxel, so the toroidal identity
+        // invariant above holds): at attribute granularity level 0 re-snapped - and fully
+        // recomposed its 128^3 non-toroidal distance volume plus attributes - every 0.25 m of
+        // camera travel, which at walking speed made it dirty essentially every frame. Eight
+        // attribute voxels per snap makes that every 2 m at level 0 (scaling per level), an 8x
+        // cut in recompose frequency for half a snap of guaranteed-coverage margin at the
+        // window edge, which the cross-fade band and the coarser level behind it absorb.
+        const float snap_size = lvl.voxel_size * float(attr_downsample) * float(origin_snap_attr_voxels);
         const math::vec3 snapped_center = math::floor(camera_position / snap_size) * snap_size;
         target_origin[i] = snapped_center - math::vec3(extent * 0.5f);
-        target_fingerprint[i] = compute_level_fingerprint(compute_level_bounds(i, target_origin[i]),
-                                                          compute_level_reach(i),
-                                                          instances);
+        // The fingerprint is a pure function of (level bounds, reach, instance content). With
+        // the content revision and the target origin both unchanged, last frame's value is
+        // the answer, and the full instance walk - which ran for every level on every frame,
+        // change or not - is skipped.
+        if(revision_cached && target_origin[i] == cached_target_origin_[i])
+        {
+            target_fingerprint[i] = cached_target_fingerprint_[i];
+        }
+        else
+        {
+            target_fingerprint[i] = compute_level_fingerprint(compute_level_bounds(i, target_origin[i]),
+                                                              compute_level_reach(i),
+                                                              instances);
+        }
+        cached_target_origin_[i] = target_origin[i];
+        cached_target_fingerprint_[i] = target_fingerprint[i];
         const bool origin_moved = target_origin[i] != lvl.origin;
         const bool contents_changed = target_fingerprint[i] != lvl.content_fingerprint;
-        if(origin_moved || contents_changed)
+        // EDIT COALESCING (GI_CLIPMAP_EDIT_THROTTLE_FRAMES), leading-edge: a continuously
+        // edited instance re-fingerprints this level EVERY frame, and each recompose is the
+        // full distance volume + attributes AND a vis-memo generation bump that turns every
+        // light-voxel relight into a miss - measured as 4.8 ms drag frames against 2.8 for
+        // pure camera motion. The FIRST edit after a quiet stretch recomposes immediately
+        // (idle_start - the pinned editor behaviour); a continuous stream coalesces to the
+        // window cadence (window_open is the release valve; note the diff persists after
+        // the stream ends and keeps re-stamping last_content_seen_, so the FINAL state
+        // lands through window_open, within one window of the last recompose). Origin
+        // re-snaps stay immediate, and the `stale_updates > 0` term latches a level already
+        // marked stale so a budget-deferred compose cannot lose its place.
+        const int64_t throttle = int64_t(gi::GI_CLIPMAP_EDIT_THROTTLE_FRAMES);
+        const bool first_content = lvl.content_fingerprint == 0;
+        const bool idle_start = update_counter_ - last_content_seen_[i] >= throttle;
+        const bool window_open = update_counter_ - last_compose_counter_[i] >= throttle;
+        if(contents_changed && !first_content)
+        {
+            last_content_seen_[i] = update_counter_;
+        }
+        const bool content_stale =
+            contents_changed &&
+            (first_content || idle_start || window_open || lvl.stale_updates > 0);
+        if(origin_moved || content_stale)
         {
             ++lvl.stale_updates;
         }
@@ -240,6 +294,7 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
         }
         seen_fingerprints_[i] = target_fingerprint[i];
     }
+    cached_instances_revision_ = instances_revision;
     // Pass two: spend the budget on the levels that have waited longest, finest first on a tie.
     //
     // Age rather than index is what prevents starvation. The finest level re-snaps most often --
@@ -268,8 +323,13 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
         }
         auto& lvl = levels_[best];
         lvl.origin = target_origin[best];
+        if(lvl.content_fingerprint != target_fingerprint[best])
+        {
+            ++composed_content_epoch_;
+        }
         lvl.content_fingerprint = target_fingerprint[best];
         lvl.stale_updates = 0;
+        last_compose_counter_[best] = update_counter_;
         // The dirty bit is set either way -- it means "this level's contents are now stale on the
         // GPU", which is exactly as true when a dispatch is about to write them as when this
         // function just did. Keeping one meaning for the bit is what lets the two paths share all
@@ -578,8 +638,25 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                 // lands precisely on the 204.5 rounding edge - measured as 48 wrong-material
                 // voxels on a one-box fixture).
                 const auto& first = instances[i1];
+                // Emissive is a SOURCE: its power scales with the emitting area, so a small
+                // emitter must not light the world through a coarse voxel's whole
+                // cross-section (a 0.5 m cube read as a 2 m blob is a 16x amplifier -
+                // measured as red on buildings tens of metres away). Scaled by the
+                // instance's largest silhouette over the voxel's cross-section; albedo keeps
+                // full-value stamping (bounded reflectance, no power of its own). Mirrors
+                // GiAttrEmissiveAreaFraction in cs_gi_clipmap_attributes.sc - the expression
+                // order is part of the transcription contract.
+                const auto emissive_area_fraction = [&](const global_sdf_instance& inst) -> float
+                {
+                    const math::vec3 extent = inst.world_bounds.max - inst.world_bounds.min;
+                    const float volume = (extent.x * extent.y) * extent.z;
+                    const float smallest = math::min(extent.x, math::min(extent.y, extent.z));
+                    const float silhouette = volume / math::max(smallest, 1e-4f);
+                    return math::clamp(silhouette / (attr_voxel_size * attr_voxel_size), 0.0f, 1.0f);
+                };
+                const math::vec3 first_emissive = first.emissive * emissive_area_fraction(first);
                 math::vec3 blended_albedo = first.albedo;
-                math::vec3 blended_emissive = first.emissive;
+                math::vec3 blended_emissive = first_emissive;
                 if(i2 < instances.size())
                 {
                     // COVERAGE-scaled proximity (mirrors cs_gi_clipmap_attributes.sc): a thin
@@ -597,11 +674,13 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                                            0.0f,
                                            1.0f);
                     };
+                    const math::vec3 second_emissive =
+                        instances[i2].emissive * emissive_area_fraction(instances[i2]);
                     const float w1 = (attr_reach - m1) * shell_coverage(first);
                     const float w2 = (attr_reach - m2) * shell_coverage(instances[i2]);
                     const float w_sum = math::max(w1 + w2, 1e-6f);
                     blended_albedo = (first.albedo * w1 + instances[i2].albedo * w2) / w_sum;
-                    blended_emissive = (first.emissive * w1 + instances[i2].emissive * w2) / w_sum;
+                    blended_emissive = (first_emissive * w1 + second_emissive * w2) / w_sum;
                 }
                 const auto quantize = [](float v) -> uint32_t
                 { return uint32_t(math::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };

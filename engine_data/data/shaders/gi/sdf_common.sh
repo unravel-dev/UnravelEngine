@@ -908,7 +908,7 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 
 SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
                           float surface_bias, float relaxation, bool want_normal, float expand_start,
-                          bool expand_full)
+                          bool expand_full, bool want_normal_on_exhaustion)
 {
 	SdfRayHit result = SdfMakeMiss();
 	if(!u_sdf_clipmap_enabled || t_min >= t_max)
@@ -1160,7 +1160,11 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 	{
 		result.clearance = 0.0;
 	}
-	if(want_normal)
+	// Gated separately from want_normal: a caller whose exhaustion path never consumes the
+	// normal (reflections fall back to the gather value on exhaustion) skips four full
+	// clipmap samples here. Every pre-existing caller passes want_normal through, so the
+	// default behaviour is unchanged.
+	if(want_normal_on_exhaustion)
 	{
 		vec3 p_exhausted = origin + direction * t;
 		float e_voxel;
@@ -1176,6 +1180,15 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 		result.normal = len > 1e-8 ? n / len : vec3(0.0, 1.0, 0.0);
 	}
 	return result;
+}
+
+/// The prior full form: exhaustion keeps the normal whenever the caller wanted one.
+SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
+                          float surface_bias, float relaxation, bool want_normal, float expand_start,
+                          bool expand_full)
+{
+	return SdfTraceClipmap(origin, direction, t_min, t_max, max_steps, surface_bias, relaxation,
+	                       want_normal, expand_start, expand_full, want_normal);
 }
 
 /// The ramped-expand form every pre-existing caller means: full-from-launch is opt-in for

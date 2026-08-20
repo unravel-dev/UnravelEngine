@@ -149,6 +149,20 @@ public:
     /// bound exists to pace the recompose wave a fresh scene triggers, not the GPU cost.
     static constexpr uint32_t max_texture_mean_captures_per_frame = 4;
 
+    /**
+     * @brief Monotonic revision of everything a clipmap-level fingerprint can depend on.
+     *
+     * Bumped when the packed instance bytes change, when a texture-mean capture lands, and
+     * when the atlas residency moves (a field uploaded or released). While it holds still and
+     * a level's target origin holds still, that level's content fingerprint is necessarily
+     * unchanged - which is what lets global_sdf_clipmap::update skip re-walking every
+     * instance for every level on every frame.
+     */
+    auto get_content_revision() const -> uint64_t
+    {
+        return content_revision_;
+    }
+
     /// CSR offsets of the instance cull grid, one entry per cell plus a terminator.
     auto get_grid_offset_buffer() const -> gfx::dynamic_index_buffer_handle
     {
@@ -366,6 +380,8 @@ private:
     std::vector<float> instance_data_;
     /// FNV-1a over @ref instance_data_ as last packed (the light buffer's convention).
     uint64_t instance_fingerprint_ = 0;
+    /// See @ref get_content_revision. Starts at 1 so a zero can mean "no revision known".
+    uint64_t content_revision_ = 1;
     /// The instance fingerprint the grid was last built and uploaded for.
     uint64_t grid_uploaded_fingerprint_ = 0;
     /// Broad-phase over @ref instances_, so a ray tests the instances near it rather than all of

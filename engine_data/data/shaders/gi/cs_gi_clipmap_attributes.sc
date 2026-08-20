@@ -25,7 +25,11 @@
 #include "gi/gi_light_voxels.sh"
 
 /// rgb = winning albedo, a = 1 where surface. Levels stacked along Z like the distance volume.
-IMAGE3D_WO(s_attr_albedo_out, rgba8, 5);
+/// READ-write: the previous alpha is the was-surface marker that gates the teardown stores
+/// below - a voxel that was non-surface and stays non-surface has nothing to clear, and the
+/// typical recompose is mostly such voxels re-storing zeros over zeros (eight image writes
+/// per voxel of pure redundancy at every camera re-snap).
+IMAGE3D_RW(s_attr_albedo_out, rgba8, 5);
 /// rgb = winning emissive (radiance units), a unused.
 IMAGE3D_WO(s_attr_emissive_out, rgba16f, 6);
 /// The surface-voxel list: a SDF_CLIPMAP_LEVEL_COUNT-entry header of append cursors (index =
@@ -70,6 +74,26 @@ float GiAttrShellCoverage(SdfHeader header, float scale)
 	return saturate(2.0 * header.two_sided_thickness * scale / u_attr_voxel_size);
 }
 
+/// Emissive is a SOURCE, so its power scales with the area that emits. Stamping a small
+/// emitter's full radiance across a coarse voxel makes the voxel's whole cross-section
+/// emit - a 0.5 m cube read as a 2 m blob is a 16x energy amplifier, measured as red on
+/// buildings tens of metres from one small emissive cube. Scale the stored radiance by the
+/// instance's largest silhouette (extent product over the smallest extent - exact for
+/// boxes and sheets, conservative for everything else) over the voxel's cross-section,
+/// saturating for anything that genuinely fills the cell: large emissive surfaces are
+/// untouched at every level, and the fine levels see small emitters at full strength.
+/// Albedo deliberately keeps full-value stamping - reflectance is bounded and carries no
+/// power of its own. Mirrors global_sdf_clipmap::compose_level_attributes; the expression
+/// order is part of the transcription contract.
+float GiAttrEmissiveAreaFraction(vec3 bounds_min, vec3 bounds_max)
+{
+	vec3 extent = bounds_max - bounds_min;
+	float volume = (extent.x * extent.y) * extent.z;
+	float smallest = min(extent.x, min(extent.y, extent.z));
+	float silhouette = volume / max(smallest, 1e-4);
+	return saturate(silhouette / (u_attr_voxel_size * u_attr_voxel_size));
+}
+
 NUM_THREADS(4, 4, 4)
 void main()
 {
@@ -112,16 +136,26 @@ void main()
 	bool is_surface = field_distance < 0.5 * SDF_CLIPMAP_OUTSIDE && abs(field_distance) <= band;
 	if(!is_surface)
 	{
-		imageStore(s_attr_albedo_out, texel, vec4_splat(0.0));
-		imageStore(s_attr_emissive_out, texel, vec4_splat(0.0));
 		// A voxel that STOPPED being surface leaves the list and is never re-lit, so its
 		// radiance must die here or it survives as a ghost: geometry that moved away kept
 		// glowing at its old cells (a closed door's old radiance held the room lit through
 		// the trilinear neighbourhood). Surface voxels keep their radiance - zeroing THOSE
 		// is the recompose flicker this pass's claim logic exists to prevent.
-		for(int face = 0; face < 6; ++face)
+		//
+		// TRANSITION-ONLY: the previous alpha says whether there is anything to tear down.
+		// A voxel that was already non-surface holds zeros in all eight texels (this rule
+		// plus the cell-claim's own clear are the only writers), and re-storing zeros over
+		// zeros was most of the pass's store traffic on every recompose.
+		vec4 previous = imageLoad(s_attr_albedo_out, texel);
+		if(previous.a > 0.0)
 		{
-			imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face), vec4_splat(0.0));
+			imageStore(s_attr_albedo_out, texel, vec4_splat(0.0));
+			imageStore(s_attr_emissive_out, texel, vec4_splat(0.0));
+			for(int face = 0; face < 6; ++face)
+			{
+				imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face),
+				           vec4_splat(0.0));
+			}
 		}
 		return;
 	}
@@ -214,12 +248,18 @@ void main()
 	{
 		// The field says surface but nothing is attributable within reach: stay dark - energy
 		// loss, never a fabricated material. Unattributed voxels also leave the list, so any
-		// radiance they held dies with the attribution (same ghost rule as the branch above).
-		imageStore(s_attr_albedo_out, texel, vec4_splat(0.0));
-		imageStore(s_attr_emissive_out, texel, vec4_splat(0.0));
-		for(int face = 0; face < 6; ++face)
+		// radiance they held dies with the attribution (same ghost rule as the branch above,
+		// with the same transition-only gate).
+		vec4 previous = imageLoad(s_attr_albedo_out, texel);
+		if(previous.a > 0.0)
 		{
-			imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face), vec4_splat(0.0));
+			imageStore(s_attr_albedo_out, texel, vec4_splat(0.0));
+			imageStore(s_attr_emissive_out, texel, vec4_splat(0.0));
+			for(int face = 0; face < 6; ++face)
+			{
+				imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face),
+				           vec4_splat(0.0));
+			}
 		}
 		return;
 	}
@@ -229,10 +269,12 @@ void main()
 	{
 		first_albedo *= b_gi_texture_means[first.mean_slot].xyz;
 	}
+	vec3 first_emissive =
+	    first.emissive * GiAttrEmissiveAreaFraction(first.world_bounds_min, first.world_bounds_max);
 	// Single-source voxels copy EXACTLY: (a * w) / w is not an identity in float, and a
 	// one-ULP wobble flips quantisation on boundary values (see the CPU reference).
 	vec3 blended_albedo = first_albedo;
-	vec3 blended_emissive = first.emissive;
+	vec3 blended_emissive = first_emissive;
 	if(second_index >= 0)
 	{
 		SdfInstance second = SdfLoadInstance(second_index);
@@ -241,6 +283,8 @@ void main()
 		{
 			second_albedo *= b_gi_texture_means[second.mean_slot].xyz;
 		}
+		vec3 second_emissive = second.emissive * GiAttrEmissiveAreaFraction(second.world_bounds_min,
+		                                                                    second.world_bounds_max);
 		// COVERAGE-scaled proximity, not proximity alone: the blend approximates the mixture
 		// of surfaces INSIDE the cell, and a thin shell's volume fraction is bounded by its
 		// thickness over the cell size - a 3 cm rope equidistant with the floor is 2% of the
@@ -254,7 +298,7 @@ void main()
 		float w2 = (u_attr_reach - second_magnitude) * second_coverage;
 		float w_sum = max(w1 + w2, 1e-6);
 		blended_albedo = (first_albedo * w1 + second_albedo * w2) / w_sum;
-		blended_emissive = (first.emissive * w1 + second.emissive * w2) / w_sum;
+		blended_emissive = (first_emissive * w1 + second_emissive * w2) / w_sum;
 	}
 	imageStore(s_attr_albedo_out, texel, vec4(blended_albedo, 1.0));
 	imageStore(s_attr_emissive_out, texel, vec4(blended_emissive, 0.0));

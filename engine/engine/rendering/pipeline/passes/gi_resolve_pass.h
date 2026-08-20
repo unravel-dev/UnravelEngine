@@ -75,6 +75,15 @@ public:
         /// weight is one over this. 0 or 1 disables the reflection temporal entirely, the
         /// A/B knob for verifying the accumulation is alive.
         int reflection_temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
+        /// Checkerboard reflection trace: half the texels per frame, the temporal fills the
+        /// rest from clamped history. OFF BY DEFAULT: on sharp/glossy content the parity
+        /// pattern shows at reflection silhouettes, held history ghosts through the wide
+        /// edge AABB, and the two halves shimmer against each other (measured on the mirror
+        /// test scene, 2026-08-19). Until the fill is velocity-aware and edge-clamped it is
+        /// an opt-in trade of those artifacts for ~half the trace cost - viable for scenes
+        /// whose reflectors are all in the rough band, where the composite blur hides the
+        /// pattern. Ignored while the reflection temporal is off.
+        bool reflection_checkerboard = false;
         /// 0 = off. 1 = RAY TIERS: every gather ray paints its answering tier instead of
         /// radiance - green = screen-trace commit, red = SDF hit, blue = world-probe/sky
         /// completion - and the mix survives the whole chain, so the lit image shows the
@@ -87,15 +96,32 @@ public:
         int debug_view = 0;
         /// Full-resolution temporal accumulation over the integrated irradiance.
         bool enable_temporal = true;
-        /// Accumulated-frame cap: the steady-state blend is 1/this.
+        /// PROBE-SPACE accumulation cap (the screen-probe tiles' 1/n blend gate). The
+        /// full-res temporal no longer uses this: it runs the dual-rate pair below.
         float max_accum_frames = float(gi::GI_TEMPORAL_MAX_FRAMES);
+        /// The full-res temporal's SLOW lane cap - the stability window. Long on purpose:
+        /// a small bright emissive source excites ~16-frame amortization waves (crawling
+        /// voxel-scale blobs) that a short mean cannot average. Costs no responsiveness -
+        /// the change detector snaps to the 8-frame fast lane on a real lighting change.
+        float temporal_slow_frames = float(gi::GI_TEMPORAL_SLOW_FRAMES);
         /// Reprojection depth tolerance (relative depth error per unit view distance).
         float reprojection_tolerance = gi::GI_TEMPORAL_DEPTH_TOLERANCE;
         /// A-trous spatial denoise over the accumulated result.
         bool enable_spatial_denoise = true;
+        /// Converged early-out: a pixel at the full accumulation count whose variance has
+        /// collapsed skips the 24-tap kernel - the edge stops make the filter an identity
+        /// there. The A/B switch for verifying no residual chroma structure is lost.
+        bool denoise_converged_early_out = true;
         int denoise_passes = 3;
         float denoise_normal_power = 32.0f;
         float denoise_luma_phi = 32.0f;
+        /// Luminance-stop floor as a fraction of each pixel's own luminance. The
+        /// variance-driven stop collapses on converged pixels and then preserves ANY
+        /// leftover structure - including the coherent probe/voxel-scale sampling-bias
+        /// blobs no temporal window can remove. The floor keeps same-plane neighbours
+        /// within this contrast merging after convergence; 0 restores the pure
+        /// variance-driven stop (the A/B).
+        float denoise_luma_floor = 0.08f;
         float denoise_plane_tolerance = 0.02f;
         float denoise_low_count_boost = 16.0f;
         /// Joint bilateral upsample from the trace resolution to full resolution.
@@ -160,7 +186,26 @@ public:
     }
 
 private:
+    /// The double-buffered temporal history pair for this frame: acquired once per frame by
+    /// whichever form of the temporal runs (fused or split) - it advances the parity counter
+    /// and owns the no-history warning.
+    struct history_targets
+    {
+        gfx::frame_buffer::ptr write_fbo;
+        gfx::texture::ptr write_tex;
+        gfx::texture::ptr write_moments;
+        gfx::texture::ptr write_fast;
+        gfx::texture::ptr read_tex;
+        gfx::texture::ptr read_moments;
+        gfx::texture::ptr read_fast;
+        bool has_history{};
+    };
+    auto acquire_history(gfx::render_view& rview,
+                         const run_params& params,
+                         const usize32_t& target_size) -> history_targets;
+
     /// Blends this frame's gather into the reprojected history. Returns the accumulated texture.
+    /// The split fallback: the deliverable path fuses this blend onto the integrate pass.
     auto run_temporal(gfx::render_view& rview,
                       const run_params& params,
                       const gfx::texture::ptr& current,
@@ -363,13 +408,17 @@ private:
         }
     } classify_program_;
 
-    /// One-thread bridge: traced count -> the trace's indirect dispatch args.
+    /// One-thread bridge: traced count -> the trace's indirect dispatch args (two entries:
+    /// one-group-per-probe for the full program, four-probes-per-group for the compact one)
+    /// plus the count itself, staged into the list head for the kernel's bounds check.
     struct args_program : uniforms_cache
     {
         gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_probe_params;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
         }
 
         auto is_valid() const -> bool
@@ -377,33 +426,6 @@ private:
             return program && program->is_valid();
         }
     } args_program_;
-
-    /// Windowed probe-space temporal: copies this probe's previous radiance tile into
-    /// this frame's atlas so the trace can blend only its 16-ray stratum.
-    struct history_program : uniforms_cache
-    {
-        gpu_program::ptr program;
-        gfx::program::uniform_ptr u_gi_probe_params;
-        gfx::program::uniform_ptr u_gi_probe_screen;
-        gfx::program::uniform_ptr u_gi_probe_temporal;
-        gfx::program::uniform_ptr s_probe_radiance_history;
-
-        void cache_uniforms()
-        {
-            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(),
-                          s_probe_radiance_history,
-                          "s_probe_radiance_history",
-                          gfx::uniform_type::Sampler);
-        }
-
-        auto is_valid() const -> bool
-        {
-            return program && program->is_valid();
-        }
-    } history_program_;
 
     /// Reconstruction (adaptive gather): fills interpolated probes' tiles from their parents
     /// between the trace and the filter - and clears dead probes' tiles, which the compacted
@@ -431,6 +453,12 @@ private:
     struct integrate_program : uniforms_cache
     {
         gpu_program::ptr program;
+        /// The FUSED integrate+temporal form (fs_gi_probe_integrate_temporal.sc), preferred
+        /// while temporal accumulation is on: the gather feeds the blend in registers and the
+        /// GI_TRACE round trip disappears. Temporal-side uniforms ride the temporal_program_
+        /// handles (bgfx uniforms are name-global). The split pair stays as the fallback and
+        /// serves when temporal is disabled.
+        gpu_program::ptr fused_program;
         gfx::program::uniform_ptr u_gi_camera;
         gfx::program::uniform_ptr u_gi_intensity;
         gfx::program::uniform_ptr u_gi_probe_params;
@@ -514,6 +542,7 @@ private:
         gfx::program::uniform_ptr s_gi_prev_depth;
         gfx::program::uniform_ptr s_gi_normal;
         gfx::program::uniform_ptr s_gi_history_moments;
+        gfx::program::uniform_ptr s_gi_history_fast;
         gfx::program::uniform_ptr u_gi_temporal_texel;
 
         void cache_uniforms()
@@ -531,6 +560,8 @@ private:
             cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_history_moments, "s_gi_history_moments",
                           gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_history_fast, "s_gi_history_fast",
+                          gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_gi_temporal_texel, "u_gi_temporal_texel", gfx::uniform_type::Vec4);
         }
 
@@ -543,6 +574,11 @@ private:
     struct denoise_program : uniforms_cache
     {
         gpu_program::ptr program;
+        /// The LDS-staged compute form (cs_gi_denoise.sc), preferred when it linked: the
+        /// fragment form is fetch-bound at 24 taps x 3 fetches per pixel per pass, and the
+        /// staging collapses that to ~9 staged texels per pixel. Same math; the fragment
+        /// program stays as the fallback.
+        gpu_program::ptr compute_program;
         gfx::program::uniform_ptr u_gi_denoise_params;
         gfx::program::uniform_ptr u_gi_denoise_texel;
         gfx::program::uniform_ptr u_gi_denoise_params2;
@@ -597,19 +633,23 @@ private:
     } upsample_program_;
 
     /// Creates or resizes an RGBA16F render target owned by the render view.
+    /// @param compute_write Also usable as a compute image store target (the denoise chain).
     static auto create_or_update_target(gfx::render_view& rview,
                                         const std::string& name,
                                         const usize32_t& size,
-                                        gfx::texture::ptr& out_tex) -> gfx::frame_buffer::ptr;
+                                        gfx::texture::ptr& out_tex,
+                                        bool compute_write = false) -> gfx::frame_buffer::ptr;
 
     /// As @ref create_or_update_target, with a second attachment for luminance moments and the
-    /// accumulation count. They share a framebuffer because they are written by one pass and must
-    /// stay exactly in step -- a count that disagreed with its colour would corrupt the mean.
+    /// accumulation count, and a third for the dual-rate temporal's FAST lane. They share a
+    /// framebuffer because they are written by one pass and must stay exactly in step -- a
+    /// count that disagreed with its colour would corrupt the mean.
     static auto create_or_update_target_mrt(gfx::render_view& rview,
                                             const std::string& name,
                                             const usize32_t& size,
                                             gfx::texture::ptr& out_color,
-                                            gfx::texture::ptr& out_moments) -> gfx::frame_buffer::ptr;
+                                            gfx::texture::ptr& out_moments,
+                                            gfx::texture::ptr& out_fast) -> gfx::frame_buffer::ptr;
 
     /// Consecutive frames with no usable history. A couple is normal at startup and after a
     /// resize; a sustained run means accumulation is not happening at all.

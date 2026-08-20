@@ -47,7 +47,8 @@ public:
     ///        scene asking for GPU composition on a backend that cannot provide it still composes.
     void update(const std::vector<global_sdf_instance>& instances,
                 const math::vec3& camera_position,
-                const global_sdf_clipmap::settings& clipmap_settings);
+                const global_sdf_clipmap::settings& clipmap_settings,
+                uint64_t instances_revision = 0);
 
     auto get_clipmap() const -> const global_sdf_clipmap&
     {
@@ -86,6 +87,46 @@ public:
         log_composition_stats_ = enabled;
     }
 
+    /**
+     * @brief Whether every input of the light-voxel and world-probe passes has been still
+     *        long enough that re-running them would rewrite bit-identical values.
+     *
+     * The world side is a fixed point when nothing changes: the probe trace rewrites the same
+     * stratum values forever (the windowed mean's zero-steady-state-variance property), the
+     * convolve re-integrates an unchanged atlas, and the light voxels re-light unchanged
+     * content. This tracks the full input set - light-buffer hash, clipmap content epoch,
+     * every level's composed origin, and every level's probe-window cell - and reports
+     * quiescent only after they have ALL held for @ref quiescence_settle_frames, so the
+     * probe<->voxel feedback loop has provably converged through several complete windows
+     * before anything is skipped. Any change resets the counter and the passes resume the
+     * same frame.
+     */
+    auto update_quiescence(uint64_t light_hash, const math::vec3& camera_position) -> bool;
+
+    /// Frames the full quiescence input set (light hash, content epoch, window origins,
+    /// probe cells) has held unchanged - 0 on any change.
+    auto get_quiet_frames() const -> uint32_t
+    {
+        return quiescence_frames_;
+    }
+
+    /// Frames since the LIGHTING-relevant subset changed: the light hash and the content
+    /// epoch only. The epoch is already suppressed while origins move (see the fingerprint
+    /// cache), so camera travel does NOT reset this - it fires exactly when accumulated
+    /// lighting went stale (an instance moved / appeared / changed material, a light
+    /// changed). The temporal accumulators key their fast-flush window off this: a camera
+    /// pan keeps full temporal depth, an edit drops to the fast caps until the stale
+    /// energy has provably washed out (quiescence_settle_frames of fast-rate blending).
+    auto get_lighting_quiet_frames() const -> uint32_t
+    {
+        return lighting_quiet_frames_;
+    }
+
+    /// Four complete probe windows (GI_WORLD_PROBE_WINDOW frames each): the bounce feedback
+    /// settles well within one, so this carries a wide margin. See update_quiescence.
+    static constexpr uint32_t quiescence_settle_frames = 4u * 16u;
+    static_assert(quiescence_settle_frames >= 32u, "must cover at least two probe windows");
+
 private:
     global_sdf_clipmap clipmap_;
     global_sdf_clipmap_gpu clipmap_gpu_;
@@ -93,6 +134,14 @@ private:
     /// enables GI never allocates the cascade texture.
     bool initialized_ = false;
     bool log_composition_stats_ = false;
+    /// update_quiescence state: the last-seen input set and how long it has held.
+    uint64_t quiescence_light_hash_ = 0;
+    uint64_t quiescence_content_epoch_ = 0;
+    std::array<math::vec3, global_sdf_clipmap::level_count> quiescence_origins_{};
+    std::array<math::ivec3, global_sdf_clipmap::level_count> quiescence_probe_cells_{};
+    uint32_t quiescence_frames_ = 0;
+    /// See get_lighting_quiet_frames; saturates so it never wraps back into "recent".
+    uint32_t lighting_quiet_frames_ = 0;
 };
 
 } // namespace unravel

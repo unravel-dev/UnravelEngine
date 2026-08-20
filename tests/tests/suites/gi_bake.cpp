@@ -15,6 +15,7 @@
 
 #include <engine/meta/rendering/gi/mesh_sdf.hpp>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
+#include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
@@ -1681,6 +1682,83 @@ void test_clipmap_recomposes_moved_geometry_within_budget()
 }
 
 /**
+ * @brief Continuous edits coalesce to the throttle cadence; the final state still lands.
+ *
+ * A dragged instance re-fingerprints its levels EVERY frame, and before the leading-edge
+ * throttle (GI_CLIPMAP_EDIT_THROTTLE_FRAMES) that meant one full recompose per frame for as
+ * long as the drag lasted - measured as ~2 ms of compose + attributes per drag frame, plus a
+ * vis-memo generation bump that turned every light-voxel relight into a miss. The contract:
+ * the FIRST edit after a quiet stretch composes immediately (the pinned editor behaviour of
+ * the test above), a continuous stream composes at the window cadence rather than per frame,
+ * and the final position always lands once the stream ends.
+ */
+void test_clipmap_edit_coalescing()
+{
+    std::printf("test_clipmap_edit_coalescing\n");
+    const float radius = 0.8f;
+    const auto geometry = make_sphere(radius, 20, 28);
+    mesh_sdf_bake_settings bake;
+    bake.resolution = 24;
+    bake.min_voxel_size = 0.001f;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(geometry, bake, sdf), "bake succeeds");
+    std::vector<global_sdf_instance> instances{make_clipmap_instance(sdf, math::vec3(0.0f, 0.0f, 0.0f)),
+                                               make_clipmap_instance(sdf, math::vec3(3.0f, 0.0f, 0.0f))};
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_settings.resolution = 32;
+    clipmap_settings.base_extent = 12.0f;
+    clipmap.init(clipmap_settings);
+    const math::vec3 camera(0.0f);
+    uint32_t settle_updates = 0;
+    while(clipmap.update(instances, camera) > 0 && settle_updates < 32)
+    {
+        ++settle_updates;
+    }
+    check(settle_updates < 32, "the cascade settles before the drag");
+    // A simulated drag: a new transform every update. Uncoalesced, every level is stale on
+    // every frame and the budget (1) composes on ALL of them; coalesced, each level re-arms
+    // only once per window, so a strict majority of drag frames compose nothing.
+    const uint32_t drag_frames = 32;
+    uint32_t composed_during_drag = 0;
+    uint32_t compose_frames = 0;
+    for(uint32_t i = 0; i < drag_frames; ++i)
+    {
+        instances[1] =
+            make_clipmap_instance(sdf, math::vec3(3.0f, 4.0f + 0.05f * float(i + 1), 1.0f));
+        const uint32_t composed = clipmap.update(instances, camera);
+        composed_during_drag += composed;
+        compose_frames += composed > 0 ? 1u : 0u;
+    }
+    std::printf("  drag: %u composes over %u frames (%u frames composed)\n",
+                composed_during_drag,
+                drag_frames,
+                compose_frames);
+    check(composed_during_drag > 0, "a drag still composes");
+    check(composed_during_drag <= (drag_frames * 3u) / 4u,
+          "continuous edits coalesce below one compose per frame (got " +
+              std::to_string(composed_during_drag) + " over " + std::to_string(drag_frames) + ")");
+    // The stream has ended but the last coalesced diff is still pending: it must land within
+    // one throttle window plus the budget catch-up, never linger.
+    uint32_t catch_up = 0;
+    const uint32_t catch_up_bound = uint32_t(gi::GI_CLIPMAP_EDIT_THROTTLE_FRAMES) +
+                                    global_sdf_clipmap::level_count + 2u;
+    while(catch_up <= catch_up_bound)
+    {
+        const uint32_t composed = clipmap.update(instances, camera);
+        ++catch_up;
+        if(composed == 0 && clipmap.get_stale_level_count() == 0)
+        {
+            break;
+        }
+    }
+    check(catch_up <= catch_up_bound, "the final edit lands within one window of release");
+    const float at_final = clipmap.sample(math::vec3(3.0f, 4.0f + 0.05f * float(drag_frames), 1.0f));
+    std::printf("  final position reads %.3f after %u catch-up updates\n", at_final, catch_up);
+    check(at_final < radius, "the drag's final position is present in the cascade");
+}
+
+/**
  * @brief The compose DISPATCH must produce the same voxels as the CPU composer.
  *
  * Transcription of cs_gi_clipmap_compose.sc, in the same style as
@@ -2818,12 +2896,16 @@ void test_clipmap_is_world_stable()
         identical = identical && a.get_level(i).voxels == b.get_level(i).voxels;
     }
     check(identical, "cameras within one voxel produce a bit-identical cascade");
-    // And moving a whole voxel must actually re-snap, or the cascade would drift out from
-    // under the camera and stop covering it.
+    // And moving past a whole snap cell must actually re-snap, or the cascade would drift out
+    // from under the camera and stop covering it. The snap granularity is
+    // attr_downsample * origin_snap_attr_voxels fine voxels (the recompose-frequency
+    // coarsening); anything within one cell is the world-stability case above.
+    const float snap_cell = level0_voxel * float(global_sdf_clipmap::attr_downsample) *
+                            float(global_sdf_clipmap::origin_snap_attr_voxels);
     global_sdf_clipmap c;
     c.init(clipmap_settings);
-    c.update(instances, camera_a + math::vec3(level0_voxel * 4.0f, 0.0f, 0.0f));
-    check(c.get_level(0).origin != a.get_level(0).origin, "moving several voxels re-snaps the origin");
+    c.update(instances, camera_a + math::vec3(snap_cell * 1.5f, 0.0f, 0.0f));
+    check(c.get_level(0).origin != a.get_level(0).origin, "moving past a snap cell re-snaps the origin");
     // A second update from the same position must recompose nothing.
     const uint32_t recomposed = a.update(instances, camera_a);
     std::printf("  recomposed on an unchanged update = %u\n", recomposed);
@@ -3856,6 +3938,7 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_instance_grid_walk_stops_past_the_nearest_hit();
     test_instance_grid_handles_degenerate_input();
     test_clipmap_recomposes_moved_geometry_within_budget();
+    test_clipmap_edit_coalescing();
     test_clipmap_compose_shader_transcription_matches_cpu();
     test_clipmap_culled_composition_matches_brute_force();
     test_clipmap_transition_is_continuous();

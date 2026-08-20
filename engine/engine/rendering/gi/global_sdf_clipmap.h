@@ -174,6 +174,21 @@ public:
         return content_epoch_;
     }
 
+    /**
+     * @brief As @ref get_content_epoch, but advancing only when changed content actually
+     *        LANDS in a composed level - the edit-coalescing throttle and the per-update
+     *        budget both sit between the two.
+     *
+     * Consumers whose state derives from the COMPOSED field key on this one: the bounce
+     * vis-memo's verdicts are marched against the composed volume, so invalidating them on
+     * the target epoch during a drag re-marched every relight against a field that had not
+     * changed since the last recompose (~1.3 ms of pure loss per drag frame).
+     */
+    auto get_composed_content_epoch() const -> uint64_t
+    {
+        return composed_content_epoch_;
+    }
+
     struct level
     {
         ///< World-space minimum corner, snapped to a whole multiple of @ref voxel_size.
@@ -241,10 +256,17 @@ public:
      *
      * @param instances Every resident field placement in the world, NOT only visible ones.
      * @param camera_position Centre of the cascade.
+     * @param instances_revision Monotonic revision of everything the level fingerprints can
+     *        depend on (surface_cache_system::get_content_revision). While it and a level's
+     *        target origin both hold still, that level's fingerprint is recalled from cache
+     *        instead of re-walking every instance - the walk ran for all four levels every
+     *        frame regardless of change. 0 means "unknown", which disables the cache and
+     *        keeps the old always-recompute behaviour.
      * @return The number of levels recomposed, for budgeting and diagnostics.
      */
-    auto update(const std::vector<global_sdf_instance>& instances, const math::vec3& camera_position)
-        -> uint32_t;
+    auto update(const std::vector<global_sdf_instance>& instances,
+                const math::vec3& camera_position,
+                uint64_t instances_revision = 0) -> uint32_t;
 
     /// Levels currently waiting to be recomposed, for diagnostics. Persistently non-zero means
     /// the budget is not keeping up with how fast the scene or the camera is changing.
@@ -326,6 +348,13 @@ public:
     /// same resolution.
     static constexpr uint32_t attr_downsample = 2;
 
+    /// Origin snap granularity, in ATTRIBUTE voxels. Must stay an integer so the toroidal
+    /// attribute/light-volume cell identity survives re-snaps; raising it trades a fraction of
+    /// guaranteed level coverage at the window edge (half a snap, absorbed by the cross-fade
+    /// and the next level) for proportionally fewer full recomposes while the camera moves -
+    /// at 1 the finest level recomposed every 0.25 m of travel.
+    static constexpr uint32_t origin_snap_attr_voxels = 8;
+
     auto get_attr_resolution() const -> uint32_t
     {
         return settings_.resolution / attr_downsample;
@@ -385,6 +414,25 @@ private:
     /// reaches the level, which would re-fire the epoch every frame while a level waits.
     std::array<uint64_t, level_count> seen_fingerprints_{};
     uint64_t content_epoch_ = 0;
+    /// See get_composed_content_epoch - bumped in the compose pass when a level lands a
+    /// content_fingerprint it did not hold before.
+    uint64_t composed_content_epoch_ = 0;
+    /// The fingerprint cache update() recalls when neither the instances revision nor a
+    /// level's target origin moved. Revision 0 = nothing cached.
+    std::array<math::vec3, level_count> cached_target_origin_{};
+    std::array<uint64_t, level_count> cached_target_fingerprint_{};
+    uint64_t cached_instances_revision_ = 0;
+    /// Edit coalescing (GI_CLIPMAP_EDIT_THROTTLE_FRAMES), LEADING-EDGE: the first edit after
+    /// a quiet stretch recomposes immediately (the pinned editor behaviour), and only a
+    /// CONTINUOUS stream of edits - a drag re-fingerprinting its levels every frame -
+    /// coalesces to one recompose per window. The pending diff persists either way, so the
+    /// final state lands within one window of the stream ending; origin re-snaps never
+    /// throttle. update_counter_ ticks once per update(); the arrays hold each level's last
+    /// recompose tick and last observed content change (signed, seeded to -window in init so
+    /// the very first edit reads as idle-started).
+    int64_t update_counter_ = 0;
+    std::array<int64_t, level_count> last_compose_counter_{};
+    std::array<int64_t, level_count> last_content_seen_{};
     /// One bit per level, set when that level's voxels were rewritten and the GPU mirror is
     /// therefore stale. Cleared by the owner once it has uploaded.
     uint32_t dirty_levels_ = 0;

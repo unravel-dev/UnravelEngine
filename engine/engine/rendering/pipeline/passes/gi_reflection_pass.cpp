@@ -6,6 +6,7 @@
 #include <engine/rendering/gi/gi_constants.h>
 
 #include <graphics/graphics.h>
+#include <logging/logging.h>
 
 #include <cmath>
 
@@ -15,11 +16,14 @@ namespace unravel
 namespace
 {
 /// RGBA16F target + wrapping fbo at an explicit size, persisted in the render view by name.
+/// compute_write additionally opens the texture for image stores (the compute trace chain
+/// writes RAW as an image; the target stays an RT for the fragment fallback).
 auto create_or_update_target(gfx::render_view& rview,
                              const std::string& name,
                              const usize32_t& size,
                              gfx::texture::ptr& out_tex,
-                             bool& out_created) -> gfx::frame_buffer::ptr
+                             bool& out_created,
+                             bool compute_write = false) -> gfx::frame_buffer::ptr
 {
     auto& tex = rview.tex_get_or_emplace(name);
     out_created = false;
@@ -31,7 +35,8 @@ auto create_or_update_target(gfx::render_view& rview,
                                              false,
                                              1,
                                              gfx::texture_format::RGBA16F,
-                                             BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+                                             BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+                                                 (compute_write ? BGFX_TEXTURE_COMPUTE_WRITE : 0));
         out_created = true;
     }
     auto& fbo = rview.fbo_get_or_emplace(name);
@@ -46,6 +51,20 @@ auto create_or_update_target(gfx::render_view& rview,
 }
 } // namespace
 
+gi_reflection_pass::~gi_reflection_pass()
+{
+    if(bgfx::isValid(refl_list_))
+    {
+        gfx::destroy(refl_list_);
+        refl_list_ = {bgfx::kInvalidHandle};
+    }
+    if(bgfx::isValid(refl_args_))
+    {
+        gfx::destroy(refl_args_);
+        refl_args_ = {bgfx::kInvalidHandle};
+    }
+}
+
 auto gi_reflection_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
@@ -53,6 +72,21 @@ auto gi_reflection_pass::init(rtti::context& ctx) -> bool
     auto fs_reflection = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_reflection.sc");
     program_.cache_uniforms();
     program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_reflection);
+    // The deliverable trace path: classify -> indirect args -> compacted 64-lane trace.
+    auto cs_classify = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_reflection_classify.sc");
+    classify_program_.cache_uniforms();
+    classify_program_.program = std::make_unique<gpu_program>(cs_classify);
+    auto cs_args = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_reflection_args.sc");
+    args_program_.cache_uniforms();
+    args_program_.program = std::make_unique<gpu_program>(cs_args);
+    auto cs_trace = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_reflection_trace.sc");
+    trace_program_.cache_uniforms();
+    trace_program_.program = std::make_unique<gpu_program>(cs_trace);
+    if(!classify_program_.is_valid() || !args_program_.is_valid() || !trace_program_.is_valid())
+    {
+        APPLOG_WARNING("[SurfaceCache] GI reflection compute chain failed to load. Falling back "
+                       "to the fragment trace (whole waves stall on single tracing pixels).");
+    }
     auto fs_temporal = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_reflection_temporal.sc");
     temporal_program_.cache_uniforms();
     temporal_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_temporal);
@@ -97,7 +131,12 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     // shaders resolution-agnostic.
     const auto full_size = params.output->get_size();
     const usize32_t trace_size = compute_trace_size(full_size, params.resolution);
-    auto raw_fbo = create_or_update_target(rview, "GI_REFL_RAW", trace_size, raw_tex, raw_created);
+    // The compute chain is the deliverable path; the fragment program is the fallback when
+    // any of its three programs failed to load. RAW opens for image stores accordingly.
+    const bool compute_trace =
+        classify_program_.is_valid() && args_program_.is_valid() && trace_program_.is_valid();
+    auto raw_fbo =
+        create_or_update_target(rview, "GI_REFL_RAW", trace_size, raw_tex, raw_created, compute_trace);
     const bool odd_frame = (gfx::get_render_frame() & 1u) != 0u;
     auto read_fbo = create_or_update_target(rview,
                                             odd_frame ? "GI_REFL_ACC_A" : "GI_REFL_ACC_B",
@@ -115,64 +154,185 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     (void)raw_created;
     (void)write_created;
     const bool history_valid = !read_created && params.temporal_frames > 1;
-    gfx::render_pass pass("GI/Reflections Trace");
-    pass.bind(raw_fbo.get());
-    // World positions reconstruct from depth, and the Hi-Z projection needs the view state.
-    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
-    program_.program->begin();
-    gfx::set_texture(program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-    gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-    gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-    gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
-    gfx::set_texture(program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
-    gfx::set_texture(program_.s_gi_normal, 5, params.g_buffer->get_texture(1));
-    // Transparent black (alpha 0) when the probe layer is absent collapses the shader's
-    // mix(sky_sh, probe, probe.a) to the SH - the opaque-black default would answer every
-    // sky miss with black instead.
-    gfx::set_texture(program_.s_gi_probe_layer,
-                     6,
-                     params.probe_layer ? params.probe_layer : default_textures::get().transparent_texture());
-    gfx::set_texture(program_.s_hiz, 8, params.hiz);
-    const bool has_gi_diffuse = params.gi_diffuse != nullptr;
-    gfx::set_texture(program_.s_gi_diffuse,
-                     9,
-                     has_gi_diffuse ? params.gi_diffuse : default_textures::get().black_texture());
-    gfx::set_texture(program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
-    gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-    gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
-    gfx::set_texture(program_.s_gi_env_sh,
-                     14,
-                     params.irradiance_sh ? params.irradiance_sh : default_textures::get().black_texture());
+    // Uniform data shared by both trace forms.
     const auto camera_position = params.cam->get_position();
+    const bool has_gi_diffuse = params.gi_diffuse != nullptr;
     const float reflection_camera[4] = {camera_position.x,
                                         camera_position.y,
                                         camera_position.z,
                                         has_gi_diffuse ? 1.0f : 0.0f};
-    gfx::set_uniform(program_.u_gi_reflection_camera, reflection_camera);
     // R2 low-discrepancy sequence advancing per frame; the shader decorrelates per pixel.
+    // zw arm the checkerboard: it needs a live temporal window to fill the untraced half.
     const double frame_index = double(gfx::get_render_frame());
+    const bool checkerboard = params.checkerboard && params.temporal_frames > 1;
+    const float frame_parity = float(gfx::get_render_frame() & 1u);
     const float jitter[4] = {float(std::fmod(0.754877666 * frame_index, 1.0)),
                              float(std::fmod(0.569840291 * frame_index, 1.0)),
-                             0.0f,
-                             0.0f};
-    gfx::set_uniform(program_.u_gi_reflection_jitter, jitter);
+                             checkerboard ? 1.0f : 0.0f,
+                             frame_parity};
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                  float(atlas.get_atlas_voxel_dim()),
                                  float(surface_cache.get_instances().size()),
                                  0.0f};
-    gfx::set_uniform(program_.u_sdf_params, sdf_params);
-    gfx::set_uniform(program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
-    gfx::set_uniform(program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
-    gfx::set_uniform(program_.u_sdf_clipmap_levels,
-                     clipmap_gpu.get_level_params(),
-                     global_sdf_clipmap::level_count);
     const float light_voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 1.0f};
-    gfx::set_uniform(program_.u_gi_light_voxel_params, light_voxel_params);
-    auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
-    program_.program->end();
+    const float refl_texel[4] = {1.0f / float(trace_size.width),
+                                 1.0f / float(trace_size.height),
+                                 float(trace_size.width),
+                                 float(trace_size.height)};
+    // Transparent black (alpha 0) when the probe layer is absent collapses the shader's
+    // mix(sky_sh, probe, probe.a) to the SH - the opaque-black default would answer every
+    // sky miss with black instead.
+    const auto probe_layer_tex =
+        params.probe_layer ? params.probe_layer : default_textures::get().transparent_texture();
+    const auto gi_diffuse_tex =
+        has_gi_diffuse ? params.gi_diffuse : default_textures::get().black_texture();
+    const auto env_sh_tex =
+        params.irradiance_sh ? params.irradiance_sh : default_textures::get().black_texture();
+    if(compute_trace)
+    {
+        // CLASSIFY -> ARGS -> compacted indirect TRACE: classify answers sky / degenerate /
+        // rough texels straight into RAW and appends the tracing texels to a dense list, so
+        // every 64-lane trace group is fully populated with rays. The fragment form paid a
+        // whole wave wherever one quad pixel traced, and its worst-case register footprint
+        // throttled even the early-out pixels.
+        const uint32_t required_indices = 2u + trace_size.width * trace_size.height;
+        bool list_created = false;
+        if(!bgfx::isValid(refl_list_) || required_indices > refl_list_capacity_)
+        {
+            if(bgfx::isValid(refl_list_))
+            {
+                gfx::destroy(refl_list_);
+            }
+            refl_list_capacity_ = required_indices;
+            refl_list_ = gfx::create_dynamic_index_buffer(refl_list_capacity_,
+                                                          BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                              BGFX_BUFFER_INDEX32);
+            list_created = true;
+        }
+        if(!bgfx::isValid(refl_args_))
+        {
+            refl_args_ = gfx::create_indirect_buffer(1);
+        }
+        if(list_created)
+        {
+            // Fresh list memory is garbage and the append cursor's reset lives at the END of
+            // the chain (in the args pass, downstream of the cursor's last reader) - run the
+            // args program once ahead of the first classify so the cursor starts defined.
+            // Its other outputs are overwritten by the real args dispatch below before the
+            // trace consumes them. (A CPU update cannot do this: bgfx forbids updating
+            // compute-writable dynamic buffers.)
+            gfx::render_pass pass("GI/Reflections List Init");
+            args_program_.program->begin();
+            gfx::set_buffer(0, refl_args_, gfx::access::Write);
+            gfx::set_buffer(1, refl_list_, gfx::access::ReadWrite);
+            gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
+            args_program_.program->end();
+        }
+        {
+            gfx::render_pass pass("GI/Reflections Classify");
+            // The rough tier's SH fallback reconstructs world positions from depth.
+            pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+            classify_program_.program->begin();
+            gfx::set_texture(classify_program_.s_hiz, 0, params.hiz);
+            gfx::set_texture(classify_program_.s_gi_normal, 1, params.g_buffer->get_texture(1));
+            gfx::set_texture(classify_program_.s_gi_diffuse, 2, gi_diffuse_tex);
+            gfx::set_texture(classify_program_.s_gi_env_sh, 3, env_sh_tex);
+            gfx::set_image(4, raw_tex->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
+            gfx::set_buffer(5, refl_list_, gfx::access::ReadWrite);
+            gfx::set_uniform(classify_program_.u_gi_reflection_camera, reflection_camera);
+            gfx::set_uniform(classify_program_.u_gi_reflection_jitter, jitter);
+            gfx::set_uniform(classify_program_.u_gi_reflection_texel, refl_texel);
+            gfx::dispatch(pass.id,
+                          classify_program_.program->native_handle(),
+                          (trace_size.width + 7u) / 8u,
+                          (trace_size.height + 7u) / 8u,
+                          1);
+            classify_program_.program->end();
+        }
+        {
+            gfx::render_pass pass("GI/Reflections Args");
+            args_program_.program->begin();
+            gfx::set_buffer(0, refl_args_, gfx::access::Write);
+            gfx::set_buffer(1, refl_list_, gfx::access::ReadWrite);
+            gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
+            args_program_.program->end();
+        }
+        {
+            gfx::render_pass pass("GI/Reflections Trace");
+            // World positions reconstruct from depth, and the Hi-Z projection needs the
+            // view state.
+            pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+            trace_program_.program->begin();
+            gfx::set_texture(trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
+            gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
+            gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
+            gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+            gfx::set_texture(trace_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+            gfx::set_texture(trace_program_.s_gi_normal, 5, params.g_buffer->get_texture(1));
+            gfx::set_texture(trace_program_.s_gi_probe_layer, 6, probe_layer_tex);
+            gfx::set_buffer(7, refl_list_, gfx::access::Read);
+            gfx::set_texture(trace_program_.s_hiz, 8, params.hiz);
+            gfx::set_texture(trace_program_.s_gi_diffuse, 9, gi_diffuse_tex);
+            gfx::set_texture(trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
+            gfx::set_image(11, raw_tex->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
+            gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
+            gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+            gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh_tex);
+            gfx::set_uniform(trace_program_.u_gi_reflection_camera, reflection_camera);
+            gfx::set_uniform(trace_program_.u_gi_reflection_jitter, jitter);
+            gfx::set_uniform(trace_program_.u_gi_reflection_texel, refl_texel);
+            gfx::set_uniform(trace_program_.u_sdf_params, sdf_params);
+            gfx::set_uniform(trace_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+            gfx::set_uniform(trace_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+            gfx::set_uniform(trace_program_.u_sdf_clipmap_levels,
+                             clipmap_gpu.get_level_params(),
+                             global_sdf_clipmap::level_count);
+            gfx::set_uniform(trace_program_.u_gi_light_voxel_params, light_voxel_params);
+            gfx::dispatch_indirect(pass.id, trace_program_.program->native_handle(), refl_args_, 0, 1);
+            trace_program_.program->end();
+        }
+    }
+    else
+    {
+        gfx::render_pass pass("GI/Reflections Trace");
+        pass.bind(raw_fbo.get());
+        // World positions reconstruct from depth, and the Hi-Z projection needs the view state.
+        pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+        program_.program->begin();
+        gfx::set_texture(program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
+        gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
+        gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
+        gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+        gfx::set_texture(program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+        gfx::set_texture(program_.s_gi_normal, 5, params.g_buffer->get_texture(1));
+        gfx::set_texture(program_.s_gi_probe_layer, 6, probe_layer_tex);
+        gfx::set_texture(program_.s_hiz, 8, params.hiz);
+        gfx::set_texture(program_.s_gi_diffuse, 9, gi_diffuse_tex);
+        gfx::set_texture(program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
+        gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
+        gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+        gfx::set_texture(program_.s_gi_env_sh, 14, env_sh_tex);
+        gfx::set_uniform(program_.u_gi_reflection_camera, reflection_camera);
+        gfx::set_uniform(program_.u_gi_reflection_jitter, jitter);
+        gfx::set_uniform(program_.u_sdf_params, sdf_params);
+        gfx::set_uniform(program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+        gfx::set_uniform(program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+        gfx::set_uniform(program_.u_sdf_clipmap_levels,
+                         clipmap_gpu.get_level_params(),
+                         global_sdf_clipmap::level_count);
+        gfx::set_uniform(program_.u_gi_light_voxel_params, light_voxel_params);
+        // Fullscreen triangle, not a quad: the quad's diagonal produces partially covered
+        // 2x2 quads whose helper lanes run the full trace (ssil/ssr already switched).
+        auto topology = gfx::clip_fullscreen_triangle(1.0f);
+        if(topology == 0)
+        {
+            topology = gfx::clip_quad(1.0f);
+        }
+        gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        gfx::submit(pass.id, program_.program->native_handle());
+        gfx::set_state(BGFX_STATE_DEFAULT);
+        program_.program->end();
+    }
     gfx::discard();
     // TEMPORAL: integrate this frame's stochastic sample into the reprojected running mean.
     {
@@ -185,14 +345,22 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::set_texture(temporal_program_.s_refl_depth, 2, params.hiz);
         auto prev_view_proj = params.cam->get_prev_view_projection();
         gfx::set_uniform(temporal_program_.u_gi_refl_prev_view_proj, prev_view_proj.get_matrix());
-        const float temporal_params[4] = {history_valid ? 1.0f : 0.0f,
+        // x packs three exact small integers: +1 history valid, +2 checkerboard, +4 parity.
+        const float temporal_flags = (history_valid ? 1.0f : 0.0f) + (checkerboard ? 2.0f : 0.0f) +
+                                     frame_parity * 4.0f;
+        const float temporal_params[4] = {temporal_flags,
                                           1.0f / float(trace_size.width),
                                           1.0f / float(trace_size.height),
                                           float(params.temporal_frames)};
         gfx::set_uniform(temporal_program_.u_gi_refl_temporal, temporal_params);
-        // clip_quad() stages a transient vertex buffer consumed by ONE submit - every draw
-        // needs its own call (reusing the trace's quad left this submit with no vertices).
-        gfx::set_state(gfx::clip_quad(1.0f) | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        // The topology helpers stage a transient vertex buffer consumed by ONE submit - every
+        // draw needs its own call (reusing the trace's left this submit with no vertices).
+        auto ttopology = gfx::clip_fullscreen_triangle(1.0f);
+        if(ttopology == 0)
+        {
+            ttopology = gfx::clip_quad(1.0f);
+        }
+        gfx::set_state(ttopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
         gfx::submit(tpass.id, temporal_program_.program->native_handle());
         gfx::set_state(BGFX_STATE_DEFAULT);
         temporal_program_.program->end();
@@ -215,7 +383,12 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                                            0.0f,
                                            0.0f};
         gfx::set_uniform(composite_program_.u_gi_refl_composite, composite_params);
-        gfx::set_state(gfx::clip_quad(1.0f) | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        auto ctopology = gfx::clip_fullscreen_triangle(1.0f);
+        if(ctopology == 0)
+        {
+            ctopology = gfx::clip_quad(1.0f);
+        }
+        gfx::set_state(ctopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
         gfx::submit(cpass.id, composite_program_.program->native_handle());
         gfx::set_state(BGFX_STATE_DEFAULT);

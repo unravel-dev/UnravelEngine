@@ -236,22 +236,6 @@ private:
     /// to compile is the silent-failure mode worth a loud line.
     bool capture_log_emitted_ = false;
     bool helper_warning_emitted_ = false;
-
-    struct reset_program : uniforms_cache
-    {
-        gpu_program::ptr program;
-        gfx::program::uniform_ptr u_surface_reset_params;
-
-        void cache_uniforms()
-        {
-            cache_uniform(program.get(), u_surface_reset_params, "u_surface_reset_params", gfx::uniform_type::Vec4);
-        }
-
-        auto is_valid() const -> bool
-        {
-            return program && program->is_valid();
-        }
-    } reset_program_;
 };
 
 } // namespace unravel

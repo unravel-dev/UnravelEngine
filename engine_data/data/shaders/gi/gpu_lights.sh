@@ -92,10 +92,16 @@ float GpuSpotAttenuation(vec3 light_vector, vec3 spot_direction, float cos_inner
  * silently unshadowed result is far easier to reason about than one that is shadowed for some
  * lights and not others.
  */
-vec3 GpuEvalLightUnshadowed(GpuLight light, vec3 world_position, vec3 world_normal)
+/// The Ex form also reports the shadow-ray geometry it already derived - direction toward the
+/// light and the distance to it - so callers that trace do not recompute the same length and
+/// normalize. For a directional light the distance is huge-but-finite; the caller substitutes
+/// its own shadow range.
+vec3 GpuEvalLightUnshadowedEx(GpuLight light, vec3 world_position, vec3 world_normal,
+                              out vec3 out_to_light, out float out_distance)
 {
 	vec3 to_light;
 	float attenuation = 1.0;
+	out_distance = 1e8;
 	if(light.type == GPU_LIGHT_TYPE_DIRECTIONAL)
 	{
 		to_light = -light.direction;
@@ -115,9 +121,19 @@ vec3 GpuEvalLightUnshadowed(GpuLight light, vec3 world_position, vec3 world_norm
 		}
 		float distance = length(delta);
 		to_light = distance > 1e-6 ? delta / distance : vec3(0.0, 1.0, 0.0);
+		out_distance = distance;
 	}
+	out_to_light = to_light;
 	float n_dot_l = saturate(dot(world_normal, to_light));
 	return light.color * (light.intensity * attenuation * n_dot_l);
+}
+
+vec3 GpuEvalLightUnshadowed(GpuLight light, vec3 world_position, vec3 world_normal)
+{
+	vec3 ignored_to_light;
+	float ignored_distance;
+	return GpuEvalLightUnshadowedEx(light, world_position, world_normal, ignored_to_light,
+	                                ignored_distance);
 }
 
 /**

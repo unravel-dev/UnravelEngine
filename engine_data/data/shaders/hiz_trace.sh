@@ -91,13 +91,23 @@ bool HizAdvanceRay(vec3 ss_ray_origin,
     return skipped_tile;
 }
 
-bool HizHierarchicalRaymarch(sampler2D hiz_sampler,
-                             vec3 ss_ray_origin,
-                             vec3 ss_ray_dir,
-                             vec2 screen_size,
-                             int most_detailed_mip,
-                             int max_iterations,
-                             inout vec3 ss_hit_pos)
+/// The Ex form adds two march bounds for consumers whose validation would reject the result
+/// anyway - so the march declares a miss instead of spending the rest of its budget:
+///  - `t_limit`: parametric bound along ss_ray_dir. A caller with a world-space range cap
+///    projects its endpoint and passes the parameter; hits past it were already rejected by
+///    the caller's own range test.
+///  - `stop_outside`: stop once the position leaves the viewport. A screen-space line never
+///    re-enters, and HizValidateHit unconditionally rejects out-of-viewport hits.
+/// The classic form forwards with both bounds disabled, so SSR/SSIL are bit-identical.
+bool HizHierarchicalRaymarchEx(sampler2D hiz_sampler,
+                               vec3 ss_ray_origin,
+                               vec3 ss_ray_dir,
+                               vec2 screen_size,
+                               int most_detailed_mip,
+                               int max_iterations,
+                               float t_limit,
+                               bool stop_outside,
+                               inout vec3 ss_hit_pos)
 {
     vec3 ss_ray_dir_inv;
     ss_ray_dir_inv.x = (ss_ray_dir.x != 0.0) ? rcp(ss_ray_dir.x) : FFX_SSSR_FLOAT_MAX;
@@ -125,6 +135,18 @@ bool HizHierarchicalRaymarch(sampler2D hiz_sampler,
     int i = 0;
     LOOP while(i < max_iterations && curr_mip >= most_detailed_mip)
     {
+        if(curr_t > t_limit)
+        {
+            return false;
+        }
+        if(stop_outside)
+        {
+            if(any(lessThan(ss_hit_pos.xy, vec2_splat(0.0))) ||
+               any(greaterThan(ss_hit_pos.xy, vec2_splat(1.0))))
+            {
+                return false;
+            }
+        }
         vec2 curr_mip_pos = curr_mip_resolution * ss_hit_pos.xy;
         float surface_z = HizFetchDepth(hiz_sampler, curr_mip_pos, curr_mip);
         bool skipped_tile = HizAdvanceRay(ss_ray_origin, ss_ray_dir, ss_ray_dir_inv,
@@ -140,6 +162,19 @@ bool HizHierarchicalRaymarch(sampler2D hiz_sampler,
     }
 
     return i < max_iterations;
+}
+
+bool HizHierarchicalRaymarch(sampler2D hiz_sampler,
+                             vec3 ss_ray_origin,
+                             vec3 ss_ray_dir,
+                             vec2 screen_size,
+                             int most_detailed_mip,
+                             int max_iterations,
+                             inout vec3 ss_hit_pos)
+{
+    return HizHierarchicalRaymarchEx(hiz_sampler, ss_ray_origin, ss_ray_dir, screen_size,
+                                     most_detailed_mip, max_iterations, FFX_SSSR_FLOAT_MAX, false,
+                                     ss_hit_pos);
 }
 
 /// Validate a screen-space hit for indirect lighting.

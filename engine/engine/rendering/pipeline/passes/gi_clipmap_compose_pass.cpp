@@ -27,9 +27,6 @@ auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
     auto cs_attributes = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_attributes.sc");
     attributes_program_.cache_uniforms();
     attributes_program_.program = std::make_unique<gpu_program>(cs_attributes);
-    auto cs_reset = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_surface_count_reset.sc");
-    reset_program_.cache_uniforms();
-    reset_program_.program = std::make_unique<gpu_program>(cs_reset);
     auto cs_texture_mean = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_texture_mean.sc");
     texture_mean_program_.cache_uniforms();
     texture_mean_program_.program = std::make_unique<gpu_program>(cs_texture_mean);
@@ -288,6 +285,11 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         // stage 4. Writing the level in place is what avoids a staging copy and the per-level
         // update_texture_3d the CPU path pays.
         gfx::set_image_3d(5, clipmap_gpu.get_texture()->native_handle(), 0, gfx::access::Write, gfx::texture_format::R8);
+        // The level's surface-list cursor resets in this dispatch (thread 0); the attribute
+        // pass's sampled read of the distance volume is the transition that orders it - the
+        // old standalone 1-thread reset relied on submission order, which D3D12 does not
+        // guarantee for same-state UAV access.
+        gfx::set_buffer(9, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
 
         const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                      float(atlas.get_atlas_voxel_dim()),
@@ -311,7 +313,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     // Attributes compose AFTER every distance level is written: the attribute shader samples the
     // composed field (band + gradient gates), so its input must be this frame's voxels. Separate
     // dispatches also give the backend its transition point from image-write to sampled-read.
-    if(attributes_program_.is_valid() && reset_program_.is_valid())
+    if(attributes_program_.is_valid())
     {
         const uint32_t attr_resolution = clipmap_gpu.get_attr_resolution();
         const uint32_t attr_groups = (attr_resolution + compose_group_size - 1u) / compose_group_size;
@@ -327,14 +329,9 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
                 continue;
             }
             gfx::render_pass pass("GI/Clipmap Attributes");
-            // The level's append cursor resets in the same view, immediately before the append
-            // dispatch: submission order is the only ordering guarantee needed.
-            reset_program_.program->begin();
-            const float reset_params[4] = {float(level), 0.0f, 0.0f, 0.0f};
-            gfx::set_uniform(reset_program_.u_surface_reset_params, reset_params);
-            gfx::set_buffer(8, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
-            gfx::dispatch(pass.id, reset_program_.program->native_handle(), 1, 1, 1);
-            reset_program_.program->end();
+            // The level's append cursor was reset by the compose dispatch above; the sampled
+            // read of the freshly composed distance volume below is the resource transition
+            // that orders that reset ahead of the appends on every backend.
             attributes_program_.program->begin();
             gfx::set_texture(attributes_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
             gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);

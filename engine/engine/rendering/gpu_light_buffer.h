@@ -80,6 +80,9 @@ private:
     uint32_t light_count_ = 0;
     std::vector<float> data_;
     uint64_t content_hash_ = 0;
+    /// Whether the current buffer object holds the bytes content_hash_ describes. Cleared on
+    /// recreate: an unchanged hash must still upload into a fresh buffer.
+    bool buffer_uploaded_ = false;
 };
 
 } // namespace unravel

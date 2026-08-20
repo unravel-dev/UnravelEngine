@@ -66,6 +66,11 @@ void main()
 	center_normal = normalize(center_normal);
 	float view_distance = max(length(center_position - u_gi_upsample_camera.xyz), 1e-4);
 	float plane_tolerance = max(u_gi_upsample_plane_tol * view_distance, 1e-4);
+	// One mat4 fold per pixel instead of one clipToWorld per tap - the taps only consume the
+	// distance from the centre's plane (see the denoise's identical derivation).
+	vec4 plane_row = mul(vec4(center_normal, 0.0), u_invViewProj);
+	vec4 w_row = mul(vec4(0.0, 0.0, 0.0, 1.0), u_invViewProj);
+	float center_plane_height = dot(center_normal, center_position);
 	vec2 low_size = u_gi_upsample_texel.zw;
 	// Half-texel shift puts the sample in the low-resolution texel's own coordinate frame, so the
 	// four neighbours and their bilinear fractions come out right.
@@ -91,8 +96,8 @@ void main()
 			}
 			// The surface this low-resolution texel was computed for: the gather sampled the
 			// G-buffer at exactly this uv, so this is an exact guide rather than an estimate.
-			vec3 tap_position;
-			if(!GiWorldAt(tap_uv, tap_position))
+			float tap_depth = texture2DLod(s_gi_depth, tap_uv, 0.0).x;
+			if(tap_depth >= 1.0)
 			{
 				continue;
 			}
@@ -104,9 +109,25 @@ void main()
 				continue;
 			}
 			tap_normal = normalize(tap_normal);
-			float plane_distance = abs(dot(center_normal, tap_position - center_position));
+			vec4 tap_h =
+			    vec4(clipTransform(vec3(tap_uv * 2.0 - 1.0, toClipSpaceDepth(tap_depth))), 1.0);
+			float plane_distance = abs(dot(plane_row, tap_h) / dot(w_row, tap_h) - center_plane_height);
 			float depth_weight = exp(-plane_distance / plane_tolerance);
-			float normal_weight = pow(max(dot(center_normal, tap_normal), 0.0), u_gi_upsample_normal_pow);
+			// The default exponent takes the exact five-multiply chain (see the denoise).
+			float ndotn = max(dot(center_normal, tap_normal), 0.0);
+			float normal_weight;
+			if(u_gi_upsample_normal_pow == 32.0)
+			{
+				float n2 = ndotn * ndotn;
+				float n4 = n2 * n2;
+				float n8 = n4 * n4;
+				float n16 = n8 * n8;
+				normal_weight = n16 * n16;
+			}
+			else
+			{
+				normal_weight = pow(ndotn, u_gi_upsample_normal_pow);
+			}
 			float weight = bilinear * depth_weight * normal_weight;
 			sum += texture2DLod(s_gi_input, tap_uv, 0.0) * weight;
 			weight_sum += weight;

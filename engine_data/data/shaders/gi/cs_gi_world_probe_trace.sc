@@ -32,6 +32,10 @@ SAMPLER2D(s_gi_env_sh, 14);
 /// DIFFERENT texture from the radiance atlas being written, so sampling it here is legal.
 SAMPLER2D(s_world_probe_irradiance_seed, 11);
 /// xy = 1 / irradiance-depth atlas size (the seeding read shares the irradiance tile layout).
+/// z = strata per frame (the fast-refresh window). Carried HERE, in a trace-only uniform,
+/// rather than in u_gi_world_probe_params.w: that lane is the cage-visibility variance gate
+/// for every reading consumer, and aliasing the two meant one added #define away from the
+/// gate silently becoming 1.0 or 2.0 and the sealed-box leak defence never marching.
 uniform vec4 u_gi_world_probe_seed_atlas;
 
 /// x = window centre CELL of level 0 (int as float) per axis... levels each get a vec4:
@@ -69,7 +73,7 @@ void main()
 	// 8 frames so a moved or toggled light propagates through the probes at double speed. The
 	// stratum formula stays exhaustive either way: count consecutive strata per frame cover
 	// every direction once per (WINDOW / count) frames.
-	int stratum_count = int(max(u_gi_world_probe_params.w, 1.0));
+	int stratum_count = int(max(u_gi_world_probe_seed_atlas.z, 1.0));
 	uint stratum_base = (u_world_probe_frame * uint(stratum_count)) % uint(GI_WORLD_PROBE_WINDOW);
 	ivec2 tile = GiWorldProbeTileBase(slot, level, GI_WORLD_PROBE_OCT_RADIANCE);
 	// Scroll claim: the slot's stored cell is compared by every thread (uniform read), thread 0

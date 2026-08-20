@@ -36,8 +36,13 @@ uniform vec4 u_gi_denoise_params;
 uniform vec4 u_gi_denoise_texel;
 
 /// x = tolerance multiplier applied at one accumulated sample, decaying to 1 as the count grows.
+/// y = the accumulation cap when the converged early-out is enabled, 0 to disable it.
+/// z = luminance-stop floor as a fraction of the centre's own luminance (the
+/// coherent-structure floor; 0 restores the pure variance-driven stop).
 uniform vec4 u_gi_denoise_params2;
 #define u_gi_denoise_low_count_boost u_gi_denoise_params2.x
+#define u_gi_denoise_converged_cap   u_gi_denoise_params2.y
+#define u_gi_denoise_luma_floor      u_gi_denoise_params2.z
 
 uniform vec4 u_gi_denoise_camera;
 
@@ -107,6 +112,37 @@ void main()
 	// widening the tolerance there is the only estimate available.
 	luma_sigma *= max(u_gi_denoise_low_count_boost / count, 1.0);
 	float center_luma = Luminance(center.xyz);
+	// COHERENT-STRUCTURE FLOOR: on converged pixels the variance collapses and the stop
+	// preserves ANY leftover structure - including the probe/voxel-scale sampling-bias blobs
+	// that are precisely what needs smoothing (coherent, not noise: no temporal window
+	// removes them, and they survived every pass of this filter by design). The floor keeps
+	// same-plane neighbours within this fraction of the centre's own luminance merging after
+	// convergence; contrast above it, and anything across a plane or normal break, is
+	// preserved exactly as before. Keep in step with the compute form.
+	luma_sigma = max(luma_sigma, u_gi_denoise_luma_floor * max(center_luma, 1e-3));
+	// CONVERGED EARLY-OUT: at a full accumulation count with collapsed variance, the stops
+	// above reject every tap whose luminance differs meaningfully - the filter is an identity
+	// operator producing its input at 24 taps of cost (the note on the luminance stop above
+	// promises exactly this behaviour; this acts on it). The threshold is relative to the
+	// centre's own luminance and sits well below the target's quantisation. Disabled by a
+	// zero cap, the A/B switch.
+	BRANCH
+	if(u_gi_denoise_converged_cap > 0.0)
+	{
+		if(count >= u_gi_denoise_converged_cap && luma_sigma < 0.002 * max(center_luma, 1e-3))
+		{
+			gl_FragColor = center;
+			return;
+		}
+	}
+	// One mat4 fold per PIXEL instead of one clipToWorld per TAP: the taps only ever consume
+	// the distance from the centre's plane, and with a = (n,0)^T * M and w = e4^T * M the
+	// plane height of a reconstructed world point is (a.h)/(w.h) for the tap's clip-space h -
+	// two dot4s and one divide per tap where the full reconstruction paid a matrix transform
+	// and a perspective divide. Algebraically identical.
+	vec4 plane_row = mul(vec4(center_normal, 0.0), u_invViewProj);
+	vec4 w_row = mul(vec4(0.0, 0.0, 0.0, 1.0), u_invViewProj);
+	float center_plane_height = dot(center_normal, center_position);
 	// B3 spline weights, the standard a-trous kernel.
 	float kernel[3];
 	kernel[0] = 3.0 / 8.0;
@@ -128,8 +164,8 @@ void main()
 			{
 				continue;
 			}
-			vec3 tap_position;
-			if(!GiWorldAt(tap_uv, tap_position))
+			float tap_depth = texture2DLod(s_gi_depth, tap_uv, 0.0).x;
+			if(tap_depth >= 1.0)
 			{
 				continue;
 			}
@@ -143,18 +179,37 @@ void main()
 			tap_normal = normalize(tap_normal);
 			// Distance from the CENTRE'S PLANE, not between the two points. A tap further along
 			// the same wall is perfectly valid however far away it is; one the same distance away
-			// but off the plane belongs to different geometry.
-			float plane_distance = abs(dot(center_normal, tap_position - center_position));
-			float depth_weight = exp(-plane_distance / plane_tolerance);
-			float normal_weight = pow(max(dot(center_normal, tap_normal), 0.0), u_gi_denoise_normal_pow);
+			// but off the plane belongs to different geometry. Folded reconstruction: see the
+			// plane_row derivation above.
+			vec4 tap_h = vec4(clipTransform(vec3(tap_uv * 2.0 - 1.0, toClipSpaceDepth(tap_depth))), 1.0);
+			float plane_distance = abs(dot(plane_row, tap_h) / dot(w_row, tap_h) - center_plane_height);
+			// pow(x, 32) is two transcendentals per tap; the default exponent takes the exact
+			// five-multiply chain, any other value keeps the general path.
+			float ndotn = max(dot(center_normal, tap_normal), 0.0);
+			float normal_weight;
+			if(u_gi_denoise_normal_pow == 32.0)
+			{
+				float n2 = ndotn * ndotn;
+				float n4 = n2 * n2;
+				float n8 = n4 * n4;
+				float n16 = n8 * n8;
+				normal_weight = n16 * n16;
+			}
+			else
+			{
+				normal_weight = pow(ndotn, u_gi_denoise_normal_pow);
+			}
 			vec4 tap_value = texture2DLod(s_gi_input, tap_uv, 0.0);
-			float luma_weight = 1.0;
+			// One exponential for both stops: exp(-a) * exp(-b) = exp(-(a + b)) exactly, and
+			// the transcendental count is what this pass is bound by (keep in step with the
+			// compute form).
+			float attenuation = plane_distance / plane_tolerance;
 			if(use_luma_stop)
 			{
-				luma_weight = exp(-abs(center_luma - Luminance(tap_value.xyz)) / luma_sigma);
+				attenuation += abs(center_luma - Luminance(tap_value.xyz)) / luma_sigma;
 			}
 			float spatial_weight = kernel[abs(x)] * kernel[abs(y)];
-			float weight = spatial_weight * depth_weight * normal_weight * luma_weight;
+			float weight = spatial_weight * normal_weight * exp(-attenuation);
 			sum += tap_value * weight;
 			weight_sum += weight;
 		}

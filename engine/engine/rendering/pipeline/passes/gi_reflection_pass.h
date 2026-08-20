@@ -54,6 +54,11 @@ public:
         /// Temporal window in frames for the stochastic ray; <= 1 bypasses the accumulation
         /// (raw passthrough) - the A/B knob for verifying the temporal is alive.
         int temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
+        /// Checkerboard trace: half the texels per frame, the temporal fills the other half
+        /// from clamped history (diagonal-neighbour bounds). Converged result identical in
+        /// expectation; disocclusions refresh at half rate. Requires the temporal (window
+        /// > 1) and is ignored without it.
+        bool checkerboard = true;
         /// Trace + accumulation resolution, the SAME knob the whole gather runs at
         /// (gi_resolve_pass::settings::resolution, default half): the composite's edge-stopped
         /// 3x3 kernel reconstructs full resolution as a joint bilateral upsample, so below-full
@@ -65,6 +70,8 @@ public:
         surface_cache_system* surface_cache{};
         surface_cache_view* view_cache{};
     };
+
+    ~gi_reflection_pass();
 
     auto init(rtti::context& ctx) -> bool;
     auto run(gfx::render_view& rview, const run_params& params) -> bool;
@@ -114,6 +121,107 @@ private:
             return program && program->is_valid();
         }
     } program_;
+
+    /// The deliverable trace path: classify answers sky / degenerate / rough texels and
+    /// compacts the tracing ones into a dense list, args sizes the indirect launch, and the
+    /// 64-lane trace groups run only rays - the fragment form (program_, kept as the
+    /// fallback) paid a whole wave wherever one quad pixel traced, and its worst-case
+    /// register footprint throttled even the early-out pixels.
+    struct reflection_classify_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_reflection_camera;
+        gfx::program::uniform_ptr u_gi_reflection_jitter;
+        gfx::program::uniform_ptr u_gi_reflection_texel;
+        gfx::program::uniform_ptr s_hiz;
+        gfx::program::uniform_ptr s_gi_normal;
+        gfx::program::uniform_ptr s_gi_diffuse;
+        gfx::program::uniform_ptr s_gi_env_sh;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_texel, "u_gi_reflection_texel", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } classify_program_;
+
+    struct reflection_args_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+
+        void cache_uniforms()
+        {
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } args_program_;
+
+    struct reflection_trace_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_reflection_camera;
+        gfx::program::uniform_ptr u_gi_reflection_jitter;
+        gfx::program::uniform_ptr u_gi_reflection_texel;
+        gfx::program::uniform_ptr u_gi_light_voxel_params;
+        gfx::program::uniform_ptr u_sdf_params;
+        gfx::program::uniform_ptr u_sdf_grid_params;
+        gfx::program::uniform_ptr u_sdf_clipmap_params;
+        gfx::program::uniform_ptr u_sdf_clipmap_levels;
+        gfx::program::uniform_ptr s_sdf_atlas;
+        gfx::program::uniform_ptr s_sdf_clipmap;
+        gfx::program::uniform_ptr s_gi_normal;
+        gfx::program::uniform_ptr s_gi_probe_layer;
+        gfx::program::uniform_ptr s_hiz;
+        gfx::program::uniform_ptr s_gi_diffuse;
+        gfx::program::uniform_ptr s_light_voxels;
+        gfx::program::uniform_ptr s_gi_env_sh;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_texel, "u_gi_reflection_texel", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
+                          global_sdf_clipmap::level_count);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_probe_layer, "s_gi_probe_layer", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } trace_program_;
+
+    /// Compacted tracing-texel list: [0] append cursor (reset by args for the next frame),
+    /// [1] staged trace count, [2+] packed coords. Raw uint indices - no typed-UAV floats.
+    gfx::dynamic_index_buffer_handle refl_list_{bgfx::kInvalidHandle};
+    uint32_t refl_list_capacity_{0};
+    /// One entry: the trace launch, ceil(count / 64) groups folded into Y past the X limit.
+    gfx::indirect_buffer_handle refl_args_{bgfx::kInvalidHandle};
 
     struct temporal_program : uniforms_cache
     {

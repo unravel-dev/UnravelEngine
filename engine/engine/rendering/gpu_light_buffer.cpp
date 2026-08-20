@@ -76,6 +76,8 @@ void gpu_light_buffer::ensure_capacity(uint32_t required_vec4)
     capacity_vec4_ = required_vec4 + required_vec4 / 2u + light_vec4_stride * 16u;
     buffer_ = gfx::create_dynamic_vertex_buffer(capacity_vec4_, ANONYMOUS::get_vec4_buffer_layout(),
                                                 BGFX_BUFFER_COMPUTE_READ);
+    // A fresh buffer holds nothing yet, whatever the content hash says.
+    buffer_uploaded_ = false;
 }
 
 void gpu_light_buffer::update(scene& scn)
@@ -138,6 +140,10 @@ void gpu_light_buffer::update(scene& scn)
         });
     if(data_.empty())
     {
+        // An emptied light set is a content change too: without flipping the hash, the last
+        // populated frame's value would linger and the probe fast-window (and the gate below,
+        // if lights later return unchanged) would read "nothing changed".
+        content_hash_ = 1469598103934665603ull;
         return;
     }
     ensure_capacity(uint32_t(data_.size() / 4u));
@@ -149,7 +155,15 @@ void gpu_light_buffer::update(scene& scn)
     {
         hash = (hash ^ bytes[i]) * 1099511628211ull;
     }
+    // The hash it just computed also gates the upload: a static light set re-staged the whole
+    // buffer every frame - on Vulkan that is continuous staging-allocator churn for identical
+    // bytes (the same waste upload_instance_grid was already gated against).
+    if(hash == content_hash_ && buffer_uploaded_)
+    {
+        return;
+    }
     content_hash_ = hash;
+    buffer_uploaded_ = true;
     gfx::update(buffer_, 0, gfx::copy(data_.data(), uint32_t(data_.size() * sizeof(float))));
 }
 

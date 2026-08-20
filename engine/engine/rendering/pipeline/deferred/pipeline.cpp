@@ -2182,7 +2182,10 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
     resolve_gi_settings(params, gi);
     auto clipmap_settings = gi.clipmap;
     clipmap_settings.compose_on_gpu = clipmap_settings.compose_on_gpu && gi_clipmap_compose_pass_.is_valid();
-    view_cache.update(surface_cache.get_clipmap_instances(), camera.get_position(), clipmap_settings);
+    view_cache.update(surface_cache.get_clipmap_instances(),
+                      camera.get_position(),
+                      clipmap_settings,
+                      surface_cache.get_content_revision());
     // Runs whenever the programs exist, not only when the GPU composes: the pass also
     // seeds the compute-writable cell buffers and drains the texture-mean captures, and
     // the CPU composer needs both. The dirty-mask handoff keeps the composers exclusive
@@ -2200,8 +2203,21 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
     // sdf-debug-only path keeps the cascade alive but has no lights to spend.
     if(params.fill_gi_params)
     {
-        run_gi_light_voxel_pass(scn, camera, rview, surface_cache, view_cache, gi);
-        run_gi_world_probe_pass(camera, rview, surface_cache, view_cache);
+        // QUIESCENCE GATE: with the light set, the clipmap content and origins, and the
+        // probe window all provably still for several complete windows, re-running the
+        // world side rewrites bit-identical values - the trace re-traces the same stratum,
+        // the convolve re-integrates the same atlas, the voxels relight to the same
+        // radiance. ~0.8 ms/frame of GPU skipped in a parked shot, resumed the same frame
+        // anything changes. Held open while an SDF debug view is up: those views paint per
+        // frame through these very dispatches.
+        const uint64_t light_hash = surface_cache.get_light_buffer().get_content_hash();
+        const bool quiescent =
+            view_cache.update_quiescence(light_hash, camera.get_position()) && !wants_sdf_debug;
+        if(!quiescent)
+        {
+            run_gi_light_voxel_pass(scn, camera, rview, surface_cache, view_cache, gi);
+            run_gi_world_probe_pass(camera, rview, surface_cache, view_cache);
+        }
         // One frame counter for both passes; each consumer keys its own rotation off it.
         ++light_voxel_frame_;
     }
@@ -2275,6 +2291,7 @@ void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
     // same convention as prev_color).
     grp.gi_diffuse = rview.tex_safe_get("GI_RESOLVE");
     grp.temporal_frames = gi_reflection_settings.resolve.reflection_temporal_frames;
+    grp.checkerboard = gi_reflection_settings.resolve.reflection_checkerboard;
     grp.resolution = gi_reflection_settings.resolve.resolution;
     grp.cam = &camera;
     grp.surface_cache = &engine::context().get_cached<surface_cache_system>();

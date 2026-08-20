@@ -30,6 +30,17 @@ IMAGE2D_WO(s_probe_irradiance_out, rgba16f, 2);
 #define GI_FILTER_PLANE_TOLERANCE 0.05
 
 SHARED vec4 s_filtered[GI_PROBE_DIR_COUNT];
+/// The 3x3 neighbourhood's metas and plane weights are per-GROUP quantities: staged once by
+/// nine threads instead of being re-derived by all 64 (that was 704 buffer loads per probe
+/// where 11 carry information).
+SHARED vec4 s_nb_meta[9];
+SHARED float s_nb_weight[9];
+/// Anchor-to-anchor distance, the parallax baseline of the adaptive angle test below.
+SHARED float s_nb_baseline[9];
+/// Every thread's decoded direction, for the convolution below: 64 threads re-decoding all
+/// 64 directions ran GiOctDecode (a normalize among other things) 4096 times per probe for
+/// 64 distinct values each thread already computed once.
+SHARED vec3 s_dir[GI_PROBE_DIR_COUNT];
 
 NUM_THREADS(8, 8, 1)
 void main()
@@ -47,56 +58,79 @@ void main()
 	int dir_index = local.y * GI_PROBE_DIR_EDGE + local.x;
 	vec2 dir_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
 	vec3 dir = GiOctDecode(dir_uv);
+	s_dir[dir_index] = dir;
+	if(dir_index < 9)
+	{
+		int ox = dir_index % 3 - 1;
+		int oy = dir_index / 3 - 1;
+		int nx = probe.x + ox;
+		int ny = probe.y + oy;
+		float plane_weight = 0.0;
+		vec4 neighbour_meta = vec4_splat(0.0);
+		if(center_valid && nx >= 0 && ny >= 0 && nx < u_gi_probe_count_x && ny < u_gi_probe_count_y)
+		{
+			uint neighbour_base =
+			    (GiProbeRecord(nx, ny, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
+			neighbour_meta = b_gi_probes[neighbour_base + uint(GI_PROBE_META)];
+			if(neighbour_meta.w > 0.5)
+			{
+				float plane_tolerance = GI_FILTER_PLANE_TOLERANCE * max(center_meta2.w, 0.1);
+				float plane = abs(dot(neighbour_meta.xyz - center_meta.xyz, center_meta2.xyz));
+				plane_weight = saturate(1.0 - plane / plane_tolerance);
+			}
+		}
+		s_nb_meta[dir_index] = neighbour_meta;
+		s_nb_weight[dir_index] = plane_weight;
+		s_nb_baseline[dir_index] = length(neighbour_meta.xyz - center_meta.xyz);
+	}
+	barrier();
 	vec4 filtered = vec4_splat(0.0);
 	if(center_valid)
 	{
 		vec4 center_texel =
 		    texelFetch(s_probe_radiance, GiProbeAtlasBase(probe.x, probe.y, 0) + local, 0);
 		float own_hit_t = center_texel.w;
-		float plane_tolerance = GI_FILTER_PLANE_TOLERANCE * max(center_meta2.w, 0.1);
 		float weight_sum = 0.0;
-		for(int oy = -1; oy <= 1; ++oy)
+		// Same neighbour order as the old oy-outer / ox-inner walk, so the summation order -
+		// and with it the floating-point result - is unchanged.
+		for(int n = 0; n < 9; ++n)
 		{
-			for(int ox = -1; ox <= 1; ++ox)
+			float weight = s_nb_weight[n];
+			if(weight <= 1e-3)
 			{
-				int nx = probe.x + ox;
-				int ny = probe.y + oy;
-				if(nx < 0 || ny < 0 || nx >= u_gi_probe_count_x || ny >= u_gi_probe_count_y)
-				{
-					continue;
-				}
-				uint neighbour_base =
-				    (GiProbeRecord(nx, ny, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
-				vec4 neighbour_meta = b_gi_probes[neighbour_base + uint(GI_PROBE_META)];
-				if(neighbour_meta.w < 0.5)
-				{
-					continue;
-				}
-				float plane = abs(dot(neighbour_meta.xyz - center_meta.xyz, center_meta2.xyz));
-				float plane_weight = saturate(1.0 - plane / plane_tolerance);
-				if(plane_weight <= 1e-3)
-				{
-					continue;
-				}
-				vec4 neighbour_value =
-				    texelFetch(s_probe_radiance, GiProbeAtlasBase(nx, ny, 0) + local, 0);
-				float weight = plane_weight;
-				// The hitT-clamped reprojection test, only when both probes actually HIT (a
-				// completed/sky texel has no parallax to test and shares freely).
-				if(own_hit_t > 0.0 && neighbour_value.w > 0.0)
-				{
-					float clamped_t = min(neighbour_value.w, own_hit_t);
-					vec3 neighbour_hit = neighbour_meta.xyz + dir * clamped_t;
-					vec3 reprojected = neighbour_hit - center_meta.xyz;
-					float reprojected_length = max(length(reprojected), 1e-4);
-					if(dot(reprojected / reprojected_length, dir) < GI_FILTER_ANGLE_LIMIT_COS)
-					{
-						continue;
-					}
-				}
-				filtered.xyz += neighbour_value.xyz * weight;
-				weight_sum += weight;
+				continue;
 			}
+			vec4 neighbour_meta = s_nb_meta[n];
+			int nx = probe.x + n % 3 - 1;
+			int ny = probe.y + n / 3 - 1;
+			vec4 neighbour_value =
+			    texelFetch(s_probe_radiance, GiProbeAtlasBase(nx, ny, 0) + local, 0);
+			// The hitT-clamped reprojection test, only when both probes actually HIT (a
+			// completed/sky texel has no parallax to test and shares freely). The limit is
+			// PARALLAX-ADAPTIVE: a co-planar neighbour's hit reprojects with an error of
+			// about baseline/hitT purely from geometry, so a fixed pi/50 rejected ALL
+			// sharing for hits within ~16 baselines - exactly the voxel-read band, whose
+			// per-probe sampling bias then stood unfiltered as wall blotches. The accepted
+			// angle is GI_FILTER_PARALLAX_SCALE x that intrinsic error, capped
+			// (GI_FILTER_ANGLE_RELAX_MAX - contact scale stays the screen trace's), floored
+			// by the published pi/50 for the far field (min of cosines = wider angle wins).
+			if(own_hit_t > 0.0 && neighbour_value.w > 0.0)
+			{
+				float clamped_t = min(neighbour_value.w, own_hit_t);
+				vec3 neighbour_hit = neighbour_meta.xyz + dir * clamped_t;
+				vec3 reprojected = neighbour_hit - center_meta.xyz;
+				float reprojected_length = max(length(reprojected), 1e-4);
+				float parallax = GI_FILTER_PARALLAX_SCALE * s_nb_baseline[n] /
+				                 max(clamped_t, 1e-3);
+				float limit_cos = min(GI_FILTER_ANGLE_LIMIT_COS,
+				                      cos(min(parallax, GI_FILTER_ANGLE_RELAX_MAX)));
+				if(dot(reprojected / reprojected_length, dir) < limit_cos)
+				{
+					continue;
+				}
+			}
+			filtered.xyz += neighbour_value.xyz * weight;
+			weight_sum += weight;
 		}
 		filtered.xyz = weight_sum > 1e-4 ? filtered.xyz / weight_sum : center_texel.xyz;
 		filtered.w = 1.0;
@@ -130,17 +164,15 @@ void main()
 		    vec4(block_luminance[0], block_luminance[1], block_luminance[2], block_luminance[3]);
 	}
 	// Cosine convolution to irradiance at THIS texel's normal direction - equal-solid-angle
-	// octahedral texels make the plain cosine-weighted sum exact up to quadrature.
-	vec3 normal = GiOctDecode(dir_uv);
+	// octahedral texels make the plain cosine-weighted sum exact up to quadrature. The sample
+	// directions come from shared memory: each is the decode some thread already did.
+	vec3 normal = dir;
 	vec4 irradiance = vec4_splat(0.0);
 	if(center_valid)
 	{
 		for(int d = 0; d < GI_PROBE_DIR_COUNT; ++d)
 		{
-			vec2 sample_uv = (vec2(float(d % GI_PROBE_DIR_EDGE), float(d / GI_PROBE_DIR_EDGE)) +
-			                  vec2_splat(0.5)) /
-			                 float(GI_PROBE_DIR_EDGE);
-			float cosine = max(dot(normal, GiOctDecode(sample_uv)), 0.0);
+			float cosine = max(dot(normal, s_dir[d]), 0.0);
 			irradiance.xyz += s_filtered[d].xyz * cosine;
 			irradiance.w += s_filtered[d].w * cosine;
 		}

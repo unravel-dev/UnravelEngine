@@ -174,9 +174,12 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     // program was compiled in (see the variant note in gi_light_voxels_kernel.sh). The lanes
     // stay so a GPU-debugger capture can finally answer whether these uniforms ever arrive,
     // the question two hunts could not settle from the CPU side.
+    // The frame lane carries only the rotation phase, never the raw frame count: past 2^24 a
+    // float frame quantises to multiples of 2 and then 4, freezing `frame % 4` on one phase -
+    // three quarters of the surface set would silently stop relighting after ~77 h at 60 fps.
     const float voxel_params[4] = {float(attr_resolution),
                                    params.sun_tier_debug ? 1.0f : 0.0f,
-                                   float(params.frame),
+                                   float(params.frame % gi::GI_LIGHT_VOXEL_UPDATE_DENOM),
                                    1.0f};
     gfx::set_uniform(program_.u_gi_light_voxel_params, voxel_params);
     // Logged on every flip: the one question a screenshot cannot answer is whether the flag
@@ -207,16 +210,20 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                                    params.probe_visibility_variance_gate};
     gfx::set_uniform(program_.u_gi_world_probe_params, probe_params);
     // The bounce's cage-visibility memo (stage 6, read+write - gfx::set_image_3d for the GL
-    // layered-binding rule). The generation refresh compares the clipmap's content epoch and
-    // the per-level probe-window cells against what the memo was stamped under; 0 means the
-    // memo is not yet seeded and the kernel takes the plain gated-march path.
+    // layered-binding rule). The generation refresh compares the clipmap's COMPOSED content
+    // epoch and the per-level probe-window cells against what the memo was stamped under;
+    // 0 means the memo is not yet seeded and the kernel takes the plain gated-march path.
+    // Composed, not target: the verdicts are marched against the composed field, and during
+    // an edit drag the target epoch churns every frame while the field only changes when
+    // the coalescing throttle lets a recompose land - keying on the target re-marched every
+    // relight against an unchanged field.
     uint32_t vis_memo_generation = 0;
     const auto& vis_memo = clipmap_gpu.get_bounce_vis_memo();
     if(vis_memo && vis_memo->is_valid())
     {
         vis_memo_generation =
             view_cache.get_clipmap_gpu_mutable().refresh_bounce_vis_generation(
-                view_clipmap.get_content_epoch(), params.camera_position, base_spacing);
+                view_clipmap.get_composed_content_epoch(), params.camera_position, base_spacing);
         gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
     }
     // Every change is logged: bumps are legitimate on edits and window scrolls, but a stream
@@ -260,15 +267,18 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_texture(program_.s_world_probe_irradiance, 11, black);
         gfx::set_texture(program_.s_world_probe_depth, 15, black);
     }
-    // Every level's full segment, early-out beyond the per-level count. The counts live on the
-    // GPU (the attribute dispatch appends them), so a tighter launch needs indirect args - a
-    // measured optimisation, not a correctness matter.
+    // One thread per entry due THIS frame: the 4-frame rotation is folded into the launch
+    // (the kernel maps thread id -> entry = denom * id + phase), so the X extent covers a
+    // quarter of the capacity, and the level rides Y so the kernel never divides. The
+    // early-out beyond the per-level count remains; a still-tighter launch needs indirect
+    // args from the GPU-side counts - a measured optimisation, not a correctness matter.
     const uint32_t capacity = attr_resolution * attr_resolution * attr_resolution;
-    const uint32_t total = capacity * global_sdf_clipmap::level_count;
+    const uint32_t rotation_slice =
+        (capacity + uint32_t(gi::GI_LIGHT_VOXEL_UPDATE_DENOM) - 1u) / uint32_t(gi::GI_LIGHT_VOXEL_UPDATE_DENOM);
     gfx::dispatch(pass.id,
                   active_program.native_handle(),
-                  (total + light_voxel_group_size - 1u) / light_voxel_group_size,
-                  1,
+                  (rotation_slice + light_voxel_group_size - 1u) / light_voxel_group_size,
+                  global_sdf_clipmap::level_count,
                   1);
     active_program.end();
     return true;

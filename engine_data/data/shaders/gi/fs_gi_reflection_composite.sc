@@ -42,8 +42,14 @@ void main()
 	// Neighbour weight ramps over the traced band: sharp lobes have no shimmer to hide and
 	// keep full sharpness, lobes near the cutoff average the whole neighbourhood.
 	float blur_scale = smoothstep(0.0, GI_REFLECTION_ROUGH_CUTOFF, nd.roughness);
+	// Two early-outs bound the kernel to the band that has shimmer to hide. Below: authored
+	// mirrors are rarely exactly 0, so `<= 0.0` never fired - a roughness-0.02 pixel ran all
+	// 24 taps to apply a total neighbour weight under 0.004. Anything below 0.05 is beneath
+	// the target's own quantisation. Above: pixels past the cutoff never traced - their
+	// accumulated value is last frame's temporally filtered, denoised resolve, which has no
+	// stochastic shimmer for the kernel to remove.
 	BRANCH
-	if(blur_scale <= 0.0)
+	if(blur_scale < 0.05 || nd.roughness >= GI_REFLECTION_ROUGH_CUTOFF)
 	{
 		gl_FragColor = vec4(center.xyz, saturate(center.w));
 		return;
@@ -68,7 +74,13 @@ void main()
 			// screen-depth band, tight normal cone so silhouettes stay crisp.
 			float depth_weight =
 			    saturate(1.0 - abs(sample_depth - center_depth) / (GI_TEMPORAL_DEPTH_TOLERANCE * 0.01));
-			float normal_weight = pow(saturate(dot(normalize(sample_normal), center_normal)), 32.0);
+			// pow(x, 32) is two transcendentals; five multiplies are cheaper and exact.
+			float nw = saturate(dot(normalize(sample_normal), center_normal));
+			nw = nw * nw;
+			nw = nw * nw;
+			nw = nw * nw;
+			nw = nw * nw;
+			float normal_weight = nw * nw;
 			float weight = blur_scale * depth_weight * normal_weight;
 			color_sum += texture2DLod(s_refl_acc, sample_uv, 0.0).xyz * weight;
 			weight_sum += weight;

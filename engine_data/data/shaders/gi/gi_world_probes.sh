@@ -254,14 +254,57 @@ uint GiWorldProbeCageMask(vec3 position, vec3 normal, vec3 view_direction, int l
 	return mask;
 }
 
-/// Bounce visibility-memo texel layout (stored in an R32U volume, low 16 bits used): low
-/// byte = the 8-bit cage mask above, bits 8-13 = a wrapping generation tag (0 reserved as
-/// "never stamped" - the volume clears to 0 and the CPU hands out generations 1..63), bits
-/// 14-15 = the probe LEVEL the mask was computed for. These four functions are the layout's
-/// single source of truth; the CPU transcriptions in gi_tests.cpp pin them by hand.
-uint GiWorldProbeVisMemoPack(uint mask, uint generation, int level)
+/// Bounce visibility-memo texel layout (an R32U volume, all 32 bits now spoken for):
+///   bits  0-7  = the 8-bit NEAR cage mask above,
+///   bits  8-13 = a wrapping generation tag shared by both halves (0 reserved as "never
+///                stamped" - the volume clears to 0 and the CPU hands out generations 1..63),
+///   bits 14-15 = the probe LEVEL the near mask was computed for,
+///   bits 16-21 = the face's cavity visibility quantised to 6 bits (error <= 1/126, consumed
+///                only as the bounce attenuator and to skip the cavity march). Quantised 0
+///                doubles as the CULLED sentinel: a stored non-culled face passed the
+///                GI_LIGHT_VOXEL_VISIBILITY_MIN (0.25) gate, so its quantised value is >= 16
+///                and the encodings can never collide.
+///   bit  22    = the FAR mask (below) is filled. Filled LAZILY, on the first probe-half HIT
+///                whose blend band is open - never on a miss: a miss marches enough already
+///                (the near cage), and on churning generations (camera motion re-snapping
+///                windows every few frames) an eager ungated far march on every miss cost
+///                MORE than the gated read it replaced. A generation that survives to its
+///                first hit has proven stable enough to amortise.
+///   bit  23    = the PROBE half (near mask, level) is populated. A culled or zero-radiance
+///                face stamps only the face half; fabricating mask 0 + level 0 instead would
+///                decode as a valid "all-dead level 0" verdict and pin the texel's cage
+///                fall-through to the wrong level for the whole generation.
+///   bits 24-31 = the FAR-blend cage mask, always for level + 1 of the near tag. Whether the
+///                blend band is open is a pure function of the texel's position and the
+///                window, both frozen within a generation.
+/// Every store writes the whole word (both halves share the one generation), and validity is
+/// generation match + the half's own populated semantics. These functions are the layout's
+/// single source of truth; the CPU transcriptions in gi_oracle.cpp pin them by hand.
+#define GI_VIS_MEMO_FACE_HALF_BITS 0x003F0000u
+
+/// The probe half of a full stamp: near mask + level, marked populated; the far mask and its
+/// filled bit only when the caller actually marched it (the lazy fill). OR the preserved (or
+/// freshly packed) face half on top - the caller owns that half.
+uint GiWorldProbeVisMemoPackProbe(uint mask, uint generation, int level, uint far_mask,
+                                  bool far_filled)
 {
-	return (mask & 0xFFu) | ((generation & 0x3Fu) << 8u) | (uint(level) << 14u);
+	return (mask & 0xFFu) | ((generation & 0x3Fu) << 8u) | (uint(level) << 14u) |
+	       (1u << 23u) | (far_filled ? (1u << 22u) : 0u) | ((far_mask & 0xFFu) << 24u);
+}
+
+/// The face half's payload bits (16-21) alone - combine with PackProbe or PackFaceOnly.
+/// Culled faces store quantised visibility 0 (see the sentinel note above).
+uint GiWorldProbeVisMemoPackFace(float visibility, bool culled)
+{
+	uint quantised = culled ? 0u : uint(saturate(visibility) * 63.0 + 0.5);
+	return quantised << 16u;
+}
+
+/// A face-half-only stamp (culled and zero-radiance faces, and the no-cage-answered
+/// fall-out): generation + face payload, probe half left unpopulated.
+uint GiWorldProbeVisMemoPackFaceOnly(uint face_half, uint generation)
+{
+	return face_half | ((generation & 0x3Fu) << 8u);
 }
 
 uint GiWorldProbeVisMemoMask(uint texel_value)
@@ -277,6 +320,31 @@ uint GiWorldProbeVisMemoGeneration(uint texel_value)
 int GiWorldProbeVisMemoLevel(uint texel_value)
 {
 	return int((texel_value >> 14u) & 0x3u);
+}
+
+float GiWorldProbeVisMemoFaceVisibility(uint texel_value)
+{
+	return float((texel_value >> 16u) & 0x3Fu) * (1.0 / 63.0);
+}
+
+bool GiWorldProbeVisMemoFaceCulled(uint texel_value)
+{
+	return ((texel_value >> 16u) & 0x3Fu) == 0u;
+}
+
+bool GiWorldProbeVisMemoFarFilled(uint texel_value)
+{
+	return (texel_value & (1u << 22u)) != 0u;
+}
+
+bool GiWorldProbeVisMemoProbeValid(uint texel_value)
+{
+	return (texel_value & (1u << 23u)) != 0u;
+}
+
+uint GiWorldProbeVisMemoFarMask(uint texel_value)
+{
+	return (texel_value >> 24u) & 0xFFu;
 }
 
 #ifndef GI_WORLD_PROBE_SKIP_IRRADIANCE
@@ -317,6 +385,9 @@ bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direct
 	// through the field-visibility term below, it distinguishes "no cage here" from "the cage
 	// is here and every probe of it is behind a wall" - two failures with opposite answers.
 	float covered_sum = 0.0;
+	// LOOP: the body carries the (gated) cage-visibility march; unrolled it multiplies the
+	// largest instruction footprint of every caller by eight.
+	LOOP
 	for(int corner = 0; corner < 8; ++corner)
 	{
 		ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
@@ -398,9 +469,18 @@ bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direct
 				continue;
 			}
 		}
-		else if(moments_ambiguous && GiWorldProbeCageVisibility(biased, probe_position, spacing) <= 0.0)
+		else
 		{
-			continue;
+			// Nested, never an && chain: HLSL && may evaluate both operands (FXC does), and
+			// the right operand is the 40-step field march the variance gate exists to skip.
+			BRANCH
+			if(moments_ambiguous)
+			{
+				if(GiWorldProbeCageVisibility(biased, probe_position, spacing) <= 0.0)
+				{
+					continue;
+				}
+			}
 		}
 		vec2 irradiance_uv =
 		    (vec2(tile) + vec2_splat(1.0) + oct_uv * float(GI_WORLD_PROBE_OCT_IRRADIANCE)) *
@@ -589,9 +669,16 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 			// every gather cone - the dominant sealed-room leak once the trace side was
 			// watertight. The gate keeps completions affordable: most miss-ray cages are
 			// open-lobe or flat-wall cases the moments already answer.
-			if(moments_ambiguous && GiWorldProbeCageVisibility(position, probe_position, spacing) <= 0.0)
+			//
+			// Nested, never an && chain: HLSL && may evaluate both operands (FXC does), and
+			// the right operand is the 40-step field march the gate exists to skip.
+			BRANCH
+			if(moments_ambiguous)
 			{
-				continue;
+				if(GiWorldProbeCageVisibility(position, probe_position, spacing) <= 0.0)
+				{
+					continue;
+				}
 			}
 			// Sphere parallax: read toward where the ray meets the probe's visibility sphere.
 			// The stored mean depth toward the RAY direction is the sphere radius estimate.

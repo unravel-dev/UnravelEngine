@@ -290,7 +290,23 @@
       " should be darkest")                                                                        \
     X(GI_FILTER_ANGLE_LIMIT_COS, 0.99802673f,                                                      \
       "cos(pi/50)", "published: [GI1.0 s2.1] probe-space filter rejects a neighbour"               \
-      " hit whose reprojected direction deviates by more than pi/50")                              \
+      " hit whose reprojected direction deviates by more than pi/50 - the FLOOR of the"            \
+      " parallax-adaptive limit below")                                                            \
+    X(GI_FILTER_PARALLAX_SCALE, 1.5f,                                                              \
+      "x the intrinsic parallax angle", "derived: a neighbour probe's hit along the SAME"          \
+      " octahedral direction reprojects with an error of about baseline/hitT even when both"       \
+      " probes see one flat co-planar surface - the offset is geometric, not a visibility"         \
+      " disagreement. Against the fixed pi/50 limit that rejected ALL sharing for hits closer"     \
+      " than ~16 baselines (~2-5 m at typical pitches) - precisely the band where gather rays"     \
+      " read light voxels, so per-probe voxel-sampling bias stood unfiltered as wall blotches."    \
+      " The accepted error now scales to this multiple of the intrinsic parallax (1.5 covers"      \
+      " the obliquity spread of co-planar hits; different-visibility hits reproject far"           \
+      " outside it), with pi/50 as the far-field floor")                                           \
+    X(GI_FILTER_ANGLE_RELAX_MAX, 0.2f,                                                             \
+      "radians", "derived: cap of the parallax-adaptive limit (~11.5 deg). Below roughly two"      \
+      " baselines of hit distance the parallax term would accept nearly anything; contact-scale"   \
+      " visibility there belongs to the pixel-precise screen trace, but the cap keeps the"         \
+      " probe-space filter from ever dissolving it outright")                                      \
     /* --- reflections (plan phase 9) --- */                                                       \
     X(GI_REFLECTION_ROUGH_CUTOFF, 0.4f,                                                            \
       "GGX roughness", "derived: the world-probe radiance atlas texel (16x16 octahedral,"          \
@@ -304,11 +320,15 @@
       " must track moving content faster than irradiance, so one cycle, ~130 ms at 60 Hz."         \
       " The temporal pass clamps history to the 3x3 neighbourhood of the current frame's"         \
       " samples, so stale content cannot outlive a frame regardless of this length")               \
-    X(GI_REFLECTION_MESH_SDF_RANGE_SHARP, 40.0f,                                                   \
-      "meters", "derived: a mirror is one image-ray, not 64 gather cones, so the mesh-exact"       \
-      " walk may run past level 0 (16 m). 40 m covers the 32 m level-1 cube with margin and"      \
-      " stays inside GI_SHADOW_DISTANCE. Average cost is held by the gloss end dropping"           \
-      " below the old flat 16 m, so only sharp pixels pay the long grid walk")                     \
+    X(GI_REFLECTION_MESH_SDF_RANGE_SHARP, 16.0f,                                                   \
+      "meters", "derived: a mirror is one image-ray, so the mesh-exact walk may run past the"      \
+      " gather's 2 m contact bound - but beyond a few metres the clipmap-finder + refine path"     \
+      " already snaps hits back to the mesh (GI_REFLECTION_REFINE_*) at a tenth of the long"       \
+      " grid walk's cost, so the walk only needs to cover the range where refine's window can"     \
+      " miss thin silhouettes: level 0's 16 m cube. Was 40 m, which duplicated refine's job on"    \
+      " the dominant-cost pixels; the A/B metric is the unrefined-clipmap fraction"                \
+      " (instance_index == SDF_NO_INSTANCE && !exhausted) - widen the refine window before"        \
+      " raising this back")                                                                        \
     X(GI_REFLECTION_MESH_SDF_RANGE_GLOSS, 8.0f,                                                    \
       "meters", "derived: at GI_REFLECTION_GATHER_FADE_START the GGX lobe already spans"           \
       " clipmap voxels, so mesh-exact silhouettes stop mattering. 8 m is 4x the gather's"          \
@@ -370,7 +390,47 @@
       " Lumen's 10 (their budget has far more effective rays) still crawled, 25 measured"          \
       " stable; 24 keeps the window commensurate with the 8-frame anchor-placement cycle"          \
       " (three full cycles). Depth rejection only, no neighbourhood clamp [S21 s98]; the"          \
-      " gi_resolve_pass::settings::max_accum_frames default")                                      \
+      " gi_resolve_pass::settings::max_accum_frames default (now the PROBE-SPACE cap; the"         \
+      " full-res temporal runs the dual-rate pair below)")                                         \
+    X(GI_TEMPORAL_FAST_FRAMES, 8,                                                                  \
+      "frames", "derived: one full anchor-placement cycle = two complete 4-frame screen-probe"     \
+      " stratum spheres - the shortest window whose mean has seen every ray direction once."       \
+      " The dual-rate temporal's fast lane, and the count a detected lighting change resets"       \
+      " the slow lane to")                                                                         \
+    X(GI_TEMPORAL_SLOW_FRAMES, 96,                                                                 \
+      "frames", "measured: a small bright emissive source excites amortization phase waves"        \
+      " with a ~16-frame period (the world-probe stratum window x the light-voxel rotation)"       \
+      " that a 24-frame mean cannot average - blobs crawl; the user-validated ~100 settles"        \
+      " them. 96 = six wave periods and twelve fast cycles. Costs no responsiveness: the"          \
+      " change detector (GI_TEMPORAL_CHANGE_SIGMA) snaps the slow lane to the fast one on a"       \
+      " real mean shift; the gi_resolve_pass::settings::temporal_slow_frames default")             \
+    X(GI_CLIPMAP_EDIT_THROTTLE_FRAMES, 8,                                                          \
+      "frames", "derived: a continuously edited instance (an editor drag) re-fingerprints its"     \
+      " levels EVERY frame, and each recompose is a full non-toroidal distance volume plus"        \
+      " attributes (~1.4 ms) AND bumps the vis-memo generation, making every light-voxel"         \
+      " relight a miss (~1.3 ms) - measured 4.8 ms drag frames against 2.8 moving the camera."     \
+      " Content-driven recomposes therefore coalesce to one per this many frames per level"        \
+      " (the pending fingerprint diff persists, so the final state lands within one window of"     \
+      " release; origin re-snaps stay immediate). Two light-voxel rotations, so half the"          \
+      " relights hit the memo even mid-drag; the coarse-clipmap GI lags a dragged object by"       \
+      " at most ~130 ms - within the gather's own multi-window latency")                           \
+    X(GI_GATHER_FIREFLY_CLAMP, 8.0f,                                                               \
+      "x the texel's own blended history", "derived: a gather ray that lands on a small bright"    \
+      " emitter returns a radiance that dominates its probe's whole tile - and a probe whose"      \
+      " accumulation just reset (a Halton walk, temporal off) ingests it at full weight, so the"   \
+      " probe's entire screen footprint pops red for a frame and fades (the moving-blocks"        \
+      " report). Each texel's new sample is clamped to this many times its own blended history"    \
+      " (per-texel, never the tile mean - a mean-relative ceiling permanently crushes a"           \
+      " legitimately bright texel to mean x k / 256): a spike tempers to k x ambient, while an"    \
+      " established bright texel keeps its ceiling at k x its own value and converges"             \
+      " unbiased. A texel with no meaningful history (fresh tile) stores its first measurement"    \
+      " unclamped - progressive ramps from black would dim every disocclusion instead")            \
+    X(GI_TEMPORAL_CHANGE_SIGMA, 3.0f,                                                              \
+      "standard deviations", "derived: the fast and slow lanes are means of the same sample"       \
+      " stream, so their gap's variance is the single-sample variance x (1/n_fast +"               \
+      " 1/n_slow); a luminance gap beyond three such sigmas is a mean SHIFT (lighting"             \
+      " changed), not noise - the slow lane snaps to the fast one and re-accumulates."             \
+      " Three sigma = ~0.3% false-snap rate, and a false snap only costs one count reset")         \
     X(GI_TEMPORAL_DEPTH_TOLERANCE, 0.25f,                                                          \
       "relative depth per unit view distance", "measured: Lumen's Temporal.DistanceThreshold"      \
       " = 0.005 assumes motion-vector reprojection; ours reconstructs the previous position"       \
