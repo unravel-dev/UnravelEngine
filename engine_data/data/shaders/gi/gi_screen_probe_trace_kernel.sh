@@ -130,6 +130,16 @@ SHARED float s_blend_alpha[GI_TRACE_SLOT_COUNT];
 /// Fresh history under the single-buffered atlas: untraced texels must be cleared rather
 /// than left showing whatever tile the atlas held before.
 SHARED bool s_tile_clear[GI_TRACE_SLOT_COUNT];
+/// Atlas base of the tile this probe INHERITS from ((-1,-1) = none): when a camera slide
+/// re-anchors the probe (same-origin fails on a frame that scheduled no walk), the
+/// world-reprojected previous-lattice probe - already located, plane-tested, for the
+/// importance mip - holds the CURRENT accumulated estimate of the world point this probe
+/// now covers. Blending into and copying from THAT tile is what lets probe-space
+/// accumulation survive camera rotation and travel; without it every slide reset the count
+/// AND left the tile serving strata traced from wherever the probe pointed windows ago,
+/// which the convolve integrated into a churning mean no pixel temporal can settle
+/// (measured as blotch noise the moment the camera moves, worst in emissive-lit darkness).
+SHARED ivec2 s_inherit_base[GI_TRACE_SLOT_COUNT];
 /// Dispatch-uniform values hoisted out of the per-ray loop.
 SHARED vec2 s_screen_size;
 SHARED vec2 s_frame_r2;
@@ -176,13 +186,28 @@ vec3 GiFarFieldFallback(vec3 hit_position, vec3 sample_dir)
 	return GiFarFieldRadiance(hit_position, sample_dir);
 }
 
-void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
+void GiStoreScreenProbeRay(int slot, ivec2 texel, ivec2 local, vec3 radiance, float hit_t)
 {
 	vec3 averaged = min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
-	// The texel's own previous value: the blend history below, and the FIREFLY GOVERNOR's
-	// reference. Loaded unconditionally - the governor applies in every accumulation mode
-	// (a probe with temporal OFF overwrites its tile each frame and pops just as hard).
-	vec4 hist = imageLoad(s_probe_radiance_out, texel);
+	// The blend history and the FIREFLY GOVERNOR's reference: the INHERITED tile's texel
+	// when a slide re-anchor adopted the world-reprojected previous probe (s_inherit_base),
+	// the texel's own previous value otherwise. Loaded unconditionally - the governor
+	// applies in every accumulation mode (a probe with temporal OFF overwrites its tile
+	// each frame and pops just as hard). The inherited read may race the source probe's
+	// own trace this frame: either side of that race is a valid radiance estimate of the
+	// same texel (old blend or new blend), and RGBA16F texel stores do not tear, so the
+	// worst case is one window of blend uncertainty - never corruption.
+	ivec2 inherit_base = s_inherit_base[slot];
+	vec4 hist;
+	BRANCH
+	if(inherit_base.x >= 0)
+	{
+		hist = imageLoad(s_probe_radiance_out, inherit_base + local);
+	}
+	else
+	{
+		hist = imageLoad(s_probe_radiance_out, texel);
+	}
 	float hist_luma = Luminance(hist.xyz);
 	// FIREFLY GOVERNOR: a ray landing on a small bright emitter dominates the whole tile,
 	// and a reset accumulation (Halton walk, temporal off) ingests it at full weight - the
@@ -432,7 +457,7 @@ void GiTraceScreenProbeRay(int slot, ivec2 probe, ivec2 local)
 		}
 		radiance_sum += radiance;
 	}
-	GiStoreScreenProbeRay(slot, texel, radiance_sum / float(sample_count), hit_t);
+	GiStoreScreenProbeRay(slot, texel, local, radiance_sum / float(sample_count), hit_t);
 }
 
 #if defined(GI_SCREEN_PROBE_TRACE_COMPACT)
@@ -476,6 +501,8 @@ void main()
 			s_importance_mean[slot] = 0.0;
 			s_blend_alpha[slot] = 1.0;
 			s_tile_clear[slot] = false;
+			s_inherit_base[slot] = ivec2(-1, -1);
+			ivec2 history_probe = ivec2(-1, -1);
 			// Placement computed the anchor, classification put this probe on the traced list -
 			// the records are valid by construction; this thread only unpacks them and
 			// reprojects the anchor for the importance mip.
@@ -513,6 +540,7 @@ void main()
 					   plane < 0.05 * max(length(world_position - u_gi_camera.xyz), 0.1))
 					{
 						s_history_record[slot] = int(history_base);
+						history_probe = ivec2(hx, hy);
 						float total = 0.0;
 						for(int m = 0; m < 4; ++m)
 						{
@@ -552,9 +580,33 @@ void main()
 					}
 				}
 				float count = keep > 0.5 ? min(prev_count + 1.0, u_gi_probe_max_accum) : 1.0;
-				b_gi_probes[record + uint(GI_PROBE_HISTORY)] = vec4(count, 1.0 / count, 0.0, keep);
-				s_blend_alpha[slot] = 1.0 / count;
-				s_tile_clear[slot] = !tile_valid;
+				// TILE INHERITANCE (see s_inherit_base): a slide re-anchor - same-origin
+				// failed on a frame that scheduled no walk - adopts the world-reprojected
+				// previous probe's tile and count instead of resetting. The plane test
+				// already vetted it as this world point's estimate, so no ghosting enters:
+				// this is the CURRENT accumulation of the right point, maintained live by
+				// its own probe (or the interp pass). Scheduled walks keep their reset -
+				// dissolving blotches is their whole purpose. The count still clamps to
+				// u_gi_probe_max_accum, so the lighting-change fast-flush caps inherited
+				// depth exactly like kept depth.
+				BRANCH
+				if(keep < 0.5 && history_probe.x >= 0 && !GiScreenProbeWalkThisFrame())
+				{
+					float inherited =
+					    b_gi_probes[uint(s_history_record[slot]) + uint(GI_PROBE_HISTORY)].x;
+					count = min(inherited + 1.0, u_gi_probe_max_accum);
+					s_inherit_base[slot] = GiProbeAtlasBase(history_probe.x, history_probe.y, 0);
+					s_tile_clear[slot] = false;
+					b_gi_probes[record + uint(GI_PROBE_HISTORY)] =
+					    vec4(count, 1.0 / count, 0.0, 0.0);
+					s_blend_alpha[slot] = 1.0 / count;
+				}
+				else
+				{
+					b_gi_probes[record + uint(GI_PROBE_HISTORY)] = vec4(count, 1.0 / count, 0.0, keep);
+					s_blend_alpha[slot] = 1.0 / count;
+					s_tile_clear[slot] = !tile_valid;
+				}
 			}
 		}
 	}
@@ -607,18 +659,36 @@ void main()
 		}
 		base_phase = (u_gi_probe_frame * uint(rays_per_thread)) % u_gi_probe_window;
 	}
-	// A fresh (invalid) history under the single-buffered atlas: the texels outside this
-	// frame's stratum hold whatever the atlas held before - the old history pass cleared
-	// them during its copy. Each thread clears the other phases of its own coarse cell.
-	if(s_tile_clear[slot] && rays_per_thread < int(u_gi_probe_window))
+	// Texels outside this frame's stratum: an INHERITED tile copies them from the
+	// world-reprojected source (they would otherwise keep serving strata traced from
+	// wherever this probe pointed windows ago - the churning mean under camera motion);
+	// a fresh (invalid) history clears them, the duty the old history-pass copy carried.
+	if(rays_per_thread < int(u_gi_probe_window))
 	{
-		for(uint p = 0u; p < u_gi_probe_window; ++p)
+		ivec2 inherit_base = s_inherit_base[slot];
+		if(inherit_base.x >= 0)
 		{
-			if(p < base_phase || p >= base_phase + uint(rays_per_thread))
+			for(uint p = 0u; p < u_gi_probe_window; ++p)
 			{
-				imageStore(s_probe_radiance_out,
-				           GiProbeAtlasBase(probe.x, probe.y, 0) + GiScreenProbeStratumLocal(thread, p),
-				           vec4(0.0, 0.0, 0.0, -1.0));
+				if(p < base_phase || p >= base_phase + uint(rays_per_thread))
+				{
+					ivec2 stratum_local = GiScreenProbeStratumLocal(thread, p);
+					imageStore(s_probe_radiance_out,
+					           GiProbeAtlasBase(probe.x, probe.y, 0) + stratum_local,
+					           imageLoad(s_probe_radiance_out, inherit_base + stratum_local));
+				}
+			}
+		}
+		else if(s_tile_clear[slot])
+		{
+			for(uint p = 0u; p < u_gi_probe_window; ++p)
+			{
+				if(p < base_phase || p >= base_phase + uint(rays_per_thread))
+				{
+					imageStore(s_probe_radiance_out,
+					           GiProbeAtlasBase(probe.x, probe.y, 0) + GiScreenProbeStratumLocal(thread, p),
+					           vec4(0.0, 0.0, 0.0, -1.0));
+				}
 			}
 		}
 	}
@@ -630,12 +700,18 @@ void main()
 #else
 	ivec2 local = ivec2(gl_LocalInvocationID.xy);
 	// Stratum early-out: untraced texels keep this probe's previous tile in place (the atlas
-	// is single-buffered) - unless the history is fresh, in which case they are cleared, the
-	// duty the old history-pass copy carried. Window 1 takes every texel, the parallel
-	// A/B-off path.
+	// is single-buffered) - unless the tile is INHERITED (copied from the world-reprojected
+	// source, see s_inherit_base) or the history is fresh (cleared, the duty the old
+	// history-pass copy carried). Window 1 takes every texel, the parallel A/B-off path.
 	if(!GiScreenProbeInStratum(local, u_gi_probe_frame, u_gi_probe_window))
 	{
-		if(s_tile_clear[slot])
+		ivec2 inherit_base = s_inherit_base[slot];
+		if(inherit_base.x >= 0)
+		{
+			imageStore(s_probe_radiance_out, GiProbeAtlasBase(probe.x, probe.y, 0) + local,
+			           imageLoad(s_probe_radiance_out, inherit_base + local));
+		}
+		else if(s_tile_clear[slot])
 		{
 			imageStore(s_probe_radiance_out, GiProbeAtlasBase(probe.x, probe.y, 0) + local,
 			           vec4(0.0, 0.0, 0.0, -1.0));
