@@ -187,16 +187,23 @@ void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 	// FIREFLY GOVERNOR: a ray landing on a small bright emitter dominates the whole tile,
 	// and a reset accumulation (Halton walk, temporal off) ingests it at full weight - the
 	// probe's screen footprint pops for a frame and fades. Each new sample is capped at
-	// GI_GATHER_FIREFLY_CLAMP x this texel's own blended history: spikes temper to a
-	// multiple of the established value, while a texel that legitimately sees the emitter
-	// keeps raising its own ceiling and converges unbiased (see the constant's note - the
-	// ceiling is per-texel on purpose, never the tile mean). A texel with no meaningful
-	// history stores its first measurement unclamped: progressive ramps from black would
-	// dim every fresh tile at disocclusions instead.
+	// GI_GATHER_FIREFLY_CLAMP x its reference. The reference is the texel's own blended
+	// history, FLOORED by the reprojected previous tile's mean luminance
+	// (s_importance_mean - looked up by WORLD position with a plane test, so it survives
+	// the camera-slide re-anchor that leaves the tile holding a NEARBY point's radiance).
+	// Without the floor, a dark stale texel crushed legitimate arrivals to 8x darkness,
+	// then let them ramp, then crushed again on the next slide - measured as pumping
+	// noise in emissive-lit dark scenes the moment the camera moved. A texel whose own
+	// history legitimately sees the emitter still raises its own ceiling and converges
+	// unbiased (per-texel, never ONLY the tile mean - that would crush a lone bright
+	// texel to mean x k / 256). No meaningful reference at all (fresh tile, failed
+	// reprojection): the first measurement stores unclamped - progressive ramps from
+	// black would dim every disocclusion instead.
+	float reference = max(hist_luma, s_importance_mean[slot]);
 	BRANCH
-	if(hist_luma > 1e-3)
+	if(reference > 1e-3)
 	{
-		float ceiling = GI_GATHER_FIREFLY_CLAMP * hist_luma;
+		float ceiling = GI_GATHER_FIREFLY_CLAMP * reference;
 		float luma = Luminance(averaged);
 		if(luma > ceiling)
 		{
@@ -559,17 +566,55 @@ void main()
 #if defined(GI_SCREEN_PROBE_TRACE_COMPACT)
 	// 16 busy lanes per slot. Window 4: one Bayer texel each. Window 1 (A/B-off fallback):
 	// each thread walks the 4 phases so the atlas still fills when the 8x8 program is missing.
+	//
+	// ADAPTIVE REINVESTMENT: the adaptive classifier frees 40-60% of the lattice's ray
+	// budget on flat content, and that budget was banked as idle lanes. The traced count is
+	// already staged in the list head (the args pass's bounds value), so the kernel widens
+	// its own stratum where the launch stays within GI_SCREEN_PROBE_REINVEST_BUDGET of the
+	// full lattice's rays - HALF, not all of it, because the probes that remain traced are
+	// the expensive ones (geometry breaks, near-field marches; the skipped flat probes are
+	// what diluted the average ray cost), so spending the whole nominal budget on them cost
+	// MORE time than the uniform lattice and adaptive stopped being a perf win (measured:
+	// +0.15 ms). Under the half budget, dense scenes reinvest nothing and keep the full
+	// adaptive saving, while sparse lattices - flat dim walls, where arrival density is the
+	// far-emissive flicker - still re-measure every direction two to four times as fast.
+	// base advances by the stratum width, so phases never overlap and a flip near the
+	// threshold costs nothing (untraced phases keep the single-buffered tile).
 	int thread = int(gl_LocalInvocationID.x);
-	int rays_per_thread = u_gi_probe_window <= 1u ? GI_SCREEN_PROBE_WINDOW : 1;
-	uint base_phase = u_gi_probe_window <= 1u ? 0u : (u_gi_probe_frame % u_gi_probe_window);
+	int rays_per_thread;
+	uint base_phase;
+	if(u_gi_probe_window <= 1u)
+	{
+		rays_per_thread = GI_SCREEN_PROBE_WINDOW;
+		base_phase = 0u;
+	}
+	else
+	{
+		float traced_count = b_gi_probes[GiProbeTracedListBase()].y;
+		float budget = GI_SCREEN_PROBE_REINVEST_BUDGET * float(u_gi_probe_count_x) *
+		               float(u_gi_probe_count_y);
+		if(traced_count * 4.0 <= budget)
+		{
+			rays_per_thread = GI_SCREEN_PROBE_WINDOW;
+		}
+		else if(traced_count * 2.0 <= budget)
+		{
+			rays_per_thread = 2;
+		}
+		else
+		{
+			rays_per_thread = 1;
+		}
+		base_phase = (u_gi_probe_frame * uint(rays_per_thread)) % u_gi_probe_window;
+	}
 	// A fresh (invalid) history under the single-buffered atlas: the texels outside this
 	// frame's stratum hold whatever the atlas held before - the old history pass cleared
 	// them during its copy. Each thread clears the other phases of its own coarse cell.
-	if(s_tile_clear[slot] && rays_per_thread == 1)
+	if(s_tile_clear[slot] && rays_per_thread < int(u_gi_probe_window))
 	{
 		for(uint p = 0u; p < u_gi_probe_window; ++p)
 		{
-			if(p != base_phase)
+			if(p < base_phase || p >= base_phase + uint(rays_per_thread))
 			{
 				imageStore(s_probe_radiance_out,
 				           GiProbeAtlasBase(probe.x, probe.y, 0) + GiScreenProbeStratumLocal(thread, p),
@@ -577,6 +622,7 @@ void main()
 			}
 		}
 	}
+	LOOP
 	for(int ri = 0; ri < rays_per_thread; ++ri)
 	{
 		GiTraceScreenProbeRay(slot, probe, GiScreenProbeStratumLocal(thread, base_phase + uint(ri)));

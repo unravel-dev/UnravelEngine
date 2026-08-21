@@ -325,8 +325,14 @@ void test_screen_probe_same_origin_rejects_halton_walk()
     const float tile_world = view_distance * spacing * inv_screen_h;
     const float limit = float(gi::GI_SCREEN_PROBE_HISTORY_TILE) * tile_world;
     check(limit > 0.0f, "history keep is a positive fraction of the tile");
-    check(float(gi::GI_SCREEN_PROBE_WALK_WINDOWS) == 1.0f,
-          "one scheduled walk per complete sphere");
+    // At least one complete sphere between walks (per-frame Halton is the shimmer), and few
+    // enough that blotches still dissolve within the temporal window. Raised from exactly 1
+    // when the parallax-adaptive probe filter took over near-band blotch dissolution: each
+    // walk is an accumulation reset, so fewer walks is less noise for the same ray budget.
+    check(gi::GI_SCREEN_PROBE_WALK_WINDOWS >= 1, "walks are at least one complete sphere apart");
+    check(gi::GI_SCREEN_PROBE_WALK_WINDOWS * gi::GI_SCREEN_PROBE_WINDOW * 2 <=
+              int(gi::GI_TEMPORAL_MAX_FRAMES),
+          "two walk periods fit the classic temporal window, so a walked blotch still fades");
     const auto same_origin = [limit](float distance) -> bool { return distance < limit; };
     check(same_origin(0.0f), "the sticky point itself keeps the running mean");
     check(same_origin(0.1f * tile_world), "sub-pixel reconstruction error stays accepted");

@@ -495,6 +495,16 @@ void main()
 	float cached_dir_visibility = 0.0;
 	int cached_dir_index = -1;
 	float center_lift = max(0.0, -d_center) + 0.5 * attr_voxel;
+	// DIRECT-LIGHTING DITHER (GI_LIGHT_VOXEL_SUN_DITHER): the evaluation point walks within
+	// the voxel per relight, so shadow edges land in the volume as temporal dither instead of
+	// a voxel staircase - the probes' stratum window and the gather temporal integrate it
+	// into penumbra. Per-VOXEL (hoisted, shared by all six faces and the directional memo);
+	// the tunnel guard, cavity march and bounce read stay un-dithered - their verdicts are
+	// memoised as pure functions of the field, and the bounce lattice is smooth anyway.
+	vec3 dither_seed = fract(vec3(cell) * vec3(0.1031, 0.1030, 0.0973) +
+	                         vec3(0.9151, 0.8380, 0.7548) * float(u_light_voxel_frame));
+	vec3 light_jitter =
+	    (dither_seed - vec3_splat(0.5)) * (2.0 * GI_LIGHT_VOXEL_SUN_DITHER * attr_voxel);
 	// LOOP: unrolled, this replicates the largest body in the GI frame - the light loop with
 	// its sphere traces, the cavity march, the 8-corner probe chain - six times, with the
 	// register pressure that implies.
@@ -666,11 +676,11 @@ void main()
 			imageStore(s_light_voxels_out, texel, vec4(0.0, 0.0, 0.0, 1.0));
 			continue;
 		}
-		vec3 irradiance = GiEvalDirectLightingVoxel(position,
+		vec3 irradiance = GiEvalDirectLightingVoxel(position + light_jitter,
 		                                            direction,
 		                                            max(level_data.w, 0.01),
 		                                            u_gi_shadow_near_field * near_scale,
-		                                            center,
+		                                            center + light_jitter,
 		                                            center_lift,
 		                                            cached_dir_visibility,
 		                                            cached_dir_index);

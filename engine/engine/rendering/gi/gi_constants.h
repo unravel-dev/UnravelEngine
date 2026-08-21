@@ -211,12 +211,16 @@
       " sticky reconstruct (sub-pixel). A Halton walk inside the tile must reset the count or"    \
       " the 16 new cones collage onto 48 from a different origin and a still camera shimmers."    \
       " The tile is still COPIED on a miss - writing black is what darkened pans")                \
-    X(GI_SCREEN_PROBE_WALK_WINDOWS, 1,                                                             \
-      "complete spheres", "derived: stay sticky for one window so the 16/64 stratum fills"        \
-      " a single sphere (per-frame Halton is the shimmer). Then the whole lattice Halton-walks"   \
-      " together (OFF's shared offset - staggering froze neighbours on different points and"      \
-      " printed blotches) and keeps the 1/n count so the walk is a fade. Halton is indexed by"    \
-      " walk count so the 8-cycle is fully used. No extra rays")                                  \
+    X(GI_SCREEN_PROBE_WALK_WINDOWS, 2,                                                             \
+      "complete spheres", "derived: stay sticky so the 16/64 stratum fills complete spheres"      \
+      " (per-frame Halton is the shimmer). Then the whole lattice Halton-walks together (OFF's"   \
+      " shared offset - staggering froze neighbours on different points and printed blotches)"    \
+      " and keeps the 1/n count so the walk is a fade. Halton is indexed by walk count so the"    \
+      " 8-cycle is fully used. No extra rays. Raised 1 -> 2 when the parallax-adaptive probe"     \
+      " filter took over blotch dissolution in the near band: the walk existed to dissolve"       \
+      " exactly those blotches, and each walk is also an accumulation reset - half the walks"     \
+      " means half the reset noise for the same budget (with adaptive reinvestment often"        \
+      " filling a sphere in 1-2 frames, two spheres is still a short stickiness)")                \
     X(GI_ADAPTIVE_PLANE_TOLERANCE, 0.05f,                                                          \
       "fraction of view distance", "derived: the adaptive gather may substitute a probe's tile"    \
       " with its even-lattice parents' blend only where the integrate pass would have blended"     \
@@ -373,11 +377,14 @@
       " a wide fade from the mirror end read as content dissolving instead of blurring"            \
       " (measured, round 3)")                                                                      \
     /* --- temporal (plan 3.5) --- */                                                              \
-    X(GI_INTERPOLATION_JITTER_TILES, 1.0f,                                                      \
-      "probe tiles", "published: [CVar] ScreenProbeGather.FullResolutionJitterWidth = 1 - the"     \
-      " integration offset jitters within one tile, spatially distributing probe differences so"   \
-      " the temporal chain integrates them [S21 s39]; plane weights gate the jittered taps and"    \
-      " an all-rejected bracket falls back to the unjittered one")                                 \
+    X(GI_INTERPOLATION_JITTER_TILES, 0.75f,                                                     \
+      "probe tiles", "published-then-tuned: [CVar] ScreenProbeGather.FullResolutionJitterWidth"    \
+      " = 1 - the integration offset jitters within a tile, spatially distributing probe"          \
+      " differences so the temporal chain integrates them [S21 s39]; plane weights gate the"       \
+      " jittered taps and an all-rejected bracket falls back to the unjittered one. Trimmed to"    \
+      " 0.75 when the parallax-adaptive probe filter started removing lattice print-through"       \
+      " upstream: the jitter's job shrank, and its amplitude is shimmer the temporal must"         \
+      " re-integrate on every anchor cycle")                                                       \
     X(GI_IMPORTANCE_SUPERSAMPLE_RATIO, 2.0f,                                                    \
       "x mean texel importance", "derived: a cone holding a concentrated emitter reads brighter"   \
       " than the probe mean; doubling its samples is the smallest step that resolves a bulb"       \
@@ -414,17 +421,41 @@
       " release; origin re-snaps stay immediate). Two light-voxel rotations, so half the"          \
       " relights hit the memo even mid-drag; the coarse-clipmap GI lags a dragged object by"       \
       " at most ~130 ms - within the gather's own multi-window latency")                           \
+    X(GI_SCREEN_PROBE_REINVEST_BUDGET, 0.5f,                                                       \
+      "of the full lattice's ray budget", "measured: reinvestment tiers first balanced against"    \
+      " the FULL lattice (traced x2 <= all probes -> double strata), but the probes the"           \
+      " adaptive classifier leaves traced are the EXPENSIVE ones - geometry breaks, near-field"    \
+      " marches - while the skipped flat probes are what diluted the average ray cost, so"         \
+      " budget-neutral in ray COUNT was +0.15 ms in ray TIME and adaptive stopped being a win."    \
+      " The widened strata may now spend at most this fraction of the full budget: in dense"       \
+      " scenes (Bistro street, traced ~half the lattice) nothing reinvests and adaptive keeps"     \
+      " its full saving; where probes are genuinely sparse - flat dim walls, the far-emissive"     \
+      " flicker case - the arrival density still doubles or quadruples at small absolute cost")    \
+    X(GI_LIGHT_VOXEL_SUN_DITHER, 0.25f,                                                            \
+      "attribute voxels", "derived: direct lighting is evaluated at one representative point"      \
+      " per voxel per relight, so shadow edges stand in the light volume as voxel-scale"           \
+      " staircases that the trilinear read softens but cannot remove - and every mirror"           \
+      " reflects them. The evaluation point now dithers within the voxel by this amplitude"        \
+      " per relight (a low-discrepancy walk keyed on cell and frame): the staircase becomes"       \
+      " dither that the world-probe stratum window and the gather temporal integrate into"         \
+      " penumbra. A quarter voxel keeps the traced tier's launch clear of the surface (the"        \
+      " lift guarantees half a voxel, computed at the true centre); the cavity and tunnel"         \
+      " gates stay UN-dithered - their verdicts are memoised as pure functions of the field."      \
+      " 0 disables, the A/B")                                                                      \
     X(GI_GATHER_FIREFLY_CLAMP, 8.0f,                                                               \
-      "x the texel's own blended history", "derived: a gather ray that lands on a small bright"    \
+      "x the governor's reference", "derived: a gather ray that lands on a small bright"           \
       " emitter returns a radiance that dominates its probe's whole tile - and a probe whose"      \
       " accumulation just reset (a Halton walk, temporal off) ingests it at full weight, so the"   \
       " probe's entire screen footprint pops red for a frame and fades (the moving-blocks"        \
-      " report). Each texel's new sample is clamped to this many times its own blended history"    \
-      " (per-texel, never the tile mean - a mean-relative ceiling permanently crushes a"           \
-      " legitimately bright texel to mean x k / 256): a spike tempers to k x ambient, while an"    \
-      " established bright texel keeps its ceiling at k x its own value and converges"             \
-      " unbiased. A texel with no meaningful history (fresh tile) stores its first measurement"    \
-      " unclamped - progressive ramps from black would dim every disocclusion instead")            \
+      " report). Each texel's new sample is clamped to this many times its reference: the"         \
+      " texel's own blended history, FLOORED by the reprojected previous tile's mean"              \
+      " luminance (world-anchored, so it survives camera-slide re-anchors - a stale dark"          \
+      " per-texel reference alone crushed legitimate energy in emissive-lit dark scenes and"       \
+      " pumped as it re-ramped on every slide). Never ONLY the tile mean - that crushes a"         \
+      " lone bright texel to mean x k / 256; the max() keeps an established bright texel"          \
+      " raising its own ceiling and converging unbiased. No reference at all (fresh tile,"         \
+      " failed reprojection): the first measurement stores unclamped - progressive ramps"          \
+      " from black would dim every disocclusion instead")                                          \
     X(GI_TEMPORAL_CHANGE_SIGMA, 3.0f,                                                              \
       "standard deviations", "derived: the fast and slow lanes are means of the same sample"       \
       " stream, so their gap's variance is the single-sample variance x (1/n_fast +"               \

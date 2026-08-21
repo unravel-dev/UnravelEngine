@@ -395,6 +395,13 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         composite_program_.program->end();
     }
     gfx::discard();
+    // A FULL-RESOLUTION mirror tier lived here briefly (capped compacted list re-traced at
+    // output res over the composite) and was REMOVED on the user's verdict: +0.6 ms at FHD
+    // for fidelity that did not read, plus artifacts - the sharp trace ran after the
+    // composite and bound RBUFFER both as its sky-fallback sampler and as its RW output
+    // image in one dispatch, a read-write alias that is undefined on every backend. If it
+    // returns, the sky fallback needs a pre-composite copy of the probe layer, and the
+    // half-res classify should exclude the pixels the tier will overwrite.
     return true;
 }
 
