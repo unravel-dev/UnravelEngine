@@ -29,10 +29,13 @@
  * SCREEN TRACE FIRST [S21 s66-68]: each ray first marches the Hi-Z depth pyramid - the same
  * machinery SSR/SSIL use - which resolves near-field occluders at PIXEL precision (an awning
  * half a metre above a wall occludes exactly the pixels in its shadow, which voxel-resolution
- * tracing cannot express). A confident on-screen hit commits: the ray reads the light voxels
- * at the reconstructed world hit, so radiance stays in the SDF path's units and the two tiers
- * never disagree on energy - the screen buys geometry, not a second lighting source. Anything
- * else - miss, left the screen, low confidence - falls through to the SDF trace unchanged.
+ * tracing cannot express). A confident on-screen hit commits, and its RADIANCE comes from
+ * last frame's composited output (reprojected; the SSR scene-colour convention, the same
+ * source the far field already trusts): the screen buys geometry AND full-resolution
+ * lighting, which is what keeps the light-voxel lattice from imprinting converged voxel-scale
+ * blotches onto every nearby receiver. The voxel read remains the commit's fallback when the
+ * hit was off-screen last frame. Anything else - miss, left the screen, low confidence -
+ * falls through to the SDF trace unchanged.
  * The march is BOUNDED by the ray's own short range (projected once per ray) and by the
  * viewport: hits past either bound were unconditionally rejected by the tests below, so the
  * old unbounded march only ever spent budget on answers it then threw away.
@@ -367,7 +370,43 @@ void GiTraceScreenProbeRay(int slot, ivec2 probe, ivec2 local)
 							{
 								hit_normal = -hit_normal;
 							}
-							if(!GiLightVoxelRead(hit_position, hit_normal, radiance))
+							// SCREEN-HIT LIGHTING from last frame's composited output: the
+							// screen tier resolves geometry at pixel precision, but reading
+							// the 0.25 m light voxels at that hit re-imprinted the voxel
+							// lattice onto every nearby receiver as CONVERGED voxel-scale
+							// blotches larger than any downstream kernel's footprint - the
+							// denoiser provably cannot reach them (measured: parameter
+							// changes did nothing; a 0.5 m voxel at 3 m spans ~100 px
+							// against a ~16 px a-trous reach). Last frame's composite
+							// carries this surface's radiance at FULL pixel resolution and
+							// is ALREADY this kernel's trusted source for the far field
+							// (GiFarFieldRadiance) - the same source at nearer range, the
+							// same feedback bounds (albedo < 1 closes the loop; the ray
+							// clamp and the firefly governor bound spikes). No prev-depth
+							// stage is free for reprojection validation, so a disoccluded
+							// reprojection can read a wrong surface for a frame - bounded
+							// by the same clamps and the temporal, accepted as Lumen does.
+							// Off-screen last frame or no history: the voxel read answers
+							// exactly as before.
+							bool screen_lit = false;
+							BRANCH
+							if(u_gi_screen_trace.w > 0.0)
+							{
+								vec4 prev_clip = mul(u_gi_prev_view_proj, vec4(hit_position, 1.0));
+								if(prev_clip.w > 0.0)
+								{
+									vec3 prev_ndc = clipTransform(prev_clip.xyz / prev_clip.w);
+									vec2 prev_hit_uv = prev_ndc.xy * 0.5 + 0.5;
+									if(all(greaterThanEqual(prev_hit_uv, vec2_splat(0.0))) &&
+									   all(lessThanEqual(prev_hit_uv, vec2_splat(1.0))))
+									{
+										radiance =
+										    texture2DLod(s_gi_prev_color, prev_hit_uv, 0.0).xyz;
+										screen_lit = true;
+									}
+								}
+							}
+							if(!screen_lit && !GiLightVoxelRead(hit_position, hit_normal, radiance))
 							{
 								// Occluded but unmeasured: honest darkness within the
 								// cascades - for sub-voxel detail (railings, awning cloth)
