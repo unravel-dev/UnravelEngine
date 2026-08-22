@@ -87,6 +87,9 @@ public:
                                gfx::render_view& rview,
                                delta_t dt) -> gfx::frame_buffer::ptr;
 
+    /// Renders the cloud shadow map for this run into cloud_shadow_ (before the lighting passes).
+    void run_cloud_shadow_pass(scene& scn, const camera& camera, gfx::render_view& rview);
+
     void run_ssr_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 
     void run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
@@ -292,6 +295,8 @@ private:
             cache_uniform(program.get(), u_contact_shadow, "u_contact_shadow", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_light_color_intensity, "u_light_color_intensity", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_camera_position, "u_camera_position", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudShadow, "u_cloudShadow", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudShadow2, "u_cloudShadow2", gfx::uniform_type::Vec4);
 
             cache_uniform(program.get(), s_tex[0], "s_tex0", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[1], "s_tex1", gfx::uniform_type::Sampler);
@@ -300,6 +305,7 @@ private:
             cache_uniform(program.get(), s_tex[4], "s_tex4", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[5], "s_tex5", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_cloudShadow, "s_cloudShadow", gfx::uniform_type::Sampler);
         }
         gfx::program::uniform_ptr u_light_position;
         gfx::program::uniform_ptr u_light_direction;
@@ -307,7 +313,10 @@ private:
         gfx::program::uniform_ptr u_contact_shadow;
         gfx::program::uniform_ptr u_light_color_intensity;
         gfx::program::uniform_ptr u_camera_position;
+        gfx::program::uniform_ptr u_cloudShadow;
+        gfx::program::uniform_ptr u_cloudShadow2;
         std::array<gfx::program::uniform_ptr, 7> s_tex;
+        gfx::program::uniform_ptr s_cloudShadow;
 
         std::shared_ptr<gpu_program> program;
     };
@@ -324,6 +333,7 @@ private:
             cache_uniform(program.get(), u_exposition, "u_exposition", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_perez_coeff, "u_perez_coeff", gfx::uniform_type::Vec4, 5);
             cache_uniform(program.get(), s_env, "s_env", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_cloudShadow, "s_cloudShadow", gfx::uniform_type::Sampler);
         }
         gfx::program::uniform_ptr u_mode;
         gfx::program::uniform_ptr u_irradiance_tint_intensity;
@@ -333,9 +343,14 @@ private:
         gfx::program::uniform_ptr u_exposition;
         gfx::program::uniform_ptr u_perez_coeff;
         gfx::program::uniform_ptr s_env;
+        gfx::program::uniform_ptr s_cloudShadow;
 
         std::unique_ptr<gpu_program> program;
     } irradiance_compute_program_;
+
+    /// Cloud shadow map of the current run (rendered before the lighting passes, consumed by
+    /// the directional light and the irradiance bake).
+    atmospheric_pass_perez::cloud_shadow_result cloud_shadow_{};
 
     struct indirect_lighting_program : uniforms_cache
     {

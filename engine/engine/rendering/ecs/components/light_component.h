@@ -171,8 +171,8 @@ public:
     void set_cloud_coverage(float coverage);
 
     /**
-     * @brief Gets the cloud layer base, height above the camera (the sky is rendered
-     * camera-relative). Volumetric: slab bottom. Flat: projection height.
+     * @brief Gets the cloud layer base altitude above the ground reference (world y = 0, or
+     * the camera when world-space altitude is off). Volumetric: shell bottom. Flat: plane.
      */
     auto get_cloud_base_altitude() const noexcept -> float;
     void set_cloud_base_altitude(float altitude);
@@ -232,6 +232,25 @@ public:
      */
     auto get_cloud_shadow_strength() const noexcept -> float;
     void set_cloud_shadow_strength(float strength);
+
+    /**
+     * @brief Whether the layer altitudes are measured from world y = 0 (true: the camera can
+     * fly into and above the layer) or from the camera (false: the layer always floats above it).
+     */
+    auto get_cloud_world_space_altitude() const noexcept -> bool;
+    void set_cloud_world_space_altitude(bool enabled);
+
+    /**
+     * @brief Whether the cloud layer casts a shadow on the scene (directional light).
+     */
+    auto get_cloud_shadows() const noexcept -> bool;
+    void set_cloud_shadows(bool enabled);
+
+    /**
+     * @brief Gets the opacity of the projected cloud shadow [0, 1].
+     */
+    auto get_cloud_shadow_opacity() const noexcept -> float;
+    void set_cloud_shadow_opacity(float opacity);
 
     /**
      * @brief Gets the irradiance intensity (strength of indirect diffuse).
@@ -357,7 +376,8 @@ private:
     /// Cloud coverage [0.0 = clear sky, 1.0 = overcast]. Controls the density threshold.
     float cloud_coverage_{0.4f};
 
-    /// Cloud base altitude, height above the camera. Vol: slab bottom. Flat: projection height.
+    /// Cloud base altitude above the ground reference (world y = 0, or the camera when
+    /// cloud_world_space_altitude_ is off). Vol: shell bottom. Flat: projection height.
     float cloud_base_altitude_{27500.0f};
     /// Cloud layer thickness (base to top) in world units.
     float cloud_thickness_{40000.0f};
@@ -377,6 +397,12 @@ private:
     float cloud_density_{1.5f};
     /// Sun-path extinction as a fraction of the view extinction.
     float cloud_shadow_strength_{0.25f};
+    /// Layer altitudes from world y = 0 (true) or from the camera (false).
+    bool cloud_world_space_altitude_{true};
+    /// Project the cloud layer as a shadow on the scene.
+    bool cloud_shadows_{false};
+    /// Opacity of the projected cloud shadow.
+    float cloud_shadow_opacity_{1.0f};
 
     /// Accumulated time in seconds, wrapped at cloud_time_period.
     float cloud_time_{0.0f};

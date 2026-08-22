@@ -3,6 +3,7 @@
 #include <editor/editing/editor_actions.h>
 #include <editor/system/project_manager.h>
 #include <filesystem/filesystem.h>
+#include <graphics/graphics.h>
 
 #include <algorithm>
 #include <logging/logging.h>
@@ -466,6 +467,61 @@ void register_editor_tools(mcp_tool_registry& registry)
                          .is_error = false};
              },
          .mutates_scene = true});
+
+    registry.add(
+        {.name = "profiler_get_passes",
+         .description =
+             "Per-render-pass CPU/GPU timings of the last frame (bgfx view stats, ms). Optional "
+             "prefix filters pass names (e.g. \"Atmospherics\"). One frame is noisy: sample it "
+             "several times and average. Pass enable:true once to switch the GPU profiler on.",
+         .input_schema_json = R"({"type":"object","properties":{"prefix":{"type":"string"},"enable":{"type":"boolean"}}})",
+         .handler =
+             [](rtti::context&, const simdjson::dom::object& args) -> tool_result
+             {
+                 std::string prefix;
+                 std::string_view prefix_view;
+                 if(!args["prefix"].get(prefix_view))
+                 {
+                     prefix = std::string(prefix_view);
+                 }
+                 // The GPU view timings only exist while the bgfx profiler is on (same switch
+                 // as the profiler panel's Enable checkbox).
+                 bool enable = false;
+                 if(!args["enable"].get(enable))
+                 {
+                     gfx::set_debug(enable ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
+                 }
+                 const auto* stats = gfx::get_stats();
+                 if(!stats)
+                 {
+                     return {.text = "No stats available", .is_error = true};
+                 }
+                 const double cpu_to_ms = 1000.0 / static_cast<double>(stats->cpuTimerFreq);
+                 const double gpu_to_ms = 1000.0 / static_cast<double>(stats->gpuTimerFreq);
+                 std::string json = "[";
+                 bool first = true;
+                 for(uint16_t pos = 0; pos < stats->numViews; ++pos)
+                 {
+                     const auto& view = stats->viewStats[pos];
+                     const std::string name = view.name ? view.name : "";
+                     if(!prefix.empty() && name.rfind(prefix, 0) != 0)
+                     {
+                         continue;
+                     }
+                     const double cpu_ms = static_cast<double>(view.cpuTimeEnd - view.cpuTimeBegin) * cpu_to_ms;
+                     const double gpu_ms = static_cast<double>(view.gpuTimeEnd - view.gpuTimeBegin) * gpu_to_ms;
+                     json += fmt::format(R"({}{{"view":{},"name":{},"cpu_ms":{:.4f},"gpu_ms":{:.4f}}})",
+                                         first ? "" : ",",
+                                         int(view.view),
+                                         make_json_string(name),
+                                         cpu_ms,
+                                         gpu_ms);
+                     first = false;
+                 }
+                 json += "]";
+                 return {.text = json, .is_error = false};
+             },
+         .mutates_scene = false});
 }
 
 } // namespace unravel::mcp

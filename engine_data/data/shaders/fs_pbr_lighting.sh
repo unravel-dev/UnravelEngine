@@ -21,6 +21,16 @@ uniform vec4 u_light_data;
 uniform vec4 u_contact_shadow;
 uniform vec4 u_camera_position;
 
+#if DIRECTIONAL_LIGHT
+// Cloud shadow map (atmospherics/fs_cloud_shadow.sc): sun transmittance of the cloud layer,
+// one texel per entry point of the sun ray at the layer base. xy = map origin (world xz),
+// z = 1 / extent, w = opacity.
+uniform vec4 u_cloudShadow;
+// x = enabled, y = layer base world y, z = border fade width (map space), w = unused.
+uniform vec4 u_cloudShadow2;
+SAMPLER2D(s_cloudShadow, 11);
+#endif
+
 #if PBR_INDIRECT
 SAMPLER2D(s_irradiance, 7);
 SAMPLER2D(s_ssil, 8);
@@ -432,6 +442,30 @@ float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_dept
     return 1.0;
 }
 
+#if DIRECTIONAL_LIGHT
+/// Sun transmittance through the cloud layer above world_position (L points toward the sun):
+/// the surface point is projected up the sun direction to the layer base and the shadow map is
+/// read there. Fades to unshadowed toward the map border.
+float CloudShadow(vec3 world_position, vec3 L)
+{
+    if(u_cloudShadow2.x < 0.5 || L.y < 0.05)
+    {
+        return 1.0;
+    }
+    float t = (u_cloudShadow2.y - world_position.y) / L.y;
+    if(t <= 0.0)
+    {
+        return 1.0;
+    }
+    vec3 entry = world_position + L * t;
+    vec2 map_pos = (entry.xz - u_cloudShadow.xy) * u_cloudShadow.z + 0.5;
+    float transmittance = texture2D(s_cloudShadow, clipToUv(map_pos)).r;
+    vec2 d = abs(map_pos - vec2_splat(0.5));
+    float border = saturate((0.5 - max(d.x, d.y)) / max(u_cloudShadow2.z, 1e-4));
+    return mix(1.0, transmittance, u_cloudShadow.w * border);
+}
+#endif
+
 vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 {
     ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
@@ -480,6 +514,9 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
         float contact = ContactShadow(s_tex4, texcoord0, data.depth01, L, contact_shadow_length, fragCoord, N);
         surface_shadow = min(surface_shadow, contact);
     }
+#if DIRECTIONAL_LIGHT
+    surface_shadow *= CloudShadow(world_position, L);
+#endif
     float subsurface_shadow = 1.0f;
     float base_attenuation = intensity * light_radius_mask * light_falloff;
     float surface_attenuation = base_attenuation * surface_shadow;

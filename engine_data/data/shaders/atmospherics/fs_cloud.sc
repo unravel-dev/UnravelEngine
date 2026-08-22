@@ -4,51 +4,43 @@ $input v_skyColor, v_clipPos, v_viewDir
 #include "atmospherics/clouds.sh"
 
 // Volumetric cloud pre-pass. Runs at half resolution into a premultiplied (rgb, transmittance)
-// target and accumulates against a reprojected history (camera rotation + wind). The sky pass
-// composites the result over the dome at far-depth pixels.
+// target and accumulates against a reprojected history (camera rotation, camera translation
+// and wind). fs_cloud_composite.sc blends the result over the whole frame (sky and geometry)
+// with a depth-aware upsample.
 //
-// MRT: target 0 = (scattered radiance, transmittance), target 1 = per-pixel history sample
-// count / CLOUD_VOL_MAX_ACCUM. The count is per pixel so a freshly disoccluded pixel is not
-// trusted as a converged history.
+// The layer is a spherical shell around the planet centre (clouds.sh): the camera may be
+// below, inside or above it, rays are clipped to the shell and to the scene depth, and the
+// horizon curves away instead of stretching to infinity.
+//
+// MRT: target 0 = (scattered radiance, transmittance), target 1 = (history sample count /
+// CLOUD_VOL_MAX_ACCUM, scene distance in km at this texel). The count is per pixel so a
+// freshly disoccluded pixel is not trusted as a converged history; the distance drives the
+// depth-aware upsample in the composite.
 
 uniform vec4 u_parameters;
 uniform vec4 u_sunDirection;
 uniform vec4 u_sunLuminance;
 uniform vec4 u_skyLuminance;
-uniform vec4 u_cloudParams;
-uniform vec4 u_cloudParams2;
-uniform vec4 u_cloudParams3;
-uniform vec4 u_cloudParams4;
 uniform vec4 u_cloudFrame;
+uniform vec4 u_cloudHistory;
 uniform mat4 u_prevViewProj;
 
 #define u_exposition u_parameters.z
 
-#define u_cloud_coverage        u_cloudParams.x
-#define u_cloud_base_altitude   u_cloudParams.y
-#define u_cloud_thickness       u_cloudParams.z
-#define u_cloud_density         u_cloudParams.w
-
-#define u_cloud_shadow_strength u_cloudParams2.x
-#define u_cloud_inv_size        u_cloudParams2.y
-#define u_cloud_softness        u_cloudParams2.z
-
-#define u_cloud_detail_erode    u_cloudParams3.x
-#define u_cloud_macro_variation u_cloudParams3.y
-#define u_cloud_wind_offset     u_cloudParams3.zw
-
-// x = jitter frame index (wrapped on the CPU), y = history valid (0/1),
-// zw = wind offset advanced since the previous frame (noise units).
+// x = jitter frame index (wrapped on the CPU), y = history valid (0/1).
 #define u_frame_index           u_cloudFrame.x
 #define u_history_valid         u_cloudFrame.y
-#define u_wind_delta            u_cloudFrame.zw
+// xyz = offset that moves a feature seen now to where the previous frame saw it (camera
+// relative): wind advance in world units plus the camera translation since the last frame.
+#define u_history_offset        u_cloudHistory.xyz
 
 SAMPLER3D(s_cloudNoise, 0);
 SAMPLER2D(s_cloudHistory, 1);
-SAMPLER2D(s_cloudHistoryConf, 2);
+SAMPLER2D(s_cloudHistoryAux, 2);
 SAMPLER2D(s_cloudNoise2D, 3);
+SAMPLER2D(s_depth, 4);
 
-// View march: the step size targets thickness / STEPS_MIN at the zenith, and the ray is cut at
+// View march: the step size targets thickness / STEPS_MIN, and the ray is cut at
 // MAX_MARCH_THICKNESS layer thicknesses so slanted rays never get steps several layers long.
 #define CLOUD_VOL_STEPS_MIN            16
 #define CLOUD_VOL_STEPS_MAX            48
@@ -60,65 +52,41 @@ SAMPLER2D(s_cloudNoise2D, 3);
 #define CLOUD_VOL_LIGHT_DETAIL_STEPS   2
 #define CLOUD_VOL_LIGHT_DISTANCE       0.6
 #define CLOUD_VOL_MAX_ACCUM            16.0
-#define CLOUD_VOL_DENSITY_EPS          0.001
 #define CLOUD_VOL_TRANSMITTANCE_EXIT   0.01
+// Interleaved update: each half-res pixel marches once every INTERLEAVE^2 frames (its 2x2 cell
+// position against the frame index) and carries its reprojected history otherwise; pixels with
+// no usable history march regardless.
+#define CLOUD_VOL_INTERLEAVE           2
+// Deep inside a cloud (view transmittance below this) the sample barely shows: reuse the
+// previous light march instead of marching again.
+#define CLOUD_VOL_LIGHT_REUSE_TRANSMITTANCE 0.25
+// Reprojection deltas below this (in history texels) read the pixel itself: an exact copy.
+#define CLOUD_VOL_REPROJECT_SNAP_PX    0.05
+// Scene distance stored in the aux target, in km (fits RG16F for any scene). Sky pixels
+// (depth at the far plane) count as CLOUD_VOL_SKY_DISTANCE: the far clip is far closer than
+// the layer, and must not clip the march.
+#define CLOUD_VOL_DISTANCE_SCALE       0.001
+#define CLOUD_VOL_SKY_DISTANCE         1.0e7
+#define CLOUD_VOL_SKY_DEPTH            0.99999
 
-vec2 world_to_prev_uv(vec3 ws_pos, out bool o_valid)
+vec2 world_to_prev_uv(vec3 rel_pos, out bool o_valid)
 {
-    vec4 prev_clip4 = mul(u_prevViewProj, vec4(ws_pos, 1.0));
+    vec4 prev_clip4 = mul(u_prevViewProj, vec4(rel_pos, 1.0));
     o_valid = prev_clip4.w > 0.0;
     vec3 prev_clip = prev_clip4.xyz / max(prev_clip4.w, 1e-6);
     prev_clip = clipTransform(prev_clip);
     return prev_clip.xy * 0.5 + 0.5;
 }
 
-vec3 cloud_sample_pos(vec3 world_pos)
+// Optical depth toward the sun from a camera-relative position: exponentially spaced samples
+// over a distance relative to the layer thickness, scaled by the view extinction and the
+// shadow-strength fraction.
+float light_march_optical_depth(vec3 rel_pos, vec3 light_dir, float jitter)
 {
-    vec3 sp = world_pos * u_cloud_inv_size;
-    sp.xz += u_cloud_wind_offset;
-    return sp;
-}
-
-// Base shape (no detail): used by the far light-march samples, and as the first stage of the
-// full sample.
-float sample_cloud_shape(vec3 world_pos, out float o_height_fraction, out vec3 o_sp)
-{
-    o_height_fraction = saturate((world_pos.y - u_cloud_base_altitude) / u_cloud_thickness);
-    o_sp = vec3_splat(0.0);
-    float h_grad = cloud_height_gradient(o_height_fraction);
-    if(h_grad < CLOUD_VOL_DENSITY_EPS)
-    {
-        return 0.0;
-    }
-    vec3 sp = cloud_sample_pos(world_pos);
-    o_sp = sp;
-    float macro = texture2D(s_cloudNoise2D, cloud_macro_uv(sp.xz)).r;
-    float base_noise = texture3D(s_cloudNoise, sp / CLOUD_NOISE_PERIOD).r;
-    float threshold = cloud_threshold(u_cloud_coverage, macro, u_cloud_macro_variation, o_height_fraction);
-    return cloud_shape_mask(base_noise, threshold, u_cloud_softness) * h_grad;
-}
-
-// Full normalized density [0,1]: shape eroded by the Worley detail octaves.
-float sample_cloud_density(vec3 world_pos, out float o_height_fraction)
-{
-    vec3 sp;
-    float density = sample_cloud_shape(world_pos, o_height_fraction, sp);
-    if(density < CLOUD_VOL_DENSITY_EPS)
-    {
-        return 0.0;
-    }
-    vec3 detail_sp = sp * CLOUD_DETAIL_SCALE + CLOUD_DETAIL_OFFSET;
-    vec3 worley_detail = texture3D(s_cloudNoise, detail_sp / CLOUD_NOISE_PERIOD).gba;
-    vec3 worley_fine = texture3D(s_cloudNoise, (detail_sp * CLOUD_DETAIL2_SCALE + CLOUD_DETAIL2_OFFSET) / CLOUD_NOISE_PERIOD).gba;
-    float detail = cloud_detail_value(worley_detail, worley_fine);
-    return cloud_erode(density, detail, u_cloud_detail_erode, o_height_fraction);
-}
-
-// Optical depth toward the sun: exponentially spaced samples over a distance relative to the
-// layer thickness, scaled by the view extinction and the shadow-strength fraction.
-float light_march_optical_depth(vec3 pos, vec3 light_dir, float jitter)
-{
-    float dist_to_top = (u_cloud_base_altitude + u_cloud_thickness - pos.y) / max(light_dir.y, 1e-3);
+    vec3 planet_center = cloud_planet_center_rel();
+    float layer_top_radius = CLOUD_PLANET_RADIUS + u_cloud_base_altitude + u_cloud_thickness;
+    vec2 top_hit = cloud_ray_sphere(rel_pos, light_dir, planet_center, layer_top_radius);
+    float dist_to_top = top_hit.y > 0.0 ? top_hit.y : u_cloud_thickness;
     float march_dist = min(dist_to_top, u_cloud_thickness * CLOUD_VOL_LIGHT_DISTANCE);
     // Step sizes s0 * 2^i sum to march_dist.
     float step_size = march_dist / float((1 << CLOUD_VOL_LIGHT_STEPS) - 1);
@@ -127,17 +95,18 @@ float light_march_optical_depth(vec3 pos, vec3 light_dir, float jitter)
     for(int j = 0; j < CLOUD_VOL_LIGHT_STEPS; j++)
     {
         float sample_t = t + step_size * jitter;
-        float h;
+        vec3 sample_rel = rel_pos + light_dir * sample_t;
+        vec3 sample_world = u_cloud_camera_pos + sample_rel;
+        float h = cloud_height_fraction_rel(sample_rel);
         vec3 sp;
-        vec3 sample_pos = pos + light_dir * sample_t;
         float density;
         if(j < CLOUD_VOL_LIGHT_DETAIL_STEPS)
         {
-            density = sample_cloud_density(sample_pos, h);
+            density = cloud_sample_density(s_cloudNoise, s_cloudNoise2D, sample_world, h);
         }
         else
         {
-            density = sample_cloud_shape(sample_pos, h, sp);
+            density = cloud_sample_shape(s_cloudNoise, s_cloudNoise2D, sample_world, h, sp);
         }
         optical_depth += density * step_size;
         t += step_size;
@@ -175,28 +144,82 @@ vec4 sample_history(vec2 uv, vec2 texel_size)
 
 void main()
 {
-    vec3 rd = normalize(v_viewDir);
+    // Exact per-pixel ray from the clip position (the vertex-interpolated v_viewDir is off by a
+    // sub-pixel amount, enough to make a static camera reproject onto neighbouring texels and
+    // blur the history copies). The view is camera-relative, so the far-plane point is the
+    // direction.
+    vec4 far_point = mul(u_invViewProj, vec4(v_clipPos, 1.0, 1.0));
+    vec3 rd = normalize(far_point.xyz / far_point.w);
     vec3 light_dir = normalize(u_sunDirection.xyz);
 
+    // Scene distance at this pixel (sky pixels sit at the far plane).
+    vec2 uv = clipToUv(v_clipPos * 0.5 + 0.5);
+    float depth = texture2DLod(s_depth, uv, 0.0).r;
+    float t_depth = depth >= CLOUD_VOL_SKY_DEPTH ? CLOUD_VOL_SKY_DISTANCE : length(computeViewSpacePosition(uv, depth));
+    float depth_km = t_depth * CLOUD_VOL_DISTANCE_SCALE;
+
     vec4 new_cloud = vec4(0.0, 0.0, 0.0, 1.0);
-    if(rd.y < CLOUD_MIN_ELEVATION)
+
+    // Ray / shell interval, clipped to the scene depth.
+    float t_start;
+    float t_end;
+    bool in_shell = cloud_shell_interval(rd, t_start, t_end);
+    t_end = min(t_end, t_depth);
+    if(!in_shell || t_end <= t_start)
     {
         gl_FragData[0] = new_cloud;
-        gl_FragData[1] = vec4_splat(0.0);
+        gl_FragData[1] = vec4(0.0, depth_km, 0.0, 0.0);
         return;
     }
 
-    // The layer sits above the camera (camera-relative rendering): both planes are in front.
-    float t_min = u_cloud_base_altitude / rd.y;
-    float t_max = (u_cloud_base_altitude + u_cloud_thickness) / rd.y;
-    float ray_length = min(t_max - t_min, u_cloud_thickness * CLOUD_VOL_MAX_MARCH_THICKNESS);
+    float ray_length = min(t_end - t_start, u_cloud_thickness * CLOUD_VOL_MAX_MARCH_THICKNESS);
+    float t_mid = t_start + ray_length * 0.5;
+
+    // History reprojection: the feature now at camera-relative P sat at P + history_offset
+    // last frame (wind advance + camera translation); the previous view-projection is
+    // camera-relative, so only that offset and the rotation move it on screen.
+    vec3 prev_dir = rd * t_mid + u_history_offset;
+    bool prev_in_front;
+    vec2 prev_uv = world_to_prev_uv(prev_dir, prev_in_front);
+    bool history_ok = u_history_valid > 0.5 && prev_in_front &&
+                      all(greaterThanEqual(prev_uv, vec2_splat(0.0))) &&
+                      all(lessThanEqual(prev_uv, vec2_splat(1.0)));
+    vec4 history = new_cloud;
+    float history_count = 0.0;
+    if(history_ok)
+    {
+        vec2 texel = u_viewTexel.xy;
+        // Static camera and no wind: the reprojection lands on this texel; copy it exactly
+        // instead of re-filtering (repeated resampling would blur the interleaved copies).
+        vec2 delta_px = (prev_uv - uv) / texel;
+        vec2 hist_uv = all(lessThan(abs(delta_px), vec2_splat(CLOUD_VOL_REPROJECT_SNAP_PX))) ? uv : prev_uv;
+        hist_uv = clamp(hist_uv, texel * 0.5, vec2_splat(1.0) - texel * 0.5);
+        history = sample_history(hist_uv, texel);
+        history_count = texture2DLod(s_cloudHistoryAux, hist_uv, 0.0).r * CLOUD_VOL_MAX_ACCUM;
+    }
+
+    // Interleaved update: only the cell position of this frame marches; the rest carry history.
+    ivec2 pixel = ivec2(gl_FragCoord.xy);
+    int cell = (pixel.x % CLOUD_VOL_INTERLEAVE) + (pixel.y % CLOUD_VOL_INTERLEAVE) * CLOUD_VOL_INTERLEAVE;
+    int active_cell = int(mod(u_frame_index, float(CLOUD_VOL_INTERLEAVE * CLOUD_VOL_INTERLEAVE)));
+    bool march = cell == active_cell || !history_ok || history_count < 0.5;
+    if(!march)
+    {
+        gl_FragData[0] = history;
+        gl_FragData[1] = vec4(history_count / CLOUD_VOL_MAX_ACCUM, depth_km, 0.0, 0.0);
+        return;
+    }
 
     float target_step = u_cloud_thickness / float(CLOUD_VOL_STEPS_MIN);
     int steps = clamp(int(ceil(ray_length / target_step)), CLOUD_VOL_STEPS_MIN, CLOUD_VOL_STEPS_MAX);
     float step_size = ray_length / float(steps);
 
+    // A pixel marches once per INTERLEAVE^2 frames, so the golden-ratio sequence must advance
+    // per march, not per frame (per frame it degenerates: fract(4 * phi) ~ 0.47 alternates
+    // between two offsets and the steps never average out).
+    float march_index = floor(u_frame_index / float(CLOUD_VOL_INTERLEAVE * CLOUD_VOL_INTERLEAVE));
     float ign = cloud_interleaved_gradient_noise(gl_FragCoord.xy);
-    float jitter = fract(ign + u_frame_index * 0.6180339887);
+    float jitter = fract(ign + march_index * 0.6180339887);
     float light_jitter = fract(jitter + 0.5);
 
     float cos_theta = dot(rd, light_dir);
@@ -204,15 +227,18 @@ void main()
 
     float transmittance = 1.0;
     vec3 accum_light = vec3_splat(0.0);
+    float od_sun = 0.0;
+    bool has_od_sun = false;
 
     for(int i = 0; i < steps; i++)
     {
-        float t = t_min + (float(i) + jitter) * step_size;
-        vec3 sample_pos = rd * t;
+        float t = t_start + (float(i) + jitter) * step_size;
+        vec3 sample_rel = rd * t;
+        vec3 sample_world = u_cloud_camera_pos + sample_rel;
+        float height_fraction = cloud_height_fraction_rel(sample_rel);
 
-        float height_fraction;
-        float density = sample_cloud_density(sample_pos, height_fraction);
-        if(density < CLOUD_VOL_DENSITY_EPS)
+        float density = cloud_sample_density(s_cloudNoise, s_cloudNoise2D, sample_world, height_fraction);
+        if(density < CLOUD_DENSITY_EPS)
         {
             continue;
         }
@@ -220,7 +246,11 @@ void main()
         float extinction = density * CLOUD_BASE_EXTINCTION * u_cloud_density;
         float sample_transmittance = exp(-extinction * step_size);
 
-        float od_sun = light_march_optical_depth(sample_pos, light_dir, light_jitter);
+        if(!has_od_sun || transmittance > CLOUD_VOL_LIGHT_REUSE_TRANSMITTANCE)
+        {
+            od_sun = light_march_optical_depth(sample_rel, light_dir, light_jitter);
+            has_od_sun = true;
+        }
         vec3 lit_color = sun_radiance * cloud_sun_scatter(od_sun, cos_theta) +
                          cloud_ambient_radiance(u_skyLuminance.xyz, u_exposition, height_fraction);
 
@@ -234,41 +264,17 @@ void main()
         }
     }
 
-    // Aerial perspective toward the marched segment's midpoint: distant clouds fade into the
-    // sky behind them (the composite shows the dome through the raised transmittance).
-    float aerial = cloud_aerial_transmittance(t_min + ray_length * 0.5, u_cloud_base_altitude);
+    // Aerial perspective toward the marched segment midpoint: distant clouds fade into the
+    // sky behind them (the composite shows the scene through the raised transmittance).
+    float aerial = cloud_aerial_transmittance(t_mid, u_cloud_base_altitude);
     accum_light *= aerial;
     transmittance = mix(1.0, transmittance, aerial);
 
     new_cloud = vec4(accum_light, transmittance);
 
-    // History reprojection: the feature now at P sat at P + wind_delta / inv_size last frame
-    // (the noise field is offset by the wind); the previous camera had the same origin
-    // (camera-relative), so only the rotation and the wind move it on screen.
-    float cloud_mid_alt = u_cloud_base_altitude + u_cloud_thickness * 0.5;
-    float t_hit = cloud_mid_alt / rd.y;
-    vec2 wind_per_frame = u_wind_delta / u_cloud_inv_size;
-    vec3 prev_dir = rd * t_hit + vec3(wind_per_frame.x, 0.0, wind_per_frame.y);
-    bool prev_in_front;
-    vec2 prev_uv = world_to_prev_uv(prev_dir, prev_in_front);
-
-    bool history_ok = u_history_valid > 0.5 && prev_in_front &&
-                      all(greaterThanEqual(prev_uv, vec2_splat(0.0))) &&
-                      all(lessThanEqual(prev_uv, vec2_splat(1.0)));
-
-    vec4 history = new_cloud;
-    float history_count = 0.0;
-    if(history_ok)
-    {
-        vec2 texel = u_viewTexel.xy;
-        vec2 hist_uv = clamp(prev_uv, texel * 0.5, vec2_splat(1.0) - texel * 0.5);
-        history = sample_history(hist_uv, texel);
-        history_count = texture2DLod(s_cloudHistoryConf, hist_uv, 0.0).r * CLOUD_VOL_MAX_ACCUM;
-    }
-
     vec4 blended = (history * history_count + new_cloud) / (history_count + 1.0);
     float new_count = min(history_count + 1.0, CLOUD_VOL_MAX_ACCUM);
 
     gl_FragData[0] = blended;
-    gl_FragData[1] = vec4(new_count / CLOUD_VOL_MAX_ACCUM, 0.0, 0.0, 0.0);
+    gl_FragData[1] = vec4(new_count / CLOUD_VOL_MAX_ACCUM, depth_km, 0.0, 0.0);
 }

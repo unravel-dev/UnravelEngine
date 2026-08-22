@@ -173,6 +173,12 @@ public:
         float cloud_density = 1.5f;
         /// Sun-path extinction as a fraction of the view extinction.
         float cloud_shadow_strength = 0.25f;
+        /// Layer altitudes measured from world y = 0 (true) or from the camera (false).
+        bool cloud_world_space_altitude = true;
+        /// Project the cloud layer as a shadow on the scene (directional light).
+        bool cloud_shadows = false;
+        /// Opacity of the projected cloud shadow [0, 1].
+        float cloud_shadow_opacity = 1.0f;
         /// Wind offset of the noise field in noise units (wrapped to the tile period).
         math::vec2 cloud_wind_offset{0.0f, 0.0f};
         /// Accumulated time (seconds), periodic; drives the star twinkle.
@@ -181,8 +187,34 @@ public:
         float sky_brightness = 1.0f;
     };
 
+    /// Cloud shadow map of one frame: sun transmittance of the cloud layer over a square of
+    /// the world around the camera (fs_cloud_shadow.sc). Texel (u, v) is the entry point of
+    /// the sun ray at the layer base at world (origin + (uv - 0.5) * extent); the lighting
+    /// pass projects surface points up the sun direction to read it, the irradiance bake
+    /// reads the lowest mip as the sky's cloud coverage.
+    struct cloud_shadow_result
+    {
+        gfx::texture::ptr map;
+        /// World xz of the map centre.
+        math::vec2 origin{0.0f, 0.0f};
+        /// World extent of the map (square).
+        float extent{1.0f};
+        /// World y of the layer base.
+        float base_world_y{0.0f};
+        /// Opacity of the projected shadow.
+        float opacity{1.0f};
+        /// False when there is no cloud layer this frame (map may be null).
+        bool valid{false};
+        /// Whether the directional light should apply it (the component checkbox).
+        bool apply_to_lights{false};
+    };
+
     auto init(rtti::context& ctx) -> bool;
     void run(gfx::frame_buffer::ptr input, const camera& camera, gfx::render_view& rview, delta_t dt, const run_params& params);
+
+    /// Renders the cloud shadow map for this frame (before the lighting passes).
+    auto run_cloud_shadow_pass(const camera& camera, gfx::render_view& rview, const run_params& params)
+        -> cloud_shadow_result;
 
 private:
 
@@ -200,7 +232,7 @@ private:
             cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_cloudParams3, "u_cloudParams3", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_cloudTex, "s_cloudTex", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", gfx::uniform_type::Sampler);
         }
 
@@ -215,7 +247,7 @@ private:
         gfx::program::uniform_ptr u_cloudParams2;
         gfx::program::uniform_ptr u_cloudParams3;
         gfx::program::uniform_ptr u_cloudParams4;
-        gfx::program::uniform_ptr s_cloudTex;
+        gfx::program::uniform_ptr u_cloudCamera;
         gfx::program::uniform_ptr s_cloudNoise2D;
 
         std::unique_ptr<gpu_program> program;
@@ -239,8 +271,11 @@ private:
             cache_uniform(program.get(), s_cloudNoise, "s_cloudNoise", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_cloudHistory, "s_cloudHistory", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_cloudHistoryConf, "s_cloudHistoryConf", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_cloudHistoryAux, "s_cloudHistoryAux", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_cloudFrame, "u_cloudFrame", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudHistory, "u_cloudHistory", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_prevViewProj, "u_prevViewProj", gfx::uniform_type::Mat4);
         }
 
@@ -255,15 +290,66 @@ private:
         gfx::program::uniform_ptr u_cloudParams3;
         gfx::program::uniform_ptr u_cloudParams4;
         gfx::program::uniform_ptr u_cloudFrame;
+        gfx::program::uniform_ptr u_cloudCamera;
+        gfx::program::uniform_ptr u_cloudHistory;
         gfx::program::uniform_ptr u_prevViewProj;
         gfx::program::uniform_ptr s_cloudNoise;
         gfx::program::uniform_ptr s_cloudNoise2D;
         gfx::program::uniform_ptr s_cloudHistory;
-        gfx::program::uniform_ptr s_cloudHistoryConf;
+        gfx::program::uniform_ptr s_cloudHistoryAux;
+        gfx::program::uniform_ptr s_depth;
 
         std::unique_ptr<gpu_program> program;
 
     } cloud_program_;
+
+    struct cloud_composite_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_cloudComposite, "u_cloudComposite", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_cloudTex, "s_cloudTex", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_cloudAux, "s_cloudAux", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+        }
+
+        gfx::program::uniform_ptr u_cloudComposite;
+        gfx::program::uniform_ptr s_cloudTex;
+        gfx::program::uniform_ptr s_cloudAux;
+        gfx::program::uniform_ptr s_depth;
+
+        std::unique_ptr<gpu_program> program;
+
+    } cloud_composite_program_;
+
+    struct cloud_shadow_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_sunDirection, "u_sunDirection", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudParams, "u_cloudParams", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudParams3, "u_cloudParams3", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudShadowMap, "u_cloudShadowMap", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_cloudNoise, "s_cloudNoise", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", gfx::uniform_type::Sampler);
+        }
+
+        gfx::program::uniform_ptr u_sunDirection;
+        gfx::program::uniform_ptr u_cloudParams;
+        gfx::program::uniform_ptr u_cloudParams2;
+        gfx::program::uniform_ptr u_cloudParams3;
+        gfx::program::uniform_ptr u_cloudParams4;
+        gfx::program::uniform_ptr u_cloudCamera;
+        gfx::program::uniform_ptr u_cloudShadowMap;
+        gfx::program::uniform_ptr s_cloudNoise;
+        gfx::program::uniform_ptr s_cloudNoise2D;
+
+        std::unique_ptr<gpu_program> program;
+
+    } cloud_shadow_program_;
 
     /// Uniform payload shared by the sky pass and the cloud pre-pass.
     struct cloud_uniform_block
@@ -273,16 +359,40 @@ private:
         float cloud_params2[4];
         float cloud_params3[4];
         float cloud_params4[4];
+        float camera[4];
+    };
+
+    /// Packs the cloud uniforms shared by every cloud program.
+    static auto make_cloud_uniforms(const run_params& params, const camera& camera, float exposition, float hour)
+        -> cloud_uniform_block;
+
+    /// Output of the volumetric pre-pass for the composite.
+    struct cloud_prepass_result
+    {
+        gfx::texture::ptr cloud;
+        gfx::texture::ptr aux;
+        usize32_t size{1, 1};
     };
 
     /// Volumetric pre-pass: half-res march + temporal accumulation into the ping-pong
-    /// history owned by the render view. Returns the texture the sky pass should composite.
+    /// history owned by the render view. Returns the textures the composite pass reads.
     auto run_cloud_prepass(const camera& camera,
                            gfx::render_view& rview,
                            const usize32_t& output_size,
+                           const gfx::texture::ptr& depth,
                            const irradiance_perez_params& perez,
                            const cloud_uniform_block& uniforms,
-                           const run_params& params) -> gfx::texture::ptr;
+                           const run_params& params) -> cloud_prepass_result;
+
+    /// Blends the pre-pass result over the whole frame with a depth-aware upsample.
+    void run_cloud_composite(gfx::frame_buffer* surface,
+                             const camera& camera,
+                             const usize32_t& output_size,
+                             const gfx::texture::ptr& depth,
+                             const cloud_prepass_result& prepass);
+
+    /// World y of the layer base for the altitude mode of `params`.
+    static auto layer_base_world_y(const run_params& params, const camera& camera) -> float;
 
     /// Drops the per-view cloud history when the volumetric path is not in use.
     static void release_cloud_resources(gfx::render_view& rview);

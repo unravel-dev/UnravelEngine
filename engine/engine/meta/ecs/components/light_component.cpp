@@ -213,6 +213,14 @@ REFLECT(skylight_component)
             entt::attribute{"tooltip", "Weather-scale coverage variation. 0 = uniform sheet, 1 = strong clear and dense patches across the sky."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
+        .data<&skylight_component::set_cloud_world_space_altitude, &skylight_component::get_cloud_world_space_altitude>("cloud_world_space_altitude"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_world_space_altitude"},
+            entt::attribute{"pretty_name", "World Space Altitude"},
+            entt::attribute{"group", "Clouds"},
+            entt::attribute{"tooltip", "On: the layer altitudes are measured from world y = 0, so the camera can fly into and above the clouds. Off: they are measured from the camera, the layer always floats above it."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
+        })
         .data<&skylight_component::set_cloud_base_altitude, &skylight_component::get_cloud_base_altitude>("cloud_base_altitude"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_base_altitude"},
@@ -221,7 +229,7 @@ REFLECT(skylight_component)
             entt::attribute{"min", 100.0f},
             entt::attribute{"max", 60000.0f},
             entt::attribute{"step", 500.0f},
-            entt::attribute{"tooltip", "Cloud layer base: height above the camera in world units (the sky is camera-relative). Volumetric: slab bottom. Flat: projection height."},
+            entt::attribute{"tooltip", "Cloud layer base altitude in world units, above world y = 0 (or above the camera when World Space Altitude is off). Volumetric: shell bottom. Flat: projection height."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
         .data<&skylight_component::set_cloud_thickness, &skylight_component::get_cloud_thickness>("cloud_thickness"_hs)
@@ -266,6 +274,25 @@ REFLECT(skylight_component)
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
             entt::attribute{"tooltip", "Fraction of the view extinction applied along the sun path. Lower lets light reach deeper (brighter, softer self-shadowing)."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
+        })
+        .data<&skylight_component::set_cloud_shadows, &skylight_component::get_cloud_shadows>("cloud_shadows"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_shadows"},
+            entt::attribute{"pretty_name", "Cloud Shadows"},
+            entt::attribute{"group", "Clouds"},
+            entt::attribute{"tooltip", "Project the cloud layer as a soft shadow on the scene (directional light)."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
+        })
+        .data<&skylight_component::set_cloud_shadow_opacity, &skylight_component::get_cloud_shadow_opacity>("cloud_shadow_opacity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_shadow_opacity"},
+            entt::attribute{"pretty_name", "Cloud Shadow Opacity"},
+            entt::attribute{"group", "Clouds"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Darkness of the projected cloud shadow. 1 = the physical sun transmittance through the layer."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
         .data<&skylight_component::set_cloud_softness, &skylight_component::get_cloud_softness>("cloud_softness"_hs)
@@ -364,6 +391,9 @@ SAVE(skylight_component)
     try_save(ar, ser20::make_nvp("cloud_size", obj.get_cloud_size()));
     try_save(ar, ser20::make_nvp("cloud_density", obj.get_cloud_density()));
     try_save(ar, ser20::make_nvp("cloud_shadow_strength", obj.get_cloud_shadow_strength()));
+    try_save(ar, ser20::make_nvp("cloud_world_space_altitude", obj.get_cloud_world_space_altitude()));
+    try_save(ar, ser20::make_nvp("cloud_shadows", obj.get_cloud_shadows()));
+    try_save(ar, ser20::make_nvp("cloud_shadow_opacity", obj.get_cloud_shadow_opacity()));
     try_save(ar, ser20::make_nvp("cloud_softness", obj.get_cloud_softness()));
     try_save(ar, ser20::make_nvp("cloud_detail_erode", obj.get_cloud_detail_erode()));
     try_save(ar, ser20::make_nvp("cloud_speed", obj.get_cloud_speed()));
@@ -481,6 +511,24 @@ LOAD(skylight_component)
             obj.set_cloud_shadow_strength(legacy_shadow_extinction_scale * cloud_light_absorption /
                                           math::max(cloud_absorption, 0.01f));
         }
+    }
+
+    bool cloud_world_space_altitude{true};
+    if(try_load(ar, ser20::make_nvp("cloud_world_space_altitude", cloud_world_space_altitude)))
+    {
+        obj.set_cloud_world_space_altitude(cloud_world_space_altitude);
+    }
+
+    bool cloud_shadows{false};
+    if(try_load(ar, ser20::make_nvp("cloud_shadows", cloud_shadows)))
+    {
+        obj.set_cloud_shadows(cloud_shadows);
+    }
+
+    float cloud_shadow_opacity{};
+    if(try_load(ar, ser20::make_nvp("cloud_shadow_opacity", cloud_shadow_opacity)))
+    {
+        obj.set_cloud_shadow_opacity(cloud_shadow_opacity);
     }
 
     float cloud_softness{};

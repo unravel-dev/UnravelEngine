@@ -271,6 +271,36 @@ void skylight_component::set_cloud_shadow_strength(float strength)
     cloud_shadow_strength_ = math::clamp(strength, 0.02f, 1.0f);
 }
 
+auto skylight_component::get_cloud_world_space_altitude() const noexcept -> bool
+{
+    return cloud_world_space_altitude_;
+}
+
+void skylight_component::set_cloud_world_space_altitude(bool enabled)
+{
+    cloud_world_space_altitude_ = enabled;
+}
+
+auto skylight_component::get_cloud_shadows() const noexcept -> bool
+{
+    return cloud_shadows_;
+}
+
+void skylight_component::set_cloud_shadows(bool enabled)
+{
+    cloud_shadows_ = enabled;
+}
+
+auto skylight_component::get_cloud_shadow_opacity() const noexcept -> float
+{
+    return cloud_shadow_opacity_;
+}
+
+void skylight_component::set_cloud_shadow_opacity(float opacity)
+{
+    cloud_shadow_opacity_ = math::clamp(opacity, 0.0f, 1.0f);
+}
+
 auto skylight_component::get_irradiance_intensity() const noexcept -> float
 {
     return irradiance_intensity_;

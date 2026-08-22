@@ -65,8 +65,29 @@ vec3 HammersleyToHemisphere(vec2 E)
     return vec3(sin_theta * cos(phi), cos_theta, sin_theta * sin(phi));
 }
 
-// x=mode (0=uniform, 1=perez, 2=env cubemap), y=sun_weight (applied in shader for all modes)
+// x=mode (0=uniform, 1=perez, 2=env cubemap), y=sun_weight (applied in shader for all modes),
+// z=cloud coverage coupling (1 = read the cloud shadow map), w=unused
 uniform vec4 u_mode;
+// Cloud shadow map (atmospherics/fs_cloud_shadow.sc): its lowest mip is the mean sun
+// transmittance of the cloud layer, i.e. 1 - sky coverage.
+SAMPLER2D(s_cloudShadow, 2);
+// Overcast sky: the clear-sky radiance is blended toward a neutral grey of the sky's mean
+// luminance, slightly darker (the cloud base albedo), by the cloud coverage.
+#define CLOUD_OVERCAST_ALBEDO 0.85
+
+float cloud_sky_coverage()
+{
+    if(u_mode.z < 0.5)
+    {
+        return 0.0;
+    }
+    return saturate(1.0 - texture2DLod(s_cloudShadow, vec2(0.5, 0.5), 16.0).r);
+}
+
+vec3 cloud_covered_sky(vec3 radiance, float mean_luma, float coverage)
+{
+    return mix(radiance, vec3_splat(mean_luma * CLOUD_OVERCAST_ALBEDO), coverage);
+}
 // rgb=irradiance tint, w=intensity. Applied in both modes (uniform: baked into L0; perez: multiplied on top of sky)
 uniform vec4 u_irradiance_tint_intensity;
 // For Perez: sun direction (points toward sun)
@@ -194,6 +215,20 @@ void process_perez_mode(float sun_weight)
     float denom = max(dot(u_sky_luminance_xyz.xyz, vec3_splat(1.0)), 0.0001);
     vec3 sky_color_xyY = vec3(u_sky_luminance_xyz.x / denom, u_sky_luminance_xyz.y / denom, u_sky_luminance_xyz.y);
 
+    float coverage = cloud_sky_coverage();
+    float mean_luma = 0.0;
+    if(coverage > 0.0)
+    {
+        for(int i = 0; i < num_samples; i++)
+        {
+            vec2 E = Hammersley(i, num_samples);
+            vec3 dir = HammersleyToHemisphere(E);
+            vec3 radiance = sample_perez_sky(dir, P0_inv, sky_color_xyY, light_dir);
+            mean_luma += dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+        }
+        mean_luma /= float(num_samples);
+    }
+
     vec3 sh_coeff[9];
     for(int k = 0; k < 9; k++)
         sh_coeff[k] = vec3_splat(0.0);
@@ -203,6 +238,7 @@ void process_perez_mode(float sun_weight)
         vec2 E = Hammersley(i, num_samples);
         vec3 dir = HammersleyToHemisphere(E);
         vec3 radiance = sample_perez_sky(dir, P0_inv, sky_color_xyY, light_dir);
+        radiance = cloud_covered_sky(radiance, mean_luma, coverage);
         accumulate_sh_sample(dir, radiance * tint_scale, d_omega, sh_coeff);
     }
     store_sh_coeffs(sh_coeff);
@@ -228,12 +264,27 @@ void process_perez_flat_mode(float sun_weight)
     float denom = max(dot(u_sky_luminance_xyz.xyz, vec3_splat(1.0)), 0.0001);
     vec3 sky_color_xyY = vec3(u_sky_luminance_xyz.x / denom, u_sky_luminance_xyz.y / denom, u_sky_luminance_xyz.y);
 
+    float coverage = cloud_sky_coverage();
+    float mean_luma = 0.0;
+    if(coverage > 0.0)
+    {
+        for(int i = 0; i < num_samples; i++)
+        {
+            vec2 E = Hammersley(i, num_samples);
+            vec3 dir = HammersleyToHemisphere(E);
+            vec3 radiance = sample_perez_sky(dir, P0_inv, sky_color_xyY, light_dir);
+            mean_luma += dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+        }
+        mean_luma /= float(num_samples);
+    }
+
     vec3 l0 = vec3_splat(0.0);
     for(int i = 0; i < num_samples; i++)
     {
         vec2 E = Hammersley(i, num_samples);
         vec3 dir = HammersleyToHemisphere(E);
         vec3 radiance = sample_perez_sky(dir, P0_inv, sky_color_xyY, light_dir);
+        radiance = cloud_covered_sky(radiance, mean_luma, coverage);
         l0 += radiance * tint_scale * 0.282095 * d_omega;
     }
     imageStore(i_output, ivec2(0, 0), vec4(l0, 0.0));

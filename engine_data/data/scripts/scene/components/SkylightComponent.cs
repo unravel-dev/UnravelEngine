@@ -136,6 +136,34 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// When true the layer altitudes are measured from world y = 0 (the camera can fly into
+        /// and above the clouds); when false they are measured from the camera.
+        /// </summary>
+        public bool cloudWorldSpaceAltitude
+        {
+            get => internal_m2n_skylight_get_cloud_world_space_altitude(owner);
+            set => internal_m2n_skylight_set_cloud_world_space_altitude(owner, value);
+        }
+
+        /// <summary>
+        /// Whether the cloud layer casts a soft shadow on the scene (directional light).
+        /// </summary>
+        public bool cloudShadows
+        {
+            get => internal_m2n_skylight_get_cloud_shadows(owner);
+            set => internal_m2n_skylight_set_cloud_shadows(owner, value);
+        }
+
+        /// <summary>
+        /// Opacity of the projected cloud shadow, 0 to 1.
+        /// </summary>
+        public float cloudShadowOpacity
+        {
+            get => internal_m2n_skylight_get_cloud_shadow_opacity(owner);
+            set => internal_m2n_skylight_set_cloud_shadow_opacity(owner, value);
+        }
+
+        /// <summary>
         /// Width of the density ramp at the cloud edge; lower = crisper silhouettes.
         /// </summary>
         public float cloudSoftness
@@ -283,6 +311,24 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_skylight_set_cloud_shadow_strength(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_skylight_get_cloud_world_space_altitude(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_skylight_set_cloud_world_space_altitude(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern bool internal_m2n_skylight_get_cloud_shadows(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_skylight_set_cloud_shadows(Entity eid, bool value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_skylight_get_cloud_shadow_opacity(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_skylight_set_cloud_shadow_opacity(Entity eid, float value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern float internal_m2n_skylight_get_cloud_softness(Entity eid);

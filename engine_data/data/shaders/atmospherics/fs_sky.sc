@@ -7,51 +7,15 @@ uniform vec4 	u_parameters;
 uniform vec4 	u_sunDirection;
 uniform vec4    u_skyLuminance;
 uniform vec4 	u_sunLuminance;
-uniform vec4 	u_cloudParams;
-uniform vec4 	u_cloudParams2;
-uniform vec4 	u_cloudParams3;
-uniform vec4 	u_cloudParams4;
 
 #define u_sun_size u_parameters.x
 #define u_sun_bloom u_parameters.y
 #define u_exposition u_parameters.z
 #define u_time u_parameters.w
 
-#define u_cloud_coverage         u_cloudParams.x
-#define u_cloud_base_altitude    u_cloudParams.y
-#define u_cloud_thickness        u_cloudParams.z
-#define u_cloud_density          u_cloudParams.w
 
-#define u_cloud_shadow_strength  u_cloudParams2.x
-#define u_cloud_inv_size         u_cloudParams2.y
-#define u_cloud_softness         u_cloudParams2.z
-#define u_cloud_mode             u_cloudParams2.w
-
-#define u_cloud_detail_erode     u_cloudParams3.x
-#define u_cloud_macro_variation  u_cloudParams3.y
-#define u_cloud_wind_offset      u_cloudParams3.zw
-
-#define u_cloud_time             u_cloudParams4.x
-
-#define CLOUD_MODE_NONE       0.0
-#define CLOUD_MODE_FLAT       1.0
-#define CLOUD_MODE_VOLUMETRIC 2.0
-
-SAMPLER2D(s_cloudTex, 0);
 SAMPLER2D(s_cloudNoise2D, 1);
 
-// Flat clouds: one projected plane, so the vertical integration the volumetric path gets
-// for free is approximated. Softer edge ramp (no height gradient to feather the mask), a
-// fraction of the layer thickness as the optical path, and a lower coverage threshold: a
-// single slice of the 3D field passes the threshold less often than a whole column does.
-#define CLOUD_FLAT_DOME_EPS            0.2
-#define CLOUD_FLAT_EDGE_SCALE          2.5
-#define CLOUD_FLAT_THICKNESS_FRACTION  0.05
-#define CLOUD_FLAT_SHADOW_OFFSET       0.0015
-#define CLOUD_FLAT_WARP_STRENGTH       0.08
-#define CLOUD_FLAT_HEIGHT_FRACTION     0.5
-#define CLOUD_FLAT_COVERAGE_BIAS       0.12
-#define CLOUD_FLAT_ERODE_SCALE         0.5
 // Star twinkle period in seconds of u_cloud_time (which wraps at a multiple of it).
 #define STAR_TWINKLE_PERIOD            10.0
 
@@ -241,18 +205,8 @@ vec3 render_stars(vec3 sky_color, vec3 view_dir, vec3 light_dir)
 // ----------------------------- Flat cloud scattering model -------------------
 // Single projected plane, lit with the shared model in clouds.sh (same sun radiance,
 // phase, multi-scatter octaves, ambient and aerial fade as the volumetric path) and the
-// same shape knobs, so both modes read one parameter set.
-
-// Base density mask on the plane: weather-modulated threshold, ramp (softness) with a
-// wider ramp to stand in for the vertical integration a single sample cannot do.
-float flat_cloud_mask(vec2 sp)
-{
-    float macro = texture2D(s_cloudNoise2D, cloud_macro_uv(sp)).r;
-    float base_noise = texture2D(s_cloudNoise2D, sp / CLOUD_NOISE_PERIOD).r;
-    float threshold = cloud_threshold(u_cloud_coverage, macro, u_cloud_macro_variation, CLOUD_FLAT_HEIGHT_FRACTION)
-                    - CLOUD_FLAT_COVERAGE_BIAS;
-    return cloud_shape_mask(base_noise, threshold, u_cloud_softness * CLOUD_FLAT_EDGE_SCALE);
-}
+// same shape knobs and world-anchored field, so both modes read one parameter set and the
+// shadow map agrees with what is drawn.
 
 vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir)
 {
@@ -261,41 +215,28 @@ vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir)
         return sky_color;
     }
 
-    // Dome-projected position on the plane, in noise units (world / cloud size + wind)
+    // Dome-projected point on the plane at the layer base, in world space. The plane is
+    // above the camera by the layer base height (a camera above it sees no flat clouds).
+    float plane_height = u_cloud_layer_base_y - u_cloud_camera_pos.y;
+    if(plane_height < 1.0)
+    {
+        return sky_color;
+    }
     float y_dome = sqrt(eye_dir.y * eye_dir.y + CLOUD_FLAT_DOME_EPS * CLOUD_FLAT_DOME_EPS);
-    float t_hit  = u_cloud_base_altitude / y_dome;
-    vec2  sp = eye_dir.xz * t_hit * u_cloud_inv_size + u_cloud_wind_offset;
+    float t_hit  = plane_height / y_dome;
+    vec3 world_pos = u_cloud_camera_pos + eye_dir * t_hit;
+    vec2 sp = cloud_noise_pos(world_pos).xz;
 
-    // Domain warping: distort with noise for organic, billowy shapes
-    vec2 warp_uv = (sp * 1.3 + vec2(3.7, 7.1)) / CLOUD_NOISE_PERIOD;
-    float warp_x = texture2D(s_cloudNoise2D, warp_uv).r - 0.5;
-    float warp_y = texture2D(s_cloudNoise2D, warp_uv + vec2(5.3, 2.9)).r - 0.5;
-    sp += vec2(warp_x, warp_y) * CLOUD_FLAT_WARP_STRENGTH * CLOUD_NOISE_PERIOD;
-
-    float density = flat_cloud_mask(sp);
-    if(density < 0.001)
+    float density = cloud_flat_density(s_cloudNoise2D, sp);
+    if(density < CLOUD_DENSITY_EPS)
     {
         return sky_color;
     }
 
-    // Detail erosion
-    vec2 detail_sp = sp * CLOUD_DETAIL_SCALE + CLOUD_DETAIL_OFFSET.xy;
-    vec3 worley_detail = texture2D(s_cloudNoise2D, detail_sp / CLOUD_NOISE_PERIOD).gba;
-    vec3 worley_fine = texture2D(s_cloudNoise2D, (detail_sp * CLOUD_DETAIL2_SCALE + CLOUD_DETAIL2_OFFSET.xy) / CLOUD_NOISE_PERIOD).gba;
-    float detail = cloud_detail_value(worley_detail, worley_fine);
-    density = cloud_erode(density, detail, u_cloud_detail_erode * CLOUD_FLAT_ERODE_SCALE, CLOUD_FLAT_HEIGHT_FRACTION);
-    if(density < 0.001)
-    {
-        return sky_color;
-    }
-
-    // Optical path through the plane: a fraction of the layer depth; the full thickness
-    // would make any density fully opaque (hard contour edges).
-    float effective_thickness = u_cloud_thickness * CLOUD_FLAT_THICKNESS_FRACTION;
-    float extinction = CLOUD_BASE_EXTINCTION * u_cloud_density * effective_thickness;
+    float extinction = cloud_flat_extinction();
 
     // Sun-offset sample as the light march
-    float lit_density = flat_cloud_mask(sp + light_dir.xz * CLOUD_FLAT_SHADOW_OFFSET * CLOUD_NOISE_PERIOD);
+    float lit_density = cloud_flat_mask(s_cloudNoise2D, sp + light_dir.xz * CLOUD_FLAT_SHADOW_OFFSET * CLOUD_NOISE_PERIOD);
     float od_sun = lit_density * extinction * u_cloud_shadow_strength;
 
     float cos_theta = dot(eye_dir, light_dir);
@@ -308,7 +249,7 @@ vec3 render_clouds(vec3 sky_color, vec3 eye_dir, vec3 light_dir)
     float alpha = 1.0 - exp(-optical_depth);
 
     // Aerial perspective: distant clouds fade into the sky behind them
-    alpha *= cloud_aerial_transmittance(t_hit, u_cloud_base_altitude);
+    alpha *= cloud_aerial_transmittance(t_hit, plane_height);
 
     return mix(sky_color, cloud_color, saturate(alpha));
 }
@@ -343,21 +284,11 @@ void main()
     vec3 sun_color = u_sunLuminance.xyz * u_exposition * (sun2 + mie_color);
     color += sun_color;
 
-    // Composite clouds based on cloud_mode
-    if(u_cloud_mode > CLOUD_MODE_NONE + 0.5)
+    // Flat clouds are drawn on the dome here; the volumetric layer is composited over the
+    // whole frame by fs_cloud_composite.sc after this pass.
+    if(u_cloud_mode > CLOUD_MODE_NONE + 0.5 && u_cloud_mode < CLOUD_MODE_FLAT + 0.5)
     {
-        if(u_cloud_mode > CLOUD_MODE_FLAT + 0.5)
-        {
-            // Volumetric: composite half-res pre-pass result
-            vec2 cloud_uv = clipToUv(v_clipPos * 0.5 + 0.5);
-            vec4 cloud_data = texture2D(s_cloudTex, cloud_uv);
-            color = color * cloud_data.a + cloud_data.rgb;
-        }
-        else
-        {
-            // Flat: single-sample scattering on projected dome
-            color = render_clouds(color, viewDir, lightDir);
-        }
+        color = render_clouds(color, viewDir, lightDir);
     }
 
     // Zenith gradient: slightly darker/deeper blue toward zenith (matches clear-sky reference)

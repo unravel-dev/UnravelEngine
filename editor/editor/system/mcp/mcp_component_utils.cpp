@@ -786,6 +786,18 @@ auto skylight_to_json(const skylight_component& comp, const std::unordered_set<s
     {
         append_prop(json, first, "cloud_shadow_strength", fmt::format("{:.6g}", comp.get_cloud_shadow_strength()));
     }
+    if(wants_key(filter, "cloud_world_space_altitude"))
+    {
+        append_prop(json, first, "cloud_world_space_altitude", comp.get_cloud_world_space_altitude() ? "true" : "false");
+    }
+    if(wants_key(filter, "cloud_shadows"))
+    {
+        append_prop(json, first, "cloud_shadows", comp.get_cloud_shadows() ? "true" : "false");
+    }
+    if(wants_key(filter, "cloud_shadow_opacity"))
+    {
+        append_prop(json, first, "cloud_shadow_opacity", fmt::format("{:.6g}", comp.get_cloud_shadow_opacity()));
+    }
     if(wants_key(filter, "cloud_softness"))
     {
         append_prop(json, first, "cloud_softness", fmt::format("{:.6g}", comp.get_cloud_softness()));
@@ -976,6 +988,42 @@ auto apply_skylight_properties(rtti::context& ctx,
                 continue;
             }
             comp.set_cloud_shadow_strength(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_world_space_altitude")
+        {
+            bool v = false;
+            if(!parse_bool(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_world_space_altitude(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_shadows")
+        {
+            bool v = false;
+            if(!parse_bool(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_shadows(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_shadow_opacity")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_shadow_opacity(v);
             result.applied.push_back(key);
         }
         else if(key == "cloud_softness")
@@ -1838,6 +1886,9 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Skylight", "cloud_size", "number");
     add("Skylight", "cloud_density", "number");
     add("Skylight", "cloud_shadow_strength", "number");
+    add("Skylight", "cloud_world_space_altitude", "boolean");
+    add("Skylight", "cloud_shadows", "boolean");
+    add("Skylight", "cloud_shadow_opacity", "number");
     add("Skylight", "cloud_softness", "number");
     add("Skylight", "cloud_detail_erode", "number");
     add("Skylight", "cloud_wind_direction", "number");

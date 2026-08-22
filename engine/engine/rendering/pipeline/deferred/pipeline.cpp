@@ -34,6 +34,12 @@
 
 namespace unravel
 {
+namespace
+{
+/// Border fade of the cloud shadow map in map space (fraction of the half extent).
+constexpr float cloud_shadow_border_fade = 0.08f;
+} // namespace
+
 namespace rendering
 {
 
@@ -736,6 +742,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // auto exposure then meters and re-amplifies (runaway brightening in dark scenes).
     run_ssr_pass(camera, rview, params);
 
+    // Cloud shadow map before any lighting: the directional light and the irradiance bake
+    // read it.
+    run_cloud_shadow_pass(scn, camera, rview);
+
     // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
     target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, dt);
 
@@ -1384,8 +1394,15 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
             mode = 4;
         }
 
-        // x=mode, y=sun_weight (applied in shader for all modes)
-        float mode_vec[4] = {float(mode), dominant.sun_weight, 0.0f, 0.0f};
+        // Cloud coverage coupling: the Perez sky is blended toward an overcast grey by the mean
+        // cloud transmittance (lowest mip of the cloud shadow map).
+        const bool couple_clouds = dominant.use_perez && cloud_shadow_.valid && cloud_shadow_.map;
+        gfx::set_texture(irradiance_compute_program_.s_cloudShadow,
+                         2,
+                         couple_clouds ? cloud_shadow_.map : default_textures::get().white_texture());
+
+        // x=mode, y=sun_weight (applied in shader for all modes), z=cloud coverage coupling
+        float mode_vec[4] = {float(mode), dominant.sun_weight, couple_clouds ? 1.0f : 0.0f, 0.0f};
         gfx::set_uniform(irradiance_compute_program_.u_mode, mode_vec);
 
         bgfx::dispatch(irr_pass.id, irradiance_compute_program_.program->native_handle(), 1, 1, 1);
@@ -1567,6 +1584,26 @@ auto deferred::run_direct_lighting_pass(scene& scn,
             if(has_shadows)
             {
                 generator.submit_uniforms(i);
+            }
+
+            if(light.type == light_type::directional)
+            {
+                // Cloud shadow map at slot 11 (after the 4 cascades). A white fallback keeps the
+                // sampler bound when there is no layer; the enable flag skips the read.
+                const bool use_cloud_shadow = cloud_shadow_.valid && cloud_shadow_.apply_to_lights && cloud_shadow_.map;
+                const float cloud_shadow[4] = {cloud_shadow_.origin.x,
+                                               cloud_shadow_.origin.y,
+                                               1.0f / std::max(cloud_shadow_.extent, 1.0f),
+                                               cloud_shadow_.opacity};
+                const float cloud_shadow2[4] = {use_cloud_shadow ? 1.0f : 0.0f,
+                                                cloud_shadow_.base_world_y,
+                                                cloud_shadow_border_fade,
+                                                0.0f};
+                gfx::set_uniform(lprogram.u_cloudShadow, cloud_shadow);
+                gfx::set_uniform(lprogram.u_cloudShadow2, cloud_shadow2);
+                gfx::set_texture(lprogram.s_cloudShadow,
+                                 11,
+                                 use_cloud_shadow ? cloud_shadow_.map : default_textures::get().white_texture());
             }
             gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
             auto topology = gfx::clip_quad(1.0f);
@@ -1792,20 +1829,16 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
     gfx::discard();
 }
 
-auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
-                                     scene& scn,
-                                     const camera& camera,
-                                     gfx::render_view& rview,
-                                     delta_t dt) -> gfx::frame_buffer::ptr
+namespace
 {
-    APP_SCOPE_PERF("Rendering/Atmospheric Pass");
-
-    atmospheric_pass_perez::run_params params_perez;
-    atmospheric_pass_skybox::run_params params_skybox;
-
+/// Copies the skylight settings into the atmospheric pass parameters. Returns false when the
+/// scene has no active skylight. Only the sun direction depends on the directional light.
+auto gather_skylight_params(scene& scn,
+                            atmospheric_pass_perez::run_params& params_perez,
+                            atmospheric_pass_skybox::run_params& params_skybox,
+                            skylight_component::sky_mode& mode) -> bool
+{
     bool found_sun = false;
-
-    skylight_component::sky_mode mode{};
     scn.registry->view<transform_component, skylight_component, active_component>().each(
         [&](auto e, auto&& transform_comp_ref, auto&& light_comp_ref, auto&& active)
         {
@@ -1829,8 +1862,6 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
             mode = light_comp_ref.get_mode();
             found_sun = true;
 
-            // Sky and cloud settings live on the skylight; only the sun direction needs the
-            // directional light. Defaults in run_params are never what the user sees.
             params_perez.turbidity = light_comp_ref.get_turbidity();
             params_perez.sky_brightness = light_comp_ref.get_sky_brightness();
             params_perez.cloud_mode = static_cast<int>(light_comp_ref.get_cloud_mode());
@@ -1843,6 +1874,9 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
             params_perez.cloud_detail_erode = light_comp_ref.get_cloud_detail_erode();
             params_perez.cloud_density = light_comp_ref.get_cloud_density();
             params_perez.cloud_shadow_strength = light_comp_ref.get_cloud_shadow_strength();
+            params_perez.cloud_world_space_altitude = light_comp_ref.get_cloud_world_space_altitude();
+            params_perez.cloud_shadows = light_comp_ref.get_cloud_shadows();
+            params_perez.cloud_shadow_opacity = light_comp_ref.get_cloud_shadow_opacity();
             params_perez.cloud_wind_offset = light_comp_ref.get_cloud_wind_offset();
             params_perez.cloud_time = light_comp_ref.get_cloud_time();
 
@@ -1858,6 +1892,40 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
             }
             params_skybox.sky_brightness = light_comp_ref.get_sky_brightness();
         });
+    return found_sun;
+}
+} // namespace
+
+void deferred::run_cloud_shadow_pass(scene& scn, const camera& camera, gfx::render_view& rview)
+{
+    cloud_shadow_ = {};
+    atmospheric_pass_perez::run_params params_perez;
+    atmospheric_pass_skybox::run_params params_skybox;
+    skylight_component::sky_mode mode{};
+    if(!gather_skylight_params(scn, params_perez, params_skybox, mode))
+    {
+        return;
+    }
+    if(mode == skylight_component::sky_mode::skybox)
+    {
+        return;
+    }
+    APP_SCOPE_PERF("Rendering/Cloud Shadow Pass");
+    cloud_shadow_ = atmospheric_pass_perez_.run_cloud_shadow_pass(camera, rview, params_perez);
+}
+
+auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
+                                     scene& scn,
+                                     const camera& camera,
+                                     gfx::render_view& rview,
+                                     delta_t dt) -> gfx::frame_buffer::ptr
+{
+    APP_SCOPE_PERF("Rendering/Atmospheric Pass");
+
+    atmospheric_pass_perez::run_params params_perez;
+    atmospheric_pass_skybox::run_params params_skybox;
+    skylight_component::sky_mode mode{};
+    const bool found_sun = gather_skylight_params(scn, params_perez, params_skybox, mode);
 
     if(!found_sun)
     {
