@@ -192,27 +192,22 @@ struct scene
      * them on the next save makes every instance of the prefab fail to match its own root,
      * rebuild it, and lose whatever was nested under the old one.
      *
-     * Also resets, on the instances directly nested under the entity, the memo of what "the
-     * containing document" stated - because in an authoring root that document is this one.
-     * Everything those instances record is this document's own authoring and has to read as
-     * local, or the prefab's editor shows its own overrides as "from prefab" and cannot revert
-     * them.
+     * What the document stated about the nested content is handed to the nested roots as this
+     * scene's own statements (re_home_document_statements): the link is gone, and the scene
+     * keeps what it sees.
      */
     static void detach_instance_link(entt::handle entity);
 
     /**
-     * @brief Makes everything the instances directly nested under `root` record read as
-     *        `root`'s own authoring.
+     * @brief Makes what `root`'s document states about its nested content read as `root`'s
+     *        own authoring: the document's list is adopted into the root's local list.
      *
-     * Each nested instance carries a memo of what "the containing document" stated about it.
-     * When `root` is the content of the prefab being edited, that document is this one - so
-     * the memo has to be empty, or the prefab's own overrides show as "from prefab" and cannot
-     * be reverted. Directly nested only: deeper instances still have a containing document
-     * above them, the instance they sit in, and its attribution stays right.
-     *
-     * Used by detach_instance_link, and on its own when the root keeps its instance link.
+     * For the root of a document being edited (prefab mode, the content browser's prefab
+     * inspector). Its statements are the author's working set there - editable, revertable -
+     * and a save folds them back into the file. Other documents' statements, on the nested
+     * roots and above, are not touched.
      */
-    static void reset_nested_inheritance(entt::handle root);
+    static void adopt_document_statements(entt::handle root);
 
     /**
      * @brief Creates an entity in the scene.

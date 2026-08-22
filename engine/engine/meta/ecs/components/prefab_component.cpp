@@ -3,7 +3,11 @@
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <serialization/types/map.hpp>
 #include <serialization/types/set.hpp>
+#include <serialization/types/vector.hpp>
+
+#include <engine/meta/ecs/entity.hpp>
 
 namespace unravel
 {
@@ -35,16 +39,50 @@ REFLECT(prefab_property_override_data)
 
 SAVE_INLINE(prefab_property_override_data)
 {
+    try_save(ar, ser20::make_nvp("instance_path", obj.instance_path));
     try_save(ar, ser20::make_nvp("entity_uuid", obj.entity_uuid));
     try_save(ar, ser20::make_nvp("component_path", obj.component_path));
     try_save(ar, ser20::make_nvp("pretty_component_path", obj.pretty_component_path));
 }
+
 LOAD_INLINE(prefab_property_override_data)
 {
+    // Absent in a record from before statements carried a path: about direct content.
+    try_load(ar, ser20::make_nvp("instance_path", obj.instance_path));
     try_load(ar, ser20::make_nvp("entity_uuid", obj.entity_uuid));
     try_load(ar, ser20::make_nvp("component_path", obj.component_path));
     try_load(ar, ser20::make_nvp("pretty_component_path", obj.pretty_component_path));
 }
+
+SAVE_INLINE(prefab_statement_target)
+{
+    try_save(ar, ser20::make_nvp("instance_path", obj.instance_path));
+    try_save(ar, ser20::make_nvp("id", obj.id));
+}
+
+LOAD_INLINE(prefab_statement_target)
+{
+    try_load(ar, ser20::make_nvp("instance_path", obj.instance_path));
+    try_load(ar, ser20::make_nvp("id", obj.id));
+}
+
+SAVE(prefab_statements)
+{
+    try_save(ar, ser20::make_nvp("overrides", obj.overrides));
+    try_save(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
+    try_save(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
+}
+SAVE_INSTANTIATE(prefab_statements, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(prefab_statements, ser20::oarchive_binary_t);
+
+LOAD(prefab_statements)
+{
+    try_load(ar, ser20::make_nvp("overrides", obj.overrides));
+    try_load(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
+    try_load(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
+}
+LOAD_INSTANTIATE(prefab_statements, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(prefab_statements, ser20::iarchive_binary_t);
 
 REFLECT(prefab_component)
 {
@@ -65,50 +103,32 @@ REFLECT(prefab_component)
             entt::attribute{"name", "source"},
             entt::attribute{"pretty_name", "Source"},
         })
-        .data<&prefab_component::property_overrides>("property_overrides"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "property_overrides"},
-            entt::attribute{"pretty_name", "Property Overrides"},
-        })
         .data<nullptr, &prefab_component::instance_id>("instance_id"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "instance_id"},
             entt::attribute{"pretty_name", "Instance Id"},
             entt::attribute{"tooltip", "Identifies which nested instance of the containing prefab this is."},
-        })
-        .data<&prefab_component::foreign_entities>("foreign_entities"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "foreign_entities"},
-            entt::attribute{"pretty_name", "Foreign Entities"},
-        })
-        .data<&prefab_component::removed_instances>("removed_instances"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "removed_instances"},
-            entt::attribute{"pretty_name", "Removed Instances"},
-        })
-        .data<&prefab_component::inherited_overrides>("inherited_overrides"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "inherited_overrides"},
-            entt::attribute{"pretty_name", "Inherited Overrides"},
-        })
-        .data<&prefab_component::removed_entities>("removed_entities"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "removed_entities"},
-            entt::attribute{"pretty_name", "Removed Entities"},
         });
 }
 
 SAVE(prefab_component)
 {
     try_save(ar, ser20::make_nvp("source", obj.source));
-    try_save(ar, ser20::make_nvp("property_overrides", obj.property_overrides));
-    try_save(ar, ser20::make_nvp("inherited_overrides", obj.inherited_overrides));
-    try_save(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
-    try_save(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
-    try_save(ar, ser20::make_nvp("inherited_removed_entities", obj.inherited_removed_entities));
-    try_save(ar, ser20::make_nvp("inherited_removed_instances", obj.inherited_removed_instances));
-    try_save(ar, ser20::make_nvp("foreign_entities", obj.foreign_entities));
+    try_save(ar, ser20::make_nvp("placed_by", static_cast<uint8_t>(obj.placed_by)));
     try_save(ar, ser20::make_nvp("instance_id", obj.instance_id));
+    try_save(ar, ser20::make_nvp("instance_document", obj.instance_document));
+
+    // The instance's own document's statements, as this scene or snapshot has them. Refreshed
+    // by that document's own replay wherever it loads.
+    try_save(ar, ser20::make_nvp("from_document", obj.from_document));
+
+    // What was stated here. Into a prefab file it is folded into the document's own list by
+    // the save (fold_document_statements) and the record carries an empty one - a file holds
+    // no scene's statements. A scene or a clone stream keeps it as it is.
+    const auto* save_ctx = try_get_save_context();
+    const bool into_prefab = save_ctx != nullptr && save_ctx->is_saving_to_prefab();
+    const prefab_statements empty;
+    try_save(ar, ser20::make_nvp("local", into_prefab ? empty : obj.local));
 }
 SAVE_INSTANTIATE(prefab_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(prefab_component, ser20::oarchive_binary_t);
@@ -116,14 +136,109 @@ SAVE_INSTANTIATE(prefab_component, ser20::oarchive_binary_t);
 LOAD(prefab_component)
 {
     try_load(ar, ser20::make_nvp("source", obj.source));
-    try_load(ar, ser20::make_nvp("property_overrides", obj.property_overrides));
-    try_load(ar, ser20::make_nvp("inherited_overrides", obj.inherited_overrides));
-    try_load(ar, ser20::make_nvp("removed_entities", obj.removed_entities));
-    try_load(ar, ser20::make_nvp("removed_instances", obj.removed_instances));
-    try_load(ar, ser20::make_nvp("inherited_removed_entities", obj.inherited_removed_entities));
-    try_load(ar, ser20::make_nvp("inherited_removed_instances", obj.inherited_removed_instances));
-    try_load(ar, ser20::make_nvp("foreign_entities", obj.foreign_entities));
+
+    uint8_t placed = 0;
+    if(try_load(ar, ser20::make_nvp("placed_by", placed)))
+    {
+        obj.placed_by = static_cast<instance_placement>(placed);
+    }
+
+    auto* load_ctx = try_get_load_context();
+    const hpp::uuid document_uid = load_ctx != nullptr ? load_ctx->document_uid : hpp::uuid{};
+
     try_load(ar, ser20::make_nvp("instance_id", obj.instance_id));
+
+    // Absent only in a file from before slots named their document. A matched instance keeps
+    // the value it has; a fresh one is left nil and attributed by the legacy pass.
+    if(!try_load(ar, ser20::make_nvp("instance_document", obj.instance_document)) && !obj.instance_id.is_nil())
+    {
+        if(load_ctx != nullptr)
+        {
+            load_ctx->saw_unqualified_ids = true;
+        }
+    }
+
+    // The document's statements travel with the instance root: replaced by this record's
+    // copy (a scene's, or a containing document's snapshot - which that document's own replay
+    // refreshes next in the cascade).
+    const bool has_statement_lists = try_load(ar, ser20::make_nvp("from_document", obj.from_document));
+
+    // What was stated here is this scene's. A replay over an existing instance must not touch
+    // it - the record's is the file's, which is empty, or an outer snapshot's, which is not this
+    // scene's either. A fresh instantiate, a scene load or a clone takes the record's.
+    const bool replaying = load_ctx != nullptr && load_ctx->is_updating_prefab();
+    if(!replaying)
+    {
+        prefab_statements local;
+        if(try_load(ar, ser20::make_nvp("local", local)))
+        {
+            obj.local = std::move(local);
+        }
+    }
+
+    if(!has_statement_lists && load_ctx != nullptr)
+    {
+        // A record from before statements lived with their author: overrides and removals of
+        // every author merged on the nested root, with memos saying which half was whose. Kept
+        // aside as it was and converted once the document has loaded, when the roots the
+        // halves belong to can be found (convert_legacy_override_state).
+        legacy_override_state legacy;
+        bool any = try_load(ar, ser20::make_nvp("property_overrides", legacy.property_overrides));
+
+        std::map<hpp::uuid, std::set<prefab_property_override_data>> stated;
+        if(try_load(ar, ser20::make_nvp("stated_overrides", stated)))
+        {
+            any = true;
+            for(auto& [document, entries] : stated)
+            {
+                const bool is_self = document.is_nil();
+                if(is_self && document_uid.is_nil())
+                {
+                    continue;
+                }
+                legacy.stated_overrides[is_self ? document_uid : document] = std::move(entries);
+            }
+        }
+        else
+        {
+            std::set<prefab_property_override_data> legacy_inherited;
+            if(try_load(ar, ser20::make_nvp("inherited_overrides", legacy_inherited)) && !legacy_inherited.empty() &&
+               !document_uid.is_nil())
+            {
+                legacy.stated_overrides[document_uid] = std::move(legacy_inherited);
+                any = true;
+            }
+        }
+
+        any |= try_load(ar, ser20::make_nvp("removed_entities", legacy.removed_entities));
+        any |= try_load(ar, ser20::make_nvp("removed_instances", legacy.removed_instances));
+        any |= try_load(ar, ser20::make_nvp("inherited_removed_entities", legacy.inherited_removed_entities));
+        any |= try_load(ar, ser20::make_nvp("inherited_removed_instances", legacy.inherited_removed_instances));
+
+        if(any)
+        {
+            if(const auto owner = obj.get_owner())
+            {
+                load_ctx->legacy_overrides[owner.entity()] = std::move(legacy);
+            }
+        }
+    }
+
+    // A file written before ids named their document listed, on each nested instance, the
+    // entities the containing document added under it. Kept aside for the legacy pass, which
+    // attributes them to that document once the whole document has loaded; nothing else reads
+    // it.
+    std::set<hpp::uuid> legacy_foreign;
+    if(try_load(ar, ser20::make_nvp("foreign_entities", legacy_foreign)) && !legacy_foreign.empty())
+    {
+        if(load_ctx != nullptr)
+        {
+            if(const auto owner = obj.get_owner())
+            {
+                load_ctx->legacy_foreign_entities[owner.entity()] = std::move(legacy_foreign);
+            }
+        }
+    }
 }
 LOAD_INSTANTIATE(prefab_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(prefab_component, ser20::iarchive_binary_t);
@@ -154,6 +269,9 @@ REFLECT(prefab_id_component)
 SAVE(prefab_id_component)
 {
     try_save(ar, ser20::make_nvp("id", obj.id));
+    // Always written, never elided to "the file being written": an absent key costs a failed
+    // lookup per entity on load, which is the one cost this path cannot afford.
+    try_save(ar, ser20::make_nvp("document", obj.document));
 }
 SAVE_INSTANTIATE(prefab_id_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(prefab_id_component, ser20::oarchive_binary_t);
@@ -161,6 +279,17 @@ SAVE_INSTANTIATE(prefab_id_component, ser20::oarchive_binary_t);
 LOAD(prefab_id_component)
 {
     try_load(ar, ser20::make_nvp("id", obj.id));
+
+    // Absent only in a file from before ids named their document. A matched entity keeps the
+    // document it has - already right, from an earlier attribution or a newer scene; a fresh
+    // one is left nil and attributed by the legacy pass once the document has loaded.
+    if(!try_load(ar, ser20::make_nvp("document", obj.document)))
+    {
+        if(auto* load_ctx = try_get_load_context())
+        {
+            load_ctx->saw_unqualified_ids = true;
+        }
+    }
 }
 
 LOAD_INSTANTIATE(prefab_id_component, ser20::iarchive_associative_t);

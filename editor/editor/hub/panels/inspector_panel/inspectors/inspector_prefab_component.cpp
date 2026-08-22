@@ -120,32 +120,32 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
         auto prefab_path = fs::resolve_protocol(data.source.id());
         asset_writer::atomic_save_to_file(prefab_path.string(), root_prefab_entity);
 
-        // Everything just went into the prefab, so no override remains - except a nested
+        // Everything from this instance down just went into the prefab: what was stated here
+        // about the nested content is the document's own statement now, and what was stated
+        // about this instance's own content is its content. One override survives - a nested
         // root's own placement. That is the *containing* document's to state, not this
         // asset's; the asset cannot absorb it, and dropping the override would let the
         // container's next replay snap the instance back to where it was before the move.
-        std::vector<prefab_property_override_data> placement_overrides;
+        prefab_statements kept;
         if(is_nested_instance(root_prefab_entity))
         {
             const auto* root_id = root_prefab_entity.try_get<prefab_id_component>();
-            for(const auto& override_data : data.get_all_overrides())
+            for(const auto& override_data : data.local.overrides)
             {
-                const bool is_root = root_id != nullptr && override_data.entity_uuid == root_id->id;
+                const bool is_root = root_id != nullptr && override_data.instance_path.empty() &&
+                                     override_data.entity_uuid == root_id->id;
                 const bool is_placement =
                     override_data.component_path.rfind("transform_component/local_transform/position", 0) == 0 ||
                     override_data.component_path.rfind("transform_component/local_transform/rotation", 0) == 0;
                 if(is_root && is_placement)
                 {
-                    placement_overrides.push_back(override_data);
+                    kept.overrides.insert(override_data);
                 }
             }
         }
-
-        data.clear_overrides();
-        for(const auto& kept : placement_overrides)
-        {
-            data.property_overrides.insert(kept);
-        }
+        data.from_document = fold_document_statements(root_prefab_entity);
+        data.local = std::move(kept);
+        clear_local_statements_below(root_prefab_entity);
         result.changed = true;
     }
     ImGui::SetItemTooltipEx("Save this instance - changes, additions and removals included -\n"

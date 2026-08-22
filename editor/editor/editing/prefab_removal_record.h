@@ -36,7 +36,6 @@ struct prefab_removal_record
 
     /// Overrides the removal dropped along with the entities, and which half each was in.
     std::set<prefab_property_override_data> erased_overrides{};
-    std::set<prefab_property_override_data> erased_inherited_overrides{};
 };
 
 } // namespace unravel

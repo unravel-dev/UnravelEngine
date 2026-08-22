@@ -22,6 +22,7 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <engine/meta/ecs/entity.hpp>
 
 namespace unravel
 {
@@ -111,6 +112,10 @@ struct instance_changes
     std::string asset_name;
     bool is_self{};
 
+    /// What is stated about this instance's content, by whom. Owned here so the override tree
+    /// can point into it.
+    statements_about_instance about;
+
     std::map<hpp::uuid, entity_overrides> overrides;
     std::vector<removal_row> removals;
     std::vector<addition_row> additions;
@@ -141,18 +146,16 @@ auto split_path(const std::string& path) -> std::vector<std::string>
     return segments;
 }
 
-/// Which of the two authors an override came from. Inherited ones are stated by the prefab
-/// that contains this instance, and it re-states them every time it is replayed - so they are
-/// shown, and are not the user's to revert here.
-auto build_override_tree(const prefab_component& data, entt::handle instance_root)
+/// Which author an override came from. Inherited ones are stated by the documents containing
+/// this instance, and they re-state them every time they are replayed - so they are shown, and
+/// are not the user's to revert here. Local ones were stated in this scene.
+auto build_override_tree(const statements_about_instance& about, entt::handle instance_root)
     -> std::map<hpp::uuid, entity_overrides>
 {
     std::map<hpp::uuid, entity_overrides> by_entity;
 
-    for(const auto& override_data : data.get_all_overrides())
+    const auto add = [&by_entity, instance_root](const prefab_property_override_data& override_data, bool inherited)
     {
-        const bool inherited = data.inherited_overrides.count(override_data) != 0u;
-
         auto& entry = by_entity[override_data.entity_uuid];
         if(!entry.handle && entry.name.empty())
         {
@@ -177,6 +180,15 @@ auto build_override_tree(const prefab_component& data, entt::handle instance_roo
 
         node->leaf = &override_data;
         node->leaf_is_inherited = inherited;
+    };
+
+    for(const auto& override_data : about.local.overrides)
+    {
+        add(override_data, false);
+    }
+    for(const auto& override_data : about.stated.overrides)
+    {
+        add(override_data, true);
     }
 
     return by_entity;
@@ -201,23 +213,31 @@ void build_group(instance_changes& group)
     }
 
     group.asset_name = asset_display_name(prefab_comp->source);
-    group.overrides = build_override_tree(*prefab_comp, group.root);
+    group.about = collect_statements_about(group.root);
+    group.overrides = build_override_tree(group.about, group.root);
 
-    group.inherited_count = prefab_comp->inherited_overrides.size();
-    group.local_count = prefab_comp->get_all_overrides().size() -
-                        std::min(group.inherited_count, prefab_comp->get_all_overrides().size());
+    group.inherited_count = group.about.stated.overrides.size();
+    group.local_count = group.about.local.overrides.size();
 
-    for(const auto& removed : prefab_comp->removed_entities)
+    for(const auto& removed : group.about.local.removed_entities)
     {
-        const bool inherited = prefab_comp->inherited_removed_entities.count(removed) != 0u;
-        group.removals.push_back({removed, false, inherited});
-        ++(inherited ? group.inherited_count : group.local_count);
+        group.removals.push_back({removed.id, false, false});
+        ++group.local_count;
     }
-    for(const auto& removed : prefab_comp->removed_instances)
+    for(const auto& removed : group.about.stated.removed_entities)
     {
-        const bool inherited = prefab_comp->inherited_removed_instances.count(removed) != 0u;
-        group.removals.push_back({removed, true, inherited});
-        ++(inherited ? group.inherited_count : group.local_count);
+        group.removals.push_back({removed.id, false, true});
+        ++group.inherited_count;
+    }
+    for(const auto& removed : group.about.local.removed_instances)
+    {
+        group.removals.push_back({removed.id, true, false});
+        ++group.local_count;
+    }
+    for(const auto& removed : group.about.stated.removed_instances)
+    {
+        group.removals.push_back({removed.id, true, true});
+        ++group.inherited_count;
     }
 }
 
@@ -265,6 +285,37 @@ void collect_groups(entt::handle entity, size_t group_index, std::vector<instanc
     }
 }
 
+/// Entities under an instance root whose id names a document other than the instance's own
+/// asset: introduced by whatever contains it. Stops at nested instances, which are groups of
+/// their own, and does not descend into an addition - the whole subtree is the addition.
+void collect_outer_additions(entt::handle entity, const hpp::uuid& own_document, instance_changes& group)
+{
+    const auto* trans_comp = entity.try_get<transform_component>();
+    if(trans_comp == nullptr)
+    {
+        return;
+    }
+
+    for(auto child : trans_comp->get_children())
+    {
+        if(child.all_of<prefab_component>())
+        {
+            continue;
+        }
+
+        if(const auto* id_comp = child.try_get<prefab_id_component>())
+        {
+            if(!id_comp->document.is_nil() && id_comp->document != own_document)
+            {
+                group.additions.push_back({child, false, true});
+                continue;
+            }
+        }
+
+        collect_outer_additions(child, own_document, group);
+    }
+}
+
 /**
  * @brief The root (when it is an instance) plus every instance nested below it, each with its
  *        changes.
@@ -285,7 +336,8 @@ auto collect_changes(entt::handle root) -> std::vector<instance_changes>
 
     collect_groups(root, 0, groups);
 
-    // Entities the *containing* prefab added under an instance: part of that prefab's
+    // Entities a *containing* document introduced under an instance - their ids name that
+    // document rather than the instance's own asset. Part of the containing prefab's
     // definition, so shown as inherited additions rather than local ones.
     for(auto& group : groups)
     {
@@ -294,14 +346,7 @@ auto collect_changes(entt::handle root) -> std::vector<instance_changes>
         {
             continue;
         }
-        for(const auto& foreign : prefab_comp->foreign_entities)
-        {
-            auto handle = scene::find_entity_by_prefab_uuid(group.root, foreign);
-            if(handle)
-            {
-                group.additions.push_back({handle, false, true});
-            }
-        }
+        collect_outer_additions(group.root, prefab_comp->source.uid(), group);
     }
 
     return groups;
@@ -343,9 +388,7 @@ struct pending_ops
  */
 void revert_local_changes(prefab_component& prefab_comp)
 {
-    prefab_comp.property_overrides = prefab_comp.inherited_overrides;
-    prefab_comp.removed_entities = prefab_comp.inherited_removed_entities;
-    prefab_comp.removed_instances = prefab_comp.inherited_removed_instances;
+    prefab_comp.local.clear();
     prefab_comp.changed = true;
 }
 
@@ -742,9 +785,14 @@ auto draw_prefab_changes(rtti::context& ctx, entt::handle root) -> inspect_resul
     const auto disabled_colour = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
     pending_ops ops;
 
-    if(auto confirmed = pending_revert_all_root().resolve(); confirmed && confirmed == root)
+    if(auto confirmed = pending_revert_all_root().resolve(); confirmed)
     {
-        ops.revert_all = true;
+        if(confirmed == root)
+        {
+            ops.revert_all = true;
+        }
+        // Consumed, or stale: a different root is being drawn, so the user has moved on, and a
+        // parked confirmation must not fire on some later visit to the root it was given for.
         pending_revert_all_root() = {};
     }
 
@@ -848,11 +896,11 @@ auto draw_prefab_changes(rtti::context& ctx, entt::handle root) -> inspect_resul
         {
             if(ops.restore_is_instance)
             {
-                owner_prefab->removed_instances.erase(ops.restore_id);
+                owner_prefab->local.restore_instance({}, ops.restore_id);
             }
             else
             {
-                owner_prefab->removed_entities.erase(ops.restore_id);
+                owner_prefab->local.restore_entity({}, ops.restore_id);
             }
             owner_prefab->changed = true;
             mutated = true;

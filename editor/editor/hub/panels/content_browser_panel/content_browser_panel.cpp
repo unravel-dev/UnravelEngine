@@ -233,9 +233,20 @@ void process_drag_drop_target(const fs::path& absolute_path)
                                 // every resync - and a stale instance_id would claim a slot in
                                 // a document that never wrote this instance. Becoming the
                                 // source of a new prefab leaves nothing overridden by
-                                // definition. Replaced rather than removed and re-added: the
-                                // on_destroy hook strips prefab ids from the whole subtree.
-                                auto& prefab_comp = dropped.emplace_or_replace<prefab_component>();
+                                // definition.
+                                //
+                                // Reset field by field, not replaced: emplace_or_replace on an
+                                // existing component takes entt's patch path, which assigns a
+                                // default-constructed component over the live one - owner
+                                // handle included - and fires only on_update, so the owner
+                                // never gets re-stamped. That null owner surfaced as a crash
+                                // in the inspector's Apply All. And not removed-and-re-added
+                                // either: the on_destroy hook strips prefab ids from the whole
+                                // subtree.
+                                auto& prefab_comp = dropped.get_or_emplace<prefab_component>();
+                                prefab_comp.clear_overrides();
+                                prefab_comp.instance_id = {};
+                                prefab_comp.instance_document = {};
                                 prefab_comp.source = am.get_asset<prefab>(key.generic_string());
                             };
 

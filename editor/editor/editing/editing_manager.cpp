@@ -739,12 +739,13 @@ void editing_manager::enter_prefab_mode(rtti::context& ctx, const asset_handle<p
         // file: its live state is the file's next content. The tag is what keeps the two
         // instance behaviours that assume the opposite away from it - syncing against the
         // file (sync_prefab_entity) and recording its own content as overrides of the file
-        // (find_prefab_root_entity). Its nested instances' memos are reset so that what this
-        // document states about them reads as its own authoring, not as inherited.
+        // (find_prefab_root_entity). What the document states about its nested content is
+        // adopted as the root's own local list, so it reads as the author's own work - not as
+        // inherited - and a save folds it back into the file.
         if(prefab_entity)
         {
             prefab_entity.emplace<authoring_root_tag>();
-            scene::reset_nested_inheritance(prefab_entity);
+            scene::adopt_document_statements(prefab_entity);
         }
         
         // Select the prefab entity

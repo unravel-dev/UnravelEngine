@@ -710,8 +710,14 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                 callbacks.can_remove = []()
                 {
+                    // prefab_component is deliberately not removable here: removing it is the
+                    // unpack - the on_destroy hook strips prefab ids down the subtree - and the
+                    // remove-component undo restores only the component, not those ids, so the
+                    // next sync rebuilds the whole instance. Unlinking goes through the
+                    // hierarchy's "Unlink from Prefab", which is what it is for.
                     return !std::is_same<ctype, id_component>::value && !std::is_same<ctype, tag_component>::value &&
                            !std::is_same<ctype, transform_component>::value && !std::is_same<ctype, prefab_id_component>::value &&
+                           !std::is_same<ctype, prefab_component>::value &&
                            !std::is_same<ctype, layer_component>::value && !std::is_same<ctype, bone_component>::value &&
                            !std::is_same<ctype, submesh_component>::value;
                 };

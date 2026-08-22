@@ -152,11 +152,13 @@ auto prefab_override_context::begin_prefab_inspection(entt::handle e) -> bool
             entity = e;
             is_active = true;
 
+            // Overridden here or by a document above - both read as "not the prefab's value".
             is_path_overridden_callback =
-                [comp_copy = *prefab_comp, entity_copy = e](const hpp::uuid& entity_uuid,
-                                                                 const std::string& component_path)
+                [about = collect_statements_about(prefab_root), entity_copy = e](const hpp::uuid& entity_uuid,
+                                                                                const std::string& component_path)
             {
-                return comp_copy.has_override(entity_uuid, component_path);
+                return about.local.has_override({}, entity_uuid, component_path) ||
+                       about.stated.has_override({}, entity_uuid, component_path);
             };
 
             // Get and set the entity UUID for both path contexts
@@ -370,7 +372,11 @@ auto is_top_level_instance_root(entt::handle entity) -> bool
     {
         if(current.all_of<prefab_component>())
         {
-            return false;
+            // An instance directly under the prefab being edited counts as top-level for this
+            // purpose: that root is upstream of its own file, so no document states this
+            // instance's placement, and a position or rotation override here would have
+            // nothing to revert to. The placement is simply the prefab's content.
+            return is_authoring_root(current);
         }
         const auto* parent_trans = current.try_get<transform_component>();
         current = parent_trans != nullptr ? parent_trans->get_parent() : entt::handle{};
@@ -560,7 +566,7 @@ void take_entity_overrides(std::set<prefab_property_override_data>& from,
                            std::set<prefab_property_override_data>& into)
 {
     auto it = from.lower_bound(prefab_property_override_data{entity_uuid, std::string{}});
-    while(it != from.end() && it->entity_uuid == entity_uuid)
+    while(it != from.end() && it->instance_path.empty() && it->entity_uuid == entity_uuid)
     {
         into.insert(*it);
         ++it;
@@ -602,8 +608,7 @@ void mark_subtree_removed(entt::handle entity, prefab_component& container_prefa
     if(!entity_uuid.is_nil())
     {
         // Captured before the removal, which drops them along with the entity.
-        take_entity_overrides(container_prefab.property_overrides, entity_uuid, record.erased_overrides);
-        take_entity_overrides(container_prefab.inherited_overrides, entity_uuid, record.erased_inherited_overrides);
+        take_entity_overrides(container_prefab.local.overrides, entity_uuid, record.erased_overrides);
 
         container_prefab.remove_entity(entity_uuid);
         record.removed_entities.push_back(entity_uuid);
@@ -692,17 +697,15 @@ void prefab_override_context::restore_entity_removal(const prefab_removal_record
 
     for(const auto& removed : record.removed_instances)
     {
-        prefab_comp->removed_instances.erase(removed);
+        prefab_comp->local.restore_instance({}, removed);
     }
 
     for(const auto& removed : record.removed_entities)
     {
-        prefab_comp->removed_entities.erase(removed);
+        prefab_comp->local.restore_entity({}, removed);
     }
 
-    prefab_comp->property_overrides.insert(record.erased_overrides.begin(), record.erased_overrides.end());
-    prefab_comp->inherited_overrides.insert(record.erased_inherited_overrides.begin(),
-                                            record.erased_inherited_overrides.end());
+    prefab_comp->local.overrides.insert(record.erased_overrides.begin(), record.erased_overrides.end());
 }
 
 auto prefab_override_context::exists_in_prefab(scene& cache_scene,

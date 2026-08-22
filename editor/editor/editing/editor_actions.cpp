@@ -1233,7 +1233,10 @@ auto bake_one_asset(rtti::context& ctx, scene& scratch, const hpp::uuid& uid, co
             auto& save_ctx = get_save_context();
             save_ctx.save_source = root;
             save_ctx.to_prefab = true;
+            // The asset being baked is the document these records belong to.
+            save_ctx.document_uid = uid;
             save_to_stream(buffer, entt::const_handle{root});
+            save_ctx.document_uid = {};
             save_ctx.to_prefab = false;
             save_ctx.save_source = {};
         }

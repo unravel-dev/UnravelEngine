@@ -907,7 +907,7 @@ auto inspector_asset_handle_prefab::get_prefab_entity(rtti::context& ctx, const 
     // reverted override straight back, before the save that would have made the revert stick)
     // and from recording its own content as overrides of it.
     inspected_root_.emplace<authoring_root_tag>();
-    scene::reset_nested_inheritance(inspected_root_);
+    scene::adopt_document_statements(inspected_root_);
 
     return inspected_root_;
 }

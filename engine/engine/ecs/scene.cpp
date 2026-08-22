@@ -264,6 +264,11 @@ scene::scene(const std::string& tag_name)
     on_destroy<character_controller_component>(*registry).connect<&physics_system::on_destroy_cc_component>();
 
     on_construct<prefab_component>(*registry).connect<&owned_component::on_create_component<prefab_component>>();
+    // on_update too: emplace_or_replace / replace / patch on an existing component assign a
+    // whole object over the live one, owner handle included, and fire only this signal. Without
+    // re-stamping here a replaced instance is left with a null owner - a crash waiting in any
+    // code that trusts get_owner().
+    on_update<prefab_component>(*registry).connect<&owned_component::on_create_component<prefab_component>>();
     on_destroy<prefab_component>(*registry).connect<&owned_component::on_destroy_component<prefab_component>>();
 
     on_destroy<prefab_component>(*registry).connect<&destroy_dependent_components_recursive<prefab_id_component>>();
@@ -553,42 +558,19 @@ auto scene::is_destroy_suppressed() -> bool
     return destroy_suppression_depth() > 0;
 }
 
-void scene::reset_nested_inheritance(entt::handle root)
+void scene::adopt_document_statements(entt::handle root)
 {
     if(!root)
     {
         return;
     }
-
-    std::vector<entt::handle> direct_nested;
-    std::function<void(entt::handle)> collect = [&](entt::handle node)
+    auto* prefab_comp = root.try_get<prefab_component>();
+    if(prefab_comp == nullptr)
     {
-        const auto* trans_comp = node.try_get<transform_component>();
-        if(trans_comp == nullptr)
-        {
-            return;
-        }
-        for(auto child : trans_comp->get_children())
-        {
-            if(child.all_of<prefab_component>())
-            {
-                direct_nested.push_back(child);
-                continue;
-            }
-            collect(child);
-        }
-    };
-    collect(root);
-
-    for(auto& nested : direct_nested)
-    {
-        if(auto* prefab_comp = nested.try_get<prefab_component>())
-        {
-            prefab_comp->inherited_overrides.clear();
-            prefab_comp->inherited_removed_entities.clear();
-            prefab_comp->inherited_removed_instances.clear();
-        }
+        return;
     }
+    prefab_comp->local.merge(prefab_comp->from_document);
+    prefab_comp->from_document.clear();
 }
 
 void scene::detach_instance_link(entt::handle entity)
@@ -597,12 +579,11 @@ void scene::detach_instance_link(entt::handle entity)
     {
         return;
     }
-
+    // What the document stated about the nested content is this scene's now.
+    re_home_document_statements(entity);
     ++keep_prefab_ids_depth();
     entity.remove<prefab_component>();
     --keep_prefab_ids_depth();
-
-    reset_nested_inheritance(entity);
 }
 
 void scene::destroy_entity(entt::handle entity)

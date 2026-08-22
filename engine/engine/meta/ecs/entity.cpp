@@ -7,6 +7,7 @@
 #include <filesystem/file_istream.h>
 #include <serialization/serialization.h>
 #include "components/all_components.h"
+#include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_writer.h>
 #include <engine/ecs/scene.h>
 #include <engine/engine.h>
@@ -142,6 +143,361 @@ auto get_save_context() -> save_context&
     assert(save_ctx_ptr);
     return *save_ctx_ptr;
 }
+
+auto try_get_save_context() -> save_context*
+{
+    return save_ctx_ptr;
+}
+
+auto try_get_load_context() -> load_context*
+{
+    return load_ctx_ptr;
+}
+
+auto instance_path_between(entt::handle outer_root, entt::handle inner_root, std::vector<hpp::uuid>& out) -> bool
+{
+    out.clear();
+    if(!outer_root || !inner_root)
+    {
+        return false;
+    }
+    if(outer_root == inner_root)
+    {
+        return true;
+    }
+
+    std::vector<hpp::uuid> reversed;
+    auto current = inner_root;
+    while(current && current != outer_root)
+    {
+        if(const auto* prefab_comp = current.try_get<prefab_component>())
+        {
+            if(prefab_comp->instance_id.is_nil())
+            {
+                return false;
+            }
+            reversed.push_back(prefab_comp->instance_id);
+        }
+        const auto* trans_comp = current.try_get<transform_component>();
+        current = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
+    }
+    if(current != outer_root)
+    {
+        return false;
+    }
+
+    out.assign(reversed.rbegin(), reversed.rend());
+    return true;
+}
+
+namespace
+{
+/// Calls fn(ancestor_root, chain) for every instance root above `root`, nearest first, with
+/// the slot chain from that ancestor down to root. Stops at the first ancestor that cannot
+/// address root - an unnamed instance in between - because nothing above it can either.
+template<typename Fn>
+void for_each_addressing_ancestor(entt::handle root, Fn&& fn)
+{
+    const auto* trans_comp = root.try_get<transform_component>();
+    auto current = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
+    std::vector<hpp::uuid> chain;
+    while(current)
+    {
+        if(current.all_of<prefab_component>())
+        {
+            if(!instance_path_between(current, root, chain))
+            {
+                return;
+            }
+            fn(current, chain);
+        }
+        const auto* parent_trans = current.try_get<transform_component>();
+        current = parent_trans != nullptr ? parent_trans->get_parent() : entt::handle{};
+    }
+}
+
+/// Calls fn(nested_root, chain) for every named instance root nested under `node` at any
+/// depth, with the slot chain from the walk's root to it. Does not descend into an unnamed
+/// one: nothing below it can be addressed from above.
+template<typename Fn>
+void for_each_addressable_nested_root(entt::handle node, std::vector<hpp::uuid>& chain, Fn&& fn)
+{
+    const auto* trans_comp = node.try_get<transform_component>();
+    if(trans_comp == nullptr)
+    {
+        return;
+    }
+    for(auto child : trans_comp->get_children())
+    {
+        if(const auto* nested_prefab = child.try_get<prefab_component>())
+        {
+            if(nested_prefab->instance_id.is_nil())
+            {
+                continue;
+            }
+            chain.push_back(nested_prefab->instance_id);
+            fn(child, chain);
+            for_each_addressable_nested_root(child, chain, fn);
+            chain.pop_back();
+            continue;
+        }
+        for_each_addressable_nested_root(child, chain, fn);
+    }
+}
+} // namespace
+
+auto collect_statements_about(entt::handle root) -> statements_about_instance
+{
+    statements_about_instance out;
+    if(!root)
+    {
+        return out;
+    }
+    if(const auto* own = root.try_get<prefab_component>())
+    {
+        out.local = own->local.direct();
+    }
+    for_each_addressing_ancestor(root,
+                                 [&out](entt::handle ancestor, const std::vector<hpp::uuid>& chain)
+                                 {
+                                     const auto& ancestor_prefab = ancestor.get<prefab_component>();
+                                     out.stated.merge(ancestor_prefab.from_document.at(chain));
+                                     out.local.merge(ancestor_prefab.local.at(chain));
+                                 });
+    return out;
+}
+
+auto collect_replay_statements(entt::handle root) -> replay_statements
+{
+    replay_statements out;
+    if(!root)
+    {
+        return out;
+    }
+    if(const auto* own = root.try_get<prefab_component>())
+    {
+        out.local.merge(own->local);
+    }
+    for_each_addressing_ancestor(root,
+                                 [&out](entt::handle ancestor, const std::vector<hpp::uuid>& chain)
+                                 {
+                                     const auto& ancestor_prefab = ancestor.get<prefab_component>();
+                                     out.stated.merge(ancestor_prefab.from_document.rebased(chain));
+                                     out.local.merge(ancestor_prefab.local.rebased(chain));
+                                 });
+    std::vector<hpp::uuid> chain;
+    for_each_addressable_nested_root(root,
+                                     chain,
+                                     [&out](entt::handle nested, const std::vector<hpp::uuid>& path)
+                                     {
+                                         out.local.merge(nested.get<prefab_component>().local.prefixed(path));
+                                     });
+    return out;
+}
+
+auto fold_document_statements(entt::handle root) -> prefab_statements
+{
+    prefab_statements out;
+    if(!root)
+    {
+        return out;
+    }
+    if(const auto* own = root.try_get<prefab_component>())
+    {
+        out.merge(own->from_document);
+        // What the root's own list states about nested content - an authoring root's adopted
+        // list. Its entries about the root's direct content are content, not statements.
+        out.merge(own->local.nested_only());
+    }
+    std::vector<hpp::uuid> chain;
+    for_each_addressable_nested_root(root,
+                                     chain,
+                                     [&out](entt::handle nested, const std::vector<hpp::uuid>& path)
+                                     {
+                                         out.merge(nested.get<prefab_component>().local.prefixed(path));
+                                     });
+    return out;
+}
+
+void clear_local_statements_below(entt::handle root)
+{
+    if(!root)
+    {
+        return;
+    }
+    std::vector<hpp::uuid> chain;
+    for_each_addressable_nested_root(root,
+                                     chain,
+                                     [](entt::handle nested, const std::vector<hpp::uuid>&)
+                                     {
+                                         nested.get<prefab_component>().local.clear();
+                                     });
+}
+
+void re_home_document_statements(entt::handle root)
+{
+    if(!root)
+    {
+        return;
+    }
+    auto* own = root.try_get<prefab_component>();
+    if(own == nullptr)
+    {
+        return;
+    }
+    prefab_statements pool = own->from_document;
+    pool.merge(own->local.nested_only());
+    std::vector<hpp::uuid> chain;
+    for_each_addressable_nested_root(root,
+                                     chain,
+                                     [&pool](entt::handle nested, const std::vector<hpp::uuid>& path)
+                                     {
+                                         nested.get<prefab_component>().local.merge(pool.at(path));
+                                     });
+    own->from_document.clear();
+    own->local = own->local.direct();
+}
+
+/**
+ * @brief Every removal stated about content under `root`, relative to root: here, by the
+ *        documents above, and by root's own document as last replayed.
+ */
+auto collect_replay_removals(entt::handle root) -> prefab_statements
+{
+    prefab_statements out;
+    if(!root)
+    {
+        return out;
+    }
+    const auto replay = collect_replay_statements(root);
+    out.merge(replay.stated);
+    out.merge(replay.local);
+    if(const auto* own = root.try_get<prefab_component>())
+    {
+        out.merge(own->from_document);
+    }
+    return out;
+}
+
+/**
+ * @brief Converts override and removal state from records written before statements lived
+ *        with their author.
+ *
+ * Such a record merged every author's overrides on the nested root it sat on, with memos saying
+ * which half was whose. For a prefab document (`document_root` set) the document's own half of
+ * every nested root's record becomes the document's statements, re-rooted to the document; the
+ * other halves belong to the documents inside and are refreshed by their own replays. For a
+ * scene the local half stays on the root that carried it and each document's half goes to
+ * that document's instance above it, re-rooted there.
+ */
+void convert_legacy_override_state(entt::registry& registry, entt::handle document_root, const hpp::uuid& document_uid)
+{
+    auto& load_ctx = get_load_context();
+    const bool is_prefab_document = static_cast<bool>(document_root);
+    for(auto& [entity_id, legacy] : load_ctx.legacy_overrides)
+    {
+        entt::handle entity{registry, entity_id};
+        if(!entity || !entity.all_of<prefab_component>())
+        {
+            continue;
+        }
+        auto& prefab_comp = entity.get<prefab_component>();
+
+        if(is_prefab_document)
+        {
+            if(entity == document_root)
+            {
+                continue;
+            }
+            std::vector<hpp::uuid> chain;
+            if(!instance_path_between(document_root, entity, chain))
+            {
+                continue;
+            }
+            const auto own_it = legacy.stated_overrides.find(document_uid);
+            const auto& own = own_it != legacy.stated_overrides.end() ? own_it->second : legacy.property_overrides;
+            for(auto entry : own)
+            {
+                entry.instance_path = chain;
+                load_ctx.document_statements.overrides.insert(std::move(entry));
+            }
+            // Directly nested, the removal memo equalled the set and all of it was the
+            // document's; deeper, the memo was the middle document's own and is refreshed by
+            // its replay.
+            const bool depth_one = chain.size() == 1;
+            for(const auto& removed : legacy.removed_entities)
+            {
+                if(depth_one || legacy.inherited_removed_entities.count(removed) == 0u)
+                {
+                    load_ctx.document_statements.removed_entities.insert({chain, removed});
+                }
+            }
+            for(const auto& removed : legacy.removed_instances)
+            {
+                if(depth_one || legacy.inherited_removed_instances.count(removed) == 0u)
+                {
+                    load_ctx.document_statements.removed_instances.insert({chain, removed});
+                }
+            }
+            continue;
+        }
+
+        std::set<prefab_property_override_data> stated_union;
+        for(const auto& [document, stated] : legacy.stated_overrides)
+        {
+            stated_union.insert(stated.begin(), stated.end());
+        }
+        for(const auto& entry : legacy.property_overrides)
+        {
+            if(stated_union.count(entry) == 0u)
+            {
+                prefab_comp.local.overrides.insert(entry);
+            }
+        }
+        for(const auto& removed : legacy.removed_entities)
+        {
+            if(legacy.inherited_removed_entities.count(removed) == 0u)
+            {
+                prefab_comp.local.removed_entities.insert({{}, removed});
+            }
+        }
+        for(const auto& removed : legacy.removed_instances)
+        {
+            if(legacy.inherited_removed_instances.count(removed) == 0u)
+            {
+                prefab_comp.local.removed_instances.insert({{}, removed});
+            }
+        }
+        for_each_addressing_ancestor(
+            entity,
+            [&legacy](entt::handle ancestor, const std::vector<hpp::uuid>& chain)
+            {
+                auto& ancestor_prefab = ancestor.get<prefab_component>();
+                const auto stated_it = legacy.stated_overrides.find(ancestor_prefab.source.uid());
+                if(stated_it != legacy.stated_overrides.end())
+                {
+                    for(auto entry : stated_it->second)
+                    {
+                        entry.instance_path = chain;
+                        ancestor_prefab.from_document.overrides.insert(std::move(entry));
+                    }
+                }
+                // The removal memo was the nearest container's statement.
+                if(chain.size() == 1)
+                {
+                    for(const auto& removed : legacy.inherited_removed_entities)
+                    {
+                        ancestor_prefab.from_document.removed_entities.insert({chain, removed});
+                    }
+                    for(const auto& removed : legacy.inherited_removed_instances)
+                    {
+                        ancestor_prefab.from_document.removed_instances.insert({chain, removed});
+                    }
+                }
+            });
+    }
+    load_ctx.legacy_overrides.clear();
+}
 scoped_instance_frame::scoped_instance_frame()
 {
     get_load_context().instance_stack.emplace_back();
@@ -242,14 +598,13 @@ void collect_scope_contents(entt::handle obj,
 
     if(is_scope_root)
     {
-        if(const auto* prefab_comp = obj.try_get<prefab_component>())
+        // Entities removed from this instance - here, or by a document above the one being
+        // loaded. A null entry: the document's record for it is skipped, not resurrected.
+        for(const auto& removed : frame.removals.removed_entities)
         {
-            // Entities this instance dropped. Null so the document's record for them is
-            // skipped - the removal is the instance's own state, not something the document
-            // gets to undo by still carrying a snapshot of them.
-            for(const auto& entity_uuid : prefab_comp->removed_entities)
+            if(removed.instance_path == path)
             {
-                scope.by_prefab_uid[entity_uuid] = {};
+                scope.by_prefab_uid[removed.id] = {};
             }
         }
     }
@@ -299,10 +654,14 @@ void record_nested_instance(entt::handle obj,
         frame.shadowed_roots.emplace_back(id_comp->id, obj);
     }
 
-    for(const auto& removed : prefab_comp->removed_instances)
+    for(const auto& removed : frame.removals.removed_instances)
     {
+        if(removed.instance_path != path)
+        {
+            continue;
+        }
         auto removed_path = path;
-        removed_path.push_back(removed);
+        removed_path.push_back(removed.id);
         frame.removed_instance_paths.insert(std::move(removed_path));
     }
 
@@ -333,35 +692,25 @@ void add_to_uid_mapping_impl(entt::handle obj, load_context::instance_frame& fra
     if(auto* id_comp = obj.try_get<prefab_id_component>())
     {
         id_comp->generate_if_nil();
-        if(frame.foreign_entities.count(id_comp->id) == 0u)
-        {
-            frame.mapping_by_prefab_uid[id_comp->id].handle = obj;
-        }
+        frame.mapping_by_prefab_uid[id_comp->id].handle = obj;
     }
 
-    if(auto* prefab_comp = obj.try_get<prefab_component>())
-    {
-        for(auto& entity_uuid : prefab_comp->removed_entities)
-        {
-            frame.mapping_by_prefab_uid[entity_uuid].handle = {};
-        }
-
-        for(const auto& removed : prefab_comp->removed_instances)
-        {
-            frame.removed_instance_paths.insert({removed});
-        }
-    }
-
-    // Added by whatever contains this instance, so its asset knows nothing about them.
-    // Leaving them out of the mapping is what leaves them alone - the same position an entity
-    // added by hand is in, which has no prefab uid to be found by.
     if(is_instance_root)
     {
-        if(const auto* prefab_comp = obj.try_get<prefab_component>())
+        // Removals about this instance's own direct content. A null mapping entry: the
+        // document's record for it is skipped, not resurrected.
+        for(const auto& removed : frame.removals.removed_entities)
         {
-            for(const auto& foreign : prefab_comp->foreign_entities)
+            if(removed.instance_path.empty())
             {
-                frame.foreign_entities.insert(foreign);
+                frame.mapping_by_prefab_uid[removed.id].handle = {};
+            }
+        }
+        for(const auto& removed : frame.removals.removed_instances)
+        {
+            if(removed.instance_path.empty())
+            {
+                frame.removed_instance_paths.insert({removed.id});
             }
         }
     }
@@ -396,11 +745,8 @@ void add_to_uid_mapping(entt::handle& obj)
     }
 
     frame->root = obj;
+    frame->removals = collect_replay_removals(obj);
     add_to_uid_mapping_impl(obj, *frame, true);
-
-    // Recorded before any record is read, because adoption adds scopes of its own and the
-    // question is about what was here to begin with.
-    frame->has_named_instances = !frame->nested_scopes.empty();
 }
 
 /// Disposes of instance entities the records never claimed - i.e. entities deleted from
@@ -422,11 +768,22 @@ void cleanup_uid_mapping()
     {
         // Shadowed entries are handled below: an unconsumed one is not necessarily gone
         // from the asset, it may be something the user added here.
-        if(!mapping.consumed() && !mapping.shadowed && mapping.handle)
+        if(mapping.consumed() || mapping.shadowed || !mapping.handle)
         {
-            // APPLOG_TRACE("destroying entity: {}", uid.to_string());
-            scene::destroy_entity(mapping.handle);
+            continue;
         }
+
+        // Unmentioned is a deletion only for this document's own content. An entity another
+        // document introduced here - an outer one adding under this instance - carries that
+        // document's name, and one the user made carries none; neither is this document's to
+        // remove.
+        const auto* id_comp = mapping.handle.try_get<prefab_id_component>();
+        if(id_comp != nullptr && id_comp->document != load_ctx.document_uid)
+        {
+            continue;
+        }
+
+        scene::destroy_entity(mapping.handle);
     }
 
     // Named by the document: decided exactly, one instance at a time. No record addressed it
@@ -450,7 +807,7 @@ void cleanup_uid_mapping()
             continue;
         }
 
-            const auto* id_comp = scope.root.try_get<prefab_id_component>();
+        const auto* id_comp = scope.root.try_get<prefab_id_component>();
         if(id_comp != nullptr)
         {
             const auto it = frame->mapping_by_prefab_uid.find(id_comp->id);
@@ -460,15 +817,81 @@ void cleanup_uid_mapping()
             }
         }
 
+        // Unmentioned is only a deletion for a slot this document placed. An instance an outer
+        // document added here is named by that document, one the user added is not named at
+        // all - and neither is this document's to remove. The slot says whose it is.
+        const auto* nested_prefab = scope.root.try_get<prefab_component>();
+        if(nested_prefab == nullptr || nested_prefab->instance_document != load_ctx.document_uid)
+        {
+            continue;
+        }
+
         scene::destroy_entity(scope.root);
     }
 
+}
+
+/**
+ * @brief Attributes ids from a file written before they named their document.
+ *
+ * Such a file says "entity x", "slot y", and nothing about whose. The only reading its writer
+ * could have meant: what sits directly under a root is that root's document's; what sits
+ * under a nested instance is that instance's asset's - unless the instance listed it as added
+ * by the document containing it, the one case those files did record. A named slot was named
+ * by the document containing the instance. Touches nil documents only, so an entity already
+ * attributed - by an earlier pass, or a newer scene - is left as it is.
+ *
+ * Run once per load that saw such an id, while the load context still holds the lists.
+ */
+void qualify_legacy_prefab_ids(entt::handle obj,
+                               hpp::uuid owner_document,
+                               hpp::uuid added_document,
+                               const std::set<hpp::uuid>* added_list,
+                               bool is_walk_root)
+{
+    if(!obj)
+    {
+        return;
+    }
+
+    auto& load_ctx = get_load_context();
+
+    auto* prefab_comp = obj.try_get<prefab_component>();
+    if(prefab_comp != nullptr)
+    {
+        // The root being loaded over is placed by the scene, not by anything in this document.
+        if(!is_walk_root && !prefab_comp->instance_id.is_nil() && prefab_comp->instance_document.is_nil())
+        {
+            prefab_comp->instance_document = owner_document;
+        }
+
+        added_document = owner_document;
+        owner_document = prefab_comp->source.uid();
+
+        const auto listed = load_ctx.legacy_foreign_entities.find(obj.entity());
+        added_list = listed != load_ctx.legacy_foreign_entities.end() ? &listed->second : nullptr;
+    }
+
+    if(auto* id_comp = obj.try_get<prefab_id_component>(); id_comp != nullptr && id_comp->document.is_nil())
+    {
+        const bool added_here = prefab_comp == nullptr && added_list != nullptr && added_list->count(id_comp->id) != 0u;
+        id_comp->document = added_here ? added_document : owner_document;
+    }
+
+    if(auto* trans_comp = obj.try_get<transform_component>())
+    {
+        for(auto child : trans_comp->get_children())
+        {
+            qualify_legacy_prefab_ids(child, owner_document, added_document, added_list, false);
+        }
+    }
 }
 
 namespace
 {
 /// Defined further down, next to the other nesting walkers.
 void collect_nested_instance_roots(entt::handle obj, std::vector<entt::handle>& out, bool is_subtree_root);
+void reconcile_cloned_slots(entt::handle obj, std::vector<hpp::uuid> instance_chain);
 } // namespace
 
 /**
@@ -478,51 +901,77 @@ void collect_nested_instance_roots(entt::handle obj, std::vector<entt::handle>& 
  * entity's record is written after its parent's, so anything recorded on the parent while
  * walking the children lands in the file a version late.
  *
- * - Every nested instance gets an id if it has none. That is the moment a slot in this file
- *   comes into existence, including for instances added or cloned in since the last write.
- *   Deliberately not done on load: an id the file does not carry would differ between
- *   instances of it, and every instance has to agree with the document about which slot is
- *   which.
+ * - Every nested instance gets a slot if it has none, named after this document. That is the
+ *   moment a slot in this file comes into existence, including for instances added or cloned
+ *   in since the last write. Deliberately not done on load: an id the file does not carry
+ *   would differ between instances of it, and every instance has to agree with the document
+ *   about which slot is which.
  *
- * - Every entity inside a nested instance that has no prefab uid is one added here rather
- *   than supplied by that instance's asset - everything from the asset arrived with one. It
- *   is given a uid and listed on the enclosing instance, so that instance's own sync leaves
- *   it alone instead of removing it as something its asset no longer has.
+ * - Every other entity gets a prefab id if it has none, and its document settled: whatever a
+ *   nested instance between here and the save root supplied keeps that asset's name;
+ *   everything else - new, the user's, or carried in from a document outside this one - is
+ *   this document's content now, which is what writing it into this file means. The name is
+ *   what lets a nested asset's sync leave this document's additions inside it alone.
  */
-void prepare_prefab_identity(entt::handle obj, entt::handle enclosing_instance, bool is_subtree_root)
+void prepare_prefab_identity(entt::handle obj,
+                             entt::handle enclosing_instance,
+                             bool is_subtree_root,
+                             std::vector<hpp::uuid> document_chain)
 {
     if(!obj)
     {
         return;
     }
 
-    if(!is_subtree_root)
-    {
-        if(auto* prefab_comp = obj.try_get<prefab_component>())
-        {
-            if(prefab_comp->instance_id.is_nil())
-            {
-                prefab_comp->instance_id = generate_uuid();
-            }
+    auto* save_ctx = try_get_save_context();
+    const hpp::uuid document_uid = save_ctx != nullptr ? save_ctx->document_uid : hpp::uuid{};
 
-            enclosing_instance = obj;
-        }
-        else if(enclosing_instance)
+    const auto settle_entity_identity = [&](entt::handle entity)
+    {
+        auto& id_comp = entity.get_or_emplace<prefab_id_component>();
+        id_comp.generate_if_nil();
+        const bool supplied_by_nested =
+            std::find(document_chain.begin(), document_chain.end(), id_comp.document) != document_chain.end();
+        if(!supplied_by_nested && !document_uid.is_nil())
         {
-            auto& id_comp = obj.get_or_emplace<prefab_id_component>();
-            if(id_comp.id.is_nil())
-            {
-                id_comp.generate_if_nil();
-                enclosing_instance.get<prefab_component>().foreign_entities.insert(id_comp.id);
-            }
+            id_comp.document = document_uid;
         }
+    };
+
+    if(is_subtree_root)
+    {
+        // The document's own root, whether a plain entity or the instance being re-saved as
+        // its own document.
+        settle_entity_identity(obj);
+    }
+    else if(auto* prefab_comp = obj.try_get<prefab_component>())
+    {
+        // A slot is named by the document that placed it. Directly under the save root that
+        // is always this document. Inside another instance it is this document only for an
+        // instance it added there; an unnamed one that instance's own asset supplied - from a
+        // file written before slots existed - is the asset's to name, and naming it from here
+        // would have two documents disagreeing about its id. placed_by is what still tells
+        // those two apart.
+        const bool placed_here = !enclosing_instance || prefab_comp->placed_by == instance_placement::other;
+        if(prefab_comp->instance_id.is_nil() && placed_here)
+        {
+            prefab_comp->instance_id = generate_uuid();
+            prefab_comp->instance_document = document_uid;
+        }
+
+        enclosing_instance = obj;
+        document_chain.push_back(prefab_comp->source.uid());
+    }
+    else
+    {
+        settle_entity_identity(obj);
     }
 
     if(auto* trans_comp = obj.try_get<transform_component>())
     {
         for(auto child : trans_comp->get_children())
         {
-            prepare_prefab_identity(child, enclosing_instance, false);
+            prepare_prefab_identity(child, enclosing_instance, false, document_chain);
         }
     }
 }
@@ -627,7 +1076,13 @@ void save_entity_prefab_uid(Archive& ar, const entt::const_handle& obj)
     if(obj)
     {
         auto& id_comp = const_handle_cast(obj).get_or_emplace<prefab_id_component>();
-        id_comp.generate_if_nil();
+        if(id_comp.id.is_nil())
+        {
+            // Reached only for an entity the identity pass did not settle; the pass runs over
+            // everything under the save root before anything is written.
+            id_comp.id = generate_uuid();
+            id_comp.document = get_save_context().document_uid;
+        }
 
         try_save(ar, ser20::make_nvp("prefab_uid", id_comp.id));
     }
@@ -844,11 +1299,6 @@ auto adopt_unnamed_instance(load_context::instance_frame& frame,
     // anything here is named, this one was produced by a document that names them, and an
     // unnamed nested instance alongside those is one added here - a clone, most often. Adopting
     // that would hand the user's copy to the document and replace its contents.
-    if(frame.has_named_instances)
-    {
-        return frame.nested_scopes.end();
-    }
-
     const std::vector<hpp::uuid> parent_path(scope_path.begin(), std::prev(scope_path.end()));
 
     for(auto& candidate : frame.adoption_candidates)
@@ -860,6 +1310,14 @@ auto adopt_unnamed_instance(load_context::instance_frame& frame,
 
         auto* prefab_comp = candidate.handle.try_get<prefab_component>();
         if(prefab_comp == nullptr)
+        {
+            continue;
+        }
+
+        // Only what this document placed may be claimed for one of its slots. A clone, a
+        // hand-placed instance or one an outer document added here is not its to take - the
+        // two are indistinguishable by anything else when both are unnamed.
+        if(prefab_comp->placed_by == instance_placement::other)
         {
             continue;
         }
@@ -990,6 +1448,11 @@ auto load_entity_from_prefab_uid(Archive& ar, entt::handle& obj, entity_flags fl
     std::vector<hpp::uuid> instance_path;
     try_load(ar, ser20::make_nvp("instance_path", instance_path));
 
+    if(load_ctx.resolving_record)
+    {
+        load_ctx.record_instance_path_depth = instance_path.size();
+    }
+
     if(!instance_uid.is_nil())
     {
         auto scope_path = instance_path;
@@ -1020,6 +1483,7 @@ auto load_entity_from_prefab_uid(Archive& ar, entt::handle& obj, entity_flags fl
         if(load_ctx.resolving_record)
         {
             scope_it->second.consumed = true;
+            load_ctx.record_matched_scope = true;
         }
 
         obj = scope_it->second.root;
@@ -1050,6 +1514,16 @@ auto load_entity_from_prefab_uid(Archive& ar, entt::handle& obj, entity_flags fl
         auto entity_it = scope_it->second.by_prefab_uid.find(uid);
         if(entity_it == scope_it->second.by_prefab_uid.end())
         {
+            // Not among the instance's entities - but it may be an *unnamed* instance nested in
+            // it (one its own asset has not named yet), which is shadowed by prefab uid rather
+            // than scoped. Resolving through the shadow skips the record, as it should: that
+            // instance is refreshed by its own sync, not by this document's snapshot of it.
+            auto shadow_it = frame->mapping_by_prefab_uid.find(uid);
+            if(shadow_it != frame->mapping_by_prefab_uid.end() && shadow_it->second.shadowed)
+            {
+                return resolve_plain_prefab_uid(load_ctx, shadow_it->second, obj);
+            }
+
             // The document knows an entity inside this instance that the instance does not:
             // one added under it. Created like any other addition.
             return false;
@@ -1413,17 +1887,6 @@ LOAD(entity_components<entt::handle>)
             id_comp->regenerate_id();
         }
 
-        // A copy of a nested instance is a different slot in the containing document, so it
-        // cannot keep the id naming the one it was copied from - both would answer to it.
-        // The clone's own root has no marker at all (should_save_component drops it), so
-        // this only reaches instances nested further inside the subtree being cloned.
-        if(auto* cloned_prefab = obj.entity.try_get<prefab_component>())
-        {
-            if(!cloned_prefab->instance_id.is_nil())
-            {
-                cloned_prefab->instance_id = generate_uuid();
-            }
-        }
     }
 }
 LOAD_INSTANTIATE(entity_components<entt::handle>, ser20::iarchive_associative_t);
@@ -1446,6 +1909,8 @@ LOAD(entity_data<entt::handle>)
         auto& load_ctx = get_load_context();
         load_ctx.resolving_record = true;
         load_ctx.pending_nested_owner = {};
+        load_ctx.record_instance_path_depth = 0;
+        load_ctx.record_matched_scope = false;
         LOAD_FUNCTION_NAME(ar, e);
         load_ctx.resolving_record = false;
     }
@@ -1463,6 +1928,30 @@ LOAD(entity_data<entt::handle>)
         pop_entity_path(pushed);
 
         load_ctx.current_nested_owner = {};
+
+        // Who placed a nested instance this record created or matched. A record directly in
+        // the document - no instance path - is the document speaking about its own slot, so
+        // the instance's container placed it. A record reaching *into* another instance that
+        // had to create what it describes was an outer document adding something there; that
+        // instance's own document knows nothing about it. A deeper record that matched leaves
+        // the verdict alone - the matched instance's own container has already given it.
+        //
+        // Never the root of the instance being loaded over: that one's placement belongs to
+        // whoever put the instance in the scene, not to the document.
+        if(const auto* frame = load_ctx.current_instance(); frame != nullptr && e != frame->root)
+        {
+            if(auto* nested_prefab = e.try_get<prefab_component>())
+            {
+                if(load_ctx.record_instance_path_depth == 0)
+                {
+                    nested_prefab->placed_by = instance_placement::container;
+                }
+                else if(!load_ctx.record_matched_scope)
+                {
+                    nested_prefab->placed_by = instance_placement::other;
+                }
+            }
+        }
     }
 }
 LOAD_INSTANTIATE(entity_data<entt::handle>, ser20::iarchive_associative_t);
@@ -1508,6 +1997,14 @@ void save_to_archive(Archive& ar, entt::const_handle obj)
     std::vector<entity_data<entt::const_handle>> entities;
     flatten_hierarchy(obj, entities);
 
+    // A prefab document's own statements - what it says about the content it nests - written
+    // before the records, so they are known before any record that depends on them loads.
+    if(get_save_context().is_saving_to_prefab())
+    {
+        const auto statements = fold_document_statements(const_handle_cast(obj));
+        try_save(ar, ser20::make_nvp("statements", statements));
+    }
+
     try_save(ar, ser20::make_nvp("entities", entities));
 
     static const std::string version = "1.0.0";
@@ -1532,6 +2029,18 @@ void save_to_archive(Archive& ar, entt::const_handle obj)
 template<typename Archive>
 auto load_from_archive_impl(Archive& ar, entt::registry& registry) -> entt::handle
 {
+    // The document's statements, before its records: the filter asks "does this document state
+    // it" while they load.
+    {
+        prefab_statements statements;
+        if(try_load(ar, ser20::make_nvp("statements", statements)))
+        {
+            auto& load_ctx = get_load_context();
+            load_ctx.document_statements = std::move(statements);
+            load_ctx.has_document_statements = true;
+        }
+    }
+
     std::vector<entity_data<entt::handle>> entities;
     try_load(ar, ser20::make_nvp("entities", entities));
 
@@ -1627,13 +2136,29 @@ void load_from_archive(Archive& ar, entt::registry& reg)
         get_load_context().nesting_resolved = true;
     }
 
+    std::vector<entt::handle> roots;
+    roots.reserve(count);
     for(size_t i = 0; i < count; ++i)
     {
         // No scratch entity. load_from_archive_impl creates the entities it needs and
         // returns the root; the loaders reassign the handle they are given rather than
         // filling it in, so one handed in here is simply abandoned - a componentless
         // entity per root, on every scene load.
-        load_from_archive_impl(ar, reg);
+        roots.push_back(load_from_archive_impl(ar, reg));
+    }
+
+    // A scene from before ids named their document: attributed here, before any instance in
+    // it syncs, so the instances' own assets can tell their content from what was added.
+    if(get_load_context().saw_unqualified_ids)
+    {
+        for(auto& root : roots)
+        {
+            qualify_legacy_prefab_ids(root, {}, {}, nullptr, true);
+        }
+    }
+    if(!get_load_context().legacy_overrides.empty())
+    {
+        convert_legacy_override_state(reg, {}, {});
     }
 
     pop_load_context(pushed);
@@ -1658,7 +2183,7 @@ void save_to_stream(std::ostream& stream, entt::const_handle obj)
         if(to_prefab && obj && obj.registry() != nullptr)
         {
             entt::handle mutable_obj{const_cast<entt::registry&>(*obj.registry()), obj.entity()};
-            prepare_prefab_identity(mutable_obj, {}, true);
+            prepare_prefab_identity(mutable_obj, {}, true, {});
         }
 
         try
@@ -1695,9 +2220,20 @@ namespace asset_writer
 {
 auto atomic_save_to_file(const fs::path& key, entt::const_handle obj) -> bool
 {
+    bool saved = false;
+    const bool pushed = push_save_context();
+    auto& save_ctx = get_save_context();
+    const auto previous_document = save_ctx.document_uid;
     try
     {
         fs::path absolute_key = fs::absolute(fs::resolve_protocol(key));
+
+        // The file being written, so the ids this save issues can name it. Registered here if
+        // it is new - the watcher would do the same a moment later - so the uid is the one
+        // every later load of this file sees.
+        auto& am = engine::context().get_cached<asset_manager>();
+        save_ctx.document_uid = am.add_asset_for_path(absolute_key);
+
         fs::error_code err;
         atomic_write_file(
             absolute_key,
@@ -1706,13 +2242,15 @@ auto atomic_save_to_file(const fs::path& key, entt::const_handle obj) -> bool
                 save_to_file(temp.string(), obj);
             },
             err);
-        return !err;
+        saved = !err;
     }
     catch(const std::exception& e)
     {
         APPLOG_ERROR("Failed to save object to file: {0}", e.what());
-        return false;
     }
+    save_ctx.document_uid = previous_document;
+    pop_save_context(pushed);
+    return saved;
 }
 
 auto atomic_save_to_file(const fs::path& key, entt::handle obj) -> bool
@@ -1725,6 +2263,15 @@ void save_to_stream_bin(std::ostream& stream, entt::const_handle obj)
 {
     if(stream.good())
     {
+        // Same identity pass as the text writer, or a binary prefab save would write a
+        // document whose nested instances are unnamed while the text save names them.
+        const bool to_prefab = save_ctx_ptr != nullptr && save_ctx_ptr->is_saving_to_prefab();
+        if(to_prefab && obj && obj.registry() != nullptr)
+        {
+            entt::handle mutable_obj{const_cast<entt::registry&>(*obj.registry()), obj.entity()};
+            prepare_prefab_identity(mutable_obj, {}, true, {});
+        }
+
         ser20::oarchive_binary_t ar(stream);
 
         save_to_archive(ar, obj);
@@ -1936,23 +2483,63 @@ void collect_nested_instance_roots(entt::handle obj, std::vector<entt::handle>& 
     }
 }
 
+/**
+ * @brief Settles the slots of the instances nested in a clone.
+ *
+ * A slot is kept when the document that placed it is an instance *inside* the clone - the
+ * clone root or something below it. The copy is as much an instance of that document as the
+ * original, and the document names the same slot in both, for the same reason two fresh
+ * instantiates agree on their slots. Regenerating those (as this used to) made every one a
+ * named slot the document does not mention, and the clone's next sync rebuilt or removed them.
+ *
+ * A slot placed by a document the clone is merely *inside of* goes nil: the copy is an
+ * addition to that document, not its slot, and a named, unmentioned copy is what that
+ * document's next sync would read as a dropped slot and remove. One rule, at any depth - an
+ * instance the outer document added two levels down is told from the asset's own content by
+ * whose name its slot carries, not by where it sits.
+ */
+void reconcile_cloned_slots(entt::handle obj, std::vector<hpp::uuid> instance_chain)
+{
+    auto* trans_comp = obj.try_get<transform_component>();
+    if(trans_comp == nullptr)
+    {
+        return;
+    }
+
+    for(auto child : trans_comp->get_children())
+    {
+        auto* nested_prefab = child.try_get<prefab_component>();
+        if(nested_prefab == nullptr)
+        {
+            reconcile_cloned_slots(child, instance_chain);
+            continue;
+        }
+
+        const bool placed_inside_clone =
+            !nested_prefab->instance_document.is_nil() &&
+            std::find(instance_chain.begin(), instance_chain.end(), nested_prefab->instance_document) !=
+                instance_chain.end();
+        if(!placed_inside_clone)
+        {
+            nested_prefab->instance_id = {};
+            nested_prefab->instance_document = {};
+            nested_prefab->placed_by = instance_placement::other;
+        }
+
+        auto chain = instance_chain;
+        chain.push_back(nested_prefab->source.uid());
+        reconcile_cloned_slots(child, std::move(chain));
+    }
+}
+
 } // namespace
 
 /**
- * @brief After a fresh instantiate, attributes what the document states about its directly
- *        nested instances to the document.
- *
- * A replay over an existing instance sets this memo as it goes (apply_nested_override_state).
- * A fresh instantiate runs no replay, so without this the memo is whatever the file happened
- * to store - empty for a prefab authored from a plain object - and every override the prefab
- * authored on its nested instances reads as local until the first resync. That is wrong in the
- * changes view, and wrong for the next replay's local-half computation. On a fresh instance
- * the answer is by definition "all of it": the document is the only author so far.
- *
- * Directly nested only. Deeper instances were refreshed by their own container's sync on the
- * way here, which set their memos relative to *that* container.
+ * @brief After a fresh instantiate, records that the document placed its directly nested
+ *        instances - the legacy discriminator for unnamed slots, which the record post-rule
+ *        sets only when loading over an existing instance.
  */
-void attribute_fresh_nested_memos(entt::handle root)
+void attribute_fresh_nested_placement(entt::handle root)
 {
     std::vector<entt::handle> nested;
     collect_nested_instance_roots(root, nested, true);
@@ -1960,9 +2547,7 @@ void attribute_fresh_nested_memos(entt::handle root)
     {
         if(auto* prefab_comp = instance.try_get<prefab_component>())
         {
-            prefab_comp->inherited_overrides = prefab_comp->property_overrides;
-            prefab_comp->inherited_removed_entities = prefab_comp->removed_entities;
-            prefab_comp->inherited_removed_instances = prefab_comp->removed_instances;
+            prefab_comp->placed_by = instance_placement::container;
         }
     }
 }
@@ -2004,28 +2589,24 @@ namespace
 /// its own, and this has to outlive that.
 thread_local bool defer_nested_sync_flag{};
 
-struct scoped_deferred_nested_sync
-{
-    scoped_deferred_nested_sync() : previous(defer_nested_sync_flag)
-    {
-        defer_nested_sync_flag = true;
-    }
-
-    ~scoped_deferred_nested_sync()
-    {
-        defer_nested_sync_flag = previous;
-    }
-
-    scoped_deferred_nested_sync(const scoped_deferred_nested_sync&) = delete;
-    auto operator=(const scoped_deferred_nested_sync&) -> scoped_deferred_nested_sync& = delete;
-
-    bool previous{};
-};
-
 auto is_nested_sync_deferred() -> bool
 {
     return defer_nested_sync_flag;
 }
+} // namespace
+
+scoped_deferred_nested_sync::scoped_deferred_nested_sync() : previous_(defer_nested_sync_flag)
+{
+    defer_nested_sync_flag = true;
+}
+
+scoped_deferred_nested_sync::~scoped_deferred_nested_sync()
+{
+    defer_nested_sync_flag = previous_;
+}
+
+namespace
+{
 
 /**
  * @brief Whether a serialization path addresses a nested instance's own prefab bookkeeping.
@@ -2157,148 +2738,97 @@ auto is_nested_root_placement_path(std::string_view component_path) -> bool
 
 /// A nested instance's overrides, split into the part the containing document authored and
 /// the part that was added here. Only the second survives the document being replayed.
-struct nested_override_state
-{
-    entt::handle root;
 
-    /// How far inside the subtree being replayed this instance sits. Only the first level is
-    /// the replaying document's to claim; anything deeper belongs to a document in between.
-    int depth{};
 
-    std::set<prefab_property_override_data> scene_only;
+/// Every nested instance under `root`, at any depth - unlike collect_nested_instance_roots,
+/// which stops at the first one because each instance's own sync continues from there.
 
-    /// The *locally made* half of this instance's removals - the full sets minus what the
-    /// containing document stated last time. The document's record replaces the sets outright,
-    /// and only this half has to survive it.
-    std::set<hpp::uuid> removed_entities;
-    std::set<hpp::uuid> removed_instances;
-};
-
-void collect_nested_override_state_impl(entt::handle obj,
-                                        std::vector<nested_override_state>& out,
-                                        bool is_subtree_root,
-                                        int depth)
+/// Nested instance roots directly inside one instance's content (not inside a deeper
+/// instance) whose slot is among `slots`.
+void collect_nested_instances_by_slot(entt::handle obj,
+                                      const std::set<hpp::uuid>& slots,
+                                      std::vector<entt::handle>& out,
+                                      bool is_subtree_root)
 {
     if(!obj)
     {
         return;
     }
-
     if(!is_subtree_root)
     {
-        const auto* prefab_comp = obj.try_get<prefab_component>();
-
-        // Unnamed ones included: a document that names its instances adopts them mid-load,
-        // and from that moment its records are replayed over them like any other.
-        if(prefab_comp != nullptr)
+        if(const auto* nested_prefab = obj.try_get<prefab_component>())
         {
-            ++depth;
-            nested_override_state state;
-            state.root = obj;
-            state.depth = depth;
-            std::set_difference(prefab_comp->removed_entities.begin(),
-                                prefab_comp->removed_entities.end(),
-                                prefab_comp->inherited_removed_entities.begin(),
-                                prefab_comp->inherited_removed_entities.end(),
-                                std::inserter(state.removed_entities, state.removed_entities.end()));
-            std::set_difference(prefab_comp->removed_instances.begin(),
-                                prefab_comp->removed_instances.end(),
-                                prefab_comp->inherited_removed_instances.begin(),
-                                prefab_comp->inherited_removed_instances.end(),
-                                std::inserter(state.removed_instances, state.removed_instances.end()));
-            std::set_difference(prefab_comp->property_overrides.begin(),
-                                prefab_comp->property_overrides.end(),
-                                prefab_comp->inherited_overrides.begin(),
-                                prefab_comp->inherited_overrides.end(),
-                                std::inserter(state.scene_only, state.scene_only.end()));
-            out.push_back(std::move(state));
+            if(slots.count(nested_prefab->instance_id) != 0u)
+            {
+                out.push_back(obj);
+            }
+            return;
         }
     }
-
     if(auto* trans_comp = obj.try_get<transform_component>())
     {
         for(auto child : trans_comp->get_children())
         {
-            collect_nested_override_state_impl(child, out, false, depth);
+            collect_nested_instances_by_slot(child, slots, out, false);
         }
     }
 }
 
-/// Every nested instance under `root`, at any depth - unlike collect_nested_instance_roots,
-/// which stops at the first one because each instance's own sync continues from there.
-auto collect_nested_override_state(entt::handle root) -> std::vector<nested_override_state>
-{
-    std::vector<nested_override_state> out;
-    collect_nested_override_state_impl(root, out, true, 0);
-    return out;
-}
-
 /**
- * @brief Re-merges each nested instance's overrides after the containing document replayed.
+ * @brief Re-applies every removal stated about content under `root` after its replay.
  *
- * The document's record replaced property_overrides with what it authors, which is the right
- * answer for that half and wrong for the other: edits made here are not in it. They are put
- * back, and what the document authored is remembered separately so the next replay can tell
- * the two apart again.
+ * The mapping already kept the replayed document from recreating what it lists as removed. What
+ * is left is content the document supplies that something *above* it removed - an outer
+ * document, the scene - and the document's own newly stated removals of content a nested asset
+ * supplies. Both are alive after the replay, and go.
  */
-void apply_nested_override_state(const std::vector<nested_override_state>& states)
+void apply_removal_statements(entt::handle root)
 {
-    for(const auto& state : states)
+    const auto removals = collect_replay_removals(root);
+    if(removals.removed_entities.empty() && removals.removed_instances.empty())
     {
-        if(!state.root)
+        return;
+    }
+
+    std::vector<entt::handle> doomed;
+    const auto collect_at = [&removals, &doomed](entt::handle instance_root, const std::vector<hpp::uuid>& chain)
+    {
+        std::set<hpp::uuid> wanted;
+        for(const auto& removed : removals.removed_entities)
         {
-            // Destroyed by this load: the document stopped mentioning it.
-            continue;
-        }
-
-        auto* prefab_comp = state.root.try_get<prefab_component>();
-        if(prefab_comp == nullptr)
-        {
-            continue;
-        }
-
-        // Only what this document directly contains is its to claim. An instance further in
-        // belongs to a document in between, and an override on it that came from further out
-        // has to keep looking local from that document's side - otherwise the next replay of
-        // the middle document treats it as its own and drops it.
-        if(state.depth <= 1)
-        {
-            prefab_comp->inherited_overrides = prefab_comp->property_overrides;
-
-            // Same memo for removals: what the sets hold right now is exactly what the
-            // document stated, and the local halves are about to be unioned back in.
-            prefab_comp->inherited_removed_entities = prefab_comp->removed_entities;
-            prefab_comp->inherited_removed_instances = prefab_comp->removed_instances;
-        }
-
-        prefab_comp->property_overrides.insert(state.scene_only.begin(), state.scene_only.end());
-
-        // Unioned, not diffed. A removal made here has to survive the document's record
-        // replacing the set; the cost is that the document cannot bring an entity *back*,
-        // which is the safe half of the trade and the rarer request.
-        prefab_comp->removed_entities.insert(state.removed_entities.begin(), state.removed_entities.end());
-        prefab_comp->removed_instances.insert(state.removed_instances.begin(), state.removed_instances.end());
-
-        // Entities the containing document says this instance no longer has. Its record is a
-        // list of what it *contains*, so a deletion inside a nested instance arrives as an
-        // addition to removed_entities and nothing else - the entity simply stops being
-        // mentioned, which is indistinguishable from the document never having known it.
-        //
-        // Applied rather than diffed: an entity already gone is not found, so running this
-        // every time costs a lookup and settles at the same place.
-        if(prefab_comp->removed_entities.empty())
-        {
-            continue;
-        }
-
-        std::vector<entt::handle> to_destroy;
-        collect_entities_by_prefab_uid(state.root, prefab_comp->removed_entities, to_destroy, true);
-        for(auto& doomed : to_destroy)
-        {
-            if(doomed)
+            if(removed.instance_path == chain)
             {
-                scene::destroy_entity(doomed);
+                wanted.insert(removed.id);
             }
+        }
+        if(!wanted.empty())
+        {
+            collect_entities_by_prefab_uid(instance_root, wanted, doomed, true);
+        }
+
+        std::set<hpp::uuid> slots;
+        for(const auto& removed : removals.removed_instances)
+        {
+            if(removed.instance_path == chain)
+            {
+                slots.insert(removed.id);
+            }
+        }
+        if(!slots.empty())
+        {
+            collect_nested_instances_by_slot(instance_root, slots, doomed, true);
+        }
+    };
+
+    std::vector<hpp::uuid> chain;
+    collect_at(root, chain);
+    for_each_addressable_nested_root(root, chain, collect_at);
+
+    for(auto& entity : doomed)
+    {
+        if(entity)
+        {
+            scene::destroy_entity(entity);
         }
     }
 }
@@ -2328,99 +2858,104 @@ auto sync_prefab_instance(entt::handle instance) -> bool
     // Copied, not referenced. prefab_component sets in_place_delete to false, so its pool
     // swaps elements on removal - and the load below both adds and removes prefab_components
     // while this callback is live.
-    const prefab_component overrides_snapshot = *prefab_comp;
+    // What the replay must leave alone, relative to this instance and at every depth below it:
+    // what was stated here (this root's local list, the local lists of the named instances
+    // nested in it, an authoring root's adopted list above) and what the documents above state.
+    // What it lets through of the nested content is what *this* document states - read from the
+    // document as it loads, or from the live list for a file written before documents carried
+    // one. Nothing is attributed afterwards; each list has one author.
+    const replay_statements protect = collect_replay_statements(instance);
+    std::vector<entt::handle> nested_roots;
+    collect_nested_instance_roots(instance, nested_roots, true);
+    const bool needs_override_tracking = !nested_roots.empty() || !protect.local.empty() || !protect.stated.empty();
 
-    // What the nested instances under this one have been overridden with *here*, as opposed
-    // to by the prefab that contains them. The document about to be replayed carries its own
-    // authoring for those instances and is entitled to update it - but not to reach past it
-    // and undo an edit made in this scene, so those paths are held back.
-    //
-    // Collected before the load: it rebuilds the subtree, and the answer is about what is
-    // here now.
-    std::vector<nested_override_state> nested_states = collect_nested_override_state(instance);
-
-    prefab_component local_edits_guard;
-    for(const auto& state : nested_states)
-    {
-        local_edits_guard.property_overrides.insert(state.scene_only.begin(), state.scene_only.end());
-    }
-
-    // Any nested instance is reason enough, overrides or not: without the filter the
-    // document's snapshot of that instance is replayed in full and reverts everything done
-    // to it here.
-    const bool needs_override_tracking = !overrides_snapshot.get_all_overrides().empty() ||
-                                         !local_edits_guard.property_overrides.empty() ||
-                                         !nested_states.empty();
+    // Slot chains from this instance to each nested owner the filter meets, computed once.
+    std::map<entt::entity, std::vector<hpp::uuid>> owner_paths;
 
     serialization::path_context path_ctx;
     serialization::path_context* old_ctx = serialization::get_path_context();
-
     if(needs_override_tracking)
     {
         path_ctx.should_serialize_property_callback =
-            [&overrides_snapshot, &local_edits_guard](const std::string& property_path)
+            [&protect, &owner_paths, instance](const std::string& property_path)
         {
-            // Edits made here always win, whichever document is being replayed.
-            if(local_edits_guard.has_serialization_override(property_path))
+            const auto parts = split_serialization_path(property_path);
+            if(!parts.valid)
+            {
+                return true;
+            }
+            auto component_path = parts.component_path;
+            if(component_path.starts_with("has_"))
+            {
+                component_path.remove_prefix(4);
+            }
+
+            auto& load_ctx = get_load_context();
+            const auto owner = load_ctx.current_nested_owner;
+            if(!owner)
+            {
+                // This instance's own content: what is stated here or above stays; the rest
+                // is the document's to restate. Protection is on-or-above: an override on one
+                // field must not shield its siblings, so the level above passes and each field
+                // decides for itself.
+                return !protect.local.has_override_on_or_above({}, parts.entity_uuid, component_path) &&
+                       !protect.stated.has_override_on_or_above({}, parts.entity_uuid, component_path);
+            }
+
+            // Content of an instance nested in this one - the document's snapshot of it. Its
+            // prefab_component is let through regardless: link, slot and the document's copy
+            // of that instance's own list, which loads before anything it has to filter.
+            if(is_prefab_bookkeeping_component(component_path))
+            {
+                return true;
+            }
+            if(!owner.all_of<prefab_component>())
+            {
+                return false;
+            }
+            const std::vector<hpp::uuid>* owner_path = nullptr;
+            if(const auto cached = owner_paths.find(owner.entity()); cached != owner_paths.end())
+            {
+                owner_path = &cached->second;
+            }
+            else
+            {
+                std::vector<hpp::uuid> chain;
+                if(!instance_path_between(instance, owner, chain))
+                {
+                    return false;
+                }
+                owner_path = &owner_paths.emplace(owner.entity(), std::move(chain)).first->second;
+            }
+
+            // Stated here, or by a document above this one: kept, whatever this document says.
+            // On-or-above, for the same reason as above: a local position override on a nested
+            // root must not keep the document's scale out of the same transform.
+            if(protect.local.has_override_on_or_above(*owner_path, parts.entity_uuid, component_path) ||
+               protect.stated.has_override_on_or_above(*owner_path, parts.entity_uuid, component_path))
             {
                 return false;
             }
 
-            auto& load_ctx = get_load_context();
-            if(const auto owner = load_ctx.current_nested_owner)
+            // A nested root's placement is the containing document's to restate.
+            const auto* owner_id = owner.try_get<prefab_id_component>();
+            if(owner_id != nullptr && owner_id->id == parts.entity_uuid &&
+               is_nested_root_placement_path(component_path))
             {
-                const auto parts = split_serialization_path(property_path);
-
-                // The instance's own bookkeeping - which asset it is, what it overrides,
-                // what it removed - is the containing document's to state, and has to arrive
-                // before it can be used to filter anything else.
-                if(parts.valid && is_prefab_bookkeeping_component(parts.component_path))
-                {
-                    return true;
-                }
-
-                // Inside a nested instance: the containing document owns only what it
-                // overrides there. The rest of its snapshot is the nested asset's business,
-                // and replaying it would revert whatever has changed here since.
-                // Not a component path at all - one of the container nodes on the way down
-                // ("entities[3]/<uuid>/components"). Refusing those would skip everything
-                // underneath, filter included.
-                if(!parts.valid)
-                {
-                    return true;
-                }
-
-                const auto* owner_prefab = owner.try_get<prefab_component>();
-                if(owner_prefab == nullptr)
-                {
-                    return false;
-                }
-
-                // "has_<component>" only says the record carries the component; which of its
-                // properties are let through is decided one by one further down. It has to be
-                // allowed whenever anything inside that component is overridden, because a
-                // property cannot arrive without the component that holds it.
-                auto component_path = parts.component_path;
-                if(component_path.starts_with("has_"))
-                {
-                    component_path.remove_prefix(4);
-                }
-
-                // The nested root's own placement is the containing document's to state. A
-                // local move is an override and the guard above already held it back; anything
-                // else goes back to where the container put it - which is what makes reverting
-                // such a move mean something.
-                const auto* owner_id = owner.try_get<prefab_id_component>();
-                if(owner_id != nullptr && owner_id->id == parts.entity_uuid &&
-                   is_nested_root_placement_path(component_path))
-                {
-                    return true;
-                }
-
-                return owner_prefab->has_override_touching(parts.entity_uuid, component_path);
+                return true;
             }
 
-            return !overrides_snapshot.has_serialization_override(property_path);
+            const prefab_statements* document = nullptr;
+            if(load_ctx.has_document_statements)
+            {
+                document = &load_ctx.document_statements;
+            }
+            else if(const auto* own = instance.try_get<prefab_component>())
+            {
+                document = &own->from_document;
+            }
+            return document != nullptr &&
+                   document->has_override_touching(*owner_path, parts.entity_uuid, component_path);
         };
         path_ctx.enable_recording();
         serialization::set_path_context(&path_ctx);
@@ -2428,12 +2963,19 @@ auto sync_prefab_instance(entt::handle instance) -> bool
 
     APPLOG_TRACE("Syncing prefab instance: {}", source.id());
 
-    // The load replaces each nested instance's override set with what the document authors.
-    // Refreshing those instances against their own assets before the local half is put back
-    // would let the refresh overwrite exactly the properties it was meant to protect.
-    const scoped_deferred_nested_sync defer_nested;
+    // The replay cascades into the nested instances below, once the removals stated about
+    // them have been re-applied - not before, from inside the load. Unless a caller deferred
+    // the cascade itself: then this is a replay of one document, and the caller's to follow up.
+    const bool cascade_deferred_by_caller = is_nested_sync_deferred();
+    bool loaded = false;
+    {
+        // Scoped to the load alone: the cascade below has to run with the caller's flag, or
+        // every nested sync would read this one's deferral as its caller's and stop a level
+        // short.
+        const scoped_deferred_nested_sync defer_nested;
+        loaded = scene::instantiate_out(*instance.registry(), source, instance, false);
+    }
 
-    const bool loaded = scene::instantiate_out(*instance.registry(), source, instance, false);
     if(loaded && instance)
     {
         auto& new_trans = instance.get<transform_component>();
@@ -2447,13 +2989,13 @@ auto sync_prefab_instance(entt::handle instance) -> bool
         serialization::set_path_context(old_ctx);
     }
 
-    apply_nested_override_state(nested_states);
-
-    // Now that each nested instance knows again what was overridden here, it is safe to bring
-    // them up to date with their own assets.
     if(loaded && instance)
     {
-        sync_nested_prefab_instances(instance);
+        apply_removal_statements(instance);
+        if(!cascade_deferred_by_caller)
+        {
+            sync_nested_prefab_instances(instance);
+        }
     }
 
     return loaded;
@@ -2533,12 +3075,13 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
         return false;
     }
 
-    bool result = true;
-
     // copy here to keep it alive
     auto prefab = pfb.get();
     const auto& buffer = prefab->buffer.data;
 
+    // An empty document loads nothing, and must say so: a caller that takes "true" as "the
+    // replay ran" goes on to re-derive state from a replay that never happened.
+    bool result = !buffer.empty();
     if(!buffer.empty())
     {
         // APPLOG_INFO_PERF(std::chrono::microseconds);
@@ -2548,6 +3091,7 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
             auto ar = ser20::create_iarchive_associative(buffer.data(), buffer.size());
              
             bool pushed = push_load_context(registry);
+            get_load_context().document_uid = pfb.uid();
 
             {
                 // Scopes the prefab-uid mapping to this instance. Records inside the frame
@@ -2562,8 +3106,18 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
 
             }
 
+            if(get_load_context().saw_unqualified_ids)
+            {
+                qualify_legacy_prefab_ids(obj, pfb.uid(), {}, nullptr, true);
+            }
+            if(!get_load_context().legacy_overrides.empty())
+            {
+                convert_legacy_override_state(registry, obj, pfb.uid());
+            }
+
             // Read before the pop: pop_load_context destroys the context.
             const bool nesting_resolved = get_load_context().nesting_resolved;
+            prefab_statements document_statements = std::move(get_load_context().document_statements);
 
             pop_load_context(pushed);
 
@@ -2572,6 +3126,14 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
             {
                 auto& pfb_comp = obj.get_or_emplace<prefab_component>();
                 pfb_comp.source = pfb;
+                // The document's own statements, replaced wholesale: one author, and this is it.
+                pfb_comp.from_document = std::move(document_statements);
+                if(fresh)
+                {
+                    // A fresh instantiate is placed by whoever asked for it - the scene, an
+                    // outer document's record, the user - never by its own document.
+                    pfb_comp.placed_by = instance_placement::other;
+                }
 
                 // Same staleness as in load_from_prefab: refresh anything nested against
                 // its own asset rather than trusting this one's snapshot of it - unless the
@@ -2584,7 +3146,7 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
 
                 if(fresh)
                 {
-                    attribute_fresh_nested_memos(obj);
+                    attribute_fresh_nested_placement(obj);
                 }
             }
         }
@@ -2637,8 +3199,18 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
             // Pushed here rather than inside load_from_archive_start so the document's
             // nesting_resolved flag can be read before the context is destroyed.
             const bool pushed = push_load_context(registry);
+            get_load_context().document_uid = pfb.uid();
             obj = load_from_archive_impl(ar, registry);
+            if(get_load_context().saw_unqualified_ids)
+            {
+                qualify_legacy_prefab_ids(obj, pfb.uid(), {}, nullptr, true);
+            }
+            if(!get_load_context().legacy_overrides.empty())
+            {
+                convert_legacy_override_state(registry, obj, pfb.uid());
+            }
             const bool nesting_resolved = get_load_context().nesting_resolved;
+            prefab_statements document_statements = std::move(get_load_context().document_statements);
             pop_load_context(pushed);
 
             if(obj)
@@ -2646,6 +3218,10 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
                 regenerate_entity_uids(obj);
                 auto& pfb_comp = obj.get_or_emplace<prefab_component>();
                 pfb_comp.source = pfb;
+                pfb_comp.from_document = std::move(document_statements);
+                // Always a fresh instantiate on this path: placed by whoever asked, not by
+                // its own document.
+                pfb_comp.placed_by = instance_placement::other;
 
                 // This asset carries a snapshot of anything nested inside it, taken when it
                 // was last saved - so it is stale the moment that inner asset is edited.
@@ -2657,7 +3233,7 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
                 }
 
                 // Always a fresh instantiate on this path.
-                attribute_fresh_nested_memos(obj);
+                attribute_fresh_nested_placement(obj);
             }
         }
         catch(const std::exception& e)
@@ -2763,16 +3339,21 @@ void clone_entity_from_stream(entt::const_handle src_obj, entt::handle& dst_obj)
     load_ctx.clone_mode = clone_mode_t::none;
     pop_load_context(pushed);
 
-    // The clone's own root is nobody's slot. Its descendants were given fresh ids during the
-    // load - they are slots in the subtree being copied, and two entities answering to one id
-    // would be as ambiguous as none - but the root is an addition to whatever contains it,
-    // and only becomes a slot if that container is written as a prefab.
+    // The clone root itself is nobody's slot: it is an addition to whatever contains it, and
+    // only becomes a slot when that container is written as a prefab. Which of the instances
+    // nested below it keep their slots is decided by whose slots they are - see
+    // reconcile_cloned_slots.
     if(dst_obj)
     {
+        std::vector<hpp::uuid> instance_chain;
         if(auto* prefab_comp = dst_obj.try_get<prefab_component>())
         {
             prefab_comp->instance_id = {};
+            prefab_comp->instance_document = {};
+            prefab_comp->placed_by = instance_placement::other;
+            instance_chain.push_back(prefab_comp->source.uid());
         }
+        reconcile_cloned_slots(dst_obj, std::move(instance_chain));
     }
 }
 
