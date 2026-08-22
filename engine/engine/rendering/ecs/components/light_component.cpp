@@ -181,14 +181,54 @@ void skylight_component::set_cloud_base_altitude(float altitude)
     cloud_base_altitude_ = math::max(altitude, 100.0f);
 }
 
-auto skylight_component::get_cloud_top_altitude() const noexcept -> float
+auto skylight_component::get_cloud_thickness() const noexcept -> float
 {
-    return cloud_top_altitude_;
+    return cloud_thickness_;
 }
 
-void skylight_component::set_cloud_top_altitude(float altitude)
+void skylight_component::set_cloud_thickness(float thickness)
 {
-    cloud_top_altitude_ = math::max(altitude, cloud_base_altitude_ + 100.0f);
+    cloud_thickness_ = math::clamp(thickness, 100.0f, 100000.0f);
+}
+
+auto skylight_component::get_cloud_size() const noexcept -> float
+{
+    return cloud_size_;
+}
+
+void skylight_component::set_cloud_size(float size)
+{
+    cloud_size_ = math::clamp(size, 100.0f, 1000000.0f);
+}
+
+auto skylight_component::get_cloud_softness() const noexcept -> float
+{
+    return cloud_softness_;
+}
+
+void skylight_component::set_cloud_softness(float softness)
+{
+    cloud_softness_ = math::clamp(softness, 0.01f, 0.8f);
+}
+
+auto skylight_component::get_cloud_detail_erode() const noexcept -> float
+{
+    return cloud_detail_erode_;
+}
+
+void skylight_component::set_cloud_detail_erode(float erode)
+{
+    cloud_detail_erode_ = math::clamp(erode, 0.0f, 2.0f);
+}
+
+auto skylight_component::get_cloud_macro_variation() const noexcept -> float
+{
+    return cloud_macro_variation_;
+}
+
+void skylight_component::set_cloud_macro_variation(float variation)
+{
+    cloud_macro_variation_ = math::clamp(variation, 0.0f, 1.5f);
 }
 
 auto skylight_component::get_cloud_speed() const noexcept -> float
@@ -201,6 +241,16 @@ void skylight_component::set_cloud_speed(float speed)
     cloud_speed_ = math::clamp(speed, 0.0f, 200.0f);
 }
 
+auto skylight_component::get_cloud_wind_direction() const noexcept -> float
+{
+    return cloud_wind_direction_;
+}
+
+void skylight_component::set_cloud_wind_direction(float degrees)
+{
+    cloud_wind_direction_ = math::mod(degrees, 360.0f);
+}
+
 auto skylight_component::get_cloud_density() const noexcept -> float
 {
     return cloud_density_;
@@ -211,104 +261,14 @@ void skylight_component::set_cloud_density(float density)
     cloud_density_ = math::max(density, 0.0f);
 }
 
-auto skylight_component::get_cloud_absorption() const noexcept -> float
+auto skylight_component::get_cloud_shadow_strength() const noexcept -> float
 {
-    return cloud_absorption_;
+    return cloud_shadow_strength_;
 }
 
-void skylight_component::set_cloud_absorption(float absorption)
+void skylight_component::set_cloud_shadow_strength(float strength)
 {
-    cloud_absorption_ = math::clamp(absorption, 0.01f, 0.5f);
-}
-
-auto skylight_component::get_cloud_light_absorption() const noexcept -> float
-{
-    return cloud_light_absorption_;
-}
-
-void skylight_component::set_cloud_light_absorption(float absorption)
-{
-    cloud_light_absorption_ = math::clamp(absorption, 0.01f, 0.5f);
-}
-
-auto skylight_component::get_cloud_vol_uv_scale() const noexcept -> float
-{
-    return cloud_vol_uv_scale_;
-}
-
-void skylight_component::set_cloud_vol_uv_scale(float scale)
-{
-    cloud_vol_uv_scale_ = math::clamp(scale, 1.0e-6f, 0.01f);
-}
-
-auto skylight_component::get_cloud_vol_edge_width() const noexcept -> float
-{
-    return cloud_vol_edge_width_;
-}
-
-void skylight_component::set_cloud_vol_edge_width(float width)
-{
-    cloud_vol_edge_width_ = math::clamp(width, 0.01f, 0.8f);
-}
-
-auto skylight_component::get_cloud_vol_shape_power() const noexcept -> float
-{
-    return cloud_vol_shape_power_;
-}
-
-void skylight_component::set_cloud_vol_shape_power(float power)
-{
-    cloud_vol_shape_power_ = math::clamp(power, 0.5f, 4.0f);
-}
-
-auto skylight_component::get_cloud_vol_detail_erode() const noexcept -> float
-{
-    return cloud_vol_detail_erode_;
-}
-
-void skylight_component::set_cloud_vol_detail_erode(float erode)
-{
-    cloud_vol_detail_erode_ = math::clamp(erode, 0.0f, 2.0f);
-}
-
-auto skylight_component::get_cloud_vol_macro_strength() const noexcept -> float
-{
-    return cloud_vol_macro_strength_;
-}
-
-void skylight_component::set_cloud_vol_macro_strength(float strength)
-{
-    cloud_vol_macro_strength_ = math::clamp(strength, 0.0f, 1.5f);
-}
-
-auto skylight_component::get_cloud_vol_coarse_scale() const noexcept -> float
-{
-    return cloud_vol_coarse_scale_;
-}
-
-void skylight_component::set_cloud_vol_coarse_scale(float scale)
-{
-    cloud_vol_coarse_scale_ = math::clamp(scale, 0.05f, 1.0f);
-}
-
-auto skylight_component::get_cloud_vol_base_mix() const noexcept -> float
-{
-    return cloud_vol_base_mix_;
-}
-
-void skylight_component::set_cloud_vol_base_mix(float mix)
-{
-    cloud_vol_base_mix_ = math::clamp(mix, 0.0f, 1.0f);
-}
-
-auto skylight_component::get_cloud_vol_sun_intensity() const noexcept -> float
-{
-    return cloud_vol_sun_intensity_;
-}
-
-void skylight_component::set_cloud_vol_sun_intensity(float intensity)
-{
-    cloud_vol_sun_intensity_ = math::clamp(intensity, 0.0f, 200.0f);
+    cloud_shadow_strength_ = math::clamp(strength, 0.02f, 1.0f);
 }
 
 auto skylight_component::get_irradiance_intensity() const noexcept -> float

@@ -80,13 +80,6 @@ REFLECT(skylight_component)
             && data->get_cloud_mode() != skylight_component::cloud_mode::none;
     });
 
-    auto volumetric_clouds_predicate_entt = entt::property_predicate<bool>([](const entt::meta_any& obj)
-    {
-        auto data = obj.try_cast<skylight_component>();
-        return data->get_mode() != skylight_component::sky_mode::skybox
-            && data->get_cloud_mode() == skylight_component::cloud_mode::volumetric;
-    });
-
     // Register skylight_component::sky_mode enum with entt
     entt::meta_factory<skylight_component::sky_mode>{}
         .type("sky_mode"_hs)
@@ -209,160 +202,115 @@ REFLECT(skylight_component)
             entt::attribute{"tooltip", "Controls cloud density. 0.0 = clear sky, 1.0 = overcast. Higher values create more clouds by lowering the density threshold."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
+        .data<&skylight_component::set_cloud_macro_variation, &skylight_component::get_cloud_macro_variation>("cloud_macro_variation"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_macro_variation"},
+            entt::attribute{"pretty_name", "Macro Variation"},
+            entt::attribute{"group", "Clouds"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.5f},
+            entt::attribute{"step", 0.02f},
+            entt::attribute{"tooltip", "Weather-scale coverage variation. 0 = uniform sheet, 1 = strong clear and dense patches across the sky."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
+        })
         .data<&skylight_component::set_cloud_base_altitude, &skylight_component::get_cloud_base_altitude>("cloud_base_altitude"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_base_altitude"},
-            entt::attribute{"pretty_name", "Cloud Base Altitude"},
+            entt::attribute{"pretty_name", "Base Altitude"},
             entt::attribute{"group", "Clouds"},
             entt::attribute{"min", 100.0f},
             entt::attribute{"max", 60000.0f},
             entt::attribute{"step", 500.0f},
-            entt::attribute{"tooltip", "Cloud layer base altitude in world units. Volumetric: slab bottom. Flat: projection height."},
+            entt::attribute{"tooltip", "Cloud layer base: height above the camera in world units (the sky is camera-relative). Volumetric: slab bottom. Flat: projection height."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
-        .data<&skylight_component::set_cloud_top_altitude, &skylight_component::get_cloud_top_altitude>("cloud_top_altitude"_hs)
+        .data<&skylight_component::set_cloud_thickness, &skylight_component::get_cloud_thickness>("cloud_thickness"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_top_altitude"},
-            entt::attribute{"pretty_name", "Cloud Top Altitude"},
+            entt::attribute{"name", "cloud_thickness"},
+            entt::attribute{"pretty_name", "Thickness"},
             entt::attribute{"group", "Clouds"},
-            entt::attribute{"min", 200.0f},
-            entt::attribute{"max", 80000.0f},
+            entt::attribute{"min", 100.0f},
+            entt::attribute{"max", 40000.0f},
+            entt::attribute{"step", 250.0f},
+            entt::attribute{"tooltip", "Cloud layer thickness (base to top) in world units. Volumetric: slab height. Flat: optical path length."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
+        })
+        .data<&skylight_component::set_cloud_size, &skylight_component::get_cloud_size>("cloud_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_size"},
+            entt::attribute{"pretty_name", "Cloud Size"},
+            entt::attribute{"group", "Clouds"},
+            entt::attribute{"min", 1000.0f},
+            entt::attribute{"max", 100000.0f},
             entt::attribute{"step", 500.0f},
-            entt::attribute{"tooltip", "Cloud layer top altitude in world units. Only used by volumetric clouds (slab top). Flat clouds ignore this."},
-            entt::attribute{"predicate", clouds_enabled_predicate_entt},
-
-        })
-        .data<&skylight_component::set_cloud_speed, &skylight_component::get_cloud_speed>("cloud_speed"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_speed"},
-            entt::attribute{"pretty_name", "Cloud Speed (km/h)"},
-            entt::attribute{"group", "Clouds"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 200.0f},
-            entt::attribute{"step", 1.0f},
-            entt::attribute{"tooltip", "Cloud wind speed in km/h. ~10 = gentle drift, ~50 = strong wind, ~100+ = storm."},
+            entt::attribute{"tooltip", "Typical size of a cloud mass in world units."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
         .data<&skylight_component::set_cloud_density, &skylight_component::get_cloud_density>("cloud_density"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_density"},
-            entt::attribute{"pretty_name", "Cloud Density"},
+            entt::attribute{"pretty_name", "Density"},
             entt::attribute{"group", "Clouds"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 20.0f},
             entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "Cloud opacity multiplier. Higher values make clouds more opaque and visible."},
+            entt::attribute{"tooltip", "Extinction scale along the view ray. Higher = more opaque clouds."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
-        .data<&skylight_component::set_cloud_absorption, &skylight_component::get_cloud_absorption>("cloud_absorption"_hs)
+        .data<&skylight_component::set_cloud_shadow_strength, &skylight_component::get_cloud_shadow_strength>("cloud_shadow_strength"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_absorption"},
-            entt::attribute{"pretty_name", "Cloud Absorption"},
+            entt::attribute{"name", "cloud_shadow_strength"},
+            entt::attribute{"pretty_name", "Shadow Strength"},
             entt::attribute{"group", "Clouds"},
-            entt::attribute{"min", 0.01f},
-            entt::attribute{"max", 0.5f},
+            entt::attribute{"min", 0.02f},
+            entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Beer-Lambert extinction coefficient. Controls how quickly light is absorbed passing through the cloud. Higher = more opaque."},
+            entt::attribute{"tooltip", "Fraction of the view extinction applied along the sun path. Lower lets light reach deeper (brighter, softer self-shadowing)."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
-        .data<&skylight_component::set_cloud_light_absorption, &skylight_component::get_cloud_light_absorption>("cloud_light_absorption"_hs)
+        .data<&skylight_component::set_cloud_softness, &skylight_component::get_cloud_softness>("cloud_softness"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_light_absorption"},
-            entt::attribute{"pretty_name", "Cloud Light Absorption"},
-            entt::attribute{"group", "Clouds"},
-            entt::attribute{"min", 0.01f},
-            entt::attribute{"max", 0.5f},
-            entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Self-shadow strength. Controls how much light is absorbed along the sun-facing direction. Higher = darker shadow side."},
-            entt::attribute{"predicate", clouds_enabled_predicate_entt},
-        })
-        .data<&skylight_component::set_cloud_vol_uv_scale, &skylight_component::get_cloud_vol_uv_scale>("cloud_vol_uv_scale"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_vol_uv_scale"},
-            entt::attribute{"pretty_name", "Vol. Noise UV Scale"},
-            entt::attribute{"group", "Volumetric"},
-            entt::attribute{"min", 0.00001f},
-            entt::attribute{"max", 0.001f},
-            entt::attribute{"step", 0.00001f},
-            entt::attribute{"tooltip", "World-to-noise scale; lower values produce larger cloud features."},
-            entt::attribute{"predicate", volumetric_clouds_predicate_entt},
-        })
-        .data<&skylight_component::set_cloud_vol_edge_width, &skylight_component::get_cloud_vol_edge_width>("cloud_vol_edge_width"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_vol_edge_width"},
-            entt::attribute{"pretty_name", "Vol. Edge Width"},
-            entt::attribute{"group", "Volumetric"},
+            entt::attribute{"name", "cloud_softness"},
+            entt::attribute{"pretty_name", "Softness"},
+            entt::attribute{"group", "Cloud Shape"},
             entt::attribute{"min", 0.01f},
             entt::attribute{"max", 0.8f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Width of the density ramp; lower = sharper cloud silhouettes."},
-            entt::attribute{"predicate", volumetric_clouds_predicate_entt},
+            entt::attribute{"tooltip", "Width of the density ramp at the cloud edge. Lower = crisper silhouettes, higher = wispy."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
-        .data<&skylight_component::set_cloud_vol_shape_power, &skylight_component::get_cloud_vol_shape_power>("cloud_vol_shape_power"_hs)
+        .data<&skylight_component::set_cloud_detail_erode, &skylight_component::get_cloud_detail_erode>("cloud_detail_erode"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_vol_shape_power"},
-            entt::attribute{"pretty_name", "Vol. Shape Power"},
-            entt::attribute{"group", "Volumetric"},
-            entt::attribute{"min", 0.5f},
-            entt::attribute{"max", 4.0f},
-            entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "Contrast on the density mask; higher thins wispy regions."},
-            entt::attribute{"predicate", volumetric_clouds_predicate_entt},
-        })
-        .data<&skylight_component::set_cloud_vol_detail_erode, &skylight_component::get_cloud_vol_detail_erode>("cloud_vol_detail_erode"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_vol_detail_erode"},
-            entt::attribute{"pretty_name", "Vol. Detail Erode"},
-            entt::attribute{"group", "Volumetric"},
+            entt::attribute{"name", "cloud_detail_erode"},
+            entt::attribute{"pretty_name", "Detail Erosion"},
+            entt::attribute{"group", "Cloud Shape"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"step", 0.02f},
-            entt::attribute{"tooltip", "Worley detail subtraction; higher adds more holes and wisps."},
-            entt::attribute{"predicate", volumetric_clouds_predicate_entt},
+            entt::attribute{"tooltip", "Small-scale Worley erosion of the edges. Higher adds holes and wisps; stronger toward the cloud tops."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
-        .data<&skylight_component::set_cloud_vol_macro_strength, &skylight_component::get_cloud_vol_macro_strength>("cloud_vol_macro_strength"_hs)
+        .data<&skylight_component::set_cloud_speed, &skylight_component::get_cloud_speed>("cloud_speed"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_vol_macro_strength"},
-            entt::attribute{"pretty_name", "Vol. Macro Variation"},
-            entt::attribute{"group", "Volumetric"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.5f},
-            entt::attribute{"step", 0.02f},
-            entt::attribute{"tooltip", "Strength of large-scale threshold jitter (clearings vs uniform sheet)."},
-            entt::attribute{"predicate", volumetric_clouds_predicate_entt},
-        })
-        .data<&skylight_component::set_cloud_vol_coarse_scale, &skylight_component::get_cloud_vol_coarse_scale>("cloud_vol_coarse_scale"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_vol_coarse_scale"},
-            entt::attribute{"pretty_name", "Vol. Coarse Scale"},
-            entt::attribute{"group", "Volumetric"},
-            entt::attribute{"min", 0.05f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Scale of the coarse noise sample (lower = larger masses)."},
-            entt::attribute{"predicate", volumetric_clouds_predicate_entt},
-        })
-        .data<&skylight_component::set_cloud_vol_base_mix, &skylight_component::get_cloud_vol_base_mix>("cloud_vol_base_mix"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_vol_base_mix"},
-            entt::attribute{"pretty_name", "Vol. Coarse/Fine Mix"},
-            entt::attribute{"group", "Volumetric"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"step", 0.02f},
-            entt::attribute{"tooltip", "Blend between coarse and fine base noise (0 = coarse, 1 = fine)."},
-            entt::attribute{"predicate", volumetric_clouds_predicate_entt},
-        })
-        .data<&skylight_component::set_cloud_vol_sun_intensity, &skylight_component::get_cloud_vol_sun_intensity>("cloud_vol_sun_intensity"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "cloud_vol_sun_intensity"},
-            entt::attribute{"pretty_name", "Vol. Sun Intensity"},
-            entt::attribute{"group", "Volumetric"},
+            entt::attribute{"name", "cloud_speed"},
+            entt::attribute{"pretty_name", "Wind Speed (km/h)"},
+            entt::attribute{"group", "Cloud Wind"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 200.0f},
             entt::attribute{"step", 1.0f},
-            entt::attribute{"tooltip", "Multiplier for direct sun scattering in the cloud integrator."},
-            entt::attribute{"predicate", volumetric_clouds_predicate_entt},
+            entt::attribute{"tooltip", "Wind speed in km/h (1 km/h ~ 5 world units/s at the default base altitude). ~15 = fair-weather drift, ~60+ = storm."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
+        })
+        .data<&skylight_component::set_cloud_wind_direction, &skylight_component::get_cloud_wind_direction>("cloud_wind_direction"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_wind_direction"},
+            entt::attribute{"pretty_name", "Wind Direction"},
+            entt::attribute{"group", "Cloud Wind"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 360.0f},
+            entt::attribute{"step", 1.0f},
+            entt::attribute{"tooltip", "Direction the clouds drift toward, in degrees (0 = +X, 90 = +Z)."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
         .data<&skylight_component::set_irradiance_intensity, &skylight_component::get_irradiance_intensity>("irradiance_intensity"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -410,20 +358,16 @@ SAVE(skylight_component)
     try_save(ar, ser20::make_nvp("turbidity", obj.get_turbidity()));
     try_save(ar, ser20::make_nvp("cloud_mode", obj.get_cloud_mode()));
     try_save(ar, ser20::make_nvp("cloud_coverage", obj.get_cloud_coverage()));
+    try_save(ar, ser20::make_nvp("cloud_macro_variation", obj.get_cloud_macro_variation()));
     try_save(ar, ser20::make_nvp("cloud_base_altitude", obj.get_cloud_base_altitude()));
-    try_save(ar, ser20::make_nvp("cloud_top_altitude", obj.get_cloud_top_altitude()));
-    try_save(ar, ser20::make_nvp("cloud_speed", obj.get_cloud_speed()));
+    try_save(ar, ser20::make_nvp("cloud_thickness", obj.get_cloud_thickness()));
+    try_save(ar, ser20::make_nvp("cloud_size", obj.get_cloud_size()));
     try_save(ar, ser20::make_nvp("cloud_density", obj.get_cloud_density()));
-    try_save(ar, ser20::make_nvp("cloud_absorption", obj.get_cloud_absorption()));
-    try_save(ar, ser20::make_nvp("cloud_light_absorption", obj.get_cloud_light_absorption()));
-    try_save(ar, ser20::make_nvp("cloud_vol_uv_scale", obj.get_cloud_vol_uv_scale()));
-    try_save(ar, ser20::make_nvp("cloud_vol_edge_width", obj.get_cloud_vol_edge_width()));
-    try_save(ar, ser20::make_nvp("cloud_vol_shape_power", obj.get_cloud_vol_shape_power()));
-    try_save(ar, ser20::make_nvp("cloud_vol_detail_erode", obj.get_cloud_vol_detail_erode()));
-    try_save(ar, ser20::make_nvp("cloud_vol_macro_strength", obj.get_cloud_vol_macro_strength()));
-    try_save(ar, ser20::make_nvp("cloud_vol_coarse_scale", obj.get_cloud_vol_coarse_scale()));
-    try_save(ar, ser20::make_nvp("cloud_vol_base_mix", obj.get_cloud_vol_base_mix()));
-    try_save(ar, ser20::make_nvp("cloud_vol_sun_intensity", obj.get_cloud_vol_sun_intensity()));
+    try_save(ar, ser20::make_nvp("cloud_shadow_strength", obj.get_cloud_shadow_strength()));
+    try_save(ar, ser20::make_nvp("cloud_softness", obj.get_cloud_softness()));
+    try_save(ar, ser20::make_nvp("cloud_detail_erode", obj.get_cloud_detail_erode()));
+    try_save(ar, ser20::make_nvp("cloud_speed", obj.get_cloud_speed()));
+    try_save(ar, ser20::make_nvp("cloud_wind_direction", obj.get_cloud_wind_direction()));
     try_save(ar, ser20::make_nvp("irradiance_intensity", obj.get_irradiance_intensity()));
     try_save(ar, ser20::make_nvp("irradiance_tint", obj.get_irradiance_tint()));
     try_save(ar, ser20::make_nvp("irradiance_quality", obj.get_irradiance_quality()));
@@ -465,16 +409,98 @@ LOAD(skylight_component)
         obj.set_cloud_coverage(cloud_coverage);
     }
 
+    float cloud_macro_variation{};
+    if(try_load(ar, ser20::make_nvp("cloud_macro_variation", cloud_macro_variation)))
+    {
+        obj.set_cloud_macro_variation(cloud_macro_variation);
+    }
+    else if(try_load(ar, ser20::make_nvp("cloud_vol_macro_strength", cloud_macro_variation)))
+    {
+        obj.set_cloud_macro_variation(cloud_macro_variation);
+    }
+
     float cloud_base_altitude{};
     if(try_load(ar, ser20::make_nvp("cloud_base_altitude", cloud_base_altitude)))
     {
         obj.set_cloud_base_altitude(cloud_base_altitude);
     }
 
-    float cloud_top_altitude{};
-    if(try_load(ar, ser20::make_nvp("cloud_top_altitude", cloud_top_altitude)))
+    float cloud_thickness{};
+    if(try_load(ar, ser20::make_nvp("cloud_thickness", cloud_thickness)))
     {
-        obj.set_cloud_top_altitude(cloud_top_altitude);
+        obj.set_cloud_thickness(cloud_thickness);
+    }
+    else
+    {
+        // Pre-collapse scenes stored the top altitude.
+        float cloud_top_altitude{};
+        if(try_load(ar, ser20::make_nvp("cloud_top_altitude", cloud_top_altitude)))
+        {
+            obj.set_cloud_thickness(cloud_top_altitude - obj.get_cloud_base_altitude());
+        }
+    }
+
+    float cloud_size{};
+    if(try_load(ar, ser20::make_nvp("cloud_size", cloud_size)))
+    {
+        obj.set_cloud_size(cloud_size);
+    }
+    else
+    {
+        // Pre-collapse scenes stored the world-to-noise scale.
+        float cloud_vol_uv_scale{};
+        if(try_load(ar, ser20::make_nvp("cloud_vol_uv_scale", cloud_vol_uv_scale)) && cloud_vol_uv_scale > 0.0f)
+        {
+            obj.set_cloud_size(1.0f / cloud_vol_uv_scale);
+        }
+    }
+
+    // Pre-collapse scenes split the extinction into density * absorption (view) and
+    // density * light_absorption (sun path); fold both into density / shadow_strength.
+    constexpr float legacy_absorption_default = 0.08f;
+    constexpr float legacy_shadow_extinction_scale = 0.2f;
+    float cloud_density{};
+    const bool has_density = try_load(ar, ser20::make_nvp("cloud_density", cloud_density));
+    float cloud_absorption{legacy_absorption_default};
+    const bool has_absorption = try_load(ar, ser20::make_nvp("cloud_absorption", cloud_absorption));
+    if(has_density)
+    {
+        obj.set_cloud_density(has_absorption ? cloud_density * cloud_absorption / legacy_absorption_default : cloud_density);
+    }
+
+    float cloud_shadow_strength{};
+    if(try_load(ar, ser20::make_nvp("cloud_shadow_strength", cloud_shadow_strength)))
+    {
+        obj.set_cloud_shadow_strength(cloud_shadow_strength);
+    }
+    else
+    {
+        float cloud_light_absorption{};
+        if(try_load(ar, ser20::make_nvp("cloud_light_absorption", cloud_light_absorption)))
+        {
+            obj.set_cloud_shadow_strength(legacy_shadow_extinction_scale * cloud_light_absorption /
+                                          math::max(cloud_absorption, 0.01f));
+        }
+    }
+
+    float cloud_softness{};
+    if(try_load(ar, ser20::make_nvp("cloud_softness", cloud_softness)))
+    {
+        obj.set_cloud_softness(cloud_softness);
+    }
+    else if(try_load(ar, ser20::make_nvp("cloud_vol_edge_width", cloud_softness)))
+    {
+        obj.set_cloud_softness(cloud_softness);
+    }
+
+    float cloud_detail_erode{};
+    if(try_load(ar, ser20::make_nvp("cloud_detail_erode", cloud_detail_erode)))
+    {
+        obj.set_cloud_detail_erode(cloud_detail_erode);
+    }
+    else if(try_load(ar, ser20::make_nvp("cloud_vol_detail_erode", cloud_detail_erode)))
+    {
+        obj.set_cloud_detail_erode(cloud_detail_erode);
     }
 
     float cloud_speed{};
@@ -483,70 +509,10 @@ LOAD(skylight_component)
         obj.set_cloud_speed(cloud_speed);
     }
 
-    float cloud_density{};
-    if(try_load(ar, ser20::make_nvp("cloud_density", cloud_density)))
+    float cloud_wind_direction{};
+    if(try_load(ar, ser20::make_nvp("cloud_wind_direction", cloud_wind_direction)))
     {
-        obj.set_cloud_density(cloud_density);
-    }
-
-    float cloud_absorption{};
-    if(try_load(ar, ser20::make_nvp("cloud_absorption", cloud_absorption)))
-    {
-        obj.set_cloud_absorption(cloud_absorption);
-    }
-
-    float cloud_light_absorption{};
-    if(try_load(ar, ser20::make_nvp("cloud_light_absorption", cloud_light_absorption)))
-    {
-        obj.set_cloud_light_absorption(cloud_light_absorption);
-    }
-
-    float cloud_vol_uv_scale{};
-    if(try_load(ar, ser20::make_nvp("cloud_vol_uv_scale", cloud_vol_uv_scale)))
-    {
-        obj.set_cloud_vol_uv_scale(cloud_vol_uv_scale);
-    }
-
-    float cloud_vol_edge_width{};
-    if(try_load(ar, ser20::make_nvp("cloud_vol_edge_width", cloud_vol_edge_width)))
-    {
-        obj.set_cloud_vol_edge_width(cloud_vol_edge_width);
-    }
-
-    float cloud_vol_shape_power{};
-    if(try_load(ar, ser20::make_nvp("cloud_vol_shape_power", cloud_vol_shape_power)))
-    {
-        obj.set_cloud_vol_shape_power(cloud_vol_shape_power);
-    }
-
-    float cloud_vol_detail_erode{};
-    if(try_load(ar, ser20::make_nvp("cloud_vol_detail_erode", cloud_vol_detail_erode)))
-    {
-        obj.set_cloud_vol_detail_erode(cloud_vol_detail_erode);
-    }
-
-    float cloud_vol_macro_strength{};
-    if(try_load(ar, ser20::make_nvp("cloud_vol_macro_strength", cloud_vol_macro_strength)))
-    {
-        obj.set_cloud_vol_macro_strength(cloud_vol_macro_strength);
-    }
-
-    float cloud_vol_coarse_scale{};
-    if(try_load(ar, ser20::make_nvp("cloud_vol_coarse_scale", cloud_vol_coarse_scale)))
-    {
-        obj.set_cloud_vol_coarse_scale(cloud_vol_coarse_scale);
-    }
-
-    float cloud_vol_base_mix{};
-    if(try_load(ar, ser20::make_nvp("cloud_vol_base_mix", cloud_vol_base_mix)))
-    {
-        obj.set_cloud_vol_base_mix(cloud_vol_base_mix);
-    }
-
-    float cloud_vol_sun_intensity{};
-    if(try_load(ar, ser20::make_nvp("cloud_vol_sun_intensity", cloud_vol_sun_intensity)))
-    {
-        obj.set_cloud_vol_sun_intensity(cloud_vol_sun_intensity);
+        obj.set_cloud_wind_direction(cloud_wind_direction);
     }
 
     float irradiance_intensity{};

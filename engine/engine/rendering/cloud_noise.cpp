@@ -1,11 +1,15 @@
 #include "cloud_noise.h"
+#include <concurrency/parallel.h>
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <limits>
+#include <numeric>
 #include <vector>
-#include <algorithm>
 
 namespace unravel
 {
@@ -13,7 +17,20 @@ namespace unravel
 namespace
 {
 
-// ---- Integer hashing (Wang hash) — excellent distribution for small integers ----
+// Baked octaves. Perlin FBM: 4 octaves at 1x..8x. Worley: 1x / 2x / 4x in G / B / A.
+constexpr int perlin_octaves = 4;
+constexpr int worley_levels = 3;
+// Base-shape blend (R channel): Perlin FBM dilated by inverted Worley.
+constexpr float perlin_weight = 0.55f;
+constexpr float worley_weight = 0.45f;
+constexpr int period = cloud_noise_textures::tile_period;
+
+struct f3
+{
+    float x, y, z;
+};
+
+// ---- Integer hashing (Wang hash) ----
 
 auto wang_hash(uint32_t seed) -> uint32_t
 {
@@ -25,117 +42,192 @@ auto wang_hash(uint32_t seed) -> uint32_t
     return seed;
 }
 
-auto hash_int3(int x, int y, int z) -> float
+auto hash_to_unit(uint32_t h) -> float
 {
-    uint32_t h = wang_hash(
-        static_cast<uint32_t>(x) * 73856093u ^
-        static_cast<uint32_t>(y) * 19349663u ^
-        static_cast<uint32_t>(z) * 83492791u);
     return static_cast<float>(h) / static_cast<float>(0xFFFFFFFFu);
 }
 
-struct f3
+auto hash_cell(int x, int y, int z, uint32_t salt) -> uint32_t
 {
-    float x, y, z;
+    return wang_hash(static_cast<uint32_t>(x) * 73856093u ^ static_cast<uint32_t>(y) * 19349663u ^
+                     static_cast<uint32_t>(z) * 83492791u ^ salt * 2654435761u);
+}
+
+auto wrap(int v, int n) -> int
+{
+    return ((v % n) + n) % n;
+}
+
+// ---- Lattice tables: one gradient / feature point per cell, per frequency. The tables make
+// the per-voxel evaluation hash-free and tileable by construction (cells wrap at n = period *
+// frequency).
+
+struct lattice
+{
+    int n{};
+    std::vector<f3> points;
+
+    auto at(int x, int y, int z) const -> const f3&
+    {
+        return points[(size_t(wrap(z, n)) * n + size_t(wrap(y, n))) * n + size_t(wrap(x, n))];
+    }
 };
 
-auto hash_int3_vec3(int x, int y, int z) -> f3
+auto make_gradient_lattice(int frequency, uint32_t salt) -> lattice
 {
-    float hx = hash_int3(x, y, z);
-    float hy = hash_int3(x + 47, y + 17, z + 31);
-    float hz = hash_int3(x + 89, y + 53, z + 71);
-    return {hx, hy, hz};
+    lattice lat;
+    lat.n = period * frequency;
+    lat.points.resize(size_t(lat.n) * lat.n * lat.n);
+    for(int z = 0; z < lat.n; z++)
+    {
+        for(int y = 0; y < lat.n; y++)
+        {
+            for(int x = 0; x < lat.n; x++)
+            {
+                // Uniform direction on the sphere from two hashes.
+                const float u = hash_to_unit(hash_cell(x, y, z, salt));
+                const float v = hash_to_unit(hash_cell(x, y, z, salt + 1u));
+                const float cos_theta = u * 2.0f - 1.0f;
+                const float sin_theta = std::sqrt(std::max(0.0f, 1.0f - cos_theta * cos_theta));
+                const float phi = v * 6.28318530718f;
+                lat.points[(size_t(z) * lat.n + y) * lat.n + x] = {sin_theta * std::cos(phi), sin_theta * std::sin(phi), cos_theta};
+            }
+        }
+    }
+    return lat;
 }
 
-// ---- Tiling helpers ----
-
-const int period = cloud_noise_textures::tile_period;
-
-auto wrap(int v) -> int
+auto make_feature_lattice(int frequency, uint32_t salt) -> lattice
 {
-    return ((v % period) + period) % period;
+    lattice lat;
+    lat.n = period * frequency;
+    lat.points.resize(size_t(lat.n) * lat.n * lat.n);
+    for(int z = 0; z < lat.n; z++)
+    {
+        for(int y = 0; y < lat.n; y++)
+        {
+            for(int x = 0; x < lat.n; x++)
+            {
+                lat.points[(size_t(z) * lat.n + y) * lat.n + x] = {hash_to_unit(hash_cell(x, y, z, salt)),
+                                                                   hash_to_unit(hash_cell(x, y, z, salt + 1u)),
+                                                                   hash_to_unit(hash_cell(x, y, z, salt + 2u))};
+            }
+        }
+    }
+    return lat;
 }
+
+struct noise_tables
+{
+    lattice gradients[perlin_octaves];
+    lattice features[worley_levels];
+
+    noise_tables()
+    {
+        for(int i = 0; i < perlin_octaves; i++)
+        {
+            gradients[i] = make_gradient_lattice(1 << i, 100u + uint32_t(i) * 7u);
+        }
+        for(int i = 0; i < worley_levels; i++)
+        {
+            features[i] = make_feature_lattice(1 << i, 500u + uint32_t(i) * 11u);
+        }
+    }
+};
 
 // ---- Math helpers ----
 
-auto lerp(float a, float b, float t) -> float { return a + (b - a) * t; }
-
-auto smoothstep_f(float t) -> float
+auto lerp(float a, float b, float t) -> float
 {
-    t = std::clamp(t, 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
+    return a + (b - a) * t;
 }
 
-// ---- Tileable value noise (Perlin-like) ----
-
-auto value_noise_3d(float px, float py, float pz) -> float
+auto fade(float t) -> float
 {
-    int ix = static_cast<int>(std::floor(px));
-    int iy = static_cast<int>(std::floor(py));
-    int iz = static_cast<int>(std::floor(pz));
+    return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f);
+}
 
-    float fx = px - std::floor(px);
-    float fy = py - std::floor(py);
-    float fz = pz - std::floor(pz);
+// ---- Tileable gradient (Perlin) noise, output roughly [-1, 1] ----
 
-    float ux = fx * fx * (3.0f - 2.0f * fx);
-    float uy = fy * fy * (3.0f - 2.0f * fy);
-    float uz = fz * fz * (3.0f - 2.0f * fz);
+auto perlin_3d(const lattice& lat, float px, float py, float pz) -> float
+{
+    const float fx0 = std::floor(px);
+    const float fy0 = std::floor(py);
+    const float fz0 = std::floor(pz);
+    const int ix = static_cast<int>(fx0);
+    const int iy = static_cast<int>(fy0);
+    const int iz = static_cast<int>(fz0);
+    const float fx = px - fx0;
+    const float fy = py - fy0;
+    const float fz = pz - fz0;
+    const float ux = fade(fx);
+    const float uy = fade(fy);
+    const float uz = fade(fz);
 
-    int i0x = wrap(ix),     i0y = wrap(iy),     i0z = wrap(iz);
-    int i1x = wrap(ix + 1), i1y = wrap(iy + 1), i1z = wrap(iz + 1);
+    auto dot_grad = [&](int cx, int cy, int cz, float dx, float dy, float dz) -> float
+    {
+        const f3& g = lat.at(ix + cx, iy + cy, iz + cz);
+        return g.x * dx + g.y * dy + g.z * dz;
+    };
 
-    float n000 = hash_int3(i0x, i0y, i0z);
-    float n100 = hash_int3(i1x, i0y, i0z);
-    float n010 = hash_int3(i0x, i1y, i0z);
-    float n110 = hash_int3(i1x, i1y, i0z);
-    float n001 = hash_int3(i0x, i0y, i1z);
-    float n101 = hash_int3(i1x, i0y, i1z);
-    float n011 = hash_int3(i0x, i1y, i1z);
-    float n111 = hash_int3(i1x, i1y, i1z);
+    const float n000 = dot_grad(0, 0, 0, fx, fy, fz);
+    const float n100 = dot_grad(1, 0, 0, fx - 1.0f, fy, fz);
+    const float n010 = dot_grad(0, 1, 0, fx, fy - 1.0f, fz);
+    const float n110 = dot_grad(1, 1, 0, fx - 1.0f, fy - 1.0f, fz);
+    const float n001 = dot_grad(0, 0, 1, fx, fy, fz - 1.0f);
+    const float n101 = dot_grad(1, 0, 1, fx - 1.0f, fy, fz - 1.0f);
+    const float n011 = dot_grad(0, 1, 1, fx, fy - 1.0f, fz - 1.0f);
+    const float n111 = dot_grad(1, 1, 1, fx - 1.0f, fy - 1.0f, fz - 1.0f);
 
-    float nx00 = lerp(n000, n100, ux);
-    float nx10 = lerp(n010, n110, ux);
-    float nx01 = lerp(n001, n101, ux);
-    float nx11 = lerp(n011, n111, ux);
-
-    float nxy0 = lerp(nx00, nx10, uy);
-    float nxy1 = lerp(nx01, nx11, uy);
-
+    const float nx00 = lerp(n000, n100, ux);
+    const float nx10 = lerp(n010, n110, ux);
+    const float nx01 = lerp(n001, n101, ux);
+    const float nx11 = lerp(n011, n111, ux);
+    const float nxy0 = lerp(nx00, nx10, uy);
+    const float nxy1 = lerp(nx01, nx11, uy);
     return lerp(nxy0, nxy1, uz);
 }
 
-// ---- Tileable Worley noise ----
-
-auto worley_noise_3d(float px, float py, float pz) -> float
+auto perlin_fbm(const noise_tables& tables, float px, float py, float pz) -> float
 {
-    int ix = static_cast<int>(std::floor(px));
-    int iy = static_cast<int>(std::floor(py));
-    int iz = static_cast<int>(std::floor(pz));
+    float value = 0.0f;
+    float amplitude = 0.5f;
+    float freq = 1.0f;
+    for(int i = 0; i < perlin_octaves; i++)
+    {
+        value += amplitude * perlin_3d(tables.gradients[i], px * freq, py * freq, pz * freq);
+        freq *= 2.0f;
+        amplitude *= 0.5f;
+    }
+    return value;
+}
 
-    float fx = px - std::floor(px);
-    float fy = py - std::floor(py);
-    float fz = pz - std::floor(pz);
+// ---- Tileable Worley noise: distance to the nearest feature point, in [0, 1] ----
+
+auto worley_3d(const lattice& lat, float px, float py, float pz) -> float
+{
+    const float fx0 = std::floor(px);
+    const float fy0 = std::floor(py);
+    const float fz0 = std::floor(pz);
+    const int ix = static_cast<int>(fx0);
+    const int iy = static_cast<int>(fy0);
+    const int iz = static_cast<int>(fz0);
+    const float fx = px - fx0;
+    const float fy = py - fy0;
+    const float fz = pz - fz0;
 
     float min_dist = 1.0f;
-
-    for(int dx = -1; dx <= 1; dx++)
+    for(int dz = -1; dz <= 1; dz++)
     {
         for(int dy = -1; dy <= 1; dy++)
         {
-            for(int dz = -1; dz <= 1; dz++)
+            for(int dx = -1; dx <= 1; dx++)
             {
-                int cx = wrap(ix + dx);
-                int cy = wrap(iy + dy);
-                int cz = wrap(iz + dz);
-
-                f3 pt = hash_int3_vec3(cx, cy, cz);
-
-                float diff_x = float(dx) + pt.x - fx;
-                float diff_y = float(dy) + pt.y - fy;
-                float diff_z = float(dz) + pt.z - fz;
-
-                float dist = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
+                const f3& pt = lat.at(ix + dx, iy + dy, iz + dz);
+                const float diff_x = float(dx) + pt.x - fx;
+                const float diff_y = float(dy) + pt.y - fy;
+                const float diff_z = float(dz) + pt.z - fz;
+                const float dist = diff_x * diff_x + diff_y * diff_y + diff_z * diff_z;
                 min_dist = std::min(min_dist, dist);
             }
         }
@@ -143,55 +235,58 @@ auto worley_noise_3d(float px, float py, float pz) -> float
     return std::sqrt(min_dist);
 }
 
-// ---- FBM wrappers ----
-
-auto fbm_value(float px, float py, float pz, int octaves) -> float
+auto worley_at(const noise_tables& tables, int level, float px, float py, float pz) -> float
 {
-    float value = 0.0f;
-    float amplitude = 0.5f;
-    float freq = 1.0f;
-    for(int i = 0; i < octaves; i++)
-    {
-        value += amplitude * value_noise_3d(px * freq, py * freq, pz * freq);
-        freq *= 2.0f;
-        amplitude *= 0.5f;
-    }
-    return value;
+    const float freq = float(1 << level);
+    return worley_3d(tables.features[level], px * freq, py * freq, pz * freq);
 }
 
-auto worley_at(float px, float py, float pz, float freq) -> float
+auto to_unorm8(float value) -> uint8_t
 {
-    return worley_noise_3d(px * freq, py * freq, pz * freq);
+    return static_cast<uint8_t>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
 }
 
-// ---- Remap utility (Schneider / HZD) ----
-
-auto remap(float value, float lo, float hi, float new_lo, float new_hi) -> float
+// Raw channels of one sample: Perlin FBM (unnormalized) and the three Worley levels.
+struct sample_channels
 {
-    return new_lo + (value - lo) / (hi - lo) * (new_hi - new_lo);
+    float perlin{};
+    float worley[worley_levels]{};
+};
+
+auto evaluate(const noise_tables& tables, float px, float py, float pz) -> sample_channels
+{
+    sample_channels s;
+    s.perlin = perlin_fbm(tables, px, py, pz);
+    for(int i = 0; i < worley_levels; i++)
+    {
+        s.worley[i] = worley_at(tables, i, px, py, pz);
+    }
+    return s;
 }
 
-// ---- Float-to-half conversion ----
-
-auto float_to_half(float value) -> uint16_t
+// Packs the samples: Perlin is remapped from its measured range to [0, 1] (gradient noise
+// uses only part of [-1, 1]) and blended with the inverted 1x Worley into R.
+void pack(const std::vector<sample_channels>& samples, std::vector<uint8_t>& out)
 {
-    uint32_t f = 0;
-    std::memcpy(&f, &value, 4);
-
-    uint32_t sign = (f >> 16u) & 0x8000u;
-    auto exponent = static_cast<int32_t>(((f >> 23u) & 0xFFu)) - 127 + 15;
-    uint32_t mantissa = f & 0x007FFFFFu;
-
-    if(exponent <= 0)
+    float perlin_min = std::numeric_limits<float>::max();
+    float perlin_max = std::numeric_limits<float>::lowest();
+    for(const auto& s : samples)
     {
-        return static_cast<uint16_t>(sign);
+        perlin_min = std::min(perlin_min, s.perlin);
+        perlin_max = std::max(perlin_max, s.perlin);
     }
-    if(exponent >= 31)
+    const float perlin_range = std::max(perlin_max - perlin_min, 1e-6f);
+    out.resize(samples.size() * 4);
+    for(size_t i = 0; i < samples.size(); i++)
     {
-        return static_cast<uint16_t>(sign | 0x7C00u);
+        const auto& s = samples[i];
+        const float perlin01 = (s.perlin - perlin_min) / perlin_range;
+        const float inv_worley = 1.0f - s.worley[0];
+        out[i * 4 + 0] = to_unorm8(perlin01 * perlin_weight + inv_worley * worley_weight);
+        out[i * 4 + 1] = to_unorm8(s.worley[0]);
+        out[i * 4 + 2] = to_unorm8(s.worley[1]);
+        out[i * 4 + 3] = to_unorm8(s.worley[2]);
     }
-
-    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exponent) << 10u) | (mantissa >> 13u));
 }
 
 } // namespace
@@ -212,117 +307,85 @@ void cloud_noise_textures::generate_3d()
 {
     constexpr uint16_t res = resolution;
     constexpr size_t total = size_t(res) * res * res;
-    constexpr size_t num_channels = 4;
-    constexpr size_t num_halfs = total * num_channels;
-    constexpr size_t bytes = num_halfs * sizeof(uint16_t);
 
-    APPLOG_TRACE("[CloudNoise] Generating {}x{}x{} 3D noise texture (RGBA16F, period={})...",
-                res, res, res, tile_period);
+    const auto start = std::chrono::steady_clock::now();
+    APPLOG_TRACE("[CloudNoise] Generating {}x{}x{} 3D noise texture (RGBA8, period={})...", res, res, res, tile_period);
 
-    std::vector<uint16_t> data(num_halfs);
-
+    const noise_tables tables;
+    std::vector<sample_channels> samples(total);
     const float inv_res = float(tile_period) / float(res);
 
-    for(uint16_t z = 0; z < res; z++)
-    {
-        for(uint16_t y = 0; y < res; y++)
-        {
-            for(uint16_t x = 0; x < res; x++)
-            {
-                float px = float(x) * inv_res;
-                float py = float(y) * inv_res;
-                float pz = float(z) * inv_res;
+    std::vector<int> slices(res);
+    std::iota(slices.begin(), slices.end(), 0);
+    poolstl::for_each_par_if(true,
+                             slices.begin(),
+                             slices.end(),
+                             [&](int z)
+                             {
+                                 const float pz = float(z) * inv_res;
+                                 for(int y = 0; y < res; y++)
+                                 {
+                                     const float py = float(y) * inv_res;
+                                     for(int x = 0; x < res; x++)
+                                     {
+                                         const float px = float(x) * inv_res;
+                                         samples[(size_t(z) * res + size_t(y)) * res + size_t(x)] = evaluate(tables, px, py, pz);
+                                     }
+                                 }
+                             });
 
-                // Perlin FBM (4 octaves) — soft large-scale shape
-                float perlin4 = fbm_value(px, py, pz, 4);
+    std::vector<uint8_t> data;
+    pack(samples, data);
 
-                // Inverted Worley at 1x — puffy cell centers
-                float inv_worley = 1.0f - worley_at(px, py, pz, 1.0f);
+    auto* mem = gfx::copy(data.data(), static_cast<uint32_t>(data.size()));
+    base_noise = std::make_unique<gfx::texture>(res,
+                                                res,
+                                                res,
+                                                false,
+                                                gfx::texture_format::RGBA8,
+                                                BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
+                                                mem);
 
-                // R: Perlin-Worley blend — slightly higher Worley weight for chunkier, less uniform masses.
-                float perlin_worley = perlin4 * 0.55f + inv_worley * 0.45f;
-                perlin_worley = std::clamp(perlin_worley, 0.0f, 1.0f);
-
-                // G/B/A: Worley at increasing frequencies for multi-octave erosion
-                float worley_1x = worley_at(px, py, pz, 1.0f);
-                float worley_2x = worley_at(px, py, pz, 2.0f);
-                float worley_4x = worley_at(px, py, pz, 4.0f);
-
-                size_t idx = (size_t(z) * res * res + size_t(y) * res + size_t(x)) * num_channels;
-                data[idx + 0] = float_to_half(perlin_worley);
-                data[idx + 1] = float_to_half(worley_1x);
-                data[idx + 2] = float_to_half(worley_2x);
-                data[idx + 3] = float_to_half(worley_4x);
-            }
-        }
-    }
-
-    APPLOG_TRACE("[CloudNoise] Noise computed, uploading to GPU...");
-
-    auto* mem = gfx::copy(data.data(), static_cast<uint32_t>(bytes));
-    base_noise = std::make_unique<gfx::texture>(
-        res, res, res,
-        false,
-        gfx::texture_format::RGBA16F,
-        BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
-        mem);
-
-    APPLOG_TRACE("[CloudNoise] 3D noise texture ready ({} MB).", bytes / size_t(1024 * 1024));
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    APPLOG_TRACE("[CloudNoise] 3D noise texture ready ({} MB, {} ms).", data.size() / size_t(1024 * 1024), ms);
 }
 
 void cloud_noise_textures::generate_flat()
 {
     constexpr uint16_t res = flat_resolution;
     constexpr size_t total = size_t(res) * res;
-    constexpr size_t num_channels = 4;
-    constexpr size_t num_halfs = total * num_channels;
-    constexpr size_t bytes = num_halfs * sizeof(uint16_t);
 
-    APPLOG_TRACE("[CloudNoise] Generating {}x{} 2D flat noise texture (RGBA16F, period={})...",
-                res, res, tile_period);
+    APPLOG_TRACE("[CloudNoise] Generating {}x{} 2D flat noise texture (RGBA8, period={})...", res, res, tile_period);
 
-    std::vector<uint16_t> data(num_halfs);
-
+    const noise_tables tables;
+    std::vector<sample_channels> samples(total);
     const float inv_res = float(tile_period) / float(res);
     const float fixed_z = float(tile_period) * 0.5f;
 
-    for(uint16_t y = 0; y < res; y++)
+    for(int y = 0; y < res; y++)
     {
-        for(uint16_t x = 0; x < res; x++)
+        const float py = float(y) * inv_res;
+        for(int x = 0; x < res; x++)
         {
-            float px = float(x) * inv_res;
-            float py = float(y) * inv_res;
-
-            float perlin4 = fbm_value(px, fixed_z, py, 4);
-            float inv_worley = 1.0f - worley_at(px, fixed_z, py, 1.0f);
-
-            float perlin_worley = perlin4 * 0.65f + inv_worley * 0.35f;
-            perlin_worley = std::clamp(perlin_worley, 0.0f, 1.0f);
-
-            float worley_1x = worley_at(px, fixed_z, py, 1.0f);
-            float worley_2x = worley_at(px, fixed_z, py, 2.0f);
-            float worley_4x = worley_at(px, fixed_z, py, 4.0f);
-
-            size_t idx = (size_t(y) * res + size_t(x)) * num_channels;
-            data[idx + 0] = float_to_half(perlin_worley);
-            data[idx + 1] = float_to_half(worley_1x);
-            data[idx + 2] = float_to_half(worley_2x);
-            data[idx + 3] = float_to_half(worley_4x);
+            const float px = float(x) * inv_res;
+            // The flat path reads (u, v) as the horizontal plane: sample the field at a fixed height.
+            samples[size_t(y) * res + size_t(x)] = evaluate(tables, px, fixed_z, py);
         }
     }
 
-    APPLOG_TRACE("[CloudNoise] 2D flat noise computed, uploading to GPU...");
+    std::vector<uint8_t> data;
+    pack(samples, data);
 
-    auto* mem = gfx::copy(data.data(), static_cast<uint32_t>(bytes));
-    flat_noise = std::make_unique<gfx::texture>(
-        res, res,
-        false,
-        1,
-        gfx::texture_format::RGBA16F,
-        BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
-        mem);
+    auto* mem = gfx::copy(data.data(), static_cast<uint32_t>(data.size()));
+    flat_noise = std::make_unique<gfx::texture>(res,
+                                                res,
+                                                false,
+                                                1,
+                                                gfx::texture_format::RGBA8,
+                                                BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
+                                                mem);
 
-    APPLOG_TRACE("[CloudNoise] 2D flat noise texture ready ({} KB).", bytes / size_t(1024));
+    APPLOG_TRACE("[CloudNoise] 2D flat noise texture ready ({} KB).", data.size() / size_t(1024));
 }
 
 } // namespace unravel

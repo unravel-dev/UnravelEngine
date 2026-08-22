@@ -1828,6 +1828,24 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
 
             mode = light_comp_ref.get_mode();
             found_sun = true;
+
+            // Sky and cloud settings live on the skylight; only the sun direction needs the
+            // directional light. Defaults in run_params are never what the user sees.
+            params_perez.turbidity = light_comp_ref.get_turbidity();
+            params_perez.sky_brightness = light_comp_ref.get_sky_brightness();
+            params_perez.cloud_mode = static_cast<int>(light_comp_ref.get_cloud_mode());
+            params_perez.cloud_coverage = light_comp_ref.get_cloud_coverage();
+            params_perez.cloud_macro_variation = light_comp_ref.get_cloud_macro_variation();
+            params_perez.cloud_base_altitude = light_comp_ref.get_cloud_base_altitude();
+            params_perez.cloud_thickness = light_comp_ref.get_cloud_thickness();
+            params_perez.cloud_size = light_comp_ref.get_cloud_size();
+            params_perez.cloud_softness = light_comp_ref.get_cloud_softness();
+            params_perez.cloud_detail_erode = light_comp_ref.get_cloud_detail_erode();
+            params_perez.cloud_density = light_comp_ref.get_cloud_density();
+            params_perez.cloud_shadow_strength = light_comp_ref.get_cloud_shadow_strength();
+            params_perez.cloud_wind_offset = light_comp_ref.get_cloud_wind_offset();
+            params_perez.cloud_time = light_comp_ref.get_cloud_time();
+
             if(auto light_comp = entity.template try_get<light_component>())
             {
                 const auto& light = light_comp->get_light();
@@ -1835,28 +1853,8 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
                 if(light.type == light_type::directional)
                 {
                     const auto& world_transform = transform_comp_ref.get_transform_global();
-                    
                     params_perez.light_direction = world_transform.z_unit_axis();
-                    params_perez.turbidity = light_comp_ref.get_turbidity();
-                    params_perez.cloud_mode = static_cast<int>(light_comp_ref.get_cloud_mode());
-                    params_perez.cloud_coverage = light_comp_ref.get_cloud_coverage();
-                    params_perez.cloud_base_altitude = light_comp_ref.get_cloud_base_altitude();
-                    params_perez.cloud_top_altitude = light_comp_ref.get_cloud_top_altitude();
-                    params_perez.cloud_density = light_comp_ref.get_cloud_density();
-                    params_perez.cloud_absorption = light_comp_ref.get_cloud_absorption();
-                    params_perez.cloud_light_absorption = light_comp_ref.get_cloud_light_absorption();
-                    params_perez.cloud_time = light_comp_ref.get_cloud_time();
-                    params_perez.sky_brightness = light_comp_ref.get_sky_brightness();
-                    params_perez.cloud_vol_uv_scale = light_comp_ref.get_cloud_vol_uv_scale();
-                    params_perez.cloud_vol_edge_width = light_comp_ref.get_cloud_vol_edge_width();
-                    params_perez.cloud_vol_shape_power = light_comp_ref.get_cloud_vol_shape_power();
-                    params_perez.cloud_vol_detail_erode = light_comp_ref.get_cloud_vol_detail_erode();
-                    params_perez.cloud_vol_macro_strength = light_comp_ref.get_cloud_vol_macro_strength();
-                    params_perez.cloud_vol_coarse_scale = light_comp_ref.get_cloud_vol_coarse_scale();
-                    params_perez.cloud_vol_base_mix = light_comp_ref.get_cloud_vol_base_mix();
-                    params_perez.cloud_vol_sun_intensity = light_comp_ref.get_cloud_vol_sun_intensity();
                 }
-                params_perez.irradiance_intensity = light_comp_ref.get_irradiance_intensity();
             }
             params_skybox.sky_brightness = light_comp_ref.get_sky_brightness();
         });

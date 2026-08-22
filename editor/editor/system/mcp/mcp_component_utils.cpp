@@ -762,6 +762,42 @@ auto skylight_to_json(const skylight_component& comp, const std::unordered_set<s
     {
         append_prop(json, first, "cloud_speed", fmt::format("{:.6g}", comp.get_cloud_speed()));
     }
+    if(wants_key(filter, "cloud_macro_variation"))
+    {
+        append_prop(json, first, "cloud_macro_variation", fmt::format("{:.6g}", comp.get_cloud_macro_variation()));
+    }
+    if(wants_key(filter, "cloud_base_altitude"))
+    {
+        append_prop(json, first, "cloud_base_altitude", fmt::format("{:.6g}", comp.get_cloud_base_altitude()));
+    }
+    if(wants_key(filter, "cloud_thickness"))
+    {
+        append_prop(json, first, "cloud_thickness", fmt::format("{:.6g}", comp.get_cloud_thickness()));
+    }
+    if(wants_key(filter, "cloud_size"))
+    {
+        append_prop(json, first, "cloud_size", fmt::format("{:.6g}", comp.get_cloud_size()));
+    }
+    if(wants_key(filter, "cloud_density"))
+    {
+        append_prop(json, first, "cloud_density", fmt::format("{:.6g}", comp.get_cloud_density()));
+    }
+    if(wants_key(filter, "cloud_shadow_strength"))
+    {
+        append_prop(json, first, "cloud_shadow_strength", fmt::format("{:.6g}", comp.get_cloud_shadow_strength()));
+    }
+    if(wants_key(filter, "cloud_softness"))
+    {
+        append_prop(json, first, "cloud_softness", fmt::format("{:.6g}", comp.get_cloud_softness()));
+    }
+    if(wants_key(filter, "cloud_detail_erode"))
+    {
+        append_prop(json, first, "cloud_detail_erode", fmt::format("{:.6g}", comp.get_cloud_detail_erode()));
+    }
+    if(wants_key(filter, "cloud_wind_direction"))
+    {
+        append_prop(json, first, "cloud_wind_direction", fmt::format("{:.6g}", comp.get_cloud_wind_direction()));
+    }
     if(wants_key(filter, "irradiance_intensity"))
     {
         append_prop(json, first, "irradiance_intensity", fmt::format("{:.6g}", comp.get_irradiance_intensity()));
@@ -868,6 +904,114 @@ auto apply_skylight_properties(rtti::context& ctx,
                 continue;
             }
             comp.set_cloud_speed(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_macro_variation")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_macro_variation(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_base_altitude")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_base_altitude(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_thickness")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_thickness(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_size")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_size(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_density")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_density(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_shadow_strength")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_shadow_strength(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_softness")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_softness(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_detail_erode")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_detail_erode(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_wind_direction")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_wind_direction(v);
             result.applied.push_back(key);
         }
         else if(key == "irradiance_intensity")
@@ -1688,6 +1832,15 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Skylight", "cloud_mode", "string", R"("enum":["none","flat","volumetric"])");
     add("Skylight", "cloud_coverage", "number");
     add("Skylight", "cloud_speed", "number");
+    add("Skylight", "cloud_macro_variation", "number");
+    add("Skylight", "cloud_base_altitude", "number");
+    add("Skylight", "cloud_thickness", "number");
+    add("Skylight", "cloud_size", "number");
+    add("Skylight", "cloud_density", "number");
+    add("Skylight", "cloud_shadow_strength", "number");
+    add("Skylight", "cloud_softness", "number");
+    add("Skylight", "cloud_detail_erode", "number");
+    add("Skylight", "cloud_wind_direction", "number");
     add("Skylight", "irradiance_intensity", "number");
     add("Skylight", "irradiance_tint", "array", R"("items":"number","minItems":3,"maxItems":4)");
     add("Skylight", "irradiance_quality", "string", R"("enum":["flat","directional"])");

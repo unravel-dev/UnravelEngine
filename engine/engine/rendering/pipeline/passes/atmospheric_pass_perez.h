@@ -47,8 +47,10 @@
 
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/perez_luminance.h>
 
 #include <graphics/index_buffer.h>
+#include <graphics/texture.h>
 #include <graphics/vertex_buffer.h>
 #include <graphics/vertex_decl.h>
 #include <graphics/render_view.h>
@@ -150,37 +152,33 @@ public:
         // [1.9 - 10.0f]
         float turbidity = 1.9f;
 
-        /// Cloud mode: 0=none, 1=flat, 2=volumetric.
+        /// Cloud mode: 0=none, 1=flat, 2=volumetric. Defaults mirror skylight_component; the
+        /// pipeline always copies the component values (see deferred::run_atmospherics_pass).
         int cloud_mode = 2;
-        /// Cloud coverage [0.0 = clear sky, 1.0 = overcast]. Controls the density threshold.
-        float cloud_coverage = 0.52f;
-        /// Cloud base altitude in world units. Vol: slab bottom. Flat: projection height.
+        /// Cloud coverage [0 = clear sky, 1 = overcast].
+        float cloud_coverage = 0.4f;
+        /// Weather-scale coverage variation [0, 1.5].
+        float cloud_macro_variation = 1.5f;
+        /// Layer base, height above the camera (the sky is rendered camera-relative).
         float cloud_base_altitude = 27500.0f;
-        /// Cloud top altitude in world units. Vol: slab top. Flat: ignored.
-        float cloud_top_altitude = 35000.0f;
-        /// Accumulated elapsed time (seconds) for cloud animation.
-        float cloud_time = 0.0f;
-        /// Cloud density/opacity multiplier.
+        /// Layer thickness, base to top.
+        float cloud_thickness = 40000.0f;
+        /// Typical size of a cloud mass in world units (world-to-noise scale).
+        float cloud_size = 20000.0f;
+        /// Edge ramp width.
+        float cloud_softness = 0.8f;
+        /// Detail erosion strength.
+        float cloud_detail_erode = 0.7f;
+        /// Extinction scale.
         float cloud_density = 1.5f;
-        /// Beer-Lambert extinction coefficient [0.01-0.5].
-        float cloud_absorption = 0.08f;
-        /// Light absorption / self-shadow strength [0.01-0.5].
-        float cloud_light_absorption = 0.10f;
+        /// Sun-path extinction as a fraction of the view extinction.
+        float cloud_shadow_strength = 0.25f;
+        /// Wind offset of the noise field in noise units (wrapped to the tile period).
+        math::vec2 cloud_wind_offset{0.0f, 0.0f};
+        /// Accumulated time (seconds), periodic; drives the star twinkle.
+        float cloud_time = 0.0f;
         /// Sky brightness multiplier (1.0 = neutral). Affects visible sky and irradiance.
         float sky_brightness = 1.0f;
-        /// Irradiance intensity. Scales cloud ambient (sky-scattered light into clouds).
-        float irradiance_intensity = 0.15f;
-
-        /// Volumetric cloud u_cloudParams3: uv scale, edge width, shape power, detail erode.
-        float cloud_vol_uv_scale = 0.00008f;
-        float cloud_vol_edge_width = 0.20f;
-        float cloud_vol_shape_power = 1.12f;
-        float cloud_vol_detail_erode = 0.48f;
-        /// Volumetric cloud u_cloudParams4: macro strength, coarse scale, base mix, sun intensity.
-        float cloud_vol_macro_strength = 0.36f;
-        float cloud_vol_coarse_scale = 0.38f;
-        float cloud_vol_base_mix = 0.45f;
-        float cloud_vol_sun_intensity = 24.0f;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -200,6 +198,8 @@ private:
             cache_uniform(program.get(), u_perezCoeff, "u_perezCoeff", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_cloudParams, "u_cloudParams", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudParams3, "u_cloudParams3", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_cloudTex, "s_cloudTex", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", gfx::uniform_type::Sampler);
         }
@@ -213,6 +213,8 @@ private:
         gfx::program::uniform_ptr u_perezCoeff;
         gfx::program::uniform_ptr u_cloudParams;
         gfx::program::uniform_ptr u_cloudParams2;
+        gfx::program::uniform_ptr u_cloudParams3;
+        gfx::program::uniform_ptr u_cloudParams4;
         gfx::program::uniform_ptr s_cloudTex;
         gfx::program::uniform_ptr s_cloudNoise2D;
 
@@ -235,7 +237,9 @@ private:
             cache_uniform(program.get(), u_cloudParams3, "u_cloudParams3", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_cloudNoise, "s_cloudNoise", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_cloudHistory, "s_cloudHistory", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_cloudHistoryConf, "s_cloudHistoryConf", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_cloudFrame, "u_cloudFrame", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_prevViewProj, "u_prevViewProj", gfx::uniform_type::Mat4);
         }
@@ -253,12 +257,35 @@ private:
         gfx::program::uniform_ptr u_cloudFrame;
         gfx::program::uniform_ptr u_prevViewProj;
         gfx::program::uniform_ptr s_cloudNoise;
+        gfx::program::uniform_ptr s_cloudNoise2D;
         gfx::program::uniform_ptr s_cloudHistory;
+        gfx::program::uniform_ptr s_cloudHistoryConf;
 
         std::unique_ptr<gpu_program> program;
 
     } cloud_program_;
 
+    /// Uniform payload shared by the sky pass and the cloud pre-pass.
+    struct cloud_uniform_block
+    {
+        float exposition[4];
+        float cloud_params[4];
+        float cloud_params2[4];
+        float cloud_params3[4];
+        float cloud_params4[4];
+    };
+
+    /// Volumetric pre-pass: half-res march + temporal accumulation into the ping-pong
+    /// history owned by the render view. Returns the texture the sky pass should composite.
+    auto run_cloud_prepass(const camera& camera,
+                           gfx::render_view& rview,
+                           const usize32_t& output_size,
+                           const irradiance_perez_params& perez,
+                           const cloud_uniform_block& uniforms,
+                           const run_params& params) -> gfx::texture::ptr;
+
+    /// Drops the per-view cloud history when the volumetric path is not in use.
+    static void release_cloud_resources(gfx::render_view& rview);
 
     std::unique_ptr<gfx::vertex_buffer> vb_;
     std::unique_ptr<gfx::index_buffer> ib_;

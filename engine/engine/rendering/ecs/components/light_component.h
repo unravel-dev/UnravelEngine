@@ -3,6 +3,8 @@
 #include <engine/ecs/components/basic_component.h>
 #include <engine/rendering/light.h>
 #include <engine/rendering/shadow.h>
+#include <engine/rendering/cloud_noise.h>
+#include <cmath>
 
 namespace unravel
 {
@@ -169,124 +171,67 @@ public:
     void set_cloud_coverage(float coverage);
 
     /**
-     * @brief Gets the cloud base altitude in world units.
-     * @return The current cloud base altitude. Volumetric: slab bottom. Flat: projection height.
+     * @brief Gets the cloud layer base, height above the camera (the sky is rendered
+     * camera-relative). Volumetric: slab bottom. Flat: projection height.
      */
     auto get_cloud_base_altitude() const noexcept -> float;
-
-    /**
-     * @brief Sets the cloud base altitude.
-     * @param[in] altitude The cloud base altitude to set, in world units.
-     */
     void set_cloud_base_altitude(float altitude);
 
     /**
-     * @brief Gets the cloud top altitude in world units (volumetric slab top).
-     * @return The current cloud top altitude. Flat clouds ignore this.
+     * @brief Gets the cloud layer thickness in world units (base to top).
      */
-    auto get_cloud_top_altitude() const noexcept -> float;
+    auto get_cloud_thickness() const noexcept -> float;
+    void set_cloud_thickness(float thickness);
 
     /**
-     * @brief Sets the cloud top altitude. Must be greater than base altitude.
-     * @param[in] altitude The cloud top altitude to set, in world units.
+     * @brief Gets the typical size of a cloud mass in world units (the noise unit).
      */
-    void set_cloud_top_altitude(float altitude);
+    auto get_cloud_size() const noexcept -> float;
+    void set_cloud_size(float size);
 
     /**
-     * @brief Gets the cloud speed multiplier.
-     * @return The current cloud speed multiplier.
+     * @brief Gets the edge softness: width of the density ramp; lower = crisper silhouettes.
+     */
+    auto get_cloud_softness() const noexcept -> float;
+    void set_cloud_softness(float softness);
+
+    /**
+     * @brief Gets the detail erosion strength (small-scale holes and wisps at the edges).
+     */
+    auto get_cloud_detail_erode() const noexcept -> float;
+    void set_cloud_detail_erode(float erode);
+
+    /**
+     * @brief Gets the weather-scale coverage variation: 0 = uniform sheet, 1 = strong clear
+     * and dense patches.
+     */
+    auto get_cloud_macro_variation() const noexcept -> float;
+    void set_cloud_macro_variation(float variation);
+
+    /**
+     * @brief Gets the wind speed in km/h.
      */
     auto get_cloud_speed() const noexcept -> float;
-
-    /**
-     * @brief Sets the cloud speed multiplier.
-     * @param[in] speed The cloud speed multiplier to set.
-     */
     void set_cloud_speed(float speed);
 
     /**
-     * @brief Gets the cloud density multiplier.
-     * @return The current cloud density multiplier.
+     * @brief Gets the wind direction in degrees (0 = +X, 90 = +Z); clouds drift toward it.
      */
-    auto get_cloud_density() const noexcept -> float;
+    auto get_cloud_wind_direction() const noexcept -> float;
+    void set_cloud_wind_direction(float degrees);
 
     /**
-     * @brief Sets the cloud density multiplier.
-     * @param[in] density The cloud density multiplier to set.
+     * @brief Gets the cloud density: extinction scale, higher = more opaque.
      */
+    auto get_cloud_density() const noexcept -> float;
     void set_cloud_density(float density);
 
     /**
-     * @brief Gets the cloud absorption coefficient (Beer-Lambert extinction).
-     * @return The current absorption value. Higher = more opaque clouds.
+     * @brief Gets the shadow strength: fraction of the view extinction applied along the sun
+     * path; lower lets light reach deeper into the cloud (approximates multiple scattering).
      */
-    auto get_cloud_absorption() const noexcept -> float;
-
-    /**
-     * @brief Sets the cloud absorption coefficient.
-     * @param[in] absorption The absorption to set, in the range [0.01, 0.5].
-     */
-    void set_cloud_absorption(float absorption);
-
-    /**
-     * @brief Gets the cloud light absorption (self-shadow strength).
-     * @return The current light absorption value. Higher = darker shadowed sides.
-     */
-    auto get_cloud_light_absorption() const noexcept -> float;
-
-    /**
-     * @brief Sets the cloud light absorption (self-shadow strength).
-     * @param[in] absorption The light absorption to set, in the range [0.01, 0.5].
-     */
-    void set_cloud_light_absorption(float absorption);
-
-    /**
-     * @brief Volumetric cloud shape: world-to-noise UV scale (smaller = larger features).
-     */
-    auto get_cloud_vol_uv_scale() const noexcept -> float;
-    void set_cloud_vol_uv_scale(float scale);
-
-    /**
-     * @brief Volumetric cloud shape: smoothstep edge width for the density mask.
-     */
-    auto get_cloud_vol_edge_width() const noexcept -> float;
-    void set_cloud_vol_edge_width(float width);
-
-    /**
-     * @brief Volumetric cloud shape: contrast on the density mask (pow exponent).
-     */
-    auto get_cloud_vol_shape_power() const noexcept -> float;
-    void set_cloud_vol_shape_power(float power);
-
-    /**
-     * @brief Volumetric cloud shape: Worley detail erosion strength.
-     */
-    auto get_cloud_vol_detail_erode() const noexcept -> float;
-    void set_cloud_vol_detail_erode(float erode);
-
-    /**
-     * @brief Volumetric cloud shape: macro Worley threshold jitter (clearings vs sheet).
-     */
-    auto get_cloud_vol_macro_strength() const noexcept -> float;
-    void set_cloud_vol_macro_strength(float strength);
-
-    /**
-     * @brief Volumetric cloud shape: coarse noise sample scale (larger masses).
-     */
-    auto get_cloud_vol_coarse_scale() const noexcept -> float;
-    void set_cloud_vol_coarse_scale(float scale);
-
-    /**
-     * @brief Volumetric cloud shape: blend between coarse and fine base noise.
-     */
-    auto get_cloud_vol_base_mix() const noexcept -> float;
-    void set_cloud_vol_base_mix(float mix);
-
-    /**
-     * @brief Volumetric cloud lighting: sun contribution multiplier in the cloud integrator.
-     */
-    auto get_cloud_vol_sun_intensity() const noexcept -> float;
-    void set_cloud_vol_sun_intensity(float intensity);
+    auto get_cloud_shadow_strength() const noexcept -> float;
+    void set_cloud_shadow_strength(float strength);
 
     /**
      * @brief Gets the irradiance intensity (strength of indirect diffuse).
@@ -358,22 +303,41 @@ public:
         cubemap_ = cubemap;
     }
 
+    /// Period of cloud_time: the shaders only use it for periodic effects (star twinkle),
+    /// so it wraps at a multiple of their period instead of growing without bound.
+    static constexpr float cloud_time_period = 3600.0f;
+
     /**
-     * @brief Gets the accumulated time for cloud animation.
-     * @return The accumulated time for cloud animation.
+     * @brief Gets the accumulated time (seconds, wrapped at cloud_time_period).
      */
     auto get_cloud_time() const noexcept -> float
     {
         return cloud_time_;
     }
 
+    /**
+     * @brief Gets the wind offset of the noise field in noise units (world / cloud_size),
+     * wrapped to the noise tile period.
+     */
+    auto get_cloud_wind_offset() const noexcept -> const math::vec2&
+    {
+        return cloud_wind_offset_;
+    }
+
     void update(delta_t dt)
     {
-        // cloud_speed_ is in km/h. Convert to the noise-UV time scale used by
-        // the shader (cloud_time * 0.5 UV/s). Calibrated so that 10-20 km/h =
-        // gentle natural drift, ~100 km/h = strong visible wind.
-        constexpr float kmh_to_time_scale = 1.0f / 500.0f;
-        cloud_time_ += dt.count() * cloud_speed_ * kmh_to_time_scale;
+        // 1 km/h = 0.278 m/s. The default base altitude (27500 units above the camera) stands
+        // for a ~1.5 km cloud base, so a metre is ~18 units and 1 km/h ~ 5 units/s at that
+        // scale. The offset lives in noise units and wraps to the tile period, so it never
+        // loses precision; the pass unwraps the per-frame delta it uses for reprojection.
+        constexpr float world_units_per_kmh = 5.0f;
+        constexpr float period = float(cloud_noise_textures::tile_period);
+        const float radians = math::radians(cloud_wind_direction_);
+        const math::vec2 dir(std::cos(radians), std::sin(radians));
+        const float rate = cloud_speed_ * world_units_per_kmh / math::max(cloud_size_, 1.0f);
+        cloud_wind_offset_ -= dir * (rate * dt.count());
+        cloud_wind_offset_ = math::mod(cloud_wind_offset_, period);
+        cloud_time_ = std::fmod(cloud_time_ + dt.count(), cloud_time_period);
     }
 
 private:
@@ -391,38 +355,34 @@ private:
     cloud_mode cloud_mode_{cloud_mode::volumetric};
 
     /// Cloud coverage [0.0 = clear sky, 1.0 = overcast]. Controls the density threshold.
-    float cloud_coverage_{0.52f};
+    float cloud_coverage_{0.4f};
 
-    /// Cloud base altitude in world units. Vol: slab bottom. Flat: projection height.
+    /// Cloud base altitude, height above the camera. Vol: slab bottom. Flat: projection height.
     float cloud_base_altitude_{27500.0f};
-
-    /// Cloud top altitude in world units. Vol: slab top. Flat: ignored.
-    float cloud_top_altitude_{45000.0f};
-
-    /// Cloud wind speed in km/h [0–200]. ~10 = gentle drift, ~50 = strong wind, ~100+ = storm.
-    float cloud_speed_{0.0f};
-
-    /// Cloud density/opacity multiplier.
+    /// Cloud layer thickness (base to top) in world units.
+    float cloud_thickness_{40000.0f};
+    /// Typical size of a cloud mass in world units (the noise unit).
+    float cloud_size_{20000.0f};
+    /// Density ramp width; lower = crisper edges.
+    float cloud_softness_{0.8f};
+    /// Detail erosion strength.
+    float cloud_detail_erode_{0.7f};
+    /// Weather-scale coverage variation.
+    float cloud_macro_variation_{1.5f};
+    /// Wind speed in km/h [0-200].
+    float cloud_speed_{15.0f};
+    /// Wind direction in degrees (0 = +X, 90 = +Z); clouds drift toward it.
+    float cloud_wind_direction_{35.0f};
+    /// Extinction scale.
     float cloud_density_{1.5f};
+    /// Sun-path extinction as a fraction of the view extinction.
+    float cloud_shadow_strength_{0.25f};
 
-    /// Beer-Lambert extinction coefficient [0.01-0.5]. Higher = more opaque.
-    float cloud_absorption_{0.08f};
-
-    /// Light absorption / self-shadow strength [0.01-0.5]. Higher = darker shadows.
-    float cloud_light_absorption_{0.10f};
-
-    /// Volumetric clouds: u_cloudParams3 (shape) and u_cloudParams4 (macro + sun).
-    float cloud_vol_uv_scale_{0.00008f};
-    float cloud_vol_edge_width_{0.20f};
-    float cloud_vol_shape_power_{1.12f};
-    float cloud_vol_detail_erode_{0.48f};
-    float cloud_vol_macro_strength_{0.36f};
-    float cloud_vol_coarse_scale_{0.38f};
-    float cloud_vol_base_mix_{0.45f};
-    float cloud_vol_sun_intensity_{24.0f};
-
-    /// Accumulated time for cloud animation.
+    /// Accumulated time in seconds, wrapped at cloud_time_period.
     float cloud_time_{0.0f};
+
+    /// Wind offset of the noise field in noise units, wrapped to the tile period.
+    math::vec2 cloud_wind_offset_{0.0f, 0.0f};
 
     /**
      * @brief Strength of indirect diffuse lighting.
