@@ -53,6 +53,7 @@
 #include <imgui_widgets/imcoolbar.h>
 #include <logging/logging.h>
 #include <subprocess/subprocess.hpp>
+#include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 
 namespace unravel
 {
@@ -243,6 +244,23 @@ void process_drag_drop_target(const fs::path& absolute_path)
                                 // in the inspector's Apply All. And not removed-and-re-added
                                 // either: the on_destroy hook strips prefab ids from the whole
                                 // subtree.
+                                // A nested instance saved as its own prefab is no longer its
+                                // container's slot: the container's document would put the old
+                                // instance back there on its next replay. The slot is stated
+                                // removed on the container, and the new instance is the user's.
+                                if(const auto* old_prefab = dropped.try_get<prefab_component>();
+                                   old_prefab != nullptr && !old_prefab->instance_id.is_nil())
+                                {
+                                    const auto* trans = dropped.try_get<transform_component>();
+                                    auto container = trans != nullptr
+                                                         ? prefab_override_context::find_prefab_root_entity(trans->get_parent())
+                                                         : entt::handle{};
+                                    if(auto* container_prefab = container ? container.try_get<prefab_component>() : nullptr)
+                                    {
+                                        container_prefab->remove_instance(old_prefab->instance_id);
+                                        container_prefab->changed = true;
+                                    }
+                                }
                                 auto& prefab_comp = dropped.get_or_emplace<prefab_component>();
                                 prefab_comp.clear_overrides();
                                 prefab_comp.instance_id = {};

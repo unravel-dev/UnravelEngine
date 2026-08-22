@@ -39,6 +39,7 @@
 
 #include <base/platform/config.hpp>
 #include <string_utils/utils.h>
+#include <memory>
 
 namespace unravel
 {
@@ -1126,8 +1127,13 @@ auto count_roots(entt::registry& registry) -> size_t
     return count;
 }
 
-auto bake_one_asset(rtti::context& ctx, scene& scratch, const hpp::uuid& uid, const fs::path& staging_root)
-    -> bool
+/// `in_place` rewrites the asset's own source file in the current format instead of a baked
+/// copy in the staging mirror: no "nesting resolved" marker, the source's own output format.
+auto bake_one_asset(rtti::context& ctx,
+                    scene& scratch,
+                    const hpp::uuid& uid,
+                    const fs::path& staging_root,
+                    bool in_place = false) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
 
@@ -1153,18 +1159,26 @@ auto bake_one_asset(rtti::context& ctx, scene& scratch, const hpp::uuid& uid, co
     // and either way it is a state the cache is not supposed to have. The deploy's data jobs
     // overlay the staged files onto the destination after the cache copy, so the cooked
     // variants exist only where they are consumed.
-    const auto compiled_path = asset_reader::resolve_compiled_path(id);
-    const auto protocol = fs::extract_protocol(fs::path(id)).generic_string();
-    const auto compiled_root = fs::resolve_protocol(ex::get_compiled_directory(protocol));
-
-    fs::error_code rel_ec;
-    const auto relative = fs::relative(compiled_path, compiled_root, rel_ec);
-    if(rel_ec || relative.empty())
+    fs::path path;
+    if(in_place)
     {
-        APPLOG_ERROR("Bake: {} compiles outside its protocol's compiled directory; skipped.", id);
-        return false;
+        path = source_path;
     }
-    const auto path = staging_root / protocol / relative;
+    else
+    {
+        const auto compiled_path = asset_reader::resolve_compiled_path(id);
+        const auto protocol = fs::extract_protocol(fs::path(id)).generic_string();
+        const auto compiled_root = fs::resolve_protocol(ex::get_compiled_directory(protocol));
+
+        fs::error_code rel_ec;
+        const auto relative = fs::relative(compiled_path, compiled_root, rel_ec);
+        if(rel_ec || relative.empty())
+        {
+            APPLOG_ERROR("Bake: {} compiles outside its protocol's compiled directory; skipped.", id);
+            return false;
+        }
+        path = staging_root / protocol / relative;
+    }
 
     const bool is_scene = ex::is_format<scene_prefab>(extension);
     const bool is_prefab = ex::is_format<prefab>(extension);
@@ -1223,10 +1237,16 @@ auto bake_one_asset(rtti::context& ctx, scene& scratch, const hpp::uuid& uid, co
     // format, which round-trips to a different root count.
     std::stringstream buffer;
     {
-        serialization::scoped_output_format compact(serialization::output_format::compact);
+        // A baked copy is compact and carries the marker; a source file keeps its own format
+        // and makes no claim about nesting.
+        std::unique_ptr<serialization::scoped_output_format> compact;
+        if(!in_place)
+        {
+            compact = std::make_unique<serialization::scoped_output_format>(serialization::output_format::compact);
+        }
 
         bool pushed = push_save_context();
-        get_save_context().nesting_resolved = true;
+        get_save_context().nesting_resolved = !in_place;
 
         if(is_prefab)
         {
@@ -2247,6 +2267,55 @@ void editor_actions::recompile_textures(const std::string& group)
                 fs::watcher::touch(path, false);
             }
         });
+}
+
+auto editor_actions::migrate_prefabs(rtti::context& ctx, size_t* total_count) -> size_t
+{
+    if(total_count != nullptr)
+    {
+        *total_count = 0;
+    }
+    auto& play = ctx.get_cached<play_mode>();
+    if(play.is_active())
+    {
+        APPLOG_ERROR("Migrate: refusing to run during play mode.");
+        return 0;
+    }
+    auto& em = ctx.get_cached<editing_manager>();
+    if(em.is_prefab_mode())
+    {
+        APPLOG_ERROR("Migrate: leave prefab mode first.");
+        return 0;
+    }
+    const auto report = validate_prefab_graph(ctx);
+    if(!report.is_valid())
+    {
+        APPLOG_ERROR("Migrate: aborted, the prefab graph contains a cycle. Nothing was written.");
+        return 0;
+    }
+
+    // Nested prefabs before the prefabs that contain them, scenes last - the same order the
+    // bake uses, and for the same reason: a container re-saved after the assets it nests finds
+    // their slots named by them, and names only its own additions.
+    auto& am = ctx.get_cached<asset_manager>();
+    const auto order = asset_deps::compute_build_order(asset_deps::collect_prefab_asset_uids(am),
+                                                       asset_deps::make_prefab_dependency_resolver(am));
+    scene scratch("prefab_migrate");
+    size_t written = 0;
+    for(const auto& uid : order.ordered)
+    {
+        if(bake_one_asset(ctx, scratch, uid, {}, true))
+        {
+            ++written;
+        }
+    }
+    scratch.unload();
+    if(total_count != nullptr)
+    {
+        *total_count = order.ordered.size();
+    }
+    APPLOG_INFO("Migrate: re-saved {} of {} prefab(s) and scene(s).", written, order.ordered.size());
+    return written;
 }
 
 auto editor_actions::migrate_texture_color_spaces(const std::string& group) -> size_t

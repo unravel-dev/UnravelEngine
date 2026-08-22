@@ -18,8 +18,9 @@ struct property_action_t : crtp_meta_type<property_action_t, editing_action_t>
     entt::meta_any new_value;
     entt::meta_custom custom;
     std::function<void()> on_success;
-    
-    property_action_t(meta_any_proxy inst, const entt::meta_any& old_val, const entt::meta_any& new_val, const entt::meta_custom& custom = {}, const std::function<void()>& on_success = {});
+    /// Run after the value is put back on undo; on_success runs on do and redo.
+    std::function<void()> on_undo;
+    property_action_t(meta_any_proxy inst, const entt::meta_any& old_val, const entt::meta_any& new_val, const entt::meta_custom& custom = {}, const std::function<void()>& on_success = {}, const std::function<void()>& on_undo = {});
 
     void do_action() override;
     void undo_action() override;

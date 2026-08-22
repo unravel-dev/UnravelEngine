@@ -7,6 +7,7 @@
 #include <engine/ecs/components/transform_component.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspector.h>
 #include <math/math.h>
+#include <editor/editing/prefab_removal_record.h>
 
 namespace unravel
 {
@@ -97,6 +98,8 @@ struct transform_set_parent_action_t : crtp_meta_type<transform_set_parent_actio
     entt::uhandle entity{};
     entt::uhandle old_parent{};
     entt::uhandle new_parent{};
+    /// What the move meant for the prefabs involved, so undo can put it back.
+    prefab_reparent_record prefab_record{};
 
     transform_set_parent_action_t(entt::handle ent, entt::handle old_p, entt::handle new_p);
     transform_set_parent_action_t(entt::uhandle ent, entt::uhandle old_p, entt::uhandle new_p);

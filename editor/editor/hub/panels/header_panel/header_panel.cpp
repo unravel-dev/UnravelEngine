@@ -28,6 +28,7 @@
 #include <editor/imgui/integration/imgui_notify.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
+#include <engine/engine.h>
 
 
 namespace unravel
@@ -216,7 +217,40 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
                 "When enabled, reflection probes are automatically refreshed whenever the scene is\n"
                 "modified (moving objects, editing materials, etc). Disable for large scenes where the\n"
                 "background bakes become noticeable; use the Build menu to rebuild manually instead.");
-
+            ImGui::Separator();
+            if(ImGui::MenuItem("Migrate Prefabs"))
+            {
+                ImBox::ShowConfirmation(
+                    "Migrate Prefabs?",
+                    "Re-saves every prefab and scene in the project in the current format - nested\n"
+                    "prefabs first, then the prefabs that contain them, then scenes. Files already in\n"
+                    "the current format are rewritten unchanged.",
+                    [](ImBox::ModalResult answer)
+                    {
+                        if(!ImBox::IsConfirmation(answer))
+                        {
+                            return;
+                        }
+                        auto& ctx = engine::context();
+                        size_t total = 0;
+                        const auto written = editor_actions::migrate_prefabs(ctx, &total);
+                        ImGui::PushNotification(ImGuiToast(written == total ? ImGuiToastType_Success : ImGuiToastType_Warning,
+                                                           4000,
+                                                           "Migrated %zu of %zu prefab(s) and scene(s).",
+                                                           written,
+                                                           total));
+                    });
+            }
+            ImGui::SetItemTooltip(
+                "Re-save every prefab and scene in the project in the current format.\n"
+                "Nested prefabs are written before the prefabs that contain them, scenes last.");
+            if(ImGui::MenuItem("Migrate Color Spaces (Project)"))
+            {
+                editor_actions::migrate_texture_color_spaces("app:/");
+            }
+            ImGui::SetItemTooltip(
+                "One-time: tag the textures referenced by material slots with their authored color\n"
+                "space (base color / emissive = sRGB, data maps = linear) and recompile the changed ones.");
             ImGui::EndMenu();
         }
 
@@ -323,13 +357,6 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
                         if(ImGui::MenuItem("Textures (Project)"))
                         {
                             editor_actions::recompile_textures("app:/");
-                        }
-
-                        ImGui::Separator();
-
-                        if(ImGui::MenuItem("Migrate Color Spaces (Project)"))
-                        {
-                            editor_actions::migrate_texture_color_spaces("app:/");
                         }
 
                         ImGui::EndMenu();

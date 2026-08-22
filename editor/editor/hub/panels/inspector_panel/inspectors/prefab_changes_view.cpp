@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/assets/impl/asset_writer.h>
 
 namespace unravel
 {
@@ -288,7 +289,10 @@ void collect_groups(entt::handle entity, size_t group_index, std::vector<instanc
 /// Entities under an instance root whose id names a document other than the instance's own
 /// asset: introduced by whatever contains it. Stops at nested instances, which are groups of
 /// their own, and does not descend into an addition - the whole subtree is the addition.
-void collect_outer_additions(entt::handle entity, const hpp::uuid& own_document, instance_changes& group)
+void collect_outer_additions(entt::handle entity,
+                             const hpp::uuid& own_document,
+                             const std::set<hpp::uuid>& authoring_documents,
+                             instance_changes& group)
 {
     const auto* trans_comp = entity.try_get<transform_component>();
     if(trans_comp == nullptr)
@@ -307,13 +311,52 @@ void collect_outer_additions(entt::handle entity, const hpp::uuid& own_document,
         {
             if(!id_comp->document.is_nil() && id_comp->document != own_document)
             {
-                group.additions.push_back({child, false, true});
+                // Added by the document being edited here - the authoring root above - it is
+                // the author's own addition, not something inherited.
+                const bool inherited = authoring_documents.count(id_comp->document) == 0u;
+                group.additions.push_back({child, false, inherited});
                 continue;
             }
         }
 
-        collect_outer_additions(child, own_document, group);
+        collect_outer_additions(child, own_document, authoring_documents, group);
     }
+}
+
+/// The asset uids of the authoring roots at or above `root` - the documents being edited here.
+auto authoring_documents_above(entt::handle root) -> std::set<hpp::uuid>
+{
+    std::set<hpp::uuid> documents;
+    auto current = root;
+    while(current)
+    {
+        if(is_authoring_root(current))
+        {
+            if(const auto* prefab_comp = current.try_get<prefab_component>())
+            {
+                documents.insert(prefab_comp->source.uid());
+            }
+        }
+        const auto* trans_comp = current.try_get<transform_component>();
+        current = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
+    }
+    return documents;
+}
+
+/// The nearest authoring root at or above `root`, if any.
+auto authoring_root_above(entt::handle root) -> entt::handle
+{
+    auto current = root;
+    while(current)
+    {
+        if(is_authoring_root(current))
+        {
+            return current;
+        }
+        const auto* trans_comp = current.try_get<transform_component>();
+        current = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
+    }
+    return {};
 }
 
 /**
@@ -339,6 +382,7 @@ auto collect_changes(entt::handle root) -> std::vector<instance_changes>
     // Entities a *containing* document introduced under an instance - their ids name that
     // document rather than the instance's own asset. Part of the containing prefab's
     // definition, so shown as inherited additions rather than local ones.
+    const auto authoring_documents = authoring_documents_above(root);
     for(auto& group : groups)
     {
         const auto* prefab_comp = group.root.try_get<prefab_component>();
@@ -346,7 +390,7 @@ auto collect_changes(entt::handle root) -> std::vector<instance_changes>
         {
             continue;
         }
-        collect_outer_additions(group.root, prefab_comp->source.uid(), group);
+        collect_outer_additions(group.root, prefab_comp->source.uid(), authoring_documents, group);
     }
 
     return groups;
@@ -777,6 +821,11 @@ auto draw_prefab_changes(rtti::context& ctx, entt::handle root) -> inspect_resul
     size_t total_added = 0;
     for(const auto& group : groups)
     {
+        // An authoring root's own group is not drawn; its counts stay out of the header too.
+        if(group.is_self && !root_is_instance)
+        {
+            continue;
+        }
         total_local += group.local_count;
         total_inherited += group.inherited_count;
         total_added += group.added_count;
@@ -933,6 +982,24 @@ auto draw_prefab_changes(rtti::context& ctx, entt::handle root) -> inspect_resul
         auto& em = ctx.get_cached<editing_manager>();
         em.push_undo_stack_enabled(true);
         em.queue_action("Delete Entities", std::make_shared<delete_entities_action_t>(ops.delete_added));
+        // An authoring root that is not prefab mode's - the content browser's prefab inspector -
+        // writes its file on every edit. The delete is deferred, so its save is queued behind it.
+        if(auto authoring = authoring_root_above(root);
+           authoring && !(em.is_prefab_mode() && authoring == em.prefab_entity))
+        {
+            if(const auto* authoring_prefab = authoring.try_get<prefab_component>();
+               authoring_prefab != nullptr && authoring_prefab->source)
+            {
+                em.queue_action("Save Prefab",
+                                [handle = entt::make_uhandle(authoring), key = authoring_prefab->source.id()]()
+                                {
+                                    if(auto entity = handle.resolve())
+                                    {
+                                        asset_writer::atomic_save_to_file(key, entity);
+                                    }
+                                });
+            }
+        }
         em.pop_undo_stack_enabled();
     }
 

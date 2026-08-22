@@ -393,43 +393,6 @@ auto minify_json(const std::string& text) -> std::string;
  * asset, so an asset built here has to be minified too or every prefab measurement is
  * taken against a document the runtime never sees.
  */
-/**
- * @brief Builds a prefab the way one written before instance ids existed would look.
- *
- * The ids are blanked in the serialized text rather than withheld at save time, because a
- * prefab save is exactly what allocates them. Same length, so the document stays valid.
- */
-auto make_prefab_from_without_allocating_ids(entt::const_handle root, const std::string& id)
-    -> asset_handle<prefab>
-{
-    const auto bytes = serialize_as_prefab(root, id);
-    std::string text(bytes.begin(), bytes.end());
-
-    // Scanned rather than regex-replaced: "$1" followed by a digit reads as group 10, which
-    // silently produced malformed JSON and a test that passed by never loading anything.
-    static constexpr size_t uuid_length = 36;
-    const std::string nil_uuid(uuid_length, '0');
-    const auto blank_ids = [&text, &nil_uuid](const std::string& key)
-    {
-        size_t pos = 0;
-        while((pos = text.find(key, pos)) != std::string::npos)
-        {
-            const auto quote = text.find('"', pos + key.size());
-            if(quote == std::string::npos || quote + 1 + uuid_length > text.size())
-            {
-                return;
-            }
-
-            text.replace(quote + 1, uuid_length, nil_uuid);
-            pos = quote + 1 + uuid_length;
-        }
-    };
-    blank_ids("\"instance_uid\"");
-    blank_ids("\"instance_id\"");
-
-    const auto compiled = minify_json(text);
-    return make_prefab_asset(std::vector<uint8_t>(compiled.begin(), compiled.end()), id);
-}
 
 auto make_prefab_from(entt::const_handle root, const std::string& id) -> asset_handle<prefab>
 {
@@ -2334,6 +2297,142 @@ auto nearly(float actual, float expected) -> bool
     return std::abs(actual - expected) < 1e-4f;
 }
 
+void test_edits_to_content_the_outer_document_added_inside_a_nested_instance_propagate()
+{
+    begin_test("content the outer document added inside a nested instance follows the outer document's edits, unless stated here");
+
+    nested_fixture fix;
+    fix.build();
+    auto added = fix.outer_authoring.create_entity("outer_added", fix.first);
+    fix.republish_and_sync();
+
+    auto live = fix.live_nested();
+    check(live.size() == 2 && static_cast<bool>(find_child_by_name(live[0], "outer_added")), "the addition reached the world instance");
+    if(live.size() != 2)
+    {
+        return;
+    }
+
+    // The outer author edits the addition - content, no statement - and re-saves.
+    added.get<tag_component>().name = "outer_added_v2";
+    fix.republish_and_sync();
+    live = fix.live_nested();
+    check(live.size() == 2 && static_cast<bool>(find_child_by_name(live[0], "outer_added_v2")),
+          "the edit reaches the existing instance through the nested scope");
+
+    // The scene states the name on the nested instance; the next outer edit respects it.
+    auto live_added = live.size() == 2 ? find_child_by_name(live[0], "outer_added_v2") : entt::handle{};
+    check(static_cast<bool>(live_added), "the addition is there to override");
+    if(!live_added)
+    {
+        return;
+    }
+    live_added.get<tag_component>().name = "renamed_here";
+    live[0].get<prefab_component>().add_override(prefab_uid_of(live_added), "tag_component/name");
+    added.get<tag_component>().name = "outer_added_v3";
+    fix.republish_and_sync();
+    live = fix.live_nested();
+    check(live.size() == 2 && static_cast<bool>(find_child_by_name(live[0], "renamed_here")),
+          "what the scene states about it is kept");
+    check(live.size() == 2 && !find_child_by_name(live[0], "outer_added_v3"), "and the outer edit does not land over it");
+
+    // And the nested asset's own sync still leaves the addition alone.
+    sync_prefab_instance_with(live[0], fix.inner_pfb);
+    check(static_cast<bool>(find_child_by_name(live[0], "renamed_here")), "the inner asset's sync leaves it alone");
+}
+
+void test_an_addition_applied_into_the_nested_asset_keeps_its_new_name()
+{
+    begin_test("an addition applied into the nested asset is the nested asset's from then on, whatever a stale outer snapshot says");
+
+    nested_fixture fix;
+    fix.build();
+    fix.outer_authoring.create_entity("outer_added", fix.first);
+    fix.republish_and_sync();
+
+    auto live = fix.live_nested();
+    auto live_added = live.size() == 2 ? find_child_by_name(live[0], "outer_added") : entt::handle{};
+    check(static_cast<bool>(live_added), "the addition reached the world instance");
+    if(!live_added)
+    {
+        return;
+    }
+    check(document_of(live_added) == fix.outer_pfb.uid(), "it is the outer document's");
+
+    // Apply the nested instance into its own prefab: the addition becomes the inner asset's.
+    fix.inner_pfb = make_prefab_from(live[0], "test:/inner.pfb");
+    check(document_of(live_added) == fix.inner_pfb.uid(), "applied, it is the inner document's");
+
+    // The outer document's snapshot still names it as the outer's. A replay must not flip it.
+    sync_prefab_instance_with(fix.outer_instance, fix.outer_pfb);
+    live = fix.live_nested();
+    live_added = live.size() == 2 ? find_child_by_name(live[0], "outer_added") : entt::handle{};
+    check(static_cast<bool>(live_added), "still there, once");
+    if(live_added)
+    {
+        check(document_of(live_added) == fix.inner_pfb.uid(), "and still the inner document's after the outer replay");
+    }
+    size_t count = 0;
+    if(live.size() == 2)
+    {
+        for(auto child : live[0].get<transform_component>().get_children())
+        {
+            if(child.get<tag_component>().name == "outer_added")
+            {
+                ++count;
+            }
+        }
+    }
+    check_eq(count, 1, "exactly one of it - not duplicated by either replay");
+}
+
+void test_cloning_a_plain_branch_holding_a_nested_instance_drops_the_branch_ids()
+{
+    begin_test("a copy of a plain branch holding a nested instance is the container's addition, its ids dropped above the nested root");
+
+    scene inner_authoring("inner_authoring");
+    auto inner_source = build_sample_tree(inner_authoring);
+    auto inner_pfb = make_prefab_from(inner_source, "test:/inner.pfb");
+
+    scene outer_authoring("outer_authoring");
+    auto outer_root = outer_authoring.create_entity("outer_root");
+    auto holder = outer_authoring.create_entity("holder", outer_root);
+    outer_authoring.instantiate(inner_pfb, holder, false);
+    auto outer_pfb = make_prefab_from(outer_root, "test:/outer.pfb");
+
+    scene world("world");
+    auto outer_instance = world.instantiate(outer_pfb, false);
+    auto live_holder = find_child_by_name(outer_instance, "holder");
+    check(static_cast<bool>(live_holder), "the instance has the holder");
+    if(!live_holder)
+    {
+        return;
+    }
+
+    auto copy = world.clone_entity(live_holder, true);
+    check(static_cast<bool>(copy), "the holder clones");
+    if(!copy)
+    {
+        return;
+    }
+    check(!copy.all_of<prefab_id_component>(), "the copied holder carries no prefab id - it is an addition to the container");
+    auto copy_nested = nested_instances_of(copy);
+    check_eq(copy_nested.size(), 1, "with its nested instance");
+    if(copy_nested.size() == 1)
+    {
+        check(copy_nested[0].all_of<prefab_id_component>(), "whose content keeps the nested asset's ids");
+        check(copy_nested[0].get<prefab_component>().instance_id.is_nil(), "and whose slot is nobody's");
+    }
+
+    // The container's replay updates the original and leaves the copy alone.
+    holder.get<tag_component>().name = "holder_v2";
+    outer_pfb = make_prefab_from(outer_root, "test:/outer.pfb");
+    sync_prefab_instance_with(outer_instance, outer_pfb);
+    check(static_cast<bool>(find_child_by_name(outer_instance, "holder_v2")), "the original follows the document");
+    check(copy.get<tag_component>().name == "holder", "the copy does not");
+    check(static_cast<bool>(copy), "and survives the replay");
+}
+
 void test_a_local_override_on_one_field_does_not_shield_its_siblings()
 {
     begin_test("a local override on one field keeps that field and lets the document change the others of the same property");
@@ -2721,73 +2820,40 @@ void test_applying_a_scene_instance_folds_its_statements_into_the_document()
           "as a document statement, with nothing local on the nested root");
 }
 
-void test_legacy_override_records_convert_on_load()
+void test_released_format_overrides_load_as_local()
 {
-    begin_test("overrides stored on nested roots by files and scenes from before convert to their authors' lists");
+    begin_test("the released format's flat override set on an instance root loads as the scene's local list");
 
-    // A prefab document written before statements lived with their author: the nested root's
-    // record carried the containing document's override in property_overrides, and the
-    // snapshot carried the authored value.
-    nested_fixture fix;
-    fix.build();
-    auto authored_child = find_child_by_name(fix.first, "child_a");
-    check(static_cast<bool>(authored_child), "the authoring scene has child_a");
-    if(!authored_child)
-    {
-        return;
-    }
-    const auto child_uid = prefab_uid_of(authored_child);
-    authored_child.get<tag_component>().name = "legacy_authored";
-    fix.outer_pfb = make_prefab_from(fix.outer_root, "test:/outer.pfb");
-
-    {
-        const auto& bytes = fix.outer_pfb.get()->buffer.data;
-        std::string text(bytes.begin(), bytes.end());
-        const auto pos = text.find(k_empty_statement_lists);
-        check(pos != std::string::npos, "the first nested root's record carries empty statement lists to replace");
-        if(pos == std::string::npos)
-        {
-            return;
-        }
-        text.replace(pos,
-                     k_empty_statement_lists.size(),
-                     R"("property_overrides":[)" + legacy_override_entry(child_uid, "tag_component/name") + "]");
-        fix.outer_pfb = make_prefab_asset(std::vector<uint8_t>(text.begin(), text.end()), "test:/outer.pfb");
-    }
+    // A scene with one top-level instance, saved, then rewritten the way the released format
+    // stored overrides: a flat property_overrides set on the instance root, no statement lists.
+    scene inner_authoring("inner_authoring");
+    auto inner_source = build_sample_tree(inner_authoring);
+    auto inner_pfb = make_prefab_from(inner_source, "test:/inner.pfb");
 
     scene world("world");
-    auto legacy_instance = world.instantiate(fix.outer_pfb, false);
-    auto nested = nested_instances_of(legacy_instance);
-    check_eq(nested.size(), 2, "two nested instances");
-    if(nested.size() != 2)
+    auto instance = world.instantiate(inner_pfb, false);
+    auto child = find_child_by_name(instance, "child_a");
+    check(static_cast<bool>(child), "the instance has child_a");
+    if(!child)
     {
         return;
     }
-    check(static_cast<bool>(find_child_by_name(nested[0], "legacy_authored")),
-          "the authored value holds through the nested document's replay");
-    check(static_cast<bool>(find_child_by_name(nested[1], "child_a")), "and the other instance is untouched");
-    check_eq(inherited_overrides_of(nested[0]).size(), 1, "the override reads as the outer document's statement");
-    check(nested[0].get<prefab_component>().local.empty(), "not as something stated here");
-    check_eq(legacy_instance.get<prefab_component>().from_document.overrides.size(), 1,
-             "it was converted onto the outer root");
+    const auto child_uid = prefab_uid_of(child);
+    child.get<tag_component>().name = "released_override";
 
-    // A scene written before: the nested root's record merged the scene's and the document's
-    // halves in property_overrides, with the document's half keyed in stated_overrides.
     std::stringstream scene_stream;
     save_to_stream(scene_stream, world);
     std::string scene_text = minify_json(scene_stream.str());
-    const auto entry = legacy_override_entry(child_uid, "tag_component/name");
-    const std::string scene_empty_lists = k_empty_statement_lists;
-    const auto scene_pos = scene_text.find(scene_empty_lists);
-    check(scene_pos != std::string::npos, "the scene's first nested root record carries empty statement lists");
-    if(scene_pos == std::string::npos)
+    const auto pos = scene_text.find(k_empty_statement_lists);
+    check(pos != std::string::npos, "the instance root record carries empty statement lists to replace");
+    if(pos == std::string::npos)
     {
         return;
     }
-    scene_text.replace(scene_pos,
-                       scene_empty_lists.size(),
-                       R"("property_overrides":[)" + entry + R"(],"stated_overrides":[{"key":")" +
-                           hpp::to_string(fix.outer_pfb.uid()) + R"(","value":[)" + entry + "]}]");
+    scene_text.replace(pos,
+                       k_empty_statement_lists.size(),
+                       R"("property_overrides":[)" + legacy_override_entry(child_uid, "tag_component/name") +
+                           R"(],"removed_entities":[])");
 
     scene loaded("loaded");
     std::stringstream in(scene_text);
@@ -2803,19 +2869,11 @@ void test_legacy_override_records_convert_on_load()
     {
         return;
     }
-    auto loaded_nested = nested_instances_of(roots[0]);
-    check_eq(loaded_nested.size(), 2, "with both nested instances");
-    if(loaded_nested.size() != 2)
-    {
-        return;
-    }
-    check_eq(inherited_overrides_of(loaded_nested[0]).size(), 1,
-             "the document's half was handed to the document's instance above, seen as inherited from here");
-    check(loaded_nested[0].get<prefab_component>().local.empty(), "and nothing of it stayed local");
+    check_eq(local_overrides_of(roots[0]).size(), 1, "the override reads as the scene's own");
+    check(inherited_overrides_of(roots[0]).empty(), "and not as anyone's statement");
     sync_all_prefab_instances(*loaded.registry);
-    loaded_nested = nested_instances_of(roots[0]);
-    check(loaded_nested.size() == 2 && static_cast<bool>(find_child_by_name(loaded_nested[0], "legacy_authored")),
-          "and the value holds through the replays that follow");
+    check(static_cast<bool>(find_child_by_name(roots[0], "released_override")),
+          "and the value holds through the replay that follows");
 }
 
 void test_issued_ids_name_their_document()
@@ -2938,21 +2996,16 @@ void test_a_nested_instance_the_container_added_is_removed_when_the_container_dr
           "dropped by the outer file, it is gone from the world instance");
 }
 
-void test_legacy_unnamed_ids_are_attributed_to_their_containers()
+void test_released_format_ids_are_attributed_to_their_instances()
 {
-    begin_test("ids from files written before they named their document are attributed on load");
+    begin_test("prefab ids from files in the released format, which named no document, are attributed on load");
 
-    // Both files written without document names, the outer one with an old-style foreign list
-    // for an entity the outer author added under a nested instance.
+    // Both files written without document names - the released format for prefab ids.
     nested_fixture fix;
     fix.build();
-    auto added = fix.outer_authoring.create_entity("outer_added", fix.first);
 
     const auto outer_bytes = serialize_as_prefab(fix.outer_root, "test:/outer.pfb");
     std::string outer_text(outer_bytes.begin(), outer_bytes.end());
-    const auto added_uid = added.get<prefab_id_component>().id;
-    const std::string foreign_list = "\"foreign_entities\": [\"" + hpp::to_string(added_uid) + "\"], \"instance_id\":";
-    outer_text = std::regex_replace(outer_text, std::regex(R"("instance_id"\s*:)"), foreign_list);
     outer_text = strip_document_names(outer_text);
     const auto compiled = minify_json(outer_text);
 
@@ -2966,8 +3019,9 @@ void test_legacy_unnamed_ids_are_attributed_to_their_containers()
     }
     fix.outer_pfb = make_prefab_asset(std::vector<uint8_t>(compiled.begin(), compiled.end()), "test:/outer.pfb");
 
-    auto legacy_instance = fix.world.instantiate(fix.outer_pfb, false);
-    check(static_cast<bool>(legacy_instance), "the legacy document instantiates");
+    scene world("world");
+    auto legacy_instance = world.instantiate(fix.outer_pfb, false);
+    check(static_cast<bool>(legacy_instance), "the document instantiates");
     if(!legacy_instance)
     {
         return;
@@ -2981,23 +3035,14 @@ void test_legacy_unnamed_ids_are_attributed_to_their_containers()
     }
     for(auto& instance : nested)
     {
-        check(slot_document_of(instance) == fix.outer_pfb.uid(), "a nested slot is attributed to the outer document");
         auto child = find_child_by_name(instance, "child_a");
         check(static_cast<bool>(child) && document_of(child) == fix.inner_pfb.uid(),
               "the nested asset's content is attributed to the inner document");
     }
-    auto live_added = find_child_by_name(nested[0], "outer_added");
-    check(static_cast<bool>(live_added), "the listed addition is there");
-    if(live_added)
-    {
-        check(document_of(live_added) == fix.outer_pfb.uid(),
-              "and is attributed to the outer document, as the old list said");
-    }
 
-    // And once attributed, the nested asset's sync tells its content from the addition.
+    // And once attributed, the nested asset's sync treats its content as its own.
     sync_prefab_instance_with(nested[0], fix.inner_pfb);
-    check(static_cast<bool>(find_child_by_name(nested[0], "outer_added")),
-          "the inner asset's sync leaves the attributed addition alone");
+    check(static_cast<bool>(find_child_by_name(nested[0], "child_a")), "the inner asset's sync keeps its content");
 }
 
 void test_clone_slots_follow_the_documents_inside_the_clone()
@@ -3083,8 +3128,6 @@ void test_an_instance_added_inside_a_nested_instance_survives_that_instances_syn
     {
         return;
     }
-    check(added.get<prefab_component>().placed_by == instance_placement::other,
-          "a hand-placed instance is not its container's");
 
     fix.outer_pfb = make_prefab_from(fix.outer_root, "test:/outer.pfb");
     check(!added.get<prefab_component>().instance_id.is_nil(), "and the saving document named it");
@@ -3121,69 +3164,6 @@ void test_an_instance_added_inside_a_nested_instance_survives_that_instances_syn
     check(live.size() == 2 && count_added_under(live[0]) == 1, "and is not duplicated by the next sync");
 }
 
-void test_a_slot_of_a_deeper_document_is_named_by_that_document_only()
-{
-    begin_test("saving the outer prefab does not name slots that belong to a nested prefab's file");
-
-    // Z inside M inside O, where M's file predates instance ids. Saving O used to name Z's slot
-    // from O; when M was later re-saved it named the same slot differently, and the two never
-    // reconciled - Z was recreated and destroyed on every sync, and O's overrides on it were
-    // orphaned. A slot is named by the document that placed it, and Z was placed by M.
-    scene z_authoring("z_authoring");
-    auto z_source = build_sample_tree(z_authoring);
-    z_source.get<tag_component>().name = "z_root";
-    auto z_pfb = make_prefab_from(z_source, "test:/z.pfb");
-
-    scene m_authoring("m_authoring");
-    auto m_root = m_authoring.create_entity("m_root");
-    m_authoring.instantiate(z_pfb, m_root, false);
-    auto m_pfb_old = make_prefab_from_without_allocating_ids(m_root, "test:/m.pfb");
-
-    scene o_authoring("o_authoring");
-    auto o_root = o_authoring.create_entity("o_root");
-    auto m_inst = o_authoring.instantiate(m_pfb_old, o_root, false);
-    auto z_in_o = nested_instances_of(m_inst);
-    check_eq(z_in_o.size(), 1, "the middle instance carries the inner one");
-    if(z_in_o.size() != 1)
-    {
-        return;
-    }
-    check(instance_uid_of(z_in_o[0]).is_nil(), "the inner slot is unnamed - the middle file predates ids");
-    check(z_in_o[0].get<prefab_component>().placed_by == instance_placement::container,
-          "but it is known to be the middle instance's own");
-
-    auto o_pfb = make_prefab_from(o_root, "test:/o.pfb");
-    check(instance_uid_of(z_in_o[0]).is_nil(),
-          "saving the outer prefab leaves it unnamed - it is not the outer file's slot to name");
-    check(!instance_uid_of(m_inst).is_nil(), "while the middle instance, directly in the outer file, is named");
-
-    scene world("world");
-    auto o_inst = world.instantiate(o_pfb, false);
-    auto live_m = nested_instances_of(o_inst);
-    check(live_m.size() == 1 && nested_instances_of(live_m[0]).size() == 1,
-          "a world instance has exactly one inner instance");
-
-    // The middle prefab is re-saved by a build that names slots.
-    auto m_pfb_new = make_prefab_from(m_root, "test:/m.pfb");
-    auto z_in_m = nested_instances_of(m_root);
-    check(z_in_m.size() == 1 && !instance_uid_of(z_in_m[0]).is_nil(), "the middle file now names its slot");
-    if(z_in_m.size() != 1)
-    {
-        return;
-    }
-
-    sync_prefab_instance_with(o_inst, o_pfb);
-    sync_prefab_instance_with(o_inst, o_pfb);
-
-    live_m = nested_instances_of(o_inst);
-    auto live_z = live_m.size() == 1 ? nested_instances_of(live_m[0]) : std::vector<entt::handle>{};
-    check_eq(live_z.size(), 1, "and the world instance still has exactly one inner instance after two syncs");
-    if(live_z.size() == 1)
-    {
-        check(instance_uid_of(live_z[0]) == instance_uid_of(z_in_m[0]),
-              "which was adopted into the name the middle file gave it");
-    }
-}
 
 void test_an_authoring_root_owns_its_statements_at_every_depth()
 {
@@ -4106,86 +4086,7 @@ void test_adding_an_entity_under_a_nested_instance_propagates()
           "and not the other instance of the same prefab");
 }
 
-void test_an_unnamed_live_instance_is_adopted_not_duplicated()
-{
-    begin_test("a prefab that gains instance ids adopts the instances it already has");
 
-    // The transition. Instances created before the prefab had instance ids carry none; the
-    // prefab is then re-saved by a build that does. Both sides mean the same slot, and
-    // matching by id alone finds nothing and creates a second one - so the nesting doubles,
-    // and doubles again on every load after that.
-    nested_fixture fix;
-    fix.build();
-
-    auto live = fix.live_nested();
-    check_eq(live.size(), 2, "the live instance starts with two nested instances");
-    if(live.size() != 2)
-    {
-        return;
-    }
-
-    // Wind the live side back to before instance ids existed.
-    live[0].get<prefab_component>().instance_id = {};
-    live[1].get<prefab_component>().instance_id = {};
-
-    // Something recognisable on each, so adoption can be shown to pick a live instance rather
-    // than build a new one.
-    live[0].get<transform_component>().set_position_local({11.0f, 0.0f, 0.0f});
-    live[1].get<transform_component>().set_position_local({22.0f, 0.0f, 0.0f});
-    const auto first_entity = live[0].entity();
-    const auto second_entity = live[1].entity();
-
-    fix.republish_and_sync();
-
-    auto after = fix.live_nested();
-    check_eq(after.size(), 2, "the nested instances are matched, not duplicated");
-    if(after.size() != 2)
-    {
-        return;
-    }
-
-    check(after[0].entity() == first_entity && after[1].entity() == second_entity,
-          "and they are the same entities, adopted rather than rebuilt");
-    check(!instance_uid_of(after[0]).is_nil() && !instance_uid_of(after[1]).is_nil(),
-          "each has been given the id the prefab knows it by");
-    check(instance_uid_of(after[0]) != instance_uid_of(after[1]),
-          "and the two ids differ - one instance cannot answer for both");
-
-    // Adoption must survive: a second resync now matches by id and must not double either.
-    fix.republish_and_sync();
-    check_eq(fix.live_nested().size(), 2, "a second resync still does not duplicate them");
-}
-
-void test_a_named_live_instance_survives_an_unnamed_prefab()
-{
-    begin_test("instances keep working against a prefab that has no instance ids");
-
-    // The reverse mismatch, which doubles just as readily: the live side is named and the
-    // document is not, so its records miss the scopes entirely.
-    nested_fixture fix;
-    fix.build();
-
-    auto live = fix.live_nested();
-    if(live.size() != 2)
-    {
-        check(false, "the live instance starts with two nested instances");
-        return;
-    }
-    const auto first_entity = live[0].entity();
-
-    // Strip the ids from the *authoring* side and re-save, so the document is the old kind.
-    fix.first.get<prefab_component>().instance_id = {};
-    fix.second.get<prefab_component>().instance_id = {};
-    auto unnamed_pfb = make_prefab_from_without_allocating_ids(fix.outer_root, "test:/outer.pfb");
-    sync_prefab_instance_with(fix.outer_instance, unnamed_pfb);
-
-    auto after = fix.live_nested();
-    check_eq(after.size(), 2, "the nested instances are left alone, not duplicated");
-    if(after.size() == 2)
-    {
-        check(after[0].entity() == first_entity, "and are the same entities");
-    }
-}
 
 void test_a_locally_cloned_nested_instance_is_not_claimed_by_the_prefab()
 {
@@ -5596,20 +5497,22 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_duplicate_nested_instances_of_one_prefab();
         test_nested_instances_are_named_by_the_containing_prefab();
         test_deleting_one_of_two_nested_instances_removes_that_one();
-        test_a_local_override_on_one_field_does_not_shield_its_siblings();
+        test_edits_to_content_the_outer_document_added_inside_a_nested_instance_propagate();
+    test_an_addition_applied_into_the_nested_asset_keeps_its_new_name();
+    test_cloning_a_plain_branch_holding_a_nested_instance_drops_the_branch_ids();
+    test_a_local_override_on_one_field_does_not_shield_its_siblings();
     test_a_replay_applies_only_what_its_document_states_to_nested_content();
     test_document_statements_live_with_their_author();
     test_an_outer_statement_wins_over_an_inner_one();
     test_a_removal_two_levels_down_holds_through_every_replay();
     test_applying_a_scene_instance_folds_its_statements_into_the_document();
-    test_legacy_override_records_convert_on_load();
+    test_released_format_overrides_load_as_local();
     test_issued_ids_name_their_document();
     test_an_entity_the_container_adds_inside_a_nested_instance_is_the_containers();
     test_a_nested_instance_the_container_added_is_removed_when_the_container_drops_it();
-    test_legacy_unnamed_ids_are_attributed_to_their_containers();
+    test_released_format_ids_are_attributed_to_their_instances();
     test_clone_slots_follow_the_documents_inside_the_clone();
     test_an_instance_added_inside_a_nested_instance_survives_that_instances_sync();
-        test_a_slot_of_a_deeper_document_is_named_by_that_document_only();
         test_an_authoring_root_owns_its_statements_at_every_depth();
         test_a_clone_of_an_instance_keeps_its_nested_slots();
         test_a_cloned_branch_makes_its_nested_instances_additions();
@@ -5628,8 +5531,6 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_local_and_authored_removals_are_distinguishable();
         test_removing_an_entity_inside_a_nested_instance_propagates();
         test_adding_an_entity_under_a_nested_instance_propagates();
-        test_an_unnamed_live_instance_is_adopted_not_duplicated();
-        test_a_named_live_instance_survives_an_unnamed_prefab();
         test_a_locally_cloned_nested_instance_is_not_claimed_by_the_prefab();
         test_a_locally_deleted_nested_instance_stays_deleted();
         test_deleting_the_only_nested_instance_stays_deleted();

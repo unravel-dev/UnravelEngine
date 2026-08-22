@@ -484,6 +484,8 @@ struct editing_manager
     
     // Execute all pending actions (called automatically each frame)
     void execute_actions();
+    /// Executes one action now: runs it, notifies, and moves it to the undo stack if undoable.
+    void execute_action(std::shared_ptr<editing_action_t>& action);
     
     // Undo/Redo operations
     auto undo() -> std::shared_ptr<editing_action_t>;
@@ -498,6 +500,8 @@ struct editing_manager
     
     auto has_unsaved_changes() const -> bool { return has_unsaved_changes_; }
     void clear_unsaved_changes() { has_unsaved_changes_ = false; }
+    /// Whether anything was edited in prefab mode since it was entered or last saved.
+    auto has_unsaved_prefab_changes() const -> bool { return prefab_has_unsaved_changes_; }
 
     void clear(bool clear_unsaved = true);
 
@@ -701,6 +705,7 @@ struct editing_manager
 
     bool waiting_for_compilation_before_play_{};
     bool has_unsaved_changes_;
+    bool prefab_has_unsaved_changes_{};
     
 
     // Prompts the user to save changes and returns true if changes should be saved

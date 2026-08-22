@@ -114,7 +114,6 @@ REFLECT(prefab_component)
 SAVE(prefab_component)
 {
     try_save(ar, ser20::make_nvp("source", obj.source));
-    try_save(ar, ser20::make_nvp("placed_by", static_cast<uint8_t>(obj.placed_by)));
     try_save(ar, ser20::make_nvp("instance_id", obj.instance_id));
     try_save(ar, ser20::make_nvp("instance_document", obj.instance_document));
 
@@ -137,26 +136,10 @@ LOAD(prefab_component)
 {
     try_load(ar, ser20::make_nvp("source", obj.source));
 
-    uint8_t placed = 0;
-    if(try_load(ar, ser20::make_nvp("placed_by", placed)))
-    {
-        obj.placed_by = static_cast<instance_placement>(placed);
-    }
-
     auto* load_ctx = try_get_load_context();
-    const hpp::uuid document_uid = load_ctx != nullptr ? load_ctx->document_uid : hpp::uuid{};
 
     try_load(ar, ser20::make_nvp("instance_id", obj.instance_id));
-
-    // Absent only in a file from before slots named their document. A matched instance keeps
-    // the value it has; a fresh one is left nil and attributed by the legacy pass.
-    if(!try_load(ar, ser20::make_nvp("instance_document", obj.instance_document)) && !obj.instance_id.is_nil())
-    {
-        if(load_ctx != nullptr)
-        {
-            load_ctx->saw_unqualified_ids = true;
-        }
-    }
+    try_load(ar, ser20::make_nvp("instance_document", obj.instance_document));
 
     // The document's statements travel with the instance root: replaced by this record's
     // copy (a scene's, or a containing document's snapshot - which that document's own replay
@@ -178,64 +161,17 @@ LOAD(prefab_component)
 
     if(!has_statement_lists && load_ctx != nullptr)
     {
-        // A record from before statements lived with their author: overrides and removals of
-        // every author merged on the nested root, with memos saying which half was whose. Kept
-        // aside as it was and converted once the document has loaded, when the roots the
-        // halves belong to can be found (convert_legacy_override_state).
+        // The released format: a flat override set and removed entities on an instance root,
+        // all of it this scene's. Kept aside and converted once the document has loaded
+        // (convert_legacy_override_state).
         legacy_override_state legacy;
         bool any = try_load(ar, ser20::make_nvp("property_overrides", legacy.property_overrides));
-
-        std::map<hpp::uuid, std::set<prefab_property_override_data>> stated;
-        if(try_load(ar, ser20::make_nvp("stated_overrides", stated)))
-        {
-            any = true;
-            for(auto& [document, entries] : stated)
-            {
-                const bool is_self = document.is_nil();
-                if(is_self && document_uid.is_nil())
-                {
-                    continue;
-                }
-                legacy.stated_overrides[is_self ? document_uid : document] = std::move(entries);
-            }
-        }
-        else
-        {
-            std::set<prefab_property_override_data> legacy_inherited;
-            if(try_load(ar, ser20::make_nvp("inherited_overrides", legacy_inherited)) && !legacy_inherited.empty() &&
-               !document_uid.is_nil())
-            {
-                legacy.stated_overrides[document_uid] = std::move(legacy_inherited);
-                any = true;
-            }
-        }
-
         any |= try_load(ar, ser20::make_nvp("removed_entities", legacy.removed_entities));
-        any |= try_load(ar, ser20::make_nvp("removed_instances", legacy.removed_instances));
-        any |= try_load(ar, ser20::make_nvp("inherited_removed_entities", legacy.inherited_removed_entities));
-        any |= try_load(ar, ser20::make_nvp("inherited_removed_instances", legacy.inherited_removed_instances));
-
         if(any)
         {
             if(const auto owner = obj.get_owner())
             {
                 load_ctx->legacy_overrides[owner.entity()] = std::move(legacy);
-            }
-        }
-    }
-
-    // A file written before ids named their document listed, on each nested instance, the
-    // entities the containing document added under it. Kept aside for the legacy pass, which
-    // attributes them to that document once the whole document has loaded; nothing else reads
-    // it.
-    std::set<hpp::uuid> legacy_foreign;
-    if(try_load(ar, ser20::make_nvp("foreign_entities", legacy_foreign)) && !legacy_foreign.empty())
-    {
-        if(load_ctx != nullptr)
-        {
-            if(const auto owner = obj.get_owner())
-            {
-                load_ctx->legacy_foreign_entities[owner.entity()] = std::move(legacy_foreign);
             }
         }
     }
@@ -280,15 +216,23 @@ LOAD(prefab_id_component)
 {
     try_load(ar, ser20::make_nvp("id", obj.id));
 
-    // Absent only in a file from before ids named their document. A matched entity keeps the
-    // document it has - already right, from an earlier attribution or a newer scene; a fresh
-    // one is left nil and attributed by the legacy pass once the document has loaded.
-    if(!try_load(ar, ser20::make_nvp("document", obj.document)))
+    // The document is identity, issued once: a record sets it only for an entity that has
+    // none. A matched entity keeps its own - an outer document's snapshot can be stale about
+    // it (an addition later applied into the nested asset is the nested asset's now), and
+    // letting every replay restamp it would make the name flip with replay order. Absent only
+    // in a file from before ids named their document: a fresh entity is left nil and
+    // attributed by the legacy pass once the document has loaded.
+    hpp::uuid document;
+    if(!try_load(ar, ser20::make_nvp("document", document)))
     {
         if(auto* load_ctx = try_get_load_context())
         {
             load_ctx->saw_unqualified_ids = true;
         }
+    }
+    else if(obj.document.is_nil())
+    {
+        obj.document = document;
     }
 }
 

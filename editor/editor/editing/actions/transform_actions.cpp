@@ -319,33 +319,44 @@ transform_set_parent_action_t::transform_set_parent_action_t(entt::uhandle ent, 
     }
 }
 
-// Reparenting records no transform override, on purpose. Keeping the world transform rewrites
-// the *local* one - position, rotation, scale and skew all change - but that is the engine
-// recomputing, not the user overriding the prefab's placement. Position and rotation of an
-// instance root are implicit overrides already (sync preserves them unconditionally), and
-// scale and skew are meant to follow the prefab unless overridden explicitly. Marking all four
-// here made every reparented instance deaf to scale changes in its prefab, and baked the
-// block into any prefab the container was later saved as.
+// What a reparent means for the prefabs involved is recorded after the move, by
+// prefab_override_context::mark_entity_reparented: within one instance the parent, position and
+// rotation become local overrides (the prefab restates the old placement otherwise; scale and
+// skew still follow the prefab); out of the instance that supplied the subtree, the subtree
+// becomes this scene's content and removals are stated where it came from, so no replay
+// brings it back. Undo reverses both the move and the bookkeeping.
 void transform_set_parent_action_t::do_action()
 {
-    if(auto ent = entity.resolve())
+    auto ent = entity.resolve();
+    if(!ent)
     {
-        if(auto transform = ent.try_get<transform_component>())
-        {
-            transform->set_parent(new_parent.resolve(), true);
-        }
+        return;
     }
+    auto* transform = ent.try_get<transform_component>();
+    if(transform == nullptr)
+    {
+        return;
+    }
+    const auto from = old_parent.resolve();
+    const auto to = new_parent.resolve();
+    transform->set_parent(to, true);
+    prefab_record = prefab_override_context::mark_entity_reparented(ent, from, to);
 }
-
 void transform_set_parent_action_t::undo_action()
 {
-    if(auto ent = entity.resolve())
+    auto ent = entity.resolve();
+    if(!ent)
     {
-        if(auto transform = ent.try_get<transform_component>())
-        {
-            transform->set_parent(old_parent.resolve(), true);
-        }
+        return;
     }
+    auto* transform = ent.try_get<transform_component>();
+    if(transform == nullptr)
+    {
+        return;
+    }
+    transform->set_parent(old_parent.resolve(), true);
+    prefab_override_context::restore_entity_reparent(prefab_record);
+    prefab_record = {};
 }
 
 auto transform_set_parent_action_t::is_mergeable(const editing_action_t& previous) const -> bool

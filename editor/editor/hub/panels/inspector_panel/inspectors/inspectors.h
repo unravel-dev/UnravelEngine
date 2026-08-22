@@ -233,6 +233,21 @@ struct prefab_override_context
      * @param component_type Meta type of the component
      * @param property_path Path to the specific property that changed
      */
+    /**
+     * @brief Records what a reparent means for the prefabs involved. Call after the move.
+     *
+     * Within one instance: parent, position and rotation become local overrides on the nearest
+     * root (the prefab restates the old placement otherwise). Out of the instance that supplied
+     * the subtree: the subtree is this scene's content now - prefab ids and slots dropped - and
+     * removals are stated on the instances that supplied it, so their replays do not bring it
+     * back. Into an instance from outside, or between plain entities: nothing.
+     */
+    static auto mark_entity_reparented(entt::handle entity, entt::handle old_parent, entt::handle new_parent)
+        -> prefab_reparent_record;
+
+    /// Undoes mark_entity_reparented. Call after the parent is restored.
+    static void restore_entity_reparent(const prefab_reparent_record& record);
+
     static void mark_property_as_changed(entt::handle entity,
                                          const entt::meta_type& component_type,
                                          const std::string& property_path,

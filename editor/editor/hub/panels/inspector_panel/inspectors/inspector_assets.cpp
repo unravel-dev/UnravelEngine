@@ -939,8 +939,11 @@ auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
     }
 
     auto prefab_entity = get_prefab_entity(ctx, data);
-
     auto& am = ctx.get_cached<asset_manager>();
+    auto& em = ctx.get_cached<editing_manager>();
+    // Two authoring roots of one file would be last-writer-wins; while prefab mode has it,
+    // this one only shows it.
+    const bool open_in_prefab_mode = em.is_prefab_mode() && em.edited_prefab.uid() == data.uid();
     inspect_result result{};
 
     if(ImGui::BeginTabBar("asset_handle_prefab",
@@ -950,7 +953,11 @@ auto inspector_asset_handle_prefab::inspect(rtti::context& ctx,
         {
             ImGui::BeginChild(ex::get_type(data.extension()).c_str());
 
-            if(data)
+            if(data && open_in_prefab_mode)
+            {
+                ImGui::TextWrapped("This prefab is open in prefab mode. Edit it there.");
+            }
+            else if(data)
             {
                 result |= ::unravel::inspect(ctx, prefab_entity);
                 if(result.edit_finished)

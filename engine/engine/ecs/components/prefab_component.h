@@ -143,24 +143,6 @@ struct prefab_statements
     auto prefixed(const std::vector<hpp::uuid>& prefix) const -> prefab_statements;
 };
 
-/**
- * @brief Who placed a nested prefab instance where it stands - for instances that have no
- *        slot yet.
- *
- * A named slot says whose it is (instance_document). An *unnamed* instance does not, and two
- * kinds are unnamed: one placed by hand, cloned, or added by an outer document - which the
- * containing asset must never claim or name - and one the containing asset supplied from a
- * file written before slots existed - which that asset alone may name and claim. This tells
- * them apart until every asset has been re-saved with slots; nothing else reads it.
- *
- * `unknown` is what a file written before this existed says, and reads as "may be claimed".
- */
-enum class instance_placement : uint8_t
-{
-    unknown = 0,
-    container = 1,
-    other = 2,
-};
 
 /**
  * @struct prefab_component
@@ -170,9 +152,6 @@ enum class instance_placement : uint8_t
 struct prefab_component : public component_crtp<prefab_component, owned_component>
 {
     static constexpr bool in_place_delete = false;
-
-    /// Who placed this instance, while it has no slot. See instance_placement.
-    instance_placement placed_by{instance_placement::unknown};
 
     /**
      * @brief Handle to the prefab asset.
@@ -192,9 +171,8 @@ struct prefab_component : public component_crtp<prefab_component, owned_componen
      * the file name a slot and be understood by all of them. Regenerated on clone, because a
      * copy is a different slot.
      *
-     * Nil means this instance was added where it stands rather than coming from a file - or
-     * that the file predates instance ids. Both read the same way, and it is the safe
-     * reading: a document only removes instances it can name.
+     * Nil means this instance was added where it stands rather than coming from a file: a
+     * document only removes instances it can name, and never names one it did not place.
      */
     hpp::uuid instance_id;
 
@@ -298,8 +276,9 @@ struct prefab_component : public component_crtp<prefab_component, owned_componen
  */
  struct prefab_id_component : public id_component_base<prefab_id_component>
  {
-    /// The asset uid of the document that introduced this entity. Nil for an id issued before
-    /// documents were named; attributed on load (qualify_legacy_prefab_ids).
+    /// The asset uid of the document that introduced this entity. Nil in a file from before
+    /// documents were named (the released format); attributed on load
+    /// (qualify_legacy_prefab_ids) to the instance the entity sits in.
     hpp::uuid document;
  };
 

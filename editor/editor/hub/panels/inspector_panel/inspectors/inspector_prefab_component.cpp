@@ -16,6 +16,8 @@
 
 // must be below all
 #include <engine/assets/impl/asset_writer.h>
+#include <editor/imgui/integration/imgui_messagebox.h>
+#include <engine/engine.h>
 
 namespace unravel
 {
@@ -88,6 +90,49 @@ auto resolve_inspected_entity(const meta_any_proxy& var_proxy, prefab_component&
 
 } // namespace
 
+namespace
+{
+/**
+ * @brief Writes an instance into its prefab file and re-homes what it carried: what was stated
+ *        here about the nested content is the document's statement now, what was stated about
+ *        this instance's own content is its content. One override survives - a nested root's
+ *        own placement, which is the *containing* document's to state; dropping it would let
+ *        the container's next replay snap the instance back to where it was before the move.
+ */
+void apply_instance_to_prefab(entt::handle root)
+{
+    auto* prefab_comp = root ? root.try_get<prefab_component>() : nullptr;
+    if(prefab_comp == nullptr)
+    {
+        return;
+    }
+    prefab_comp->changed = false;
+    auto prefab_path = fs::resolve_protocol(prefab_comp->source.id());
+    asset_writer::atomic_save_to_file(prefab_path.string(), root);
+
+    prefab_statements kept;
+    if(is_nested_instance(root))
+    {
+        const auto* root_id = root.try_get<prefab_id_component>();
+        for(const auto& override_data : prefab_comp->local.overrides)
+        {
+            const bool is_root = root_id != nullptr && override_data.instance_path.empty() &&
+                                 override_data.entity_uuid == root_id->id;
+            const bool is_placement =
+                override_data.component_path.rfind("transform_component/local_transform/position", 0) == 0 ||
+                override_data.component_path.rfind("transform_component/local_transform/rotation", 0) == 0;
+            if(is_root && is_placement)
+            {
+                kept.overrides.insert(override_data);
+            }
+        }
+    }
+    prefab_comp->from_document = fold_document_statements(root);
+    prefab_comp->local = std::move(kept);
+    clear_local_statements_below(root);
+}
+} // namespace
+
 auto inspector_prefab_component::inspect(rtti::context& ctx,
                                         entt::meta_any& var,
                                         const meta_any_proxy& var_proxy,
@@ -116,37 +161,37 @@ auto inspector_prefab_component::inspect(rtti::context& ctx,
 
     if(ImGui::Button(ICON_MDI_CONTENT_SAVE " Apply All to Prefab", ImVec2(-1, ImGui::GetFrameHeight())))
     {
-        data.changed = false;
-        auto prefab_path = fs::resolve_protocol(data.source.id());
-        asset_writer::atomic_save_to_file(prefab_path.string(), root_prefab_entity);
-
-        // Everything from this instance down just went into the prefab: what was stated here
-        // about the nested content is the document's own statement now, and what was stated
-        // about this instance's own content is its content. One override survives - a nested
-        // root's own placement. That is the *containing* document's to state, not this
-        // asset's; the asset cannot absorb it, and dropping the override would let the
-        // container's next replay snap the instance back to where it was before the move.
-        prefab_statements kept;
         if(is_nested_instance(root_prefab_entity))
         {
-            const auto* root_id = root_prefab_entity.try_get<prefab_id_component>();
-            for(const auto& override_data : data.local.overrides)
-            {
-                const bool is_root = root_id != nullptr && override_data.instance_path.empty() &&
-                                     override_data.entity_uuid == root_id->id;
-                const bool is_placement =
-                    override_data.component_path.rfind("transform_component/local_transform/position", 0) == 0 ||
-                    override_data.component_path.rfind("transform_component/local_transform/rotation", 0) == 0;
-                if(is_root && is_placement)
+            // A nested instance: what goes into its file is everything stated about it here
+            // *and* by the containing prefab - the container's authoring becomes the nested
+            // asset's content, for every instance of it anywhere. Worth asking.
+            ImBox::ShowConfirmation(
+                "Apply to nested prefab?",
+                "This instance sits inside another prefab instance. Applying writes everything\n"
+                "stated about it - here and by the containing prefab - into its own prefab file,\n"
+                "for every instance of that prefab everywhere.",
+                [root = entt::make_uhandle(root_prefab_entity)](ImBox::ModalResult answer)
                 {
-                    kept.overrides.insert(override_data);
-                }
-            }
+                    if(!ImBox::IsConfirmation(answer))
+                    {
+                        return;
+                    }
+                    auto entity = root.resolve();
+                    if(!entity)
+                    {
+                        return;
+                    }
+                    auto& ctx = engine::context();
+                    apply_instance_to_prefab(entity);
+                    ctx.get_cached<editing_manager>().sync_after_override_change(ctx, entity);
+                });
         }
-        data.from_document = fold_document_statements(root_prefab_entity);
-        data.local = std::move(kept);
-        clear_local_statements_below(root_prefab_entity);
-        result.changed = true;
+        else
+        {
+            apply_instance_to_prefab(root_prefab_entity);
+            result.changed = true;
+        }
     }
     ImGui::SetItemTooltipEx("Save this instance - changes, additions and removals included -\n"
                             "into its prefab file. Every other instance of it will follow.");

@@ -13,6 +13,7 @@
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/engine.h>
+#include <editor/editing/authoring_root.h>
 
 
 namespace unravel
@@ -119,6 +120,11 @@ auto entity_panel::get_entity_icon(entt::handle entity) -> std::string
 auto entity_panel::get_entity_prefab_role(entt::handle entity) -> prefab_role
 {
     if(!entity)
+    {
+        return prefab_role::none;
+    }
+    // The root of the document being edited is the document, not an instance of it.
+    if(is_authoring_root(entity))
     {
         return prefab_role::none;
     }

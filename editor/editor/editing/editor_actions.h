@@ -190,6 +190,11 @@ struct editor_actions
     /// recompiles the changed ones. Metas with an explicit (non-automatic) color
     /// space are left untouched. Returns the number of textures tagged.
     static auto migrate_texture_color_spaces(const std::string& group = "") -> size_t;
+    /// Re-saves every prefab and scene in the project in the current format: nested prefabs
+    /// before the prefabs that contain them (a container must never name a nested asset's
+    /// slots), scenes last. Returns the number of files rewritten; `total_count` receives how
+    /// many were attempted.
+    static auto migrate_prefabs(rtti::context& ctx, size_t* total_count = nullptr) -> size_t;
     static void recompile_ui(const std::string& group = "");
     static void recompile_scripts(const std::string& group = "");
     static void recompile_meshes(const std::string& group = "");

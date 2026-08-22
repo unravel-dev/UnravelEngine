@@ -75,17 +75,13 @@ struct save_context
     hpp::uuid document_uid{};
 };
 
-/// What a prefab_component record from before statements lived with their author carried:
-/// every author's overrides and removals merged on the nested root, with memos saying which
-/// half was whose. Kept aside by the loader and converted once the document has loaded.
+/// What a prefab_component record in the released format carried: a flat override set and
+/// the removed entities of one instance, all of it the scene's. Kept aside by the loader and
+/// converted once the document has loaded (convert_legacy_override_state).
 struct legacy_override_state
 {
     std::set<prefab_property_override_data> property_overrides;
-    std::map<hpp::uuid, std::set<prefab_property_override_data>> stated_overrides;
     std::set<hpp::uuid> removed_entities;
-    std::set<hpp::uuid> removed_instances;
-    std::set<hpp::uuid> inherited_removed_entities;
-    std::set<hpp::uuid> inherited_removed_instances;
 };
 
 struct load_context
@@ -126,13 +122,9 @@ struct load_context
     /// nested instance is keyed by, and what a nested instance's placement is attributed to.
     hpp::uuid document_uid{};
 
-    /// Set by any record whose prefab id or slot did not name its document - a file written
-    /// before they did. The loader then runs qualify_legacy_prefab_ids over what it loaded.
+    /// Set by any record whose prefab id did not name its document - the released format.
+    /// The loader then runs qualify_legacy_prefab_ids over what it loaded.
     bool saw_unqualified_ids{};
-
-    /// What such a file said about entities a containing document added under a nested
-    /// instance, keyed by the instance root. Read by the legacy pass only.
-    std::map<entt::entity, std::set<hpp::uuid>> legacy_foreign_entities;
 
     /// The statements of the prefab document being loaded - what it states about the content
     /// it nests - read before its records, so the filter can ask "does this document state
@@ -140,16 +132,18 @@ struct load_context
     prefab_statements document_statements;
     bool has_document_statements{};
 
-    /// Override and removal state from records written before statements lived with their
-    /// author, keyed by the instance root that carried them. Converted once the document has
-    /// loaded (convert_legacy_override_state).
+    /// Override and removal state from records in the released format, keyed by the instance
+    /// root that carried them. Converted once the document has loaded
+    /// (convert_legacy_override_state).
     std::map<entt::entity, legacy_override_state> legacy_overrides;
 
-    /// About the record currently being resolved: how deep its instance_path was (0 = directly
-    /// in the document), and whether it matched an existing nested scope. Read after the
-    /// record's components load to decide who placed a nested instance it created or matched.
-    size_t record_instance_path_depth{};
-    bool record_matched_scope{};
+    /// Set while a record resolves into a nested scope and lands on an entity whose prefab id
+    /// names the document being loaded: content this document introduced inside a nested
+    /// instance. Its record is content, not a statement about the nested asset - applied
+    /// unless something stated here or above keeps it. Promoted to `current` for the record's
+    /// components, like the nested owner.
+    bool pending_record_is_own_content{};
+    bool current_record_is_own_content{};
 
     /**
      * @brief The nested instance whose contents are currently being read, if any.
@@ -176,35 +170,15 @@ struct load_context
     {
         entt::handle handle;
 
-        /// How many records addressed this prefab uid. A count rather than a flag because
-        /// two instances of the same prefab under one root share uids: knowing *how many*
-        /// the asset still mentions is what lets the extra ones be identified.
+        /// How many records addressed this prefab uid. Counted only for records, not links: a
+        /// parent's children list refers to every child it has, and counting those would make
+        /// the asset look like it still contains an entity it dropped.
         size_t consumed_count{};
 
         auto consumed() const -> bool
         {
             return consumed_count > 0;
         }
-
-        /// Belongs to a nested instance. Records addressed at it resolve to an empty handle
-        /// so the outer asset's snapshot cannot overwrite it, but the handle is still kept
-        /// so cleanup can remove it if the asset has dropped that instance entirely.
-        bool shadowed{};
-
-        /// How many live entities carry this uid. More than one whenever a nested instance
-        /// was duplicated - a copy keeps the original's prefab uid, so the uid alone can no
-        /// longer say how much there is to protect.
-        size_t shadow_count{};
-
-        /// How many records found every live instance already claimed and were let through to
-        /// create one. Distinguishes "the document has more of these than exist here" from
-        /// "the document said nothing more about them", which links have to tell apart.
-        size_t surplus_records{};
-
-        /// How many of those a record has claimed so far. Once it reaches shadow_count the
-        /// asset is carrying more of these than exist here, so the surplus has nothing to
-        /// protect and is loaded normally - which is what creates it.
-        size_t shadow_cursor{};
     };
 
     /**
@@ -248,23 +222,6 @@ struct load_context
         /// whatever B nests, and those carry the same id.
         std::map<std::vector<hpp::uuid>, nested_scope> nested_scopes;
 
-        /**
-         * @brief A live nested instance with no id, and where it sits.
-         *
-         * The two sides of a nesting can disagree about ids: a document re-saved by a build
-         * that has them, loaded over instances created before it, or the reverse. An id the
-         * document knows and the instance does not means the same slot, unlabelled - so the
-         * instance is adopted and labelled rather than duplicated, which is what matching by
-         * id alone would do.
-         */
-        struct adoption_candidate
-        {
-            std::vector<hpp::uuid> parent_path;
-            hpp::uuid prefab_uid;
-            entt::handle handle;
-        };
-        std::vector<adoption_candidate> adoption_candidates;
-
         /// Nested instances deleted here, by the same chain. There is no scope for one - it
         /// is gone - so without this the document's record for it simply creates it again,
         /// which is what a deletion looks like from the document's side.
@@ -278,11 +235,6 @@ struct load_context
 
         /// The instance being loaded over, when there is one.
         entt::handle root;
-
-        /// Nested instance roots that were live before the load, as (prefab uid, handle)
-        /// pairs rather than a set: two instances of the same prefab under one root carry
-        /// identical prefab uids, so keying by uid alone would lose one of them.
-        std::vector<std::pair<hpp::uuid, entt::handle>> shadowed_roots;
     };
 
     /// Innermost instance being loaded over, or nullptr when entities are being created

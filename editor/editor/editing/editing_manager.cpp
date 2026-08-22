@@ -136,8 +136,9 @@ void editing_manager::on_play_before_begin(rtti::context& ctx)
     }
 
 
-    exit_prefab_mode(ctx, save_option::no);
-
+    // Play starts from the scene; prefab-mode edits are saved rather than dropped (a prompt
+    // cannot stop this path, which continues synchronously). No-op when nothing was edited.
+    exit_prefab_mode(ctx, save_option::yes);
     undo_stack.clear();
     pending_actions.clear();
 
@@ -733,6 +734,7 @@ void editing_manager::enter_prefab_mode(rtti::context& ctx, const asset_handle<p
         
         // Instantiate the prefab in our editing scene
         prefab_entity = prefab_scene.instantiate(prefab);
+        prefab_has_unsaved_changes_ = false;
 
         // The edit root stays an instance of the prefab - prefab mode is a scene holding one
         // instance, and Save is Apply All - but it is an instance that is *upstream* of its
@@ -817,6 +819,11 @@ void editing_manager::exit_prefab_mode(rtti::context& ctx, save_option save_chan
     {
         return;
     }
+    // Nothing edited since entering or saving: neither a prompt nor a rewrite of the file.
+    if(!prefab_has_unsaved_changes_ && save_changes != save_option::no)
+    {
+        save_changes = save_option::no;
+    }
     
     auto on_save = [this,&ctx]()
     {
@@ -888,7 +895,7 @@ void editing_manager::save_prefab_changes(rtti::context& ctx)
     
     auto prefab_path = fs::resolve_protocol(edited_prefab.id());
     asset_writer::atomic_save_to_file(prefab_path.string(), prefab_entity);
-
+    prefab_has_unsaved_changes_ = false;
     APPLOG_INFO("Saved changes to prefab: {}", edited_prefab.id());
     ImGui::PushNotification(ImGuiToast(ImGuiToastType_Success, 1000,"Prefab saved."));
 
@@ -936,8 +943,9 @@ void editing_manager::clear(bool clear_unsaved)
     // If in prefab mode, exit it
     if (is_prefab_mode())
     {
+        // Saved rather than dropped; no-op when nothing was edited.
         auto& ctx = engine::context();
-        exit_prefab_mode(ctx, save_option::no);
+        exit_prefab_mode(ctx, save_option::yes);
     }
 
     // Reset prefab editing mode and clean up all references
@@ -1007,13 +1015,15 @@ void editing_manager::add_action(const std::string& name, std::shared_ptr<editin
         action->detach();
     }
     
-    // Queue the action for execution (don't execute immediately)
-    pending_actions.push_back(std::move(action));
-
     if(immediate)
     {
-        execute_actions();
+        // Only this action. Draining the whole queue here would run actions that were deferred
+        // on purpose - a delete queued from a panel still holding component references - from
+        // inside whatever called do_action, while it holds its own.
+        execute_action(action);
+        return;
     }
+    pending_actions.push_back(std::move(action));
 }
 
 
@@ -1032,33 +1042,31 @@ void editing_manager::pop_undo_stack_enabled()
     undo_stack_enabled.pop();
 }
 
+void editing_manager::execute_action(std::shared_ptr<editing_action_t>& action)
+{
+    if(!action)
+    {
+        return;
+    }
+    action->execution_count++;
+    action->do_action();
+    on_action_executed(action);
+    // Moved to the undo stack if undoable; merging is handled there, now that it has run.
+    if(action->is_undoable())
+    {
+        undo_stack.push_if_undoable(std::move(action));
+    }
+}
+
 void editing_manager::execute_actions()
 {
     while(!pending_actions.empty())
     {
         auto actions = std::move(pending_actions);
-        // Process all pending actions
-        for (auto& action : actions)
+        for(auto& action : actions)
         {
-            if (action)
-            {
-                // Execute the action
-                action->execution_count++;
-                action->do_action();
-                
-                on_action_executed(action);
-                // Add to undo stack if the action is undoable
-                // Note: We need to handle merging here since the action is now executed
-                if (action->is_undoable())
-                {
-                    // Move the action to the undo stack
-                    undo_stack.push_if_undoable(std::move(action));
-                }
-
-                
-            }
+            execute_action(action);
         }
-
     }
 
 }
@@ -1068,6 +1076,7 @@ auto editing_manager::undo() -> std::shared_ptr<editing_action_t>
     if (undo_stack.can_undo())
     {
         has_unsaved_changes_ = true;
+        prefab_has_unsaved_changes_ |= is_prefab_mode();
         return undo_stack.undo();
     }
     return nullptr;
@@ -1078,6 +1087,7 @@ auto editing_manager::redo() -> std::shared_ptr<editing_action_t>
     if (undo_stack.can_redo())
     {
         has_unsaved_changes_ = true;
+        prefab_has_unsaved_changes_ |= is_prefab_mode();
         return undo_stack.redo();
     }
     return nullptr;
@@ -1091,6 +1101,10 @@ void editing_manager::on_action_executed(std::shared_ptr<editing_action_t> actio
     if(action->modifies_scene_content())
     {
         has_unsaved_changes_ = true;
+        if(is_prefab_mode())
+        {
+            prefab_has_unsaved_changes_ = true;
+        }
 
         if(auto_rebuild_reflection_probes)
         {
