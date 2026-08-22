@@ -1,4 +1,5 @@
 #include "editing_manager.h"
+#include "authoring_root.h"
 #include "base/basetypes.hpp"
 #include "engine/profiler/profiler.h"
 #include "imgui/imgui.h"
@@ -462,6 +463,16 @@ void editing_manager::on_prefab_updated(const asset_handle<prefab>& pfb)
 
 void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity, const asset_handle<prefab>& pfb)
 {
+    // The one funnel every editor-side sync goes through, so this is where the authoring root
+    // is kept out. It is upstream of its file: a replay can only restore what was last saved,
+    // which undoes any revert made since, and it re-labels the root's own authoring on its
+    // nested instances as "inherited from the containing prefab". Both are the file flowing
+    // the wrong way.
+    if(is_authoring_root(entity))
+    {
+        return;
+    }
+
     queue_action("Sync Prefab Entity",
         [&ctx, entity, pfb]() mutable
     {
@@ -490,6 +501,80 @@ void editing_manager::sync_prefab_entity(rtti::context& ctx, entt::handle entity
 
         sync_prefab_instance(entity);
     });
+}
+
+namespace
+{
+/// The instance root furthest up from `entity`, `entity` itself included; null when it is
+/// neither an instance nor inside one.
+auto find_outermost_instance(entt::handle entity) -> entt::handle
+{
+    if(!entity)
+    {
+        return {};
+    }
+
+    entt::handle outermost = entity.all_of<prefab_component>() ? entity : entt::handle{};
+    const auto* trans_comp = entity.try_get<transform_component>();
+    auto current = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
+    while(current)
+    {
+        if(current.all_of<prefab_component>())
+        {
+            outermost = current;
+        }
+        const auto* parent_trans = current.try_get<transform_component>();
+        current = parent_trans != nullptr ? parent_trans->get_parent() : entt::handle{};
+    }
+    return outermost;
+}
+
+/// The instance roots directly under `entity`, not descending into them.
+void collect_direct_nested_instances(entt::handle entity, std::vector<entt::handle>& out)
+{
+    const auto* trans_comp = entity.try_get<transform_component>();
+    if(trans_comp == nullptr)
+    {
+        return;
+    }
+    for(auto child : trans_comp->get_children())
+    {
+        if(child.all_of<prefab_component>())
+        {
+            out.push_back(child);
+            continue;
+        }
+        collect_direct_nested_instances(child, out);
+    }
+}
+} // namespace
+
+void editing_manager::sync_after_override_change(rtti::context& ctx, entt::handle entity)
+{
+    auto outermost = find_outermost_instance(entity);
+
+    if(outermost && !is_authoring_root(outermost))
+    {
+        if(const auto* prefab_comp = outermost.try_get<prefab_component>())
+        {
+            sync_prefab_entity(ctx, outermost, prefab_comp->source);
+        }
+        return;
+    }
+
+    // Under an authoring root, or under nothing at all. No document above to replay, so each
+    // instance directly under it is brought back in line with its own prefab - their own
+    // syncs cascade into anything nested further down.
+    const auto base = outermost ? outermost : entity;
+    std::vector<entt::handle> nested;
+    collect_direct_nested_instances(base, nested);
+    for(auto& instance : nested)
+    {
+        if(const auto* prefab_comp = instance.try_get<prefab_component>())
+        {
+            sync_prefab_entity(ctx, instance, prefab_comp->source);
+        }
+    }
 }
 
 void editing_manager::sync_prefab_instances(rtti::context& ctx, scene* scn)
@@ -648,6 +733,19 @@ void editing_manager::enter_prefab_mode(rtti::context& ctx, const asset_handle<p
         
         // Instantiate the prefab in our editing scene
         prefab_entity = prefab_scene.instantiate(prefab);
+
+        // The edit root stays an instance of the prefab - prefab mode is a scene holding one
+        // instance, and Save is Apply All - but it is an instance that is *upstream* of its
+        // file: its live state is the file's next content. The tag is what keeps the two
+        // instance behaviours that assume the opposite away from it - syncing against the
+        // file (sync_prefab_entity) and recording its own content as overrides of the file
+        // (find_prefab_root_entity). Its nested instances' memos are reset so that what this
+        // document states about them reads as its own authoring, not as inherited.
+        if(prefab_entity)
+        {
+            prefab_entity.emplace<authoring_root_tag>();
+            scene::reset_nested_inheritance(prefab_entity);
+        }
         
         // Select the prefab entity
         if (prefab_entity)

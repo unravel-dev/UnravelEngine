@@ -122,6 +122,17 @@ struct editing_manager
     void on_prefab_updated(const asset_handle<prefab>& pfb);
 
     void sync_prefab_entity(rtti::context& ctx, entt::handle entity, const asset_handle<prefab>& pfb);
+
+    /**
+     * @brief The sync to run after overrides were reverted or restored under an entity.
+     *
+     * For an entity at or inside an instance: the outermost instance, whose replay owns the
+     * values being reverted to and cascades into everything nested. When that outermost
+     * instance is an authoring root - the prefab being edited, which is upstream of its own
+     * file - it is not replayed; the instances directly under it are synced against their own
+     * prefabs instead, which is what restores a reverted value from the prefab that owns it.
+     */
+    void sync_after_override_change(rtti::context& ctx, entt::handle entity);
     void sync_prefab_instances(rtti::context& ctx, scene* scn);
     auto get_select_mode() const -> select_mode;
 

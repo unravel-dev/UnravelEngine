@@ -16,6 +16,7 @@
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/prefab_component.h>
+#include <editor/editing/authoring_root.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
@@ -629,7 +630,9 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
 
             ImGui::Separator();
 
-            if(entity.any_of<prefab_component, prefab_id_component>())
+            // Not for the prefab being edited: "Open Prefab" would open itself, and "Unlink"
+            // would unpack the file's own content - strip its prefab ids - under the user.
+            if(entity.any_of<prefab_component, prefab_id_component>() && !is_authoring_root(entity))
             {
                 if(ImGui::MenuItemIcon(ICON_MDI_OPEN_IN_NEW, "Open Prefab"))
                 {

@@ -182,6 +182,39 @@ struct scene
     static auto is_destroy_suppressed() -> bool;
 
     /**
+     * @brief Removes an entity's prefab link while keeping its subtree's prefab ids.
+     *
+     * Removing prefab_component normally *unpacks* the instance: an on_destroy hook strips
+     * prefab_id_component down the subtree, because an unlinked entity has no prefab for those
+     * ids to mean anything in. That is right for the user's Unlink. It is wrong for the one
+     * other reason to drop the link - turning an instantiated prefab into the authoring root
+     * of that same prefab - where the ids are the identities the file is keyed by. Regenerating
+     * them on the next save makes every instance of the prefab fail to match its own root,
+     * rebuild it, and lose whatever was nested under the old one.
+     *
+     * Also resets, on the instances directly nested under the entity, the memo of what "the
+     * containing document" stated - because in an authoring root that document is this one.
+     * Everything those instances record is this document's own authoring and has to read as
+     * local, or the prefab's editor shows its own overrides as "from prefab" and cannot revert
+     * them.
+     */
+    static void detach_instance_link(entt::handle entity);
+
+    /**
+     * @brief Makes everything the instances directly nested under `root` record read as
+     *        `root`'s own authoring.
+     *
+     * Each nested instance carries a memo of what "the containing document" stated about it.
+     * When `root` is the content of the prefab being edited, that document is this one - so
+     * the memo has to be empty, or the prefab's own overrides show as "from prefab" and cannot
+     * be reverted. Directly nested only: deeper instances still have a containing document
+     * above them, the instance they sit in, and its attribution stays right.
+     *
+     * Used by detach_instance_link, and on its own when the root keeps its instance link.
+     */
+    static void reset_nested_inheritance(entt::handle root);
+
+    /**
      * @brief Creates an entity in the scene.
      * @param e The entity identifier.
      * @return A handle to the created entity.

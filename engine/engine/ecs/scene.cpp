@@ -1,4 +1,6 @@
 #include "scene.h"
+
+#include <functional>
 #include "uuid/uuid.h"
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/layer_component.h>
@@ -169,12 +171,26 @@ void destroy_dependent_components_in_children(entt::registry& r, entt::entity e)
     }
 }
 
+/// Raised by scene::detach_instance_link around its removal, so the unpack hook below knows
+/// this particular removal is a detach rather than an unlink.
+auto keep_prefab_ids_depth() -> int&
+{
+    static thread_local int depth = 0;
+    return depth;
+}
+
 /// Entry point for on_destroy<prefab_component>. Kept at exactly (registry&, entity) so
 /// entt's connect<> can bind it.
 template<typename ...Ts>
 void destroy_dependent_components_recursive(entt::registry& r, entt::entity e)
 {
     if(!r.valid(e))
+    {
+        return;
+    }
+
+    // A detach, not an unpack: the link goes, the ids stay. See scene::detach_instance_link.
+    if(keep_prefab_ids_depth() > 0)
     {
         return;
     }
@@ -535,6 +551,58 @@ scene::scoped_destroy_suppression::~scoped_destroy_suppression()
 auto scene::is_destroy_suppressed() -> bool
 {
     return destroy_suppression_depth() > 0;
+}
+
+void scene::reset_nested_inheritance(entt::handle root)
+{
+    if(!root)
+    {
+        return;
+    }
+
+    std::vector<entt::handle> direct_nested;
+    std::function<void(entt::handle)> collect = [&](entt::handle node)
+    {
+        const auto* trans_comp = node.try_get<transform_component>();
+        if(trans_comp == nullptr)
+        {
+            return;
+        }
+        for(auto child : trans_comp->get_children())
+        {
+            if(child.all_of<prefab_component>())
+            {
+                direct_nested.push_back(child);
+                continue;
+            }
+            collect(child);
+        }
+    };
+    collect(root);
+
+    for(auto& nested : direct_nested)
+    {
+        if(auto* prefab_comp = nested.try_get<prefab_component>())
+        {
+            prefab_comp->inherited_overrides.clear();
+            prefab_comp->inherited_removed_entities.clear();
+            prefab_comp->inherited_removed_instances.clear();
+        }
+    }
+}
+
+void scene::detach_instance_link(entt::handle entity)
+{
+    if(!entity || !entity.all_of<prefab_component>())
+    {
+        return;
+    }
+
+    ++keep_prefab_ids_depth();
+    entity.remove<prefab_component>();
+    --keep_prefab_ids_depth();
+
+    reset_nested_inheritance(entity);
 }
 
 void scene::destroy_entity(entt::handle entity)

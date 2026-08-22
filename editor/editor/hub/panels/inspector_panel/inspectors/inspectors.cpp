@@ -1,5 +1,6 @@
 #include "inspectors.h"
 #include "editor/editing/editing_manager.h"
+#include <editor/editing/authoring_root.h>
 #include "editor/hub/panels/entity_panel.h"
 #include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 #include "editor/imgui/integration/imgui.h"
@@ -226,7 +227,9 @@ auto prefab_override_context::reset_override() -> bool
         
         auto& ctx = engine::context();
         auto& em = ctx.get_cached<editing_manager>();
-        em.sync_prefab_entity(ctx, prefab_root_entity, prefab_comp->source);
+        // From the top: the reverted value may be owned by a containing document - a nested
+        // root's placement is - and only that document's replay can restore it.
+        em.sync_after_override_change(ctx, prefab_root_entity);
         return true;
     }
     return false;
@@ -307,6 +310,14 @@ auto prefab_override_context::find_prefab_root_entity(entt::handle entity) -> en
     {
         if(current_entity.try_get<prefab_component>())
         {
+            // The prefab being edited is an instance of its own file, but editing its content
+            // is not deviating from that file - it is writing it. Nothing under it records as
+            // an override of it; instances nested inside it are still found, since the walk
+            // reaches them first.
+            if(is_authoring_root(current_entity))
+            {
+                return {};
+            }
             return current_entity;
         }
 
@@ -342,12 +353,44 @@ auto prefab_override_context::get_entity_prefab_uuid(entt::handle entity) -> hpp
 
     return id_comp->id;
 }
+namespace
+{
+/// An instance root with no instance above it. Its placement belongs to the scene: no prefab
+/// restates it, so a position or rotation "override" on it has nothing to revert to and would
+/// only ever be noise in the changes list.
+auto is_top_level_instance_root(entt::handle entity) -> bool
+{
+    if(!entity || !entity.all_of<prefab_component>())
+    {
+        return false;
+    }
+    const auto* trans_comp = entity.try_get<transform_component>();
+    auto current = trans_comp != nullptr ? trans_comp->get_parent() : entt::handle{};
+    while(current)
+    {
+        if(current.all_of<prefab_component>())
+        {
+            return false;
+        }
+        const auto* parent_trans = current.try_get<transform_component>();
+        current = parent_trans != nullptr ? parent_trans->get_parent() : entt::handle{};
+    }
+    return true;
+}
+} // namespace
+
 void prefab_override_context::mark_transform_as_changed(entt::handle entity,
                                                         bool position,
                                                         bool rotation,
                                                         bool scale,
                                                         bool skew)
 {
+    if(is_top_level_instance_root(entity))
+    {
+        position = false;
+        rotation = false;
+    }
+
     if(position)
     {
         mark_property_as_changed(entity, entt::resolve<transform_component>(), "local_transform/position");
@@ -376,6 +419,11 @@ void prefab_override_context::mark_transform_global_as_changed(entt::handle enti
     // also changes local transform
     mark_transform_as_changed(entity, position, rotation, scale, skew);
 
+    if(is_top_level_instance_root(entity))
+    {
+        position = false;
+        rotation = false;
+    }
 
     if(position)
     {

@@ -319,6 +319,13 @@ transform_set_parent_action_t::transform_set_parent_action_t(entt::uhandle ent, 
     }
 }
 
+// Reparenting records no transform override, on purpose. Keeping the world transform rewrites
+// the *local* one - position, rotation, scale and skew all change - but that is the engine
+// recomputing, not the user overriding the prefab's placement. Position and rotation of an
+// instance root are implicit overrides already (sync preserves them unconditionally), and
+// scale and skew are meant to follow the prefab unless overridden explicitly. Marking all four
+// here made every reparented instance deaf to scale changes in its prefab, and baked the
+// block into any prefab the container was later saved as.
 void transform_set_parent_action_t::do_action()
 {
     if(auto ent = entity.resolve())
@@ -326,7 +333,6 @@ void transform_set_parent_action_t::do_action()
         if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_parent(new_parent.resolve(), true);
-            prefab_override_context::mark_transform_as_changed(ent, true, true, true, true);
         }
     }
 }
@@ -338,7 +344,6 @@ void transform_set_parent_action_t::undo_action()
         if(auto transform = ent.try_get<transform_component>())
         {
             transform->set_parent(old_parent.resolve(), true);
-            prefab_override_context::mark_transform_as_changed(ent, true, true, true, true);
         }
     }
 }

@@ -1939,6 +1939,35 @@ void collect_nested_instance_roots(entt::handle obj, std::vector<entt::handle>& 
 } // namespace
 
 /**
+ * @brief After a fresh instantiate, attributes what the document states about its directly
+ *        nested instances to the document.
+ *
+ * A replay over an existing instance sets this memo as it goes (apply_nested_override_state).
+ * A fresh instantiate runs no replay, so without this the memo is whatever the file happened
+ * to store - empty for a prefab authored from a plain object - and every override the prefab
+ * authored on its nested instances reads as local until the first resync. That is wrong in the
+ * changes view, and wrong for the next replay's local-half computation. On a fresh instance
+ * the answer is by definition "all of it": the document is the only author so far.
+ *
+ * Directly nested only. Deeper instances were refreshed by their own container's sync on the
+ * way here, which set their memos relative to *that* container.
+ */
+void attribute_fresh_nested_memos(entt::handle root)
+{
+    std::vector<entt::handle> nested;
+    collect_nested_instance_roots(root, nested, true);
+    for(auto& instance : nested)
+    {
+        if(auto* prefab_comp = instance.try_get<prefab_component>())
+        {
+            prefab_comp->inherited_overrides = prefab_comp->property_overrides;
+            prefab_comp->inherited_removed_entities = prefab_comp->removed_entities;
+            prefab_comp->inherited_removed_instances = prefab_comp->removed_instances;
+        }
+    }
+}
+
+/**
  * @brief Whether a document's "nesting already resolved" claim can be believed.
  *
  * Only in a deployed build, and the reason is about *who wrote the claim*, not about the
@@ -2098,6 +2127,32 @@ void collect_entities_by_prefab_uid(entt::handle obj,
             collect_entities_by_prefab_uid(child, wanted, out, false);
         }
     }
+}
+
+/**
+ * @brief Whether a component path is a nested instance root's placement, or on the way to it.
+ *
+ * Local position and rotation of an instance root belong to whoever *placed* the instance.
+ * For a top-level instance that is the scene, and its own asset never restates them - the
+ * "implicit override". For a nested instance the placer is the containing document, and the
+ * same implicit rule from the nested asset's side means that if the container did not restate
+ * them either, nothing could ever put a nested instance back where its container authored it.
+ *
+ * Scale and skew are deliberately not here: those follow the nested asset unless overridden,
+ * from either side. Nor is the parent link: a reparent made here has no override bookkeeping,
+ * and restating it would undo the reparent on every sync.
+ */
+auto is_nested_root_placement_path(std::string_view component_path) -> bool
+{
+    constexpr std::string_view transform = "transform_component";
+    constexpr std::string_view local = "transform_component/local_transform";
+    constexpr std::string_view position = "transform_component/local_transform/position";
+    constexpr std::string_view rotation = "transform_component/local_transform/rotation";
+
+    // The two containers on the way down have to pass for the leaves to be reached at all;
+    // scale and skew underneath them are still decided leaf by leaf.
+    return component_path == transform || component_path == local || component_path.starts_with(position) ||
+           component_path.starts_with(rotation);
 }
 
 /// A nested instance's overrides, split into the part the containing document authored and
@@ -2351,6 +2406,17 @@ auto sync_prefab_instance(entt::handle instance) -> bool
                     component_path.remove_prefix(4);
                 }
 
+                // The nested root's own placement is the containing document's to state. A
+                // local move is an override and the guard above already held it back; anything
+                // else goes back to where the container put it - which is what makes reverting
+                // such a move mean something.
+                const auto* owner_id = owner.try_get<prefab_id_component>();
+                if(owner_id != nullptr && owner_id->id == parts.entity_uuid &&
+                   is_nested_root_placement_path(component_path))
+                {
+                    return true;
+                }
+
                 return owner_prefab->has_override_touching(parts.entity_uuid, component_path);
             }
 
@@ -2360,7 +2426,7 @@ auto sync_prefab_instance(entt::handle instance) -> bool
         serialization::set_path_context(&path_ctx);
     }
 
-    APPLOG_INFO("Syncing prefab instance: {}", source.id());
+    APPLOG_TRACE("Syncing prefab instance: {}", source.id());
 
     // The load replaces each nested instance's override set with what the document authors.
     // Refreshing those instances against their own assets before the local half is put back
@@ -2457,6 +2523,9 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
                           entt::registry& registry,
                           entt::handle& obj) -> bool
 {
+    // Nothing to load over: a fresh instantiate rather than a sync.
+    const bool fresh = !obj;
+
     // Refuses re-entry for an asset already being expanded further up the chain.
     scoped_prefab_expansion expansion(pfb.uid());
     if(!expansion.entered())
@@ -2511,6 +2580,11 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
                 if((!nesting_resolved || !can_trust_resolved_marker()) && !is_nested_sync_deferred())
                 {
                     sync_nested_prefab_instances(obj);
+                }
+
+                if(fresh)
+                {
+                    attribute_fresh_nested_memos(obj);
                 }
             }
         }
@@ -2581,6 +2655,9 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
                 {
                     sync_nested_prefab_instances(obj);
                 }
+
+                // Always a fresh instantiate on this path.
+                attribute_fresh_nested_memos(obj);
             }
         }
         catch(const std::exception& e)

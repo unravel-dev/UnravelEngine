@@ -90,6 +90,11 @@ private:
     scene inspected_scene_{"inspector_asset_handle_prefab"};
     uintptr_t inspected_version_{};
 
+    /// The cached authoring root, keyed by handle: it is detached from its instance link, so
+    /// there is no prefab_component to find it by.
+    entt::handle inspected_root_{};
+    hpp::uuid inspected_uid_{};
+
 
 };
 REFLECT_INSPECTOR_INLINE(inspector_asset_handle_prefab, asset_handle<prefab>)

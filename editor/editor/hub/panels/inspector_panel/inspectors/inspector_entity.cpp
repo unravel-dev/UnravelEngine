@@ -574,6 +574,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
         ImGui::Separator();
         ImGui::Spacing();
 
+
         // Keep "Add Component" pinned below the scrollable component list.
         const ImGuiStyle& style = ImGui::GetStyle();
         const float add_component_footer_height =
