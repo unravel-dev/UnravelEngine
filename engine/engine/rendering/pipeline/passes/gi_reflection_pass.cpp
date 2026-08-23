@@ -195,7 +195,16 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         // every 64-lane trace group is fully populated with rays. The fragment form paid a
         // whole wave wherever one quad pixel traced, and its worst-case register footprint
         // throttled even the early-out pixels.
-        const uint32_t required_indices = 2u + trace_size.width * trace_size.height;
+        //
+        // The list also carries a texture-mean block between its header and the pixel slots
+        // (layout in cs_gi_reflection_args.sc): the trace kernel's albedo remodulation needs
+        // the means, and the list's stage is the only surface it has left to receive them on.
+        static_assert(gi::GI_REFLECTION_MEAN_SLOTS == surface_cache_system::texture_mean_capacity,
+                      "The args pass stages the whole mean buffer into the trace list; the "
+                      "shader-side block size must match the buffer's capacity.");
+        const uint32_t mean_block_indices = uint32_t(gi::GI_REFLECTION_MEAN_SLOTS) * 3u;
+        const uint32_t required_indices =
+            2u + mean_block_indices + trace_size.width * trace_size.height;
         bool list_created = false;
         if(!bgfx::isValid(refl_list_) || required_indices > refl_list_capacity_)
         {
@@ -225,6 +234,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             args_program_.program->begin();
             gfx::set_buffer(0, refl_args_, gfx::access::Write);
             gfx::set_buffer(1, refl_list_, gfx::access::ReadWrite);
+            gfx::set_buffer(2, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
             gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
             args_program_.program->end();
         }
@@ -254,6 +264,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             args_program_.program->begin();
             gfx::set_buffer(0, refl_args_, gfx::access::Write);
             gfx::set_buffer(1, refl_list_, gfx::access::ReadWrite);
+            gfx::set_buffer(2, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
             gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
             args_program_.program->end();
         }
@@ -275,6 +286,14 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             gfx::set_texture(trace_program_.s_hiz, 8, params.hiz);
             gfx::set_texture(trace_program_.s_gi_diffuse, 9, gi_diffuse_tex);
             gfx::set_texture(trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
+            // Albedo remodulation source. The texture's own flags clamp all three axes (its
+            // other samplers stay inside a level); this read is toroidal in xy exactly like
+            // the light volume, so override to xy REPEAT, keeping W clamped (the two z taps
+            // land on texel centres either way).
+            gfx::set_texture(trace_program_.s_gi_attr_albedo,
+                             11,
+                             clipmap_gpu.get_attr_albedo_texture(),
+                             BGFX_SAMPLER_W_CLAMP);
             gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
             gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
             gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh_tex);

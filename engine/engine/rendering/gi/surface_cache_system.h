@@ -130,6 +130,13 @@ public:
     /// being packed into a spare component.
     static constexpr uint32_t instance_vec4_stride = 10;
 
+    /// Slot capacity of the mean buffer (16 KiB of vec4s). Overflow falls back to the white
+    /// slot with a one-time warning rather than growing - a scene with a thousand distinct
+    /// colour maps has bigger problems than its bounce tint. PUBLIC because the reflection
+    /// pass stages the whole buffer into its trace list (GI_REFLECTION_MEAN_SLOTS must equal
+    /// this; static_assert at the staging site).
+    static constexpr uint32_t texture_mean_capacity = 1024;
+
     /// The per-texture mean buffer the attribute composer reads (slot 0 = white).
     auto get_texture_mean_buffer() const -> gfx::dynamic_vertex_buffer_handle
     {
@@ -351,10 +358,6 @@ private:
     /// vec4 per slot, seeded white; written only by cs_gi_texture_mean dispatches.
     gfx::dynamic_vertex_buffer_handle texture_mean_buffer_{bgfx::kInvalidHandle};
     uint32_t next_texture_mean_slot_ = 1;
-    /// Slot capacity of the mean buffer (16 KiB of vec4s). Overflow falls back to the white
-    /// slot with a one-time warning rather than growing - a scene with a thousand distinct
-    /// colour maps has bigger problems than its bounce tint.
-    static constexpr uint32_t texture_mean_capacity = 1024;
     bool texture_mean_overflow_warned_ = false;
     std::vector<instance> instances_;
     /// Clipmap composition input, rebuilt each frame alongside @ref instances_.

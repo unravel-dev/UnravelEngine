@@ -367,6 +367,22 @@
       " pop in as dark spots (camera-centred cascade boxes projected through the floor)."        \
       " Twice the field band is 1 m at level 0 / 2 m at level 1: wide enough to hide one"        \
       " coarse voxel of isosurface disagreement. Extra taps only inside that band")              \
+    X(GI_REFLECTION_MEAN_SLOTS, 1024,                                                              \
+      "texture-mean slots", "derived: equals surface_cache_system::texture_mean_capacity"          \
+      " (static_assert in gi_reflection_pass.cpp). The trace kernel needs the means to"            \
+      " rebuild a hit's own albedo, but every one of the trace's 16 bgfx stages is taken -"        \
+      " so the args pass stages the mean buffer into the trace list (3 uints of float bits"        \
+      " per slot, between the [0]/[1] header and the pixel block), riding the stage the"           \
+      " list already owns")                                                                        \
+    X(GI_REFLECTION_REMODULATE_ALBEDO_FLOOR, 0.02f,                                                \
+      "unitless albedo", "derived: 5 quanta of the RGBA8 attribute-albedo storage (1/255"          \
+      " each) - the divisor floor that keeps the remodulation ratio from amplifying"               \
+      " quantisation noise of near-black voxel means into fireflies")                              \
+    X(GI_REFLECTION_REMODULATE_RATIO_MAX, 4.0f,                                                    \
+      "unitless gain", "derived: cap on hit-albedo / voxel-mean-albedo. Legitimate contrast"       \
+      " (mid 0.5 hit beside a dark 0.125 cell mix) reaches about 4; anything above is a"           \
+      " mismatched read (radiance and albedo answered by different cascade levels, occupancy"      \
+      " holes) and must not multiply energy")                                                      \
     X(GI_REFLECTION_GATHER_FADE_START, 0.3f,                                                       \
       "GGX roughness", "derived: 0.75 x GI_REFLECTION_ROUGH_CUTOFF. The traced tiers now"          \
       " SPREAD with roughness (screen hits average a GGX-cone disk, world hits blend toward"       \

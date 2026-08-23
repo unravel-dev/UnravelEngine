@@ -188,6 +188,7 @@ private:
         gfx::program::uniform_ptr s_gi_diffuse;
         gfx::program::uniform_ptr s_light_voxels;
         gfx::program::uniform_ptr s_gi_env_sh;
+        gfx::program::uniform_ptr s_gi_attr_albedo;
 
         void cache_uniforms()
         {
@@ -208,6 +209,7 @@ private:
             cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_attr_albedo, "s_gi_attr_albedo", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool

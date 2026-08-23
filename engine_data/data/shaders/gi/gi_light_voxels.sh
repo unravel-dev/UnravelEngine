@@ -265,6 +265,106 @@ bool GiLightVoxelReadFade(vec3 position, vec3 normal, vec3 fallback, float fade_
 	return false;
 }
 
+#if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
+
+/// The attribute-albedo volume (cs_gi_clipmap_attributes.sc): rgb = winning instance albedo
+/// (base colour factor x texture mean), a = 1 where surface - premultiplied like the light
+/// volume, so trilinear (rgb, a) normalised by the filtered alpha is the weight-correct mean
+/// over surface cells. Z stacks LEVEL slabs (no faces). The includer owns keeping stage 11
+/// free; the CPU bind must override the texture's clamp flags with xy REPEAT (toroidal slots,
+/// same contract as the light volume) and W clamp.
+SAMPLER3D(s_gi_attr_albedo, 11);
+
+/// One cascade level's mean surface albedo at a position. False when no covering cell holds
+/// a surface voxel there. Same cell/slot addressing as GiLightVoxelReadLevel, minus faces.
+bool GiAttrAlbedoReadLevel(vec3 position, int level, out vec3 out_albedo)
+{
+	out_albedo = vec3_splat(0.0);
+	vec4 level_data = u_sdf_clipmap_levels[level];
+	if(!(level_data.w > 0.0))
+	{
+		return false;
+	}
+	int res = u_light_voxel_resolution;
+	float attr_voxel_size = level_data.w * 2.0;
+	vec3 base_cell = floor(level_data.xyz / attr_voxel_size + vec3_splat(0.5));
+	vec3 cell = clamp(position / attr_voxel_size,
+	                  base_cell + vec3_splat(0.5),
+	                  base_cell + vec3_splat(float(res) - 0.5));
+	vec2 uv = cell.xy / float(res);
+	float z_cell = cell.z - 0.5;
+	float z_base = floor(z_cell);
+	float z_frac = z_cell - z_base;
+	int z_biased = int(z_base) + 1048576;
+	int z0 = z_biased % res;
+	int z1 = (z_biased + 1) % res;
+	float depth_texels = float(res * SDF_CLIPMAP_LEVEL_COUNT);
+	int slab = level * res;
+	vec4 s0 = texture3DLod(s_gi_attr_albedo, vec3(uv, (float(slab + z0) + 0.5) / depth_texels), 0.0);
+	vec4 s1 = texture3DLod(s_gi_attr_albedo, vec3(uv, (float(slab + z1) + 0.5) / depth_texels), 0.0);
+	vec4 filtered = mix(s0, s1, z_frac);
+	if(filtered.a <= 1e-4)
+	{
+		return false;
+	}
+	out_albedo = filtered.xyz / filtered.a;
+	return true;
+}
+
+/**
+ * Mean surface albedo at a position with GiLightVoxelReadFade's level selection, so a ratio
+ * of the two reads compares like with like in the common case. KEEP THE LEVEL LOGIC IN STEP
+ * with GiLightVoxelReadFade. The two can still disagree at occupancy holes (the radiance
+ * walked to a deeper level than the albedo, or answered mixed with the caller's fallback);
+ * the consumer's ratio clamp is the bound on that mismatch, never this function.
+ */
+bool GiAttrAlbedoReadFade(vec3 position, float fade_voxels, out vec3 out_albedo)
+{
+	out_albedo = vec3_splat(0.0);
+	float field_blend;
+	float answered_voxel;
+	int finest = SdfFindClipmapLevel(position, field_blend, answered_voxel);
+	if(finest >= SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		return false;
+	}
+	float fade = SdfClipmapEdgeBlend(finest, position, fade_voxels);
+	fade = fade * fade * (3.0 - 2.0 * fade);
+	vec3 fine_albedo;
+	bool ok_fine = GiAttrAlbedoReadLevel(position, finest, fine_albedo);
+	vec3 coarse_albedo;
+	bool ok_coarse = false;
+	if(fade > 0.0 && (finest + 1) < SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		ok_coarse = GiAttrAlbedoReadLevel(position, finest + 1, coarse_albedo);
+	}
+	if(ok_fine && ok_coarse)
+	{
+		out_albedo = mix(fine_albedo, coarse_albedo, fade);
+		return true;
+	}
+	if(ok_fine)
+	{
+		out_albedo = fine_albedo;
+		return true;
+	}
+	if(ok_coarse)
+	{
+		out_albedo = coarse_albedo;
+		return true;
+	}
+	for(int level = finest + 2; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
+	{
+		if(GiAttrAlbedoReadLevel(position, level, out_albedo))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+#endif // GI_LIGHT_VOXEL_READ_ALBEDO
+
 #endif // GI_LIGHT_VOXEL_READ
 
 #endif // __GI_LIGHT_VOXELS_SH__

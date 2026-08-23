@@ -27,6 +27,11 @@
  * blended, parallax-projected sky capture at this pixel - and with the sky SH only where no
  * probe reaches (an L2 SH cannot hold clouds or a sun disk; the probes can).
  *
+ * ALBEDO REMODULATION (compute form only, GI_LIGHT_VOXEL_READ_ALBEDO): a measured light-voxel
+ * answer at a hit with a known instance is rescaled by hit-albedo / voxel-mean-albedo, so the
+ * image carries the hit surface's own colour instead of the attribute lattice's 0.25-1 m
+ * trilinear mix - see the block at the read site for the full contract.
+ *
  * NO SCREEN TIER: screen space belongs to SSR, which composites over this pass with its own
  * stochastic spread, denoise, and fades. Two screen tracers on the same pixel gave two
  * different answers wherever their validation or fades differed (measured, round 6), and a
@@ -331,6 +336,52 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			                        GI_REFLECTION_CASCADE_FADE_VOXELS, measured))
 			{
 				radiance = measured;
+#if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
+				// ALBEDO REMODULATION - the "voxelized colour" fix. The volume stores
+				// bounded_albedo * E / pi + emissive per face, and its trilinear read mixes
+				// the WINNING albedos of a 0.25-1 m cell neighbourhood - a curtain hit next
+				// to a wall answers pink. A mesh-exact (or refined) hit knows its instance,
+				// so divide the cell-mixed albedo back out and multiply the hit's own in:
+				// colour boundaries move from the attribute lattice to the SDF silhouette,
+				// while the irradiance keeps the volume's smooth estimate. Only measured
+				// radiance is remodulated (rough_value and the sky fallback are not voxel
+				// products); emissive hits are skipped rather than having their emission
+				// separated (the albedo ratio does not apply to a source term). The floor
+				// and cap bound quantisation noise and level-mismatched reads
+				// (GiAttrAlbedoReadFade's contract).
+				BRANCH
+				if(hit.instance_index != SDF_NO_INSTANCE)
+				{
+					uint material_base = uint(hit.instance_index) * uint(SDF_INSTANCE_STRIDE);
+					vec4 material0 = b_sdf_instances[material_base + 8u];
+					vec3 hit_emissive = b_sdf_instances[material_base + 9u].xyz;
+					BRANCH
+					if(dot(hit_emissive, hit_emissive) <= 0.0)
+					{
+						vec3 hit_albedo = material0.xyz;
+						uint mean_slot = uint(material0.w);
+						// Slot 0 is the composer's "no mean" convention: factor only.
+						if(mean_slot != 0u)
+						{
+							hit_albedo *= GiReflectionMeanAlbedo(mean_slot);
+						}
+						hit_albedo = min(hit_albedo, vec3_splat(GI_MAX_ALBEDO));
+						vec3 voxel_albedo;
+						BRANCH
+						if(GiAttrAlbedoReadFade(hit_position, GI_REFLECTION_CASCADE_FADE_VOXELS,
+						                        voxel_albedo))
+						{
+							voxel_albedo = min(voxel_albedo, vec3_splat(GI_MAX_ALBEDO));
+							vec3 ratio = hit_albedo /
+							             max(voxel_albedo,
+							                 vec3_splat(GI_REFLECTION_REMODULATE_ALBEDO_FLOOR));
+							radiance *= clamp(ratio,
+							                  vec3_splat(0.0),
+							                  vec3_splat(GI_REFLECTION_REMODULATE_RATIO_MAX));
+						}
+					}
+				}
+#endif // GI_LIGHT_VOXEL_READ_ALBEDO
 			}
 		}
 		if(clipmap_shape)
