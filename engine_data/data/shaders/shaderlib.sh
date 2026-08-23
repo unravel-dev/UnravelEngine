@@ -563,10 +563,13 @@ float screenSpaceToViewSpaceDepth(float screenDepth)
     float depthLinearizeAdd = u_proj[2][3];    // -n*f/(f-n)
     return -depthLinearizeAdd / (depthLinearizeMul - screenDepth);
 #else
-    // For OpenGL: Z_clip = -(f+n)/(f-n) * Z_view - (2*f*n)/(f-n)
-    float depthLinearizeMul = -u_proj[2][2];   // (f+n)/(f-n)
-    float depthLinearizeAdd = -u_proj[2][3];   // (2*f*n)/(f-n)
-    return -depthLinearizeAdd / (depthLinearizeMul + screenDepth);
+    // OpenGL: homogeneous NDC, window depth in [0, 1]. GLSL indexes column-major (m[column][row])
+    // and bgfx uploads the same memory untransposed, so the elements the HLSL branch reads as
+    // [2][2] / [2][3] are [2][2] / [3][2] here:
+    // Z_clip = u_proj[2][2] * Z_view + u_proj[3][2], W_clip = Z_view, NDC = 2 * depth - 1.
+    float depthLinearizeMul = u_proj[2][2];    // (f+n)/(f-n)
+    float depthLinearizeAdd = u_proj[3][2];    // -2*f*n/(f-n)
+    return -depthLinearizeAdd / (depthLinearizeMul + 1.0 - 2.0 * screenDepth);
 #endif
 }
 

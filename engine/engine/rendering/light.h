@@ -353,25 +353,27 @@ struct light
     /**
      * @brief Struct representing contact shadow parameters.
      * Screen-space ray-marched shadows that add fine detail at object contact
-     * points where shadow maps lack resolution.
+     * points where shadow maps lack resolution (fs_pbr_lighting.sh, ContactShadow).
      */
     struct contact_shadow_params
     {
         /// Whether contact shadows are enabled for this light.
         bool enabled{false};
-        /// Maximum ray length in view-space units. Shorter = tighter contact detail,
-        /// longer = catches more occluders but may produce artifacts on thin geometry.
+        /// Ray length in world units along the light. Near the camera the ray is shortened
+        /// so that its projection stays within a bounded number of pixels; a receiver closer
+        /// to a spot / point light than this marches only up to the light.
         float ray_length{0.2f};
-        /// View-space depth comparison thickness for ray hits. Zero uses automatic
-        /// thickness from ray length (legacy 15 percent of ray length).
-        float thickness{0.15f};
-        /// N·L smoothstep low edge: below this, contact shadow fades out (surface faces away from light).
-        float n_dot_l_fade_start{0.0f};
-        /// N·L smoothstep high edge: at or above this, contact shadow has full strength.
-        float n_dot_l_fade_end{0.475f};
-        /// If in [0, 1], reject ray hits whose reconstructed occluder normal faces the light
-        /// more strongly than this cosine (reduces false self-contact). Below zero disables.
-        float normal_facing_reject{-1.0f};
+        /// Minimum occluder thickness in world units: a visible surface up to this far in
+        /// front of the ray counts as blocking it. The march also never steps through a
+        /// surface it entered (the per-step depth travel is a floor), so this only has to
+        /// cover occluders the ray crosses sideways. Small values keep the side halo of
+        /// objects invisible; the shadow map covers what is missed.
+        float thickness{0.03f};
+        /// Distance from the camera in world units where contact shadows end (fading out over
+        /// the outer part). Zero = unlimited.
+        float max_distance{50.0f};
+        /// Strength of the contact shadow, 0..1.
+        float opacity{1.0f};
     } contact_shadow;
 };
 

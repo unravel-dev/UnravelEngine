@@ -17,7 +17,8 @@ uniform vec4 u_light_position;
 uniform vec4 u_light_direction;
 uniform vec4 u_light_color_intensity;
 uniform vec4 u_light_data;
-/// x: hit thickness (view-space, 0 = auto from ray length). y,z: N·L smoothstep edges. w: normal-facing reject (-1 = off).
+/// Contact shadows: x = minimum occluder thickness (world units), y = max distance (0 = off),
+/// z = opacity, w = temporal frame index for the dither (0 when no TAA integrates it).
 uniform vec4 u_contact_shadow;
 uniform vec4 u_camera_position;
 
@@ -434,86 +435,216 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     return visibility;
 }
 
-/// Screen-space contact shadow. Marches a short ray toward the light in
-/// screen space and tests the depth buffer for occluders that shadow maps
-/// cannot resolve (object contact points, small crevices, fine detail).
-/// Returns 1.0 when fully lit, 0.0 when fully shadowed.
-float ContactShadow(sampler2D depthTex, vec2 origin_uv, float origin_device_depth,
-                    vec3 world_light_dir, float ray_length, vec2 screen_pos, vec3 world_shading_normal)
+// ---- Contact shadows ----------------------------------------------------------------------
+// Screen-space march along the light through the depth buffer, for the occluders the shadow
+// map cannot resolve (object bases, crevices, fine detail). Same family as Unreal's
+// ShadowRayCast / HDRP's ContactShadows.compute (perspective-correct march in uv + device
+// depth, point-sampled depth, binary hit with a tolerance tied to the per-step depth travel,
+// border vignette, dither integrated by TAA), plus a receiver-plane test that neither has: the
+// receiver's own plane is rebuilt from its depth neighbours, so a planar receiver never
+// shadows itself at any light elevation, view angle or distance (no N.L mask, no view-
+// dependent bias), and only geometry on the light side of that plane can occlude.
+//
+// Step count: one step per CONTACT_SHADOW_PIXELS_PER_STEP projected pixels, clamped; rays under
+// a pixel skip; near the camera the ray is shortened so its projection stays within
+// CONTACT_SHADOW_MAX_PIXELS (the stride stays bounded without a second, screen-space length).
+#define CONTACT_SHADOW_MIN_STEPS 4
+#define CONTACT_SHADOW_MAX_STEPS 16
+#define CONTACT_SHADOW_PIXELS_PER_STEP 2.0
+#define CONTACT_SHADOW_MAX_PIXELS 64.0
+// A depth-buffer surface is never thinner than this many steps of the ray's own depth travel,
+// so a ray cannot step through a surface it entered (the user thickness is the minimum
+// occluder thickness for rays that run sideways to the view).
+#define CONTACT_SHADOW_STEP_THICKNESS 2.0
+// Depth-buffer ulps granted to the plane test (on top of one per pixel travelled, the tilt
+// error of a normal reconstructed from one-pixel differences) and to the ray-in-front test.
+#define CONTACT_SHADOW_PLANE_ULPS 4.0
+#define CONTACT_SHADOW_RAY_ULPS 2.0
+// Curvature allowance of the plane test: tan of the tilt a neighbouring facet may have toward
+// the camera before it can register as an occluder (faceted terrain, creases).
+#define CONTACT_SHADOW_PLANE_TOLERANCE_TAN 0.05
+// A candidate occluder's point-sampled depth is uncertain by the depth its surface spans across
+// one pixel; the ray must be behind it by more than this many pixels of that span to count as
+// inside it. Surfaces seen at grazing angles (the top of a raised edge beside a receiver in a
+// depression) cannot register from their silhouette; faces, legs and overhangs are unaffected.
+#define CONTACT_SHADOW_OCCLUDER_SPAN_PX 1.0
+// The hit is released over the last part of the ray (the shadow map takes over) ...
+#define CONTACT_SHADOW_FADE_START 0.75
+// ... and over the outer part of the maximum distance.
+#define CONTACT_SHADOW_DISTANCE_FADE 0.2
+// The march is skipped where the shadow map already leaves less than this.
+#define CONTACT_SHADOW_SKIP_BELOW 0.001
+
+// uv + device depth of a view-space point, the space the march is affine in.
+vec3 contactProjectToScreen(vec3 vs_pos)
 {
-    float vs_depth = abs(screenSpaceToViewSpaceDepth(origin_device_depth));
-    float fade_end = max(ray_length * 80.0, 20.0);
-    float distance_fade = 1.0 - smoothstep(fade_end * 0.6, fade_end, vs_depth);
-    if(distance_fade <= 0.0) return 1.0;
-
-    vec3 vs_origin = computeViewSpacePosition(origin_uv, origin_device_depth);
-    vec3 vs_light_dir = normalize(mul(u_view, vec4(world_light_dir, 0.0)).xyz);
-    vec3 vs_end = vs_origin + vs_light_dir * ray_length;
-    vec4 end_proj = mul(u_proj, vec4(vs_end, 1.0));
-    vec3 ss_end = end_proj.xyz / end_proj.w;
-    ss_end = clipTransform(ss_end);
-    ss_end.xy = ss_end.xy * 0.5 + 0.5;
+    vec4 clip = mul(u_proj, vec4(vs_pos, 1.0));
+    vec3 ss = clipTransform(clip.xyz / clip.w);
+    ss.xy = ss.xy * 0.5 + 0.5;
 #if BGFX_SHADER_LANGUAGE_GLSL
-    ss_end.z = ss_end.z * 0.5 + 0.5;
+    ss.z = ss.z * 0.5 + 0.5;
 #endif
-    vec3 ss_origin = vec3(origin_uv, origin_device_depth);
-    vec3 ss_ray = ss_end - ss_origin;
-    const int CONTACT_SHADOW_STEPS = 16;
-    float inv_steps = 1.0 / float(CONTACT_SHADOW_STEPS);
-    float thickness = u_contact_shadow.x > 0.0 ? u_contact_shadow.x : (ray_length * 0.15);
-    float n_dot_l = saturate(dot(world_shading_normal, world_light_dir));
-    float n_dot_l_hi = max(u_contact_shadow.z, u_contact_shadow.y + 1e-4);
-    float n_dot_l_mask = smoothstep(u_contact_shadow.y, n_dot_l_hi, n_dot_l);
-    if(n_dot_l_mask <= 0.0) return 1.0;
+    return ss;
+}
 
-    float vs_origin_z = vs_origin.z;
-    float vs_end_z = vs_end.z;
-    vec3 vs_normal = normalize(mul(u_view, vec4(world_shading_normal, 0.0)).xyz);
-    float n_dot_v = max(abs(dot(vs_normal, normalize(-vs_origin))), 0.05);
-    float self_shadow_bias = ray_length * 0.07 / n_dot_v;
-    float frame_index = u_camera_position.w;
-    float dither = interleavedGradientNoise(screen_pos + frame_index * vec2(47.17, 17.31)) * inv_steps;
-    LOOP for(int i = 0; i < CONTACT_SHADOW_STEPS; i++)
+// Linear depth of a depth-buffer texel, clamped into the texture.
+float contactTexelDepth(sampler2D depthTex, ivec2 texel, ivec2 max_texel)
+{
+    return screenSpaceToViewSpaceDepth(texelFetch(depthTex, clamp(texel, ivec2(0, 0), max_texel), 0).x);
+}
+
+// Tangent along one axis of the receiver surface from the two texel neighbours: the one
+// closer in depth to the centre (the side more likely on the same surface), the other side
+// when the first is off the texture.
+vec3 contactPlaneAxis(vec3 p_center, float z_center, vec3 d_minus, float z_minus, bool has_minus,
+                      vec3 d_plus, float z_plus, bool has_plus)
+{
+    bool use_plus = has_plus && (!has_minus || abs(z_plus - z_center) <= abs(z_minus - z_center));
+    return use_plus ? (d_plus * z_plus - p_center) : (p_center - d_minus * z_minus);
+}
+
+/// Returns 1.0 when lit, 0.0 when the march found an occluder (scaled by opacity and fades).
+/// origin_texel / origin_device_depth: the receiver's G-buffer texel; depth_ulp: view-space span
+/// of one depth-buffer ulp at the receiver (pbr_light); light_distance: distance to a spot /
+/// point light (the ray stops there), a large value for directional lights.
+float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_depth, float depth_ulp,
+                    vec3 world_light_dir, float ray_length, float light_distance, vec2 screen_pos)
+{
+    // Perspective cameras only: the plane evaluation assumes camera rays through the origin.
+    // u_proj[3][3] (0 perspective, 1 orthographic) is a diagonal element and reads the same on
+    // every backend.
+    if(u_proj[3][3] != 0.0) return 1.0;
+
+    ivec2 depth_size = textureSize(depthTex, 0);
+    ivec2 max_texel = depth_size - ivec2(1, 1);
+    vec2 depth_size_f = vec2(depth_size);
+    vec2 texel_uv = 1.0 / depth_size_f;
+    vec2 origin_uv = (vec2(origin_texel) + vec2(0.5, 0.5)) * texel_uv;
+    vec3 vs_origin = computeViewSpacePosition(origin_uv, origin_device_depth);
+    float z0 = vs_origin.z;
+
+    float distance_fade = 1.0;
+    if(u_contact_shadow.y > 0.0)
     {
-        float t = (float(i) + 1.0) * inv_steps + dither;
-        if(t > 1.0) break;
+        distance_fade = 1.0 - smoothstep(u_contact_shadow.y * (1.0 - CONTACT_SHADOW_DISTANCE_FADE), u_contact_shadow.y, z0);
+        if(distance_fade <= 0.0) return 1.0;
+    }
+
+    // The ray: along the light, no farther than the light itself, clipped before the near plane
+    // (a projected end behind the camera would flip the screen-space segment).
+    vec3 vs_light_dir = normalize(mul(u_view, vec4(world_light_dir, 0.0)).xyz);
+    float ray_len = min(ray_length, light_distance);
+    if(vs_light_dir.z < 0.0)
+    {
+        float z_near = screenSpaceToViewSpaceDepth(0.0);
+        ray_len = min(ray_len, (z0 - z_near) * 0.9 / -vs_light_dir.z);
+    }
+    if(ray_len <= 0.0) return 1.0;
+
+    vec3 ss_origin = vec3(origin_uv, origin_device_depth);
+    vec3 ss_end = contactProjectToScreen(vs_origin + vs_light_dir * ray_len);
+    float ray_px = length((ss_end.xy - ss_origin.xy) * depth_size_f);
+    if(ray_px < 1.0) return 1.0;
+    if(ray_px > CONTACT_SHADOW_MAX_PIXELS)
+    {
+        ray_len *= CONTACT_SHADOW_MAX_PIXELS / ray_px;
+        ss_end = contactProjectToScreen(vs_origin + vs_light_dir * ray_len);
+        ray_px = length((ss_end.xy - ss_origin.xy) * depth_size_f);
+    }
+    vec3 ss_ray = ss_end - ss_origin;
+    int steps = int(clamp(ceil(ray_px / CONTACT_SHADOW_PIXELS_PER_STEP), float(CONTACT_SHADOW_MIN_STEPS), float(CONTACT_SHADOW_MAX_STEPS)));
+    float inv_steps = 1.0 / float(steps);
+
+    // Receiver plane from the depth buffer. d(texel) is the view-space direction with z = 1
+    // through a texel centre: affine in the texel index, with per-texel derivatives from the
+    // projection's diagonal (safe to index on every backend); the y sign follows clipTransform.
+    vec3 d0 = vs_origin / z0;
+    float dd_dx = 2.0 / u_proj[0][0] * texel_uv.x;
+#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
+    float dd_dy = -2.0 / u_proj[1][1] * texel_uv.y;
+#else
+    float dd_dy = 2.0 / u_proj[1][1] * texel_uv.y;
+#endif
+    vec3 d_left = d0 - vec3(dd_dx, 0.0, 0.0);
+    vec3 d_right = d0 + vec3(dd_dx, 0.0, 0.0);
+    vec3 d_down = d0 - vec3(0.0, dd_dy, 0.0);
+    vec3 d_up = d0 + vec3(0.0, dd_dy, 0.0);
+    float z_left = contactTexelDepth(depthTex, origin_texel + ivec2(-1, 0), max_texel);
+    float z_right = contactTexelDepth(depthTex, origin_texel + ivec2(1, 0), max_texel);
+    float z_down = contactTexelDepth(depthTex, origin_texel + ivec2(0, -1), max_texel);
+    float z_up = contactTexelDepth(depthTex, origin_texel + ivec2(0, 1), max_texel);
+    vec3 axis_x = contactPlaneAxis(vs_origin, z0, d_left, z_left, origin_texel.x > 0, d_right, z_right, origin_texel.x < max_texel.x);
+    vec3 axis_y = contactPlaneAxis(vs_origin, z0, d_down, z_down, origin_texel.y > 0, d_up, z_up, origin_texel.y < max_texel.y);
+    vec3 plane_n = cross(axis_x, axis_y);
+    float plane_n_len = length(plane_n);
+    if(plane_n_len <= 0.0) return 1.0;
+    plane_n /= plane_n_len;
+    // Facing the camera (at the origin): the camera side of the plane is the only side an
+    // occluder of the receiver can be on.
+    if(dot(plane_n, d0) > 0.0) plane_n = -plane_n;
+    float plane_c = dot(plane_n, vs_origin);
+
+    float px_world_scale = max(abs(dd_dx), abs(dd_dy));
+    float inv_z0_sq = 1.0 / (z0 * z0);
+    float thickness_min = max(u_contact_shadow.x, 0.0);
+    float dither = interleavedGradientNoise(screen_pos + u_contact_shadow.w * vec2(47.17, 17.31)) - 0.5;
+    float z_prev = z0;
+    float hit_t = -1.0;
+    LOOP for(int i = 0; i < steps; i++)
+    {
+        float t = (float(i) + 1.0 + dither) * inv_steps;
         vec3 ss_pos = ss_origin + ss_ray * t;
-        if(any(greaterThan(abs(ss_pos.xy - 0.5), vec2_splat(0.5))))
-            break;
-        float scene_depth = texture2DLod(depthTex, ss_pos.xy, 0.0).x;
-        float vs_ray_depth = mix(vs_origin_z, vs_end_z, t);
-        float vs_scene_depth = screenSpaceToViewSpaceDepth(scene_depth);
-        float depth_diff = vs_ray_depth - vs_scene_depth;
-        float step_thickness = thickness * (1.0 - t * 0.7);
-        if(depth_diff > self_shadow_bias && depth_diff < step_thickness)
+        if(any(lessThan(ss_pos.xy, vec2_splat(0.0))) || any(greaterThan(ss_pos.xy, vec2_splat(1.0)))) break;
+        ivec2 texel = min(ivec2(floor(ss_pos.xy * depth_size_f)), max_texel);
+        float z_ray = screenSpaceToViewSpaceDepth(ss_pos.z);
+        float z_scene = contactTexelDepth(depthTex, texel, max_texel);
+        float ulp_scene = depth_ulp * (z_scene * z_scene) * inv_z0_sq;
+        float thickness = max(thickness_min, CONTACT_SHADOW_STEP_THICKNESS * abs(z_ray - z_prev));
+        z_prev = z_ray;
+        // The visible surface must be in front of the ray point (by more than its precision) and
+        // no farther in front than the occluder thickness ...
+        float behind = z_ray - z_scene;
+        if(behind > CONTACT_SHADOW_RAY_ULPS * ulp_scene && behind <= thickness)
         {
-            if(u_contact_shadow.w >= 0.0)
+            // ... and on the camera side of the receiver plane at that texel's centre, by more
+            // than the plane's precision (depth ulps, growing one per pixel travelled, converted to
+            // height along the normal) and the curvature allowance. A planar receiver's own texels
+            // sit on the plane and fail this exactly.
+            vec2 dpx = vec2(texel - origin_texel);
+            vec3 d_scene = d0 + vec3(dpx.x * dd_dx, dpx.y * dd_dy, 0.0);
+            float n_dot_d = dot(plane_n, d_scene);
+            float height = n_dot_d * z_scene - plane_c;
+            float travelled_px = length(dpx);
+            float eps_height = (CONTACT_SHADOW_PLANE_ULPS + travelled_px) * ulp_scene * abs(n_dot_d)
+                             + travelled_px * z_scene * px_world_scale * CONTACT_SHADOW_PLANE_TOLERANCE_TAN;
+            if(height > eps_height)
             {
-                vec2 texel_uv = 1.0 / vec2(textureSize(depthTex, 0));
-                vec2 duvx = vec2(texel_uv.x, 0.0);
-                vec2 duvy = vec2(0.0, texel_uv.y);
-                float zx = texture2DLod(depthTex, ss_pos.xy + duvx, 0.0).x;
-                float zy = texture2DLod(depthTex, ss_pos.xy + duvy, 0.0).x;
-                vec3 p0 = computeViewSpacePosition(ss_pos.xy, scene_depth);
-                vec3 px = computeViewSpacePosition(ss_pos.xy + duvx, zx);
-                vec3 py = computeViewSpacePosition(ss_pos.xy + duvy, zy);
-                vec3 n_vs = cross(px - p0, py - p0);
-                float n_len = length(n_vs);
-                if(n_len > 1e-5)
+                // ... and behind the occluder by more than its own per-pixel depth span (the
+                // smaller difference per axis, so a thin occluder is measured against itself and
+                // not across its silhouette).
+                float z_l = contactTexelDepth(depthTex, texel + ivec2(-1, 0), max_texel);
+                float z_r = contactTexelDepth(depthTex, texel + ivec2(1, 0), max_texel);
+                float z_d = contactTexelDepth(depthTex, texel + ivec2(0, -1), max_texel);
+                float z_u = contactTexelDepth(depthTex, texel + ivec2(0, 1), max_texel);
+                float span_x = min(abs(z_r - z_scene), abs(z_scene - z_l));
+                float span_y = min(abs(z_u - z_scene), abs(z_scene - z_d));
+                if(behind > CONTACT_SHADOW_OCCLUDER_SPAN_PX * max(span_x, span_y))
                 {
-                    n_vs *= 1.0 / n_len;
-                    if(dot(n_vs, normalize(-p0)) < 0.0)
-                        n_vs = -n_vs;
-                    vec3 n_ws = normalize(mul(u_invView, vec4(n_vs, 0.0)).xyz);
-                    if(dot(n_ws, world_light_dir) > u_contact_shadow.w)
-                        continue;
+                    hit_t = t;
+                    break;
                 }
             }
-            float occ = smoothstep(0.0, 1.0, t);
-            return mix(1.0, occ, n_dot_l_mask * distance_fade);
         }
     }
-    return 1.0;
+    if(hit_t < 0.0) return 1.0;
+
+    float occlusion = 1.0 - smoothstep(CONTACT_SHADOW_FADE_START, 1.0, hit_t);
+    // Screen-border vignette on the hit position (Unreal's).
+    vec2 hit_ndc = (ss_origin.xy + ss_ray.xy * hit_t) * 2.0 - 1.0;
+    vec2 vignette = max(6.0 * abs(hit_ndc) - 5.0, vec2_splat(0.0));
+    occlusion *= saturate(1.0 - dot(vignette, vignette));
+    occlusion *= distance_fade * saturate(u_contact_shadow.z);
+    return 1.0 - occlusion;
 }
 
 #if DIRECTIONAL_LIGHT
@@ -588,11 +719,18 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     float depthUlp = abs(viewDepthProbe - viewDepthHere) * (SHADOW_DEPTH_FLOAT_ULP / SHADOW_DEPTH_PROBE_STEP);
     float precisionNormal = SHADOW_DEPTH_ULPS * depthUlp * abs(dot(N, V));
     float surface_shadow = CalculateSurfaceShadow(world_position, N, L, precisionNormal, fragCoord, colorCoverage);
+    // Contact shadows: skipped where they cannot change the result (unlit, already fully
+    // shadowed, sky).
     float contact_shadow_length = u_light_data.w;
     BRANCH
-    if(contact_shadow_length > 0.0)
+    if(contact_shadow_length > 0.0 && NoL > 0.0 && surface_shadow > CONTACT_SHADOW_SKIP_BELOW && data.depth01 < 1.0)
     {
-        float contact = ContactShadow(s_tex4, texcoord0, data.depth01, L, contact_shadow_length, fragCoord, N);
+#if DIRECTIONAL_LIGHT
+        const float light_distance = 1.0e6;
+#else
+        float light_distance = sqrt(distance_sqr);
+#endif
+        float contact = ContactShadow(s_tex4, gbuf_texel, data.depth01, depthUlp, L, contact_shadow_length, light_distance, fragCoord);
         surface_shadow = min(surface_shadow, contact);
     }
 #if DIRECTIONAL_LIGHT

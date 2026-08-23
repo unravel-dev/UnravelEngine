@@ -663,47 +663,37 @@ REFLECT(light)
             entt::attribute{"min", 0.01f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Maximum ray distance in view-space units. Shorter = tighter contact detail, longer = catches more occluders."},
+            entt::attribute{"tooltip", "Ray length in world units along the light. Longer rays catch occluders farther from the contact; near the camera the ray is shortened to a bounded number of pixels."},
             entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
         })
         .data<&light::contact_shadow_params::thickness>("thickness"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "thickness"},
-            entt::attribute{"pretty_name", "Hit Thickness"},
+            entt::attribute{"pretty_name", "Occluder Thickness"},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 2.0f},
+            entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.005f},
-            entt::attribute{"tooltip", "View-space depth tolerance for a ray hit. Zero = automatic (15% of ray length)."},
+            entt::attribute{"tooltip", "Minimum occluder thickness in world units. Larger values let thin objects cast longer contact shadows but darken the ground beside objects."},
             entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
         })
-        .data<&light::contact_shadow_params::n_dot_l_fade_start>("n_dot_l_fade_start"_hs)
+        .data<&light::contact_shadow_params::max_distance>("max_distance"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "n_dot_l_fade_start"},
-            entt::attribute{"pretty_name", "N·L Fade Start"},
+            entt::attribute{"name", "max_distance"},
+            entt::attribute{"pretty_name", "Max Distance"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1000.0f},
+            entt::attribute{"step", 1.0f},
+            entt::attribute{"tooltip", "Distance from the camera in world units where contact shadows fade out. 0 = unlimited."},
+            entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
+        })
+        .data<&light::contact_shadow_params::opacity>("opacity"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "opacity"},
+            entt::attribute{"pretty_name", "Opacity"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
             entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Contact shadow ramps in from this N·L (smoothstep low edge)."},
-            entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
-        })
-        .data<&light::contact_shadow_params::n_dot_l_fade_end>("n_dot_l_fade_end"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "n_dot_l_fade_end"},
-            entt::attribute{"pretty_name", "N·L Fade End"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"step", 0.01f},
-            entt::attribute{"tooltip", "Full contact shadow strength at or above this N·L (smoothstep high edge)."},
-            entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
-        })
-        .data<&light::contact_shadow_params::normal_facing_reject>("normal_facing_reject"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "normal_facing_reject"},
-            entt::attribute{"pretty_name", "Normal Facing Reject"},
-            entt::attribute{"min", -1.0f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "Reject hits when reconstructed occluder normal faces the light above this cosine. -1 disables."},
+            entt::attribute{"tooltip", "Strength of the contact shadow."},
             entt::attribute{"predicate", contact_shadow_enabled_predicate_entt},
         });
 
@@ -895,14 +885,15 @@ SAVE(light::shadowmap_params)
 SAVE_INSTANTIATE(light::shadowmap_params, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light::shadowmap_params, ser20::oarchive_binary_t);
 
+// "occluder_thickness" replaced "thickness" together with the hit model: documents carrying the
+// old window value load the new default.
 SAVE(light::contact_shadow_params)
 {
     try_save(ar, ser20::make_nvp("enabled", obj.enabled));
     try_save(ar, ser20::make_nvp("ray_length", obj.ray_length));
-    try_save(ar, ser20::make_nvp("thickness", obj.thickness));
-    try_save(ar, ser20::make_nvp("n_dot_l_fade_start", obj.n_dot_l_fade_start));
-    try_save(ar, ser20::make_nvp("n_dot_l_fade_end", obj.n_dot_l_fade_end));
-    try_save(ar, ser20::make_nvp("normal_facing_reject", obj.normal_facing_reject));
+    try_save(ar, ser20::make_nvp("occluder_thickness", obj.thickness));
+    try_save(ar, ser20::make_nvp("max_distance", obj.max_distance));
+    try_save(ar, ser20::make_nvp("opacity", obj.opacity));
 }
 SAVE_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_binary_t);
@@ -1044,10 +1035,9 @@ LOAD(light::contact_shadow_params)
 {
     try_load(ar, ser20::make_nvp("enabled", obj.enabled));
     try_load(ar, ser20::make_nvp("ray_length", obj.ray_length));
-    try_load(ar, ser20::make_nvp("thickness", obj.thickness));
-    try_load(ar, ser20::make_nvp("n_dot_l_fade_start", obj.n_dot_l_fade_start));
-    try_load(ar, ser20::make_nvp("n_dot_l_fade_end", obj.n_dot_l_fade_end));
-    try_load(ar, ser20::make_nvp("normal_facing_reject", obj.normal_facing_reject));
+    try_load(ar, ser20::make_nvp("occluder_thickness", obj.thickness));
+    try_load(ar, ser20::make_nvp("max_distance", obj.max_distance));
+    try_load(ar, ser20::make_nvp("opacity", obj.opacity));
 }
 LOAD_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_associative_t);
 LOAD_INSTANTIATE(light::contact_shadow_params, ser20::oarchive_binary_t);

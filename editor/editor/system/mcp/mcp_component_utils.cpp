@@ -514,6 +514,18 @@ auto light_to_json(const light_component& comp, const std::unordered_set<std::st
     {
         append_prop(json, first, "contact_shadow_ray_length", fmt::format("{:.6g}", l.contact_shadow.ray_length));
     }
+    if(wants_key(filter, "contact_shadow_thickness"))
+    {
+        append_prop(json, first, "contact_shadow_thickness", fmt::format("{:.6g}", l.contact_shadow.thickness));
+    }
+    if(wants_key(filter, "contact_shadow_max_distance"))
+    {
+        append_prop(json, first, "contact_shadow_max_distance", fmt::format("{:.6g}", l.contact_shadow.max_distance));
+    }
+    if(wants_key(filter, "contact_shadow_opacity"))
+    {
+        append_prop(json, first, "contact_shadow_opacity", fmt::format("{:.6g}", l.contact_shadow.opacity));
+    }
     if(wants_key(filter, "split_distribution"))
     {
         append_prop(json, first, "split_distribution", fmt::format("{:.6g}", l.directional_shadow_params.split_distribution));
@@ -701,6 +713,36 @@ auto apply_light_properties(light_component& comp, const simdjson::dom::object& 
         else if(key == "contact_shadow_ray_length")
         {
             if(!parse_number(value, light.contact_shadow.ray_length, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "contact_shadow_thickness")
+        {
+            if(!parse_number(value, light.contact_shadow.thickness, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "contact_shadow_max_distance")
+        {
+            if(!parse_number(value, light.contact_shadow.max_distance, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "contact_shadow_opacity")
+        {
+            if(!parse_number(value, light.contact_shadow.opacity, error))
             {
                 result.ok = false;
                 result.errors.push_back(key + ": " + error);
@@ -1886,6 +1928,9 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Light", "shadow_resolution", "string", R"("enum":["low","medium","high","very_high"])");
     add("Light", "contact_shadow_enabled", "boolean");
     add("Light", "contact_shadow_ray_length", "number");
+    add("Light", "contact_shadow_thickness", "number");
+    add("Light", "contact_shadow_max_distance", "number");
+    add("Light", "contact_shadow_opacity", "number");
     add("Light", "split_distribution", "number");
     add("Light", "num_splits", "integer");
     add("Light", "stabilize", "boolean");

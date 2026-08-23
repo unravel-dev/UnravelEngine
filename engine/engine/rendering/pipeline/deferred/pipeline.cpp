@@ -28,6 +28,7 @@
 #include <graphics/render_pass.h>
 
 #include <algorithm>
+#include <cmath>
 #include <graphics/render_view.h>
 #include <graphics/texture.h>
 #include <graphics/vertex_buffer.h>
@@ -38,6 +39,8 @@ namespace
 {
 /// Border fade of the cloud shadow map in map space (fraction of the half extent).
 constexpr float cloud_shadow_border_fade = 0.08f;
+/// Period of the contact-shadow dither's temporal offset (frames); TAA integrates it.
+constexpr int contact_shadow_dither_frames = 16;
 } // namespace
 
 namespace rendering
@@ -1512,22 +1515,16 @@ auto deferred::run_direct_lighting_pass(scene& scn,
 
             lprogram.program->begin();
 
-            float contact_shadow_distance = light.contact_shadow.enabled
-                                             ? light.contact_shadow.ray_length
-                                             : 0.0f;
-
-            float n_dot_l_low = light.contact_shadow.n_dot_l_fade_start;
-            float n_dot_l_high = light.contact_shadow.n_dot_l_fade_end;
-            if(n_dot_l_high < n_dot_l_low)
-            {
-                const float t = n_dot_l_low;
-                n_dot_l_low = n_dot_l_high;
-                n_dot_l_high = t;
-            }
+            const float contact_shadow_distance = light.contact_shadow.enabled
+                                                   ? light.contact_shadow.ray_length
+                                                   : 0.0f;
+            // The dither advances only while TAA integrates it (aa_data.x is the temporal frame
+            // index, 0 without TAA); wrapped so the noise offsets stay in float range.
+            const float contact_frame = std::fmod(camera.get_aa_data().x, float(contact_shadow_dither_frames));
             const float contact_shadow_uniform[4] = {light.contact_shadow.thickness,
-                                                     n_dot_l_low,
-                                                     n_dot_l_high,
-                                                     light.contact_shadow.normal_facing_reject};
+                                                     light.contact_shadow.max_distance,
+                                                     light.contact_shadow.opacity,
+                                                     contact_frame};
 
             if(light.type == light_type::directional)
             {
