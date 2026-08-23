@@ -490,6 +490,10 @@ auto light_to_json(const light_component& comp, const std::unordered_set<std::st
     {
         append_prop(json, first, "shadow_normal_bias", fmt::format("{:.6g}", l.shadow_params.normal_bias));
     }
+    if(wants_key(filter, "shadow_slope_bias"))
+    {
+        append_prop(json, first, "shadow_slope_bias", fmt::format("{:.6g}", l.shadow_params.slope_bias));
+    }
     if(wants_key(filter, "shadow_near_plane"))
     {
         append_prop(json, first, "shadow_near_plane", fmt::format("{:.6g}", l.shadow_params.near_plane));
@@ -636,6 +640,16 @@ auto apply_light_properties(light_component& comp, const simdjson::dom::object& 
         else if(key == "shadow_normal_bias")
         {
             if(!parse_number(value, light.shadow_params.normal_bias, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "shadow_slope_bias")
+        {
+            if(!parse_number(value, light.shadow_params.slope_bias, error))
             {
                 result.ok = false;
                 result.errors.push_back(key + ": " + error);
@@ -1866,6 +1880,7 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Light", "inner_angle", "number");
     add("Light", "shadow_bias", "number");
     add("Light", "shadow_normal_bias", "number");
+    add("Light", "shadow_slope_bias", "number");
     add("Light", "shadow_near_plane", "number");
     add("Light", "shadow_far_plane", "number");
     add("Light", "shadow_resolution", "string", R"("enum":["low","medium","high","very_high"])");

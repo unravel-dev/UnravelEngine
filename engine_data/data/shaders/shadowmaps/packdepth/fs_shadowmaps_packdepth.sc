@@ -10,5 +10,5 @@ $input v_position
 void main()
 {
 	float depth = v_position.z/v_position.w * 0.5 + 0.5;
-	gl_FragColor = packFloatToRgba(depth);
+	gl_FragColor = vec4(depth, 0.0, 0.0, 0.0);
 }

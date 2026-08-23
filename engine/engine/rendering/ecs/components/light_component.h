@@ -396,7 +396,7 @@ private:
     /// Extinction scale.
     float cloud_density_{1.5f};
     /// Sun-path extinction as a fraction of the view extinction.
-    float cloud_shadow_strength_{0.25f};
+    float cloud_shadow_strength_{0.1f};
     /// Layer altitudes from world y = 0 (true) or from the camera (false).
     bool cloud_world_space_altitude_{true};
     /// Project the cloud layer as a shadow on the scene.

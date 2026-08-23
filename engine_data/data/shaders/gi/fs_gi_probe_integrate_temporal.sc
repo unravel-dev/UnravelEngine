@@ -28,9 +28,21 @@ SAMPLER2D(s_gi_history_fast, 12);
 #define GI_TEMPORAL_FUSED
 #include "gi/gi_temporal_kernel.sh"
 
+#if BGFX_SHADER_LANGUAGE_GLSL >= 420
+// gl_FragData is removed from GLSL 4.20 core, and this pass compiles at 430 (its include
+// chain carries compute buffers): the render targets are declared explicitly here. Every
+// other language keeps gl_FragData, which shaderc maps to the targets itself.
+layout(location = 0) out vec4 gi_color_out;
+layout(location = 1) out vec4 gi_moments_out;
+layout(location = 2) out vec4 gi_fast_out;
+#define GI_COLOR_OUT   gi_color_out
+#define GI_MOMENTS_OUT gi_moments_out
+#define GI_FAST_OUT    gi_fast_out
+#else
 #define GI_COLOR_OUT   gl_FragData[0]
 #define GI_MOMENTS_OUT gl_FragData[1]
 #define GI_FAST_OUT    gl_FragData[2]
+#endif
 
 void main()
 {

@@ -550,20 +550,29 @@ REFLECT(light)
         .data<&light::shadowmap_params::bias>("bias"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bias"},
-            entt::attribute{"pretty_name", "Bias"},
+            entt::attribute{"pretty_name", "Depth Bias"},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 0.01f},
-            entt::attribute{"step", 0.00001f},
-            entt::attribute{"tooltip", "Shadowmap bias offset."},
+            entt::attribute{"max", 10.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Constant receiver depth bias, in shadow-map texels."},
+        })
+        .data<&light::shadowmap_params::slope_bias>("slope_bias"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "slope_bias"},
+            entt::attribute{"pretty_name", "Slope Bias"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 10.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Slope-scaled depth bias, in shadow-map texels per unit slope toward the light."},
         })
         .data<&light::shadowmap_params::normal_bias>("normal_bias"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "normal_bias"},
             entt::attribute{"pretty_name", "Normal Bias"},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 0.5f},
-            entt::attribute{"step", 0.00001f},
-            entt::attribute{"tooltip", "Shadowmap normal bias offset"},
+            entt::attribute{"max", 10.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip", "Receiver offset along the surface normal, in shadow-map texels (zero when facing the light)."},
         })
         .data<&light::shadowmap_params::near_plane>("near_plane"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -838,8 +847,9 @@ SAVE(light::shadowmap_params)
     try_save(ar, ser20::make_nvp("type", obj.type));
     try_save(ar, ser20::make_nvp("depth", obj.depth));
     try_save(ar, ser20::make_nvp("resolution", obj.resolution));
-    try_save(ar, ser20::make_nvp("bias", obj.bias));
-    try_save(ar, ser20::make_nvp("normal_bias", obj.normal_bias));
+    try_save(ar, ser20::make_nvp("depth_bias_texels", obj.bias));
+    try_save(ar, ser20::make_nvp("slope_bias_texels", obj.slope_bias));
+    try_save(ar, ser20::make_nvp("normal_bias_texels", obj.normal_bias));
     try_save(ar, ser20::make_nvp("near_plane", obj.near_plane));
     try_save(ar, ser20::make_nvp("far_plane", obj.far_plane));
     try_save(ar, ser20::make_nvp("show_coverage", obj.show_coverage));
@@ -978,8 +988,12 @@ LOAD(light::shadowmap_params)
     try_load(ar, ser20::make_nvp("type", obj.type));
     try_load(ar, ser20::make_nvp("depth", obj.depth));
     try_load(ar, ser20::make_nvp("resolution", obj.resolution));
-    try_load(ar, ser20::make_nvp("bias", obj.bias));
-    try_load(ar, ser20::make_nvp("normal_bias", obj.normal_bias));
+    // The biases are keyed by their unit. Documents written before the texel model stored
+    // "bias" / "normal_bias" in normalized depth of the packed RGBA8 maps and in world units;
+    // those values have no meaning here and are deliberately not read, so the defaults apply.
+    try_load(ar, ser20::make_nvp("depth_bias_texels", obj.bias));
+    try_load(ar, ser20::make_nvp("slope_bias_texels", obj.slope_bias));
+    try_load(ar, ser20::make_nvp("normal_bias_texels", obj.normal_bias));
     try_load(ar, ser20::make_nvp("near_plane", obj.near_plane));
     try_load(ar, ser20::make_nvp("far_plane", obj.far_plane));
     try_load(ar, ser20::make_nvp("show_coverage", obj.show_coverage));

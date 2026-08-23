@@ -45,20 +45,18 @@
 SAMPLER2D(s_gi_sun_shadowmap, 14);
 uniform mat4 u_gi_sun_shadowmap_mtx;
 /// x = light-buffer index of the sun the bound map belongs to (< 0 disables the tier),
-/// y = receiver depth bias (the generator's u_params1.x), z = texcoord border.
+/// y = cascade-0 constant receiver bias in stored depth (the generator's texel bias converted),
+/// z = texcoord border, w = d(stored depth)/d(world distance along the sun).
 uniform vec4 u_gi_sun_shadowmap_params;
-#define u_gi_sun_index  u_gi_sun_shadowmap_params.x
-#define u_gi_sun_bias   u_gi_sun_shadowmap_params.y
-#define u_gi_sun_border u_gi_sun_shadowmap_params.z
+#define u_gi_sun_index          u_gi_sun_shadowmap_params.x
+#define u_gi_sun_bias           u_gi_sun_shadowmap_params.y
+#define u_gi_sun_border         u_gi_sun_shadowmap_params.z
+#define u_gi_sun_world_to_depth u_gi_sun_shadowmap_params.w
 
-/// shaderlib.sh unpackRgbaToFloat, restated: the compute include chain does not carry
-/// shaderlib, and the depth maps pack RGBA (every technique except VSM, which the caller
-/// gates out).
-float GiUnpackShadowDepth(vec4 rgba)
-{
-	const vec4 shift = vec4(1.0 / (256.0 * 256.0 * 256.0), 1.0 / (256.0 * 256.0), 1.0 / 256.0, 1.0);
-	return dot(rgba, shift);
-}
+/// The quadrature taps sit half a voxel off the face centre; a face tilted toward the sun
+/// puts them at different depths than the centre. One voxel of receiver depth covers faces
+/// tilted up to about 63 degrees, beyond which the face receives little sun anyway.
+#define GI_SUN_SHADOWMAP_SLOPE_COVER_VOXELS 1.0
 
 /**
  * Sun visibility from the bound cascade-0 map, when it covers @p world_position.
@@ -102,14 +100,14 @@ bool GiSunShadowmapVisibility(vec3 world_position, vec3 world_normal, float voxe
 	vec4 delta_t = mul(u_gi_sun_shadowmap_mtx, vec4(tangent, 0.0));
 	vec4 delta_b = mul(u_gi_sun_shadowmap_mtx, vec4(bitangent, 0.0));
 	float lit = 0.0;
+	float bias = u_gi_sun_bias + voxel_size * GI_SUN_SHADOWMAP_SLOPE_COVER_VOXELS * u_gi_sun_world_to_depth;
 	for(int tap = 0; tap < 4; ++tap)
 	{
 		vec4 tap_coord = shadow_coord +
 		                 (tap < 2 ? delta_t : -delta_t) +
 		                 ((tap & 1) != 0 ? delta_b : -delta_b);
-		float receiver = (tap_coord.z - u_gi_sun_bias) / tap_coord.w;
-		float occluder = GiUnpackShadowDepth(
-		    texture2DLod(s_gi_sun_shadowmap, tap_coord.xy / tap_coord.w, 0.0));
+		float receiver = (tap_coord.z - bias) / tap_coord.w;
+		float occluder = texture2DLod(s_gi_sun_shadowmap, tap_coord.xy / tap_coord.w, 0.0).x;
 		lit += step(receiver, occluder);
 	}
 	out_lit = lit * 0.25;

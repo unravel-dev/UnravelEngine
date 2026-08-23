@@ -7,5 +7,5 @@ void main()
 {
 	shadowCutoutClip(v_texcoord0);
 	float depthSq = v_depth * v_depth;
-	gl_FragColor = vec4(packHalfFloat(v_depth), packHalfFloat(depthSq));
+	gl_FragColor = vec4(v_depth, depthSq, 0.0, 0.0);
 }

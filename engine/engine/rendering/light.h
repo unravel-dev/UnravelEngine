@@ -225,12 +225,25 @@ struct light
         sm_resolution resolution = sm_resolution::high;
         /// Near plane distance for shadow mapping.
         float near_plane{0.2f};
-        /// Far plane distance for shadow mapping.
-        float far_plane{550.0f};
-        /// Bias for shadow mapping.
-        float bias{0.00100f};
-        /// Normal bias for shadow mapping.
-        float normal_bias{0.1300f};
+        /// Far plane distance for shadow mapping. For directional lights this is the shadow
+        /// distance: the last cascade ends (and fades out) here, and the texel size of every
+        /// cascade scales with it (about 0.07 % of the cascade's far distance at 2048): 200 m
+        /// keeps the far cascade around 15 cm per texel; 500 m and more leaves it too coarse for
+        /// the shadows of small objects at low sun.
+        float far_plane{200.0f};
+        /// Constant receiver depth bias, in shadow-map texels: the world size of one texel of
+        /// the cascade that answers (directional) or of the map at the receiver's distance
+        /// (spot / point). Texel units keep the bias minimal near the camera and sufficient in
+        /// the far cascades without retuning per scene. Planar receivers are compared against
+        /// their own plane at the texel centre (see fs_pbr_lighting.sh), so the three terms only
+        /// cover what that plane does not know: curvature, normal maps and position error.
+        float bias{0.5f};
+        /// Receiver offset along the surface normal, in shadow-map texels, scaled by the sine
+        /// of the angle between the normal and the light (zero when facing the light).
+        float normal_bias{0.5f};
+        /// Slope-scaled receiver depth bias, in shadow-map texels per unit tan(angle between
+        /// the normal and the light); the slope is clamped in the shader.
+        float slope_bias{0.5f};
 
         /**
          * @brief Struct representing implementation parameters for hard shadow mapping.

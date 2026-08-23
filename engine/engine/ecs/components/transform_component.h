@@ -73,6 +73,11 @@ public:
             /// Model pose refresh: submesh/bone poses and cached render-proxy bounds
             /// (see model_component::update_armature).
             model_pose = 2,
+            /// The same refresh, consumed on the MODEL'S OWN entity for submeshes the owner
+            /// places directly (meshes without an armature node for them). A separate slot
+            /// from model_pose: an entity can be an armature node of one model and the owner
+            /// of another, and the two refreshes run in parallel.
+            model_owner_pose = 3,
         };
     };
     /**

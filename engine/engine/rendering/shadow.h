@@ -201,12 +201,26 @@ struct Uniforms
         m_XOffset = 10.0f / 512.0f;
         m_YOffset = 10.0f / 512.0f;
 
+        for(int ii = 0; ii < 4; ++ii)
+        {
+            m_shadowBiasParams[ii] = 0.0f;
+            m_csmTexelWorld[ii] = 0.0f;
+            m_perspTexelParams[ii] = 0.0f;
+            m_shadowAxisU[ii] = 0.0f;
+            m_shadowAxisV[ii] = 0.0f;
+        }
+
         u_params0 = bgfx::createUniform("u_params0", bgfx::UniformType::Vec4);
         u_params1 = bgfx::createUniform("u_params1", bgfx::UniformType::Vec4);
         u_params2 = bgfx::createUniform("u_params2", bgfx::UniformType::Vec4);
         u_color = bgfx::createUniform("u_color", bgfx::UniformType::Vec4);
         u_smSamplingParams = bgfx::createUniform("u_smSamplingParams", bgfx::UniformType::Vec4);
         u_csmFarDistances = bgfx::createUniform("u_csmFarDistances", bgfx::UniformType::Vec4);
+        u_shadowBiasParams = bgfx::createUniform("u_shadowBiasParams", bgfx::UniformType::Vec4);
+        u_csmTexelWorld = bgfx::createUniform("u_csmTexelWorld", bgfx::UniformType::Vec4);
+        u_perspTexelParams = bgfx::createUniform("u_perspTexelParams", bgfx::UniformType::Vec4);
+        u_shadowAxisU = bgfx::createUniform("u_shadowAxisU", bgfx::UniformType::Vec4);
+        u_shadowAxisV = bgfx::createUniform("u_shadowAxisV", bgfx::UniformType::Vec4);
         u_lightMtx = bgfx::createUniform("u_lightMtx", bgfx::UniformType::Mat4);
 
         u_tetraNormalGreen = bgfx::createUniform("u_tetraNormalGreen", bgfx::UniformType::Vec4);
@@ -259,6 +273,11 @@ struct Uniforms
         bgfx::setUniform(u_params2, m_params2);
         bgfx::setUniform(u_smSamplingParams, m_paramsBlur);
         bgfx::setUniform(u_csmFarDistances, m_csmFarDistances);
+        bgfx::setUniform(u_shadowBiasParams, m_shadowBiasParams);
+        bgfx::setUniform(u_csmTexelWorld, m_csmTexelWorld);
+        bgfx::setUniform(u_perspTexelParams, m_perspTexelParams);
+        bgfx::setUniform(u_shadowAxisU, m_shadowAxisU);
+        bgfx::setUniform(u_shadowAxisV, m_shadowAxisV);
     }
 
     // Call this before each draw call.
@@ -305,6 +324,11 @@ struct Uniforms
         safe_destroy(u_color);
         safe_destroy(u_smSamplingParams);
         safe_destroy(u_csmFarDistances);
+        safe_destroy(u_shadowBiasParams);
+        safe_destroy(u_csmTexelWorld);
+        safe_destroy(u_perspTexelParams);
+        safe_destroy(u_shadowAxisU);
+        safe_destroy(u_shadowAxisV);
 
         safe_destroy(u_tetraNormalGreen);
         safe_destroy(u_tetraNormalYellow);
@@ -341,7 +365,9 @@ struct Uniforms
     {
         struct
         {
+            /// Constant receiver depth bias, in shadow-map texels.
             float m_shadowMapBias;
+            /// Receiver normal offset, in shadow-map texels.
             float m_shadowMapOffset;
             float m_shadowMapParam0;
             float m_shadowMapParam1;
@@ -382,6 +408,20 @@ struct Uniforms
     float m_tetraNormalRed[3];
     float m_csmFarDistances[4];
 
+    /// x = slope-scaled bias (texels per unit slope), y = d(stored depth)/d(world depth) for
+    /// ortho and linear maps, z = the same numerator for perspective 1/z maps (the shader
+    /// divides by w^2), w = z for the vertical tetrahedron faces (stencil-packed point lights).
+    float m_shadowBiasParams[4];
+    /// World size of one shadow-map texel per cascade (directional lights).
+    float m_csmTexelWorld[4];
+    /// Perspective maps: x = texel world size per unit distance along the light axis,
+    /// y / z = map width / height per unit distance (spot and point lights).
+    float m_perspTexelParams[4];
+    /// World-space unit vectors along +u and +v of the map, for the receiver-plane bias
+    /// (zero for point lights, whose faces would each need their own pair).
+    float m_shadowAxisU[4];
+    float m_shadowAxisV[4];
+
     float* m_lightMtxPtr;
     float* m_colorPtr;
     Light* m_lightPtr;
@@ -397,6 +437,11 @@ private:
     bgfx::UniformHandle u_color;
     bgfx::UniformHandle u_smSamplingParams;
     bgfx::UniformHandle u_csmFarDistances;
+    bgfx::UniformHandle u_shadowBiasParams;
+    bgfx::UniformHandle u_csmTexelWorld;
+    bgfx::UniformHandle u_perspTexelParams;
+    bgfx::UniformHandle u_shadowAxisU;
+    bgfx::UniformHandle u_shadowAxisV;
 
     bgfx::UniformHandle u_tetraNormalGreen;
     bgfx::UniformHandle u_tetraNormalYellow;
@@ -676,8 +721,14 @@ public:
     /// split directly (the GI light-voxel pass) instead of taking the full CSM uniform set.
     auto get_shadow_map_matrix(uint8_t split) const -> const float*;
 
-    /// The receiver depth bias the lighting shaders receive via u_params1.x.
+    /// The constant receiver depth bias of cascade 0 in stored depth units (the texel bias
+    /// converted through the cascade's texel size and depth scale), for consumers that sample
+    /// the map with their own compare (the GI light-voxel pass).
     auto get_shadow_map_bias() const -> float;
+
+    /// d(stored depth)/d(world distance along the light) of the directional map, so a consumer
+    /// can convert its own world-space bias (the GI pass covers a voxel of slope).
+    auto get_shadow_map_world_to_depth() const -> float;
 
     // Configuration methods for improved shadow mapping
     void set_frustum_calculation_method(frustum_calculation_method::Enum method) { frustum_method_ = method; }
@@ -724,6 +775,10 @@ private:
                                                ShadowMapSettings* currentSmSettings,
                                                const RenderState& renderState,
                                                ::unravel::rendering::pipeline_stats* stats = nullptr);
+
+    /// Fills the geometric bias conversions (depth scale, map axes, perspective texel size)
+    /// from the final light view / projection matrices of this update.
+    void update_bias_uniforms(bool origin_bottom_left);
 
     ClearValues clear_values_;
 

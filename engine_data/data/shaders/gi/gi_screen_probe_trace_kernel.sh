@@ -522,7 +522,8 @@ void main()
 	bool leader = gl_LocalInvocationID.x == 0u && gl_LocalInvocationID.y == 0u;
 #endif
 	uint packed_probe = floatBitsToUint(b_gi_probes[GiProbeTracedListBase() + list_index].x);
-	bool active = packed_probe != GI_TRACE_LIST_SENTINEL;
+	// (`active` is a reserved word in GLSL)
+	bool probe_active = packed_probe != GI_TRACE_LIST_SENTINEL;
 	ivec2 probe = ivec2(int(packed_probe & 0xFFFFu), int(packed_probe >> 16u));
 	uint record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
 	if(leader)
@@ -534,7 +535,7 @@ void main()
 			s_screen_size = HizGetDepthMipResolution(s_hiz, 0);
 			s_frame_r2 = fract(vec2(0.754877666, 0.569840291) * u_gi_camera.w);
 		}
-		if(active)
+		if(probe_active)
 		{
 			s_history_record[slot] = -1;
 			s_importance_mean[slot] = 0.0;
@@ -650,7 +651,7 @@ void main()
 		}
 	}
 	barrier();
-	if(!active)
+	if(!probe_active)
 	{
 		return;
 	}

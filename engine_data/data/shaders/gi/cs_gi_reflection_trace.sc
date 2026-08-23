@@ -13,8 +13,10 @@
 #include "bgfx_compute.sh"
 #include "gi/gi_reflection_kernel.sh"
 
-BUFFER_RO(b_gi_refl_list, uint, 7);
-IMAGE2D_WO(s_gi_refl_out, rgba16f, 11);
+// The output image sits on stage 7: OpenGL guarantees only eight image units (0-7), while
+// a buffer tolerates the high stages, so the trace list moved up to 15.
+BUFFER_RO(b_gi_refl_list, uint, 15);
+IMAGE2D_WO(s_gi_refl_out, rgba16f, 7);
 
 /// xy = one texel of the trace target, zw = its dimensions.
 uniform vec4 u_gi_reflection_texel;
@@ -31,8 +33,9 @@ void main()
 	{
 		return;
 	}
-	uint packed = b_gi_refl_list[2u + index];
-	ivec2 pixel = ivec2(int(packed & 0xffffu), int(packed >> 16u));
+	// (packed is a reserved word in GLSL)
+	uint packed_pixel = b_gi_refl_list[2u + index];
+	ivec2 pixel = ivec2(int(packed_pixel & 0xffffu), int(packed_pixel >> 16u));
 	vec2 frag_coord = vec2(pixel) + vec2_splat(0.5);
 	vec2 uv = frag_coord * u_gi_reflection_texel.xy;
 	imageStore(s_gi_refl_out, pixel, GiReflectionShade(uv, frag_coord));

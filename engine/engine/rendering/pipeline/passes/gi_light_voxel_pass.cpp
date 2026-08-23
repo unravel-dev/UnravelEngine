@@ -158,7 +158,13 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         // One filter footprint inside the edge, mirroring the lighting shader's cascade
         // selection bounds, so a clamped tap never answers for a position outside the crop.
         sun_params[2] = 0.01f;
-        gfx::set_texture(14, program_.s_gi_sun_shadowmap->native_handle(), sun_map);
+        // World -> stored depth, so the kernel can cover a voxel of slope per answering level.
+        sun_params[3] = params.sun_shadows->get_shadow_map_world_to_depth();
+        // Raw float depth: point sampled and clamped, as the lighting pass binds it.
+        gfx::set_texture(14,
+                         program_.s_gi_sun_shadowmap->native_handle(),
+                         sun_map,
+                         BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
     }
     else
     {

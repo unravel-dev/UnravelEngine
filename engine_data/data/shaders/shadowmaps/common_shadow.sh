@@ -127,9 +127,36 @@ float texcoordInRange(vec2 _texcoord)
     return float(inRange);
 }
 
-float hardShadowLod(sampler2D _sampler, float lod, vec4 _shadowCoord, float _bias)
+// Shadow maps hold raw float depth in .x (VSM: depth and depth^2 in .xy), point sampled.
+//
+// Receiver-plane correction: _planeGrad is the change of stored depth per unit of shadow-map UV
+// along the receiver's own surface plane (from the G-buffer normal). A point sample returns the
+// depth the map stored at the CENTRE of a texel, so every tap is compared against the depth the
+// receiver's plane has at that texel centre - not at the receiver, and not at the tap position:
+// the within-texel slope error of a point sample, which otherwise needs a slope bias of up to
+// a texel times the slope, and the kernel radius both drop out for planar receivers. _uvOffset
+// is the tap's displacement from the receiver, so texCoord - _uvOffset is the receiver itself.
+// _bias is the constant + slope-scaled bias, already converted to stored depth units.
+uniform vec4 u_params2;
+#define u_shadowMapTexelSize u_params2.z
+
+// Smallest filter radius in texels: below one texel, point-sampled taps all land on the same
+// texel and the kernel stops filtering (blocky edges in the far cascades).
+#define SHADOW_MIN_FILTER_RADIUS_TEXELS 1.0
+
+// Stored-depth correction for the plane of a receiver at _receiverUV when reading the texel
+// that contains _sampleUV.
+float receiverPlaneDelta(vec2 _sampleUV, vec2 _receiverUV, vec2 _planeGrad)
+{
+    float mapSize = 1.0 / u_shadowMapTexelSize;
+    vec2 texelCenter = (floor(_sampleUV * mapSize) + 0.5) * u_shadowMapTexelSize;
+    return dot(texelCenter - _receiverUV, _planeGrad);
+}
+
+float hardShadowLod(sampler2D _sampler, float lod, vec4 _shadowCoord, float _bias, vec2 _planeGrad, vec2 _uvOffset)
 {
     vec2 texCoord = _shadowCoord.xy/_shadowCoord.w;
+    vec2 receiverUV = texCoord - _uvOffset;
 
 #if SM_CSM
     // For CSM, clamp to the cascade bounds so that filter samples extending
@@ -147,24 +174,26 @@ float hardShadowLod(sampler2D _sampler, float lod, vec4 _shadowCoord, float _bia
     }
 #endif
 
-    float receiver = (_shadowCoord.z-_bias)/_shadowCoord.w;
-    float occluder = unpackRgbaToFloat(texture2DLod(_sampler, texCoord, lod) );
+    float receiver = (_shadowCoord.z-_bias)/_shadowCoord.w + receiverPlaneDelta(texCoord, receiverUV, _planeGrad);
+    float occluder = texture2DLod(_sampler, texCoord, lod).x;
 
     float visibility = step(receiver, occluder);
     return visibility;
 }
 
-float hardShadow(sampler2D _sampler, vec4 _shadowCoord, float _bias)
+float hardShadow(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec2 _planeGrad)
 {
-    return hardShadowLod(_sampler, 0.0, _shadowCoord, _bias);
+    return hardShadowLod(_sampler, 0.0, _shadowCoord, _bias, _planeGrad, vec2_splat(0.0));
 }
 
 
 // _diskRotation = vec2(sin(angle), cos(angle)) for per-pixel Poisson disk rotation.
 // Pass vec2(0.0, 1.0) for no rotation (identity).
-float PCFLodOffset(sampler2D _sampler, float lod, vec2 offset, vec4 _shadowCoord, float _bias, vec2 _texelSize, vec2 _diskRotation)
+// offset is in pre-divide units (UV * w); the plane correction takes the UV displacement.
+float PCFLodOffset(sampler2D _sampler, float lod, vec2 offset, vec4 _shadowCoord, float _bias, vec2 _planeGrad, vec2 _texelSize, vec2 _diskRotation)
 {
     float result = 0.0;
+    float invW = 1.0 / _shadowCoord.w;
 
 #if SM_CSM
     // For CSM, de-weight samples that land near the cascade shadow map edge.
@@ -181,35 +210,35 @@ float PCFLodOffset(sampler2D _sampler, float lod, vec2 offset, vec4 _shadowCoord
         float edgeDist = min(min(sampleUV.x, 1.0 - sampleUV.x),
                              min(sampleUV.y, 1.0 - sampleUV.y));
         float weight = smoothstep(0.0, 0.02, edgeDist);
-        result += hardShadowLod(_sampler, lod, sampleCoord, _bias) * weight;
+        result += hardShadowLod(_sampler, lod, sampleCoord, _bias, _planeGrad, jitteredOffset * invW) * weight;
         totalWeight += weight;
     }
     return (totalWeight > 0.5) ? result / totalWeight
-                               : hardShadowLod(_sampler, lod, _shadowCoord, _bias);
+                               : hardShadowLod(_sampler, lod, _shadowCoord, _bias, _planeGrad, vec2_splat(0.0));
 #else
     for ( int i = 0; i < PCF_LOD_OFFSET_NUM_SAMPLES; ++i )
     {
         vec2 jitteredOffset = rotateSample(samplePoisson(i), _diskRotation) * offset;
-        result += hardShadowLod(_sampler, lod, _shadowCoord + vec4(jitteredOffset, 0.0, 0.0), _bias);
+        result += hardShadowLod(_sampler, lod, _shadowCoord + vec4(jitteredOffset, 0.0, 0.0), _bias, _planeGrad, jitteredOffset * invW);
     }
     return result / float(PCF_LOD_OFFSET_NUM_SAMPLES);
 #endif
 }
 
-float PCFLod(sampler2D _sampler, float lod, vec2 filterRadius, vec4 _shadowCoord, float _bias, vec4 _pcfParams, vec2 _texelSize, vec2 _diskRotation, float _cascadeScale)
+float PCFLod(sampler2D _sampler, float lod, vec2 filterRadius, vec4 _shadowCoord, float _bias, vec2 _planeGrad, vec4 _pcfParams, vec2 _texelSize, vec2 _diskRotation, float _cascadeScale, float _minRadiusUV)
 {
-    vec2 offset = filterRadius * _pcfParams.zw * _texelSize * _shadowCoord.w * _cascadeScale;
+    vec2 offset = max(filterRadius * _pcfParams.zw * _texelSize * _cascadeScale, vec2_splat(_minRadiusUV)) * _shadowCoord.w;
 
-    return PCFLodOffset(_sampler, lod, offset, _shadowCoord, _bias, _texelSize, _diskRotation);
+    return PCFLodOffset(_sampler, lod, offset, _shadowCoord, _bias, _planeGrad, _texelSize, _diskRotation);
 }
 
-float PCF(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcfParams, vec2 _texelSize, vec2 fragCoord, float _cascadeScale)
+float PCF(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec2 _planeGrad, vec4 _pcfParams, vec2 _texelSize, vec2 fragCoord, float _cascadeScale, float _minRadiusUV)
 {
     // Per-pixel Poisson disk rotation from shadow map texel coordinates
     vec2 noiseCoord = fragCoord;//(_shadowCoord.xy / _shadowCoord.w) * (1.0 / _texelSize.x);
     float angle = interleavedGradientNoise(noiseCoord) * 6.283185;
     vec2 diskRotation = vec2(sin(angle), cos(angle));
-    return PCFLod(_sampler, 0.0, vec2(2.0, 2.0), _shadowCoord, _bias, _pcfParams, _texelSize, diskRotation, _cascadeScale);
+    return PCFLod(_sampler, 0.0, vec2(2.0, 2.0), _shadowCoord, _bias, _planeGrad, _pcfParams, _texelSize, diskRotation, _cascadeScale, _minRadiusUV);
 }
 
 float VSM(sampler2D _sampler, vec4 _shadowCoord, float _bias, float _depthMultiplier, float _minVariance)
@@ -226,8 +255,7 @@ float VSM(sampler2D _sampler, vec4 _shadowCoord, float _bias, float _depthMultip
     }
 
     float receiver = (_shadowCoord.z-_bias)/_shadowCoord.w * _depthMultiplier;
-    vec4 rgba = texture2D(_sampler, texCoord);
-    vec2 occluder = vec2(unpackHalfFloat(rgba.rg), unpackHalfFloat(rgba.ba)) * _depthMultiplier;
+    vec2 occluder = texture2D(_sampler, texCoord).xy * _depthMultiplier;
 
     if (receiver < occluder.x)
     {
@@ -256,7 +284,7 @@ float ESM(sampler2D _sampler, vec4 _shadowCoord, float _bias, float _depthMultip
     }
 
     float receiver = (_shadowCoord.z-_bias)/_shadowCoord.w;
-    float occluder = unpackRgbaToFloat(texture2D(_sampler, texCoord) );
+    float occluder = texture2D(_sampler, texCoord).x;
 
     float visibility = clamp(exp(_depthMultiplier * (occluder-receiver) ), 0.0, 1.0);
 
@@ -275,16 +303,16 @@ vec4 blur9(sampler2D _sampler, vec2 _uv0, vec4 _uv1, vec4 _uv2, vec4 _uv3, vec4 
 #define BLUR9_WEIGHT(_x) (_BLUR9_WEIGHT_##_x/_BLUR9_NORMALIZE)
 
     float blur;
-    blur  = unpackRgbaToFloat(texture2D(_sampler, _uv0)    * BLUR9_WEIGHT(0));
-    blur += unpackRgbaToFloat(texture2D(_sampler, _uv1.xy) * BLUR9_WEIGHT(1));
-    blur += unpackRgbaToFloat(texture2D(_sampler, _uv1.zw) * BLUR9_WEIGHT(1));
-    blur += unpackRgbaToFloat(texture2D(_sampler, _uv2.xy) * BLUR9_WEIGHT(2));
-    blur += unpackRgbaToFloat(texture2D(_sampler, _uv2.zw) * BLUR9_WEIGHT(2));
-    blur += unpackRgbaToFloat(texture2D(_sampler, _uv3.xy) * BLUR9_WEIGHT(3));
-    blur += unpackRgbaToFloat(texture2D(_sampler, _uv3.zw) * BLUR9_WEIGHT(3));
-    blur += unpackRgbaToFloat(texture2D(_sampler, _uv4.xy) * BLUR9_WEIGHT(4));
-    blur += unpackRgbaToFloat(texture2D(_sampler, _uv4.zw) * BLUR9_WEIGHT(4));
-    return packFloatToRgba(blur);
+    blur  = texture2D(_sampler, _uv0).x    * BLUR9_WEIGHT(0);
+    blur += texture2D(_sampler, _uv1.xy).x * BLUR9_WEIGHT(1);
+    blur += texture2D(_sampler, _uv1.zw).x * BLUR9_WEIGHT(1);
+    blur += texture2D(_sampler, _uv2.xy).x * BLUR9_WEIGHT(2);
+    blur += texture2D(_sampler, _uv2.zw).x * BLUR9_WEIGHT(2);
+    blur += texture2D(_sampler, _uv3.xy).x * BLUR9_WEIGHT(3);
+    blur += texture2D(_sampler, _uv3.zw).x * BLUR9_WEIGHT(3);
+    blur += texture2D(_sampler, _uv4.xy).x * BLUR9_WEIGHT(4);
+    blur += texture2D(_sampler, _uv4.zw).x * BLUR9_WEIGHT(4);
+    return vec4(blur, 0.0, 0.0, 0.0);
 }
 
 vec4 blur9VSM(sampler2D _sampler, vec2 _uv0, vec4 _uv1, vec4 _uv2, vec4 _uv3, vec4 _uv4)
@@ -298,27 +326,16 @@ vec4 blur9VSM(sampler2D _sampler, vec2 _uv0, vec4 _uv1, vec4 _uv2, vec4 _uv3, ve
 #define BLUR9_WEIGHT(_x) (_BLUR9_WEIGHT_##_x/_BLUR9_NORMALIZE)
 
     vec2 blur;
-    vec4 val;
-    val = texture2D(_sampler, _uv0) * BLUR9_WEIGHT(0);
-    blur = vec2(unpackHalfFloat(val.rg), unpackHalfFloat(val.ba));
-    val = texture2D(_sampler, _uv1.xy) * BLUR9_WEIGHT(1);
-    blur += vec2(unpackHalfFloat(val.rg), unpackHalfFloat(val.ba));
-    val = texture2D(_sampler, _uv1.zw) * BLUR9_WEIGHT(1);
-    blur += vec2(unpackHalfFloat(val.rg), unpackHalfFloat(val.ba));
-    val = texture2D(_sampler, _uv2.xy) * BLUR9_WEIGHT(2);
-    blur += vec2(unpackHalfFloat(val.rg), unpackHalfFloat(val.ba));
-    val = texture2D(_sampler, _uv2.zw) * BLUR9_WEIGHT(2);
-    blur += vec2(unpackHalfFloat(val.rg), unpackHalfFloat(val.ba));
-    val = texture2D(_sampler, _uv3.xy) * BLUR9_WEIGHT(3);
-    blur += vec2(unpackHalfFloat(val.rg), unpackHalfFloat(val.ba));
-    val = texture2D(_sampler, _uv3.zw) * BLUR9_WEIGHT(3);
-    blur += vec2(unpackHalfFloat(val.rg), unpackHalfFloat(val.ba));
-    val = texture2D(_sampler, _uv4.xy) * BLUR9_WEIGHT(4);
-    blur += vec2(unpackHalfFloat(val.rg), unpackHalfFloat(val.ba));
-    val = texture2D(_sampler, _uv4.zw) * BLUR9_WEIGHT(4);
-    blur += vec2(unpackHalfFloat(val.rg), unpackHalfFloat(val.ba));
-
-    return vec4(packHalfFloat(blur.x), packHalfFloat(blur.y));
+    blur  = texture2D(_sampler, _uv0).xy    * BLUR9_WEIGHT(0);
+    blur += texture2D(_sampler, _uv1.xy).xy * BLUR9_WEIGHT(1);
+    blur += texture2D(_sampler, _uv1.zw).xy * BLUR9_WEIGHT(1);
+    blur += texture2D(_sampler, _uv2.xy).xy * BLUR9_WEIGHT(2);
+    blur += texture2D(_sampler, _uv2.zw).xy * BLUR9_WEIGHT(2);
+    blur += texture2D(_sampler, _uv3.xy).xy * BLUR9_WEIGHT(3);
+    blur += texture2D(_sampler, _uv3.zw).xy * BLUR9_WEIGHT(3);
+    blur += texture2D(_sampler, _uv4.xy).xy * BLUR9_WEIGHT(4);
+    blur += texture2D(_sampler, _uv4.zw).xy * BLUR9_WEIGHT(4);
+    return vec4(blur, 0.0, 0.0);
 }
 
 
@@ -327,7 +344,8 @@ vec4 blur9VSM(sampler2D _sampler, vec2 _uv0, vec4 _uv1, vec4 _uv2, vec4 _uv3, ve
 //   closestBlockerDepth: maximum depth among blockers (nearest to receiver, for contact hardening)
 //   blockerRatio:        fraction of search samples that found a blocker [0..1]
 // _diskRotation = vec2(sin(angle), cos(angle)) for per-pixel Poisson disk rotation
-vec3 findBlocker(sampler2D _sampler, vec4 _shadowCoord, vec2 _searchSize, float _bias, vec2 _diskRotation)
+// Every search tap compares against the receiver plane at that tap (see hardShadowLod).
+vec3 findBlocker(sampler2D _sampler, vec4 _shadowCoord, vec2 _searchSize, float _bias, vec2 _planeGrad, vec2 _diskRotation)
 {
     int blockerCount = 0;
     float avgBlockerDepth = 0.0;
@@ -343,8 +361,8 @@ vec3 findBlocker(sampler2D _sampler, vec4 _shadowCoord, vec2 _searchSize, float 
 #if SM_CSM
         sampleUV = saturate(sampleUV);
 #endif
-        float shadowMapDepth = unpackRgbaToFloat(texture2D(_sampler, sampleUV));
-        if (shadowMapDepth < receiverDepth)
+        float shadowMapDepth = texture2D(_sampler, sampleUV).x;
+        if (shadowMapDepth < receiverDepth + receiverPlaneDelta(sampleUV, texCoord, _planeGrad))
         {
             avgBlockerDepth += shadowMapDepth;
             closestBlockerDepth = max(closestBlockerDepth, shadowMapDepth);
@@ -368,7 +386,7 @@ vec3 findBlocker(sampler2D _sampler, vec4 _shadowCoord, vec2 _searchSize, float 
 
 
 
-float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcssParams, vec2 _texelSize, vec2 fragCoord, float _cascadeScale)
+float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec2 _planeGrad, vec4 _pcssParams, vec2 _texelSize, vec2 fragCoord, float _cascadeScale, float _minRadiusUV)
 {
     // -----------------------------------------------------------------------
     // PCSS Parameters
@@ -399,7 +417,7 @@ float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcssParams,
     // -----------------------------------------------------------------------
     // Step 1: Blocker Search
     // -----------------------------------------------------------------------
-    vec3 blockerResult = findBlocker(_sampler, _shadowCoord, searchRadiusUV, _bias, diskRotation);
+    vec3 blockerResult = findBlocker(_sampler, _shadowCoord, searchRadiusUV, _bias, _planeGrad, diskRotation);
     float avgBlockerDepth = blockerResult.x;
     float blockerRatio = blockerResult.z;
 
@@ -419,8 +437,8 @@ float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcssParams,
     // -----------------------------------------------------------------------
     float depthParam =  max(0.0, receiverDepth - avgBlockerDepth) / max(avgBlockerDepth, 0.001);
     vec2 penumbraUV = penumbraScale * depthParam;
-    float filterRadiusU = clamp(penumbraUV.x, 0.0, maxFilterRadiusUV);
-    float filterRadiusV = clamp(penumbraUV.y, 0.0, maxFilterRadiusUV);
+    float filterRadiusU = clamp(penumbraUV.x, _minRadiusUV, maxFilterRadiusUV);
+    float filterRadiusV = clamp(penumbraUV.y, _minRadiusUV, maxFilterRadiusUV);
 
     // Offset in UV, scaled by _shadowCoord.w for consistency with PCF
     vec2 offset = vec2(filterRadiusU, filterRadiusV) * _shadowCoord.w;
@@ -428,7 +446,7 @@ float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec4 _pcssParams,
     // -----------------------------------------------------------------------
     // Step 3: Percentage-Closer Filtering
     // -----------------------------------------------------------------------
-    float visibility = PCFLodOffset(_sampler, 0.0, offset, _shadowCoord, _bias, _texelSize, diskRotation);
+    float visibility = PCFLodOffset(_sampler, 0.0, offset, _shadowCoord, _bias, _planeGrad, _texelSize, diskRotation);
 
     // -----------------------------------------------------------------------
     // Step 4: Edge fade based on blocker ratio

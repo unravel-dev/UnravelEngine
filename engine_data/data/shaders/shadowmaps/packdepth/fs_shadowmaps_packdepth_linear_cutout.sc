@@ -6,5 +6,5 @@ $input v_depth, v_texcoord0
 void main()
 {
 	shadowCutoutClip(v_texcoord0);
-	gl_FragColor = packFloatToRgba(v_depth);
+	gl_FragColor = vec4(v_depth, 0.0, 0.0, 0.0);
 }

@@ -361,23 +361,17 @@ void worldSpaceFrustumCorners(
 */
 void calculateCascadeSplits(float* cascadeSplits, uint8_t numSplits, float nearClip, float farClip, float splitLambda)
 {
+    // Practical split scheme: split i sits at the lambda blend of the logarithmic and the
+    // uniform distribution of the shadow range, and the last split is the far plane. (The
+    // previous odd-index variant topped out at 0.7 of the range, so the far plane meant
+    // nothing and the outer part of the shadow distance had no cascade at all.)
     const float clipRange = farClip - nearClip;
-    const float minZ = nearClip;
-    const float maxZ = nearClip + clipRange;
-    const float range = maxZ - minZ;
-    const float ratio = maxZ / minZ;
-
-    // Calculate split depths based on view camera frustum
-    // Use a modified indexing similar to the original implementation for better distribution feel
-    // The original used odd indices (1,3,5,7) out of (num_splits*2), giving more weight to near cascades
-    const float numSlicesF = float(numSplits) * 2.5f;
-    
+    const float ratio = farClip / nearClip;
     for(uint32_t i = 0; i < numSplits; i++)
     {
-        // Use odd indices like the original: 1, 3, 5, 7 for 4 splits
-        const float si = float(i * 2 + 1) / numSlicesF;
-        const float logSplit = minZ * bx::pow(ratio, si);
-        const float uniformSplit = minZ + range * si;
+        const float si = float(i + 1) / float(numSplits);
+        const float logSplit = nearClip * bx::pow(ratio, si);
+        const float uniformSplit = nearClip + clipRange * si;
         const float d = splitLambda * (logSplit - uniformSplit) + uniformSplit;
         cascadeSplits[i] = (d - nearClip) / clipRange;
     }
@@ -1126,6 +1120,10 @@ void shadowmap_generator::submit_uniforms(uint8_t stage) const
     // uniforms_.submitPerFrameUniforms();
     uniforms_.submitPerDrawUniforms();
 
+    // Depth maps hold raw float depth: point sampling (interpolated depth is neither of the
+    // two surfaces it lies between) and clamped edges. Blurred VSM / ESM maps interpolate.
+    const bool filtered_map = (SmImpl::VSM == settings_.m_smImpl) || (SmImpl::ESM == settings_.m_smImpl);
+    const uint32_t sampler_flags = (filtered_map ? 0u : uint32_t(BGFX_SAMPLER_POINT)) | BGFX_SAMPLER_UVW_CLAMP;
     for(uint8_t ii = 0; ii < ShadowMapRenderTargets::Count; ++ii)
     {
         if(!bgfx::isValid(rt_shadow_map_[ii]))
@@ -1133,7 +1131,7 @@ void shadowmap_generator::submit_uniforms(uint8_t stage) const
             continue;
         }
 
-        bgfx::setTexture(stage + ii, shadow_map_[ii], bgfx::getTexture(rt_shadow_map_[ii]));
+        bgfx::setTexture(stage + ii, shadow_map_[ii], bgfx::getTexture(rt_shadow_map_[ii]), sampler_flags);
     }
 }
 
@@ -1144,7 +1142,12 @@ auto shadowmap_generator::get_shadow_map_matrix(uint8_t split) const -> const fl
 
 auto shadowmap_generator::get_shadow_map_bias() const -> float
 {
-    return uniforms_.m_shadowMapBias;
+    return uniforms_.m_shadowMapBias * uniforms_.m_csmTexelWorld[0] * uniforms_.m_shadowBiasParams[1];
+}
+
+auto shadowmap_generator::get_shadow_map_world_to_depth() const -> float
+{
+    return uniforms_.m_shadowBiasParams[1];
 }
 
 auto shadowmap_generator::already_updated() const -> bool
@@ -1285,6 +1288,13 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     {
         current_shadow_map_size_ = shadowMapSize;
 
+        // Float depth (moments for VSM). The RGBA8 packing this replaced decoded with a
+        // systematic error of up to 2e-3 of the depth range (the 1/255 steps of UNORM8 against
+        // the 1/256 the packing assumes), which on a 2 * far deep directional map was metres
+        // of world depth, so every bias value was first a calibration of that error.
+        const bgfx::TextureFormat::Enum color_format =
+            (SmImpl::VSM == settings_.m_smImpl) ? bgfx::TextureFormat::RG32F : bgfx::TextureFormat::R32F;
+
         if(bgfx::isValid(rt_shadow_map_[0]))
         {
             bgfx::destroy(rt_shadow_map_[0]);
@@ -1297,7 +1307,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                                       current_shadow_map_size_,
                                       false,
                                       1,
-                                      bgfx::TextureFormat::BGRA8,
+                                      color_format,
                                       BGFX_TEXTURE_RT),
                 bgfx::createTexture2D(current_shadow_map_size_,
                                       current_shadow_map_size_,
@@ -1330,7 +1340,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                                               current_shadow_map_size_,
                                               false,
                                               1,
-                                              bgfx::TextureFormat::BGRA8,
+                                              color_format,
                                               BGFX_TEXTURE_RT),
                         bgfx::createTexture2D(current_shadow_map_size_,
                                               current_shadow_map_size_,
@@ -1360,7 +1370,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         // Blur shadow map.
         if(bVsmOrEsm && currentSmSettings->m_doBlur)
         {
-            rt_blur_ = bgfx::createFrameBuffer(current_shadow_map_size_, current_shadow_map_size_, bgfx::TextureFormat::BGRA8);
+            rt_blur_ = bgfx::createFrameBuffer(current_shadow_map_size_, current_shadow_map_size_, color_format);
         }
     }
 
@@ -1371,6 +1381,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     uniforms_.m_shadowMapTexelSize = 1.0f / currentShadowMapSizef;
     uniforms_.m_shadowMapBias = currentSmSettings->m_bias;
     uniforms_.m_shadowMapOffset = currentSmSettings->m_normalOffset;
+    uniforms_.m_shadowBiasParams[0] = l.shadow_params.slope_bias;
     uniforms_.m_shadowMapParam0 = currentSmSettings->m_customParam0;
     uniforms_.m_shadowMapParam1 = currentSmSettings->m_customParam1;
     uniforms_.m_depthValuePow = currentSmSettings->m_depthValuePow;
@@ -1621,6 +1632,10 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                 scaley = quantizer / bx::ceil(quantizer / scaley);
             }
 
+            // The crop maps 2 / scalex world units onto the full map width: one texel of
+            // this cascade in world units, the unit every bias is expressed in.
+            uniforms_.m_csmTexelWorld[ii] = 2.0f / (scalex * float(current_shadow_map_size_));
+
             // Calculate offset to center the cascade in the projection
             float offsetx = -scalex * (minproj.x + maxproj.x) * 0.5f;
             float offsety = -scaley * (minproj.y + maxproj.y) * 0.5f;
@@ -1696,6 +1711,8 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         lightFrustums[2].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[2]), homogeneousDepth);
         lightFrustums[3].update(math::make_mat4(lightView[0]), math::make_mat4(lightProj[3]), homogeneousDepth);
     }
+
+    update_bias_uniforms(originBottomLeft);
 
     // Prepare for scene.
     {
@@ -1838,6 +1855,68 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
 
             bx::mtxMul(light_mtx_, tmp, mtxShadow);
         }
+    }
+}
+
+void shadowmap_generator::update_bias_uniforms(bool origin_bottom_left)
+{
+    // Stored depth = 0.5 * z_ndc + zadd (mtxBias), z_ndc = proj[10] * z + proj[14] for ortho and
+    // linear maps and proj[10] + proj[14] / z for perspective 1/z maps; the crop matrices of
+    // the cascades do not touch z. The shader turns a world-space bias into stored depth with
+    // these derivatives. +v of the map runs along +up of the light view when the texture
+    // origin is bottom-left (mtxBias ymul), along -up otherwise.
+    float* params = uniforms_.m_shadowBiasParams;
+    float* persp = uniforms_.m_perspTexelParams;
+    float* axis_u = uniforms_.m_shadowAxisU;
+    float* axis_v = uniforms_.m_shadowAxisV;
+    params[1] = params[2] = params[3] = 0.0f;
+    for(int ii = 0; ii < 4; ++ii)
+    {
+        persp[ii] = 0.0f;
+        axis_u[ii] = 0.0f;
+        axis_v[ii] = 0.0f;
+    }
+    const float v_sign = origin_bottom_left ? 1.0f : -1.0f;
+    const auto set_axes = [&](const float* view)
+    {
+        axis_u[0] = view[0];
+        axis_u[1] = view[4];
+        axis_u[2] = view[8];
+        axis_v[0] = v_sign * view[1];
+        axis_v[1] = v_sign * view[5];
+        axis_v[2] = v_sign * view[9];
+    };
+    const float map_size = float(current_shadow_map_size_);
+    if(LightType::DirectionalLight == settings_.m_lightType)
+    {
+        params[1] = 0.5f * light_proj_[0][10];
+        set_axes(light_view_[0]);
+        return;
+    }
+    for(int ii = 0; ii < 4; ++ii)
+    {
+        uniforms_.m_csmTexelWorld[ii] = 0.0f;
+    }
+    const float* proj = light_proj_[ProjType::Horizontal];
+    params[1] = 0.5f * proj[10];
+    params[2] = -0.5f * proj[14];
+    params[3] = params[2];
+    // Map extent per unit distance along the light axis: 2 z / proj[0] wide, 2 z / proj[5] tall.
+    persp[1] = 2.0f / proj[0];
+    persp[2] = 2.0f / proj[5];
+    if(LightType::SpotLight == settings_.m_lightType)
+    {
+        persp[0] = persp[2] / map_size;
+        set_axes(light_view_[0]);
+        return;
+    }
+    // Point light: every tetrahedron face covers half the map height; the stencil-packed
+    // vertical faces use their own projection for the depth derivative. The receiver-plane
+    // term stays off (axes zero): each face would need its own basis.
+    persp[0] = persp[2] / (map_size * 0.5f);
+    if(settings_.m_stencilPack)
+    {
+        params[3] = -0.5f * light_proj_[ProjType::Vertical][14];
     }
 }
 
@@ -2264,10 +2343,14 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
 
         const auto extras = model_comp.get_submit_extras(true);
 
-        // For CSM (directional lights), cascades are nested by distance, so anything
-        // fully inside a nearer cascade does not need to be rendered into the farther
-        // (larger) cascades. For point/spot lights, faces cover different directions, so
-        // an object must be rendered to ALL faces where it is visible.
+        // For CSM (directional lights) a caster fully inside a nearer cascade's light frustum
+        // is not drawn into the farther (larger) cascades. This is exact ONLY because the
+        // lighting shader samples the smallest cascade whose crop contains the receiver
+        // (fs_pbr_lighting.sh, CalculateSurfaceShadow): a caster that shadows a receiver
+        // shares its light-space xy, so whatever shadows a receiver of crop j lies in column
+        // j and is drawn into map j. Selecting cascades by view distance instead would need
+        // every caster in every cascade it touches. For point/spot lights, faces cover
+        // different directions, so an object must be rendered to ALL faces where it is visible.
         const bool nested_cascades = (LightType::DirectionalLight == settings_.m_lightType);
 
         if(can_batch)

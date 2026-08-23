@@ -270,14 +270,15 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             gfx::set_texture(trace_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
             gfx::set_texture(trace_program_.s_gi_normal, 5, params.g_buffer->get_texture(1));
             gfx::set_texture(trace_program_.s_gi_probe_layer, 6, probe_layer_tex);
-            gfx::set_buffer(7, refl_list_, gfx::access::Read);
+            // Stage 7 is the output image (OpenGL has eight image units); the list sits at 15.
+            gfx::set_image(7, raw_tex->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
             gfx::set_texture(trace_program_.s_hiz, 8, params.hiz);
             gfx::set_texture(trace_program_.s_gi_diffuse, 9, gi_diffuse_tex);
             gfx::set_texture(trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
-            gfx::set_image(11, raw_tex->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
             gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
             gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
             gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh_tex);
+            gfx::set_buffer(15, refl_list_, gfx::access::Read);
             gfx::set_uniform(trace_program_.u_gi_reflection_camera, reflection_camera);
             gfx::set_uniform(trace_program_.u_gi_reflection_jitter, jitter);
             gfx::set_uniform(trace_program_.u_gi_reflection_texel, refl_texel);

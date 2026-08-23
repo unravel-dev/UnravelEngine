@@ -221,19 +221,29 @@ auto process_armature(const mesh& render_mesh,
 /// Consumer slot in transform_component's indexed dirty flags owned by the model pose
 /// refresh. Set on any transform/flags change, cleared per node when the pose consumes it.
 constexpr uint8_t pose_dirty_id = transform_component::dirty_ids::model_pose;
+/// The owner's slot for the same refresh (submeshes the owner places directly).
+constexpr uint8_t owner_pose_dirty_id = transform_component::dirty_ids::model_owner_pose;
 
 /**
  * Refreshes the pose outputs from the armature entities in a single change-driven walk.
  *
  * Pass 1 resolves each entity's transform_component once into a scratch list while OR-ing
- * the model_pose dirty bits. When nothing is dirty (and @p force is false) the function
- * returns false WITHOUT touching any output - the cached poses/proxies are still valid.
- * Pass 2 reuses the resolved pointers (no second transform lookup) to rebuild the outputs
- * and clears the consumed dirty bits.
+ * the model_pose dirty bits (and the owner's model_owner_pose bit). When nothing is dirty
+ * (and @p force is false) the function returns false WITHOUT touching any output - the
+ * cached poses/proxies are still valid. Pass 2 reuses the resolved pointers (no second
+ * transform lookup) to rebuild the outputs and clears the consumed dirty bits.
  *
+ * Submeshes no armature node places (meshes without an armature at all - primitives - or
+ * nodes without entities) are drawn by the submit paths with the owner's world transform as
+ * instance 0; pass 2 publishes exactly that box as their proxy, so per-submesh culling and
+ * the nested-cascade shadow culling see them like any placed submesh instead of falling
+ * back to "intersect".
+ *
+ * @param owner_transform The model entity's own transform, or null.
  * @return True when a rebuild ran, false when everything was clean and outputs were kept.
  */
 auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
+                                 transform_component* owner_transform,
                                  const mesh& render_mesh,
                                  submesh_pose_mat4& submesh_pose,
                                  pose_mat4& bone_pose,
@@ -247,6 +257,7 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
     transform_scratch.reserve(entities.size());
 
     bool any_dirty = force;
+    any_dirty |= owner_transform != nullptr && owner_transform->is_dirty(owner_pose_dirty_id);
     for(const auto& e : entities)
     {
         auto* transform_comp = e.try_get<transform_component>();
@@ -339,6 +350,27 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
         }
     }
 
+    // Owner-placed submeshes: the box the submit paths' fallback instance actually covers.
+    if(owner_transform != nullptr)
+    {
+        owner_transform->set_dirty(owner_pose_dirty_id, false);
+        const auto& owner_global = owner_transform->get_transform_global();
+        for(size_t submesh_index = 0; submesh_index < submesh_count; ++submesh_index)
+        {
+            if(submesh_pose.has_transforms(static_cast<uint32_t>(submesh_index)))
+            {
+                continue;
+            }
+            const auto* sm = submesh_index < submeshes.size() ? submeshes[submesh_index] : nullptr;
+            if(sm == nullptr || sm->skinned || !sm->bbox.is_populated())
+            {
+                continue;
+            }
+            proxies.add_instance_bounds(static_cast<uint32_t>(submesh_index),
+                                        math::bbox::mul(sm->bbox, owner_global));
+        }
+    }
+
     return true;
 }
 
@@ -409,12 +441,14 @@ auto model_component::update_armature() -> bool
 
     const auto& armature_entities = get_armature_entities();
     const auto& skin_data = mesh->get_skin_bind_data();
+    auto* owner_transform = get_owner().try_get<transform_component>();
 
     // Change-driven refresh in ONE walk: the dirty check and the rebuild share the same
     // pass over the armature entities (the transform lookup is done once and reused).
     // When nothing changed and nothing forced a refresh, outputs are left untouched and
     // we early-out - visible idle models cost a single pointer+bit scan.
     const bool refreshed = get_transforms_for_entities(armature_entities,
+                                                       owner_transform,
                                                        *mesh,
                                                        submesh_pose_,
                                                        bone_pose_,

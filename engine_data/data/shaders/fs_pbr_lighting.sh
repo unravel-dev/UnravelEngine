@@ -43,10 +43,22 @@ SAMPLER2D(s_shadowMap3, 10);
 
 uniform vec4 u_params0;
 uniform vec4 u_params1;
-uniform vec4 u_params2;
+// u_params2 (texel size, coverage) is declared by shadowmaps/common_shadow.sh.
 
 uniform vec4 u_smSamplingParams;
 uniform vec4 u_csmFarDistances;
+/// x = slope-scaled bias in texels per unit slope, y = d(stored depth)/d(world depth) for ortho
+/// and linear maps, z = the same numerator for perspective 1/z maps (divided by w^2 here),
+/// w = z for the vertical tetrahedron faces of a stencil-packed point light.
+uniform vec4 u_shadowBiasParams;
+/// World size of one texel per cascade (directional lights).
+uniform vec4 u_csmTexelWorld;
+/// Spot / point: x = texel world size per unit distance along the light axis,
+/// y / z = map width / height per unit distance.
+uniform vec4 u_perspTexelParams;
+/// World-space unit vectors along +u / +v of the map (zero = receiver-plane term off).
+uniform vec4 u_shadowAxisU;
+uniform vec4 u_shadowAxisV;
 
 #if SM_OMNI
 uniform vec4 u_tetraNormalGreen;
@@ -70,7 +82,6 @@ uniform mat4 u_shadowMapMtx3;
 #define u_shadowMapParam1 u_params1.w
 
 #define u_shadowMapShowCoverage u_params2.y
-#define u_shadowMapTexelSize    u_params2.z
 
 
 
@@ -85,17 +96,7 @@ uniform mat4 u_shadowMapMtx3;
 // Esm
 #define u_shadowMapHardness        u_shadowMapParam0
 #define u_shadowMapDepthMultiplier u_shadowMapParam1
-float calculateDistanceBias(float _bias, float _distanceFromCamera)
-{
-    // Use power function (exponent 0.65) for non-linear scaling - starts very gentle
-    // at close distances, scales more aggressively at far distances. This reduces
-    // shadow floating when close while maintaining good bias at distance.
-    float shadowMapDistanceBiasScale = 0.02f;
-    float shadowMapDistanceBiasExponent = 0.65f;
-    float distanceScale = pow(_distanceFromCamera, shadowMapDistanceBiasExponent) * shadowMapDistanceBiasScale;
-    return _bias * (1.0 + distanceScale);
-}
-
+#define u_shadowSlopeBias u_shadowBiasParams.x
 
 // NdotL-scaled normal offset: returns the scale factor for the normal offset.
 // Zero when the surface faces the light (preserving ground contact),
@@ -105,13 +106,75 @@ float calculateNormalOffsetScale(float _NdotL)
     return sqrt(1.0 - _NdotL * _NdotL);
 }
 
-// Receiver-plane depth bias (ddx/ddy of shadow coords) is not used in this file: deferred lighting
-// runs as a fullscreen pass, so derivatives are across unrelated screen neighbors, not along the
-// receiver surface — the plane assumption is wrong and produces sparse wrong visibility (dots).
+// Bias model, all on the receiver side and all in shadow-map texels of the map that answers
+// (the world size of one texel of the sampled cascade, or of the map at the receiver's
+// distance for spot and point lights), so one set of values holds at every cascade, distance
+// and resolution:
+//   constant       u_shadowMapBias   * texel               along the light
+//   slope-scaled   u_shadowSlopeBias * texel * tan(theta)  along the light, tan clamped
+//   normal offset  u_shadowMapOffset * texel * sin(theta)  along the normal, before projecting
+//   receiver plane every filter tap is compared against the receiver's own plane at that tap
+// theta = angle between the surface normal and the light. Receiver-plane depth bias from
+// ddx/ddy of the shadow coords is not usable here: deferred lighting runs as a fullscreen pass
+// and derivatives are across unrelated screen neighbors; the plane comes from the G-buffer
+// normal instead. The constant and slope terms only have to cover the sub-texel rasterization
+// error; the plane term makes the kernel exact on planar receivers at any radius.
+#define SHADOW_MAX_SLOPE 8.0
+// The last cascade fades to unshadowed over the outer part of the shadow distance.
+#define SHADOW_CASCADE_FADE_START 0.9
+// Receiver position precision: relative probe step for the depth-buffer finite difference,
+// the float32 relative ulp, and the ulps of margin granted.
+#define SHADOW_DEPTH_PROBE_STEP 1.0e-6
+#define SHADOW_DEPTH_FLOAT_ULP 1.2e-7
+#define SHADOW_DEPTH_ULPS 2.0
+
+struct ShadowReceiver
+{
+    float sinT;      // sin(theta): normal offset scale
+    float tanT;      // tan(theta), clamped: slope bias scale
+    float invNdotL;  // 1 / NdotL, clamped: receiver-plane gradient scale
+    float nU;        // N . map axis u
+    float nV;        // N . map axis v
+    float positionError; // receiver position uncertainty along its normal, world units (GLSL reserves 'precision')
+};
+
+// precisionNormal: how far the reconstructed receiver position can be off along its normal
+// (the depth-buffer quantization projected on N, see pbr_light). A plane compare only feels
+// that component, amplified by 1 / NdotL like every depth term.
+ShadowReceiver makeShadowReceiver(vec3 N, vec3 L, float precisionNormal)
+{
+    ShadowReceiver r;
+    float NdotL = saturate(dot(N, L));
+    r.sinT = calculateNormalOffsetScale(NdotL);
+    r.invNdotL = 1.0 / max(NdotL, 1.0 / SHADOW_MAX_SLOPE);
+    r.tanT = min(r.sinT * r.invNdotL, SHADOW_MAX_SLOPE);
+    r.nU = dot(N, u_shadowAxisU.xyz);
+    r.nV = dot(N, u_shadowAxisV.xyz);
+    r.positionError = precisionNormal;
+    return r;
+}
+
+// Constant + slope bias (texels) plus the position-precision term (world), in stored depth;
+// depthScale = d(stored depth)/d(world depth). The precision term is what lets a receiver far
+// from the camera sample a near cascade's fine map (the smallest crop that contains it) without
+// acne: it does not depend on the texel, only on how well the receiver itself is known.
+float shadowDepthBias(ShadowReceiver r, float texelWorld, float depthScale)
+{
+    return ((u_shadowMapBias + u_shadowSlopeBias * r.tanT) * texelWorld + r.positionError * r.invNdotL) * depthScale;
+}
+
+// Change of stored depth per unit of map UV along the receiver plane; mapExtent = world size
+// of the map along u and v at the receiver. A tap displaced by t on the plane sits
+// (N . t) / (N . L) farther from the light.
+vec2 shadowPlaneGradient(ShadowReceiver r, vec2 mapExtent, float depthScale)
+{
+    return vec2(r.nU, r.nV) * mapExtent * (r.invNdotL * depthScale);
+}
 
 float computeVisibility(sampler2D _sampler
                       , vec4 _shadowCoord
                       , float _bias
+                      , vec2 _planeGrad
                       , vec4 _samplingParams
                       , vec2 _texelSize
                       , float _depthMultiplier
@@ -122,6 +185,7 @@ float computeVisibility(sampler2D _sampler
                       )
 {
     float visibility = 1.0f;
+    float minRadiusUV = SHADOW_MIN_FILTER_RADIUS_TEXELS * u_shadowMapTexelSize;
 
 #if SM_LINEAR
     vec4 shadowcoord = vec4(_shadowCoord.xy / _shadowCoord.w, _shadowCoord.z, 1.0);
@@ -130,11 +194,11 @@ float computeVisibility(sampler2D _sampler
 #endif
 
 #if SM_HARD
-    visibility = hardShadow(_sampler, shadowcoord, _bias);
+    visibility = hardShadow(_sampler, shadowcoord, _bias, _planeGrad);
 #elif SM_PCF
-    visibility = PCF(_sampler, shadowcoord, _bias, _samplingParams, _texelSize, _fragCoord, _cascadeScale);
+    visibility = PCF(_sampler, shadowcoord, _bias, _planeGrad, _samplingParams, _texelSize, _fragCoord, _cascadeScale, minRadiusUV);
 #elif SM_PCSS
-    visibility = PCSS(_sampler, shadowcoord, _bias, _samplingParams, _texelSize, _fragCoord, _cascadeScale);
+    visibility = PCSS(_sampler, shadowcoord, _bias, _planeGrad, _samplingParams, _texelSize, _fragCoord, _cascadeScale, minRadiusUV);
 #elif SM_VSM
     visibility = VSM(_sampler, shadowcoord, _bias, _depthMultiplier, _minVariance);
 #elif SM_ESM
@@ -144,8 +208,37 @@ float computeVisibility(sampler2D _sampler
     return visibility;
 }
 
+#if SM_CSM
+// One cascade: offset the receiver along its normal by this cascade's texel, project, bias, filter.
+float csmCascadeVisibility(sampler2D _sampler, mat4 _mtx, float _texelWorld, float _cascadeScale, vec2 _texelSize,
+                           vec3 _worldPos, vec3 _N, ShadowReceiver _r, vec2 _fragCoord)
+{
+    vec4 wpos = vec4(_worldPos + _N * (u_shadowMapOffset * _texelWorld * _r.sinT), 1.0);
+    vec4 shadowcoord = mul(_mtx, wpos);
+#if SM_LINEAR
+    shadowcoord.z += 0.5;
+#endif
+    float depthScale = u_shadowBiasParams.y;
+    float mapExtent = _texelWorld / u_shadowMapTexelSize;
+    float bias = shadowDepthBias(_r, _texelWorld, depthScale);
+    vec2 planeGrad = shadowPlaneGradient(_r, vec2_splat(mapExtent), depthScale);
+    return computeVisibility(_sampler
+                           , shadowcoord
+                           , bias
+                           , planeGrad
+                           , u_smSamplingParams
+                           , _texelSize
+                           , u_shadowMapDepthMultiplier
+                           , u_shadowMapMinVariance
+                           , u_shadowMapHardness
+                           , _fragCoord
+                           , _cascadeScale
+                           );
+}
+#endif
 
-float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_dir, vec2 fragCoord, out vec3 colorCoverage)
+
+float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_dir, float precisionNormal, vec2 fragCoord, out vec3 colorCoverage)
 {
     float visibility = 1.0f;
     colorCoverage = vec3(0.0f, 0.0f, 0.0f);
@@ -153,138 +246,96 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
 #if SM_NOOP
     // No operation
 #else
-    float NdotL = saturate(dot(world_normal, light_dir));
-    float normalOffsetScale = calculateNormalOffsetScale(NdotL);
-    vec4 wpos = vec4(world_position.xyz + world_normal.xyz * u_shadowMapOffset * normalOffsetScale, 1.0);
-#if SM_CSM
-    vec4 v_shadowcoord = wpos;
-#else
-    vec4 v_shadowcoord = mul(u_lightMtx, wpos);
-#endif
-
-#if SM_CSM
-    vec4 v_texcoord1 = mul(u_shadowMapMtx0, v_shadowcoord);
-    vec4 v_texcoord2 = mul(u_shadowMapMtx1, v_shadowcoord);
-    vec4 v_texcoord3 = mul(u_shadowMapMtx2, v_shadowcoord);
-    vec4 v_texcoord4 = mul(u_shadowMapMtx3, v_shadowcoord);
-#elif SM_OMNI
-    vec4 v_texcoord1 = mul(u_shadowMapMtx0, v_shadowcoord);
-    vec4 v_texcoord2 = mul(u_shadowMapMtx1, v_shadowcoord);
-    vec4 v_texcoord3 = mul(u_shadowMapMtx2, v_shadowcoord);
-    vec4 v_texcoord4 = mul(u_shadowMapMtx3, v_shadowcoord);
-#endif
-
-#if SM_LINEAR
-#if SM_CSM
-    v_texcoord1.z += 0.5;
-    v_texcoord2.z += 0.5;
-    v_texcoord3.z += 0.5;
-    v_texcoord4.z += 0.5;
-#elif SM_OMNI
-    v_texcoord1.z += 0.5;
-    v_texcoord2.z += 0.5;
-    v_texcoord3.z += 0.5;
-    v_texcoord4.z += 0.5;
-#else
-    v_shadowcoord.z += 0.5;
-#endif
-#endif
-
-    float distanceFromCamera = length(u_camera_position.xyz - world_position);
-    float adjustedBias = calculateDistanceBias(u_shadowMapBias, distanceFromCamera);
+    ShadowReceiver receiver = makeShadowReceiver(world_normal, light_dir, precisionNormal);
+    vec4 wpos = vec4(world_position, 1.0);
 
 #if SM_CSM
     vec2 texelSize = vec2_splat(u_shadowMapTexelSize);
+
+    // The cascade is chosen from the unoffset position (the normal offset is texels and would
+    // not change the choice); the chosen cascade then offsets and projects on its own.
+    vec4 v_texcoord1 = mul(u_shadowMapMtx0, wpos);
+    vec4 v_texcoord2 = mul(u_shadowMapMtx1, wpos);
+    vec4 v_texcoord3 = mul(u_shadowMapMtx2, wpos);
+    vec4 v_texcoord4 = mul(u_shadowMapMtx3, wpos);
 
     vec2 texcoord1 = v_texcoord1.xy/v_texcoord1.w;
     vec2 texcoord2 = v_texcoord2.xy/v_texcoord2.w;
     vec2 texcoord3 = v_texcoord3.xy/v_texcoord3.w;
     vec2 texcoord4 = v_texcoord4.xy/v_texcoord4.w;
 
-	bool selection0 = all(lessThan(texcoord1, vec2_splat(0.99))) && all(greaterThan(texcoord1, vec2_splat(0.01)));
-	bool selection1 = all(lessThan(texcoord2, vec2_splat(0.99))) && all(greaterThan(texcoord2, vec2_splat(0.01)));
-	bool selection2 = all(lessThan(texcoord3, vec2_splat(0.99))) && all(greaterThan(texcoord3, vec2_splat(0.01)));
-	bool selection3 = all(lessThan(texcoord4, vec2_splat(0.99))) && all(greaterThan(texcoord4, vec2_splat(0.01)));
+    // The smallest cascade whose crop contains the receiver answers (xy inside the crop, depth
+    // inside the map's range). This is the contract the shadow pass's nested-cascade caster
+    // culling relies on (shadow.cpp): whatever can shadow a receiver of crop j lies in the same
+    // light-space column and is drawn into map j. The crops are as deep as the shadow range, so
+    // a near cascade's crop also answers for ground far from the camera at low sun - with the
+    // nearest map's full resolution; what that receiver needs is a bias for its own position
+    // precision (ShadowReceiver.positionError), not a coarser cascade.
+    float viewDepth = mul(u_view, wpos).z;
+#if SM_LINEAR
+    const float zBase = 0.5;
+#else
+    const float zBase = 0.0;
+#endif
+    float z1 = v_texcoord1.z + zBase;
+    float z2 = v_texcoord2.z + zBase;
+    float z3 = v_texcoord3.z + zBase;
+    float z4 = v_texcoord4.z + zBase;
+
+	bool selection0 = all(lessThan(texcoord1, vec2_splat(0.99))) && all(greaterThan(texcoord1, vec2_splat(0.01))) && z1 > 0.0 && z1 < 1.0;
+	bool selection1 = all(lessThan(texcoord2, vec2_splat(0.99))) && all(greaterThan(texcoord2, vec2_splat(0.01))) && z2 > 0.0 && z2 < 1.0;
+	bool selection2 = all(lessThan(texcoord3, vec2_splat(0.99))) && all(greaterThan(texcoord3, vec2_splat(0.01))) && z3 > 0.0 && z3 < 1.0;
+	bool selection3 = all(lessThan(texcoord4, vec2_splat(0.99))) && all(greaterThan(texcoord4, vec2_splat(0.01))) && z4 > 0.0 && z4 < 1.0;
 
     if (selection0)
     {
-        vec4 shadowcoord = v_texcoord1;
         float cascadeScale = u_csmFarDistances.x / max(u_csmFarDistances.x, 0.001);
 
-        float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.4;
+        float coverage = texcoordInRange(texcoord1) * 0.4;
         colorCoverage = vec3(-coverage, coverage, -coverage);
-        visibility = computeVisibility(s_shadowMap0
-                        , shadowcoord
-                        , adjustedBias
-                        , u_smSamplingParams
-                        , texelSize
-                        , u_shadowMapDepthMultiplier
-                        , u_shadowMapMinVariance
-                        , u_shadowMapHardness
-                        , fragCoord
-                        , cascadeScale
-                        );
-
+        visibility = csmCascadeVisibility(s_shadowMap0, u_shadowMapMtx0, u_csmTexelWorld.x, cascadeScale, texelSize,
+                                          world_position, world_normal, receiver, fragCoord);
     }
     else if (selection1 && u_numSplits > 1)
     {
-        vec4 shadowcoord = v_texcoord2;
         float cascadeScale = u_csmFarDistances.x / max(u_csmFarDistances.y, 0.001);
 
-        float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.4;
+        float coverage = texcoordInRange(texcoord2) * 0.4;
         colorCoverage = vec3(coverage, coverage, -coverage);
-        visibility = computeVisibility(s_shadowMap1
-                        , shadowcoord
-                        , adjustedBias
-                        , u_smSamplingParams
-                        , texelSize/2.0
-                        , u_shadowMapDepthMultiplier
-                        , u_shadowMapMinVariance
-                        , u_shadowMapHardness
-                        , fragCoord
-                        , cascadeScale
-                        );
+        visibility = csmCascadeVisibility(s_shadowMap1, u_shadowMapMtx1, u_csmTexelWorld.y, cascadeScale, texelSize/2.0,
+                                          world_position, world_normal, receiver, fragCoord);
     }
     else if (selection2 && u_numSplits > 2)
     {
-        vec4 shadowcoord = v_texcoord3;
         float cascadeScale = u_csmFarDistances.x / max(u_csmFarDistances.z, 0.001);
 
-        float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.4;
+        float coverage = texcoordInRange(texcoord3) * 0.4;
         colorCoverage = vec3(-coverage, -coverage, coverage);
-        visibility = computeVisibility(s_shadowMap2
-                        , shadowcoord
-                        , adjustedBias
-                        , u_smSamplingParams
-                        , texelSize/3.0
-                        , u_shadowMapDepthMultiplier
-                        , u_shadowMapMinVariance
-                        , u_shadowMapHardness
-                        , fragCoord
-                        , cascadeScale
-                        );
+        visibility = csmCascadeVisibility(s_shadowMap2, u_shadowMapMtx2, u_csmTexelWorld.z, cascadeScale, texelSize/3.0,
+                                          world_position, world_normal, receiver, fragCoord);
     }
     else if (selection3 && u_numSplits > 3)
     {
-        vec4 shadowcoord = v_texcoord4;
         float cascadeScale = u_csmFarDistances.x / max(u_csmFarDistances.w, 0.001);
 
-        float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.4;
+        float coverage = texcoordInRange(texcoord4) * 0.4;
         colorCoverage = vec3(coverage, -coverage, -coverage);
-        visibility = computeVisibility(s_shadowMap3
-                        , shadowcoord
-                        , adjustedBias
-                        , u_smSamplingParams
-                        , texelSize/4.0
-                        , u_shadowMapDepthMultiplier
-                        , u_shadowMapMinVariance
-                        , u_shadowMapHardness
-                        , fragCoord
-                        , cascadeScale
-                        );
+        visibility = csmCascadeVisibility(s_shadowMap3, u_shadowMapMtx3, u_csmTexelWorld.w, cascadeScale, texelSize/4.0,
+                                          world_position, world_normal, receiver, fragCoord);
     }
+
+    // Shadow distance: the last cascade fades out over its outer part instead of ending on the
+    // edge of its crop.
+    float farLast = u_csmFarDistances.x;
+    if (u_numSplits > 1) farLast = u_csmFarDistances.y;
+    if (u_numSplits > 2) farLast = u_csmFarDistances.z;
+    if (u_numSplits > 3) farLast = u_csmFarDistances.w;
+    float distanceFade = smoothstep(farLast * SHADOW_CASCADE_FADE_START, farLast, viewDepth);
+    visibility = mix(visibility, 1.0, distanceFade);
 #elif SM_OMNI
     vec2 texelSize = vec2_splat(u_shadowMapTexelSize/4.0);
+
+    vec4 v_shadowcoord = mul(u_lightMtx, wpos);
 
     vec4 faceSelection;
 	vec3 pos = v_shadowcoord.xyz;
@@ -293,40 +344,50 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     faceSelection.z = dot(u_tetraNormalBlue.xyz,   pos);
     faceSelection.w = dot(u_tetraNormalRed.xyz,    pos);
 
-    vec4 shadowcoord;
+    mat4 faceMtx = u_shadowMapMtx0;
+    float depthNumerator = u_shadowBiasParams.z;
+    vec3 coverageSign = vec3(-1.0, 1.0, -1.0);
     float faceMax = max(max(faceSelection.x, faceSelection.y), max(faceSelection.z, faceSelection.w));
-    if (faceSelection.x == faceMax)
+    if (faceSelection.y == faceMax)
     {
-        shadowcoord = v_texcoord1;
-
-        float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
-        colorCoverage = vec3(-coverage, coverage, -coverage);
-    }
-    else if (faceSelection.y == faceMax)
-    {
-        shadowcoord = v_texcoord2;
-
-        float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
-        colorCoverage = vec3(coverage, coverage, -coverage);
+        faceMtx = u_shadowMapMtx1;
+        coverageSign = vec3(1.0, 1.0, -1.0);
     }
     else if (faceSelection.z == faceMax)
     {
-        shadowcoord = v_texcoord3;
-
-        float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
-        colorCoverage = vec3(-coverage, -coverage, coverage);
+        faceMtx = u_shadowMapMtx2;
+        depthNumerator = u_shadowBiasParams.w;
+        coverageSign = vec3(-1.0, -1.0, 1.0);
     }
-    else // (faceSelection.w == faceMax)
+    else if (faceSelection.w == faceMax)
     {
-        shadowcoord = v_texcoord4;
-
-        float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
-        colorCoverage = vec3(coverage, -coverage, -coverage);
+        faceMtx = u_shadowMapMtx3;
+        depthNumerator = u_shadowBiasParams.w;
+        coverageSign = vec3(1.0, -1.0, -1.0);
     }
+
+    // Texel size at the receiver's distance along the face axis, from the unoffset projection.
+    vec4 unoffset = mul(faceMtx, v_shadowcoord);
+    float texelWorld = unoffset.w * u_perspTexelParams.x;
+    vec4 wposOffset = vec4(world_position + world_normal * (u_shadowMapOffset * texelWorld * receiver.sinT), 1.0);
+    vec4 shadowcoord = mul(faceMtx, mul(u_lightMtx, wposOffset));
+#if SM_LINEAR
+    shadowcoord.z += 0.5;
+    float depthScale = u_shadowBiasParams.y;
+#else
+    float depthScale = depthNumerator / max(shadowcoord.w * shadowcoord.w, 1e-6);
+#endif
+    float bias = shadowDepthBias(receiver, texelWorld, depthScale);
+    // Receiver-plane term is off for point lights (the map axes are zero per face).
+    vec2 planeGrad = vec2_splat(0.0);
+
+    float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
+    colorCoverage = coverageSign * coverage;
 
     visibility = computeVisibility(s_shadowMap0
                     , shadowcoord
-                    , adjustedBias
+                    , bias
+                    , planeGrad
                     , u_smSamplingParams
                     , texelSize
                     , u_shadowMapDepthMultiplier
@@ -338,14 +399,27 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
 #else
     vec2 texelSize = vec2_splat(u_shadowMapTexelSize);
 
-    vec4 shadowcoord = v_shadowcoord;
+    // Texel size at the receiver's distance along the light axis, from the unoffset projection.
+    vec4 unoffset = mul(u_lightMtx, wpos);
+    float texelWorld = unoffset.w * u_perspTexelParams.x;
+    vec4 wposOffset = vec4(world_position + world_normal * (u_shadowMapOffset * texelWorld * receiver.sinT), 1.0);
+    vec4 shadowcoord = mul(u_lightMtx, wposOffset);
+#if SM_LINEAR
+    shadowcoord.z += 0.5;
+    float depthScale = u_shadowBiasParams.y;
+#else
+    float depthScale = u_shadowBiasParams.z / max(shadowcoord.w * shadowcoord.w, 1e-6);
+#endif
+    float bias = shadowDepthBias(receiver, texelWorld, depthScale);
+    vec2 planeGrad = shadowPlaneGradient(receiver, shadowcoord.w * u_perspTexelParams.yz, depthScale);
 
     float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
     colorCoverage = vec3(coverage, -coverage, -coverage);
 
     visibility = computeVisibility(s_shadowMap0
                     , shadowcoord
-                    , adjustedBias
+                    , bias
+                    , planeGrad
                     , u_smSamplingParams
                     , texelSize
                     , u_shadowMapDepthMultiplier
@@ -506,7 +580,14 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     float NoL = saturate(dot(N, L));
 
     vec3 colorCoverage = vec3(0.0f, 0.0f, 0.0f);
-    float surface_shadow = CalculateSurfaceShadow(world_position, N, L, fragCoord,colorCoverage);
+    // Receiver position uncertainty: the view-space distance one float ulp of the stored depth
+    // spans here (finite difference over a small relative step), a couple of ulps of margin,
+    // projected on the normal - the only component a planar shadow compare feels.
+    float viewDepthHere = screenSpaceToViewSpaceDepth(data.depth01);
+    float viewDepthProbe = screenSpaceToViewSpaceDepth(data.depth01 * (1.0 + SHADOW_DEPTH_PROBE_STEP));
+    float depthUlp = abs(viewDepthProbe - viewDepthHere) * (SHADOW_DEPTH_FLOAT_ULP / SHADOW_DEPTH_PROBE_STEP);
+    float precisionNormal = SHADOW_DEPTH_ULPS * depthUlp * abs(dot(N, V));
+    float surface_shadow = CalculateSurfaceShadow(world_position, N, L, precisionNormal, fragCoord, colorCoverage);
     float contact_shadow_length = u_light_data.w;
     BRANCH
     if(contact_shadow_length > 0.0)

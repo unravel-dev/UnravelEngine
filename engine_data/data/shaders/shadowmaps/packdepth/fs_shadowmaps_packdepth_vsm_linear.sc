@@ -12,5 +12,5 @@ void main()
 	float depth = v_depth;
 	float depthSq = depth*depth;
 
-	gl_FragColor = vec4(packHalfFloat(depth), packHalfFloat(depthSq));
+	gl_FragColor = vec4(depth, depthSq, 0.0, 0.0);
 }

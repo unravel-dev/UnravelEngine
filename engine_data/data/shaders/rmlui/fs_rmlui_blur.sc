@@ -45,11 +45,11 @@ void main()
     {
         float offset = float(i - BLUR_NUM_WEIGHTS + 1);
         vec2 sampleCoord = v_texcoord0 - offset * texelOffset;     
-        // Check if sample is within valid region
+        // Check if color_sample is within valid region
         vec2 in_region = step(u_texCoordMin.xy, sampleCoord) * step(sampleCoord, u_texCoordMax.xy);   
-        vec4 sample = texture2D(s_tex, sampleCoord);
+        vec4 color_sample = texture2D(s_tex, sampleCoord);
         float weight = u_weights[abs(i - BLUR_NUM_WEIGHTS + 1)].x;    
-        color += sample * in_region.x * in_region.y * weight;
+        color += color_sample * in_region.x * in_region.y * weight;
     }   
     gl_FragColor = color;
 #else
