@@ -25,72 +25,6 @@ namespace unravel::mcp
 namespace
 {
 
-auto asset_key_json(const std::string& key) -> std::string
-{
-    if(key.empty())
-    {
-        return "null";
-    }
-    return make_json_string(key);
-}
-
-template<typename T>
-auto asset_handle_key_json(const asset_handle<T>& handle) -> std::string
-{
-    if(!handle)
-    {
-        return "null";
-    }
-    return make_json_string(handle.id());
-}
-
-auto parse_bool(const simdjson::dom::element& value, bool& out, std::string& error) -> bool
-{
-    bool b = false;
-    if(!value.get(b))
-    {
-        out = b;
-        return true;
-    }
-    error = "Expected boolean";
-    return false;
-}
-
-auto parse_int(const simdjson::dom::element& value, int& out, std::string& error) -> bool
-{
-    int64_t i = 0;
-    if(!value.get(i))
-    {
-        out = static_cast<int>(i);
-        return true;
-    }
-    double d = 0.0;
-    if(!value.get(d))
-    {
-        out = static_cast<int>(d);
-        return true;
-    }
-    error = "Expected integer";
-    return false;
-}
-
-auto parse_string(const simdjson::dom::element& value, std::string& out, std::string& error) -> bool
-{
-    if(value.is_null())
-    {
-        out.clear();
-        return true;
-    }
-    std::string_view view;
-    if(value.get(view))
-    {
-        error = "Expected string or null";
-        return false;
-    }
-    out.assign(view);
-    return true;
-}
-
 auto resolve_texture(rtti::context& ctx, const std::string& key_or_uid, std::string& error)
     -> asset_handle<gfx::texture>
 {
@@ -2177,25 +2111,7 @@ auto entity_supported_component_properties_json(rtti::context& ctx,
 
 auto component_apply_result_to_json(const component_apply_result& result) -> std::string
 {
-    auto list_json = [](const std::vector<std::string>& items)
-    {
-        std::string json = "[";
-        for(size_t i = 0; i < items.size(); ++i)
-        {
-            if(i > 0)
-            {
-                json += ",";
-            }
-            json += make_json_string(items[i]);
-        }
-        json += "]";
-        return json;
-    };
-    return fmt::format(R"({{"ok":{},"applied":{},"unknown":{},"errors":{}}})",
-                       result.ok ? "true" : "false",
-                       list_json(result.applied),
-                       list_json(result.unknown),
-                       list_json(result.errors));
+    return apply_result_to_json(result);
 }
 
 } // namespace unravel::mcp

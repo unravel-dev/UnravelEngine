@@ -139,17 +139,13 @@ void register_script_tools(mcp_tool_registry& registry)
                  return {.text = "Script system unavailable", .is_error = true};
              }
              const auto& types = ctx.get_cached<script_system>().get_all_scriptable_components();
-             std::string json = "[";
-             for(size_t i = 0; i < types.size(); ++i)
+             std::vector<std::string> names;
+             names.reserve(types.size());
+             for(const auto& type : types)
              {
-                 if(i > 0)
-                 {
-                     json += ",";
-                 }
-                 json += make_json_string(types[i].get_fullname());
+                 names.push_back(type.get_fullname());
              }
-             json += "]";
-             return {.text = json, .is_error = false};
+             return {.text = strings_to_json_array(names), .is_error = false};
          },
          .mutates_scene = false});
 
@@ -238,9 +234,9 @@ void register_script_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              bool recompile = true;
              read_bool(args, "recompile", recompile);
@@ -253,9 +249,9 @@ void register_script_tools(mcp_tool_registry& registry)
              {
                  ++requested;
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  if(!first)
                  {
@@ -365,9 +361,9 @@ void register_script_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              bool recompile = true;
              read_bool(args, "recompile", recompile);
@@ -382,9 +378,9 @@ void register_script_tools(mcp_tool_registry& registry)
              {
                  ++requested;
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  if(!first)
                  {

@@ -35,16 +35,6 @@ auto asset_entry_json(const std::string& uid, const std::string& location, const
                        make_json_string(type));
 }
 
-auto ends_with_ci(std::string_view value, std::string_view suffix) -> bool
-{
-    if(suffix.size() > value.size())
-    {
-        return false;
-    }
-    const auto v = value.substr(value.size() - suffix.size());
-    return to_lower_ascii(std::string(v)) == to_lower_ascii(std::string(suffix));
-}
-
 auto path_matches_type(const std::string& location, const std::string& type_filter) -> bool
 {
     if(type_filter.empty())
@@ -157,20 +147,7 @@ auto try_wait_asset_ready(rtti::context& ctx, const std::string& key, std::chron
 
 auto read_import_timeout_ms(const simdjson::dom::object& args, int64_t default_ms) -> std::chrono::milliseconds
 {
-    int64_t timeout_ms = default_ms;
-    if(args["wait_ms"].get(timeout_ms))
-    {
-        timeout_ms = default_ms;
-    }
-    if(timeout_ms < 0)
-    {
-        timeout_ms = 0;
-    }
-    if(timeout_ms > 60000)
-    {
-        timeout_ms = 60000;
-    }
-    return std::chrono::milliseconds(timeout_ms);
+    return read_timeout_ms(args, default_ms, 60000);
 }
 
 auto collect_imported_asset_keys(const import_files_item& item) -> std::vector<std::string>
@@ -223,23 +200,7 @@ void register_asset_tools(mcp_tool_registry& registry)
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
          {
-             if(!ctx.has<project_manager>())
-             {
-                 return {.text = R"({"open":false})", .is_error = false};
-             }
-             auto& pm = ctx.get_cached<project_manager>();
-             if(!pm.has_open_project())
-             {
-                 return {.text = R"({"open":false})", .is_error = false};
-             }
-
-             const auto& info = pm.get_project_info();
-             const auto path = fs::resolve_protocol("app:/").generic_string();
-             return {.text = fmt::format(R"({{"open":true,"name":{},"path":{},"guid":{}}})",
-                                         make_json_string(pm.get_name()),
-                                         make_json_string(path),
-                                         make_json_string(info.project_guid)),
-                     .is_error = false};
+             return {.text = project_info_json(ctx), .is_error = false};
          },
          .mutates_scene = false});
 
@@ -271,15 +232,7 @@ void register_asset_tools(mcp_tool_registry& registry)
                  type_filter = normalize_asset_type_filter(type_filter);
              }
 
-             int64_t limit = 200;
-             if(args["limit"].get(limit))
-             {
-                 limit = 200;
-             }
-             if(limit < 1)
-             {
-                 limit = 1;
-             }
+             const int64_t limit = read_clamped_int64(args, "limit", 200, 1);
 
              auto& am = ctx.get_cached<asset_manager>();
              auto locations = am.get_all_assets(group);
@@ -365,15 +318,7 @@ void register_asset_tools(mcp_tool_registry& registry)
              std::string name_contains;
              read_string(args, "name_contains", name_contains);
 
-             int64_t limit = 200;
-             if(args["limit"].get(limit))
-             {
-                 limit = 200;
-             }
-             if(limit < 1)
-             {
-                 limit = 1;
-             }
+             const int64_t limit = read_clamped_int64(args, "limit", 200, 1);
              
              auto& am = ctx.get_cached<asset_manager>();
              std::string json = "[";
@@ -588,10 +533,20 @@ void register_asset_tools(mcp_tool_registry& registry)
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              const auto wait_ms = read_import_timeout_ms(args, 15000);
-             simdjson::dom::array paths_arr;
-             if(args["paths"].get(paths_arr))
+             std::string error;
+             std::vector<std::string> paths;
+             if(!read_string_array(args, "paths", paths, error))
              {
-                 return {.text = "Missing paths array", .is_error = true};
+                 return {.text = error, .is_error = true};
+             }
+             if(paths.empty() || std::any_of(paths.begin(),
+                                             paths.end(),
+                                             [](const std::string& path)
+                                             {
+                                                 return path.empty();
+                                             }))
+             {
+                 return {.text = "Each paths entry must be a non-empty string", .is_error = true};
              }
              std::string folder;
              if(!read_string(args, "folder", folder) || folder.empty())
@@ -602,20 +557,6 @@ void register_asset_tools(mcp_tool_registry& registry)
              if(!starts_with(folder, "app:/"))
              {
                  return {.text = "folder must be under app:/ (project data)", .is_error = true};
-             }
-             std::vector<std::string> paths;
-             for(auto el : paths_arr)
-             {
-                 std::string_view path_view;
-                 if(el.get(path_view) || path_view.empty())
-                 {
-                     return {.text = "Each paths entry must be a non-empty string", .is_error = true};
-                 }
-                 paths.emplace_back(path_view);
-             }
-             if(paths.empty())
-             {
-                 return {.text = "paths array is empty", .is_error = true};
              }
              std::string project_error;
              if(!require_open_project(ctx, project_error))
@@ -761,9 +702,10 @@ void register_asset_tools(mcp_tool_registry& registry)
          {
              auto& am = ctx.get_cached<asset_manager>();
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             std::string error;
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              std::string results = "[";
              bool first = true;
@@ -773,9 +715,9 @@ void register_asset_tools(mcp_tool_registry& registry)
              {
                  ++requested;
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  std::string key;
                  std::string uid_str;
@@ -838,17 +780,18 @@ void register_asset_tools(mcp_tool_registry& registry)
              auto& mcp = ctx.get_cached<mcp_manager>();
              const auto wait_ms = read_wait_ms(args, 500);
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             std::string error;
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              std::vector<std::string> keys;
              for(auto el : items_arr)
              {
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  std::string key;
                  if(!read_string(obj, "key", key) || key.empty())
@@ -925,31 +868,20 @@ void register_asset_tools(mcp_tool_registry& registry)
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             std::string error;
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
-             int64_t timeout_ms = 15000;
-             if(args["timeout_ms"].get(timeout_ms))
-             {
-                 timeout_ms = 15000;
-             }
-             if(timeout_ms < 0)
-             {
-                 timeout_ms = 0;
-             }
-             if(timeout_ms > 60000)
-             {
-                 timeout_ms = 60000;
-             }
+             const auto timeout_ms = read_timeout_ms(args, 15000, 60000, "timeout_ms").count();
              std::vector<std::string> keys;
              keys.reserve(32);
              for(auto el : items_arr)
              {
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  std::string key;
                  if(!read_string(obj, "key", key) || key.empty())
@@ -1033,9 +965,10 @@ void register_asset_tools(mcp_tool_registry& registry)
              auto& mcp = ctx.get_cached<mcp_manager>();
              const auto wait_ms = read_wait_ms(args, 500);
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             std::string error;
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              struct item_t
              {
@@ -1049,9 +982,9 @@ void register_asset_tools(mcp_tool_registry& registry)
              for(auto el : items_arr)
              {
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  item_t item{};
                  if(!read_string(obj, "entity_id", item.entity_id) || item.entity_id.empty())

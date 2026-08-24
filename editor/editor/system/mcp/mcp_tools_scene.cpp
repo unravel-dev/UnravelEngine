@@ -203,39 +203,7 @@ void register_scene_tools(mcp_tool_registry& registry)
          .input_schema_json=empty_object_schema(),
          .handler=[](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
          {
-             auto& em = ctx.get_cached<editing_manager>();
-             auto* scn = em.get_active_scene(ctx);
-             std::string phase = "inactive";
-             if(ctx.has<play_mode>())
-             {
-                 auto& play = ctx.get_cached<play_mode>();
-                 if(play.is_splash())
-                 {
-                     phase = "splash";
-                 }
-                 else if(play.is_simulation_running())
-                 {
-                     phase = "running";
-                 }
-                 else if(play.is_active())
-                 {
-                     phase = "active";
-                 }
-             }
-
-             if(!scn || !scn->registry)
-             {
-                 return {R"({"has_scene":false,"play_phase":")" + phase + "\"}", false};
-             }
-
-             const auto entity_count = scn->registry->storage<entt::entity>().size();
-             const auto source = scn->source ? scn->source.id() : std::string{};
-             return {.text=fmt::format(R"({{"has_scene":true,"tag":{},"source":{},"entity_count":{},"play_phase":{}}})",
-                                 make_json_string(scn->tag),
-                                 make_json_string(source),
-                                 entity_count,
-                                 make_json_string(phase)),
-                     .is_error=false};
+             return {.text = active_scene_status_json(ctx), .is_error = false};
          },
          .mutates_scene=false});
 
@@ -249,32 +217,15 @@ void register_scene_tools(mcp_tool_registry& registry)
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
-             auto& em = ctx.get_cached<editing_manager>();
-             auto* scn = em.get_active_scene(ctx);
-             if(!scn || !scn->registry)
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_active_scene(ctx, scn, error))
              {
-                 return {.text = "No active scene", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
 
-             int64_t max_depth = 2;
-             if(args["max_depth"].get(max_depth))
-             {
-                 max_depth = 2;
-             }
-             if(max_depth < 0)
-             {
-                 max_depth = 0;
-             }
-
-             int64_t limit = 200;
-             if(args["limit"].get(limit))
-             {
-                 limit = 200;
-             }
-             if(limit < 1)
-             {
-                 limit = 1;
-             }
+             const int64_t max_depth = read_clamped_int64(args, "max_depth", 2, 0);
+             const int64_t limit = read_clamped_int64(args, "limit", 200, 1);
 
              std::string parent_id;
              read_string(args, "parent_id", parent_id);
@@ -310,10 +261,10 @@ void register_scene_tools(mcp_tool_registry& registry)
 
              if(!parent_id.empty())
              {
-                 auto parent = find_entity(*scn, parent_id);
+                 auto parent = resolve_entity(*scn, parent_id, error);
                  if(!parent)
                  {
-                     return {.text = "Entity not found: " + parent_id, .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  if(auto* transform = parent.try_get<transform_component>())
                  {
@@ -337,7 +288,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                                          json,
                                          nodes_emitted,
                                          limit,
-                                         truncated ? "true" : "false"),
+                                         bool_to_json(truncated)),
                      .is_error = false};
          },
          .mutates_scene = false});
@@ -359,10 +310,10 @@ void register_scene_tools(mcp_tool_registry& registry)
              {
                  return {.text = error, .is_error = true};
              }
-             simdjson::dom::array ids;
-             if(args["entity_ids"].get(ids))
+             std::vector<entt::handle> entities;
+             if(!read_entity_ids(args, *scn, entities, error))
              {
-                 return {.text = "Missing entity_ids", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              std::string detail = "pose";
              read_string(args, "detail", detail);
@@ -371,33 +322,14 @@ void register_scene_tools(mcp_tool_registry& registry)
                  return {.text = "Invalid detail (use pose, summary, or components)", .is_error = true};
              }
              std::vector<std::string> component_filter;
-             simdjson::dom::array components_arr;
-             if(!args["components"].get(components_arr))
+             if(!read_string_array(args, "components", component_filter, error, false))
              {
-                 for(auto el : components_arr)
-                 {
-                     std::string_view name_view;
-                     if(el.get(name_view))
-                     {
-                         return {.text = "components must be strings", .is_error = true};
-                     }
-                     component_filter.emplace_back(name_view);
-                 }
+                 return {.text = error, .is_error = true};
              }
              std::string json = "[";
              size_t count = 0;
-             for(auto el : ids)
+             for(auto entity : entities)
              {
-                 std::string_view id_view;
-                 if(el.get(id_view))
-                 {
-                     return {.text = "entity_ids must be strings", .is_error = true};
-                 }
-                 auto entity = find_entity(*scn, std::string(id_view));
-                 if(!entity)
-                 {
-                     return {.text = "Entity not found: " + std::string(id_view), .is_error = true};
-                 }
                  if(count > 0)
                  {
                      json += ",";
@@ -442,32 +374,21 @@ void register_scene_tools(mcp_tool_registry& registry)
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
-             auto& em = ctx.get_cached<editing_manager>();
-             auto* scn = em.get_active_scene(ctx);
-             if(!scn || !scn->registry)
+             scene* scn = nullptr;
+             std::string error;
+             if(!require_active_scene(ctx, scn, error))
              {
-                 return {.text = "No active scene", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
-             simdjson::dom::array ids;
-             if(args["entity_ids"].get(ids))
+             std::vector<entt::handle> entities;
+             if(!read_entity_ids(args, *scn, entities, error))
              {
-                 return {.text = "Missing entity_ids", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              std::string json = "[";
              size_t count = 0;
-             for(auto el : ids)
+             for(auto entity : entities)
              {
-                 std::string_view id_view;
-                 if(el.get(id_view))
-                 {
-                     return {.text = "entity_ids must be strings", .is_error = true};
-                 }
-                 const auto entity_id = std::string(id_view);
-                 auto entity = find_entity(*scn, entity_id);
-                 if(!entity)
-                 {
-                     return {.text = "Entity not found: " + entity_id, .is_error = true};
-                 }
                  std::string children = "[";
                  bool first_child = true;
                  if(auto* transform = entity.try_get<transform_component>())
@@ -487,7 +408,9 @@ void register_scene_tools(mcp_tool_registry& registry)
                  {
                      json += ",";
                  }
-                 json += fmt::format(R"({{"entity_id":{},"children":{}}})", make_json_string(entity_id), children);
+                 json += fmt::format(R"({{"entity_id":{},"children":{}}})",
+                                     make_json_string(entity_id_string(entity)),
+                                     children);
                  ++count;
              }
              json += "]";
@@ -530,18 +453,18 @@ void register_scene_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              simdjson::dom::array items;
-             if(args["items"].get(items))
+             if(!read_required_array(args, "items", items, error))
              {
-                 return {.text = "Missing items", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              std::string json = "[";
              size_t count = 0;
              for(auto el : items)
              {
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  std::string entity_id;
                  std::string component;
@@ -552,18 +475,9 @@ void register_scene_tools(mcp_tool_registry& registry)
                  std::string script_type;
                  read_string(obj, "script_type", script_type);
                  std::vector<std::string> property_filter;
-                 simdjson::dom::array props_arr;
-                 if(!obj["properties"].get(props_arr))
+                 if(!read_string_array(obj, "properties", property_filter, error, false))
                  {
-                     for(auto prop_el : props_arr)
-                     {
-                         std::string_view name_view;
-                         if(prop_el.get(name_view))
-                         {
-                             return {.text = "properties must be strings", .is_error = true};
-                         }
-                         property_filter.emplace_back(name_view);
-                     }
+                     return {.text = error, .is_error = true};
                  }
                  auto entity = find_entity(*scn, entity_id);
                  if(count > 0)
@@ -639,9 +553,9 @@ void register_scene_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              simdjson::dom::array items;
-             if(args["items"].get(items))
+             if(!read_required_array(args, "items", items, error))
              {
-                 return {.text = "Missing items", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              struct entry
              {
@@ -682,9 +596,9 @@ void register_scene_tools(mcp_tool_registry& registry)
              for(auto el : items)
              {
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  std::string entity_id;
                  std::string component;
@@ -900,26 +814,10 @@ void register_scene_tools(mcp_tool_registry& registry)
                  return {.text=error, .is_error=true};
              }
 
-             simdjson::dom::array ids;
-             if(args["entity_ids"].get(ids))
-             {
-                 return {.text="Missing entity_ids", .is_error=true};
-             }
-
              std::vector<entt::handle> entities;
-             for(auto el : ids)
+             if(!read_entity_ids(args, *scn, entities, error))
              {
-                 std::string_view id_view;
-                 if(el.get(id_view))
-                 {
-                     return {.text="entity_ids must be strings", .is_error=true};
-                 }
-                 auto entity = find_entity(*scn, std::string(id_view));
-                 if(!entity)
-                 {
-                     return {.text="Entity not found: " + std::string(id_view), .is_error=true};
-                 }
-                 entities.push_back(entity);
+                 return {.text=error, .is_error=true};
              }
 
              ctx.get_cached<editing_manager>().do_action<delete_entities_action_t>("MCP Delete Entities", entities);
@@ -933,22 +831,15 @@ void register_scene_tools(mcp_tool_registry& registry)
          .input_schema_json=empty_object_schema(),
          .handler=[](rtti::context&, const simdjson::dom::object&) -> tool_result
          {
-             std::string json = "[";
-             bool first = true;
+             std::vector<std::string> names;
              hpp::for_each_tuple_type<all_addable_components>(
                  [&](auto index)
                  {
                      using ctype = std::tuple_element_t<decltype(index)::value, all_addable_components>;
                      auto type = entt::resolve<ctype>();
-                     if(!first)
-                     {
-                         json += ",";
-                     }
-                     first = false;
-                     json += make_json_string(std::string(entt::get_pretty_name(type)));
+                     names.emplace_back(entt::get_pretty_name(type));
                  });
-             json += "]";
-             return {.text=json, .is_error=false};
+             return {.text = strings_to_json_array(names), .is_error = false};
          },
          .mutates_scene=false});
 

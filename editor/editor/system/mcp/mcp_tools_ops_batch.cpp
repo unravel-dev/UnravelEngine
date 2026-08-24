@@ -36,16 +36,6 @@ auto resolve_addable_component(const std::string& name) -> entt::meta_type
     return found;
 }
 
-auto read_items_array(const simdjson::dom::object& args, simdjson::dom::array& out, std::string& error) -> bool
-{
-    if(args["items"].get(out))
-    {
-        error = "Missing items array";
-        return false;
-    }
-    return true;
-}
-
 auto item_space_is_local(const simdjson::dom::object& obj) -> bool
 {
     std::string space;
@@ -93,7 +83,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      return {.text = error, .is_error = true};
                  }
                  simdjson::dom::array items_arr;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -108,9 +98,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      item_t item{};
                      if(!read_string(obj, "name", item.name) || item.name.empty())
@@ -172,7 +162,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      return {.text = error, .is_error = true};
                  }
                  simdjson::dom::array items_arr;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -188,9 +178,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      item_t item{};
                      if(!read_string(obj, "asset_key", item.asset_key) || item.asset_key.empty())
@@ -270,7 +260,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      return {.text = error, .is_error = true};
                  }
                  simdjson::dom::array items_arr;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -286,9 +276,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      item_t item{};
                      if(!read_string(obj, "asset_key", item.asset_key) || item.asset_key.empty())
@@ -362,7 +352,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      return {.text = error, .is_error = true};
                  }
                  simdjson::dom::array items_arr;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -376,9 +366,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      std::string entity_id;
                      if(!read_string(obj, "entity_id", entity_id))
@@ -450,7 +440,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      return {.text = error, .is_error = true};
                  }
                  simdjson::dom::array items_arr;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -464,9 +454,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      std::string entity_id;
                      std::string name;
@@ -527,7 +517,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      return {.text = error, .is_error = true};
                  }
                  simdjson::dom::array items_arr;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -541,9 +531,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      std::string entity_id;
                      bool active = true;
@@ -606,7 +596,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      return {.text = error, .is_error = true};
                  }
                  simdjson::dom::array items_arr;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -619,9 +609,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      std::string entity_id;
                      std::string component_type;
@@ -669,7 +659,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      return {.text = error, .is_error = true};
                  }
                  simdjson::dom::array items_arr;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -682,9 +672,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      std::string entity_id;
                      std::string component_type;
@@ -741,7 +731,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      return {.text = "Script system unavailable", .is_error = true};
                  }
                  simdjson::dom::array items_arr;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -751,9 +741,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      std::string entity_id;
                      std::string type_name;
@@ -792,7 +782,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      return {.text = error, .is_error = true};
                  }
                  simdjson::dom::array items_arr;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -801,9 +791,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      std::string entity_id;
                      std::string type_name;
@@ -841,7 +831,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  }
                  simdjson::dom::array items_arr;
                  std::string error;
-                 if(!read_items_array(args, items_arr, error))
+                 if(!read_required_array(args, "items", items_arr, error))
                  {
                      return {.text = error, .is_error = true};
                  }
@@ -850,9 +840,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  for(auto el : items_arr)
                  {
                      simdjson::dom::object obj;
-                     if(el.get(obj))
+                     if(!read_object(el, obj, error))
                      {
-                         return {.text = "Each item must be an object", .is_error = true};
+                         return {.text = error, .is_error = true};
                      }
                      std::string entity_id;
                      if(!read_string(obj, "entity_id", entity_id))
@@ -914,31 +904,21 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
-                 auto& em = ctx.get_cached<editing_manager>();
-                 auto* scn = em.get_active_scene(ctx);
-                 if(!scn || !scn->registry)
+                 scene* scn = nullptr;
+                 std::string error;
+                 if(!require_active_scene(ctx, scn, error))
                  {
-                     return {.text = "No active scene", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
-                 simdjson::dom::array ids;
-                 if(args["entity_ids"].get(ids))
+                 std::vector<entt::handle> entities;
+                 if(!read_entity_ids(args, *scn, entities, error))
                  {
-                     return {.text = "Missing entity_ids", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  std::string json = "[";
                  size_t count = 0;
-                 for(auto el : ids)
+                 for(auto entity : entities)
                  {
-                     std::string_view id_view;
-                     if(el.get(id_view))
-                     {
-                         return {.text = "entity_ids must be strings", .is_error = true};
-                     }
-                     auto entity = find_entity(*scn, std::string(id_view));
-                     if(!entity)
-                     {
-                         return {.text = "Entity not found: " + std::string(id_view), .is_error = true};
-                     }
                      if(count > 0)
                      {
                          json += ",";

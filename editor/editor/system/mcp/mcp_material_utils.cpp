@@ -84,14 +84,6 @@ auto alpha_mode_from_string(std::string_view value, alpha_mode& out) -> bool
     return false;
 }
 
-auto texture_key_json(const asset_handle<gfx::texture>& tex) -> std::string
-{
-    if(!tex)
-    {
-        return "null";
-    }
-    return make_json_string(tex.id());
-}
 
 auto resolve_texture(rtti::context& ctx, const simdjson::dom::element& el, asset_handle<gfx::texture>& out, std::string& error)
     -> bool
@@ -245,12 +237,12 @@ auto material_to_json(const material& mat) -> std::string
     json += fmt::format(R"("alpha_cutoff":{:.6g},)", pbr->get_alpha_cutoff());
     json += fmt::format(R"("tiling":{},)", vec2_to_json(pbr->get_tiling()));
     json += fmt::format(R"("dither_threshold":{},)", vec2_to_json(pbr->get_dither_threshold()));
-    json += fmt::format(R"("color_map":{},)", texture_key_json(pbr->get_color_map()));
-    json += fmt::format(R"("normal_map":{},)", texture_key_json(pbr->get_normal_map()));
-    json += fmt::format(R"("roughness_map":{},)", texture_key_json(pbr->get_roughness_map()));
-    json += fmt::format(R"("metalness_map":{},)", texture_key_json(pbr->get_metalness_map()));
-    json += fmt::format(R"("emissive_map":{},)", texture_key_json(pbr->get_emissive_map()));
-    json += fmt::format(R"("ao_map":{})", texture_key_json(pbr->get_ao_map()));
+    json += fmt::format(R"("color_map":{},)", asset_handle_key_json(pbr->get_color_map()));
+    json += fmt::format(R"("normal_map":{},)", asset_handle_key_json(pbr->get_normal_map()));
+    json += fmt::format(R"("roughness_map":{},)", asset_handle_key_json(pbr->get_roughness_map()));
+    json += fmt::format(R"("metalness_map":{},)", asset_handle_key_json(pbr->get_metalness_map()));
+    json += fmt::format(R"("emissive_map":{},)", asset_handle_key_json(pbr->get_emissive_map()));
+    json += fmt::format(R"("ao_map":{})", asset_handle_key_json(pbr->get_ao_map()));
     json += "}";
     return json;
 }

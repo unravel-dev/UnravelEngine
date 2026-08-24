@@ -143,18 +143,18 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              }
 
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
 
              std::vector<primitive_batch_item> items;
              for(auto el : items_arr)
              {
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  primitive_batch_item item{};
                  if(!read_string(obj, "primitive", item.primitive) || item.primitive.empty())
@@ -255,9 +255,9 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              }
 
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
 
              struct entry
@@ -272,9 +272,9 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              for(auto el : items_arr)
              {
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  std::string entity_id;
                  if(!read_string(obj, "entity_id", entity_id))
@@ -346,9 +346,9 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              }
 
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
 
              struct entry
@@ -363,9 +363,9 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              for(auto el : items_arr)
              {
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  std::string entity_id;
                  std::string material_key;
@@ -449,44 +449,12 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
              }
 
              std::vector<entt::handle> entities;
-             std::string entity_id;
-             if(read_string(args, "entity_id", entity_id) && !entity_id.empty())
+             if(!resolve_entity_id_or_ids(*scn, args, entities, error))
              {
-                 auto entity = find_entity(*scn, entity_id);
-                 if(!entity)
-                 {
-                     return {.text = "Entity not found: " + entity_id, .is_error = true};
-                 }
-                 entities.push_back(entity);
-             }
-             simdjson::dom::array ids;
-             if(!args["entity_ids"].get(ids))
-             {
-                 for(auto el : ids)
-                 {
-                     std::string_view id_view;
-                     if(el.get(id_view))
-                     {
-                         return {.text = "entity_ids must be strings", .is_error = true};
-                     }
-                     auto entity = find_entity(*scn, std::string(id_view));
-                     if(!entity)
-                     {
-                         return {.text = "Entity not found: " + std::string(id_view), .is_error = true};
-                     }
-                     entities.push_back(entity);
-                 }
-             }
-             if(entities.empty())
-             {
-                 return {.text = "Provide entity_id or entity_ids", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
 
-             int64_t depth = -1;
-             if(args["depth"].get(depth))
-             {
-                 depth = -1;
-             }
+             const int64_t depth = read_int64_or(args, "depth", -1);
 
              math::bbox bounds;
              bool first = true;
@@ -542,15 +510,7 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                          .is_error = true};
              }
 
-             int64_t limit = 100;
-             if(args["limit"].get(limit))
-             {
-                 limit = 100;
-             }
-             if(limit < 1)
-             {
-                 limit = 1;
-             }
+             const int64_t limit = read_clamped_int64(args, "limit", 100, 1);
 
              std::vector<entt::handle> matches;
              std::string parent_id;
@@ -623,25 +583,10 @@ void register_scene_batch_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
 
-             simdjson::dom::array ids;
-             if(args["entity_ids"].get(ids))
-             {
-                 return {.text = "Missing entity_ids", .is_error = true};
-             }
              std::vector<entt::handle> sources;
-             for(auto el : ids)
+             if(!read_entity_ids(args, *scn, sources, error))
              {
-                 std::string_view id_view;
-                 if(el.get(id_view))
-                 {
-                     return {.text = "entity_ids must be strings", .is_error = true};
-                 }
-                 auto entity = find_entity(*scn, std::string(id_view));
-                 if(!entity)
-                 {
-                     return {.text = "Entity not found: " + std::string(id_view), .is_error = true};
-                 }
-                 sources.push_back(entity);
+                 return {.text = error, .is_error = true};
              }
 
              std::vector<entt::handle> created;

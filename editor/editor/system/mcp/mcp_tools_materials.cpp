@@ -16,34 +16,6 @@
 
 namespace unravel::mcp
 {
-namespace
-{
-
-auto apply_result_to_json(const material_apply_result& result) -> std::string
-{
-    auto list_json = [](const std::vector<std::string>& items) -> std::string
-    {
-        std::string json = "[";
-        for(size_t i = 0; i < items.size(); ++i)
-        {
-            if(i > 0)
-            {
-                json += ",";
-            }
-            json += make_json_string(items[i]);
-        }
-        json += "]";
-        return json;
-    };
-
-    return fmt::format(R"({{"ok":{},"applied":{},"unknown":{},"errors":{}}})",
-                       result.ok ? "true" : "false",
-                       list_json(result.applied),
-                       list_json(result.unknown),
-                       list_json(result.errors));
-}
-
-} // namespace
 
 void register_material_tools(mcp_tool_registry& registry)
 {
@@ -163,10 +135,11 @@ void register_material_tools(mcp_tool_registry& registry)
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
+             std::string error;
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              std::string results = "[";
              bool first = true;
@@ -176,15 +149,14 @@ void register_material_tools(mcp_tool_registry& registry)
              {
                  ++requested;
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  std::string key;
                  std::string uid;
                  read_string(obj, "key", key);
                  read_string(obj, "uid", uid);
-                 std::string error;
                  auto handle = resolve_material_asset(ctx, key, uid, error);
                  if(!first)
                  {
@@ -232,10 +204,11 @@ void register_material_tools(mcp_tool_registry& registry)
          {
              auto& mcp = ctx.get_cached<mcp_manager>();
              const auto wait_ms = read_wait_ms(args, 1000);
+             std::string error;
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              struct item_t
              {
@@ -247,9 +220,9 @@ void register_material_tools(mcp_tool_registry& registry)
              for(auto el : items_arr)
              {
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  item_t item{};
                  read_string(obj, "path", item.path);
@@ -383,9 +356,9 @@ void register_material_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              struct item_t
              {
@@ -397,9 +370,9 @@ void register_material_tools(mcp_tool_registry& registry)
              for(auto el : items_arr)
              {
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  item_t item{};
                  if(!read_string(obj, "entity_id", item.entity_id) || item.entity_id.empty())
@@ -525,9 +498,9 @@ void register_material_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              simdjson::dom::array items_arr;
-             if(args["items"].get(items_arr))
+             if(!read_required_array(args, "items", items_arr, error))
              {
-                 return {.text = "Missing items array", .is_error = true};
+                 return {.text = error, .is_error = true};
              }
              std::string results = "[";
              bool first = true;
@@ -538,9 +511,9 @@ void register_material_tools(mcp_tool_registry& registry)
              {
                  ++requested;
                  simdjson::dom::object obj;
-                 if(el.get(obj))
+                 if(!read_object(el, obj, error))
                  {
-                     return {.text = "Each item must be an object", .is_error = true};
+                     return {.text = error, .is_error = true};
                  }
                  std::string entity_id;
                  if(!read_string(obj, "entity_id", entity_id) || entity_id.empty())

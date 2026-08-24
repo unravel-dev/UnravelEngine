@@ -29,19 +29,6 @@ auto compat_to_string(project_manager::project_compat status) -> const char*
     return "ok";
 }
 
-auto project_info_json(project_manager& pm) -> std::string
-{
-    if(!pm.has_open_project())
-    {
-        return R"({"open":false})";
-    }
-    const auto& info = pm.get_project_info();
-    return fmt::format(R"({{"open":true,"name":{},"path":{},"guid":{}}})",
-                       make_json_string(pm.get_name()),
-                       make_json_string(fs::resolve_protocol("app:/").generic_string()),
-                       make_json_string(info.project_guid));
-}
-
 } // namespace
 
 void register_project_tools(mcp_tool_registry& registry)
@@ -196,7 +183,7 @@ void register_project_tools(mcp_tool_registry& registry)
                                  R"({{"ok":true,"project":{},"compat":{},"created_scene_from_preset":{},"preset":{}}})",
                                  project_info_json(pm),
                                  make_json_string(compat_to_string(report.status)),
-                                 created_from_preset ? "true" : "false",
+                                 bool_to_json(created_from_preset),
                                  make_json_string(std::string(preset_str.empty() ? "medium" : preset_str))),
                              .is_error = false};
                  },

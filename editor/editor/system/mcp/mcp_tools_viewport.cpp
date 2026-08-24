@@ -131,47 +131,7 @@ auto resolve_focus_entities(rtti::context& ctx,
         return false;
     }
 
-    out.clear();
-
-    std::string single_id;
-    if(read_string(args, "entity_id", single_id) && !single_id.empty())
-    {
-        auto entity = find_entity(*scn, single_id);
-        if(!entity)
-        {
-            error = "Entity not found: " + single_id;
-            return false;
-        }
-        out.push_back(entity);
-    }
-
-    simdjson::dom::array ids;
-    if(!args["entity_ids"].get(ids))
-    {
-        for(auto el : ids)
-        {
-            std::string_view id_view;
-            if(el.get(id_view))
-            {
-                error = "entity_ids must be an array of strings";
-                return false;
-            }
-            auto entity = find_entity(*scn, std::string(id_view));
-            if(!entity)
-            {
-                error = "Entity not found: " + std::string(id_view);
-                return false;
-            }
-            out.push_back(entity);
-        }
-    }
-
-    if(out.empty())
-    {
-        error = "Provide entity_id or entity_ids";
-        return false;
-    }
-    return true;
+    return resolve_entity_id_or_ids(*scn, args, out, error);
 }
 
 } // namespace
