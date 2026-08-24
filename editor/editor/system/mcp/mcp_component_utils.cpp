@@ -25,17 +25,6 @@ namespace unravel::mcp
 namespace
 {
 
-auto color_to_json(const math::color& c) -> std::string
-{
-    const math::vec4 v = c;
-    return fmt::format("[{:.6g},{:.6g},{:.6g},{:.6g}]", v.x, v.y, v.z, v.w);
-}
-
-auto vec3_to_json(const math::vec3& v) -> std::string
-{
-    return fmt::format("[{:.6g},{:.6g},{:.6g}]", v.x, v.y, v.z);
-}
-
 auto asset_key_json(const std::string& key) -> std::string
 {
     if(key.empty())
@@ -67,24 +56,6 @@ auto parse_bool(const simdjson::dom::element& value, bool& out, std::string& err
     return false;
 }
 
-auto parse_number(const simdjson::dom::element& value, float& out, std::string& error) -> bool
-{
-    double d = 0.0;
-    if(!value.get(d))
-    {
-        out = static_cast<float>(d);
-        return true;
-    }
-    int64_t i = 0;
-    if(!value.get(i))
-    {
-        out = static_cast<float>(i);
-        return true;
-    }
-    error = "Expected number";
-    return false;
-}
-
 auto parse_int(const simdjson::dom::element& value, int& out, std::string& error) -> bool
 {
     int64_t i = 0;
@@ -101,61 +72,6 @@ auto parse_int(const simdjson::dom::element& value, int& out, std::string& error
     }
     error = "Expected integer";
     return false;
-}
-
-auto parse_color(const simdjson::dom::element& value, math::color& out, std::string& error) -> bool
-{
-    simdjson::dom::array arr;
-    if(value.get(arr))
-    {
-        error = "Expected color array [r,g,b] or [r,g,b,a]";
-        return false;
-    }
-    std::vector<float> vals;
-    for(auto el : arr)
-    {
-        float f = 0.0f;
-        if(!parse_number(el, f, error))
-        {
-            return false;
-        }
-        vals.push_back(f);
-    }
-    if(vals.size() < 3 || vals.size() > 4)
-    {
-        error = "Color must have 3 or 4 components";
-        return false;
-    }
-    const float a = vals.size() == 4 ? vals[3] : 1.0f;
-    out = math::color{vals[0], vals[1], vals[2], a};
-    return true;
-}
-
-auto parse_vec3(const simdjson::dom::element& value, math::vec3& out, std::string& error) -> bool
-{
-    simdjson::dom::array arr;
-    if(value.get(arr))
-    {
-        error = "Expected vec3 array [x,y,z]";
-        return false;
-    }
-    std::vector<float> vals;
-    for(auto el : arr)
-    {
-        float f = 0.0f;
-        if(!parse_number(el, f, error))
-        {
-            return false;
-        }
-        vals.push_back(f);
-    }
-    if(vals.size() != 3)
-    {
-        error = "Vec3 must have 3 components";
-        return false;
-    }
-    out = math::vec3{vals[0], vals[1], vals[2]};
-    return true;
 }
 
 auto parse_string(const simdjson::dom::element& value, std::string& out, std::string& error) -> bool

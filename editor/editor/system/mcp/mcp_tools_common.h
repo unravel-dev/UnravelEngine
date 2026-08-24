@@ -11,6 +11,7 @@
 #include <editor/editing/entity_inspect.h>
 #include <editor/hub/panels/inspector_panel/inspectors/inspectors.h>
 #include <editor/system/project_manager.h>
+#include <math/color.h>
 #include <math/math.h>
 #include <uuid/uuid.h>
 
@@ -118,6 +119,122 @@ inline auto read_vec3(const simdjson::dom::object& args, const char* key, math::
     }
     out = math::vec3{static_cast<float>(values[0]), static_cast<float>(values[1]), static_cast<float>(values[2])};
     return true;
+}
+
+inline auto parse_number(const simdjson::dom::element& value, float& out, std::string& error) -> bool
+{
+    double d = 0.0;
+    if(!value.get(d))
+    {
+        out = static_cast<float>(d);
+        return true;
+    }
+    int64_t i = 0;
+    if(!value.get(i))
+    {
+        out = static_cast<float>(i);
+        return true;
+    }
+    error = "Expected number";
+    return false;
+}
+
+inline auto parse_vec2(const simdjson::dom::element& value, math::vec2& out, std::string& error) -> bool
+{
+    simdjson::dom::array arr;
+    if(value.get(arr))
+    {
+        error = "Expected vec2 array [x,y]";
+        return false;
+    }
+    std::vector<float> vals;
+    for(auto el : arr)
+    {
+        float f = 0.0f;
+        if(!parse_number(el, f, error))
+        {
+            return false;
+        }
+        vals.push_back(f);
+    }
+    if(vals.size() != 2)
+    {
+        error = "Vec2 must have 2 components";
+        return false;
+    }
+    out = math::vec2{vals[0], vals[1]};
+    return true;
+}
+
+inline auto parse_vec3(const simdjson::dom::element& value, math::vec3& out, std::string& error) -> bool
+{
+    simdjson::dom::array arr;
+    if(value.get(arr))
+    {
+        error = "Expected vec3 array [x,y,z]";
+        return false;
+    }
+    std::vector<float> vals;
+    for(auto el : arr)
+    {
+        float f = 0.0f;
+        if(!parse_number(el, f, error))
+        {
+            return false;
+        }
+        vals.push_back(f);
+    }
+    if(vals.size() != 3)
+    {
+        error = "Vec3 must have 3 components";
+        return false;
+    }
+    out = math::vec3{vals[0], vals[1], vals[2]};
+    return true;
+}
+
+inline auto parse_color(const simdjson::dom::element& value, math::color& out, std::string& error) -> bool
+{
+    simdjson::dom::array arr;
+    if(value.get(arr))
+    {
+        error = "Expected color array [r,g,b] or [r,g,b,a]";
+        return false;
+    }
+    std::vector<float> vals;
+    for(auto el : arr)
+    {
+        float f = 0.0f;
+        if(!parse_number(el, f, error))
+        {
+            return false;
+        }
+        vals.push_back(f);
+    }
+    if(vals.size() < 3 || vals.size() > 4)
+    {
+        error = "Color must have 3 or 4 components";
+        return false;
+    }
+    const float a = vals.size() == 4 ? vals[3] : 1.0f;
+    out = math::color{vals[0], vals[1], vals[2], a};
+    return true;
+}
+
+inline auto vec2_to_json(const math::vec2& v) -> std::string
+{
+    return fmt::format("[{:.6g},{:.6g}]", v.x, v.y);
+}
+
+inline auto vec3_to_json(const math::vec3& v) -> std::string
+{
+    return fmt::format("[{:.6g},{:.6g},{:.6g}]", v.x, v.y, v.z);
+}
+
+inline auto color_to_json(const math::color& c) -> std::string
+{
+    const math::vec4 v = c;
+    return fmt::format("[{:.6g},{:.6g},{:.6g},{:.6g}]", v.x, v.y, v.z, v.w);
 }
 
 inline auto empty_object_schema() -> std::string

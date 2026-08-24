@@ -86,11 +86,6 @@ auto resolve_game_obuffer(rtti::context& ctx) -> gfx::frame_buffer::ptr
     return found;
 }
 
-auto vec3_to_json(const math::vec3& v) -> std::string
-{
-    return fmt::format("[{:.6g},{:.6g},{:.6g}]", v.x, v.y, v.z);
-}
-
 auto camera_to_json(entt::handle camera) -> std::string
 {
     auto& tc = camera.get<transform_component>();

@@ -1,4 +1,5 @@
 #include "mcp_material_utils.h"
+#include "mcp_tools_common.h"
 
 #include <editor/editing/thumbnail_manager.h>
 #include <engine/assets/asset_manager.h>
@@ -83,17 +84,6 @@ auto alpha_mode_from_string(std::string_view value, alpha_mode& out) -> bool
     return false;
 }
 
-auto color_to_json(const math::color& c) -> std::string
-{
-    const math::vec4 v = c;
-    return fmt::format("[{:.6g},{:.6g},{:.6g},{:.6g}]", v.x, v.y, v.z, v.w);
-}
-
-auto vec2_to_json(const math::vec2& v) -> std::string
-{
-    return fmt::format("[{:.6g},{:.6g}]", v.x, v.y);
-}
-
 auto texture_key_json(const asset_handle<gfx::texture>& tex) -> std::string
 {
     if(!tex)
@@ -101,67 +91,6 @@ auto texture_key_json(const asset_handle<gfx::texture>& tex) -> std::string
         return "null";
     }
     return make_json_string(tex.id());
-}
-
-auto read_color(const simdjson::dom::element& el, math::color& out) -> bool
-{
-    simdjson::dom::array arr;
-    if(el.get(arr))
-    {
-        return false;
-    }
-    std::vector<double> values;
-    for(auto item : arr)
-    {
-        double v = 0.0;
-        if(item.get(v))
-        {
-            return false;
-        }
-        values.push_back(v);
-    }
-    if(values.size() == 3)
-    {
-        out = math::color(static_cast<float>(values[0]),
-                          static_cast<float>(values[1]),
-                          static_cast<float>(values[2]),
-                          1.0f);
-        return true;
-    }
-    if(values.size() == 4)
-    {
-        out = math::color(static_cast<float>(values[0]),
-                          static_cast<float>(values[1]),
-                          static_cast<float>(values[2]),
-                          static_cast<float>(values[3]));
-        return true;
-    }
-    return false;
-}
-
-auto read_vec2(const simdjson::dom::element& el, math::vec2& out) -> bool
-{
-    simdjson::dom::array arr;
-    if(el.get(arr))
-    {
-        return false;
-    }
-    std::vector<double> values;
-    for(auto item : arr)
-    {
-        double v = 0.0;
-        if(item.get(v))
-        {
-            return false;
-        }
-        values.push_back(v);
-    }
-    if(values.size() != 2)
-    {
-        return false;
-    }
-    out = math::vec2{static_cast<float>(values[0]), static_cast<float>(values[1])};
-    return true;
 }
 
 auto resolve_texture(rtti::context& ctx, const simdjson::dom::element& el, asset_handle<gfx::texture>& out, std::string& error)
@@ -371,9 +300,9 @@ auto apply_material_properties(rtti::context& ctx, material::sptr mat, const sim
         if(key == "base_color")
         {
             math::color c;
-            if(!read_color(value, c))
+            if(!parse_color(value, c, error))
             {
-                mark_error("expected [r,g,b] or [r,g,b,a]");
+                mark_error(error);
                 continue;
             }
             pbr->set_base_color(c);
@@ -383,9 +312,9 @@ auto apply_material_properties(rtti::context& ctx, material::sptr mat, const sim
         if(key == "subsurface_color")
         {
             math::color c;
-            if(!read_color(value, c))
+            if(!parse_color(value, c, error))
             {
-                mark_error("expected [r,g,b] or [r,g,b,a]");
+                mark_error(error);
                 continue;
             }
             pbr->set_subsurface_color(c);
@@ -395,9 +324,9 @@ auto apply_material_properties(rtti::context& ctx, material::sptr mat, const sim
         if(key == "emissive_color")
         {
             math::color c;
-            if(!read_color(value, c))
+            if(!parse_color(value, c, error))
             {
-                mark_error("expected [r,g,b] or [r,g,b,a]");
+                mark_error(error);
                 continue;
             }
             pbr->set_emissive_color(c);
@@ -480,9 +409,9 @@ auto apply_material_properties(rtti::context& ctx, material::sptr mat, const sim
         if(key == "tiling")
         {
             math::vec2 v{};
-            if(!read_vec2(value, v))
+            if(!parse_vec2(value, v, error))
             {
-                mark_error("expected [x,y]");
+                mark_error(error);
                 continue;
             }
             pbr->set_tiling(v);
@@ -492,9 +421,9 @@ auto apply_material_properties(rtti::context& ctx, material::sptr mat, const sim
         if(key == "dither_threshold")
         {
             math::vec2 v{};
-            if(!read_vec2(value, v))
+            if(!parse_vec2(value, v, error))
             {
-                mark_error("expected [x,y]");
+                mark_error(error);
                 continue;
             }
             pbr->set_dither_threshold(v);
