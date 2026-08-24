@@ -37,11 +37,14 @@ namespace unravel
 {
 namespace
 {
+namespace ANONYMOUS
+{
 /// Border fade of the cloud shadow map in map space (fraction of the half extent).
 constexpr float cloud_shadow_border_fade = 0.08f;
 /// Period of the contact-shadow dither's temporal offset (frames); TAA integrates it.
 constexpr int contact_shadow_dither_frames = 16;
-} // namespace
+} // namespace ANONYMOUS
+} // namespace unravel
 
 namespace rendering
 {
@@ -1520,7 +1523,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                                                    : 0.0f;
             // The dither advances only while TAA integrates it (aa_data.x is the temporal frame
             // index, 0 without TAA); wrapped so the noise offsets stay in float range.
-            const float contact_frame = std::fmod(camera.get_aa_data().x, float(contact_shadow_dither_frames));
+            const float contact_frame = std::fmod(camera.get_aa_data().x, float(ANONYMOUS::contact_shadow_dither_frames));
             const float contact_shadow_uniform[4] = {light.contact_shadow.thickness,
                                                      light.contact_shadow.max_distance,
                                                      light.contact_shadow.opacity,
@@ -1594,7 +1597,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                                                cloud_shadow_.opacity};
                 const float cloud_shadow2[4] = {use_cloud_shadow ? 1.0f : 0.0f,
                                                 cloud_shadow_.base_world_y,
-                                                cloud_shadow_border_fade,
+                                                ANONYMOUS::cloud_shadow_border_fade,
                                                 0.0f};
                 gfx::set_uniform(lprogram.u_cloudShadow, cloud_shadow);
                 gfx::set_uniform(lprogram.u_cloudShadow2, cloud_shadow2);

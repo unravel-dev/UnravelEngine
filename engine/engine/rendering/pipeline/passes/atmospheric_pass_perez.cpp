@@ -294,8 +294,6 @@ constexpr float cloud_shadow_extent_sizes = 16.0f;
 // Below this sun elevation the shadow map is not rendered (the sun ray through the layer
 // is too long to be meaningful and the lighting shader ignores it as well).
 constexpr float cloud_shadow_min_sun_elevation = 0.05f;
-// Border fade of the shadow map in map space (fraction of the half extent).
-constexpr float cloud_shadow_border_fade = 0.08f;
 } // namespace
 
 auto atmospheric_pass_perez::make_cloud_uniforms(const run_params& params,
