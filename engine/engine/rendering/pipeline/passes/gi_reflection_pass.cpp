@@ -156,6 +156,14 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     const bool history_valid = !read_created && params.temporal_frames > 1;
     // Uniform data shared by both trace forms.
     const auto camera_position = params.cam->get_position();
+    // TAA-JITTER-FREE projection for every pass in this chain: these passes reconstruct
+    // world positions from u_invViewProj, and the jittered projection's sub-pixel wobble
+    // times the mirror lever arm swept the light-voxel read at the hit by centimetres per
+    // frame, marching to the TAA sequence (the measured mirror shimmer near emissives).
+    // The temporal reprojects via the TAA-unjittered PREVIOUS pair for the same reason: a
+    // still camera must reproject onto itself exactly, or its motion-gated clamp release
+    // reads a parked camera as moving.
+    const math::transform reflection_projection = params.cam->get_projection_unjittered();
     const bool has_gi_diffuse = params.gi_diffuse != nullptr;
     const float reflection_camera[4] = {camera_position.x,
                                         camera_position.y,
@@ -241,7 +249,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         {
             gfx::render_pass pass("GI/Reflections Classify");
             // The rough tier's SH fallback reconstructs world positions from depth.
-            pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+            pass.set_view_proj(params.cam->get_view(), reflection_projection);
             classify_program_.program->begin();
             gfx::set_texture(classify_program_.s_hiz, 0, params.hiz);
             gfx::set_texture(classify_program_.s_gi_normal, 1, params.g_buffer->get_texture(1));
@@ -272,7 +280,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             gfx::render_pass pass("GI/Reflections Trace");
             // World positions reconstruct from depth, and the Hi-Z projection needs the
             // view state.
-            pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+            pass.set_view_proj(params.cam->get_view(), reflection_projection);
             trace_program_.program->begin();
             gfx::set_texture(trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
             gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
@@ -317,7 +325,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::render_pass pass("GI/Reflections Trace");
         pass.bind(raw_fbo.get());
         // World positions reconstruct from depth, and the Hi-Z projection needs the view state.
-        pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+        pass.set_view_proj(params.cam->get_view(), reflection_projection);
         program_.program->begin();
         gfx::set_texture(program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
         gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
@@ -358,12 +366,14 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     {
         gfx::render_pass tpass("GI/Reflections Temporal");
         tpass.bind(write_fbo.get());
-        tpass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+        tpass.set_view_proj(params.cam->get_view(), reflection_projection);
         temporal_program_.program->begin();
         gfx::set_texture(temporal_program_.s_refl_raw, 0, raw_tex);
         gfx::set_texture(temporal_program_.s_refl_history, 1, history_valid ? read_tex : raw_tex);
         gfx::set_texture(temporal_program_.s_refl_depth, 2, params.hiz);
-        auto prev_view_proj = params.cam->get_prev_view_projection();
+        // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered
+        // prev misaligns a still camera's reprojection by the jitter delta every frame.
+        auto prev_view_proj = params.cam->get_taa_prev_view_projection();
         gfx::set_uniform(temporal_program_.u_gi_refl_prev_view_proj, prev_view_proj.get_matrix());
         // x packs three exact small integers: +1 history valid, +2 checkerboard, +4 parity.
         const float temporal_flags = (history_valid ? 1.0f : 0.0f) + (checkerboard ? 2.0f : 0.0f) +

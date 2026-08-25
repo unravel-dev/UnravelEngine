@@ -50,8 +50,10 @@ BUFFER_RO(b_surface_list, uint, 10);
 /// Attribute volumes: what the surface looks like.
 SAMPLER3D(s_attr_albedo, 8);
 SAMPLER3D(s_attr_emissive, 9);
-/// The light volume this pass owns.
-IMAGE3D_WO(s_light_voxels_out, rgba16f, 7);
+/// The light volume this pass owns. Read+write: the radiance store folds each relight into
+/// a per-voxel EMA (GI_LIGHT_VOXEL_EMA_BLEND) - the read is this pass's own previous answer
+/// for the texel, never another consumer's concurrent write.
+IMAGE3D_RW(s_light_voxels_out, rgba16f, 7);
 /// The per-face memo: one texel per light-volume texel (same GiLightVoxelTexel
 /// addressing), all 32 bits used (layout owned by GiWorldProbeVisMemoPack* in
 /// gi_world_probes.sh). The PROBE half holds the bounce's near cage mask + generation +
@@ -77,8 +79,13 @@ uniform vec4 u_gi_light_voxel_camera;
 /// x = the bounce visibility-memo generation (1..63; 0 = memo unavailable, fall back to the
 /// gated march every other consumer runs). The CPU bumps it when the clipmap content epoch
 /// changes or any probe window scrolls, so a stale texel can never serve.
+/// y = the relight EMA blend for the radiance store (1 = write through). The CPU holds it at
+/// 1 for a full rotation after any light-set or content change (and after debug-variant
+/// writes), so real changes land in one relight and only the dither/limit-cycle noise is
+/// integrated (GI_LIGHT_VOXEL_EMA_BLEND).
 uniform vec4 u_gi_vis_memo_params;
 #define u_vis_memo_generation uint(u_gi_vis_memo_params.x)
+#define u_light_voxel_ema_blend u_gi_vis_memo_params.y
 /// COMPILE-TIME variant switch, deliberately NOT a uniform. The debug write spent two hunts
 /// dead behind runtime flags that provably left the CPU (two independent lanes, current
 /// binaries, one camera, per-submit capture semantics) yet never steered the kernel - never
@@ -708,6 +715,24 @@ void main()
 			}
 		}
 		vec3 radiance = bounded_albedo * irradiance / GI_PI + emissive;
+		// RELIGHT EMA (GI_LIGHT_VOXEL_EMA_BLEND): the relight is SAMPLED - one dithered
+		// evaluation point per rotation (light_jitter above) - so near shadow edges and
+		// 1/r^2 falloffs the raw store is a limit cycle at the rotation period. The gather
+		// and probes are contracted to integrate that; MIRRORS read the volume raw and
+		// showed it as shimmer. Folding each relight into the voxel's own history makes the
+		// volume the integrator. Blend 1 (CPU-held on light/content change, debug writes,
+		// first frames) writes through; a previous texel with alpha 0 was culled or never
+		// measured - its zero is provenance, not radiance, and is never blended in.
+		float ema = u_light_voxel_ema_blend;
+		BRANCH
+		if(ema < 1.0)
+		{
+			vec4 previous = imageLoad(s_light_voxels_out, texel);
+			if(previous.w > 0.0)
+			{
+				radiance = mix(previous.xyz, radiance, ema);
+			}
+		}
 		imageStore(s_light_voxels_out, texel, vec4(radiance, 1.0));
 	}
 }

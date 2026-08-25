@@ -107,10 +107,12 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     gfx::set_buffer(10, clipmap_gpu.get_surface_list_buffer(), gfx::access::Read);
     gfx::set_texture(program_.s_attr_albedo, 8, clipmap_gpu.get_attr_albedo_texture());
     gfx::set_texture(program_.s_attr_emissive, 9, clipmap_gpu.get_attr_emissive_texture());
+    // ReadWrite: the radiance store folds each relight into a per-voxel EMA, reading the
+    // texel's own previous value (see the store in gi_light_voxels_kernel.sh).
     gfx::set_image_3d(7,
                       clipmap_gpu.get_light_voxel_texture()->native_handle(),
                       0,
-                      gfx::access::Write,
+                      gfx::access::ReadWrite,
                       gfx::texture_format::RGBA16F);
     gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
     gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
@@ -254,7 +256,35 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         //                 ? (vis_memo_debug_available ? "vis-memo variant" : "MISSING - radiance fallback")
         //                 : "radiance");
     }
-    const float vis_memo_params[4] = {float(vis_memo_generation), 0.0f, 0.0f, 0.0f};
+    // RELIGHT EMA blend (u_gi_vis_memo_params.y; the radiance store in the kernel). Any
+    // change of the light set (hash) or of the field/window (the vis-memo generation, which
+    // also bumps on window scrolls - a scrolled-in slot must never fade in the departed
+    // cell's radiance) holds the blend at write-through for one FULL rotation: only a
+    // quarter of the surface set relights per frame, so every voxel's first relight after
+    // the change has to snap. Debug variants overwrite the volume with attribution colors,
+    // so the rotation after they clear snaps too. Generation 0 means the change tracker is
+    // unavailable - the EMA stays off rather than integrating over undetected changes.
+    const bool radiance_write = !((want_vis_memo_debug && vis_memo_debug_available) ||
+                                  (want_debug && debug_available));
+    const uint64_t light_hash = light_buffer.is_valid() ? light_buffer.get_content_hash() : 0u;
+    if(!ema_history_valid_ || light_hash != ema_light_hash_ ||
+       vis_memo_generation != ema_generation_ || !radiance_write)
+    {
+        ema_snap_frames_ = uint32_t(gi::GI_LIGHT_VOXEL_UPDATE_DENOM);
+    }
+    ema_history_valid_ = radiance_write;
+    ema_light_hash_ = light_hash;
+    ema_generation_ = vis_memo_generation;
+    float ema_blend = 1.0f;
+    if(ema_snap_frames_ > 0u)
+    {
+        --ema_snap_frames_;
+    }
+    else if(vis_memo_generation != 0u)
+    {
+        ema_blend = float(gi::GI_LIGHT_VOXEL_EMA_BLEND);
+    }
+    const float vis_memo_params[4] = {float(vis_memo_generation), ema_blend, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_gi_vis_memo_params, vis_memo_params);
     if(probes_ready)
     {

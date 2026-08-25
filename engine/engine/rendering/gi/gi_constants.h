@@ -383,6 +383,31 @@
       " (mid 0.5 hit beside a dark 0.125 cell mix) reaches about 4; anything above is a"           \
       " mismatched read (radiance and albedo answered by different cascade levels, occupancy"      \
       " holes) and must not multiply energy")                                                      \
+    X(GI_REFLECTION_MIRROR_ROUGHNESS, 0.06f,                                                       \
+      "decoded G-buffer roughness", "derived: the G-buffer encoder clamps roughness to >= 0.05"    \
+      " at write (fs_deferred_geom.sc), so an AUTHORED mirror decodes at the floor - plus up to"   \
+      " one UNORM8 quantum (1/255) on the LDR G-buffer format. At or below this threshold the"     \
+      " VNDF branch collapses to the deterministic mirror ray. The old gate compared"              \
+      " alpha = roughness^2 against 1e-4, which the floor's 2.5e-3 passes 25x over: every"         \
+      " authored mirror stochastically jittered, and pixels whose exact ray near-missed a small"   \
+      " emissive hit it on tail samples - the measured dancing fireflies. The recorded lesson:"    \
+      " any threshold on decoded roughness must account for the encoder floor")                    \
+    X(GI_REFLECTION_CLAMP_MOTION_TEXELS, 1.0f,                                                     \
+      "trace-target texels of reprojection motion", "derived: below one texel the camera is"       \
+      " still and reprojection is exact, so held history IS this pixel's own sample stream -"      \
+      " the neighbourhood clamp may release and the running mean converge on sparse-bright"        \
+      " content (a small emissive under the lobe: the clamp otherwise erases the accumulated"      \
+      " p*L on every miss frame, so the estimator cannot converge BY CONSTRUCTION and every hit"   \
+      " re-flashes as a dancing dot). Motion is the only per-frame discriminator between"          \
+      " disocclusion ghosts (need the clamp) and sparse-bright samples (the clamp destroys"        \
+      " them) without a velocity buffer; a moving emitter under a still camera can still trail"    \
+      " - accepted and documented")                                                                \
+    X(GI_REFLECTION_STILL_WINDOW_SCALE, 4.0f,                                                      \
+      "x the temporal window", "derived: while the clamp is released (still camera) the"           \
+      " running-mean count may grow to this multiple of the settings window, so a sparse spike"    \
+      " enters at 1/(4W) weight and the mean's variance floor drops 4x where convergence is"       \
+      " actually possible. The count cap collapses to the base window on the first moving"         \
+      " frame, so responsiveness under motion is unchanged")                                       \
     X(GI_REFLECTION_GATHER_FADE_START, 0.3f,                                                       \
       "GGX roughness", "derived: 0.75 x GI_REFLECTION_ROUGH_CUTOFF. The traced tiers now"          \
       " SPREAD with roughness (screen hits average a GGX-cone disk, world hits blend toward"       \
@@ -458,6 +483,17 @@
       " lift guarantees half a voxel, computed at the true centre); the cavity and tunnel"         \
       " gates stay UN-dithered - their verdicts are memoised as pure functions of the field."      \
       " 0 disables, the A/B")                                                                      \
+    X(GI_LIGHT_VOXEL_EMA_BLEND, 0.125f,                                                            \
+      "per-relight blend weight", "derived: 1/8 - two full 4-frame relight rotations of"           \
+      " history. The volume's relight is sampled (one dithered evaluation point per voxel per"     \
+      " rotation, GI_LIGHT_VOXEL_SUN_DITHER), so voxel radiance near shadow edges and 1/r^2"       \
+      " falloffs is a limit cycle at the rotation period; the gather and probes are contracted"    \
+      " to integrate it, but MIRRORS read the volume raw and the reflection temporal's"            \
+      " neighbourhood clamp TRACKS it (measured: shimmer at pure mirror with SSR off). The"        \
+      " relight-to-relight EMA makes the volume itself the integrator. The CPU snaps the blend"    \
+      " to 1 on light-set or content changes (light hash, vis-memo generation - which also"        \
+      " bumps on window scrolls, so a scrolled-in slot never fades in a departed cell's"           \
+      " radiance) and after any debug-variant write, so real changes land in one relight")         \
     X(GI_GATHER_FIREFLY_CLAMP, 8.0f,                                                               \
       "x the governor's reference", "derived: a gather ray that lands on a small bright"           \
       " emitter returns a radiance that dominates its probe's whole tile - and a probe whose"      \

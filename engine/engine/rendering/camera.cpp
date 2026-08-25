@@ -275,6 +275,16 @@ auto camera::get_prev_projection() const -> const math::transform&
     return last_projection_;
 }
 
+auto camera::get_projection_unjittered() const -> math::transform
+{
+    // The jitter lives additively in the [2][0]/[2][1] shear terms (see get_projection),
+    // so subtracting it back out reconstructs the pixel-center-aligned projection exactly.
+    math::mat4 projection = get_projection().get_matrix();
+    projection[2][0] -= aa_data_.z;
+    projection[2][1] -= aa_data_.w;
+    return math::transform(projection);
+}
+
 auto camera::get_view() const -> const math::transform&
 {
     return view_;
@@ -857,16 +867,14 @@ void camera::set_aa_data(const usize32_t& viewport_size,
     // history is the resolved, pixel-center-aligned image, so reprojection must
     // target unjittered NDC.
     const math::transform frame_view = get_view();
-    math::mat4 frame_proj = get_projection().get_matrix();
-    frame_proj[2][0] -= aa_data_.z;
-    frame_proj[2][1] -= aa_data_.w;
+    const math::transform frame_proj = get_projection_unjittered();
 
     // Promote the pair recorded on the previous call: those are the matrices the
     // previous frame actually rendered with. Snapshotting get_view() directly here
     // would capture the CURRENT view (the camera already moved), which cancels the
     // view term in the TAA reprojection and reduces it to a jitter-only offset.
     taa_prev_view_ = taa_frame_valid_ ? taa_frame_view_ : frame_view;
-    taa_prev_projection_ = taa_frame_valid_ ? taa_frame_projection_ : math::transform(frame_proj);
+    taa_prev_projection_ = taa_frame_valid_ ? taa_frame_projection_ : frame_proj;
 
     taa_frame_view_ = frame_view;
     taa_frame_projection_ = frame_proj;

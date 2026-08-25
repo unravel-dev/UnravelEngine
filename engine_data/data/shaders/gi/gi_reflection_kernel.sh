@@ -229,8 +229,14 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	// by IGN and advanced per frame by R2; the temporal pass integrates. A sample below the
 	// horizon (VNDF guarantees a valid half-vector, not a valid reflection at grazing) keeps
 	// the mirror direction.
+	//
+	// The determinism gate is on DECODED roughness against the encoder floor, never on alpha
+	// against a small epsilon: the G-buffer write clamps roughness to >= 0.05, so an authored
+	// mirror decodes at the floor and its alpha (2.5e-3) sailed over the old 1e-4 gate -
+	// every mirror pixel jittered, and rays near-missing a small emissive hit it on the
+	// VNDF tail as full-radiance fireflies (the recorded decoded-roughness-floor lesson).
 	BRANCH
-	if(alpha_ggx > 1e-4)
+	if(roughness > GI_REFLECTION_MIRROR_ROUGHNESS)
 	{
 		// TWO independent IGN evaluations for a true 2D point: deriving the second
 		// coordinate from the first put every sample on a 1D curve through the unit square,
@@ -382,6 +388,14 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 					}
 				}
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
+				// FIREFLY CLAMP, the gather's per-ray contract applied to the one tier that
+				// lacked it: the volume stores emissive UNBOUNDED, so a single ray landing on
+				// a small bright emitter returned its full radiance - two orders over the
+				// scene - and no temporal window can hide an unbounded spike (1/p samples
+				// needed). Only the voxel-measured answer is capped: rough_value is last
+				// frame's denoised resolve and the sky fallback is a stable per-pixel image,
+				// neither a stochastic spike source.
+				radiance = min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
 			}
 		}
 		if(clipmap_shape)

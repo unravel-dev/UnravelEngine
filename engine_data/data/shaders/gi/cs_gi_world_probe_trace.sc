@@ -202,6 +202,11 @@ void main()
 			}
 			radiance = voxel_radiance;
 		}
-		imageStore(s_world_probe_radiance_out, texel, vec4(radiance, hit_t));
+		// The gather's per-ray firefly clamp (GI_MAX_RAY_RADIANCE), applied at the one other
+	// stochastic-ray tier: emissive is stored unbounded in the light voxels, and a single
+	// stratum ray skewering a small bright emitter otherwise holds its full radiance in
+	// the windowed mean for a whole window - the probe-side shimmer near emissives.
+	imageStore(s_world_probe_radiance_out, texel,
+	           vec4(min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE)), hit_t));
 	}
 }

@@ -89,6 +89,13 @@ private:
     /// static scene means an invalidation tracker is churning and the memo can never hit -
     /// the CPU-side discriminator for the measured miss-every-rotation cost signature.
     uint32_t vis_memo_generation_logged_ = uint32_t(-1);
+    /// Relight-EMA change tracking (u_gi_vis_memo_params.y): what the blend was last
+    /// computed against, and how many write-through frames remain so every voxel's first
+    /// relight after a change snaps (one full rotation); see the blend block in run().
+    bool ema_history_valid_ = false;
+    uint64_t ema_light_hash_ = 0;
+    uint32_t ema_generation_ = uint32_t(-1);
+    uint32_t ema_snap_frames_ = 0;
 
 private:
     struct light_voxel_program : uniforms_cache

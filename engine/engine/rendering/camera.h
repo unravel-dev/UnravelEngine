@@ -234,6 +234,18 @@ public:
     auto get_prev_projection() const -> const math::transform&;
 
     /**
+     * @brief The current projection with the TAA subpixel jitter subtracted back out.
+     *
+     * get_projection() carries the jitter set_aa_data() injected, which is correct for
+     * rasterization but poison for any pass that reconstructs world positions from the
+     * inverse view-projection: the sub-pixel wobble times the ray's lever arm becomes a
+     * world-space sweep marching to the jitter sequence (measured as mirror shimmer in the
+     * GI reflection chain). Such passes take this matrix instead; with TAA off the two are
+     * identical.
+     */
+    auto get_projection_unjittered() const -> math::transform;
+
+    /**
      * @brief Retrieves the current view matrix.
      *
      * @return The current view matrix.

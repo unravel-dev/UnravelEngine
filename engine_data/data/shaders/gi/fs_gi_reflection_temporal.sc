@@ -111,6 +111,20 @@ void main()
 		return;
 	}
 	vec4 history_texel = texture2DLod(s_refl_history, prev_uv, 0.0);
+	// STILLNESS releases the neighbourhood clamp. The clamp exists for disocclusion, but for
+	// SPARSE-BRIGHT content (a small emissive under the lobe: hit probability p per frame)
+	// it erases the accumulated p*L mean on every miss frame - the estimator cannot converge
+	// BY CONSTRUCTION and every hit re-flashes as a dancing dot. Below one texel of
+	// reprojection motion the history IS this pixel's own sample stream and may be held
+	// unclamped; the release also extends the running-mean window (the count cap below), so
+	// spikes enter at 1/(scale x window) weight. Motion is the only per-frame discriminator
+	// between ghosts and sparse-bright samples without a velocity buffer - a moving emitter
+	// under a still camera can trail over the extended window (accepted, documented). This
+	// gate only reads truly still because the whole chain runs on TAA-unjittered matrices
+	// (the pass subtracts the jitter; jittered matrices read a parked camera as 0.25-0.5
+	// texel/frame of motion and silently kept the clamp engaged).
+	vec2 motion_texels = (uv - prev_uv) / max(texel, vec2_splat(1e-6));
+	float still = 1.0 - saturate(length(motion_texels) / GI_REFLECTION_CLAMP_MOTION_TEXELS);
 	BRANCH
 	if(traced && curr.w < 0.5)
 	{
@@ -180,8 +194,9 @@ void main()
 		// keeps every traced sample's weight in the mean identical to the full-rate path.
 		if(history_texel.w >= 0.5)
 		{
-			vec3 held = bound_count > 0.0 ? clamp(history_texel.xyz, lo.xyz, hi.xyz)
-			                              : history_texel.xyz;
+			vec3 held = bound_count > 0.0
+			                ? mix(clamp(history_texel.xyz, lo.xyz, hi.xyz), history_texel.xyz, still)
+			                : history_texel.xyz;
 			gl_FragColor = vec4(held, history_texel.w);
 			return;
 		}
@@ -193,8 +208,13 @@ void main()
 	// about a quarter of the sample spread at weight 1/8 - which read as reflections that
 	// never converge exactly where the stochastic spread is widest (measured, round 13).
 	// The count clamp keeps steady-state responsiveness at one over the settings window.
-	vec3 history_rgb = history_texel.w >= 0.5 ? clamp(history_texel.xyz, lo.xyz, hi.xyz) : curr.xyz;
+	vec3 history_rgb = history_texel.w >= 0.5
+	                       ? mix(clamp(history_texel.xyz, lo.xyz, hi.xyz), history_texel.xyz, still)
+	                       : curr.xyz;
 	float prev_count = history_texel.w >= 0.5 ? history_texel.w : 0.0;
-	float count = min(prev_count, max(u_gi_refl_temporal.w - 1.0, 1.0)) + 1.0;
+	// The count cap grows with stillness (see the release note above) and collapses to the
+	// base window on the first moving frame, so responsiveness under motion is unchanged.
+	float window = max(u_gi_refl_temporal.w - 1.0, 1.0);
+	float count = min(prev_count, window * mix(1.0, GI_REFLECTION_STILL_WINDOW_SCALE, still)) + 1.0;
 	gl_FragColor = vec4(mix(history_rgb, curr.xyz, 1.0 / count), count);
 }
