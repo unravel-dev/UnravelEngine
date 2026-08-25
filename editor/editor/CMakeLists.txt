@@ -32,14 +32,12 @@ set_target_properties(${target_name} PROPERTIES
     WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-
-if(UNRAVEL_UNITY_BUILD)
+# UNITY_BUILD is configure-time, not per-config. Enable for Release / RelWithDebInfo / MinSizeRel.
+if(UNRAVEL_UNITY_BUILD AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     set_target_properties(${target_name} PROPERTIES
         UNITY_BUILD ON
         UNITY_BUILD_UNIQUE_ID "ANONYMOUS"
     )
-endif()
 endif()
 
 if (CMAKE_C_COMPILER_ID MATCHES GNU|Clang AND NOT WIN32)

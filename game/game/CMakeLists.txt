@@ -27,13 +27,11 @@ set_target_properties(${target_name} PROPERTIES
     WINDOWS_EXPORT_ALL_SYMBOLS ON
 )
 
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    if(UNRAVEL_UNITY_BUILD)
-        set_target_properties(${target_name} PROPERTIES
+if(UNRAVEL_UNITY_BUILD AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set_target_properties(${target_name} PROPERTIES
         UNITY_BUILD ON
         UNITY_BUILD_UNIQUE_ID "ANONYMOUS"
         )
-    endif()
 endif()
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
