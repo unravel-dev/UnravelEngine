@@ -15,7 +15,7 @@ Classify the task before writing code. Read relevant source first; never guess a
 | Domain | Trigger signals | Primary skill |
 |--------|-----------------|---------------|
 | ECS / entities | component, system, scene, entity, serialize entity | `unravel-ecs-component` |
-| Rendering | shader, pass, pipeline, bgfx, material, post-process, GPU | `unravel-rendering` |
+| Rendering | shader, pass, pipeline, bgfx, material, post-process, GPU, GI, probes, clouds, shadows | `unravel-rendering` |
 | Editor UI | panel, inspector, gizmo, menu bar, ImGui, dock, undo | `unravel-editor-panel` |
 | Assets | import, reimport, `.meta`, uid, asset compiler, handle | `unravel-assets` |
 | Materials (MCP / `.mat`) | PBR material, `.mat`, material instance, `materials_set`, albedo/roughness maps | `unravel-materials` |
@@ -55,13 +55,13 @@ If multiple domains apply, list all and identify the **primary** change surface.
 
 Check each before implementing:
 
-- [ ] **Serialization** — ser20 SAVE/LOAD + `all_serializeable_components` in `engine/engine/meta/ecs/components/all_components.h`
-- [ ] **Meta / inspector** — `REFLECT()` in `engine/engine/meta/`, inspector in `editor/editor/hub/panels/inspector_panel/inspectors/`
-- [ ] **Play mode** — `play_mode` phases: splash vs running; `on_play_begin` only in running phase
-- [ ] **Prefab overrides** — `serialization::path_context` for per-instance property paths
-- [ ] **C# API parity** — `engine_data/data/scripts/` if exposed to scripts
-- [ ] **Asset pipeline** — `.meta` uid stability, importers in `engine/engine/assets/impl/importers/`
-- [ ] **Editor-only vs runtime** — code in `editor/` must not be required at game runtime
+- [ ] **Serialization** - ser20 SAVE/LOAD + `all_serializeable_components` in `engine/engine/meta/ecs/components/all_components.h`
+- [ ] **Meta / inspector** - `REFLECT()` in `engine/engine/meta/`, inspector in `editor/editor/hub/panels/inspector_panel/inspectors/`
+- [ ] **Play mode** - `play_mode` phases: splash vs running; `on_play_begin` only in running phase
+- [ ] **Prefab overrides** - `serialization::path_context` for per-instance property paths
+- [ ] **C# API parity** - `engine_data/data/scripts/` if exposed to scripts
+- [ ] **Asset pipeline** - `.meta` uid stability, importers in `engine/engine/assets/impl/importers/`
+- [ ] **Editor-only vs runtime** - code in `editor/` must not be required at game runtime
 
 ## Step 4: Pick workflow skill
 
@@ -82,19 +82,24 @@ Before coding, state:
 1. Domain(s) and skill(s) to apply
 2. Files to read (minimum set)
 3. Files likely to change
-4. Verification steps (build, manual test, play mode)
+4. Verification steps (build, `unravel-tests` suites - see `unravel-build-verify`,
+   manual test, play mode)
 
 ## Hard rules
 
 - Do not modify `deps/3rdparty/` unless no alternative exists
 - Match existing file naming: `snake_case` for types, files, functions
-- Minimal diff — only touch what the task requires
+- Minimal diff - only touch what the task requires
 - Follow `AGENTS.md` (C++ guidelines section) for all C++ changes
 
 ## System init order (reference)
 
-From `engine/engine/engine.cpp`:
+From `engine/engine/engine.cpp` - **verify there before relying on it; this list
+drifts**:
 
-`threader` → `renderer` → `audio_system` → `asset_manager` → `ecs` → `rendering_system` → `transform_system` → `camera_system` → `reflection_probe_system` → `skylight_system` → `model_system` → `animation_system` → `physics_system` → `particle_system` → `input_system` → `script_system` → `ui_system`
+`threader` -> `renderer` -> `audio_system` -> `asset_manager` -> `ecs` -> `rendering_system` -> `transform_system` -> `camera_system` -> `reflection_probe_system` -> `skylight_system` -> `model_system` -> `animation_system` -> `physics_system` -> `particle_system` -> `input_system` -> `script_system` -> `ui_system`
 
-New systems must respect this ordering and event hook priorities.
+New systems must respect this ordering. Frame-event slot order is a separate,
+explicit contract: `frame_update_priority` in `engine/engine/events.h` (scene
+systems -> scripts -> scripts_late; same-priority order is registration order and
+deliberately non-contractual).

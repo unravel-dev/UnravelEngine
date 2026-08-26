@@ -4,7 +4,6 @@ description: >-
   Works on UnravelEngine in-game UI using RmlUi: HTML/CSS documents, ui_document
   component, world-space UI, and UI debugger. Use for game UI screens, RML/RCSS
   assets, UI rendering, or UI input handling.
-disable-model-invocation: true
 ---
 
 # Unravel UI (RmlUi)
@@ -17,7 +16,7 @@ disable-model-invocation: true
 | UI document component | `engine/engine/ui/ecs/components/ui_document_component.h` |
 | RmlUi backend | `engine/engine/ui/rmlui/` |
 | Meta | `engine/engine/meta/ecs/components/ui_document_component.hpp` |
-| Game panel debugger | `game_panel.cpp` — UI Debugger menu toggle |
+| Game panel debugger | `game_panel.cpp` - UI Debugger menu toggle |
 | Templates | `engine_data/data/` (UI templates if present) |
 
 ## Architecture
@@ -29,7 +28,7 @@ disable-model-invocation: true
 
 ## Document assets
 
-UI documents are assets — follow `unravel-assets` for import/meta. RML + RCSS file pairs.
+UI documents are assets - follow `unravel-assets` for import/meta. RML + RCSS file pairs.
 
 ## World-space UI
 

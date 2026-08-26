@@ -4,7 +4,6 @@ description: >-
   Structured bug investigation workflow for UnravelEngine: reproduce, isolate
   domain, find root cause, minimal fix, and verify. Use for bug reports, crashes,
   regressions, or unexpected behavior in engine or editor.
-disable-model-invocation: true
 ---
 
 # Bug Investigation Workflow
@@ -26,7 +25,7 @@ Run `unravel-triage` to classify domain. Gather:
 - Reduce to minimal scene/steps
 - Note whether fresh project reproduces
 
-If not reproducible: ask for scene file, project settings, or video — but keep investigating logs/code paths meanwhile.
+If not reproducible: ask for scene file, project settings, or video - but keep investigating logs/code paths meanwhile.
 
 ## Phase 3: Isolate
 
@@ -62,6 +61,9 @@ Use logging (`APPLOG_*`), breakpoints, or stats overlay as appropriate.
 ## Phase 6: Verify
 
 - [ ] Original repro steps pass
+- [ ] Relevant `unravel-tests` suite green (serialization / physics / ik / animation /
+      gi - see `unravel-build-verify`); when practical, add a failing check to the
+      suite FIRST, then fix
 - [ ] Related areas smoke tested
 - [ ] Play mode enter/exit if applicable
 - [ ] Save/reload if data involved

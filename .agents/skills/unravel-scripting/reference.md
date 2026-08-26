@@ -29,11 +29,11 @@ Expose via: C# wrapper in `engine_data/data/scripts/scene/components/` +
 
 **Intentional non-exposures (do not add as `Component` types):**
 
-- `tag_component` / `layer_component` — use `Entity.name` / `Entity.tag` / `Entity.layers`
-- `prefab_component` / `prefab_id_component` — use `Prefab` asset + `Scene.Instantiate`
-- `test_component` — editor/dev serialization smoke test only
-- `root_component` / `active_component` — runtime markers; active is on `Entity`
-- `script_component` — host for user `ScriptComponent` subclasses, not Add-able as native type
+- `tag_component` / `layer_component` - use `Entity.name` / `Entity.tag` / `Entity.layers`
+- `prefab_component` / `prefab_id_component` - use `Prefab` asset + `Scene.Instantiate`
+- `test_component` - editor/dev serialization smoke test only
+- `root_component` / `active_component` - runtime markers; active is on `Entity`
+- `script_component` - host for user `ScriptComponent` subclasses, not Add-able as native type
 
 ## script_system init hooks
 
@@ -67,7 +67,7 @@ Event: `on_script_recompile(ctx, protocol, version)`
 
 ## Debug config
 
-`script_system::set_debug_config(address, port, loglevel)` — managed debugger attachment via `dotnet::debugging_config`.
+`script_system::set_debug_config(address, port, loglevel)` - managed debugger attachment via `dotnet::debugging_config`.
 
 ## Adding C# API method
 
@@ -88,7 +88,7 @@ reg.add_internal_call("internal_m2n_do_thing", dotnet_internal_call(internal_m2n
 For layout-compatible value types shared between C++ and C#:
 
 ```cpp
-// script_interop.h — engine POD structs in managed_interface
+// script_interop.h - engine POD structs in managed_interface
 dotnet_register_converter_for_pod(math::vec3, dotnetpp_backend::managed_interface::vector3);
 ```
 
@@ -120,7 +120,7 @@ Physics system forwards to script_system -> C#:
 - `on_collision_enter` / `exit`
 - `on_sensor_enter` / `exit`
 
-Bridge code in physics + script glue — update both sides. Manifold points use
+Bridge code in physics + script glue - update both sides. Manifold points use
 `dotnetpp_backend::managed_interface::manifold_point`.
 
 ## dotnetpp API (current)
@@ -147,22 +147,22 @@ Link `dotnetpp` in CMake.
 
 ## Domain unload, statics cleanup, leak detection
 
-CoreCLR domains are collectible `AssemblyLoadContext`s — a static field in a *surviving*
+CoreCLR domains are collectible `AssemblyLoadContext`s - a static field in a *surviving*
 assembly (engine managers, caches keyed by script `Type`s, event subscriptions) silently
 pins the unloaded domain forever.
 
 `Bridge.Unload.cs` (clrpp managed side) handles this on every domain unload:
 
-1. **`[AutoStaticsCleanup]`** (defined in `Unravel.Core`, matched by attribute *name* so any assembly can define its own copy): all marked types in all clrpp contexts get cleaned. If the type defines `static void OnStaticsCleanup()` it is invoked (use to re-create managers — e.g. `SystemManager`, `UIEventManager`); otherwise all non-readonly static fields are reset to defaults (readonly fields warn — use `OnStaticsCleanup`).
+1. **`[AutoStaticsCleanup]`** (defined in `Unravel.Core`, matched by attribute *name* so any assembly can define its own copy): all marked types in all clrpp contexts get cleaned. If the type defines `static void OnStaticsCleanup()` it is invoked (use to re-create managers - e.g. `SystemManager`, `UIEventManager`); otherwise all non-readonly static fields are reset to defaults (readonly fields warn - use `OnStaticsCleanup`).
 2. Interned reflection handles owned by the dying context are purged.
 3. Unload is **verified** via `WeakReference` after GC; `bridge().domain_unload()` returns 0 = clean, 1 = leaked, -1 = error.
 4. On leak, a diagnostic scan of the surviving contexts' static fields (values, delegate targets, shallow collection contents incl. `Dictionary<Type,...>` keys) logs every root, e.g. `static root: Foo.Bar.cache contains key MyScript`.
-5. Also on leak, `Bridge.LeakAnalysis.cs` asks the GC itself via ClrMD (`Microsoft.Diagnostics.Runtime`, optional dll next to the bridge): snapshots the process (`DataTarget.CreateSnapshotAndAttach`) and reports (a) strong/pinned GC handles targeting leaked-domain objects — i.e. handles native code did not release, (b) a census of surviving instances per type, (c) full root paths (`Stack/handle root -> Holder -> ... -> LeakedObject`). Zero steady-state overhead — the snapshot only happens after a leak was already detected.
+5. Also on leak, `Bridge.LeakAnalysis.cs` asks the GC itself via ClrMD (`Microsoft.Diagnostics.Runtime`, optional dll next to the bridge): snapshots the process (`DataTarget.CreateSnapshotAndAttach`) and reports (a) strong/pinned GC handles targeting leaked-domain objects - i.e. handles native code did not release, (b) a census of surviving instances per type, (c) full root paths (`Stack/handle root -> Holder -> ... -> LeakedObject`). Zero steady-state overhead - the snapshot only happens after a leak was already detected.
 
 Classes with statics that hold script instances/Types/delegates MUST be marked `[AutoStaticsCleanup]`.
 
-Interned-handle purge gotcha: ownership checks members by **DeclaringType and ReflectedType** — a `PropertyInfo` declared on an engine base class but reflected through an app type pins the app domain via `m_reflectedTypeCache`.
+Interned-handle purge gotcha: ownership checks members by **DeclaringType and ReflectedType** - a `PropertyInfo` declared on an engine base class but reflected through an app type pins the app domain via `m_reflectedTypeCache`.
 
 ### Managed bridge deployment
 
-The bridge payload (`Clrpp.Managed.dll` + `Clrpp.Managed.runtimeconfig.json` + optional NuGet deps: `Mono.Cecil*` for icall weaving, `Microsoft.Diagnostics.*`/`Microsoft.Extensions.*` for leak analysis) is deployed by CMake into a **`clrpp/` subfolder** next to the executables. The native loader (`clr_bridge.cpp initialize`) probes: explicit `compiler_paths::assembly_dir` (and its `clrpp/` child), `<exe_dir>/clrpp`, `<exe_dir>`, `<cwd>/clrpp`, `<cwd>`. The bridge resolves its own dependencies from its own directory (`Resolving` hook in `Bridge.Core.cs`), so the whole folder is self-contained — ship the `clrpp/` folder as-is when deploying. Optional dlls may be omitted from a shipped game: without Cecil, icall weaving is disabled (scripts with `[InternalCall]` will not work on CoreCLR until woven); without ClrMD, leak reports lose the GC-snapshot analysis.
+The bridge payload (`Clrpp.Managed.dll` + `Clrpp.Managed.runtimeconfig.json` + optional NuGet deps: `Mono.Cecil*` for icall weaving, `Microsoft.Diagnostics.*`/`Microsoft.Extensions.*` for leak analysis) is deployed by CMake into a **`clrpp/` subfolder** next to the executables. The native loader (`clr_bridge.cpp initialize`) probes: explicit `compiler_paths::assembly_dir` (and its `clrpp/` child), `<exe_dir>/clrpp`, `<exe_dir>`, `<cwd>/clrpp`, `<cwd>`. The bridge resolves its own dependencies from its own directory (`Resolving` hook in `Bridge.Core.cs`), so the whole folder is self-contained - ship the `clrpp/` folder as-is when deploying. Optional dlls may be omitted from a shipped game: without Cecil, icall weaving is disabled (scripts with `[InternalCall]` will not work on CoreCLR until woven); without ClrMD, leak reports lose the GC-snapshot analysis.

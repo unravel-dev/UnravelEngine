@@ -4,7 +4,6 @@ description: >-
   Captures user corrections and recurring mistakes into tasks/lessons.md and
   proposes rule or skill updates for UnravelEngine. Use after any user correction,
   rejected approach, or repeated mistake pattern.
-disable-model-invocation: true
 ---
 
 # Unravel Lessons
@@ -25,7 +24,7 @@ Turn corrections into durable project memory.
 Add one entry to `tasks/lessons.md` (create file if missing):
 
 ```markdown
-## YYYY-MM-DD — Short title
+## YYYY-MM-DD - Short title
 
 **Context:** What task was being done
 **Mistake:** What went wrong
@@ -44,16 +43,25 @@ Keep entries concise. One pattern per entry.
 | Universal workflow issue | Propose addition to `AGENTS.md` |
 | One-off edge case | Lesson entry only |
 
-### 3. Propose skill/rule update
+### 3. Promote to skill (do not let lessons rot)
 
-When escalating, draft a minimal addition (1-5 lines) — do not rewrite entire skills.
+A lesson that states a durable engine contract (an API ordering rule, a platform
+gotcha, a lifecycle invariant) belongs in the matching domain skill, not only in the
+log - lessons.md is written once and rarely re-read; skills are read at task start.
+When the lesson is domain-shaped:
 
-Ask user before modifying rules/skills unless they explicitly requested autonomous lesson integration.
+1. Fold a 1-5 line rule into the matching `.agents/skills/unravel-*/SKILL.md`
+   (usually its "Common mistakes" or a contract section) - do not rewrite the skill
+2. Mark the lesson entry `(promoted to <skill>)` so later passes skip it
+
+Ask user before modifying rules/skills unless they explicitly requested autonomous
+lesson integration - but always ask rather than silently leaving the lesson
+unpromoted; that is how skills went stale before (fixed 2026-08-26).
 
 ## Entry template
 
 ```markdown
-## 2026-07-09 — Menu bar alignment needs frame padding
+## 2026-07-09 - Menu bar alignment needs frame padding
 
 **Context:** Right-aligning Stats toggle in viewport menu bar
 **Mistake:** Used `CalcTextSize` only; MenuItem wider than label text

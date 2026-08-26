@@ -5,7 +5,6 @@ description: >-
   ScriptComponent lifecycle, and C++/C# interop via dotnetpp (CoreCLR). Use for
   game scripts, scripting backend, OnCreate/OnUpdate hooks, or physics/UI events
   forwarded to C#.
-disable-model-invocation: true
 ---
 
 # Unravel Scripting
@@ -26,10 +25,10 @@ disable-model-invocation: true
 
 - **dotnetpp** embedding API (`dotnet::`) over CoreCLR (`DOTNETPP_BACKEND=coreclr`)
 - Requires **.NET 9 SDK** (`dotnet` on `PATH`) for script compile and hot-reload
-- **Dual script domains** — engine scripts + per-project scripts
-- **Hot-reload** — `events::on_script_recompile` triggers recompile and reload
-- **ScriptComponent** — attaches C# class to entity
-- **POD interop** — layout-compatible value types in `dotnetpp_backend::managed_interface`,
+- **Dual script domains** - engine scripts + per-project scripts
+- **Hot-reload** - `events::on_script_recompile` triggers recompile and reload
+- **ScriptComponent** - attaches C# class to entity
+- **POD interop** - layout-compatible value types in `dotnetpp_backend::managed_interface`,
   converter specializations in `dotnetpp_backend::managed_interface`, registered with
   `dotnet_register_converter_for_pod`
 
@@ -50,8 +49,8 @@ Namespace: `Unravel.Core` (and project-specific assemblies).
 
 C# scripts implement:
 
-- `OnCreate` — entity created
-- `OnStart` — play mode start
+- `OnCreate` - entity created
+- `OnStart` - play mode start
 - `OnUpdate` / fixed update variants
 - Collision/sensor callbacks forwarded from physics
 
@@ -68,8 +67,8 @@ When exposing new engine features to scripts:
 2. Add C# wrapper in `engine_data/data/scripts/`
 3. Register internal call with `dotnet::add_internal_call` / `dotnet::internal_call_registry` and `dotnet_internal_call()`
 4. For POD types, add layout-compatible managed struct + `dotnet_register_converter_for_pod` in `script_interop.h`
-5. Maintain API parity — breaking C# API breaks user projects
-6. **Document every public C# API** (required — see below)
+5. Maintain API parity - breaking C# API breaks user projects
+6. **Document every public C# API** (required - see below)
 
 ## C# XML documentation (required)
 
@@ -135,8 +134,8 @@ whose statics hold script instances, script `Type`s, or delegates with `[AutoSta
 - C# API change without migration note
 - Script logic in C++ that belongs in `script_system` dispatch
 - Forgetting play-mode-only guards on runtime script state
-- Using backend-specific embedding APIs directly — use `dotnet::` and `<dotnetpp/dotnetpp.h>`
-- Putting converter specializations in the wrong namespace — use
+- Using backend-specific embedding APIs directly - use `dotnet::` and `<dotnetpp/dotnetpp.h>`
+- Putting converter specializations in the wrong namespace - use
   `dotnetpp_backend::managed_interface` (no backend ifdefs in user code)
 
 ## Deep reference

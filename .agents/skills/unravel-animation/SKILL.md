@@ -2,9 +2,9 @@
 name: unravel-animation
 description: >-
   Works on UnravelEngine animation: skeletal animation, clips, blend spaces,
-  animation components, and animation panel integration. Use for skeletal
-  animation, blend trees, clip playback, or skinned mesh animation bugs.
-disable-model-invocation: true
+  animation components, root motion, IK, and animation panel integration. Use for
+  skeletal animation, blend trees, clip playback, root motion, IK, or skinned mesh
+  animation bugs.
 ---
 
 # Unravel Animation
@@ -29,9 +29,18 @@ disable-model-invocation: true
 - `animation_system` updates bone poses each frame
 - Skinned meshes submitted in deferred pipeline (separate draw path from static)
 
+## Frame ordering (contract)
+
+Scene systems (incl. animation) run BEFORE script `OnUpdate`
+(`frame_update_priority` in `engine/engine/events.h`): animation_system rewrites
+every animated bone's local transform, so bone writes made before it (IK,
+procedural offsets) are discarded the same frame. Script writes land before
+model_system's skinning pass in `on_frame_before_render`. Do not connect animation
+consumers at an unnamed priority.
+
 ## Blend spaces
 
-Blend space assets combine multiple clips by parameters (e.g. speed, direction). Defined in animation module — read existing blend space types before adding new ones.
+Blend space assets combine multiple clips by parameters (e.g. speed, direction). Defined in animation module - read existing blend space types before adding new ones.
 
 ## ECS integration
 
@@ -48,10 +57,12 @@ Blend space assets combine multiple clips by parameters (e.g. speed, direction).
 
 ## Editor
 
-`animation_panel/` — clip preview, blend editing. Changes may require asset reimport for clip data.
+`animation_panel/` - clip preview, blend editing. Changes may require asset reimport for clip data.
 
 ## Verification checklist
 
+- [ ] `unravel-tests --suite animation` green (blend spaces, root motion wraps,
+      replay); `--suite ik` for IK solver work
 - [ ] Clip plays correctly in play mode
 - [ ] Bone transforms propagate to skinned mesh
 - [ ] Blend space parameters interpolate smoothly

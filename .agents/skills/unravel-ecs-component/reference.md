@@ -25,10 +25,10 @@
 
 ## Key types
 
-- `entt::handle` / `entt::const_handle` — entity references
-- `scene` — owns `entt::registry`, load/save
-- `component_meta<T>` — meta factory helpers for add/remove/save/load
-- `layer_mask` — render/collision filtering (`engine/engine/layers/layer_mask.h`)
+- `entt::handle` / `entt::const_handle` - entity references
+- `scene` - owns `entt::registry`, load/save
+- `component_meta<T>` - meta factory helpers for add/remove/save/load
+- `layer_mask` - render/collision filtering (`engine/engine/layers/layer_mask.h`)
 
 ## Event hooks used by systems
 
@@ -43,6 +43,9 @@ Connect with sentinel for auto-disconnect on system destroy.
 
 ## Prefab components
 
-- `prefab_component` — marks entity as prefab instance
-- `prefab_id_component` — links to source prefab asset
-- Overrides stored with pretty + serialization paths (see `inspector_registry` in editor)
+- `prefab_component` - instance root: asset link, slot identity (`instance_id` +
+  `instance_document`), and the two per-author statement lists (`from_document`,
+  `local`)
+- `prefab_id_component` - entity identity within the document that introduced it
+  (`{id, document}`)
+- Details: skill `unravel-prefabs` (unified statement model)

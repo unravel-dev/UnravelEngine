@@ -4,7 +4,6 @@ description: >-
   Works on UnravelEngine audio: OpenAL via audiopp, audio sources, listeners,
   3D spatial audio, and audio components. Use for sound playback, 3D audio,
   listener setup, or audio system lifecycle.
-disable-model-invocation: true
 ---
 
 # Unravel Audio
@@ -23,12 +22,12 @@ disable-model-invocation: true
 
 - **OpenAL Soft** via `audiopp` dependency
 - `audio_system` manages device, listener, source updates
-- `audio_source_component` — clip playback, 3D position, volume, loop
-- `audio_listener_component` — typically one per active camera
+- `audio_source_component` - clip playback, 3D position, volume, loop
+- `audio_listener_component` - typically one per active camera
 
 ## Lifecycle
 
-- `audio_source_component::on_play_begin()` — reset/play on play mode entry
+- `audio_source_component::on_play_begin()` - reset/play on play mode entry
 - System hooks: `audio_system::on_play_begin`
 - Sources tied to entity transforms for 3D spatialization
 

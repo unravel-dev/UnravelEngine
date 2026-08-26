@@ -4,7 +4,6 @@ description: >-
   Develops UnravelEngine editor UI: ImGui panels, menu bars, dockspace, gizmos,
   inspectors, undo/redo, and viewport overlays. Use for editor panels, hub
   integration, selection, editing actions, or ImGui layout bugs.
-disable-model-invocation: true
 ---
 
 # Unravel Editor Panel
@@ -36,7 +35,7 @@ disable-model-invocation: true
 
 ## Selection and editing
 
-- `editing_manager` — active selection, snap settings, grid, gizmo state
+- `editing_manager` - active selection, snap settings, grid, gizmo state
 - Selection is `entt::handle` based
 - Undo via `editing_action_t` derivatives in `editor/editor/editing/actions/`
 - Property changes should go through undo actions when user-visible
@@ -44,9 +43,11 @@ disable-model-invocation: true
 ## Inspector system
 
 - `inspector_registry` auto-discovers `inspector` subclasses
-- Component icons in `inspector_entity.cpp` → `get_component_icon<T>()`
+- Component icons in `inspector_entity.cpp` -> `get_component_icon<T>()`
 - Property drawing uses EnTT meta reflection
-- Prefab overrides: `prefab_property_override` with pretty + serialization paths
+- Prefab overrides: recorded as statements on the nearest instance root's `local`
+  list (`prefab_property_override_data`, pretty + component paths) - see
+  `unravel-prefabs`
 
 Use `unravel-add-inspector` for custom type inspectors.
 
@@ -62,7 +63,7 @@ Use `unravel-add-inspector` for custom type inspectors.
 
 - Custom widgets: `deps/3rdparty/imgui/imgui_widgets/`, `editor/editor/imgui/`
 - Icons: Material Design Icons via `icons_material_design_icons.h`
-- `ImGui::AlignedItem()` for horizontal alignment — include `FramePadding` in item width for buttons/menu items
+- `ImGui::AlignedItem()` for horizontal alignment - include `FramePadding` in item width for buttons/menu items
 - `ImGui::SetItemTooltipEx()` for tooltips (project wrapper)
 - Menu bar items: account for `FramePadding` and `ItemSpacing` when right-aligning
 
@@ -70,11 +71,11 @@ Use `unravel-add-inspector` for custom type inspectors.
 
 Scene and game panels have `draw_menubar()`:
 
-- `scene_panel.cpp` → `draw_menubar`
-- `game_panel.cpp` → `draw_menubar`
+- `scene_panel.cpp` -> `draw_menubar`
+- `game_panel.cpp` -> `draw_menubar`
 - Stats toggle: `viewport_stats_overlay::draw_stats_toggle`
 
-Menu bar uses horizontal `MenuItem` layout — width exceeds `CalcTextSize` label.
+Menu bar uses horizontal `MenuItem` layout - width exceeds `CalcTextSize` label.
 
 ## Play mode UI
 
@@ -97,7 +98,7 @@ Menu bar uses horizontal `MenuItem` layout — width exceeds `CalcTextSize` labe
 
 - Raw ImGui IDs causing state bleed between panels
 - Editing without undo action (user cannot revert)
-- Engine code in editor target only — keep editor logic in `editor/`
+- Engine code in editor target only - keep editor logic in `editor/`
 - Forgetting `ImGui::SameLine()` spacing when aligning items
 - Using label text width only for `AlignedItem` on interactive widgets
 

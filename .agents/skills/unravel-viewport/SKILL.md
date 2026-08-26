@@ -4,12 +4,11 @@ description: >-
   Controls the UnravelEngine Scene panel editor camera and viewport captures
   via MCP. Use when framing entities, looking at points, orbiting, resetting the
   viewport camera, or capturing Scene/Game PNGs.
-disable-model-invocation: true
 ---
 
 # Unravel Viewport Camera (MCP)
 
-The Scene panel camera lives in a **private panel scene** (`scene_panel`), not the edit scene. Resolve it via `hub → get_scene_panel().get_camera()`.
+The Scene panel camera lives in a **private panel scene** (`scene_panel`), not the edit scene. Resolve it via `hub -> get_scene_panel().get_camera()`.
 
 World axes match entities: **X-right, Y-up, Z-forward**. Camera `position` / `look_at` `target` are world-space.
 
@@ -23,7 +22,7 @@ World axes match entities: **X-right, Y-up, Z-forward**. Camera `position` / `lo
 | `viewport_focus_entities_batch` | Dolly along current forward to fit entities (same as F / double-click) |
 | `viewport_focus_bounds` | Focus sphere (`center`+`radius`) or box (`min`+`max`) |
 | `viewport_orbit_camera` | Orbit around `pivot` by `yaw`/`pitch` degrees |
-| `viewport_reset_camera` | UI “Reset Camera” parity |
+| `viewport_reset_camera` | UI "Reset Camera" parity |
 | `viewport_capture_scene` / `viewport_capture_game` | PNG capture; `wait_ms` (default 500), `scale` (default 1, bimg linear resize) |
 | `panel_focus_scene` | Focus Scene panel tab (editing camera) |
 | `panel_focus_game` | Focus Game panel tab (game camera) |
@@ -51,7 +50,7 @@ Mutation tools return lean `{ok:true}` (plus small args). Full pose only from `v
 // Move then look
 {"position":[0,2,-8],"target":[0,1,0]}
 
-// Orbit 45° around a pivot
+// Orbit 45 deg around a pivot
 {"pivot":[0,1,0],"yaw":45,"pitch":-10}
 ```
 
@@ -63,4 +62,4 @@ Mutation tools return lean `{ok:true}` (plus small args). Full pose only from `v
 | Scene panel camera | `editor/editor/hub/panels/scene_panel/scene_panel.*` |
 | MCP tools | `editor/editor/system/mcp/mcp_tools_viewport.cpp` |
 | Panel focus MCP | `editor/editor/system/mcp/mcp_tools_editor.cpp` (`panel_focus_*`) |
-| Panel focus API | `editor_actions::focus_scene_panel` / `focus_game_panel` → `panel_base::focus()` |
+| Panel focus API | `editor_actions::focus_scene_panel` / `focus_game_panel` -> `panel_base::focus()` |

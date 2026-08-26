@@ -4,7 +4,6 @@ description: >-
   Procedure for adding a render pass to the UnravelEngine deferred pipeline.
   Use when adding geometry, lighting, post-process, or compute passes to the
   rendering pipeline.
-disable-model-invocation: true
 ---
 
 # Add Render Pass Workflow

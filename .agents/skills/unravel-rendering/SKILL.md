@@ -2,9 +2,9 @@
 name: unravel-rendering
 description: >-
   Works on UnravelEngine rendering: bgfx deferred pipeline, render passes, shaders,
-  materials, post-processing volumes, and GPU stats. Use for shader edits, pipeline
-  changes, visual bugs, draw call issues, or GPU memory/eviction work.
-disable-model-invocation: true
+  materials, post-processing volumes, GI, clouds, shadows, and GPU stats. Use for
+  shader edits, pipeline changes, visual bugs, draw call issues, GI/probe work,
+  or GPU memory/eviction work.
 ---
 
 # Unravel Rendering
@@ -44,11 +44,37 @@ Do not add passes without understanding stage ordering in `run_pipeline_impl`.
 ## Shader workflow
 
 1. Edit `.sc` in `engine_data/data/shaders/`
-2. Rebuild project (CMake compiles shaders to `engine_data/compiled/shaders/`)
+2. `cmake --build build/<Config> --target engine_data` - this only **copies** sources
+   into the runtime tree; the editor's asset importer compiles via `shaderc` at import
+   time. Validate offline with the in-tree `shaderc.exe` (`s_5_0` + `spirv`) - a
+   failed compile silently keeps the stale binary
 3. Shader includes: `bgfx_shader.sh`, `bgfx_compute.sh` synced by CMake
 4. Do **not** edit `deps/3rdparty/bgfx/` unless absolutely necessary
 
 Use `unravel-shader-change` for step-by-step shader edits.
+
+## GPU contracts (hard-won - violating these costs days)
+
+- **GL uniform order:** on OpenGL, create bgfx uniforms BEFORE programs. Symptom of
+  breaking it: "uniform not found" warnings, samplers silently landing on unit 0
+  (black passes / invalid draws).
+- **GL 3D image binds:** plain `setImage` binds 3D textures non-layered on GL (Mesa
+  drops image3D stores, NVIDIA hides it). Always use `gfx::set_image_3d`
+  (`engine/core/graphics/graphics.h`).
+- **D3D12:** allocates per texture update - batch updates into boxes. PSOs compile at
+  first use - the disk cache is wired via `gfx::set_cache_directory`.
+- **Vulkan:** scratch buffer is 32MB/frame - large per-frame uploads can exhaust it.
+
+## GI subsystem
+
+`engine/engine/rendering/gi/` - voxel/probe GI with SDF tracing, surface cache, and
+its own shader constants mirror (`gi_constants.h` / `gi_constants.sh` must not drift -
+the `gi constants` test suite enforces parity). Before GI work, read the plan docs:
+`tasks/gi_perf_plan.md`, `tasks/gi_rewrite_plan.md`. Shadow bias model:
+`tasks/shadow_bias_plan.md`. Clouds: `tasks/clouds_audit.md`.
+
+Test suites: `unravel-tests --suite "gi constants"` and `--suite "gi bake"` (the
+latter also shader-compiles every GI shader).
 
 ## Volume / post-processing components
 
@@ -62,15 +88,15 @@ Each has meta registration in `engine/engine/meta/ecs/components/`.
 
 ## Materials and draws
 
-- `material` — `engine/engine/rendering/material.h`
-- `model_component` / `submesh_component` — mesh rendering
-- `batch_collector` — static mesh batching stats in `pipeline_stats`
-- `layer_mask` — culling/filtering per pass
+- `material` - `engine/engine/rendering/material.h`
+- `model_component` / `submesh_component` - mesh rendering
+- `batch_collector` - static mesh batching stats in `pipeline_stats`
+- `layer_mask` - culling/filtering per pass
 
 ## Editor vs scene rendering
 
 - Scene panel renders through deferred pipeline into viewport FBO
-- Editor UI (ImGui) draws separately — excluded from scene primitive counts
+- Editor UI (ImGui) draws separately - excluded from scene primitive counts
 - Stats overlay: `editor/editor/hub/panels/viewport_stats_overlay.cpp`
 - Gizmo rendering: `editor/editor/hub/panels/scene_panel/gizmos/`
 

@@ -4,7 +4,6 @@ description: >-
   Manages UnravelEngine asset pipeline: importers, .meta sidecars, UID stability,
   asset compilation, async loading, and reimport. Use for asset types, import
   errors, content browser issues, or compiled .asset output.
-disable-model-invocation: true
 ---
 
 # Unravel Assets
@@ -29,8 +28,8 @@ disable-model-invocation: true
 
 Every source asset has a **`.meta` sidecar** (JSON):
 
-- `uid` — stable unique ID (never change casually)
-- `type` — asset type name
+- `uid` - stable unique ID (never change casually)
+- `type` - asset type name
 - `importer` settings per type
 
 Meta extension constant: `.meta` in `asset_extensions.h`.
@@ -54,13 +53,13 @@ Importers live in `engine/engine/assets/impl/importers/`.
 
 `asset_manager` supports sync and async/deferred loading. Hot paths (frame render) must not block on uncached loads.
 
-`asset_handle<T>` — typed reference resolved through asset database.
+`asset_handle<T>` - typed reference resolved through asset database.
 
 ## Editor integration
 
-- **Content browser** — browse, import, reimport, rename, delete
-- **Asset watcher** — file changes trigger reimport (`editor/editor/assets/`)
-- **Thumbnails** — `thumbnail_manager` generates previews
+- **Content browser** - browse, import, reimport, rename, delete
+- **Asset watcher** - file changes trigger reimport (`editor/editor/assets/`)
+- **Thumbnails** - `thumbnail_manager` generates previews
 
 Context menu actions in `content_browser_panel.cpp`.
 
@@ -71,7 +70,7 @@ Context menu actions in `content_browser_panel.cpp`.
 | `assets_list_batch` | List by protocol (`app`/`engine`/`editor`); optional `type`, `limit` (default 200) |
 | `assets_find_batch` | Prefer for search: `protocol` (incl. `all`), `type`, `prefix`, `name_contains`, `limit` |
 | `assets_get_batch` | Metadata for many (`items`: `key` / `uid`) |
-| `assets_list_types` | Known extensions (`.mat`, `.pfb`, `.emesh`, …) |
+| `assets_list_types` | Known extensions (`.mat`, `.pfb`, `.emesh`, ...) |
 | `assets_list_embedded_primitives` | Names for `scene_create_primitives_batch` |
 | `assets_create_folder` | Create folder under protocol path |
 | `assets_import_files` | Copy external files/folders into `app:/...` (content-browser Import); waits for copy + ready |
@@ -104,12 +103,12 @@ Code: `editor/editor/system/mcp/mcp_tools_assets.cpp`.
 
 ## Protocols and paths
 
-Asset manager uses virtual filesystem protocols for engine vs project vs editor data. Respect protocol boundaries — do not hardcode absolute paths.
+Asset manager uses virtual filesystem protocols for engine vs project vs editor data. Respect protocol boundaries - do not hardcode absolute paths.
 
 Runtime data copied by CMake:
 
-- `engine_data/` → `build/bin/data/engine`
-- `editor_data/` → `build/bin/data/editor`
+- `engine_data/` -> `build/bin/data/engine`
+- `editor_data/` -> `build/bin/data/editor`
 
 ## Verification checklist
 

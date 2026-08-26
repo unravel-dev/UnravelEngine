@@ -4,7 +4,6 @@ description: >-
   Procedure for adding a custom ImGui inspector for a reflected type in
   UnravelEngine. Use when default meta property drawing is insufficient for
   a component or asset type.
-disable-model-invocation: true
 ---
 
 # Add Inspector Workflow
@@ -60,7 +59,7 @@ If inspector edits component properties on prefab instances:
 
 ## Step 6: Icons and labels
 
-- Component icons: `inspector_entity.cpp` → `get_component_icon<T>()`
+- Component icons: `inspector_entity.cpp` -> `get_component_icon<T>()`
 - Use `ICON_MDI_*` constants from material design icons header
 
 ## Verification

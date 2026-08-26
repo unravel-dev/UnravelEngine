@@ -4,7 +4,6 @@ description: >-
   Procedure for editing bgfx shaders in UnravelEngine: .sc source files,
   compilation to .asset blobs, and verification in scene viewport. Use when
   modifying or adding shaders in engine_data/data/shaders/.
-disable-model-invocation: true
 ---
 
 # Shader Change Workflow
@@ -35,20 +34,30 @@ disable-model-invocation: true
 
 **Do not edit** `engine_data/compiled/shaders/*.asset.*` directly.
 
-## Step 3: Rebuild
+## Step 3: Copy into the runtime tree
 
 ```bash
-# From build directory — rebuild compiles shaders via CMake custom targets
-cmake --build <build-dir> --target engine_data
+# In EACH active configured tree (build/Debug, build/RelWithDebInfo, ...)
+cmake --build build/<Config> --target engine_data
 ```
 
-Or full project rebuild. CMake syncs `bgfx_shader.sh` / `bgfx_compute.sh` headers.
+**`engine_data` only COPIES** `.sc`/`.sh` into `<runtime dir>/data/engine/` and syncs
+`bgfx_shader.sh` / `bgfx_compute.sh` headers. It does **not** compile anything -
+compilation happens in the editor's asset importer, which invokes `shaderc` at import
+time.
 
 ## Step 4: Verify compilation
 
-- Check build log for shader compile errors
-- Confirm updated `.asset.{gl,dxbc,dxil,spirv}` timestamps in `engine_data/compiled/shaders/`
-- No errors in bgfx shader compiler output
+A syntax error does NOT fail the build - it surfaces as a runtime import failure, and
+a failed import silently keeps the stale compiled binary (wrong rendering, no error).
+Validate before launching:
+
+- Run the in-tree `build/<Config>/bin/shaderc.exe` against the copied shader for
+  `s_5_0` and `spirv`, writing output inside the build tree
+- For GI shaders: `unravel-tests --suite "gi bake"` compiles every GI shader via
+  shaderc as part of the suite
+- Then launch the editor and check the console for import errors; confirm updated
+  compiled output timestamps
 
 ## Step 5: Runtime verification
 
@@ -77,9 +86,13 @@ When adding new uniforms:
 ## Common mistakes
 
 - Editing compiled blobs instead of `.sc`
-- Forgetting to rebuild `engine_data` target
+- Forgetting to rebuild `engine_data` target (the copy step)
+- Assuming the C++ build compiles shaders - it does not; only the editor import (or a
+  manual shaderc run) does, so errors hide until runtime
 - Mismatched varying names between VS and FS
 - Modifying `deps/3rdparty/bgfx` instead of engine shaders
+- On OpenGL: creating bgfx uniforms after programs - see GPU contracts in
+  `unravel-rendering`
 
 ## Rollback
 

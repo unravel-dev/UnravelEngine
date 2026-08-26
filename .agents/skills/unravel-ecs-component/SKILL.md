@@ -4,7 +4,6 @@ description: >-
   Implements and modifies UnravelEngine ECS components, systems, scene lifecycle,
   and meta registration. Use when adding or editing components, entity systems,
   scene serialization, EnTT signals, or component ownership patterns.
-disable-model-invocation: true
 ---
 
 # Unravel ECS Component
@@ -47,12 +46,20 @@ r.on_destroy<T>().connect<&T::on_destroy_component>();
 
 Static callbacks live on `owned_component` or the component type.
 
+**`on_destroy` caveat (hard rule):** an entt `on_destroy` hook must NOT touch other
+components of the dying entity - pool destruction order is arbitrary and the access is
+UB. For cross-component teardown, connect to the `on_pre_destroy` bus instead
+(`engine/engine/ecs/scene.h`): `scene::destroy_entity` is the single destruction
+funnel and announces the whole subtree - children before parents, everything still
+intact - BEFORE `registry::destroy` runs. Never call `registry.destroy()` directly on
+scene entities; it skips the announcement. Listeners must be idempotent.
+
 ### Component lists
 
 After adding a component, update **both** tuples in `all_components.h`:
 
-- `all_serializeable_components` — scene save/load
-- `all_inspectable_components` — inspector add-component menu
+- `all_serializeable_components` - scene save/load
+- `all_inspectable_components` - inspector add-component menu
 
 Include the meta header in `all_components.h`.
 
@@ -60,8 +67,8 @@ Include the meta header in `all_components.h`.
 
 Each component needs three files:
 
-1. `engine/engine/meta/ecs/components/my_component.hpp` — `SAVE_EXTERN`, `LOAD_EXTERN`, `REFLECT_EXTERN`
-2. `engine/engine/meta/ecs/components/my_component.cpp` — `REFLECT`, `SAVE`, `LOAD` macros
+1. `engine/engine/meta/ecs/components/my_component.hpp` - `SAVE_EXTERN`, `LOAD_EXTERN`, `REFLECT_EXTERN`
+2. `engine/engine/meta/ecs/components/my_component.cpp` - `REFLECT`, `SAVE`, `LOAD` macros
 3. Register `.data<>()` for each exposed field with `entt::attribute{"name", "field_name"}`
 
 Factory must include component lifecycle funcs:
@@ -96,10 +103,22 @@ Systems init in `engine/engine/engine.cpp`. New systems:
 2. Call `init(ctx)` in correct order relative to dependencies
 3. Connect `events` with explicit priority when order matters
 
+## Frame ordering
+
+`frame_update_priority` in `engine/engine/events.h` is the contract for
+`on_frame_update` slot order (higher runs earlier): `play_mode` (10000) ->
+`editing` (1000) -> `scene_systems` (0, incl. transforms/animation/physics/audio;
+order within the band is deliberately non-contractual) -> `scripts` (-1000, so
+script code sees the evaluated animation pose) -> `scripts_late` (-100000).
+Anything with a real ordering requirement must use a named priority from that
+struct - same-priority order depends on whether a system connects from its
+constructor or `init()`, which no caller should have to reason about.
+
 ## Verification checklist
 
 - [ ] Component in `all_serializeable_components` and `all_inspectable_components`
 - [ ] Meta REFLECT/SAVE/LOAD registered
+- [ ] `unravel-tests --suite serialization` green (covers save/load + prefabs + cloning)
 - [ ] Scene save and reload preserves fields
 - [ ] Inspector shows component (add/remove works)
 - [ ] Prefab instance override works for changed fields
@@ -110,6 +129,8 @@ Systems init in `engine/engine/engine.cpp`. New systems:
 
 - Forgetting `all_components.h` tuple entry
 - Meta `.hpp` not included in `all_components.h`
+- `registry.destroy()` instead of `scene::destroy_entity` (skips `on_pre_destroy`)
+- Touching sibling components from an `on_destroy` hook (UB - see caveat above)
 - Using raw `entt::entity` instead of `entt::handle` for ownership
 - System logic in component that belongs in a system
 - Missing play mode reset in `on_play_end`

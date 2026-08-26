@@ -6,7 +6,6 @@ description: >-
   components, ScriptComponent source, and scene_save. Use when spawning
   primitives, parenting, placing children, attaching C# scripts, or persisting
   .spfb scenes.
-disable-model-invocation: true
 ---
 
 # Unravel Entities & Scripts (MCP)
@@ -21,7 +20,7 @@ disable-model-invocation: true
 
 Right-handed. `rotation_euler` is degrees as `[pitch_x, yaw_y, roll_z]`.
 
-**Primitives:** embedded `Cube` is **1×1×1**, origin at **center**. Non-uniform `scale` is size in world units. When assembling props (benches, signs), place parts in **local** space: seat up on **+Y**, width on **±X**, depth / facing along **±Z** (backrest typically **−Z** if the seat faces **+Z**).
+**Primitives:** embedded `Cube` is **1x1x1**, origin at **center**. Non-uniform `scale` is size in world units. When assembling props (benches, signs), place parts in **local** space: seat up on **+Y**, width on **+/-X**, depth / facing along **+/-Z** (backrest typically **-Z** if the seat faces **+Z**).
 
 ## WORLD vs LOCAL (critical)
 
@@ -34,9 +33,9 @@ Right-handed. `rotation_euler` is degrees as `[pitch_x, yaw_y, roll_z]`.
 | Same JSON `position_local`, `rotation_euler_local`, `scale_local` | **LOCAL** |
 | `scene_get_transforms_batch` | per-item `space:"world"\|"local"` |
 
-**Rule:** Parent a child, then set pose with `space:"local"`. Never pass local offsets to world setters — parts collapse to the origin.
+**Rule:** Parent a child, then set pose with `space:"local"`. Never pass local offsets to world setters - parts collapse to the origin.
 
-When the parent is rotated, always set the child’s `rotation_euler:[0,0,0]` in local space together with position/scale. Omitting rotation can leave world identity, which becomes a compensating local rotation and cancels the parent (parts stick out sideways).
+When the parent is rotated, always set the child's `rotation_euler:[0,0,0]` in local space together with position/scale. Omitting rotation can leave world identity, which becomes a compensating local rotation and cancels the parent (parts stick out sideways).
 
 ```json
 // Child door under a house at world (-30,0,19)
@@ -77,7 +76,7 @@ Browse lean, then drill in:
 | `logs_get_recent` | Console log tail (`min_level`, `max_count`, `after_id`) |
 | `panel_focus_scene` / `panel_focus_game` | Focus Scene or Game ImGui panel tabs |
 
-Component names: use `scene_get_entities_batch` with `detail:"summary"`. Patch fields via typed property tools (`scene_list_component_properties` → get → set); do not round-trip ser20 JSON. Hierarchy parent/children stay on transform/parent tools. Component must already exist before set.
+Component names: use `scene_get_entities_batch` with `detail:"summary"`. Patch fields via typed property tools (`scene_list_component_properties` -> get -> set); do not round-trip ser20 JSON. Hierarchy parent/children stay on transform/parent tools. Component must already exist before set.
 
 ## Script tools
 
@@ -117,5 +116,5 @@ File writes use `asset_writer::atomic_write_file`. Scene saves use `asset_writer
 3. Prefer `scene_create_primitives_batch` / `scene_set_transforms_batch` for procedural builds.
 4. Inspect with `detail:"summary"` or typed `scene_get_component_properties_batch`; mutate with `scene_set_component_properties_batch` (not ser20 blobs / not source rewrites for tuning).
 5. After large procedural builds, call `scene_save` with an `app:/data/...spfb` key.
-6. Prefer `scripts_list_types` → `scene_add_scripts_batch` over guessing type names.
+6. Prefer `scripts_list_types` -> `scene_add_scripts_batch` over guessing type names.
 7. Edit C# with `scripts_set_sources_batch`; wait for recompile before `scene_add_scripts_batch` on new types.

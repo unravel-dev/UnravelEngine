@@ -4,7 +4,6 @@ description: >-
   Debugs UnravelEngine performance using the profiler panel, GPU timeline,
   viewport stats overlay, bgfx stats, and GPU eviction/paging metrics. Use for
   frame drops, GPU bottlenecks, memory pressure, or profiling UI work.
-disable-model-invocation: true
 ---
 
 # Unravel Profiler Debug
@@ -27,10 +26,10 @@ Toggle via menu bar in scene/game panels (`draw_stats_toggle`).
 
 Sections:
 
-- **Performance** — FPS, CPU/GPU submit ms, GPU latency
-- **Scene** — triangles, draw calls, render passes, compute/blit
-- **Memory** — GPU memory, texture/RT memory, eviction/paging
-- **Pipeline** — models, lights, shadows, particles, batching
+- **Performance** - FPS, CPU/GPU submit ms, GPU latency
+- **Scene** - triangles, draw calls, render passes, compute/blit
+- **Memory** - GPU memory, texture/RT memory, eviction/paging
+- **Pipeline** - models, lights, shadows, particles, batching
 
 Color coding: green/yellow/red thresholds for FPS and memory usage.
 
@@ -43,7 +42,7 @@ Color coding: green/yellow/red thresholds for FPS and memory usage.
 - Headroom bar (how much can still be paged out)
 - Lifetime evictions/restores, thrash events
 
-High thrash → budget too tight or min-age too low.
+High thrash -> budget too tight or min-age too low.
 
 ## Profiler panel
 
@@ -57,8 +56,8 @@ GPU timeline with encoder/view stats. Open from stats overlay "Open Profiler" bu
 | High GPU submit | Heavy shaders, fill rate, post-process chain |
 | High GPU latency | Pipeline depth; normal 1-3 frames |
 | Rising eviction count | GPU memory pressure |
-| Thrash events | Evict/restore cycling — raise budget |
-| UI primitives in scene count | Stats separate UI prims — verify separation logic |
+| Thrash events | Evict/restore cycling - raise budget |
+| UI primitives in scene count | Stats separate UI prims - verify separation logic |
 
 ## Verification workflow
 

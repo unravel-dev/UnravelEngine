@@ -4,7 +4,6 @@ description: >-
   End-to-end procedure for adding a new ECS component to UnravelEngine including
   meta, serialization, inspector, and optional C# API. Use when creating a new
   component type from scratch.
-disable-model-invocation: true
 ---
 
 # Add Component Workflow

@@ -4,7 +4,6 @@ description: >-
   Opens/closes UnravelEngine editor projects, lists recent projects, and opens
   or creates scenes from defaults::scene_preset via Editor MCP. Use when
   switching projects, loading .spfb scenes, or bootstrapping a new preset scene.
-disable-model-invocation: true
 ---
 
 # Unravel Projects & Scenes (MCP)
@@ -23,7 +22,7 @@ disable-model-invocation: true
 | List preset names | `scene_list_presets` |
 | Entity spawn / transforms / scripts | see `unravel-entities` |
 
-All mutating tools refuse play mode. Scene/project switches use `force:true` by default (discard unsaved) — no ImGui save/create modals.
+All mutating tools refuse play mode. Scene/project switches use `force:true` by default (discard unsaved) - no ImGui save/create modals.
 
 ## Project tools
 
@@ -43,7 +42,7 @@ All mutating tools refuse play mode. Scene/project switches use `force:true` by 
 
 `project_open` calls `project_manager::open_project` on the main thread (long timeout). If the editor would show the create-scene modal, MCP completes it with `preset` (`low`|`medium`|`high`|`showcase`).
 
-Recent list lives in `editor.cfg` → `projects.recent_projects` (see `project_manager`).
+Recent list lives in `editor.cfg` -> `projects.recent_projects` (see `project_manager`).
 
 ## Scene tools
 
@@ -83,7 +82,7 @@ Open/new/save require an open project. Paths may be absolute; keys are normalize
 
 ## Rules of thumb
 
-1. Prefer `project_list_recent` → `project_open` with `recent_index` over guessing paths.
+1. Prefer `project_list_recent` -> `project_open` with `recent_index` over guessing paths.
 2. After open, use `scene_get_info` / `scene_get_hierarchy_batch` before spawning content.
-3. Do not call UI `editor_actions::new_scene` / `open_scene` from automation — they show ImGui modals.
+3. Do not call UI `editor_actions::new_scene` / `open_scene` from automation - they show ImGui modals.
 4. Asset work under `app:/` needs an open project; `engine:/` / `editor:/` do not.

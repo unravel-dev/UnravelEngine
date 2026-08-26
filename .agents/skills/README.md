@@ -8,7 +8,9 @@ Always-on conventions live only in root `AGENTS.md`. Optional junctions under
 ## How to use
 
 Skills load when the task matches their `description` in frontmatter, or when you name them
-explicitly (e.g. "use the unravel-rendering skill").
+explicitly (e.g. "use the unravel-rendering skill"). All skills allow model
+auto-invocation except `unravel-architect`, which is invoked deliberately for large
+design work.
 
 Start non-trivial work with **`unravel-triage`**.
 
@@ -40,7 +42,7 @@ Start non-trivial work with **`unravel-triage`**.
 | `unravel-animation` | Skeletal animation, blend spaces |
 | `unravel-ui-rmlui` | In-game RmlUi documents |
 | `unravel-audio` | OpenAL sources, listeners, spatial audio |
-| `unravel-prefabs` | Prefab assets, property overrides |
+| `unravel-prefabs` | Prefab assets, nested instances, statement lists / overrides |
 | `unravel-profiler-debug` | GPU timeline, eviction stats, frame debugging |
 | `unravel-materials` | PBR `.mat` / MCP materials |
 | `unravel-projects` | Open project / scene presets / `.spfb` |
@@ -66,3 +68,8 @@ Start non-trivial work with **`unravel-triage`**.
 - Encode Unravel-specific paths and checklists, not generic C++ advice
 - Never modify `deps/3rdparty/` unless unavoidable
 - Reference `AGENTS.md` for always-on rules; put domain workflows in skills
+- Verification sections should name the concrete `unravel-tests` suites for the
+  domain (see `unravel-build-verify`), not just "build and smoke test"
+- When a lesson in `tasks/lessons.md` states a durable contract, promote it into the
+  matching skill (see `unravel-lessons`) - skills go stale when knowledge stops at
+  the lessons log

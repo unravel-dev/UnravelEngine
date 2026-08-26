@@ -4,7 +4,6 @@ description: >-
   Guides changes that affect edit mode vs play mode behavior in UnravelEngine.
   Use when features behave differently during play, pause, splash, or resume, or when
   state must reset on play end.
-disable-model-invocation: true
 ---
 
 # Play Mode Change Workflow
@@ -48,9 +47,9 @@ MCP tools: `play_get_state`, `play_set_active`, `play_set_paused`, `play_skip_fr
 
 ### Enter play
 
-1. `on_play_before_begin` — editor prep (checkpoints, script domain reload)
-2. `splash` phase (if `settings.splash.enabled`) — `splash_screen` service
-3. `on_play_begin` — only when entering `running` phase
+1. `on_play_before_begin` - editor prep (checkpoints, script domain reload)
+2. `splash` phase (if `settings.splash.enabled`) - `splash_screen` service
+3. `on_play_begin` - only when entering `running` phase
 
 ### Exit play
 

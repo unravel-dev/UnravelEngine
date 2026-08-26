@@ -14,7 +14,7 @@
 
 ## Meta file rules
 
-- Stored adjacent to source: `model.fbx` → `model.fbx.meta`
+- Stored adjacent to source: `model.fbx` -> `model.fbx.meta`
 - `asset_writer.h` appends `.meta` if missing extension
 - UID assigned on first import; preserve across reimports
 - Importer settings serialized in meta JSON
@@ -31,7 +31,7 @@
 ## Asset database
 
 - Groups and protocols in `asset_manager`
-- `asset_storage` maps UID → location + meta
+- `asset_storage` maps UID -> location + meta
 - Scene/prefab files reference assets by UID through handles
 
 ## Git LFS

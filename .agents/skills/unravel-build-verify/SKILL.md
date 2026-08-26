@@ -1,10 +1,10 @@
 ---
 name: unravel-build-verify
 description: >-
-  Builds and verifies UnravelEngine: CMake targets, engine_data/editor_data copy,
-  .NET SDK / CoreCLR scripting dependency, sanitizers, and CI workflows. Use after
-  code changes, before marking work complete, or when fixing build/CI failures.
-disable-model-invocation: true
+  Builds and verifies UnravelEngine: CMake targets, the unravel-tests runner,
+  engine_data/editor_data copy, shaderc validation, .NET SDK / CoreCLR scripting
+  dependency, sanitizers, and CI workflows. Use after code changes, before marking
+  work complete, or when fixing build/CI failures.
 ---
 
 # Build Verify Workflow
@@ -12,51 +12,86 @@ disable-model-invocation: true
 ## Project structure
 
 ```
-deps → engine (lib) → editor (exe)
-                   → game (exe)
+deps -> engine (lib) -> editor (exe)
+                   -> game (exe)
+                   -> tests (exe, output name unravel-tests)
 ```
 
 Custom data targets: `engine_data`, `editor_data`
 
-Prefer building Debug builds.
+## Rule 1: build in the already-configured tree
 
-## Build commands
+**Locate existing configured trees first - never configure a scratch dir:**
 
 ```bash
-# Configure (example)
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
-
-# Full build
-cmake --build build --config Debug
-
-# Data only (shaders/assets copy)
-cmake --build build --target engine_data
-cmake --build build --target editor_data
+ls build/*/CMakeCache.txt
 ```
+
+Typical local layout: single-config Ninja trees at `build/Debug` and
+`build/RelWithDebInfo` (there is **no** CMakeCache at `build/` itself). The user
+iterates from those trees; artifacts written elsewhere prove nothing about what the
+running editor loads, and a second configure wastes time. Build the tree(s) the user
+actually runs - often both Debug and RelWithDebInfo.
+
+```bash
+# Build a target in a configured tree
+cmake --build build/Debug --target editor
+
+# Data copy only (see shader note below)
+cmake --build build/Debug --target engine_data
+cmake --build build/Debug --target editor_data
+```
+
+Only if no configured tree exists, configure one: `cmake -B build/Debug -G Ninja -DCMAKE_BUILD_TYPE=Debug`.
+
+This extends to throwaway diagnostics: do not compile scratch repros with ad-hoc
+g++/clang++ outside the tree. Put the probe in a test suite or a debug log in the real
+code, built through the configured pipeline.
 
 ## Output directories
 
-CMake sets `CMAKE_RUNTIME_OUTPUT_DIRECTORY` to `build/bin` (see root `CMakeLists.txt`).
-On multi-config generators (Visual Studio), that becomes `build/bin/<Config>/`.
+Two layouts exist - **locate, don't assume**:
 
-| Output | CMake default path |
-|--------|--------------------|
-| Executables | `build/bin/<Config>/` (e.g. `RelWithDebInfo`) |
-| Libraries | `build/lib/<Config>/` |
-| Engine runtime data | `build/bin/<Config>/data/engine/` (via `engine_data`) |
-| Editor runtime data | `build/bin/<Config>/data/editor/` (via `editor_data`) |
-| Clrpp managed | `build/bin/<Config>/clrpp/` |
+| Generator | Runtime dir |
+|-----------|-------------|
+| Single-config Ninja tree (typical local) | `build/<Config>/bin/` (e.g. `build/Debug/bin/`) |
+| Multi-config (Visual Studio) | `build/bin/<Config>/` |
 
-**Legacy / local layout:** some machines also have a populated `build/<Config>/bin/`
-(e.g. `build/RelWithDebInfo/bin/`) with a full runtime. Do not assume the just-linked
-exe directory is launchable.
+Within the runtime dir: executables, `data/engine/` (via `engine_data`),
+`data/editor/` (via `editor_data`), `clrpp/` managed payload, `lib/` alongside.
+Do not assume the just-linked exe directory is launchable - launch from a bin that
+has `data/` and `clrpp/`.
+
+## Tests (unravel-tests)
+
+ALL validation suites live in the `tests` target (exe name `unravel-tests`). It boots
+the real engine headlessly (threading + assets, no renderer/audio), so asset handles
+and prefab sources actually resolve. Exit code = number of failing checks.
+
+```bash
+cmake --build build/Debug --target tests
+build/Debug/bin/unravel-tests.exe                              # all suites
+build/Debug/bin/unravel-tests.exe --suite serialization        # substring match
+```
+
+| Suite name | Covers | Run when touching |
+|------------|--------|-------------------|
+| `ecs serialization / prefabs / cloning` | Save/load, prefab statements, cloning (`--bench` adds timings) | Serialization, meta, prefabs, components |
+| `physics contacts / destroy funnel` | Contact events, entity-destroy funnel | Physics, entity lifecycle |
+| `ik solvers` | IK correctness | Animation/IK |
+| `animation` | Blend spaces, root motion, replay | Animation |
+| `gi constants / reference oracle` | GI constants parity (C++ vs shader mirror), reference tracer | GI code or GI shaders |
+| `gi bake / sdf / clipmap` | Bake pipeline; also **compiles every GI shader via shaderc** | GI shaders / SDF |
+
+Suites self-register (`REGISTER_TEST_SUITE` in `tests/tests/suites/`); adding one is
+adding a file.
 
 ### Launching the editor/game
 
 1. Prefer a directory that already has `data/` and `clrpp/Clrpp.Managed.dll`.
-2. If CMake wrote a newer exe to `build/bin/<Config>/` but runtime data lives under
-   `build/<Config>/bin/`, copy the exe into the populated bin and launch from there
-   (or rebuild `engine_data` / `editor_data` into the CMake output dir).
+2. If CMake wrote a newer exe to a different dir than the populated runtime bin,
+   copy the exe into the populated bin and launch from there (or rebuild
+   `engine_data` / `editor_data` into that output dir).
 3. Set the process working directory to that bin folder.
 
 ## Requirements
@@ -68,8 +103,8 @@ exe directory is launchable.
 
 ## Build options (CMakeLists.txt)
 
-- `UNRAVEL_UNITY_BUILD` — unity builds in Release
-- `BUILD_ENGINE_SHARED` — static by default
+- `UNRAVEL_UNITY_BUILD` - unity builds in Release
+- `BUILD_ENGINE_SHARED` - static by default
 - Sanitizers via `ECMEnableSanitizers`
 - `compile_commands.json` exported for clang tooling
 
@@ -90,15 +125,28 @@ After code changes:
 - [ ] `engine` target compiles
 - [ ] `editor` target compiles (if editor code touched)
 - [ ] `game` target compiles (if runtime-only code)
+- [ ] `tests` target compiles and the relevant `unravel-tests` suites pass
 - [ ] No new warnings in touched files
-- [ ] `engine_data` copied if shaders/assets changed
+- [ ] `engine_data` copied if shaders/assets changed (+ shaderc validation, see below)
 - [ ] `editor_data` copied if editor shaders changed
 - [ ] Editor launches without crash
 - [ ] Game runner launches (if applicable)
 
 ## Shader rebuild
 
-Shader changes require `engine_data` target rebuild — not just C++ link.
+The `engine_data` target only **COPIES** `.sc`/`.sh` sources into
+`<runtime dir>/data/engine/` (and syncs `bgfx_shader.sh` / `bgfx_compute.sh`) - it does
+**not** compile shaders. The editor's asset importer invokes `shaderc` at import time,
+so a shader syntax error shows up only as a runtime import failure, and a failed
+compile silently keeps the stale binary (presents as wrong rendering, not an error).
+
+After a shader change:
+
+1. `cmake --build build/<Config> --target engine_data` in each active tree.
+2. Validate offline: run the in-tree `build/<Config>/bin/shaderc.exe` against the
+   copied tree for `s_5_0` and `spirv`, writing output inside the build tree - or run
+   the `gi bake` test suite, whose shader-compile test does this for all GI shaders.
+3. Launch the editor and confirm the import produced no errors.
 
 ## Scripting / .NET verify
 
@@ -127,4 +175,5 @@ CPack configured for Windows/Linux/macOS ZIP. Test packaging only when release-r
 
 ## Done criteria
 
-Clean build of affected targets + smoke test (editor opens, scene loads).
+Clean build of affected targets in the configured tree(s) + relevant `unravel-tests`
+suites green + smoke test (editor opens, scene loads).

@@ -30,7 +30,7 @@ Examples in `editor/editor/editing/actions/`.
 
 ## ImGui backend
 
-- `editor/editor/imgui/integration/imgui_impl_ospp.cpp` — SDL/ospp backend
+- `editor/editor/imgui/integration/imgui_impl_ospp.cpp` - SDL/ospp backend
 - Custom fonts: `editor/editor/imgui/integration/fonts/`
 - Shaders for ImGui rendering in integration folder
 - Style presets: `imgui_style.cpp`
@@ -43,6 +43,6 @@ Examples in `editor/editor/editing/actions/`.
 
 ## Project context
 
-- `project_manager` — open project, paths, settings
+- `project_manager` - open project, paths, settings
 - `rtti::context` passed to all panel methods
 - `ctx.get_cached<T>()` for engine/editor services

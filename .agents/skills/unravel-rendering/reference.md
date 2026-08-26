@@ -4,16 +4,16 @@
 
 ```
 rendering_system
-  → deferred::run_pipeline(scene, camera, render_view, dt, run_params, layer_mask)
-    → run_pipeline_impl(output, ...)
-      → geometry_pass (G-buffer)
-      → shadow_pass (if flagged)
-      → reflection_probe (if flagged)
-      → lighting / deferred resolve
-      → atmospheric (if flagged)
-      → post-process volumes (bloom, TAA, SSIL, etc.)
-      → particles_pass (if flagged)
-      → tonemapping / FXAA
+  -> deferred::run_pipeline(scene, camera, render_view, dt, run_params, layer_mask)
+    -> run_pipeline_impl(output, ...)
+      -> geometry_pass (G-buffer)
+      -> shadow_pass (if flagged)
+      -> reflection_probe (if flagged)
+      -> lighting / deferred resolve
+      -> atmospheric (if flagged)
+      -> post-process volumes (bloom, TAA, SSIL, etc.)
+      -> particles_pass (if flagged)
+      -> tonemapping / FXAA
 ```
 
 ## Key shader directories
@@ -29,10 +29,10 @@ rendering_system
 
 ## Render view and framebuffers
 
-- `gfx::render_view` — per-viewport render state
-- `gfx::frame_buffer` — render targets
-- `camera` / `camera_component` — view/projection matrices
-- `render_pass` — pass ID tracking (`gfx::render_pass::get_last_frame_max_pass_id()`)
+- `gfx::render_view` - per-viewport render state
+- `gfx::frame_buffer` - render targets
+- `camera` / `camera_component` - view/projection matrices
+- `render_pass` - pass ID tracking (`gfx::render_pass::get_last_frame_max_pass_id()`)
 
 ## pipeline_stats fields (debugging)
 
@@ -42,7 +42,7 @@ From `rendering::pipeline_stats`:
 - `drawn_lights`, `drawn_lights_casting_shadows`
 - Shadow model/mesh counts (can exceed main pass due to cascades)
 - `drawn_particles`, `drawn_particles_batches`
-- `batching_stats` — efficiency, draw_calls_saved
+- `batching_stats` - efficiency, draw_calls_saved
 
 Displayed in `viewport_stats_overlay.cpp` and profiler panel.
 

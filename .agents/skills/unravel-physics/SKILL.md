@@ -4,7 +4,6 @@ description: >-
   Works on UnravelEngine physics: Bullet3 backend, rigid bodies, collision shapes,
   character controllers, layer filtering, and script collision callbacks. Use for
   physics bugs, collision detection, triggers, or character movement.
-disable-model-invocation: true
 ---
 
 # Unravel Physics
@@ -57,6 +56,21 @@ Physics events forward to:
 
 When adding new collision event types, update physics backend dispatch **and** script glue.
 
+## Contact exits on entity destroy (funnel)
+
+Destroying an entity mid-contact must still deliver `on_collision_exit` /
+`on_sensor_exit`. This works through the destruction funnel, not entt hooks (an entt
+`on_destroy` hook cannot do it - cross-component access there is UB, pool order is
+arbitrary):
+
+- `scene::destroy_entity` announces the subtree on the `on_pre_destroy` bus
+  (`engine/engine/ecs/scene.h`) while everything is still intact
+- The backend's contact bookkeeping lives in
+  `engine/engine/physics/backend/contact_graph.h` (see `contact_event_flags`)
+- Never bypass the funnel with a raw `registry.destroy()`
+
+Covered by the `physics contacts / destroy funnel` test suite.
+
 ## Editor tools
 
 - Physics shape gizmos in scene panel
@@ -65,6 +79,7 @@ When adding new collision event types, update physics backend dispatch **and** s
 
 ## Verification checklist
 
+- [ ] `unravel-tests --suite physics` green (contacts / destroy funnel)
 - [ ] Collisions work in play mode (not edit mode unless explicitly supported)
 - [ ] Layer mask filtering correct
 - [ ] Character controller moves and collides correctly

@@ -17,17 +17,17 @@ Apply when a change affects more than one subsystem or introduces a new public c
 
 - Extend `pipeline`, `component_crtp`, `inspector`, `asset_compiler` patterns
 - Register into existing registries (`all_components.h`, `inspector_registry`, meta factories)
-- Wire through `rtti::context` and `events` — do not introduce parallel globals
+- Wire through `rtti::context` and `events` - do not introduce parallel globals
 
 ### 2. Define the contract first
 
 Document before implementing:
 
-- **Runtime API** — C++ types, context access, event hooks
-- **Persistence** — ser20 format, prefab override behavior, migration if breaking
-- **Editor surface** — inspector fields, panels, undo actions
-- **Script surface** — C# mirror in `engine_data/data/scripts/` if applicable
-- **Asset surface** — importer, `.meta` schema, compiled output
+- **Runtime API** - C++ types, context access, event hooks
+- **Persistence** - ser20 format, prefab override behavior, migration if breaking
+- **Editor surface** - inspector fields, panels, undo actions
+- **Script surface** - C# mirror in `engine_data/data/scripts/` if applicable
+- **Asset surface** - importer, `.meta` schema, compiled output
 
 ### 3. Play mode boundary
 
