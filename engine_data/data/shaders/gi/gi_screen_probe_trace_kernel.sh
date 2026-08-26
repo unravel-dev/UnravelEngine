@@ -71,6 +71,7 @@
 // for the compacted probe list below.
 #define GI_WORLD_PROBE_SKIP_IRRADIANCE
 #include "gi/gi_world_probes.sh"
+#include "gi/gi_noise.sh"
 
 /// LAST frame's composited output (the SSR convention, same source): the far-field radiance
 /// for hits BEYOND the cascades, where the light voxels have nothing. Bound in place of the
@@ -264,11 +265,15 @@ void GiTraceScreenProbeRay(int slot, ivec2 probe, ivec2 local)
 		imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
 		return;
 	}
-	// IMPORTANCE-DRIVEN SUPERSAMPLING: a cone whose reprojected history reads brighter than
-	// GI_IMPORTANCE_SUPERSAMPLE_RATIO x the probe mean gets a second sub-cone sample - the
-	// smallest step that resolves an emitter smaller than the cone, funded only where the
-	// history says energy is concentrated. Deterministic sub-positions, so a static scene still
-	// produces identical probe input every frame.
+	// IMPORTANCE-PROPORTIONAL SAMPLE ALLOCATION: a cone whose reprojected history reads
+	// brighter than the probe mean gets extra sub-cone samples on a geometric ladder of the
+	// ratio - the refinement of the old binary 2x gate that resolves an emitter smaller than
+	// the cone in proportion to how much of the tile's energy it concentrates. The ladder is
+	// SELF-BUDGETING with no reduction: ratios normalise by the tile MEAN, and the sixteen
+	// block importances sum to sixteen means by definition - so however the energy is
+	// distributed, a stratum's extra samples are bounded (about half the base ray count in
+	// the all-worst-case), and a uniformly lit tile pays exactly one sample per cone as
+	// before. History absent or reprojection failed: uniform allocation, as ever.
 	int sample_count = 1;
 	if(s_history_record[slot] >= 0 && s_importance_mean[slot] > 1e-4)
 	{
@@ -276,9 +281,19 @@ void GiTraceScreenProbeRay(int slot, ivec2 probe, ivec2 local)
 		vec4 mip = s_importance_mip[slot * 4 + block / 4];
 		int lane = block % 4;
 		float importance = lane == 0 ? mip.x : (lane == 1 ? mip.y : (lane == 2 ? mip.z : mip.w));
-		if(importance > GI_IMPORTANCE_SUPERSAMPLE_RATIO * s_importance_mean[slot])
+		float ratio = importance / s_importance_mean[slot];
+		if(ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO)
 		{
 			sample_count = 2;
+		}
+		if(ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO * GI_IMPORTANCE_SUPERSAMPLE_RATIO)
+		{
+			sample_count = 3;
+		}
+		if(ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO * GI_IMPORTANCE_SUPERSAMPLE_RATIO *
+		               GI_IMPORTANCE_SUPERSAMPLE_RATIO)
+		{
+			sample_count = GI_IMPORTANCE_SUPERSAMPLE_MAX;
 		}
 	}
 	// Sub-texel DIRECTION jitter. Fixed centre rays ALIAS small bright sources: a source
@@ -288,13 +303,17 @@ void GiTraceScreenProbeRay(int slot, ivec2 probe, ivec2 local)
 	// not noisy (measured: blobs immune to temporal off, denoise off, spacing, and every
 	// writer-side fix). Jittering the sample within its cone per frame turns that bias into
 	// per-frame variance the temporal chain integrates - each cone measures its whole solid
-	// angle over the accumulation window. R2 low-discrepancy across frames, IGN-decorrelated
-	// across texels; the supersample takes the antithetic offset.
-	float texel_ign =
-	    fract(52.9829189 * fract(0.06711056 * float(local.x) + 0.00583715 * float(local.y)));
-	vec2 sub_positions[2];
-	sub_positions[0] = fract(s_frame_r2 + vec2(texel_ign, fract(texel_ign * 1.618033989)));
-	sub_positions[1] = fract(sub_positions[0] + vec2_splat(0.5));
+	// angle over the accumulation window. R2 low-discrepancy across frames; the pattern is
+	// addressed by ATLAS texel so it decorrelates both the texels within a tile and the
+	// same direction across neighbouring probes (two independent channels - see
+	// gi_noise.sh). The multi-sample pattern is the first four points of a shifted
+	// (0,2)-net: positions 0/1 are the exact antithetic pair the binary gate traced, so
+	// counts one and two reproduce the previous estimator.
+	vec2 sub_positions[GI_IMPORTANCE_SUPERSAMPLE_MAX];
+	sub_positions[0] = fract(s_frame_r2 + GiIgnNoise(texel));
+	sub_positions[1] = fract(sub_positions[0] + vec2(0.5, 0.5));
+	sub_positions[2] = fract(sub_positions[0] + vec2(0.25, 0.75));
+	sub_positions[3] = fract(sub_positions[0] + vec2(0.75, 0.25));
 	vec3 radiance_sum = vec3_splat(0.0);
 	float hit_t = -1.0;
 	for(int s = 0; s < sample_count; ++s)
@@ -625,10 +644,12 @@ void main()
 				// previous probe's tile and count instead of resetting. The plane test
 				// already vetted it as this world point's estimate, so no ghosting enters:
 				// this is the CURRENT accumulation of the right point, maintained live by
-				// its own probe (or the interp pass). Scheduled walks keep their reset -
-				// dissolving blotches is their whole purpose. The count still clamps to
-				// u_gi_probe_max_accum, so the lighting-change fast-flush caps inherited
-				// depth exactly like kept depth.
+				// its own probe (or the interp pass). Scheduled walks normally never reach
+				// this branch at all - ANCHOR.w keeps their count upstream (the walk is a
+				// 1/n fade, never a reset); the walk guard here only stops a walk that
+				// landed on an INVALID tile from inheriting content its own move is meant
+				// to leave behind. The count still clamps to u_gi_probe_max_accum, so the
+				// lighting-change fast-flush caps inherited depth exactly like kept depth.
 				BRANCH
 				if(keep < 0.5 && history_probe.x >= 0 && !GiScreenProbeWalkThisFrame())
 				{
@@ -697,7 +718,11 @@ void main()
 		{
 			rays_per_thread = 1;
 		}
-		base_phase = (u_gi_probe_frame * uint(rays_per_thread)) % u_gi_probe_window;
+		// Per-probe phase stagger (GiScreenProbePhaseOffset): the base stays a multiple of
+		// the stratum width, so consecutive frames' phases still tile the window without
+		// overlap exactly as before - only WHICH probe refreshes which phase decorrelates.
+		base_phase = ((u_gi_probe_frame + GiScreenProbePhaseOffset(probe)) *
+		              uint(rays_per_thread)) % u_gi_probe_window;
 	}
 	// Texels outside this frame's stratum: an INHERITED tile copies them from the
 	// world-reprojected source (they would otherwise keep serving strata traced from
@@ -743,7 +768,9 @@ void main()
 	// is single-buffered) - unless the tile is INHERITED (copied from the world-reprojected
 	// source, see s_inherit_base) or the history is fresh (cleared, the duty the old
 	// history-pass copy carried). Window 1 takes every texel, the parallel A/B-off path.
-	if(!GiScreenProbeInStratum(local, u_gi_probe_frame, u_gi_probe_window))
+	if(!GiScreenProbeInStratum(local,
+	                           u_gi_probe_frame + GiScreenProbePhaseOffset(probe),
+	                           u_gi_probe_window))
 	{
 		ivec2 inherit_base = s_inherit_base[slot];
 		if(inherit_base.x >= 0)

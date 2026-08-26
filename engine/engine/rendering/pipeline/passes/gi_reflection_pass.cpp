@@ -169,15 +169,15 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                                         camera_position.y,
                                         camera_position.z,
                                         has_gi_diffuse ? 1.0f : 0.0f};
-    // R2 low-discrepancy sequence advancing per frame; the shader decorrelates per pixel.
-    // zw arm the checkerboard: it needs a live temporal window to fill the untraced half.
+    // R2 low-discrepancy sequence advancing per frame; the shader decorrelates per pixel
+    // with blue noise. zw unused (the checkerboard that armed them was removed: its parity
+    // pattern showed at silhouettes and its held half ghosted - quality it cost outweighed
+    // the trace it saved).
     const double frame_index = double(gfx::get_render_frame());
-    const bool checkerboard = params.checkerboard && params.temporal_frames > 1;
-    const float frame_parity = float(gfx::get_render_frame() & 1u);
     const float jitter[4] = {float(std::fmod(0.754877666 * frame_index, 1.0)),
                              float(std::fmod(0.569840291 * frame_index, 1.0)),
-                             checkerboard ? 1.0f : 0.0f,
-                             frame_parity};
+                             0.0f,
+                             0.0f};
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                  float(atlas.get_atlas_voxel_dim()),
                                  float(surface_cache.get_instances().size()),
@@ -375,10 +375,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         // prev misaligns a still camera's reprojection by the jitter delta every frame.
         auto prev_view_proj = params.cam->get_taa_prev_view_projection();
         gfx::set_uniform(temporal_program_.u_gi_refl_prev_view_proj, prev_view_proj.get_matrix());
-        // x packs three exact small integers: +1 history valid, +2 checkerboard, +4 parity.
-        const float temporal_flags = (history_valid ? 1.0f : 0.0f) + (checkerboard ? 2.0f : 0.0f) +
-                                     frame_parity * 4.0f;
-        const float temporal_params[4] = {temporal_flags,
+        const float temporal_params[4] = {history_valid ? 1.0f : 0.0f,
                                           1.0f / float(trace_size.width),
                                           1.0f / float(trace_size.height),
                                           float(params.temporal_frames)};

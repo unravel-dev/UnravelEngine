@@ -415,7 +415,15 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             const auto hiz_or_depth = screen_trace ? params.hiz : params.g_buffer->get_texture(4);
             const bool adaptive = s.adaptive_probes;
             const bool has_prev_color = params.prev_color && params.prev_color->is_valid();
-            const auto gather_prev_view_proj = params.cam->get_prev_view_projection();
+            // TAA-JITTER-FREE matrices for the whole gather chain: every pass here
+            // reconstructs world positions from depth (probe anchors, trace origins,
+            // integration, reprojection), and the jittered projection's sub-pixel wobble
+            // made those positions - and with them the probe anchors and the reprojection
+            // of a parked camera - march to the TAA sequence every frame (the same defect
+            // measured and fixed in the reflection chain). The previous pair is the
+            // TAA-unjittered record for the same reason: still camera, exact reprojection.
+            const math::transform gather_projection = params.cam->get_projection_unjittered();
+            const auto gather_prev_view_proj = params.cam->get_taa_prev_view_projection();
             const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
                                                   float(s.debug_view),
                                                   adaptive ? 1.0f : 0.0f,
@@ -426,7 +434,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 // itself against its parents' anchors. One thread per probe; noise next to
                 // the trace it gates.
                 gfx::render_pass pass("GI/Probe Place");
-                pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+                pass.set_view_proj(params.cam->get_view(), gather_projection);
                 place_program_.program->begin();
                 gfx::set_texture(place_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
                 gfx::set_buffer(6, probe_traced_, gfx::access::Write);
@@ -480,7 +488,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             }
             {
                 gfx::render_pass pass("GI/Probe Trace");
-                pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+                pass.set_view_proj(params.cam->get_view(), gather_projection);
                 gpu_program* trace_cs = trace_program_.select(probe_temporal_active);
                 if(trace_cs == nullptr)
                 {
@@ -594,7 +602,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::render_pass pass(fuse_temporal ? "GI/Probe Integrate+Temporal"
                                                     : "GI/Probe Integrate");
                 pass.bind(fuse_temporal ? history.write_fbo.get() : trace_fbo.get());
-                pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+                pass.set_view_proj(params.cam->get_view(), gather_projection);
                 integrate->begin();
                 // Never sampled here, bound for OpenGL's benefit (see the struct note).
                 gfx::set_texture(integrate_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
@@ -642,7 +650,9 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     gfx::set_texture(temporal_program_.s_gi_history_fast,
                                      12,
                                      history.has_history ? history.read_fast : black);
-                    const auto prev_view_proj = params.cam->get_prev_view_projection();
+                    // The TAA-unjittered previous pair, matching the unjittered current
+                    // reconstruction above - a still camera must reproject onto itself.
+                    const auto prev_view_proj = params.cam->get_taa_prev_view_projection();
                     gfx::set_uniform(temporal_program_.u_gi_prev_view_proj, prev_view_proj.get_matrix());
                     const auto prev_inv_view_proj = glm::inverse(prev_view_proj.get_matrix());
                     gfx::set_uniform(temporal_program_.u_gi_prev_inv_view_proj, prev_inv_view_proj);
@@ -734,8 +744,8 @@ auto gi_resolve_pass::run_upsample(gfx::render_view& rview,
     auto fbo = create_or_update_target(rview, "GI_UPSAMPLED", full_size, result);
     gfx::render_pass pass("GI/Upsample Pass");
     pass.bind(fbo.get());
-    // World positions are reconstructed from depth, so the view state is required.
-    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+    // World positions are reconstructed from depth - jitter-free, like the whole chain.
+    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     upsample_program_.program->begin();
     gfx::set_texture(upsample_program_.s_gi_input, 0, input);
     gfx::set_texture(upsample_program_.s_gi_depth, 1, params.g_buffer->get_texture(4));
@@ -773,6 +783,8 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
     auto source = input;
     const bool use_compute =
         denoise_program_.compute_program && denoise_program_.compute_program->is_valid();
+    // World positions are reconstructed from depth - jitter-free, like the whole chain.
+    const math::transform denoise_projection = params.cam->get_projection_unjittered();
     const auto camera_position = params.cam->get_position();
     const float denoise_camera[4] = {camera_position.x, camera_position.y, camera_position.z, 0.0f};
     const float texel[4] = {1.0f / float(target_size.width),
@@ -804,8 +816,7 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
         if(use_compute && i < compute_max_pass)
         {
             gfx::render_pass pass("GI/Denoise Pass");
-            // World positions are reconstructed from depth, so the view state is required.
-            pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+            pass.set_view_proj(params.cam->get_view(), denoise_projection);
             denoise_program_.compute_program->begin();
             gfx::set_texture(denoise_program_.s_gi_input, 0, source);
             gfx::set_texture(denoise_program_.s_gi_depth, 1, params.g_buffer->get_texture(4));
@@ -827,8 +838,7 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
         }
         gfx::render_pass pass("GI/Denoise Pass");
         pass.bind(fbo.get());
-        // World positions are reconstructed from depth, so the view state is required here too.
-        pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+        pass.set_view_proj(params.cam->get_view(), denoise_projection);
         denoise_program_.program->begin();
         gfx::set_texture(denoise_program_.s_gi_input, 0, source);
         gfx::set_texture(denoise_program_.s_gi_depth, 1, params.g_buffer->get_texture(4));
@@ -922,7 +932,9 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
 
     gfx::render_pass temporal_pass("GI/Temporal Pass");
     temporal_pass.bind(write_fbo.get());
-    temporal_pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+    // Jitter-free reconstruction, TAA-unjittered previous pair below: a still camera
+    // must reproject onto itself exactly (the reflection chain's measured lesson).
+    temporal_pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     temporal_program_.program->begin();
     gfx::set_texture(temporal_program_.s_gi_current, 0, current);
     gfx::set_texture(temporal_program_.s_gi_history, 1, has_history ? read_tex : current);
@@ -939,7 +951,7 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
     // members, so handing its address to a mat4 uniform uploads whatever happens to sit in the
     // first 64 bytes. The shader then reprojects to nonsense and rejects every pixel's history,
     // which looks exactly like temporal accumulation that is switched off.
-    const auto prev_view_proj = params.cam->get_prev_view_projection();
+    const auto prev_view_proj = params.cam->get_taa_prev_view_projection();
     gfx::set_uniform(temporal_program_.u_gi_prev_view_proj, prev_view_proj.get_matrix());
     const auto prev_inv_view_proj = glm::inverse(prev_view_proj.get_matrix());
     gfx::set_uniform(temporal_program_.u_gi_prev_inv_view_proj, prev_inv_view_proj);

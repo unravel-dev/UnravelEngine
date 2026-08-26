@@ -59,6 +59,7 @@
 #include "gi/sdf_common.sh"
 #define GI_LIGHT_VOXEL_READ
 #include "gi/gi_light_voxels.sh"
+#include "gi/gi_noise.sh"
 
 SAMPLER2D(s_gi_normal, 5);
 /// The authored probe layer (RBUFFER right after the probe pass): at trace time it holds
@@ -76,9 +77,7 @@ SAMPLER2D(s_gi_env_sh, 14);
 
 /// xyz = camera position, w > 0 when s_gi_diffuse holds last frame's resolve.
 uniform vec4 u_gi_reflection_camera;
-/// xy = this frame's R2 low-discrepancy offset for the GGX sample; z > 0 enables the
-/// checkerboard (trace half the texels per frame, the temporal fills the rest); w = the
-/// frame parity selecting which half.
+/// xy = this frame's R2 low-discrepancy offset for the GGX sample; zw unused.
 uniform vec4 u_gi_reflection_jitter;
 
 /// Heitz 2018 visible-normal GGX sampling; view and result in tangent space (z = normal).
@@ -238,13 +237,11 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	BRANCH
 	if(roughness > GI_REFLECTION_MIRROR_ROUGHNESS)
 	{
-		// TWO independent IGN evaluations for a true 2D point: deriving the second
+		// TWO independent noise channels for a true 2D point: deriving the second
 		// coordinate from the first put every sample on a 1D curve through the unit square,
 		// so the azimuthal half of the lobe was never properly covered and high-contrast
-		// regions could not converge (measured, round 13).
-		float ign_a = fract(52.9829189 * fract(0.06711056 * frag_coord.x + 0.00583715 * frag_coord.y));
-		float ign_b = fract(52.9829189 * fract(0.06711056 * (frag_coord.y + 17.0) + 0.00583715 * (frag_coord.x + 31.0)));
-		vec2 xi = fract(vec2(ign_a, ign_b) + u_gi_reflection_jitter.xy);
+		// regions could not converge (measured, round 13; the shared pattern in gi_noise.sh).
+		vec2 xi = fract(GiIgnNoise(ivec2(frag_coord)) + u_gi_reflection_jitter.xy);
 		vec3 axis;
 		if(abs(normal.z) < 0.999)
 		{

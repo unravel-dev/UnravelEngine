@@ -4,7 +4,7 @@
  *
  * Per trace-target texel, exactly the decisions fs_gi_reflection.sc made at its top -
  * KEEP THE TWO IN STEP:
- *   - checkerboard off-parity, sky, or a degenerate G-buffer normal: answer 0 directly.
+ *   - sky, or a degenerate G-buffer normal: answer 0 directly.
  *   - roughness at/past GI_REFLECTION_ROUGH_CUTOFF: the wide-lobe limit - last frame's
  *     resolved gather (or the SH along the mirror direction before one exists) at full
  *     coverage, no ray.
@@ -37,7 +37,7 @@ BUFFER_RW(b_gi_refl_list, uint, 5);
 
 /// xyz = camera position, w > 0 when s_gi_diffuse holds last frame's resolve.
 uniform vec4 u_gi_reflection_camera;
-/// xy = R2 offset (unused here), z > 0 enables the checkerboard, w = the frame parity.
+/// xy = R2 offset (unused here), zw unused.
 uniform vec4 u_gi_reflection_jitter;
 /// xy = one texel of the trace target, zw = its dimensions.
 uniform vec4 u_gi_reflection_texel;
@@ -50,18 +50,6 @@ void main()
 	if(pixel.x >= size.x || pixel.y >= size.y)
 	{
 		return;
-	}
-	// Checkerboard off-parity texels answer 0 exactly as the fragment form's early-out;
-	// the temporal pass fills them from clamped history.
-	BRANCH
-	if(u_gi_reflection_jitter.z > 0.0)
-	{
-		int chequer = (pixel.x + pixel.y + int(u_gi_reflection_jitter.w)) & 1;
-		if(chequer != 0)
-		{
-			imageStore(s_gi_refl_out, pixel, vec4_splat(0.0));
-			return;
-		}
 	}
 	vec2 uv = (vec2(pixel) + vec2_splat(0.5)) * u_gi_reflection_texel.xy;
 	float depth = texture2DLod(s_hiz, uv, 0.0).x;

@@ -75,15 +75,6 @@ public:
         /// weight is one over this. 0 or 1 disables the reflection temporal entirely, the
         /// A/B knob for verifying the accumulation is alive.
         int reflection_temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
-        /// Checkerboard reflection trace: half the texels per frame, the temporal fills the
-        /// rest from clamped history. OFF BY DEFAULT: on sharp/glossy content the parity
-        /// pattern shows at reflection silhouettes, held history ghosts through the wide
-        /// edge AABB, and the two halves shimmer against each other (measured on the mirror
-        /// test scene, 2026-08-19). Until the fill is velocity-aware and edge-clamped it is
-        /// an opt-in trade of those artifacts for ~half the trace cost - viable for scenes
-        /// whose reflectors are all in the rough band, where the composite blur hides the
-        /// pattern. Ignored while the reflection temporal is off.
-        bool reflection_checkerboard = false;
         /// 0 = off. 1 = RAY TIERS: every gather ray paints its answering tier instead of
         /// radiance - green = screen-trace commit, red = SDF hit, blue = world-probe/sky
         /// completion - and the mix survives the whole chain, so the lit image shows the

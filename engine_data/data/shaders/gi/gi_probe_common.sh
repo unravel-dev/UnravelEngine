@@ -263,6 +263,22 @@ bool GiScreenProbeInStratum(ivec2 local, uint frame, uint window)
 }
 
 /**
+ * Per-probe stratum phase offset. With one global phase the whole screen refreshed the
+ * SAME sub-texel of every 2x2 each frame, so any lighting change landed as four
+ * screen-coherent steps - a pulse the eye picks out of far smaller amplitudes than
+ * spatial noise. The offset rotates each probe's cycle start (a rotated full cycle is
+ * still exhaustive per window, so the windowed-mean contract holds untouched); (x + 2y)
+ * covers all four phases in every 2x2 probe block, turning the global step into
+ * probe-granular dither the probe filter and the pixel temporal integrate. Only the
+ * refresh ORDER decorrelates: the walk schedule stays frame-global and position-shared
+ * (staggering WALK POSITIONS printed blotches - see GiScreenProbeWalkPeriod).
+ */
+uint GiScreenProbePhaseOffset(ivec2 probe)
+{
+	return uint(probe.x + probe.y * 2);
+}
+
+/**
  * Compacted-trace inverse of GiScreenProbeInStratum: thread t in
  * [0, GI_SCREEN_PROBE_RAYS_PER_FRAME) plus Bayer phase -> octahedral texel.
  * The 16 threads are a 4x4 coarse grid; phase selects which of the 2x2 sub-texels

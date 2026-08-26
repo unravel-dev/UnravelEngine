@@ -111,17 +111,6 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "World-space specular tier under SSR: rough lobes from the world "
                             "probes, sharp ones traced - off-screen reflections SSR cannot see."},
         })
-        .data<&settings::reflection_checkerboard>("reflection_checkerboard"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "reflection_checkerboard"},
-            entt::attribute{"pretty_name", "Reflection Checkerboard"},
-            entt::attribute{"group", "Gather"},
-            entt::attribute{"tooltip",
-                            "Trace half the reflection texels per frame; the temporal fills the "
-                            "rest from history. Roughly halves the trace cost, but on sharp "
-                            "glossy reflectors the pattern shows at silhouettes, motion ghosts, "
-                            "and edges shimmer - an opt-in trade for rough-reflector scenes."},
-        })
         .data<&settings::denoise_converged_early_out>("denoise_converged_early_out"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_converged_early_out"},
@@ -437,7 +426,6 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("probe_space_temporal", obj.probe_space_temporal));
     try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
-    try_save(ar, ser20::make_nvp("reflection_checkerboard", obj.reflection_checkerboard));
     try_save(ar, ser20::make_nvp("denoise_converged_early_out", obj.denoise_converged_early_out));
     try_save(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
     try_save(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
@@ -468,12 +456,9 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("probe_space_temporal", obj.probe_space_temporal));
     try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
-    // Absent in older documents: try_load leaves the defaults (off / on), the sparse-load rule.
-    try_load(ar, ser20::make_nvp("reflection_checkerboard", obj.reflection_checkerboard));
     try_load(ar, ser20::make_nvp("denoise_converged_early_out", obj.denoise_converged_early_out));
     try_load(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
     try_load(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
-    // Absent in older documents: try_load keeps the dual-rate default, the sparse-load rule.
     try_load(ar, ser20::make_nvp("temporal_slow_frames", obj.temporal_slow_frames));
     try_load(ar, ser20::make_nvp("reprojection_tolerance", obj.reprojection_tolerance));
     try_load(ar, ser20::make_nvp("enable_spatial_denoise", obj.enable_spatial_denoise));
@@ -482,7 +467,6 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("denoise_luma_phi", obj.denoise_luma_phi));
     try_load(ar, ser20::make_nvp("denoise_plane_tolerance", obj.denoise_plane_tolerance));
     try_load(ar, ser20::make_nvp("denoise_low_count_boost", obj.denoise_low_count_boost));
-    // Absent in older documents: try_load keeps the coherent-floor default, the sparse-load rule.
     try_load(ar, ser20::make_nvp("denoise_luma_floor", obj.denoise_luma_floor));
     try_load(ar, ser20::make_nvp("enable_bilateral_upsample", obj.enable_bilateral_upsample));
     try_load(ar, ser20::make_nvp("upsample_normal_power", obj.upsample_normal_power));

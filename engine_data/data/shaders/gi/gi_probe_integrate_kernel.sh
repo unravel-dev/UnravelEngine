@@ -22,6 +22,7 @@
 #define GI_WORLD_PROBE_READ
 #include "gi/gi_world_probes.sh"
 #include "gi/gi_probe_common.sh"
+#include "gi/gi_noise.sh"
 
 BUFFER_RO(b_gi_probes, vec4, 7);
 SAMPLER2D(s_gi_depth, 8);
@@ -116,15 +117,11 @@ vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 o
 	vec2 grid = pixel / u_gi_probe_spacing - vec2_splat(0.5);
 	// Interpolation JITTER [S21 s39]: offsetting which bracket a pixel reads spatially
 	// distributes probe-to-probe differences, which the temporal chain then integrates -
-	// without it the probe lattice prints through as tile-sized plateaus. Interleaved
-	// gradient noise, animated by frame: spatially low-discrepancy, deterministic.
-	float ign = fract(52.9829189 *
-	                  fract(0.06711056 * (frag_coord.x + 5.588238 * u_gi_camera.w) +
-	                        0.00583715 * frag_coord.y));
-	float ign2 = fract(52.9829189 *
-	                   fract(0.06711056 * (frag_coord.y + 5.588238 * u_gi_camera.w) +
-	                         0.00583715 * frag_coord.x));
-	vec2 jitter = (vec2(ign, ign2) - vec2_splat(0.5)) * GI_INTERPOLATION_JITTER_TILES;
+	// without it the probe lattice prints through as tile-sized plateaus. Two-channel IGN
+	// per pixel, advanced per frame by R2 in value space (gi_noise.sh).
+	vec2 frame_r2 = fract(vec2(0.754877669, 0.569840296) * u_gi_camera.w);
+	vec2 noise = fract(GiIgnNoise(ivec2(frag_coord.xy)) + frame_r2);
+	vec2 jitter = (noise - vec2_splat(0.5)) * GI_INTERPOLATION_JITTER_TILES;
 	vec2 jittered_grid = grid + jitter;
 	vec2 base = floor(jittered_grid);
 	vec2 frac = jittered_grid - base;

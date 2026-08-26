@@ -2357,7 +2357,6 @@ void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
     // same convention as prev_color).
     grp.gi_diffuse = rview.tex_safe_get("GI_RESOLVE");
     grp.temporal_frames = gi_reflection_settings.resolve.reflection_temporal_frames;
-    grp.checkerboard = gi_reflection_settings.resolve.reflection_checkerboard;
     grp.resolution = gi_reflection_settings.resolve.resolution;
     grp.cam = &camera;
     grp.surface_cache = &engine::context().get_cached<surface_cache_system>();

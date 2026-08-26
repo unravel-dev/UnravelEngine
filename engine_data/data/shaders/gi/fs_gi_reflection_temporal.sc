@@ -6,19 +6,22 @@ $input v_texcoord0
  * GI_REFLECTION_TEMPORAL_FRAMES instead of shimmering. History is clamped to the
  * neighbourhood bounds of THIS frame's GEOMETRIC samples - the standard TAA guard - so
  * disoccluded or moved reflections cannot ghost past one frame, while in-lobe jitter noise
- * averages out. Raw alpha is coverage (mesh-exact / refined hit). A coverage-0 sample is
- * not an image: history is held so a refined mean is not bleached by sky, and a zero count
- * lets the composite reveal the authored probe layer.
+ * averages out; the clamp fades out under a still camera (the motion release below) so
+ * sparse-bright content can converge. Raw alpha is coverage (mesh-exact / refined hit).
+ * A coverage-0 sample is not an image: history is held so a refined mean is not bleached
+ * by sky, and a zero count lets the composite reveal the authored probe layer.
  *
- * CHECKERBOARD (flag bit below): the trace produces half the texels per frame by pixel
- * parity. Traced texels integrate as always, with their clamp AABB built from the four
- * DIAGONAL raw neighbours - the same parity, so every bound is a real sample (and four
- * fewer taps than the 3x3). Untraced texels carry their reprojected history forward,
- * clamped against the same diagonal bounds, WITHOUT advancing the count - the mean then
- * weights each traced sample exactly as the full-rate path does, so the converged result
- * is identical in expectation. An untraced texel with no usable history (first frame,
- * off-screen reprojection) reconstructs from the traced diagonals rather than leaving a
- * hole that would flash the probe layer during fast pans.
+ * FIREFLY GOVERNOR (the gather's recipe, GI_REFLECTION_FIREFLY_CLAMP): one VNDF ray per
+ * pixel per frame makes a small bright emitter a sparse-spike process on rough surfaces -
+ * a hit returns the emitter's (ray-capped) radiance, orders over the local mean, and no
+ * running mean can hide an isolated spike entering at 1/count (the dancing red pixels).
+ * Each new sample is capped at the clamp's multiple of its REFERENCE: the pixel's own
+ * accumulated luminance, floored by the neighbourhood mean of this frame's geometric
+ * samples (fetched by the same 3x3 the bounds already pay for). An established bright
+ * pixel raises its own ceiling and converges unbiased; the halo near an emitter builds as
+ * a stable glow instead of noise. No meaningful reference (fresh surroundings, dark
+ * scene): the sample stores unclamped - progressive ramps from black would dim every
+ * disocclusion instead.
  */
 
 #include "../common.sh"
@@ -29,68 +32,36 @@ SAMPLER2D(s_refl_history, 1);
 SAMPLER2D(s_refl_depth, 2);
 
 uniform mat4 u_gi_refl_prev_view_proj;
-/// x = packed flags as an exact small float: +1 history target holds valid data,
-/// +2 checkerboard enabled, +4 frame parity. yz = 1 / target size; w = accumulation
+/// x > 0.5 = the history target holds valid data; yz = 1 / target size; w = accumulation
 /// window in frames (the settings knob; GI_REFLECTION_TEMPORAL_FRAMES is its default).
 uniform vec4 u_gi_refl_temporal;
 
-/// The traced diagonal neighbours' geometric mean, for an untraced texel with no history.
-vec4 GiChequerFill(vec2 uv, vec2 texel)
+/// Rec.709 luminance (common.sh carries no Luminance helper).
+float GiReflLuma(vec3 color)
 {
-	vec3 sum = vec3_splat(0.0);
-	float weight = 0.0;
-	LOOP
-	for(int i = 0; i < 4; ++i)
-	{
-		vec2 offset = vec2((i & 1) != 0 ? 1.0 : -1.0, (i & 2) != 0 ? 1.0 : -1.0);
-		vec4 s = texture2DLod(s_refl_raw, uv + offset * texel, 0.0);
-		if(s.w >= 0.5)
-		{
-			sum += s.xyz;
-			weight += 1.0;
-		}
-	}
-	if(weight > 0.0)
-	{
-		return vec4(sum / weight, 1.0);
-	}
-	return vec4_splat(0.0);
+	return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
 void main()
 {
 	vec2 uv = v_texcoord0;
-	int flags = int(u_gi_refl_temporal.x + 0.5);
-	bool history_flag = (flags & 1) != 0;
-	bool checkerboard = (flags & 2) != 0;
-	int frame_parity = (flags >> 2) & 1;
-	bool traced = true;
-	if(checkerboard)
-	{
-		traced = (((int(gl_FragCoord.x) + int(gl_FragCoord.y) + frame_parity) & 1) == 0);
-	}
+	bool history_flag = u_gi_refl_temporal.x > 0.5;
 	vec2 texel = u_gi_refl_temporal.yz;
 	vec4 curr = texture2DLod(s_refl_raw, uv, 0.0);
 	float depth = texture2DLod(s_refl_depth, uv, 0.0).x;
 	BRANCH
 	if(depth >= 1.0)
 	{
-		// Sky: zeros either way (the trace writes zeros for sky and for untraced texels).
+		// Sky: zeros either way (the trace writes zeros for sky).
 		gl_FragColor = vec4(curr.xyz, curr.w >= 0.5 ? 1.0 : curr.w);
 		return;
 	}
 	BRANCH
 	if(!history_flag)
 	{
-		if(traced)
-		{
-			// No history: alpha is coverage. A geometric sample starts the running mean at
-			// 1; a coverage-0 sample stays 0 so the composite reveals probes.
-			float start = curr.w >= 0.5 ? 1.0 : curr.w;
-			gl_FragColor = vec4(curr.xyz, start);
-			return;
-		}
-		gl_FragColor = GiChequerFill(uv, texel);
+		// No history: alpha is coverage. A geometric sample starts the running mean at 1;
+		// a coverage-0 sample stays 0 so the composite reveals probes.
+		gl_FragColor = vec4(curr.xyz, curr.w >= 0.5 ? 1.0 : curr.w);
 		return;
 	}
 	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(depth)));
@@ -101,13 +72,7 @@ void main()
 	BRANCH
 	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
 	{
-		if(traced)
-		{
-			float start = curr.w >= 0.5 ? 1.0 : curr.w;
-			gl_FragColor = vec4(curr.xyz, start);
-			return;
-		}
-		gl_FragColor = GiChequerFill(uv, texel);
+		gl_FragColor = vec4(curr.xyz, curr.w >= 0.5 ? 1.0 : curr.w);
 		return;
 	}
 	vec4 history_texel = texture2DLod(s_refl_history, prev_uv, 0.0);
@@ -126,82 +91,55 @@ void main()
 	vec2 motion_texels = (uv - prev_uv) / max(texel, vec2_splat(1e-6));
 	float still = 1.0 - saturate(length(motion_texels) / GI_REFLECTION_CLAMP_MOTION_TEXELS);
 	BRANCH
-	if(traced && curr.w < 0.5)
+	if(curr.w < 0.5)
 	{
 		// Not an image this frame. Hold the geometric mean we already have; do not clamp
 		// against a sky/empty neighbourhood that would bleach a refined history.
 		gl_FragColor = vec4(history_texel.xyz, history_texel.w);
 		return;
 	}
-	// Neighbourhood bounds from geometric samples only, so a coverage-0 neighbour cannot
-	// shrink the AABB of a refined hit. Checkerboard: the four diagonals are this texel's
-	// own parity and therefore real samples this frame; full rate keeps the whole 3x3.
-	vec4 lo = vec4_splat(1e30);
-	vec4 hi = vec4_splat(-1e30);
-	float bound_count = 0.0;
-	if(traced)
-	{
-		if(curr.w >= 0.5)
-		{
-			lo = curr;
-			hi = curr;
-			bound_count = 1.0;
-		}
-	}
-	BRANCH
-	if(checkerboard)
+	// Neighbourhood bounds and mean from geometric samples only, so a coverage-0 neighbour
+	// cannot shrink the AABB of a refined hit (nor drag the firefly reference toward sky).
+	vec4 lo = curr;
+	vec4 hi = curr;
+	vec3 neighbor_sum = vec3_splat(0.0);
+	float neighbor_count = 0.0;
+	LOOP
+	for(int y = -1; y <= 1; ++y)
 	{
 		LOOP
-		for(int i = 0; i < 4; ++i)
+		for(int x = -1; x <= 1; ++x)
 		{
-			vec2 offset = vec2((i & 1) != 0 ? 1.0 : -1.0, (i & 2) != 0 ? 1.0 : -1.0);
-			vec4 s = texture2DLod(s_refl_raw, uv + offset * texel, 0.0);
+			if(x == 0 && y == 0)
+			{
+				continue;
+			}
+			vec4 s = texture2DLod(s_refl_raw, uv + vec2(float(x), float(y)) * texel, 0.0);
 			if(s.w >= 0.5)
 			{
 				lo = min(lo, s);
 				hi = max(hi, s);
-				bound_count += 1.0;
+				neighbor_sum += s.xyz;
+				neighbor_count += 1.0;
 			}
 		}
 	}
-	else
+	// FIREFLY GOVERNOR (see the header): cap the new sample at the clamp's multiple of the
+	// pixel's own accumulated luminance, floored by this frame's neighbourhood mean.
+	float reference = history_texel.w >= 0.5 ? GiReflLuma(history_texel.xyz) : 0.0;
+	if(neighbor_count > 0.0)
 	{
-		LOOP
-		for(int y = -1; y <= 1; ++y)
-		{
-			LOOP
-			for(int x = -1; x <= 1; ++x)
-			{
-				if(x == 0 && y == 0)
-				{
-					continue;
-				}
-				vec4 s = texture2DLod(s_refl_raw, uv + vec2(float(x), float(y)) * texel, 0.0);
-				if(s.w >= 0.5)
-				{
-					lo = min(lo, s);
-					hi = max(hi, s);
-					bound_count += 1.0;
-				}
-			}
-		}
+		reference = max(reference, GiReflLuma(neighbor_sum / neighbor_count));
 	}
 	BRANCH
-	if(!traced)
+	if(reference > 1e-3)
 	{
-		// Untraced texel: history carried forward, clamped against this frame's traced
-		// diagonals so disocclusion cannot ghost - the count does NOT advance, which is what
-		// keeps every traced sample's weight in the mean identical to the full-rate path.
-		if(history_texel.w >= 0.5)
+		float ceiling = GI_REFLECTION_FIREFLY_CLAMP * reference;
+		float luma = GiReflLuma(curr.xyz);
+		if(luma > ceiling)
 		{
-			vec3 held = bound_count > 0.0
-			                ? mix(clamp(history_texel.xyz, lo.xyz, hi.xyz), history_texel.xyz, still)
-			                : history_texel.xyz;
-			gl_FragColor = vec4(held, history_texel.w);
-			return;
+			curr.xyz *= ceiling / luma;
 		}
-		gl_FragColor = GiChequerFill(uv, texel);
-		return;
 	}
 	// RUNNING MEAN, not a fixed EMA: alpha carries the accumulated frame count (the SSR
 	// temporal-resolve convention). A fixed-weight EMA has a permanent variance floor -

@@ -54,11 +54,6 @@ public:
         /// Temporal window in frames for the stochastic ray; <= 1 bypasses the accumulation
         /// (raw passthrough) - the A/B knob for verifying the temporal is alive.
         int temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
-        /// Checkerboard trace: half the texels per frame, the temporal fills the other half
-        /// from clamped history (diagonal-neighbour bounds). Converged result identical in
-        /// expectation; disocclusions refresh at half rate. Requires the temporal (window
-        /// > 1) and is ignored without it.
-        bool checkerboard = true;
         /// Trace + accumulation resolution, the SAME knob the whole gather runs at
         /// (gi_resolve_pass::settings::resolution, default half): the composite's edge-stopped
         /// 3x3 kernel reconstructs full resolution as a joint bilateral upsample, so below-full
