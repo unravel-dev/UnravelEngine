@@ -52,8 +52,8 @@ auto capture_thumbnail_snapshot(const gfx::frame_buffer::ptr& source) -> gfx::te
     const auto src_size = source->get_size();
 
     // The preview camera is built at k_thumbnail_size, so anything else means the capture came
-    // from a target that is not the one the preview set up - which is what produces a small
     // correct image in the corner of an otherwise empty thumbnail.
+    // from a target that is not the one the preview set up - which is what produces a small
     if(src_size.width != k_thumbnail_size.width || src_size.height != k_thumbnail_size.height)
     {
         APPLOG_WARNING("Thumbnail captured at {}x{}, expected {}x{}.",
@@ -400,7 +400,6 @@ void thumbnail_manager::regenerate_thumbnail(const hpp::uuid& uid)
 {
     auto& entry = gen_.thumbnails[uid];
     entry.needs_regeneration = true;
-    entry.snapshot = nullptr;
     entry.pending_snapshot = nullptr;
 }
 void thumbnail_manager::remove_thumbnail(const hpp::uuid& uid)
