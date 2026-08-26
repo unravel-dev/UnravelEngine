@@ -692,6 +692,10 @@ auto skylight_to_json(const skylight_component& comp, const std::unordered_set<s
     {
         append_prop(json, first, "cloud_shadow_strength", fmt::format("{:.6g}", comp.get_cloud_shadow_strength()));
     }
+    if(wants_key(filter, "cloud_brightness"))
+    {
+        append_prop(json, first, "cloud_brightness", fmt::format("{:.6g}", comp.get_cloud_brightness()));
+    }
     if(wants_key(filter, "cloud_world_space_altitude"))
     {
         append_prop(json, first, "cloud_world_space_altitude", comp.get_cloud_world_space_altitude() ? "true" : "false");
@@ -894,6 +898,18 @@ auto apply_skylight_properties(rtti::context& ctx,
                 continue;
             }
             comp.set_cloud_shadow_strength(v);
+            result.applied.push_back(key);
+        }
+        else if(key == "cloud_brightness")
+        {
+            float v = 0.0f;
+            if(!parse_number(value, v, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            comp.set_cloud_brightness(v);
             result.applied.push_back(key);
         }
         else if(key == "cloud_world_space_altitude")

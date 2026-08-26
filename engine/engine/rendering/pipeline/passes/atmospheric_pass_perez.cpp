@@ -320,7 +320,7 @@ auto atmospheric_pass_perez::make_cloud_uniforms(const run_params& params,
     uniforms.cloud_params3[2] = params.cloud_wind_offset.x;
     uniforms.cloud_params3[3] = params.cloud_wind_offset.y;
     uniforms.cloud_params4[0] = params.cloud_time;
-    uniforms.cloud_params4[1] = 0.0f;
+    uniforms.cloud_params4[1] = params.cloud_brightness;
     uniforms.cloud_params4[2] = 0.0f;
     uniforms.cloud_params4[3] = 0.0f;
     const auto& cam_pos = camera.get_position();

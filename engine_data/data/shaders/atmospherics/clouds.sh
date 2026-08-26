@@ -14,7 +14,7 @@
 //   u_cloudParams  = (coverage, base altitude, thickness, density)
 //   u_cloudParams2 = (shadow strength, 1 / cloud size, softness, mode)
 //   u_cloudParams3 = (detail erosion, macro variation, wind offset x, wind offset y)
-//   u_cloudParams4 = (cloud time, 0, 0, 0)
+//   u_cloudParams4 = (cloud time, brightness, 0, 0)
 //   u_cloudCamera  = (camera world position xyz, layer base world y)
 //
 // Space: the layer is a spherical shell around a planet centre placed below the camera's
@@ -57,6 +57,9 @@ uniform vec4 u_cloudCamera;
 #define u_cloud_wind_offset     u_cloudParams3.zw
 
 #define u_cloud_time            u_cloudParams4.x
+// User multiplier on the scattered cloud radiance (1 = the shared sky light scale); above 1
+// pushes the clouds toward white through the tonemapper without touching the dome.
+#define u_cloud_brightness      u_cloudParams4.y
 
 #define u_cloud_camera_pos      u_cloudCamera.xyz
 // World-space altitude of the layer base (packed by the CPU from the altitude mode).
@@ -83,10 +86,12 @@ uniform vec4 u_cloudCamera;
 #define CLOUD_HG_BLEND              0.65
 
 // Multiple scattering approximation (Wrenninge 2013, used by Frostbite / UE): octave i scales
-// extinction by a^i, contribution by b^i and phase eccentricity by c^i.
-#define CLOUD_MS_OCTAVES            4
-#define CLOUD_MS_EXTINCTION         0.5
-#define CLOUD_MS_CONTRIBUTION       0.7
+// extinction by a^i, contribution by b^i and phase eccentricity by c^i. Cloud droplets have
+// albedo ~0.99, so the higher octaves carry a lot of energy: a strong contribution factor and
+// a fast-decaying extinction are what make thick clouds white instead of grey.
+#define CLOUD_MS_OCTAVES            5
+#define CLOUD_MS_EXTINCTION         0.4
+#define CLOUD_MS_CONTRIBUTION       0.85
 #define CLOUD_MS_PHASE_ATTEN        0.5
 
 // The Perez tables put the sun at ~13.5x the zenith luminance; a measured clear sky is
@@ -96,10 +101,11 @@ uniform vec4 u_cloudCamera;
 
 // Ambient in-scatter as a fraction of the zenith sky radiance, graded by height in the
 // layer: the layer shadows its own base, so bases are darker than tops. The hemisphere a
-// cloud sees (whiter horizon, ground bounce) is less saturated than the zenith colour.
-#define CLOUD_AMBIENT_TOP           1.0
-#define CLOUD_AMBIENT_BOTTOM        0.4
-#define CLOUD_AMBIENT_SATURATION    0.5
+// cloud sees (whiter horizon, ground bounce, neighbouring clouds) is brighter and less
+// saturated than the zenith colour, so the top factor exceeds 1.
+#define CLOUD_AMBIENT_TOP           1.2
+#define CLOUD_AMBIENT_BOTTOM        0.6
+#define CLOUD_AMBIENT_SATURATION    0.35
 
 // Aerial perspective, extinction per (distance / base altitude). Distant (low elevation)
 // clouds fade toward the sky behind them instead of being cut off by an angle mask.
@@ -187,7 +193,8 @@ float cloud_sun_scatter(float od_sun, float cos_theta)
 // at night, and keeps its warm chroma at low sun: never clamp it.
 vec3 cloud_sun_radiance(vec3 sun_luminance, float exposition)
 {
-    return max(sun_luminance, vec3_splat(0.0)) * (exposition * CLOUD_SUN_ILLUMINANCE_SCALE);
+    return max(sun_luminance, vec3_splat(0.0)) *
+           (exposition * CLOUD_SUN_ILLUMINANCE_SCALE * u_cloud_brightness);
 }
 
 // Sky ambient reaching a sample at height fraction h (0 = base, 1 = top).
@@ -197,7 +204,7 @@ vec3 cloud_ambient_radiance(vec3 sky_luminance, float exposition, float height_f
     vec3 sky = max(sky_luminance, vec3_splat(0.0));
     float luma = dot(sky, vec3(0.2126, 0.7152, 0.0722));
     vec3 ambient = mix(vec3_splat(luma), sky, CLOUD_AMBIENT_SATURATION);
-    return ambient * exposition * occlusion;
+    return ambient * (exposition * occlusion * u_cloud_brightness);
 }
 
 float cloud_aerial_transmittance(float distance, float base_altitude)

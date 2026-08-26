@@ -1874,6 +1874,7 @@ auto gather_skylight_params(scene& scn,
             params_perez.cloud_detail_erode = light_comp_ref.get_cloud_detail_erode();
             params_perez.cloud_density = light_comp_ref.get_cloud_density();
             params_perez.cloud_shadow_strength = light_comp_ref.get_cloud_shadow_strength();
+            params_perez.cloud_brightness = light_comp_ref.get_cloud_brightness();
             params_perez.cloud_world_space_altitude = light_comp_ref.get_cloud_world_space_altitude();
             params_perez.cloud_shadows = light_comp_ref.get_cloud_shadows();
             params_perez.cloud_shadow_opacity = light_comp_ref.get_cloud_shadow_opacity();

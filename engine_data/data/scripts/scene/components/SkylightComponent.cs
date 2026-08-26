@@ -136,6 +136,16 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Multiplier on the scattered cloud light (sun and ambient). 1 keeps clouds on the
+        /// sky's light scale; higher pushes them toward white.
+        /// </summary>
+        public float cloudBrightness
+        {
+            get => internal_m2n_skylight_get_cloud_brightness(owner);
+            set => internal_m2n_skylight_set_cloud_brightness(owner, value);
+        }
+
+        /// <summary>
         /// When true the layer altitudes are measured from world y = 0 (the camera can fly into
         /// and above the clouds); when false they are measured from the camera.
         /// </summary>
@@ -311,6 +321,12 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_skylight_set_cloud_shadow_strength(Entity eid, float value);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_skylight_get_cloud_brightness(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_skylight_set_cloud_brightness(Entity eid, float value);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_skylight_get_cloud_world_space_altitude(Entity eid);

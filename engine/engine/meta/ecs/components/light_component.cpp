@@ -276,6 +276,17 @@ REFLECT(skylight_component)
             entt::attribute{"tooltip", "Fraction of the view extinction applied along the sun path. Lower lets light reach deeper (brighter, softer self-shadowing)."},
             entt::attribute{"predicate", clouds_enabled_predicate_entt},
         })
+        .data<&skylight_component::set_cloud_brightness, &skylight_component::get_cloud_brightness>("cloud_brightness"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cloud_brightness"},
+            entt::attribute{"pretty_name", "Brightness"},
+            entt::attribute{"group", "Clouds"},
+            entt::attribute{"min", 0.1f},
+            entt::attribute{"max", 4.0f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"tooltip", "Multiplier on the scattered cloud light (sun and ambient). 1 keeps clouds on the sky's light scale; higher pushes them toward white."},
+            entt::attribute{"predicate", clouds_enabled_predicate_entt},
+        })
         .data<&skylight_component::set_cloud_shadows, &skylight_component::get_cloud_shadows>("cloud_shadows"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "cloud_shadows"},
@@ -391,6 +402,7 @@ SAVE(skylight_component)
     try_save(ar, ser20::make_nvp("cloud_size", obj.get_cloud_size()));
     try_save(ar, ser20::make_nvp("cloud_density", obj.get_cloud_density()));
     try_save(ar, ser20::make_nvp("cloud_shadow_strength", obj.get_cloud_shadow_strength()));
+    try_save(ar, ser20::make_nvp("cloud_brightness", obj.get_cloud_brightness()));
     try_save(ar, ser20::make_nvp("cloud_world_space_altitude", obj.get_cloud_world_space_altitude()));
     try_save(ar, ser20::make_nvp("cloud_shadows", obj.get_cloud_shadows()));
     try_save(ar, ser20::make_nvp("cloud_shadow_opacity", obj.get_cloud_shadow_opacity()));
@@ -511,6 +523,12 @@ LOAD(skylight_component)
             obj.set_cloud_shadow_strength(legacy_shadow_extinction_scale * cloud_light_absorption /
                                           math::max(cloud_absorption, 0.01f));
         }
+    }
+
+    float cloud_brightness{};
+    if(try_load(ar, ser20::make_nvp("cloud_brightness", cloud_brightness)))
+    {
+        obj.set_cloud_brightness(cloud_brightness);
     }
 
     bool cloud_world_space_altitude{true};

@@ -2633,7 +2633,7 @@ auto sync_prefab_instance(entt::handle instance) -> bool
         serialization::set_path_context(&path_ctx);
     }
 
-    APPLOG_TRACE("Syncing prefab instance: {}", source.id());
+    // APPLOG_TRACE("Syncing prefab instance: {}", source.id());
 
     // The replay cascades into the nested instances below, once the removals stated about
     // them have been re-applied - not before, from inside the load. Unless a caller deferred

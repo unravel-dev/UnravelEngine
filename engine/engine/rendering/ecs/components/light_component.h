@@ -234,6 +234,14 @@ public:
     void set_cloud_shadow_strength(float strength);
 
     /**
+     * @brief Gets the cloud brightness: multiplier on the scattered cloud radiance (sun and
+     * ambient). 1 keeps the clouds on the same light scale as the sky dome; above 1 pushes
+     * them toward white through the tonemapper.
+     */
+    auto get_cloud_brightness() const noexcept -> float;
+    void set_cloud_brightness(float brightness);
+
+    /**
      * @brief Whether the layer altitudes are measured from world y = 0 (true: the camera can
      * fly into and above the layer) or from the camera (false: the layer always floats above it).
      */
@@ -397,6 +405,8 @@ private:
     float cloud_density_{1.5f};
     /// Sun-path extinction as a fraction of the view extinction.
     float cloud_shadow_strength_{0.1f};
+    /// Multiplier on the scattered cloud radiance (1 = the shared sky light scale).
+    float cloud_brightness_{1.0f};
     /// Layer altitudes from world y = 0 (true) or from the camera (false).
     bool cloud_world_space_altitude_{true};
     /// Project the cloud layer as a shadow on the scene.

@@ -271,6 +271,16 @@ void skylight_component::set_cloud_shadow_strength(float strength)
     cloud_shadow_strength_ = math::clamp(strength, 0.02f, 1.0f);
 }
 
+auto skylight_component::get_cloud_brightness() const noexcept -> float
+{
+    return cloud_brightness_;
+}
+
+void skylight_component::set_cloud_brightness(float brightness)
+{
+    cloud_brightness_ = math::clamp(brightness, 0.1f, 4.0f);
+}
+
 auto skylight_component::get_cloud_world_space_altitude() const noexcept -> bool
 {
     return cloud_world_space_altitude_;
