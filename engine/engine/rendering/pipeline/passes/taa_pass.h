@@ -10,7 +10,9 @@ namespace unravel
 {
 
 /**
- * @brief HDR temporal anti-aliasing resolve (depth reprojection). Phase 2: optional velocity buffer.
+ * @brief HDR temporal anti-aliasing resolve. Reprojects through the velocity (motion vector)
+ * buffer when available (per-object motion, dilated at silhouettes), falling back to
+ * camera-only depth reprojection when the buffer is off or absent.
  */
 class taa_pass
 {
@@ -45,6 +47,10 @@ public:
         /// Null (first frame) falls back to the current depth, which degrades the
         /// test to a benign approximation for that frame.
         gfx::texture::ptr prev_depth;
+        /// This frame's velocity buffer, passed explicitly by the pipeline (the single
+        /// place that fetches it from the render view). A valid texture IS the enable;
+        /// null = camera-only depth reprojection.
+        gfx::texture::ptr velocity;
         settings config{};
     };
 
@@ -69,16 +75,20 @@ private:
             cache_uniform(program.get(), s_history, "s_history", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_prev_depth, "s_prev_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_taa_params, "u_taa_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_taa_params2, "u_taa_params2", gfx::uniform_type::Vec4);
         }
 
         gfx::program::uniform_ptr s_curr;
         gfx::program::uniform_ptr s_history;
         gfx::program::uniform_ptr s_depth;
         gfx::program::uniform_ptr s_prev_depth;
+        gfx::program::uniform_ptr s_velocity;
         gfx::program::uniform_ptr u_prev_view_proj;
         gfx::program::uniform_ptr u_taa_params;
+        gfx::program::uniform_ptr u_taa_params2;
         std::unique_ptr<gpu_program> program;
     } program_;
 };

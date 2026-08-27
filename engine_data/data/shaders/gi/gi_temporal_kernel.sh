@@ -53,6 +53,16 @@
 
 #include "gi/gi_constants.sh"
 
+/// Velocity buffer (full camera resolution): RG = total uv-delta (uv_curr - uv_prev,
+/// unjittered previous), BA = the OBJECT-ONLY component, split at write time inside the
+/// velocity pass. Stage 14 is the one register free in BOTH consumers - the fused form's
+/// D3D t-register space is shared between samplers AND buffers (b_gi_probes sits on t7,
+/// the SDF tables on t1-t3/t12-t13), so "free" must be judged across both. The kernel owns
+/// the declaration. Never re-derive camera velocity from matrices here and compare against
+/// this buffer - measured in this engine, the previous view-projection is NOT guaranteed
+/// identical across passes within one frame (see the velocity plan).
+SAMPLER2D(s_gi_velocity, 14);
+
 uniform mat4 u_gi_prev_view_proj;
 uniform mat4 u_gi_prev_inv_view_proj;
 
@@ -67,7 +77,10 @@ uniform vec4 u_gi_temporal_params;
 
 /// xy = one texel of this buffer, zw = its dimensions.
 uniform vec4 u_gi_temporal_texel;
+/// xyz = camera position; w = 1 when the velocity buffer is bound and should drive the
+/// history reprojection (0 = legacy matrix path).
 uniform vec4 u_gi_temporal_camera;
+#define u_gi_velocity_available (u_gi_temporal_camera.w > 0.5)
 
 /// Replaces any non-finite component. A single NaN in the history is otherwise permanent: it
 /// propagates through every subsequent blend and spreads outward through the spatial filter.
@@ -203,16 +216,32 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position,
 		out_moments = GiFreshMoments(current);
 		return;
 	}
+	// History UV: camera-consistent pixels ALWAYS use this pass's own matrix reprojection;
+	// the velocity buffer's RG drives only OBJECT-motion pixels (gated by BA, the
+	// object-only split), where it makes history FOLLOW the mover so lighting accumulates
+	// on moving geometry instead of resetting every frame. Trusting RG for camera pixels
+	// drags the whole image: the buffer's camera component is written with a previous
+	// view-projection that is not reliably this pass's own (measured; open engine issue -
+	// see the velocity plan). Same gating as the TAA resolve, where the pattern was proven.
+	float object_w = 0.0;
+	vec2 prev_uv_object = vec2_splat(0.0);
+	if(u_gi_velocity_available)
+	{
+		vec4 vel4 = texture2DLod(s_gi_velocity, uv, 0.0);
+		prev_uv_object = uv - vel4.xy;
+		vec2 vel_dim = vec2(textureSize(s_gi_velocity, 0));
+		object_w = smoothstep(0.5, 1.5, length(vel4.zw * vel_dim));
+	}
 	vec4 prev_clip4 = mul(u_gi_prev_view_proj, vec4(world_position, 1.0));
-	if(prev_clip4.w <= 0.0)
+	if(prev_clip4.w <= 0.0 && object_w < 0.5)
 	{
 		out_color = current;
 		out_fast = current;
 		out_moments = GiFreshMoments(current);
 		return;
 	}
-	vec3 prev_clip = clipTransform(prev_clip4.xyz / prev_clip4.w);
-	vec2 prev_uv = prev_clip.xy * 0.5 + 0.5;
+	vec3 prev_clip = clipTransform(prev_clip4.xyz / max(prev_clip4.w, 1e-6));
+	vec2 prev_uv = mix(prev_clip.xy * 0.5 + 0.5, prev_uv_object, object_w);
 	// Off screen last frame: clamping to the edge would smear whatever sat on the border across
 	// the whole disoccluded region.
 	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
@@ -224,25 +253,33 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position,
 	}
 	// Validate by reconstructing the world position the previous frame actually held there.
 	// Comparing WORLD positions keeps the test independent of the depth encoding and projection.
-	float prev_depth = texture2DLod(s_gi_prev_depth, prev_uv, 0.0).x;
-	if(prev_depth >= 1.0)
+	// OBJECT-MOTION pixels skip it: a mover's world position legitimately changed, so the test
+	// would reject its own valid history. Newly revealed background behind a mover is
+	// camera-consistent (object_w = 0) and keeps the full test; a mover emerging from behind an
+	// occluder can briefly accept the occluder's history, which the dual-rate change detector
+	// snaps away within the fast window.
+	if(object_w < 0.5)
 	{
-		out_color = current;
-		out_fast = current;
-		out_moments = GiFreshMoments(current);
-		return;
-	}
-	vec3 prev_clip_stored = clipTransform(vec3(prev_uv * 2.0 - 1.0, toClipSpaceDepth(prev_depth)));
-	vec3 prev_world = clipToWorld(u_gi_prev_inv_view_proj, prev_clip_stored);
-	// Tolerance scales with view distance so one value works near and far: reprojection error and
-	// depth precision both grow with distance.
-	float view_distance = max(length(world_position - u_gi_temporal_camera.xyz), 1e-4);
-	if(length(prev_world - world_position) > u_gi_depth_tolerance * view_distance)
-	{
-		out_color = current;
-		out_fast = current;
-		out_moments = GiFreshMoments(current);
-		return;
+		float prev_depth = texture2DLod(s_gi_prev_depth, prev_uv, 0.0).x;
+		if(prev_depth >= 1.0)
+		{
+			out_color = current;
+			out_fast = current;
+			out_moments = GiFreshMoments(current);
+			return;
+		}
+		vec3 prev_clip_stored = clipTransform(vec3(prev_uv * 2.0 - 1.0, toClipSpaceDepth(prev_depth)));
+		vec3 prev_world = clipToWorld(u_gi_prev_inv_view_proj, prev_clip_stored);
+		// Tolerance scales with view distance so one value works near and far: reprojection error and
+		// depth precision both grow with distance.
+		float view_distance = max(length(world_position - u_gi_temporal_camera.xyz), 1e-4);
+		if(length(prev_world - world_position) > u_gi_depth_tolerance * view_distance)
+		{
+			out_color = current;
+			out_fast = current;
+			out_moments = GiFreshMoments(current);
+			return;
+		}
 	}
 	// The normal agreement test that used to sit here is gone, and deliberately.
 	//

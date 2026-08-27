@@ -650,6 +650,15 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     gfx::set_texture(temporal_program_.s_gi_history_fast,
                                      12,
                                      history.has_history ? history.read_fast : black);
+                    // This frame's velocity buffer, passed explicitly by the pipeline (a
+                    // valid texture IS the enable). Stage 14 - the only register free of
+                    // both the fused sampler map and its t-register buffers; black stands
+                    // in when absent - the kernel's flag keeps it unread then.
+                    const bool use_velocity = params.velocity != nullptr;
+                    gfx::set_texture(temporal_program_.s_gi_velocity,
+                                     14,
+                                     use_velocity ? params.velocity : black,
+                                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
                     // The TAA-unjittered previous pair, matching the unjittered current
                     // reconstruction above - a still camera must reproject onto itself.
                     const auto prev_view_proj = params.cam->get_taa_prev_view_projection();
@@ -684,7 +693,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     const float temporal_camera[4] = {camera_position.x,
                                                       camera_position.y,
                                                       camera_position.z,
-                                                      0.0f};
+                                                      use_velocity ? 1.0f : 0.0f};
                     gfx::set_uniform(temporal_program_.u_gi_temporal_camera, temporal_camera);
                 }
                 auto topology = gfx::clip_quad(1.0f);
@@ -947,6 +956,14 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
     gfx::set_texture(temporal_program_.s_gi_history_fast,
                      6,
                      has_history ? history.read_fast : current);
+    // This frame's velocity buffer, passed explicitly by the pipeline (a valid texture IS
+    // the enable). Stage 14, matching the kernel declaration - see the t-register note
+    // there; the current gather stands in when absent - the kernel's flag keeps it unread.
+    const bool use_velocity = params.velocity != nullptr;
+    gfx::set_texture(temporal_program_.s_gi_velocity,
+                     14,
+                     use_velocity ? params.velocity : current,
+                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     // get_matrix(), NOT the address of the transform: math::transform is a class with its own
     // members, so handing its address to a mat4 uniform uploads whatever happens to sit in the
     // first 64 bytes. The shader then reprojects to nonsense and rejects every pixel's history,
@@ -975,7 +992,10 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
                                      float(target_size.height)};
     gfx::set_uniform(temporal_program_.u_gi_temporal_texel, temporal_texel);
     const auto camera_position = params.cam->get_position();
-    const float temporal_camera[4] = {camera_position.x, camera_position.y, camera_position.z, 0.0f};
+    const float temporal_camera[4] = {camera_position.x,
+                                      camera_position.y,
+                                      camera_position.z,
+                                      use_velocity ? 1.0f : 0.0f};
     gfx::set_uniform(temporal_program_.u_gi_temporal_camera, temporal_camera);
     auto temporal_topology = gfx::clip_quad(1.0f);
     gfx::set_state(temporal_topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB |

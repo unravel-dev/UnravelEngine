@@ -836,6 +836,13 @@ void model::submit(const math::mat4& world_transform,
 
                             const auto [sm, sm_lod] = resolve(static_cast<uint32_t>(index), *transform, i);
                             gfx::set_world_transform(*transform);
+                            if(extras.prev_submesh_transforms != nullptr)
+                            {
+                                const auto* prev_transform =
+                                    extras.prev_submesh_transforms->get_transform(static_cast<uint32_t>(index), i);
+                                gfx::set_prev_world_transform(prev_transform != nullptr ? *prev_transform
+                                                                                        : *transform);
+                            }
                             mesh->bind_render_buffers_for_submesh(sm, sm_lod);
                             params.preserve_state = (&index != &indices.back());
                             callbacks.setup_params_per_submesh(params, *mat);
@@ -851,6 +858,10 @@ void model::submit(const math::mat4& world_transform,
 
                     const auto [sm, sm_lod] = resolve(static_cast<uint32_t>(index), matrix, 0);
                     gfx::set_world_transform(matrix);
+                    if(extras.prev_world_transform != nullptr)
+                    {
+                        gfx::set_prev_world_transform(*extras.prev_world_transform);
+                    }
                     mesh->bind_render_buffers_for_submesh(sm, sm_lod);
                     params.preserve_state = &index != &indices.back();
                     callbacks.setup_params_per_submesh(params, *mat);
@@ -966,6 +977,15 @@ void model::submit(const math::mat4& world_transform,
                     }
 
                     gfx::set_world_transform(submesh_skinning_transforms.transforms);
+                    if(extras.prev_skinning_transforms != nullptr)
+                    {
+                        const auto& prev_all = *extras.prev_skinning_transforms;
+                        const bool has_matching_prev =
+                            index < prev_all.size() &&
+                            prev_all[index].transforms.size() == submesh_skinning_transforms.transforms.size();
+                        gfx::set_prev_world_transform(has_matching_prev ? prev_all[index].transforms
+                                                                        : submesh_skinning_transforms.transforms);
+                    }
 
                     mesh->bind_render_buffers_for_submesh(sm, sm_lod);
                     params.preserve_state = &index != &indices.back();

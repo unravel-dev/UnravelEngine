@@ -396,7 +396,7 @@ auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_para
 
     // Pass 2: Temporal Resolve - reads (denoised) SSR_CURR + SSR_HIST, writes new SSR_HIST
     auto ssr_history_fb =
-        run_temporal_resolve(rview, temporal_input_fb, params.g_buffer, params.cam, params.settings.fidelityfx);
+        run_temporal_resolve(rview, temporal_input_fb, params.g_buffer, params.velocity, params.cam, params.settings.fidelityfx);
     if(!ssr_history_fb)
     {
         gfx::render_pass::pop_scope();
@@ -495,8 +495,10 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
     };
     gfx::set_uniform(fidelityfx_pixel_program_.u_cone_params, cone_params);
 
-    // Set previous frame view-projection matrix for temporal reprojection
-    auto prev_view_proj = params.cam->get_prev_view_projection();
+    // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered prev
+    // misaligns a still camera's reprojection by the jitter delta every frame (the GI
+    // reflection chain's measured lesson; every temporal consumer now shares this chain).
+    auto prev_view_proj = params.cam->get_taa_prev_view_projection();
     gfx::set_uniform(fidelityfx_pixel_program_.u_prev_view_proj, prev_view_proj.get_matrix());
 
     uint64_t topology = gfx::clip_fullscreen_triangle(1.0f);
@@ -518,6 +520,7 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
 auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
                                     const gfx::frame_buffer::ptr& ssr_curr,
                                     const gfx::frame_buffer::ptr& g_buffer,
+                                    const gfx::texture::ptr& velocity,
                                     const camera* cam,
                                     const fidelityfx_ssr_settings& settings) -> gfx::frame_buffer::ptr
 {
@@ -559,6 +562,14 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     gfx::set_texture(temporal_resolve_program_.s_normal, 2, g_buffer->get_texture(1));
     gfx::set_texture(temporal_resolve_program_.s_depth, 3, g_buffer->get_texture(4));
 
+    // The velocity buffer arrives explicitly from the pipeline; a valid texture IS the
+    // enable. Depth stands in as an inert placeholder so the sampler slot is always bound.
+    const bool use_velocity = velocity != nullptr;
+    gfx::set_texture(temporal_resolve_program_.s_velocity,
+                     4,
+                     use_velocity ? velocity : g_buffer->get_texture(4),
+                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+
     // Set temporal parameters (enable_temporal, history_strength, depth_threshold, roughness_sensitivity)
     float temporal_params[4] = {settings.enable_temporal_accumulation ? 1.0f : 0.0f,
                                 settings.temporal.history_strength,
@@ -566,12 +577,12 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
                                 settings.temporal.roughness_sensitivity};
     gfx::set_uniform(temporal_resolve_program_.u_temporal_params, temporal_params);
 
-    // Set motion parameters (motion_scale_pixels, normal_dot_threshold, max_accum_frames, unused)
+    // Set motion parameters (motion_scale_pixels, normal_dot_threshold, max_accum_frames, velocity flag)
     float motion_params[4] = {
         settings.temporal.motion_scale_pixels,
         settings.temporal.normal_dot_threshold,
         float(settings.temporal.max_accum_frames),
-        0.0f // unused
+        use_velocity ? 1.0f : 0.0f
     };
     gfx::set_uniform(temporal_resolve_program_.u_motion_params, motion_params);
 
@@ -584,8 +595,9 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     float fade_params[4] = {settings.fade_in_start, settings.fade_in_end, ssr_scale_x, ssr_scale_y};
     gfx::set_uniform(temporal_resolve_program_.u_fade_params, fade_params);
 
-    // Set previous frame view-projection matrix
-    auto prev_view_proj = cam->get_prev_view_projection();
+    // The TAA-unjittered previous pair (see the trace-side comment); keeps the legacy
+    // camera-pixel path jitter-aligned with the velocity buffer's convention.
+    auto prev_view_proj = cam->get_taa_prev_view_projection();
     gfx::set_uniform(temporal_resolve_program_.u_prev_view_proj, prev_view_proj.get_matrix());
 
     // Draw fullscreen quad

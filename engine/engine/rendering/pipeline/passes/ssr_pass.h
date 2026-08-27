@@ -84,6 +84,9 @@ public:
         gfx::frame_buffer::ptr g_buffer;     ///< G-buffer containing normals
         gfx::texture::ptr hiz_buffer;        ///< Hi-Z buffer texture
         gfx::texture::ptr previous_frame;    ///< Previous frame color for reflection sampling
+        /// This frame's velocity buffer, passed explicitly by the pipeline. A valid
+        /// texture IS the enable; null = legacy matrix reprojection.
+        gfx::texture::ptr velocity;
         const camera* cam{};
         ssr_settings settings;
     };
@@ -107,9 +110,11 @@ public:
     auto run_ssr_trace(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 
     /// Executes the temporal resolve pass. Returns updated SSR history buffer.
-    auto run_temporal_resolve(gfx::render_view& rview, 
+    /// @param velocity This frame's velocity buffer; null = legacy matrix reprojection.
+    auto run_temporal_resolve(gfx::render_view& rview,
                               const gfx::frame_buffer::ptr& ssr_curr,
                               const gfx::frame_buffer::ptr& g_buffer,
+                              const gfx::texture::ptr& velocity,
                               const camera* cam,
                               const fidelityfx_ssr_settings& settings) -> gfx::frame_buffer::ptr;
 
@@ -210,6 +215,7 @@ private:
         gfx::program::uniform_ptr s_ssr_history;      // Previous frame SSR history
         gfx::program::uniform_ptr s_normal;           // Normal buffer
         gfx::program::uniform_ptr s_depth;            // Depth buffer
+        gfx::program::uniform_ptr s_velocity;         // Velocity buffer (RG total, BA object-only)
 
         void cache_uniforms()
         {
@@ -221,6 +227,7 @@ private:
             cache_uniform(program.get(), s_ssr_history, "s_ssr_history", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
         }
         
         auto is_valid() const -> bool

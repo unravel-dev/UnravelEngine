@@ -54,6 +54,9 @@ public:
         /// Temporal window in frames for the stochastic ray; <= 1 bypasses the accumulation
         /// (raw passthrough) - the A/B knob for verifying the temporal is alive.
         int temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
+        /// This frame's velocity buffer, passed explicitly by the pipeline. A valid texture
+        /// IS the enable; null = legacy matrix reprojection of the receiver.
+        gfx::texture::ptr velocity;
         /// Trace + accumulation resolution, the SAME knob the whole gather runs at
         /// (gi_resolve_pass::settings::resolution, default half): the composite's edge-stopped
         /// 3x3 kernel reconstructs full resolution as a joint bilateral upsample, so below-full
@@ -225,9 +228,11 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_gi_refl_prev_view_proj;
         gfx::program::uniform_ptr u_gi_refl_temporal;
+        gfx::program::uniform_ptr u_gi_refl_velocity;
         gfx::program::uniform_ptr s_refl_raw;
         gfx::program::uniform_ptr s_refl_history;
         gfx::program::uniform_ptr s_refl_depth;
+        gfx::program::uniform_ptr s_refl_velocity;
 
         void cache_uniforms()
         {
@@ -236,9 +241,11 @@ private:
                           "u_gi_refl_prev_view_proj",
                           gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_gi_refl_temporal, "u_gi_refl_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_refl_velocity, "u_gi_refl_velocity", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_refl_raw, "s_refl_raw", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_refl_history, "s_refl_history", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_refl_depth, "s_refl_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_refl_velocity, "s_refl_velocity", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool

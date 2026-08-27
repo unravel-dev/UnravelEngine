@@ -44,6 +44,7 @@ struct context_data
     uint32_t frame{};
 
     uniform_handle u_world{gfx::invalid_handle};
+    uniform_handle u_prev_world{gfx::invalid_handle};
     texture_handle fallback_texture{gfx::invalid_handle};
     allocation_failure_policy allocation_policy = allocation_failure_policy::skip_with_fallback;
 
@@ -346,6 +347,7 @@ void shutdown()
         }
         deinit_uniform_cache();
         bgfx::destroy(s_context.u_world);
+        bgfx::destroy(s_context.u_prev_world);
         bgfx::shutdown();
     }
     s_context = {};
@@ -392,6 +394,7 @@ bool init(init_type init_data)
     s_context.frame = 0;
     s_context.initted = bgfx::init(init_data);
     s_context.u_world = create_uniform("u_world", bgfx::UniformType::Mat4, get_max_blend_transforms());
+    s_context.u_prev_world = create_uniform("u_prev_world", bgfx::UniformType::Mat4, get_max_blend_transforms());
 
     bgfx::frame();
     // Initialize after the first frame so the backend has reported its GPU memory budget.
@@ -1675,6 +1678,11 @@ uint32_t get_render_frame()
 void set_world_transform(const void* _mtx, uint16_t _num)
 {
     bgfx::setUniform(s_context.u_world, _mtx, _num);
+}
+
+void set_prev_world_transform(const void* _mtx, uint16_t _num)
+{
+    bgfx::setUniform(s_context.u_prev_world, _mtx, _num);
 }
 
 

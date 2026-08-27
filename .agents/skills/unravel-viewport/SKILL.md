@@ -24,6 +24,7 @@ World axes match entities: **X-right, Y-up, Z-forward**. Camera `position` / `lo
 | `viewport_orbit_camera` | Orbit around `pivot` by `yaw`/`pitch` degrees |
 | `viewport_reset_camera` | UI "Reset Camera" parity |
 | `viewport_capture_scene` / `viewport_capture_game` | PNG capture; `wait_ms` (default 500), `scale` (default 1, bimg linear resize) |
+| `viewport_set_debug_view` | Set Scene panel debug visualization: `mode` = name (`"full"`, `"base_color"`, `"normals"`, `"depth"`, `"velocity"`, `"sdf_normals"`, ...) or raw id (-1..29); returns applied + previous mode |
 | `panel_focus_scene` | Focus Scene panel tab (editing camera) |
 | `panel_focus_game` | Focus Game panel tab (game camera) |
 

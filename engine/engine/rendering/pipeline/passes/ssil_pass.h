@@ -102,6 +102,9 @@ public:
         gfx::texture::ptr direct_lighting;
         gfx::texture::ptr prev_depth;
         gfx::texture::ptr prev_ssil;
+        /// This frame's velocity buffer, passed explicitly by the pipeline. A valid
+        /// texture IS the enable; null = legacy matrix reprojection.
+        gfx::texture::ptr velocity;
         /// Environment SH coefficients (9x3 R32F); sampled per ray as the miss fallback so
         /// the trace integrates the environment where it escapes on-screen geometry. May be
         /// null on the first frame, in which case the fallback is disabled (misses = 0).
@@ -145,6 +148,7 @@ private:
                               gfx::frame_buffer::ptr ssil_input,
                               const gfx::frame_buffer::ptr& g_buffer,
                               const gfx::texture::ptr& prev_depth,
+                              const gfx::texture::ptr& velocity,
                               const camera* cam,
                               const ssil_settings& settings,
                               gfx::frame_buffer::ptr& out_result_fb,
@@ -290,6 +294,8 @@ private:
         gfx::program::uniform_ptr s_ssil_moments_history;
         /// Full-res G-buffer normal. Used for the normal-validity disocclusion gate.
         gfx::program::uniform_ptr s_normal;
+        /// Velocity buffer (RG total uv-delta, BA object-only component).
+        gfx::program::uniform_ptr s_velocity;
 
         void cache_uniforms()
         {
@@ -303,6 +309,7 @@ private:
             cache_uniform(program.get(), s_prev_depth, "s_prev_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_ssil_moments_history, "s_ssil_moments_history", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool { return program && program->is_valid(); }

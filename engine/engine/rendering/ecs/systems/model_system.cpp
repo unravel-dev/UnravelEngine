@@ -94,6 +94,20 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                           model_comp.set_last_render_frame(frame);
                       }
 
+                      auto& transform_comp = view.get<transform_component>(entity);
+
+                      // Velocity (motion vector) state: consume the transform dirty bit and
+                      // promote the previous-frame snapshot BEFORE update_armature overwrites
+                      // the pose caches (they still hold last frame's values here). The call
+                      // is frame-stamped internally and no-ops entirely while no pipeline
+                      // requests velocity recording.
+                      const bool transform_moved =
+                          transform_comp.is_dirty(transform_component::dirty_ids::velocity);
+                      transform_comp.set_dirty(transform_component::dirty_ids::velocity, false);
+                      model_comp.record_velocity_state(frame,
+                                                       transform_comp.get_transform_global().get_matrix(),
+                                                       transform_moved);
+
                       // Refresh pose-derived render data (submesh/bone poses, cached proxy
                       // bounds, skinning palettes) before world bounds are computed. This is
                       // change-driven, not visibility-driven: update_armature early-outs when
@@ -102,9 +116,11 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                       // re-enter the frustum correctly. (Skipping animation work for culled
                       // models is the animation system's job via its renderer-based culling
                       // mode, which freezes the transforms and thus also skips this refresh.)
-                      model_comp.update_armature();
+                      const bool pose_refreshed = model_comp.update_armature();
+                      // Node/bone animation moves submeshes without touching the owner
+                      // transform; a pose refresh that actually ran is motion evidence.
+                      model_comp.mark_motion(pose_refreshed);
 
-                      auto& transform_comp = view.get<transform_component>(entity);
                       model_comp.update_world_bounds(transform_comp.get_transform_global());
                   });
 

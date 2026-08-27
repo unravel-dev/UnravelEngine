@@ -243,6 +243,13 @@ void set_world_transform(const math::transform& matrix);
 void set_transform(const math::transform& matrix);
 
 /**
+ * @brief Previous-frame counterparts of set_world_transform (uniform u_prev_world), used by
+ * the velocity (motion vector) pass to deliver last frame's world matrix / bone palette.
+ */
+void set_prev_world_transform(const std::vector<math::transform::mat4_t>& matrices);
+void set_prev_world_transform(const math::transform::mat4_t& matrix);
+
+/**
  * @brief Sets the texture for a specific stage using a frame buffer.
  *
  * @param uniform The uniform pointer.

@@ -109,6 +109,14 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
                      3,
                      params.prev_depth ? params.prev_depth : params.g_buffer->get_texture(4),
                      k_taa_sampler_flags);
+    // Reproject through the velocity buffer when the pipeline passed one; a valid texture
+    // IS the enable. The depth texture stands in as an inert placeholder so the sampler
+    // slot is always bound (never read with the flag at 0).
+    const bool use_velocity = params.velocity != nullptr;
+    gfx::set_texture(program_.s_velocity,
+                     4,
+                     use_velocity ? params.velocity : params.g_buffer->get_texture(4),
+                     k_taa_sampler_flags);
 
     const auto prev_vp = params.cam->get_taa_prev_view_projection();
     gfx::set_uniform(program_.u_prev_view_proj, prev_vp.get_matrix());
@@ -118,6 +126,9 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
                                  params.config.depth_reject_scale,
                                  params.config.variance_clip_scale};
     gfx::set_uniform(program_.u_taa_params, taa_params);
+
+    const float taa_params2[4] = {use_velocity ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(program_.u_taa_params2, taa_params2);
 
     const auto topology = gfx::clip_quad(1.0f);
     gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);

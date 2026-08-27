@@ -127,6 +127,11 @@ public:
         /// Previous frame's depth, used to validate reprojected history. Null disables temporal
         /// accumulation for this frame rather than accepting history blindly.
         gfx::texture::ptr prev_depth;
+        /// This frame's velocity buffer, passed explicitly by the pipeline. A valid texture
+        /// IS the enable: history reprojects through it and FOLLOWS moving receivers (the
+        /// world-position test is skipped for them; the dual-rate change detector owns
+        /// rejection there). Null = legacy matrix reprojection.
+        gfx::texture::ptr velocity;
         /// The frame's Hi-Z depth pyramid (shared with SSR/SSIL). When present the gather's
         /// screen-trace tier runs; null falls back to pure SDF tracing with the raw G-buffer
         /// depth bound in its place.
@@ -534,11 +539,13 @@ private:
         gfx::program::uniform_ptr s_gi_normal;
         gfx::program::uniform_ptr s_gi_history_moments;
         gfx::program::uniform_ptr s_gi_history_fast;
+        gfx::program::uniform_ptr s_gi_velocity;
         gfx::program::uniform_ptr u_gi_temporal_texel;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_gi_temporal_clamp, "u_gi_temporal_clamp", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_gi_velocity, "s_gi_velocity", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_gi_prev_inv_view_proj, "u_gi_prev_inv_view_proj",
                           gfx::uniform_type::Mat4);

@@ -7,6 +7,7 @@ SAMPLER2D(s_curr, 0);
 SAMPLER2D(s_history, 1);
 SAMPLER2D(s_depth, 2);
 SAMPLER2D(s_prev_depth, 3);
+SAMPLER2D(s_velocity, 4);
 
 uniform mat4 u_prev_view_proj;
 
@@ -15,6 +16,11 @@ uniform vec4 u_taa_params;
 #define u_sharpen              u_taa_params.y
 #define u_depth_reject_scale   u_taa_params.z
 #define u_variance_clip_scale  u_taa_params.w
+
+uniform vec4 u_taa_params2;
+// 1 = reproject through the velocity buffer (uv - velocity); 0 = legacy depth reprojection.
+#define u_use_velocity         u_taa_params2.x
+
 
 // YCoCg: chroma bounds are much tighter than RGB's, so a variance box built there
 // rejects colored ghosting an RGB box lets through.
@@ -96,6 +102,7 @@ float TAA_LinearViewDepthFrom01(float depth01)
     return screenSpaceToViewSpaceDepth(depth01);
 }
 
+
 void main()
 {
     vec2 uv = v_texcoord0;
@@ -109,8 +116,71 @@ void main()
 
     float depth_edge = max(abs(dFdx(depth01)), abs(dFdy(depth01)));
 
+    // Camera-only reprojection: the fallback history UV, the expected previous depth for
+    // the disocclusion test, and - in velocity mode - the reference that separates object
+    // motion from camera motion.
     vec3 prev_pos = TAA_PreviousScreenPos(uv, depth01);
     vec2 prev_uv = prev_pos.xy;
+
+    // How much of this pixel's motion the camera CANNOT explain (in pixels). Stays 0 on
+    // the legacy path and for camera-consistent pixels in velocity mode.
+    float object_motion_w = 0.0;
+    if(u_use_velocity > 0.5)
+    {
+        // Closest-depth dilation source: the nearest (smallest depth01) texel in the 3x3
+        // neighborhood, so a MOVER's anti-aliased silhouette reprojects with the object.
+        // Deliberately inlined: an out-parameter helper for this loop miscompiled on the
+        // HLSL path (garbage src_t/src_depth), which reprojected the whole frame by one
+        // border texel's velocity - a full-screen history drag under camera motion.
+        ivec2 src_t = tcent;
+        float src_depth = depth01;
+        for(int y = -1; y <= 1; ++y)
+        {
+            for(int x = -1; x <= 1; ++x)
+            {
+                ivec2 t = clamp(tcent + ivec2(x, y), ivec2(0, 0), ddim - ivec2(1, 1));
+                float d = texelFetch(s_depth, t, 0).x;
+                if(d < src_depth)
+                {
+                    src_depth = d;
+                    src_t = t;
+                }
+            }
+        }
+        // Dilation affinity: adopt the closest neighbor's velocity only when this pixel
+        // plausibly belongs to the same surface (linear depths within 5%). Without this,
+        // every pixel within 1px of a MOVING surface - its whole background rim, and every
+        // hole of a dithered (screen-door) surface - adopts the mover's velocity with the
+        // depth test disabled below: a bright halo band around slow movers and wrong
+        // reprojection across dithered interiors. Background-depth pixels keep their own
+        // velocity texel (camera motion), full depth test and edge damping included; the
+        // mover's own texels (interior + the AA texels whose depth the mover wrote) still
+        // reproject with the mover.
+        float z_center_aff = abs(TAA_LinearViewDepthFrom01(depth01));
+        float z_src_aff = abs(TAA_LinearViewDepthFrom01(src_depth));
+        if(abs(z_center_aff - z_src_aff) > 0.05 * max(z_center_aff, z_src_aff))
+        {
+            src_t = tcent;
+            src_depth = depth01;
+        }
+        vec4 vel4 = texelFetch(s_velocity, src_t, 0);
+        vec2 vel = vel4.xy;
+        // BA of the velocity buffer is the OBJECT-ONLY component, split inside the
+        // velocity pass itself with one consistent matrix set (fs_velocity.sc). It is
+        // exactly zero for every camera-derived pixel, so the static world takes the
+        // legacy path below unconditionally - no matrices are re-derived here, and no
+        // cross-pass matrix consistency is assumed (measured in this engine: the same
+        // camera getter did NOT return the same previous view-projection to the velocity
+        // pass and to this pass within one frame; classification through a recomputed
+        // camera velocity therefore misfired screen-wide).
+        float object_px = length(vel4.zw * ddimf);
+        object_motion_w = smoothstep(0.5, 1.5, object_px);
+        // Genuine object motion reprojects through the dilated velocity (silhouette
+        // band included). Camera-only pixels keep the center-depth camera reprojection:
+        // exact for them (dither interiors and static silhouettes included), and it
+        // keeps the expected-previous-depth disocclusion test meaningful.
+        prev_uv = mix(prev_pos.xy, uv - vel, object_motion_w);
+    }
 
     vec4 curr = texture2D(s_curr, uv);
 
@@ -139,12 +209,21 @@ void main()
     float depth_diff = abs(z_expected - z_stored) / max(1.0, z_expected);
     float depth_ok = 1.0 - smoothstep(0.001, 0.035 * max(0.25, u_depth_reject_scale), depth_diff);
 
-    // Depth-edge history damping. This is an anti-ghosting lever for moving objects
-    // (no motion vectors), but silhouettes are also exactly where jitter accumulation
-    // is needed; the working reprojection + prev-depth disocclusion test above now
-    // catch most real mismatches, so the floor stays moderate instead of aggressive.
+    // The expected previous depth comes from the camera-only reprojection, so the test is
+    // only meaningful where the pixel's true motion agrees with it. For object-motion
+    // pixels (velocity mode) the surface's previous depth is unknowable here - neutralize
+    // the test and let the variance clip own history rejection for them.
+    depth_ok = mix(depth_ok, 1.0, object_motion_w);
+
+    // Depth-edge history damping. The floor masks TWO things: mover ghosting (which the
+    // velocity path genuinely fixes) and bilinear history bleed across depth edges under
+    // CAMERA motion (which velocity does nothing for - those pixels reproject exactly as
+    // before). So it is retired only for object-motion pixels; camera-consistent edges -
+    // static silhouettes and dithered-transparency interiors, which are depth edges at
+    // every pixel - keep the legacy damping. Retiring it globally in velocity mode put a
+    // bright halo on static edges and shimmer inside dither under camera motion.
     float silhouette = 1.0 - smoothstep(0.0, 0.02, depth_edge);
-    float edge_blend = mix(0.6, 1.0, silhouette);
+    float edge_blend = mix(mix(0.6, 1.0, silhouette), 1.0, object_motion_w);
 
     float k = max(0.75, u_variance_clip_scale);
     // RGB mean/min/max feed the sharpen path below; the variance box for history

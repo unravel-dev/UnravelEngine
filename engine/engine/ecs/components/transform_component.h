@@ -78,6 +78,11 @@ public:
             /// from model_pose: an entity can be an armature node of one model and the owner
             /// of another, and the two refreshes run in parallel.
             model_owner_pose = 3,
+            /// Velocity (motion vector) mover detection: consumed once per render frame by
+            /// model_system's before-render promotion (model_component::record_velocity_state).
+            /// A set bit means the world transform changed since the last consumption, so the
+            /// entity is drawn into the velocity buffer with per-object motion this frame.
+            velocity = 4,
         };
     };
     /**

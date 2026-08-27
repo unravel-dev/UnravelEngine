@@ -3,6 +3,7 @@
 #include <engine/ecs/components/basic_component.h>
 #include <engine/rendering/model.h>
 #include <engine/rendering/render_proxy.h>
+#include <atomic>
 #include <unordered_map>
 namespace unravel
 {
@@ -185,6 +186,37 @@ public:
     auto get_last_render_frame() const noexcept -> uint64_t;
     auto was_used_last_frame() const noexcept -> bool;
 
+    /**
+     * @brief Global request window for velocity (motion vector) state recording. The deferred
+     * pipeline requests recording on every camera run that produces the velocity buffer;
+     * recording decays two frames after the last request, so the feature-off CPU cost is zero.
+     */
+    static void request_velocity_recording(uint32_t frame);
+    static auto is_velocity_recording_active(uint32_t frame) -> bool;
+
+    /**
+     * @brief Promotes the previous-frame motion state (world matrix, submesh pose, skinning
+     * palettes) exactly once per render frame. Must run BEFORE update_armature refreshes the
+     * pose caches (the caches still hold last frame's values at that point). Guarded against
+     * the editor's multiple before-render invocations per frame (scene + game panels,
+     * thumbnails) by a render-frame stamp.
+     * @param transform_moved The consumed transform_component velocity dirty bit.
+     */
+    void record_velocity_state(uint32_t frame, const math::mat4& current_world, bool transform_moved);
+
+    /**
+     * @brief ORs additional motion evidence into this frame's mover flag (e.g. an armature
+     * pose refresh that ran without the owner transform changing). Safe to call repeatedly.
+     */
+    void mark_motion(bool moved);
+
+    /// True when this model moved since the last rendered frame (or is skinned) and should be
+    /// drawn into the velocity buffer with per-object motion.
+    auto has_motion() const -> bool;
+    auto get_prev_world_transform() const -> const math::mat4&;
+    auto get_prev_submesh_transforms() const -> const submesh_pose_mat4&;
+    auto get_prev_skinning_transforms() const -> const std::vector<pose_mat4>&;
+
     auto is_skinned() const -> bool;
     auto get_bind_pose() const -> const animation_pose&;
 
@@ -351,6 +383,30 @@ private:
      * Automatically cleaned up when cameras become stale.
      */
     std::unordered_map<uintptr_t, per_camera_lod_state> per_camera_lod_data_;
+
+    /**
+     * @brief Velocity (motion vector) state: what the PREVIOUS frame rendered with.
+     * prev_world_/prev_submesh_pose_/prev_skinning_pose_ feed u_prev_world in the velocity
+     * pass; recorded_world_ is the two-slot staging for the world matrix (transforms are
+     * already this frame's value at promotion time, unlike the pose caches).
+     */
+    math::mat4 prev_world_{1.0f};
+    math::mat4 recorded_world_{1.0f};
+    submesh_pose_mat4 prev_submesh_pose_;
+    std::vector<pose_mat4> prev_skinning_pose_;
+
+    /// Render frame of the last velocity promotion (multi-invoke guard).
+    uint32_t velocity_state_frame_{0};
+
+    /// False until the first promotion after (re-)enabling recording: the first frame uses
+    /// prev = current so a spawn/stream-in never claims bogus motion.
+    bool velocity_initialized_{false};
+
+    /// This model moved since the last rendered frame (or is skinned).
+    bool has_motion_{false};
+
+    /// Last render frame (+1, 0 = never) any pipeline requested velocity recording for.
+    static std::atomic<uint32_t> velocity_recording_request_frame_;
 };
 
 struct bone_component : public component_crtp<bone_component>

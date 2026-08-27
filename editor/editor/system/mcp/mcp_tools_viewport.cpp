@@ -4,6 +4,7 @@
 #include <editor/hub/hub.h>
 #include <editor/hub/panels/panel.h>
 #include <editor/hub/panels/scene_panel/scene_panel.h>
+#include <editor/hub/panels/visualization_modes.h>
 #include <editor/system/mcp_manager.h>
 
 #include <editor/editing/editing_manager.h>
@@ -23,6 +24,26 @@ namespace
 auto resolve_scene_panel(rtti::context& ctx) -> scene_panel&
 {
     return ctx.get_cached<hub>().get_panels().get_scene_panel();
+}
+
+auto debug_view_name_for_value(int value) -> const char*
+{
+    const auto* entry = find_visualization_mode(value);
+    return entry != nullptr ? entry->name : "unknown";
+}
+
+auto list_debug_view_names() -> std::string
+{
+    std::string names;
+    for(const auto& entry : get_visualization_modes())
+    {
+        if(!names.empty())
+        {
+            names += ", ";
+        }
+        names += entry.name;
+    }
+    return names;
 }
 
 auto resolve_scene_camera(rtti::context& ctx, std::string& error) -> entt::handle
@@ -478,6 +499,67 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  return {.text = error, .is_error = true};
              }
              return {.text = R"({"ok":true})", .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "viewport_set_debug_view",
+         .description = "Set the Scene panel debug visualization mode. Pass mode as a name string "
+                        "(e.g. \"full\", \"base_color\", \"normals\", \"depth\", \"velocity\", "
+                        "\"sdf_normals\") or as the raw integer id (-1..29). \"full\" (-1) restores "
+                        "the normal render. Returns the applied mode.",
+         .input_schema_json = R"({"type":"object","properties":{"mode":{"description":"Mode name or raw integer id"}},"required":["mode"]})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             int mode_value = 0;
+             bool resolved = false;
+
+             std::string_view mode_name;
+             int64_t mode_int = 0;
+             if(args["mode"].get(mode_name) == simdjson::SUCCESS)
+             {
+                 const auto* entry = find_visualization_mode(mode_name);
+                 if(entry == nullptr)
+                 {
+                     return {.text = fmt::format("Unknown debug view \"{}\". Valid modes: {}",
+                                                 mode_name,
+                                                 list_debug_view_names()),
+                             .is_error = true};
+                 }
+                 mode_value = static_cast<int>(entry->mode);
+                 resolved = true;
+             }
+             else if(args["mode"].get(mode_int) == simdjson::SUCCESS)
+             {
+                 const auto* entry = find_visualization_mode(static_cast<int>(mode_int));
+                 if(entry == nullptr)
+                 {
+                     return {.text = fmt::format("Debug view id {} out of range. Valid modes: {}",
+                                                 mode_int,
+                                                 list_debug_view_names()),
+                             .is_error = true};
+                 }
+                 mode_value = static_cast<int>(entry->mode);
+                 resolved = true;
+             }
+
+             if(!resolved)
+             {
+                 return {.text = "Missing or invalid \"mode\" (string name or integer id expected)",
+                         .is_error = true};
+             }
+
+             auto& panel = resolve_scene_panel(ctx);
+             const int previous = panel.get_visualization_mode();
+             panel.set_visualization_mode(mode_value);
+
+             return {.text = fmt::format(R"({{"ok":true,"mode":{},"name":"{}","previous":{},"previous_name":"{}"}})",
+                                         mode_value,
+                                         debug_view_name_for_value(mode_value),
+                                         previous,
+                                         debug_view_name_for_value(previous)),
+                     .is_error = false};
          },
          .mutates_scene = false});
 }

@@ -266,6 +266,16 @@ struct model_submit_extras
     /// True when submitting into a shadow pass. Instances flagged as not casting shadows
     /// (see submesh_pose_mat4::transform_index::casts_shadow) are skipped.
     bool shadow_pass{false};
+
+    /// Velocity pass only: previous-frame transforms mirrored from the current ones. When set,
+    /// the submit path uploads the matching previous transform via gfx::set_prev_world_transform
+    /// (uniform u_prev_world) next to every u_world upload. A missing or size-mismatched prev
+    /// lookup (armature rebuilt, palette resized) falls back to the CURRENT transform, which
+    /// degrades that draw to zero object velocity instead of producing a bogus one. Null
+    /// pointers (every non-velocity pass) skip the extra uploads entirely.
+    const math::mat4* prev_world_transform{nullptr};
+    const submesh_pose_mat4* prev_submesh_transforms{nullptr};
+    const std::vector<pose_mat4>* prev_skinning_transforms{nullptr};
 };
 /**
  * @class model

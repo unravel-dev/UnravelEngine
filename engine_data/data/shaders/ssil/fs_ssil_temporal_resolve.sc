@@ -24,6 +24,9 @@ SAMPLER2D(s_ssil_moments_history, 4);
 // reprojection landing on a different surface (rotated geometry, animated foliage) but
 // not the rarer case of the same surface being re-shaded with a different normal.
 SAMPLER2D(s_normal, 5);
+// Velocity buffer: RG = total uv-delta (uv_curr - uv_prev, unjittered prev), BA = the
+// object-only component. Produced by the deferred velocity pass; authoritative when bound.
+SAMPLER2D(s_velocity, 6);
 
 uniform vec4 u_temporal_params;
 #define u_enable_temporal       u_temporal_params.x
@@ -34,6 +37,8 @@ uniform vec4 u_temporal_params;
 uniform vec4 u_temporal_params2;
 /// Minimum dot(n_curr, n_at_prev_uv) to accept history. Typical 0.85 (~32 deg).
 #define u_normal_dot_threshold  u_temporal_params2.x
+/// 1 = reproject through the velocity buffer; 0 = legacy prev view-projection path.
+#define u_velocity_available    u_temporal_params2.y
 
 /// xy = full G-buffer size; zw = per-axis full / temporal-target scale.
 uniform vec4 u_temporal_resolution;
@@ -174,9 +179,25 @@ void main()
         return;
     }
 
+    // Camera-consistent pixels ALWAYS use this pass's own matrix reprojection (which also
+    // supplies the expected previous depth for the disocclusion gate); the velocity
+    // buffer's RG drives only OBJECT-motion pixels, gated by BA (the object-only split).
+    // Trusting RG for camera pixels drags the whole image - the buffer's camera component
+    // is not reliably this pass's own previous view-projection (measured; open engine
+    // issue, see the velocity plan). Same gating as the TAA resolve. For movers the
+    // velocity prev_uv follows the object while expected_prev_z does not; the depth and
+    // normal gates then reject stale content there, the same net behavior as legacy.
     vec3 prev_sample = SSIL_ComputePreviousFrameSample(full_uv, surface_z);
     vec2 prev_uv = prev_sample.xy;
     float expected_prev_z = prev_sample.z;
+    BRANCH
+    if(u_velocity_available > 0.5)
+    {
+        vec4 vel4 = texture2DLod(s_velocity, full_uv, 0.0);
+        vec2 vel_dim = vec2(textureSize(s_velocity, 0));
+        float object_w = smoothstep(0.5, 1.5, length(vel4.zw * vel_dim));
+        prev_uv = mix(prev_uv, full_uv - vel4.xy, object_w);
+    }
 
     vec2 overshoot = max(max(-prev_uv, prev_uv - vec2_splat(1.0)), vec2_splat(0.0));
     float edge_fade = 1.0 - smoothstep(0.0, EDGE_FADE_MARGIN, max(overshoot.x, overshoot.y));

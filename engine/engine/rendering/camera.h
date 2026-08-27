@@ -231,7 +231,6 @@ public:
      * @return The current projection matrix.
      */
     auto get_projection() const -> const math::transform&;
-    auto get_prev_projection() const -> const math::transform&;
 
     /**
      * @brief The current projection with the TAA subpixel jitter subtracted back out.
@@ -251,29 +250,40 @@ public:
      * @return The current view matrix.
      */
     auto get_view() const -> const math::transform&;
-    auto get_prev_view() const -> const math::transform&;
     auto get_view_inverse() const -> const math::transform&;
     auto get_view_relative() const -> const math::transform&;
-    auto get_prev_view_relative() const -> const math::transform&;
     auto get_view_inverse_relative() const -> const math::transform&;
-    /**
-     * @brief Retrieves the previous view matrix.
-     *
-     * @return The previous view matrix.
-     */
-    auto get_prev_view_projection() const -> math::transform;
-    auto get_prev_view_projection_relative() const -> math::transform;
 
     /**
      * @brief View-projection the PREVIOUS frame rendered with, jitter removed.
      *
      * Updated inside set_aa_data() by promoting the matrices recorded on the previous
-     * call. The projection is unjittered because the TAA history is the resolved,
-     * pixel-center-aligned image; unprojecting the current pixel with the jittered
-     * current matrices and reprojecting with this one yields the correct history UV
-     * under camera motion (standard TAA formulation).
+     * call (at most once per render frame). The projection is unjittered because the
+     * TAA history is the resolved, pixel-center-aligned image; unprojecting the current
+     * pixel with the jittered current matrices and reprojecting with this one yields
+     * the correct history UV under camera motion (standard TAA formulation).
+     *
+     * Total: on a camera whose set_aa_data never ran, this returns the CURRENT
+     * unjittered view-projection ("previous == current", zero motion) instead of the
+     * default-constructed identity, so a consumer at worst treats the frame as fresh.
      */
     auto get_taa_prev_view_projection() const -> math::transform;
+
+    /**
+     * @brief The VIEW the previous frame rendered with (absolute; from the same promotion
+     * as get_taa_prev_view_projection). Falls back to the current view when set_aa_data
+     * never ran. Consumers needing the previous camera POSITION derive it from this.
+     */
+    auto get_taa_prev_view() const -> const math::transform&;
+
+    /**
+     * @brief Camera-RELATIVE previous view-projection (previous rotation-only view x the
+     * unjittered previous projection), for camera-relative passes (clouds). Derived from
+     * the absolute TAA pair by dropping the view translation - valid because the view is
+     * rigid (lookAt), so its rotation-only form IS the relative view. Total, like
+     * get_taa_prev_view_projection.
+     */
+    auto get_taa_prev_view_projection_relative() const -> math::transform;
     /**
      * @brief Retrieves the current view-projection matrix.
      *
@@ -281,11 +291,6 @@ public:
      */
     auto get_view_projection() const -> math::transform;
     auto get_view_projection_relative() const -> math::transform;
-
-    /**
-     * @brief Makes a copy of the current view and projection matrices before they are changed.
-     */
-    void record_current_matrices();
 
     /**
      * @brief Sets the current jitter value for temporal anti-aliasing.
@@ -564,21 +569,18 @@ protected:
 
     /// Cached projection matrix.
     mutable math::transform projection_;
-    /// Cached "previous" view matrix.
-    math::transform last_view_;
-    math::transform last_view_relative_;
-
-    /// Cached "previous" projection matrix.
-    math::transform last_projection_;
 
     /// Temporal reprojection state (see set_aa_data): matrices the previous frame
     /// rendered with (projection unjittered), plus the recording of this frame's
-    /// pair that becomes "previous" on the next call.
+    /// pair that becomes "previous" on the next call. The promotion is guarded by a
+    /// render-frame stamp so a camera rendered more than once per frame (preview
+    /// insets, multi-view) cannot collapse the previous pair onto the current one.
     math::transform taa_prev_view_;
     math::transform taa_prev_projection_;
     math::transform taa_frame_view_;
     math::transform taa_frame_projection_;
     bool taa_frame_valid_ = false;
+    std::uint32_t taa_promote_frame_ = 0xFFFFFFFFu;
     /// Details regarding the camera frustum.
     mutable math::frustum frustum_;
     /// The near clipping volume (area of space between the camera position and the near plane).

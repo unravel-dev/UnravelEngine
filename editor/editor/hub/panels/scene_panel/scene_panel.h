@@ -32,6 +32,13 @@ public:
 
     auto get_auto_save_prefab() const -> bool;
 
+    /// Debug visualization mode the panel drives into the scene camera's pipeline every frame
+    /// (see draw_scene_viewport). -1 = full render; other values match the visualization menu
+    /// and deferred::debug_pass_* ids. Exposed for MCP tooling - writing the pipeline directly
+    /// would be overwritten by the panel on the next frame.
+    void set_visualization_mode(int mode);
+    auto get_visualization_mode() const -> int;
+
     void on_project_opened();
 
     // Drag selection methods

@@ -747,6 +747,10 @@ uint32_t get_render_frame();
 
 void set_world_transform(const void* _mtx, uint16_t _num = 1);
 
+/// Previous-frame counterpart of @ref set_world_transform (uniform @c u_prev_world), consumed by
+/// the velocity (motion vector) pass. Same 128-matrix capacity as @c u_world.
+void set_prev_world_transform(const void* _mtx, uint16_t _num = 1);
+
 /// Estimate of GPU memory a texture occupies for eviction accounting. Matches bgfx's internal
 /// @c textureMemoryUsed baseline (@ref texture_info::storageSize), with row-pitch uplift for
 /// uncompressed formats (256-byte alignment) and a 4 KiB minimum for committed image allocations.

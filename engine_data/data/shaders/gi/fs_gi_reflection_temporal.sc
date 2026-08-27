@@ -30,11 +30,17 @@ $input v_texcoord0
 SAMPLER2D(s_refl_raw, 0);
 SAMPLER2D(s_refl_history, 1);
 SAMPLER2D(s_refl_depth, 2);
+/// Velocity buffer (full camera resolution): RG = total uv-delta, BA = object-only.
+SAMPLER2D(s_refl_velocity, 3);
 
 uniform mat4 u_gi_refl_prev_view_proj;
 /// x > 0.5 = the history target holds valid data; yz = 1 / target size; w = accumulation
 /// window in frames (the settings knob; GI_REFLECTION_TEMPORAL_FRAMES is its default).
 uniform vec4 u_gi_refl_temporal;
+/// x > 0.5 = reproject the receiver through the velocity buffer (unjittered convention,
+/// correct for moving receivers; the stillness gate then reads TRUE per-pixel motion, so
+/// a moving receiver keeps the clamp engaged while a parked one still releases it).
+uniform vec4 u_gi_refl_velocity;
 
 /// Rec.709 luminance (common.sh carries no Luminance helper).
 float GiReflLuma(vec3 color)
@@ -64,11 +70,24 @@ void main()
 		gl_FragColor = vec4(curr.xyz, curr.w >= 0.5 ? 1.0 : curr.w);
 		return;
 	}
+	// Receiver reprojection: camera-consistent pixels ALWAYS use this pass's own matrix
+	// reprojection; the velocity buffer's RG drives only OBJECT-motion pixels (BA gate).
+	// Trusting RG for camera pixels drags the image - the buffer's camera component is not
+	// reliably this pass's own previous view-projection (measured; open engine issue, see
+	// the velocity plan). Same gating as the TAA resolve.
 	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(depth)));
 	vec3 world_position = clipToWorld(u_invViewProj, clip);
 	vec4 prev_clip = mul(u_gi_refl_prev_view_proj, vec4(world_position, 1.0));
 	vec3 prev_ndc = clipTransform(prev_clip.xyz / max(prev_clip.w, 1e-6));
 	vec2 prev_uv = prev_ndc.xy * 0.5 + 0.5;
+	BRANCH
+	if(u_gi_refl_velocity.x > 0.5)
+	{
+		vec4 vel4 = texture2DLod(s_refl_velocity, uv, 0.0);
+		vec2 vel_dim = vec2(textureSize(s_refl_velocity, 0));
+		float object_w = smoothstep(0.5, 1.5, length(vel4.zw * vel_dim));
+		prev_uv = mix(prev_uv, uv - vel4.xy, object_w);
+	}
 	BRANCH
 	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
 	{

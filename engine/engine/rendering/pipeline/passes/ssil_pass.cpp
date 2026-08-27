@@ -147,6 +147,7 @@ auto ssil_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
                                              result_fb,
                                              params.g_buffer,
                                              params.prev_depth,
+                                             params.velocity,
                                              params.cam,
                                              params.settings,
                                              temporal_result_fb,
@@ -551,6 +552,7 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
                                      gfx::frame_buffer::ptr ssil_input,
                                      const gfx::frame_buffer::ptr& g_buffer,
                                      const gfx::texture::ptr& prev_depth,
+                                     const gfx::texture::ptr& velocity,
                                      const camera* cam,
                                      const ssil_settings& settings,
                                      gfx::frame_buffer::ptr& out_result_fb,
@@ -603,7 +605,15 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         static_cast<float>(gbuf_sz.width) / static_cast<float>(temporal_sz.width),
         static_cast<float>(gbuf_sz.height) / static_cast<float>(temporal_sz.height)};
 
-    const float temporal_params2[4] = {settings.temporal.normal_dot_threshold, 0.0f, 0.0f, 0.0f};
+    // The velocity buffer arrives explicitly from the pipeline; a valid texture IS the
+    // enable. Depth stands in as an inert placeholder so the sampler slot is always bound.
+    const auto& velocity_tex = velocity;
+    const bool use_velocity = velocity_tex != nullptr;
+
+    const float temporal_params2[4] = {settings.temporal.normal_dot_threshold,
+                                       use_velocity ? 1.0f : 0.0f,
+                                       0.0f,
+                                       0.0f};
 
     auto bind_common = [&](float enable_temporal,
                            const gfx::texture::ptr& prev_depth_tex)
@@ -614,6 +624,10 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         gfx::set_texture(temporal_program_.s_prev_depth, 3, prev_depth_tex);
         gfx::set_texture(temporal_program_.s_ssil_moments_history, 4, read_moments);
         gfx::set_texture(temporal_program_.s_normal, 5, g_buffer->get_texture(1));
+        gfx::set_texture(temporal_program_.s_velocity,
+                         6,
+                         use_velocity ? velocity_tex : g_buffer->get_texture(4),
+                         BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 
         float temporal_params[4] = {enable_temporal,
                                     settings.temporal.history_strength,
@@ -623,7 +637,10 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         gfx::set_uniform(temporal_program_.u_temporal_params2, temporal_params2);
         gfx::set_uniform(temporal_program_.u_temporal_resolution, temporal_resolution);
 
-        auto prev_vp = cam->get_prev_view_projection();
+        // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered
+        // prev misaligns a still camera's reprojection by the jitter delta every frame
+        // (every temporal consumer now shares this chain).
+        auto prev_vp = cam->get_taa_prev_view_projection();
         gfx::set_uniform(temporal_program_.u_prev_view_proj, prev_vp.get_matrix());
     };
 

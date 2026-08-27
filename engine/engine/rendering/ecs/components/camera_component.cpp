@@ -9,10 +9,13 @@ camera_component::camera_component()
 
 void camera_component::update(const math::transform& t)
 {
-    // Release the unused fbos and textures
-    pipeline_camera_.get_camera().record_current_matrices();
+    // Previous-frame matrices live in the ONE promoted TAA pair (camera::set_aa_data,
+    // frame-stamped at the render site); the old before-move snapshot chain is retired.
     pipeline_camera_.get_camera().look_at(t.get_position(), t.get_position() + t.z_unit_axis(), t.y_unit_axis());
-
+    // Per-view resource lifetime: every render_view access stamps the entry, so any
+    // target the pipeline stopped touching (a feature turned off, a debug path gone
+    // idle) ages out here on its own -- no per-feature release code required.
+    rview_.release_unused(gfx::get_render_frame());
 }
 
 void camera_component::release_resources()

@@ -371,6 +371,13 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::set_texture(temporal_program_.s_refl_raw, 0, raw_tex);
         gfx::set_texture(temporal_program_.s_refl_history, 1, history_valid ? read_tex : raw_tex);
         gfx::set_texture(temporal_program_.s_refl_depth, 2, params.hiz);
+        // This frame's velocity buffer, passed explicitly by the pipeline (a valid texture
+        // IS the enable); the raw target stands in when absent (the flag keeps it unread).
+        const bool use_velocity = params.velocity != nullptr;
+        gfx::set_texture(temporal_program_.s_refl_velocity,
+                         3,
+                         use_velocity ? params.velocity : raw_tex,
+                         BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
         // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered
         // prev misaligns a still camera's reprojection by the jitter delta every frame.
         auto prev_view_proj = params.cam->get_taa_prev_view_projection();
@@ -380,6 +387,8 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                                           1.0f / float(trace_size.height),
                                           float(params.temporal_frames)};
         gfx::set_uniform(temporal_program_.u_gi_refl_temporal, temporal_params);
+        const float velocity_params[4] = {use_velocity ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+        gfx::set_uniform(temporal_program_.u_gi_refl_velocity, velocity_params);
         // The topology helpers stage a transient vertex buffer consumed by ONE submit - every
         // draw needs its own call (reusing the trace's left this submit with no vertices).
         auto ttopology = gfx::clip_fullscreen_triangle(1.0f);

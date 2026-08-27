@@ -51,6 +51,11 @@ public:
         reflection_probe = 1u << 3,
         atmospheric = 1u << 5,
         particles_pass = 1u << 6,
+        /// Velocity (motion vector) buffer production - UNCONDITIONAL for camera runs (a
+        /// standing frame resource, like depth). Camera runs use the default full mask so
+        /// this is on by default; probe captures build pflags from 0 and never set it, and
+        /// clearing the bit is the opt-out for custom callers.
+        velocity_pass = 1u << 7,
 
         full = 0xFFFFFFFFu,
     };
@@ -67,6 +72,20 @@ public:
                            const camera& camera,
                            gfx::render_view& rview,
                            delta_t dt);
+
+    /// Produces the per-pixel velocity (motion vector) buffer ("VELOCITY", RG16F, uv delta
+    /// uv_curr - uv_prev): a fullscreen camera-motion pass reconstructed from depth, then the
+    /// movers (has_motion models) drawn over it with true per-object motion, depth-tested
+    /// EQUAL against the shared G-buffer depth. Removes the buffer when inactive.
+    void run_velocity_pass(const visibility_set_models_t& visibility_set,
+                           const camera& camera,
+                           gfx::render_view& rview);
+
+    /// Renders the VELOCITY buffer visualization (debug view @c debug_pass_velocity):
+    /// hue = direction, brightness = magnitude, magenta = NaN.
+    void run_velocity_debug_pass(const camera& camera,
+                                 gfx::render_view& rview,
+                                 const gfx::frame_buffer::ptr& output);
 
     void run_assao_pass(const camera& camera,
                         gfx::render_view& rview,
@@ -136,6 +155,10 @@ public:
     static constexpr int debug_pass_sdf_sun_tiers = 26;
     static constexpr int debug_pass_sdf_probe_sky = 27;
     static constexpr int debug_pass_sdf_vis_memo = 28;
+    /// Velocity buffer visualization. Not part of the SDF band: dispatched by an exact match
+    /// BEFORE the >= debug_pass_sdf_normals check. Selecting it forces velocity production
+    /// for camera runs even when no other consumer (TAA) is active.
+    static constexpr int debug_pass_velocity = 29;
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,
                             const run_params& rparams,
@@ -284,6 +307,49 @@ private:
     geom_program geom_program_;
     geom_program geom_program_skinned_;
     geom_program geom_program_instanced_;
+
+    struct velocity_geom_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
+        }
+
+        gfx::program::uniform_ptr u_prev_view_proj;
+
+        std::unique_ptr<gpu_program> program;
+    };
+
+    velocity_geom_program velocity_program_;
+    velocity_geom_program velocity_program_skinned_;
+
+    struct velocity_camera_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
+        }
+
+        gfx::program::uniform_ptr s_depth;
+        gfx::program::uniform_ptr u_prev_view_proj;
+
+        std::unique_ptr<gpu_program> program;
+    } velocity_camera_program_;
+
+    struct velocity_debug_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_params, "u_params", gfx::uniform_type::Vec4);
+        }
+
+        gfx::program::uniform_ptr s_velocity;
+        gfx::program::uniform_ptr u_params;
+
+        std::unique_ptr<gpu_program> program;
+    } velocity_debug_program_;
 
     struct color_lighting : uniforms_cache
     {
@@ -436,6 +502,10 @@ private:
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     int debug_pass_{-1};
+    /// Velocity buffer production is active for the CURRENT run (camera run + velocity_pass
+    /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
+    /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).
+    bool velocity_run_active_{false};
     /// Rotation phase of the light-voxel update (GI_LIGHT_VOXEL_UPDATE_DENOM slices).
     uint32_t light_voxel_frame_{0};
 

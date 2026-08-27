@@ -540,12 +540,15 @@
       " 1/n_slow); a luminance gap beyond three such sigmas is a mean SHIFT (lighting"             \
       " changed), not noise - the slow lane snaps to the fast one and re-accumulates."             \
       " Three sigma = ~0.3% false-snap rate, and a false snap only costs one count reset")         \
-    X(GI_TEMPORAL_DEPTH_TOLERANCE, 0.25f,                                                          \
-      "relative depth per unit view distance", "measured: Lumen's Temporal.DistanceThreshold"      \
-      " = 0.005 assumes motion-vector reprojection; ours reconstructs the previous position"       \
-      " from the depth buffer alone, whose error at edges and grazing angles rejects history"      \
-      " constantly at 0.005 (visible jitter, Bistro). 0.25 measured stable with acceptable"        \
-      " ghosting; the gi_resolve_pass::settings::reprojection_tolerance default")
+    X(GI_TEMPORAL_DEPTH_TOLERANCE, 0.1f,                                                           \
+      "relative depth per unit view distance", "Lumen's Temporal.DistanceThreshold = 0.005"        \
+      " assumes motion-vector reprojection; ours still reconstructs the previous position"         \
+      " from the depth buffer (velocity-era note: camera pixels keep the matrix+depth path,"       \
+      " so reconstruction error at edges and grazing angles remains and 0.005 still"               \
+      " over-rejects). The historical 0.25 also absorbed MOVING receivers failing the test;"       \
+      " those now skip it via the velocity buffer's object split, so the slack tightened to"       \
+      " 0.1 - less stale-light bleed across depth edges under camera motion. Live-tunable as"      \
+      " gi_resolve_pass::settings::reprojection_tolerance (this is its default)")
 // clang-format on
 
 namespace unravel::gi

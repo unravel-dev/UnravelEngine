@@ -12,6 +12,9 @@ SAMPLER2D(s_ssr_history, 1);
 SAMPLER2D(s_normal, 2);
 // Depth buffer for validity checks
 SAMPLER2D(s_depth, 3);
+// Velocity buffer: RG = total uv-delta (uv_curr - uv_prev, unjittered prev), BA = the
+// object-only component. Produced by the deferred velocity pass; authoritative when bound.
+SAMPLER2D(s_velocity, 4);
 
 uniform vec4 u_temporal_params;
 #define u_enable_temporal         u_temporal_params.x
@@ -23,7 +26,8 @@ uniform vec4 u_motion_params;
 #define u_motion_scale_pixels     u_motion_params.x
 #define u_normal_dot_threshold    u_motion_params.y
 #define u_max_accum_frames        u_motion_params.z
-#define u_motion_unused_w         u_motion_params.w
+// 1 = reproject through the velocity buffer; 0 = legacy prev view-projection path.
+#define u_velocity_available      u_motion_params.w
 
 uniform vec4 u_fade_params;
 #define u_fade_in_start           u_fade_params.x
@@ -86,7 +90,21 @@ vec4 ApplyTemporalAccumulation(
         return curr;                           // temporal OFF → just pass through
 
     // == 1. reprojection ====================================================
+    // Camera-consistent pixels ALWAYS use this pass's own matrix reprojection; the
+    // velocity buffer's RG drives only OBJECT-motion pixels (BA = the object-only split).
+    // Trusting RG for camera pixels drags the whole image: the buffer's camera component
+    // is written with a previous view-projection that is NOT reliably this pass's own
+    // (measured; open engine issue - see the velocity plan). Same gating as the TAA
+    // resolve, which this pattern was proven on.
     vec2 prev_uv = ComputePreviousFrameUV(uv, surface_z);
+    BRANCH
+    if (u_velocity_available > 0.5)
+    {
+        vec4 vel4 = texture2DLod(s_velocity, uv, 0.0);
+        vec2 vel_dim = vec2(textureSize(s_velocity, 0));
+        float object_w = smoothstep(0.5, 1.5, length(vel4.zw * vel_dim));
+        prev_uv = mix(prev_uv, uv - vel4.xy, object_w);
+    }
     BRANCH
     if (any(lessThan(prev_uv, vec2(0.0, 0.0))) ||
         any(greaterThan(prev_uv, vec2(1.0, 1.0))))

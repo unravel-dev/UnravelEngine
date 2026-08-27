@@ -893,6 +893,80 @@ auto model_component::get_submesh_transforms() const -> const submesh_pose_mat4&
     return submesh_pose_;
 }
 
+std::atomic<uint32_t> model_component::velocity_recording_request_frame_{0};
+
+void model_component::request_velocity_recording(uint32_t frame)
+{
+    // Stored with +1 so 0 keeps meaning "never requested" even for render frame 0.
+    velocity_recording_request_frame_.store(frame + 1, std::memory_order_relaxed);
+}
+
+auto model_component::is_velocity_recording_active(uint32_t frame) -> bool
+{
+    const uint32_t request = velocity_recording_request_frame_.load(std::memory_order_relaxed);
+    // The request is made during render of frame N; recording happens in before-render of
+    // frame N+1, so keep a 2-frame window before the recording decays to zero cost.
+    return request != 0u && frame + 1u <= request + 2u;
+}
+
+void model_component::record_velocity_state(uint32_t frame, const math::mat4& current_world, bool transform_moved)
+{
+    if(!is_velocity_recording_active(frame))
+    {
+        // Reset so a later re-enable re-initializes (prev = current, no bogus first-frame motion).
+        velocity_initialized_ = false;
+        has_motion_ = false;
+        return;
+    }
+    if(velocity_initialized_ && velocity_state_frame_ == frame)
+    {
+        // Editor panels (scene + game + thumbnails) invoke before-render more than once per
+        // frame; the promotion must run exactly once or prev state collapses onto current.
+        return;
+    }
+    const bool first = !velocity_initialized_;
+    velocity_state_frame_ = frame;
+    velocity_initialized_ = true;
+    // recorded_world_ holds the matrix the previous frame rendered with (world transforms are
+    // already THIS frame's value here). The pose caches still hold LAST frame's values because
+    // update_armature runs after this promotion, so a plain copy is the correct prev snapshot.
+    prev_world_ = first ? current_world : recorded_world_;
+    recorded_world_ = current_world;
+    prev_submesh_pose_ = submesh_pose_;
+    prev_skinning_pose_ = skinning_pose_;
+    // Skinned models count as movers unconditionally: an animated palette changes every frame
+    // without necessarily touching any entity transform.
+    has_motion_ = !first && (transform_moved || !skinning_pose_.empty());
+}
+
+void model_component::mark_motion(bool moved)
+{
+    if(moved && velocity_initialized_)
+    {
+        has_motion_ = true;
+    }
+}
+
+auto model_component::has_motion() const -> bool
+{
+    return has_motion_;
+}
+
+auto model_component::get_prev_world_transform() const -> const math::mat4&
+{
+    return prev_world_;
+}
+
+auto model_component::get_prev_submesh_transforms() const -> const submesh_pose_mat4&
+{
+    return prev_submesh_pose_;
+}
+
+auto model_component::get_prev_skinning_transforms() const -> const std::vector<pose_mat4>&
+{
+    return prev_skinning_pose_;
+}
+
 auto model_component::get_render_proxies() const -> const submesh_render_proxies&
 {
     return render_proxies_;
