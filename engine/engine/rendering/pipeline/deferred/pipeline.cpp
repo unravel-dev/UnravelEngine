@@ -119,6 +119,10 @@ void apply_pipeline_taa_jitter_to_camera(const camera& view_camera,
     {
         cam.set_aa_data(viewport_size, 0u, 1u);
     }
+    // With the frame's jitter final, record this frame's matrices; last frame's recording
+    // becomes the camera's get_prev_* set (frame-stamped - a second run of the same camera
+    // in one frame is a no-op). This is the ONE place previous matrices are maintained.
+    cam.record_current_matrices();
 }
 
 auto create_or_resize_d_buffer(gfx::render_view& rview,
@@ -1299,7 +1303,7 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
     // the EQUAL depth test, and the fullscreen reconstruction mirrors the TAA formulation
     // (jittered current unprojection + unjittered previous reprojection, camera.h:267-275).
     const auto& proj = camera.get_projection();
-    const auto prev_vp = camera.get_taa_prev_view_projection();
+    const auto prev_vp = camera.get_prev_view_projection_unjittered();
 
     // 1) Camera-derived velocity for every pixel, reconstructed from depth. Makes the buffer
     //    complete so consumers never branch on "does this pixel have object velocity".

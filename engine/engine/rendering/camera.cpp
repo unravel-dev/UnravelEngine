@@ -306,38 +306,58 @@ auto camera::get_view_projection() const -> math::transform
     return get_projection() * get_view();
 }
 
-auto camera::get_taa_prev_view_projection() const -> math::transform
+auto camera::get_view_projection_unjittered() const -> math::transform
 {
-    // Never promoted (set_aa_data has not run on this camera yet): the members are
-    // default-constructed identity, and reprojecting through identity is garbage UVs.
-    // Degrade to "previous == current" instead - zero motion, the same sane frame-0
-    // semantic the first set_aa_data call establishes; temporal consumers then treat
-    // the frame as fresh rather than fetching nonsense history.
-    if(!taa_frame_valid_)
+    return get_projection_unjittered() * get_view();
+}
+
+auto camera::get_prev_view() const -> const math::transform&
+{
+    return prev_matrices_valid_ ? prev_view_ : view_;
+}
+
+auto camera::get_prev_projection() const -> const math::transform&
+{
+    return prev_matrices_valid_ ? prev_projection_ : get_projection();
+}
+
+auto camera::get_prev_projection_unjittered() const -> math::transform
+{
+    // By value: the never-recorded fallback is the CURRENT unjittered projection, which
+    // is itself computed on demand (jitter subtracted) rather than stored.
+    return prev_matrices_valid_ ? prev_projection_unjittered_ : get_projection_unjittered();
+}
+
+auto camera::get_prev_view_projection() const -> math::transform
+{
+    return get_prev_projection() * get_prev_view();
+}
+
+auto camera::get_prev_view_projection_unjittered() const -> math::transform
+{
+    // Never recorded: degrade to "previous == current" - zero motion, the same sane
+    // frame-0 semantic the first recording establishes; temporal consumers then treat
+    // the frame as fresh rather than reprojecting through default-constructed identity.
+    if(!prev_matrices_valid_)
     {
-        return get_projection_unjittered() * get_view();
+        return get_view_projection_unjittered();
     }
-    return taa_prev_projection_ * taa_prev_view_;
+    return prev_projection_unjittered_ * prev_view_;
 }
 
-auto camera::get_taa_prev_view() const -> const math::transform&
+auto camera::get_prev_view_projection_relative_unjittered() const -> math::transform
 {
-    return taa_frame_valid_ ? taa_prev_view_ : view_;
-}
-
-auto camera::get_taa_prev_view_projection_relative() const -> math::transform
-{
-    if(!taa_frame_valid_)
+    if(!prev_matrices_valid_)
     {
         return get_projection_unjittered() * get_view_relative();
     }
     // The view is rigid (lookAt), so zeroing its translation column yields exactly the
     // rotation-only "camera at origin" form - the same matrix look_at builds for
     // view_relative_. Derived here so camera-relative consumers (clouds) share the ONE
-    // promoted previous pair instead of a second bookkeeping chain.
-    math::mat4 prev_view_relative = taa_prev_view_.get_matrix();
+    // recorded previous set instead of a second bookkeeping chain.
+    math::mat4 prev_view_relative = prev_view_.get_matrix();
     prev_view_relative[3] = math::vec4(0.0f, 0.0f, 0.0f, 1.0f);
-    return taa_prev_projection_.get_matrix() * prev_view_relative;
+    return prev_projection_unjittered_.get_matrix() * prev_view_relative;
 }
 
 auto camera::get_view_projection_relative() const -> math::transform
@@ -856,38 +876,41 @@ void camera::set_aa_data(const usize32_t& viewport_size,
     }
 
     projection_dirty_ = true;
+}
 
-    // Matrices THIS frame renders with; set_aa_data runs after the camera has been
-    // moved to the current transform, so get_view() here is the frame's real view.
-    // The projection is recorded with the fresh jitter subtracted back out: the TAA
-    // history is the resolved, pixel-center-aligned image, so reprojection must
-    // target unjittered NDC.
-    //
-    // Promote ONCE PER RENDER FRAME: a camera rendered more than once in a frame (a
-    // preview inset, future multi-view) must not re-promote, or the previous pair
-    // collapses onto the current one and every temporal consumer's reprojection
-    // silently degrades to a jitter-only offset. Jitter itself is (re)applied above on
-    // every call - only the history bookkeeping is guarded.
+void camera::record_current_matrices()
+{
+    // ONCE PER RENDER FRAME: a camera rendered more than once in a frame (a preview
+    // inset, future multi-view) must not re-record, or the previous set collapses onto
+    // the current one and every temporal consumer's reprojection silently degrades to
+    // a jitter-only offset.
     const std::uint32_t render_frame = gfx::get_render_frame();
-    if(taa_promote_frame_ == render_frame)
+    if(prev_record_frame_ == render_frame)
     {
         return;
     }
-    taa_promote_frame_ = render_frame;
+    prev_record_frame_ = render_frame;
 
+    // Matrices THIS frame renders with; the pipeline calls this after the camera has
+    // been moved to the current transform AND the frame's jitter has been applied, so
+    // both the jittered and unjittered pairs recorded here are the frame's final ones.
     const math::transform frame_view = get_view();
-    const math::transform frame_proj = get_projection_unjittered();
+    const math::transform frame_proj = get_projection();
+    const math::transform frame_proj_unjittered = get_projection_unjittered();
 
-    // Promote the pair recorded on the previous call: those are the matrices the
+    // Promote the set recorded on the previous call: those are the matrices the
     // previous frame actually rendered with. Snapshotting get_view() directly here
     // would capture the CURRENT view (the camera already moved), which cancels the
-    // view term in the TAA reprojection and reduces it to a jitter-only offset.
-    taa_prev_view_ = taa_frame_valid_ ? taa_frame_view_ : frame_view;
-    taa_prev_projection_ = taa_frame_valid_ ? taa_frame_projection_ : frame_proj;
+    // view term in the reprojection and reduces it to a jitter-only offset.
+    prev_view_ = prev_matrices_valid_ ? frame_view_ : frame_view;
+    prev_projection_ = prev_matrices_valid_ ? frame_projection_ : frame_proj;
+    prev_projection_unjittered_ =
+        prev_matrices_valid_ ? frame_projection_unjittered_ : frame_proj_unjittered;
 
-    taa_frame_view_ = frame_view;
-    taa_frame_projection_ = frame_proj;
-    taa_frame_valid_ = true;
+    frame_view_ = frame_view;
+    frame_projection_ = frame_proj;
+    frame_projection_unjittered_ = frame_proj_unjittered;
+    prev_matrices_valid_ = true;
 }
 
 auto camera::get_aa_data() const -> const math::vec4&

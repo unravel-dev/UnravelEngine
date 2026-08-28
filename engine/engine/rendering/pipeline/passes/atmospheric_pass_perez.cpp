@@ -556,7 +556,7 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
     // jittered chain is retired); the sub-pixel alignment only improves the reprojection.
     const float cloud_size = std::max(params.cloud_size, 1.0f);
     const math::vec3 cam_pos = camera.get_position();
-    const math::vec3 prev_cam_pos = math::inverse(camera.get_taa_prev_view()).get_position();
+    const math::vec3 prev_cam_pos = math::inverse(camera.get_prev_view()).get_position();
     const math::vec3 cam_delta = cam_pos - prev_cam_pos;
     float history_offset[4] = {wind_delta[0] * cloud_size + cam_delta.x,
                                cam_delta.y,
@@ -564,7 +564,7 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
                                0.0f};
     gfx::set_uniform(cloud_program_.u_cloudHistory, history_offset);
 
-    auto prev_vp = camera.get_taa_prev_view_projection_relative();
+    auto prev_vp = camera.get_prev_view_projection_relative_unjittered();
     gfx::set_uniform(cloud_program_.u_prevViewProj, prev_vp.get_matrix());
 
     auto& cloud_noise = default_textures::get().cloud_noise();

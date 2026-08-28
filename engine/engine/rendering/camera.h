@@ -255,41 +255,62 @@ public:
     auto get_view_inverse_relative() const -> const math::transform&;
 
     /**
-     * @brief View-projection the PREVIOUS frame rendered with, jitter removed.
+     * @brief The matrices the PREVIOUS frame rendered with - the complete set, mirroring
+     * the current-side convention (unsuffixed = jittered, _unjittered explicit):
      *
-     * Updated inside set_aa_data() by promoting the matrices recorded on the previous
-     * call (at most once per render frame). The projection is unjittered because the
-     * TAA history is the resolved, pixel-center-aligned image; unprojecting the current
-     * pixel with the jittered current matrices and reprojecting with this one yields
-     * the correct history UV under camera motion (standard TAA formulation).
+     *   current                          | previous
+     *   get_view                         | get_prev_view
+     *   get_projection        (jittered) | get_prev_projection        (jittered)
+     *   get_projection_unjittered        | get_prev_projection_unjittered
+     *   get_view_projection   (jittered) | get_prev_view_projection   (jittered)
+     *   get_view_projection_unjittered   | get_prev_view_projection_unjittered
      *
-     * Total: on a camera whose set_aa_data never ran, this returns the CURRENT
-     * unjittered view-projection ("previous == current", zero motion) instead of the
-     * default-constructed identity, so a consumer at worst treats the frame as fresh.
+     * Recorded by record_current_matrices(), which the pipeline calls once per rendered
+     * frame AFTER applying the frame's jitter (frame-stamped: a camera rendered more
+     * than once per frame cannot collapse the previous pair onto the current one).
+     *
+     * Temporal reprojection consumers take get_prev_view_projection_unjittered: the
+     * history is the resolved, pixel-center-aligned image, so unprojecting the current
+     * pixel with the jittered current matrices and reprojecting with the UNJITTERED
+     * previous pair yields the correct history UV under camera motion (standard TAA
+     * formulation). The jittered variants exist for completeness and rasterization-
+     * aligned uses.
+     *
+     * All getters are TOTAL: on a camera never recorded they report the CURRENT
+     * matrices ("previous == current", zero motion) instead of default-constructed
+     * identity, so a consumer at worst treats the frame as fresh.
      */
-    auto get_taa_prev_view_projection() const -> math::transform;
-
-    /**
-     * @brief The VIEW the previous frame rendered with (absolute; from the same promotion
-     * as get_taa_prev_view_projection). Falls back to the current view when set_aa_data
-     * never ran. Consumers needing the previous camera POSITION derive it from this.
-     */
-    auto get_taa_prev_view() const -> const math::transform&;
+    auto get_prev_view() const -> const math::transform&;
+    auto get_prev_projection() const -> const math::transform&;
+    auto get_prev_projection_unjittered() const -> math::transform;
+    auto get_prev_view_projection() const -> math::transform;
+    auto get_prev_view_projection_unjittered() const -> math::transform;
 
     /**
      * @brief Camera-RELATIVE previous view-projection (previous rotation-only view x the
-     * unjittered previous projection), for camera-relative passes (clouds). Derived from
-     * the absolute TAA pair by dropping the view translation - valid because the view is
-     * rigid (lookAt), so its rotation-only form IS the relative view. Total, like
-     * get_taa_prev_view_projection.
+     * UNJITTERED previous projection), for camera-relative passes (clouds). Derived from
+     * the absolute pair by dropping the view translation - valid because the view is
+     * rigid (lookAt), so its rotation-only form IS the relative view. Total.
      */
-    auto get_taa_prev_view_projection_relative() const -> math::transform;
+    auto get_prev_view_projection_relative_unjittered() const -> math::transform;
+
+    /**
+     * @brief Records the matrices THIS frame renders with; last frame's recording becomes
+     * the get_prev_* set. Called by the pipeline once per rendered frame, immediately
+     * after the frame's jitter is applied (so both the jittered and unjittered current
+     * pairs are final) - NOT from before-render code, where the frame's jitter does not
+     * exist yet and pipeline-only cameras (probe faces, tools) would be missed.
+     * Frame-stamped internally: repeated calls within one render frame are no-ops.
+     */
+    void record_current_matrices();
+
     /**
      * @brief Retrieves the current view-projection matrix.
      *
      * @return The current view-projection matrix.
      */
     auto get_view_projection() const -> math::transform;
+    auto get_view_projection_unjittered() const -> math::transform;
     auto get_view_projection_relative() const -> math::transform;
 
     /**
@@ -570,17 +591,20 @@ protected:
     /// Cached projection matrix.
     mutable math::transform projection_;
 
-    /// Temporal reprojection state (see set_aa_data): matrices the previous frame
-    /// rendered with (projection unjittered), plus the recording of this frame's
-    /// pair that becomes "previous" on the next call. The promotion is guarded by a
-    /// render-frame stamp so a camera rendered more than once per frame (preview
-    /// insets, multi-view) cannot collapse the previous pair onto the current one.
-    math::transform taa_prev_view_;
-    math::transform taa_prev_projection_;
-    math::transform taa_frame_view_;
-    math::transform taa_frame_projection_;
-    bool taa_frame_valid_ = false;
-    std::uint32_t taa_promote_frame_ = 0xFFFFFFFFu;
+    /// Previous-frame matrix state (see record_current_matrices): the full set the
+    /// previous frame rendered with (view + jittered and unjittered projections), plus
+    /// the recording of this frame's set that becomes "previous" on the next call. The
+    /// promotion is guarded by a render-frame stamp so a camera rendered more than once
+    /// per frame (preview insets, multi-view) cannot collapse the previous set onto the
+    /// current one.
+    math::transform prev_view_;
+    math::transform prev_projection_;
+    math::transform prev_projection_unjittered_;
+    math::transform frame_view_;
+    math::transform frame_projection_;
+    math::transform frame_projection_unjittered_;
+    bool prev_matrices_valid_ = false;
+    std::uint32_t prev_record_frame_ = 0xFFFFFFFFu;
     /// Details regarding the camera frustum.
     mutable math::frustum frustum_;
     /// The near clipping volume (area of space between the camera position and the near plane).

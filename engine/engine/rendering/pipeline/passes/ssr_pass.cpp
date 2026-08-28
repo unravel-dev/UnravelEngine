@@ -498,7 +498,7 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
     // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered prev
     // misaligns a still camera's reprojection by the jitter delta every frame (the GI
     // reflection chain's measured lesson; every temporal consumer now shares this chain).
-    auto prev_view_proj = params.cam->get_taa_prev_view_projection();
+    auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
     gfx::set_uniform(fidelityfx_pixel_program_.u_prev_view_proj, prev_view_proj.get_matrix());
 
     uint64_t topology = gfx::clip_fullscreen_triangle(1.0f);
@@ -597,7 +597,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
 
     // The TAA-unjittered previous pair (see the trace-side comment); keeps the legacy
     // camera-pixel path jitter-aligned with the velocity buffer's convention.
-    auto prev_view_proj = cam->get_taa_prev_view_projection();
+    auto prev_view_proj = cam->get_prev_view_projection_unjittered();
     gfx::set_uniform(temporal_resolve_program_.u_prev_view_proj, prev_view_proj.get_matrix());
 
     // Draw fullscreen quad

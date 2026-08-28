@@ -423,7 +423,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             // measured and fixed in the reflection chain). The previous pair is the
             // TAA-unjittered record for the same reason: still camera, exact reprojection.
             const math::transform gather_projection = params.cam->get_projection_unjittered();
-            const auto gather_prev_view_proj = params.cam->get_taa_prev_view_projection();
+            const auto gather_prev_view_proj = params.cam->get_prev_view_projection_unjittered();
             const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
                                                   float(s.debug_view),
                                                   adaptive ? 1.0f : 0.0f,
@@ -661,7 +661,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                      BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
                     // The TAA-unjittered previous pair, matching the unjittered current
                     // reconstruction above - a still camera must reproject onto itself.
-                    const auto prev_view_proj = params.cam->get_taa_prev_view_projection();
+                    const auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
                     gfx::set_uniform(temporal_program_.u_gi_prev_view_proj, prev_view_proj.get_matrix());
                     const auto prev_inv_view_proj = glm::inverse(prev_view_proj.get_matrix());
                     gfx::set_uniform(temporal_program_.u_gi_prev_inv_view_proj, prev_inv_view_proj);
@@ -968,7 +968,7 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
     // members, so handing its address to a mat4 uniform uploads whatever happens to sit in the
     // first 64 bytes. The shader then reprojects to nonsense and rejects every pixel's history,
     // which looks exactly like temporal accumulation that is switched off.
-    const auto prev_view_proj = params.cam->get_taa_prev_view_projection();
+    const auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
     gfx::set_uniform(temporal_program_.u_gi_prev_view_proj, prev_view_proj.get_matrix());
     const auto prev_inv_view_proj = glm::inverse(prev_view_proj.get_matrix());
     gfx::set_uniform(temporal_program_.u_gi_prev_inv_view_proj, prev_inv_view_proj);

@@ -118,7 +118,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
                      use_velocity ? params.velocity : params.g_buffer->get_texture(4),
                      k_taa_sampler_flags);
 
-    const auto prev_vp = params.cam->get_taa_prev_view_projection();
+    const auto prev_vp = params.cam->get_prev_view_projection_unjittered();
     gfx::set_uniform(program_.u_prev_view_proj, prev_vp.get_matrix());
 
     const float taa_params[4] = {params.config.history_blend,

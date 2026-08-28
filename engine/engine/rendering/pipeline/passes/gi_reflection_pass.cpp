@@ -380,7 +380,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                          BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
         // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered
         // prev misaligns a still camera's reprojection by the jitter delta every frame.
-        auto prev_view_proj = params.cam->get_taa_prev_view_projection();
+        auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
         gfx::set_uniform(temporal_program_.u_gi_refl_prev_view_proj, prev_view_proj.get_matrix());
         const float temporal_params[4] = {history_valid ? 1.0f : 0.0f,
                                           1.0f / float(trace_size.width),

@@ -640,7 +640,7 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered
         // prev misaligns a still camera's reprojection by the jitter delta every frame
         // (every temporal consumer now shares this chain).
-        auto prev_vp = cam->get_taa_prev_view_projection();
+        auto prev_vp = cam->get_prev_view_projection_unjittered();
         gfx::set_uniform(temporal_program_.u_prev_view_proj, prev_vp.get_matrix());
     };
 
