@@ -17,10 +17,16 @@ struct batch_instance
 {
     /// Pointer to world transformation matrix for this instance (valid only during frame processing)
     const math::mat4* world_transform_ptr = nullptr;
-    
+
+    /// Previous-frame world transform for this instance (velocity runs only; null = not a
+    /// mover / no velocity this frame). Points into model_component's frame-stamped prev
+    /// pose storage - same frame-lifetime contract as world_transform_ptr. Consumed by the
+    /// velocity pass's instanced submit; the G-buffer instanced path ignores it.
+    const math::mat4* prev_world_transform_ptr = nullptr;
+
     /// LOD blending parameters (x = transition factor: +[0,1] = fade out, -[0,1] = fade in; y,z reserved)
     math::vec3 lod_params = math::vec3(0.0f, 0.0f, 0.0f);
-    
+
     /// Padding to ensure alignment (unused, reserved for future use)
     float padding = 0.0f;
     
@@ -106,6 +112,39 @@ struct instance_vertex_data
      * @return String representation of the vertex data
      */
     auto to_string() const -> std::string;
+};
+
+/**
+ * @brief GPU instance data for the velocity pass's instanced movers submit: the same
+ * world matrix layout the G-buffer instanced path uses (LOD packed in [3][3], consumed as
+ * i_data0..3) followed by the previous-frame world matrix (i_data4..7). 128-byte stride;
+ * packed only for mover instances, so static batches never pay for it.
+ */
+struct velocity_instance_vertex_data
+{
+    static auto packed_size() -> size_t
+    {
+        return 128;
+    }
+
+    /// Current world matrix, LOD parameter packed in [3][3] (i_data0..3) - identical to
+    /// instance_vertex_data so the raster position matches the G-buffer batched draw.
+    math::mat4 world_matrix;
+    /// Previous-frame world matrix (i_data4..7); [3][3] content is never read.
+    math::mat4 prev_world_matrix;
+
+    velocity_instance_vertex_data() = default;
+
+    explicit velocity_instance_vertex_data(const batch_instance& instance)
+        : world_matrix(instance.world_transform_ptr ? *instance.world_transform_ptr : math::mat4(1.0f))
+        , prev_world_matrix(instance.prev_world_transform_ptr ? *instance.prev_world_transform_ptr
+                            : instance.world_transform_ptr   ? *instance.world_transform_ptr
+                                                             : math::mat4(1.0f))
+    {
+        // Same packing as instance_vertex_data so the raster position bit-matches the
+        // G-buffer batched draw.
+        world_matrix[3][3] = instance.lod_params.x;
+    }
 };
 
 /**

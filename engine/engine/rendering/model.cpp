@@ -1370,6 +1370,12 @@ void model::submit_for_batching(batch_collector& collector,
                     // Create batch instance with the specific transform
                     batch_instance instance(transform_ptr);
                     instance.lod_params.x = lod_param;
+                    if(extras.prev_submesh_transforms != nullptr)
+                    {
+                        const auto* prev_ptr =
+                            extras.prev_submesh_transforms->get_transform(submesh_index, instance_idx);
+                        instance.prev_world_transform_ptr = prev_ptr != nullptr ? prev_ptr : transform_ptr;
+                    }
 
                     // Collect for batching
                     collector.collect_renderable(key, instance);
@@ -1395,6 +1401,10 @@ void model::submit_for_batching(batch_collector& collector,
                 // Create batch instance with world transform
                 batch_instance instance(&world_transform);
                 instance.lod_params.x = lod_param;
+                if(extras.prev_world_transform != nullptr)
+                {
+                    instance.prev_world_transform_ptr = extras.prev_world_transform;
+                }
 
                 // Collect for batching
                 collector.collect_renderable(key, instance);

@@ -322,6 +322,7 @@ private:
 
     velocity_geom_program velocity_program_;
     velocity_geom_program velocity_program_skinned_;
+    velocity_geom_program velocity_program_instanced_;
 
     struct velocity_camera_program : uniforms_cache
     {
@@ -479,6 +480,10 @@ private:
     auto get_light_program_no_shadows(const light& l) const -> const color_lighting&;
     void submit_pbr_material(geom_program& program, const pbr_material& mat);
     void submit_batched_geometry(gfx::render_pass& pass, const camera& camera);
+    /// Velocity for batched movers: draws the mover instances of this frame's prepared
+    /// batches (instance stream doubled with the previous world matrix) into the velocity
+    /// target, depth-tested EQUAL. Batches without movers cost nothing.
+    void submit_batched_velocity(gfx::render_pass& pass, const math::transform& prev_vp);
 
     color_lighting color_lighting_[uint8_t(light_type::count)][uint8_t(sm_depth::count)][uint8_t(sm_impl::count)];
     color_lighting color_lighting_no_shadow_[uint8_t(light_type::count)];

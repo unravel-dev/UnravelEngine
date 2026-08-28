@@ -1102,23 +1102,31 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
 
         const auto extras = model_comp.get_submit_extras(false);
 
-        // Check if this model can be batched (static mesh, no skinning). While a velocity run
-        // is active, movers are drawn through the individual path instead: the velocity pass
-        // re-rasterizes them with the same u_world chain and depth-tests EQUAL, which requires
-        // the G-buffer depth to come from the identical (non-instanced) transform path.
+        // Check if this model can be batched (static mesh, no skinning). Movers stay
+        // batched: their instances carry the previous-frame transform alongside the
+        // current one, and the velocity pass re-rasterizes them with the IDENTICAL
+        // instanced matrix math (vs_velocity_instanced mirrors vs_deferred_geom_instanced
+        // bit for bit), so the EQUAL depth test holds without excluding them here.
         const bool is_skinned = !skinning_matrices.empty();
-        const bool can_batch = batch_collector::is_static_mesh_batching_enabled() && !is_skinned &&
-                               !(velocity_run_active_ && model_comp.has_motion());
+        const bool can_batch = batch_collector::is_static_mesh_batching_enabled() && !is_skinned;
 
         if (can_batch)
         {
+            // Movers attach their previous-frame transforms so the velocity pass's
+            // instanced submit can pick their instances out of the shared batches.
+            auto batch_extras = extras;
+            if(velocity_run_active_ && model_comp.has_motion())
+            {
+                batch_extras.prev_world_transform = &model_comp.get_prev_world_transform();
+                batch_extras.prev_submesh_transforms = &model_comp.get_prev_submesh_transforms();
+            }
             // Collect this model for batching with appropriate transforms
-            model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, current_lod_index, params.x, &view_frustum, &camera, extras);
+            model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, current_lod_index, params.x, &view_frustum, &camera, batch_extras);
             stats_.drawn_models++;
             // Handle LOD transitions for batched models
             if(math::epsilonNotEqual(current_time, 0.0f, math::epsilon<float>()))
             {
-                model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, target_lod_index, params_inv.x, &view_frustum, &camera, extras);
+                model.submit_for_batching(batch_collector_, world_transform, submesh_transforms, target_lod_index, params_inv.x, &view_frustum, &camera, batch_extras);
                 stats_.drawn_models++;
             }
         }
@@ -1269,9 +1277,10 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
     // Update statistics
     const auto& batch_stats = batch_collector_.get_stats();
     stats_.add_batch_stats(batch_stats);
-    
-    // Clear batches to invalidate all transform pointers and free memory
-    batch_collector_.clear();
+
+    // NOT cleared here: the velocity pass reuses the prepared batches (mover instances
+    // carry their previous transforms) in the same frame. run_pipeline_impl clears the
+    // collector at the end of the run, which also invalidates the transform pointers.
 }
 
 void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
@@ -1358,6 +1367,15 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
             {
                 continue;
             }
+            // Batchable movers were collected into the shared batches with their previous
+            // transforms and are drawn by submit_batched_velocity below - mirroring the
+            // G-buffer's can_batch split exactly so nothing draws twice.
+            const bool batched = batch_collector::is_static_mesh_batching_enabled() &&
+                                 model_comp.get_skinning_transforms().empty();
+            if(batched)
+            {
+                continue;
+            }
 
             const auto& transform_comp = entity.get<transform_component>();
             const auto& world_transform = transform_comp.get_transform_global();
@@ -1409,8 +1427,92 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
                          &camera,
                          extras);
         }
+
+        // Batched movers: instanced over the SAME prepared batches the G-buffer drew,
+        // with the doubled per-instance stream (current + previous world matrix).
+        if(batch_collector::is_static_mesh_batching_enabled())
+        {
+            submit_batched_velocity(pass, prev_vp);
+        }
         gfx::discard();
     }
+}
+
+void deferred::submit_batched_velocity(gfx::render_pass& pass, const math::transform& prev_vp)
+{
+    if(!velocity_program_instanced_.program || !velocity_program_instanced_.program->is_valid())
+    {
+        return;
+    }
+
+    // The batches (and their prepare_batches sorting) are the ones submit_batched_geometry
+    // built this frame; the collector is deliberately not cleared until the end of the run.
+    const auto& prepared_batches = batch_collector_.get_prepared_batches();
+    if(prepared_batches.empty())
+    {
+        return;
+    }
+
+    APP_SCOPE_PERF("Rendering/Velocity Batched Geometry");
+
+    velocity_program_instanced_.program->begin();
+    gfx::set_uniform(velocity_program_instanced_.u_prev_view_proj, prev_vp.get_matrix());
+
+    std::vector<velocity_instance_vertex_data> mover_instances;
+    for(const auto* batch : prepared_batches)
+    {
+        if(!batch->is_valid() || batch->instances.empty())
+        {
+            continue;
+        }
+
+        // Only mover instances carry a previous transform; batches without any skip free.
+        mover_instances.clear();
+        for(const auto& instance : batch->instances)
+        {
+            if(instance.prev_world_transform_ptr != nullptr)
+            {
+                mover_instances.emplace_back(velocity_instance_vertex_data(instance));
+            }
+        }
+        if(mover_instances.empty())
+        {
+            continue;
+        }
+
+        const auto mesh_ptr = batch->key.mesh_ptr;
+        const auto material_ptr = batch->key.material_ptr;
+        if(!mesh_ptr || !material_ptr)
+        {
+            continue;
+        }
+        const auto submesh = mesh_ptr->get_submesh(batch->key.submesh_index, batch->key.lod_index);
+        if(!submesh)
+        {
+            continue;
+        }
+
+        const auto instance_count = static_cast<uint32_t>(mover_instances.size());
+        const auto instance_data_size = static_cast<uint16_t>(velocity_instance_vertex_data::packed_size());
+        bgfx::InstanceDataBuffer instance_buffer;
+        bgfx::allocInstanceDataBuffer(&instance_buffer, instance_count, instance_data_size);
+        if(!instance_buffer.data)
+        {
+            continue;
+        }
+        std::memcpy(instance_buffer.data, mover_instances.data(), size_t(instance_count) * instance_data_size);
+
+        mesh_ptr->bind_render_buffers_for_submesh(submesh, batch->key.lod_index);
+        bgfx::setInstanceDataBuffer(&instance_buffer);
+
+        // Match the material's cull (two-sided coverage), own the depth/write bits:
+        // EQUAL test against the G-buffer depth, no depth write, color only.
+        const uint64_t cull_state = material_ptr->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
+        gfx::set_state(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
+        gfx::submit(pass.id, velocity_program_instanced_.program->native_handle(), 0, false);
+    }
+
+    velocity_program_instanced_.program->end();
 }
 
 void deferred::run_velocity_debug_pass(const camera& camera,
@@ -2912,6 +3014,9 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     velocity_program_skinned_.cache_uniforms();
     velocity_program_skinned_.program = load_program("velocity/vs_velocity_skinned", "velocity/fs_velocity");
+
+    velocity_program_instanced_.cache_uniforms();
+    velocity_program_instanced_.program = load_program("velocity/vs_velocity_instanced", "velocity/fs_velocity");
 
     velocity_camera_program_.cache_uniforms();
     velocity_camera_program_.program = load_program("vs_clip_quad", "velocity/fs_velocity_camera");
