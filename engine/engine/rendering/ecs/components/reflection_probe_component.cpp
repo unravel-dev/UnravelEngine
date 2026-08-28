@@ -113,12 +113,12 @@ auto reflection_probe_component::get_cubemap_prefiltered() -> const  gfx::textur
 
 auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::frame_buffer::ptr&
 {
-    // Bake scratch, deliberately auto-collected (the default), unlike the product
-    // cubemaps in rview_: every cycle starts by recreating and clearing the faces
-    // here, and only the prefilter reads them, at cycle end. The dormant-only purge
-    // in update() keeps a stalled mid-cycle bake's captured faces intact.
-    auto& fbo = face_rviews_[face].fbo_get_or_emplace("CUBEMAP", false);
-    auto& tex = face_rviews_[face].tex_get_or_emplace("CUBEMAP_FACE", false);
+    // Bake scratch, auto-collected (the default), unlike the product cubemaps in
+    // rview_: every cycle starts by recreating and clearing the faces here, and only
+    // the prefilter reads them, at cycle end. The dormant-only purge in update()
+    // keeps a stalled mid-cycle bake's captured faces intact.
+    auto& fbo = face_rviews_[face].fbo_get_or_emplace("CUBEMAP");
+    auto& tex = face_rviews_[face].tex_get_or_emplace("CUBEMAP_FACE");
     const uint16_t size = probe_resolution_to_size(resolution_);
     constexpr gfx::texture_format format = gfx::texture_format::RGBA16F;
     const bool recreate_texture = gfx::needs_recreate(tex, {size, size}, format);
@@ -131,18 +131,19 @@ auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::fram
                                              1,
                                              format,
                                              BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
-   
+    }
+    // The fbo gets its own guard, never keyed on the texture alone: a collected fbo
+    // entry must rebuild around a still-valid texture instead of coming back null.
+    if(recreate_texture || !fbo)
+    {
         gfx::fbo_attachment att;
         att.layer = 0;
         att.texture = tex;
         att.generate_mips = true;
-
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({att});
     }
-
-
     return fbo;
 }
 

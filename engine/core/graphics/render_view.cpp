@@ -1,5 +1,6 @@
 #include "render_view.h"
 #include "graphics.h"
+#include <algorithm>
 #include <cassert>
 
 namespace gfx
@@ -106,13 +107,20 @@ void render_view::release_unused(uint32_t current_frame, uint32_t max_idle_frame
         }
     }
     // Using an fbo is using its attachments (see the header for the desync this
-    // prevents): refresh every texture entry a surviving fbo still references.
+    // prevents): a texture entry a surviving fbo references inherits the fbo's own
+    // stamp, NOT current_frame. Stamping "now" would keep the texture fresh for as
+    // long as the fbo entry exists, so the texture would outlive its fbo by one full
+    // idle window after the fbo expires -- and a creation site re-entered in that gap
+    // finds a valid texture next to a null fbo. Inheriting the stamp makes the pair
+    // age in lockstep and expire in the same call. Permanent (auto_collect = false)
+    // fbos keep the old guarantee: their attachments never age out.
     for(const auto& [fbo_name, fbo_slot] : fbos_)
     {
         if(!fbo_slot.ptr)
         {
             continue;
         }
+        const uint32_t fbo_stamp = fbo_slot.auto_collect ? fbo_slot.last_used_frame : current_frame;
         for(const auto& att : fbo_slot.ptr->get_attachments())
         {
             if(!att.texture)
@@ -123,7 +131,7 @@ void render_view::release_unused(uint32_t current_frame, uint32_t max_idle_frame
             {
                 if(tex_slot.ptr == att.texture)
                 {
-                    tex_slot.last_used_frame = current_frame;
+                    tex_slot.last_used_frame = std::max(tex_slot.last_used_frame, fbo_stamp);
                 }
             }
         }

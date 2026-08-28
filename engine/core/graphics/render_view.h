@@ -47,17 +47,20 @@ public:
      * @p max_idle_frames, releasing the GPU resources with it.
      *
      * Every accessor above counts as an access, the const gets included, and using a
-     * framebuffer counts as using its attachment textures: a texture reached only
-     * through its fbo (created once, attached, then always bound via the fbo) ages
-     * with the fbo, never alone. Dropping such a texture entry on its own would not
-     * free the texture -- the fbo's strong attachment reference keeps it alive -- but
-     * WOULD desync the name, handing the next get_or_emplace a second texture while
-     * the fbo still renders into the old one.
+     * framebuffer counts as using its attachment textures: a texture entry referenced
+     * by a live fbo inherits that fbo entry's stamp, so a texture reached only through
+     * its fbo (created once, attached, then always bound via the fbo) ages IN LOCKSTEP
+     * with the fbo and the pair expires in the same call. It can neither die before
+     * the fbo -- which would not free it (the fbo's strong attachment reference keeps
+     * it alive) but WOULD desync the name, handing the next get_or_emplace a second
+     * texture while the fbo still renders into the old one -- nor outlive it, which
+     * would open a window where a creation site keyed on the texture's validity finds
+     * a healthy texture next to a null fbo slot and hands its caller the null.
      *
-     * Entries created with auto_collect = false are never dropped here (and, being
-     * permanent, their fbo attachments stay refreshed). The OWNER of the view decides
-     * whether and when to call this (typically its component's per-frame update):
-     * lifetime is a per-view concern.
+     * Entries created with auto_collect = false are never dropped here, and their fbo
+     * attachments stay permanently refreshed. The OWNER of the view decides whether
+     * and when to call this (typically its component's per-frame update): lifetime is
+     * a per-view concern.
      */
     void release_unused(uint32_t current_frame, uint32_t max_idle_frames = default_max_idle_frames);
 
