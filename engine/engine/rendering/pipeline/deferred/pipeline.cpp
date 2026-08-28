@@ -1172,6 +1172,89 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     gfx::discard();
 }
 
+namespace
+{
+/**
+ * Shared core of the instanced batch submits (G-buffer geometry and velocity movers).
+ * Iterates the prepared batches, selects instances via @p should_include, packs the
+ * selected ones DIRECTLY into a transient bgfx instance buffer as @p InstanceData
+ * (which supplies packed_size() and a batch_instance conversion - two passes, count
+ * then pack, so the all-instances case stays zero-copy and the filtered case allocates
+ * exactly what it draws), binds the submesh buffers, and hands the draw to
+ * @p submit_batch - program, uniform, state and stats differences live in the callers.
+ * The instance count is clamped to what bgfx actually allocated, so a short transient
+ * pool can never be overrun.
+ */
+template<typename InstanceData, typename BatchList, typename Filter, typename SubmitFn>
+void submit_prepared_batches_instanced(const BatchList& prepared_batches,
+                                       Filter&& should_include,
+                                       SubmitFn&& submit_batch)
+{
+    for(const auto* batch : prepared_batches)
+    {
+        if(!batch->is_valid() || batch->instances.empty())
+        {
+            continue;
+        }
+
+        const auto mesh_ptr = batch->key.mesh_ptr;
+        const auto material_ptr = batch->key.material_ptr;
+        if(!mesh_ptr || !material_ptr)
+        {
+            continue;
+        }
+
+        const auto submesh = mesh_ptr->get_submesh(batch->key.submesh_index, batch->key.lod_index);
+        if(!submesh)
+        {
+            continue;
+        }
+
+        uint32_t instance_count = 0;
+        for(const auto& instance : batch->instances)
+        {
+            if(should_include(instance))
+            {
+                ++instance_count;
+            }
+        }
+        if(instance_count == 0)
+        {
+            continue;
+        }
+
+        bgfx::InstanceDataBuffer instance_buffer;
+        bgfx::allocInstanceDataBuffer(&instance_buffer,
+                                      instance_count,
+                                      static_cast<uint16_t>(InstanceData::packed_size()));
+        if(!instance_buffer.data)
+        {
+            continue;
+        }
+        instance_count = std::min(instance_count, instance_buffer.num);
+
+        auto* buffer_data = reinterpret_cast<InstanceData*>(instance_buffer.data);
+        uint32_t packed = 0;
+        for(const auto& instance : batch->instances)
+        {
+            if(packed >= instance_count)
+            {
+                break;
+            }
+            if(should_include(instance))
+            {
+                buffer_data[packed++] = InstanceData(instance);
+            }
+        }
+
+        mesh_ptr->bind_render_buffers_for_submesh(submesh, batch->key.lod_index);
+        bgfx::setInstanceDataBuffer(&instance_buffer);
+
+        submit_batch(*batch, *material_ptr, instance_count);
+    }
+}
+} // namespace
+
 void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& camera)
 {
     APP_SCOPE_PERF("Rendering/Submit Batched Geometry");
@@ -1200,77 +1283,26 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
     gfx::set_uniform(geom_program_instanced_.u_camera_wpos, camera_pos);
     gfx::set_uniform(geom_program_instanced_.u_camera_clip_planes, clip_planes);
 
-    // Submit each batch
-    for (const auto* batch : prepared_batches)
-    {
-        if (!batch->is_valid() || batch->instances.empty())
+    submit_prepared_batches_instanced<instance_vertex_data>(
+        prepared_batches,
+        [](const batch_instance&) { return true; },
+        [&](const auto& /*batch*/, const material& mat, uint32_t instance_count)
         {
-            continue;
-        }
+            stats_.drawn_static_submeshes += instance_count;
 
-        const auto instance_count = static_cast<uint32_t>(batch->instances.size());
-        stats_.drawn_static_submeshes += instance_count;
-
-        const auto mesh_ptr = batch->key.mesh_ptr;
-        const auto material_ptr = batch->key.material_ptr;
-        const auto lod_index = batch->key.lod_index;
-        const auto submesh_index = batch->key.submesh_index;
-
-        if (!mesh_ptr || !material_ptr)
-        {
-            continue;
-        }
-
-        const auto submesh = mesh_ptr->get_submesh(submesh_index, lod_index);
-        if(!submesh)
-        {
-            continue;
-        }
-
-        // Create instance buffer from batch instances
-        const auto instance_data_size = static_cast<uint16_t>(instance_vertex_data::packed_size());
-        
-        // Allocate instance buffer
-        bgfx::InstanceDataBuffer instance_buffer;
-        bgfx::allocInstanceDataBuffer(&instance_buffer, instance_count, instance_data_size);
-        if (!instance_buffer.data)
-        {
-            continue; // Skip this batch if allocation failed
-        }
-
-        
-        // Submit the mesh with instancing
-        // Bind vertex and index buffers for the specific submesh
-        mesh_ptr->bind_render_buffers_for_submesh(submesh, lod_index);
-        
-        // Pack instance data into buffer
-        auto* buffer_data = reinterpret_cast<instance_vertex_data*>(instance_buffer.data);
-        for (size_t i = 0; i < batch->instances.size(); ++i)
-        {
-            buffer_data[i] = instance_vertex_data(batch->instances[i]);
-        }
-
-        // Set instance data buffer
-        bgfx::setInstanceDataBuffer(&instance_buffer);
-
-        // Submit material properties
-        bool material_submitted = material_ptr->submit(geom_program_instanced_.program.get());
-        if (!material_submitted)
-        {
-            if (material_ptr->is<pbr_material>())
+            // Submit material properties
+            bool material_submitted = mat.submit(geom_program_instanced_.program.get());
+            if(!material_submitted && mat.is<pbr_material>())
             {
-                const auto& pbr = static_cast<const pbr_material&>(*material_ptr);
-                submit_pbr_material(geom_program_instanced_, pbr);
+                submit_pbr_material(geom_program_instanced_, static_cast<const pbr_material&>(mat));
             }
-        }
 
-        // Set LOD parameters (using global LOD settings for now)
-        const auto lod_params = math::vec3{0.0f, -1.0f, 1.0f}; // Default LOD params
-        gfx::set_uniform(geom_program_instanced_.u_lod_params, lod_params);
+            // Set LOD parameters (using global LOD settings for now)
+            const auto lod_params = math::vec3{0.0f, -1.0f, 1.0f}; // Default LOD params
+            gfx::set_uniform(geom_program_instanced_.u_lod_params, lod_params);
 
-        // Submit the instanced draw call
-        gfx::submit(pass.id, geom_program_instanced_.program->native_handle(), 0, false);
-    }
+            gfx::submit(pass.id, geom_program_instanced_.program->native_handle(), 0, false);
+        });
 
     geom_program_instanced_.program->end();
 
@@ -1458,59 +1490,18 @@ void deferred::submit_batched_velocity(gfx::render_pass& pass, const math::trans
     velocity_program_instanced_.program->begin();
     gfx::set_uniform(velocity_program_instanced_.u_prev_view_proj, prev_vp.get_matrix());
 
-    std::vector<velocity_instance_vertex_data> mover_instances;
-    for(const auto* batch : prepared_batches)
-    {
-        if(!batch->is_valid() || batch->instances.empty())
-        {
-            continue;
-        }
-
+    submit_prepared_batches_instanced<velocity_instance_vertex_data>(
+        prepared_batches,
         // Only mover instances carry a previous transform; batches without any skip free.
-        mover_instances.clear();
-        for(const auto& instance : batch->instances)
+        [](const batch_instance& instance) { return instance.prev_world_transform_ptr != nullptr; },
+        [&](const auto& /*batch*/, const material& mat, uint32_t /*instance_count*/)
         {
-            if(instance.prev_world_transform_ptr != nullptr)
-            {
-                mover_instances.emplace_back(velocity_instance_vertex_data(instance));
-            }
-        }
-        if(mover_instances.empty())
-        {
-            continue;
-        }
-
-        const auto mesh_ptr = batch->key.mesh_ptr;
-        const auto material_ptr = batch->key.material_ptr;
-        if(!mesh_ptr || !material_ptr)
-        {
-            continue;
-        }
-        const auto submesh = mesh_ptr->get_submesh(batch->key.submesh_index, batch->key.lod_index);
-        if(!submesh)
-        {
-            continue;
-        }
-
-        const auto instance_count = static_cast<uint32_t>(mover_instances.size());
-        const auto instance_data_size = static_cast<uint16_t>(velocity_instance_vertex_data::packed_size());
-        bgfx::InstanceDataBuffer instance_buffer;
-        bgfx::allocInstanceDataBuffer(&instance_buffer, instance_count, instance_data_size);
-        if(!instance_buffer.data)
-        {
-            continue;
-        }
-        std::memcpy(instance_buffer.data, mover_instances.data(), size_t(instance_count) * instance_data_size);
-
-        mesh_ptr->bind_render_buffers_for_submesh(submesh, batch->key.lod_index);
-        bgfx::setInstanceDataBuffer(&instance_buffer);
-
-        // Match the material's cull (two-sided coverage), own the depth/write bits:
-        // EQUAL test against the G-buffer depth, no depth write, color only.
-        const uint64_t cull_state = material_ptr->get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
-        gfx::set_state(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
-        gfx::submit(pass.id, velocity_program_instanced_.program->native_handle(), 0, false);
-    }
+            // Match the material's cull (two-sided coverage), own the depth/write bits:
+            // EQUAL test against the G-buffer depth, no depth write, color only.
+            const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
+            gfx::set_state(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
+            gfx::submit(pass.id, velocity_program_instanced_.program->native_handle(), 0, false);
+        });
 
     velocity_program_instanced_.program->end();
 }
