@@ -41,15 +41,15 @@ GLM_FUNC_QUALIFIER vec<3, T, Q> scale_impl(vec<3, T, Q> const& v, T desiredLengt
 }
 
 template<typename T>
-GLM_FUNC_QUALIFIER T scale_fix(T& in)
+GLM_FUNC_QUALIFIER T scale_fix(T in)
 {
-    T el = in;
-    if(math::epsilonEqual<T>(el, T(0), lowest_scale<T>()))
+    if(math::epsilonEqual<T>(in, T(0), lowest_scale<T>()))
     {
-        el = lowest_scale<T>() * (std::signbit(el) ? T(1.0) : T(1.0));
+        // Preserve the sign so mirrored (negative) scales keep their handedness.
+        in = lowest_scale<T>() * (std::signbit(in) ? T(-1.0) : T(1.0));
     }
 
-    return el;
+    return in;
 }
 
 template<typename T, qualifier Q>

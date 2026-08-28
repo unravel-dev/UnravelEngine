@@ -439,15 +439,15 @@ public:
     /**
      * @brief Compare this transform with another.
      * @param t The transform to compare with.
-     * @return -1, 0, or 1 based on comparison.
+     * @return 0 if equal within the default epsilon, 1 otherwise.
      */
     auto compare(const transform_t& rhs) const noexcept -> int;
 
     /**
      * @brief Compare this transform with another within a tolerance.
      * @param t The transform to compare with.
-     * @param tolerance The tolerance value.
-     * @return -1, 0, or 1 based on comparison.
+     * @param tolerance The per-element tolerance value.
+     * @return 0 if equal within the tolerance, 1 otherwise.
      */
     auto compare(const transform_t& rhs, T tolerance) const noexcept -> int;
 
@@ -1037,10 +1037,17 @@ TRANSFORM_INLINE void transform_t<T, Q>::set_rotation(const quat_t& rotation) no
     update_components();
     const quat_t normalized = glm::normalize(rotation);
     // Undo/property actions re-apply the same orientation via set_rotation after
-    // set_rotation_euler*. Keep the typed Euler hint unless orientation actually changed.
-    if(!rotations_equivalent(normalized, rotation_))
+    // set_rotation_euler*. Keep the typed Euler hint only while it still maps to the
+    // NEW orientation. Comparing new-vs-previous instead would let many small
+    // incremental rotations (each within tolerance of the last) drift arbitrarily
+    // far from a hint that is never invalidated.
+    if(!euler_hint_dirty_)
     {
-        make_euler_hint_dirty();
+        const quat_t from_hint = glm::normalize(quat_t(radians(euler_angles_hint_)));
+        if(!rotations_equivalent(from_hint, normalized))
+        {
+            make_euler_hint_dirty();
+        }
     }
     rotation_ = normalized;
     make_matrix_dirty();
@@ -1153,7 +1160,15 @@ TRANSFORM_INLINE void transform_t<T, Q>::rotate(const quat_t& q) noexcept
 template<typename T, precision Q>
 TRANSFORM_INLINE void transform_t<T, Q>::rotate_axis(T a, const vec3_t& v) noexcept
 {
-    quat_t q = glm::angleAxis(a, v) * get_rotation();
+    // glm::angleAxis requires a unit axis; normalize so arbitrary caller input rotates
+    // by the requested angle. A degenerate axis has no defined rotation - do nothing
+    // rather than poison the quaternion with NaNs.
+    const T axis_len2 = dot(v, v);
+    if(axis_len2 <= epsilon<T>())
+    {
+        return;
+    }
+    quat_t q = glm::angleAxis(a, v / sqrt(axis_len2)) * get_rotation();
     set_rotation(q);
 }
 
@@ -1270,21 +1285,10 @@ TRANSFORM_INLINE auto transform_t<T, Q>::compare(const transform_t& rhs, T toler
     const auto& m1 = get_matrix();
     const auto& m2 = rhs.get_matrix();
 
-    // Compare matrices
-    for(int i = 0; i < 4; ++i)
+    // Compare matrices; every element honors the caller's tolerance.
+    for(length_t i = 0; i < 4; ++i)
     {
-        vec4_t diff = m1[i] - m2[i];
-
-        if(i == 3)
-        {
-            diff.w = 0.0f;
-
-            if(!glm::epsilonEqual(m1[i].w, m2[i].w, T(0.001)))
-            {
-                return 1;
-            }
-        }
-
+        const vec4_t diff = m1[i] - m2[i];
         if(!glm::all(glm::epsilonEqual(diff, glm::zero<vec4_t>(), tolerance)))
         {
             return 1;
@@ -1334,6 +1338,11 @@ TRANSFORM_INLINE auto transform_t<T, Q>::transform_coord(const vec3_t& v) const 
 
     // Use matrix multiplication
     vec4_t result = get_matrix() * vec4_t(v, T(1));
+    if(abs(result.w) <= epsilon<T>())
+    {
+        // Point on the eye plane of a perspective transform: no finite projection.
+        return vec3_t(result);
+    }
     return vec3_t(result) / result.w;
 }
 
@@ -1363,6 +1372,11 @@ TRANSFORM_INLINE auto transform_t<T, Q>::inverse_transform_coord(const vec3_t& v
 
     // Use matrix multiplication
     vec4_t result = glm::inverse(get_matrix()) * vec4_t(v, T(1));
+    if(abs(result.w) <= epsilon<T>())
+    {
+        // Point on the eye plane of a perspective transform: no finite projection.
+        return vec3_t(result);
+    }
     return vec3_t(result) / result.w;
 }
 
@@ -1370,11 +1384,15 @@ template<typename T, precision Q>
 TRANSFORM_INLINE auto transform_t<T, Q>::transform_normal(const vec3_t& v) const noexcept ->
     typename transform_t<T, Q>::vec3_t
 {
-    // here skew can affect the direction of the normal
+    // Contract: the direction of the inverse-transpose (normal matrix) with the input's
+    // length preserved. Backs Unity-style TransformDirection, so length must not pick up
+    // the object's scale, and both branches must agree.
     if(can_use_simplified_calculations())
     {
-        // Direct transformation using components (normals are not affected by translation)
-        return get_rotation() * v;
+        // Uniform scale s: the normal matrix is (1/s) * R, so the direction is
+        // sign(s) * (R * v) and the length of v is already preserved.
+        const vec3_t rotated = get_rotation() * v;
+        return get_scale().x < T(0) ? -rotated : rotated;
     }
 
     // Use matrix multiplication
@@ -1385,17 +1403,31 @@ TRANSFORM_INLINE auto transform_t<T, Q>::transform_normal(const vec3_t& v) const
     mat3_t normal_matrix = glm::transpose(glm::inverse(linear_matrix));
 
     // Transform the normal vector using the normal matrix
-    return normal_matrix * v;
+    vec3_t result = normal_matrix * v;
+
+    // Rescale to the input length so both branches share one magnitude contract.
+    const T result_len2 = dot(result, result);
+    const T input_len2 = dot(v, v);
+    if(result_len2 > T(0) && input_len2 > T(0))
+    {
+        result *= sqrt(input_len2 / result_len2);
+    }
+    return result;
 }
 
 template<typename T, precision Q>
 TRANSFORM_INLINE auto transform_t<T, Q>::inverse_transform_normal(const vec3_t& v) const noexcept ->
     typename transform_t<T, Q>::vec3_t
 {
+    // Exact directional inverse of transform_normal (the transpose of the linear part
+    // inverts the inverse-transpose), with the input's length preserved - see the
+    // contract note in transform_normal.
     if(can_use_simplified_calculations())
     {
-        // Uniform scaling and no skew/perspective; inverse rotate the normal
-        return glm::conjugate(get_rotation()) * v;
+        // Uniform scale s: the transpose is s * R^T, so the direction is
+        // sign(s) * (R^T * v) and the length of v is already preserved.
+        const vec3_t rotated = glm::conjugate(get_rotation()) * v;
+        return get_scale().x < T(0) ? -rotated : rotated;
     }
 
     // Use transpose of the linear transformation matrix
@@ -1403,7 +1435,16 @@ TRANSFORM_INLINE auto transform_t<T, Q>::inverse_transform_normal(const vec3_t& 
     mat3_t normal_matrix = glm::transpose(linear_matrix);
 
     // Transform the normal vector using the normal matrix
-    return normal_matrix * v;
+    vec3_t result = normal_matrix * v;
+
+    // Rescale to the input length so both branches share one magnitude contract.
+    const T result_len2 = dot(result, result);
+    const T input_len2 = dot(v, v);
+    if(result_len2 > T(0) && input_len2 > T(0))
+    {
+        result *= sqrt(input_len2 / result_len2);
+    }
+    return result;
 }
 
 template<typename T, precision Q>
@@ -1591,7 +1632,8 @@ TRANSFORM_INLINE auto transform_t<T, Q>::is_scale_uniform() const noexcept -> bo
 {
     const T epsilon = glm::epsilon<T>();
     const auto& scale = get_scale();
-    return glm::abs(scale.x - scale.y) < epsilon && glm::abs(scale.y - scale.z) < epsilon;
+    return glm::abs(scale.x - scale.y) < epsilon && glm::abs(scale.y - scale.z) < epsilon &&
+           glm::abs(scale.x - scale.z) < epsilon;
 }
 
 template<typename T, precision Q>
@@ -1673,61 +1715,62 @@ struct compute_to_string<math::transform_t<T, Q>>
 // Unity-like LookRotation: +Z = forward, +Y = upwards (approx).
 inline auto look_rotation(const glm::vec3& forward, const glm::vec3& upwards) -> glm::quat
 {
-    auto view = glm::lookAt(
-        math::zero<math::vec3>(),
-        forward,
-        upwards
-        );
-
-    glm::mat4 model = glm::inverse(view);
-    return glm::quat_cast(model);
+    // Build the basis directly: +Z = forward by construction, independent of the
+    // GLM_FORCE_LEFT_HANDED configuration that glm::lookAt depends on, and safe for
+    // the degenerate inputs (zero forward, forward parallel to upwards) that made
+    // the lookAt-based version produce NaNs.
+    constexpr float k_degenerate_len2 = 1e-12f;
+    const float forward_len2 = glm::dot(forward, forward);
+    if(forward_len2 < k_degenerate_len2)
+    {
+        return glm::identity<glm::quat>();
+    }
+    const glm::vec3 f = forward / glm::sqrt(forward_len2);
+    glm::vec3 right = glm::cross(upwards, f);
+    float right_len2 = glm::dot(right, right);
+    if(right_len2 < k_degenerate_len2)
+    {
+        // upwards is collinear with forward (or zero): substitute any axis
+        // orthogonal to f so the basis stays well defined.
+        const glm::vec3 orth =
+            glm::abs(f.x) > glm::abs(f.z) ? glm::vec3(-f.y, f.x, 0.0f) : glm::vec3(0.0f, -f.z, f.y);
+        right = glm::cross(orth, f);
+        right_len2 = glm::dot(right, right);
+    }
+    right /= glm::sqrt(right_len2);
+    const glm::vec3 up = glm::cross(f, right);
+    return glm::quat_cast(glm::mat3(right, up, f));
 }
 
 inline auto from_to_rotation(const glm::vec3& from, const glm::vec3& to) -> glm::quat
 {
-    // 1. Normalize inputs
-    glm::vec3 f = glm::normalize(from);
-    glm::vec3 t = glm::normalize(to);
-
-    // 2. Dot product -> angle
-    float dot_product = glm::dot(f, t);
-    dot_product = glm::clamp(dot_product, -1.0f, 1.0f);
-    float angle = glm::acos(dot_product);
-
-    // 3. If vectors are nearly the same, return identity
-    if(glm::epsilonEqual(dot_product, 1.0f, 1e-5f))
+    // 1. Guard degenerate inputs (a zero vector has no direction) and normalize.
+    constexpr float k_degenerate_len2 = 1e-12f;
+    const float from_len2 = glm::dot(from, from);
+    const float to_len2 = glm::dot(to, to);
+    if(from_len2 < k_degenerate_len2 || to_len2 < k_degenerate_len2)
     {
-        // Angle is 0 -> no rotation needed
-        return glm::identity<glm::quat>(); // Identity
+        return glm::identity<glm::quat>();
     }
+    const glm::vec3 f = from / glm::sqrt(from_len2);
+    const glm::vec3 t = to / glm::sqrt(to_len2);
 
-    // 4. If vectors are nearly opposite
-    if(glm::epsilonEqual(dot_product, -1.0f, 1e-5f))
+    const float dot_product = glm::dot(f, t);
+
+    // 2. Nearly opposite: a 180-degree turn about any axis orthogonal to 'from'.
+    // The half-vector construction below degenerates to a zero quaternion here.
+    if(dot_product <= -1.0f + 1e-6f)
     {
-        // Angle is pi -> pick an orthonormal axis
-        // The axis must be perpendicular to 'from'
-        // Choose any vector orthonormal to 'f'
         glm::vec3 orth = glm::abs(f.x) > glm::abs(f.z) ? glm::vec3(-f.y, f.x, 0.0f) : glm::vec3(0.0f, -f.z, f.y);
         orth = glm::normalize(orth);
         return glm::angleAxis(glm::pi<float>(), orth);
     }
 
-    // 5. Otherwise, use cross product for the axis
-    glm::vec3 axis = glm::cross(f, t);
-
-    // If numerical drift caused near-zero cross magnitude, safe-guard:
-    float len_sq = glm::dot(axis, axis);
-    if(len_sq < 1e-12f)
-    {
-        // 'from' and 'to' differ by a small angle, but cross is near zero
-        // fallback: identity or very small rotation
-        return glm::identity<glm::quat>(); // Identity
-    }
-
-    axis = glm::normalize(axis);
-
-    // 6. Convert angle/axis to a quaternion
-    return glm::angleAxis(angle, axis);
+    // 3. Half-vector construction: normalize(w = 1 + dot, xyz = cross(f, t)) rotates
+    // f onto t. Trig-free and more accurate near dot = +/-1 than acos + angleAxis
+    // (also exact for the nearly-parallel case, which needs no special handling).
+    const glm::quat q(1.0f + dot_product, glm::cross(f, t));
+    return glm::normalize(q);
 }
 
 inline void set_position_relative(glm::mat4& matrix, const glm::vec3& camera_position)
