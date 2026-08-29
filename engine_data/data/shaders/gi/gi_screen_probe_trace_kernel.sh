@@ -522,47 +522,9 @@ int GiScreenProbeBlockRays(int slot, int block)
 	return GiScreenProbeBlockRatio(slot, block) > GI_IMPORTANCE_SUPERSAMPLE_RATIO ? 4 : 1;
 }
 
-/*
- * One COARSE block: block @p coarse in [0,16) is the 2x2 texel quad of the 4x4 octahedral
- * lattice; its cone is traced once (the sample jittered across the WHOLE quad footprint,
- * so the cone's full solid angle is measured over the R2 sequence) and the result is
- * stored to all four texels. Blend-free, the splat lives exactly one frame - a boundary
- * quad's bright/dark coin flip is white noise the resolve temporal integrates, never a
- * persistent blob (the lesson of the removed blended schemes). The per-texel tangent
- * cull is preserved exactly; the quad-centre pre-cull threshold is the texel cull
- * loosened by the quad's cosine half-span (~0.25), so a quad it rejects has every texel
- * at or under the cap, where cosine weights vanish anyway.
- */
-void GiTraceScreenProbeCoarse(int slot, ivec2 probe, int coarse)
-{
-	int coarse_edge = GI_PROBE_DIR_EDGE / 2;
-	ivec2 quad = ivec2((coarse % coarse_edge) * 2, (coarse / coarse_edge) * 2);
-	ivec2 base = GiProbeAtlasBase(probe.x, probe.y, 0);
-	vec2 quad_uv = (vec2(quad) + vec2_splat(1.0)) / float(GI_PROBE_DIR_EDGE);
-	vec3 centre_dir = GiOctDecode(quad_uv);
-	bool cone_traced = dot(centre_dir, s_anchor_normal[slot]) >= -0.45;
-	vec4 traced = vec4(0.0, 0.0, 0.0, -1.0);
-	BRANCH
-	if(cone_traced)
-	{
-		traced = GiTraceScreenProbeCone(slot, vec2(quad), 2.0, 1, base + quad);
-	}
-	LOOP
-	for(int i = 0; i < 4; ++i)
-	{
-		ivec2 local = quad + ivec2(i & 1, i >> 1);
-		ivec2 texel = base + local;
-		vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
-		if(!cone_traced || dot(GiOctDecode(tile_uv), s_anchor_normal[slot]) < -0.2)
-		{
-			imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
-		}
-		else
-		{
-			GiStoreScreenProbeRay(slot, texel, traced.xyz, traced.w);
-		}
-	}
-}
+// The coarse-block executor was FOLDED into the scheduler below: keeping it as a second
+// function gave the cone body a second inlined instantiation, which alone quadrupled this
+// program's compile time (see the note at the scheduler's trace call).
 
 #endif // GI_SCREEN_PROBE_TRACE_ADAPTIVE
 
@@ -702,23 +664,56 @@ void main()
 			}
 			scan -= block_rays;
 		}
+		// ONE cone-body instantiation for both ray kinds, by PARAMETER selection: fxc
+		// fully inlines every call site of the trace body (Hi-Z + SDF march + completion,
+		// thousands of instructions), and a second instantiation alone took this program's
+		// s_5_0 compile from ~4 s to ~17 s - fxc codegen is superlinear in inlined
+		// mega-bodies, independent of the -O level (measured 2026-08-29; [loop] attributes
+		// and unrolling were ruled out).
 		float ratio = GiScreenProbeBlockRatio(slot, block);
+		bool detail = ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO;
+		ivec2 quad = ivec2((block % 4) * 2, (block / 4) * 2);
+		// DETAIL: ray `scan` in [0,4) owns one texel of the 2x2 quad, double-sampled on
+		// the ladder's top rung. COARSE: one cone jittered across the whole quad footprint,
+		// splatted to all four texels (blend-free, the splat lives one frame - a boundary
+		// quad's bright/dark coin flip is white noise the resolve temporal integrates).
+		ivec2 cone_base = detail ? quad + ivec2(scan & 1, scan >> 1) : quad;
+		float cone_span = detail ? 1.0 : 2.0;
+		int sample_count = (detail && ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO *
+		                                          GI_IMPORTANCE_SUPERSAMPLE_RATIO *
+		                                          GI_IMPORTANCE_SUPERSAMPLE_RATIO)
+		                       ? 2
+		                       : 1;
+		ivec2 atlas_base = GiProbeAtlasBase(probe.x, probe.y, 0);
+		// Cone-centre cull: the detail texel's own threshold, or the quad centre loosened
+		// by its cosine half-span (~0.25) - a quad it rejects has every texel at or under
+		// the tangent cap, where cosine weights vanish anyway.
+		vec2 centre_uv = (vec2(cone_base) + vec2_splat(0.5 * cone_span)) / float(GI_PROBE_DIR_EDGE);
+		bool cone_traced =
+		    dot(GiOctDecode(centre_uv), s_anchor_normal[slot]) >= (detail ? -0.2 : -0.45);
+		vec4 traced = vec4(0.0, 0.0, 0.0, -1.0);
 		BRANCH
-		if(ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO)
+		if(cone_traced)
 		{
-			// DETAIL block: ray `scan` in [0,4) owns one texel of the 2x2 quad; the very
-			// brightest blocks (the ladder's top rung) double-sample each texel.
-			ivec2 local = ivec2((block % 4) * 2 + (scan & 1), (block / 4) * 2 + (scan >> 1));
-			int sample_count = ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO *
-			                               GI_IMPORTANCE_SUPERSAMPLE_RATIO *
-			                               GI_IMPORTANCE_SUPERSAMPLE_RATIO
-			                       ? 2
-			                       : 1;
-			GiTraceScreenProbeDetail(slot, probe, local, sample_count);
+			traced = GiTraceScreenProbeCone(slot, vec2(cone_base), cone_span, sample_count,
+			                                atlas_base + cone_base);
 		}
-		else
+		int store_count = detail ? 1 : 4;
+		LOOP
+		for(int i = 0; i < store_count; ++i)
 		{
-			GiTraceScreenProbeCoarse(slot, probe, block);
+			ivec2 local = cone_base + (detail ? ivec2(0, 0) : ivec2(i & 1, i >> 1));
+			ivec2 texel = atlas_base + local;
+			vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
+			// The cap texel's contract, exactly as the full path stores it.
+			if(!cone_traced || dot(GiOctDecode(tile_uv), s_anchor_normal[slot]) < -0.2)
+			{
+				imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
+			}
+			else
+			{
+				GiStoreScreenProbeRay(slot, texel, traced.xyz, traced.w);
+			}
 		}
 	}
 #else

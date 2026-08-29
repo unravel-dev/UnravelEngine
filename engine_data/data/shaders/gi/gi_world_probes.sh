@@ -598,6 +598,10 @@ uniform vec4 u_gi_world_probe_radiance_atlas;
 bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out vec3 out_radiance)
 {
 	out_radiance = vec3_splat(0.0);
+	// LOOP on both levels and corners, exactly as the irradiance cage: the corner body
+	// carries the (gated) cage-visibility march, and unrolled it multiplied the largest
+	// instruction footprint of every completing trace kernel by eight per level.
+	LOOP
 	for(int level = 0; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
 	{
 		float spacing = GiWorldProbeSpacing(level);
@@ -616,6 +620,7 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 		// before the field's verdict, so an all-blocked cage can answer darkness instead of
 		// falling through to the environment term.
 		float covered_sum = 0.0;
+		LOOP
 		for(int corner = 0; corner < 8; ++corner)
 		{
 			ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);

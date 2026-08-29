@@ -693,6 +693,13 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 	}
 	float t = t_near;
 	bool resolved = false;
+	// LOOP on every march in this file: max_steps is a compile-time constant at most call
+	// sites after inlining, and fxc then attempts to fully unroll a ~100-line body 64 times
+	// per instantiation - nested inside the grid walk and duplicated per caller, that was
+	// the dominant term of the GI shaders' 68-second s_5_0 compile total (the light-voxel
+	// kernel alone took 23 s; measured 2026-08-29). Divergent early-exit marches gain
+	// nothing from unrolling at runtime - the Hi-Z march has shipped [loop] all along.
+	LOOP
 	for(int step_index = 0; step_index < max_steps; ++step_index)
 	{
 		if(t > t_far)
@@ -798,6 +805,7 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 		// No grid this frame (nothing resident, or the upload failed). Testing everything is the
 		// slow answer, not a wrong one, and it keeps the tier working rather than silently
 		// dropping every instance.
+		LOOP
 		for(int i = 0; i < u_sdf_instance_count; ++i)
 		{
 			SdfTestInstance(i, origin, direction, inv_dir, t_min, t_max, max_steps, surface_bias,
@@ -856,6 +864,9 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 	// It also bounds per-instance cost without a separate budget: a visit can only cover one cell's
 	// worth of distance, so the "max_steps PER INSTANCE" blowup largely disappears on its own.
 	float t_cell_enter = t_enter;
+	// LOOP: the walk body carries the whole per-instance sphere trace (see the compile-time
+	// note at the mesh march above).
+	LOOP
 	for(int visited = 0; visited < SDF_GRID_MAX_STEPS; ++visited)
 	{
 		float t_step = min(t_next.x, min(t_next.y, t_next.z));
@@ -866,6 +877,7 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 		int cell_index = int(cell_f.x + cell_f.y * dim.x + cell_f.z * dim.x * dim.y);
 		uint begin = b_sdf_grid_offsets[cell_index];
 		uint end = b_sdf_grid_offsets[cell_index + 1];
+		LOOP
 		for(uint entry_index = begin; entry_index < end; ++entry_index)
 		{
 			SdfTestInstance(int(b_sdf_grid_instances[entry_index]), origin, direction, inv_dir,
@@ -938,6 +950,9 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 	float suppress_travel = 0.0;
 	bool first_sample = true;
 	bool from_origin = t_min <= 0.0;
+	// LOOP: see the compile-time note at the mesh march - this body additionally carries
+	// the coarse-level descent, so its unroll was the widest of all.
+	LOOP
 	for(int step = 0; step < max_steps; ++step)
 	{
 		if(t > t_max)

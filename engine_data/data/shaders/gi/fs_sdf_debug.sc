@@ -74,6 +74,9 @@ bool RunDiagnosticMode(vec3 ray_origin, vec3 ray_dir, out vec4 out_color)
 {
 	out_color = vec4(0.0, 0.0, 0.0, 0.0);
 	vec3 inv_dir = 1.0 / max(abs(ray_dir), vec3_splat(1e-8)) * sign(ray_dir + vec3_splat(1e-20));
+	// LOOP on the fat-bodied loops here too (see sdf_common's compile-time note): a
+	// debug-only shader still costs every import 7+ seconds when fxc unrolls them.
+	LOOP
 	for(int i = 0; i < u_sdf_instance_count; ++i)
 	{
 		SdfInstance inst = SdfLoadInstance(i);
@@ -274,6 +277,7 @@ void main()
 		vec4 albedo = vec4_splat(0.0);
 		int attributed_level = SDF_CLIPMAP_LEVEL_COUNT;
 		float attributed_voxel = 0.0;
+		LOOP
 		for(int probe_level = attr_level; probe_level < SDF_CLIPMAP_LEVEL_COUNT; ++probe_level)
 		{
 			vec4 level_data = u_sdf_clipmap_levels[probe_level];
@@ -420,6 +424,7 @@ void main()
 			float sky = 0.0;
 			bool answered = false;
 			bool in_blend_band = false;
+			LOOP
 			for(int probe_level = 0; probe_level < SDF_CLIPMAP_LEVEL_COUNT; ++probe_level)
 			{
 				float spacing = GiWorldProbeSpacing(probe_level);
