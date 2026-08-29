@@ -383,6 +383,123 @@ void test_phase_synced_blend_has_no_motion_spike()
           "phase-synced blend start produces no root-motion spike");
 }
 
+void test_keep_in_place_preserves_sway()
+{
+    std::printf("test_keep_in_place_preserves_sway\n");
+    // keep_in_place must discard the clip's TRAVEL - both the linearly
+    // accrued start-to-end displacement AND the capture's speed asymmetry
+    // along the travel line (mocap travel is not constant-speed; leaving the
+    // asymmetry plays a fore-aft lunge once per loop) - while keeping the
+    // lateral sway in the pose. The old behavior froze the bone's local X/Z
+    // entirely (bone weight 0), which flattened every gait.
+    auto clip = std::make_shared<animation_clip>();
+    clip->duration = seconds_t{1.0f};
+    auto& channel = clip->channels.emplace_back();
+    channel.node_name = "root";
+    channel.node_index = 0;
+    // Z carries travel 0 -> 1, running +0.1 ahead of constant speed at the
+    // midpoint (asymmetric capture); X carries a +0.1 lateral sway bump.
+    channel.position_keys = {{seconds_t{0.0f}, {0.0f, 0.0f, 0.0f}},
+                             {seconds_t{0.5f}, {0.1f, 0.0f, 0.6f}},
+                             {seconds_t{1.0f}, {0.0f, 0.0f, 1.0f}}};
+    channel.rotation_keys = {{seconds_t{0.0f}, math::identity<math::quat>()}};
+    channel.scaling_keys = {{seconds_t{0.0f}, {1.0f, 1.0f, 1.0f}}};
+    clip->root_motion.position_node_index = 0;
+    clip->root_motion.position_node_name = "root";
+    clip->root_motion.keep_in_place = true;
+    clip->root_motion.keep_position_y = true;
+
+    animation_player player;
+    player.blend_to(0, make_clip_handle(clip), seconds_t{0.0f}, true);
+    player.play();
+
+    // t = 0.5: the lateral bump survives; the +0.1 fore-aft lead does not.
+    auto frame = step_player(player, 0.5f);
+    check_near(frame.nodes[0].get_position().x, 0.1f, 1e-3f, "lateral sway survives in place");
+    check_near(frame.nodes[0].get_position().z, 0.0f, 1e-3f, "travel-line asymmetry is removed");
+    check_near(frame.motion.bone_position_weights.x, 1.0f, 1e-4f, "in-place bone x is written, not frozen");
+    check_near(frame.motion.root_position_weights.x, 0.0f, 1e-4f, "in place moves no root translation");
+
+    // Step 0.75 wraps 0.5 -> 0.25: sampled (0.05, 0, 0.3), lateral half-bump
+    // kept, fore-aft removed. The residual matches at both key-range ends,
+    // so the wrap produces no discontinuity.
+    frame = step_player(player, 0.75f);
+    check_near(frame.nodes[0].get_position().x, 0.05f, 1e-3f, "lateral residual continuous across loop wrap");
+    check_near(frame.nodes[0].get_position().z, 0.0f, 1e-3f, "travel line stays removed after wrap");
+}
+
+void test_root_motion_extract_pose_is_blend_safe()
+{
+    std::printf("test_root_motion_extract_pose_is_blend_safe\n");
+    // Extraction moves the FULL per-frame displacement into the root delta,
+    // so the pose's horizontal position must be the constant clip-start
+    // baseline written at bone weight 1 - not raw travel masked by a zero
+    // weight. Pose blending ignores per-pose weights, so masked raw travel
+    // leaked into crossfades against clips whose weight is 1: the model
+    // lunged forward, then slid back as the blend completed.
+    auto clip = make_linear_clip(0.0f, 1.0f, 1.0f, true /*root_motion*/);
+
+    animation_player player;
+    player.blend_to(0, make_clip_handle(clip), seconds_t{0.0f}, true);
+    player.play();
+
+    step_player(player, 0.25f);
+    auto frame = step_player(player, 0.5f);
+    check_near(frame.nodes[0].get_position().x, 0.0f, 1e-3f, "extracted pose holds the clip-start baseline");
+    check_near(frame.motion.bone_position_weights.x, 1.0f, 1e-4f, "extracted pose is written, not weight-masked");
+    check_near(frame.motion.root_transform_delta.get_translation().x, 0.5f, 1e-3f, "extraction still yields the full delta");
+
+    // Crossfade into an in-place clip mid-travel: the blended pose must stay
+    // at the baseline instead of leaking the traveling clip's raw position.
+    auto in_place = make_linear_clip(0.0f, 1.0f, 1.0f, true);
+    in_place->root_motion.keep_in_place = true;
+    player.blend_to(0, make_clip_handle(in_place), seconds_t{0.2f}, true);
+    frame = step_player(player, 0.1f);
+    check(std::fabs(frame.nodes[0].get_position().x) < 0.01f, "mid-blend pose does not leak travel");
+}
+
+void test_root_motion_extract_rotation_is_blend_safe()
+{
+    std::printf("test_root_motion_extract_rotation_is_blend_safe\n");
+    // Rotation extraction moves the FULL per-frame rotation change into the
+    // root delta, so the pose must hold the constant clip-start rotation at
+    // bone weight 1 - not raw traveling yaw masked by a zero weight, which
+    // leaked into crossfades against kept-rotation clips as a heading twitch.
+    auto clip = std::make_shared<animation_clip>();
+    clip->duration = seconds_t{1.0f};
+    auto& channel = clip->channels.emplace_back();
+    channel.node_name = "root";
+    channel.node_index = 0;
+    channel.position_keys = {{seconds_t{0.0f}, {0.0f, 0.0f, 0.0f}}};
+    // Yaws 90 degrees over the loop; rotation extraction is on (keep_rotation
+    // stays false), so the yaw belongs to the root delta, not the pose.
+    channel.rotation_keys = {{seconds_t{0.0f}, math::identity<math::quat>()},
+                             {seconds_t{1.0f}, math::angleAxis(1.5707963f, math::vec3{0.0f, 1.0f, 0.0f})}};
+    channel.scaling_keys = {{seconds_t{0.0f}, {1.0f, 1.0f, 1.0f}}};
+    clip->root_motion.position_node_index = 0;
+    clip->root_motion.position_node_name = "root";
+    clip->root_motion.rotation_node_index = 0;
+    clip->root_motion.rotation_node_name = "root";
+
+    animation_player player;
+    player.blend_to(0, make_clip_handle(clip), seconds_t{0.0f}, true);
+    player.play();
+
+    step_player(player, 0.25f);
+    auto frame = step_player(player, 0.5f);
+    check_near(frame.motion.bone_rotation_weight, 1.0f, 1e-4f, "extracted rotation pose is written, not weight-masked");
+    check(std::fabs(frame.nodes[0].get_rotation().w) > 0.9999f, "extracted pose holds the clip-start rotation");
+    // Delta over the 0.5s step is 45 degrees of yaw: +Z rotates toward +X.
+    math::vec3 fwd = frame.motion.root_transform_delta.get_rotation() * math::vec3{0.0f, 0.0f, 1.0f};
+    check_near(fwd.x, 0.70711f, 1e-3f, "extraction still yields the full rotation delta");
+
+    // Crossfade into a clip without root rotation: the blended pose must stay
+    // near identity instead of leaking the traveling clip's raw yaw.
+    player.blend_to(0, make_clip_handle(make_linear_clip(0.0f, 0.0f, 1.0f, true)), seconds_t{0.2f}, true);
+    frame = step_player(player, 0.1f);
+    check(std::fabs(frame.nodes[0].get_rotation().w) > 0.999f, "mid-blend pose does not leak extracted yaw");
+}
+
 void test_zero_duration_blend_and_finite_output()
 {
     std::printf("test_zero_duration_blend_and_finite_output\n");
@@ -522,6 +639,9 @@ auto run_animation_suite(rtti::context& ctx) -> int
     test_root_motion_accumulates_across_loops();
     test_root_motion_no_teleport_on_replay();
     test_phase_synced_blend_has_no_motion_spike();
+    test_keep_in_place_preserves_sway();
+    test_root_motion_extract_pose_is_blend_safe();
+    test_root_motion_extract_rotation_is_blend_safe();
     test_zero_duration_blend_and_finite_output();
     test_force_update_steps_while_paused();
     test_blend_to_null_clears_layer();

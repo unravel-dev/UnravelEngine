@@ -8,6 +8,11 @@ namespace unravel
 
 namespace
 {
+/// Horizontal start-to-end displacement below which a root channel counts as
+/// non-traveling for keep_in_place (idles, dances): its full animation is kept
+/// instead of projecting out the travel direction.
+constexpr float IN_PLACE_MIN_TRAVEL = 1e-2f;
+
 /**
  * @brief Interpolates between keyframes to find the appropriate value at the current time.
  *  * @tparam T The type of value being interpolated (e.g., vec3 or quat).
@@ -619,8 +624,55 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
                 pose.motion_result.root_position_weights.z = 0.0f;
 
                 pose.motion_result.bone_position_weights.y = 1.0f;
-                pose.motion_result.bone_position_weights.x = 0.0f;
-                pose.motion_result.bone_position_weights.z = 0.0f;
+            }
+
+            // Unless keep_position_xz explicitly leaves the raw travel in the
+            // pose, replace the pose's horizontal position with a value that is
+            // meaningful WITHOUT its weight mask, and write it at bone weight 1.
+            // Pose blending knows nothing about per-pose weights, so a raw
+            // traveling position masked by a zero weight (the previous scheme)
+            // leaked into any crossfade against a clip whose weight is 1 - seen
+            // as the model lunging forward, then sliding back as the blend
+            // completed, whenever clips disagreed on root-motion settings.
+            //
+            // keep_in_place discards the clip's TRAVEL, not the bone's
+            // animation: subtract the start-to-end displacement accrued
+            // linearly over the key range, then remove EVERY remaining
+            // component along the travel direction - mocap travel is not
+            // constant-speed (a Mixamo jog's hip speed swings ~30% within the
+            // loop), and the linear part alone leaves that asymmetry as a
+            // fore-aft lunge played once per loop. The lateral sway stays in
+            // the pose, the residual matches at both key-range ends (no seam
+            // across loop wraps), and a non-traveling channel (idle, dance)
+            // keeps its full animation. Extraction instead takes the FULL
+            // per-frame displacement - sway included - into the root delta, so
+            // its pose complement is the constant clip-start baseline; adding
+            // the sway there too would play it twice.
+            if(anim_clip->root_motion.keep_in_place || !anim_clip->root_motion.keep_position_xz)
+            {
+                pose.motion_result.bone_position_weights.x = 1.0f;
+                pose.motion_result.bone_position_weights.z = 1.0f;
+
+                const auto& first_key = channel.position_keys.front();
+                const auto& last_key = channel.position_keys.back();
+                const float key_span = (last_key.time - first_key.time).count();
+                math::vec3 pose_position = first_key.value;
+                if(anim_clip->root_motion.keep_in_place && key_span > 0.0f)
+                {
+                    const float progress = math::clamp((time - first_key.time).count() / key_span, 0.0f, 1.0f);
+                    math::vec3 travel = last_key.value - first_key.value;
+                    travel.y = 0.0f;
+                    math::vec3 residual = position - first_key.value - travel * progress;
+                    const float travel_len = math::length(travel);
+                    if(travel_len > IN_PLACE_MIN_TRAVEL)
+                    {
+                        const math::vec3 travel_dir = travel / travel_len;
+                        residual -= travel_dir * math::dot(residual, travel_dir);
+                    }
+                    pose_position = first_key.value + residual;
+                }
+                pose_position.y = position.y;
+                node.transform.set_position(pose_position);
             }
 
             motion_state.root_position_at_time = position;
@@ -677,6 +729,20 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
             {
                 pose.motion_result.root_rotation_weight = 0.0f;
                 pose.motion_result.bone_rotation_weight = 1.0f;
+            }
+            else if(!anim_clip->root_motion.keep_rotation)
+            {
+                // Extraction takes the FULL per-frame rotation change into the
+                // root delta, so the pose's own rotation must be the constant
+                // clip-start baseline written at bone weight 1 - not the raw
+                // traveling rotation masked by a zero weight. Pose blending
+                // ignores per-pose weights, so the masked raw value leaked
+                // into crossfades against kept-rotation clips: the same class
+                // of bug as the position leak, seen as a heading twitch when
+                // blending a rotation-extracted clip (falls, dances) with a
+                // kept-rotation locomotion clip.
+                pose.motion_result.bone_rotation_weight = 1.0f;
+                node.transform.set_rotation(channel.rotation_keys.front().value);
             }
 
             motion_state.root_rotation_at_time = rotation;

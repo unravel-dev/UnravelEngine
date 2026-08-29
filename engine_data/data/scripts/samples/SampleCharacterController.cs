@@ -126,10 +126,10 @@ public class SampleCharacterController : ScriptComponent
     [Tooltip("Unused by two-bone foot IK (always hip-knee-foot). Kept for inspector compatibility.")]
     public int FootChainLength = 2;
 
-    [Tooltip("Foot height above the hips at which foot IK starts blending out.")]
+    [Tooltip("Foot height above the character root at which foot IK starts blending out.")]
     public float FootHeightMin = 0.14f;
 
-    [Tooltip("Foot height above the hips at which foot IK has fully blended out.")]
+    [Tooltip("Foot height above the character root at which foot IK has fully blended out.")]
     public float FootHeightMax = 0.22f;
 
     [Tooltip("Vertical offset above the foot from which to start the ground raycast.")]
@@ -140,6 +140,21 @@ public class SampleCharacterController : ScriptComponent
 
     [Tooltip("Additional vertical offset applied to the foot IK target for foot thickness.")]
     public float FootTargetYOffset = 0.1f;
+
+    [Tooltip("Ground drop below the animated foot at which foot IK starts fading out for that foot. " +
+             "Lets a touchdown foot conform to a slope while keeping a swing foot from being pulled " +
+             "onto ground far below it.")]
+    public float FootDropStart = 0.15f;
+
+    [Tooltip("Ground drop below the animated foot at which foot IK is fully off for that foot.")]
+    public float FootDropMax = 0.3f;
+
+    [Tooltip("Maximum distance the hips may dip to help a leg reach lower ground.")]
+    public float MaxHipsDrop = 0.3f;
+
+    [Tooltip("Sideways offset of each leg's knee pole (positive = knees bias outward). " +
+             "Prevents the knees from collapsing toward each other on slopes.")]
+    public float KneePoleOutwardBias = 0.15f;
 
     [Tooltip("Smoothing factor for the hips dip offset (0 = no smoothing, 1 = snap).")]
     [Range(0, 1)]
@@ -540,26 +555,43 @@ public class SampleCharacterController : ScriptComponent
         bool rightHit = ProcessFoot(RightFoot, ref rightFootBlend, dt, out FootGoal right);
 
         // Lower the hips by the deepest foot drop so bent knees look correct
-        // on steps and slopes.
+        // on steps and slopes. Clamped so a foot over a long drop can never
+        // fold the character - past the clamp that foot's IK weight has faded
+        // out anyway (see the drop gate in ProcessFoot).
         float targetOffset = 0.0f;
         if (leftHit) targetOffset = Mathf.Min(targetOffset, left.verticalOffset);
         if (rightHit) targetOffset = Mathf.Min(targetOffset, right.verticalOffset);
+        targetOffset = Mathf.Max(targetOffset, -MaxHipsDrop);
         hipsOffset = Mathf.Lerp(hipsOffset, targetOffset, SmoothingAlpha(HipsSmoothing, dt));
 
         Vector3 hipsPos = Hips.transform.position;
         Hips.transform.position = new Vector3(hipsPos.x, hipsPos.y + hipsOffset, hipsPos.z);
 
-        if (leftHit) ApplyFootGoal(LeftFoot, left);
-        if (rightHit) ApplyFootGoal(RightFoot, right);
+        if (leftHit) ApplyFootGoal(LeftFoot, left, -1.0f);
+        if (rightHit) ApplyFootGoal(RightFoot, right, 1.0f);
     }
 
-    private void ApplyFootGoal(Entity foot, FootGoal goal)
+    // Knee pole geometry: a point in front of the pelvis at roughly knee
+    // height. See the pole comment in ApplyFootGoal.
+    private const float KneePoleForward = 1.0f;
+    private const float KneePoleDown = 0.35f;
+
+    private void ApplyFootGoal(Entity foot, FootGoal goal, float side)
     {
         if (!foot.IsValid() || goal.weight <= 0.0f)
             return;
 
-        // Pole in front of and above the foot so the knee always bends forward.
-        Vector3 kneePole = foot.transform.position + transform.forward + transform.up * 0.5f;
+        // Pole anchored at the pelvis, never at the foot: the solver flattens
+        // the pole against the hip-to-target axis, and on a slope that axis
+        // tilts forward - a foot-derived pole then loses its forward part and
+        // its leftover inward lean (feet travel inboard of the hip joints)
+        // steers BOTH knees toward the midline until the thighs intersect.
+        // A pelvis anchor with an explicit outward bias keeps each knee
+        // bending forward and slightly out on any terrain.
+        Vector3 kneePole = Hips.transform.position
+                         + transform.forward * KneePoleForward
+                         + transform.right * (side * KneePoleOutwardBias)
+                         - transform.up * KneePoleDown;
 
         // Two-bone rather than FABRIK: hip-knee-foot is exactly the analytical
         // case, so it lands on the target in a single pass instead of iterating
@@ -602,6 +634,21 @@ public class SampleCharacterController : ScriptComponent
 
         goal.position = hit.Value.point + Vector3.up * FootTargetYOffset;
         goal.normal = hit.Value.normal;
+
+        // Drop gate: fade IK by how far the target would pull the foot DOWN
+        // from its animated position. The lift gate above reads the clip's
+        // authored foot height, which cannot exclude a slow-gait swing foot
+        // (barely lifted), and on a downhill slope the ground under such a
+        // foot is arbitrarily far below - without this gate the foot gets
+        // slammed onto the slope and, through the hips dip, drags the pelvis
+        // down with it. Ground near or above the foot (uphill step-up) passes
+        // through untouched.
+        float drop = footPos.y - goal.position.y;
+        effectiveBlend *= 1.0f - Mathf.InverseLerp(FootDropStart, FootDropMax, drop);
+
+        if (effectiveBlend <= 0.0f)
+            return false;
+
         goal.verticalOffset = (goal.position.y - footPos.y) * effectiveBlend;
         // Fade the IK weight rather than dragging the target part of the way
         // down: a part-way target is a point in mid-air, so the foot would hover
