@@ -150,7 +150,7 @@
       " on a flat floor four of the eight cage probes lie in the floor plane and the biased"       \
       " query clears it by only ~0.4 voxel (the view-dominant bias's 0.2 normal share), so a"      \
       " half-voxel acceptance blocked whole flat-ground cages and the all-blocked contract"       \
-      " painted black rings/donuts on open ground (measured, 2026-08-12 screenshots). Walls"       \
+      " painted black rings/donuts on open ground (measured in screenshots). Walls"                \
       " that actually seal have negative cores in the finest field covering the sample, which"     \
       " the march reads; sub-voxel-porous walls at coarse-only coverage stay the documented"       \
       " residual either way")                                                                      \
@@ -199,7 +199,7 @@
       " - THE ray-budget knob now that the probe-space temporal is gone (cost scales with the"     \
       " inverse square; the removal's full-rate cost is recovered here as spatial density"         \
       " instead of temporal staleness). 32 was A/B'd against 16 at 4K and judged"                  \
-      " indistinguishable (2026-08-29): the adaptive interp already thins flat regions, the"       \
+      " indistinguishable: the adaptive interp already thins flat regions, the"                    \
       " integrate's plane-weighted 4-probe blend + bilateral upsample + denoise band-limit"        \
       " spatially at this scale, and the Hi-Z screen tier keeps near-field occlusion"              \
       " pixel-precise regardless of lattice pitch. For reference, Lumen's shipped uniform grid"    \
@@ -208,7 +208,7 @@
       " backed by adaptive SKIPPING - the refinement direction is the open quality lever if"       \
       " sparse lattices ever show silhouette errors")                                              \
     /* The probe-space temporal (direction strata blended 1/n into the tile, sticky anchors,   */ \
-    /* scheduled Halton walks) was REMOVED 2026-08-29: averaging in probe space turns white    */ \
+    /* scheduled Halton walks) was REMOVED: averaging in probe space turns white               */ \
     /* per-frame noise into probe-granular correlated drift the downstream temporal cannot     */ \
     /* remove (measured as still-camera moving blobs across three schemes). All 64 texels      */ \
     /* trace fresh every frame; ray budget scales with probe_spacing instead.                  */ \

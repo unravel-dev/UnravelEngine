@@ -211,7 +211,8 @@ auto game::init_window(rtti::context& ctx, const cmd_line::parser& parser) -> bo
         rend.create_window(title, x, y, width, height, flags);
         return true;
     }
-    const uint32_t flags = os::window::resizable | os::window::maximized;
+    // Deploy default "Fullscreen Window"
+    const uint32_t flags = os::window::fullscreen_desktop;
     const auto primary_display = os::display::get_primary_display_index();
     rend.create_window_for_display(primary_display, title, flags);
     return true;

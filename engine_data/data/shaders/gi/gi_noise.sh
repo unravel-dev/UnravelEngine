@@ -10,7 +10,7 @@
  * temporal advance in value space - fract(pattern + R2(frame)) - which is what carries
  * the per-pixel convergence.
  *
- * HISTORY (2026-08-26): a 32x32 blue-noise tile lived here briefly (256-vec4 uniform
+ * HISTORY: a 32x32 blue-noise tile lived here briefly (256-vec4 uniform
  * array + CPU void-and-cluster generator + macro-tile scramble + a settings toggle) and
  * was REMOVED after measurement: under this pipeline's temporal chain (probe-space mean,
  * dual-rate pixel temporal, denoise) it was visually indistinguishable from IGN and

@@ -61,7 +61,7 @@ public:
         /// pixel, so a skipped probe's tile is one the pixels would have blended to anyway.
         bool adaptive_probes = true;
         /// A windowed PROBE-SPACE temporal (16-ray direction strata blended 1/n into the
-        /// tile) lived here and was REMOVED (2026-08-29): averaging in probe space turns
+        /// tile) lived here and was REMOVED: averaging in probe space turns
         /// white per-frame noise into probe-granular correlated drift the full-res temporal
         /// cannot remove - measured as still-camera moving blobs across three schemes. All
         /// texels trace fresh every frame; scale cost with probe_spacing first (spatial

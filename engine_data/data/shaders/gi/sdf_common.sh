@@ -696,9 +696,9 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 	// LOOP on every march in this file: max_steps is a compile-time constant at most call
 	// sites after inlining, and fxc then attempts to fully unroll a ~100-line body 64 times
 	// per instantiation - nested inside the grid walk and duplicated per caller, that was
-	// the dominant term of the GI shaders' 68-second s_5_0 compile total (the light-voxel
-	// kernel alone took 23 s; measured 2026-08-29). Divergent early-exit marches gain
-	// nothing from unrolling at runtime - the Hi-Z march has shipped [loop] all along.
+	// a measured term of the GI shaders' 68-second s_5_0 compile total (the light-voxel
+	// kernel alone took 23 s). Divergent early-exit marches gain nothing from unrolling at
+	// runtime - the Hi-Z march has shipped [loop] all along.
 	LOOP
 	for(int step_index = 0; step_index < max_steps; ++step_index)
 	{

@@ -668,8 +668,8 @@ void main()
 		// fully inlines every call site of the trace body (Hi-Z + SDF march + completion,
 		// thousands of instructions), and a second instantiation alone took this program's
 		// s_5_0 compile from ~4 s to ~17 s - fxc codegen is superlinear in inlined
-		// mega-bodies, independent of the -O level (measured 2026-08-29; [loop] attributes
-		// and unrolling were ruled out).
+		// mega-bodies, independent of the -O level (measured; [loop] attributes and
+		// unrolling were ruled out).
 		float ratio = GiScreenProbeBlockRatio(slot, block);
 		bool detail = ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO;
 		ivec2 quad = ivec2((block % 4) * 2, (block / 4) * 2);

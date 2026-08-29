@@ -101,7 +101,7 @@ uniform vec4 u_gi_vis_memo_params;
 #endif
 /// Third compiled variant (cs_gi_light_voxels_vis_memo_debug.sc): paints the LIVE bounce
 /// visibility-memo transaction per face into the light volume instead of radiance - the
-/// instrument for "is the memo hitting" (measured 2026-08-13: Light Voxels +0.5 ms over the
+/// instrument for "is the memo hitting" (measured: Light Voxels +0.5 ms over the
 /// pre-memo build = the miss-every-rotation cost signature; the CPU-side links all verified,
 /// exactly the situation the sun-tier saga taught to settle with a compiled variant, never a
 /// runtime flag). It runs the real memo path - load, miss-march, restamp - so the view shows
