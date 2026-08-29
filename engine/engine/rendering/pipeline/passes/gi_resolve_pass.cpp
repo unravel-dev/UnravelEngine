@@ -137,21 +137,14 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
     auto cs_args = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_args.sc");
     args_program_.cache_uniforms();
     args_program_.program = std::make_unique<gpu_program>(cs_args);
-    auto cs_trace = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_trace.sc");
     auto cs_trace_full =
         am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_trace_full.sc");
     trace_program_.cache_uniforms();
-    trace_program_.program = std::make_unique<gpu_program>(cs_trace);
-    trace_program_.full_program = std::make_unique<gpu_program>(cs_trace_full);
-    if(!trace_program_.program || !trace_program_.program->is_valid())
+    trace_program_.program = std::make_unique<gpu_program>(cs_trace_full);
+    if(!trace_program_.is_valid())
     {
-        APPLOG_WARNING("[SurfaceCache] GI compacted probe-trace program failed to load. "
-                       "Probe-space temporal falls back to the 8x8 group (48 idle lanes).");
-    }
-    if(!trace_program_.full_program || !trace_program_.full_program->is_valid())
-    {
-        APPLOG_WARNING("[SurfaceCache] GI full probe-trace program failed to load. The "
-                       "A/B-off path serializes 4 rays per compacted thread.");
+        APPLOG_WARNING("[SurfaceCache] GI probe-trace program failed to load. GI is disabled "
+                       "for this run.");
     }
     auto cs_interp = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_interp.sc");
     interp_program_.cache_uniforms();
@@ -275,10 +268,9 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                        float(target_size.height),
                                        1.0f / float(target_size.width),
                                        1.0f / float(target_size.height)};
-        // Radiance atlas: one 8x8 octahedral tile per probe, SINGLE-BUFFERED - every tile
-        // lives at a lattice-fixed position, so "history" is the tile itself and the trace
-        // blends its 16-ray stratum in place. The old A/B ping-pong existed only to feed an
-        // identity texel-for-texel copy (the deleted history pass).
+        // Radiance atlas: one 8x8 octahedral tile per probe, single-buffered and fully
+        // rewritten every frame (traced, interpolated or cleared) - the firefly governor
+        // reads last frame's texel from it before the overwrite.
         const usize32_t atlas_size{probes_x * probe_dir_edge, probes_y * probe_layers * probe_dir_edge};
         const auto ensure_atlas = [&](const char* name) -> gfx::texture::ptr
         {
@@ -306,9 +298,9 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         auto probe_atlas = ensure_atlas("GI_PROBE_ATLAS");
         // Derived data, fully rewritten by the filter each frame: no ping-pong needed.
         auto irradiance_atlas = ensure_atlas("GI_PROBE_IRRADIANCE");
-        // DOUBLE buffered: reprojection needs last frame's meta and counts resident alongside
-        // this frame's, and the halves swap with the atlas parity. Each half holds every LAYER's
-        // full lattice.
+        // DOUBLE buffered: the importance reprojection needs last frame's meta and mip
+        // resident alongside this frame's, and the halves swap each frame. Each half holds
+        // every LAYER's full lattice.
         const uint32_t probe_count = probes_x * probes_y;
         const uint32_t records_per_half = probe_count * probe_layers;
         // Both record halves plus the traced-LIST region (one bit-cast coordinate per vec4 -
@@ -349,34 +341,35 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         }
         if(!bgfx::isValid(probe_args_))
         {
-            // Entry 0: one group per traced probe (the full program). Entry 1: four probes
-            // per group (the compact program). The args shader writes both.
-            probe_args_ = gfx::create_indirect_buffer(2);
+            // One entry: one 8x8 group per traced probe.
+            probe_args_ = gfx::create_indirect_buffer(1);
         }
         const uint32_t write_probe_offset = even_probe_frame ? 0u : records_per_half;
         const uint32_t read_probe_offset = even_probe_frame ? records_per_half : 0u;
-        const bool probe_temporal_active = s.probe_space_temporal && records_trusted_;
-        const float probe_window =
-            probe_temporal_active ? float(gi::GI_SCREEN_PROBE_WINDOW) : 1.0f;
-        // The probe-space window follows the LIGHTING change signal (light hash + content
-        // epoch; camera travel deliberately excluded - it does not stale accumulated
-        // light): each direction is re-measured once per GI_SCREEN_PROBE_WINDOW frames, so
-        // a 24-deep tile mean drags a moved emitter across ~96 frames - the "5 second
-        // trail". After an edit the cap drops to a 4-deep blend and HOLDS for
-        // quiescence_settle_frames: (3/4)^16 blends over that hold flushes the stale
-        // energy to ~1% BEFORE the cap restores - a shorter hold left half the trail to
-        // decay at the slow rate, which read as a 3 s tail. The stored per-probe counts
-        // clamp to the cap on the next blend, so the drop takes effect immediately.
-        const float probe_cap =
-            params.view_cache->get_lighting_quiet_frames() < surface_cache_view::quiescence_settle_frames
-                ? math::min(math::max(s.max_accum_frames, 2.0f), float(gi::GI_SCREEN_PROBE_WINDOW))
-                : math::max(s.max_accum_frames, 2.0f);
-        // x = 0 untrusted, 1 trusted no-blend, >= 2 trusted + 1/n cap (the blend gate),
-        // y = the probe-space temporal window,
-        // zw = the double-buffered record offsets.
-        const float temporal_x = !records_trusted_ ? 0.0f : (probe_temporal_active ? probe_cap : 1.0f);
-        const float probe_temporal[4] = {temporal_x,
-                                         probe_window,
+        // STUCK-HOT diagnostic: sustained hotness keeps the temporal fast caps engaged, and
+        // no estimator change can fully calm GI in that state - the report attributes it.
+        const bool lighting_hot = params.view_cache->get_lighting_quiet_frames() <
+                                  surface_cache_view::quiescence_settle_frames;
+        if(lighting_hot)
+        {
+            if(++lighting_hot_streak_ == lighting_hot_report_frames)
+            {
+                APPLOG_INFO("[SurfaceCache] GI lighting-change signal hot for {} consecutive "
+                            "frames: the temporal caps are pinned at their fast (noisier) "
+                            "values. Expected while a light or emissive keeps animating; "
+                            "otherwise a churning light hash or content epoch is holding GI "
+                            "in its reactive mode.",
+                            lighting_hot_report_frames);
+            }
+        }
+        else
+        {
+            lighting_hot_streak_ = 0;
+        }
+        // x = records trusted (gates the trace's importance reprojection),
+        // y = unused, zw = the double-buffered record offsets.
+        const float probe_temporal[4] = {records_trusted_ ? 1.0f : 0.0f,
+                                         0.0f,
                                          float(write_probe_offset),
                                          float(read_probe_offset)};
         // The one gather (plan phase 8: the v1 paths and the radiance hash are gone). Without
@@ -489,15 +482,12 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             {
                 gfx::render_pass pass("GI/Probe Trace");
                 pass.set_view_proj(params.cam->get_view(), gather_projection);
-                gpu_program* trace_cs = trace_program_.select(probe_temporal_active);
-                if(trace_cs == nullptr)
+                gpu_program* trace_cs = trace_program_.program.get();
+                if(trace_cs == nullptr || !trace_cs->is_valid())
                 {
                     gfx::discard();
                     return trace_tex;
                 }
-                // The compact program packs four probes per group and launches from args
-                // entry 1; the full program is one probe per group, entry 0.
-                const bool compact_selected = trace_cs == trace_program_.program.get();
                 trace_cs->begin();
                 gfx::set_texture(trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
                 gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
@@ -549,11 +539,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(trace_program_.u_gi_world_probe_atlas,
                                  clipmap_gpu.get_world_probe_atlas_params());
                 gfx::set_uniform(trace_program_.u_gi_world_probe_radiance_atlas, wp_radiance_atlas);
-                gfx::dispatch_indirect(pass.id,
-                                       trace_cs->native_handle(),
-                                       probe_args_,
-                                       compact_selected ? 1 : 0,
-                                       1);
+                gfx::dispatch_indirect(pass.id, trace_cs->native_handle(), probe_args_, 0, 1);
                 trace_cs->end();
                 records_trusted_ = true;
             }
@@ -669,16 +655,18 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     // exactly the inputs whose change makes accumulated lighting stale
                     // (camera travel is deliberately excluded - reprojection handles it and
                     // the epoch is suppressed while origins move). After an edit the slow
-                    // lane caps at the classic window, held for quiescence_settle_frames so
-                    // the stale energy actually flushes at the fast rate before the long
-                    // window returns; a still world then earns it and the amortization
-                    // waves average out. The per-pixel 3-sigma detector remains for large
-                    // local shifts, but it is provably blind to SMALL bright sources (their
-                    // mean shift is below the lane noise) - this global signal answers those.
+                    // lane collapses to the FAST cap, held for quiescence_settle_frames so
+                    // the stale energy actually flushes before the long window returns; a
+                    // still world then earns it and the amortization waves average out. The
+                    // per-pixel 3-sigma detector snaps only the bright core of a change - the
+                    // DIM PENUMBRA of a moved emissive sits below the lane noise and, at the
+                    // old hot cap of GI_TEMPORAL_MAX_FRAMES, decayed as the visible
+                    // second-long trail (see the constant's justification) - so the global
+                    // signal owns the whole flush.
                     const float slow_cap =
                         params.view_cache->get_lighting_quiet_frames() <
                                 surface_cache_view::quiescence_settle_frames
-                            ? math::min(s.temporal_slow_frames, float(gi::GI_TEMPORAL_MAX_FRAMES))
+                            ? float(gi::GI_TEMPORAL_FAST_FRAMES)
                             : s.temporal_slow_frames;
                     const float temporal_params[4] = {s.reprojection_tolerance,
                                                       float(gi::GI_TEMPORAL_FAST_FRAMES),
@@ -814,11 +802,12 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
                                          s.denoise_normal_power,
                                          s.denoise_plane_tolerance,
                                          moments ? s.denoise_luma_phi : 0.0f};
-        // y arms the converged early-out with the accumulation cap; only meaningful when a
-        // real moments texture is bound (the same condition that arms the luminance stop).
+        // y arms the converged early-out with the accumulation cap (the slow lane's - the
+        // count the moments actually accumulate to); only meaningful when a real moments
+        // texture is bound (the same condition that arms the luminance stop).
         const float denoise_params2[4] = {s.denoise_low_count_boost,
                                           (moments && s.denoise_converged_early_out && s.enable_temporal)
-                                              ? s.max_accum_frames
+                                              ? s.temporal_slow_frames
                                               : 0.0f,
                                           math::max(s.denoise_luma_floor, 0.0f),
                                           0.0f};
@@ -972,10 +961,12 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
     gfx::set_uniform(temporal_program_.u_gi_prev_view_proj, prev_view_proj.get_matrix());
     const auto prev_inv_view_proj = glm::inverse(prev_view_proj.get_matrix());
     gfx::set_uniform(temporal_program_.u_gi_prev_inv_view_proj, prev_inv_view_proj);
-    // Lighting-change-aware slow cap, exactly as the fused form (see the note there).
+    // Lighting-change-aware slow cap, exactly as the fused form (see the note there): while
+    // the lighting signal is hot the slow lane collapses to the FAST cap so a moved source's
+    // dim penumbra - invisible to the 3-sigma detector - flushes instead of trailing.
     const float slow_cap =
         params.view_cache->get_lighting_quiet_frames() < surface_cache_view::quiescence_settle_frames
-            ? math::min(s.temporal_slow_frames, float(gi::GI_TEMPORAL_MAX_FRAMES))
+            ? float(gi::GI_TEMPORAL_FAST_FRAMES)
             : s.temporal_slow_frames;
     const float temporal_params[4] = {s.reprojection_tolerance,
                                       float(gi::GI_TEMPORAL_FAST_FRAMES),

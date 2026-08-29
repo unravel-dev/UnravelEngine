@@ -60,13 +60,12 @@ public:
         /// classification is exactly the interpolation test the integrate pass applies per
         /// pixel, so a skipped probe's tile is one the pixels would have blended to anyway.
         bool adaptive_probes = true;
-        /// Windowed probe-space temporal: each traced probe fires 16 of 64 octahedral rays
-        /// per frame (a 2x2 Bayer stratum) and blends them into that probe's own previous
-        /// tile. Placement stays sticky while the origin is still in-tile so a still camera
-        /// fills one sphere; probes walk to a new Halton after a few complete spheres so
-        /// blotches can dissolve. A miss copies the previous tile (never black).
-        /// Off traces all 64 every frame.
-        bool probe_space_temporal = true;
+        /// A windowed PROBE-SPACE temporal (16-ray direction strata blended 1/n into the
+        /// tile) lived here and was REMOVED (2026-08-29): averaging in probe space turns
+        /// white per-frame noise into probe-granular correlated drift the full-res temporal
+        /// cannot remove - measured as still-camera moving blobs across three schemes. All
+        /// 64 rays trace fresh every frame; scale cost with probe_spacing instead (spatial
+        /// softness, the artifact-free trade).
         /// World-space specular tier (plan phase 9), layered under SSR: rough lobes read the
         /// world-probe radiance atlas, sharp ones trace (screen first, SDF + light voxels
         /// beyond) - contributing the off-screen reflections SSR cannot have.
@@ -87,9 +86,6 @@ public:
         int debug_view = 0;
         /// Full-resolution temporal accumulation over the integrated irradiance.
         bool enable_temporal = true;
-        /// PROBE-SPACE accumulation cap (the screen-probe tiles' 1/n blend gate). The
-        /// full-res temporal no longer uses this: it runs the dual-rate pair below.
-        float max_accum_frames = float(gi::GI_TEMPORAL_MAX_FRAMES);
         /// The full-res temporal's SLOW lane cap - the stability window. Long on purpose:
         /// a small bright emissive source excites ~16-frame amortization waves (crawling
         /// voxel-scale blobs) that a short mean cannot average. Costs no responsiveness -
@@ -232,12 +228,9 @@ private:
     /// lattice descriptors, the camera, and the world-structure bindings.
     struct trace_program : uniforms_cache
     {
-        /// Compacted 16-thread group (cs_gi_screen_probe_trace.sc). Used while
-        /// probe-space temporal is on: one thread per Bayer-stratum ray.
+        /// 8x8 group (cs_gi_screen_probe_trace_full.sc): one group per traced probe,
+        /// all 64 octahedral rays in parallel, every frame.
         gpu_program::ptr program;
-        /// 8x8 group (cs_gi_screen_probe_trace_full.sc). A/B-off and the first
-        /// untrusted frame: all 64 octahedral rays in parallel.
-        gpu_program::ptr full_program;
         gfx::program::uniform_ptr u_gi_camera;
         gfx::program::uniform_ptr u_gi_screen_trace;
         gfx::program::uniform_ptr u_gi_prev_view_proj;
@@ -300,26 +293,7 @@ private:
 
         auto is_valid() const -> bool
         {
-            return (program && program->is_valid()) || (full_program && full_program->is_valid());
-        }
-
-        /// Compact when temporal is on and that program linked; otherwise the 8x8
-        /// full path; last resort the compact program (window 1 walks 4 phases).
-        auto select(bool want_compact) const -> gpu_program*
-        {
-            if(want_compact && program && program->is_valid())
-            {
-                return program.get();
-            }
-            if(full_program && full_program->is_valid())
-            {
-                return full_program.get();
-            }
-            if(program && program->is_valid())
-            {
-                return program.get();
-            }
-            return nullptr;
+            return program && program->is_valid();
         }
     } trace_program_;
 
@@ -653,6 +627,12 @@ private:
     /// resize; a sustained run means accumulation is not happening at all.
     static constexpr uint32_t history_warning_frames = 120;
     uint32_t frames_without_history_ = 0;
+    /// Consecutive frames the lighting-change signal has been hot. A burst is legitimate
+    /// (an edit plus the settle hold); a SUSTAINED run pins the probe and temporal caps at
+    /// their fast, noisier values - reported once so sustained GI shimmer can be attributed
+    /// to the scene (an animating light, a churning hash) instead of the estimator.
+    static constexpr uint32_t lighting_hot_report_frames = 600;
+    uint32_t lighting_hot_streak_ = 0;
 };
 
 } // namespace unravel

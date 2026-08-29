@@ -378,6 +378,8 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                          3,
                          use_velocity ? params.velocity : raw_tex,
                          BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+        // Receiver normal for the mover gate's mirror-direction hit rebuild.
+        gfx::set_texture(temporal_program_.s_refl_normal, 4, params.g_buffer->get_texture(1));
         // The TAA-unjittered previous pair, never get_prev_view_projection(): the jittered
         // prev misaligns a still camera's reprojection by the jitter delta every frame.
         auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
@@ -387,8 +389,15 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                                           1.0f / float(trace_size.height),
                                           float(params.temporal_frames)};
         gfx::set_uniform(temporal_program_.u_gi_refl_temporal, temporal_params);
-        const float velocity_params[4] = {use_velocity ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+        // y = the stillness-release ceiling: capped while the velocity pass drew any mover
+        // within one temporal window (present cannot validate history - the per-pixel hit
+        // read in the shader only TIGHTENS this), released to 1 otherwise.
+        const float mover_cap = (use_velocity && params.velocity_movers_recent)
+                                    ? float(gi::GI_REFLECTION_MOVER_STILL_CAP)
+                                    : 1.0f;
+        const float velocity_params[4] = {use_velocity ? 1.0f : 0.0f, mover_cap, 0.0f, 0.0f};
         gfx::set_uniform(temporal_program_.u_gi_refl_velocity, velocity_params);
+        gfx::set_uniform(temporal_program_.u_gi_reflection_camera, reflection_camera);
         // The topology helpers stage a transient vertex buffer consumed by ONE submit - every
         // draw needs its own call (reusing the trace's left this submit with no vertices).
         auto ttopology = gfx::clip_fullscreen_triangle(1.0f);

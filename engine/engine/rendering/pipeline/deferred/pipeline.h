@@ -511,6 +511,12 @@ private:
     /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
     /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).
     bool velocity_run_active_{false};
+    /// Render frame of the last velocity pass that drew ANY mover (individual or batched),
+    /// stamped inside run_velocity_pass's own visibility walk - the CPU-side signal for the
+    /// GI reflection temporal's mover gate, held one temporal window by the consumer.
+    /// Riding the owning pass's loop keeps the signal exactly as covered as the buffer it
+    /// describes (off-screen movers are accepted as uncovered by design - no registry scan).
+    uint64_t velocity_movers_frame_{~0ull};
     /// Rotation phase of the light-voxel update (GI_LIGHT_VOXEL_UPDATE_DENOM slices).
     uint32_t light_voxel_frame_{0};
 

@@ -194,40 +194,24 @@
       " documented DDGI thin-wall failure). Two voxels clears the trace acceptance with margin"    \
       " and stays below any wall the field itself resolves")                                       \
     /* --- screen probe gather (plan 3.4) --- */                                                   \
-    X(GI_SCREEN_PROBE_SPACING, 16,                                                                 \
-      "trace-resolution pixels", "published: [S21 s34][CVar] ScreenProbeGather.DownsampleFactor;"  \
-      " the gi_resolve_pass::settings::probe_spacing default")                                     \
-    X(GI_SCREEN_PROBE_RAYS_PER_FRAME, 16,                                                          \
-      "rays per traced probe per frame", "derived: the 8x8 atlas keeps 64 world-anchored"          \
-      " directions; each frame traces a 2x2 Bayer stratum of 16 and blends them into that"         \
-      " probe's own previous tile (the world-probe windowed-mean recipe). Lumen's 16-ray"          \
-      " path is a 4x4 octahedron, not a hole-filled 8x8")                                          \
-    X(GI_SCREEN_PROBE_WINDOW, 4,                                                                   \
-      "frames", "derived: 64 octahedral texels / GI_SCREEN_PROBE_RAYS_PER_FRAME - every"           \
-      " direction is measured exactly once per window. 4 frames sits inside"                       \
-      " GI_TEMPORAL_MAX_FRAMES so the pixel filter still sees several complete spheres")           \
-    X(GI_SCREEN_PROBE_HISTORY_TILE, 0.25f,                                                         \
-      "of the probe tile in world units", "derived: the origin-sameness band for the sticky"       \
-      " reconstruct - within it the anchor is the same visibility field and the running-mean"      \
-      " count carries. Outside it an UNSCHEDULED origin change (a camera slide) must not"          \
-      " collage new cones onto another origin's tile at full trust: the trace inherits the"        \
-      " world-reprojected previous probe's tile and count (plane-vetted) or resets. SCHEDULED"     \
-      " walks are exempt via ANCHOR.w - they keep the count and fade the new origin in at 1/n."    \
-      " The tile is still COPIED on a miss - writing black is what darkened pans")                 \
-    X(GI_SCREEN_PROBE_WALK_WINDOWS, 3,                                                             \
-      "complete spheres", "derived: stay sticky so the 16/64 stratum fills complete spheres"      \
-      " (per-frame Halton is the shimmer). Then the whole lattice Halton-walks together (OFF's"   \
-      " shared offset - staggering froze neighbours on different points and printed blotches)"    \
-      " and keeps the 1/n count via ANCHOR.w so the walk is a fade, never a reset. Halton is"     \
-      " indexed by walk count so the 8-cycle is fully used. No extra rays. Raised 1 -> 2 when"    \
-      " the parallax-adaptive probe filter took over blotch dissolution in the near band, then"   \
-      " 2 -> 3 (2026-08-25): even as a fade, each walk starts a screen-coherent origin"           \
-      " migration - every probe's tile begins blending toward a new anchor on the SAME frame,"    \
-      " and the eye picks that synchronized micro-pulse out of far smaller amplitudes than"       \
-      " spatial noise (the user-reported probe-space shimmer). Three is the CEILING the"          \
-      " tested invariant permits: two walk periods must fit the classic temporal window"          \
-      " (2 x 3 x 4 = 24 = GI_TEMPORAL_MAX_FRAMES) so a walked blotch always has a second,"        \
-      " differently-anchored epoch inside the pixel mean to fade against")                        \
+    X(GI_SCREEN_PROBE_SPACING, 32,                                                                 \
+      "full-resolution pixels", "measured: the gi_resolve_pass::settings::probe_spacing default"   \
+      " - THE ray-budget knob now that the probe-space temporal is gone (cost scales with the"     \
+      " inverse square; the removal's full-rate cost is recovered here as spatial density"         \
+      " instead of temporal staleness). 32 was A/B'd against 16 at 4K and judged"                  \
+      " indistinguishable (2026-08-29): the adaptive interp already thins flat regions, the"       \
+      " integrate's plane-weighted 4-probe blend + bilateral upsample + denoise band-limit"        \
+      " spatially at this scale, and the Hi-Z screen tier keeps near-field occlusion"              \
+      " pixel-precise regardless of lattice pitch. For reference, Lumen's shipped uniform grid"    \
+      " (ScreenProbeGather.DownsampleFactor [S21 s34]) is one probe per 16x16 full-res pixels"     \
+      " backed by ADAPTIVE REFINEMENT probes at interpolation failures; ours is one per 32x32"     \
+      " backed by adaptive SKIPPING - the refinement direction is the open quality lever if"       \
+      " sparse lattices ever show silhouette errors")                                              \
+    /* The probe-space temporal (direction strata blended 1/n into the tile, sticky anchors,   */ \
+    /* scheduled Halton walks) was REMOVED 2026-08-29: averaging in probe space turns white    */ \
+    /* per-frame noise into probe-granular correlated drift the downstream temporal cannot     */ \
+    /* remove (measured as still-camera moving blobs across three schemes). All 64 texels      */ \
+    /* trace fresh every frame; ray budget scales with probe_spacing instead.                  */ \
     X(GI_ADAPTIVE_PLANE_TOLERANCE, 0.05f,                                                          \
       "fraction of view distance", "derived: the adaptive gather may substitute a probe's tile"    \
       " with its even-lattice parents' blend only where the integrate pass would have blended"     \
@@ -426,6 +410,17 @@
       " the bounds already fetch). An established bright pixel raises its own ceiling and"         \
       " converges unbiased; no reference stores unclamped (disocclusions must not ramp from"       \
       " black). Same multiple as the gather's - the two governors bound the same physics")         \
+    X(GI_REFLECTION_MOVER_STILL_CAP, 0.125f,                                                       \
+      "stillness fraction", "derived: ceiling on the temporal's stillness release while the"       \
+      " velocity pass drew any mover within one temporal window. The release reads RECEIVER"       \
+      " motion only, so a still camera watching a moving emitter held its ghost unclamped and"     \
+      " x4-windowed - and the per-pixel hit read can only TIGHTEN, never lift, the cap: a"         \
+      " DEPARTED mover reads static at exactly its ghost's pixels (the current mirror hit is"      \
+      " the revealed background - present cannot validate history), so any 'static now'"           \
+      " reading that superseded the cap preserved the trail (measured, emissive-cube shooter)."    \
+      " 0.125 keeps 87.5% of the neighbourhood clamp engaged: ghosts flush within about one"       \
+      " window while converged static content under a parked camera loses at most the release's"   \
+      " tail. Costs nothing while no mover is on screen")                                          \
     X(GI_REFLECTION_GATHER_FADE_START, 0.3f,                                                       \
       "GGX roughness", "derived: 0.75 x GI_REFLECTION_ROUGH_CUTOFF. The traced tiers now"          \
       " SPREAD with roughness (screen hits average a GGX-cone disk, world hits blend toward"       \
@@ -464,13 +459,17 @@
       " Lumen's 10 (their budget has far more effective rays) still crawled, 25 measured"          \
       " stable; 24 keeps the window commensurate with the 8-frame anchor-placement cycle"          \
       " (three full cycles). Depth rejection only, no neighbourhood clamp [S21 s98]; the"          \
-      " gi_resolve_pass::settings::max_accum_frames default (now the PROBE-SPACE cap; the"         \
-      " full-res temporal runs the dual-rate pair below)")                                         \
+      " full-res temporal runs the dual-rate pair below")                                          \
     X(GI_TEMPORAL_FAST_FRAMES, 8,                                                                  \
-      "frames", "derived: one full anchor-placement cycle = two complete 4-frame screen-probe"     \
-      " stratum spheres - the shortest window whose mean has seen every ray direction once."       \
-      " The dual-rate temporal's fast lane, and the count a detected lighting change resets"       \
-      " the slow lane to")                                                                         \
+      "frames", "derived: one full anchor-placement cycle (the 8-cycle Halton) - the shortest"     \
+      " window whose mean has seen every placement jitter once. The dual-rate temporal's fast"     \
+      " lane, the count a detected lighting change resets the slow lane to, AND the slow"          \
+      " lane's cap while the lighting-change signal is hot: the dim penumbra of a moved"           \
+      " emissive shifts the mean by less than the lane noise (shift/sigma = sqrt(p/(1-p)) for"     \
+      " rare-arrival content), so the 3-sigma detector is provably blind to it and at the old"     \
+      " hot cap of GI_TEMPORAL_MAX_FRAMES the penumbra decayed as a visible second-long trail."    \
+      " Flushing at the fast rate while hot trades transient shimmer (bounded by the"              \
+      " quiescence hold) for reactivity, and costs nothing while still")                           \
     X(GI_TEMPORAL_SLOW_FRAMES, 96,                                                                 \
       "frames", "measured: a small bright emissive source excites amortization phase waves"        \
       " with a ~16-frame period (the world-probe stratum window x the light-voxel rotation)"       \
@@ -488,16 +487,6 @@
       " release; origin re-snaps stay immediate). Two light-voxel rotations, so half the"          \
       " relights hit the memo even mid-drag; the coarse-clipmap GI lags a dragged object by"       \
       " at most ~130 ms - within the gather's own multi-window latency")                           \
-    X(GI_SCREEN_PROBE_REINVEST_BUDGET, 0.5f,                                                       \
-      "of the full lattice's ray budget", "measured: reinvestment tiers first balanced against"    \
-      " the FULL lattice (traced x2 <= all probes -> double strata), but the probes the"           \
-      " adaptive classifier leaves traced are the EXPENSIVE ones - geometry breaks, near-field"    \
-      " marches - while the skipped flat probes are what diluted the average ray cost, so"         \
-      " budget-neutral in ray COUNT was +0.15 ms in ray TIME and adaptive stopped being a win."    \
-      " The widened strata may now spend at most this fraction of the full budget: in dense"       \
-      " scenes (Bistro street, traced ~half the lattice) nothing reinvests and adaptive keeps"     \
-      " its full saving; where probes are genuinely sparse - flat dim walls, the far-emissive"     \
-      " flicker case - the arrival density still doubles or quadruples at small absolute cost")    \
     X(GI_LIGHT_VOXEL_SUN_DITHER, 0.25f,                                                            \
       "attribute voxels", "derived: direct lighting is evaluated at one representative point"      \
       " per voxel per relight, so shadow edges stand in the light volume as voxel-scale"           \

@@ -1,4 +1,4 @@
-/*
+﻿/*
  * GI Phase 0: the validation suite itself (plan: tasks/gi_rewrite_plan.md, sections 9-10).
  *
  * Runs inside the unravel-tests runner:
@@ -225,144 +225,9 @@ void test_gi_shaders_compile_sm50()
 #endif
 }
 
-/// Probe-space temporal Bayer: 16 of 64 octahedral texels per frame, exhaustive over
-/// GI_SCREEN_PROBE_WINDOW, matching GiScreenProbeInStratum / GiScreenProbeStratumLocal.
-void test_screen_probe_stratum_covers_the_atlas()
-{
-    std::printf("test_screen_probe_stratum_covers_the_atlas\n");
-    check(gi::GI_SCREEN_PROBE_RAYS_PER_FRAME * gi::GI_SCREEN_PROBE_WINDOW == 64,
-          "rays-per-frame x window equals the 8x8 octahedral atlas");
-    check(gi::GI_SCREEN_PROBE_WINDOW == 4, "window is the 2x2 Bayer period");
-    check(gi::GI_SCREEN_PROBE_RAYS_PER_FRAME == 16, "compact group is 16 threads");
-    const auto in_stratum = [](int x, int y, uint32_t frame, uint32_t window) -> bool
-    {
-        if(window <= 1u)
-        {
-            return true;
-        }
-        const uint32_t phase = frame % window;
-        return (uint32_t(x) & 1u) == (phase & 1u) && (uint32_t(y) & 1u) == ((phase >> 1u) & 1u);
-    };
-    const auto stratum_local_x = [](int thread, uint32_t phase) -> int
-    {
-        const int coarse = 8 / 2;
-        return (thread % coarse) * 2 + int(phase & 1u);
-    };
-    const auto stratum_local_y = [](int thread, uint32_t phase) -> int
-    {
-        const int coarse = 8 / 2;
-        return (thread / coarse) * 2 + int((phase >> 1u) & 1u);
-    };
-    int seen[64];
-    for(int i = 0; i < 64; ++i)
-    {
-        seen[i] = 0;
-    }
-    for(uint32_t frame = 0; frame < uint32_t(gi::GI_SCREEN_PROBE_WINDOW); ++frame)
-    {
-        int this_frame = 0;
-        int compact_seen[64];
-        for(int i = 0; i < 64; ++i)
-        {
-            compact_seen[i] = 0;
-        }
-        for(int y = 0; y < 8; ++y)
-        {
-            for(int x = 0; x < 8; ++x)
-            {
-                if(in_stratum(x, y, frame, uint32_t(gi::GI_SCREEN_PROBE_WINDOW)))
-                {
-                    ++seen[y * 8 + x];
-                    ++this_frame;
-                }
-            }
-        }
-        check(this_frame == gi::GI_SCREEN_PROBE_RAYS_PER_FRAME,
-              "each frame traces exactly rays-per-frame texels");
-        for(int thread = 0; thread < gi::GI_SCREEN_PROBE_RAYS_PER_FRAME; ++thread)
-        {
-            const int x = stratum_local_x(thread, frame % uint32_t(gi::GI_SCREEN_PROBE_WINDOW));
-            const int y = stratum_local_y(thread, frame % uint32_t(gi::GI_SCREEN_PROBE_WINDOW));
-            check(x >= 0 && x < 8 && y >= 0 && y < 8, "compact thread maps inside the tile");
-            check(in_stratum(x, y, frame, uint32_t(gi::GI_SCREEN_PROBE_WINDOW)),
-                  "compact thread maps to this frame's Bayer stratum");
-            check(compact_seen[y * 8 + x] == 0, "compact threads do not collide");
-            compact_seen[y * 8 + x] = 1;
-        }
-    }
-    for(int i = 0; i < 64; ++i)
-    {
-        check(seen[i] == 1, "each octahedral texel is traced exactly once per window");
-    }
-    int window_off[64];
-    for(int i = 0; i < 64; ++i)
-    {
-        window_off[i] = 0;
-    }
-    for(int thread = 0; thread < gi::GI_SCREEN_PROBE_RAYS_PER_FRAME; ++thread)
-    {
-        for(uint32_t phase = 0; phase < uint32_t(gi::GI_SCREEN_PROBE_WINDOW); ++phase)
-        {
-            const int x = stratum_local_x(thread, phase);
-            const int y = stratum_local_y(thread, phase);
-            ++window_off[y * 8 + x];
-        }
-    }
-    for(int i = 0; i < 64; ++i)
-    {
-        check(window_off[i] == 1, "window-1 compact walk covers each texel once");
-    }
-}
+// The probe-space temporal's stratum/walk transcription tests were removed with the
+// feature (2026-08-29): all 64 octahedral texels trace fresh every frame now.
 
-/// GiScreenProbeSameOrigin: a sticky reconstruct keeps the running-mean count.
-/// A Halton walk inside the tile must reset it (the tile is still copied).
-void test_screen_probe_same_origin_rejects_halton_walk()
-{
-    std::printf("test_screen_probe_same_origin_rejects_halton_walk\n");
-    const float view_distance = 8.0f;
-    const float spacing = 8.0f;
-    const float inv_screen_h = 1.0f / 540.0f;
-    const float tile_world = view_distance * spacing * inv_screen_h;
-    const float limit = float(gi::GI_SCREEN_PROBE_HISTORY_TILE) * tile_world;
-    check(limit > 0.0f, "history keep is a positive fraction of the tile");
-    // At least one complete sphere between walks (per-frame Halton is the shimmer), and few
-    // enough that blotches still dissolve within the temporal window. Raised from exactly 1
-    // when the parallax-adaptive probe filter took over near-band blotch dissolution: each
-    // walk is an accumulation reset, so fewer walks is less noise for the same ray budget.
-    check(gi::GI_SCREEN_PROBE_WALK_WINDOWS >= 1, "walks are at least one complete sphere apart");
-    check(gi::GI_SCREEN_PROBE_WALK_WINDOWS * gi::GI_SCREEN_PROBE_WINDOW * 2 <=
-              int(gi::GI_TEMPORAL_MAX_FRAMES),
-          "two walk periods fit the classic temporal window, so a walked blotch still fades");
-    const auto same_origin = [limit](float distance) -> bool { return distance < limit; };
-    check(same_origin(0.0f), "the sticky point itself keeps the running mean");
-    check(same_origin(0.1f * tile_world), "sub-pixel reconstruction error stays accepted");
-    check(!same_origin(0.5f * tile_world), "a half-tile Halton jump resets the count");
-    check(!same_origin(tile_world), "a full-tile jump resets the count");
-}
-
-/// Walk-indexed Halton must visit the whole 8-cycle. Indexing by raw frame on a
-/// 4-frame window only hits two points and the lattice freezes into blotches.
-void test_screen_probe_walk_halton_uses_the_full_cycle()
-{
-    std::printf("test_screen_probe_walk_halton_uses_the_full_cycle\n");
-    const uint32_t period = uint32_t(gi::GI_SCREEN_PROBE_WINDOW) *
-                            uint32_t(gi::GI_SCREEN_PROBE_WALK_WINDOWS);
-    check(period >= 1u, "walk period is at least one frame");
-    int seen[8];
-    for(int i = 0; i < 8; ++i)
-    {
-        seen[i] = 0;
-    }
-    for(uint32_t walk = 0; walk < 8u; ++walk)
-    {
-        const uint32_t frame = walk * period;
-        seen[(frame / period) % 8u] = 1;
-    }
-    for(int i = 0; i < 8; ++i)
-    {
-        check(seen[i] == 1, "each Halton cycle point is used as a walk origin");
-    }
-}
 
 // ---------------------------------------------------------------------------------------
 // Golden scene fixtures
@@ -2302,9 +2167,6 @@ auto run_gi_oracle_suite(rtti::context& /*ctx*/) -> int
 {
     test_shader_constants_match_cpp();
     test_gi_shaders_compile_sm50();
-    test_screen_probe_stratum_covers_the_atlas();
-    test_screen_probe_same_origin_rejects_halton_walk();
-    test_screen_probe_walk_halton_uses_the_full_cycle();
     test_attribute_voxels_mark_the_surface_band();
     test_clipmap_attribute_transcription_matches_cpu();
     test_reference_is_deterministic();

@@ -51,7 +51,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Probe Spacing"},
             entt::attribute{"group", "Gather"},
             entt::attribute{"min", 8.0f},
-            entt::attribute{"max", 32.0f},
+            entt::attribute{"max", 48.0f},
             entt::attribute{"tooltip",
                             "Distance between screen probes, in full-resolution pixels. Lower means "
                             "denser probes and finer indirect detail; ray cost grows with the "
@@ -90,17 +90,6 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "Probes on flat regions skip tracing and reconstruct from their "
                             "neighbours; geometry breaks keep full probe density. Flat scenes "
                             "trace a fraction of the rays for the same image."},
-        })
-        .data<&settings::probe_space_temporal>("probe_space_temporal"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "probe_space_temporal"},
-            entt::attribute{"pretty_name", "Probe-Space Temporal"},
-            entt::attribute{"group", "Gather"},
-            entt::attribute{"tooltip",
-                            "Each probe traces 16 of 64 directions per frame and blends them "
-                            "into that probe's own previous tile. A still camera keeps the same "
-                            "origin for one window so the sphere fills, then walks to a new "
-                            "Halton so blotches dissolve. Off traces all 64 every frame."},
         })
         .data<&settings::enable_reflections>("enable_reflections"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -149,18 +138,6 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"tooltip",
                             "Stochastic reflection accumulation window; 0/1 turns the "
                             "reflection temporal off."},
-        })
-        .data<&settings::max_accum_frames>("max_accum_frames"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "max_accum_frames"},
-            entt::attribute{"pretty_name", "Probe Accumulated Frames"},
-            entt::attribute{"group", "Filtering"},
-            entt::attribute{"min", 4.0f},
-            entt::attribute{"max", 96.0f},
-            entt::attribute{"tooltip",
-                            "Probe-space history length in frames (the screen-probe tiles' blend "
-                            "cap). The full-resolution temporal runs the dual-rate pair; see "
-                            "Temporal Slow Frames."},
         })
         .data<&settings::temporal_slow_frames>("temporal_slow_frames"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -423,12 +400,12 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
     try_save(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
     try_save(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
-    try_save(ar, ser20::make_nvp("probe_space_temporal", obj.probe_space_temporal));
+    // probe_space_temporal / max_accum_frames are gone with the removed probe-space
+    // temporal; stored keys in old scenes are simply not read (the sparse-load rule).
     try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_save(ar, ser20::make_nvp("denoise_converged_early_out", obj.denoise_converged_early_out));
     try_save(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
-    try_save(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
     try_save(ar, ser20::make_nvp("temporal_slow_frames", obj.temporal_slow_frames));
     try_save(ar, ser20::make_nvp("reprojection_tolerance", obj.reprojection_tolerance));
     try_save(ar, ser20::make_nvp("enable_spatial_denoise", obj.enable_spatial_denoise));
@@ -453,12 +430,10 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
     try_load(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
     try_load(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
-    try_load(ar, ser20::make_nvp("probe_space_temporal", obj.probe_space_temporal));
     try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_load(ar, ser20::make_nvp("denoise_converged_early_out", obj.denoise_converged_early_out));
     try_load(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
-    try_load(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
     try_load(ar, ser20::make_nvp("temporal_slow_frames", obj.temporal_slow_frames));
     try_load(ar, ser20::make_nvp("reprojection_tolerance", obj.reprojection_tolerance));
     try_load(ar, ser20::make_nvp("enable_spatial_denoise", obj.enable_spatial_denoise));

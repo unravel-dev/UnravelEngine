@@ -57,6 +57,12 @@ public:
         /// This frame's velocity buffer, passed explicitly by the pipeline. A valid texture
         /// IS the enable; null = legacy matrix reprojection of the receiver.
         gfx::texture::ptr velocity;
+        /// True while the velocity pass drew ANY mover within one temporal window: caps the
+        /// temporal's stillness release at GI_REFLECTION_MOVER_STILL_CAP so a still camera
+        /// watching a moving emitter cannot hold the ghost's history unclamped (see the
+        /// constant's justification). Off-screen movers are accepted as uncovered by design
+        /// - the signal rides the velocity pass's own draw loop, never a registry scan.
+        bool velocity_movers_recent = false;
         /// Trace + accumulation resolution, the SAME knob the whole gather runs at
         /// (gi_resolve_pass::settings::resolution, default half): the composite's edge-stopped
         /// 3x3 kernel reconstructs full resolution as a joint bilateral upsample, so below-full
@@ -229,10 +235,12 @@ private:
         gfx::program::uniform_ptr u_gi_refl_prev_view_proj;
         gfx::program::uniform_ptr u_gi_refl_temporal;
         gfx::program::uniform_ptr u_gi_refl_velocity;
+        gfx::program::uniform_ptr u_gi_reflection_camera;
         gfx::program::uniform_ptr s_refl_raw;
         gfx::program::uniform_ptr s_refl_history;
         gfx::program::uniform_ptr s_refl_depth;
         gfx::program::uniform_ptr s_refl_velocity;
+        gfx::program::uniform_ptr s_refl_normal;
 
         void cache_uniforms()
         {
@@ -242,10 +250,12 @@ private:
                           gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_gi_refl_temporal, "u_gi_refl_temporal", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_refl_velocity, "u_gi_refl_velocity", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_refl_raw, "s_refl_raw", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_refl_history, "s_refl_history", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_refl_depth, "s_refl_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_refl_velocity, "s_refl_velocity", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_refl_normal, "s_refl_normal", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool

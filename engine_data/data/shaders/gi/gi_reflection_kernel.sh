@@ -49,8 +49,10 @@
  * interpolation pattern stamps into the image as blotches, not blur (measured twice, rounds
  * 2 and 8). Output = incoming radiance along the sampled ray at FULL weight - energy is
  * constant across roughness (fading the sharp end read as brightness rising with roughness,
- * round 10). Alpha is coverage: mesh-exact and refined hits cover the probe layer, an
- * unrefined clipmap hit on a sharp pixel does not. SSR composites on top.
+ * round 10). Alpha is coverage below 1 (mesh-exact and refined hits cover the probe layer,
+ * an unrefined clipmap hit on a sharp pixel does not) and encodes the HIT DISTANCE above 1
+ * for the temporal's mover gate - see the encoding note at the return. SSR composites on
+ * top.
  */
 
 #include "../common.sh"
@@ -422,8 +424,23 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	// (mirror fade, footprint confidence) removed energy at the sharp end, which read as
 	// "brightness rises with roughness" next to SSR's constant-energy blur (measured, round
 	// 10). Roughness now changes only WHERE the stochastic rays go, exactly as it should.
-	// Alpha is coverage for the probe-layer composite, not energy.
-	return vec4(mix(radiance, rough_value, gloss_blend), coverage);
+	//
+	// RAW ALPHA ENCODING: coverage for the probe-layer composite in [0, 1) (shape-fade),
+	// EXACTLY 1.0 for the rough tier (the classify pass writes it too), and above 1.0 the
+	// HIT DISTANCE rides along - 1 + t / GI_SHADOW_DISTANCE for a full-coverage geometric
+	// hit, 2.0 for a miss (the sky answered). The temporal pass rebuilds the reflected hit
+	// from this to read the velocity buffer THERE (its mover gate); every >= 0.5 image test
+	// downstream and the composite's saturate() are unchanged by construction.
+	float alpha = coverage;
+	if(hit.hit && coverage >= 1.0)
+	{
+		alpha = 1.0 + clamp(hit.t / GI_SHADOW_DISTANCE, 1e-3, 1.0);
+	}
+	else if(!hit.hit)
+	{
+		alpha = 2.0;
+	}
+	return vec4(mix(radiance, rough_value, gloss_blend), alpha);
 }
 
 #endif // __GI_REFLECTION_KERNEL_SH__

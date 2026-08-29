@@ -1399,6 +1399,11 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
             {
                 continue;
             }
+            // Mover stamp for the GI reflection temporal's gate, BEFORE the batched skip so
+            // batched movers (drawn by submit_batched_velocity below) count too: the buffer
+            // holds object velocity this frame, so reflected-content stillness readings are
+            // trustworthy only under the gate's cap for the next temporal window.
+            velocity_movers_frame_ = gfx::get_render_frame();
             // Batchable movers were collected into the shared batches with their previous
             // transforms and are drawn by submit_batched_velocity below - mirroring the
             // G-buffer's can_batch split exactly so nothing draws twice.
@@ -2716,6 +2721,12 @@ void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
     grp.temporal_frames = gi_reflection_settings.resolve.reflection_temporal_frames;
     // This frame's velocity buffer, handed to the pass explicitly (a valid texture IS the enable).
     grp.velocity = rview.tex_safe_get("VELOCITY");
+    // Mover signal for the temporal's stillness-release cap, held one temporal window past
+    // the last mover draw so a just-departed mover's ghost still flushes under the clamp.
+    const uint64_t frame_now = gfx::get_render_frame();
+    grp.velocity_movers_recent =
+        velocity_movers_frame_ != ~0ull && frame_now >= velocity_movers_frame_ &&
+        frame_now - velocity_movers_frame_ <= uint64_t(math::max(grp.temporal_frames, 1));
     grp.resolution = gi_reflection_settings.resolve.resolution;
     grp.cam = &camera;
     grp.surface_cache = &engine::context().get_cached<surface_cache_system>();

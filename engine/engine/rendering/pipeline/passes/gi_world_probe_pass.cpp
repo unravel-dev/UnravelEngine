@@ -66,10 +66,15 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
     const float base_spacing =
         clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
     // Change fast window (plan section 8): a changed light set OR changed scene content
-    // doubles the strata per frame for one full window, so the bounce chain reacts at twice
-    // the speed exactly while something is changing and costs nothing while the scene is
-    // still. The content epoch fires on geometry/material changes (a door closing) and is
-    // scroll-suppressed, so camera motion alone never pins the fast path.
+    // quadruples the strata per frame for one full window, so the whole atlas re-measures
+    // within 4 frames exactly while something is changing and costs nothing while the scene
+    // is still. x4 rather than the original x2 because the world probes sit mid-chain in the
+    // reactivity path (recompose -> relight -> HERE -> screen probes -> resolve temporal)
+    // and every stage's latency SERIALIZES - an 8-frame refresh here was a third of the
+    // measured emissive-drag trail on its own. The stratum count must divide
+    // GI_WORLD_PROBE_WINDOW so the per-frame coverage stays exhaustive. The content epoch
+    // fires on geometry/material changes (a door closing) and is scroll-suppressed, so
+    // camera motion alone never pins the fast path.
     if(params.light_hash != last_light_hash_)
     {
         last_light_hash_ = params.light_hash;
@@ -83,7 +88,9 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         last_content_epoch_ = clipmap.get_composed_content_epoch();
         fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
     }
-    const uint32_t strata_per_frame = fast_frames_ > 0 ? 2u : 1u;
+    const uint32_t strata_per_frame = fast_frames_ > 0 ? 4u : 1u;
+    static_assert(gi::GI_WORLD_PROBE_WINDOW % 4 == 0,
+                  "fast-window strata must divide the probe window (exhaustive coverage)");
     if(fast_frames_ > 0)
     {
         --fast_frames_;
