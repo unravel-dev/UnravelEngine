@@ -239,7 +239,12 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"pretty_name", "Facing Reflections Fading"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
-            entt::attribute{"tooltip", "Fade factor for camera-facing reflections"},
+            entt::attribute{"tooltip",
+                            "Angular dead cone toward the view axis where SSR fades out "
+                            "(reflections of the camera's own position). 0 = off, 0.1 fades "
+                            "only rays nearly straight back at the camera, 1 fades the whole "
+                            "toward-camera hemisphere. Validated hits outside the cone "
+                            "composite at full strength."},
         })
         .data<&fidelityfx_settings::roughness_depth_tolerance>("roughness_depth_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -249,21 +254,16 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"max", 2.0f},
             entt::attribute{"tooltip", "Additional depth tolerance for rough surfaces"},
         })
-        .data<&fidelityfx_settings::fade_in_start>("fade_in_start"_hs)
+        .data<&fidelityfx_settings::screen_edge_fade>("screen_edge_fade"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "fade_in_start"},
-            entt::attribute{"pretty_name", "Fade In Start"},
+            entt::attribute{"name", "screen_edge_fade"},
+            entt::attribute{"pretty_name", "Screen Edge Fade"},
             entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"tooltip", "Screen edge fade start"},
-        })
-        .data<&fidelityfx_settings::fade_in_end>("fade_in_end"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "fade_in_end"},
-            entt::attribute{"pretty_name", "Fade In End"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"tooltip", "Screen edge fade end"},
+            entt::attribute{"max", 0.5f},
+            entt::attribute{"tooltip",
+                            "Border band (fraction of the screen) over which reflections "
+                            "sourced near the frame edge fade toward the fallback layer, "
+                            "softening the transition where rays leave the screen."},
         })
         .data<&fidelityfx_settings::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -411,8 +411,7 @@ SAVE_INLINE(ssr_pass::fidelityfx_ssr_settings)
     try_save(ar, ser20::make_nvp("brightness", obj.brightness));
     try_save(ar, ser20::make_nvp("facing_reflections_fading", obj.facing_reflections_fading));
     try_save(ar, ser20::make_nvp("roughness_depth_tolerance", obj.roughness_depth_tolerance));
-    try_save(ar, ser20::make_nvp("fade_in_start", obj.fade_in_start));
-    try_save(ar, ser20::make_nvp("fade_in_end", obj.fade_in_end));
+    try_save(ar, ser20::make_nvp("screen_edge_fade", obj.screen_edge_fade));
     try_save(ar, ser20::make_nvp("resolution", obj.resolution));
     try_save(ar, ser20::make_nvp("enable_cone_tracing", obj.enable_cone_tracing));
     try_save(ar, ser20::make_nvp("cone_tracing", obj.cone_tracing));
@@ -432,18 +431,8 @@ LOAD_INLINE(ssr_pass::fidelityfx_ssr_settings)
     try_load(ar, ser20::make_nvp("brightness", obj.brightness));
     try_load(ar, ser20::make_nvp("facing_reflections_fading", obj.facing_reflections_fading));
     try_load(ar, ser20::make_nvp("roughness_depth_tolerance", obj.roughness_depth_tolerance));
-    try_load(ar, ser20::make_nvp("fade_in_start", obj.fade_in_start));
-    try_load(ar, ser20::make_nvp("fade_in_end", obj.fade_in_end));
-    // Backwards compat: legacy scenes store the old boolean under `enable_half_res`.
-    // Try the new enum field first; fall back to the bool when missing.
-    if(!try_load(ar, ser20::make_nvp("resolution", obj.resolution)))
-    {
-        bool legacy_half_res = false;
-        if(try_load(ar, ser20::make_nvp("enable_half_res", legacy_half_res)))
-        {
-            obj.resolution = legacy_half_res ? trace_resolution::half : trace_resolution::full;
-        }
-    }
+    try_load(ar, ser20::make_nvp("screen_edge_fade", obj.screen_edge_fade));
+    try_load(ar, ser20::make_nvp("resolution", obj.resolution));
     try_load(ar, ser20::make_nvp("enable_cone_tracing", obj.enable_cone_tracing));
     try_load(ar, ser20::make_nvp("cone_tracing", obj.cone_tracing));
     try_load(ar, ser20::make_nvp("enable_temporal_accumulation", obj.enable_temporal_accumulation));

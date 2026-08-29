@@ -479,9 +479,9 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
     }
     gfx::set_uniform(fidelityfx_pixel_program_.u_hiz_params, hiz_params);
 
-    // Set fade parameters (fade_in_start, fade_in_end, roughness_depth_tolerance, facing_reflections_fading)
-    float fade_params[4] = {params.settings.fidelityfx.fade_in_start,
-                            params.settings.fidelityfx.fade_in_end,
+    // Set fade parameters (screen_edge_fade, unused, roughness_depth_tolerance, facing_reflections_fading)
+    float fade_params[4] = {params.settings.fidelityfx.screen_edge_fade,
+                            0.0f,
                             params.settings.fidelityfx.roughness_depth_tolerance,
                             params.settings.fidelityfx.facing_reflections_fading};
     gfx::set_uniform(fidelityfx_pixel_program_.u_fade_params, fade_params);
@@ -592,7 +592,8 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     const float ssr_scale_x = float(g_buffer_size.width) / float(history_size.width);
     const float ssr_scale_y = float(g_buffer_size.height) / float(history_size.height);
 
-    float fade_params[4] = {settings.fade_in_start, settings.fade_in_end, ssr_scale_x, ssr_scale_y};
+    // xy unused by the temporal (the trace-side fade lanes); zw = the resolution scale.
+    float fade_params[4] = {0.0f, 0.0f, ssr_scale_x, ssr_scale_y};
     gfx::set_uniform(temporal_resolve_program_.u_fade_params, fade_params);
 
     // The TAA-unjittered previous pair (see the trace-side comment); keeps the legacy

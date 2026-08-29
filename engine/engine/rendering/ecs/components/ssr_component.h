@@ -37,8 +37,7 @@ public:
         r.brightness = std::lerp(r.brightness, f.brightness, contribution);
         r.facing_reflections_fading = std::lerp(r.facing_reflections_fading, f.facing_reflections_fading, contribution);
         r.roughness_depth_tolerance = std::lerp(r.roughness_depth_tolerance, f.roughness_depth_tolerance, contribution);
-        r.fade_in_start = std::lerp(r.fade_in_start, f.fade_in_start, contribution);
-        r.fade_in_end = std::lerp(r.fade_in_end, f.fade_in_end, contribution);
+        r.screen_edge_fade = std::lerp(r.screen_edge_fade, f.screen_edge_fade, contribution);
         r.resolution = contribution >= 0.5f ? f.resolution : r.resolution;
 
         r.enable_cone_tracing = contribution >= 0.5f ? f.enable_cone_tracing : r.enable_cone_tracing;

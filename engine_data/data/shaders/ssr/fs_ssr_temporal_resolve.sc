@@ -30,8 +30,7 @@ uniform vec4 u_motion_params;
 #define u_velocity_available      u_motion_params.w
 
 uniform vec4 u_fade_params;
-#define u_fade_in_start           u_fade_params.x
-#define u_fade_in_end             u_fade_params.y
+// u_fade_params.xy are unused here (the trace-side fade lanes).
 // Per-axis (full_dim / pass_dim) ratio. Scalar scale is wrong at odd full-res dims; see
 // HizScreenPassToFullResUV docs in hiz_trace.sh.
 #define u_ssr_resolution_scale    u_fade_params.zw

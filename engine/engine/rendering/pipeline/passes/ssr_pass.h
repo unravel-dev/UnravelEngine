@@ -43,10 +43,21 @@ public:
         int max_rays = 4;                              ///< Maximum rays for rough surfaces (future: cone tracing)
         float depth_tolerance = 0.1f;                   ///< Depth tolerance for hit validation
         float brightness = 1.0f;                        ///< Reflection brightness multiplier
-        float facing_reflections_fading = 0.1f;         ///< Fade factor for camera-facing reflections
+        /// Width of the ANGULAR dead cone toward the exact view axis where SSR fades out
+        /// (reflections of the camera's own position - occluded space with no color).
+        /// 0 = no fade, 0.1 fades only the last ~37 degrees, 1 fades across the whole
+        /// toward-camera hemisphere. Toward-camera hits OUTSIDE the cone composite at full
+        /// confidence now: the backface rejection already guarantees their stored color is
+        /// the face the ray sees (the old meters-scaled dot collapsed every toward-camera
+        /// ray to this value as a floor - mirrors ghosted their foreground reflections).
+        float facing_reflections_fading = 0.1f;
         float roughness_depth_tolerance = 1.0f;         ///< Additional depth tolerance for rough surfaces
-        float fade_in_start = 0.1f;                     ///< Screen edge fade start
-        float fade_in_end = 0.2f;                       ///< Screen edge fade end
+        /// Border band, as a fraction of the screen, over which reflections sourced near
+        /// the frame edge fade toward the fallback layer - softening the transition where
+        /// rays leave the screen. Hits deeper than the band composite at full strength.
+        /// (Replaces the fade_in_start/fade_in_end pair, whose two values were fed as
+        /// per-axis widths by accident; legacy scenes load fade_in_start into this.)
+        float screen_edge_fade = 0.1f;
         /// Trace resolution divisor. SSR is runtime-capped at `half` because sub-half
         /// tracing breaks Hi-Z traversal, temporal clamp and the spatial denoiser.
         trace_resolution resolution = trace_resolution::full;
@@ -173,7 +184,7 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_ssr_params;      // x: max_steps, y: depth_tolerance, z: max_rays, w: brightness
         gfx::program::uniform_ptr u_hiz_params;      // x: hiz_width, y: hiz_height, z: trace_scale_x, w: trace_scale_y
-        gfx::program::uniform_ptr u_fade_params;     // x: fade_in_start, y: fade_in_end, z: roughness_depth_tolerance, w: facing_reflections_fading
+        gfx::program::uniform_ptr u_fade_params;     // x: screen_edge_fade, y: unused, z: roughness_depth_tolerance, w: facing_reflections_fading
         gfx::program::uniform_ptr u_cone_params;     // x: cone_angle_bias, y: max_mip_level, z: unused, w: unused
         gfx::program::uniform_ptr u_prev_view_proj;   // Previous frame view-projection matrix
         gfx::program::uniform_ptr s_color;           // Input color texture
@@ -209,7 +220,7 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_temporal_params;  // x: enable_temporal, y: history_strength, z: depth_threshold, w: roughness_sensitivity
         gfx::program::uniform_ptr u_motion_params;    // x: motion_scale_pixels, y: normal_dot_threshold, z: max_accum_frames, w: unused
-        gfx::program::uniform_ptr u_fade_params;      // x: fade_in_start, y: fade_in_end, z: trace_scale_x, w: trace_scale_y
+        gfx::program::uniform_ptr u_fade_params;      // x: unused, y: unused, z: trace_scale_x, w: trace_scale_y
         gfx::program::uniform_ptr u_prev_view_proj;   // Previous frame view-projection matrix
         gfx::program::uniform_ptr s_ssr_curr;         // Current frame SSR result
         gfx::program::uniform_ptr s_ssr_history;      // Previous frame SSR history

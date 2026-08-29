@@ -26,8 +26,7 @@ uniform vec4 u_hiz_params;
 #define u_ssr_resolution_scale u_hiz_params.zw
 
 uniform vec4 u_fade_params;
-#define u_fade_in_start     u_fade_params.x
-#define u_fade_in_end       u_fade_params.y
+#define u_screen_edge_fade  u_fade_params.x
 #define u_roughness_depth_tolerance u_fade_params.z
 #define u_facing_reflections_fading u_fade_params.w
 
@@ -321,19 +320,50 @@ float ValidateHit(vec3 ss_hit_pos, vec2 uv, vec3 vs_ray_origin, float roughness,
     float dist = length(vs_hit_pos - vs_hit_surface);
 
     float depth_tolerance = u_depth_tolerance + mix(0.0, u_roughness_depth_tolerance, roughness);
-    float confidence = 1.0 - smoothstep(0.0, depth_tolerance, dist);
+    // Dead zone at half the tolerance: the Hi-Z march reconstructs hits with a small,
+    // unavoidable error (mip-cell quantisation, depth slope within the landing texel),
+    // and a ZERO-based ramp converted that error into a permanent confidence haircut on
+    // perfectly valid hits - half the tolerance in error still composited at 50%, which
+    // read as the whole SSR image "semi-blended" over the GI reflection layer beneath.
+    // Error under half the tolerance is full confidence; the upper half stays the fade.
+    float confidence = 1.0 - smoothstep(0.5 * depth_tolerance, depth_tolerance, dist);
 
-    vec2 fade_in = vec2(u_fade_in_start, u_fade_in_end);
+    // ONE border band for all four edges (u_screen_edge_fade; the retired
+    // fade_in_start/fade_in_end pair was fed as PER-AXIS widths by accident - X faded
+    // over 0.1 of the screen while Y faded over 0.2 - and the wide bands taxed every
+    // reflection sourced near the frame border: a foreground object at the screen's edge
+    // mirrored at half strength). The band only exists to soften the transition where
+    // rays leave the screen; hits deeper than it composite at full strength.
+    vec2 fade_in = vec2_splat(max(u_screen_edge_fade, 1e-3));
     vec2 border = smoothstep(vec2_splat(0.0), fade_in, ss_hit_pos.xy) *
                   (1.0 - smoothstep(1.0 - fade_in, vec2_splat(1.0), ss_hit_pos.xy));
 
     float edge_fade = border.x * border.y;
 
-    float mirror_fade = clamp(max(dot(vs_ray_origin, vs_ray_dir), 0.0) + u_facing_reflections_fading, 0.0, 1.0);
+    // Camera-facing fade, ANGULAR. The original form dotted two UNNORMALIZED view-space
+    // vectors (meters^2 scale): any ray heading away from the camera clamped to full
+    // strength while any ray heading back toward it - a wall mirror reflecting foreground
+    // objects, the most common mirror content - collapsed to the knob's floor, compositing
+    // validated front-facing screen hits at ~10% over the coarse GI reflection layer
+    // (measured: the reflected menu sign ghosting, its ground shadow visible through it).
+    // The backface rejection above already guarantees the stored color at the hit is the
+    // face the ray sees, so toward-camera hits are LEGITIMATE reflections; the only
+    // genuinely un-sampleable direction is the cone straight back at the camera itself
+    // (reflections of the camera's own position - occluded space with no color). The knob
+    // now sets that dead cone's width: 0 disables the fade, 0.1 (the default) fades only
+    // the last ~37 degrees toward the exact view axis, 1 fades across the whole
+    // toward-camera hemisphere (the old behavior's intent).
+    // The width floor keeps smoothstep's edges distinct (equal edges are undefined) - a
+    // zero knob degenerates to "no fade" through it.
+    float facing = dot(normalize(vs_ray_origin), normalize(vs_ray_dir));
+    float mirror_fade =
+        smoothstep(-1.0, -1.0 + 2.0 * clamp(u_facing_reflections_fading, 1e-3, 1.0), facing);
 
-    float roughness_fade = GetRoughnessVisibility(roughness);
-
-    return clamp(confidence * mirror_fade * edge_fade * roughness_fade, 0.0, 1.0);
+    // NO roughness fade here: the composite pass already applies GetRoughnessVisibility
+    // to the blend alpha, and multiplying it per-ray too SQUARED the SSR -> GI handoff
+    // band - a 0.45-rough surface composited at 25% instead of the designed 50%. The
+    // trace's own roughness handling is the early-out above the cutoff.
+    return clamp(confidence * mirror_fade * edge_fade, 0.0, 1.0);
 }
 
 vec3 ImportanceSampleGGX(vec2 E, vec3 N, float a2)
@@ -486,11 +516,21 @@ void main()
 
             float sample_confidence = max(confidence, 0.0);
             sample_color.a *= sample_confidence;
-            
-            output_color += sample_color;
+            // CONFIDENCE-WEIGHTED colour: misses and low-confidence rays must lower
+            // COVERAGE (alpha), never darken the image - the old unweighted /num_rays
+            // mean mixed black into the colour wherever any ray missed, a dimmed washed
+            // reflection even at full composite alpha.
+            output_color.rgb += sample_color.rgb * sample_color.a;
+            output_color.a += sample_color.a;
+            total_weight += sample_color.a;
         }
     }
 
-	output_color /= float(num_rays);
+    BRANCH
+    if(total_weight > 1e-4)
+    {
+        output_color.rgb /= total_weight;
+    }
+    output_color.a /= float(num_rays);
     gl_FragColor = output_color;
 }
