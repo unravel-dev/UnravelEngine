@@ -91,6 +91,19 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "neighbours; geometry breaks keep full probe density. Flat scenes "
                             "trace a fraction of the rays for the same image."},
         })
+        .data<&settings::adaptive_rays>("adaptive_rays"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "adaptive_rays"},
+            entt::attribute{"pretty_name", "Adaptive Rays"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip",
+                            "Importance-driven ray allocation: bright octahedral blocks trace at "
+                            "full per-texel detail, dim blocks as one wider cone - cheaper at "
+                            "high resolutions for slightly more noise and coarser angular detail "
+                            "in dim directions. Engages only on large probe lattices (4K-class); "
+                            "small dispatches are latency-bound and run the full trace either "
+                            "way. Off traces every direction individually."},
+        })
         .data<&settings::enable_reflections>("enable_reflections"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_reflections"},
@@ -402,6 +415,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     // probe_space_temporal / max_accum_frames are gone with the removed probe-space
     // temporal; stored keys in old scenes are simply not read (the sparse-load rule).
+    try_save(ar, ser20::make_nvp("adaptive_rays", obj.adaptive_rays));
     try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_save(ar, ser20::make_nvp("denoise_converged_early_out", obj.denoise_converged_early_out));
@@ -430,6 +444,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
     try_load(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
     try_load(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
+    try_load(ar, ser20::make_nvp("adaptive_rays", obj.adaptive_rays));
     try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_load(ar, ser20::make_nvp("denoise_converged_early_out", obj.denoise_converged_early_out));

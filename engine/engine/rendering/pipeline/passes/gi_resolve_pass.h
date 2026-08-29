@@ -64,8 +64,16 @@ public:
         /// tile) lived here and was REMOVED (2026-08-29): averaging in probe space turns
         /// white per-frame noise into probe-granular correlated drift the full-res temporal
         /// cannot remove - measured as still-camera moving blobs across three schemes. All
-        /// 64 rays trace fresh every frame; scale cost with probe_spacing instead (spatial
-        /// softness, the artifact-free trade).
+        /// texels trace fresh every frame; scale cost with probe_spacing first (spatial
+        /// softness, the artifact-free trade) and adaptive_rays second.
+        /// Importance-driven ray allocation (Lumen's structured-importance-sampling shape,
+        /// blend-free): bright 2x2 octahedral blocks trace at full per-texel detail, dim
+        /// blocks as one splatted cone - 16 + 3K rays per probe instead of 64, roughly
+        /// halving the trace at 4K. The trade is per-frame variance and 4x4 angular
+        /// granularity in DIM octants only - white and one-frame-lived, so the resolve
+        /// temporal integrates it (the removed temporal's blob pathology cannot occur
+        /// without blending). Off = every texel traces its own ray, the quality ceiling.
+        bool adaptive_rays = false;
         /// World-space specular tier (plan phase 9), layered under SSR: rough lobes read the
         /// world-probe radiance atlas, sharp ones trace (screen first, SDF + light voxels
         /// beyond) - contributing the off-screen reflections SSR cannot have.
@@ -229,8 +237,12 @@ private:
     struct trace_program : uniforms_cache
     {
         /// 8x8 group (cs_gi_screen_probe_trace_full.sc): one group per traced probe,
-        /// all 64 octahedral rays in parallel, every frame.
+        /// all 64 octahedral rays in parallel, every frame. The default.
         gpu_program::ptr program;
+        /// Four probes per 64-lane group with importance-driven ray allocation
+        /// (cs_gi_screen_probe_trace_adaptive.sc) - the adaptive_rays checkbox; the full
+        /// program stands in when it is off or this program failed to load.
+        gpu_program::ptr adaptive_program;
         gfx::program::uniform_ptr u_gi_camera;
         gfx::program::uniform_ptr u_gi_screen_trace;
         gfx::program::uniform_ptr u_gi_prev_view_proj;
@@ -294,6 +306,16 @@ private:
         auto is_valid() const -> bool
         {
             return program && program->is_valid();
+        }
+
+        /// The adaptive program when requested and linked; the full program otherwise.
+        auto select(bool want_adaptive) const -> gpu_program*
+        {
+            if(want_adaptive && adaptive_program && adaptive_program->is_valid())
+            {
+                return adaptive_program.get();
+            }
+            return program.get();
         }
     } trace_program_;
 

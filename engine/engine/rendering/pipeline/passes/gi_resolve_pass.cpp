@@ -15,6 +15,14 @@ namespace
 /// Mirror of GI_PROBE_DIR_EDGE / GI_PROBE_STRIDE in gi/gi_probe_common.sh.
 constexpr uint32_t probe_dir_edge = 8;
 constexpr uint32_t probe_vec4_stride = 12;
+/// LATENCY GATE for the adaptive-ray trace: packing four probes per group cuts rays about
+/// in half but also cuts GROUP COUNT four-fold and lengthens each lane's serial chain (the
+/// round-robin ray pull). On a small lattice the dispatch is latency-bound, not ray-bound,
+/// and the packed form measured SLOWER (FHD at spacing 32, ~2k probes: 0.50 -> 0.75 ms)
+/// while the full form's many short, half-culled waves hide their own latency. Adaptive
+/// therefore engages only when the lattice is large enough to be occupancy-bound
+/// (4K at spacing 32, ~8.2k probes: 0.95 -> 0.75 ms measured).
+constexpr uint32_t adaptive_rays_min_probes = 4096;
 /// Mirror of GI_PROBE_LAYERS: majority-surface probe plus the adaptive minority-surface one.
 /// Single layer (Phase 8): the gather anchors one probe per tile. Must match
 /// GI_PROBE_LAYERS in gi_probe_common.sh.
@@ -139,12 +147,20 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
     args_program_.program = std::make_unique<gpu_program>(cs_args);
     auto cs_trace_full =
         am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_trace_full.sc");
+    auto cs_trace_adaptive =
+        am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_trace_adaptive.sc");
     trace_program_.cache_uniforms();
     trace_program_.program = std::make_unique<gpu_program>(cs_trace_full);
+    trace_program_.adaptive_program = std::make_unique<gpu_program>(cs_trace_adaptive);
     if(!trace_program_.is_valid())
     {
         APPLOG_WARNING("[SurfaceCache] GI probe-trace program failed to load. GI is disabled "
                        "for this run.");
+    }
+    if(!trace_program_.adaptive_program || !trace_program_.adaptive_program->is_valid())
+    {
+        APPLOG_WARNING("[SurfaceCache] GI adaptive-ray trace program failed to load. The "
+                       "Adaptive Rays checkbox falls back to the full 64-ray trace.");
     }
     auto cs_interp = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_interp.sc");
     interp_program_.cache_uniforms();
@@ -341,8 +357,9 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         }
         if(!bgfx::isValid(probe_args_))
         {
-            // One entry: one 8x8 group per traced probe.
-            probe_args_ = gfx::create_indirect_buffer(1);
+            // Entry 0: one 8x8 group per traced probe (the full program). Entry 1:
+            // four probes per group (the adaptive program). The args shader writes both.
+            probe_args_ = gfx::create_indirect_buffer(2);
         }
         const uint32_t write_probe_offset = even_probe_frame ? 0u : records_per_half;
         const uint32_t read_probe_offset = even_probe_frame ? records_per_half : 0u;
@@ -482,12 +499,16 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             {
                 gfx::render_pass pass("GI/Probe Trace");
                 pass.set_view_proj(params.cam->get_view(), gather_projection);
-                gpu_program* trace_cs = trace_program_.program.get();
+                gpu_program* trace_cs = trace_program_.select(
+                    s.adaptive_rays && probe_count >= adaptive_rays_min_probes);
                 if(trace_cs == nullptr || !trace_cs->is_valid())
                 {
                     gfx::discard();
                     return trace_tex;
                 }
+                // The adaptive program packs four probes per group and launches from args
+                // entry 1; the full program is one probe per group, entry 0.
+                const bool adaptive_selected = trace_cs == trace_program_.adaptive_program.get();
                 trace_cs->begin();
                 gfx::set_texture(trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
                 gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
@@ -539,7 +560,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(trace_program_.u_gi_world_probe_atlas,
                                  clipmap_gpu.get_world_probe_atlas_params());
                 gfx::set_uniform(trace_program_.u_gi_world_probe_radiance_atlas, wp_radiance_atlas);
-                gfx::dispatch_indirect(pass.id, trace_cs->native_handle(), probe_args_, 0, 1);
+                gfx::dispatch_indirect(pass.id,
+                                       trace_cs->native_handle(),
+                                       probe_args_,
+                                       adaptive_selected ? 1 : 0,
+                                       1);
                 trace_cs->end();
                 records_trusted_ = true;
             }

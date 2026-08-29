@@ -54,6 +54,7 @@ public:
         r.probe_visibility_variance_gate =
             std::lerp(r.probe_visibility_variance_gate, f.probe_visibility_variance_gate, contribution);
         r.adaptive_probes = dominant ? f.adaptive_probes : r.adaptive_probes;
+        r.adaptive_rays = dominant ? f.adaptive_rays : r.adaptive_rays;
         r.enable_reflections = dominant ? f.enable_reflections : r.enable_reflections;
         r.reflection_temporal_frames =
             dominant ? f.reflection_temporal_frames : r.reflection_temporal_frames;

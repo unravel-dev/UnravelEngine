@@ -2,13 +2,25 @@
 #define __GI_SCREEN_PROBE_TRACE_KERNEL_SH__
 
 /*
- * GI screen probe trace (plan 3.4) - the Lumen recipe, one 8x8 thread group per probe:
- * all 64 octahedral texels of the tile traced fresh EVERY frame, one thread per texel
- * (cs_gi_screen_probe_trace_full.sc is the single consumer).
+ * GI screen probe trace (plan 3.4) - the Lumen recipe. Compiled twice:
  *
- * There is deliberately NO probe-space temporal accumulation. Direction-stratum
- * amortization (16-ray windows blended 1/n into the tile) was built, rebuilt as a
- * per-frame-complete adaptive schedule, and finally REMOVED: averaging in probe space
+ *  - cs_gi_screen_probe_trace_full.sc: one 8x8 group per traced probe, one thread per
+ *    octahedral texel - all 64 rays fresh every frame. The default and the quality
+ *    ceiling.
+ *  - cs_gi_screen_probe_trace_adaptive.sc (GI_SCREEN_PROBE_TRACE_ADAPTIVE, the
+ *    settings::adaptive_rays checkbox): Lumen's structured-importance-sampling shape at
+ *    the same per-frame-complete contract - 2x2 blocks whose reprojected importance
+ *    concentrates energy (ratio over the tile mean) trace at FULL per-texel detail (x2
+ *    samples on the very brightest), every other block traces ONE cone jittered across
+ *    its quad and splats it - 16 + 3K rays per probe instead of 64. FOUR probes pack
+ *    into each 64-lane group (16 lanes each, rays pulled round-robin so one bright
+ *    block never idles the wave); a 16-thread group alone would leave three quarters
+ *    of every wave idle. The trade is per-frame variance and 4x4 angular granularity
+ *    in DIM octants only - white, one-frame-lived, integrated by the resolve temporal.
+ *
+ * There is deliberately NO probe-space temporal accumulation in either form.
+ * Direction-stratum amortization (16-ray windows blended 1/n into the tile) was built,
+ * rebuilt as a blended adaptive schedule, and finally REMOVED: averaging in probe space
  * turns white per-frame noise into probe-granular correlated drift - tiles serving
  * differently-aged strata, rare emitter arrivals living for ~cap frames as 16px-coherent
  * blobs, walk cadences stepping every anchor at once - and correlated drift is exactly
@@ -16,7 +28,8 @@
  * its change detector snaps on it; measured as still-camera moving blobs across three
  * schemes). The per-frame gather stays white; the full-res dual-rate temporal and the
  * spatial denoiser own ALL accumulation. Ray budget scales with PROBE DENSITY
- * (settings::probe_spacing) - the artifact-free knob, and the one Lumen ships.
+ * (settings::probe_spacing) first - the artifact-free knob, and the one Lumen ships -
+ * and with adaptive_rays second.
  *
  * Probes ARE pixels: the anchor is a Halton-jittered G-buffer pixel of the probe's tile
  * (re-jittered every frame), its depth and normal taken as-is - no median selection, no
@@ -46,7 +59,7 @@
  * old unbounded march only ever spent budget on answers it then threw away.
  *
  * Everything here is owned by gi_constants - the pass has no tuning surface beyond the
- * lattice descriptors.
+ * lattice descriptors and the adaptive_rays checkbox.
  */
 
 #include "bgfx_compute.sh"
@@ -98,23 +111,30 @@ uniform vec4 u_gi_screen_trace;
 /// importance mip the filter stored in that probe's record slots.
 uniform mat4 u_gi_prev_view_proj;
 
-/// The compacted list's padding sentinel (see cs_gi_screen_probe_args.sc).
-#define GI_TRACE_LIST_SENTINEL 0xFFFFFFFFu
+/// Probe slots per group: the adaptive program packs four 16-lane probes into one 64-lane
+/// group; the full program's 8x8 group is one fully-busy probe already.
+#if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
+#	define GI_TRACE_SLOT_COUNT 4
+#else
+#	define GI_TRACE_SLOT_COUNT 1
+#endif
+/// Lanes per probe in the adaptive program = the 4x4 block count of the 8x8 tile.
+#define GI_TRACE_ADAPTIVE_LANES ((GI_PROBE_DIR_EDGE / 2) * (GI_PROBE_DIR_EDGE / 2))
 
-SHARED vec3 s_anchor_normal;
-SHARED vec3 s_origin;
-SHARED float s_short_range;
+SHARED vec3 s_anchor_normal[GI_TRACE_SLOT_COUNT];
+SHARED vec3 s_origin[GI_TRACE_SLOT_COUNT];
+SHARED float s_short_range[GI_TRACE_SLOT_COUNT];
 /// Anchor in the screen tier's spaces, shared by every ray's Hi-Z march: full-res uv (self-hit
 /// rejection), (uv, device z) screen-space origin, and the view-space origin.
-SHARED vec2 s_anchor_uv;
-SHARED vec3 s_ss_origin;
-SHARED vec3 s_vs_origin;
+SHARED vec2 s_anchor_uv[GI_TRACE_SLOT_COUNT];
+SHARED vec3 s_ss_origin[GI_TRACE_SLOT_COUNT];
+SHARED vec3 s_vs_origin[GI_TRACE_SLOT_COUNT];
 /// Base record index of the reprojected PREVIOUS probe, or -1 when reprojection failed.
-SHARED int s_history_record;
-SHARED float s_importance_mean;
+SHARED int s_history_record[GI_TRACE_SLOT_COUNT];
+SHARED float s_importance_mean[GI_TRACE_SLOT_COUNT];
 /// The reprojected probe's 4x4 importance mip, staged by the leader: the per-ray lookup used
 /// to re-read the same four record vec4s the leader had already loaded for the mean.
-SHARED vec4 s_importance_mip[4];
+SHARED vec4 s_importance_mip[GI_TRACE_SLOT_COUNT * 4];
 /// Dispatch-uniform values hoisted out of the per-ray loop.
 SHARED vec2 s_screen_size;
 SHARED vec2 s_frame_r2;
@@ -161,7 +181,7 @@ vec3 GiFarFieldFallback(vec3 hit_position, vec3 sample_dir)
 	return GiFarFieldRadiance(hit_position, sample_dir);
 }
 
-void GiStoreScreenProbeRay(ivec2 texel, vec3 radiance, float hit_t)
+void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 {
 	vec3 averaged = min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
 	// FIREFLY GOVERNOR: a ray landing on a small bright emitter dominates the whole tile
@@ -178,7 +198,7 @@ void GiStoreScreenProbeRay(ivec2 texel, vec3 radiance, float hit_t)
 	// reference at all (fresh tile, failed reprojection): the first measurement stores
 	// unclamped - progressive ramps from black would dim every disocclusion instead.
 	vec4 hist = imageLoad(s_probe_radiance_out, texel);
-	float reference = max(Luminance(hist.xyz), s_importance_mean);
+	float reference = max(Luminance(hist.xyz), s_importance_mean[slot]);
 	BRANCH
 	if(reference > 1e-3)
 	{
@@ -194,16 +214,16 @@ void GiStoreScreenProbeRay(ivec2 texel, vec3 radiance, float hit_t)
 
 /// The block's reprojected importance over the tile mean; 1.0 (neutral) when history is
 /// absent or reprojection failed - uniform allocation, as ever.
-float GiScreenProbeBlockRatio(int block)
+float GiScreenProbeBlockRatio(int slot, int block)
 {
-	if(s_history_record < 0 || s_importance_mean <= 1e-4)
+	if(s_history_record[slot] < 0 || s_importance_mean[slot] <= 1e-4)
 	{
 		return 1.0;
 	}
-	vec4 mip = s_importance_mip[block / 4];
+	vec4 mip = s_importance_mip[slot * 4 + block / 4];
 	int lane = block % 4;
 	float importance = lane == 0 ? mip.x : (lane == 1 ? mip.y : (lane == 2 ? mip.z : mip.w));
-	return importance / s_importance_mean;
+	return importance / s_importance_mean[slot];
 }
 
 /*
@@ -216,9 +236,9 @@ float GiScreenProbeBlockRatio(int block)
  * are bounded (about half the base ray count in the all-worst-case), and a uniformly lit
  * tile pays exactly one sample per cone as before.
  */
-int GiScreenProbeSampleCount(int block)
+int GiScreenProbeSampleCount(int slot, int block)
 {
-	float ratio = GiScreenProbeBlockRatio(block);
+	float ratio = GiScreenProbeBlockRatio(slot, block);
 	int sample_count = 1;
 	if(ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO)
 	{
@@ -237,7 +257,8 @@ int GiScreenProbeSampleCount(int block)
 }
 
 /*
- * The sample loop: @p sample_count directions jittered inside the texel's cone, each
+ * The sample loop: @p sample_count directions jittered inside the cone spanning
+ * @p texel_span octahedral texels from @p texel_base (top-left, in tile texels), each
  * answered Hi-Z -> SDF -> world-probe completion. Returns (radiance mean, max hitT;
  * -1 = completed/sky only). Returned, never out-parameters - the shaderc HLSL path
  * miscompiles out-params in .sc helpers silently (tasks/lessons.md).
@@ -256,7 +277,8 @@ int GiScreenProbeSampleCount(int block)
  * (0,2)-net: positions 0/1 are the exact antithetic pair, so counts one and two
  * reproduce the classic estimator.
  */
-vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel)
+vec4 GiTraceScreenProbeCone(int slot, vec2 texel_base, float texel_span, int sample_count,
+                            ivec2 noise_texel)
 {
 	vec2 sub_positions[GI_IMPORTANCE_SUPERSAMPLE_MAX];
 	sub_positions[0] = fract(s_frame_r2 + GiIgnNoise(noise_texel));
@@ -267,7 +289,7 @@ vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel
 	float hit_t = -1.0;
 	for(int s = 0; s < sample_count; ++s)
 	{
-		vec2 sample_uv = (texel_base + sub_positions[s]) / float(GI_PROBE_DIR_EDGE);
+		vec2 sample_uv = (texel_base + sub_positions[s] * texel_span) / float(GI_PROBE_DIR_EDGE);
 		vec3 sample_dir = GiOctDecode(sample_uv);
 		vec3 radiance = vec3_splat(0.0);
 		bool committed = false;
@@ -279,7 +301,7 @@ vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel
 		if(u_gi_screen_trace.x > 0.0)
 		{
 			vec3 vs_dir = mul(u_view, vec4(sample_dir, 0.0)).xyz;
-			vec3 ss_dir = HizProjectVsDirToSsDir(s_vs_origin, vs_dir, s_ss_origin);
+			vec3 ss_dir = HizProjectVsDirToSsDir(s_vs_origin[slot], vs_dir, s_ss_origin[slot]);
 			BRANCH
 			if(dot(ss_dir.xy, ss_dir.xy) >= 1e-12)
 			{
@@ -292,7 +314,7 @@ vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel
 				// watertight SDF answer anyway.
 				float t_limit = FFX_SSSR_FLOAT_MAX;
 				vec4 end_pj4 =
-				    mul(u_proj, vec4(s_vs_origin + vs_dir * s_short_range, 1.0));
+				    mul(u_proj, vec4(s_vs_origin[slot] + vs_dir * s_short_range[slot], 1.0));
 				if(end_pj4.w > 1e-6)
 				{
 					vec3 end_pj = clipTransform(end_pj4.xyz / end_pj4.w);
@@ -300,7 +322,7 @@ vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel
 #if BGFX_SHADER_LANGUAGE_GLSL
 					end_pj.z = end_pj.z * 0.5 + 0.5;
 #endif
-					vec3 ss_delta = end_pj - s_ss_origin;
+					vec3 ss_delta = end_pj - s_ss_origin[slot];
 					t_limit = 1.05 * dot(ss_delta, ss_dir) / max(dot(ss_dir, ss_dir), 1e-12);
 				}
 				vec3 ss_hit = vec3_splat(0.0);
@@ -308,7 +330,7 @@ vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel
 				// probe tile, so a mip-0 walk buys sub-pixel precision below the cone footprint
 				// at twice the traversal cost. Validation still reads mip-0 depth; a lost
 				// commit falls through to the SDF, which is the watertight answer anyway.
-				bool marched = HizHierarchicalRaymarchEx(s_hiz, s_ss_origin, ss_dir,
+				bool marched = HizHierarchicalRaymarchEx(s_hiz, s_ss_origin[slot], ss_dir,
 				                                         s_screen_size, GI_SCREEN_TRACE_MIN_MIP,
 				                                         GI_SCREEN_TRACE_MAX_STEPS, t_limit, true,
 				                                         ss_hit);
@@ -316,16 +338,16 @@ vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel
 				if(marched)
 				{
 					vec3 vs_hit = HizComputeViewspacePosition(ss_hit.xy, ss_hit.z);
-					float hit_dist = length(vs_hit - s_vs_origin);
+					float hit_dist = length(vs_hit - s_vs_origin[slot]);
 					// Beyond the short range the world probes own the answer, exactly as they
 					// do for an SDF miss - a far screen hit must not override that contract.
 					BRANCH
-					if(hit_dist < s_short_range)
+					if(hit_dist < s_short_range[slot])
 					{
 						float tolerance = GI_SCREEN_TRACE_DEPTH_TOLERANCE +
-						                  GI_SCREEN_TRACE_THICKNESS * (hit_dist / s_short_range);
+						                  GI_SCREEN_TRACE_THICKNESS * (hit_dist / s_short_range[slot]);
 						float confidence = HizValidateHit(s_hiz, s_gi_normal, ss_hit,
-						                                  s_anchor_uv, s_vs_origin,
+						                                  s_anchor_uv[slot], s_vs_origin[slot],
 						                                  vs_hit, tolerance);
 						BRANCH
 						if(confidence >= GI_SCREEN_TRACE_CONFIDENCE_MIN)
@@ -393,7 +415,7 @@ vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel
 		BRANCH
 		if(!committed)
 		{
-			SdfRayHit hit = SdfTraceRayEx(s_origin, sample_dir, s_short_range,
+			SdfRayHit hit = SdfTraceRayEx(s_origin[slot], sample_dir, s_short_range[slot],
 			                              GI_MESH_SDF_TRACE_RANGE, GI_TRACE_MAX_STEPS,
 			                              GI_PROBE_TRACE_SURFACE_BIAS, GI_PROBE_TRACE_RELAXATION,
 			                              true, 0.0);
@@ -401,7 +423,7 @@ vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel
 			{
 				answered_tier = 2;
 				hit_t = max(hit_t, hit.t);
-				vec3 hit_position = s_origin + sample_dir * hit.t;
+				vec3 hit_position = s_origin[slot] + sample_dir * hit.t;
 				vec3 hit_normal = hit.normal;
 				if(dot(hit_normal, sample_dir) > 0.0)
 				{
@@ -448,7 +470,7 @@ vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel
 			{
 				// Completion: the world probes carry everything beyond the short range - scene
 				// AND sky.
-				if(!GiWorldProbeRadiance(s_origin + sample_dir * s_short_range,
+				if(!GiWorldProbeRadiance(s_origin[slot] + sample_dir * s_short_range[slot],
 				                         sample_dir, u_gi_camera.xyz, radiance))
 				{
 					radiance = eval_radiance_sh(s_gi_env_sh, sample_dir);
@@ -467,52 +489,129 @@ vec4 GiTraceScreenProbeCone(vec2 texel_base, int sample_count, ivec2 noise_texel
 	return vec4(radiance_sum / float(sample_count), hit_t);
 }
 
-/// One octahedral texel: Hi-Z then SDF then world-probe completion, written to the atlas.
-/// The cone centre serves the below-tangent cull and the importance lookup; the traced
-/// sample directions jitter WITHIN the cone (GiTraceScreenProbeCone).
-void GiTraceScreenProbeRay(ivec2 probe, ivec2 local)
+/// One octahedral texel at @p sample_count sub-cone samples: traced and stored, with the
+/// below-tangent cull (cap texels hold exact zero - their converged value by definition).
+void GiTraceScreenProbeDetail(int slot, ivec2 probe, ivec2 local, int sample_count)
 {
 	ivec2 texel = GiProbeAtlasBase(probe.x, probe.y, 0) + local;
 	vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
 	vec3 direction = GiOctDecode(tile_uv);
-	// The hemisphere cap below the anchor's tangent plane cannot carry irradiance; skipped
-	// with a small tolerance so grazing directions still trace (the integration weights by
-	// cosine). Stored as EXACT zero: the cap's converged value is zero by definition.
-	if(dot(direction, s_anchor_normal) < -0.2)
+	if(dot(direction, s_anchor_normal[slot]) < -0.2)
 	{
 		imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
 		return;
 	}
-	int sample_count = GiScreenProbeSampleCount((local.y / 2) * 4 + (local.x / 2));
-	vec4 traced = GiTraceScreenProbeCone(vec2(local.xy), sample_count, texel);
-	GiStoreScreenProbeRay(texel, traced.xyz, traced.w);
+	vec4 traced = GiTraceScreenProbeCone(slot, vec2(local.xy), 1.0, sample_count, texel);
+	GiStoreScreenProbeRay(slot, texel, traced.xyz, traced.w);
 }
 
+/// The full-program form: one texel with the whole importance ladder.
+void GiTraceScreenProbeRay(int slot, ivec2 probe, ivec2 local)
+{
+	GiTraceScreenProbeDetail(slot, probe, local,
+	                         GiScreenProbeSampleCount(slot, (local.y / 2) * 4 + (local.x / 2)));
+}
+
+#if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
+
+/// Rays the adaptive schedule grants a block this frame: 4 per-texel DETAIL rays when the
+/// block concentrates energy, 1 coarse cone otherwise (a culled block's single "ray" is
+/// the coarse executor's zero-store walk - no trace).
+int GiScreenProbeBlockRays(int slot, int block)
+{
+	return GiScreenProbeBlockRatio(slot, block) > GI_IMPORTANCE_SUPERSAMPLE_RATIO ? 4 : 1;
+}
+
+/*
+ * One COARSE block: block @p coarse in [0,16) is the 2x2 texel quad of the 4x4 octahedral
+ * lattice; its cone is traced once (the sample jittered across the WHOLE quad footprint,
+ * so the cone's full solid angle is measured over the R2 sequence) and the result is
+ * stored to all four texels. Blend-free, the splat lives exactly one frame - a boundary
+ * quad's bright/dark coin flip is white noise the resolve temporal integrates, never a
+ * persistent blob (the lesson of the removed blended schemes). The per-texel tangent
+ * cull is preserved exactly; the quad-centre pre-cull threshold is the texel cull
+ * loosened by the quad's cosine half-span (~0.25), so a quad it rejects has every texel
+ * at or under the cap, where cosine weights vanish anyway.
+ */
+void GiTraceScreenProbeCoarse(int slot, ivec2 probe, int coarse)
+{
+	int coarse_edge = GI_PROBE_DIR_EDGE / 2;
+	ivec2 quad = ivec2((coarse % coarse_edge) * 2, (coarse / coarse_edge) * 2);
+	ivec2 base = GiProbeAtlasBase(probe.x, probe.y, 0);
+	vec2 quad_uv = (vec2(quad) + vec2_splat(1.0)) / float(GI_PROBE_DIR_EDGE);
+	vec3 centre_dir = GiOctDecode(quad_uv);
+	bool cone_traced = dot(centre_dir, s_anchor_normal[slot]) >= -0.45;
+	vec4 traced = vec4(0.0, 0.0, 0.0, -1.0);
+	BRANCH
+	if(cone_traced)
+	{
+		traced = GiTraceScreenProbeCone(slot, vec2(quad), 2.0, 1, base + quad);
+	}
+	LOOP
+	for(int i = 0; i < 4; ++i)
+	{
+		ivec2 local = quad + ivec2(i & 1, i >> 1);
+		ivec2 texel = base + local;
+		vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
+		if(!cone_traced || dot(GiOctDecode(tile_uv), s_anchor_normal[slot]) < -0.2)
+		{
+			imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
+		}
+		else
+		{
+			GiStoreScreenProbeRay(slot, texel, traced.xyz, traced.w);
+		}
+	}
+}
+
+#endif // GI_SCREEN_PROBE_TRACE_ADAPTIVE
+
+#if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
+NUM_THREADS(GI_TRACE_ADAPTIVE_LANES, GI_TRACE_SLOT_COUNT, 1)
+#else
 NUM_THREADS(8, 8, 1)
+#endif
 void main()
 {
-	// COMPACTED dispatch: one group per traced probe (indirect args from the args pass),
-	// each group reading its probe coordinate from the dense list - interpolated, dead and
-	// sky probes never occupy a group here. Their tiles are the interp pass's job (parent
-	// blend or black clear). The list lives in the probe buffer's list region, one bit-cast
-	// coordinate per vec4 (GiProbeTracedListBase).
+	// COMPACTED dispatch (indirect args from the args pass): the full program launches one
+	// group per traced probe, the adaptive program ceil(count / 4) groups of four probes -
+	// interpolated, dead and sky probes never occupy a lane here. Their tiles are the
+	// interp pass's job (parent blend or black clear). The list lives in the probe
+	// buffer's list region, one bit-cast coordinate per vec4 (GiProbeTracedListBase); the
+	// head's y lane carries the traced COUNT (staged by the args pass) so a partial final
+	// adaptive group bounds-checks its tail slots.
+#if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
+	int slot = int(gl_LocalInvocationID.y);
+	uint list_index = gl_WorkGroupID.x * uint(GI_TRACE_SLOT_COUNT) + uint(slot);
+	bool leader = int(gl_LocalInvocationID.x) == 0;
+	float traced_count = b_gi_probes[GiProbeTracedListBase()].y;
+	bool probe_active = float(list_index) < traced_count;
+#else
+	int slot = 0;
 	uint list_index = gl_WorkGroupID.x;
 	bool leader = gl_LocalInvocationID.x == 0u && gl_LocalInvocationID.y == 0u;
-	uint packed_probe = floatBitsToUint(b_gi_probes[GiProbeTracedListBase() + list_index].x);
-	// (`active` is a reserved word in GLSL)
-	bool probe_active = packed_probe != GI_TRACE_LIST_SENTINEL;
+	// One group per traced probe by construction - every list read is in bounds.
+	bool probe_active = true;
+#endif
+	// Coordinates start at the list base; the head entry's .x IS the first coordinate and
+	// its .y lane carries the staged count (the args pass preserves .x when it stages).
+	uint packed_probe =
+	    probe_active ? floatBitsToUint(b_gi_probes[GiProbeTracedListBase() + list_index].x) : 0u;
 	ivec2 probe = ivec2(int(packed_probe & 0xFFFFu), int(packed_probe >> 16u));
 	uint record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
 	if(leader)
 	{
-		// Dispatch-uniform hoists: the mip-0 resolution the screen tier reads per sample,
-		// and the frame's R2 offset the jitter derives per ray.
-		s_screen_size = HizGetDepthMipResolution(s_hiz, 0);
-		s_frame_r2 = fract(vec2(0.754877666, 0.569840291) * u_gi_camera.w);
+		if(slot == 0)
+		{
+			// Dispatch-uniform hoists: the mip-0 resolution the screen tier reads per
+			// sample, and the frame's R2 offset the jitter derives per ray.
+			s_screen_size = HizGetDepthMipResolution(s_hiz, 0);
+			s_frame_r2 = fract(vec2(0.754877666, 0.569840291) * u_gi_camera.w);
+		}
 		if(probe_active)
 		{
-			s_history_record = -1;
-			s_importance_mean = 0.0;
+			s_history_record[slot] = -1;
+			s_importance_mean[slot] = 0.0;
 			// Placement computed the anchor, classification put this probe on the traced
 			// list - the records are valid by construction; this thread only unpacks them
 			// and reprojects the anchor for the importance mip.
@@ -522,12 +621,12 @@ void main()
 			vec3 world_normal = meta2.xyz;
 			vec4 origin_range = b_gi_probes[record + uint(GI_PROBE_ORIGIN)];
 			vec4 anchor = b_gi_probes[record + uint(GI_PROBE_ANCHOR)];
-			s_anchor_normal = world_normal;
-			s_origin = origin_range.xyz;
-			s_short_range = origin_range.w;
-			s_anchor_uv = anchor.xy;
-			s_ss_origin = vec3(anchor.xy, anchor.z);
-			s_vs_origin = HizComputeViewspacePosition(anchor.xy, anchor.z);
+			s_anchor_normal[slot] = world_normal;
+			s_origin[slot] = origin_range.xyz;
+			s_short_range[slot] = origin_range.w;
+			s_anchor_uv[slot] = anchor.xy;
+			s_ss_origin[slot] = vec3(anchor.xy, anchor.z);
+			s_vs_origin[slot] = HizComputeViewspacePosition(anchor.xy, anchor.z);
 			// Reproject the anchor into LAST frame's lattice for the importance mip. The
 			// lookup CLAMPS to the border instead of requiring an on-screen reprojection:
 			// content revealed by panning or rotation often shares a surface with the
@@ -554,15 +653,15 @@ void main()
 					if(history_meta.w > 0.5 &&
 					   plane < 0.05 * max(length(world_position - u_gi_camera.xyz), 0.1))
 					{
-						s_history_record = int(history_base);
+						s_history_record[slot] = int(history_base);
 						float total = 0.0;
 						for(int m = 0; m < 4; ++m)
 						{
 							vec4 mip = b_gi_probes[history_base + uint(m)];
-							s_importance_mip[m] = mip;
+							s_importance_mip[slot * 4 + m] = mip;
 							total += mip.x + mip.y + mip.z + mip.w;
 						}
-						s_importance_mean = total / 16.0;
+						s_importance_mean[slot] = total / 16.0;
 					}
 				}
 			}
@@ -573,7 +672,58 @@ void main()
 	{
 		return;
 	}
-	GiTraceScreenProbeRay(probe, ivec2(gl_LocalInvocationID.xy));
+#if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
+	// ADAPTIVE SCHEDULE (see the header): 16 + 3K rays for K detail blocks, pulled
+	// round-robin across the 16 lanes so one bright block never idles the wave (lane time
+	// = ceil(rays / 16) iterations, not one block's whole cost). Every texel is written
+	// every frame - by its own detail ray, by its block's coarse splat, or by the cull's
+	// zero store. The block walk below is pure shared-memory arithmetic per lane; with
+	// sixteen blocks a scan beats any prefix machinery.
+	int thread = int(gl_LocalInvocationID.x);
+	int total_rays = 0;
+	LOOP
+	for(int b = 0; b < 16; ++b)
+	{
+		total_rays += GiScreenProbeBlockRays(slot, b);
+	}
+	LOOP
+	for(int r = thread; r < total_rays; r += GI_TRACE_ADAPTIVE_LANES)
+	{
+		int scan = r;
+		int block = 0;
+		LOOP
+		for(int b = 0; b < 16; ++b)
+		{
+			int block_rays = GiScreenProbeBlockRays(slot, b);
+			if(scan < block_rays)
+			{
+				block = b;
+				break;
+			}
+			scan -= block_rays;
+		}
+		float ratio = GiScreenProbeBlockRatio(slot, block);
+		BRANCH
+		if(ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO)
+		{
+			// DETAIL block: ray `scan` in [0,4) owns one texel of the 2x2 quad; the very
+			// brightest blocks (the ladder's top rung) double-sample each texel.
+			ivec2 local = ivec2((block % 4) * 2 + (scan & 1), (block / 4) * 2 + (scan >> 1));
+			int sample_count = ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO *
+			                               GI_IMPORTANCE_SUPERSAMPLE_RATIO *
+			                               GI_IMPORTANCE_SUPERSAMPLE_RATIO
+			                       ? 2
+			                       : 1;
+			GiTraceScreenProbeDetail(slot, probe, local, sample_count);
+		}
+		else
+		{
+			GiTraceScreenProbeCoarse(slot, probe, block);
+		}
+	}
+#else
+	GiTraceScreenProbeRay(slot, probe, ivec2(gl_LocalInvocationID.xy));
+#endif
 }
 
 #endif // __GI_SCREEN_PROBE_TRACE_KERNEL_SH__
