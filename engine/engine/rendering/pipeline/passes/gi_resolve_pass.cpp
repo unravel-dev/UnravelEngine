@@ -371,7 +371,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         {
             if(++lighting_hot_streak_ == lighting_hot_report_frames)
             {
-                APPLOG_INFO("[SurfaceCache] GI lighting-change signal hot for {} consecutive "
+                APPLOG_DEBUG("[SurfaceCache] GI lighting-change signal hot for {} consecutive "
                             "frames: the temporal caps are pinned at their fast (noisier) "
                             "values. Expected while a light or emissive keeps animating; "
                             "otherwise a churning light hash or content epoch is holding GI "

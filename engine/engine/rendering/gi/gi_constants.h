@@ -393,6 +393,16 @@
       " disocclusion ghosts (need the clamp) and sparse-bright samples (the clamp destroys"        \
       " them) without a velocity buffer; a moving emitter under a still camera can still trail"    \
       " - accepted and documented")                                                                \
+    X(GI_REFLECTION_MOTION_WINDOW, 3.0f,                                                           \
+      "frames of running-mean depth under camera motion", "derived: trail length on a blurred"     \
+      " high-contrast boundary (a bright building over sky on a gloss floor) is the 1/count"       \
+      " catch-up time, and the base window's 8 frames read as a visible smear band that the"       \
+      " neighbourhood clamp cannot reject (a blurred edge's AABB legitimately spans both sides)."  \
+      " While MEASURED reprojection motion exceeds the clamp threshold the count cap collapses"    \
+      " to this instead - the composite's roughness-ramped spatial kernel and the motion itself"   \
+      " hide the extra variance. Keys on measured motion, never on the release gates: the mirror"  \
+      " determinism gate forces the release to 0 permanently, and a PARKED mirror must keep its"   \
+      " full base window for relight-phase integration")                                           \
     X(GI_REFLECTION_STILL_WINDOW_SCALE, 4.0f,                                                      \
       "x the temporal window", "derived: while the clamp is released (still camera) the"           \
       " running-mean count may grow to this multiple of the settings window, so a sparse spike"    \

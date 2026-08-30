@@ -94,14 +94,52 @@ void main()
 		gl_FragColor = vec4(curr.xyz, 1.0);
 		return;
 	}
-	// Receiver reprojection: camera-consistent pixels ALWAYS use this pass's own matrix
+	// VIRTUAL-IMAGE reprojection: camera-consistent pixels ALWAYS use this pass's own matrix
 	// reprojection; the velocity buffer's RG drives only OBJECT-motion pixels (BA gate).
 	// Trusting RG for camera pixels drags the image - the buffer's camera component is not
 	// reliably this pass's own previous view-projection (measured; open engine issue, see
 	// the velocity plan). Same gating as the TAA resolve.
+	//
+	// The point that reprojects is NOT the receiver: reflected content lives at the mirror
+	// image of the hit, |camera - P| + hit_t along the view ray through P (exact for a
+	// planar reflector - the standard SSR hit-distance reprojection). Reprojecting the
+	// RECEIVER fetched history from where the SURFACE was, not where the reflected content
+	// was, so camera translation dragged sky and far-content reflections with receiver
+	// parallax - motion trails that only caught up once the camera stopped. hit_t rides the
+	// raw alpha (the trace kernel's contract): 1 < w < 2 is a geometric hit, w = 2 a sky
+	// miss, pushed far enough that translation parallax cancels and rotation alone remains.
+	// Rough-tier (w = 1) and shape-fade pixels keep the receiver point - their content is
+	// the receiver's own gather / probe capture. Under a parked camera every point on the
+	// view ray reprojects onto uv exactly, so the stillness gate below is untouched; under
+	// pure rotation the virtual point lands where the receiver would anyway (same ray).
 	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(depth)));
 	vec3 world_position = clipToWorld(u_invViewProj, clip);
-	vec4 prev_clip = mul(u_gi_refl_prev_view_proj, vec4(world_position, 1.0));
+	// TWO reprojections, deliberately: the virtual image answers WHERE the history is, the
+	// receiver answers WHETHER it may be trusted. Conflating them broke the release: a
+	// sky-classified pixel's virtual point sits far enough that it reprojects onto uv even
+	// while the camera strafes, so pixels the reflected building had just LEFT read as
+	// perfectly still, released the clamp at the extended window, and held the building's
+	// ghost - a sawtooth trail that snapped only when the sweeping boundary handed the
+	// pixel a geometric sample again (real motion measured, clamp re-engaged). The
+	// stillness gates therefore measure RECEIVER motion - is this pixel's viewing geometry
+	// parked - which is the actual precondition for "the history is my own sample stream";
+	// converged sky content survives the engaged clamp anyway (it agrees with the current
+	// neighbourhood by construction).
+	vec4 recv_clip = mul(u_gi_refl_prev_view_proj, vec4(world_position, 1.0));
+	vec3 recv_ndc = clipTransform(recv_clip.xyz / max(recv_clip.w, 1e-6));
+	vec2 recv_prev_uv = recv_ndc.xy * 0.5 + 0.5;
+	vec3 reproject_point = world_position;
+	BRANCH
+	if(curr.w > 1.001)
+	{
+		vec3 view_ray = world_position - u_gi_reflection_camera.xyz;
+		float view_dist = max(length(view_ray), 1e-4);
+		float hit_t = curr.w >= 1.999 ? GI_SHADOW_DISTANCE * 8.0
+		                              : (curr.w - 1.0) * GI_SHADOW_DISTANCE;
+		reproject_point =
+		    u_gi_reflection_camera.xyz + view_ray * ((view_dist + hit_t) / view_dist);
+	}
+	vec4 prev_clip = mul(u_gi_refl_prev_view_proj, vec4(reproject_point, 1.0));
 	vec3 prev_ndc = clipTransform(prev_clip.xyz / max(prev_clip.w, 1e-6));
 	vec2 prev_uv = prev_ndc.xy * 0.5 + 0.5;
 	BRANCH
@@ -111,6 +149,8 @@ void main()
 		vec2 vel_dim = vec2(textureSize(s_refl_velocity, 0));
 		float object_w = smoothstep(0.5, 1.5, length(vel4.zw * vel_dim));
 		prev_uv = mix(prev_uv, uv - vel4.xy, object_w);
+		// A moving RECEIVER's motion is carried by the velocity buffer, not the matrices.
+		recv_prev_uv = mix(recv_prev_uv, uv - vel4.xy, object_w);
 	}
 	BRANCH
 	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
@@ -133,8 +173,14 @@ void main()
 	// gate only reads truly still because the whole chain runs on TAA-unjittered matrices
 	// (the pass subtracts the jitter; jittered matrices read a parked camera as 0.25-0.5
 	// texel/frame of motion and silently kept the clamp engaged).
-	vec2 motion_texels = (uv - prev_uv) / max(texel, vec2_splat(1e-6));
-	float still = 1.0 - saturate(length(motion_texels) / GI_REFLECTION_CLAMP_MOTION_TEXELS);
+	// RECEIVER-motion texels, never the fetch offset: see the two-reprojection note above.
+	vec2 motion_texels = (uv - recv_prev_uv) / max(texel, vec2_splat(1e-6));
+	// Measured receiver stillness, kept SEPARATE from the release gates below: the
+	// motion-collapsed window keys on actual motion only, while the release additionally
+	// drops for mirrors (determinism gate) and recent movers - a PARKED mirror must keep
+	// its full base window for relight-phase integration.
+	float still_motion = 1.0 - saturate(length(motion_texels) / GI_REFLECTION_CLAMP_MOTION_TEXELS);
+	float still = still_motion;
 	// MOVER GATE, part one - the global cap (u_gi_refl_velocity.y, see its declaration):
 	// receiver motion is the only thing `still` measured, so a parked camera watching a
 	// MOVING emitter held the ghost's history unclamped at the extended window. While any
@@ -156,6 +202,14 @@ void main()
 		still = 0.0;
 	}
 	float window = max(u_gi_refl_temporal.w - 1.0, 1.0);
+	// MOTION WINDOW: trail length on a blurred high-contrast boundary is the 1/count
+	// catch-up time, and the base window's depth reads as a smear band the clamp cannot
+	// reject there (a blurred edge's AABB legitimately spans both sides). While measured
+	// motion exceeds the clamp threshold, the effective window collapses to
+	// GI_REFLECTION_MOTION_WINDOW - the composite's roughness-ramped kernel and the motion
+	// itself hide the extra variance, and the full depth returns the frame the camera
+	// parks.
+	float window_eff = mix(min(GI_REFLECTION_MOTION_WINDOW, window), window, still_motion);
 	BRANCH
 	if(curr.w < 0.5)
 	{
@@ -178,9 +232,18 @@ void main()
 		// the fallback IS an image, and the next geometric sample restarts a fresh mean
 		// on top of it instead of resurrecting anything.
 		float held = min(history_texel.w,
-		                 window * mix(1.0, GI_REFLECTION_STILL_WINDOW_SCALE, still));
+		                 window_eff * mix(1.0, GI_REFLECTION_STILL_WINDOW_SCALE, still));
 		held *= 1.0 - 1.0 / max(u_gi_refl_temporal.w, 2.0);
-		float trust = saturate(held);
+		// The hold may bridge sparse coverage gaps ONLY while the history is this pixel's
+		// own still sample stream - hence the stillness factor. Under reprojection motion
+		// the fetch is a NEIGHBOUR'S mean dragged at receiver parallax (band content mixes
+		// wall and sky, so no single hit distance can reproject it), and the band sweeping
+		// across the screen re-inherits converged neighbours every frame - displaying that
+		// at full trust was a self-refreshing smear along reflected silhouettes (the
+		// wall-edge motion trails). On a deterministic mirror (still forced 0 above) a
+		// coverage-0 answer is PERSISTENT, not a gap, so the live fallback is the correct
+		// display there at any camera state.
+		float trust = saturate(held) * still;
 		gl_FragColor = vec4(mix(curr.xyz, history_texel.xyz, trust), max(held, 1.0));
 		return;
 	}
@@ -269,7 +332,8 @@ void main()
 	                       : curr.xyz;
 	float prev_count = history_texel.w >= 0.5 ? history_texel.w : 0.0;
 	// The count cap grows with stillness (see the release note above) and collapses to the
-	// base window on the first moving frame, so responsiveness under motion is unchanged.
-	float count = min(prev_count, window * mix(1.0, GI_REFLECTION_STILL_WINDOW_SCALE, still)) + 1.0;
+	// MOTION window on the first moving frame, so trails shorten to a few frames of
+	// catch-up while the camera moves.
+	float count = min(prev_count, window_eff * mix(1.0, GI_REFLECTION_STILL_WINDOW_SCALE, still)) + 1.0;
 	gl_FragColor = vec4(mix(history_rgb, curr.xyz, 1.0 / count), count);
 }
