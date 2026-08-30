@@ -40,6 +40,7 @@ auto mcp_manager::init(rtti::context& ctx) -> bool
     mcp::register_project_tools(registry_);
     mcp::register_script_tools(registry_);
     mcp::register_editor_tools(registry_);
+    mcp::register_skill_tools(registry_);
 
     log_activity("lifecycle",
                  fmt::format("Registered {} tools", registry_.tools().size()));
@@ -258,8 +259,9 @@ auto mcp_manager::dispatch_json_rpc(const std::string& body) -> std::string
     {
         log_activity("rpc", "initialize");
         const auto result = fmt::format(
-            R"({{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"unravel-editor","version":{}}}}})",
-            mcp::make_json_string(version::get_full()));
+            R"({{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"unravel-editor","version":{}}},"instructions":{}}})",
+            mcp::make_json_string(version::get_full()),
+            mcp::make_json_string(mcp::get_server_instructions()));
         return mcp::make_json_rpc_result(id, result);
     }
 

@@ -57,5 +57,9 @@ void register_material_tools(mcp_tool_registry& registry);
 void register_project_tools(mcp_tool_registry& registry);
 void register_script_tools(mcp_tool_registry& registry);
 void register_editor_tools(mcp_tool_registry& registry);
+void register_skill_tools(mcp_tool_registry& registry);
+
+/// Server usage rules injected into clients via the MCP initialize "instructions" field.
+auto get_server_instructions() -> const std::string&;
 
 } // namespace unravel::mcp

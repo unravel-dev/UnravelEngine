@@ -525,7 +525,9 @@ void register_asset_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "assets_import_files",
          .description =
-             "Import absolute filesystem paths (outside project) into folder (app:/...). "
+             "Import absolute filesystem paths (outside project) into folder (app:/...). The single "
+             "import path for all assets: paths may be files or directories (directories copy "
+             "recursively - pass one directory per multi-file model, e.g. .gltf + .bin + textures). "
              "Waits for copy+ready (wait_ms, default 15000).",
          .input_schema_json =
              R"json({"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}},"folder":{"type":"string"},"wait_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["paths","folder"]})json",

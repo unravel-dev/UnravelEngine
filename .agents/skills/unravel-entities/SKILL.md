@@ -54,7 +54,7 @@ Browse lean, then drill in:
 | `scene_get_children_batch` | Immediate children (`id`/`name`) for many entities |
 | `scene_list_component_properties` | Schema for MCP-editable typed keys (optional `component` filter) |
 | `scene_get_component_properties_batch` | Typed get: `{entity_id, component, script_type?, properties?[]}` |
-| `scene_set_component_properties_batch` | Typed set via real setters (one undo). Supported: Light, Skylight, Audio Source, Camera, Volume, Script |
+| `scene_set_component_properties_batch` | Typed set via real setters (one undo). Supported: Light, Skylight, Audio Source, Camera, Volume, Script, Particle Emitter, Physics, Animation, Text, Reflection Probe, Bloom |
 | `scene_find_entities_batch` | Find by `name_contains` / `name_exact` / `component_type` / `script_type` (AND); play-safe |
 | `scene_get_transforms_batch` | Many entity poses (`items` with `entity_id`, optional `space`) |
 | `scene_set_transforms_batch` | Many poses in one undoable action |

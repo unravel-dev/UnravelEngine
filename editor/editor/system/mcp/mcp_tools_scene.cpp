@@ -422,7 +422,8 @@ void register_scene_tools(mcp_tool_registry& registry)
         {.name = "scene_list_component_properties",
          .description =
              "List MCP-editable typed property schema. Optional component filter (Light, Skylight, "
-             "Audio Source, Camera, Volume, Script). Prefer over leaking ser20 JSON blobs.",
+             "Audio Source, Camera, Volume, Script, Particle Emitter, Physics, Animation, Text, "
+             "Reflection Probe, Bloom). Prefer over leaking ser20 JSON blobs.",
          .input_schema_json =
              R"json({"type":"object","properties":{"component":{"type":"string"}}})json",
          .handler =
@@ -439,8 +440,9 @@ void register_scene_tools(mcp_tool_registry& registry)
         {.name = "scene_get_component_properties_batch",
          .description =
              "Read typed properties for supported components. Each item: entity_id, component "
-             "(Light|Skylight|Audio Source|Camera|Volume|Script), optional script_type (required for "
-             "Script), optional properties[] key filter.",
+             "(Light|Skylight|Audio Source|Camera|Volume|Script|Particle Emitter|Physics|Animation|"
+             "Text|Reflection Probe|Bloom), optional script_type (required for Script), optional "
+             "properties[] key filter.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"script_type":{"type":"string"},"properties":{"type":"array","items":{"type":"string"}}},"required":["entity_id","component"]}}},"required":["items"]})json",
          .handler =
