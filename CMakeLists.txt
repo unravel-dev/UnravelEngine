@@ -60,9 +60,12 @@ string(REGEX REPLACE "^v([0-9]+)\\..*" "\\1" GIT_VERSION_MAJOR "${GIT_VERSION}")
 string(REGEX REPLACE "^v[0-9]+\\.([0-9]+).*" "\\1" GIT_VERSION_MINOR "${GIT_VERSION}")
 string(REGEX REPLACE "^v[0-9]+\\.[0-9]+\\.([0-9]+).*" "\\1" GIT_VERSION_PATCH "${GIT_VERSION}")
 string(REGEX REPLACE "^v[0-9]+\\.[0-9]+\\.[0-9]+(.*)" "\\1" GIT_VERSION_SHA1 "${GIT_VERSION}")
+string(REGEX REPLACE "-g[0-9a-f]+$" "" GIT_VERSION_NO_SHA "${GIT_VERSION}")
 set(VERSION_SHORT "${GIT_VERSION_MAJOR}.${GIT_VERSION_MINOR}.${GIT_VERSION_PATCH}${GIT_VERSION_SHA1}")
+string(REGEX REPLACE "^v" "" VERSION_SHORT_NO_SHA "${GIT_VERSION_NO_SHA}")
 
 message(STATUS "Version ${GIT_VERSION}")
+message(STATUS "Version (no sha) ${VERSION_SHORT_NO_SHA}")
 message(STATUS "CMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}")
 
 option(BUILD_ENGINE_SHARED "Build as a shared library." ON)
@@ -371,7 +374,7 @@ endforeach()
 # Basic settings
 
 set(CPACK_PACKAGE_NAME "UnravelEngine")
-set(CPACK_PACKAGE_VERSION "${VERSION_SHORT}")
+set(CPACK_PACKAGE_VERSION "${VERSION_SHORT_NO_SHA}")
 set(CPACK_COMPONENTS_ALL UnravelEngine)
 
 

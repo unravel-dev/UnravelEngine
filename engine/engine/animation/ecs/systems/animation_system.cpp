@@ -240,6 +240,7 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                           player.update_poses(
                               model_comp.get_bind_pose(),
                               retargeting_mode,
+                              apply_root_motion,
                               [&](const animation_pose::node_desc& desc,
                                   const math::transform& transform,
                                   const animation_pose::root_motion_result& motion_result)

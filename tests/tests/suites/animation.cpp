@@ -125,7 +125,8 @@ struct sampled_frame
     bool updated{};
 };
 
-auto step_player(animation_player& player, float dt, bool force = false) -> sampled_frame
+auto step_player(animation_player& player, float dt, bool force = false, bool extract_root_motion = true)
+    -> sampled_frame
 {
     static const animation_pose empty_ref_pose{};
     sampled_frame frame;
@@ -134,6 +135,7 @@ auto step_player(animation_player& player, float dt, bool force = false) -> samp
     {
         player.update_poses(empty_ref_pose,
                             animation_retargeting_mode::index_based,
+                            extract_root_motion,
                             [&](const animation_pose::node_desc& desc,
                                 const math::transform& transform,
                                 const animation_pose::root_motion_result& motion_result)
@@ -500,6 +502,42 @@ void test_root_motion_extract_rotation_is_blend_safe()
     check(std::fabs(frame.nodes[0].get_rotation().w) > 0.999f, "mid-blend pose does not leak extracted yaw");
 }
 
+void test_root_motion_unapplied_extraction_keeps_authored_pose()
+{
+    std::printf("test_root_motion_unapplied_extraction_keeps_authored_pose\n");
+    // The clip-start baseline is the pose complement of an APPLIED root
+    // delta. When the consumer does not apply root motion the delta is
+    // discarded, so pinning erased the authored motion: an imported Die clip
+    // (hips translate and pitch to the ground, extraction mode, root motion
+    // off by default) froze upright instead of falling. Without extraction
+    // the raw channel must stay in the pose.
+    auto clip = std::make_shared<animation_clip>();
+    clip->duration = seconds_t{1.0f};
+    auto& channel = clip->channels.emplace_back();
+    channel.node_name = "root";
+    channel.node_index = 0;
+    channel.position_keys = {{seconds_t{0.0f}, {0.0f, 0.0f, 0.0f}}, {seconds_t{1.0f}, {0.0f, 0.0f, -1.0f}}};
+    channel.rotation_keys = {{seconds_t{0.0f}, math::identity<math::quat>()},
+                             {seconds_t{1.0f}, math::angleAxis(-1.5707963f, math::vec3{1.0f, 0.0f, 0.0f})}};
+    channel.scaling_keys = {{seconds_t{0.0f}, {1.0f, 1.0f, 1.0f}}};
+    clip->root_motion.position_node_index = 0;
+    clip->root_motion.position_node_name = "root";
+    clip->root_motion.rotation_node_index = 0;
+    clip->root_motion.rotation_node_name = "root";
+
+    animation_player player;
+    player.blend_to(0, make_clip_handle(clip), seconds_t{0.0f}, true);
+    player.play();
+
+    step_player(player, 0.25f, false, false /*extract_root_motion*/);
+    auto frame = step_player(player, 0.5f, false, false /*extract_root_motion*/);
+    check_near(frame.nodes[0].get_position().z, -0.75f, 1e-3f, "unapplied extraction keeps authored travel in pose");
+    // 3/4 through a -90 degree pitch: |w| = cos(33.75 deg), well away from 1.
+    check(std::fabs(frame.nodes[0].get_rotation().w) < 0.99f, "unapplied extraction keeps authored rotation in pose");
+    // The delta stays tracked so enabling root motion later does not teleport.
+    check_near(frame.motion.root_transform_delta.get_translation().z, -0.5f, 1e-3f, "delta still tracked while unapplied");
+}
+
 void test_zero_duration_blend_and_finite_output()
 {
     std::printf("test_zero_duration_blend_and_finite_output\n");
@@ -642,6 +680,7 @@ auto run_animation_suite(rtti::context& ctx) -> int
     test_keep_in_place_preserves_sway();
     test_root_motion_extract_pose_is_blend_safe();
     test_root_motion_extract_rotation_is_blend_safe();
+    test_root_motion_unapplied_extraction_keeps_authored_pose();
     test_zero_duration_blend_and_finite_output();
     test_force_update_steps_while_paused();
     test_blend_to_null_clears_layer();

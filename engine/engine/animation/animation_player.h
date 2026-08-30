@@ -147,8 +147,18 @@ public:
      * @return True if time advanced and poses should be updated.
      */
     auto update_time(seconds_t delta_time, bool force = false) -> bool;
+    /**
+     * @brief Samples, blends and emits the final pose for every layer.
+     *
+     * @param extract_root_motion True when the caller consumes
+     * root_transform_delta (applies root motion). Extraction rewrites the
+     * root channel's pose to the constant clip-start baseline, which is only
+     * valid when the extracted delta is applied elsewhere; pass false to keep
+     * the authored root motion in the pose instead.
+     */
     void update_poses(const animation_pose& ref_pose,
                       animation_retargeting_mode retargeting_mode,
+                      bool extract_root_motion,
                       const update_callback_t& set_transform_callback);
 
     /**
@@ -206,12 +216,14 @@ private:
                           seconds_t time,
                           uint64_t loop_count,
                           animation_retargeting_mode retargeting_mode,
+                          bool extract_root_motion,
                           animation_pose& pose) const;
     auto compute_blend_factor(const animation_layer& layer, float normalized_blend_time) -> float;
     void update_state(seconds_t delta_time, animation_state& state);
     static auto get_state_duration(const animation_state& state) -> seconds_t;
     auto get_blend_progress(const animation_layer& layer) const -> float;
-    auto update_pose(animation_layer_state& layer, animation_retargeting_mode retargeting_mode) -> bool;
+    auto update_pose(animation_layer_state& layer, animation_retargeting_mode retargeting_mode, bool extract_root_motion)
+        -> bool;
 
     std::vector<animation_layer> layers_;
 

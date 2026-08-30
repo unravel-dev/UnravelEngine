@@ -316,7 +316,10 @@ auto animation_player::update_time(seconds_t delta_time, bool force) -> bool
     return true;
 }
 
-void animation_player::update_poses(const animation_pose& ref_pose, animation_retargeting_mode retargeting_mode, const update_callback_t& set_transform_callback)
+void animation_player::update_poses(const animation_pose& ref_pose,
+                                    animation_retargeting_mode retargeting_mode,
+                                    bool extract_root_motion,
+                                    const update_callback_t& set_transform_callback)
 {
     if(layers_.empty())
     {
@@ -326,10 +329,10 @@ void animation_player::update_poses(const animation_pose& ref_pose, animation_re
     for(auto& layer : layers_)
     {
         // Update current layer
-        update_pose(layer.current_state, retargeting_mode);
+        update_pose(layer.current_state, retargeting_mode, extract_root_motion);
 
         // Update target layer
-        if(update_pose(layer.target_state, retargeting_mode))
+        if(update_pose(layer.target_state, retargeting_mode, extract_root_motion))
         {
             // Compute blend factor
             float blend_progress = get_blend_progress(layer);
@@ -380,7 +383,9 @@ void animation_player::update_poses(const animation_pose& ref_pose, animation_re
     }
 }
 
-auto animation_player::update_pose(animation_layer_state& layer, animation_retargeting_mode retargeting_mode) -> bool
+auto animation_player::update_pose(animation_layer_state& layer,
+                                   animation_retargeting_mode retargeting_mode,
+                                   bool extract_root_motion) -> bool
 {
     auto& state = layer.state;
     auto& pose = layer.pose;
@@ -402,6 +407,7 @@ auto animation_player::update_pose(animation_layer_state& layer, animation_retar
                              state.elapsed,
                              state.loop_count,
                              retargeting_mode,
+                             extract_root_motion,
                              state.blend_poses[i]);
             state.blend_weights[i] = clip_weight_pair.second;
         }
@@ -420,7 +426,7 @@ auto animation_player::update_pose(animation_layer_state& layer, animation_retar
 
     if(state.clip)
     {
-        sample_animation(state.clip.get().get(), state.elapsed, state.loop_count, retargeting_mode, pose);
+        sample_animation(state.clip.get().get(), state.elapsed, state.loop_count, retargeting_mode, extract_root_motion, pose);
         return true;
     }
 
@@ -513,6 +519,7 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
                                         seconds_t time,
                                         uint64_t loop_count,
                                         animation_retargeting_mode retargeting_mode,
+                                        bool extract_root_motion,
                                         animation_pose& pose) const
 {
     if(!anim_clip)
@@ -647,8 +654,13 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
             // keeps its full animation. Extraction instead takes the FULL
             // per-frame displacement - sway included - into the root delta, so
             // its pose complement is the constant clip-start baseline; adding
-            // the sway there too would play it twice.
-            if(anim_clip->root_motion.keep_in_place || !anim_clip->root_motion.keep_position_xz)
+            // the sway there too would play it twice. The baseline is only
+            // valid while the caller actually applies the extracted delta -
+            // when root motion is not applied the delta is discarded, so
+            // pinning would erase the authored motion (a Die clip froze
+            // upright); keep the raw channel in the pose instead.
+            if(anim_clip->root_motion.keep_in_place ||
+               (extract_root_motion && !anim_clip->root_motion.keep_position_xz))
             {
                 pose.motion_result.bone_position_weights.x = 1.0f;
                 pose.motion_result.bone_position_weights.z = 1.0f;
@@ -730,7 +742,7 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
                 pose.motion_result.root_rotation_weight = 0.0f;
                 pose.motion_result.bone_rotation_weight = 1.0f;
             }
-            else if(!anim_clip->root_motion.keep_rotation)
+            else if(extract_root_motion && !anim_clip->root_motion.keep_rotation)
             {
                 // Extraction takes the FULL per-frame rotation change into the
                 // root delta, so the pose's own rotation must be the constant
@@ -740,7 +752,9 @@ void animation_player::sample_animation(const animation_clip* anim_clip,
                 // into crossfades against kept-rotation clips: the same class
                 // of bug as the position leak, seen as a heading twitch when
                 // blending a rotation-extracted clip (falls, dances) with a
-                // kept-rotation locomotion clip.
+                // kept-rotation locomotion clip. As with position, the
+                // baseline only holds while the delta is applied - with root
+                // motion off the raw rotation stays in the pose.
                 pose.motion_result.bone_rotation_weight = 1.0f;
                 node.transform.set_rotation(channel.rotation_keys.front().value);
             }
