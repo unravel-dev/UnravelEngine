@@ -2337,6 +2337,15 @@ void deferred::run_ssr_pass(const camera& camera,
         rparams.fill_ssr_params(ssr_params);
     }
 
+    // Content-lag signal for the temporal's release ceiling (see run_params) - held one
+    // accumulation window past the last mover draw. Placed after fill_ssr_params so the
+    // settings window is final.
+    const uint64_t ssr_frame_now = gfx::get_render_frame();
+    ssr_params.velocity_movers_recent =
+        velocity_movers_frame_ != ~0ull && ssr_frame_now >= velocity_movers_frame_ &&
+        ssr_frame_now - velocity_movers_frame_ <=
+            uint64_t(math::max(ssr_params.settings.fidelityfx.temporal.max_accum_frames, 1));
+
     ssr_params.hiz_buffer = rview.tex_get("HIZBUFFER");
 
     // BUG Cone tracing is not working properly, so we disable it for now.

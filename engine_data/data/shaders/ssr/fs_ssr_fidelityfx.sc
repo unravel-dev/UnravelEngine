@@ -438,7 +438,8 @@ void main()
     BRANCH
     if(roughnessFade <= 0.0)
     {
-        gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+        gl_FragData[0] = vec4(0.0, 0.0, 0.0, 0.0);
+        gl_FragData[1] = vec4_splat(0.0);
         return;
     }
 
@@ -456,7 +457,8 @@ void main()
     if(surface_z == 1.0)
 #endif
     {
-        gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+        gl_FragData[0] = vec4(0.0, 0.0, 0.0, 0.0);
+        gl_FragData[1] = vec4_splat(0.0);
         return;
     }
 
@@ -476,6 +478,9 @@ void main()
 	bool cone_tracing_enabled = u_enable_cone_tracing > 0.5;
     vec4 output_color = vec4_splat(0.0);
     float total_weight = 0.0;
+    // Confidence-weighted mean hit distance (view-space metres) for the temporal's
+    // per-pixel content validation; 0 when no ray landed with confidence.
+    float total_hit_t = 0.0;
 	
 	int max_iterations = int(u_max_steps);
     int adaptive_max_iterations = int(mix(8.0, float(max_iterations), 
@@ -523,14 +528,21 @@ void main()
             output_color.rgb += sample_color.rgb * sample_color.a;
             output_color.a += sample_color.a;
             total_weight += sample_color.a;
+            // View-space ray length to the accepted hit, weighted like the colour so the
+            // stored mean matches what the accumulated image actually shows.
+            vec3 vs_hit = HizComputeViewspacePosition(ss_hit_pos.xy, ss_hit_pos.z);
+            total_hit_t += length(vs_hit - vs_ray_origin) * sample_color.a;
         }
     }
 
+    float mean_hit_t = 0.0;
     BRANCH
     if(total_weight > 1e-4)
     {
         output_color.rgb /= total_weight;
+        mean_hit_t = total_hit_t / total_weight;
     }
     output_color.a /= float(num_rays);
-    gl_FragColor = output_color;
+    gl_FragData[0] = output_color;
+    gl_FragData[1] = vec4(mean_hit_t, 0.0, 0.0, 0.0);
 }

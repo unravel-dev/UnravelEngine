@@ -98,6 +98,16 @@ public:
         /// This frame's velocity buffer, passed explicitly by the pipeline. A valid
         /// texture IS the enable; null = legacy matrix reprojection.
         gfx::texture::ptr velocity;
+        /// True while the velocity pass drew ANY mover within one accumulation window.
+        /// This is the CONTENT-LAG guard, not a ghost-rejection guard: the trace samples
+        /// PREV_SCENE_HDR, so a moving emitter's radiance sweeps across every glossy
+        /// surface one frame late while the geometry at the hit stays static and
+        /// t-confirmed - no per-pixel geometric signal can see a radiance-only change,
+        /// and deep accumulation stretches that one-frame lag into a long tail. While
+        /// dynamic radiance exists on screen the accumulation window is capped, which is
+        /// the correct window for a signal that changes every frame; converged static
+        /// content agrees with its neighbourhood box and loses only the release's tail.
+        bool velocity_movers_recent = false;
         const camera* cam{};
         ssr_settings settings;
     };
@@ -122,10 +132,16 @@ public:
 
     /// Executes the temporal resolve pass. Returns updated SSR history buffer.
     /// @param velocity This frame's velocity buffer; null = legacy matrix reprojection.
+    /// @param curr_hit_t The trace's mean hit-distance target (SSR_CURR attachment 1) -
+    ///        always the TRACE's own output, even when the colour input was spatially
+    ///        denoised: hit distance carries validation data, not an image to filter.
+    /// @param velocity_movers_recent The content-lag window cap (see run_params).
     auto run_temporal_resolve(gfx::render_view& rview,
                               const gfx::frame_buffer::ptr& ssr_curr,
+                              const gfx::texture::ptr& curr_hit_t,
                               const gfx::frame_buffer::ptr& g_buffer,
                               const gfx::texture::ptr& velocity,
+                              bool velocity_movers_recent,
                               const camera* cam,
                               const fidelityfx_ssr_settings& settings) -> gfx::frame_buffer::ptr;
 
@@ -220,13 +236,15 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_temporal_params;  // x: enable_temporal, y: history_strength, z: depth_threshold, w: roughness_sensitivity
         gfx::program::uniform_ptr u_motion_params;    // x: motion_scale_pixels, y: normal_dot_threshold, z: max_accum_frames, w: unused
-        gfx::program::uniform_ptr u_fade_params;      // x: unused, y: unused, z: trace_scale_x, w: trace_scale_y
+        gfx::program::uniform_ptr u_fade_params;      // x: content-lag release ceiling, y: unused, z: trace_scale_x, w: trace_scale_y
         gfx::program::uniform_ptr u_prev_view_proj;   // Previous frame view-projection matrix
         gfx::program::uniform_ptr s_ssr_curr;         // Current frame SSR result
         gfx::program::uniform_ptr s_ssr_history;      // Previous frame SSR history
         gfx::program::uniform_ptr s_normal;           // Normal buffer
         gfx::program::uniform_ptr s_depth;            // Depth buffer
         gfx::program::uniform_ptr s_velocity;         // Velocity buffer (RG total, BA object-only)
+        gfx::program::uniform_ptr s_ssr_curr_hit_t;   // Trace mean hit distance THIS frame
+        gfx::program::uniform_ptr s_ssr_hist_hit_t;   // Accumulated hit-distance history
 
         void cache_uniforms()
         {
@@ -239,6 +257,8 @@ private:
             cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_ssr_curr_hit_t, "s_ssr_curr_hit_t", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_ssr_hist_hit_t, "s_ssr_hist_hit_t", gfx::uniform_type::Sampler);
         }
         
         auto is_valid() const -> bool

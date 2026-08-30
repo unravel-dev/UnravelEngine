@@ -117,12 +117,29 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
                                                           BGFX_SAMPLER_V_CLAMP);
     }
 
+    // Attachment 1: confidence-weighted mean hit distance (view-space metres). The
+    // temporal's per-pixel content validation - hit-point velocity read + hit-distance
+    // history compare - lives on this lane; R16F covers the trace range at ~0.1%
+    // relative, plenty for a compare threshold.
+    auto& ssr_curr_t_tex = rview.tex_get_or_emplace("SSR_CURR_T");
+    if(gfx::needs_recreate(ssr_curr_t_tex, target_size, gfx::texture_format::R16F))
+    {
+        ssr_curr_t_tex.reset();
+        ssr_curr_t_tex = std::make_shared<gfx::texture>(target_size.width,
+                                                        target_size.height,
+                                                        false,
+                                                        1,
+                                                        gfx::texture_format::R16F,
+                                                        BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+                                                            BGFX_SAMPLER_V_CLAMP);
+    }
+
     auto& ssr_curr_fbo = rview.fbo_get_or_emplace("SSR_CURR");
     if(gfx::needs_recreate(ssr_curr_fbo, target_size))
     {
         ssr_curr_fbo.reset();
         ssr_curr_fbo = std::make_shared<gfx::frame_buffer>();
-        ssr_curr_fbo->populate({ssr_curr_tex});
+        ssr_curr_fbo->populate({ssr_curr_tex, ssr_curr_t_tex});
     }
 
     return ssr_curr_fbo;
@@ -148,6 +165,20 @@ auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
                                                          BGFX_SAMPLER_V_CLAMP);
     }
 
+    // Hit-distance history rides alongside the colour history (same size, same blits).
+    auto& history_t_tex = rview.tex_get_or_emplace("SSR_HISTORY_T");
+    if(gfx::needs_recreate(history_t_tex, target_size, gfx::texture_format::R16F))
+    {
+        history_t_tex.reset();
+        history_t_tex = std::make_shared<gfx::texture>(target_size.width,
+                                                       target_size.height,
+                                                       false,
+                                                       1,
+                                                       gfx::texture_format::R16F,
+                                                       BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+                                                           BGFX_SAMPLER_V_CLAMP);
+    }
+
     return history_tex;
 }
 
@@ -171,12 +202,26 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
                                                       BGFX_SAMPLER_V_CLAMP);
     }
 
+    // MRT lane for the resolved hit-distance history (blitted into SSR_HISTORY_T).
+    auto& temp_t_tex = rview.tex_get_or_emplace("SSR_HISTORY_T_TEMP");
+    if(gfx::needs_recreate(temp_t_tex, target_size, gfx::texture_format::R16F))
+    {
+        temp_t_tex.reset();
+        temp_t_tex = std::make_shared<gfx::texture>(target_size.width,
+                                                    target_size.height,
+                                                    false,
+                                                    1,
+                                                    gfx::texture_format::R16F,
+                                                    BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
+                                                        BGFX_SAMPLER_V_CLAMP);
+    }
+
     auto& temp_fbo = rview.fbo_get_or_emplace("SSR_HISTORY_TEMP");
     if(gfx::needs_recreate(temp_fbo, target_size))
     {
         temp_fbo.reset();
         temp_fbo = std::make_shared<gfx::frame_buffer>();
-        temp_fbo->populate({temp_tex});
+        temp_fbo->populate({temp_tex, temp_t_tex});
     }
 
     return temp_fbo;
@@ -394,9 +439,17 @@ auto ssr_pass::run_fidelityfx_three_pass(gfx::render_view& rview, const run_para
         rview.tex_remove("SSR_DENOISED_B");
     }
 
-    // Pass 2: Temporal Resolve - reads (denoised) SSR_CURR + SSR_HIST, writes new SSR_HIST
-    auto ssr_history_fb =
-        run_temporal_resolve(rview, temporal_input_fb, params.g_buffer, params.velocity, params.cam, params.settings.fidelityfx);
+    // Pass 2: Temporal Resolve - reads (denoised) SSR_CURR + SSR_HIST, writes new SSR_HIST.
+    // The hit-distance lane always comes from the TRACE target (validation data, never
+    // filtered), regardless of whether the colour input was spatially denoised.
+    auto ssr_history_fb = run_temporal_resolve(rview,
+                                               temporal_input_fb,
+                                               ssr_curr_fb->get_texture(1),
+                                               params.g_buffer,
+                                               params.velocity,
+                                               params.velocity_movers_recent,
+                                               params.cam,
+                                               params.settings.fidelityfx);
     if(!ssr_history_fb)
     {
         gfx::render_pass::pop_scope();
@@ -519,8 +572,10 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
 
 auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
                                     const gfx::frame_buffer::ptr& ssr_curr,
+                                    const gfx::texture::ptr& curr_hit_t,
                                     const gfx::frame_buffer::ptr& g_buffer,
                                     const gfx::texture::ptr& velocity,
+                                    bool velocity_movers_recent,
                                     const camera* cam,
                                     const fidelityfx_ssr_settings& settings) -> gfx::frame_buffer::ptr
 {
@@ -533,6 +588,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     // resolution, so we ask the helpers not to downscale any further.
     auto old_history = rview.tex_safe_get("SSR_HISTORY");
     auto history_tex = create_or_update_ssr_history_tex(rview, ssr_curr, trace_resolution::full);
+    auto history_t_tex = rview.tex_get("SSR_HISTORY_T");
     auto temp_fbo = create_or_update_ssr_history_temp_fb(rview, ssr_curr, trace_resolution::full);
 
     // History was just allocated -- RGBA16F contains undefined data (possibly NaN).
@@ -541,6 +597,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     {
         gfx::render_pass blit_pass("History Init Blit Pass");
         gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, ssr_curr->get_texture()->native_handle(), 0, 0);
+        gfx::blit(blit_pass.id, history_t_tex->native_handle(), 0, 0, curr_hit_t->native_handle(), 0, 0);
         return nullptr;
     }
 
@@ -569,6 +626,10 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
                      4,
                      use_velocity ? velocity : g_buffer->get_texture(4),
                      BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    // The per-pixel content-validation lanes: this frame's mean hit distance and the
+    // accumulated hit-distance history (both view-space metres, 0 = no confident data).
+    gfx::set_texture(temporal_resolve_program_.s_ssr_curr_hit_t, 5, curr_hit_t);
+    gfx::set_texture(temporal_resolve_program_.s_ssr_hist_hit_t, 6, history_t_tex);
 
     // Set temporal parameters (enable_temporal, history_strength, depth_threshold, roughness_sensitivity)
     float temporal_params[4] = {settings.enable_temporal_accumulation ? 1.0f : 0.0f,
@@ -592,8 +653,14 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     const float ssr_scale_x = float(g_buffer_size.width) / float(history_size.width);
     const float ssr_scale_y = float(g_buffer_size.height) / float(history_size.height);
 
-    // xy unused by the temporal (the trace-side fade lanes); zw = the resolution scale.
-    float fade_params[4] = {0.0f, 0.0f, ssr_scale_x, ssr_scale_y};
+    // x = the CONTENT-LAG release ceiling: the trace samples PREV_SCENE_HDR, so a moving
+    // emitter's radiance sweeps every glossy surface one frame late while geometry at the
+    // hit stays static and t-confirmed - invisible to the per-pixel guards. While any
+    // mover was drawn within one accumulation window the release is capped screen-wide:
+    // a shallow window is the CORRECT window for radiance that changes every frame.
+    // y unused; zw = the resolution scale.
+    const float release_ceiling = velocity_movers_recent ? 0.125f : 1.0f;
+    float fade_params[4] = {release_ceiling, 0.0f, ssr_scale_x, ssr_scale_y};
     gfx::set_uniform(temporal_resolve_program_.u_fade_params, fade_params);
 
     // The TAA-unjittered previous pair (see the trace-side comment); keeps the legacy
@@ -616,6 +683,7 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     // ============================================================================
     gfx::render_pass blit_pass("History Blit Pass");
     gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, temp_fbo->get_texture()->native_handle(), 0, 0);
+    gfx::blit(blit_pass.id, history_t_tex->native_handle(), 0, 0, temp_fbo->get_texture(1)->native_handle(), 0, 0);
 
     return temp_fbo;
 }
