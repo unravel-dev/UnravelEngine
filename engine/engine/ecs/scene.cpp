@@ -21,6 +21,7 @@
 #include <engine/scripting/ecs/systems/script_system.h>
 
 #include <engine/rendering/ecs/systems/rendering_system.h>
+#include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <engine/ui/ecs/systems/ui_system.h>
 #include <engine/events.h>
@@ -283,6 +284,11 @@ scene::scene(const std::string& tag_name)
 
     on_construct<particle_emitter_component>(*registry).connect<&particle_emitter_component::on_create_component>();
     on_destroy<particle_emitter_component>(*registry).connect<&particle_emitter_component::on_destroy_component>();
+
+    // Activation must refresh a probe whose product cubemaps were released while inactive.
+    // Wired here (not play-gated like the script/audio hooks) because the editor's active
+    // toggle drives the same transform-flags path in edit mode.
+    on_construct<active_component>(*registry).connect<&reflection_probe_system::on_create_active_component>();
     
 
 }

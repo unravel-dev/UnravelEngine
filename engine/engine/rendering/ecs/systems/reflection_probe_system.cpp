@@ -1,5 +1,7 @@
 #include "reflection_probe_system.h"
+#include <engine/engine.h>
 #include <engine/events.h>
+#include <engine/play_mode.h>
 
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
 #include <engine/ecs/components/transform_component.h>
@@ -56,6 +58,28 @@ void reflection_probe_system::on_play_begin(hpp::span<const entt::handle> entiti
             probe->mark_dirty(true);
         }
     }
+}
+
+void reflection_probe_system::on_create_active_component(entt::registry& r, entt::entity e)
+{
+    auto* probe = r.try_get<reflection_probe_component>(e);
+    if(!probe)
+    {
+        return;
+    }
+    // In play mode, on_demand probes keep their manual contract: gameplay activating
+    // pooled/streamed objects must not pay surprise full-frame bakes - the owning script
+    // schedules the rebake explicitly via MarkDirty. In edit mode every mode refreshes:
+    // the product cubemaps were released while inactive, and the person flipping the
+    // active toggle expects a valid capture, not an uninitialized cubemap.
+    if(probe->get_update_mode() == probe_update_mode::on_demand)
+    {
+        if(engine::context().get_cached<play_mode>().is_active())
+        {
+            return;
+        }
+    }
+    probe->mark_dirty(true);
 }
 
 auto reflection_probe_system::mark_all_dirty(scene& scn, bool force_full_first_frame) -> size_t
