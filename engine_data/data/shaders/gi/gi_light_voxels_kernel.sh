@@ -52,7 +52,12 @@ SAMPLER3D(s_attr_albedo, 8);
 SAMPLER3D(s_attr_emissive, 9);
 /// The light volume this pass owns. Read+write: the radiance store folds each relight into
 /// a per-voxel EMA (GI_LIGHT_VOXEL_EMA_BLEND) - the read is this pass's own previous answer
-/// for the texel, never another consumer's concurrent write.
+/// for the texel, never another consumer's concurrent write. The near-edge tint fill
+/// (GiBounceBlockerRadiance) widens that contract by cross-texel loads: the value read is
+/// either last rotation's EMA or this dispatch's fresh store, both valid measurements one
+/// relight apart, and the downstream temporal owns that noise. A torn 64-bit load (typed
+/// UAV loads are atomic only to 32 bits) mixes two valid answers for one rotation under
+/// the EMA - below anything the readers can resolve.
 IMAGE3D_RW(s_light_voxels_out, rgba16f, 7);
 /// The per-face memo: one texel per light-volume texel (same GiLightVoxelTexel
 /// addressing), all 32 bits used (layout owned by GiWorldProbeVisMemoPack* in
@@ -173,6 +178,110 @@ float GiBounceCavityVisibility(vec3 position, vec3 direction, float attr_voxel)
 		}
 	}
 	return saturate(1.0 - occlusion / weight_sum);
+}
+
+/*
+ * NEAR-EDGE TINT FILL for the bounce term. The cavity march above attenuates the cage's
+ * ambient by its visibility, but the BLOCKED fraction of the face's cone contributed
+ * black - a white floor face beside a red wall lost exactly the wall's red, the
+ * sub-spacing colour adjacency the probe cage cannot represent (the DDGI-family chroma
+ * wash near edges and corners). The blocked fraction is owned by whatever surface
+ * encroaches within the march's own band, and that surface's outgoing radiance is already
+ * measured - in this very volume. This helper re-locates the encroaching surface (the
+ * march's 1/2/4-voxel stations, strongest encroachment wins, one tetrahedral gradient
+ * resolves the contact) and reads its back-facing light-voxel face via imageLoad; the
+ * caller injects it at weight (1 - visibility), the energy the attenuation removed.
+ *
+ * Runs per relight, deliberately un-memoised: the geometry verdicts above are frozen
+ * within a generation, but the blocker's RADIANCE changes with every relight - and the
+ * caller's visibility gate (GI_BOUNCE_TINT_MAX_VISIBILITY) keeps the taps off every
+ * face without a nearby edge, which is most of them.
+ *
+ * Stability: this adds a voxel->voxel edge to the bounce loop. Each hop multiplies
+ * albedo x (1 - visibility) <= GI_MAX_ALBEDO x (1 - GI_LIGHT_VOXEL_VISIBILITY_MIN) < 1
+ * on every surviving face (culled faces still store zero), so the series converges -
+ * physically it IS the light bouncing inside the cavity. A same-cell self-read is
+ * refused outright: its loop has no second surface, only the face re-ingesting itself.
+ * Leak defence is inherited: the gradient at an encroached point aims at the nearest
+ * surface's OWN side, and the two sides of a wall live in different face slabs, so the
+ * face selected by the outward normal is the reader's side by construction.
+ */
+bool GiBounceBlockerRadiance(vec3 position, vec3 direction, float attr_voxel, int level,
+                             ivec3 own_cell, ivec3 window_base, int attr_res,
+                             out vec3 out_radiance)
+{
+	out_radiance = vec3_splat(0.0);
+	// The march's stations, the march's measure (1 - d/t): the fill's reach is exactly the
+	// band the attenuation measured. A buried station (d < 0) saturates to full encroachment.
+	float best_encroach = 0.0;
+	vec3 best_point = vec3_splat(0.0);
+	float best_distance = 0.0;
+	float t = attr_voxel;
+	LOOP for(int i = 0; i < GI_BOUNCE_AO_STEPS; ++i)
+	{
+		vec3 p = position + direction * t;
+		float d = SdfSampleClipmap(p);
+		float encroach = saturate(1.0 - d / t);
+		if(encroach > best_encroach)
+		{
+			best_encroach = encroach;
+			best_point = p;
+			best_distance = d;
+		}
+		t *= 2.0;
+	}
+	if(best_encroach <= 0.0)
+	{
+		return false;
+	}
+	// Tetrahedral gradient at the winning station (the trace exhaustion path's pattern): the
+	// nearest surface lies distance x -normal away.
+	float e = max(attr_voxel * 0.5, 1e-3);
+	vec3 k0 = vec3(1.0, -1.0, -1.0);
+	vec3 k1 = vec3(-1.0, -1.0, 1.0);
+	vec3 k2 = vec3(-1.0, 1.0, -1.0);
+	vec3 k3 = vec3(1.0, 1.0, 1.0);
+	vec3 gradient = k0 * SdfSampleClipmap(best_point + k0 * e) +
+	                k1 * SdfSampleClipmap(best_point + k1 * e) +
+	                k2 * SdfSampleClipmap(best_point + k2 * e) +
+	                k3 * SdfSampleClipmap(best_point + k3 * e);
+	float len = length(gradient);
+	if(len <= 1e-8)
+	{
+		return false;
+	}
+	vec3 normal = gradient / len;
+	// Half a voxel INSIDE the surface: the attribute band is a voxel wide, so a real contact
+	// lands in a listed surface voxel; a deep or false contact lands in an unmeasured cell
+	// and fails the alpha test below - toward darkness, the current behaviour.
+	vec3 surface_point = best_point - normal * (max(best_distance, 0.0) + 0.5 * attr_voxel);
+	ivec3 tint_cell = GiLightVoxelCell(surface_point, attr_voxel);
+	if(tint_cell.x == own_cell.x && tint_cell.y == own_cell.y && tint_cell.z == own_cell.z)
+	{
+		return false;
+	}
+	// Containment in this level's resident window - past it the toroidal wrap would answer
+	// with cells from the far side of the window.
+	ivec3 span = tint_cell - window_base;
+	if(any(lessThan(span, ivec3(0, 0, 0))) ||
+	   any(greaterThanEqual(span, ivec3(attr_res, attr_res, attr_res))))
+	{
+		return false;
+	}
+	// The face radiating back toward the reader: dominant axis of the outward normal.
+	vec3 magnitude = abs(normal);
+	int axis = magnitude.x >= magnitude.y ? (magnitude.x >= magnitude.z ? 0 : 2)
+	                                      : (magnitude.y >= magnitude.z ? 1 : 2);
+	float component = axis == 0 ? normal.x : (axis == 1 ? normal.y : normal.z);
+	int face = axis * 2 + (component < 0.0 ? 1 : 0);
+	ivec3 tint_texel = GiLightVoxelTexel(GiLightVoxelSlot(tint_cell), level, face);
+	vec4 measured = imageLoad(s_light_voxels_out, tint_texel);
+	if(measured.a <= 0.0)
+	{
+		return false;
+	}
+	out_radiance = GiFiniteOrZero(measured.xyz);
+	return true;
 }
 
 /*
@@ -722,6 +831,21 @@ void main()
 				// is measured on a lattice that cannot see this cavity. The SAME value gated the
 				// face above, so the gate costs nothing extra.
 				irradiance += probe_value * GI_PI * visibility;
+			}
+			// The attenuation's complement: the blocked fraction of the cone is filled with the
+			// encroaching surface's own radiance instead of black (see GiBounceBlockerRadiance).
+			// A surface of radiance L covering the whole cosine hemisphere delivers E = pi x L,
+			// so the fraction mirrors the probe term's convention exactly. Branched, never a
+			// gated ternary or && chain - the helper does an imageLoad.
+			BRANCH
+			if(visibility < GI_BOUNCE_TINT_MAX_VISIBILITY)
+			{
+				vec3 blocker_radiance;
+				if(GiBounceBlockerRadiance(position, direction, attr_voxel, int(level), cell,
+				                           window_base, attr_res, blocker_radiance))
+				{
+					irradiance += blocker_radiance * GI_PI * (1.0 - visibility);
+				}
 			}
 		}
 		vec3 radiance = bounded_albedo * irradiance / GI_PI + emissive;

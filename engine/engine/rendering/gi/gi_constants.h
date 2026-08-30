@@ -283,6 +283,19 @@
       " sub-spacing cavity (an awning's underside, a window reveal) receives the OPEN"             \
       " ambient of the probe cage around it and glows in exactly the places that"                  \
       " should be darkest")                                                                        \
+    X(GI_BOUNCE_TINT_MAX_VISIBILITY, 0.95f,                                                        \
+      "cavity visibility", "derived: gate for the bounce's near-edge tint fill. The cavity"        \
+      " march attenuates the cage ambient by its visibility, but the BLOCKED fraction of the"      \
+      " face's cone contributed black - a white floor face beside a red wall lost exactly the"     \
+      " wall's red, the sub-spacing colour adjacency a probe-spacing cage cannot represent"        \
+      " (the DDGI-family chroma wash). The fill re-locates the encroaching surface within the"     \
+      " march's own band and injects its light-voxel radiance at weight (1 - visibility), the"     \
+      " energy the attenuation removed. Above this visibility the blocked sliver is"               \
+      " negligible and the locator's field taps are all cost. Stability: the new"                  \
+      " voxel->voxel edge multiplies albedo x (1 - visibility) per hop, bounded by"                \
+      " GI_MAX_ALBEDO x (1 - GI_LIGHT_VOXEL_VISIBILITY_MIN) < 1 on every surviving face"           \
+      " (culled faces still store zero), and a same-cell self-read is refused outright -"          \
+      " the series is the light bouncing inside the cavity, converging under the relight EMA")     \
     X(GI_FILTER_ANGLE_LIMIT_COS, 0.99802673f,                                                      \
       "cos(pi/50)", "published: [GI1.0 s2.1] probe-space filter rejects a neighbour"               \
       " hit whose reprojected direction deviates by more than pi/50 - the FLOOR of the"            \
