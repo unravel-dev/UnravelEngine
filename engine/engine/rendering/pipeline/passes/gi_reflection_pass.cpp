@@ -8,6 +8,7 @@
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace unravel
@@ -391,8 +392,23 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::set_uniform(temporal_program_.u_gi_refl_temporal, temporal_params);
         // y = the stillness-release ceiling: capped while the velocity pass drew any mover
         // within one temporal window (present cannot validate history - the per-pixel hit
-        // read in the shader only TIGHTENS this), released to 1 otherwise.
-        const float mover_cap = (use_velocity && params.velocity_movers_recent)
+        // read in the shader only TIGHTENS this), released to 1 otherwise. The composed
+        // content epoch is the STRUCTURAL half of the same signal: an instance destroyed
+        // while parked never draws into the velocity buffer again, but the composed field
+        // it vanishes from advances the epoch - without this the dead object's reflection
+        // out-lived it at the released (extended) window under a still camera.
+        const uint64_t content_epoch = params.view_cache->get_clipmap().get_composed_content_epoch();
+        const uint64_t frame_now = gfx::get_render_frame();
+        if(content_epoch_seen_ != content_epoch)
+        {
+            content_epoch_seen_ = content_epoch;
+            content_changed_frame_ = frame_now;
+        }
+        const uint64_t cap_window = uint64_t(std::max(params.temporal_frames, 1));
+        const bool content_changed_recent = content_changed_frame_ != ~0ull &&
+                                            frame_now >= content_changed_frame_ &&
+                                            frame_now - content_changed_frame_ <= cap_window;
+        const float mover_cap = ((use_velocity && params.velocity_movers_recent) || content_changed_recent)
                                     ? float(gi::GI_REFLECTION_MOVER_STILL_CAP)
                                     : 1.0f;
         const float velocity_params[4] = {use_velocity ? 1.0f : 0.0f, mover_cap, 0.0f, 0.0f};

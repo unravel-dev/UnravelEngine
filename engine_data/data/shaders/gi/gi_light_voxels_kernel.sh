@@ -548,10 +548,20 @@ void main()
 		{
 			// FACE MEMO HIT: the tunnel guard and the cavity march are pure functions of the
 			// field and the window, both frozen within a generation - the stored verdict
-			// answers. A culled face's light texel already holds the zero this generation's
-			// miss rotation stored, so even that store is skipped.
+			// answers. The march is memoised; the ZERO STORE is NOT elidable. The old skip
+			// assumed "a culled face's texel already holds zero", and that invariant broke in
+			// the field: content that lands in a culled face's texel between stamps (a
+			// transit-era measurement whose cull verdict returned under the epoch churn of
+			// moving objects, a debug variant's attribution colours) was then SERVED FOREVER -
+			// this was the only relight route that never wrote, so grazing junction reads
+			// (diagonal hit normals mix side faces that no surface-aligned read ever shows)
+			// kept a departed emitter's radiance as permanent lines along the borders it
+			// passed. One redundant store per culled face per rotation buys the invariant
+			// being enforced instead of assumed: any orphan now self-heals within one
+			// rotation.
 			if(GiWorldProbeVisMemoFaceCulled(memo_word))
 			{
+				imageStore(s_light_voxels_out, texel, vec4_splat(0.0));
 				continue;
 			}
 			visibility = GiWorldProbeVisMemoFaceVisibility(memo_word);

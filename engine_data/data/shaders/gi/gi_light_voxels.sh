@@ -275,10 +275,31 @@ bool GiLightVoxelReadFade(vec3 position, vec3 normal, vec3 fallback, float fade_
 /// same contract as the light volume) and W clamp.
 SAMPLER3D(s_gi_attr_albedo, 11);
 
-/// One cascade level's mean surface albedo at a position. False when no covering cell holds
-/// a surface voxel there. Same cell/slot addressing as GiLightVoxelReadLevel, minus faces.
-bool GiAttrAlbedoReadLevel(vec3 position, int level, out vec3 out_albedo)
+/**
+ * One cascade level's radiance AND matched-weight mean albedo, for the remodulation ratio.
+ *
+ * THE WEIGHT SETS MUST BE IDENTICAL. The ratio's correctness rests on
+ * radiance_mean / albedo_mean cancelling to the (albedo-weighted) irradiance: with the same
+ * weights, sum(w * a * albedo * E) / sum(w * a * albedo) is exact under locally uniform
+ * lighting at EVERY material boundary. The previous split readers weighted radiance by
+ * face-alpha x facing but albedo by plain cell-trilinear, and wherever face culling thinned
+ * one set (crevices, rims - any silhouette a reflection ray grazes) the ratio over/undershot
+ * to its clamp: a standing bright outline on the lighter material and a dark edging on the
+ * darker one, stamped along every reflected junction - and a x4 amplifier window that kept
+ * otherwise-invisible residual radiance (a departed emitter's tail) glowing as a line.
+ *
+ * Explicit 2x2x2 corner walk instead of hardware trilinear, because the albedo texels must be
+ * weighted by the RADIANCE texels' face alphas, which live in a different texture. Corners
+ * with zero trilinear weight are skipped (they may wrap toroidally; their weight is zero by
+ * the window-edge clamp, same contract as the filtered readers).
+ */
+bool GiLightVoxelReadLevelRemod(vec3 position,
+                                vec3 normal,
+                                int level,
+                                out vec3 out_radiance,
+                                out vec3 out_albedo)
 {
+	out_radiance = vec3_splat(0.0);
 	out_albedo = vec3_splat(0.0);
 	vec4 level_data = u_sdf_clipmap_levels[level];
 	if(!(level_data.w > 0.0))
@@ -291,36 +312,73 @@ bool GiAttrAlbedoReadLevel(vec3 position, int level, out vec3 out_albedo)
 	vec3 cell = clamp(position / attr_voxel_size,
 	                  base_cell + vec3_splat(0.5),
 	                  base_cell + vec3_splat(float(res) - 0.5));
-	vec2 uv = cell.xy / float(res);
-	float z_cell = cell.z - 0.5;
-	float z_base = floor(z_cell);
-	float z_frac = z_cell - z_base;
-	int z_biased = int(z_base) + 1048576;
-	int z0 = z_biased % res;
-	int z1 = (z_biased + 1) % res;
-	float depth_texels = float(res * SDF_CLIPMAP_LEVEL_COUNT);
-	int slab = level * res;
-	vec4 s0 = texture3DLod(s_gi_attr_albedo, vec3(uv, (float(slab + z0) + 0.5) / depth_texels), 0.0);
-	vec4 s1 = texture3DLod(s_gi_attr_albedo, vec3(uv, (float(slab + z1) + 0.5) / depth_texels), 0.0);
-	vec4 filtered = mix(s0, s1, z_frac);
-	if(filtered.a <= 1e-4)
+	vec3 corner_pos = cell - vec3_splat(0.5);
+	vec3 corner_base = floor(corner_pos);
+	vec3 frac = corner_pos - corner_base;
+	ivec3 c0 = ivec3(corner_base);
+	vec3 radiance_sum = vec3_splat(0.0);
+	vec3 albedo_sum = vec3_splat(0.0);
+	float weight_sum = 0.0;
+	LOOP
+	for(int corner = 0; corner < 8; ++corner)
+	{
+		ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
+		vec3 lerp_w = mix(vec3_splat(1.0) - frac, frac, vec3(offset));
+		float w = lerp_w.x * lerp_w.y * lerp_w.z;
+		if(w <= 1e-6)
+		{
+			continue;
+		}
+		ivec3 slot = GiLightVoxelSlot(c0 + offset);
+		// Premultiplied by the cell's surface alpha; a face with alpha > 0 implies a listed
+		// (surface) cell, so no divide is needed to recover the true albedo.
+		vec3 cell_albedo =
+		    texelFetch(s_gi_attr_albedo, ivec3(slot.x, slot.y, level * res + slot.z), 0).xyz;
+		LOOP
+		for(int axis = 0; axis < 3; ++axis)
+		{
+			float component = axis == 0 ? normal.x : (axis == 1 ? normal.y : normal.z);
+			float facing = abs(component);
+			if(facing <= 0.0)
+			{
+				continue;
+			}
+			int face = axis * 2 + (component < 0.0 ? 1 : 0);
+			vec4 face_texel = texelFetch(s_light_voxels, GiLightVoxelTexel(slot, level, face), 0);
+			float face_weight = w * facing;
+			// Radiance texels are premultiplied (rgb = 0 wherever a = 0).
+			radiance_sum += face_texel.xyz * face_weight;
+			albedo_sum += cell_albedo * (face_texel.a * face_weight);
+			weight_sum += face_texel.a * face_weight;
+		}
+	}
+	if(weight_sum <= 1e-4)
 	{
 		return false;
 	}
-	out_albedo = filtered.xyz / filtered.a;
+	out_radiance = GiFiniteOrZero(radiance_sum / weight_sum);
+	out_albedo = albedo_sum / weight_sum;
 	return true;
 }
 
 /**
- * Mean surface albedo at a position with GiLightVoxelReadFade's level selection, so a ratio
- * of the two reads compares like with like in the common case. KEEP THE LEVEL LOGIC IN STEP
- * with GiLightVoxelReadFade. The two can still disagree at occupancy holes (the radiance
- * walked to a deeper level than the albedo, or answered mixed with the caller's fallback);
- * the consumer's ratio clamp is the bound on that mismatch, never this function.
+ * GiLightVoxelReadFade's cascade walk with the matched-weight remodulation pair. KEEP THE
+ * LEVEL LOGIC IN STEP with GiLightVoxelReadFade. @p out_albedo_valid is false exactly when
+ * the radiance answer mixed in the caller's @p fallback (coarse-only inside the cross-fade
+ * band): the fallback is not a lattice product, so no albedo can match it and the consumer
+ * must skip the ratio rather than remodulate a partially foreign value.
  */
-bool GiAttrAlbedoReadFade(vec3 position, float fade_voxels, out vec3 out_albedo)
+bool GiLightVoxelReadFadeRemod(vec3 position,
+                               vec3 normal,
+                               vec3 fallback,
+                               float fade_voxels,
+                               out vec3 out_radiance,
+                               out vec3 out_albedo,
+                               out bool out_albedo_valid)
 {
+	out_radiance = vec3_splat(0.0);
 	out_albedo = vec3_splat(0.0);
+	out_albedo_valid = false;
 	float field_blend;
 	float answered_voxel;
 	int finest = SdfFindClipmapLevel(position, field_blend, answered_voxel);
@@ -330,33 +388,43 @@ bool GiAttrAlbedoReadFade(vec3 position, float fade_voxels, out vec3 out_albedo)
 	}
 	float fade = SdfClipmapEdgeBlend(finest, position, fade_voxels);
 	fade = fade * fade * (3.0 - 2.0 * fade);
+	vec3 fine_radiance;
 	vec3 fine_albedo;
-	bool ok_fine = GiAttrAlbedoReadLevel(position, finest, fine_albedo);
+	bool ok_fine = GiLightVoxelReadLevelRemod(position, normal, finest, fine_radiance, fine_albedo);
+	vec3 coarse_radiance;
 	vec3 coarse_albedo;
 	bool ok_coarse = false;
 	if(fade > 0.0 && (finest + 1) < SDF_CLIPMAP_LEVEL_COUNT)
 	{
-		ok_coarse = GiAttrAlbedoReadLevel(position, finest + 1, coarse_albedo);
+		ok_coarse =
+		    GiLightVoxelReadLevelRemod(position, normal, finest + 1, coarse_radiance, coarse_albedo);
 	}
 	if(ok_fine && ok_coarse)
 	{
+		out_radiance = mix(fine_radiance, coarse_radiance, fade);
 		out_albedo = mix(fine_albedo, coarse_albedo, fade);
+		out_albedo_valid = true;
 		return true;
 	}
 	if(ok_fine)
 	{
+		out_radiance = fine_radiance;
 		out_albedo = fine_albedo;
+		out_albedo_valid = true;
 		return true;
 	}
 	if(ok_coarse)
 	{
+		out_radiance = mix(fallback, coarse_radiance, fade);
 		out_albedo = coarse_albedo;
+		out_albedo_valid = false;
 		return true;
 	}
 	for(int level = finest + 2; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
 	{
-		if(GiAttrAlbedoReadLevel(position, level, out_albedo))
+		if(GiLightVoxelReadLevelRemod(position, normal, level, out_radiance, out_albedo))
 		{
+			out_albedo_valid = true;
 			return true;
 		}
 	}

@@ -12,7 +12,9 @@ $input v_texcoord0
  * a moving emitter otherwise held its ghost unclamped. Raw alpha is coverage below 1 and
  * encodes the hit distance above 1 (the trace kernel's contract; >= 0.5 image tests hold).
  * A coverage-0 sample is not an image: history is held so a refined mean is not bleached
- * by sky, and a zero count lets the composite reveal the authored probe layer.
+ * by sky - held with a per-frame COUNT DECAY (see the branch), so a pixel that stops
+ * producing images ever again ages out to the probe layer instead of freezing its last
+ * mean forever - and a zero count lets the composite reveal the authored probe layer.
  *
  * FIREFLY GOVERNOR (the gather's recipe, GI_REFLECTION_FIREFLY_CLAMP): one VNDF ray per
  * pixel per frame makes a small bright emitter a sparse-spike process on rough surfaces -
@@ -49,7 +51,10 @@ uniform vec4 u_gi_refl_temporal;
 /// correct for moving receivers; the stillness gate then reads TRUE per-pixel motion, so
 /// a moving receiver keeps the clamp engaged while a parked one still releases it).
 /// y = ceiling on the stillness release: GI_REFLECTION_MOVER_STILL_CAP while the velocity
-/// pass drew any mover within one temporal window, 1.0 otherwise. The cap applies
+/// pass drew any mover - or the composed SDF content changed (an instance appeared,
+/// vanished, or moved: the structural signal a parked-then-destroyed object leaves when
+/// it can no longer draw into the velocity buffer) - within one temporal window, 1.0
+/// otherwise. The cap applies
 /// EVERYWHERE and the per-pixel hit read below only TIGHTENS it - a departed mover reads
 /// static at exactly its ghost's pixels (the current mirror hit is the revealed
 /// background), so a depth-confirmed "static now" reading that superseded the cap
@@ -81,9 +86,12 @@ void main()
 	BRANCH
 	if(!history_flag)
 	{
-		// No history: alpha is coverage. A geometric sample starts the running mean at 1;
-		// a coverage-0 sample stays 0 so the composite reveals probes.
-		gl_FragColor = vec4(curr.xyz, curr.w >= 0.5 ? 1.0 : curr.w);
+		// No history: alpha is the accumulation count. A geometric sample starts the running
+		// mean at 1; a coverage-0 sample's rgb is already the trace's fallback answer (the
+		// shape fade mixes to GiReflectionSkyFallback as coverage drops), stored at count 1
+		// so the composite covers with it - revealing RBUFFER instead is a black hole
+		// wherever no probe reaches (see the hold branch below).
+		gl_FragColor = vec4(curr.xyz, 1.0);
 		return;
 	}
 	// Receiver reprojection: camera-consistent pixels ALWAYS use this pass's own matrix
@@ -107,7 +115,9 @@ void main()
 	BRANCH
 	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
 	{
-		gl_FragColor = vec4(curr.xyz, curr.w >= 0.5 ? 1.0 : curr.w);
+		// Off-screen history: restart, same fallback-at-count-1 contract as the no-history
+		// path above.
+		gl_FragColor = vec4(curr.xyz, 1.0);
 		return;
 	}
 	vec4 history_texel = texture2DLod(s_refl_history, prev_uv, 0.0);
@@ -131,12 +141,47 @@ void main()
 	// mover was drawn recently the release is capped screen-wide; ghosts flush at roughly
 	// the base window while converged static content loses only the release's tail.
 	still = min(still, u_gi_refl_velocity.y);
+	// DETERMINISM GATE: the release exists for STOCHASTIC pixels - a jittered lobe's sparse
+	// hits need an unclamped, extended mean to converge (the p*L estimator above). A mirror
+	// pixel (the trace's own determinism gate, same constant, same decode) fires the SAME
+	// ray every frame: there is no lobe variance to integrate, every sample is the full
+	// truth, and an unclamped extended hold can only preserve stale content. Mirrors
+	// therefore keep the clamp engaged and the base window at ANY stillness - history that
+	// disagrees with the current neighbourhood dies within frames, which is exactly the
+	// surface where departed-content lines proved able to outlive every upstream flush.
+	// The decode is shared with the mover gate's mirror-direction rebuild below.
+	GBufferDataNormalMetalRoughness nd = DecodeGBufferNormalMetalRoughnessLod(uv, s_refl_normal, 0.0);
+	if(nd.roughness <= GI_REFLECTION_MIRROR_ROUGHNESS)
+	{
+		still = 0.0;
+	}
+	float window = max(u_gi_refl_temporal.w - 1.0, 1.0);
 	BRANCH
 	if(curr.w < 0.5)
 	{
-		// Not an image this frame. Hold the geometric mean we already have; do not clamp
-		// against a sky/empty neighbourhood that would bleach a refined history.
-		gl_FragColor = vec4(history_texel.xyz, history_texel.w);
+		// Not an image this frame. Hold the geometric mean we already have rather than
+		// clamping it against a sky/empty neighbourhood that would bleach a refined
+		// history - but held is not immortal. The count obeys the same stillness ceiling
+		// as the image path and decays by 1/window per held frame, so a pixel whose trace
+		// KEEPS answering non-image (the grazing unrefined-clipmap band at the silhouette
+		// of departed content - the ghost stripe at the hit/sky transition) ages out over
+		// about a window; a single-frame coverage gap costs one window-fraction of
+		// weight and no colour.
+		//
+		// As the held count dies, the DISPLAYED colour cross-fades to curr.rgb, which on
+		// a coverage-0 frame is already the trace's own fallback answer (shape_ok 0 mixes
+		// to pure GiReflectionSkyFallback): the steady state of a persistently-non-image
+		// pixel is the LIVE sky/probe answer at count 1 - never a bare low alpha that
+		// uncovers RBUFFER, because where no probe reaches that "reveal" is a black hole,
+		// not the SH (measured: black bands rimmed with the last held colour at every
+		// persistent-non-image silhouette once the count decayed). The count floors at 1:
+		// the fallback IS an image, and the next geometric sample restarts a fresh mean
+		// on top of it instead of resurrecting anything.
+		float held = min(history_texel.w,
+		                 window * mix(1.0, GI_REFLECTION_STILL_WINDOW_SCALE, still));
+		held *= 1.0 - 1.0 / max(u_gi_refl_temporal.w, 2.0);
+		float trust = saturate(held);
+		gl_FragColor = vec4(mix(curr.xyz, history_texel.xyz, trust), max(held, 1.0));
 		return;
 	}
 	// MOVER GATE, part two - the per-pixel TIGHTEN (never lift): rebuild the reflected hit
@@ -148,8 +193,6 @@ void main()
 	BRANCH
 	if(u_gi_refl_velocity.x > 0.5 && curr.w > 1.001 && curr.w < 1.999)
 	{
-		GBufferDataNormalMetalRoughness nd =
-		    DecodeGBufferNormalMetalRoughnessLod(uv, s_refl_normal, 0.0);
 		BRANCH
 		if(dot(nd.world_normal, nd.world_normal) >= 0.5)
 		{
@@ -227,7 +270,6 @@ void main()
 	float prev_count = history_texel.w >= 0.5 ? history_texel.w : 0.0;
 	// The count cap grows with stillness (see the release note above) and collapses to the
 	// base window on the first moving frame, so responsiveness under motion is unchanged.
-	float window = max(u_gi_refl_temporal.w - 1.0, 1.0);
 	float count = min(prev_count, window * mix(1.0, GI_REFLECTION_STILL_WINDOW_SCALE, still)) + 1.0;
 	gl_FragColor = vec4(mix(history_rgb, curr.xyz, 1.0 / count), count);
 }

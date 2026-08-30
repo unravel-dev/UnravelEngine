@@ -285,6 +285,15 @@ private:
             return program && program->is_valid();
         }
     } composite_program_;
+
+    /// Composed-content epoch of the view's clipmap at the last run, and the frame it last
+    /// advanced: the STRUCTURAL half of the temporal's stillness-release cap. The mover
+    /// signal rides the velocity pass's draw loop and cannot see an instance destroyed
+    /// while parked - it never draws again - but the composed field it vanishes from
+    /// advances the epoch. ~0ull = not seen yet (pass birth stamps once; history is fresh
+    /// then anyway).
+    uint64_t content_epoch_seen_ = ~0ull;
+    uint64_t content_changed_frame_ = ~0ull;
 };
 
 } // namespace unravel

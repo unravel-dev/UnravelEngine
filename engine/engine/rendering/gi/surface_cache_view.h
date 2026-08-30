@@ -122,9 +122,17 @@ public:
         return lighting_quiet_frames_;
     }
 
-    /// Four complete probe windows (GI_WORLD_PROBE_WINDOW frames each): the bounce feedback
-    /// settles well within one, so this carries a wide margin. See update_quiescence.
-    static constexpr uint32_t quiescence_settle_frames = 4u * 16u;
+    /// Sixteen complete probe windows (GI_WORLD_PROBE_WINDOW frames each). The bounce
+    /// FEEDBACK settles within one window, but the light-voxel relight converges by EMA
+    /// (GI_LIGHT_VOXEL_EMA_BLEND 0.125, one visit per 4-frame rotation): after the last
+    /// content change a voxel still holds 0.875^(frames/4) of its stale radiance. The old
+    /// 64-frame settle froze that tail at ~13% - invisible on flat surfaces, but a departed
+    /// emitter's residual stayed a visible line wherever reflections amplify (measured:
+    /// the red edge lines after emissive movers passed). 256 frames leaves ~0.02%, below
+    /// perception at any amplification the reflection path can apply. Camera-driven churn
+    /// resets the counter anyway, so the cost is only ~3 extra seconds of GI passes after
+    /// an edit in an otherwise parked shot. See update_quiescence.
+    static constexpr uint32_t quiescence_settle_frames = 16u * 16u;
     static_assert(quiescence_settle_frames >= 32u, "must cover at least two probe windows");
 
 private:

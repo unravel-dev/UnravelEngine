@@ -336,9 +336,27 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		if(!hit.exhausted && shape_ok > 0.0)
 		{
 			vec3 measured;
+#if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
+			// MATCHED-WEIGHT read (compute form): the radiance and the remodulation
+			// denominator below come from ONE walk with identical face-alpha x facing x
+			// trilinear weights. The split readers this replaces disagreed wherever face
+			// culling thinned the radiance set but not the albedo set - crevices, rims,
+			// every silhouette a mirror ray grazes - and the ratio slammed to its clamp:
+			// a standing bright outline along reflected junctions, and a x4 window that
+			// kept a departed emitter's residual glowing as a line long after the lattice
+			// had converged (the "leftover red lines where the cubes passed").
+			vec3 measured_albedo;
+			bool measured_albedo_ok;
+			bool measured_ok = GiLightVoxelReadFadeRemod(hit_position, hit_normal, rough_value,
+			                                             GI_REFLECTION_CASCADE_FADE_VOXELS,
+			                                             measured, measured_albedo,
+			                                             measured_albedo_ok);
+#else
+			bool measured_ok = GiLightVoxelReadFade(hit_position, hit_normal, rough_value,
+			                                        GI_REFLECTION_CASCADE_FADE_VOXELS, measured);
+#endif // GI_LIGHT_VOXEL_READ_ALBEDO
 			BRANCH
-			if(GiLightVoxelReadFade(hit_position, hit_normal, rough_value,
-			                        GI_REFLECTION_CASCADE_FADE_VOXELS, measured))
+			if(measured_ok)
 			{
 				radiance = measured;
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
@@ -351,11 +369,14 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 				// while the irradiance keeps the volume's smooth estimate. Only measured
 				// radiance is remodulated (rough_value and the sky fallback are not voxel
 				// products); emissive hits are skipped rather than having their emission
-				// separated (the albedo ratio does not apply to a source term). The floor
-				// and cap bound quantisation noise and level-mismatched reads
-				// (GiAttrAlbedoReadFade's contract).
+				// separated (the albedo ratio does not apply to a source term). With the
+				// matched-weight denominator the ratio is exact under locally uniform
+				// lighting at every boundary; the floor and cap now bound only
+				// quantisation noise and genuinely non-uniform lighting across the
+				// footprint. A fallback-mixed answer carries no matching albedo
+				// (measured_albedo_ok false) and is served unremodulated.
 				BRANCH
-				if(hit.instance_index != SDF_NO_INSTANCE)
+				if(hit.instance_index != SDF_NO_INSTANCE && measured_albedo_ok)
 				{
 					uint material_base = uint(hit.instance_index) * uint(SDF_INSTANCE_STRIDE);
 					vec4 material0 = b_sdf_instances[material_base + 8u];
@@ -371,19 +392,13 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 							hit_albedo *= GiReflectionMeanAlbedo(mean_slot);
 						}
 						hit_albedo = min(hit_albedo, vec3_splat(GI_MAX_ALBEDO));
-						vec3 voxel_albedo;
-						BRANCH
-						if(GiAttrAlbedoReadFade(hit_position, GI_REFLECTION_CASCADE_FADE_VOXELS,
-						                        voxel_albedo))
-						{
-							voxel_albedo = min(voxel_albedo, vec3_splat(GI_MAX_ALBEDO));
-							vec3 ratio = hit_albedo /
-							             max(voxel_albedo,
-							                 vec3_splat(GI_REFLECTION_REMODULATE_ALBEDO_FLOOR));
-							radiance *= clamp(ratio,
-							                  vec3_splat(0.0),
-							                  vec3_splat(GI_REFLECTION_REMODULATE_RATIO_MAX));
-						}
+						vec3 voxel_albedo = min(measured_albedo, vec3_splat(GI_MAX_ALBEDO));
+						vec3 ratio = hit_albedo /
+						             max(voxel_albedo,
+						                 vec3_splat(GI_REFLECTION_REMODULATE_ALBEDO_FLOOR));
+						radiance *= clamp(ratio,
+						                  vec3_splat(0.0),
+						                  vec3_splat(GI_REFLECTION_REMODULATE_RATIO_MAX));
 					}
 				}
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
