@@ -108,8 +108,24 @@ void main()
 		// energy-consistent, refined stratum by stratum over the window. Without it every
 		// window edge dragged a dark frontier that took a full window (a quarter second) to
 		// converge. The outermost level has no parent and keeps the dark clear (energy loss,
-		// never invention); buried probes stay dead; the seeded hitT stays the sky marker the
-		// clear always wrote, so the depth moments behave exactly as before.
+		// never invention); buried probes stay dead.
+		//
+		// The seed is RADIANCE ONLY. hitT is left at 0 - the "never measured" value the atlas
+		// clear writes - never at the -1 sky marker this claim used to stamp. That marker was
+		// a lie about GEOMETRY with no relation to the seed: the convolve turns every sky
+		// texel into depth = GI_WORLD_PROBE_DEPTH_CLAMP x spacing at near-zero variance, so a
+		// just-claimed slot advertised "confidently open in every direction" for a whole
+		// window. A cage corner is at most sqrt(3) x spacing away against a 1.5 x spacing
+		// clamp, so most corners then took the readers' no-test path (distance <= mean, low
+		// variance = neither Chebyshev nor the field march runs) at FULL trilinear weight -
+		// and what they read was the COARSER cascade's irradiance, which straddles walls worse
+		// by construction. That is a cascade-down import into sealed interiors, re-arming
+		// every time the camera crosses a probe cell, and it bypasses every defence in the
+		// reader. Leaving hitT at 0 drags the convolved mean toward zero instead, which
+		// over-occludes: the fresh cage is rejected and the query falls through to the coarser
+		// level - the same energy, by the legitimate path that still gets a visibility test.
+		// Untraced strata also stop counting as sky, so a fresh interior probe no longer
+		// reports sky_fraction 1.
 		int parent_level = level + 1;
 		bool parent_valid = false;
 		ivec2 parent_tile = ivec2(0, 0);
@@ -135,7 +151,7 @@ void main()
 			int clear_index = thread * GI_WORLD_PROBE_WINDOW + s;
 			ivec2 clear_texel = tile + ivec2(clear_index % GI_WORLD_PROBE_OCT_RADIANCE,
 			                                 clear_index / GI_WORLD_PROBE_OCT_RADIANCE);
-			vec4 clear_value = vec4(0.0, 0.0, 0.0, buried ? 0.0 : -1.0);
+			vec4 clear_value = vec4(0.0, 0.0, 0.0, 0.0);
 			if(parent_valid)
 			{
 				vec2 clear_uv = (vec2(clear_texel - tile) + vec2_splat(0.5)) /

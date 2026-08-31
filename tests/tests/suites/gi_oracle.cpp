@@ -1695,11 +1695,25 @@ auto cage_visibility(const global_sdf_clipmap& clipmap,
         return 1.0f;
     }
     const float accept = float(gi::GI_WORLD_PROBE_CAGE_VIS_ACCEPT_VOXELS) * field_voxel;
+    // Crossing conviction alongside the negative core - see the shader for the argument.
+    const float band = float(gi::GI_WORLD_PROBE_CAGE_VIS_CROSS_VOXELS) * field_voxel;
+    float minimum_d = global_sdf_clipmap::outside_distance;
+    float minimum_t = t;
     const float base_step = (t_end - t) / float(gi::GI_WORLD_PROBE_CAGE_VIS_STEPS);
     for(int i = 0; i < int(gi::GI_WORLD_PROBE_CAGE_VIS_STEPS); ++i)
     {
         const float d = cage_visibility_sample(clipmap, from + direction * t);
         if(d < accept)
+        {
+            return 0.0f;
+        }
+        if(d < minimum_d)
+        {
+            minimum_d = d;
+            minimum_t = t;
+        }
+        else if(minimum_d < band &&
+                (d - minimum_d) >= float(gi::GI_WORLD_PROBE_CAGE_VIS_CROSS_SLOPE) * (t - minimum_t))
         {
             return 0.0f;
         }
@@ -1929,6 +1943,97 @@ void test_world_probe_cage_visibility_seals_box()
     check(cage_visibility(ground_clipmap, {0.3f, hug, -0.7f}, {0.3f, -2.0f, -0.7f}, ground_spacing) <=
               0.0f,
           "a probe beneath the floor is blocked");
+    // A cage segment LEAVING the ground stays visible: its first sample is legitimately within
+    // a voxel of the floor and it climbs away at crossing rate, which is exactly the shape the
+    // crossing conviction must not mistake for a wall (measured minimum 0.891 voxels against
+    // the 0.25 band, and the reason that band is not one voxel).
+    check(cage_visibility(ground_clipmap, {0.3f, hug, -0.7f},
+                          {0.3f + ground_spacing, ground_spacing, -0.7f}, ground_spacing) > 0.0f,
+          "a cage segment climbing away from the ground stays visible");
+}
+
+/// The THIN-WALL seal (2026-08-31): the negative-core conviction
+/// (GI_WORLD_PROBE_CAGE_VIS_ACCEPT_VOXELS) asks the field for an interior, which a wall thinner
+/// than one voxel of the level answering the sample does not have - the trilinear
+/// reconstruction smooths its two faces into a dip that never reaches zero. The march therefore
+/// walked straight through walls the probe rays themselves stop dead on (they convict at
+/// accept + expand = about +1.9 voxels), and every reader that trusts the march imported the
+/// far side. The crossing conviction is the defence: a minimum inside
+/// GI_WORLD_PROBE_CAGE_VIS_CROSS_VOXELS followed by a rise at
+/// GI_WORLD_PROBE_CAGE_VIS_CROSS_SLOPE. Pinned here at production clipmap resolution against a
+/// 0.1 m wall - 0.8 of a level-0 voxel, with no negative core anywhere in it.
+void test_world_probe_cage_visibility_seals_thin_wall()
+{
+    std::printf("test_world_probe_cage_visibility_seals_thin_wall\n");
+    mesh_sdf thin;
+    check(bake_slab({0.05f, 4.0f, 4.0f}, thin), "thin wall slab bakes");
+    std::vector<global_sdf_instance> instances;
+    instances.push_back(
+        make_clipmap_instance(thin, {0.0f, 0.0f, 0.0f}, math::vec3(0.8f), math::vec3(0.0f)));
+    global_sdf_clipmap::settings settings;
+    settings.resolution = 128;
+    settings.base_extent = 16.0f;
+    settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    global_sdf_clipmap clipmap;
+    clipmap.init(settings);
+    clipmap.update(instances, math::vec3(0.0f));
+    const float spacing = clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
+    std::printf("  level-0 voxel %.3f m, wall 0.100 m (%.2f voxels)\n",
+                clipmap.get_level(0).voxel_size,
+                0.1f / clipmap.get_level(0).voxel_size);
+    // The wall has no negative core to find: this is what makes the old conviction blind to it.
+    check(clipmap.sample_level(0, {0.0f, 0.0f, 0.0f}) >= 0.0f,
+          "the thin wall has no negative core in the composed field");
+    // Crossings at a spread of incidences, and at both cage scales.
+    int crossings = 0;
+    int leaked = 0;
+    const math::vec3 targets[] = {
+        {0.6f, 0.0f, 0.0f},   {0.6f, 1.2f, 0.0f},  {0.6f, 0.0f, 1.2f},
+        {0.9f, -0.5f, 0.4f},  {1.4f, 0.9f, -0.9f}, {0.4f, 0.2f, -0.2f},
+    };
+    for(const auto& target : targets)
+    {
+        for(int mirror = 0; mirror < 2; ++mirror)
+        {
+            const float sign = mirror == 0 ? 1.0f : -1.0f;
+            const math::vec3 from(-0.6f * sign, 0.0f, 0.0f);
+            const math::vec3 to(target.x * sign, target.y, target.z);
+            ++crossings;
+            if(cage_visibility(clipmap, from, to, spacing) > 0.0f)
+            {
+                ++leaked;
+            }
+        }
+    }
+    std::printf("  thin-wall crossings: %d tested, %d leaked\n", crossings, leaked);
+    check(leaked == 0,
+          "every segment crossing a sub-voxel wall is blocked (leaked " + std::to_string(leaked) +
+              ")");
+    // Same-side segments must survive: the conviction is about crossing, not proximity. These
+    // run parallel to the wall at grazing clearance - the shape the negative acceptance exists
+    // to protect.
+    int same_side = 0;
+    int wrongly_blocked = 0;
+    const math::vec3 same_side_pairs[][2] = {
+        {{-0.2f, -1.0f, 0.0f}, {-0.2f, 1.0f, 0.0f}},
+        {{-0.1f, 0.0f, -1.0f}, {-0.1f, 0.0f, 1.0f}},
+        {{-0.2f, -0.8f, -0.8f}, {-0.3f, 0.8f, 0.8f}},
+        {{0.2f, -1.0f, 0.0f}, {0.2f, 1.0f, 0.0f}},
+        {{0.1f, 0.0f, -1.0f}, {0.1f, 0.0f, 1.0f}},
+        {{-2.0f, 0.0f, 0.0f}, {-0.3f, 1.5f, 0.5f}},
+    };
+    for(const auto& pair : same_side_pairs)
+    {
+        ++same_side;
+        if(cage_visibility(clipmap, pair[0], pair[1], spacing) <= 0.0f)
+        {
+            ++wrongly_blocked;
+        }
+    }
+    std::printf("  same-side segments: %d tested, %d wrongly blocked\n", same_side, wrongly_blocked);
+    check(wrongly_blocked == 0,
+          "no segment on one side of the thin wall is wrongly blocked (got " +
+              std::to_string(wrongly_blocked) + ")");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2179,6 +2284,7 @@ auto run_gi_oracle_suite(rtti::context& /*ctx*/) -> int
     test_shadow_through_coarse_baked_colonnade();
     test_attribution_prefers_true_surface_over_shell();
     test_world_probe_cage_visibility_seals_box();
+    test_world_probe_cage_visibility_seals_thin_wall();
     test_world_probe_vis_memo_mask_matches_fresh_march();
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

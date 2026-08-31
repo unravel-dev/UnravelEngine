@@ -74,13 +74,28 @@ uniform vec4 u_gi_sun_shadowmap_params;
  * coverage through EXACTLY the code the lighting takes - a parallel implementation would
  * drift and the attribution would lie.
  *
+ * COARSE LEVELS DECLINE (GI_SUN_SHADOWMAP_MAX_VOXEL). The receiver bias below is one LEVEL
+ * voxel of light-space depth, which the quadrature genuinely needs - and which also means the
+ * tier reports LIT through any occluder thinner than that voxel. At the coarse cascades that
+ * is metres, so a sealed room whose roof is thinner than one cell is lit from outside through
+ * a path no field defence can see: not the SDF, not the cage visibility, not the dead-probe
+ * gate (measured: interior ceiling brightest, sun-white, falling off downward, the walls
+ * merely bouncing it). There is no bias that is simultaneously acne-free and leak-free over a
+ * metre-wide face, so the honest move is to decline and let the traced field answer, exactly
+ * as it did before this tier existed. The gate sits FIRST: declining costs one compare, and
+ * it skips the projection and the four taps as well.
+ *
  * @param voxel_size Voxel of the answering cascade level: the quadrature half-extent.
  * @return true when the map answered; @p out_lit then holds the lit fraction. False means
- *         out of cascade-0 coverage, and the traced field must answer instead.
+ *         out of cascade-0 coverage or too coarse a level, and the traced field must answer.
  */
 bool GiSunShadowmapVisibility(vec3 world_position, vec3 world_normal, float voxel_size, out float out_lit)
 {
 	out_lit = 0.0;
+	if(voxel_size > GI_SUN_SHADOWMAP_MAX_VOXEL)
+	{
+		return false;
+	}
 	vec4 shadow_coord = mul(u_gi_sun_shadowmap_mtx, vec4(world_position, 1.0));
 	if(shadow_coord.w <= 1e-6)
 	{

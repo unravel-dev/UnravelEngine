@@ -187,11 +187,55 @@ float GiWorldProbeCageVisibility(vec3 from, vec3 to, float spacing)
 		return 1.0;
 	}
 	float accept = GI_WORLD_PROBE_CAGE_VIS_ACCEPT_VOXELS * field_voxel;
+	/*
+	 * CROSSING conviction, alongside the negative-core one above.
+	 *
+	 * The negative test asks the field for a NEGATIVE INTERIOR, which a wall thinner than one
+	 * voxel of the level answering the sample simply does not have: the trilinear
+	 * reconstruction smooths its two faces into a dip that never reaches zero, so the march
+	 * walks straight through a wall the probe rays themselves stop dead on (they convict at
+	 * d < accept + expand = about +1.9 voxels - the two conventions disagree by ~19x AND by
+	 * sign). Raising this threshold to a positive proximity is what cannot be done: legitimate
+	 * cage segments run PARALLEL to the query's own surface by construction - on flat ground
+	 * four of the eight cage probes lie in the floor plane and the biased query clears it by
+	 * ~0.4 voxel - and a proximity test blocked those whole cages, painting the black
+	 * rings/donuts on open ground that ACCEPT_VOXELS is negative to avoid.
+	 *
+	 * Proximity is the wrong question; the field's SHAPE along the segment separates the two
+	 * cases outright. Because the field is 1-Lipschitz and a sphere trace steps by its own
+	 * reading, the measured rate d(d)/dt along the walk is exactly the sine of the segment's
+	 * incidence on the surface: a segment CROSSING a wall descends into a minimum and climbs
+	 * out the other side at that rate, while a segment GRAZING one runs at near-constant
+	 * clearance (rate ~0) and a segment ENDING on one (the flat-ground cage) descends
+	 * monotonically and never climbs. So conviction takes a V: a minimum inside the surface
+	 * band, followed by a rise at crossing rate. Grazes have no V, floor cages have no rise,
+	 * and no threshold has to be calibrated against a wall thickness.
+	 *
+	 * Strictly additive - the negative core still convicts on its own - so the verdict can
+	 * only ever get MORE conservative, which is the direction this reader must fail in. Costs
+	 * nothing: the discriminator is arithmetic over samples the march already takes.
+	 */
+	float band = GI_WORLD_PROBE_CAGE_VIS_CROSS_VOXELS * field_voxel;
+	float minimum_d = SDF_CLIPMAP_OUTSIDE;
+	float minimum_t = t;
 	float base_step = (t_end - t) / float(GI_WORLD_PROBE_CAGE_VIS_STEPS);
 	LOOP for(int i = 0; i < GI_WORLD_PROBE_CAGE_VIS_STEPS; ++i)
 	{
 		float d = GiCageVisibilitySample(from + direction * t);
 		if(d < accept)
+		{
+			return 0.0;
+		}
+		if(d < minimum_d)
+		{
+			minimum_d = d;
+			minimum_t = t;
+		}
+		// Climbing away from a minimum that reached the surface band, at crossing rate: the
+		// segment went through. Tested BEFORE the clearance break, which the far side of a
+		// crossed wall would otherwise satisfy first.
+		else if(minimum_d < band &&
+		        (d - minimum_d) >= GI_WORLD_PROBE_CAGE_VIS_CROSS_SLOPE * (t - minimum_t))
 		{
 			return 0.0;
 		}

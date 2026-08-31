@@ -251,10 +251,37 @@ bool GiBounceBlockerRadiance(vec3 position, vec3 direction, float attr_voxel, in
 		return false;
 	}
 	vec3 normal = gradient / len;
+	// EDGE GUARD 1 - the gradient must NAME a face, not tie-break one. The face-slab argument
+	// in this function's header ("the two sides of a wall live in different face slabs") holds
+	// only where the gradient is axis-aligned. At a CONVEX silhouette edge the field rounds
+	// over to about 45 degrees, where two axes read 1/sqrt(2) and the dominant-axis pick below
+	// is decided by an epsilon - so the slab selected can be the face around the corner, lit by
+	// an emitter the reader cannot see (measured: cyan emissive bleeding around a box corner
+	// onto its shadowed face). Requiring one axis to carry GI_BOUNCE_TINT_MIN_AXIS_DOMINANCE
+	// puts the threshold above that 1/sqrt(2) tie with margin for field noise. Declining
+	// returns the pre-fill behaviour - the blocked fraction contributes black - which is the
+	// safe direction, and the early-out lands ahead of the imageLoad.
+	vec3 magnitude = abs(normal);
+	if(max(magnitude.x, max(magnitude.y, magnitude.z)) < GI_BOUNCE_TINT_MIN_AXIS_DOMINANCE)
+	{
+		return false;
+	}
 	// Half a voxel INSIDE the surface: the attribute band is a voxel wide, so a real contact
 	// lands in a listed surface voxel; a deep or false contact lands in an unmeasured cell
 	// and fails the alpha test below - toward darkness, the current behaviour.
 	vec3 surface_point = best_point - normal * (max(best_distance, 0.0) + 0.5 * attr_voxel);
+	// EDGE GUARD 2 - the reader must lie on the OUTWARD side of the blocker's own surface.
+	// A face only radiates into the half-space its normal points at, and surface_point was
+	// pushed exactly half an attribute voxel UNDER that surface, so the reader clears the real
+	// plane when it sits at least that far out along the normal. This is what separates the
+	// case the fill exists for from the case that leaks: a floor voxel beside a wall lies in
+	// front of the wall's inward face (accepted), while a voxel on one side of a convex edge
+	// lies BEHIND the plane of the face around it (rejected) - the two are indistinguishable
+	// by facing alone, because the intended concave pair meets at 90 degrees and its dot is 0.
+	if(dot(normal, position - surface_point) < 0.5 * attr_voxel)
+	{
+		return false;
+	}
 	ivec3 tint_cell = GiLightVoxelCell(surface_point, attr_voxel);
 	if(tint_cell.x == own_cell.x && tint_cell.y == own_cell.y && tint_cell.z == own_cell.z)
 	{
@@ -268,8 +295,8 @@ bool GiBounceBlockerRadiance(vec3 position, vec3 direction, float attr_voxel, in
 	{
 		return false;
 	}
-	// The face radiating back toward the reader: dominant axis of the outward normal.
-	vec3 magnitude = abs(normal);
+	// The face radiating back toward the reader: dominant axis of the outward normal. Guard 1
+	// above has already established that this axis wins outright rather than by a tie-break.
 	int axis = magnitude.x >= magnitude.y ? (magnitude.x >= magnitude.z ? 0 : 2)
 	                                      : (magnitude.y >= magnitude.z ? 1 : 2);
 	float component = axis == 0 ? normal.x : (axis == 1 ? normal.y : normal.z);

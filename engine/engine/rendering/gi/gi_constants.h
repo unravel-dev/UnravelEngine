@@ -83,6 +83,19 @@
       " direction rather than lifting the point (see the gather's identical rule). NEVER scale"    \
       " this by incidence: a slope-aware skip teleports through sun-facing walls at contact"       \
       " range (measured, test_shadow_blob_floor_building)")                                        \
+    X(GI_SUN_SHADOWMAP_MAX_VOXEL, 0.25f,                                                           \
+      "m", "derived: the sun shadow-map tier's ceiling on the ANSWERING LEVEL's voxel. The"        \
+      " tier biases the receiver by one level voxel of light-space depth"                          \
+      " (GI_SUN_SHADOWMAP_SLOPE_COVER_VOXELS, which the +-0.5-voxel quadrature over a whole"       \
+      " attribute face genuinely needs), so it reports LIT through any occluder thinner than"      \
+      " that voxel - a field-free sun injector into every sealed room whose roof is thinner"       \
+      " than a coarse cascade cell, bypassing the SDF, the cage visibility and the dead-probe"     \
+      " gate alike (measured: interior ceiling brightest, sun-white, falling off downward,"        \
+      " walls merely bouncing it). At metre-scale faces NO bias is simultaneously acne-free"       \
+      " and leak-free, so the tier must decline rather than guess: above this the traced"          \
+      " field answers, exactly as it did before the tier existed. 0.25 m keeps levels 0 and 1"     \
+      " at the runtime cascade (resolution 128 over a 16 m base extent = 0.125 / 0.25 m),"         \
+      " which is where CSM cascade 0 - the only split the tier binds - reaches anyway")            \
     X(GI_WORLD_PROBE_DIVISOR, 16,                                                                  \
       "SDF voxels per probe cell", "published: [SDFGI] PROBE_DIVISOR - 9^3 probe lattice per"      \
       " cascade at resolution 128")                                                                \
@@ -161,6 +174,24 @@
       " hugging the OPEN side of a wall must stay readable from the room it serves; one voxel"     \
       " excludes both contact zones while any wall that actually separates the pair still"         \
       " crosses the tested middle")                                                                \
+    X(GI_WORLD_PROBE_CAGE_VIS_CROSS_VOXELS, 0.25f,                                                 \
+      "SDF voxels of the cage's level", "MEASURED on the oracle's marches"                         \
+      " (test_world_probe_cage_visibility_seals_box): the depth a minimum must reach before a"     \
+      " rise can convict. A 0.1 m wall - below the 0.125 m level-0 voxel, so it has no negative"   \
+      " core for ACCEPT_VOXELS to find - bottoms out at 0.090 voxels head-on and 0.096 at 45"      \
+      " degrees, while a cage segment LEAVING flat ground bottoms at 0.891 and one grazing"        \
+      " along it holds 0.17-0.28. 0.25 sits 2.8x above the crossings and 3.6x below the"           \
+      " departure. Cannot be used as a proximity test on its own (that is the flat-ground"         \
+      " black-donut failure); it only qualifies a MINIMUM, and the rise below is what makes"       \
+      " the verdict a crossing")                                                                   \
+    X(GI_WORLD_PROBE_CAGE_VIS_CROSS_SLOPE, 0.25f,                                                  \
+      "field rise per unit travel", "derived + MEASURED: the field is 1-Lipschitz and a sphere"    \
+      " trace steps by its own reading, so the rate along the walk IS the sine of the segment's"   \
+      " incidence on the surface. Measured climbing out of the 0.1 m wall: 1.00 head-on, 0.71"     \
+      " at 45 degrees; a segment grazing flat ground holds 0.008 and one ENDING on a surface"      \
+      " never climbs at all - a straight segment over a PLANE has no V by construction, it can"    \
+      " only approach or recede. 0.25 convicts crossings steeper than ~14 degrees while sitting"   \
+      " 30x above the graze")                                                                      \
     X(GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE, 0.15f,                                                \
       "probe spacings (std of the depth lobe)", "derived: the march runs ONLY where the depth"     \
       " moments are statistically ambiguous - std above this fraction of the probe spacing."      \
@@ -296,6 +327,17 @@
       " GI_MAX_ALBEDO x (1 - GI_LIGHT_VOXEL_VISIBILITY_MIN) < 1 on every surviving face"           \
       " (culled faces still store zero), and a same-cell self-read is refused outright -"          \
       " the series is the light bouncing inside the cavity, converging under the relight EMA")     \
+    X(GI_BOUNCE_TINT_MIN_AXIS_DOMINANCE, 0.8f,                                                     \
+      "unitless", "derived: the near-edge tint fill selects the blocker's face slab by the"        \
+      " DOMINANT AXIS of the field gradient, and its leak defence is that the two sides of a"      \
+      " wall live in different slabs - which holds only while the gradient is axis-aligned. At"    \
+      " a convex silhouette edge the field rounds to ~45 degrees, two axes read 1/sqrt(2) ="       \
+      " 0.707, and the pick is decided by an epsilon: the slab chosen can be the face AROUND"      \
+      " the corner, lit by an emitter the reader cannot see (measured: cyan emissive bleeding"     \
+      " around a box corner onto its shadowed face). The threshold must sit above that tie;"       \
+      " 0.8 (within ~37 degrees of an axis) leaves margin for field noise. Below it the fill"      \
+      " declines and the blocked fraction contributes black - the pre-fill behaviour, toward"      \
+      " darkness")                                                                                 \
     X(GI_FILTER_ANGLE_LIMIT_COS, 0.99802673f,                                                      \
       "cos(pi/50)", "published: [GI1.0 s2.1] probe-space filter rejects a neighbour"               \
       " hit whose reprojected direction deviates by more than pi/50 - the FLOOR of the"            \
