@@ -873,7 +873,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         ((reflection_screen_stack_enabled(params) && params.fill_ssr_params) || params.fill_gi_params);
     if(wants_scene_history)
     {
-        snapshot_prev_scene_color(rview, target);
+        snapshot_prev_scene_color(rview, target, camera);
     }
     else
     {
@@ -932,36 +932,15 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
 }
 
-void deferred::snapshot_prev_scene_color(gfx::render_view& rview, const gfx::frame_buffer::ptr& source)
+void deferred::snapshot_prev_scene_color(gfx::render_view& rview,
+                                         const gfx::frame_buffer::ptr& source,
+                                         const camera& camera)
 {
-    if(!source)
-    {
-        return;
-    }
-    auto src_tex = source->get_texture();
-    if(!src_tex)
-    {
-        return;
-    }
-    // Match the source format exactly: bgfx blit requires identical formats, and the
-    // source can be RGBA16F (HDR pipeline) or RGBA8 (LDR fallback).
-    const auto format = static_cast<gfx::texture_format>(src_tex->info.format);
-    const auto size = src_tex->get_size();
-    auto& prev = rview.tex_get_or_emplace("PREV_SCENE_HDR");
-    if(gfx::needs_recreate(prev, size, format))
-    {
-        prev.reset();
-        prev = std::make_shared<gfx::texture>(size.width,
-                                              size.height,
-                                              false,
-                                              1,
-                                              format,
-                                              BGFX_TEXTURE_BLIT_DST | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-    }
-    gfx::render_pass blit_pass("History/Prev Scene Color Blit Pass");
-    gfx::blit(blit_pass.id,
-              prev->native_handle(), 0, 0,
-              src_tex->native_handle(), 0, 0);
+    // This frame's G-buffer depth rides along in alpha (scene_history_pass), so the readers
+    // can tell a reprojection that still shows its surface from a disoccluded one.
+    const auto& gbuffer = rview.fbo_get("GBUFFER");
+    const auto depth = gbuffer ? gbuffer->get_texture(4) : nullptr;
+    scene_history_pass_.run(rview, source, depth, camera);
 }
 
 void deferred::snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size)
@@ -2649,7 +2628,10 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
         // frame through these very dispatches.
         const uint64_t light_hash = surface_cache.get_light_buffer().get_content_hash();
         const bool quiescent =
-            view_cache.update_quiescence(light_hash, camera.get_position()) && !wants_sdf_debug;
+            view_cache.update_quiescence(light_hash,
+                                         camera.get_position(),
+                                         gi_light_voxel_pass_.get_relight_sample()) &&
+            !wants_sdf_debug;
         if(!quiescent)
         {
             run_gi_light_voxel_pass(scn, camera, rview, surface_cache, view_cache, gi);

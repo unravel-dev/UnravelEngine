@@ -25,6 +25,7 @@
 #include "passes/gi_world_probe_pass.h"
 #include "passes/gi_reflection_pass.h"
 #include "passes/gi_resolve_pass.h"
+#include "passes/scene_history_pass.h"
 #include "passes/ssil_pass.h"
 #include "passes/sdf_debug_pass.h"
 #include "passes/bloom_pass.h"
@@ -272,6 +273,7 @@ protected:
     gi_world_probe_pass gi_world_probe_pass_{};
     gi_resolve_pass gi_resolve_pass_{};
     gi_reflection_pass gi_reflection_pass_{};
+    scene_history_pass scene_history_pass_{}; ///< PREV_SCENE_HDR, view depth in alpha
     sdf_debug_pass sdf_debug_pass_{}; ///< Diagnostic only; see sdf_debug_pass.h
 
     std::unique_ptr<gpu_program> particle_program_instanced_{};

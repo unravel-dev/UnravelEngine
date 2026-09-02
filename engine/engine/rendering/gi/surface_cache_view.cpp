@@ -5,6 +5,8 @@
 
 #include <logging/logging.h>
 
+#include <algorithm>
+
 namespace unravel
 {
 
@@ -87,8 +89,9 @@ void surface_cache_view::update(const std::vector<global_sdf_instance>& instance
     clipmap_gpu_.upload(clipmap_);
 }
 
-auto surface_cache_view::update_quiescence(uint64_t light_hash, const math::vec3& camera_position)
-    -> bool
+auto surface_cache_view::update_quiescence(uint64_t light_hash,
+                                           const math::vec3& camera_position,
+                                           const relight_sample& relight) -> bool
 {
     bool changed = false;
     bool lighting_changed = false;
@@ -142,14 +145,68 @@ auto surface_cache_view::update_quiescence(uint64_t light_hash, const math::vec3
     if(changed)
     {
         quiescence_frames_ = 0;
+        relight_ring_count_ = 0;
         return false;
     }
-    if(quiescence_frames_ < quiescence_settle_frames)
+    if(quiescence_frames_ < uint32_t(gi::GI_QUIESCENCE_MAX_FRAMES))
     {
         ++quiescence_frames_;
+    }
+    // One sample per completed readback; only those taken since the last change count.
+    if(relight.index != 0 && relight.index != relight_sample_consumed_)
+    {
+        relight_sample_consumed_ = relight.index;
+        relight_ring_[relight_ring_head_] = relight.mean_change;
+        relight_ring_head_ = (relight_ring_head_ + 1u) % uint32_t(relight_ring_.size());
+        relight_ring_count_ = std::min(relight_ring_count_ + 1u, uint32_t(relight_ring_.size()));
+    }
+    if(quiescence_frames_ < uint32_t(gi::GI_QUIESCENCE_MIN_FRAMES))
+    {
         return false;
     }
-    return true;
+    if(quiescence_frames_ >= uint32_t(gi::GI_QUIESCENCE_MAX_FRAMES))
+    {
+        return true;
+    }
+    if(relight.index == 0)
+    {
+        // No statistic on this backend: the fixed settle.
+        return quiescence_frames_ >= quiescence_settle_frames;
+    }
+    // Mean of `count` samples ending `back` samples before the newest.
+    const auto ring_mean = [&](uint32_t back, uint32_t count) -> float
+    {
+        float sum = 0.0f;
+        for(uint32_t i = 0; i < count; ++i)
+        {
+            const uint32_t offset = back + i + 1u;
+            const uint32_t slot = (relight_ring_head_ + uint32_t(relight_ring_.size()) - offset) %
+                                  uint32_t(relight_ring_.size());
+            sum += relight_ring_[slot];
+        }
+        return sum / float(count);
+    };
+    const auto window = uint32_t(gi::GI_QUIESCENCE_WINDOW_FRAMES);
+    const auto compare = uint32_t(gi::GI_QUIESCENCE_COMPARE_FRAMES);
+    static_assert(gi::GI_QUIESCENCE_COMPARE_FRAMES + gi::GI_QUIESCENCE_WINDOW_FRAMES <= 64,
+                  "the sample ring must hold both compared windows");
+    if(relight_ring_count_ < window)
+    {
+        return false;
+    }
+    const float recent = ring_mean(0, window);
+    if(recent < float(gi::GI_QUIESCENCE_CONVERGED_MEAN))
+    {
+        return true;
+    }
+    if(relight_ring_count_ < compare + window)
+    {
+        return false;
+    }
+    // Stationary: the change has stopped falling. A decaying tail shrinks between the two
+    // windows; the dithered equilibrium of shadow edges does not.
+    const float earlier = ring_mean(compare, window);
+    return recent >= float(gi::GI_QUIESCENCE_STATIONARY_FRACTION) * earlier;
 }
 
 } // namespace unravel

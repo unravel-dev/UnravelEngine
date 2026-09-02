@@ -96,9 +96,12 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
     // matches a live generation and turns the memo into a permanent miss (the failure is
     // invisible except as light-voxel cost). ~25 MB at the runtime default - half the
     // light volume.
+    // One slice deeper than the light volume: the relight convergence statistic lives past
+    // the last face slab (GiLightVoxelStatsTexel) - the pass has no free stage for a
+    // buffer of its own, and this image is bound read-write on every backend.
     bounce_vis_memo_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
                                                       static_cast<uint16_t>(attr_resolution),
-                                                      static_cast<uint16_t>(light_depth),
+                                                      static_cast<uint16_t>(light_depth + 1u),
                                                       false,
                                                       gfx::texture_format::R32U,
                                                       BGFX_TEXTURE_COMPUTE_WRITE);

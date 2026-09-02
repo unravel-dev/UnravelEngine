@@ -38,8 +38,11 @@
  * ONE split only, deliberately: the includer (cs_gi_light_voxels) has exactly one free
  * resource stage, and split 0 is the sharpest and covers the camera's neighbourhood - which
  * is where level-0/1 voxels live, the only cells fine enough to hold a sun pool anyway.
- * Outside its texcoord bounds, and for every other light, the traced field remains the
- * answer. Gated by a define so the debug direct view keeps showing the PURE traced tier -
+ * Outside its texcoord bounds, outside the frustum slice it was fitted to (see the
+ * contract in GiSunShadowmapVisibility), and for every other light, the traced field
+ * remains the answer. A world-stable map of the GI's own would answer the unseen faces
+ * too, but it costs a second scene render per window scroll, which was judged not worth
+ * it. Gated by a define so the debug direct view keeps showing the PURE traced tier -
  * the diagnostic contrast that found this bug.
  */
 SAMPLER2D(s_gi_sun_shadowmap, 14);
@@ -338,11 +341,44 @@ vec3 GiEvalDirectLighting(vec3 world_position, vec3 world_normal, float voxel_si
  * faces of one voxel can no longer disagree about the traced tier's answer.
  *
  * One cached slot: scenes with several directional lights fall back to per-face traces for
- * all but the first one encountered, which is the safe direction.
+ * all but the first one encountered, which is the safe direction. A cached index of -2
+ * marks a REFUSED share (see GiSharedOriginClear): every face of that voxel traces its own
+ * ray for every directional light.
  */
+/*
+ * SHARED-ORIGIN VALIDATION (GI_SHARED_ORIGIN_REDESCENT_VOXELS). The shared ray launches
+ * from the voxel centre lifted along the light by the centre's depth plus half an attribute
+ * voxel. That lift is the answering level's own scale - 0.5 to 1 m at the coarse levels -
+ * and it crosses any occluder thinner than itself standing between the voxel and the sun
+ * (measured: the door tunnel's floor faces lit through a 25 cm baffle, the shared ray
+ * starting on the baffle's sunlit side). The field along the lift tells the two cases
+ * apart: leaving the voxel's own surface the distance RISES; a re-descent before the
+ * origin means the segment entered another surface. Sampled once per voxel, on the face
+ * that would establish the memo.
+ */
+bool GiSharedOriginClear(int level, vec3 voxel_center, vec3 shared_origin, float voxel_size)
+{
+	float peak = SdfSampleClipmapLevel(level, voxel_center);
+	float tolerance = GI_SHARED_ORIGIN_REDESCENT_VOXELS * voxel_size;
+	LOOP
+	for(int sample_index = 1; sample_index <= GI_SHARED_ORIGIN_SAMPLES; ++sample_index)
+	{
+		vec3 sample_position = mix(voxel_center, shared_origin,
+		                           float(sample_index) / float(GI_SHARED_ORIGIN_SAMPLES));
+		float distance = SdfSampleClipmapLevel(level, sample_position);
+		if(distance < peak - tolerance)
+		{
+			return false;
+		}
+		peak = max(peak, distance);
+	}
+	return true;
+}
+
 vec3 GiEvalDirectLightingVoxel(vec3 world_position, vec3 world_normal, float voxel_size,
                                float near_field, vec3 voxel_center, float center_lift,
-                               inout float cached_dir_visibility, inout int cached_dir_index)
+                               int level, inout float cached_dir_visibility,
+                               inout int cached_dir_index)
 {
 	vec3 total = vec3_splat(0.0);
 	LOOP
@@ -380,16 +416,27 @@ vec3 GiEvalDirectLightingVoxel(vec3 world_position, vec3 world_normal, float vox
 			{
 				visibility = cached_dir_visibility;
 			}
-			else if(cached_dir_index < 0)
+			else if(cached_dir_index == -1)
 			{
 				// The shared origin lifts along the RAY, so the trace's own normal bias
 				// (measured along what it is given as the normal) cannot teleport through a
-				// sun-facing wall the way a slope-scaled skip would.
+				// sun-facing wall the way a slope-scaled skip would. The lift itself can cross
+				// a thin occluder; the validation refuses the share when it does.
 				vec3 shared_origin = voxel_center + to_light * center_lift;
-				visibility = GiTraceShadow(shared_origin, to_light, to_light, u_gi_shadow_distance,
-				                           voxel_size, near_field);
-				cached_dir_visibility = visibility;
-				cached_dir_index = i;
+				BRANCH
+				if(GiSharedOriginClear(level, voxel_center, shared_origin, voxel_size))
+				{
+					visibility = GiTraceShadow(shared_origin, to_light, to_light,
+					                           u_gi_shadow_distance, voxel_size, near_field);
+					cached_dir_visibility = visibility;
+					cached_dir_index = i;
+				}
+				else
+				{
+					cached_dir_index = -2;
+					visibility = GiTraceShadow(world_position, world_normal, to_light,
+					                           u_gi_shadow_distance, voxel_size, near_field);
+				}
 			}
 			else
 			{

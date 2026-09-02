@@ -27,6 +27,9 @@ auto gi_light_voxel_pass::init(rtti::context& ctx) -> bool
     program_.program = std::make_unique<gpu_program>(cs);
     program_.debug_program = std::make_unique<gpu_program>(cs_debug);
     program_.vis_memo_debug_program = std::make_unique<gpu_program>(cs_vis_memo_debug);
+    // Optional: without it the quiescence gate falls back to its fixed settle.
+    auto cs_stats = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_light_voxel_stats.sc");
+    stats_program_ = std::make_unique<gpu_program>(cs_stats);
     return program_.is_valid();
 }
 
@@ -328,7 +331,89 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                   global_sdf_clipmap::level_count,
                   1);
     active_program.end();
+    collect_relight_stats(vis_memo, attr_resolution);
     return true;
+}
+
+void gi_light_voxel_pass::collect_relight_stats(const gfx::texture::ptr& vis_memo, uint32_t attr_resolution)
+{
+    if(!stats_program_ || !stats_program_->is_valid() || !vis_memo || !vis_memo->is_valid())
+    {
+        return;
+    }
+    const auto width = static_cast<uint16_t>(global_sdf_clipmap::level_count);
+    const uint16_t height = 2;
+    if(!stats_texture_ || !stats_texture_->is_valid())
+    {
+        stats_texture_ = std::make_shared<gfx::texture>(width,
+                                                        height,
+                                                        false,
+                                                        1,
+                                                        gfx::texture_format::R32U,
+                                                        BGFX_TEXTURE_COMPUTE_WRITE);
+        for(auto& slot : stats_slots_)
+        {
+            slot.texture = std::make_shared<gfx::texture>(width,
+                                                          height,
+                                                          false,
+                                                          1,
+                                                          gfx::texture_format::R32U,
+                                                          BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+            slot.pending = false;
+        }
+    }
+    if(stats_source_ != vis_memo.get())
+    {
+        stats_source_ = vis_memo.get();
+        stats_primed_ = false;
+    }
+    // Completed readbacks, oldest first (the cursor is the oldest slot in flight).
+    const uint32_t frame = gfx::get_render_frame();
+    for(uint32_t i = 0; i < stats_slots_.size(); ++i)
+    {
+        auto& slot = stats_slots_[(stats_slot_cursor_ + i) % stats_slots_.size()];
+        if(!slot.pending || frame < slot.ready_frame)
+        {
+            continue;
+        }
+        slot.pending = false;
+        if(!stats_primed_)
+        {
+            // The slice's first content is whatever the allocation held.
+            stats_primed_ = true;
+            continue;
+        }
+        float change = 0.0f;
+        float faces = 0.0f;
+        for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
+        {
+            change += float(slot.data[level]) / float(gi::GI_QUIESCENCE_STATS_SCALE);
+            faces += float(slot.data[global_sdf_clipmap::level_count + level]);
+        }
+        ++relight_sample_.index;
+        relight_sample_.mean_change = faces > 0.0f ? change / faces : 0.0f;
+    }
+    // Copy and zero this frame's sums (a view of its own: a blit executes before the
+    // dispatches of its view, so the staging copy needs the next one).
+    gfx::render_pass copy_pass("GI/Light Voxel Stats");
+    stats_program_->begin();
+    gfx::set_image_3d(0, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
+    gfx::set_image(1, stats_texture_->native_handle(), 0, gfx::access::Write, gfx::texture_format::R32U);
+    const float voxel_params[4] = {float(attr_resolution), 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(program_.u_gi_light_voxel_params, voxel_params);
+    gfx::dispatch(copy_pass.id, stats_program_->native_handle(), 1, 1, 1);
+    stats_program_->end();
+    auto& slot = stats_slots_[stats_slot_cursor_];
+    if(slot.pending)
+    {
+        // Every staging texture in flight: this frame's sample is dropped, not awaited.
+        return;
+    }
+    stats_slot_cursor_ = (stats_slot_cursor_ + 1) % uint32_t(stats_slots_.size());
+    gfx::render_pass readback_pass("GI/Light Voxel Stats Readback");
+    gfx::blit(readback_pass.id, slot.texture->native_handle(), 0, 0, stats_texture_->native_handle(), 0, 0, width, height);
+    slot.ready_frame = gfx::read_texture(slot.texture->native_handle(), slot.data.data());
+    slot.pending = true;
 }
 
 } // namespace unravel

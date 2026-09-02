@@ -93,6 +93,23 @@
       " direction rather than lifting the point (see the gather's identical rule). NEVER scale"    \
       " this by incidence: a slope-aware skip teleports through sun-facing walls at contact"       \
       " range (measured, test_shadow_blob_floor_building)")                                        \
+    X(GI_SHARED_ORIGIN_REDESCENT_VOXELS, 0.15f,                                                    \
+      "level voxels", "derived: the per-voxel sun memo's shared shadow ray launches from the"      \
+      " voxel centre lifted along the light by the centre's depth plus half an attribute"          \
+      " voxel, and that lift crosses any occluder thinner than itself standing between the"        \
+      " voxel and the sun (measured: door-tunnel floor faces lit through a 25 cm baffle,"          \
+      " the shared ray starting on the baffle's sunlit side). Leaving the voxel's own"             \
+      " surface the level field RISES along the lift; a drop below the running peak by more"       \
+      " than this many voxels means the segment entered another surface, and the share is"         \
+      " refused for that voxel (every face then launches its own ray, at the face's own"           \
+      " scale). The trilinear field's interpolation ripple across a voxel stays under 0.1"         \
+      " voxel, so 0.15 rejects real re-entries and never the ripple")                              \
+    X(GI_SHARED_ORIGIN_SAMPLES, 4,                                                                 \
+      "samples", "derived: the lift is at most the centre depth plus half an attribute voxel -"    \
+      " under two level voxels for a surface cell - so four samples put one every half"            \
+      " voxel, and a 25 cm slab (a full voxel at level 1) always receives one inside its dip."     \
+      " Four trilinear fetches per voxel per relight, on the memo-establishing face only,"         \
+      " against the ~100 m sphere trace they guard")                                               \
     X(GI_SUN_SHADOWMAP_MAX_VOXEL, 0.125f,                                                          \
       "m", "derived: the sun shadow-map tier's ceiling on the ANSWERING LEVEL's voxel. The"        \
       " tier biases the receiver by one level voxel of light-space depth"                          \
@@ -588,6 +605,50 @@
       " to 1 on light-set or content changes (light hash, vis-memo generation - which also"        \
       " bumps on window scrolls, so a scrolled-in slot never fades in a departed cell's"           \
       " radiance) and after any debug-variant write, so real changes land in one relight")         \
+    X(GI_QUIESCENCE_LUMINANCE_FLOOR, 0.001f,                                                       \
+      "radiance, scene linear", "derived: the relight convergence statistic measures each"         \
+      " face's change RELATIVE to its luminance, so a decaying sealed room registers next to"      \
+      " a sunlit exterior (an absolute sum is owned by the exterior and hides the room's"          \
+      " tail - the very tail the gate must not freeze). Below this absolute luminance the"         \
+      " change is taken against the floor instead: at the exposures the exposure pass allows"      \
+      " a dark room (its dark-adaptation slope caps the lift near 1.5x neutral) 1e-3 is under"     \
+      " one 8-bit step, so a change below it is invisible and must not hold the passes open")      \
+    X(GI_QUIESCENCE_STATS_SCALE, 1024.0f,                                                          \
+      "fixed-point steps per unit", "derived: the per-level sums are integer image atomics"        \
+      " (no float atomics on the SM5 / GLSL 4.3 floor); 1024 steps per unit of relative"           \
+      " change resolve 0.1% per face, and the worst-case sum (2^18 relit faces at full"            \
+      " change x 1024) stays under 2^32")                                                          \
+    X(GI_QUIESCENCE_MIN_FRAMES, 32,                                                                \
+      "frames", "derived: two complete world-probe windows (GI_WORLD_PROBE_WINDOW): the probe"     \
+      " atlas is a windowed mean that reaches its fixed point one window after the last"           \
+      " voxel change, and the bounce feeds back once more through the voxels. Nothing"             \
+      " freezes earlier however still the relight reads")                                          \
+    X(GI_QUIESCENCE_MAX_FRAMES, 1024,                                                              \
+      "frames", "derived: the hard ceiling on how long a still scene keeps the world passes"       \
+      " alive, 4x the old fixed settle: a relight that never reads stationary (an unstable"        \
+      " feedback loop, a dithered edge storm) is bounded here instead of running forever."         \
+      " At 0.99 per relight - the slowest closed-room tail the loop gain allows - 256"             \
+      " relights leave 7%, the accepted cost of that rare case")                                   \
+    X(GI_QUIESCENCE_CONVERGED_MEAN, 0.0005f,                                                       \
+      "relative change per relit face", "derived: half of one 8-bit step of a face at unit"        \
+      " luminance, per relight. A volume whose mean relative change is below this rewrites"        \
+      " values no reader can distinguish, so the passes stop at GI_QUIESCENCE_MIN_FRAMES"          \
+      " instead of the old 256 - static exteriors freeze 8x sooner")                               \
+    X(GI_QUIESCENCE_STATIONARY_FRACTION, 0.95f,                                                    \
+      "unitless", "derived: at rest the relight is a stationary process (the sun dither at"        \
+      " shadow edges, folded in by the EMA) whose mean relative change never reaches the"          \
+      " converged floor, while a decaying tail shrinks; the mean over the last"                    \
+      " GI_QUIESCENCE_WINDOW_FRAMES against the same mean GI_QUIESCENCE_COMPARE_FRAMES"            \
+      " earlier separates them. The slowest tail the bounce loop can carry (0.99 per"              \
+      " relight) falls to 0.92 over 32 frames, so 0.95 still catches it; the dither noise of"      \
+      " two-rotation means sits well inside 5%")                                                   \
+    X(GI_QUIESCENCE_WINDOW_FRAMES, 8,                                                              \
+      "frames", "derived: two relight rotations (GI_LIGHT_VOXEL_UPDATE_DENOM) - every face in"     \
+      " the mean twice, which cancels the per-phase difference of the rotation's face sets")       \
+    X(GI_QUIESCENCE_COMPARE_FRAMES, 32,                                                            \
+      "frames", "derived: eight rotations apart - far enough for the slowest decay to show (see"   \
+      " GI_QUIESCENCE_STATIONARY_FRACTION), short enough that a stationary scene freezes"          \
+      " within 40 frames of stillness")                                                            \
     X(GI_GATHER_FIREFLY_CLAMP, 8.0f,                                                               \
       "x the governor's reference", "derived: a gather ray that lands on a small bright"           \
       " emitter returns a radiance that dominates its probe's whole tile - and a probe whose"      \

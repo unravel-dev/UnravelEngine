@@ -105,7 +105,9 @@ uniform vec4 u_gi_camera;
 /// (green = screen commit, red = SDF hit, blue = world-probe/sky completion; the interp pass
 /// paints interpolated tiles magenta under the same flag).
 /// z = the adaptive flag - consumed by the CLASSIFY pass, bound here only for layout parity.
-/// w > 0 when s_gi_prev_color holds last frame's composited output.
+/// w > 0 when s_gi_prev_color holds last frame's composited output; > 1.5 when its alpha
+/// also carries each pixel's view depth (the RGBA16F history), which GiReadHistory then
+/// validates a reprojection against.
 uniform vec4 u_gi_screen_trace;
 /// Previous view projection: the anchor reprojects into LAST frame's lattice to read the
 /// importance mip the filter stored in that probe's record slots.
@@ -140,6 +142,44 @@ SHARED vec2 s_screen_size;
 SHARED vec2 s_frame_r2;
 
 /*
+ * HISTORY READ, validated. True when last frame's composite holds THIS surface at the
+ * reprojected pixel: on screen last frame and, when the snapshot carries its view depth
+ * (u_gi_screen_trace.w > 1.5), the stored depth agrees with the hit's reprojected depth
+ * within GI_TEMPORAL_DEPTH_TOLERANCE of it - the temporal accumulation's own tolerance.
+ * Without the test a disoccluded reprojection read whatever surface last frame showed at
+ * that pixel, and the first frame after a disocclusion measured a different source (the
+ * light voxels) than the frames after it (the composite) - a bias step the temporal then
+ * carried. No stage was free for a depth history; the snapshot's alpha carries it instead.
+ */
+bool GiReadHistory(vec3 hit_position, out vec3 radiance)
+{
+	radiance = vec3_splat(0.0);
+	if(u_gi_screen_trace.w <= 0.0)
+	{
+		return false;
+	}
+	vec4 prev_clip = mul(u_gi_prev_view_proj, vec4(hit_position, 1.0));
+	if(prev_clip.w <= 0.0)
+	{
+		return false;
+	}
+	vec3 ndc = clipTransform(prev_clip.xyz / prev_clip.w);
+	vec2 prev_uv = ndc.xy * 0.5 + 0.5;
+	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
+	{
+		return false;
+	}
+	vec4 history = texture2DLod(s_gi_prev_color, prev_uv, 0.0);
+	if(u_gi_screen_trace.w > 1.5 &&
+	   abs(history.w - prev_clip.w) > GI_TEMPORAL_DEPTH_TOLERANCE * prev_clip.w)
+	{
+		return false;
+	}
+	radiance = history.xyz;
+	return true;
+}
+
+/*
  * Radiance for a hit whose light-voxel read failed, BEYOND the outermost cascade - where "no
  * data" must not mean "no light" (the black wall at the end of the street): the Lumen
  * far-field recipe applies - reproject the hit into LAST frame's composited output, which
@@ -151,20 +191,11 @@ SHARED vec2 s_frame_r2;
  */
 vec3 GiFarFieldRadiance(vec3 hit_position, vec3 sample_dir)
 {
+	vec3 history;
 	BRANCH
-	if(u_gi_screen_trace.w > 0.0)
+	if(GiReadHistory(hit_position, history))
 	{
-		vec4 prev_clip = mul(u_gi_prev_view_proj, vec4(hit_position, 1.0));
-		if(prev_clip.w > 0.0)
-		{
-			vec3 ndc = clipTransform(prev_clip.xyz / prev_clip.w);
-			vec2 prev_uv = ndc.xy * 0.5 + 0.5;
-			if(all(greaterThanEqual(prev_uv, vec2_splat(0.0))) &&
-			   all(lessThanEqual(prev_uv, vec2_splat(1.0))))
-			{
-				return texture2DLod(s_gi_prev_color, prev_uv, 0.0).xyz;
-			}
-		}
+		return history;
 	}
 	return eval_radiance_sh(s_gi_env_sh, sample_dir);
 }
@@ -372,30 +403,13 @@ vec4 GiTraceScreenProbeCone(int slot, vec2 texel_base, float texel_span, int sam
 							// is ALREADY this kernel's trusted source for the far field
 							// (GiFarFieldRadiance) - the same source at nearer range, the
 							// same feedback bounds (albedo < 1 closes the loop; the ray
-							// clamp and the firefly governor bound spikes). No prev-depth
-							// stage is free for reprojection validation, so a disoccluded
-							// reprojection can read a wrong surface for a frame - bounded
-							// by the same clamps and the temporal, accepted as Lumen does.
-							// Off-screen last frame or no history: the voxel read answers
-							// exactly as before.
-							bool screen_lit = false;
-							BRANCH
-							if(u_gi_screen_trace.w > 0.0)
-							{
-								vec4 prev_clip = mul(u_gi_prev_view_proj, vec4(hit_position, 1.0));
-								if(prev_clip.w > 0.0)
-								{
-									vec3 prev_ndc = clipTransform(prev_clip.xyz / prev_clip.w);
-									vec2 prev_hit_uv = prev_ndc.xy * 0.5 + 0.5;
-									if(all(greaterThanEqual(prev_hit_uv, vec2_splat(0.0))) &&
-									   all(lessThanEqual(prev_hit_uv, vec2_splat(1.0))))
-									{
-										radiance =
-										    texture2DLod(s_gi_prev_color, prev_hit_uv, 0.0).xyz;
-										screen_lit = true;
-									}
-								}
-							}
+							// clamp and the firefly governor bound spikes). The read is
+							// validated against the depth the snapshot carries (GiReadHistory):
+							// a disoccluded reprojection declines instead of reading whatever
+							// surface last frame showed there. Off-screen last frame, no
+							// history, or a depth mismatch: the voxel read answers exactly as
+							// before.
+							bool screen_lit = GiReadHistory(hit_position, radiance);
 							if(!screen_lit && !GiLightVoxelRead(hit_position, hit_normal, radiance))
 							{
 								// Occluded but unmeasured: honest darkness within the

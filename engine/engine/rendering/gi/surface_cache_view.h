@@ -6,6 +6,7 @@
 
 #include <math/math.h>
 
+#include <array>
 #include <vector>
 
 namespace unravel
@@ -33,6 +34,15 @@ class surface_cache_view
 public:
     /// Name this is stored under in @c gfx::render_view::data().
     static constexpr const char* view_key = "GI_SURFACE_CACHE_VIEW";
+
+    /// One completed relight-convergence readback (gi_light_voxel_pass::get_relight_sample).
+    struct relight_sample
+    {
+        /// Increments per completed readback; 0 = none yet, or no statistic on this backend.
+        uint64_t index = 0;
+        /// Mean relative change per relit face (see GI_QUIESCENCE_LUMINANCE_FLOOR).
+        float mean_change = 0.0f;
+    };
 
     /**
      * @brief Recomposes the stale levels around @p camera_position and uploads them.
@@ -89,19 +99,29 @@ public:
 
     /**
      * @brief Whether every input of the light-voxel and world-probe passes has been still
-     *        long enough that re-running them would rewrite bit-identical values.
+     *        long enough, and the relight has provably converged, so that re-running them
+     *        would rewrite values no reader can distinguish.
      *
      * The world side is a fixed point when nothing changes: the probe trace rewrites the same
      * stratum values forever (the windowed mean's zero-steady-state-variance property), the
      * convolve re-integrates an unchanged atlas, and the light voxels re-light unchanged
      * content. This tracks the full input set - light-buffer hash, clipmap content epoch,
-     * every level's composed origin, and every level's probe-window cell - and reports
-     * quiescent only after they have ALL held for @ref quiescence_settle_frames, so the
-     * probe<->voxel feedback loop has provably converged through several complete windows
-     * before anything is skipped. Any change resets the counter and the passes resume the
-     * same frame.
+     * every level's composed origin, and every level's probe-window cell - and any change
+     * resets the gate; the passes resume the same frame.
+     *
+     * CONVERGENCE, MEASURED. Stillness of the inputs is not convergence of the volume: the
+     * relight folds each visit into a per-voxel EMA and the closed-room bounce loop stretches
+     * its tail, so a fixed settle count froze a sealed room mid-decay at whatever residual it
+     * had reached (a room that read lit and stayed lit). The light-voxel pass now reads back
+     * the mean relative change per relit face (@p relight); the gate opens when that mean is
+     * below GI_QUIESCENCE_CONVERGED_MEAN, or has stopped falling (a stationary dithered
+     * equilibrium: GI_QUIESCENCE_STATIONARY_FRACTION), never before GI_QUIESCENCE_MIN_FRAMES
+     * and always by GI_QUIESCENCE_MAX_FRAMES. Without the statistic (index 0) the fixed
+     * @ref quiescence_settle_frames remains.
      */
-    auto update_quiescence(uint64_t light_hash, const math::vec3& camera_position) -> bool;
+    auto update_quiescence(uint64_t light_hash,
+                           const math::vec3& camera_position,
+                           const relight_sample& relight) -> bool;
 
     /// Frames the full quiescence input set (light hash, content epoch, window origins,
     /// probe cells) has held unchanged - 0 on any change.
@@ -122,7 +142,8 @@ public:
         return lighting_quiet_frames_;
     }
 
-    /// Sixteen complete probe windows (GI_WORLD_PROBE_WINDOW frames each). The bounce
+    /// The FALLBACK settle when no convergence statistic is available (update_quiescence):
+    /// sixteen complete probe windows (GI_WORLD_PROBE_WINDOW frames each). The bounce
     /// FEEDBACK settles within one window, but the light-voxel relight converges by EMA
     /// (GI_LIGHT_VOXEL_EMA_BLEND 0.125, one visit per 4-frame rotation): after the last
     /// content change a voxel still holds 0.875^(frames/4) of its stale radiance. The old
@@ -150,6 +171,12 @@ private:
     uint32_t quiescence_frames_ = 0;
     /// See get_lighting_quiet_frames; saturates so it never wraps back into "recent".
     uint32_t lighting_quiet_frames_ = 0;
+    /// The convergence samples seen since the last input change, newest at head - 1; sized
+    /// for the stationarity comparison (two windows GI_QUIESCENCE_COMPARE_FRAMES apart).
+    std::array<float, 64> relight_ring_{};
+    uint32_t relight_ring_head_ = 0;
+    uint32_t relight_ring_count_ = 0;
+    uint64_t relight_sample_consumed_ = 0;
 };
 
 } // namespace unravel

@@ -72,6 +72,27 @@ IMAGE3D_RW(s_light_voxels_out, rgba16f, 7);
 /// GiBounceProbeIrradiance. Stage 6 is an IMAGE on purpose: OpenGL guarantees only eight
 /// image units (bindings 0-7), which is why the surface list vacated it.
 UIMAGE3D_RW(s_gi_vis_memo, r32ui, 6);
+#if !BGFX_SHADER_LANGUAGE_GLSL
+/// Scalar 3D image atomic add with GLSL's native signature (imageAtomicAdd(uimage3D,
+/// ivec3, uint)) for the HLSL-syntax family - D3D, and SPIR-V / Metal, which bgfx
+/// compiles through the HLSL front-end too (the compute header splits on the same
+/// test). It covers only the 2D form; without this the SPIR-V build silently matched
+/// the 2D template and emitted a mistyped OpStore.
+void imageAtomicAdd(RWTexture3D<uint> _image, ivec3 _uvw, uint _value)
+{
+	InterlockedAdd(_image[_uvw], _value);
+}
+#endif // !BGFX_SHADER_LANGUAGE_GLSL
+
+/// Group scratch for the relight convergence statistic (see main).
+SHARED float s_stats_change[64];
+SHARED float s_stats_faces[64];
+
+/// Rec. 709 luminance, the convergence statistic's measure of a face.
+float GiStatsLuminance(vec3 radiance)
+{
+	return dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+}
 
 /// Defined locally rather than taken from lighting.sh, which this shader does not include. The
 /// D3D backend happens to supply one anyway, so relying on it compiles there and fails on GLSL.
@@ -568,28 +589,14 @@ vec4 GiDebugSunTierColor(vec3 world_position, vec3 world_normal, float voxel_siz
 	return vec4(shade, shade, shade, GI_SUN_TIER_DEBUG_ALPHA);
 }
 
-NUM_THREADS(64, 1, 1)
-void main()
+/*
+ * The relight of ONE surface-list entry, every early-out intact. Split from main() so the
+ * group-wide convergence statistic can sit in uniform control flow: a barrier after a
+ * lane's early return is illegal, and re-indenting this body under a flag would have
+ * touched the whole file.
+ */
+void GiRelightEntry(uint level, uint entry, inout float stats_change, inout float stats_faces)
 {
-	// One thread per entry due for relight THIS frame. The 4-frame rotation used to be a
-	// `(entry + frame) % 4` test over the dense list, which left exactly 8 of every 32 lanes
-	// alive in a live warp while the warp still issued the full body - the trace, the cage
-	// chain, all six faces - for a quarter of the output. Folding the rotation into the
-	// launch (entry = denom * id + phase selects the identical set) makes every lane of a
-	// live warp do real work, with the entry footprint per wave unchanged in spirit: still
-	// a contiguous stretch of the same compacted list.
-	//
-	// The level rides gl_WorkGroupID.y, which keeps it provably wave-uniform (scalar loads
-	// for the per-level state) and removes two integer divisions by a non-constant.
-	uint level = gl_WorkGroupID.y;
-	if(level >= uint(SDF_CLIPMAP_LEVEL_COUNT))
-	{
-		return;
-	}
-	// The phase that selects the set `(entry + frame) % denom == 0`.
-	uint denom = uint(GI_LIGHT_VOXEL_UPDATE_DENOM);
-	uint phase = (denom - (u_light_voxel_frame % denom)) % denom;
-	uint entry = (gl_WorkGroupID.x * 64u + gl_LocalInvocationID.x) * denom + phase;
 	if(entry >= b_surface_list[level])
 	{
 		return;
@@ -844,6 +851,7 @@ void main()
 		                                            u_gi_shadow_near_field * near_scale,
 		                                            center + light_jitter,
 		                                            center_lift,
+		                                            int(level),
 		                                            cached_dir_visibility,
 		                                            cached_dir_index);
 		// Bounce: LAST frame's world-probe irradiance around this face (the probes traced after
@@ -894,17 +902,78 @@ void main()
 		// first frames) writes through; a previous texel with alpha 0 was culled or never
 		// measured - its zero is provenance, not radiance, and is never blended in.
 		float ema = u_light_voxel_ema_blend;
+		vec4 previous = imageLoad(s_light_voxels_out, texel);
+		// Measured faces carry alpha 1; culled ones the provenance epsilon, never blended.
+		bool previous_measured = previous.w > 0.5;
 		BRANCH
-		if(ema < 1.0)
+		if(ema < 1.0 && previous_measured)
 		{
-			vec4 previous = imageLoad(s_light_voxels_out, texel);
-			// Measured faces carry alpha 1; culled ones the provenance epsilon, never blended.
-			if(previous.w > 0.5)
-			{
-				radiance = mix(previous.xyz, radiance, ema);
-			}
+			radiance = mix(previous.xyz, radiance, ema);
 		}
+		// CONVERGENCE STATISTIC (GI_QUIESCENCE_LUMINANCE_FLOOR): how far this relight moved
+		// the stored value, relative to the value itself, reduced per group in main and read
+		// back by the quiescence gate. A face without measured history counts as fully
+		// changed - the first relight of a scrolled-in slab is a change by definition.
+		float lum_new = GiStatsLuminance(radiance);
+		float lum_old = previous_measured ? GiStatsLuminance(previous.xyz) : 0.0;
+		float lum_scale = max(max(lum_new, lum_old), GI_QUIESCENCE_LUMINANCE_FLOOR);
+		stats_change += abs(lum_new - lum_old) / lum_scale;
+		stats_faces += 1.0;
 		imageStore(s_light_voxels_out, texel, vec4(radiance, 1.0));
+	}
+}
+
+NUM_THREADS(64, 1, 1)
+void main()
+{
+	// One thread per entry due for relight THIS frame. The 4-frame rotation used to be a
+	// `(entry + frame) % 4` test over the dense list, which left exactly 8 of every 32 lanes
+	// alive in a live warp while the warp still issued the full body - the trace, the cage
+	// chain, all six faces - for a quarter of the output. Folding the rotation into the
+	// launch (entry = denom * id + phase selects the identical set) makes every lane of a
+	// live warp do real work, with the entry footprint per wave unchanged in spirit: still
+	// a contiguous stretch of the same compacted list.
+	//
+	// The level rides gl_WorkGroupID.y, which keeps it provably wave-uniform (scalar loads
+	// for the per-level state) and removes two integer divisions by a non-constant.
+	uint level = gl_WorkGroupID.y;
+	float stats_change = 0.0;
+	float stats_faces = 0.0;
+	// Wave-uniform (the level rides the group id), so the barrier below never diverges.
+	if(level < uint(SDF_CLIPMAP_LEVEL_COUNT))
+	{
+		// The phase that selects the set `(entry + frame) % denom == 0`.
+		uint denom = uint(GI_LIGHT_VOXEL_UPDATE_DENOM);
+		uint phase = (denom - (u_light_voxel_frame % denom)) % denom;
+		uint entry = (gl_WorkGroupID.x * 64u + gl_LocalInvocationID.x) * denom + phase;
+		GiRelightEntry(level, entry, stats_change, stats_faces);
+	}
+	// CONVERGENCE STATISTIC (GI_QUIESCENCE_STATS_SCALE): the group's relative change and
+	// relit face count, reduced through shared memory and added to the memo texture's
+	// statistics slice (GiLightVoxelStatsTexel) with two atomics per group - never one
+	// per face, which would serialise the whole dispatch on one address. The pass copies
+	// and zeroes the slice after the dispatch and the quiescence gate reads it back: the
+	// world passes stop when the relight has provably converged, not after a fixed count
+	// of frames that a decaying closed-room tail can outlast.
+	s_stats_change[gl_LocalInvocationID.x] = stats_change;
+	s_stats_faces[gl_LocalInvocationID.x] = stats_faces;
+	barrier();
+	if(gl_LocalInvocationID.x == 0u && level < uint(SDF_CLIPMAP_LEVEL_COUNT))
+	{
+		float change = 0.0;
+		float faces = 0.0;
+		LOOP
+		for(uint lane = 0u; lane < 64u; ++lane)
+		{
+			change += s_stats_change[lane];
+			faces += s_stats_faces[lane];
+		}
+		if(faces > 0.0)
+		{
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), 0),
+			               uint(change * GI_QUIESCENCE_STATS_SCALE + 0.5));
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), 1), uint(faces + 0.5));
+		}
 	}
 }
 

@@ -77,6 +77,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     gi_world_probe_pass_.init(ctx);
     gi_resolve_pass_.init(ctx);
     gi_reflection_pass_.init(ctx);
+    scene_history_pass_.init(ctx);
     sdf_debug_pass_.init(ctx);
 
     auto& am = ctx.get_cached<asset_manager>();

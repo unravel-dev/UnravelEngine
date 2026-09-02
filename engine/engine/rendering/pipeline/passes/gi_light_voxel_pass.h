@@ -8,6 +8,8 @@
 #include <graphics/render_pass.h>
 #include <graphics/render_view.h>
 
+#include <array>
+
 namespace unravel
 {
 
@@ -83,7 +85,23 @@ public:
         return program_.is_valid();
     }
 
+    /// The latest completed relight-convergence readback (see collect_relight_stats), for
+    /// the quiescence gate (surface_cache_view::update_quiescence). Index 0 until the first
+    /// sample lands, and on backends without the statistic.
+    auto get_relight_sample() const -> const surface_cache_view::relight_sample&
+    {
+        return relight_sample_;
+    }
+
 private:
+    /**
+     * @brief Copies this frame's relight convergence sums out of the vis-memo texture's
+     *        statistics slice and stages them for the CPU, consuming the readbacks that
+     *        completed (a readback lands two frames after it is asked for; three staging
+     *        textures keep one in flight per frame).
+     */
+    void collect_relight_stats(const gfx::texture::ptr& vis_memo, uint32_t attr_resolution);
+
     /// One-time "the program never became valid" diagnostic; see run().
     bool invalid_warning_emitted_ = false;
     /// One-time "debug variant requested but its program never built" diagnostic; see run().
@@ -106,6 +124,23 @@ private:
     uint64_t ema_light_hash_ = 0;
     uint32_t ema_generation_ = uint32_t(-1);
     uint32_t ema_snap_frames_ = 0;
+    /// Relight convergence statistic state (collect_relight_stats).
+    struct stats_readback_slot
+    {
+        gfx::texture::ptr texture;
+        std::array<uint32_t, 2u * global_sdf_clipmap::level_count> data{};
+        uint32_t ready_frame = 0;
+        bool pending = false;
+    };
+    std::unique_ptr<gpu_program> stats_program_;
+    gfx::texture::ptr stats_texture_;
+    std::array<stats_readback_slot, 3> stats_slots_{};
+    uint32_t stats_slot_cursor_ = 0;
+    /// The memo texture the statistic was last collected from: a fresh allocation carries
+    /// an unwritten statistics slice, so its first sample is discarded.
+    const gfx::texture* stats_source_ = nullptr;
+    bool stats_primed_ = false;
+    surface_cache_view::relight_sample relight_sample_{};
 
 private:
     struct light_voxel_program : uniforms_cache

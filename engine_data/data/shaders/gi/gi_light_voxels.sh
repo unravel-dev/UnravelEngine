@@ -48,6 +48,16 @@ uniform vec4 u_gi_light_voxel_params;
 #define u_light_voxel_frame      uint(u_gi_light_voxel_params.z)
 #define u_light_voxel_ready      (u_gi_light_voxel_params.w > 0.0)
 
+/// The relight convergence statistic's texel: one slice past the last face slab of the
+/// bounce vis-memo texture (allocated one slice deeper than the light volume for it); x =
+/// level, y = quantity (0 = summed relative change x GI_QUIESCENCE_STATS_SCALE, 1 = relit
+/// face count). Written by the group reduction in gi_light_voxels_kernel.sh, copied out
+/// and zeroed by cs_gi_light_voxel_stats.sc.
+ivec3 GiLightVoxelStatsTexel(int level, int quantity)
+{
+	return ivec3(level, quantity, u_light_voxel_resolution * SDF_CLIPMAP_LEVEL_COUNT * 6);
+}
+
 /// TOROIDAL world anchoring: a voxel's storage SLOT is its absolute world cell
 /// (floor(world / attr_voxel)) wrapped by the resolution, exactly the world-probe scheme. A
 /// level re-snap then changes which cells are in the window, never which slot a surviving cell

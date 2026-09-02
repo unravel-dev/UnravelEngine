@@ -425,6 +425,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             const auto hiz_or_depth = screen_trace ? params.hiz : params.g_buffer->get_texture(4);
             const bool adaptive = s.adaptive_probes;
             const bool has_prev_color = params.prev_color && params.prev_color->is_valid();
+            // The HDR snapshot (scene_history_pass) carries each pixel's view depth in alpha;
+            // the LDR fallback cannot, and the kernel then reads history unvalidated.
+            const bool prev_color_carries_depth =
+                has_prev_color && params.prev_color->info.format == bgfx::TextureFormat::RGBA16F;
             // TAA-JITTER-FREE matrices for the whole gather chain: every pass here
             // reconstructs world positions from depth (probe anchors, trace origins,
             // integration, reprojection), and the jittered projection's sub-pixel wobble
@@ -437,7 +441,8 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
                                                   float(s.debug_view),
                                                   adaptive ? 1.0f : 0.0f,
-                                                  has_prev_color ? 1.0f : 0.0f};
+                                                  has_prev_color ? (prev_color_carries_depth ? 2.0f : 1.0f)
+                                                                 : 0.0f};
             {
                 // PLACEMENT (adaptive gather): every probe's anchor lands in the records
                 // before the trace runs - the only ordering under which a probe can test

@@ -503,7 +503,9 @@ private:
     /// next frame's SSR trace and GI far-field. Deliberately pre-bloom/tonemap/UI: the old
     /// source (final OBUFFER) fed display-encoded values back into linear lighting, which
     /// with free-floating auto exposure formed a brightness feedback loop in dark scenes.
-    void snapshot_prev_scene_color(gfx::render_view& rview, const gfx::frame_buffer::ptr& source);
+    void snapshot_prev_scene_color(gfx::render_view& rview,
+                                   const gfx::frame_buffer::ptr& source,
+                                   const camera& camera);
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     int debug_pass_{-1};

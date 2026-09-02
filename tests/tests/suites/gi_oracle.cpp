@@ -176,7 +176,7 @@ void test_gi_shaders_compile_sm50()
         {
             continue;
         }
-        // BOTH the D3D floor and the OpenGL profile: the backends disagree on real things -
+        // The D3D floor AND the OpenGL profile: the backends disagree on real things -
         // GLSL reserves `packed`, rejects expressions in local_size, lacks scalar
         // equal()/notEqual() and legacy *Lod entry points - and every one of those shipped
         // as a D3D-only-tested regression before this second profile existed.
@@ -186,9 +186,14 @@ void test_gi_shaders_compile_sm50()
             const char* profile;
             const char* label;
         };
+        // And SPIR-V: bgfx compiles it through the HLSL front-end, but not with fxc's
+        // overload strictness - a 3D image atomic that fxc rejected outright was silently
+        // matched to the 2D template and emitted a mistyped OpStore that only the Vulkan
+        // runtime compile reported.
         const profile_case profiles[] = {
             {"windows", "s_5_0", "SM 5.0"},
             {"linux", "440", "GLSL 440"},
+            {"windows", "spirv", "SPIR-V"},
         };
         for(const auto& profile : profiles)
         {
