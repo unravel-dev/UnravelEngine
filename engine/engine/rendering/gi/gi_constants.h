@@ -56,6 +56,16 @@
       " every face and went black wherever only coarse levels covered them; a quarter still"       \
       " separates a blob-buried outward shell (partial escape at 2-4 voxels) from a genuine"       \
       " interior face (closed at every scale)")                                                    \
+    X(GI_LIGHT_VOXEL_CULLED_ALPHA, 0.00390625f,                                                    \
+      "unitless", "derived: 1/256, the provenance alpha a CULLED voxel face stores. Alpha 0 is"    \
+      " the never-measured mark that lets every light-voxel reader fall back to a coarser"         \
+      " level, and a culled face is not unmeasured - its cavity cone is closed at this level,"     \
+      " so the correct answer is DARK. Falling back handed exactly the crevice and thin-slab"      \
+      " faces to a coarser level whose cell straddles the geometry the cull reacted to and"        \
+      " whose shadow ray launches from its sunlit side (measured: the GI Room's door tunnel"       \
+      " floor lit through the 25 cm baffle from level 2). One quantum of the RGBA16F"              \
+      " alpha's useful range: carries no energy, weighs nothing against a measured neighbour"      \
+      " in the trilinear mix, and clears the readers' 1e-4 measured threshold on its own")         \
     X(GI_MAX_ALBEDO, 0.9f,                                                                         \
       "unitless", "derived: bounce feedback has per-channel gain exactly equal to albedo; 1.0 is"  \
       " the neutral-stability point of L = a*L + c, so the gain is held strictly below it")        \
@@ -83,7 +93,7 @@
       " direction rather than lifting the point (see the gather's identical rule). NEVER scale"    \
       " this by incidence: a slope-aware skip teleports through sun-facing walls at contact"       \
       " range (measured, test_shadow_blob_floor_building)")                                        \
-    X(GI_SUN_SHADOWMAP_MAX_VOXEL, 0.25f,                                                           \
+    X(GI_SUN_SHADOWMAP_MAX_VOXEL, 0.125f,                                                          \
       "m", "derived: the sun shadow-map tier's ceiling on the ANSWERING LEVEL's voxel. The"        \
       " tier biases the receiver by one level voxel of light-space depth"                          \
       " (GI_SUN_SHADOWMAP_SLOPE_COVER_VOXELS, which the +-0.5-voxel quadrature over a whole"       \
@@ -93,9 +103,13 @@
       " gate alike (measured: interior ceiling brightest, sun-white, falling off downward,"        \
       " walls merely bouncing it). At metre-scale faces NO bias is simultaneously acne-free"       \
       " and leak-free, so the tier must decline rather than guess: above this the traced"          \
-      " field answers, exactly as it did before the tier existed. 0.25 m keeps levels 0 and 1"     \
-      " at the runtime cascade (resolution 128 over a 16 m base extent = 0.125 / 0.25 m),"         \
-      " which is where CSM cascade 0 - the only split the tier binds - reaches anyway")            \
+      " field answers, exactly as it did before the tier existed. 0.125 m keeps ONLY level 0"      \
+      " at the runtime cascade (resolution 128 over a 16 m base extent = 0.125 m voxels):"         \
+      " the bias must stay below the thinnest geometry a scene is expected to seal, and at"        \
+      " level 1 the 0.25 m bias EQUALS a 25 cm door slab or baffle, which the tier then"           \
+      " reports lit for any sun within 60 degrees of grazing (depth through the slab ="            \
+      " thickness x cos(incidence) < bias). Level 0 sits 2x below that slab; CSM cascade 0 -"      \
+      " the only split the tier binds - covers the near frustum slice where level 0 lives")        \
     X(GI_WORLD_PROBE_DIVISOR, 16,                                                                  \
       "SDF voxels per probe cell", "published: [SDFGI] PROBE_DIVISOR - 9^3 probe lattice per"      \
       " cascade at resolution 128")                                                                \

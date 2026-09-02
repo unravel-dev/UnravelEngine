@@ -48,6 +48,10 @@ uniform mat4 u_gi_sun_shadowmap_mtx;
 /// y = cascade-0 constant receiver bias in stored depth (the generator's texel bias converted),
 /// z = texcoord border, w = d(stored depth)/d(world distance along the sun).
 uniform vec4 u_gi_sun_shadowmap_params;
+/// The camera's (TAA-unjittered) view-projection - the frustum cascade 0 was fitted to.
+uniform mat4 u_gi_sun_shadowmap_camera_vp;
+/// x = cascade 0's view-space far distance (the slice's far plane); yzw unused.
+uniform vec4 u_gi_sun_shadowmap_slice;
 #define u_gi_sun_index          u_gi_sun_shadowmap_params.x
 #define u_gi_sun_bias           u_gi_sun_shadowmap_params.y
 #define u_gi_sun_border         u_gi_sun_shadowmap_params.z
@@ -93,6 +97,26 @@ bool GiSunShadowmapVisibility(vec3 world_position, vec3 world_normal, float voxe
 {
 	out_lit = 0.0;
 	if(voxel_size > GI_SUN_SHADOWMAP_MAX_VOXEL)
+	{
+		return false;
+	}
+	// THE SLICE CONTRACT. Cascade 0 is fitted to the camera's near frustum slice, and the
+	// raster samples it for nothing outside that slice. Its crop footprint - a bounding sphere
+	// of the slice - reaches metres BEHIND and beside the camera, so a world-space receiver
+	// there projects inside the map's texcoords while nothing about the fit is contracted for
+	// it. Measured: faces of a sealed room BEHIND the camera read LIT through this map while
+	// the camera faced away, and every camera turn then revealed a lit room that decayed over
+	// seconds through the relight EMA and the closed-room bounce (the first-look glow). A
+	// receiver outside the slice - behind the near plane, past cascade 0's far plane, or
+	// outside the field of view - declines here and the traced field answers, exactly as it
+	// does past the map's edge. Costs one mat4 transform per face.
+	vec4 camera_clip = mul(u_gi_sun_shadowmap_camera_vp, vec4(world_position, 1.0));
+	if(camera_clip.w <= 0.0 || camera_clip.w > u_gi_sun_shadowmap_slice.x)
+	{
+		return false;
+	}
+	vec2 camera_ndc = camera_clip.xy / camera_clip.w;
+	if(any(greaterThan(abs(camera_ndc), vec2_splat(1.0))))
 	{
 		return false;
 	}

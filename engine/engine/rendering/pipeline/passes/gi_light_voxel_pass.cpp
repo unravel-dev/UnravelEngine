@@ -155,6 +155,17 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     if(bgfx::isValid(sun_map))
     {
         gfx::set_uniform(program_.u_gi_sun_shadowmap_mtx, params.sun_shadows->get_shadow_map_matrix(0));
+        // The map's CONTRACT: cascade 0 is fitted to the camera's near frustum slice and the
+        // raster samples it for nothing outside that slice. Its crop footprint (a bounding
+        // sphere of the slice) reaches metres behind and beside the camera, and receivers
+        // there project INTO the map while nothing about the fit is contracted for them -
+        // measured as LIT verdicts for sealed-room faces behind the camera (the room lights
+        // up while the camera faces away and decays when it turns: the first-look glow).
+        // The kernel declines outside the slice and the traced field answers, exactly as
+        // it does past the map's edge.
+        gfx::set_uniform(program_.u_gi_sun_shadowmap_camera_vp, params.camera_view_proj);
+        const float slice_params[4] = {params.sun_shadows->get_cascade_far_distance(0), 0.0f, 0.0f, 0.0f};
+        gfx::set_uniform(program_.u_gi_sun_shadowmap_slice, slice_params);
         sun_params[0] = float(params.sun_light_index);
         sun_params[1] = params.sun_shadows->get_shadow_map_bias();
         // One filter footprint inside the edge, mirroring the lighting shader's cascade

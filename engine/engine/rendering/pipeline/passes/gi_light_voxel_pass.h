@@ -48,6 +48,16 @@ public:
         /// The sun's slot in the GPU light buffer, so the shader applies the map to exactly
         /// the light it was rendered for. Negative disables the tier.
         int sun_light_index = -1;
+        /// The camera's TAA-unjittered view-projection - the frustum cascade 0 was fitted to
+        /// this frame. The tier answers only for receivers inside that frustum slice
+        /// ([near, cascade-0 far] in view depth, inside the FOV): the map's crop footprint
+        /// (a bounding sphere of the slice) extends metres BEHIND and beside the camera, and
+        /// receivers there project into the map but are outside its contract - the raster
+        /// never samples them, and they measured LIT for sealed-room faces behind the camera
+        /// (the first-look glow: the room lights up while the camera faces away, then decays
+        /// when it turns). Outside the slice the traced field answers, as it does past the
+        /// map's edge.
+        math::mat4 camera_view_proj{1.0f};
         /// Diagnostic: dispatch the SUN-TIER debug PROGRAM (cs_gi_light_voxels_debug.sc),
         /// which writes tier-attribution colors into the light volume instead of radiance
         /// (see GiDebugSunTierColor in gi_light_voxels_kernel.sh), for the sun_tiers debug
@@ -127,11 +137,21 @@ private:
         gfx::program::uniform_ptr s_world_probe_depth;
         gfx::program::uniform_ptr u_gi_sun_shadowmap_mtx;
         gfx::program::uniform_ptr u_gi_sun_shadowmap_params;
+        gfx::program::uniform_ptr u_gi_sun_shadowmap_camera_vp;
+        gfx::program::uniform_ptr u_gi_sun_shadowmap_slice;
         gfx::program::uniform_ptr s_gi_sun_shadowmap;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_gi_sun_shadowmap_mtx, "u_gi_sun_shadowmap_mtx", gfx::uniform_type::Mat4);
+            cache_uniform(program.get(),
+                          u_gi_sun_shadowmap_camera_vp,
+                          "u_gi_sun_shadowmap_camera_vp",
+                          gfx::uniform_type::Mat4);
+            cache_uniform(program.get(),
+                          u_gi_sun_shadowmap_slice,
+                          "u_gi_sun_shadowmap_slice",
+                          gfx::uniform_type::Vec4);
             cache_uniform(program.get(),
                           u_gi_sun_shadowmap_params,
                           "u_gi_sun_shadowmap_params",

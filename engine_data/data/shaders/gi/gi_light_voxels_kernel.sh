@@ -697,7 +697,7 @@ void main()
 			// rotation.
 			if(GiWorldProbeVisMemoFaceCulled(memo_word))
 			{
-				imageStore(s_light_voxels_out, texel, vec4_splat(0.0));
+				imageStore(s_light_voxels_out, texel, vec4(0.0, 0.0, 0.0, GI_LIGHT_VOXEL_CULLED_ALPHA));
 				continue;
 			}
 			visibility = GiWorldProbeVisMemoFaceVisibility(memo_word);
@@ -750,10 +750,19 @@ void main()
 				// In debug mode the cull carries the provenance alpha too: with it, EVERY texel
 				// this dispatch visits is marked 0.5, so any alpha-1 texel left on screen is
 				// PROOF of a radiance-path write (flag not arriving), not of a stale texel.
+				// CULLED IS A MEASUREMENT (GI_LIGHT_VOXEL_CULLED_ALPHA): the face's cone is closed at
+				// this level - a crevice, the strip of floor beside a door slab - and the readers
+				// must answer DARK here, never fall through to a coarser level. Alpha 0 meant
+				// "never measured", and the cascade fallback then handed exactly these faces to a
+				// level whose cell straddles the thin geometry the cull was reacting to, with a
+				// shadow ray launched from its sunlit side (measured: the GI Room's door tunnel
+				// floor and lintel lit through the 25 cm baffle from level 2). The epsilon alpha
+				// carries no energy and next to no weight in the trilinear mix; it only stops the
+				// fallback.
 				imageStore(s_light_voxels_out, texel,
 				           u_light_voxel_debug_sun_tiers
 				               ? vec4(0.0, 0.0, 0.0, GI_SUN_TIER_DEBUG_ALPHA)
-				               : vec4_splat(0.0));
+				               : vec4(0.0, 0.0, 0.0, GI_LIGHT_VOXEL_CULLED_ALPHA));
 				continue;
 			}
 			face_half = GiWorldProbeVisMemoPackFace(visibility, false);
@@ -889,7 +898,8 @@ void main()
 		if(ema < 1.0)
 		{
 			vec4 previous = imageLoad(s_light_voxels_out, texel);
-			if(previous.w > 0.0)
+			// Measured faces carry alpha 1; culled ones the provenance epsilon, never blended.
+			if(previous.w > 0.5)
 			{
 				radiance = mix(previous.xyz, radiance, ema);
 			}

@@ -730,6 +730,16 @@ public:
     /// can convert its own world-space bias (the GI pass covers a voxel of slope).
     auto get_shadow_map_world_to_depth() const -> float;
 
+    /// View-space far distance of one directional split - the slice of the camera frustum the
+    /// cascade was fitted to. The map is defined ONLY for receivers inside that slice: the
+    /// raster never samples a cascade for pixels outside it, so nothing about the fit, the
+    /// caster set or the crop is contracted beyond it. A world-space consumer (the GI
+    /// light-voxel pass) needs the bound to stay inside the contract.
+    auto get_cascade_far_distance(uint8_t split) const -> float
+    {
+        return uniforms_.m_csmFarDistances[split];
+    }
+
     // Configuration methods for improved shadow mapping
     void set_frustum_calculation_method(frustum_calculation_method::Enum method) { frustum_method_ = method; }
     auto get_frustum_calculation_method() const -> frustum_calculation_method::Enum { return frustum_method_; }

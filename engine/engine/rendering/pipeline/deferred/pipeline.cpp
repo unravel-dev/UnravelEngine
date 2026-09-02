@@ -2672,6 +2672,9 @@ void deferred::run_gi_light_voxel_pass(scene& scn,
     light_params.view_cache = &view_cache;
     light_params.frame = light_voxel_frame_;
     light_params.camera_position = camera.get_position();
+    // Unjittered: the cascade fit in build_shadows ran before the TAA jitter was applied,
+    // and the slice test in the kernel must describe the same frustum.
+    light_params.camera_view_proj = camera.get_view_projection_unjittered().get_matrix();
     light_params.probe_visibility_variance_gate = gi.resolve.probe_visibility_variance_gate;
     // The sun-tier and vis-memo views are WRITER-side diagnostics: the compute
     // pass stamps categorical colors into the light volume and the debug pass
