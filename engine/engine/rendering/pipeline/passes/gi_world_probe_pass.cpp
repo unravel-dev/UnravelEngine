@@ -113,12 +113,24 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
         gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
         gfx::set_texture(trace_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+        // ReadWrite: the trace folds each window's sample into the texel's running mean.
         gfx::set_image(5,
                        clipmap_gpu.get_world_probe_radiance()->native_handle(),
                        0,
-                       gfx::access::Write,
+                       gfx::access::ReadWrite,
                        gfx::texture_format::RGBA16F);
         gfx::set_buffer(6, clipmap_gpu.get_world_probe_cells(), gfx::access::ReadWrite);
+        gfx::set_buffer(7, clipmap_gpu.get_world_probe_counts(), gfx::access::ReadWrite);
+        // The window index's R2 offset in double (a float(frame) product loses the jitter
+        // over a long session); the fast window advances windows four times faster.
+        const double window_index =
+            std::floor(double(params.frame) * double(strata_per_frame) / double(gi::GI_WORLD_PROBE_WINDOW));
+        // z = the jitter/mean enable (the settings knob); 0 keeps texel centres at write-through.
+        const float jitter[4] = {float(std::fmod(0.754877666 * window_index, 1.0)),
+                                 float(std::fmod(0.569840291 * window_index, 1.0)),
+                                 params.jitter_directions ? 1.0f : 0.0f,
+                                 0.0f};
+        gfx::set_uniform(trace_program_.u_gi_world_probe_jitter, jitter);
         gfx::set_texture(trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
         gfx::set_texture(trace_program_.s_world_probe_irradiance_seed,
                          11,

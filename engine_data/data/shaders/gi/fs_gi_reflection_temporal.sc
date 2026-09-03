@@ -201,7 +201,13 @@ void main()
 	{
 		still = 0.0;
 	}
-	float window = max(u_gi_refl_temporal.w - 1.0, 1.0);
+	// ROUGHNESS-SCALED WINDOW (GI_REFLECTION_ROUGH_WINDOW_SCALE): a wide lobe integrates one
+	// VNDF ray per frame slowest, so its running mean may grow to several times the settings
+	// window (Lumen reflections accumulate 32); mirrors keep the short window and its
+	// responsiveness. The mover gate and the clamp still bound ghosting on the longer mean.
+	float rough_window_scale =
+	    mix(1.0, GI_REFLECTION_ROUGH_WINDOW_SCALE, saturate(nd.roughness / GI_REFLECTION_ROUGH_CUTOFF));
+	float window = max(u_gi_refl_temporal.w * rough_window_scale - 1.0, 1.0);
 	// MOTION WINDOW: trail length on a blurred high-contrast boundary is the 1/count
 	// catch-up time, and the base window's depth reads as a smear band the clamp cannot
 	// reject there (a blurred edge's AABB legitimately spans both sides). While measured
@@ -279,12 +285,27 @@ void main()
 			}
 		}
 	}
-	// Neighbourhood bounds and mean from geometric samples only, so a coverage-0 neighbour
-	// cannot shrink the AABB of a refined hit (nor drag the firefly reference toward sky).
+	// Neighbourhood bounds, the firefly reference and the pre-temporal resolve share one 3x3
+	// walk over this frame's GEOMETRIC samples (a coverage-0 neighbour cannot shrink the AABB
+	// of a refined hit, drag the reference toward sky, or enter the resolve). The samples are
+	// kept so the resolve below can apply the governor's ceiling to each of them.
 	vec4 lo = curr;
 	vec4 hi = curr;
 	vec3 neighbor_sum = vec3_splat(0.0);
 	float neighbor_count = 0.0;
+	float neighbor_luma_max = 0.0;
+	vec3 neighbor_rgb[8];
+	float neighbor_weight[8];
+	// PRE-TEMPORAL RESOLVE (GI_REFLECTION_RESOLVE_START): stochastic SSR's resolve stage on
+	// the 3x3 the bounds already fetch - the rough band's raw sample is one GGX ray of a lobe
+	// whose neighbours sample the SAME lobe, so an edge-stopped average of them is nine
+	// samples per frame for free. Fades in with roughness (a tight lobe's neighbours see
+	// different content), never on mirrors, never on non-image samples. Blend-free: the
+	// history's neighbourhood bounds stay the raw ones.
+	float resolve_scale =
+	    smoothstep(GI_REFLECTION_RESOLVE_START, GI_REFLECTION_GATHER_FADE_START, nd.roughness);
+	vec3 resolve_normal = normalize(nd.world_normal);
+	int neighbor_index = 0;
 	LOOP
 	for(int y = -1; y <= 1; ++y)
 	{
@@ -295,31 +316,94 @@ void main()
 			{
 				continue;
 			}
-			vec4 s = texture2DLod(s_refl_raw, uv + vec2(float(x), float(y)) * texel, 0.0);
+			vec2 sample_uv = uv + vec2(float(x), float(y)) * texel;
+			vec4 s = texture2DLod(s_refl_raw, sample_uv, 0.0);
+			vec3 sample_rgb = vec3_splat(0.0);
+			float sample_weight = 0.0;
 			if(s.w >= 0.5)
 			{
 				lo = min(lo, s);
 				hi = max(hi, s);
 				neighbor_sum += s.xyz;
 				neighbor_count += 1.0;
+				neighbor_luma_max = max(neighbor_luma_max, GiReflLuma(s.xyz));
+				sample_rgb = s.xyz;
+				BRANCH
+				if(resolve_scale > 0.0)
+				{
+					// The composite's edge stops: depth agreement within a small band and a
+					// tight normal cone, so the resolve never bleeds across silhouettes.
+					float sample_depth = texture2DLod(s_refl_depth, sample_uv, 0.0).x;
+					float depth_weight = saturate(1.0 - abs(sample_depth - depth) /
+					                                        (GI_TEMPORAL_DEPTH_TOLERANCE * 0.01));
+					vec3 sample_normal =
+					    DecodeGBufferNormalMetalRoughnessLod(sample_uv, s_refl_normal, 0.0).world_normal;
+					float nw = saturate(dot(normalize(sample_normal), resolve_normal));
+					nw = nw * nw;
+					nw = nw * nw;
+					nw = nw * nw;
+					nw = nw * nw;
+					sample_weight = resolve_scale * depth_weight * nw * nw;
+				}
 			}
+			neighbor_rgb[neighbor_index] = sample_rgb;
+			neighbor_weight[neighbor_index] = sample_weight;
+			++neighbor_index;
 		}
 	}
 	// FIREFLY GOVERNOR (see the header): cap the new sample at the clamp's multiple of the
-	// pixel's own accumulated luminance, floored by this frame's neighbourhood mean.
+	// pixel's own accumulated luminance, floored by this frame's neighbourhood mean - the
+	// TRIMMED mean, brightest neighbour excluded. With the plain mean a single unclamped
+	// emissive hit (up to GI_MAX_RAY_RADIANCE) set every neighbour's ceiling to its own
+	// height, and once the resolve existed it spread that hit into a 3x3 of unclamped dots
+	// that the 3-frame motion window showed dancing (measured regression on brushed metal).
+	// With one neighbour there is nothing to trim: the history alone is the reference.
 	float reference = history_texel.w >= 0.5 ? GiReflLuma(history_texel.xyz) : 0.0;
-	if(neighbor_count > 0.0)
+	if(neighbor_count > 1.0)
 	{
-		reference = max(reference, GiReflLuma(neighbor_sum / neighbor_count));
+		float trimmed = max(GiReflLuma(neighbor_sum) - neighbor_luma_max, 0.0) / (neighbor_count - 1.0);
+		reference = max(reference, trimmed);
 	}
+	bool has_reference = reference > 1e-3;
+	float ceiling = GI_REFLECTION_FIREFLY_CLAMP * reference;
 	BRANCH
-	if(reference > 1e-3)
+	if(has_reference)
 	{
-		float ceiling = GI_REFLECTION_FIREFLY_CLAMP * reference;
 		float luma = GiReflLuma(curr.xyz);
 		if(luma > ceiling)
 		{
 			curr.xyz *= ceiling / luma;
+		}
+	}
+	// The resolve runs only with an ESTABLISHED reference and applies the same ceiling to
+	// every neighbour it averages: without a reference the neighbourhood is sparse spikes
+	// on dark, and averaging those can only spread the dots (the no-reference store stays
+	// unclamped exactly as before, one pixel per hit).
+	BRANCH
+	if(has_reference && curr.w >= 0.5 && resolve_scale > 0.0)
+	{
+		vec3 resolve_sum = vec3_splat(0.0);
+		float resolve_weight = 0.0;
+		LOOP
+		for(int i = 0; i < 8; ++i)
+		{
+			float sample_weight = neighbor_weight[i];
+			if(sample_weight <= 0.0)
+			{
+				continue;
+			}
+			vec3 sample_rgb = neighbor_rgb[i];
+			float sample_luma = GiReflLuma(sample_rgb);
+			if(sample_luma > ceiling)
+			{
+				sample_rgb *= ceiling / sample_luma;
+			}
+			resolve_sum += sample_rgb * sample_weight;
+			resolve_weight += sample_weight;
+		}
+		if(resolve_weight > 0.0)
+		{
+			curr.xyz = (curr.xyz + resolve_sum) / (1.0 + resolve_weight);
 		}
 	}
 	// RUNNING MEAN, not a fixed EMA: alpha carries the accumulated frame count (the SSR

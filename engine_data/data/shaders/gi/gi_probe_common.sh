@@ -124,6 +124,35 @@ ivec2 GiOctWrapTexel(ivec2 texel)
 	return texel;
 }
 
+/// Area of the spherical triangle (a, b, c) on the unit sphere (Van Oosterom and Strackee).
+float GiSphericalTriangleArea(vec3 a, vec3 b, vec3 c)
+{
+	float numerator = abs(dot(a, cross(b, c)));
+	float denominator = 1.0 + dot(a, b) + dot(b, c) + dot(c, a);
+	return 2.0 * atan2(numerator, denominator);
+}
+
+/**
+ * Solid angle of the octahedral texel at @p texel (top-left corner, tile texels) in an
+ * @p edge x @p edge tile: the geodesic quad through its four decoded corners, as two triangles.
+ *
+ * The octahedral map is NOT equal-area: 8x8 texels span 0.53x-1.47x of 4 pi / 64 and 16x16
+ * texels 0.41x-1.61x of their mean (measured), so a cosine sum that treats them as equal
+ * biases each direction's contribution by that much. Every convolution weights by this
+ * instead and normalises by sum(cos x omega), which makes a uniform radiance field integrate
+ * exactly. Exact up to the geodesic approximation of the texel's curved edges; the 64 (or
+ * 256) values sum to 4 pi to four digits.
+ */
+float GiOctTexelSolidAngle(ivec2 texel, int edge)
+{
+	float inv_edge = 1.0 / float(edge);
+	vec3 a = GiOctDecode(vec2(texel) * inv_edge);
+	vec3 b = GiOctDecode(vec2(texel + ivec2(1, 0)) * inv_edge);
+	vec3 c = GiOctDecode(vec2(texel + ivec2(1, 1)) * inv_edge);
+	vec3 d = GiOctDecode(vec2(texel + ivec2(0, 1)) * inv_edge);
+	return GiSphericalTriangleArea(a, b, c) + GiSphericalTriangleArea(a, c, d);
+}
+
 /// The nine SH2 basis functions at a direction, in the order the probe buffer stores them.
 void GiShBasis(vec3 d, out float basis[9])
 {

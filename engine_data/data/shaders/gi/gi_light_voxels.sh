@@ -275,6 +275,59 @@ bool GiLightVoxelReadFade(vec3 position, vec3 normal, vec3 fallback, float fade_
 	return false;
 }
 
+/**
+ * The irradiance consumers' cascade read (gather rays, world-probe rays): cross-fades the
+ * finer and coarser levels' MEASURED answers over @p fade_voxels of the finer level, with no
+ * foreign fallback - where only one level measured the point, that level answers alone, and
+ * where neither did the walk continues outward exactly as GiLightVoxelRead. The first-success
+ * walk switched hit radiance from 0.25 m to 0.5 m voxels at a knife edge 8 m from the camera,
+ * and that edge sweeps every surface as the camera translates (GI_LIGHT_VOXEL_FADE_VOXELS).
+ */
+bool GiLightVoxelReadBlend(vec3 position, vec3 normal, float fade_voxels, out vec3 out_radiance)
+{
+	out_radiance = vec3_splat(0.0);
+	float field_blend;
+	float answered_voxel;
+	int finest = SdfFindClipmapLevel(position, field_blend, answered_voxel);
+	if(finest >= SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		return false;
+	}
+	float fade = SdfClipmapEdgeBlend(finest, position, fade_voxels);
+	fade = fade * fade * (3.0 - 2.0 * fade);
+	vec3 fine_radiance;
+	bool ok_fine = GiLightVoxelReadLevel(position, normal, finest, fine_radiance);
+	vec3 coarse_radiance;
+	bool ok_coarse = false;
+	if(fade > 0.0 && (finest + 1) < SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		ok_coarse = GiLightVoxelReadLevel(position, normal, finest + 1, coarse_radiance);
+	}
+	if(ok_fine && ok_coarse)
+	{
+		out_radiance = mix(fine_radiance, coarse_radiance, fade);
+		return true;
+	}
+	if(ok_fine)
+	{
+		out_radiance = fine_radiance;
+		return true;
+	}
+	if(ok_coarse)
+	{
+		out_radiance = coarse_radiance;
+		return true;
+	}
+	for(int level = finest + 1; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
+	{
+		if(GiLightVoxelReadLevel(position, normal, level, out_radiance))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
 
 /// The attribute-albedo volume (cs_gi_clipmap_attributes.sc): rgb = winning instance albedo

@@ -121,6 +121,8 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             attr_resolution_seed * attr_resolution_seed * attr_resolution_seed * global_sdf_clipmap::level_count;
         fill(clipmap_gpu.get_attr_cells(), attr_cell_count, 0xFFFFFFFFu);
         fill(clipmap_gpu.get_world_probe_cells(), clipmap_gpu.get_world_probe_cell_count(), 0xFFFFFFFFu);
+        // The running-mean window counts start at zero: every probe's first window writes through.
+        fill(clipmap_gpu.get_world_probe_counts(), clipmap_gpu.get_world_probe_cell_count(), 0u);
         // Only when the GPU owns the counts: the CPU-composed variant carries no COMPUTE_WRITE
         // (a compute fill would be invalid on it) and was zero-seeded from the CPU at creation.
         // The cursors are the surface list's HEADER (first level_count entries), so the fill
@@ -356,10 +358,12 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             gfx::set_buffer(10, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
             const float light_voxel_params[4] = {float(attr_resolution), 0.0f, 0.0f, 1.0f};
             gfx::set_uniform(attributes_program_.u_gi_light_voxel_params, light_voxel_params);
+            // ReadWrite: a claimed slot seeds its faces from the PARENT level's texels
+            // (GI_LIGHT_VOXEL_SEED_ALPHA) - a different slab of the same volume.
             gfx::set_image_3d(7,
                               clipmap_gpu.get_light_voxel_texture()->native_handle(),
                               0,
-                              gfx::access::Write,
+                              gfx::access::ReadWrite,
                               gfx::texture_format::RGBA16F);
             gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
             gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);

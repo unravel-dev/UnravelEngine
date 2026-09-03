@@ -2635,7 +2635,7 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
         if(!quiescent)
         {
             run_gi_light_voxel_pass(scn, camera, rview, surface_cache, view_cache, gi);
-            run_gi_world_probe_pass(camera, rview, surface_cache, view_cache);
+            run_gi_world_probe_pass(camera, rview, surface_cache, view_cache, gi);
         }
         // One frame counter for both passes; each consumer keys its own rotation off it.
         ++light_voxel_frame_;
@@ -2670,7 +2670,8 @@ void deferred::run_gi_light_voxel_pass(scene& scn,
 void deferred::run_gi_world_probe_pass(const camera& camera,
                                        gfx::render_view& rview,
                                        surface_cache_system& surface_cache,
-                                       surface_cache_view& view_cache)
+                                       surface_cache_view& view_cache,
+                                       const gi_settings& gi)
 {
     // World probes trace against the freshly lit voxels (GI v2 plan 3.3).
     gi_world_probe_pass::run_params probe_params;
@@ -2680,6 +2681,7 @@ void deferred::run_gi_world_probe_pass(const camera& camera,
     probe_params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
     probe_params.frame = light_voxel_frame_;
     probe_params.light_hash = surface_cache.get_light_buffer().get_content_hash();
+    probe_params.jitter_directions = gi.resolve.world_probe_jitter;
     gi_world_probe_pass_.run(rview, probe_params);
 }
 

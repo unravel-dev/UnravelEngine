@@ -32,6 +32,9 @@ SAMPLER2D(s_probe_irradiance, 2);
 
 /// xyz = camera position, w = frame index.
 uniform vec4 u_gi_camera;
+/// xy = this frame's R2 offset for the interpolation jitter, computed in double on the CPU
+/// (see the trace kernel's note on float(frame) precision). zw unused.
+uniform vec4 u_gi_jitter;
 
 /// x = settings.intensity, the artistic multiplier on the gathered bounce. Applied to the
 /// output rgb only: alpha keeps the measured weight that replaces the environment term
@@ -119,7 +122,7 @@ vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 o
 	// distributes probe-to-probe differences, which the temporal chain then integrates -
 	// without it the probe lattice prints through as tile-sized plateaus. Two-channel IGN
 	// per pixel, advanced per frame by R2 in value space (gi_noise.sh).
-	vec2 frame_r2 = fract(vec2(0.754877669, 0.569840296) * u_gi_camera.w);
+	vec2 frame_r2 = u_gi_jitter.xy;
 	vec2 noise = fract(GiIgnNoise(ivec2(frag_coord.xy)) + frame_r2);
 	vec2 jitter = (noise - vec2_splat(0.5)) * GI_INTERPOLATION_JITTER_TILES;
 	vec2 jittered_grid = grid + jitter;

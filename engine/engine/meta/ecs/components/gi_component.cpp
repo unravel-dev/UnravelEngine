@@ -104,6 +104,19 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "small dispatches are latency-bound and run the full trace either "
                             "way. Off traces every direction individually."},
         })
+        .data<&settings::world_probe_jitter>("world_probe_jitter"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "world_probe_jitter"},
+            entt::attribute{"pretty_name", "World Probe Jitter"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip",
+                            "World-probe rays jitter inside their texel and the probe atlas "
+                            "converges as a running mean over several seconds: removes the "
+                            "per-probe bias that shows as blotches on emissive-lit walls, at the "
+                            "price of a visible re-settle after every probe-window scroll while "
+                            "the camera travels. Off keeps the deterministic, instantly settled "
+                            "atlas."},
+        })
         .data<&settings::enable_reflections>("enable_reflections"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_reflections"},
@@ -416,6 +429,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     // probe_space_temporal / max_accum_frames are gone with the removed probe-space
     // temporal; stored keys in old scenes are simply not read (the sparse-load rule).
     try_save(ar, ser20::make_nvp("adaptive_rays", obj.adaptive_rays));
+    try_save(ar, ser20::make_nvp("world_probe_jitter", obj.world_probe_jitter));
     try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_save(ar, ser20::make_nvp("denoise_converged_early_out", obj.denoise_converged_early_out));
@@ -445,6 +459,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
     try_load(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     try_load(ar, ser20::make_nvp("adaptive_rays", obj.adaptive_rays));
+    try_load(ar, ser20::make_nvp("world_probe_jitter", obj.world_probe_jitter));
     try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
     try_load(ar, ser20::make_nvp("denoise_converged_early_out", obj.denoise_converged_early_out));

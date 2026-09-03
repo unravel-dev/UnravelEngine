@@ -107,6 +107,28 @@ public:
         return clipmap_instances_;
     }
 
+    /**
+     * @brief A world region whose accumulated lighting went stale recently: the union of the
+     *        bounds a changed placement occupied within the last GI_TEMPORAL_DIRTY_HOLD_FRAMES
+     *        frames (it moved, appeared, vanished or changed material).
+     *
+     * The temporal accumulators localise their fast-flush window to these regions instead of
+     * dropping the whole screen to the fast cap whenever anything anywhere moves - which is
+     * what one oscillating cube in a far cell used to do to every pixel of a still shot.
+     */
+    struct dirty_region
+    {
+        math::bbox bounds{};
+        /// Frame of the most recent change inside the region.
+        uint64_t last_change_frame = 0;
+    };
+
+    /// The regions changed within the hold window, rebuilt by @ref update_world.
+    auto get_dirty_regions() const -> const std::vector<dirty_region>&
+    {
+        return dirty_regions_;
+    }
+
     auto get_atlas() -> sdf_atlas&
     {
         return atlas_;
@@ -278,7 +300,25 @@ private:
      *        neutral albedo; it must resolve the same way the renderer does, or a bounce would
      *        tint light with a colour the surface is not actually painted.
      */
-    void add_instance(uint32_t header_index,
+    /**
+     * @brief Records a placement's pose for @ref get_dirty_regions: a new, moved, re-materialed
+     *        or vanished placement adds the bounds it occupied to its region history.
+     *
+     * @param identity Stable key of the placement (entity, submesh, placement index), so a pose
+     *        can be compared against the same placement's previous frame.
+     */
+    void track_placement(uint64_t identity,
+                         const math::mat4& local_to_world,
+                         const math::vec3& albedo,
+                         const math::vec3& emissive,
+                         const math::bbox& bounds);
+
+    /// Sweeps placements not seen this frame (their last bounds go stale too), drops history
+    /// older than the hold window and rebuilds @ref dirty_regions_.
+    void rebuild_dirty_regions();
+
+    void add_instance(uint64_t identity,
+                      uint32_t header_index,
                       const mesh_sdf& sdf,
                       const math::mat4& local_to_world,
                       const std::shared_ptr<mesh>& owner,
@@ -362,6 +402,20 @@ private:
     std::vector<instance> instances_;
     /// Clipmap composition input, rebuilt each frame alongside @ref instances_.
     std::vector<global_sdf_instance> clipmap_instances_;
+    /// Per-placement motion tracking behind @ref get_dirty_regions. `history` holds the
+    /// (frame, bounds) pairs the placement occupied within the hold window, newest last; a
+    /// placement that vanished keeps its entry until that history ages out.
+    struct tracked_placement
+    {
+        uint64_t placement_hash = 0;
+        math::bbox bounds{};
+        uint64_t seen_frame = 0;
+        /// Set once the sweep recorded the placement's disappearance; cleared if it returns.
+        bool swept = false;
+        std::vector<std::pair<uint64_t, math::bbox>> history;
+    };
+    std::unordered_map<uint64_t, tracked_placement> tracked_placements_;
+    std::vector<dirty_region> dirty_regions_;
     /// Keeps every mesh referenced by @ref clipmap_instances_ alive for the duration of
     /// composition. The composer borrows raw mesh_sdf pointers, so an asset unloading
     /// mid-compose would otherwise dangle.

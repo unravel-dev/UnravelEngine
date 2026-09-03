@@ -106,10 +106,15 @@ auto surface_cache_view::update_quiescence(uint64_t light_hash,
     {
         quiescence_content_epoch_ = epoch;
         changed = true;
-        lighting_changed = true;
     }
-    // The lighting-only counter (see get_lighting_quiet_frames): origins and probe cells
-    // below deliberately do not touch it - camera travel does not stale accumulated light.
+    // The lighting-only counter (see get_lighting_quiet_frames) follows the LIGHT SET alone.
+    // Content changes (an instance moved, appeared, vanished) used to reset it too, and that
+    // made the signal global: one oscillating cube anywhere in the clipmap held every pixel's
+    // temporal at the fast cap for the whole motion plus the settle (measured: a mover 30 m
+    // away doubled static-floor noise in a still shot). Instance changes are now REGION-LOCAL
+    // - surface_cache_system::get_dirty_bounds carries where they happened, and the temporal
+    // flushes only there. Origins and probe cells below deliberately do not touch the counter
+    // either - camera travel does not stale accumulated light.
     if(lighting_changed)
     {
         lighting_quiet_frames_ = 0;

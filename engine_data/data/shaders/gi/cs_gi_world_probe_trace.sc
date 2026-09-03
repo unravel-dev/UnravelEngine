@@ -21,11 +21,20 @@
 #define GI_LIGHT_VOXEL_READ
 #include "gi/gi_light_voxels.sh"
 #include "gi/gi_world_probes.sh"
+#include "gi/gi_noise.sh"
 
-/// rgb = radiance the ray saw, a = hitT (negative = sky/miss).
-IMAGE2D_WO(s_world_probe_radiance_out, rgba16f, 5);
+/// rgb = radiance, a = hitT (negative = sky/miss). READ-write: the radiance is a converging
+/// running mean over windows (GI_WORLD_PROBE_EMA_WINDOWS) - the read is this texel's own
+/// previous value; hitT stays the latest sample.
+IMAGE2D_RW(s_world_probe_radiance_out, rgba16f, 5);
 /// One packed cell id per probe slot across all cascades (GiWorldProbePackCell).
 BUFFER_RW(b_world_probe_cells, uint, 6);
+/// Complete windows accumulated per probe slot since its claim or the last fast window - the
+/// running mean's count (saturating at GI_WORLD_PROBE_EMA_WINDOWS).
+BUFFER_RW(b_world_probe_counts, uint, 7);
+/// xy = this window's R2 offset for the sub-texel direction jitter (double on the CPU, from
+/// the window index). zw unused.
+uniform vec4 u_gi_world_probe_jitter;
 /// The lighting pass's environment SH probe, for the sky at ray miss.
 SAMPLER2D(s_gi_env_sh, 14);
 /// The PARENT cascade's convolved irradiance, for scroll-in seeding. Read-only and a
@@ -94,6 +103,33 @@ void main()
 	// test itself then kills it at every read. Cost: one field sample per probe slice.
 	bool buried = SdfSampleClipmap(origin) < 0.0;
 	bool fresh = b_world_probe_cells[slot_index] != packed_cell;
+	// CONVERGING MEAN (GI_WORLD_PROBE_EMA_WINDOWS). The atlas used to be a windowed mean over
+	// FIXED texel-centre directions: zero variance, but BIASED per probe - a small emitter is
+	// skewered or missed per direction and neighbouring probes disagree, which entered the
+	// voxel bounce as the blotch field on emissive-lit walls. Directions now jitter inside
+	// their texel per window and each texel is a running mean over the last windows; a fresh
+	// claim or a fast (light/content change) window resets the count so changes still land
+	// in one window at write-through. Every thread reads the count before thread 0 advances it.
+	uint windows_seen = fresh ? 0u : b_world_probe_counts[slot_index];
+	bool fast_window = stratum_count > 1;
+	// The jitter/mean is a SETTING (u_gi_world_probe_jitter.z, gi_resolve_pass::settings::
+	// world_probe_jitter): off, every window is a fast one in this sense - texel centres at
+	// write-through, the deterministic atlas that settles the instant the scene does.
+	if(fast_window || u_gi_world_probe_jitter.z < 0.5)
+	{
+		windows_seen = 0u;
+	}
+	float mean_blend = 1.0 / float(min(windows_seen + 1u, uint(GI_WORLD_PROBE_EMA_WINDOWS)));
+	barrier();
+	if(thread == 0)
+	{
+		// A window completes on the frame that traces its last strata.
+		bool window_end = stratum_base + uint(stratum_count) >= uint(GI_WORLD_PROBE_WINDOW);
+		b_world_probe_counts[slot_index] =
+		    (fast_window || u_gi_world_probe_jitter.z < 0.5)
+		        ? 0u
+		        : (window_end ? min(windows_seen + 1u, 255u) : windows_seen);
+	}
 	if(fresh)
 	{
 		if(thread == 0)
@@ -178,7 +214,21 @@ void main()
 			imageStore(s_world_probe_radiance_out, texel, vec4_splat(0.0));
 			continue;
 		}
-		vec2 tile_uv = (vec2(texel - tile) + vec2_splat(0.5)) / float(GI_WORLD_PROBE_OCT_RADIANCE);
+		// Sub-texel direction jitter, per window (R2) and per atlas texel (IGN, so neighbouring
+		// probes and texels decorrelate): the running mean integrates the texel's whole solid
+		// angle instead of its centre ray. FAST windows (a light or content change) sample the
+		// texel CENTRE at write-through instead - deterministic and reactive, exactly the old
+		// atlas - because a jittered sample written through every 4 frames is a flickering
+		// probe, and content churn (movers) keeps the fast window open for as long as it lasts
+		// (measured: static surfaces noisier under movers than before the jitter). The
+		// converging mean resumes from that deterministic base when the scene settles.
+		// A probe's FIRST window (fresh claim, or the window after a fast one) samples the
+		// centres too: the mean has no base yet and a lone jittered sample written through is
+		// a noisy probe for a whole window (measured as a pop at the level-0 scroll).
+		bool deterministic_window = fast_window || windows_seen == 0u || u_gi_world_probe_jitter.z < 0.5;
+		vec2 texel_jitter = deterministic_window ? vec2_splat(0.5)
+		                                         : fract(GiIgnNoise(texel) + u_gi_world_probe_jitter.xy);
+		vec2 tile_uv = (vec2(texel - tile) + texel_jitter) / float(GI_WORLD_PROBE_OCT_RADIANCE);
 		vec3 direction = GiOctDecode(tile_uv);
 		// Coarse world structure: cascade tier only, called DIRECTLY (near_field 0 makes the
 		// tiered entry point equivalent), with two probe-specific hardenings against the
@@ -195,14 +245,21 @@ void main()
 		                                true, 0.0, true);
 		vec3 radiance;
 		float hit_t;
+		// The stored distance is the CLAMPED depth the convolve consumes (misses store the clamp
+		// itself: a miss and a hit beyond GI_WORLD_PROBE_DEPTH_CLAMP are the same moments and
+		// the same sky share), always positive, so it can ride the running mean like the
+		// radiance - under the direction jitter a "latest sample" depth made the Chebyshev
+		// moments flicker per window and tripped the cage-visibility marches (measured: Light
+		// Voxels 2x). Zero stays the never-measured mark (fresh clear, buried probes).
+		float depth_clamp = GI_WORLD_PROBE_DEPTH_CLAMP * GiWorldProbeSpacing(level);
 		if(!hit.hit)
 		{
 			radiance = eval_radiance_sh(s_gi_env_sh, direction);
-			hit_t = -1.0;
+			hit_t = depth_clamp;
 		}
 		else
 		{
-			hit_t = hit.t;
+			hit_t = min(hit.t, depth_clamp);
 			vec3 hit_position = origin + direction * hit.t;
 			vec3 hit_normal = hit.normal;
 			if(dot(hit_normal, direction) > 0.0)
@@ -210,7 +267,8 @@ void main()
 				hit_normal = -hit_normal;
 			}
 			vec3 voxel_radiance;
-			if(!GiLightVoxelRead(hit_position, hit_normal, voxel_radiance))
+			// Cross-faded across cascade levels like the gather's read (GI_LIGHT_VOXEL_FADE_VOXELS).
+			if(!GiLightVoxelReadBlend(hit_position, hit_normal, GI_LIGHT_VOXEL_FADE_VOXELS, voxel_radiance))
 			{
 				// Occluded but unmeasured: honest darkness, never fabricated energy - the
 				// sealed room converges black through exactly this branch.
@@ -219,10 +277,25 @@ void main()
 			radiance = voxel_radiance;
 		}
 		// The gather's per-ray firefly clamp (GI_MAX_RAY_RADIANCE), applied at the one other
-	// stochastic-ray tier: emissive is stored unbounded in the light voxels, and a single
-	// stratum ray skewering a small bright emitter otherwise holds its full radiance in
-	// the windowed mean for a whole window - the probe-side shimmer near emissives.
-	imageStore(s_world_probe_radiance_out, texel,
-	           vec4(min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE)), hit_t));
+		// stochastic-ray tier: emissive is stored unbounded in the light voxels, and a single
+		// stratum ray skewering a small bright emitter otherwise holds its full radiance in
+		// the mean for a whole window - the probe-side shimmer near emissives.
+		vec3 stored = min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
+		float stored_t = hit_t;
+		BRANCH
+		if(mean_blend < 1.0)
+		{
+			// Running mean over windows: the previous value is this texel's own, written by
+			// this thread's slot one window ago (the seed or the clear on a fresh claim -
+			// both replaced at write-through while the count is zero). A never-measured depth
+			// (0) is not averaged into.
+			vec4 previous = imageLoad(s_world_probe_radiance_out, texel);
+			stored = mix(GiFiniteOrZero(previous.xyz), stored, mean_blend);
+			if(previous.w > 0.0)
+			{
+				stored_t = mix(previous.w, hit_t, mean_blend);
+			}
+		}
+		imageStore(s_world_probe_radiance_out, texel, vec4(stored, stored_t));
 	}
 }

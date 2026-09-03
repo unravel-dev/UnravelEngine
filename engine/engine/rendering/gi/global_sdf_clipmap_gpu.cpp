@@ -185,13 +185,16 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
         world_probe_cells_ = gfx::create_dynamic_index_buffer(probe_count,
                                                               BGFX_BUFFER_COMPUTE_READ_WRITE |
                                                                   BGFX_BUFFER_INDEX32);
+        world_probe_counts_ = gfx::create_dynamic_index_buffer(probe_count,
+                                                               BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                                   BGFX_BUFFER_INDEX32);
         world_probe_atlas_params_[0] = 1.0f / float(gutter_w);
         world_probe_atlas_params_[1] = 1.0f / float(gutter_h);
         world_probe_atlas_params_[2] = float(gutter_w);
         world_probe_atlas_params_[3] = float(gutter_h);
         if(!world_probe_radiance_ || !world_probe_radiance_->is_valid() || !world_probe_irradiance_ ||
            !world_probe_irradiance_->is_valid() || !world_probe_depth_ || !world_probe_depth_->is_valid() ||
-           !bgfx::isValid(world_probe_cells_))
+           !bgfx::isValid(world_probe_cells_) || !bgfx::isValid(world_probe_counts_))
         {
             APPLOG_ERROR("[SurfaceCache] Failed to create the world probe resources.");
             shutdown();
@@ -234,6 +237,11 @@ void global_sdf_clipmap_gpu::shutdown()
     {
         gfx::destroy(world_probe_cells_);
         world_probe_cells_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+    }
+    if(bgfx::isValid(world_probe_counts_))
+    {
+        gfx::destroy(world_probe_counts_);
+        world_probe_counts_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
     }
     world_probe_cell_count_ = 0;
     needs_buffer_seed_ = false;

@@ -1,5 +1,10 @@
 #include "surface_cache_system.h"
 
+#include <engine/rendering/gi/gi_constants.h>
+
+#include <algorithm>
+#include <cstring>
+
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/profiler/profiler.h>
@@ -327,7 +332,122 @@ auto surface_cache_system::take_texture_mean_captures(uint32_t budget)
     return captures;
 }
 
-void surface_cache_system::add_instance(uint32_t header_index,
+void surface_cache_system::track_placement(uint64_t identity,
+                                            const math::mat4& local_to_world,
+                                            const math::vec3& albedo,
+                                            const math::vec3& emissive,
+                                            const math::bbox& bounds)
+{
+    // FNV-1a over the pose and the material the attribute voxels bake: either moving makes the
+    // light this placement bounced (or emitted) stale wherever it stood. Component by
+    // component, never over sizeof: math::vec3 carries alignment padding whose bytes are
+    // indeterminate, and hashing them made every static placement read as moved every frame
+    // (measured: 163 regions per frame in a parked scene, the whole screen at the fast cap).
+    uint64_t hash = 0xcbf29ce484222325ull;
+    const auto mix_float = [&hash](float value)
+    {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        hash = (hash ^ uint64_t(bits)) * 0x100000001b3ull;
+    };
+    for(int column = 0; column < 4; ++column)
+    {
+        for(int row = 0; row < 4; ++row)
+        {
+            mix_float(local_to_world[column][row]);
+        }
+    }
+    mix_float(albedo.x);
+    mix_float(albedo.y);
+    mix_float(albedo.z);
+    mix_float(emissive.x);
+    mix_float(emissive.y);
+    mix_float(emissive.z);
+    auto [it, inserted] = tracked_placements_.try_emplace(identity);
+    auto& tracked = it->second;
+    if(inserted || tracked.swept)
+    {
+        // A placement appearing (or re-appearing after a sweep) lights and occludes where
+        // nothing did: its bounds are stale from the first frame.
+        tracked.history.emplace_back(world_frame_, bounds);
+    }
+    else if(tracked.placement_hash != hash)
+    {
+        // Both the vacated spot and the new one: the light the placement bounced where it WAS
+        // is exactly the trail the flush exists for.
+        tracked.history.emplace_back(world_frame_, tracked.bounds);
+        tracked.history.emplace_back(world_frame_, bounds);
+    }
+    tracked.placement_hash = hash;
+    tracked.bounds = bounds;
+    tracked.seen_frame = world_frame_;
+    tracked.swept = false;
+}
+
+void surface_cache_system::rebuild_dirty_regions()
+{
+    dirty_regions_.clear();
+    const uint64_t hold = uint64_t(gi::GI_TEMPORAL_DIRTY_HOLD_FRAMES);
+    for(auto it = tracked_placements_.begin(); it != tracked_placements_.end();)
+    {
+        auto& tracked = it->second;
+        if(tracked.seen_frame != world_frame_ && !tracked.swept)
+        {
+            // Vanished this frame: the spot it left is stale like a move's vacated spot.
+            // Recorded once; the entry is erased below once the history ages out.
+            tracked.history.emplace_back(world_frame_, tracked.bounds);
+            tracked.swept = true;
+        }
+        // Age out the history beyond the hold window.
+        auto& history = tracked.history;
+        history.erase(std::remove_if(history.begin(),
+                                     history.end(),
+                                     [&](const std::pair<uint64_t, math::bbox>& entry)
+                                     {
+                                         return world_frame_ - entry.first > hold;
+                                     }),
+                      history.end());
+        if(history.empty())
+        {
+            if(tracked.swept)
+            {
+                it = tracked_placements_.erase(it);
+                continue;
+            }
+            ++it;
+            continue;
+        }
+        dirty_region region;
+        region.bounds.reset();
+        for(const auto& [frame, bounds] : history)
+        {
+            // Skip an inverted (never set) box; add_point of its sentinels would span the
+            // world.
+            if(bounds.min.x > bounds.max.x)
+            {
+                continue;
+            }
+            region.bounds.add_point(bounds.min);
+            region.bounds.add_point(bounds.max);
+            region.last_change_frame = std::max(region.last_change_frame, frame);
+        }
+        if(!(region.bounds.min.x > region.bounds.max.x))
+        {
+            dirty_regions_.push_back(region);
+        }
+        ++it;
+    }
+    // Most recent first, so a consumer with a fixed budget keeps the regions still flushing.
+    std::sort(dirty_regions_.begin(),
+              dirty_regions_.end(),
+              [](const dirty_region& a, const dirty_region& b)
+              {
+                  return a.last_change_frame > b.last_change_frame;
+              });
+}
+
+void surface_cache_system::add_instance(uint64_t identity,
+                                         uint32_t header_index,
                                          const mesh_sdf& sdf,
                                          const math::mat4& local_to_world,
                                          const std::shared_ptr<mesh>& owner,
@@ -374,6 +494,7 @@ void surface_cache_system::add_instance(uint32_t header_index,
         inst.world_bounds.add_point(math::vec3(world_corner));
     }
     instances_.push_back(inst);
+    track_placement(identity, local_to_world, inst.albedo, inst.emissive, inst.world_bounds);
     // The clipmap composer borrows a raw mesh_sdf pointer, so the owning mesh has to be kept
     // alive for as long as the composition input list references it.
     clipmap_keepalive_.push_back(owner);
@@ -645,9 +766,17 @@ void surface_cache_system::update_world(scene& scn)
                 // Resolved once per submesh rather than per placement: every instance of a
                 // submesh is drawn with the same material.
                 const auto mat = resolve_submesh_material(mdl, model_comp, *mesh_ptr, submesh_index);
+                // Placement identity for the dirty-region tracker: entity, submesh, placement
+                // index - stable across frames for as long as the placement exists.
+                const uint64_t entity_key = uint64_t(static_cast<uint32_t>(entity)) << 32u;
                 if(!submesh_transforms.has_transforms(submesh_index))
                 {
-                    add_instance(header_index, sdf, world_transform, mesh_ptr, mat);
+                    add_instance(entity_key | (uint64_t(submesh_index) << 16u),
+                                 header_index,
+                                 sdf,
+                                 world_transform,
+                                 mesh_ptr,
+                                 mat);
                     continue;
                 }
                 const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
@@ -662,7 +791,13 @@ void surface_cache_system::update_world(scene& scn)
                     {
                         continue;
                     }
-                    add_instance(header_index, sdf, *transform_ptr, mesh_ptr, mat);
+                    add_instance(entity_key | (uint64_t(submesh_index) << 16u) |
+                                     (uint64_t(instance_index) & 0xFFFFu),
+                                 header_index,
+                                 sdf,
+                                 *transform_ptr,
+                                 mesh_ptr,
+                                 mat);
                 }
             }
         });
@@ -671,6 +806,7 @@ void surface_cache_system::update_world(scene& scn)
     // outgoing ones still hold their bricks, and succeed on the retry once this has run. Sweeping
     // first would need the whole scene walked twice to know what to keep.
     release_unused_fields();
+    rebuild_dirty_regions();
     atlas_.flush();
     light_buffer_.update(scn);
     upload_instances();

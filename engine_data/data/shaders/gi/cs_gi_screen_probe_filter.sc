@@ -41,6 +41,8 @@ SHARED float s_nb_baseline[9];
 /// 64 directions ran GiOctDecode (a normalize among other things) 4096 times per probe for
 /// 64 distinct values each thread already computed once.
 SHARED vec3 s_dir[GI_PROBE_DIR_COUNT];
+/// Every texel's solid angle (GiOctTexelSolidAngle): the octahedral map is not equal-area.
+SHARED float s_omega[GI_PROBE_DIR_COUNT];
 
 NUM_THREADS(8, 8, 1)
 void main()
@@ -59,6 +61,7 @@ void main()
 	vec2 dir_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
 	vec3 dir = GiOctDecode(dir_uv);
 	s_dir[dir_index] = dir;
+	s_omega[dir_index] = GiOctTexelSolidAngle(local, GI_PROBE_DIR_EDGE);
 	if(dir_index < 9)
 	{
 		int ox = dir_index % 3 - 1;
@@ -163,20 +166,25 @@ void main()
 		b_gi_probes[base + uint(local.x)] =
 		    vec4(block_luminance[0], block_luminance[1], block_luminance[2], block_luminance[3]);
 	}
-	// Cosine convolution to irradiance at THIS texel's normal direction - equal-solid-angle
-	// octahedral texels make the plain cosine-weighted sum exact up to quadrature. The sample
-	// directions come from shared memory: each is the decode some thread already did.
+	// Cosine convolution to irradiance at THIS texel's normal direction, each sample weighted
+	// by its texel's SOLID ANGLE (the octahedral map is not equal-area - see
+	// GiOctTexelSolidAngle) and normalised by sum(cos x omega), so a uniform radiance field
+	// integrates to exactly E/pi = L (the equal-weight sum over N/4 under-counted by ~8% and
+	// biased individual directions by up to 47%). The sample directions come from shared
+	// memory: each is the decode some thread already did.
 	vec3 normal = dir;
 	vec4 irradiance = vec4_splat(0.0);
 	if(center_valid)
 	{
+		float cos_omega_sum = 0.0;
 		for(int d = 0; d < GI_PROBE_DIR_COUNT; ++d)
 		{
-			float cosine = max(dot(normal, s_dir[d]), 0.0);
-			irradiance.xyz += s_filtered[d].xyz * cosine;
-			irradiance.w += s_filtered[d].w * cosine;
+			float weight = max(dot(normal, s_dir[d]), 0.0) * s_omega[d];
+			irradiance.xyz += s_filtered[d].xyz * weight;
+			irradiance.w += s_filtered[d].w * weight;
+			cos_omega_sum += weight;
 		}
-		float norm = float(GI_PROBE_DIR_COUNT) * 0.25;
+		float norm = max(cos_omega_sum, 1e-6);
 		irradiance.xyz /= norm;
 		// w becomes the measured fraction of the cosine lobe: texels the trace refused (the
 		// below-tangent cap of an invalid neighbour set) hand their share to integration's

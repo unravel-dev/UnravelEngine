@@ -100,6 +100,10 @@ SAMPLER2D(s_gi_env_sh, 14);
 
 /// xyz = camera position (world-probe window centre), w = frame index.
 uniform vec4 u_gi_camera;
+/// xy = this frame's R2 offset for the sub-texel cone jitter, computed in DOUBLE on the CPU:
+/// fract(R2 x float(frame)) here had 1/128 precision after ~1e5 frames and the jitter
+/// collapsed to a few positions in long sessions. zw unused.
+uniform vec4 u_gi_jitter;
 /// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs.
 /// y > 0 = RAY TIER debug: rays paint which tier answered instead of radiance
 /// (green = screen commit, red = SDF hit, blue = world-probe/sky completion; the interp pass
@@ -410,7 +414,8 @@ vec4 GiTraceScreenProbeCone(int slot, vec2 texel_base, float texel_span, int sam
 							// history, or a depth mismatch: the voxel read answers exactly as
 							// before.
 							bool screen_lit = GiReadHistory(hit_position, radiance);
-							if(!screen_lit && !GiLightVoxelRead(hit_position, hit_normal, radiance))
+							if(!screen_lit && !GiLightVoxelReadBlend(hit_position, hit_normal,
+							                                         GI_LIGHT_VOXEL_FADE_VOXELS, radiance))
 							{
 								// Occluded but unmeasured: honest darkness within the
 								// cascades - for sub-voxel detail (railings, awning cloth)
@@ -465,7 +470,13 @@ vec4 GiTraceScreenProbeCone(int slot, vec2 texel_base, float texel_span, int sam
 					{
 						radiance = vec3_splat(0.0);
 					}
-					else if(!GiLightVoxelRead(hit_position, hit_normal, radiance))
+					// Cross-faded across cascade levels (GI_LIGHT_VOXEL_FADE_VOXELS): the
+					// first-success walk switched from 0.25 m to 0.5 m voxels at a knife edge
+					// the camera dragged across every surface (measured pops at the level-0
+					// re-snap). The blend mixes two MEASURED answers only; a hole still
+					// falls through to the walk.
+					else if(!GiLightVoxelReadBlend(hit_position, hit_normal,
+					                               GI_LIGHT_VOXEL_FADE_VOXELS, radiance))
 					{
 						// Occluded but unmeasured within the cascades: honest darkness (the
 						// sealed-room branch) - exactly what the old fallback's covered
@@ -582,7 +593,7 @@ void main()
 			// Dispatch-uniform hoists: the mip-0 resolution the screen tier reads per
 			// sample, and the frame's R2 offset the jitter derives per ray.
 			s_screen_size = HizGetDepthMipResolution(s_hiz, 0);
-			s_frame_r2 = fract(vec2(0.754877666, 0.569840291) * u_gi_camera.w);
+			s_frame_r2 = u_gi_jitter.xy;
 		}
 		if(probe_active)
 		{

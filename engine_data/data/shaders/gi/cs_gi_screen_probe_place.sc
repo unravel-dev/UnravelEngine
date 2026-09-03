@@ -49,11 +49,20 @@ void GiCommitScreenProbe(uint record, vec3 world_position, vec3 world_normal, ve
 	float answered_voxel;
 	int level = SdfFindClipmapLevel(world_position, blend, answered_voxel);
 	int clamped = level >= SDF_CLIPMAP_LEVEL_COUNT ? SDF_CLIPMAP_LEVEL_COUNT - 1 : level;
+	// The shortened-ray range follows the cascade's own cross-fade: at a level face it used to
+	// jump from 2 x 2 m to 2 x 4 m outright, moving the voxel/probe energy split of every ray
+	// at a knife edge the camera drags across the scene. Blending the spacing over the field's
+	// blend band makes the range continuous in the anchor's position.
+	float spacing = GiWorldProbeSpacing(clamped);
+	if(blend > 0.0 && clamped + 1 < SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		spacing = mix(spacing, GiWorldProbeSpacing(clamped + 1), blend);
+	}
 	b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 1.0);
 	b_gi_probes[record + uint(GI_PROBE_META2)] =
 	    vec4(world_normal, length(world_position - u_gi_camera.xyz));
 	b_gi_probes[record + uint(GI_PROBE_ORIGIN)] =
-	    vec4(world_position + world_normal * lift, 2.0 * GiWorldProbeSpacing(clamped));
+	    vec4(world_position + world_normal * lift, 2.0 * spacing);
 	// ANCHOR.w is reserved (the removed probe-space temporal's walk flag); kept zero for
 	// layout stability.
 	b_gi_probes[record + uint(GI_PROBE_ANCHOR)] = vec4(uv, depth, 0.0);

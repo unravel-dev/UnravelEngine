@@ -32,6 +32,10 @@ public:
         /// Hash of the resident light set; a change halves the probe refresh window for one
         /// full window (the DDGI event pattern, plan section 8).
         uint64_t light_hash = 0;
+        /// gi_resolve_pass::settings::world_probe_jitter: sub-texel direction jitter plus the
+        /// converging running mean. Off = fixed texel centres written through (the
+        /// deterministic atlas).
+        bool jitter_directions = false;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -62,9 +66,15 @@ private:
         /// radiance atlas the dispatch writes, so the sampler binding is legal).
         gfx::program::uniform_ptr s_world_probe_irradiance_seed;
         gfx::program::uniform_ptr u_gi_world_probe_seed_atlas;
+        /// xy = the window's R2 offset for the sub-texel direction jitter (double on the CPU).
+        gfx::program::uniform_ptr u_gi_world_probe_jitter;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(),
+                          u_gi_world_probe_jitter,
+                          "u_gi_world_probe_jitter",
+                          gfx::uniform_type::Vec4);
             cache_uniform(program.get(),
                           s_world_probe_irradiance_seed,
                           "s_world_probe_irradiance_seed",

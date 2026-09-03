@@ -43,7 +43,7 @@ BUFFER_RW(b_surface_list, uint, 9);
 /// slot's six face slabs only when the slot's world CELL changed hands (detected through
 /// b_attr_cells) - a surviving cell keeps the radiance it accumulated across any number of
 /// level re-snaps, which is what stops camera motion from pulsing the bounce light dark.
-IMAGE3D_WO(s_light_voxels_out, rgba16f, 7);
+IMAGE3D_RW(s_light_voxels_out, rgba16f, 7);
 /// One packed cell id per attribute slot per level (GiLightVoxelPackCell).
 BUFFER_RW(b_attr_cells, uint, 11);
 /// Per-texture mean colours (cs_gi_texture_mean.sc); an instance's albedo is its base colour
@@ -118,15 +118,49 @@ void main()
 	uint packed_cell_id = GiLightVoxelPackCell(cell, u_attr_level);
 	int cell_index =
 	    ((u_attr_level * resolution + slot.z) * resolution + slot.y) * resolution + slot.x;
+	vec3 center = (vec3(cell) + vec3_splat(0.5)) * u_attr_voxel_size;
 	if(b_attr_cells[cell_index] != packed_cell_id)
 	{
 		b_attr_cells[cell_index] = packed_cell_id;
+		// PARENT SEED (GI_LIGHT_VOXEL_SEED_ALPHA): a slot claimed by a new cell starts from the
+		// PARENT level's radiance for the same point instead of black. The parent scrolls half
+		// as often, so its cell is valid here; the seed is stored premultiplied under a
+		// provenance alpha the readers accept as measured and the relight EMA does not (so the
+		// first relight writes through and replaces it). Zero-claimed cells stayed black until
+		// their first relight - up to one rotation - a dark frontier dragged through the near
+		// field every level-0 re-snap. The probes seed from their parent cascade the same way.
+		int parent_level = u_attr_level + 1;
+		bool parent_ok = false;
+		ivec3 parent_slot = ivec3(0, 0, 0);
+		if(parent_level < SDF_CLIPMAP_LEVEL_COUNT)
+		{
+			vec4 parent_data = u_sdf_clipmap_levels[parent_level];
+			if(parent_data.w > 0.0)
+			{
+				float parent_voxel = parent_data.w * 2.0;
+				ivec3 parent_cell = GiLightVoxelCell(center, parent_voxel);
+				parent_slot = GiLightVoxelSlot(parent_cell);
+				int parent_index =
+				    ((parent_level * resolution + parent_slot.z) * resolution + parent_slot.y) * resolution +
+				    parent_slot.x;
+				parent_ok = b_attr_cells[parent_index] == GiLightVoxelPackCell(parent_cell, parent_level);
+			}
+		}
 		for(int face = 0; face < 6; ++face)
 		{
-			imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face), vec4_splat(0.0));
+			vec4 seed = vec4_splat(0.0);
+			if(parent_ok)
+			{
+				vec4 parent_face = imageLoad(s_light_voxels_out, GiLightVoxelTexel(parent_slot, parent_level, face));
+				// Only a MEASURED parent face seeds; culled/seeded/never-measured ones stay zero.
+				if(parent_face.w > 0.5)
+				{
+					seed = vec4(parent_face.xyz * GI_LIGHT_VOXEL_SEED_ALPHA, GI_LIGHT_VOXEL_SEED_ALPHA);
+				}
+			}
+			imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face), seed);
 		}
 	}
-	vec3 center = (vec3(cell) + vec3_splat(0.5)) * u_attr_voxel_size;
 	float band = GI_SURFACE_VOXEL_BAND * u_attr_voxel_size;
 	// Band gate on the composed field, ALONE (transcribes the CPU reference, including the
 	// removal of the gradient gate - see compose_level_attributes for the thin-wall-valley

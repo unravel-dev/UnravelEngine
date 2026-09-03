@@ -130,13 +130,14 @@ public:
         return quiescence_frames_;
     }
 
-    /// Frames since the LIGHTING-relevant subset changed: the light hash and the content
-    /// epoch only. The epoch is already suppressed while origins move (see the fingerprint
-    /// cache), so camera travel does NOT reset this - it fires exactly when accumulated
-    /// lighting went stale (an instance moved / appeared / changed material, a light
-    /// changed). The temporal accumulators key their fast-flush window off this: a camera
-    /// pan keeps full temporal depth, an edit drops to the fast caps until the stale
-    /// energy has provably washed out (quiescence_settle_frames of fast-rate blending).
+    /// Frames since the LIGHT SET changed (the light-buffer hash). Content changes - an
+    /// instance moved, appeared, vanished, changed material - are deliberately NOT in this
+    /// signal any more: they are region-local and carried by
+    /// surface_cache_system::get_dirty_bounds, which the temporal tests per pixel. A light
+    /// change is genuinely global (a sun or a room light reaches everything), so the temporal
+    /// accumulators key their screen-wide fast-flush window off this alone: a camera pan keeps
+    /// full temporal depth, a light edit drops to the fast caps until the stale energy has
+    /// provably washed out (quiescence_settle_frames of fast-rate blending).
     auto get_lighting_quiet_frames() const -> uint32_t
     {
         return lighting_quiet_frames_;

@@ -43,6 +43,9 @@ uniform vec4 u_gi_denoise_params2;
 #define u_gi_denoise_low_count_boost u_gi_denoise_params2.x
 #define u_gi_denoise_converged_cap   u_gi_denoise_params2.y
 #define u_gi_denoise_luma_floor      u_gi_denoise_params2.z
+/// w > 0 = REVEAL pass (GI_DENOISE_REVEAL_STEP): only pixels with an accumulation count below
+/// this value are filtered; converged pixels pass through.
+#define u_gi_denoise_reveal_count    u_gi_denoise_params2.w
 
 uniform vec4 u_gi_denoise_camera;
 
@@ -95,6 +98,14 @@ void main()
 	bool use_luma_stop = u_gi_denoise_luma_phi > 0.0;
 	vec4 moments = texture2DLod(s_gi_moments, uv, 0.0);
 	float count = max(moments.z, 1.0);
+	// REVEAL PASS gate (the ReBLUR history-fix idea): the wide extra pass serves only pixels
+	// whose running mean is still short - a disocclusion, a reveal - and costs converged
+	// pixels one moments fetch.
+	if(u_gi_denoise_reveal_count > 0.0 && count >= u_gi_denoise_reveal_count)
+	{
+		gl_FragColor = center;
+		return;
+	}
 	// DIVIDED BY THE COUNT, and that is the whole reason the stop tightens over time. The moments
 	// accumulate the RAW per-frame gather, so this variance is that of a SINGLE sample -- a
 	// constant of the scene and the ray count, which does not decay however long the camera is

@@ -677,7 +677,72 @@
       " over-rejects). The historical 0.25 also absorbed MOVING receivers failing the test;"       \
       " those now skip it via the velocity buffer's object split, so the slack tightened to"       \
       " 0.1 - less stale-light bleed across depth edges under camera motion. Live-tunable as"      \
-      " gi_resolve_pass::settings::reprojection_tolerance (this is its default)")
+      " gi_resolve_pass::settings::reprojection_tolerance (this is its default)")                \
+    X(GI_TEMPORAL_DIRTY_HOLD_FRAMES, 48,                                                           \
+      "frames", "derived: how long a moved instance's region keeps the temporal's FAST cap"       \
+      " after its last change. The stale light a mover leaves behind reaches the gather"          \
+      " through the world side with serialised latency (recompose <= GI_CLIPMAP_EDIT_THROTTLE"    \
+      "_FRAMES 8, relight rotation 4 with the EMA at write-through, probe fast window 4), so"      \
+      " the last stale gather lands ~16 frames after the object stops; flushing it at the fast"    \
+      " rate to ~1% takes another 32 (0.875^32). Before this the trigger was GLOBAL: any moving"   \
+      " instance anywhere pinned every pixel's slow lane at the fast cap for the motion plus 256"  \
+      " frames (measured: a cube 30 m away doubled static-floor noise in a still shot) - the"      \
+      " region-local hold keeps the flush where the stale light is")                             \
+    X(GI_TEMPORAL_DIRTY_MAX_BOUNDS, 16,                                                            \
+      "regions", "derived: the uniform-array budget for changed-instance regions (two vec4s"      \
+      " each) the temporal tests per pixel. Beyond it the pass falls back to the global fast"      \
+      " cap, exactly the pre-localisation behaviour - a crowd of movers is a scene that IS"        \
+      " changing everywhere")                                                                     \
+    X(GI_LIGHT_VOXEL_FADE_VOXELS, 8.0f,                                                            \
+      "voxels of the finer covering level", "derived: the gather's and probes' light-voxel"        \
+      " reads cross-fade between cascade levels over this band - GI_REFLECTION_CASCADE_FADE"      \
+      "_VOXELS's role for irradiance. The first-success walk switched hit radiance from 0.25 m"   \
+      " to 0.5 m voxels at a knife edge 8 m from the camera, and that edge sweeps every surface"  \
+      " as the camera translates (measured: 50-60% brightness pops in a dark corridor at the"     \
+      " level-0 re-snap). Twice the field's blend band, like the reflection tier")                 \
+    X(GI_LIGHT_VOXEL_SEED_ALPHA, 0.25f,                                                            \
+      "unitless", "derived: the provenance alpha of a light-voxel face SEEDED from the parent"    \
+      " level when its cell scrolls into a window. Above the readers' 1e-4 measured threshold"    \
+      " (the seed is read, premultiplied, like any measurement) and below the relight EMA's 0.5"  \
+      " measured test, so the first relight writes through and replaces the seed outright."       \
+      " Zero-claimed cells stayed black until their first relight - up to one 4-frame rotation"   \
+      " - dragging a dark frontier through the near field every 2 m of travel")                   \
+    X(GI_DENOISE_REVEAL_STEP, 8,                                                                   \
+      "texels", "derived: a-trous spacing of the REVEAL pass run after the three compute"          \
+      " passes (steps 1, 2, 4) for pixels whose accumulation count is still low - the ReBLUR"     \
+      " history-fix idea (blur radius from accumulated frames). Twice the last regular step,"     \
+      " so a just-revealed pixel is reconstructed from a 32-texel reach instead of 8")             \
+    X(GI_DENOISE_REVEAL_COUNT, 8,                                                                  \
+      "accumulated frames", "derived: the reveal pass passes through pixels at or above this"     \
+      " count - one fast window, past which the running mean has averaged enough gathers that"    \
+      " the regular chain's reach suffices (measured: revealed regions stayed 3-4x noisier than"  \
+      " converged ones for 14+ frames with the fixed reach)")                                     \
+    X(GI_REFLECTION_ROUGH_WINDOW_SCALE, 4.0f,                                                      \
+      "x the reflection temporal window", "published: Lumen reflections accumulate 32 frames"     \
+      " (Reflections.Temporal.MaxFramesAccumulated) against the gather's 10; the window here"      \
+      " scales from the settings value at mirror roughness to this multiple at"                   \
+      " GI_REFLECTION_ROUGH_CUTOFF, where the lobe is widest and one VNDF ray per frame"          \
+      " integrates slowest. Sharp reflections keep the short window and its responsiveness")      \
+    X(GI_REFLECTION_RESOLVE_START, 0.1f,                                                           \
+      "GGX roughness", "derived: the pre-temporal spatial resolve of the 3x3 raw neighbourhood"   \
+      " (stochastic-SSR's resolve stage, edge-stopped, blend-free) fades in from here to"          \
+      " GI_REFLECTION_GATHER_FADE_START. Below it the lobe is tight enough that neighbours"        \
+      " sample different content and the resolve would only blur; above it one ray per pixel"     \
+      " cannot resolve a small emitter under the lobe (measured: speckle on brushed metal at"     \
+      " roughness 0.35), and nine samples per frame is the cheapest variance reduction the pass"  \
+      " already fetches")                                                                          \
+    X(GI_WORLD_PROBE_EMA_WINDOWS, 16,                                                              \
+      "probe windows", "derived: the world-probe atlas is now a converging running mean over"     \
+      " this many complete windows (256 frames) of directions JITTERED inside their texel, in"     \
+      " place of the zero-variance mean over fixed texel centres. Fixed centres are BIASED per"    \
+      " probe - a small emitter is skewered or missed per direction and neighbouring probes"       \
+      " disagree - which entered the voxel bounce as the blotch field on emissive-lit walls"       \
+      " (measured: temporal std 1.24 vs 0.11 in sunlit cells). A capped mean has a variance"      \
+      " floor of sigma^2 / (2N - 1): four windows left ~40% of the per-sample spread as a"          \
+      " standing probe flicker (measured); sixteen leaves ~18% while converging within ~3 s,"      \
+      " and the quiescence gate freezes the settled atlas. Light and content changes bypass"       \
+      " the mean entirely: their fast windows sample texel centres at write-through - the"         \
+      " deterministic atlas of before - and the mean resumes from it when the scene settles")
 // clang-format on
 
 namespace unravel::gi

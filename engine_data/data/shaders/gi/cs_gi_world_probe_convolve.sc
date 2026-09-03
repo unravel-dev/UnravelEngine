@@ -39,6 +39,9 @@ SHARED vec4 s_irradiance[GI_WORLD_PROBE_OCT_IRRADIANCE * GI_WORLD_PROBE_OCT_IRRA
 SHARED vec2 s_depth[GI_WORLD_PROBE_OCT_IRRADIANCE * GI_WORLD_PROBE_OCT_IRRADIANCE];
 SHARED vec4 s_radiance[RADIANCE_TEXELS];
 SHARED vec3 s_sample_dir[RADIANCE_TEXELS];
+/// Per-texel solid angle (GiOctTexelSolidAngle): the octahedral map is not equal-area, and
+/// both the irradiance sum and the depth lobe weight by it.
+SHARED float s_sample_omega[RADIANCE_TEXELS];
 
 NUM_THREADS(8, 8, 1)
 void main()
@@ -68,18 +71,22 @@ void main()
 		s_radiance[d] = texelFetch(s_world_probe_radiance, radiance_tile + offset, 0);
 		s_sample_dir[d] =
 		    GiOctDecode((vec2(offset) + vec2_splat(0.5)) / float(GI_WORLD_PROBE_OCT_RADIANCE));
+		s_sample_omega[d] = GiOctTexelSolidAngle(offset, GI_WORLD_PROBE_OCT_RADIANCE);
 	}
 	barrier();
 	ivec2 texel = local;
 	vec3 normal = GiOctDecode((vec2(texel) + vec2_splat(0.5)) / float(GI_WORLD_PROBE_OCT_IRRADIANCE));
 	vec3 irradiance = vec3_splat(0.0);
 	float sky = 0.0;
+	float cos_omega_sum = 0.0;
 	float depth_mean = 0.0;
 	float depth_mean_sq = 0.0;
 	float depth_weight = 0.0;
 	// The depth lobe is numerically dead outside its ~34-degree cone: cos^50 < 1e-4 below
 	// cos = 0.829, under RG16F's own precision, so those terms are skipped. The irradiance
-	// cosine sum is untouched.
+	// cosine sum is untouched. Every term carries the texel's solid angle (the octahedral map
+	// is not equal-area) and the irradiance normalises by sum(cos x omega): a uniform field
+	// integrates exactly (the equal-weight sum over N/4 under-counted by ~5% at 16x16).
 	LOOP
 	for(int d = 0; d < RADIANCE_TEXELS; ++d)
 	{
@@ -89,8 +96,13 @@ void main()
 		{
 			continue;
 		}
-		irradiance += sample_value.xyz * cosine;
-		sky += (sample_value.w < 0.0 ? 1.0 : 0.0) * cosine;
+		float omega = s_sample_omega[d];
+		float cos_omega = cosine * omega;
+		irradiance += sample_value.xyz * cos_omega;
+		// The trace stores the CLAMPED depth (a miss stores the clamp itself), so sky is
+		// "at the clamp"; a never-measured texel holds 0.
+		sky += (sample_value.w >= 0.999 * depth_clamp ? 1.0 : 0.0) * cos_omega;
+		cos_omega_sum += cos_omega;
 		if(cosine > 0.829)
 		{
 			// Exact repeat-squaring for the shipped exponent (50 = 32 + 16 + 2); any other
@@ -109,13 +121,14 @@ void main()
 			{
 				lobe = pow(cosine, GI_WORLD_PROBE_DEPTH_SHARPNESS);
 			}
-			float depth = sample_value.w < 0.0 ? depth_clamp : min(sample_value.w, depth_clamp);
+			float depth = min(sample_value.w, depth_clamp);
+			lobe *= omega;
 			depth_mean += depth * lobe;
 			depth_mean_sq += depth * depth * lobe;
 			depth_weight += lobe;
 		}
 	}
-	float norm = float(RADIANCE_TEXELS) * 0.25;
+	float norm = max(cos_omega_sum, 1e-6);
 	vec4 result = vec4(irradiance / norm, sky / norm);
 	s_irradiance[lane] = result;
 	vec2 moments = depth_weight > 1e-6 ? vec2(depth_mean, depth_mean_sq) / depth_weight

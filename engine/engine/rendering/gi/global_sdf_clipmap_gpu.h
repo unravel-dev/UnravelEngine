@@ -189,6 +189,13 @@ public:
         return world_probe_cell_count_;
     }
 
+    /// One uint per probe slot: complete windows accumulated by the trace's running mean
+    /// (GI_WORLD_PROBE_EMA_WINDOWS); zero-seeded by the compose pass's buffer seed.
+    auto get_world_probe_counts() const -> gfx::dynamic_index_buffer_handle
+    {
+        return world_probe_counts_;
+    }
+
     /**
      * @brief True until the compose pass seeds the freshly created cell/cursor buffers.
      *
@@ -284,6 +291,7 @@ private:
     gfx::dynamic_index_buffer_handle surface_list_{bgfx::kInvalidHandle};
     gfx::dynamic_index_buffer_handle attr_cells_{bgfx::kInvalidHandle};
     gfx::dynamic_index_buffer_handle world_probe_cells_{bgfx::kInvalidHandle};
+    gfx::dynamic_index_buffer_handle world_probe_counts_{bgfx::kInvalidHandle};
     uint32_t world_probe_cell_count_ = 0;
     bool needs_buffer_seed_ = false;
     bool needs_texture_clear_ = false;

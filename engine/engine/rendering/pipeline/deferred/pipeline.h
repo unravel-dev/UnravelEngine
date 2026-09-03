@@ -187,7 +187,8 @@ public:
     void run_gi_world_probe_pass(const camera& camera,
                                  gfx::render_view& rview,
                                  surface_cache_system& surface_cache,
-                                 surface_cache_view& view_cache);
+                                 surface_cache_view& view_cache,
+                                 const gi_settings& gi);
 
     /// World-space specular tier into RBUFFER, layered UNDER SSR. No-op unless a
     /// camera run with GI reflections enabled.

@@ -74,6 +74,14 @@ public:
         /// temporal integrates it (the removed temporal's blob pathology cannot occur
         /// without blending). Off = every texel traces its own ray, the quality ceiling.
         bool adaptive_rays = false;
+        /// World-probe rays JITTER inside their octahedral texel per window and the atlas
+        /// becomes a converging running mean (GI_WORLD_PROBE_EMA_WINDOWS): removes the
+        /// per-probe bias of fixed texel-centre rays (a small emitter skewered or missed per
+        /// direction - the blotch field on emissive-lit walls) at the price of a settle after
+        /// every probe-window scroll: scrolled-in probes re-converge over seconds and dark,
+        /// probe-lit regions drift while they do (measured 2-3x the post-translation frame
+        /// change). Off = the deterministic atlas: zero variance, biased, settles at once.
+        bool world_probe_jitter = false;
         /// World-space specular tier (plan phase 9), layered under SSR: rough lobes read the
         /// world-probe radiance atlas, sharp ones trace (screen first, SDF + light voxels
         /// beyond) - contributing the off-screen reflections SSR cannot have.
@@ -204,6 +212,15 @@ private:
                          const run_params& params,
                          const usize32_t& target_size) -> history_targets;
 
+    /**
+     * @brief Binds the surface cache's dirty regions (changed placements, held for
+     *        GI_TEMPORAL_DIRTY_HOLD_FRAMES) for the temporal's per-pixel fast cap.
+     * @param margin Soft falloff distance around each region, metres.
+     * @return true when more regions changed than the uniform budget holds - the caller then
+     *         falls back to the screen-wide fast cap.
+     */
+    auto bind_dirty_regions(const run_params& params, float margin) -> bool;
+
     /// Blends this frame's gather into the reprojected history. Returns the accumulated texture.
     /// The split fallback: the deliverable path fuses this blend onto the integrate pass.
     auto run_temporal(gfx::render_view& rview,
@@ -244,6 +261,10 @@ private:
         /// program stands in when it is off or this program failed to load.
         gpu_program::ptr adaptive_program;
         gfx::program::uniform_ptr u_gi_camera;
+        /// xy = this frame's R2 offset for the cone jitter, computed in double on the CPU:
+        /// fract(R2 x float(frame)) in the shader lost the jitter to float precision after
+        /// ~1e5 frames (a half-hour session).
+        gfx::program::uniform_ptr u_gi_jitter;
         gfx::program::uniform_ptr u_gi_screen_trace;
         gfx::program::uniform_ptr u_gi_prev_view_proj;
         gfx::program::uniform_ptr u_gi_probe_params;
@@ -272,6 +293,7 @@ private:
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_gi_camera, "u_gi_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_jitter, "u_gi_jitter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_screen_trace, "u_gi_screen_trace", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
@@ -452,6 +474,8 @@ private:
         /// serves when temporal is disabled.
         gpu_program::ptr fused_program;
         gfx::program::uniform_ptr u_gi_camera;
+        /// xy = the frame's R2 offset for the interpolation jitter (see trace_program).
+        gfx::program::uniform_ptr u_gi_jitter;
         gfx::program::uniform_ptr u_gi_intensity;
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
@@ -477,6 +501,7 @@ private:
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_gi_camera, "u_gi_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_intensity, "u_gi_intensity", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_jitter, "u_gi_jitter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
@@ -528,6 +553,11 @@ private:
         gfx::program::uniform_ptr u_gi_prev_inv_view_proj;
         gfx::program::uniform_ptr u_gi_temporal_params;
         gfx::program::uniform_ptr u_gi_temporal_camera;
+        /// x = number of dirty regions bound (0..GI_TEMPORAL_DIRTY_MAX_BOUNDS), y = the soft
+        /// margin around each region in metres; the regions themselves ride
+        /// u_gi_temporal_bounds as (min, max) vec4 pairs.
+        gfx::program::uniform_ptr u_gi_temporal_dirty;
+        gfx::program::uniform_ptr u_gi_temporal_bounds;
         gfx::program::uniform_ptr s_gi_current;
         gfx::program::uniform_ptr s_gi_history;
         gfx::program::uniform_ptr s_gi_depth;
@@ -547,6 +577,12 @@ private:
                           gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_gi_temporal_params, "u_gi_temporal_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_temporal_camera, "u_gi_temporal_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_temporal_dirty, "u_gi_temporal_dirty", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_gi_temporal_bounds,
+                          "u_gi_temporal_bounds",
+                          gfx::uniform_type::Vec4,
+                          2u * uint16_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS));
             cache_uniform(program.get(), s_gi_current, "s_gi_current", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_history, "s_gi_history", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);

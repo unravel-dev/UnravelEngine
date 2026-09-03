@@ -8,6 +8,8 @@
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 
+#include <cmath>
+
 namespace unravel
 {
 namespace
@@ -407,6 +409,15 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                         camera_position.y,
                                         camera_position.z,
                                         float(gfx::get_render_frame())};
+            // The frame's R2 offset in DOUBLE: fract(R2 x float(frame)) in the shader had
+            // 1/128 precision after ~1e5 frames and 1/16 after 1e6, so a long session's cone
+            // and interpolation jitter collapsed to a few positions (the reflection pass
+            // already computes its offset here for the same reason).
+            const double frame_index = double(gfx::get_render_frame());
+            const float gi_jitter[4] = {float(std::fmod(0.754877666 * frame_index, 1.0)),
+                                        float(std::fmod(0.569840291 * frame_index, 1.0)),
+                                        0.0f,
+                                        0.0f};
             const auto& view_clipmap = params.view_cache->get_clipmap();
             const float wp_base_spacing =
                 view_clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
@@ -558,6 +569,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(trace_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(trace_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(trace_program_.u_gi_camera, gi_camera);
+                gfx::set_uniform(trace_program_.u_gi_jitter, gi_jitter);
                 gfx::set_uniform(trace_program_.u_gi_screen_trace, screen_trace_params);
                 gfx::set_uniform(trace_program_.u_gi_prev_view_proj, gather_prev_view_proj.get_matrix());
                 gfx::set_uniform(trace_program_.u_gi_light_voxel_params, light_voxel_params);
@@ -641,6 +653,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(integrate_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(integrate_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(integrate_program_.u_gi_camera, gi_camera);
+                gfx::set_uniform(integrate_program_.u_gi_jitter, gi_jitter);
                 const float gi_intensity[4] = {math::max(s.intensity, 0.0f), 0.0f, 0.0f, 0.0f};
                 gfx::set_uniform(integrate_program_.u_gi_intensity, gi_intensity);
                 gfx::set_uniform(integrate_program_.u_gi_world_probe_params, wp_params);
@@ -693,9 +706,14 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     // old hot cap of GI_TEMPORAL_MAX_FRAMES, decayed as the visible
                     // second-long trail (see the constant's justification) - so the global
                     // signal owns the whole flush.
+                    // REGION-LOCAL for instance changes: the changed placements' bounds ride
+                    // u_gi_temporal_bounds and the kernel drops to the fast cap only around
+                    // them (soft over one probe spacing); more regions than the budget holds
+                    // falls back to the screen-wide cap - a scene changing everywhere.
+                    const bool dirty_overflow = bind_dirty_regions(params, wp_base_spacing);
                     const float slow_cap =
-                        params.view_cache->get_lighting_quiet_frames() <
-                                surface_cache_view::quiescence_settle_frames
+                        (dirty_overflow || params.view_cache->get_lighting_quiet_frames() <
+                                               surface_cache_view::quiescence_settle_frames)
                             ? float(gi::GI_TEMPORAL_FAST_FRAMES)
                             : s.temporal_slow_frames;
                     const float temporal_params[4] = {s.reprojection_tolerance,
@@ -886,7 +904,101 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
         gfx::discard();
         source = result;
     }
+    // REVEAL PASS (the ReBLUR history-fix idea): pixels whose accumulation count is still
+    // below GI_DENOISE_REVEAL_COUNT get one more a-trous pass at twice the widest regular
+    // spacing; converged pixels pass through at the cost of one moments fetch. A just-revealed
+    // region otherwise showed one to eight frames of a 64-ray gather at the fixed 8-texel
+    // reach and stayed 3-4x noisier than its surroundings for a dozen frames (measured).
+    if(moments && s.enable_temporal && s.denoise_passes > 0)
+    {
+        const bool into_a = (s.denoise_passes % 2) == 0;
+        const auto& fbo = into_a ? fbo_a : fbo_b;
+        const auto& result = into_a ? target_a : target_b;
+        const float denoise_params[4] = {float(gi::GI_DENOISE_REVEAL_STEP),
+                                         s.denoise_normal_power,
+                                         s.denoise_plane_tolerance,
+                                         s.denoise_luma_phi};
+        const float denoise_params2[4] = {s.denoise_low_count_boost,
+                                          0.0f,
+                                          math::max(s.denoise_luma_floor, 0.0f),
+                                          float(gi::GI_DENOISE_REVEAL_COUNT)};
+        gfx::render_pass pass("GI/Denoise Reveal");
+        pass.bind(fbo.get());
+        pass.set_view_proj(params.cam->get_view(), denoise_projection);
+        denoise_program_.program->begin();
+        gfx::set_texture(denoise_program_.s_gi_input, 0, source);
+        gfx::set_texture(denoise_program_.s_gi_depth, 1, params.g_buffer->get_texture(4));
+        gfx::set_texture(denoise_program_.s_gi_normal, 2, params.g_buffer->get_texture(1));
+        gfx::set_texture(denoise_program_.s_gi_moments, 3, moments);
+        gfx::set_uniform(denoise_program_.u_gi_denoise_params, denoise_params);
+        gfx::set_uniform(denoise_program_.u_gi_denoise_texel, texel);
+        gfx::set_uniform(denoise_program_.u_gi_denoise_params2, denoise_params2);
+        gfx::set_uniform(denoise_program_.u_gi_denoise_camera, denoise_camera);
+        auto topology = gfx::clip_quad(1.0f);
+        gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        gfx::submit(pass.id, denoise_program_.program->native_handle());
+        gfx::set_state(BGFX_STATE_DEFAULT);
+        denoise_program_.program->end();
+        gfx::discard();
+        source = result;
+    }
     return source;
+}
+
+auto gi_resolve_pass::bind_dirty_regions(const run_params& params, float margin) -> bool
+{
+    constexpr uint32_t max_regions = uint32_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS);
+    float bounds[max_regions * 2u * 4u] = {};
+    uint32_t count = 0;
+    bool overflow = false;
+    if(params.surface_cache != nullptr)
+    {
+        const auto& regions = params.surface_cache->get_dirty_regions();
+        overflow = regions.size() > size_t(max_regions);
+        // Most recent first (the system sorts them), so the budget keeps the regions still
+        // flushing when it overflows - the global cap covers the rest that frame anyway.
+        for(const auto& region : regions)
+        {
+            if(count >= max_regions)
+            {
+                break;
+            }
+            float* slot = bounds + size_t(count) * 8u;
+            slot[0] = region.bounds.min.x;
+            slot[1] = region.bounds.min.y;
+            slot[2] = region.bounds.min.z;
+            slot[3] = 0.0f;
+            slot[4] = region.bounds.max.x;
+            slot[5] = region.bounds.max.y;
+            slot[6] = region.bounds.max.z;
+            slot[7] = 0.0f;
+            ++count;
+        }
+    }
+    const float dirty_params[4] = {float(count), math::max(margin, 1e-3f), 0.0f, 0.0f};
+    gfx::set_uniform(temporal_program_.u_gi_temporal_dirty, dirty_params);
+    // Attribution log, throttled, for the OVER-BUDGET case only: it means more placements
+    // changed than the region budget holds and the screen-wide fast cap is back. Legitimate
+    // for a scene load or a crowd; a parked scene reporting it means a placement's pose or
+    // material hash churns every frame (measured once: vec3 padding bytes in the hash).
+    if(overflow && (gfx::get_render_frame() % 120u) == 0u && params.surface_cache != nullptr)
+    {
+        const auto& regions = params.surface_cache->get_dirty_regions();
+        const auto& first = regions.front().bounds;
+        APPLOG_DEBUG("[SurfaceCache] {} dirty GI region(s) this frame{}; first spans ({:.1f}, {:.1f}, {:.1f}) "
+                     "to ({:.1f}, {:.1f}, {:.1f}), last change frame {}.",
+                     regions.size(),
+                     overflow ? " (over budget: screen-wide fast cap)" : "",
+                     first.min.x,
+                     first.min.y,
+                     first.min.z,
+                     first.max.x,
+                     first.max.y,
+                     first.max.z,
+                     regions.front().last_change_frame);
+    }
+    gfx::set_uniform(temporal_program_.u_gi_temporal_bounds, bounds, uint16_t(max_regions * 2u));
+    return overflow;
 }
 
 auto gi_resolve_pass::acquire_history(gfx::render_view& rview,
@@ -992,10 +1104,15 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
     const auto prev_inv_view_proj = glm::inverse(prev_view_proj.get_matrix());
     gfx::set_uniform(temporal_program_.u_gi_prev_inv_view_proj, prev_inv_view_proj);
     // Lighting-change-aware slow cap, exactly as the fused form (see the note there): while
-    // the lighting signal is hot the slow lane collapses to the FAST cap so a moved source's
-    // dim penumbra - invisible to the 3-sigma detector - flushes instead of trailing.
+    // the light set is hot the slow lane collapses to the FAST cap so a moved source's dim
+    // penumbra - invisible to the 3-sigma detector - flushes instead of trailing; instance
+    // changes flush region-locally through the dirty bounds.
+    const float dirty_margin = params.view_cache->get_clipmap().get_level(0).voxel_size *
+                               float(gi::GI_WORLD_PROBE_DIVISOR);
+    const bool dirty_overflow = bind_dirty_regions(params, dirty_margin);
     const float slow_cap =
-        params.view_cache->get_lighting_quiet_frames() < surface_cache_view::quiescence_settle_frames
+        (dirty_overflow || params.view_cache->get_lighting_quiet_frames() <
+                               surface_cache_view::quiescence_settle_frames)
             ? float(gi::GI_TEMPORAL_FAST_FRAMES)
             : s.temporal_slow_frames;
     const float temporal_params[4] = {s.reprojection_tolerance,
