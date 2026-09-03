@@ -126,7 +126,12 @@
       " level 1 the 0.25 m bias EQUALS a 25 cm door slab or baffle, which the tier then"           \
       " reports lit for any sun within 60 degrees of grazing (depth through the slab ="            \
       " thickness x cos(incidence) < bias). Level 0 sits 2x below that slab; CSM cascade 0 -"      \
-      " the only split the tier binds - covers the near frustum slice where level 0 lives")        \
+      " the only split the tier binds - covers the near frustum slice where level 0 lives."       \
+      " Coarser levels inside the level-0 window inherit its faces instead (the light-voxel"     \
+      " kernel's fine-level pull), so the map's answer reaches them without a tap of their own;"  \
+      " a lifted single-tap variant for the coarse levels was measured and rejected (a second"   \
+      " launch per cascade cost +0.4 ms, and one launch under cascade 0 lit thin-walled sealed"   \
+      " cells)")                                                                                   \
     X(GI_WORLD_PROBE_DIVISOR, 16,                                                                  \
       "SDF voxels per probe cell", "published: [SDFGI] PROBE_DIVISOR - 9^3 probe lattice per"      \
       " cascade at resolution 128")                                                                \
@@ -693,13 +698,30 @@
       " each) the temporal tests per pixel. Beyond it the pass falls back to the global fast"      \
       " cap, exactly the pre-localisation behaviour - a crowd of movers is a scene that IS"        \
       " changing everywhere")                                                                     \
-    X(GI_LIGHT_VOXEL_FADE_VOXELS, 8.0f,                                                            \
+    X(GI_LIGHT_VOXEL_FADE_VOXELS, 16.0f,                                                            \
       "voxels of the finer covering level", "derived: the gather's and probes' light-voxel"        \
       " reads cross-fade between cascade levels over this band - GI_REFLECTION_CASCADE_FADE"      \
       "_VOXELS's role for irradiance. The first-success walk switched hit radiance from 0.25 m"   \
       " to 0.5 m voxels at a knife edge 8 m from the camera, and that edge sweeps every surface"  \
       " as the camera translates (measured: 50-60% brightness pops in a dark corridor at the"     \
-      " level-0 re-snap). Twice the field's blend band, like the reflection tier")                 \
+      " level-0 re-snap). Four times the field's blend band (4 m at level 0): inside the"          \
+      " level-0 window the coarser level's faces are inherited means of the finer ones, so the"   \
+      " band mixes matching data at no leak cost, and what residual the levels still disagree"    \
+      " on (fattening beyond the window) becomes a gradient over metres of travel instead of a"   \
+      " step")                                                                                     \
+    X(GI_LIGHT_VOXEL_INHERIT_CONTRAST, 4.0f,                                                      \
+      "luminance ratio", "derived: a coarse light-voxel face inherits the mean of its measured"   \
+      " finer children only while their brightest and darkest lie within this ratio. Sun"        \
+      " against sky is 10x or more, relight noise between children well under 2x, so children"   \
+      " that disagree by more straddle a lighting edge (a sun pool's rim, a thin wall with a"      \
+      " lit and a dark side) that the coarse face cannot hold as one value; the coarse relight"  \
+      " answers at the face centre instead. Not the guard against the exterior leaking in - a"   \
+      " lone exposed child on the far side of a wall agrees with itself; that case is closed by"  \
+      " running the pull only after this level's own exposure gates (see the kernel)")            \
+    X(GI_LIGHT_VOXEL_INHERIT_FLOOR, 0.0001f,                                                       \
+      "radiance luminance", "derived: the darkest child's luminance is floored here before the"  \
+      " contrast ratio, so a black child beside any lit one reads as disagreement while two"      \
+      " near-black children (below the readers' own 1e-4 measured threshold) still agree")       \
     X(GI_LIGHT_VOXEL_SEED_ALPHA, 0.25f,                                                            \
       "unitless", "derived: the provenance alpha of a light-voxel face SEEDED from the parent"    \
       " level when its cell scrolls into a window. Above the readers' 1e-4 measured threshold"    \
@@ -742,7 +764,15 @@
       " standing probe flicker (measured); sixteen leaves ~18% while converging within ~3 s,"      \
       " and the quiescence gate freezes the settled atlas. Light and content changes bypass"       \
       " the mean entirely: their fast windows sample texel centres at write-through - the"         \
-      " deterministic atlas of before - and the mean resumes from it when the scene settles")
+      " deterministic atlas of before - and the mean resumes from it when the scene settles")     \
+    X(GI_WORLD_PROBE_BLEND_BAND, 0.5f,                                                             \
+      "probe spacings", "derived: width of the cross-fade between a cascade's cage and the"        \
+      " next, measured inward from the usable extent (3 spacings). Half a spacing is one sixth"   \
+      " of the extent; Godot smoothsteps over two of eight, DDGI21 over the last full cell. One"  \
+      " spacing was measured and reverted: the wider band admitted half-visible coarse cages"     \
+      " and brightened a corridor interior even with the far blend scaled by the near cage's"     \
+      " visible fraction. The irradiance cascade, the radiance completion and the light-voxel"    \
+      " bounce twin all read it - they must stay in step")
 // clang-format on
 
 namespace unravel::gi

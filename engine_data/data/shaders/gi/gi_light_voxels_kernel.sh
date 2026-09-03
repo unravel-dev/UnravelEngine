@@ -396,18 +396,19 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 			continue;
 		}
 		// The blend band, computed up front: the far mask below belongs to the stamp.
-		float band = 0.5 * spacing;
+		float band = GI_WORLD_PROBE_BLEND_BAND * spacing;
 		float blend = saturate((largest - (half_extent - band)) / band);
 		bool wants_far = blend > 0.0 && level + 1 < SDF_CLIPMAP_LEVEL_COUNT;
 		vec3 near_irradiance;
 		float near_sky;
+		float near_visible = 0.0;
 		bool answered;
 		bool restamp = false;
 		uint mask = 0u;
 		if(!memo_live)
 		{
 			answered = GiWorldProbeIrradiance(position, face_direction, face_direction, level,
-			                                  near_irradiance, near_sky);
+			                                  near_irradiance, near_sky, near_visible);
 		}
 		else
 		{
@@ -428,7 +429,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 			}
 			restamp = !hit;
 			answered = GiWorldProbeIrradianceMasked(position, face_direction, face_direction,
-			                                        level, mask, near_irradiance, near_sky);
+			                                        level, mask, near_irradiance, near_sky, near_visible);
 		}
 		if(!answered)
 		{
@@ -461,6 +462,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 		{
 			vec3 far_irradiance;
 			float far_sky;
+			float far_visible = 0.0;
 			bool far_answered;
 			BRANCH if(!memo_live || restamp)
 			{
@@ -468,7 +470,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 				// cost, so churning generations (window re-snaps under camera motion) never
 				// pay the 8-corner far march on top of the near one they already marched.
 				far_answered = GiWorldProbeIrradiance(position, face_direction, face_direction,
-				                                      level + 1, far_irradiance, far_sky);
+				                                      level + 1, far_irradiance, far_sky, far_visible);
 			}
 			else
 			{
@@ -492,12 +494,14 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 				}
 				far_answered = GiWorldProbeIrradianceMasked(position, face_direction,
 				                                            face_direction, level + 1, far_mask,
-				                                            far_irradiance, far_sky);
+				                                            far_irradiance, far_sky, far_visible);
 			}
 			if(far_answered)
 			{
-				near_irradiance = mix(near_irradiance, far_irradiance, blend);
-				near_sky = mix(near_sky, far_sky, blend);
+				// Scaled by the near cage's visible fraction, as the cascade read does.
+				float far_mix = blend * near_visible;
+				near_irradiance = mix(near_irradiance, far_irradiance, far_mix);
+				near_sky = mix(near_sky, far_sky, far_mix);
 			}
 		}
 		out_irradiance = GiFiniteOrZero(near_irradiance);
@@ -658,6 +662,46 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 	// LOOP: unrolled, this replicates the largest body in the GI frame - the light loop with
 	// its sphere traces, the cavity march, the 8-corner probe chain - six times, with the
 	// register pressure that implies.
+	// FINE-LEVEL INHERITANCE. A coarse cell whose centre lies inside the next finer level's
+	// composed window has eight finer children that are relit with the finer field, the
+	// finer verdict scale and (at level 0) the shadow-mapped sun. Relighting the coarse cell at
+	// its own scale gave a DIFFERENT answer for the same surface - fatter occluders, coarser
+	// cavity marches, the traced sun - and the camera-following window boundary dragged that
+	// disagreement across the scene as a lighting step. Where both levels exist the coarse
+	// face now takes the mean of its measured children (eight image loads in place of the
+	// shadow rays and the bounce read), so the cross-fade band blends identical values;
+	// once the finer window moves on, the coarse relight resumes from the inherited value
+	// through the EMA - a drift over a rotation window, not a step. Children never measured
+	// (no surface at the finer scale) leave the coarse relight to answer, and so does a face
+	// this level's own gates cull: the pull runs AFTER the gates (see the branch below
+	// them), because a finer child exposed on the far side of the geometry is a legitimate
+	// measurement the coarse face must not carry (measured: a bright full-height column at
+	// a convex wall corner, 3x its level, from one child face that looked onto the sunlit
+	// exterior). Children that DISAGREE beyond GI_LIGHT_VOXEL_INHERIT_CONTRAST also leave
+	// it to the relight: a parent straddling a lighting edge (a sun pool's rim, a thin wall
+	// with a lit and a dark side) cannot hold both as one value, and the relight's answer
+	// at the face centre is what the coarse field can represent there.
+	bool inherit_fine = false;
+	vec4 fine_level_data = vec4_splat(0.0);
+	float fine_attr_voxel = 0.0;
+	ivec3 fine_window_base = ivec3(0, 0, 0);
+	if(level > 0u)
+	{
+		fine_level_data = u_sdf_clipmap_levels[level - 1u];
+		if(fine_level_data.w > 0.0)
+		{
+			fine_attr_voxel = fine_level_data.w * 2.0;
+			// The finer window's cells: the level origin is attr-voxel aligned (the snap).
+			fine_window_base = ivec3(floor(fine_level_data.xyz / fine_attr_voxel + vec3_splat(0.5)));
+			// The parent's eight children occupy two finer cells per axis from 2 x cell; all
+			// must lie inside the finer window for the inheritance to be complete.
+			ivec3 child_base = cell * 2;
+			ivec3 span_lo = child_base - fine_window_base;
+			ivec3 span_hi = span_lo + ivec3(1, 1, 1);
+			inherit_fine = all(greaterThanEqual(span_lo, ivec3(0, 0, 0))) &&
+			               all(lessThan(span_hi, ivec3(attr_res, attr_res, attr_res)));
+		}
+	}
 	LOOP
 	for(int face = 0; face < 6; ++face)
 	{
@@ -845,6 +889,58 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 			imageStore(s_light_voxels_out, texel, vec4(0.0, 0.0, 0.0, 1.0));
 			continue;
 		}
+		// FINE-LEVEL INHERITANCE, after every gate on purpose: the face has passed this
+		// level's own exposure verdict (tunnel guard, cavity cone), so a coarse face that
+		// this level culls stays culled even when a finer child of it is exposed on the
+		// far side of the geometry (measured: at a convex wall corner one child face of a
+		// coarse cell looked out onto the sunlit exterior, and inheriting it before the
+		// gates painted a bright column on the interior side, 3x its level).
+		BRANCH
+		if(inherit_fine)
+		{
+			vec3 child_sum = vec3_splat(0.0);
+			float child_measured = 0.0;
+			float child_lum_min = 1e30;
+			float child_lum_max = 0.0;
+			LOOP
+			for(int child = 0; child < 8; ++child)
+			{
+				ivec3 child_cell = cell * 2 + ivec3(child & 1, (child >> 1) & 1, (child >> 2) & 1);
+				vec4 child_face = imageLoad(
+				    s_light_voxels_out,
+				    GiLightVoxelTexel(GiLightVoxelSlot(child_cell), int(level) - 1, face));
+				if(child_face.w > 0.5)
+				{
+					child_sum += child_face.xyz;
+					child_measured += 1.0;
+					float child_lum = GiStatsLuminance(child_face.xyz);
+					child_lum_min = min(child_lum_min, child_lum);
+					child_lum_max = max(child_lum_max, child_lum);
+				}
+			}
+			bool children_agree =
+			    child_lum_max <= GI_LIGHT_VOXEL_INHERIT_CONTRAST * max(child_lum_min, GI_LIGHT_VOXEL_INHERIT_FLOOR);
+			if(child_measured > 0.0 && children_agree)
+			{
+				// Stamp the face half like the zero-radiance skip: the gates' verdict is
+				// generation-stable, so later rotations serve it from the memo instead of
+				// marching again (the probe half stays unpopulated - nothing read it).
+				if(face_memo_live && !face_hit)
+				{
+					imageStore(s_gi_vis_memo, texel,
+					           uvec4(GiWorldProbeVisMemoPackFaceOnly(face_half,
+					                                                 u_vis_memo_generation),
+					                 0u, 0u, 0u));
+				}
+				imageStore(s_light_voxels_out, texel,
+				           vec4(GiFiniteOrZero(child_sum / child_measured), 1.0));
+				continue;
+			}
+			// Children all culled, or measured but disagreeing, or none at all (the finer
+			// level has no surface here): the coarse relight below answers. The all-culled
+			// case no longer forces a cull - this level's own gates above already judged the
+			// face exposed, and the finer children's cones are a different scale's verdict.
+		}
 		vec3 irradiance = GiEvalDirectLightingVoxel(position + light_jitter,
 		                                            direction,
 		                                            max(level_data.w, 0.01),
@@ -935,7 +1031,10 @@ void main()
 	// a contiguous stretch of the same compacted list.
 	//
 	// The level rides gl_WorkGroupID.y, which keeps it provably wave-uniform (scalar loads
-	// for the per-level state) and removes two integer divisions by a non-constant.
+	// for the per-level state) and removes two integer divisions by a non-constant. One
+	// launch for every level ON PURPOSE: a launch per level (so each could bind its own CSM
+	// cascade) measured 2x this pass's cost and even two launches cost +0.4 ms - the
+	// serialised tail of each launch on the shared light volume.
 	uint level = gl_WorkGroupID.y;
 	float stats_change = 0.0;
 	float stats_faces = 0.0;

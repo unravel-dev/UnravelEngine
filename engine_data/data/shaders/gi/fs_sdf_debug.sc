@@ -437,8 +437,9 @@ void main()
 				}
 				vec3 near_irradiance;
 				float near_sky;
+				float debug_visible;
 				if(!GiWorldProbeIrradiance(hit_position, hit.normal, -ray_dir, probe_level,
-				                           near_irradiance, near_sky))
+				                           near_irradiance, near_sky, debug_visible))
 				{
 					continue;
 				}

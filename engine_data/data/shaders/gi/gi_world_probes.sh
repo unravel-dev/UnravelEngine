@@ -411,10 +411,16 @@ uint GiWorldProbeVisMemoFarMask(uint texel_value)
  */
 bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direction, int level,
                                     bool use_mask, uint visibility_mask,
-                                    out vec3 out_irradiance, out float out_sky_fraction)
+                                    out vec3 out_irradiance, out float out_sky_fraction, out float out_visible)
 {
 	out_irradiance = vec3_splat(0.0);
 	out_sky_fraction = 0.0;
+	// The cage's VISIBLE fraction: the weight that survived the field's verdict over the weight
+	// the statistical chain granted. 0 for a sealed cage. The cascade readers scale their
+	// blend toward the coarser cage by it, so a fine cage the field sealed never admits a
+	// coarse cage that straddles the wall (measured: the completion blend lit a thin-walled
+	// sealed room and a narrow corridor from the level-1 cages outside them).
+	out_visible = 0.0;
 	float spacing = GiWorldProbeSpacing(level);
 	vec3 biased = GiWorldProbeBiasedQuery(position, normal, view_direction, spacing);
 	vec3 grid = biased / spacing;
@@ -544,25 +550,27 @@ bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direct
 	}
 	out_irradiance = sum / weight_sum;
 	out_sky_fraction = sky_sum / weight_sum;
+	out_visible = covered_sum > 1e-5 ? saturate(weight_sum / covered_sum) : 1.0;
 	return true;
 }
 
 /// The default cage read: field verdicts marched here, gated to the Chebyshev-ambiguous band.
 bool GiWorldProbeIrradiance(vec3 position, vec3 normal, vec3 view_direction, int level,
-                            out vec3 out_irradiance, out float out_sky_fraction)
+                            out vec3 out_irradiance, out float out_sky_fraction, out float out_visible)
 {
 	return GiWorldProbeIrradianceInternal(position, normal, view_direction, level, false, 0u,
-	                                      out_irradiance, out_sky_fraction);
+	                                      out_irradiance, out_sky_fraction, out_visible);
 }
 
 /// The memoised cage read (light-voxel bounce): field verdicts supplied as the per-corner
 /// bitmask GiWorldProbeCageMask filled, applied to every probe in place of the gated march.
 bool GiWorldProbeIrradianceMasked(vec3 position, vec3 normal, vec3 view_direction, int level,
                                   uint visibility_mask,
-                                  out vec3 out_irradiance, out float out_sky_fraction)
+                                  out vec3 out_irradiance, out float out_sky_fraction, out float out_visible)
 {
 	return GiWorldProbeIrradianceInternal(position, normal, view_direction, level, true,
-	                                      visibility_mask, out_irradiance, out_sky_fraction);
+	                                      visibility_mask, out_irradiance, out_sky_fraction,
+	                                      out_visible);
 }
 
 /**
@@ -590,21 +598,28 @@ bool GiWorldProbeIrradianceCascade(vec3 position, vec3 normal, vec3 view_directi
 		}
 		vec3 near_irradiance;
 		float near_sky;
-		if(!GiWorldProbeIrradiance(position, normal, view_direction, level, near_irradiance, near_sky))
+		float near_visible;
+		if(!GiWorldProbeIrradiance(position, normal, view_direction, level, near_irradiance, near_sky,
+		                           near_visible))
 		{
 			continue;
 		}
 		// Blend toward the next level over the outer half of the last usable cell.
-		float band = 0.5 * spacing;
+		float band = GI_WORLD_PROBE_BLEND_BAND * spacing;
 		float blend = saturate((largest - (half_extent - band)) / band);
 		if(blend > 0.0 && level + 1 < SDF_CLIPMAP_LEVEL_COUNT)
 		{
 			vec3 far_irradiance;
 			float far_sky;
-			if(GiWorldProbeIrradiance(position, normal, view_direction, level + 1, far_irradiance, far_sky))
+			float far_visible;
+			if(GiWorldProbeIrradiance(position, normal, view_direction, level + 1, far_irradiance, far_sky,
+			                          far_visible))
 			{
-				near_irradiance = mix(near_irradiance, far_irradiance, blend);
-				near_sky = mix(near_sky, far_sky, blend);
+				// Scaled by the NEAR cage's visible fraction: the finer field is the authority, so
+				// a sealed fine cage admits nothing from a coarse one that straddles the wall.
+				float far_mix = blend * near_visible;
+				near_irradiance = mix(near_irradiance, far_irradiance, far_mix);
+				near_sky = mix(near_sky, far_sky, far_mix);
 			}
 		}
 		out_irradiance = GiFiniteOrZero(near_irradiance);
@@ -662,13 +677,14 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 		// camera drags across every surface (measured as brightness pops on translation). The
 		// far cage is evaluated by the SAME loop body (k = 1) so fxc instantiates the corner
 		// walk once (the one-call-site contract of the trace mega-bodies).
-		float band = 0.5 * level_spacing;
+		float band = GI_WORLD_PROBE_BLEND_BAND * level_spacing;
 		float blend = saturate((largest - (half_extent - band)) / band);
 		bool wants_far = blend > 0.0 && level + 1 < SDF_CLIPMAP_LEVEL_COUNT;
 		vec3 near_radiance = vec3_splat(0.0);
 		vec3 far_radiance = vec3_splat(0.0);
 		bool near_answered = false;
 		bool far_answered = false;
+		float near_visible = 0.0;
 		LOOP
 		for(int k = 0; k < 2; ++k)
 		{
@@ -786,6 +802,8 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 			{
 				near_answered = answered;
 				near_radiance = cage_radiance;
+				// The fine cage's visible fraction gates the far blend (see the irradiance cascade).
+				near_visible = covered_sum > 1e-5 ? saturate(weight_sum / covered_sum) : 0.0;
 			}
 			else
 			{
@@ -804,7 +822,7 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 		}
 		if(far_answered)
 		{
-			near_radiance = mix(near_radiance, far_radiance, blend);
+			near_radiance = mix(near_radiance, far_radiance, blend * near_visible);
 		}
 		out_radiance = GiFiniteOrZero(near_radiance);
 		return true;
