@@ -97,6 +97,9 @@ uniform vec4 u_sdf_params;
 #define u_sdf_atlas_brick_dim u_sdf_params.x
 #define u_sdf_atlas_voxel_dim u_sdf_params.y
 #define u_sdf_instance_count  int(u_sdf_params.z)
+/// Emissive instances in the table appended to b_sdf_instances after the instances (see
+/// gi_emissive_nee.sh); 0 when the probes have nothing to sample explicitly.
+#define u_sdf_emitter_count   int(u_sdf_params.w)
 
 struct SdfHeader
 {

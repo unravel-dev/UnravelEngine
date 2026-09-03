@@ -3,6 +3,7 @@
 #include <engine/rendering/gi/gi_constants.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include <engine/ecs/components/transform_component.h>
@@ -588,13 +589,80 @@ void surface_cache_system::upload_instance_grid()
     grid_params_[7] = 1.0f;
 }
 
+void surface_cache_system::rebuild_emitters()
+{
+    emitters_.clear();
+    for(const auto& inst : instances_)
+    {
+        const math::vec3& radiance = inst.emissive;
+        const float luminance = 0.2126f * radiance.x + 0.7152f * radiance.y + 0.0722f * radiance.z;
+        if(luminance < float(gi::GI_EMISSIVE_NEE_MIN_LUMINANCE))
+        {
+            continue;
+        }
+        const math::vec3 extent = inst.world_bounds.max - inst.world_bounds.min;
+        // SEGMENTS: the bounding sphere of a long strip swallows every probe near it, so the
+        // bounds are cut into pieces no longer than GI_EMISSIVE_NEE_SEGMENT per axis, each a
+        // sphere a probe can aim inside. A thin or flat piece still wastes part of its cone
+        // on directions past it - those rays read whatever stands behind, which is the right
+        // answer for that direction.
+        const float segment = float(gi::GI_EMISSIVE_NEE_SEGMENT);
+        const math::ivec3 pieces(math::max(1, int(std::ceil(extent.x / segment))),
+                                 math::max(1, int(std::ceil(extent.y / segment))),
+                                 math::max(1, int(std::ceil(extent.z / segment))));
+        const math::vec3 piece_extent(extent.x / float(pieces.x), extent.y / float(pieces.y), extent.z / float(pieces.z));
+        const float piece_area = 2.0f * (piece_extent.x * piece_extent.y + piece_extent.y * piece_extent.z +
+                                         piece_extent.z * piece_extent.x);
+        for(int z = 0; z < pieces.z; ++z)
+        {
+            for(int y = 0; y < pieces.y; ++y)
+            {
+                for(int x = 0; x < pieces.x; ++x)
+                {
+                    emitter e;
+                    e.center = inst.world_bounds.min +
+                               piece_extent * (math::vec3(float(x), float(y), float(z)) + math::vec3(0.5f));
+                    e.radius = 0.5f * math::length(piece_extent);
+                    e.radiance = radiance;
+                    e.power = luminance * piece_area;
+                    emitters_.push_back(e);
+                }
+            }
+        }
+    }
+    const size_t cap = size_t(gi::GI_EMISSIVE_NEE_MAX_EMITTERS);
+    if(emitters_.size() > cap)
+    {
+        std::partial_sort(emitters_.begin(),
+                          emitters_.begin() + ptrdiff_t(cap),
+                          emitters_.end(),
+                          [](const emitter& a, const emitter& b) { return a.power > b.power; });
+        emitters_.resize(cap);
+    }
+}
+
 void surface_cache_system::upload_instances()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Upload Instances");
     // resize, not assign: every one of the 40 floats per instance is written below (including
     // the trailing pad), so the quarter-megabyte zero-fill assign did at Bistro scale was
-    // fully overwritten every frame.
-    instance_data_.resize(size_t(instances_.size()) * instance_vec4_stride * 4u);
+    // fully overwritten every frame. The emitter table rides after the instances (see
+    // rebuild_emitters): the tracers bind this buffer already and have no stage to spare.
+    const size_t instance_floats = size_t(instances_.size()) * instance_vec4_stride * 4u;
+    instance_data_.resize(instance_floats + emitters_.size() * emitter_vec4_stride * 4u);
+    for(size_t i = 0; i < emitters_.size(); ++i)
+    {
+        const auto& e = emitters_[i];
+        float* dst = instance_data_.data() + instance_floats + i * emitter_vec4_stride * 4u;
+        dst[0] = e.center.x;
+        dst[1] = e.center.y;
+        dst[2] = e.center.z;
+        dst[3] = e.radius;
+        dst[4] = e.radiance.x;
+        dst[5] = e.radiance.y;
+        dst[6] = e.radiance.z;
+        dst[7] = e.power;
+    }
     for(size_t i = 0; i < instances_.size(); ++i)
     {
         const auto& inst = instances_[i];
@@ -643,7 +711,7 @@ void surface_cache_system::upload_instances()
             fingerprint = (fingerprint ^ bytes[i]) * 1099511628211ull;
         }
     }
-    const uint32_t required_vec4 = math::max(uint32_t(instances_.size()) * instance_vec4_stride, 1u);
+    const uint32_t required_vec4 = math::max(uint32_t(instance_data_.size() / 4u), 1u);
     bool recreated = false;
     if(!bgfx::isValid(instance_buffer_) || required_vec4 > instance_buffer_capacity_)
     {
@@ -809,6 +877,7 @@ void surface_cache_system::update_world(scene& scn)
     rebuild_dirty_regions();
     atlas_.flush();
     light_buffer_.update(scn);
+    rebuild_emitters();
     upload_instances();
     upload_instance_grid();
     // The cascade is deliberately NOT composed here. It is centred on a viewer, so it belongs to

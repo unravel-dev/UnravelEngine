@@ -138,7 +138,7 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                  float(atlas.get_atlas_voxel_dim()),
                                  float(instances.size()),
-                                 0.0f};
+                                 float(surface_cache.get_emitters().size())};
     gfx::set_uniform(debug_program_.u_sdf_params, sdf_params);
     gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
     gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);

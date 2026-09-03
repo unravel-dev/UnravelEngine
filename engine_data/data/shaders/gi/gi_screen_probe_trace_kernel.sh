@@ -69,6 +69,7 @@
 #include "../hiz_trace.sh"
 
 #include "gi/sdf_common.sh"
+#include "gi/gi_emissive_nee.sh"
 #define GI_LIGHT_VOXEL_READ
 #include "gi/gi_light_voxels.sh"
 #define GI_WORLD_PROBE_READ
@@ -144,6 +145,32 @@ SHARED vec4 s_importance_mip[GI_TRACE_SLOT_COUNT * 4];
 /// Dispatch-uniform values hoisted out of the per-ray loop.
 SHARED vec2 s_screen_size;
 SHARED vec2 s_frame_r2;
+/// EXPLICIT EMISSIVE SAMPLING (gi_emissive_nee.sh). Per slot: the aimed emitters' cone
+/// axes and cosines (a cosine above 1 = no emitter), the aimed-ray count per emitter
+/// (n_e), the jittered-ray count (n_c) and the aimed emitter per CELL (a texel, or a
+/// coarse block's 2x2 - the block's mean is what its four texels store), and the
+/// per-texel accumulators every sample splats into. Fixed point (GI_NEE_FIXED per unit)
+/// because shared-memory atomics are integer only; the hit distance is the max of the
+/// ordered float bits. One MIS sum per cell needs every technique's count before the first
+/// ray is traced, hence the two extra barriers in main.
+#define GI_NEE_K GI_EMISSIVE_NEE_PER_PROBE
+/// Fixed-point scale of the accumulators: 6e-5 radiance per unit (below the atlas's own
+/// 16-bit-float resolution in dark rooms), and with samples capped at GI_NEE_SAMPLE_MAX
+/// a cell's sum stays two orders below the 32-bit ceiling.
+#define GI_NEE_FIXED 16384.0
+/// Per-sample radiance cap before the splat, 16x the stored-texel clamp: a far-field or
+/// sky-disc hit of thousands would otherwise wrap the fixed-point sum; anything above this
+/// is a firefly the store clamps to GI_MAX_RAY_RADIANCE anyway.
+#define GI_NEE_SAMPLE_MAX (16.0 * GI_MAX_RAY_RADIANCE)
+SHARED vec3 s_nee_axis[GI_TRACE_SLOT_COUNT * GI_NEE_K];
+SHARED float s_nee_cos[GI_TRACE_SLOT_COUNT * GI_NEE_K];
+SHARED uint s_nee_rays[GI_TRACE_SLOT_COUNT * GI_NEE_K];
+SHARED uint s_cell_rays[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
+SHARED int s_cell_nee[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
+SHARED uint s_acc_r[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
+SHARED uint s_acc_g[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
+SHARED uint s_acc_b[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
+SHARED uint s_acc_t[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
 
 /*
  * HISTORY READ, validated. True when last frame's composite holds THIS surface at the
@@ -292,13 +319,13 @@ int GiScreenProbeSampleCount(int slot, int block)
 }
 
 /*
- * The sample loop: @p sample_count directions jittered inside the cone spanning
- * @p texel_span octahedral texels from @p texel_base (top-left, in tile texels), each
- * answered Hi-Z -> SDF -> world-probe completion. Returns (radiance mean, max hitT;
- * -1 = completed/sky only). Returned, never out-parameters - the shaderc HLSL path
- * miscompiles out-params in .sc helpers silently (tasks/lessons.md).
+ * ONE direction, answered Hi-Z -> SDF -> world-probe completion. Returns (radiance, hitT;
+ * -1 = completed/sky). Returned, never out-parameters - the shaderc HLSL path miscompiles
+ * out-params in .sc helpers silently (tasks/lessons.md). The sample loop lives in the
+ * caller (main), which chooses each direction: a jitter inside the cell, or an aimed
+ * direction inside an emitter's cone (gi_emissive_nee.sh) - one call site either way.
  *
- * Sub-texel DIRECTION jitter. Fixed centre rays ALIAS small bright sources: a source
+ * Sub-texel DIRECTION jitter (the caller's). Fixed centre rays ALIAS small bright sources: a source
  * smaller than one cone is either skewered or missed by the grid, and which probes catch
  * it varies smoothly with anchor position - printing stationary whitish blobs across
  * walls that NO downstream filter can remove, because the per-probe estimates are BIASED,
@@ -312,20 +339,10 @@ int GiScreenProbeSampleCount(int slot, int block)
  * (0,2)-net: positions 0/1 are the exact antithetic pair, so counts one and two
  * reproduce the classic estimator.
  */
-vec4 GiTraceScreenProbeCone(int slot, vec2 texel_base, float texel_span, int sample_count,
-                            ivec2 noise_texel)
+vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 {
-	vec2 sub_positions[GI_IMPORTANCE_SUPERSAMPLE_MAX];
-	sub_positions[0] = fract(s_frame_r2 + GiIgnNoise(noise_texel));
-	sub_positions[1] = fract(sub_positions[0] + vec2(0.5, 0.5));
-	sub_positions[2] = fract(sub_positions[0] + vec2(0.25, 0.75));
-	sub_positions[3] = fract(sub_positions[0] + vec2(0.75, 0.25));
-	vec3 radiance_sum = vec3_splat(0.0);
 	float hit_t = -1.0;
-	for(int s = 0; s < sample_count; ++s)
 	{
-		vec2 sample_uv = (texel_base + sub_positions[s] * texel_span) / float(GI_PROBE_DIR_EDGE);
-		vec3 sample_dir = GiOctDecode(sample_uv);
 		vec3 radiance = vec3_splat(0.0);
 		bool committed = false;
 		// 1 = screen commit, 2 = SDF hit, 3 = completion; consumed by the tier debug view.
@@ -509,32 +526,8 @@ vec4 GiTraceScreenProbeCone(int slot, vec2 texel_base, float texel_span, int sam
 			                              : (answered_tier == 2 ? vec3(1.0, 0.0, 0.0)
 			                                                    : vec3(0.0, 0.0, 1.0));
 		}
-		radiance_sum += radiance;
+		return vec4(radiance, hit_t);
 	}
-	return vec4(radiance_sum / float(sample_count), hit_t);
-}
-
-/// One octahedral texel at @p sample_count sub-cone samples: traced and stored, with the
-/// below-tangent cull (cap texels hold exact zero - their converged value by definition).
-void GiTraceScreenProbeDetail(int slot, ivec2 probe, ivec2 local, int sample_count)
-{
-	ivec2 texel = GiProbeAtlasBase(probe.x, probe.y, 0) + local;
-	vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
-	vec3 direction = GiOctDecode(tile_uv);
-	if(dot(direction, s_anchor_normal[slot]) < -0.2)
-	{
-		imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
-		return;
-	}
-	vec4 traced = GiTraceScreenProbeCone(slot, vec2(local.xy), 1.0, sample_count, texel);
-	GiStoreScreenProbeRay(slot, texel, traced.xyz, traced.w);
-}
-
-/// The full-program form: one texel with the whole importance ladder.
-void GiTraceScreenProbeRay(int slot, ivec2 probe, ivec2 local)
-{
-	GiTraceScreenProbeDetail(slot, probe, local,
-	                         GiScreenProbeSampleCount(slot, (local.y / 2) * 4 + (local.x / 2)));
 }
 
 #if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
@@ -547,11 +540,276 @@ int GiScreenProbeBlockRays(int slot, int block)
 	return GiScreenProbeBlockRatio(slot, block) > GI_IMPORTANCE_SUPERSAMPLE_RATIO ? 4 : 1;
 }
 
-// The coarse-block executor was FOLDED into the scheduler below: keeping it as a second
-// function gave the cone body a second inlined instantiation, which alone quadrupled this
-// program's compile time (see the note at the scheduler's trace call).
-
 #endif // GI_SCREEN_PROBE_TRACE_ADAPTIVE
+
+/// A ray unit: the CELL it estimates (top-left texel + span: one texel, or a coarse
+/// block's 2x2), its jittered sample count and whether it is traced at all.
+struct GiRayUnit
+{
+	ivec2 base;
+	int span;
+	int samples;
+	bool traced;
+};
+
+int GiCellIndex(int slot, ivec2 texel)
+{
+	return slot * GI_PROBE_DIR_COUNT + texel.y * GI_PROBE_DIR_EDGE + texel.x;
+}
+
+/// The cell a texel belongs to this frame: itself, or (adaptive coarse block) its 2x2.
+GiRayUnit GiCellOfTexel(int slot, ivec2 local)
+{
+	GiRayUnit unit;
+	unit.base = local;
+	unit.span = 1;
+	unit.samples = 0;
+	unit.traced = false;
+#if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
+	int block = (local.y / 2) * 4 + (local.x / 2);
+	if(GiScreenProbeBlockRays(slot, block) == 1)
+	{
+		unit.base = (local / 2) * 2;
+		unit.span = 2;
+	}
+#endif
+	return unit;
+}
+
+float GiCellSolidAngle(ivec2 base, int span)
+{
+	float omega = 0.0;
+	for(int y = 0; y < span; ++y)
+	{
+		for(int x = 0; x < span; ++x)
+		{
+			omega += GiOctTexelSolidAngle(base + ivec2(x, y), GI_PROBE_DIR_EDGE);
+		}
+	}
+	return omega;
+}
+
+ivec2 GiTexelOfDirection(vec3 direction)
+{
+	ivec2 texel = ivec2(floor(GiOctEncode(direction) * float(GI_PROBE_DIR_EDGE)));
+	return clamp(texel, ivec2(0, 0), ivec2(GI_PROBE_DIR_EDGE - 1, GI_PROBE_DIR_EDGE - 1));
+}
+
+/// The first (brightest) aimed emitter whose cone touches the cell's footprint, or -1.
+/// The test is the cone half angle plus the cell's angular half-diagonal, in cosines.
+int GiSelectNeeForCell(int slot, ivec2 base, int span)
+{
+	vec3 centre = GiOctDecode((vec2(base) + vec2_splat(0.5 * float(span))) / float(GI_PROBE_DIR_EDGE));
+	float half_cos = 1.0;
+	for(int c = 0; c < 4; ++c)
+	{
+		vec2 corner_uv = (vec2(base) + vec2(float(c & 1), float(c >> 1)) * float(span)) / float(GI_PROBE_DIR_EDGE);
+		half_cos = min(half_cos, dot(centre, GiOctDecode(corner_uv)));
+	}
+	float half_sin = sqrt(max(1.0 - half_cos * half_cos, 0.0));
+	for(int k = 0; k < GI_NEE_K; ++k)
+	{
+		float cos_k = s_nee_cos[slot * GI_NEE_K + k];
+		if(cos_k > 1.0)
+		{
+			continue;
+		}
+		float sin_k = sqrt(max(1.0 - cos_k * cos_k, 0.0));
+		float cos_total = cos_k * half_cos - sin_k * half_sin;
+		if(dot(centre, s_nee_axis[slot * GI_NEE_K + k]) >= cos_total)
+		{
+			return k;
+		}
+	}
+	return -1;
+}
+
+/// Publishes a cell's jittered-sample count and aimed emitter to every texel it covers.
+void GiPublishCell(int slot, ivec2 base, int span, int jittered_samples, int nee)
+{
+	for(int y = 0; y < span; ++y)
+	{
+		for(int x = 0; x < span; ++x)
+		{
+			int idx = GiCellIndex(slot, base + ivec2(x, y));
+			s_cell_rays[idx] = uint(jittered_samples);
+			s_cell_nee[idx] = nee;
+		}
+	}
+}
+
+/// The balance-heuristic denominator for a direction landing in a cell: the cell's own
+/// jittered density plus every aimed cone that contains the direction.
+float GiSampleDenominator(int slot, ivec2 base, int span, vec3 direction)
+{
+	float denominator = float(s_cell_rays[GiCellIndex(slot, base)]) / max(GiCellSolidAngle(base, span), 1e-6);
+	for(int k = 0; k < GI_NEE_K; ++k)
+	{
+		float cos_k = s_nee_cos[slot * GI_NEE_K + k];
+		if(cos_k <= 1.0 && dot(direction, s_nee_axis[slot * GI_NEE_K + k]) >= cos_k)
+		{
+			denominator += float(s_nee_rays[slot * GI_NEE_K + k]) / max(GiConeSolidAngle(cos_k), 1e-6);
+		}
+	}
+	return max(denominator, 1e-6);
+}
+
+/// Adds one traced sample to the accumulators of the cell its direction lands in.
+void GiSplatSample(int slot, ivec2 base, int span, vec3 direction, vec3 radiance, float hit_t)
+{
+	vec3 contribution =
+	    min(radiance, vec3_splat(GI_NEE_SAMPLE_MAX)) / GiSampleDenominator(slot, base, span, direction);
+	uvec3 fixed_point = uvec3(max(contribution, vec3_splat(0.0)) * GI_NEE_FIXED + vec3_splat(0.5));
+	uint hit_bits = floatBitsToUint(max(hit_t, 0.0));
+	for(int y = 0; y < span; ++y)
+	{
+		for(int x = 0; x < span; ++x)
+		{
+			int idx = GiCellIndex(slot, base + ivec2(x, y));
+			atomicAdd(s_acc_r[idx], fixed_point.x);
+			atomicAdd(s_acc_g[idx], fixed_point.y);
+			atomicAdd(s_acc_b[idx], fixed_point.z);
+			atomicMax(s_acc_t[idx], hit_bits);
+		}
+	}
+}
+
+/// Resolves one texel from its cell's accumulators and stores it (governor included).
+void GiFinalizeTexel(int slot, ivec2 atlas_base, ivec2 local)
+{
+	ivec2 texel = atlas_base + local;
+	int idx = GiCellIndex(slot, local);
+	vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
+	uint acc_r = s_acc_r[idx];
+	uint acc_g = s_acc_g[idx];
+	uint acc_b = s_acc_b[idx];
+	// The cap texel's contract: exact zero, negative hitT (its converged value by
+	// definition); a cell no ray served this frame stores the same.
+	if(dot(GiOctDecode(tile_uv), s_anchor_normal[slot]) < -0.2 ||
+	   (s_cell_rays[idx] == 0u && (acc_r | acc_g | acc_b) == 0u))
+	{
+		imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
+		return;
+	}
+	GiRayUnit cell = GiCellOfTexel(slot, local);
+	float omega = max(GiCellSolidAngle(cell.base, cell.span), 1e-6);
+	vec3 radiance = vec3(float(acc_r), float(acc_g), float(acc_b)) / (GI_NEE_FIXED * omega);
+	uint hit_bits = s_acc_t[idx];
+	float hit_t = hit_bits == 0u ? -1.0 : uintBitsToFloat(hit_bits);
+	GiStoreScreenProbeRay(slot, texel, radiance, hit_t);
+}
+
+/// Traces one ray unit's samples - its jittered ones, then the aimed ones - through the
+/// single trace call site, splatting each into the cell it lands in.
+void GiTraceRayUnit(int slot, ivec2 atlas_base, GiRayUnit unit)
+{
+	int idx = GiCellIndex(slot, unit.base);
+	int jittered = int(s_cell_rays[idx]);
+	int nee = s_cell_nee[idx];
+	int aimed = nee >= 0 ? GI_EMISSIVE_NEE_SAMPLES : 0;
+	vec3 nee_axis = nee >= 0 ? s_nee_axis[slot * GI_NEE_K + nee] : vec3(0.0, 1.0, 0.0);
+	float nee_cos = nee >= 0 ? s_nee_cos[slot * GI_NEE_K + nee] : 1.0;
+	// The multi-sample pattern is the first four points of a shifted (0,2)-net: positions
+	// 0/1 are the exact antithetic pair, so counts one and two reproduce the classic
+	// estimator. Addressed by ATLAS texel so it decorrelates the texels within a tile and
+	// the same direction across neighbouring probes (gi_noise.sh).
+	vec2 sub_positions[GI_IMPORTANCE_SUPERSAMPLE_MAX];
+	sub_positions[0] = fract(s_frame_r2 + GiIgnNoise(atlas_base + unit.base));
+	sub_positions[1] = fract(sub_positions[0] + vec2(0.5, 0.5));
+	sub_positions[2] = fract(sub_positions[0] + vec2(0.25, 0.75));
+	sub_positions[3] = fract(sub_positions[0] + vec2(0.75, 0.25));
+	LOOP
+	for(int s = 0; s < jittered + aimed; ++s)
+	{
+		bool is_aimed = s >= jittered;
+		vec2 xi = sub_positions[min(s, GI_IMPORTANCE_SUPERSAMPLE_MAX - 1)];
+		vec3 direction =
+		    is_aimed ? GiSampleCone(nee_axis, nee_cos, xi)
+		             : GiOctDecode((vec2(unit.base) + xi * float(unit.span)) / float(GI_PROBE_DIR_EDGE));
+		// An aimed direction under the anchor's tangent cap cannot light it (the cull the
+		// jittered rays get per cell).
+		if(is_aimed && dot(direction, s_anchor_normal[slot]) < -0.2)
+		{
+			continue;
+		}
+		vec4 traced = GiTraceScreenProbeDirection(slot, direction);
+		ivec2 land_base = unit.base;
+		int land_span = unit.span;
+		if(is_aimed)
+		{
+			GiRayUnit land = GiCellOfTexel(slot, GiTexelOfDirection(direction));
+			land_base = land.base;
+			land_span = land.span;
+		}
+		GiSplatSample(slot, land_base, land_span, direction, traced.xyz, traced.w);
+	}
+}
+
+/// Phase 1 for one ray unit: the cell's jittered count (one supersample gives way to the
+/// aimed ray, never the last) and its aimed emitter, published for the MIS sums.
+void GiAllocateRayUnit(int slot, GiRayUnit unit)
+{
+	int nee = unit.traced ? GiSelectNeeForCell(slot, unit.base, unit.span) : -1;
+	int aimed = nee >= 0 ? GI_EMISSIVE_NEE_SAMPLES : 0;
+	int jittered = !unit.traced ? 0 : (nee >= 0 ? max(unit.samples - aimed, 1) : unit.samples);
+	GiPublishCell(slot, unit.base, unit.span, jittered, nee);
+	if(nee >= 0)
+	{
+		atomicAdd(s_nee_rays[slot * GI_NEE_K + nee], uint(aimed));
+	}
+}
+
+#if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
+/// Ray @p r of the adaptive schedule: its block (walked by the per-block ray counts), its
+/// cell (a detail texel or the whole coarse quad), sample count and cull.
+GiRayUnit GiAdaptiveRayUnit(int slot, int r)
+{
+	int scan = r;
+	int block = 0;
+	LOOP
+	for(int b = 0; b < 16; ++b)
+	{
+		int block_rays = GiScreenProbeBlockRays(slot, b);
+		if(scan < block_rays)
+		{
+			block = b;
+			break;
+		}
+		scan -= block_rays;
+	}
+	float ratio = GiScreenProbeBlockRatio(slot, block);
+	bool detail = ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO;
+	ivec2 quad = ivec2((block % 4) * 2, (block / 4) * 2);
+	GiRayUnit unit;
+	// DETAIL: ray `scan` in [0,4) owns one texel of the 2x2 quad, double-sampled on the
+	// ladder's top rung. COARSE: one cone jittered across the whole quad footprint, its
+	// mean stored to all four texels.
+	unit.base = detail ? quad + ivec2(scan & 1, scan >> 1) : quad;
+	unit.span = detail ? 1 : 2;
+	unit.samples = (detail && ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO * GI_IMPORTANCE_SUPERSAMPLE_RATIO *
+	                                     GI_IMPORTANCE_SUPERSAMPLE_RATIO)
+	                   ? 2
+	                   : 1;
+	// Cone-centre cull: the detail texel's own threshold, or the quad centre loosened by
+	// its cosine half-span (~0.25) - a quad it rejects has every texel at or under the
+	// tangent cap, where cosine weights vanish anyway.
+	vec2 centre_uv = (vec2(unit.base) + vec2_splat(0.5 * float(unit.span))) / float(GI_PROBE_DIR_EDGE);
+	unit.traced = dot(GiOctDecode(centre_uv), s_anchor_normal[slot]) >= (detail ? -0.2 : -0.45);
+	return unit;
+}
+#else
+/// The full program's ray unit: one texel with the whole importance ladder.
+GiRayUnit GiFullRayUnit(int slot, ivec2 local)
+{
+	GiRayUnit unit;
+	unit.base = local;
+	unit.span = 1;
+	unit.samples = GiScreenProbeSampleCount(slot, (local.y / 2) * 4 + (local.x / 2));
+	vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
+	unit.traced = dot(GiOctDecode(tile_uv), s_anchor_normal[slot]) >= -0.2;
+	return unit;
+}
+#endif
 
 #if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
 NUM_THREADS(GI_TRACE_ADAPTIVE_LANES, GI_TRACE_SLOT_COUNT, 1)
@@ -614,6 +872,61 @@ void main()
 			s_anchor_uv[slot] = anchor.xy;
 			s_ss_origin[slot] = vec3(anchor.xy, anchor.z);
 			s_vs_origin[slot] = HizComputeViewspacePosition(anchor.xy, anchor.z);
+			// EXPLICIT EMISSIVE SAMPLING: the K brightest emitters this probe can aim at,
+			// by luminance x subtended solid angle (gi_emissive_nee.sh). Cones wider than
+			// GI_EMISSIVE_NEE_MIN_CONE_COS and emitters under the anchor's tangent cap are
+			// left to the jittered rays.
+			{
+				float nee_score[GI_NEE_K];
+				vec3 nee_axis[GI_NEE_K];
+				float nee_cos[GI_NEE_K];
+				for(int k0 = 0; k0 < GI_NEE_K; ++k0)
+				{
+					nee_score[k0] = 0.0;
+					nee_axis[k0] = vec3(0.0, 1.0, 0.0);
+					nee_cos[k0] = 2.0;
+				}
+				int emitter_count = min(u_sdf_emitter_count, GI_EMISSIVE_NEE_MAX_EMITTERS);
+				LOOP
+				for(int ei = 0; ei < emitter_count; ++ei)
+				{
+					GiEmitter e = GiLoadEmitter(ei);
+					GiEmitterCone cone = GiEmitterConeFrom(e, origin_range.xyz);
+					if(!cone.valid || cone.cos_max < GI_EMISSIVE_NEE_MIN_CONE_COS)
+					{
+						continue;
+					}
+					float sin_max = sqrt(max(1.0 - cone.cos_max * cone.cos_max, 0.0));
+					if(dot(cone.axis, world_normal) < -0.2 - sin_max)
+					{
+						continue;
+					}
+					float score = GiEmitterLuminance(e) * GiConeSolidAngle(cone.cos_max);
+					LOOP
+					for(int k = 0; k < GI_NEE_K; ++k)
+					{
+						if(score > nee_score[k])
+						{
+							for(int j = GI_NEE_K - 1; j > k; --j)
+							{
+								nee_score[j] = nee_score[j - 1];
+								nee_axis[j] = nee_axis[j - 1];
+								nee_cos[j] = nee_cos[j - 1];
+							}
+							nee_score[k] = score;
+							nee_axis[k] = cone.axis;
+							nee_cos[k] = cone.cos_max;
+							break;
+						}
+					}
+				}
+				for(int k2 = 0; k2 < GI_NEE_K; ++k2)
+				{
+					s_nee_axis[slot * GI_NEE_K + k2] = nee_axis[k2];
+					s_nee_cos[slot * GI_NEE_K + k2] = nee_cos[k2];
+					s_nee_rays[slot * GI_NEE_K + k2] = 0u;
+				}
+			}
 			// Reproject the anchor into LAST frame's lattice for the importance mip. The
 			// lookup CLAMPS to the border instead of requiring an on-screen reprojection:
 			// content revealed by panning or rotation often shares a surface with the
@@ -654,95 +967,90 @@ void main()
 			}
 		}
 	}
-	barrier();
-	if(!probe_active)
+	// Every lane clears the accumulators of the texels it will finalize (phase 3 below),
+	// before the barrier that publishes the leader's staging.
+#if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
+	int thread = int(gl_LocalInvocationID.x);
+	for(int clear_i = 0; clear_i < GI_PROBE_DIR_COUNT / GI_TRACE_ADAPTIVE_LANES; ++clear_i)
 	{
-		return;
+		int clear_t = thread + clear_i * GI_TRACE_ADAPTIVE_LANES;
+		int clear_idx = slot * GI_PROBE_DIR_COUNT + clear_t;
+		s_acc_r[clear_idx] = 0u;
+		s_acc_g[clear_idx] = 0u;
+		s_acc_b[clear_idx] = 0u;
+		s_acc_t[clear_idx] = 0u;
+		s_cell_rays[clear_idx] = 0u;
+		s_cell_nee[clear_idx] = -1;
 	}
+#else
+	{
+		int clear_idx = int(gl_LocalInvocationID.y) * GI_PROBE_DIR_EDGE + int(gl_LocalInvocationID.x);
+		s_acc_r[clear_idx] = 0u;
+		s_acc_g[clear_idx] = 0u;
+		s_acc_b[clear_idx] = 0u;
+		s_acc_t[clear_idx] = 0u;
+		s_cell_rays[clear_idx] = 0u;
+		s_cell_nee[clear_idx] = -1;
+	}
+#endif
+	barrier();
+	// No early return for an inactive slot (a partial final adaptive group): the phase
+	// barriers below must stay in uniform flow control, so the work is guarded instead.
+	ivec2 atlas_base = GiProbeAtlasBase(probe.x, probe.y, 0);
+	// THREE PHASES per probe, two barriers: (1) every ray unit publishes its cell's
+	// jittered count and aimed emitter, so the balance heuristic knows every technique's
+	// sample count; (2) every unit traces its samples through the ONE trace call site
+	// (fxc fully inlines every call site of the trace body - Hi-Z + SDF march +
+	// completion, thousands of instructions - and a second instantiation alone took this
+	// program's s_5_0 compile from ~4 s to ~17 s) and splats them; (3) every texel resolves
+	// its cell's accumulators. Every texel is written every frame - by its cell's samples,
+	// or by the cull's zero store.
 #if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
 	// ADAPTIVE SCHEDULE (see the header): 16 + 3K rays for K detail blocks, pulled
 	// round-robin across the 16 lanes so one bright block never idles the wave (lane time
-	// = ceil(rays / 16) iterations, not one block's whole cost). Every texel is written
-	// every frame - by its own detail ray, by its block's coarse splat, or by the cull's
-	// zero store. The block walk below is pure shared-memory arithmetic per lane; with
-	// sixteen blocks a scan beats any prefix machinery.
-	int thread = int(gl_LocalInvocationID.x);
+	// = ceil(rays / 16) iterations, not one block's whole cost). The block walk is pure
+	// shared-memory arithmetic per lane; with sixteen blocks a scan beats any prefix
+	// machinery.
 	int total_rays = 0;
-	LOOP
-	for(int b = 0; b < 16; ++b)
+	if(probe_active)
 	{
-		total_rays += GiScreenProbeBlockRays(slot, b);
-	}
-	LOOP
-	for(int r = thread; r < total_rays; r += GI_TRACE_ADAPTIVE_LANES)
-	{
-		int scan = r;
-		int block = 0;
 		LOOP
 		for(int b = 0; b < 16; ++b)
 		{
-			int block_rays = GiScreenProbeBlockRays(slot, b);
-			if(scan < block_rays)
-			{
-				block = b;
-				break;
-			}
-			scan -= block_rays;
+			total_rays += GiScreenProbeBlockRays(slot, b);
 		}
-		// ONE cone-body instantiation for both ray kinds, by PARAMETER selection: fxc
-		// fully inlines every call site of the trace body (Hi-Z + SDF march + completion,
-		// thousands of instructions), and a second instantiation alone took this program's
-		// s_5_0 compile from ~4 s to ~17 s - fxc codegen is superlinear in inlined
-		// mega-bodies, independent of the -O level (measured; [loop] attributes and
-		// unrolling were ruled out).
-		float ratio = GiScreenProbeBlockRatio(slot, block);
-		bool detail = ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO;
-		ivec2 quad = ivec2((block % 4) * 2, (block / 4) * 2);
-		// DETAIL: ray `scan` in [0,4) owns one texel of the 2x2 quad, double-sampled on
-		// the ladder's top rung. COARSE: one cone jittered across the whole quad footprint,
-		// splatted to all four texels (blend-free, the splat lives one frame - a boundary
-		// quad's bright/dark coin flip is white noise the resolve temporal integrates).
-		ivec2 cone_base = detail ? quad + ivec2(scan & 1, scan >> 1) : quad;
-		float cone_span = detail ? 1.0 : 2.0;
-		int sample_count = (detail && ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO *
-		                                          GI_IMPORTANCE_SUPERSAMPLE_RATIO *
-		                                          GI_IMPORTANCE_SUPERSAMPLE_RATIO)
-		                       ? 2
-		                       : 1;
-		ivec2 atlas_base = GiProbeAtlasBase(probe.x, probe.y, 0);
-		// Cone-centre cull: the detail texel's own threshold, or the quad centre loosened
-		// by its cosine half-span (~0.25) - a quad it rejects has every texel at or under
-		// the tangent cap, where cosine weights vanish anyway.
-		vec2 centre_uv = (vec2(cone_base) + vec2_splat(0.5 * cone_span)) / float(GI_PROBE_DIR_EDGE);
-		bool cone_traced =
-		    dot(GiOctDecode(centre_uv), s_anchor_normal[slot]) >= (detail ? -0.2 : -0.45);
-		vec4 traced = vec4(0.0, 0.0, 0.0, -1.0);
-		BRANCH
-		if(cone_traced)
-		{
-			traced = GiTraceScreenProbeCone(slot, vec2(cone_base), cone_span, sample_count,
-			                                atlas_base + cone_base);
-		}
-		int store_count = detail ? 1 : 4;
 		LOOP
-		for(int i = 0; i < store_count; ++i)
+		for(int r = thread; r < total_rays; r += GI_TRACE_ADAPTIVE_LANES)
 		{
-			ivec2 local = cone_base + (detail ? ivec2(0, 0) : ivec2(i & 1, i >> 1));
-			ivec2 texel = atlas_base + local;
-			vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
-			// The cap texel's contract, exactly as the full path stores it.
-			if(!cone_traced || dot(GiOctDecode(tile_uv), s_anchor_normal[slot]) < -0.2)
-			{
-				imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
-			}
-			else
-			{
-				GiStoreScreenProbeRay(slot, texel, traced.xyz, traced.w);
-			}
+			GiAllocateRayUnit(slot, GiAdaptiveRayUnit(slot, r));
+		}
+	}
+	barrier();
+	if(probe_active)
+	{
+		LOOP
+		for(int r = thread; r < total_rays; r += GI_TRACE_ADAPTIVE_LANES)
+		{
+			GiTraceRayUnit(slot, atlas_base, GiAdaptiveRayUnit(slot, r));
+		}
+	}
+	barrier();
+	if(probe_active)
+	{
+		for(int final_i = 0; final_i < GI_PROBE_DIR_COUNT / GI_TRACE_ADAPTIVE_LANES; ++final_i)
+		{
+			int final_t = thread + final_i * GI_TRACE_ADAPTIVE_LANES;
+			GiFinalizeTexel(slot, atlas_base, ivec2(final_t % GI_PROBE_DIR_EDGE, final_t / GI_PROBE_DIR_EDGE));
 		}
 	}
 #else
-	GiTraceScreenProbeRay(slot, probe, ivec2(gl_LocalInvocationID.xy));
+	ivec2 local = ivec2(gl_LocalInvocationID.xy);
+	GiRayUnit unit = GiFullRayUnit(slot, local);
+	GiAllocateRayUnit(slot, unit);
+	barrier();
+	GiTraceRayUnit(slot, atlas_base, unit);
+	barrier();
+	GiFinalizeTexel(slot, atlas_base, local);
 #endif
 }
 

@@ -182,7 +182,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                  float(atlas.get_atlas_voxel_dim()),
                                  float(surface_cache.get_instances().size()),
-                                 0.0f};
+                                 float(surface_cache.get_emitters().size())};
     const float light_voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 1.0f};
     const float refl_texel[4] = {1.0f / float(trace_size.width),
                                  1.0f / float(trace_size.height),

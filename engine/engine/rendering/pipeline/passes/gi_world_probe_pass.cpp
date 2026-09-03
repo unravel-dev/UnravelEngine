@@ -145,7 +145,7 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                      float(atlas.get_atlas_voxel_dim()),
                                      float(instances.size()),
-                                     0.0f};
+                                     float(surface_cache.get_emitters().size())};
         gfx::set_uniform(trace_program_.u_sdf_params, sdf_params);
         gfx::set_uniform(trace_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
         gfx::set_uniform(trace_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());

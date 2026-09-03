@@ -147,6 +147,27 @@ public:
         return instance_buffer_;
     }
 
+    /// One emissive instance the probes sample explicitly (GI S4, next-event estimation):
+    /// the bounding sphere of its placed bounds, its emitted radiance and its power.
+    struct emitter
+    {
+        math::vec3 center{0.0f, 0.0f, 0.0f};
+        float radius = 0.0f;
+        math::vec3 radiance{0.0f, 0.0f, 0.0f};
+        /// Luminance x bounds surface area, the ordering key for the cap.
+        float power = 0.0f;
+    };
+
+    /// This frame's emitter table (rebuilt by update_world, capped by power).
+    auto get_emitters() const -> const std::vector<emitter>&
+    {
+        return emitters_;
+    }
+
+    /// vec4 elements per emitter in the table appended to the instance buffer. Must match
+    /// SDF_EMITTER_STRIDE in gi/gi_emissive_nee.sh: (center, radius), (radiance, power).
+    static constexpr uint32_t emitter_vec4_stride = 2;
+
     /// vec4 elements per packed instance. Must match SDF_INSTANCE_STRIDE in gi/sdf_common.sh.
     /// Two of the ten carry the material; emission is HDR, so it gets its own vec4 rather than
     /// being packed into a spare component.
@@ -358,8 +379,13 @@ private:
      */
     void upload_instances();
 
+    /// Rebuilds the emitter table from this frame's instances (bounding spheres of the
+    /// emissive ones), capped at GI_EMISSIVE_NEE_MAX_EMITTERS by power.
+    void rebuild_emitters();
+
     sdf_atlas atlas_;
     gpu_light_buffer light_buffer_;
+    std::vector<emitter> emitters_;
     /// Identifies one submesh's field. Residency is per SUBMESH, not per mesh: each submesh has
     /// its own field and is uploaded to the atlas independently.
     struct field_key

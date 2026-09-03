@@ -765,6 +765,37 @@
       " and the quiescence gate freezes the settled atlas. Light and content changes bypass"       \
       " the mean entirely: their fast windows sample texel centres at write-through - the"         \
       " deterministic atlas of before - and the mean resumes from it when the scene settles")     \
+    X(GI_EMISSIVE_NEE_MAX_EMITTERS, 64,                                                           \
+      "emitters", "derived: cap on the emitter SEGMENTS the probes sample explicitly per"       \
+      " frame (next-event estimation), brightest by power. Every probe scores every entry once"  \
+      " (one lane per entry in the trace group), so the cap bounds that cost; emitters beyond"   \
+      " it are found by the cone rays as before. Also the stride of the table appended to the"   \
+      " SDF instance buffer, which the tracers already bind - no stage was free for a buffer")   \
+    X(GI_EMISSIVE_NEE_PER_PROBE, 4,                                                               \
+      "emitters", "derived: emitters a probe samples explicitly each frame, the top of its"       \
+      " luminance x solid-angle score. Four covers a room with a panel and strips; the rest of"   \
+      " the list still contributes through the cone rays, weighted by the balance heuristic")     \
+    X(GI_EMISSIVE_NEE_SAMPLES, 1,                                                                  \
+      "rays", "derived: aimed rays per CELL whose footprint touches a selected emitter's cone,"     \
+      " on top of the cell's own jittered rays (which lose one supersample first, never their"     \
+      " last). A cone narrower than a cell is served by one cell, a wider one by every cell it"    \
+      " touches - the aimed count grows with the emitter's apparent size until"                    \
+      " GI_EMISSIVE_NEE_MIN_CONE_COS hands it back to the cell rays. One keeps every lane within"  \
+      " the importance ladder's four samples")                                                    \
+    X(GI_EMISSIVE_NEE_MIN_CONE_COS, 0.866f,                                                        \
+      "cosine", "derived: an emitter whose bounding-sphere cone is wider than this (30 degrees"    \
+      " half angle, 0.84 sr against a 0.2 sr octahedral cell) is not aimed at: the cell rays"     \
+      " already land a sample in it several times per frame, and aiming would only spread"       \
+      " extra rays across every cell it covers. Aiming pays exactly where the cone is small")    \
+    X(GI_EMISSIVE_NEE_SEGMENT, 1.0f,                                                             \
+      "metres", "derived: an emissive instance longer than this on an axis is split into"        \
+      " that many segments, each its own bounding sphere. The sphere of a 7 m light strip is"    \
+      " 3.5 m across and swallows every probe near it - the strip was never aimed at - while"    \
+      " seven 1 m segments subtend cones a probe can aim inside. One level-0 window's worth of" \
+      " probe spacing: a segment no longer than the lattice it serves")                          \
+    X(GI_EMISSIVE_NEE_MIN_LUMINANCE, 0.05f,                                                        \
+      "radiance luminance", "derived: emissive below this never enters the table - the readers'" \
+      " measured-darkness level; a faintly glowing surface is fine on the cone rays alone")       \
     X(GI_WORLD_PROBE_BLEND_BAND, 0.5f,                                                             \
       "probe spacings", "derived: width of the cross-fade between a cascade's cage and the"        \
       " next, measured inward from the usable extent (3 spacings). Half a spacing is one sixth"   \
