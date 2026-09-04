@@ -667,6 +667,7 @@ void surface_cache_system::rebuild_emitters()
                     e.radius = 0.5f * math::length(piece_extent);
                     e.radiance = radiance;
                     e.power = luminance * piece_area;
+                    e.extent = piece_extent;
                     emitters_.push_back(e);
                 }
             }
@@ -703,7 +704,15 @@ void surface_cache_system::upload_instances()
         dst[4] = e.radiance.x;
         dst[5] = e.radiance.y;
         dst[6] = e.radiance.z;
-        dst[7] = e.power;
+        // The piece extent rides the power lane (see emitter::extent): 8 bits per axis as a
+        // fraction of GI_EMISSIVE_NEE_SEGMENT, exact in a float, negated and offset so a
+        // shader fed by an older upload (a positive power) reads "no extent".
+        const auto pack_axis = [](float metres)
+        {
+            const float unit = metres / float(gi::GI_EMISSIVE_NEE_SEGMENT);
+            return float(math::clamp(int(std::lround(unit * 255.0f)), 0, 255));
+        };
+        dst[7] = -(pack_axis(e.extent.x) + pack_axis(e.extent.y) * 256.0f + pack_axis(e.extent.z) * 65536.0f) - 1.0f;
     }
     for(size_t i = 0; i < instances_.size(); ++i)
     {

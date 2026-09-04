@@ -61,7 +61,121 @@
 #include "gi/sdf_common.sh"
 #define GI_LIGHT_VOXEL_READ
 #include "gi/gi_light_voxels.sh"
+#include "gi/gi_emissive_nee.sh"
 #include "gi/gi_noise.sh"
+
+/// Analytic irradiance from one emitter piece at @p position for a receiver facing @p normal:
+/// GI_REFLECTION_NEAR_FIELD_SAMPLES Lambertian patches along the piece's longest axis, each
+/// the piece's area share; the piece's own facing is taken as the convex mean of one half.
+/// Unshadowed - the caller uses it only as a ratio and a fraction.
+float GiReflectionPieceIrradiance(GiEmitter e, vec3 position, vec3 normal)
+{
+	vec3 ext = max(e.extent, vec3_splat(0.0));
+	vec3 axis = vec3(1.0, 0.0, 0.0);
+	float half_length = 0.5 * ext.x;
+	if(ext.y > ext.x && ext.y >= ext.z)
+	{
+		axis = vec3(0.0, 1.0, 0.0);
+		half_length = 0.5 * ext.y;
+	}
+	else if(ext.z > ext.x && ext.z > ext.y)
+	{
+		axis = vec3(0.0, 0.0, 1.0);
+		half_length = 0.5 * ext.z;
+	}
+	float area = 2.0 * (ext.x * ext.y + ext.y * ext.z + ext.z * ext.x);
+	float patch = area / float(GI_REFLECTION_NEAR_FIELD_SAMPLES);
+	// Never closer than the piece's own half thickness: the surface, not its centre line.
+	float d_min = max(0.5 * min(ext.x, min(ext.y, ext.z)), 0.02);
+	float sum = 0.0;
+	LOOP
+	for(int i = 0; i < GI_REFLECTION_NEAR_FIELD_SAMPLES; ++i)
+	{
+		float t = (float(i) + 0.5) / float(GI_REFLECTION_NEAR_FIELD_SAMPLES) * 2.0 - 1.0;
+		vec3 to_patch = e.center + axis * (t * half_length) - position;
+		float d2 = max(dot(to_patch, to_patch), d_min * d_min);
+		float cos_receiver = max(dot(normal, to_patch * rsqrt(d2)), 0.0);
+		sum += cos_receiver / d2;
+	}
+	return 0.5 * GiEmitterLuminance(e) * patch * sum;
+}
+
+/// The near-field factor for a mirror hit's lit voxel value: the strongest
+/// GI_REFLECTION_NEAR_FIELD_EMITTERS pieces (power / d^2 at the hit) give an analytic
+/// irradiance at the hit and at the cell centres the walk measured; the fraction of the
+/// cell's irradiance those pieces account for is rescaled by the ratio. 1 with no emitter
+/// table, no extents (an older upload) or far from every piece.
+float GiReflectionNearFieldFactor(vec3 hit_position, vec3 hit_normal, vec3 lit_position,
+                                  vec3 lit_value, vec3 lit_albedo)
+{
+	int count = min(u_sdf_emitter_count, GI_EMISSIVE_NEE_MAX_EMITTERS);
+	if(count <= 0)
+	{
+		return 1.0;
+	}
+	int pick[GI_REFLECTION_NEAR_FIELD_EMITTERS];
+	float pick_score[GI_REFLECTION_NEAR_FIELD_EMITTERS];
+	for(int k = 0; k < GI_REFLECTION_NEAR_FIELD_EMITTERS; ++k)
+	{
+		pick[k] = -1;
+		pick_score[k] = 0.0;
+	}
+	LOOP
+	for(int i = 0; i < count; ++i)
+	{
+		GiEmitter e = GiLoadEmitter(i);
+		if(!e.has_extent)
+		{
+			return 1.0;
+		}
+		vec3 to_center = e.center - hit_position;
+		float score = e.power / max(dot(to_center, to_center), 1e-4);
+		// Insertion into the descending top-K.
+		int slot = -1;
+		for(int k = 0; k < GI_REFLECTION_NEAR_FIELD_EMITTERS; ++k)
+		{
+			if(slot < 0 && score > pick_score[k])
+			{
+				slot = k;
+			}
+		}
+		if(slot >= 0)
+		{
+			for(int k = GI_REFLECTION_NEAR_FIELD_EMITTERS - 1; k > slot; --k)
+			{
+				pick[k] = pick[k - 1];
+				pick_score[k] = pick_score[k - 1];
+			}
+			pick[slot] = i;
+			pick_score[slot] = score;
+		}
+	}
+	float irradiance_hit = 0.0;
+	float irradiance_cell = 0.0;
+	LOOP
+	for(int k = 0; k < GI_REFLECTION_NEAR_FIELD_EMITTERS; ++k)
+	{
+		if(pick[k] < 0)
+		{
+			break;
+		}
+		GiEmitter e = GiLoadEmitter(pick[k]);
+		irradiance_hit += GiReflectionPieceIrradiance(e, hit_position, hit_normal);
+		irradiance_cell += GiReflectionPieceIrradiance(e, lit_position, hit_normal);
+	}
+	if(irradiance_cell <= 1e-6)
+	{
+		return 1.0;
+	}
+	// The cell's measured irradiance, E = pi x lit / albedo, bounds the emitters' share.
+	float lit_luminance = dot(lit_value, vec3(0.2126, 0.7152, 0.0722));
+	float albedo_luminance = max(dot(lit_albedo, vec3(0.2126, 0.7152, 0.0722)),
+	                             GI_REFLECTION_REMODULATE_ALBEDO_FLOOR);
+	float cell_irradiance = GI_NEE_PI * lit_luminance / albedo_luminance;
+	float emitter_fraction = saturate(irradiance_cell / max(cell_irradiance, 1e-6));
+	float ratio = clamp(irradiance_hit / irradiance_cell, 0.0, GI_REFLECTION_NEAR_FIELD_RATIO_MAX);
+	return 1.0 + emitter_fraction * (ratio - 1.0);
+}
 
 SAMPLER2D(s_gi_normal, 5);
 /// The authored probe layer (RBUFFER right after the probe pass): at trace time it holds
@@ -347,10 +461,15 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			// had converged (the "leftover red lines where the cubes passed").
 			vec3 measured_albedo;
 			bool measured_albedo_ok;
+			vec3 measured_lit;
+			float measured_lit_share;
+			vec3 measured_lit_position;
 			bool measured_ok = GiLightVoxelReadFadeRemod(hit_position, hit_normal, rough_value,
 			                                             GI_REFLECTION_CASCADE_FADE_VOXELS,
 			                                             measured, measured_albedo,
-			                                             measured_albedo_ok);
+			                                             measured_albedo_ok, measured_lit,
+			                                             measured_lit_share,
+			                                             measured_lit_position);
 #else
 			bool measured_ok = GiLightVoxelReadFade(hit_position, hit_normal, rough_value,
 			                                        GI_REFLECTION_CASCADE_FADE_VOXELS, measured);
@@ -381,25 +500,51 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 					uint material_base = uint(hit.instance_index) * uint(SDF_INSTANCE_STRIDE);
 					vec4 material0 = b_sdf_instances[material_base + 8u];
 					vec3 hit_emissive = b_sdf_instances[material_base + 9u].xyz;
-					BRANCH
-					if(dot(hit_emissive, hit_emissive) <= 0.0)
+					// SOURCE SPLIT: the volume mixes a voxelised emitter's own emission into
+					// every read within a cell or two of it, so a mirror showed the strip's
+					// exact silhouette next to a fat glowing bar of the ceiling's voxels
+					// (the user's "light blob voxels next to accurate geometry"). The walk
+					// now hands back the LIT estimate over non-source faces, which is
+					// remodulated by the hit's own albedo as before, and the hit's OWN
+					// emission - exact, at the SDF silhouette - is added on top: the
+					// ceiling reflects the strip's light as a smooth gradient, the strip
+					// reflects as itself. A footprint with no lit face (all source) borrows
+					// the first coarser level's lit estimate inside the walk.
+					vec3 hit_albedo = material0.xyz;
+					uint mean_slot = uint(material0.w);
+					// Slot 0 is the composer's "no mean" convention: factor only.
+					if(mean_slot != 0u)
 					{
-						vec3 hit_albedo = material0.xyz;
-						uint mean_slot = uint(material0.w);
-						// Slot 0 is the composer's "no mean" convention: factor only.
-						if(mean_slot != 0u)
-						{
-							hit_albedo *= GiReflectionMeanAlbedo(mean_slot);
-						}
-						hit_albedo = min(hit_albedo, vec3_splat(GI_MAX_ALBEDO));
-						vec3 voxel_albedo = min(measured_albedo, vec3_splat(GI_MAX_ALBEDO));
-						vec3 ratio = hit_albedo /
-						             max(voxel_albedo,
-						                 vec3_splat(GI_REFLECTION_REMODULATE_ALBEDO_FLOOR));
-						radiance *= clamp(ratio,
-						                  vec3_splat(0.0),
-						                  vec3_splat(GI_REFLECTION_REMODULATE_RATIO_MAX));
+						hit_albedo *= GiReflectionMeanAlbedo(mean_slot);
 					}
+					hit_albedo = min(hit_albedo, vec3_splat(GI_MAX_ALBEDO));
+					vec3 voxel_albedo = min(measured_albedo, vec3_splat(GI_MAX_ALBEDO));
+					vec3 ratio = hit_albedo /
+					             max(voxel_albedo,
+					                 vec3_splat(GI_REFLECTION_REMODULATE_ALBEDO_FLOOR));
+					bool hit_emits = dot(hit_emissive, hit_emissive) > 0.0;
+					// No lit face at any level (the walk borrows from coarser levels first):
+					// a non-emissive hit keeps the voxel total rather than the receiver's own
+					// gather, which on a mirror floor beside a strip is bright and painted a
+					// block along the strip line.
+					vec3 lit = hit_emits ? vec3_splat(0.0) : measured;
+					BRANCH
+					if(measured_lit_share > 0.0)
+					{
+						lit = measured_lit * clamp(ratio,
+						                           vec3_splat(0.0),
+						                           vec3_splat(GI_REFLECTION_REMODULATE_RATIO_MAX));
+						// NEAR-FIELD REMODULATION: a cell beside a strip holds one lit value
+						// for its whole 0.25 m, and the mirror drew it as a block. The
+						// emitter table knows the strip exactly, so the part of the cell's
+						// value the emitters account for is rescaled from where the walk
+						// measured it (the lit-weighted cell centres) to the hit - the 1/d
+						// gradient at pixel precision. Unshadowed on purpose: the voxel's
+						// own occlusion stays, the factor only reshapes it.
+						lit *= GiReflectionNearFieldFactor(hit_position, hit_normal, measured_lit_position,
+						                                   measured_lit, measured_albedo);
+					}
+					radiance = lit + hit_emissive;
 				}
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
 				// FIREFLY CLAMP, the gather's per-ray contract applied to the one tier that

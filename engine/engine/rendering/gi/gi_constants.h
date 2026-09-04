@@ -56,6 +56,14 @@
       " every face and went black wherever only coarse levels covered them; a quarter still"       \
       " separates a blob-buried outward shell (partial escape at 2-4 voxels) from a genuine"       \
       " interior face (closed at every scale)")                                                    \
+    X(GI_LIGHT_VOXEL_SOURCE_ALPHA, 0.9990234375f,                                                \
+      "unitless", "derived: 1 - 1/1024, the alpha a measured face stores when its value is"      \
+      " mostly its OWN emission (emissive luminance above the lit part). Representable in"       \
+      " half floats, above every reader's measured test (0.5) and within 0.1% of 1 for every"  \
+      " alpha-weighted trilinear read, so the diffuse readers are unchanged; the reflection"    \
+      " tier's matched-weight walk reads it exactly (texelFetch) and keeps source faces out"    \
+      " of its lit estimate, adding the hit instance's own emission instead - a voxelised"     \
+      " strip no longer smears its glow over the neighbouring ceiling in a mirror")             \
     X(GI_LIGHT_VOXEL_CULLED_ALPHA, 0.00390625f,                                                    \
       "unitless", "derived: 1/256, the provenance alpha a CULLED voxel face stores. Alpha 0 is"    \
       " the never-measured mark that lets every light-voxel reader fall back to a coarser"         \
@@ -604,6 +612,18 @@
     X(GI_TEMPORAL_DIRTY_EMISSIVE_REACH_MAX, 16.0f,                                              \
       "metres", "derived: the level-0 clipmap half extent - a reach past it is the far field's" \
       " business, and a screen-wide flush already exists for a scene changing everywhere")     \
+    X(GI_REFLECTION_NEAR_FIELD_EMITTERS, 4,                                                     \
+      "emitter pieces", "derived: the strongest pieces (power / d^2 at the hit) whose analytic"  \
+      " irradiance remodulates a mirror hit's lit voxel value from the cell the walk measured"  \
+      " to the exact hit - the near field of a strip, 1/d over centimetres, that a 0.25 m cell" \
+      " can only draw as a block. Four covers a strip's neighbouring segments and a corner")   \
+    X(GI_REFLECTION_NEAR_FIELD_SAMPLES, 4,                                                      \
+      "points per piece", "derived: Lambertian patches along a piece's longest axis; the ratio" \
+      " of two such sums is exact for a point source and within a few percent of the line"     \
+      " integral at four for a 1 m piece past a tenth of its length")                          \
+    X(GI_REFLECTION_NEAR_FIELD_RATIO_MAX, 16.0f,                                               \
+      "unitless", "derived: the near-field gain cap - a hit a few centimetres from a strip"    \
+      " against a cell centre 0.2 m away is ~10; beyond that the firefly clamp owns it")       \
     X(GI_CLIPMAP_EDIT_THROTTLE_FRAMES, 8,                                                          \
       "frames", "derived: a continuously edited instance (an editor drag) re-fingerprints its"     \
       " levels EVERY frame, and each recompose is a full non-toroidal distance volume plus"        \

@@ -43,6 +43,11 @@ struct GiEmitter
 	float radius;
 	vec3 radiance;
 	float power;
+	/// The piece's axis-aligned extent in metres, decoded from the power lane (the upload
+	/// packs it there, negated and offset by one); zero with has_extent false when the
+	/// table came from an upload that still wrote the power.
+	vec3 extent;
+	bool has_extent;
 };
 
 /// The emitter's bounding-sphere cone as seen from one point.
@@ -66,6 +71,16 @@ GiEmitter GiLoadEmitter(int index)
 	e.radius = e0.w;
 	e.radiance = e1.xyz;
 	e.power = e1.w;
+	e.extent = vec3_splat(0.0);
+	e.has_extent = e1.w < -0.5;
+	if(e.has_extent)
+	{
+		float packed = -e1.w - 1.0;
+		float x8 = floor(mod(packed, 256.0));
+		float y8 = floor(mod(packed / 256.0, 256.0));
+		float z8 = floor(packed / 65536.0);
+		e.extent = vec3(x8, y8, z8) * (GI_EMISSIVE_NEE_SEGMENT / 255.0);
+	}
 	return e;
 }
 

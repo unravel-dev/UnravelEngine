@@ -990,6 +990,11 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 			}
 		}
 		vec3 radiance = bounded_albedo * irradiance / GI_PI + emissive;
+		// SOURCE FLAG (GI_LIGHT_VOXEL_SOURCE_ALPHA): a face whose value is mostly its own
+		// emission stores an alpha a hair under 1. Every alpha-weighted read is unchanged
+		// to 0.1%; the reflection tier's matched-weight walk tells such faces apart and keeps
+		// their emission out of the lit estimate it remodulates (gi_light_voxels.sh).
+		bool source_dominated = GiStatsLuminance(emissive) > GiStatsLuminance(radiance - emissive);
 		// RELIGHT EMA (GI_LIGHT_VOXEL_EMA_BLEND): the relight is SAMPLED - one dithered
 		// evaluation point per rotation (light_jitter above) - so near shadow edges and
 		// 1/r^2 falloffs the raw store is a limit cycle at the rotation period. The gather
@@ -1021,7 +1026,8 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		float lum_scale = max(max(lum_new, lum_old), GI_QUIESCENCE_LUMINANCE_FLOOR);
 		stats_change += abs(lum_new - lum_old) / lum_scale;
 		stats_faces += 1.0;
-		imageStore(s_light_voxels_out, texel, vec4(radiance, 1.0));
+		imageStore(s_light_voxels_out, texel,
+		           vec4(radiance, source_dominated ? GI_LIGHT_VOXEL_SOURCE_ALPHA : 1.0));
 	}
 }
 
