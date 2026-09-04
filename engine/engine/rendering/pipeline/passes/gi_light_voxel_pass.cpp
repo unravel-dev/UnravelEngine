@@ -300,6 +300,20 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     }
     const float vis_memo_params[4] = {float(vis_memo_generation), ema_blend, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_gi_vis_memo_params, vis_memo_params);
+    // DIRTY REGIONS (gi_dirty_regions.sh): inside one the radiance store writes through
+    // instead of folding into the EMA - the bounce it integrates there is the light a moved
+    // placement left, and blending it in at 1/8 per relight kept a moved emissive's pool in
+    // the volume for a rotation window after the temporal's hold had already expired.
+    {
+        constexpr uint32_t max_regions = uint32_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS);
+        float dirty_bounds[max_regions * 2u * 4u] = {};
+        const uint32_t dirty_count = surface_cache.pack_dirty_regions(dirty_bounds, max_regions);
+        const float dirty_margin =
+            params.view_cache->get_clipmap().get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
+        const float dirty_params[4] = {float(dirty_count), math::max(dirty_margin, 1e-3f), 0.0f, 0.0f};
+        gfx::set_uniform(program_.u_gi_temporal_dirty, dirty_params);
+        gfx::set_uniform(program_.u_gi_temporal_bounds, dirty_bounds, uint16_t(2u * max_regions));
+    }
     if(probes_ready)
     {
         gfx::set_texture(program_.s_world_probe_irradiance, 11, clipmap_gpu.get_world_probe_irradiance());

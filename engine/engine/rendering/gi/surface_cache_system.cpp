@@ -364,25 +364,67 @@ void surface_cache_system::track_placement(uint64_t identity,
     mix_float(emissive.x);
     mix_float(emissive.y);
     mix_float(emissive.z);
+    // EMISSIVE REACH: a bounced pool sits within a probe spacing of its placement (the
+    // kernel's margin), but an emitter lights everything it faces out to where L x A / d^2
+    // drops below GI_TEMPORAL_DIRTY_EMISSIVE_IRRADIANCE. Its region is inflated to that
+    // distance so the pool it LEFT flushes too: the temporal collapses there and the screen
+    // tier stops reading last frame's composite there (the loop that kept the old glow alive
+    // for seconds). Power-derived, so a bullet inflates by centimetres, a room panel by the
+    // room.
+    math::bbox region_bounds = bounds;
+    const float luminance = 0.2126f * emissive.x + 0.7152f * emissive.y + 0.0722f * emissive.z;
+    if(luminance > 0.0f && !(bounds.min.x > bounds.max.x))
+    {
+        const math::vec3 extent = math::max(bounds.max - bounds.min, math::vec3(0.0f));
+        const float area = 2.0f * (extent.x * extent.y + extent.y * extent.z + extent.z * extent.x);
+        const float reach = math::clamp(std::sqrt(luminance * area / float(gi::GI_TEMPORAL_DIRTY_EMISSIVE_IRRADIANCE)),
+                                        0.0f,
+                                        float(gi::GI_TEMPORAL_DIRTY_EMISSIVE_REACH_MAX));
+        region_bounds.min -= math::vec3(reach);
+        region_bounds.max += math::vec3(reach);
+    }
     auto [it, inserted] = tracked_placements_.try_emplace(identity);
     auto& tracked = it->second;
     if(inserted || tracked.swept)
     {
         // A placement appearing (or re-appearing after a sweep) lights and occludes where
         // nothing did: its bounds are stale from the first frame.
-        tracked.history.emplace_back(world_frame_, bounds);
+        tracked.history.emplace_back(world_frame_, region_bounds);
     }
     else if(tracked.placement_hash != hash)
     {
         // Both the vacated spot and the new one: the light the placement bounced where it WAS
         // is exactly the trail the flush exists for.
         tracked.history.emplace_back(world_frame_, tracked.bounds);
-        tracked.history.emplace_back(world_frame_, bounds);
+        tracked.history.emplace_back(world_frame_, region_bounds);
     }
     tracked.placement_hash = hash;
-    tracked.bounds = bounds;
+    tracked.bounds = region_bounds;
     tracked.seen_frame = world_frame_;
     tracked.swept = false;
+}
+
+auto surface_cache_system::pack_dirty_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t
+{
+    uint32_t count = 0;
+    for(const auto& region : dirty_regions_)
+    {
+        if(count >= max_regions)
+        {
+            break;
+        }
+        float* slot = out_bounds + size_t(count) * 8u;
+        slot[0] = region.bounds.min.x;
+        slot[1] = region.bounds.min.y;
+        slot[2] = region.bounds.min.z;
+        slot[3] = 0.0f;
+        slot[4] = region.bounds.max.x;
+        slot[5] = region.bounds.max.y;
+        slot[6] = region.bounds.max.z;
+        slot[7] = 0.0f;
+        ++count;
+    }
+    return count;
 }
 
 void surface_cache_system::rebuild_dirty_regions()
@@ -809,6 +851,66 @@ void surface_cache_system::update_world(scene& scn)
             const auto& submesh_transforms = model_comp.get_submesh_transforms();
             const math::mat4& world_transform = transform_comp.get_transform_global().get_matrix();
             const uint32_t sdf_count = mesh_ptr->get_sdf_count();
+            // EMISSIVE SUBMESHES WITHOUT A FIELD (no baked SDF, or skinned) are not voxelised:
+            // they light the gather through the screen tier alone. The light one leaves behind
+            // when it moves is exactly the residual the dirty regions flush, and without a
+            // placement it never registered one - an emissive moved in the editor kept its old
+            // glow on the walls until the camera moved (the screen-history loop's memory). They
+            // are tracked here with their drawn bounds; the field walk below tracks every
+            // submesh that has one, so the two sets are disjoint.
+            const uint64_t drawn_entity_key = uint64_t(static_cast<uint32_t>(entity)) << 32u;
+            const size_t drawn_submesh_count = mesh_ptr->get_submeshes_count();
+            for(uint32_t submesh_index = 0; submesh_index < uint32_t(drawn_submesh_count); ++submesh_index)
+            {
+                const auto* submesh = mesh_ptr->get_submesh(submesh_index);
+                if(submesh == nullptr || (submesh_index < sdf_count && !submesh->skinned))
+                {
+                    continue;
+                }
+                const auto mat = resolve_submesh_material(mdl, model_comp, *mesh_ptr, submesh_index);
+                const auto* pbr = dynamic_cast<const pbr_material*>(mat.get());
+                if(pbr == nullptr)
+                {
+                    continue;
+                }
+                const auto emissive_color = pbr->get_emissive_color().to_linear();
+                const math::vec3 emissive =
+                    math::vec3(emissive_color.value.r, emissive_color.value.g, emissive_color.value.b) *
+                    pbr->get_emissive_intensity();
+                const float luminance = 0.2126f * emissive.x + 0.7152f * emissive.y + 0.0722f * emissive.z;
+                if(luminance < float(gi::GI_EMISSIVE_NEE_MIN_LUMINANCE))
+                {
+                    continue;
+                }
+                const auto base_color = pbr->get_base_color().to_linear();
+                const math::vec3 albedo(base_color.value.r, base_color.value.g, base_color.value.b);
+                const auto track_drawn = [&](uint64_t identity, const math::mat4& local_to_world)
+                {
+                    math::bbox world_bounds;
+                    world_bounds.reset();
+                    for(const auto& corner : submesh->bbox.get_corners())
+                    {
+                        world_bounds.add_point(math::vec3(local_to_world * math::vec4(corner, 1.0f)));
+                    }
+                    track_placement(identity, local_to_world, albedo, emissive, world_bounds);
+                };
+                if(!submesh_transforms.has_transforms(submesh_index))
+                {
+                    track_drawn(drawn_entity_key | (uint64_t(submesh_index) << 16u), world_transform);
+                    continue;
+                }
+                const size_t drawn_transform_count = submesh_transforms.get_transform_count(submesh_index);
+                for(size_t instance_index = 0; instance_index < drawn_transform_count; ++instance_index)
+                {
+                    const math::mat4* transform_ptr = submesh_transforms.get_transform(submesh_index, instance_index);
+                    if(transform_ptr != nullptr)
+                    {
+                        track_drawn(drawn_entity_key | (uint64_t(submesh_index) << 16u) |
+                                        (uint64_t(instance_index) & 0xFFFFu),
+                                    *transform_ptr);
+                    }
+                }
+            }
             for(uint32_t submesh_index = 0; submesh_index < sdf_count; ++submesh_index)
             {
                 // Skinned submeshes never place a field, even when the compiled asset carries one

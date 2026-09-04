@@ -425,6 +425,12 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                         float(gfx::get_render_frame()),
                                         1.0f,
                                         s.probe_visibility_variance_gate};
+            // Once per frame, ahead of the trace: the screen tier declines last frame's
+            // composite at hits inside a dirty region (gi_dirty_regions.sh), so the regions
+            // and the camera motion are bound before the trace dispatch as well as for the
+            // temporal.
+            camera_motion_ = measure_camera_motion(params);
+            bind_dirty_regions(params, wp_base_spacing);
             const auto radiance_atlas_tex = clipmap_gpu.get_world_probe_radiance();
             const float wp_radiance_atlas[4] = {1.0f / float(radiance_atlas_tex->info.width),
                                                 1.0f / float(radiance_atlas_tex->info.height),
@@ -955,30 +961,10 @@ auto gi_resolve_pass::bind_dirty_regions(const run_params& params, float margin)
     bool overflow = false;
     if(params.surface_cache != nullptr)
     {
-        const auto& regions = params.surface_cache->get_dirty_regions();
-        overflow = regions.size() > size_t(max_regions);
-        // Most recent first (the system sorts them), so the budget keeps the regions still
-        // flushing when it overflows - the global cap covers the rest that frame anyway.
-        for(const auto& region : regions)
-        {
-            if(count >= max_regions)
-            {
-                break;
-            }
-            float* slot = bounds + size_t(count) * 8u;
-            slot[0] = region.bounds.min.x;
-            slot[1] = region.bounds.min.y;
-            slot[2] = region.bounds.min.z;
-            slot[3] = 0.0f;
-            slot[4] = region.bounds.max.x;
-            slot[5] = region.bounds.max.y;
-            slot[6] = region.bounds.max.z;
-            slot[7] = 0.0f;
-            ++count;
-        }
+        count = params.surface_cache->pack_dirty_regions(bounds, max_regions);
+        overflow = params.surface_cache->get_dirty_regions().size() > size_t(max_regions);
     }
-    const float camera_motion = measure_camera_motion(params);
-    const float dirty_params[4] = {float(count), math::max(margin, 1e-3f), camera_motion, 0.0f};
+    const float dirty_params[4] = {float(count), math::max(margin, 1e-3f), camera_motion_, 0.0f};
     gfx::set_uniform(temporal_program_.u_gi_temporal_dirty, dirty_params);
     // Attribution log, throttled, for the OVER-BUDGET case only: it means more placements
     // changed than the region budget holds and the screen-wide fast cap is back. Legitimate

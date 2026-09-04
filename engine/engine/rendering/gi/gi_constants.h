@@ -592,6 +592,18 @@
     X(GI_TEMPORAL_CAMERA_ROTATION_FULL, 1.0f,                                                      \
       "degrees per frame", "derived: the rotation-rate counterpart - a turn moves the viewport"    \
       " edge, which is the screen partition's boundary, across every wall it crosses")            \
+    X(GI_TEMPORAL_DIRTY_EMISSIVE_IRRADIANCE, 0.05f,                                              \
+      "radiance units", "derived: an emissive placement's dirty region is inflated to the"      \
+      " distance where its irradiance L x A / d^2 falls to this - the pool it lit. Without it"  \
+      " the region was the placement's own bounds plus one probe spacing, and the glow a moved" \
+      " emissive left on walls beyond that stayed on the slow lane, fed back through the"       \
+      " screen-history read (last frame's composite carries the accumulated glow) with a"      \
+      " multi-second time constant - the user's 'emissive does not clear' report. The same"   \
+      " threshold as GI_EMISSIVE_NEE_MIN_LUMINANCE, so a bullet-sized emitter inflates by"      \
+      " centimetres and a room panel by the room")                                             \
+    X(GI_TEMPORAL_DIRTY_EMISSIVE_REACH_MAX, 16.0f,                                              \
+      "metres", "derived: the level-0 clipmap half extent - a reach past it is the far field's" \
+      " business, and a screen-wide flush already exists for a scene changing everywhere")     \
     X(GI_CLIPMAP_EDIT_THROTTLE_FRAMES, 8,                                                          \
       "frames", "derived: a continuously edited instance (an editor drag) re-fingerprints its"     \
       " levels EVERY frame, and each recompose is a full non-toroidal distance volume plus"        \

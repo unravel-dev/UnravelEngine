@@ -219,6 +219,8 @@ private:
      * @param margin Soft falloff distance around each region, metres.
      * @return true when more regions changed than the uniform budget holds - the caller then
      *         falls back to the screen-wide fast cap.
+     * Idempotent within a frame: bound before the trace (its screen tier declines the
+     * composite history inside a region) and again for the temporal.
      */
     auto bind_dirty_regions(const run_params& params, float margin) -> bool;
 
@@ -274,6 +276,8 @@ private:
         /// ~1e5 frames (a half-hour session).
         gfx::program::uniform_ptr u_gi_jitter;
         gfx::program::uniform_ptr u_gi_screen_trace;
+        gfx::program::uniform_ptr u_gi_temporal_dirty;
+        gfx::program::uniform_ptr u_gi_temporal_bounds;
         gfx::program::uniform_ptr u_gi_prev_view_proj;
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
@@ -303,6 +307,12 @@ private:
             cache_uniform(program.get(), u_gi_camera, "u_gi_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_jitter, "u_gi_jitter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_screen_trace, "u_gi_screen_trace", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_temporal_dirty, "u_gi_temporal_dirty", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_gi_temporal_bounds,
+                          "u_gi_temporal_bounds",
+                          gfx::uniform_type::Vec4,
+                          2u * uint16_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS));
             cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
@@ -542,6 +552,8 @@ private:
     math::vec3 prev_camera_position_{};
     math::vec3 prev_camera_axis_{};
     bool has_prev_camera_ = false;
+    /// This frame's camera motion (measure_camera_motion), bound with the dirty regions.
+    float camera_motion_ = 0.0f;
     /// Probe lattice of the last traced frame. Reprojection indexes the READ half by the same
     /// layout, so a lattice change makes the whole history unaddressable and must reset it.
     uint32_t probe_grid_x_ = 0;

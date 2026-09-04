@@ -72,6 +72,7 @@
 #include "gi/gi_emissive_nee.sh"
 #define GI_LIGHT_VOXEL_READ
 #include "gi/gi_light_voxels.sh"
+#include "gi/gi_dirty_regions.sh"
 #define GI_WORLD_PROBE_READ
 #define GI_WORLD_PROBE_READ_RADIANCE
 // Completion reads radiance + depth, never the irradiance cage - skipping it frees stage 11
@@ -444,7 +445,15 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 							// surface last frame showed there. Off-screen last frame, no
 							// history, or a depth mismatch: the voxel read answers exactly as
 							// before.
-							bool screen_lit = GiReadHistory(hit_position, radiance);
+							// DIRTY-REGION CUT: where a placement just moved, appeared or
+							// vanished (an emissive one: out to its light's reach), last
+							// frame's composite still carries the light it left, and
+							// reading it here fed that light back into the gather - with
+							// the temporal's memory on top, a moved emissive's pool decayed
+							// over seconds. Inside a region the voxel read answers (relit
+							// within a rotation) until the hold expires.
+							bool screen_lit = GiDirtyRegionFactor(hit_position) < 0.5 &&
+							                  GiReadHistory(hit_position, radiance);
 							if(!screen_lit && !GiLightVoxelReadBlend(hit_position, hit_normal,
 							                                         GI_LIGHT_VOXEL_FADE_VOXELS, radiance))
 							{

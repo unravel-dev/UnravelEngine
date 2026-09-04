@@ -164,6 +164,8 @@ private:
         gfx::program::uniform_ptr u_gi_vis_memo_params;
         gfx::program::uniform_ptr u_gi_world_probe_params;
         gfx::program::uniform_ptr u_gi_world_probe_atlas;
+        gfx::program::uniform_ptr u_gi_temporal_dirty;
+        gfx::program::uniform_ptr u_gi_temporal_bounds;
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_attr_albedo;
@@ -196,6 +198,12 @@ private:
             cache_uniform(program.get(), u_gi_vis_memo_params, "u_gi_vis_memo_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_temporal_dirty, "u_gi_temporal_dirty", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_gi_temporal_bounds,
+                          "u_gi_temporal_bounds",
+                          gfx::uniform_type::Vec4,
+                          2u * uint16_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS));
             cache_uniform(program.get(),
                           s_world_probe_irradiance,
                           "s_world_probe_irradiance",

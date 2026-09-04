@@ -82,39 +82,9 @@ uniform vec4 u_gi_temporal_texel;
 uniform vec4 u_gi_temporal_camera;
 #define u_gi_velocity_available (u_gi_temporal_camera.w > 0.5)
 
-/// DIRTY REGIONS - where an instance moved, appeared, vanished or changed material within the
-/// last GI_TEMPORAL_DIRTY_HOLD_FRAMES (surface_cache_system::get_dirty_regions). x = how many
-/// (min, max) pairs of u_gi_temporal_bounds are live, y = the soft margin around each in
-/// metres (one level-0 probe spacing: the reach of a small mover's bounce pool). Inside a
-/// region the slow lane collapses to the fast cap so the stale light the mover left behind
-/// flushes; outside, the long mean stays. The old trigger was the content epoch - GLOBAL, so
-/// one cube oscillating 30 m away pinned every pixel at the fast cap (measured: static-floor
-/// noise doubled in a still shot).
-uniform vec4 u_gi_temporal_dirty;
+#include "gi/gi_dirty_regions.sh"
 // z = the camera's motion this frame against the GI_TEMPORAL_CAMERA_*_FULL rates, [0, 1].
 #define u_gi_camera_motion    u_gi_temporal_dirty.z
-uniform vec4 u_gi_temporal_bounds[GI_TEMPORAL_DIRTY_MAX_BOUNDS * 2];
-
-/// 1 inside a dirty region, fading to 0 over the margin outside its box.
-float GiDirtyRegionFactor(vec3 world_position)
-{
-	int region_count = int(u_gi_temporal_dirty.x);
-	float margin = max(u_gi_temporal_dirty.y, 1e-3);
-	float factor = 0.0;
-	LOOP
-	for(int i = 0; i < GI_TEMPORAL_DIRTY_MAX_BOUNDS; ++i)
-	{
-		if(i >= region_count)
-		{
-			break;
-		}
-		vec3 region_min = u_gi_temporal_bounds[i * 2].xyz;
-		vec3 region_max = u_gi_temporal_bounds[i * 2 + 1].xyz;
-		vec3 outside = max(max(region_min - world_position, world_position - region_max), vec3_splat(0.0));
-		factor = max(factor, saturate(1.0 - length(outside) / margin));
-	}
-	return factor;
-}
 
 /// Replaces any non-finite component. A single NaN in the history is otherwise permanent: it
 /// propagates through every subsequent blend and spreads outward through the spatial filter.

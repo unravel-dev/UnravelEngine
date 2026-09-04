@@ -129,6 +129,15 @@ public:
         return dirty_regions_;
     }
 
+    /**
+     * @brief Packs the dirty regions as (min, max) vec4 pairs for the shader uniform of
+     *        gi_dirty_regions.sh, most recent first so a fixed budget keeps the regions
+     *        still flushing.
+     * @return The number of regions packed (at most @p max_regions); more regions than that
+     *         exist when get_dirty_regions().size() exceeds it.
+     */
+    auto pack_dirty_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t;
+
     auto get_atlas() -> sdf_atlas&
     {
         return atlas_;
