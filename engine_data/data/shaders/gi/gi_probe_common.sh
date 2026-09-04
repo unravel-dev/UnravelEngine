@@ -23,6 +23,9 @@
  *      [4]     xyz = lifted trace origin, w = shortened-ray range (placement pass)
  *      [5]     xy = anchor uv, z = anchor device depth, w = 0 (reserved; held the
  *              removed probe-space temporal's walk flag - kept for layout stability)
+ *      [6]     x = the SCREEN-TIER SHARE of the probe's traced rays this frame (the trace;
+ *              the interp pass mirrors its parents' mean) - the temporal's camera-motion
+ *              collapse weight, yzw = 0
  *      [9]     xyz = anchor world position, w = the probe MODE: 0 = no geometry, 1 = traced,
  *              2 = interpolated from its even-lattice parents (adaptive gather). Consumers
  *              that only care about validity keep testing w > 0.5.
@@ -36,6 +39,7 @@
 #define GI_PROBE_STRIDE     12
 #define GI_PROBE_ORIGIN     4
 #define GI_PROBE_ANCHOR     5
+#define GI_PROBE_SCREEN_SHARE 6
 #define GI_PROBE_META       9
 #define GI_PROBE_META2      10
 #define GI_PROBE_HISTORY    11

@@ -51,7 +51,8 @@ uniform vec4 u_gi_intensity;
 /// the fallback unjittered brackets run identical code.
 void GiGatherBracket(vec2 base, vec2 frac, vec3 world_position, vec3 world_normal,
                        float plane_tolerance, vec2 oct_base, vec2 oct_frac,
-                       inout vec3 radiance, inout float measured, inout float weight_sum)
+                       inout vec3 radiance, inout float measured, inout float weight_sum,
+                       inout float screen_share)
 {
 	for(int j = 0; j < 2; ++j)
 	{
@@ -88,6 +89,7 @@ void GiGatherBracket(vec2 base, vec2 frac, vec3 world_position, vec3 world_norma
 			radiance += max(probe_irradiance.xyz, vec3_splat(0.0)) * weight;
 			measured += saturate(probe_irradiance.w) * weight;
 			weight_sum += weight;
+			screen_share += saturate(b_gi_probes[record + uint(GI_PROBE_SCREEN_SHARE)].x) * weight;
 		}
 	}
 }
@@ -95,12 +97,16 @@ void GiGatherBracket(vec2 base, vec2 frac, vec3 world_position, vec3 world_norma
 /// The whole gather for one pixel: rgb = irradiance/pi, a = the measured weight. Depth and
 /// the world reconstruction are handed back so the fused temporal reuses them in registers
 /// (on the sky and degenerate-normal early-outs the position is never consumed downstream -
-/// the temporal's sky test fires first).
-vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 out_world_position)
+/// the temporal's sky test fires first). @p out_screen_share is the bracket-weighted share
+/// of the gather that the SCREEN tier answered (0 when the world probes answer), the
+/// temporal's camera-motion collapse weight.
+vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 out_world_position,
+                       out float out_screen_share)
 {
 	float depth = texture2DLod(s_gi_depth, uv, 0.0).x;
 	out_depth = depth;
 	out_world_position = vec3_splat(0.0);
+	out_screen_share = 0.0;
 	if(depth >= 1.0)
 	{
 		return vec4_splat(0.0);
@@ -135,8 +141,9 @@ vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 o
 	vec3 irradiance = vec3_splat(0.0);
 	float measured = 0.0;
 	float weight_sum = 0.0;
+	float screen_share = 0.0;
 	GiGatherBracket(base, frac, world_position, world_normal, plane_tolerance, oct_base, oct_frac,
-	                  irradiance, measured, weight_sum);
+	                  irradiance, measured, weight_sum, screen_share);
 	// The PLANE CONSTRAINT on the jitter: a jittered bracket whose probes all fail the plane
 	// test would fall through to the world probes and flicker at silhouettes; the unjittered
 	// bracket answers instead, which is the "only when the target stays in the pixel's plane"
@@ -146,10 +153,11 @@ vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 o
 		base = floor(grid);
 		frac = grid - base;
 		GiGatherBracket(base, frac, world_position, world_normal, plane_tolerance, oct_base, oct_frac,
-		                  irradiance, measured, weight_sum);
+		                  irradiance, measured, weight_sum, screen_share);
 	}
 	if(weight_sum > 1e-4 && measured > 1e-4)
 	{
+		out_screen_share = saturate(screen_share / weight_sum);
 		// Normalised over the measured fraction, weighted out over what the probes vouch for.
 		return vec4(irradiance / measured * u_gi_intensity.x, saturate(measured / weight_sum));
 	}

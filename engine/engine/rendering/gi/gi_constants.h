@@ -571,13 +571,27 @@
       " hot cap of GI_TEMPORAL_MAX_FRAMES the penumbra decayed as a visible second-long trail."    \
       " Flushing at the fast rate while hot trades transient shimmer (bounded by the"              \
       " quiescence hold) for reactivity, and costs nothing while still")                           \
-    X(GI_TEMPORAL_SLOW_FRAMES, 96,                                                                 \
-      "frames", "measured: a small bright emissive source excites amortization phase waves"        \
-      " with a ~16-frame period (the world-probe stratum window x the light-voxel rotation)"       \
-      " that a 24-frame mean cannot average - blobs crawl; the user-validated ~100 settles"        \
-      " them. 96 = six wave periods and twelve fast cycles. Costs no responsiveness: the"          \
-      " change detector (GI_TEMPORAL_CHANGE_SIGMA) snaps the slow lane to the fast one on a"       \
-      " real mean shift; the gi_resolve_pass::settings::temporal_slow_frames default")             \
+    X(GI_TEMPORAL_SLOW_FRAMES, 24,                                                                 \
+      "frames", "derived: three anchor-placement cycles (the 8-cycle Halton), the window"          \
+      " GI_TEMPORAL_MAX_FRAMES was measured stable at with per-frame cone jitter. It was 96 for" \
+      " a while, justified as hiding ~16-frame amortization waves from the world probes; but a"   \
+      " long mean also assumes the gather is stationary per surface point, and it is not: which" \
+      " rays read the screen history and which the voxels follows the camera, so after every"    \
+      " translation the lane kept the old partition for seconds (sharp patches converging on"    \
+      " walls). Measured 2026-09-04 on the suite: the still-camera temporal std at 24 equals the" \
+      " 96 numbers in every emissive cell (no wave left to hide - the light-voxel EMA and the"    \
+      " relight rotation changed since), a per-probe stratum phase in the world probe trace was"  \
+      " neutral still and slightly worse with movers and was dropped, and the slow lane now"     \
+      " collapses under camera motion by its screen share (GI_TEMPORAL_CAMERA_MOTION_FULL)")     \
+    X(GI_TEMPORAL_CAMERA_MOTION_FULL, 0.02f,                                                       \
+      "metres per frame", "derived: camera translation per frame at which a pixel lit through"     \
+      " the SCREEN tier has its slow lane fully collapsed to the fast cap (scaled by the pixel's" \
+      " screen share, so cache-lit pixels keep their history - camera travel does not stale"      \
+      " accumulated world light, it stales the screen-history partition). A walking pace at"       \
+      " 60 Hz; a slow dolly collapses proportionally")                                            \
+    X(GI_TEMPORAL_CAMERA_ROTATION_FULL, 1.0f,                                                      \
+      "degrees per frame", "derived: the rotation-rate counterpart - a turn moves the viewport"    \
+      " edge, which is the screen partition's boundary, across every wall it crosses")            \
     X(GI_CLIPMAP_EDIT_THROTTLE_FRAMES, 8,                                                          \
       "frames", "derived: a continuously edited instance (an editor drag) re-fingerprints its"     \
       " levels EVERY frame, and each recompose is a full non-toroidal distance volume plus"        \

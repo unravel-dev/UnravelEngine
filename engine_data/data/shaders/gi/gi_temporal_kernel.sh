@@ -91,6 +91,8 @@ uniform vec4 u_gi_temporal_camera;
 /// one cube oscillating 30 m away pinned every pixel at the fast cap (measured: static-floor
 /// noise doubled in a still shot).
 uniform vec4 u_gi_temporal_dirty;
+// z = the camera's motion this frame against the GI_TEMPORAL_CAMERA_*_FULL rates, [0, 1].
+#define u_gi_camera_motion    u_gi_temporal_dirty.z
 uniform vec4 u_gi_temporal_bounds[GI_TEMPORAL_DIRTY_MAX_BOUNDS * 2];
 
 /// 1 inside a dirty region, fading to 0 over the margin outside its box.
@@ -230,7 +232,7 @@ vec4 GiFreshMoments(vec4 current)
  * them from a helper fails on the D3D backend alone with an undeclared-identifier error that does
  * not name the output.
  */
-void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position,
+void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, float screen_share,
                        out vec4 out_color, out vec4 out_fast, out vec4 out_moments)
 {
 	if(!u_gi_has_history)
@@ -346,8 +348,20 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position,
 	// The slow lane's cap is REGION-LOCAL: the fast cap inside a dirty region (a changed
 	// instance's stale bounce flushes there), the settings window everywhere else - a
 	// continuous mix over the margin so the flush boundary never prints as a noise step.
-	float slow_cap = mix(max(u_gi_max_accum, 1.0), max(u_gi_fast_accum, 1.0),
-	                     GiDirtyRegionFactor(world_position));
+	// CAMERA MOTION [S5.3]. The gather is not stationary under camera translation: which of
+	// a pixel's rays read the screen history and which the light voxels is a partition that
+	// follows the viewport, and the slow lane, fed by the reprojected history, kept the old
+	// partition for its whole window after every dolly (sharp patches converging on walls,
+	// nothing the 3-sigma detector sees). While the camera moves the slow cap collapses
+	// toward the fast cap by the pixel's SCREEN SHARE - the screen-lit part of its gather -
+	// so cache-lit pixels keep their history (world light does not go stale with camera
+	// travel) and screen-lit pixels re-converge in fast-cap frames instead of slow-cap ones.
+	// u_gi_camera_motion is the resolve pass's per-frame translation and turn against the
+	// GI_TEMPORAL_CAMERA_*_FULL rates, saturated. Object motion is the dirty regions' and
+	// the velocity buffer's business already.
+	float motion_collapse = u_gi_camera_motion * saturate(screen_share);
+	float collapse = max(GiDirtyRegionFactor(world_position), motion_collapse);
+	float slow_cap = mix(max(u_gi_max_accum, 1.0), max(u_gi_fast_accum, 1.0), collapse);
 	float count = min(history_moments.z + 1.0, slow_cap);
 	float count_fast = min(count, max(u_gi_fast_accum, 1.0));
 	float alpha = 1.0 / count;

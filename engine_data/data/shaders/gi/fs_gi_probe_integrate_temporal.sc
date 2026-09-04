@@ -52,11 +52,12 @@ void main()
 	// The gather is finite by construction (probe atlases are sanitized upstream and the
 	// weights are clamped), matching the split path: GiSanitize there guards the TEXTURE
 	// round-trip this form no longer takes.
-	vec4 current = GiIntegrateGather(uv, gl_FragCoord.xy, depth, world_position);
+	float screen_share;
+	vec4 current = GiIntegrateGather(uv, gl_FragCoord.xy, depth, world_position, screen_share);
 	vec4 color;
 	vec4 fast;
 	vec4 moments;
-	GiResolveTemporal(uv, current, depth, world_position, color, fast, moments);
+	GiResolveTemporal(uv, current, depth, world_position, screen_share, color, fast, moments);
 	GI_COLOR_OUT = color;
 	GI_MOMENTS_OUT = moments;
 	GI_FAST_OUT = fast;

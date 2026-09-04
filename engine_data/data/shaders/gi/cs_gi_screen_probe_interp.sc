@@ -23,7 +23,7 @@
 #include "gi/gi_probe_common.sh"
 
 IMAGE2D_RW(s_probe_radiance_rw, rgba16f, 5);
-BUFFER_RO(b_gi_probes, vec4, 7);
+BUFFER_RW(b_gi_probes, vec4, 7);
 
 /// y > 0 = tier debug view: interpolated tiles paint magenta so the adaptive coverage is
 /// visible in the same view that shows the trace's tiers. Other components unused here.
@@ -55,6 +55,19 @@ void main()
 	}
 	ivec2 parents[4];
 	GiProbeParents(probe, parents);
+	if(local.x == 0 && local.y == 0)
+	{
+		// The screen share the temporal weights by: an interpolated probe carries its
+		// parents' mean, so the record never holds a stale value from an older trace.
+		float screen_share = 0.0;
+		for(int share_p = 0; share_p < 4; ++share_p)
+		{
+			uint parent_record = (GiProbeRecord(parents[share_p].x, parents[share_p].y, 0) +
+			                      u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
+			screen_share += b_gi_probes[parent_record + uint(GI_PROBE_SCREEN_SHARE)].x * 0.25;
+		}
+		b_gi_probes[record + uint(GI_PROBE_SCREEN_SHARE)] = vec4(screen_share, 0.0, 0.0, 0.0);
+	}
 	vec3 radiance = vec3_splat(0.0);
 	float alpha = 0.0;
 	LOOP for(int p = 0; p < 4; ++p)

@@ -14,5 +14,7 @@ void main()
 {
 	float depth_unused;
 	vec3 world_position_unused;
-	gl_FragColor = GiIntegrateGather(v_texcoord0, gl_FragCoord.xy, depth_unused, world_position_unused);
+	float screen_share_unused;
+	gl_FragColor = GiIntegrateGather(v_texcoord0, gl_FragCoord.xy, depth_unused, world_position_unused,
+	                                 screen_share_unused);
 }

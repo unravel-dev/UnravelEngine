@@ -597,7 +597,9 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                0,
                                gfx::access::ReadWrite,
                                gfx::texture_format::RGBA16F);
-                gfx::set_buffer(7, probe_buffer_, gfx::access::Read);
+                // Read-write: the interp pass mirrors its parents' screen share into the
+                // interpolated probe's record (GI_PROBE_SCREEN_SHARE).
+                gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
                 gfx::set_uniform(interp_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(interp_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(interp_program_.u_gi_screen_trace, screen_trace_params);
@@ -975,7 +977,8 @@ auto gi_resolve_pass::bind_dirty_regions(const run_params& params, float margin)
             ++count;
         }
     }
-    const float dirty_params[4] = {float(count), math::max(margin, 1e-3f), 0.0f, 0.0f};
+    const float camera_motion = measure_camera_motion(params);
+    const float dirty_params[4] = {float(count), math::max(margin, 1e-3f), camera_motion, 0.0f};
     gfx::set_uniform(temporal_program_.u_gi_temporal_dirty, dirty_params);
     // Attribution log, throttled, for the OVER-BUDGET case only: it means more placements
     // changed than the region budget holds and the screen-wide fast cap is back. Legitimate
@@ -999,6 +1002,29 @@ auto gi_resolve_pass::bind_dirty_regions(const run_params& params, float margin)
     }
     gfx::set_uniform(temporal_program_.u_gi_temporal_bounds, bounds, uint16_t(max_regions * 2u));
     return overflow;
+}
+
+auto gi_resolve_pass::measure_camera_motion(const run_params& params) -> float
+{
+    const math::vec3 position = params.cam->get_position();
+    // Normalised here: the view axis comes out of the inverse view transform with a length
+    // a little off one, and acos of a dot near one turns that into a standing "turn" of
+    // most of a degree per frame (measured 0.7-0.8 of the full rate on a parked camera).
+    // The chord of two unit axes is exactly zero for an unchanged pose.
+    const math::vec3 axis = math::normalize(params.cam->z_unit_axis());
+    float motion = 0.0f;
+    if(has_prev_camera_)
+    {
+        const float travel = math::length(position - prev_camera_position_);
+        const float half_chord = math::clamp(0.5f * math::length(axis - prev_camera_axis_), 0.0f, 1.0f);
+        const float turn_degrees = math::degrees(2.0f * std::asin(half_chord));
+        motion = math::max(travel / gi::GI_TEMPORAL_CAMERA_MOTION_FULL,
+                           turn_degrees / gi::GI_TEMPORAL_CAMERA_ROTATION_FULL);
+    }
+    prev_camera_position_ = position;
+    prev_camera_axis_ = axis;
+    has_prev_camera_ = true;
+    return math::clamp(motion, 0.0f, 1.0f);
 }
 
 auto gi_resolve_pass::acquire_history(gfx::render_view& rview,

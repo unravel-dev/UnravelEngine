@@ -102,10 +102,11 @@ public:
         int debug_view = 0;
         /// Full-resolution temporal accumulation over the integrated irradiance.
         bool enable_temporal = true;
-        /// The full-res temporal's SLOW lane cap - the stability window. Long on purpose:
-        /// a small bright emissive source excites ~16-frame amortization waves (crawling
-        /// voxel-scale blobs) that a short mean cannot average. Costs no responsiveness -
-        /// the change detector snaps to the 8-frame fast lane on a real lighting change.
+        /// The full-res temporal's SLOW lane cap - the stability window: three placement
+        /// cycles (GI_TEMPORAL_SLOW_FRAMES). The change detector snaps to the 8-frame fast
+        /// lane on a real lighting change, and under camera motion the lane collapses
+        /// toward the fast cap by each pixel's screen-tier share (the part of the gather
+        /// that is not stationary under translation).
         float temporal_slow_frames = float(gi::GI_TEMPORAL_SLOW_FRAMES);
         /// Reprojection depth tolerance (relative depth error per unit view distance).
         float reprojection_tolerance = gi::GI_TEMPORAL_DEPTH_TOLERANCE;
@@ -220,6 +221,13 @@ private:
      *         falls back to the screen-wide fast cap.
      */
     auto bind_dirty_regions(const run_params& params, float margin) -> bool;
+
+    /**
+     * @brief The camera's motion this frame for the temporal's slow-lane collapse: the
+     *        larger of translation over GI_TEMPORAL_CAMERA_MOTION_FULL and turn over
+     *        GI_TEMPORAL_CAMERA_ROTATION_FULL, saturated to [0, 1]. Advances the stored pose.
+     */
+    auto measure_camera_motion(const run_params& params) -> float;
 
     /// Blends this frame's gather into the reprojected history. Returns the accumulated texture.
     /// The split fallback: the deliverable path fuses this blend onto the integrate pass.
@@ -529,6 +537,11 @@ private:
     /// False until both record halves hold real data; gates the trace's importance
     /// reprojection so freshly allocated garbage is never read as history.
     bool records_trusted_ = false;
+    /// Last frame's camera pose for the temporal's camera-motion collapse (the z lane of
+    /// u_gi_temporal_dirty): position and view axis, valid once has_prev_camera_ is set.
+    math::vec3 prev_camera_position_{};
+    math::vec3 prev_camera_axis_{};
+    bool has_prev_camera_ = false;
     /// Probe lattice of the last traced frame. Reprojection indexes the READ half by the same
     /// layout, so a lattice change makes the whole history unaddressable and must reset it.
     uint32_t probe_grid_x_ = 0;

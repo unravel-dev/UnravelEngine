@@ -171,6 +171,20 @@ SHARED uint s_acc_r[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
 SHARED uint s_acc_g[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
 SHARED uint s_acc_b[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
 SHARED uint s_acc_t[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
+// Per probe: rays answered by the SCREEN tier over rays traced - the probe's screen share,
+// stored to its record for the temporal's camera-motion collapse (gi_temporal_kernel.sh).
+SHARED uint s_screen_rays[GI_TRACE_SLOT_COUNT];
+SHARED uint s_traced_rays[GI_TRACE_SLOT_COUNT];
+
+/// The probe's screen share for the temporal: rays the screen tier answered over rays
+/// traced (both counted where the tier is decided). Written by the slot leader after the
+/// trace barrier; interpolated probes get their parents' mean from the interp pass.
+void GiStoreScreenShare(int slot, uint record)
+{
+	uint traced = s_traced_rays[slot];
+	float share = traced > 0u ? float(s_screen_rays[slot]) / float(traced) : 0.0;
+	b_gi_probes[record + uint(GI_PROBE_SCREEN_SHARE)] = vec4(share, 0.0, 0.0, 0.0);
+}
 
 /*
  * HISTORY READ, validated. True when last frame's composite holds THIS surface at the
@@ -526,6 +540,11 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 			                              : (answered_tier == 2 ? vec3(1.0, 0.0, 0.0)
 			                                                    : vec3(0.0, 0.0, 1.0));
 		}
+		atomicAdd(s_traced_rays[slot], 1u);
+		if(answered_tier == 1)
+		{
+			atomicAdd(s_screen_rays[slot], 1u);
+		}
 		return vec4(radiance, hit_t);
 	}
 }
@@ -857,6 +876,8 @@ void main()
 		{
 			s_history_record[slot] = -1;
 			s_importance_mean[slot] = 0.0;
+			s_screen_rays[slot] = 0u;
+			s_traced_rays[slot] = 0u;
 			// Placement computed the anchor, classification put this probe on the traced
 			// list - the records are valid by construction; this thread only unpacks them
 			// and reprojects the anchor for the importance mip.
@@ -1037,6 +1058,10 @@ void main()
 	barrier();
 	if(probe_active)
 	{
+		if(leader)
+		{
+			GiStoreScreenShare(slot, record);
+		}
 		for(int final_i = 0; final_i < GI_PROBE_DIR_COUNT / GI_TRACE_ADAPTIVE_LANES; ++final_i)
 		{
 			int final_t = thread + final_i * GI_TRACE_ADAPTIVE_LANES;
@@ -1050,6 +1075,10 @@ void main()
 	barrier();
 	GiTraceRayUnit(slot, atlas_base, unit);
 	barrier();
+	if(leader)
+	{
+		GiStoreScreenShare(slot, record);
+	}
 	GiFinalizeTexel(slot, atlas_base, local);
 #endif
 }
