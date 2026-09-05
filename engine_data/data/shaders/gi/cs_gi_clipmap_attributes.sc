@@ -166,43 +166,13 @@ void main()
 	if(!survived)
 	{
 		b_attr_cells[cell_index] = packed_cell_id;
-		// PARENT SEED (GI_LIGHT_VOXEL_SEED_ALPHA): a slot claimed by a new cell starts from the
-		// PARENT level's radiance for the same point instead of black. The parent scrolls half
-		// as often, so its cell is valid here; the seed is stored premultiplied under a
-		// provenance alpha the readers accept as measured and the relight EMA does not (so the
-		// first relight writes through and replaces it). Zero-claimed cells stayed black until
-		// their first relight - up to one rotation - a dark frontier dragged through the near
-		// field every level-0 re-snap. The probes seed from their parent cascade the same way.
-		int parent_level = u_attr_level + 1;
-		bool parent_ok = false;
-		ivec3 parent_slot = ivec3(0, 0, 0);
-		if(parent_level < SDF_CLIPMAP_LEVEL_COUNT)
-		{
-			vec4 parent_data = u_sdf_clipmap_levels[parent_level];
-			if(parent_data.w > 0.0)
-			{
-				float parent_voxel = parent_data.w * 2.0;
-				ivec3 parent_cell = GiLightVoxelCell(center, parent_voxel);
-				parent_slot = GiLightVoxelSlot(parent_cell);
-				int parent_index =
-				    ((parent_level * resolution + parent_slot.z) * resolution + parent_slot.y) * resolution +
-				    parent_slot.x;
-				parent_ok = b_attr_cells[parent_index] == GiLightVoxelPackCell(parent_cell, parent_level);
-			}
-		}
+		// The departed cell's radiance dies with the claim. The parent SEED for the new cell
+		// is written at the listed store below, never here: a face with alpha > 0 must imply
+		// a LISTED cell (the readers weight any alpha > 0 and assume exactly that), and a
+		// claim cannot know yet whether this cell will be listed.
 		for(int face = 0; face < 6; ++face)
 		{
-			vec4 seed = vec4_splat(0.0);
-			if(parent_ok)
-			{
-				vec4 parent_face = imageLoad(s_light_voxels_out, GiLightVoxelTexel(parent_slot, parent_level, face));
-				// Only a MEASURED parent face seeds; culled/seeded/never-measured ones stay zero.
-				if(parent_face.w > 0.5)
-				{
-					seed = vec4(parent_face.xyz * GI_LIGHT_VOXEL_SEED_ALPHA, GI_LIGHT_VOXEL_SEED_ALPHA);
-				}
-			}
-			imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face), seed);
+			imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face), vec4_splat(0.0));
 		}
 	}
 	float band = GI_SURFACE_VOXEL_BAND * u_attr_voxel_size;
@@ -380,6 +350,53 @@ void main()
 	}
 	imageStore(s_attr_albedo_out, texel, vec4(blended_albedo, 1.0));
 	imageStore(s_attr_emissive_out, texel, vec4(blended_emissive, 0.0));
+	if(!survived)
+	{
+		// PARENT SEED (GI_LIGHT_VOXEL_SEED_ALPHA): a slot claimed by a new cell starts from the
+		// PARENT level's radiance for the same point instead of black. The parent scrolls half
+		// as often, so its cell is valid here; the seed is stored premultiplied under a
+		// provenance alpha the readers accept as measured and the relight EMA does not (so the
+		// first relight writes through and replaces it). Zero-claimed cells stayed black until
+		// their first relight - up to one rotation - a dark frontier dragged through the near
+		// field every level-0 re-snap. The probes seed from their parent cascade the same way.
+		//
+		// LISTED CELLS ONLY, which is why the seed lives here and not in the claim above. A
+		// seeded slot that never made the list was never relit and never torn down (the
+		// teardowns above fire on the slot's PREVIOUS albedo alpha, which an air-to-air or
+		// air-to-unattributed claim leaves at zero), so it served its parent's radiance at the
+		// seed weight to every hit in its trilinear neighbourhood for as long as it held the
+		// cell (measured: a departed emissive's red at the coarse levels after camera motion).
+		int parent_level = u_attr_level + 1;
+		bool parent_ok = false;
+		ivec3 parent_slot = ivec3(0, 0, 0);
+		if(parent_level < SDF_CLIPMAP_LEVEL_COUNT)
+		{
+			vec4 parent_data = u_sdf_clipmap_levels[parent_level];
+			if(parent_data.w > 0.0)
+			{
+				float parent_voxel = parent_data.w * 2.0;
+				ivec3 parent_cell = GiLightVoxelCell(center, parent_voxel);
+				parent_slot = GiLightVoxelSlot(parent_cell);
+				int parent_index =
+				    ((parent_level * resolution + parent_slot.z) * resolution + parent_slot.y) * resolution +
+				    parent_slot.x;
+				parent_ok = b_attr_cells[parent_index] == GiLightVoxelPackCell(parent_cell, parent_level);
+			}
+		}
+		if(parent_ok)
+		{
+			for(int face = 0; face < 6; ++face)
+			{
+				vec4 parent_face = imageLoad(s_light_voxels_out, GiLightVoxelTexel(parent_slot, parent_level, face));
+				// Only a MEASURED parent face seeds; culled/seeded/never-measured ones stay zero.
+				if(parent_face.w > 0.5)
+				{
+					imageStore(s_light_voxels_out, GiLightVoxelTexel(slot, u_attr_level, face),
+					           vec4(parent_face.xyz * GI_LIGHT_VOXEL_SEED_ALPHA, GI_LIGHT_VOXEL_SEED_ALPHA));
+				}
+			}
+		}
+	}
 	uint cursor;
 	atomicFetchAndAdd(b_surface_list[uint(u_attr_level)], 1u, cursor);
 	// Cannot overflow by construction - the segment holds one entry per voxel and each thread

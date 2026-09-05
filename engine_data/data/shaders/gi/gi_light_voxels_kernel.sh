@@ -902,6 +902,17 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// far side of the geometry (measured: at a convex wall corner one child face of a
 		// coarse cell looked out onto the sunlit exterior, and inheriting it before the
 		// gates painted a bright column on the interior side, 3x its level).
+		//
+		// FLAG, NOT `continue`: this block used to end its inherited case with a `continue`
+		// of the face loop, placed after the eight-child loop inside the branch. The DXBC
+		// build of that shape skipped the REMAINING faces of the cell whenever a face
+		// inherited (measured with stamped variants: a cell whose first exposed face took
+		// the inheritance never stored its +Y face again, at every rotation, for as long as
+		// the finer window covered it - the light a departed emissive left in a coarse cell
+		// stayed there until a slot re-claim, and the world probes kept serving it; the
+		// same body with the inherited case folded into a flag stored every face). The
+		// relight below is skipped through the flag, at the loop's own level.
+		bool inherited = false;
 		BRANCH
 		if(inherit_fine)
 		{
@@ -941,12 +952,16 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 				}
 				imageStore(s_light_voxels_out, texel,
 				           vec4(GiFiniteOrZero(child_sum / child_measured), 1.0));
-				continue;
+				inherited = true;
 			}
 			// Children all culled, or measured but disagreeing, or none at all (the finer
 			// level has no surface here): the coarse relight below answers. The all-culled
 			// case no longer forces a cull - this level's own gates above already judged the
 			// face exposed, and the finer children's cones are a different scale's verdict.
+		}
+		if(inherited)
+		{
+			continue;
 		}
 		vec3 irradiance = GiEvalDirectLightingVoxel(position + light_jitter,
 		                                            direction,
