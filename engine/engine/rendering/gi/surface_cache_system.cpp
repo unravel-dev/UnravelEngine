@@ -333,11 +333,9 @@ auto surface_cache_system::take_texture_mean_captures(uint32_t budget)
     return captures;
 }
 
-void surface_cache_system::track_placement(uint64_t identity,
-                                            const math::mat4& local_to_world,
-                                            const math::vec3& albedo,
-                                            const math::vec3& emissive,
-                                            const math::bbox& bounds)
+auto surface_cache_system::compute_placement_hash(const math::mat4& local_to_world,
+                                                   const math::vec3& albedo,
+                                                   const math::vec3& emissive) -> uint64_t
 {
     // FNV-1a over the pose and the material the attribute voxels bake: either moving makes the
     // light this placement bounced (or emitted) stale wherever it stood. Component by
@@ -364,6 +362,45 @@ void surface_cache_system::track_placement(uint64_t identity,
     mix_float(emissive.x);
     mix_float(emissive.y);
     mix_float(emissive.z);
+    return hash;
+}
+
+namespace
+{
+/// The pose cache's key: the transform and the field's local bounds, the two inputs of the
+/// inverse and the transformed corners (the material is deliberately not part of it).
+auto compute_pose_key(const math::mat4& local_to_world, const math::bbox& local_bounds) -> uint64_t
+{
+    uint64_t hash = 0x84222325cbf29ce4ull;
+    const auto mix_float = [&hash](float value)
+    {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        hash = (hash ^ uint64_t(bits)) * 0x100000001b3ull;
+    };
+    for(int column = 0; column < 4; ++column)
+    {
+        for(int row = 0; row < 4; ++row)
+        {
+            mix_float(local_to_world[column][row]);
+        }
+    }
+    mix_float(local_bounds.min.x);
+    mix_float(local_bounds.min.y);
+    mix_float(local_bounds.min.z);
+    mix_float(local_bounds.max.x);
+    mix_float(local_bounds.max.y);
+    mix_float(local_bounds.max.z);
+    return hash;
+}
+} // namespace
+
+auto surface_cache_system::track_placement(uint64_t identity,
+                                            uint64_t placement_hash,
+                                            const math::vec3& emissive,
+                                            const math::bbox& bounds) -> tracked_placement&
+{
+    const uint64_t hash = placement_hash;
     // EMISSIVE REACH: a bounced pool sits within a probe spacing of its placement (the
     // kernel's margin), but an emitter lights everything it faces out to where L x A / d^2
     // drops below GI_TEMPORAL_DIRTY_EMISSIVE_IRRADIANCE. Its region is inflated to that
@@ -389,19 +426,21 @@ void surface_cache_system::track_placement(uint64_t identity,
     {
         // A placement appearing (or re-appearing after a sweep) lights and occludes where
         // nothing did: its bounds are stale from the first frame.
-        tracked.history.emplace_back(world_frame_, region_bounds);
+        tracked.history.push_back({world_frame_, region_bounds});
     }
     else if(tracked.placement_hash != hash)
     {
         // Both the vacated spot and the new one: the light the placement bounced where it WAS
         // is exactly the trail the flush exists for.
-        tracked.history.emplace_back(world_frame_, tracked.bounds);
-        tracked.history.emplace_back(world_frame_, region_bounds);
+        tracked.history.push_back({world_frame_, tracked.bounds});
+        tracked.history.push_back({world_frame_, region_bounds});
     }
     tracked.placement_hash = hash;
     tracked.bounds = region_bounds;
+    tracked.field_bounds = bounds;
     tracked.seen_frame = world_frame_;
     tracked.swept = false;
+    return tracked;
 }
 
 auto surface_cache_system::pack_dirty_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t
@@ -438,16 +477,16 @@ void surface_cache_system::rebuild_dirty_regions()
         {
             // Vanished this frame: the spot it left is stale like a move's vacated spot.
             // Recorded once; the entry is erased below once the history ages out.
-            tracked.history.emplace_back(world_frame_, tracked.bounds);
+            tracked.history.push_back({world_frame_, tracked.bounds});
             tracked.swept = true;
         }
         // Age out the history beyond the hold window.
         auto& history = tracked.history;
         history.erase(std::remove_if(history.begin(),
                                      history.end(),
-                                     [&](const std::pair<uint64_t, math::bbox>& entry)
+                                     [&](const tracked_placement::history_entry& entry)
                                      {
-                                         return world_frame_ - entry.first > hold;
+                                         return world_frame_ - entry.frame > hold;
                                      }),
                       history.end());
         if(history.empty())
@@ -462,17 +501,17 @@ void surface_cache_system::rebuild_dirty_regions()
         }
         dirty_region region;
         region.bounds.reset();
-        for(const auto& [frame, bounds] : history)
+        for(const auto& entry : history)
         {
             // Skip an inverted (never set) box; add_point of its sentinels would span the
             // world.
-            if(bounds.min.x > bounds.max.x)
+            if(entry.bounds.min.x > entry.bounds.max.x)
             {
                 continue;
             }
-            region.bounds.add_point(bounds.min);
-            region.bounds.add_point(bounds.max);
-            region.last_change_frame = std::max(region.last_change_frame, frame);
+            region.bounds.add_point(entry.bounds.min);
+            region.bounds.add_point(entry.bounds.max);
+            region.last_change_frame = std::max(region.last_change_frame, entry.frame);
         }
         if(!(region.bounds.min.x > region.bounds.max.x))
         {
@@ -513,31 +552,56 @@ void surface_cache_system::add_instance(uint64_t identity,
                         pbr->get_emissive_intensity();
     }
     inst.local_to_world = local_to_world;
-    // glm::inverse explicitly: namespace math declares its own inverse() for math::transform,
-    // which hides the glm overloads from qualified lookup as math::inverse.
-    inst.world_to_local = glm::inverse(local_to_world);
     inst.header_index = header_index;
-    // Scale is recovered from the matrix rather than from a transform object, because the
-    // renderer hands out plain matrices for submesh nodes.
-    const float scale_x = math::length(math::vec3(local_to_world[0]));
-    const float scale_y = math::length(math::vec3(local_to_world[1]));
-    const float scale_z = math::length(math::vec3(local_to_world[2]));
-    // Smallest axis, not average: a distance measured in local space maps to at least this
-    // much world distance, so using it keeps every step an under-estimate. The largest or the
-    // mean would let a sphere trace overshoot a non-uniformly scaled instance and pass
-    // through it.
-    inst.local_to_world_scale = math::max(math::min(scale_x, math::min(scale_y, scale_z)), 1e-6f);
-    // World-space AABB of the field's local bounds, for the tracer's broad phase. Built from
-    // the transformed corners so a rotated instance still gets a bound that contains it.
-    inst.world_bounds.reset();
-    const auto corners = sdf.bounds.get_corners();
-    for(const auto& corner : corners)
+    // POSE CACHE: the inverse, the smallest scale axis and the transformed corners are pure
+    // functions of the transform and the field's local bounds, and a static placement
+    // presents the same pair every frame - the tracker below already keys placements by
+    // identity, so it carries them across frames. Recomputed only when the key moves.
+    const uint64_t pose_key = compute_pose_key(local_to_world, sdf.bounds);
+    const auto cached_it = tracked_placements_.find(identity);
+    const bool pose_cached = cached_it != tracked_placements_.end() && cached_it->second.has_pose &&
+                             cached_it->second.pose_key == pose_key;
+    if(pose_cached)
     {
-        const math::vec4 world_corner = local_to_world * math::vec4(corner, 1.0f);
-        inst.world_bounds.add_point(math::vec3(world_corner));
+        const auto& cached = cached_it->second;
+        inst.world_to_local = cached.world_to_local;
+        inst.local_to_world_scale = cached.local_to_world_scale;
+        inst.world_bounds = cached.field_bounds;
+    }
+    else
+    {
+        // glm::inverse explicitly: namespace math declares its own inverse() for math::transform,
+        // which hides the glm overloads from qualified lookup as math::inverse.
+        inst.world_to_local = glm::inverse(local_to_world);
+        // Scale is recovered from the matrix rather than from a transform object, because the
+        // renderer hands out plain matrices for submesh nodes.
+        const float scale_x = math::length(math::vec3(local_to_world[0]));
+        const float scale_y = math::length(math::vec3(local_to_world[1]));
+        const float scale_z = math::length(math::vec3(local_to_world[2]));
+        // Smallest axis, not average: a distance measured in local space maps to at least this
+        // much world distance, so using it keeps every step an under-estimate. The largest or the
+        // mean would let a sphere trace overshoot a non-uniformly scaled instance and pass
+        // through it.
+        inst.local_to_world_scale = math::max(math::min(scale_x, math::min(scale_y, scale_z)), 1e-6f);
+        // World-space AABB of the field's local bounds, for the tracer's broad phase. Built from
+        // the transformed corners so a rotated instance still gets a bound that contains it.
+        inst.world_bounds.reset();
+        const auto corners = sdf.bounds.get_corners();
+        for(const auto& corner : corners)
+        {
+            const math::vec4 world_corner = local_to_world * math::vec4(corner, 1.0f);
+            inst.world_bounds.add_point(math::vec3(world_corner));
+        }
     }
     instances_.push_back(inst);
-    track_placement(identity, local_to_world, inst.albedo, inst.emissive, inst.world_bounds);
+    auto& tracked = track_placement(identity,
+                                    compute_placement_hash(local_to_world, inst.albedo, inst.emissive),
+                                    inst.emissive,
+                                    inst.world_bounds);
+    tracked.pose_key = pose_key;
+    tracked.has_pose = true;
+    tracked.world_to_local = inst.world_to_local;
+    tracked.local_to_world_scale = inst.local_to_world_scale;
     // The clipmap composer borrows a raw mesh_sdf pointer, so the owning mesh has to be kept
     // alive for as long as the composition input list references it.
     clipmap_keepalive_.push_back(owner);
@@ -901,7 +965,10 @@ void surface_cache_system::update_world(scene& scn)
                     {
                         world_bounds.add_point(math::vec3(local_to_world * math::vec4(corner, 1.0f)));
                     }
-                    track_placement(identity, local_to_world, albedo, emissive, world_bounds);
+                    track_placement(identity,
+                                    compute_placement_hash(local_to_world, albedo, emissive),
+                                    emissive,
+                                    world_bounds);
                 };
                 if(!submesh_transforms.has_transforms(submesh_index))
                 {

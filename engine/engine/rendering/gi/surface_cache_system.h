@@ -336,18 +336,56 @@ private:
      *        neutral albedo; it must resolve the same way the renderer does, or a bounce would
      *        tint light with a colour the surface is not actually painted.
      */
+    /// Per-placement motion tracking behind @ref get_dirty_regions, and the cache of the
+    /// pose-derived values @ref add_instance would otherwise recompute every frame. `history`
+    /// holds the (frame, bounds) pairs the placement occupied within the hold window, newest
+    /// last; a placement that vanished keeps its entry until that history ages out.
+    struct tracked_placement
+    {
+        /// FNV over the pose and the baked material (see compute_placement_hash).
+        uint64_t placement_hash = 0;
+        /// The region bounds (emissive-inflated) and the raw world bounds as of the last frame.
+        math::bbox bounds{};
+        math::bbox field_bounds{};
+        /// Pose-derived cache: valid while @ref pose_key matches the frame's (transform, field
+        /// bounds) - the inverse and the transformed corners are pure functions of those, so
+        /// a static placement reuses them instead of paying an inverse per frame.
+        uint64_t pose_key = 0;
+        bool has_pose = false;
+        math::mat4 world_to_local{1.0f};
+        float local_to_world_scale = 1.0f;
+        uint64_t seen_frame = 0;
+        /// Set once the sweep recorded the placement's disappearance; cleared if it returns.
+        bool swept = false;
+        struct history_entry
+        {
+            uint64_t frame = 0;
+            math::bbox bounds{};
+        };
+        std::vector<history_entry> history;
+    };
+
+    /// FNV-1a over the pose and the material the attribute voxels bake, component by
+    /// component (never over sizeof: math::vec3 carries indeterminate padding bytes).
+    static auto compute_placement_hash(const math::mat4& local_to_world,
+                                       const math::vec3& albedo,
+                                       const math::vec3& emissive) -> uint64_t;
+
     /**
      * @brief Records a placement's pose for @ref get_dirty_regions: a new, moved, re-materialed
      *        or vanished placement adds the bounds it occupied to its region history.
      *
      * @param identity Stable key of the placement (entity, submesh, placement index), so a pose
      *        can be compared against the same placement's previous frame.
+     * @param placement_hash The frame's compute_placement_hash of the placement.
+     * @param field_bounds The placement's raw world bounds; the region bounds are derived here
+     *        (an emissive placement inflates by its light's reach).
+     * @return The placement's record, for the pose cache.
      */
-    void track_placement(uint64_t identity,
-                         const math::mat4& local_to_world,
-                         const math::vec3& albedo,
+    auto track_placement(uint64_t identity,
+                         uint64_t placement_hash,
                          const math::vec3& emissive,
-                         const math::bbox& bounds);
+                         const math::bbox& field_bounds) -> tracked_placement&;
 
     /// Sweeps placements not seen this frame (their last bounds go stale too), drops history
     /// older than the hold window and rebuilds @ref dirty_regions_.
@@ -443,18 +481,6 @@ private:
     std::vector<instance> instances_;
     /// Clipmap composition input, rebuilt each frame alongside @ref instances_.
     std::vector<global_sdf_instance> clipmap_instances_;
-    /// Per-placement motion tracking behind @ref get_dirty_regions. `history` holds the
-    /// (frame, bounds) pairs the placement occupied within the hold window, newest last; a
-    /// placement that vanished keeps its entry until that history ages out.
-    struct tracked_placement
-    {
-        uint64_t placement_hash = 0;
-        math::bbox bounds{};
-        uint64_t seen_frame = 0;
-        /// Set once the sweep recorded the placement's disappearance; cleared if it returns.
-        bool swept = false;
-        std::vector<std::pair<uint64_t, math::bbox>> history;
-    };
     std::unordered_map<uint64_t, tracked_placement> tracked_placements_;
     std::vector<dirty_region> dirty_regions_;
     /// Keeps every mesh referenced by @ref clipmap_instances_ alive for the duration of

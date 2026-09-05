@@ -55,6 +55,11 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_clipmap_compose_params;
         gfx::program::uniform_ptr u_clipmap_compose_origin;
+        /// The voxel box one dispatch composes (a scroll-only recompose composes the exposed
+        /// slabs, a full one the whole level): xyz = min corner, w = reset the surface-list
+        /// cursor (the level's first dispatch); size in xyz of the second.
+        gfx::program::uniform_ptr u_clipmap_compose_range;
+        gfx::program::uniform_ptr u_clipmap_compose_range_size;
         gfx::program::uniform_ptr u_sdf_params;
         gfx::program::uniform_ptr u_sdf_grid_params;
         gfx::program::uniform_ptr u_sdf_clipmap_params;
@@ -69,6 +74,14 @@ private:
             cache_uniform(program.get(),
                           u_clipmap_compose_origin,
                           "u_clipmap_compose_origin",
+                          gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_clipmap_compose_range,
+                          "u_clipmap_compose_range",
+                          gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_clipmap_compose_range_size,
+                          "u_clipmap_compose_range_size",
                           gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
@@ -89,6 +102,9 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_gi_light_voxel_params;
         gfx::program::uniform_ptr u_clipmap_attr_params;
+        /// xyz = the window's shift in attribute cells since the level's previous compose,
+        /// w > 0.5 = scroll-only (surviving interior cells keep their attributes).
+        gfx::program::uniform_ptr u_clipmap_attr_scroll;
         gfx::program::uniform_ptr u_clipmap_compose_origin;
         gfx::program::uniform_ptr u_sdf_params;
         gfx::program::uniform_ptr u_sdf_grid_params;
@@ -101,6 +117,7 @@ private:
         {
             cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_clipmap_attr_params, "u_clipmap_attr_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_clipmap_attr_scroll, "u_clipmap_attr_scroll", gfx::uniform_type::Vec4);
             cache_uniform(program.get(),
                           u_clipmap_compose_origin,
                           "u_clipmap_compose_origin",
@@ -231,6 +248,30 @@ private:
             return program && program->is_valid();
         }
     } vis_memo_clear_program_;
+
+    /**
+     * @brief Composes one dirty level's distance voxels: a scroll-only recompose copies the
+     *        overlap of the old and new windows through @ref scroll_scratch_ and composes the
+     *        exposed slabs; anything else composes the whole level.
+     */
+    void compose_level_voxels(const global_sdf_clipmap& clipmap,
+                              const global_sdf_clipmap_gpu& clipmap_gpu,
+                              surface_cache_system& surface_cache,
+                              uint32_t level);
+
+    /// Dispatches the compose kernel over one voxel box of @p level.
+    void dispatch_compose_box(gfx::render_pass& pass,
+                              const global_sdf_clipmap& clipmap,
+                              const global_sdf_clipmap_gpu& clipmap_gpu,
+                              surface_cache_system& surface_cache,
+                              uint32_t level,
+                              const global_sdf_clipmap::voxel_box& box,
+                              bool reset_cursor);
+
+    /// The staging copy of one level slab for a scroll-only recompose (R8, resolution^3): a
+    /// blit cannot move voxels within one texture, so the slab goes out and the overlap
+    /// comes back shifted. Recreated when the resolution changes.
+    gfx::texture::ptr scroll_scratch_;
 
     /// One-time diagnostics: captures flowing is the positive signal, helper shaders failing
     /// to compile is the silent-failure mode worth a loud line.

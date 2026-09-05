@@ -43,16 +43,30 @@ uniform vec4 u_clipmap_compose_params;
 /// xyz = this level's world-space origin (its minimum corner, already snapped).
 uniform vec4 u_clipmap_compose_origin;
 
+/// The voxel box this dispatch composes: xyz = its minimum corner in level voxels, w > 0.5
+/// when this is the level's first dispatch of the frame and resets the surface-list cursor.
+/// A full recompose is one box over the whole level; a SCROLL-ONLY recompose (the origin
+/// moved with the instance content unchanged - global_sdf_clipmap::level::scroll_only) blits
+/// the overlap of the old and new windows into place and dispatches only the exposed slabs.
+uniform vec4 u_clipmap_compose_range;
+/// xyz = the box's size in voxels.
+uniform vec4 u_clipmap_compose_range_size;
+
 NUM_THREADS(4, 4, 4)
 void main()
 {
-	ivec3 voxel = ivec3(gl_GlobalInvocationID.xyz);
-	if(all(equal(voxel, ivec3(0, 0, 0))))
+	ivec3 local = ivec3(gl_GlobalInvocationID.xyz);
+	if(all(equal(local, ivec3(0, 0, 0))) && u_clipmap_compose_range.w > 0.5)
 	{
 		// This level's surface-list append cursor, reset for the attribute pass that follows
 		// (see the buffer's note above for why the reset lives here).
 		b_surface_list[uint(u_compose_level)] = 0u;
 	}
+	if(any(greaterThanEqual(local, ivec3(u_clipmap_compose_range_size.xyz))))
+	{
+		return;
+	}
+	ivec3 voxel = ivec3(u_clipmap_compose_range.xyz) + local;
 	int resolution = int(u_compose_resolution);
 	if(voxel.x >= resolution || voxel.y >= resolution || voxel.z >= resolution)
 	{

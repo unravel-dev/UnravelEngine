@@ -51,16 +51,26 @@ uniform vec4 u_gi_world_probe_seed_atlas;
 /// xyz = centre cell, w = ray max distance for that level's probes.
 uniform vec4 u_gi_world_probe_window[SDF_CLIPMAP_LEVEL_COUNT];
 
-NUM_THREADS(GI_WORLD_PROBE_RAYS_PER_FRAME, 1, 1)
+/// Probes per 64-lane group: four 16-ray probes, so a wave runs full instead of one probe's
+/// 16 lanes leaving half (32-wide) or three quarters (64-wide) of it idle. Each probe keeps
+/// its own leader lane and claim logic; the group barrier stays uniform. Mirror of
+/// gi_world_probe_pass.cpp's dispatch (ceil(probe count / this)).
+#define PROBE_TRACE_SLOTS 4
+
+// = GI_WORLD_PROBE_RAYS_PER_FRAME x PROBE_TRACE_SLOTS: a literal, as the OpenGL backend
+// rejects expressions in local_size.
+NUM_THREADS(64, 1, 1)
 void main()
 {
-	int slot_linear = int(gl_WorkGroupID.x);
+	int slot_in_group = int(gl_LocalInvocationID.x) / GI_WORLD_PROBE_RAYS_PER_FRAME;
+	int slot_linear = int(gl_WorkGroupID.x) * PROBE_TRACE_SLOTS + slot_in_group;
 	int per_level = GI_WORLD_PROBE_AXIS * GI_WORLD_PROBE_AXIS * GI_WORLD_PROBE_AXIS;
 	int level = slot_linear / per_level;
-	if(level >= SDF_CLIPMAP_LEVEL_COUNT)
-	{
-		return;
-	}
+	// A partial final group: the lanes past the last probe do no work but must still reach
+	// the barrier below (a return here is varying flow, which the barrier forbids), so the
+	// level is clamped for the uniform-array reads and every store is guarded.
+	bool probe_active = level < SDF_CLIPMAP_LEVEL_COUNT;
+	level = min(level, SDF_CLIPMAP_LEVEL_COUNT - 1);
 	int in_level = slot_linear % per_level;
 	ivec3 slot = ivec3(in_level % GI_WORLD_PROBE_AXIS,
 	                   (in_level / GI_WORLD_PROBE_AXIS) % GI_WORLD_PROBE_AXIS,
@@ -76,7 +86,7 @@ void main()
 	                     (slot.z - base_slot.z + GI_WORLD_PROBE_AXIS) % GI_WORLD_PROBE_AXIS);
 	ivec3 cell = window_base + offset;
 	vec3 origin = GiWorldProbeCellPosition(cell, level);
-	int thread = int(gl_LocalInvocationID.x);
+	int thread = int(gl_LocalInvocationID.x) % GI_WORLD_PROBE_RAYS_PER_FRAME;
 	// FAST-REFRESH WINDOW (gi_rewrite_plan.md section 8, the DDGI event pattern adapted): while the
 	// light set is changing, each frame covers TWO strata instead of one, halving the window to
 	// 8 frames so a moved or toggled light propagates through the probes at double speed. The
@@ -121,6 +131,10 @@ void main()
 	}
 	float mean_blend = 1.0 / float(min(windows_seen + 1u, uint(GI_WORLD_PROBE_EMA_WINDOWS)));
 	barrier();
+	if(!probe_active)
+	{
+		return;
+	}
 	if(thread == 0)
 	{
 		// A window completes on the frame that traces its last strata.

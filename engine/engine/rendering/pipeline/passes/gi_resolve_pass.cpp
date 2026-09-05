@@ -248,8 +248,19 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
     const auto& s = params.settings;
 
     const auto target_size = compute_trace_size(params.g_buffer->get_size(), s.resolution);
+    // The standalone gather target serves only the SPLIT paths (temporal off, or the fused
+    // program missing) and the not-ready clear; the fused path keeps the gather in registers
+    // and never touches it, so it is created on demand rather than held as 8 bytes per
+    // trace-resolution pixel of unused allocation.
     gfx::texture::ptr trace_tex;
-    auto trace_fbo = create_or_update_target(rview, "GI_TRACE", target_size, trace_tex);
+    gfx::frame_buffer::ptr trace_fbo;
+    const auto ensure_trace_target = [&]()
+    {
+        if(!trace_fbo)
+        {
+            trace_fbo = create_or_update_target(rview, "GI_TRACE", target_size, trace_tex);
+        }
+    };
 
     const bool clipmap_ready = clipmap_gpu.is_valid();
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
@@ -398,6 +409,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                               static_cast<bool>(clipmap_gpu.get_light_voxel_texture());
         if(!gather_ready)
         {
+            ensure_trace_target();
             gfx::render_pass pass("GI/Probe Trace");
             pass.bind(trace_fbo.get());
             pass.clear(BGFX_CLEAR_COLOR, 0x00000000u, 1.0f, 0);
@@ -525,6 +537,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     s.adaptive_rays && probe_count >= adaptive_rays_min_probes);
                 if(trace_cs == nullptr || !trace_cs->is_valid())
                 {
+                    ensure_trace_target();
                     gfx::discard();
                     return trace_tex;
                 }
@@ -632,6 +645,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 if(fuse_temporal)
                 {
                     history = acquire_history(rview, params, target_size);
+                }
+                else
+                {
+                    ensure_trace_target();
                 }
                 gpu_program* integrate = fuse_temporal ? integrate_program_.fused_program.get()
                                                        : integrate_program_.program.get();

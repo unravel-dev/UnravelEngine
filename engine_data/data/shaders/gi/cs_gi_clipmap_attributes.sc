@@ -63,6 +63,16 @@ uniform vec4 u_clipmap_attr_params;
 /// xyz = this level's world-space origin (snapped minimum corner).
 uniform vec4 u_clipmap_compose_origin;
 
+/// SCROLL-ONLY recompose (global_sdf_clipmap::level::scroll_only): xyz = the window's shift
+/// in attribute cells since this level's previous compose, w > 0.5 when the instance content
+/// is unchanged since then. A cell that survived the scroll and sits at least one cell inside
+/// BOTH windows holds exactly the attributes a recompute would produce - the same world
+/// centre, the same instance set, and the same field bytes (the compose pass copied them) -
+/// so it re-appends to the surface list from its stored alpha and skips the field sample and
+/// the candidate walk. Cells within one cell of either window's boundary run the full path:
+/// the field's half-voxel coverage margin can flip their band test between the two windows.
+uniform vec4 u_clipmap_attr_scroll;
+
 /// Fraction of an attribute cell a candidate can actually occupy: 1 for solids, the shell
 /// thickness fraction for two-sided fields. See the blend note at the use site.
 float GiAttrShellCoverage(SdfHeader header, float scale)
@@ -119,7 +129,41 @@ void main()
 	int cell_index =
 	    ((u_attr_level * resolution + slot.z) * resolution + slot.y) * resolution + slot.x;
 	vec3 center = (vec3(cell) + vec3_splat(0.5)) * u_attr_voxel_size;
-	if(b_attr_cells[cell_index] != packed_cell_id)
+	bool survived = b_attr_cells[cell_index] == packed_cell_id;
+	uint capacity = uint(resolution * resolution * resolution);
+	// packed_slot, not `packed`: a GLSL layout-qualifier keyword, illegal as a variable
+	// name on the OpenGL backend.
+	uint packed_slot = uint(slot.x) | (uint(slot.y) << 8u) | (uint(slot.z) << 16u) |
+	                   (uint(u_attr_level) << 24u);
+	BRANCH
+	if(u_clipmap_attr_scroll.w > 0.5 && survived)
+	{
+		// The cell's offset under the OLD window: old base = new base - shift.
+		ivec3 shift = ivec3(u_clipmap_attr_scroll.xyz);
+		ivec3 old_offset = offset + shift;
+		ivec3 interior_min = ivec3(1, 1, 1);
+		ivec3 interior_max = ivec3(resolution - 2, resolution - 2, resolution - 2);
+		bool interior = all(greaterThanEqual(offset, interior_min)) && all(lessThanEqual(offset, interior_max)) &&
+		                all(greaterThanEqual(old_offset, interior_min)) &&
+		                all(lessThanEqual(old_offset, interior_max));
+		if(interior)
+		{
+			// Attributes unchanged; only the (rebuilt) surface list needs the cell back.
+			vec4 previous = imageLoad(s_attr_albedo_out, texel);
+			if(previous.a > 0.0)
+			{
+				uint kept_cursor;
+				atomicFetchAndAdd(b_surface_list[uint(u_attr_level)], 1u, kept_cursor);
+				if(kept_cursor < capacity)
+				{
+					b_surface_list[uint(SDF_CLIPMAP_LEVEL_COUNT) + uint(u_attr_level) * capacity + kept_cursor] =
+					    packed_slot;
+				}
+			}
+			return;
+		}
+	}
+	if(!survived)
 	{
 		b_attr_cells[cell_index] = packed_cell_id;
 		// PARENT SEED (GI_LIGHT_VOXEL_SEED_ALPHA): a slot claimed by a new cell starts from the
@@ -338,15 +382,10 @@ void main()
 	imageStore(s_attr_emissive_out, texel, vec4(blended_emissive, 0.0));
 	uint cursor;
 	atomicFetchAndAdd(b_surface_list[uint(u_attr_level)], 1u, cursor);
-	uint capacity = uint(resolution * resolution * resolution);
 	// Cannot overflow by construction - the segment holds one entry per voxel and each thread
 	// appends at most once - so this clamp is a guard against a mis-sized buffer, not policy.
 	if(cursor < capacity)
 	{
-		// packed_slot, not `packed`: a GLSL layout-qualifier keyword, illegal as a variable
-		// name on the OpenGL backend.
-		uint packed_slot = uint(slot.x) | (uint(slot.y) << 8u) | (uint(slot.z) << 16u) |
-		                   (uint(u_attr_level) << 24u);
 		b_surface_list[uint(SDF_CLIPMAP_LEVEL_COUNT) + uint(u_attr_level) * capacity + cursor] =
 		    packed_slot;
 	}

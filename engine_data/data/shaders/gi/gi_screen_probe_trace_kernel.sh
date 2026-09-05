@@ -604,6 +604,10 @@ GiRayUnit GiCellOfTexel(int slot, ivec2 local)
 	return unit;
 }
 
+/// Evaluated per call on purpose: a per-texel table staged in shared memory (one evaluation
+/// per lane, reads here) MEASURED slower on the gather (scene view probe trace 0.513 ->
+/// 0.549 ms, same session, 200-sample means) - the same verdict the blue-noise tile staging
+/// got in gi_noise.sh; the recompute is ALU the wave hides, the staging is not.
 float GiCellSolidAngle(ivec2 base, int span)
 {
 	float omega = 0.0;

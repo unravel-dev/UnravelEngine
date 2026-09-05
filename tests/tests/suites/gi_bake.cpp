@@ -2912,6 +2912,193 @@ void test_clipmap_is_world_stable()
     check(recomposed == 0, "an unchanged camera recomposes no levels");
 }
 
+/// SCROLL-ONLY recompose (global_sdf_clipmap::level::scroll_only): a level whose origin moved
+/// by whole snap cells while the instance content held still holds, in the overlap of its
+/// old and new windows, exactly the bytes a recompose writes - the premise on which the GPU
+/// composer copies the overlap and composes only the exposed slabs, and on which the
+/// attribute pass keeps surviving interior cells. Pinned on the CPU reference composer for
+/// the distance voxels, the attribute voxels (toroidal, so a surviving cell keeps its slot)
+/// and the surface list, together with the slab decomposition the pass dispatches.
+void test_clipmap_scroll_copy_matches_recompose()
+{
+    std::printf("test_clipmap_scroll_copy_matches_recompose\n");
+    const auto geometry = make_sphere(0.8f, 24, 32);
+    mesh_sdf_bake_settings settings;
+    settings.resolution = 32;
+    settings.min_voxel_size = 0.001f;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(geometry, settings, sdf), "bake succeeds");
+    std::vector<global_sdf_instance> instances{make_clipmap_instance(sdf, math::vec3(1.5f, 0.3f, -0.7f)),
+                                               make_clipmap_instance(sdf, math::vec3(-2.5f, 1.0f, 2.0f))};
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_settings.resolution = 32;
+    clipmap_settings.base_extent = 8.0f;
+    clipmap_settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    global_sdf_clipmap clipmap;
+    clipmap.init(clipmap_settings);
+    const uint64_t revision = 7;
+    clipmap.update(instances, math::vec3(0.0f), revision);
+    std::array<global_sdf_clipmap::level, global_sdf_clipmap::level_count> before;
+    for(uint32_t i = 0; i < global_sdf_clipmap::level_count; ++i)
+    {
+        before[i] = clipmap.get_level(i);
+    }
+    // One snap cell along x and along z at level 0; the coarser levels' snap is larger, so
+    // they stay put and must report no scroll.
+    const float level0_voxel = before[0].voxel_size;
+    const float snap_cell = level0_voxel * float(global_sdf_clipmap::attr_downsample) *
+                            float(global_sdf_clipmap::origin_snap_attr_voxels);
+    const math::vec3 camera_b(snap_cell, 0.0f, snap_cell);
+    const uint32_t recomposed = clipmap.update(instances, camera_b, revision);
+    check(recomposed >= 1, "the scroll recomposed at least level 0");
+    const int res = int(clipmap_settings.resolution);
+    const int attr_res = int(clipmap.get_attr_resolution());
+    const auto wrap = [](int v, int n) -> int { return ((v % n) + n) % n; };
+    for(uint32_t i = 0; i < global_sdf_clipmap::level_count; ++i)
+    {
+        const auto& after = clipmap.get_level(i);
+        const std::string level_tag = "level " + std::to_string(i) + ": ";
+        if(after.origin == before[i].origin)
+        {
+            check(!after.scroll_only, level_tag + "an unmoved level reports no scroll");
+            check(after.voxels == before[i].voxels, level_tag + "an unmoved level keeps its voxels");
+            continue;
+        }
+        check(after.scroll_only, level_tag + "a moved level with unchanged content is scroll-only");
+        const math::vec3 shift_f = (after.origin - before[i].origin) / after.voxel_size;
+        const math::ivec3 shift(int(std::lround(shift_f.x)), int(std::lround(shift_f.y)), int(std::lround(shift_f.z)));
+        check(after.scroll_shift == shift, level_tag + "the recorded shift is the origin's move in voxels");
+        global_sdf_clipmap::voxel_box overlap;
+        std::array<global_sdf_clipmap::voxel_box, 3> exposed;
+        const uint32_t exposed_count =
+            global_sdf_clipmap::compute_scroll_boxes(shift, clipmap_settings.resolution, overlap, exposed);
+        check(exposed_count > 0, level_tag + "the decomposition has exposed slabs");
+        // The overlap and the slabs tile the window exactly once.
+        std::vector<uint8_t> covered(size_t(res) * res * res, 0u);
+        const auto mark = [&](const global_sdf_clipmap::voxel_box& box)
+        {
+            for(int z = box.min.z; z < box.min.z + box.size.z; ++z)
+            {
+                for(int y = box.min.y; y < box.min.y + box.size.y; ++y)
+                {
+                    for(int x = box.min.x; x < box.min.x + box.size.x; ++x)
+                    {
+                        ++covered[size_t(x) + size_t(y) * res + size_t(z) * res * res];
+                    }
+                }
+            }
+        };
+        mark(overlap);
+        for(uint32_t b = 0; b < exposed_count; ++b)
+        {
+            mark(exposed[b]);
+        }
+        const bool tiled = std::all_of(covered.begin(), covered.end(), [](uint8_t c) { return c == 1u; });
+        check(tiled, level_tag + "overlap + exposed slabs tile the window exactly once");
+        // The overlap: new voxel v holds what the old window held at v + shift, byte for byte.
+        size_t mismatched = 0;
+        size_t compared = 0;
+        for(int z = overlap.min.z; z < overlap.min.z + overlap.size.z; ++z)
+        {
+            for(int y = overlap.min.y; y < overlap.min.y + overlap.size.y; ++y)
+            {
+                for(int x = overlap.min.x; x < overlap.min.x + overlap.size.x; ++x)
+                {
+                    const size_t new_index = size_t(x) + size_t(y) * res + size_t(z) * res * res;
+                    const size_t old_index = size_t(x + shift.x) + size_t(y + shift.y) * res +
+                                             size_t(z + shift.z) * res * res;
+                    ++compared;
+                    if(after.voxels[new_index] != before[i].voxels[old_index])
+                    {
+                        ++mismatched;
+                    }
+                }
+            }
+        }
+        check(compared > 0 && mismatched == 0,
+              level_tag + "every overlap voxel is byte-identical to its old-window source (" +
+                  std::to_string(mismatched) + " of " + std::to_string(compared) + " differ)");
+        // The attributes: a slot whose cell survived the scroll at least one cell inside both
+        // windows keeps its albedo, emissive and list membership.
+        const float attr_voxel = after.voxel_size * float(global_sdf_clipmap::attr_downsample);
+        const auto window_base = [&](const math::vec3& origin)
+        {
+            return math::ivec3(int(std::floor(origin.x / attr_voxel + 0.5f)),
+                               int(std::floor(origin.y / attr_voxel + 0.5f)),
+                               int(std::floor(origin.z / attr_voxel + 0.5f)));
+        };
+        const math::ivec3 base_old = window_base(before[i].origin);
+        const math::ivec3 base_new = window_base(after.origin);
+        const math::ivec3 attr_shift = base_new - base_old;
+        check(attr_shift * int(global_sdf_clipmap::attr_downsample) == shift,
+              level_tag + "the shift is a whole number of attribute cells");
+        std::vector<uint8_t> listed_before(size_t(attr_res) * attr_res * attr_res, 0u);
+        std::vector<uint8_t> listed_after(listed_before.size(), 0u);
+        for(uint32_t packed : before[i].attr_surface_list)
+        {
+            listed_before[size_t(packed & 0xFFu) + size_t((packed >> 8u) & 0xFFu) * attr_res +
+                          size_t((packed >> 16u) & 0xFFu) * attr_res * attr_res] = 1u;
+        }
+        for(uint32_t packed : after.attr_surface_list)
+        {
+            listed_after[size_t(packed & 0xFFu) + size_t((packed >> 8u) & 0xFFu) * attr_res +
+                         size_t((packed >> 16u) & 0xFFu) * attr_res * attr_res] = 1u;
+        }
+        size_t survivors = 0;
+        size_t attr_mismatched = 0;
+        for(int z = 0; z < attr_res; ++z)
+        {
+            for(int y = 0; y < attr_res; ++y)
+            {
+                for(int x = 0; x < attr_res; ++x)
+                {
+                    const math::ivec3 slot(x, y, z);
+                    const math::ivec3 offset_new(wrap(x - wrap(base_new.x, attr_res), attr_res),
+                                                 wrap(y - wrap(base_new.y, attr_res), attr_res),
+                                                 wrap(z - wrap(base_new.z, attr_res), attr_res));
+                    const math::ivec3 offset_old = offset_new + attr_shift;
+                    const auto interior = [&](const math::ivec3& o)
+                    {
+                        return o.x >= 1 && o.y >= 1 && o.z >= 1 && o.x <= attr_res - 2 && o.y <= attr_res - 2 &&
+                               o.z <= attr_res - 2;
+                    };
+                    if(!interior(offset_new) || !interior(offset_old))
+                    {
+                        continue;
+                    }
+                    ++survivors;
+                    const size_t index = size_t(x) + size_t(y) * attr_res + size_t(z) * attr_res * attr_res;
+                    const bool same = before[i].attr_albedo[index] == after.attr_albedo[index] &&
+                                      before[i].attr_emissive[index] == after.attr_emissive[index] &&
+                                      listed_before[index] == listed_after[index];
+                    if(!same)
+                    {
+                        ++attr_mismatched;
+                    }
+                }
+            }
+        }
+        check(survivors > 0 && attr_mismatched == 0,
+              level_tag + "every surviving interior attribute cell is unchanged (" +
+                  std::to_string(attr_mismatched) + " of " + std::to_string(survivors) + " differ)");
+    }
+    // A content change between the two updates must NOT be a scroll: the revision moves.
+    global_sdf_clipmap edited;
+    edited.init(clipmap_settings);
+    edited.update(instances, math::vec3(0.0f), revision);
+    edited.update(instances, camera_b, revision + 1);
+    check(!edited.get_level(0).scroll_only, "a moved origin with a moved revision composes in full");
+    // The decomposition's edge cases: no shift, and a shift past the window.
+    global_sdf_clipmap::voxel_box overlap;
+    std::array<global_sdf_clipmap::voxel_box, 3> exposed;
+    check(global_sdf_clipmap::compute_scroll_boxes(math::ivec3(0), 32, overlap, exposed) == 0,
+          "a zero shift has nothing to compose");
+    check(global_sdf_clipmap::compute_scroll_boxes(math::ivec3(32, 0, 0), 32, overlap, exposed) == 0,
+          "a shift past the window has no overlap and composes in full");
+    check(global_sdf_clipmap::compute_scroll_boxes(math::ivec3(-16, 16, 16), 32, overlap, exposed) == 3,
+          "a three-axis shift yields three slabs");
+}
+
 void test_clipmap_sees_offscreen_geometry()
 {
     std::printf("test_clipmap_sees_offscreen_geometry\n");
@@ -3944,6 +4131,7 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_clipmap_transition_is_continuous();
     test_clipmap_blend_stays_conservative();
     test_clipmap_is_world_stable();
+    test_clipmap_scroll_copy_matches_recompose();
     test_clipmap_sees_offscreen_geometry();
     test_raw_buffer_extraction_matches_direct_geometry();
     test_submesh_extraction_selects_only_its_own_submesh();

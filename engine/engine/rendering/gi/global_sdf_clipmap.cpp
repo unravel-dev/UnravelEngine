@@ -100,6 +100,70 @@ auto global_sdf_clipmap::compute_level_reach(uint32_t index) const -> float
     return settings_.encode_range * levels_[index].voxel_size;
 }
 
+auto global_sdf_clipmap::compute_instance_entry_hash(const global_sdf_instance& instance) -> uint64_t
+{
+    // Placement AND identity. A pure move changes no count and no membership, so hashing
+    // either alone would miss it entirely -- the object would go on occluding and lighting
+    // from where it used to be, with nothing downstream able to recover.
+    uint64_t entry = 0xcbf29ce484222325ull;
+    const auto* words = reinterpret_cast<const uint32_t*>(&instance.world_to_local);
+    constexpr size_t word_count = sizeof(instance.world_to_local) / sizeof(uint32_t);
+    for(size_t i = 0; i < word_count; ++i)
+    {
+        entry = (entry ^ uint64_t(words[i])) * 0x100000001b3ull;
+    }
+    entry = (entry ^ reinterpret_cast<uintptr_t>(instance.sdf)) * 0x100000001b3ull;
+    // Material too: albedo and emissive are BAKED into the attribute voxels at composition,
+    // so a change nothing rehashes would keep bouncing the old colour forever. This is also
+    // what publishes a lazily resolved texture-mean albedo (surface_cache_system) and any
+    // material edit into the volume: the fingerprint moves, the level recomposes.
+    const auto hash_vec3 = [&entry](const math::vec3& v)
+    {
+        const auto* vec_words = reinterpret_cast<const uint32_t*>(&v);
+        for(size_t i = 0; i < 3; ++i)
+        {
+            entry = (entry ^ uint64_t(vec_words[i])) * 0x100000001b3ull;
+        }
+    };
+    hash_vec3(instance.albedo);
+    hash_vec3(instance.emissive);
+    // The mean slot and its captured flag stand in for the mean VALUE, which lives only on
+    // the GPU: the flag flipping once per capture is what publishes the mean into the
+    // attribute voxels via a single recompose.
+    entry = (entry ^ (uint64_t(instance.mean_slot) | (instance.mean_captured ? 0x100000000ull : 0ull))) *
+            0x100000001b3ull;
+    return entry;
+}
+
+void global_sdf_clipmap::refresh_instance_entry_hashes(const std::vector<global_sdf_instance>& instances,
+                                                       uint64_t instances_revision)
+{
+    // The per-instance entry is independent of the level; only the membership test is per
+    // level. Hashing it once per content revision instead of once per level per frame is
+    // what keeps a mover's frame from paying four walks of the whole instance list. Revision
+    // 0 means "unknown" and refreshes every call, the old always-recompute behaviour.
+    const bool current = instances_revision != 0 && instances_revision == instance_entry_hash_revision_ &&
+                         instance_entry_hashes_.size() == instances.size();
+    if(current)
+    {
+        return;
+    }
+    instance_entry_hashes_.resize(instances.size());
+    for(size_t i = 0; i < instances.size(); ++i)
+    {
+        const auto& instance = instances[i];
+        // is_sampleable, not is_valid: the thorough check walks every indirection entry. The
+        // field was already validated in full when it became resident
+        // (surface_cache_system::acquire_field), so re-proving it per frame buys nothing and
+        // costs the brick count times four times the instance count, every frame.
+        const bool sampleable = instance.sdf != nullptr && instance.sdf->is_sampleable();
+        instance_entry_hashes_[i] = sampleable ? compute_instance_entry_hash(instance) : 0ull;
+        instance_entry_sampleable_.resize(instances.size());
+        instance_entry_sampleable_[i] = sampleable ? 1u : 0u;
+    }
+    instance_entry_hash_revision_ = instances_revision;
+}
+
 auto global_sdf_clipmap::compute_level_fingerprint(const math::bbox& bounds,
                                                    float reach,
                                                    const std::vector<global_sdf_instance>& instances) const
@@ -107,14 +171,16 @@ auto global_sdf_clipmap::compute_level_fingerprint(const math::bbox& bounds,
 {
     uint64_t total = 0;
     uint64_t count = 0;
-    for(const auto& instance : instances)
+    // The entry hashes were refreshed for this instance list (refresh_instance_entry_hashes);
+    // a list of another size means an unrefreshed call, which hashes in place - correct,
+    // only slower.
+    const bool cached = instance_entry_hashes_.size() == instances.size();
+    for(size_t i = 0; i < instances.size(); ++i)
     {
-        // is_sampleable, not is_valid: the thorough check walks every indirection entry, and this
-        // loop runs for EVERY level on EVERY frame, whether or not anything ends up composing.
-        // The field was already validated in full when it became resident
-        // (surface_cache_system::acquire_field), so re-proving it per frame buys nothing and
-        // costs the brick count times four times the instance count, every frame.
-        if(instance.sdf == nullptr || !instance.sdf->is_sampleable())
+        const auto& instance = instances[i];
+        const bool sampleable = cached ? instance_entry_sampleable_[i] != 0u
+                                       : (instance.sdf != nullptr && instance.sdf->is_sampleable());
+        if(!sampleable)
         {
             continue;
         }
@@ -125,40 +191,10 @@ auto global_sdf_clipmap::compute_level_fingerprint(const math::bbox& bounds,
             continue;
         }
         ++count;
-        // Placement AND identity. A pure move changes no count and no membership, so hashing
-        // either alone would miss it entirely -- the object would go on occluding and lighting
-        // from where it used to be, with nothing downstream able to recover.
-        uint64_t entry = 0xcbf29ce484222325ull;
-        const auto* words = reinterpret_cast<const uint32_t*>(&instance.world_to_local);
-        constexpr size_t word_count = sizeof(instance.world_to_local) / sizeof(uint32_t);
-        for(size_t i = 0; i < word_count; ++i)
-        {
-            entry = (entry ^ uint64_t(words[i])) * 0x100000001b3ull;
-        }
-        entry = (entry ^ reinterpret_cast<uintptr_t>(instance.sdf)) * 0x100000001b3ull;
-        // Material too: albedo and emissive are BAKED into the attribute voxels at composition,
-        // so a change nothing rehashes would keep bouncing the old colour forever. This is also
-        // what publishes a lazily resolved texture-mean albedo (surface_cache_system) and any
-        // material edit into the volume: the fingerprint moves, the level recomposes.
-        const auto hash_vec3 = [&entry](const math::vec3& v)
-        {
-            const auto* vec_words = reinterpret_cast<const uint32_t*>(&v);
-            for(size_t i = 0; i < 3; ++i)
-            {
-                entry = (entry ^ uint64_t(vec_words[i])) * 0x100000001b3ull;
-            }
-        };
-        hash_vec3(instance.albedo);
-        hash_vec3(instance.emissive);
-        // The mean slot and its captured flag stand in for the mean VALUE, which lives only on
-        // the GPU: the flag flipping once per capture is what publishes the mean into the
-        // attribute voxels via a single recompose.
-        entry = (entry ^ (uint64_t(instance.mean_slot) | (instance.mean_captured ? 0x100000000ull : 0ull))) *
-                0x100000001b3ull;
         // Summed rather than chained, so the result does not depend on iteration order -- the
         // scene traversal that produced this list has no guaranteed order and a reshuffle is
         // not a change.
-        total += entry;
+        total += cached ? instance_entry_hashes_[i] : compute_instance_entry_hash(instance);
     }
     // Mixed with the count so an empty level cannot collide with a populated one whose entries
     // happen to sum to zero.
@@ -205,6 +241,7 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
     // instance-content revision it was filled under, and never for revision 0 (unknown).
     const bool revision_cached =
         instances_revision != 0 && instances_revision == cached_instances_revision_;
+    refresh_instance_entry_hashes(instances, instances_revision);
     // Pass one: decide what each level SHOULD be, and how stale it is. Nothing is composed here,
     // so the budget below chooses between levels knowing all of them.
     std::array<math::vec3, level_count> target_origin{};
@@ -322,12 +359,36 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
             break;
         }
         auto& lvl = levels_[best];
+        // SCROLL-ONLY (see level::scroll_only): the origin moved while the instance content
+        // revision held still since this level's last compose, so the overlap of the two
+        // windows is byte-identical and only the exposed slabs need composing. The shift is
+        // the whole-snap move in voxels; a level never composed, an unknown revision, or a
+        // move past the window (no overlap) composes in full.
+        lvl.scroll_only = false;
+        lvl.scroll_shift = math::ivec3(0);
+        const bool previously_composed = lvl.content_fingerprint != 0 && lvl.composed_revision != 0;
+        if(previously_composed && instances_revision != 0 && instances_revision == lvl.composed_revision &&
+           target_origin[best] != lvl.origin)
+        {
+            const math::vec3 shift_voxels = (target_origin[best] - lvl.origin) / lvl.voxel_size;
+            const math::ivec3 shift(int(std::lround(shift_voxels.x)),
+                                    int(std::lround(shift_voxels.y)),
+                                    int(std::lround(shift_voxels.z)));
+            voxel_box overlap;
+            std::array<voxel_box, 3> exposed;
+            if(compute_scroll_boxes(shift, settings_.resolution, overlap, exposed) > 0)
+            {
+                lvl.scroll_only = true;
+                lvl.scroll_shift = shift;
+            }
+        }
         lvl.origin = target_origin[best];
         if(lvl.content_fingerprint != target_fingerprint[best])
         {
             ++composed_content_epoch_;
         }
         lvl.content_fingerprint = target_fingerprint[best];
+        lvl.composed_revision = instances_revision;
         lvl.stale_updates = 0;
         last_compose_counter_[best] = update_counter_;
         // The dirty bit is set either way -- it means "this level's contents are now stale on the
@@ -345,6 +406,66 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
     // for an origin that still overlaps this one, and for an instance set that has only changed
     // where something moved. Tracing remains correct, just briefly out of date.
     return composed;
+}
+
+auto global_sdf_clipmap::compute_scroll_boxes(const math::ivec3& shift,
+                                              uint32_t resolution,
+                                              voxel_box& out_overlap,
+                                              std::array<voxel_box, 3>& out_exposed) -> uint32_t
+{
+    const int res = int(resolution);
+    out_overlap = {};
+    out_exposed = {};
+    if(shift == math::ivec3(0))
+    {
+        return 0;
+    }
+    // The overlap in new-window coordinates: voxel v of the new window is voxel v + shift of
+    // the old one, which exists while 0 <= v + shift < res.
+    math::ivec3 overlap_min(0);
+    math::ivec3 overlap_max(res);
+    for(int axis = 0; axis < 3; ++axis)
+    {
+        overlap_min[axis] = math::max(0, -shift[axis]);
+        overlap_max[axis] = math::min(res, res - shift[axis]);
+        if(overlap_min[axis] >= overlap_max[axis])
+        {
+            return 0;
+        }
+    }
+    out_overlap.min = overlap_min;
+    out_overlap.size = overlap_max - overlap_min;
+    // One slab per moved axis, covering the new window's full extent on the axes handled
+    // AFTER it and only the overlap range on the axes handled before, so the three slabs and
+    // the overlap are disjoint and tile the window.
+    uint32_t count = 0;
+    for(int axis = 0; axis < 3; ++axis)
+    {
+        if(shift[axis] == 0)
+        {
+            continue;
+        }
+        voxel_box slab;
+        for(int other = 0; other < 3; ++other)
+        {
+            if(other < axis)
+            {
+                slab.min[other] = overlap_min[other];
+                slab.size[other] = overlap_max[other] - overlap_min[other];
+            }
+            else
+            {
+                slab.min[other] = 0;
+                slab.size[other] = res;
+            }
+        }
+        // The exposed range on this axis is the complement of the overlap range.
+        slab.min[axis] = shift[axis] > 0 ? overlap_max[axis] : 0;
+        slab.size[axis] = shift[axis] > 0 ? res - overlap_max[axis] : overlap_min[axis];
+        out_exposed[count] = slab;
+        ++count;
+    }
+    return count;
 }
 
 void global_sdf_clipmap::compose_level(uint32_t index, const std::vector<global_sdf_instance>& instances)

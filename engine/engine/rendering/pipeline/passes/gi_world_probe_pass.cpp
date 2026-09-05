@@ -156,7 +156,14 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_uniform(trace_program_.u_gi_light_voxel_params, light_voxel_params);
         gfx::set_uniform(trace_program_.u_gi_world_probe_params, probe_params);
         gfx::set_uniform(trace_program_.u_gi_world_probe_window, window, global_sdf_clipmap::level_count);
-        gfx::dispatch(pass.id, trace_program_.program->native_handle(), probe_count, 1, 1);
+        // Four probes per 64-lane group (PROBE_TRACE_SLOTS in the kernel): a 16-lane group
+        // left half or three quarters of every wave idle.
+        constexpr uint32_t probes_per_group = 4u;
+        gfx::dispatch(pass.id,
+                      trace_program_.program->native_handle(),
+                      (probe_count + probes_per_group - 1u) / probes_per_group,
+                      1,
+                      1);
         trace_program_.program->end();
     }
     {

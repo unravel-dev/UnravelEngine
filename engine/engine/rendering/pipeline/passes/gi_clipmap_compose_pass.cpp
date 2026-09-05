@@ -260,9 +260,6 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     // that correctly, writing the saturated "nothing reached this voxel" value everywhere.
     const auto& instances = surface_cache.get_instances();
     auto& atlas = surface_cache.get_atlas();
-    const auto& clipmap_settings = clipmap.get_settings();
-    const uint32_t resolution = clipmap_settings.resolution;
-    const uint32_t groups = (resolution + compose_group_size - 1u) / compose_group_size;
     uint32_t composed = 0;
     for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
     {
@@ -275,41 +272,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         {
             continue;
         }
-        gfx::render_pass pass("GI/Clipmap Compose");
-        compose_program_.program->begin();
-        gfx::set_texture(compose_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-        gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-        gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-        gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
-        gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-        gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
-        // Stage 5 is the clipmap as an IMAGE here, where the tracing passes bind it as a sampler at
-        // stage 4. Writing the level in place is what avoids a staging copy and the per-level
-        // update_texture_3d the CPU path pays.
-        gfx::set_image_3d(5, clipmap_gpu.get_texture()->native_handle(), 0, gfx::access::Write, gfx::texture_format::R8);
-        // The level's surface-list cursor resets in this dispatch (thread 0); the attribute
-        // pass's sampled read of the distance volume is the transition that orders it - the
-        // old standalone 1-thread reset relied on submission order, which D3D12 does not
-        // guarantee for same-state UAV access.
-        gfx::set_buffer(9, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
-
-        const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
-                                     float(atlas.get_atlas_voxel_dim()),
-                                     float(instances.size()),
-                                     float(surface_cache.get_emitters().size())};
-        gfx::set_uniform(compose_program_.u_sdf_params, sdf_params);
-        gfx::set_uniform(compose_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
-        gfx::set_uniform(compose_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
-        // The reach is what the CPU composer seeds `nearest` with, and it must be the same value:
-        // it is simultaneously the cheap-reject bound and the saturated output, so a mismatch
-        // changes the composed bytes rather than merely the cost.
-        const float reach = clipmap_settings.encode_range * lvl.voxel_size;
-        const float compose_params[4] = {float(level), float(resolution), lvl.voxel_size, reach};
-        gfx::set_uniform(compose_program_.u_clipmap_compose_params, compose_params);
-        const float compose_origin[4] = {lvl.origin.x, lvl.origin.y, lvl.origin.z, 0.0f};
-        gfx::set_uniform(compose_program_.u_clipmap_compose_origin, compose_origin);
-        gfx::dispatch(pass.id, compose_program_.program->native_handle(), groups, groups, groups);
-        compose_program_.program->end();
+        compose_level_voxels(clipmap, clipmap_gpu, surface_cache, level);
         ++composed;
     }
     // Attributes compose AFTER every distance level is written: the attribute shader samples the
@@ -387,6 +350,16 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
                                           attr_voxel_size,
                                           attr_reach};
             gfx::set_uniform(attributes_program_.u_clipmap_attr_params, attr_params);
+            // Scroll-only: the window's shift in attribute cells (the snap is a whole number
+            // of them), so the kernel can tell which surviving cells sit inside both windows
+            // and keep their attributes. Off unless the distance voxels were scroll-composed
+            // this frame - the two passes must agree on what the level holds.
+            const bool scroll_only = lvl.scroll_only && clipmap_gpu.is_composed_on_gpu();
+            const float attr_scroll[4] = {float(lvl.scroll_shift.x / int(global_sdf_clipmap::attr_downsample)),
+                                          float(lvl.scroll_shift.y / int(global_sdf_clipmap::attr_downsample)),
+                                          float(lvl.scroll_shift.z / int(global_sdf_clipmap::attr_downsample)),
+                                          scroll_only ? 1.0f : 0.0f};
+            gfx::set_uniform(attributes_program_.u_clipmap_attr_scroll, attr_scroll);
             const float compose_origin[4] = {lvl.origin.x, lvl.origin.y, lvl.origin.z, 0.0f};
             gfx::set_uniform(attributes_program_.u_clipmap_compose_origin, compose_origin);
             gfx::dispatch(pass.id,
@@ -401,6 +374,162 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     // it would clear the mask before this pass ever saw it.
     clipmap.clear_dirty_levels();
     return composed > 0;
+}
+
+void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& clipmap,
+                                                   const global_sdf_clipmap_gpu& clipmap_gpu,
+                                                   surface_cache_system& surface_cache,
+                                                   uint32_t level)
+{
+    const auto& lvl = clipmap.get_level(level);
+    const uint32_t resolution = clipmap.get_settings().resolution;
+    global_sdf_clipmap::voxel_box overlap;
+    std::array<global_sdf_clipmap::voxel_box, 3> exposed;
+    uint32_t exposed_count = 0;
+    // SCROLL-ONLY (level::scroll_only): the overlap of the old and new windows holds exactly
+    // the bytes a recompose would write, so it is moved - out to the scratch slab and back
+    // in at its new position, two blits, since a blit cannot shift voxels within one
+    // texture - and only the exposed slabs are composed. A backend without texture blits,
+    // or a scratch that failed to allocate, composes in full as before.
+    const auto* caps = bgfx::getCaps();
+    const bool can_blit = caps != nullptr && (caps->supported & BGFX_CAPS_TEXTURE_BLIT) != 0u;
+    if(lvl.scroll_only && can_blit)
+    {
+        exposed_count = global_sdf_clipmap::compute_scroll_boxes(lvl.scroll_shift, resolution, overlap, exposed);
+    }
+    if(exposed_count > 0)
+    {
+        const bool scratch_stale = !scroll_scratch_ || !scroll_scratch_->is_valid() ||
+                                   scroll_scratch_->info.width != resolution ||
+                                   scroll_scratch_->info.depth != resolution;
+        if(scratch_stale)
+        {
+            scroll_scratch_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(resolution),
+                                                             static_cast<uint16_t>(resolution),
+                                                             static_cast<uint16_t>(resolution),
+                                                             false,
+                                                             gfx::texture_format::R8,
+                                                             BGFX_TEXTURE_BLIT_DST);
+        }
+        if(!scroll_scratch_ || !scroll_scratch_->is_valid())
+        {
+            exposed_count = 0;
+        }
+    }
+    if(exposed_count > 0)
+    {
+        const auto res16 = static_cast<uint16_t>(resolution);
+        const auto slab_z = static_cast<uint16_t>(level * resolution);
+        {
+            // Blits run at the start of their view, so the copy out and the placement back
+            // each take a view of their own, ahead of the compose dispatches.
+            gfx::render_pass copy_pass("GI/Clipmap Scroll Copy");
+            gfx::blit(copy_pass.id,
+                      scroll_scratch_->native_handle(),
+                      0,
+                      0,
+                      0,
+                      0,
+                      clipmap_gpu.get_texture()->native_handle(),
+                      0,
+                      0,
+                      0,
+                      slab_z,
+                      res16,
+                      res16,
+                      res16);
+        }
+        {
+            // New-window voxel v came from old-window voxel v + shift.
+            const math::ivec3 source = overlap.min + lvl.scroll_shift;
+            gfx::render_pass place_pass("GI/Clipmap Scroll Place");
+            gfx::blit(place_pass.id,
+                      clipmap_gpu.get_texture()->native_handle(),
+                      0,
+                      static_cast<uint16_t>(overlap.min.x),
+                      static_cast<uint16_t>(overlap.min.y),
+                      static_cast<uint16_t>(slab_z + overlap.min.z),
+                      scroll_scratch_->native_handle(),
+                      0,
+                      static_cast<uint16_t>(source.x),
+                      static_cast<uint16_t>(source.y),
+                      static_cast<uint16_t>(source.z),
+                      static_cast<uint16_t>(overlap.size.x),
+                      static_cast<uint16_t>(overlap.size.y),
+                      static_cast<uint16_t>(overlap.size.z));
+        }
+        gfx::render_pass pass("GI/Clipmap Compose");
+        for(uint32_t box = 0; box < exposed_count; ++box)
+        {
+            dispatch_compose_box(pass, clipmap, clipmap_gpu, surface_cache, level, exposed[box], box == 0);
+        }
+        return;
+    }
+    global_sdf_clipmap::voxel_box whole;
+    whole.min = math::ivec3(0);
+    whole.size = math::ivec3(int(resolution));
+    gfx::render_pass pass("GI/Clipmap Compose");
+    dispatch_compose_box(pass, clipmap, clipmap_gpu, surface_cache, level, whole, true);
+}
+
+void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
+                                                   const global_sdf_clipmap& clipmap,
+                                                   const global_sdf_clipmap_gpu& clipmap_gpu,
+                                                   surface_cache_system& surface_cache,
+                                                   uint32_t level,
+                                                   const global_sdf_clipmap::voxel_box& box,
+                                                   bool reset_cursor)
+{
+    const auto& lvl = clipmap.get_level(level);
+    const auto& clipmap_settings = clipmap.get_settings();
+    const uint32_t resolution = clipmap_settings.resolution;
+    const auto& instances = surface_cache.get_instances();
+    auto& atlas = surface_cache.get_atlas();
+    compose_program_.program->begin();
+    gfx::set_texture(compose_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
+    gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
+    gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
+    gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+    gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
+    gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+    // Stage 5 is the clipmap as an IMAGE here, where the tracing passes bind it as a sampler at
+    // stage 4. Writing the level in place is what avoids a staging copy and the per-level
+    // update_texture_3d the CPU path pays.
+    gfx::set_image_3d(5, clipmap_gpu.get_texture()->native_handle(), 0, gfx::access::Write, gfx::texture_format::R8);
+    // The level's surface-list cursor resets in this dispatch (thread 0); the attribute
+    // pass's sampled read of the distance volume is the transition that orders it - the
+    // old standalone 1-thread reset relied on submission order, which D3D12 does not
+    // guarantee for same-state UAV access.
+    gfx::set_buffer(9, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
+    const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
+                                 float(atlas.get_atlas_voxel_dim()),
+                                 float(instances.size()),
+                                 float(surface_cache.get_emitters().size())};
+    gfx::set_uniform(compose_program_.u_sdf_params, sdf_params);
+    gfx::set_uniform(compose_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+    gfx::set_uniform(compose_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+    // The reach is what the CPU composer seeds `nearest` with, and it must be the same value:
+    // it is simultaneously the cheap-reject bound and the saturated output, so a mismatch
+    // changes the composed bytes rather than merely the cost.
+    const float reach = clipmap_settings.encode_range * lvl.voxel_size;
+    const float compose_params[4] = {float(level), float(resolution), lvl.voxel_size, reach};
+    gfx::set_uniform(compose_program_.u_clipmap_compose_params, compose_params);
+    const float compose_origin[4] = {lvl.origin.x, lvl.origin.y, lvl.origin.z, 0.0f};
+    gfx::set_uniform(compose_program_.u_clipmap_compose_origin, compose_origin);
+    const float range[4] = {float(box.min.x), float(box.min.y), float(box.min.z), reset_cursor ? 1.0f : 0.0f};
+    gfx::set_uniform(compose_program_.u_clipmap_compose_range, range);
+    const float range_size[4] = {float(box.size.x), float(box.size.y), float(box.size.z), 0.0f};
+    gfx::set_uniform(compose_program_.u_clipmap_compose_range_size, range_size);
+    const auto groups = [](int extent)
+    {
+        return (uint32_t(math::max(extent, 0)) + compose_group_size - 1u) / compose_group_size;
+    };
+    gfx::dispatch(pass.id,
+                  compose_program_.program->native_handle(),
+                  groups(box.size.x),
+                  groups(box.size.y),
+                  groups(box.size.z));
+    compose_program_.program->end();
 }
 
 } // namespace unravel

@@ -660,6 +660,12 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 	                         vec3(0.9151, 0.8380, 0.7548) * float(u_light_voxel_frame));
 	vec3 light_jitter =
 	    (dither_seed - vec3_splat(0.5)) * (2.0 * GI_LIGHT_VOXEL_SUN_DITHER * attr_voxel);
+	// Inside a DIRTY REGION (a placement just moved, appeared or vanished; an emissive one
+	// out to its light's reach) the previous value is the light that placement left, so the
+	// radiance store below writes through: the volume must not integrate a vacated pool at
+	// 1/8 per relight while the temporal above it is already flushing. Per VOXEL - the test
+	// reads the centre, so it is the same answer for all six faces.
+	bool history_trusted = GiDirtyRegionFactor(center) <= 0.0;
 	// LOOP: unrolled, this replicates the largest body in the GI frame - the light loop with
 	// its sphere traces, the cavity march, the 8-corner probe chain - six times, with the
 	// register pressure that implies.
@@ -1007,11 +1013,6 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		vec4 previous = imageLoad(s_light_voxels_out, texel);
 		// Measured faces carry alpha 1; culled ones the provenance epsilon, never blended.
 		bool previous_measured = previous.w > 0.5;
-		// Inside a DIRTY REGION (a placement just moved, appeared or vanished; an emissive one
-		// out to its light's reach) the previous value is the light that placement left, so
-		// the store writes through: the volume must not integrate a vacated pool at 1/8 per
-		// relight while the temporal above it is already flushing.
-		bool history_trusted = GiDirtyRegionFactor(center) <= 0.0;
 		BRANCH
 		if(ema < 1.0 && previous_measured && history_trusted)
 		{

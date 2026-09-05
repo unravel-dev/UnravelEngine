@@ -34,12 +34,15 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
     // without it the image binding silently produces no writes rather than an error.
     const uint64_t flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_W_CLAMP |
                            BGFX_TEXTURE_COMPUTE_WRITE;
+    // BLIT_DST as well: a scroll-only recompose (level::scroll_only) places the overlap of
+    // the old and new windows back into the level slab with a blit, composing only the
+    // exposed slabs.
     texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(resolution),
                                               static_cast<uint16_t>(resolution),
                                               static_cast<uint16_t>(depth),
                                               false,
                                               gfx::texture_format::R8,
-                                              flags);
+                                              flags | BGFX_TEXTURE_BLIT_DST);
     if(!texture_ || !texture_->is_valid())
     {
         APPLOG_ERROR("[SurfaceCache] Failed to create the {}x{}x{} clipmap texture.",
