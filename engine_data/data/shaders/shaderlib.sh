@@ -424,7 +424,7 @@ float limit = (bayer_matrix[x + y * 16])/256.0f;
 return limit;
 }
 
-// 16x16 tile of screen-space IGN (Jimenez) at integer pixel offsets — same cost as @c dither16x16
+// 16x16 tile of screen-space IGN (Jimenez) at integer pixel offsets - same cost as @c dither16x16
 // (mod + const lookup). Repeats on screen like Bayer; values match float IGN at (x,y) in 0..15.
 float ign16x16(vec2 fragCoord)
 {

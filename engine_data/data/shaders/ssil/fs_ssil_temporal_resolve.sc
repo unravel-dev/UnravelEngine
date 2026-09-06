@@ -324,7 +324,7 @@ void main()
     }
 
     // Weighted-mean accumulation. The divisor must be the actual sum of
-    // weights — NOT the saturation-clamped W_new — otherwise increasing
+    // weights - NOT the saturation-clamped W_new - otherwise increasing
     // u_max_accum_frames artificially shrinks C_curr's contribution to the
     // numerator while leaving the denominator capped, dimming the SSIL signal
     // as the accumulation window grows. W_new (capped at u_max_accum_frames)

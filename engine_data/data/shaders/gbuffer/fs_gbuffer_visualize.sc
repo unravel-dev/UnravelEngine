@@ -108,6 +108,15 @@ vec4 gbuffer_visualize(vec2 texcoord0)
         float NoV = max(saturate(dot(view_normal, normalize(-view_position))), 1e-5);
         float lighting_visibility = saturate(sqrt(Luminance(eval_irradiance_sh(s_tex6, data.world_normal))));
         float occlusion = ComputeSpecularOcclusion(NoV, data.roughness, data.ambient_occlusion, lighting_visibility);
+        // Times the GTSO cone term when GTAO is bound (a white fallback opens the cone to
+        // the hemisphere, so the term is 1 without it).
+        vec4 gtao = texture2D(s_tex8, texcoord0);
+        vec3 bent_normal = gtao.xyz * 2.0 - vec3_splat(1.0);
+        if(dot(bent_normal, bent_normal) > 1e-4)
+        {
+            vec3 view_vec = normalize(mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz - world_position);
+            occlusion *= ConeConeSpecularOcclusion(view_vec, normalize(data.world_normal), normalize(bent_normal), gtao.a, data.roughness);
+        }
         color = vec3_splat(occlusion);
     }
     else if(u_mode == GTAO)

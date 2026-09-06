@@ -406,7 +406,7 @@ ivec2 GBufferTexelFromFragCoord(vec2 fragCoord, sampler2D dimSampler)
     return clamp(t, ivec2(0, 0), dim - ivec2(1, 1));
 }
 
-// UV at texel center — use for depth rays / SSIL so they match the same pixel as texelFetch.
+// UV at texel center - use for depth rays / SSIL so they match the same pixel as texelFetch.
 vec2 GBufferUvCenterFromTexel(ivec2 texel, sampler2D dimSampler)
 {
     vec2 dim = vec2(textureSize(dimSampler, 0));
@@ -647,7 +647,7 @@ struct BxDFContext
 };
 
 // Matches Unreal BRDF.ush InitBxDFContext: unsaturated NoL/NoV so NoH/VoL stay consistent with
-// N·H = (N·V + N·L) / |V+L|. Clamp cosines only where the microfacet model assumes the upper hemisphere.
+// N*H = (N*V + N*L) / |V+L|. Clamp cosines only where the microfacet model assumes the upper hemisphere.
 void Init( inout BxDFContext Context, vec3 N, vec3 V, vec3 L )
 {
     Context.NoL = dot(N, L);
@@ -1428,7 +1428,7 @@ vec3 ComputeEnergyConservation(FBxDFEnergyTerms EnergyTerms)
     return EnergyTerms.W;
 }
 
-// Direct lighting — analytic (delta) lights.
+// Direct lighting - analytic (delta) lights.
 // Specular AA: use GeometricSpecularAA on roughness before this path (Tokuyoshi & Kaplanyan 2019; also Unity HDRP / Frostbite).
 // Multiple-scattering energy weight W from directional-albedo fits is intended for integrated lighting (IBL / prefiltered
 // probes); for delta lights the standard evaluation is the single-scatter microfacet BRDF (W = 1). See e.g. Kulla-Conty
@@ -1493,6 +1493,43 @@ vec3 StandardShadingDirect(
     return (DiffuseLighting * EnergyPreservationFactor * DirectAO) + specular;
 }
 
+// Solid angle of the intersection of two spherical caps (Oat and Sander 2007), the form
+// Jimenez 2016 uses for GTSO: caps of cosines CosCapA / CosCapB whose axes are CosDistance
+// apart. The partial overlap is the paper's smoothstep fit.
+float SphericalCapIntersectionSolidAngle(float CosCapA, float CosCapB, float CosDistance)
+{
+    float RadiusA = acos(CosCapA);
+    float RadiusB = acos(CosCapB);
+    float Distance = acos(CosDistance);
+    float SmallerCap = 2.0 * PI * (1.0 - max(CosCapA, CosCapB));
+    if(Distance <= max(RadiusA, RadiusB) - min(RadiusA, RadiusB))
+    {
+        return SmallerCap;
+    }
+    if(Distance >= RadiusA + RadiusB)
+    {
+        return 0.0;
+    }
+    float Difference = abs(RadiusA - RadiusB);
+    float Overlap = 1.0 - saturate((Distance - Difference) / max(RadiusA + RadiusB - Difference, 1e-4));
+    return smoothstep(0.0, 1.0, Overlap) * SmallerCap;
+}
+
+// GTSO (Jimenez 2016): the visible region as a cone about the bent normal with the aperture
+// the cosine-weighted visibility implies (sin^2 = V), the GGX lobe as a cone about the
+// reflection vector (Karis' fit, 10^-roughness^2), and the occlusion as their intersection
+// over the lobe. 1 when nothing is known (V = 1 opens the cone to the hemisphere).
+float ConeConeSpecularOcclusion(vec3 V, vec3 N, vec3 BentNormal, float Visibility, float Roughness)
+{
+    vec3 R = reflect(-V, N);
+    float CosVisible = sqrt(saturate(1.0 - Visibility));
+    float SafeRoughness = max(Roughness, 0.01);
+    float CosLobe = exp2(-3.32193 * SafeRoughness * SafeRoughness);
+    float CosBetween = dot(BentNormal, R);
+    float Lobe = 2.0 * PI * (1.0 - CosLobe);
+    return saturate(SphericalCapIntersectionSolidAngle(CosVisible, CosLobe, CosBetween) / max(Lobe, 1e-4));
+}
+
 float ComputeSpecularOcclusion(float NoV, float Roughness, float AO, float LightingVisibility)
 {
     float RoughnessSq = Roughness * Roughness;
@@ -1517,6 +1554,7 @@ vec3 StandardShadingIndirectAO(
  float Roughness,
  float DiffuseAO,
  float SpecularAO,
+ float SpecularOcclusionScale,
  float LightingVisibility,
  vec3 V,
  vec3 N )
@@ -1526,7 +1564,9 @@ vec3 StandardShadingIndirectAO(
     const float kNoVEpsilon = 1e-5f;
     float NoV = max(saturate(dot(N, V)), kNoVEpsilon);
 
-    float SpecularOcclusion = ComputeSpecularOcclusion(NoV, Roughness, SpecularAO, LightingVisibility);
+    // The material AO through the roughness-aware fit; a directional screen-space term
+    // (GTSO) arrives as a plain scale so the two are not both fitted.
+    float SpecularOcclusion = ComputeSpecularOcclusion(NoV, Roughness, SpecularAO, LightingVisibility) * SpecularOcclusionScale;
 
 #if USE_ENERGY_CONSERVATION > 0
     FBxDFEnergyTerms SpecularEnergyTerms = ComputeGGXSpecEnergyTerms(Roughness, NoV, SpecularColor);
@@ -1554,7 +1594,7 @@ vec3 StandardShadingIndirect(
  vec3 N )
 {
     return StandardShadingIndirectAO(DiffuseColor, IndirectDiffuse, SpecularColor, IndirectSpecular,
-                                     BRDFIntegrationMap, Roughness, AO, AO, LightingVisibility, V, N);
+                                     BRDFIntegrationMap, Roughness, AO, AO, 1.0, LightingVisibility, V, N);
 }
 
 /// Multi-bounce ambient occlusion (Jimenez et al. 2016, eq. 9): the fit of a path-traced

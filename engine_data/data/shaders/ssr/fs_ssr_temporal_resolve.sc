@@ -140,7 +140,7 @@ SsrTemporalResult ApplyTemporalAccumulation(
 
     BRANCH
     if (u_enable_temporal <= 0.5)
-        return result;                         // temporal OFF → just pass through
+        return result;                         // temporal OFF -> just pass through
 
     // == 1. reprojection ====================================================
     // Camera-consistent pixels ALWAYS use this pass's own matrix reprojection; the
@@ -161,11 +161,11 @@ SsrTemporalResult ApplyTemporalAccumulation(
     BRANCH
     if (any(lessThan(prev_uv, vec2(0.0, 0.0))) ||
         any(greaterThan(prev_uv, vec2(1.0, 1.0))))
-        return result;                         // out of screen → no history
+        return result;                         // out of screen -> no history
 
     // == 2. fetch history ===================================================
     vec4  hist     = texture2D(s_ssr_history, prev_uv);
-    float W_hist   = hist.a * u_max_accum_frames;     // 0 … kMaxFrames
+    float W_hist   = hist.a * u_max_accum_frames;     // 0 ... kMaxFrames
     vec3  C_hist   = hist.rgb;
     float hist_t   = texture2DLod(s_ssr_hist_hit_t, prev_uv, 0.0).x;
 

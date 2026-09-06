@@ -29,19 +29,19 @@ const preset_card_info presets[] = {
     {"preset_medium",
      ICON_MDI_LAYERS,
      "Standard",
-     "Flat clouds, SSR, TAA, ASSAO, Bloom and Auto-Exposure, Soft Shadows.\n"
+     "Flat clouds, SSR, TAA, GTAO, Bloom and Auto-Exposure, Soft Shadows.\n"
      "Recommended for most projects.",
      defaults::scene_preset::medium},
     {"preset_high",
      ICON_MDI_DIAMOND_STONE,
      "High End",
-     "Volumetric clouds, World GI, SSR, TAA, ASSAO, Bloom, Auto-Exposure and Contact Shadows.\n"
+     "Volumetric clouds, World GI, SSR, TAA, GTAO, Bloom, Auto-Exposure and Contact Shadows.\n"
      "Best for high-end desktop.",
      defaults::scene_preset::high},
     {"preset_showcase",
      ICON_MDI_GIFT,
      "Showcase",
-     "Volumetric clouds, World GI, SSR, TAA, ASSAO, Bloom, Auto-Exposure and Contact Shadows.\n"
+     "Volumetric clouds, World GI, SSR, TAA, GTAO, Bloom, Auto-Exposure and Contact Shadows.\n"
      "Highest quality lighting and shadows. Requires a powerful GPU.",
      defaults::scene_preset::showcase},
 };

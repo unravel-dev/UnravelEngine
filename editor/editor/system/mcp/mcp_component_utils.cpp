@@ -10,6 +10,7 @@
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/rendering/ecs/components/bloom_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/rendering/ecs/components/gtao_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
@@ -3123,6 +3124,219 @@ auto apply_bloom_properties(bloom_component& comp,
     }
 }
 
+auto gtao_resolution_to_string(trace_resolution value) -> const char*
+{
+    switch(value)
+    {
+        case trace_resolution::full:
+            return "full";
+        case trace_resolution::half:
+            return "half";
+        case trace_resolution::quarter:
+            return "quarter";
+        case trace_resolution::eighth:
+            return "eighth";
+        default:
+            return "half";
+    }
+}
+
+auto gtao_resolution_from_string(std::string_view value, trace_resolution& out) -> bool
+{
+    if(value == "full")
+    {
+        out = trace_resolution::full;
+        return true;
+    }
+    if(value == "half")
+    {
+        out = trace_resolution::half;
+        return true;
+    }
+    if(value == "quarter")
+    {
+        out = trace_resolution::quarter;
+        return true;
+    }
+    if(value == "eighth")
+    {
+        out = trace_resolution::eighth;
+        return true;
+    }
+    return false;
+}
+
+auto gtao_to_json(const gtao_component& comp, const std::unordered_set<std::string>* filter) -> std::string
+{
+    const auto& st = comp.settings;
+    std::string json = "{";
+    bool first = true;
+    auto add_number = [&](const char* key, float value)
+    {
+        if(wants_key(filter, key))
+        {
+            append_prop(json, first, key, fmt::format("{:.6g}", value));
+        }
+    };
+    auto add_int = [&](const char* key, int value)
+    {
+        if(wants_key(filter, key))
+        {
+            append_prop(json, first, key, fmt::format("{}", value));
+        }
+    };
+    auto add_bool = [&](const char* key, bool value)
+    {
+        if(wants_key(filter, key))
+        {
+            append_prop(json, first, key, value ? "true" : "false");
+        }
+    };
+    add_bool("enabled", comp.enabled);
+    add_number("radius", st.radius);
+    add_number("falloff_range", st.falloff_range);
+    add_number("final_power", st.final_power);
+    add_number("max_screen_radius", st.max_screen_radius);
+    add_number("intensity", st.intensity);
+    add_number("thin_occluder_compensation", st.thin_occluder_compensation);
+    add_int("quality_level", st.quality_level);
+    if(wants_key(filter, "resolution"))
+    {
+        append_prop(json, first, "resolution", make_json_string(gtao_resolution_to_string(st.resolution)));
+    }
+    add_int("denoise_passes", st.denoise_passes);
+    add_bool("enable_temporal", st.enable_temporal);
+    add_number("temporal_history", st.temporal_history);
+    add_number("temporal_depth_threshold", st.temporal_depth_threshold);
+    add_number("bent_normal_strength", st.bent_normal_strength);
+    add_bool("multi_bounce", st.multi_bounce);
+    add_bool("generate_normals", st.generate_normals);
+    add_number("normal_map_detail", st.normal_map_detail);
+    json += "}";
+    return json;
+}
+
+auto apply_gtao_properties(gtao_component& comp,
+                           const simdjson::dom::object& properties,
+                           component_apply_result& result) -> void
+{
+    auto& st = comp.settings;
+    for(auto field : properties)
+    {
+        const std::string key(field.key);
+        const auto& value = field.value;
+        std::string error;
+        auto fail = [&](const std::string& message)
+        {
+            result.ok = false;
+            result.errors.push_back(key + ": " + message);
+        };
+        auto applied = [&]()
+        {
+            result.applied.push_back(key);
+        };
+        auto number = [&](float& target)
+        {
+            parse_number(value, target, error) ? applied() : fail(error);
+        };
+        auto integer = [&](int32_t& target)
+        {
+            int parsed = 0;
+            if(parse_int(value, parsed, error))
+            {
+                target = parsed;
+                applied();
+            }
+            else
+            {
+                fail(error);
+            }
+        };
+        auto boolean = [&](bool& target)
+        {
+            parse_bool(value, target, error) ? applied() : fail(error);
+        };
+        if(key == "enabled")
+        {
+            boolean(comp.enabled);
+        }
+        else if(key == "radius")
+        {
+            number(st.radius);
+        }
+        else if(key == "falloff_range")
+        {
+            number(st.falloff_range);
+        }
+        else if(key == "final_power")
+        {
+            number(st.final_power);
+        }
+        else if(key == "max_screen_radius")
+        {
+            number(st.max_screen_radius);
+        }
+        else if(key == "intensity")
+        {
+            number(st.intensity);
+        }
+        else if(key == "thin_occluder_compensation")
+        {
+            number(st.thin_occluder_compensation);
+        }
+        else if(key == "quality_level")
+        {
+            integer(st.quality_level);
+        }
+        else if(key == "resolution")
+        {
+            std::string s;
+            if(!parse_string(value, s, error) || !gtao_resolution_from_string(s, st.resolution))
+            {
+                fail("expected full|half|quarter|eighth");
+                continue;
+            }
+            applied();
+        }
+        else if(key == "denoise_passes")
+        {
+            integer(st.denoise_passes);
+        }
+        else if(key == "enable_temporal")
+        {
+            boolean(st.enable_temporal);
+        }
+        else if(key == "temporal_history")
+        {
+            number(st.temporal_history);
+        }
+        else if(key == "temporal_depth_threshold")
+        {
+            number(st.temporal_depth_threshold);
+        }
+        else if(key == "bent_normal_strength")
+        {
+            number(st.bent_normal_strength);
+        }
+        else if(key == "multi_bounce")
+        {
+            boolean(st.multi_bounce);
+        }
+        else if(key == "generate_normals")
+        {
+            boolean(st.generate_normals);
+        }
+        else if(key == "normal_map_detail")
+        {
+            number(st.normal_map_detail);
+        }
+        else
+        {
+            result.unknown.push_back(key);
+        }
+    }
+}
+
 auto to_filter_set(const std::vector<std::string>* filter) -> std::unique_ptr<std::unordered_set<std::string>>
 {
     if(!filter || filter->empty())
@@ -3310,6 +3524,23 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Bloom", "clamp", "number");
     add("Bloom", "intensity", "number");
     add("Bloom", "scatter", "number");
+    add("GTAO", "enabled", "boolean");
+    add("GTAO", "radius", "number");
+    add("GTAO", "falloff_range", "number");
+    add("GTAO", "final_power", "number");
+    add("GTAO", "max_screen_radius", "number");
+    add("GTAO", "intensity", "number");
+    add("GTAO", "thin_occluder_compensation", "number");
+    add("GTAO", "quality_level", "integer", R"("minimum":0,"maximum":3)");
+    add("GTAO", "resolution", "string", R"("enum":["full","half","quarter","eighth"])");
+    add("GTAO", "denoise_passes", "integer", R"("minimum":0,"maximum":4)");
+    add("GTAO", "enable_temporal", "boolean");
+    add("GTAO", "temporal_history", "number");
+    add("GTAO", "temporal_depth_threshold", "number");
+    add("GTAO", "bent_normal_strength", "number");
+    add("GTAO", "multi_bounce", "boolean");
+    add("GTAO", "generate_normals", "boolean");
+    add("GTAO", "normal_map_detail", "number");
     if(all || component_filter == "Script")
     {
         if(!first)
@@ -3331,7 +3562,8 @@ auto is_supported_component_pretty_name(const std::string& component_pretty_name
            component_pretty_name == "Volume" || component_pretty_name == "Script" ||
            component_pretty_name == "Particle Emitter" || component_pretty_name == "Physics" ||
            component_pretty_name == "Animation" || component_pretty_name == "Text" ||
-           component_pretty_name == "Reflection Probe" || component_pretty_name == "Bloom";
+           component_pretty_name == "Reflection Probe" || component_pretty_name == "Bloom" ||
+           component_pretty_name == "GTAO";
 }
 
 auto component_properties_to_json(rtti::context& ctx,
@@ -3468,6 +3700,16 @@ auto component_properties_to_json(rtti::context& ctx,
             return {};
         }
         return bloom_to_json(*comp, filter_ptr);
+    }
+    if(component_pretty_name == "GTAO")
+    {
+        auto* comp = entity.try_get<gtao_component>();
+        if(!comp)
+        {
+            error = "Component not present on entity: GTAO";
+            return {};
+        }
+        return gtao_to_json(*comp, filter_ptr);
     }
     error = "Unsupported component for typed properties: " + component_pretty_name;
     return {};
@@ -3630,6 +3872,18 @@ auto apply_component_properties(rtti::context& ctx,
         apply_bloom_properties(*comp, properties, result);
         return result;
     }
+    if(component_pretty_name == "GTAO")
+    {
+        auto* comp = entity.try_get<gtao_component>();
+        if(!comp)
+        {
+            result.ok = false;
+            result.errors.push_back("Component not present on entity: GTAO");
+            return result;
+        }
+        apply_gtao_properties(*comp, properties, result);
+        return result;
+    }
     result.ok = false;
     result.errors.push_back("Unsupported component for typed properties: " + component_pretty_name);
     return result;
@@ -3685,6 +3939,7 @@ auto entity_supported_component_properties_json(rtti::context& ctx,
     try_add("Text");
     try_add("Reflection Probe");
     try_add("Bloom");
+    try_add("GTAO");
     // For Script, emit one bag per attached scriptable type.
     if(auto* script = entity.try_get<script_component>())
     {

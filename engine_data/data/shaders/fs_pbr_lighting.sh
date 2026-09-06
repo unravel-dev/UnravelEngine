@@ -787,16 +787,16 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // occlusion keeps the plain visibility. Direct light is untouched by design.
     float screen_ao = 1.0;
     vec3 diffuse_normal = N;
+    vec3 bent_normal = N;
     if(u_gtao_params.x > 0.5)
     {
         vec4 gtao = texture2D(s_gtao, texcoord0);
         screen_ao = mix(1.0, gtao.a, u_gtao_params.z);
-        vec3 bent_normal = normalize(gtao.xyz * 2.0 - 1.0);
+        bent_normal = normalize(gtao.xyz * 2.0 - 1.0);
         diffuse_normal = normalize(mix(N, bent_normal, u_gtao_params.y));
     }
     vec3 diffuse_screen_ao = u_gtao_params.w > 0.5 ? MultiBounceAO(screen_ao, data.diffuse_color)
                                                    : vec3_splat(screen_ao);
-    float combined_ao = data.ambient_occlusion * screen_ao;
 
     vec3 irradiance = eval_irradiance_sh(s_irradiance, diffuse_normal);
     // THE INDIRECT DIFFUSE CONTRACT (energy audit): this slot carries E/pi - the
@@ -818,10 +818,17 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
 
     float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
     float lighting_visibility = saturate(sqrt(Luminance(indirect_diffuse)));
+    // GTSO: the specular lobe against the visible cone about the bent normal (Jimenez 2016),
+    // in place of pushing the plain visibility through the diffuse-style fit - a glossy
+    // surface whose reflection direction looks into the open stays bright, one whose lobe
+    // points at the occluder darkens, at any visibility.
+    float specular_screen_ao = u_gtao_params.x > 0.5
+                                   ? ConeConeSpecularOcclusion(V, N, bent_normal, screen_ao, indirect_filtered_roughness)
+                                   : 1.0;
 
     // Diffuse: the material AO (the screen term is already folded into indirect_diffuse per
-    // channel); specular occlusion: material x plain screen visibility.
-    vec3 indirect_lighting = StandardShadingIndirectAO(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, data.ambient_occlusion, combined_ao, lighting_visibility, V, N);
+    // channel); specular: the material AO through the fit, times the GTSO cone term.
+    vec3 indirect_lighting = StandardShadingIndirectAO(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, data.ambient_occlusion, data.ambient_occlusion, specular_screen_ao, lighting_visibility, V, N);
     return vec4(indirect_lighting + data.emissive_color, 1.0f);
 }
 #endif
