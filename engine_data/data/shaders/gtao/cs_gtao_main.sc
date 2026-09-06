@@ -1,15 +1,17 @@
 /*
  * GTAO main pass: per AO-resolution texel, the cosine-weighted visibility integral over
  * `slice_count` slices through the view vector (Jimenez et al. 2016, "Practical Realtime
- * Strategies for Accurate Indirect Occlusion"; structure after Intel's XeGTAO), with each
- * slice's occlusion kept as a VISIBILITY BITMASK (Therrien, Levesque, Gilet 2023, "Screen
- * Space Indirect Lighting with Visibility Bitmask"): the projected normal's hemisphere is
- * split into GTAO_SECTOR_COUNT sectors and each of the `steps_per_slice` samples along
- * +/- the slice direction marks the sectors between its front face and the face
- * `occluder_thickness` behind it. Unlike the two-horizon integral, what lies beyond a thin
- * occluder (a railing, a post, a leaf) stays visible, and the bent normal - the mean
- * unoccluded direction, which the lighting uses to steer its diffuse lookups - is the sum of
- * the open sectors.
+ * Strategies for Accurate Indirect Occlusion"; structure after Intel's XeGTAO), each slice
+ * searched by `steps_per_slice` samples of the prefiltered
+ * view-depth mips along +/- the slice direction. Two integrations of one search:
+ *  - the two-horizon closed form (default): the largest horizon angle on
+ *    each side bounds the visible arc; the bent normal - the mean unoccluded direction the
+ *    lighting steers its lookups and specular occlusion by - comes from the arc's moments;
+ *  - the VISIBILITY BITMASK (Therrien, Levesque, Gilet 2023; u_gtao_bitmask): the projected
+ *    normal's hemisphere split into GTAO_SECTOR_COUNT sectors, each sample marking the
+ *    sectors between its front face and the face one slab depth behind it, so what lies
+ *    beyond a thin occluder stays visible; the open sectors give visibility and bent normal.
+ * The search extent is a world radius with a distance falloff, capped on screen (XeGTAO).
  *
  * Output (RGBA8): rgb = world-space bent normal * 0.5 + 0.5, a = visibility.
  */
@@ -137,6 +139,7 @@ void main()
 		imageStore(i_gtao_out, texel, GtaoEncode(world_normal, saturate(1.0 / GTAO_OCCLUSION_TERM_SCALE)));
 		return;
 	}
+	// An occluder's influence fades over the outer falloff_range of the radius.
 	float falloff_range = u_gtao_falloff_range * radius;
 	float falloff_from = radius * (1.0 - u_gtao_falloff_range);
 	float falloff_mul = -1.0 / max(falloff_range, 1e-5);
@@ -149,8 +152,9 @@ void main()
 	int slice_count = int(u_gtao_slice_count + 0.5);
 	int steps_per_slice = int(u_gtao_steps_per_slice + 0.5);
 	float min_s = GTAO_PIXEL_TOO_CLOSE / screen_radius;
-	// The slab depth as a fraction of the (possibly screen-clamped) radius, so a scene keeps
-	// its look when the radius changes.
+	bool use_bitmask = u_gtao_bitmask > 0.5;
+	// The bitmask's slab depth as a fraction of the (possibly screen-clamped) radius, so a
+	// scene keeps its look when the radius changes.
 	float occluder_thickness = u_gtao_occluder_thickness * radius;
 	float sector_angle = GTAO_PI / float(GTAO_SECTOR_COUNT);
 	vec3 bent_normal = vec3_splat(0.0);
@@ -174,7 +178,12 @@ void main()
 		float sign_n = sign(dot(ortho_direction, projected_normal));
 		float cos_n = saturate(dot(projected_normal, view_vec) / projected_length);
 		float n = sign_n * acos(cos_n);
-		// The sectors cover the projected normal's hemisphere; nothing is occluded yet.
+		// Horizons start at the normal-relative hemisphere bounds; the sectors cover that
+		// hemisphere and nothing is occluded yet.
+		float low_horizon_cos0 = cos(n + GTAO_HALF_PI);
+		float low_horizon_cos1 = cos(n - GTAO_HALF_PI);
+		float horizon_cos0 = low_horizon_cos0;
+		float horizon_cos1 = low_horizon_cos1;
 		float hemisphere_start = n - GTAO_HALF_PI;
 		uint occluded = 0u;
 		LOOP
@@ -199,11 +208,24 @@ void main()
 			vec3 delta1 = GtaoAoViewPosition(uv1, depth1) - position;
 			float dist0 = length(delta0);
 			float dist1 = length(delta1);
-			// Falloff over the radius (the thin-occluder question is the slab's, below).
+			// The sample's weight over the radius: 1 counts in full, 0 leaves the horizon /
+			// sectors untouched.
 			float weight0 = saturate(dist0 * falloff_mul + falloff_add);
 			float weight1 = saturate(dist1 * falloff_mul + falloff_add);
-			occluded |= GtaoSlabSectors(delta0, dist0, view_vec, occluder_thickness, weight0, hemisphere_start, 1.0, n);
-			occluded |= GtaoSlabSectors(delta1, dist1, view_vec, occluder_thickness, weight1, hemisphere_start, -1.0, n);
+			if(use_bitmask)
+			{
+				occluded |= GtaoSlabSectors(delta0, dist0, view_vec, occluder_thickness, weight0, hemisphere_start, 1.0, n);
+				occluded |= GtaoSlabSectors(delta1, dist1, view_vec, occluder_thickness, weight1, hemisphere_start, -1.0, n);
+			}
+			else
+			{
+				float shc0 = dot(delta0, view_vec) / max(dist0, 1e-5);
+				float shc1 = dot(delta1, view_vec) / max(dist1, 1e-5);
+				shc0 = mix(low_horizon_cos0, shc0, weight0);
+				shc1 = mix(low_horizon_cos1, shc1, weight1);
+				horizon_cos0 = max(horizon_cos0, shc0);
+				horizon_cos1 = max(horizon_cos1, shc1);
+			}
 		}
 		// XeGTAO's fudge for a slight over-darkening on steep slopes.
 		projected_length = mix(projected_length, 1.0, 0.05);
@@ -214,12 +236,14 @@ void main()
 		// view vector.
 		float t0 = 0.0;
 		float t1 = 0.0;
-		if(occluded == 0u)
+		if(!use_bitmask || occluded == 0u)
 		{
-			// Nothing in this slice: the paper's closed-form arc over the whole hemisphere,
-			// which the sector sum below converges to.
-			float h0 = n - GTAO_HALF_PI;
-			float h1 = n + GTAO_HALF_PI;
+			// The closed-form arc between the two horizons (the whole hemisphere for a bitmask
+			// slice no sample touched); the +omega side (horizon 0) bounds the positive arc.
+			float h0 = use_bitmask ? n - GTAO_HALF_PI : -acos(clamp(horizon_cos1, -1.0, 1.0));
+			float h1 = use_bitmask ? n + GTAO_HALF_PI : acos(clamp(horizon_cos0, -1.0, 1.0));
+			h0 = n + clamp(h0 - n, -GTAO_HALF_PI, GTAO_HALF_PI);
+			h1 = n + clamp(h1 - n, -GTAO_HALF_PI, GTAO_HALF_PI);
 			slice_visibility = GtaoArcIntegral(h0, n, cos_n) + GtaoArcIntegral(h1, n, cos_n);
 			t0 = (6.0 * sin(h0 - n) - sin(3.0 * h0 - n) + 6.0 * sin(h1 - n) - sin(3.0 * h1 - n) +
 			      16.0 * sin_n - 3.0 * (sin(h0 + n) + sin(h1 + n))) / 12.0;

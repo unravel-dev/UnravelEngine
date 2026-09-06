@@ -69,7 +69,7 @@ auto gtao_pass::get_slice_count(int32_t quality_level) -> uint32_t
 
 auto gtao_pass::get_steps_per_slice(int32_t quality_level) -> uint32_t
 {
-    return std::clamp(quality_level, 0, 3) >= 2 ? 3u : 2u;
+    return std::clamp(quality_level, 0, 3) >= 1 ? 3u : 2u;
 }
 
 auto gtao_pass::init(rtti::context& ctx) -> bool
@@ -87,6 +87,7 @@ auto gtao_pass::init(rtti::context& ctx) -> bool
     common_cache_.cache_uniform(nullptr, common_.u_gtao_params1, "u_gtao_params1", gfx::uniform_type::Vec4);
     common_cache_.cache_uniform(nullptr, common_.u_gtao_params2, "u_gtao_params2", gfx::uniform_type::Vec4);
     common_cache_.cache_uniform(nullptr, common_.u_gtao_params3, "u_gtao_params3", gfx::uniform_type::Vec4);
+    common_cache_.cache_uniform(nullptr, common_.u_gtao_params4, "u_gtao_params4", gfx::uniform_type::Vec4);
     prefilter_program_.cache_uniforms();
     prefilter_program_.program = std::make_unique<gpu_program>(cs_prefilter);
     main_program_.cache_uniforms();
@@ -159,6 +160,8 @@ void gtao_pass::set_common_uniforms(const frame_context& ctx, float denoise_axis
                               (detail > 0.0f && (reduced || geometric)) ? 1.0f : 0.0f,
                               denoise_axis};
     gfx::set_uniform(common_.u_gtao_params3, params3);
+    const float params4[4] = {ctx.config.visibility_bitmask ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(common_.u_gtao_params4, params4);
 }
 
 void gtao_pass::run_prefilter(gfx::render_view& rview,

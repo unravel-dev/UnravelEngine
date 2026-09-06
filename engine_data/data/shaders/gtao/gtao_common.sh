@@ -97,6 +97,9 @@ uniform vec4 u_gtao_params3;
 #define u_gtao_detail_enabled     u_gtao_params3.z
 /// The denoise pass's axis: 0 = along x, 1 = along y (the 5x5 blur is run separably).
 #define u_gtao_denoise_axis       u_gtao_params3.w
+/// x = 1 for the visibility bitmask (else the two-horizon integral), yzw unused.
+uniform vec4 u_gtao_params4;
+#define u_gtao_bitmask            u_gtao_params4.x
 
 /// View-space depth (positive distance along the view axis) of a device depth value.
 float GtaoViewDepthFromDevice(float device_depth)

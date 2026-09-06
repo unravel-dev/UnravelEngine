@@ -45,6 +45,7 @@ SAMPLER2D(s_shadowMap3, 10);
 #endif
 
 // x = GTAO bound (0/1), y = bent normal strength, z = intensity, w = multi-bounce (0/1).
+#define GTAO_MULTIBOUNCE_MAX_ALBEDO 0.5
 uniform vec4 u_gtao_params;
 uniform vec4 u_params0;
 uniform vec4 u_params1;
@@ -793,9 +794,13 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
         vec4 gtao = texture2D(s_gtao, texcoord0);
         screen_ao = mix(1.0, gtao.a, u_gtao_params.z);
         bent_normal = normalize(gtao.xyz * 2.0 - 1.0);
-        diffuse_normal = normalize(mix(N, bent_normal, u_gtao_params.y));
+        // The lookup follows the bent normal by how much is occluded (an open pixel keeps
+        // its normal), scaled by the strength knob.
+        vec3 occluded_normal = normalize(mix(bent_normal, N, screen_ao));
+        diffuse_normal = normalize(mix(N, occluded_normal, u_gtao_params.y));
     }
-    vec3 diffuse_screen_ao = u_gtao_params.w > 0.5 ? MultiBounceAO(screen_ao, data.diffuse_color)
+    // Multi-bounce with the albedo clamped: near-white surfaces keep some occlusion.
+    vec3 diffuse_screen_ao = u_gtao_params.w > 0.5 ? MultiBounceAO(screen_ao, min(data.diffuse_color, vec3_splat(GTAO_MULTIBOUNCE_MAX_ALBEDO)))
                                                    : vec3_splat(screen_ao);
 
     vec3 irradiance = eval_irradiance_sh(s_irradiance, diffuse_normal);

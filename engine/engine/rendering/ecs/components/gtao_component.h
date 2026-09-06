@@ -29,6 +29,7 @@ public:
             result = from;
             return;
         }
+        result.visibility_bitmask = contribution >= 0.5f ? from.visibility_bitmask : result.visibility_bitmask;
         result.radius = std::lerp(result.radius, from.radius, contribution);
         result.falloff_range = std::lerp(result.falloff_range, from.falloff_range, contribution);
         result.max_screen_radius = std::lerp(result.max_screen_radius, from.max_screen_radius, contribution);

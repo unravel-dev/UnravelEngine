@@ -139,7 +139,10 @@ vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 o
 		vec3 bent_normal = gtao.xyz * 2.0 - vec3_splat(1.0);
 		if(dot(bent_normal, bent_normal) > 1e-4)
 		{
-			lookup_normal = normalize(mix(world_normal, normalize(bent_normal), u_gi_gtao_bent));
+			// The lookup follows the bent normal by how much is occluded (an open pixel keeps its
+			// normal), scaled by the strength knob.
+			vec3 occluded_normal = normalize(mix(normalize(bent_normal), world_normal, gtao.a));
+			lookup_normal = normalize(mix(world_normal, occluded_normal, u_gi_gtao_bent));
 		}
 	}
 	float view_distance = max(length(world_position - u_gi_camera.xyz), 1e-3);

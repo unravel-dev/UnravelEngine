@@ -1493,41 +1493,28 @@ vec3 StandardShadingDirect(
     return (DiffuseLighting * EnergyPreservationFactor * DirectAO) + specular;
 }
 
-// Solid angle of the intersection of two spherical caps (Oat and Sander 2007), the form
-// Jimenez 2016 uses for GTSO: caps of cosines CosCapA / CosCapB whose axes are CosDistance
-// apart. The partial overlap is the paper's smoothstep fit.
-float SphericalCapIntersectionSolidAngle(float CosCapA, float CosCapB, float CosDistance)
+// Overlap of two cones of half-angles ArcLength0 / ArcLength1 whose axes are AngleBetween
+// apart, as a fraction of the smaller cone (the paper's smoothstep fit of the spherical-cap
+// overlap).
+float ApproximateConeConeIntersection(float ArcLength0, float ArcLength1, float AngleBetween)
 {
-    float RadiusA = acos(CosCapA);
-    float RadiusB = acos(CosCapB);
-    float Distance = acos(CosDistance);
-    float SmallerCap = 2.0 * PI * (1.0 - max(CosCapA, CosCapB));
-    if(Distance <= max(RadiusA, RadiusB) - min(RadiusA, RadiusB))
-    {
-        return SmallerCap;
-    }
-    if(Distance >= RadiusA + RadiusB)
-    {
-        return 0.0;
-    }
-    float Difference = abs(RadiusA - RadiusB);
-    float Overlap = 1.0 - saturate((Distance - Difference) / max(RadiusA + RadiusB - Difference, 1e-4));
-    return smoothstep(0.0, 1.0, Overlap) * SmallerCap;
+    float AngleDifference = abs(ArcLength0 - ArcLength1);
+    float Overlap = 1.0 - saturate((AngleBetween - AngleDifference) / max(ArcLength0 + ArcLength1 - AngleDifference, 1e-4));
+    return smoothstep(0.0, 1.0, Overlap);
 }
 
-// GTSO (Jimenez 2016): the visible region as a cone about the bent normal with the aperture
-// the cosine-weighted visibility implies (sin^2 = V), the GGX lobe as a cone about the
-// reflection vector (Karis' fit, 10^-roughness^2), and the occlusion as their intersection
-// over the lobe. 1 when nothing is known (V = 1 opens the cone to the hemisphere).
+// Specular occlusion from a bent normal and its visibility: the GGX lobe as a cone of half-angle roughness * pi about the reflection
+// vector, the visible region as a cone of half-angle AO * pi about the bent normal, and the
+// occlusion their overlap; faded to fully occluded below AO 0.1, where the bent normal's
+// direction is no longer reliable. 1 when nothing is known (AO = 1 opens the cone).
 float ConeConeSpecularOcclusion(vec3 V, vec3 N, vec3 BentNormal, float Visibility, float Roughness)
 {
+    float ReflectionConeAngle = max(Roughness, 0.1) * PI;
+    float UnoccludedAngle = Visibility * PI;
     vec3 R = reflect(-V, N);
-    float CosVisible = sqrt(saturate(1.0 - Visibility));
-    float SafeRoughness = max(Roughness, 0.01);
-    float CosLobe = exp2(-3.32193 * SafeRoughness * SafeRoughness);
-    float CosBetween = dot(BentNormal, R);
-    float Lobe = 2.0 * PI * (1.0 - CosLobe);
-    return saturate(SphericalCapIntersectionSolidAngle(CosVisible, CosLobe, CosBetween) / max(Lobe, 1e-4));
+    float AngleBetween = acos(clamp(dot(BentNormal, R), -1.0, 1.0));
+    float Occlusion = ApproximateConeConeIntersection(ReflectionConeAngle, UnoccludedAngle, AngleBetween);
+    return mix(0.0, Occlusion, saturate((UnoccludedAngle - 0.1) / 0.2));
 }
 
 float ComputeSpecularOcclusion(float NoV, float Roughness, float AO, float LightingVisibility)

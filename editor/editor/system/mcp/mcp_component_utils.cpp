@@ -3193,6 +3193,7 @@ auto gtao_to_json(const gtao_component& comp, const std::unordered_set<std::stri
         }
     };
     add_bool("enabled", comp.enabled);
+    add_bool("visibility_bitmask", st.visibility_bitmask);
     add_number("radius", st.radius);
     add_number("falloff_range", st.falloff_range);
     add_number("final_power", st.final_power);
@@ -3263,6 +3264,10 @@ auto apply_gtao_properties(gtao_component& comp,
         else if(key == "radius")
         {
             number(st.radius);
+        }
+        else if(key == "visibility_bitmask")
+        {
+            boolean(st.visibility_bitmask);
         }
         else if(key == "falloff_range")
         {
@@ -3526,6 +3531,7 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Bloom", "scatter", "number");
     add("GTAO", "enabled", "boolean");
     add("GTAO", "radius", "number");
+    add("GTAO", "visibility_bitmask", "boolean");
     add("GTAO", "falloff_range", "number");
     add("GTAO", "final_power", "number");
     add("GTAO", "max_screen_radius", "number");

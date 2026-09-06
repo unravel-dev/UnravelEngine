@@ -29,6 +29,9 @@ class gtao_pass
 public:
     struct settings
     {
+        /// Integrate each slice as a 32-sector visibility bitmask (what lies beyond a thin
+        /// occluder stays visible) instead of the two-horizon closed form.
+        bool visibility_bitmask = false;
         /// World-space radius of the occlusion search. 4 m adds the room-scale term the
         /// GI's probe lattice under-delivers (evaluated against 0.5 and 16 in the Bistro and
         /// the GI test suite); the search is capped on screen by max_screen_radius, so the
@@ -39,36 +42,39 @@ public:
         /// occluder crosses the boundary (XeGTAO's 0.615 is softer, 0.2 pops).
         float falloff_range = 0.3f;
         /// Power applied to the visibility (XeGTAO's final value power). 1 = ground truth
-        /// for the depth buffer; 1.6 pairs with the wide radius (2.2 goes past dark into dirty).
-        float final_power = 1.6f;
+        /// for the depth buffer; 1.6 pairs with the wide world radius.
+        float final_power = 1.0f;
         /// Longest horizon search as a fraction of the AO target height. Bounds the cost and
         /// the sample spacing of a wide radius; the world radius shrinks with it so the
         /// falloff stays consistent. 0.25 = XeGTAO-like contact scale, 0.4 = wide.
         float max_screen_radius = 0.4f;
         /// Blend between no occlusion (0) and the full visibility (1) at the consumer.
         float intensity = 1.0f;
-        /// Lets horizons relax behind thin occluders (railings, foliage) instead of treating
-        /// them as walls. 0 = off, 0.7 = strong.
+        /// The bitmask's slab depth as a fraction of the radius.
         float occluder_thickness = 0.25f;
-        /// 0 = low (1 slice x 2 steps), 1 = medium (2 x 2), 2 = high (3 x 3), 3 = ultra (9 x 3).
-        int32_t quality_level = 2;
+        /// 0 = low (1 slice x 2 steps), 1 = default (2 x 3), 2 = XeGTAO high (3 x 3),
+        /// 3 = ultra (9 x 3).
+        int32_t quality_level = 1;
         /// Resolution the visibility is computed at; the result is upsampled edge-aware.
         /// Half is the default for the wide-radius look (a quarter of the cost, and the
         /// signal is low-frequency at that radius); Full for contact-scale reference.
         trace_resolution resolution = trace_resolution::half;
-        /// Joint-bilateral denoise passes over the raw visibility (0 disables).
-        int32_t denoise_passes = 2;
+        /// Separable joint-bilateral denoise passes over the raw visibility (0 = none, the
+        /// temporal accumulation alone; 2 = one 5x5 blur).
+        int32_t denoise_passes = 0;
         bool enable_temporal = true;
         /// History weight of the temporal accumulation (0 = off, 0.95 = very smooth).
         float temporal_history = 0.9f;
         /// Relative view-depth tolerance for the temporal disocclusion test.
         float temporal_depth_threshold = 0.1f;
         /// How far the diffuse lookups (the GI probes and the environment SH) follow the bent
-        /// normal instead of the geometric normal (0 = geometric normal).
-        float bent_normal_strength = 1.0f;
+        /// normal, weighted by the occlusion (an open pixel keeps its normal). 0 = off: the
+        /// bent normal then serves the specular occlusion only.
+        float bent_normal_strength = 0.0f;
         /// Multi-bounce approximation (Jimenez 2016): brightens the diffuse occlusion on light
-        /// albedos by the interreflection a crevice gets back from its own walls.
-        bool multi_bounce = false;
+        /// albedos by the interreflection a crevice gets back from its own walls; the albedo
+        /// is clamped to 0.5 so near-white surfaces keep some occlusion.
+        bool multi_bounce = true;
         /// Generate the receiver normal from the depth buffer (the geometric normal, edge-aware)
         /// instead of reading the G-buffer.
         bool generate_normals = false;
@@ -140,6 +146,7 @@ private:
         gfx::program::uniform_ptr u_gtao_params1;
         gfx::program::uniform_ptr u_gtao_params2;
         gfx::program::uniform_ptr u_gtao_params3;
+        gfx::program::uniform_ptr u_gtao_params4;
     };
 
     struct prefilter_program : uniforms_cache

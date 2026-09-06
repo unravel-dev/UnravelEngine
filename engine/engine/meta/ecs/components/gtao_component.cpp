@@ -28,6 +28,12 @@ REFLECT_INLINE(gtao_pass::settings)
             entt::attribute{"name", "gtao_pass::settings"},
             entt::attribute{"pretty_name", "GTAO Settings"},
         })
+        .data<&settings::visibility_bitmask>("visibility_bitmask"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "visibility_bitmask"},
+            entt::attribute{"pretty_name", "Visibility Bitmask"},
+            entt::attribute{"tooltip", "Integrate each slice as a 32-sector visibility bitmask, so what lies beyond a thin\noccluder stays visible, instead of the two-horizon closed form. Off by default."},
+        })
         .data<&settings::radius>("radius"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "radius"},
@@ -155,6 +161,7 @@ REFLECT_INLINE(gtao_pass::settings)
 SAVE_INLINE(gtao_pass::settings)
 {
     try_save(ar, ser20::make_nvp("radius", obj.radius));
+    try_save(ar, ser20::make_nvp("visibility_bitmask", obj.visibility_bitmask));
     try_save(ar, ser20::make_nvp("falloff_range", obj.falloff_range));
     try_save(ar, ser20::make_nvp("max_screen_radius", obj.max_screen_radius));
     try_save(ar, ser20::make_nvp("final_power", obj.final_power));
@@ -177,6 +184,7 @@ SAVE_INSTANTIATE(gtao_pass::settings, ser20::oarchive_binary_t);
 LOAD_INLINE(gtao_pass::settings)
 {
     try_load(ar, ser20::make_nvp("radius", obj.radius));
+    try_load(ar, ser20::make_nvp("visibility_bitmask", obj.visibility_bitmask));
     try_load(ar, ser20::make_nvp("falloff_range", obj.falloff_range));
     try_load(ar, ser20::make_nvp("max_screen_radius", obj.max_screen_radius));
     try_load(ar, ser20::make_nvp("final_power", obj.final_power));
