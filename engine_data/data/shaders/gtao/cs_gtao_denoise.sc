@@ -1,12 +1,14 @@
 /*
  * GTAO spatial denoise: a 5x5 blur of the visibility and bent normal at the AO resolution,
- * weighted by XeGTAO's depth edges (slope-adjusted relative depth differences to the
- * centre) so the noise of the stochastic slices averages out within a surface and never
- * across a silhouette. When the shading normal is the receiver normal the G-buffer normal
- * joins the weights: the bump-scale response the normal map produced must survive the
- * blur (with the geometric source there is none to keep, and stopping at every bump would
- * only preserve noise). Run one to three times (ping-pong); the values stay at the stored
- * occlusion-term scale.
+ * run SEPARABLY - each pass takes 5 taps along one axis (u_gtao_denoise_axis: x, then y),
+ * a fifth of the fetches of the square kernel for a near-identical result - weighted by
+ * XeGTAO's depth edges (slope-adjusted relative depth differences to the centre) so the
+ * noise of the stochastic slices averages out within a surface and never across a
+ * silhouette. When the shading normal is the receiver normal the G-buffer normal joins the
+ * weights: the bump-scale response the normal map produced must survive the blur (with the
+ * geometric source there is none to keep, and stopping at every bump would only preserve
+ * noise). Run one to three times (ping-pong, alternating axes); the values stay at the
+ * stored occlusion-term scale.
  */
 
 #include "../bgfx_compute.sh"
@@ -43,20 +45,16 @@ void main()
 	vec3 bent_sum = vec3_splat(0.0);
 	float ao_sum = 0.0;
 	float w_sum = 0.0;
+	ivec2 axis = u_gtao_denoise_axis > 0.5 ? ivec2(0, 1) : ivec2(1, 0);
 	LOOP
-	for(int dy = -2; dy <= 2; ++dy)
+	for(int d = -2; d <= 2; ++d)
 	{
-		LOOP
-		for(int dx = -2; dx <= 2; ++dx)
+		ivec2 tap = clamp(texel + axis * d, ivec2(0, 0), size - ivec2(1, 1));
+		float tap_depth = texelFetch(s_gtao_depth_mips, tap, 0).x;
+		if(tap_depth < GTAO_SKY_DEPTH * 0.5)
 		{
-			ivec2 tap = clamp(texel + ivec2(dx, dy), ivec2(0, 0), size - ivec2(1, 1));
-			float tap_depth = texelFetch(s_gtao_depth_mips, tap, 0).x;
-			if(tap_depth >= GTAO_SKY_DEPTH * 0.5)
-			{
-				continue;
-			}
 			vec4 tap_value = texelFetch(s_gtao_input, tap, 0);
-			float spatial = exp(-float(dx * dx + dy * dy) * 0.25);
+			float spatial = exp(-float(d * d) * 0.25);
 			float edge_w = saturate(1.25 - abs(tap_depth - center_depth) / edge_scale);
 			float w = spatial * edge_w;
 			if(normal_weights)

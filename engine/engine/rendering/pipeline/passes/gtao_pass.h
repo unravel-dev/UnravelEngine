@@ -49,9 +49,9 @@ public:
         float intensity = 1.0f;
         /// Lets horizons relax behind thin occluders (railings, foliage) instead of treating
         /// them as walls. 0 = off, 0.7 = strong.
-        float thin_occluder_compensation = 0.0f;
+        float occluder_thickness = 0.25f;
         /// 0 = low (1 slice x 2 steps), 1 = medium (2 x 2), 2 = high (3 x 3), 3 = ultra (9 x 3).
-        int32_t quality_level = 3;
+        int32_t quality_level = 2;
         /// Resolution the visibility is computed at; the result is upsampled edge-aware.
         /// Half is the default for the wide-radius look (a quarter of the cost, and the
         /// signal is low-frequency at that radius); Full for contact-scale reference.
@@ -116,7 +116,9 @@ private:
                                   gfx::texture_format format,
                                   bool has_mips,
                                   uint64_t flags) -> gfx::texture::ptr;
-    void set_common_uniforms(const frame_context& ctx) const;
+    /// denoise_axis selects the separable denoise pass's axis (0 = x, 1 = y); the other
+    /// passes ignore it.
+    void set_common_uniforms(const frame_context& ctx, float denoise_axis = 0.0f) const;
     void run_prefilter(gfx::render_view& rview, const frame_context& ctx, const run_params& params,
                        const gfx::texture::ptr& depth_mips);
     auto run_main(gfx::render_view& rview, const frame_context& ctx, const run_params& params,

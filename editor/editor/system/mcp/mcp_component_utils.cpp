@@ -3198,7 +3198,7 @@ auto gtao_to_json(const gtao_component& comp, const std::unordered_set<std::stri
     add_number("final_power", st.final_power);
     add_number("max_screen_radius", st.max_screen_radius);
     add_number("intensity", st.intensity);
-    add_number("thin_occluder_compensation", st.thin_occluder_compensation);
+    add_number("occluder_thickness", st.occluder_thickness);
     add_int("quality_level", st.quality_level);
     if(wants_key(filter, "resolution"))
     {
@@ -3280,9 +3280,9 @@ auto apply_gtao_properties(gtao_component& comp,
         {
             number(st.intensity);
         }
-        else if(key == "thin_occluder_compensation")
+        else if(key == "occluder_thickness")
         {
-            number(st.thin_occluder_compensation);
+            number(st.occluder_thickness);
         }
         else if(key == "quality_level")
         {
@@ -3530,7 +3530,7 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("GTAO", "final_power", "number");
     add("GTAO", "max_screen_radius", "number");
     add("GTAO", "intensity", "number");
-    add("GTAO", "thin_occluder_compensation", "number");
+    add("GTAO", "occluder_thickness", "number");
     add("GTAO", "quality_level", "integer", R"("minimum":0,"maximum":3)");
     add("GTAO", "resolution", "string", R"("enum":["full","half","quarter","eighth"])");
     add("GTAO", "denoise_passes", "integer", R"("minimum":0,"maximum":4)");

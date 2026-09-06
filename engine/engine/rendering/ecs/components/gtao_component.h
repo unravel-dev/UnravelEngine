@@ -34,8 +34,7 @@ public:
         result.max_screen_radius = std::lerp(result.max_screen_radius, from.max_screen_radius, contribution);
         result.final_power = std::lerp(result.final_power, from.final_power, contribution);
         result.intensity = std::lerp(result.intensity, from.intensity, contribution);
-        result.thin_occluder_compensation =
-            std::lerp(result.thin_occluder_compensation, from.thin_occluder_compensation, contribution);
+        result.occluder_thickness = std::lerp(result.occluder_thickness, from.occluder_thickness, contribution);
         result.quality_level = contribution >= 0.5f ? from.quality_level : result.quality_level;
         result.resolution = contribution >= 0.5f ? from.resolution : result.resolution;
         result.denoise_passes = contribution >= 0.5f ? from.denoise_passes : result.denoise_passes;

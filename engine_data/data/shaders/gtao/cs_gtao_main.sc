@@ -1,10 +1,15 @@
 /*
  * GTAO main pass: per AO-resolution texel, the cosine-weighted visibility integral over
- * `slice_count` slices through the view vector, each slice's two horizons found by
- * `steps_per_slice` samples of the prefiltered view-depth mips along +/- the slice
- * direction (Jimenez et al. 2016, "Practical Realtime Strategies for Accurate Indirect
- * Occlusion"; structure after Intel's XeGTAO). Also integrates the bent normal - the
- * mean unoccluded direction - which the lighting uses to steer its diffuse lookups.
+ * `slice_count` slices through the view vector (Jimenez et al. 2016, "Practical Realtime
+ * Strategies for Accurate Indirect Occlusion"; structure after Intel's XeGTAO), with each
+ * slice's occlusion kept as a VISIBILITY BITMASK (Therrien, Levesque, Gilet 2023, "Screen
+ * Space Indirect Lighting with Visibility Bitmask"): the projected normal's hemisphere is
+ * split into GTAO_SECTOR_COUNT sectors and each of the `steps_per_slice` samples along
+ * +/- the slice direction marks the sectors between its front face and the face
+ * `occluder_thickness` behind it. Unlike the two-horizon integral, what lies beyond a thin
+ * occluder (a railing, a post, a leaf) stays visible, and the bent normal - the mean
+ * unoccluded direction, which the lighting uses to steer its diffuse lookups - is the sum of
+ * the open sectors.
  *
  * Output (RGBA8): rgb = world-space bent normal * 0.5 + 0.5, a = visibility.
  */
@@ -19,12 +24,44 @@ SAMPLER2D(s_gtao_depth_mips, 0);
 SAMPLER2D(s_gtao_normal, 1);
 IMAGE2D_WO(i_gtao_out, rgba8, 2);
 
-/// The slice integral's arc terms (the closed form of the cosine-weighted visibility
-/// between the normal-relative angles h and n) and the bent-normal moments, as derived
-/// in the GTAO paper's supplemental material.
+/// The slice integral's arc term (the closed form of the cosine-weighted visibility between
+/// the normal-relative angles h and n) and the bent-normal moments, as derived in the GTAO
+/// paper's supplemental material: the fast path for a slice no sample touched.
 float GtaoArcIntegral(float h, float n, float cos_n)
 {
 	return 0.25 * (cos_n + 2.0 * h * sin(n) - cos(2.0 * h - n));
+}
+
+/// The sectors one sample occludes: the slab between the sample (its front face) and the
+/// point `thickness` behind it along the view direction (its back face), as an angle range
+/// about the view vector, signed by the slice side, mapped onto the projected normal's
+/// hemisphere [hemisphere_start, hemisphere_start + pi). The falloff weight pulls both faces
+/// to the hemisphere edge on that side, so a sample at the radius marks nothing (GTAO's
+/// horizon blend, in angle). A sample below the tangent plane maps past the last sector
+/// and marks nothing either.
+uint GtaoSlabSectors(vec3 delta, float dist, vec3 view_vec, float thickness, float weight,
+                     float hemisphere_start, float side, float n)
+{
+	vec3 back = delta - view_vec * thickness;
+	float cos_front = dot(delta, view_vec) / max(dist, 1e-5);
+	float cos_back = dot(back, view_vec) / max(length(back), 1e-5);
+	float theta_front = side * GtaoFastAcos(clamp(cos_front, -1.0, 1.0));
+	float theta_back = side * GtaoFastAcos(clamp(cos_back, -1.0, 1.0));
+	float bound = n + side * GTAO_HALF_PI;
+	theta_front = mix(bound, theta_front, weight);
+	theta_back = mix(bound, theta_back, weight);
+	float sector_angle = GTAO_PI / float(GTAO_SECTOR_COUNT);
+	float lo = (min(theta_front, theta_back) - hemisphere_start) / sector_angle;
+	float hi = (max(theta_front, theta_back) - hemisphere_start) / sector_angle;
+	uint first = uint(clamp(floor(lo), 0.0, float(GTAO_SECTOR_COUNT)));
+	uint last = uint(clamp(ceil(hi), 0.0, float(GTAO_SECTOR_COUNT)));
+	if(last <= first)
+	{
+		return 0u;
+	}
+	uint count = last - first;
+	uint bits = count >= 32u ? 0xFFFFFFFFu : ((1u << count) - 1u);
+	return bits << first;
 }
 
 NUM_THREADS(8, 8, 1)
@@ -112,7 +149,10 @@ void main()
 	int slice_count = int(u_gtao_slice_count + 0.5);
 	int steps_per_slice = int(u_gtao_steps_per_slice + 0.5);
 	float min_s = GTAO_PIXEL_TOO_CLOSE / screen_radius;
-	float thin_compensation = u_gtao_thin_compensation;
+	// The slab depth as a fraction of the (possibly screen-clamped) radius, so a scene keeps
+	// its look when the radius changes.
+	float occluder_thickness = u_gtao_occluder_thickness * radius;
+	float sector_angle = GTAO_PI / float(GTAO_SECTOR_COUNT);
 	vec3 bent_normal = vec3_splat(0.0);
 	LOOP
 	for(int slice = 0; slice < slice_count; ++slice)
@@ -134,11 +174,9 @@ void main()
 		float sign_n = sign(dot(ortho_direction, projected_normal));
 		float cos_n = saturate(dot(projected_normal, view_vec) / projected_length);
 		float n = sign_n * acos(cos_n);
-		// Horizons start at the normal-relative hemisphere bounds.
-		float low_horizon_cos0 = cos(n + GTAO_HALF_PI);
-		float low_horizon_cos1 = cos(n - GTAO_HALF_PI);
-		float horizon_cos0 = low_horizon_cos0;
-		float horizon_cos1 = low_horizon_cos1;
+		// The sectors cover the projected normal's hemisphere; nothing is occluded yet.
+		float hemisphere_start = n - GTAO_HALF_PI;
+		uint occluded = 0u;
 		LOOP
 		for(int step = 0; step < steps_per_slice; ++step)
 		{
@@ -161,35 +199,54 @@ void main()
 			vec3 delta1 = GtaoAoViewPosition(uv1, depth1) - position;
 			float dist0 = length(delta0);
 			float dist1 = length(delta1);
-			float shc0 = dot(delta0, view_vec) / max(dist0, 1e-5);
-			float shc1 = dot(delta1, view_vec) / max(dist1, 1e-5);
-			// Falloff over the radius; XeGTAO's thickness heuristic stretches the depth axis
-			// so samples well in front of (or behind) the receiver drop out sooner - a thin
-			// occluder then shades less like a wall. 0 = the plain distance.
-			float falloff0 = length(vec3(delta0.xy, delta0.z * (1.0 + thin_compensation)));
-			float falloff1 = length(vec3(delta1.xy, delta1.z * (1.0 + thin_compensation)));
-			float weight0 = saturate(falloff0 * falloff_mul + falloff_add);
-			float weight1 = saturate(falloff1 * falloff_mul + falloff_add);
-			shc0 = mix(low_horizon_cos0, shc0, weight0);
-			shc1 = mix(low_horizon_cos1, shc1, weight1);
-			horizon_cos0 = max(horizon_cos0, shc0);
-			horizon_cos1 = max(horizon_cos1, shc1);
+			// Falloff over the radius (the thin-occluder question is the slab's, below).
+			float weight0 = saturate(dist0 * falloff_mul + falloff_add);
+			float weight1 = saturate(dist1 * falloff_mul + falloff_add);
+			occluded |= GtaoSlabSectors(delta0, dist0, view_vec, occluder_thickness, weight0, hemisphere_start, 1.0, n);
+			occluded |= GtaoSlabSectors(delta1, dist1, view_vec, occluder_thickness, weight1, hemisphere_start, -1.0, n);
 		}
 		// XeGTAO's fudge for a slight over-darkening on steep slopes.
 		projected_length = mix(projected_length, 1.0, 0.05);
-		// The +omega side (horizon 0) bounds the positive arc, the -omega side the negative.
-		float h0 = -acos(clamp(horizon_cos1, -1.0, 1.0));
-		float h1 = acos(clamp(horizon_cos0, -1.0, 1.0));
-		h0 = n + clamp(h0 - n, -GTAO_HALF_PI, GTAO_HALF_PI);
-		h1 = n + clamp(h1 - n, -GTAO_HALF_PI, GTAO_HALF_PI);
-		float local_visibility = projected_length * (GtaoArcIntegral(h0, n, cos_n) + GtaoArcIntegral(h1, n, cos_n));
-		visibility += local_visibility;
-		// Bent normal moments in the slice frame: t0 along the slice direction, t1 along the
-		// view vector (the frame the arc integral was evaluated in).
-		float t0 = (6.0 * sin(h0 - n) - sin(3.0 * h0 - n) + 6.0 * sin(h1 - n) - sin(3.0 * h1 - n) +
-		            16.0 * sin(n) - 3.0 * (sin(h0 + n) + sin(h1 + n))) / 12.0;
-		float t1 = (-cos(3.0 * h0 - n) - cos(3.0 * h1 - n) + 8.0 * cos(n) - 3.0 * (cos(h0 + n) + cos(h1 + n))) / 12.0;
 		vec3 slice_dir = normalize(ortho_direction);
+		float sin_n = sin(n);
+		float slice_visibility = 0.0;
+		// Bent-normal moments in the slice frame: t0 along the slice direction, t1 along the
+		// view vector.
+		float t0 = 0.0;
+		float t1 = 0.0;
+		if(occluded == 0u)
+		{
+			// Nothing in this slice: the paper's closed-form arc over the whole hemisphere,
+			// which the sector sum below converges to.
+			float h0 = n - GTAO_HALF_PI;
+			float h1 = n + GTAO_HALF_PI;
+			slice_visibility = GtaoArcIntegral(h0, n, cos_n) + GtaoArcIntegral(h1, n, cos_n);
+			t0 = (6.0 * sin(h0 - n) - sin(3.0 * h0 - n) + 6.0 * sin(h1 - n) - sin(3.0 * h1 - n) +
+			      16.0 * sin_n - 3.0 * (sin(h0 + n) + sin(h1 + n))) / 12.0;
+			t1 = (-cos(3.0 * h0 - n) - cos(3.0 * h1 - n) + 8.0 * cos_n - 3.0 * (cos(h0 + n) + cos(h1 + n))) / 12.0;
+		}
+		else if(occluded != 0xFFFFFFFFu)
+		{
+			// The open sectors, each with GTAO's integrand cos(theta - n) |sin theta| over its
+			// angle (the midpoint rule). With theta = n + alpha and alpha the sector's constant
+			// offset from the normal, cos(theta - n) = cos(alpha) and sin / cos(theta) are angle
+			// sums of the per-slice sin n / cos n: no trig per sector.
+			UNROLL
+			for(int sector = 0; sector < GTAO_SECTOR_COUNT; ++sector)
+			{
+				float alpha = (float(sector) + 0.5) * sector_angle - GTAO_HALF_PI;
+				float cos_alpha = cos(alpha);
+				float sin_alpha = sin(alpha);
+				float open = ((occluded >> uint(sector)) & 1u) == 0u ? 1.0 : 0.0;
+				float sin_theta = sin_n * cos_alpha + cos_n * sin_alpha;
+				float cos_theta = cos_n * cos_alpha - sin_n * sin_alpha;
+				float sector_weight = open * cos_alpha * abs(sin_theta) * sector_angle;
+				slice_visibility += sector_weight;
+				t0 += sector_weight * sin_theta;
+				t1 += sector_weight * cos_theta;
+			}
+		}
+		visibility += projected_length * slice_visibility;
 		bent_normal += (slice_dir * t0 + view_vec * t1) * projected_length;
 	}
 	visibility /= float(slice_count);

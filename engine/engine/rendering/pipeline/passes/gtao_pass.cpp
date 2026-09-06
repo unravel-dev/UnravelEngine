@@ -121,7 +121,7 @@ auto gtao_pass::create_or_update_texture(gfx::render_view& rview,
     return tex;
 }
 
-void gtao_pass::set_common_uniforms(const frame_context& ctx) const
+void gtao_pass::set_common_uniforms(const frame_context& ctx, float denoise_axis) const
 {
     const float size[4] = {float(ctx.ao_size.width),
                            float(ctx.ao_size.height),
@@ -134,7 +134,7 @@ void gtao_pass::set_common_uniforms(const frame_context& ctx) const
     const float params0[4] = {std::max(ctx.config.radius, 0.01f),
                               std::clamp(ctx.config.falloff_range, 0.05f, 1.0f),
                               std::max(ctx.config.final_power, 0.1f),
-                              std::clamp(ctx.config.thin_occluder_compensation, 0.0f, 0.9f)};
+                              std::max(ctx.config.occluder_thickness, 0.0f)};
     const float noise_index = float(gfx::get_render_frame() % noise_period);
     const float params1[4] = {float(get_slice_count(ctx.config.quality_level)),
                               float(get_steps_per_slice(ctx.config.quality_level)),
@@ -157,7 +157,7 @@ void gtao_pass::set_common_uniforms(const frame_context& ctx) const
     const float params3[4] = {geometric ? 1.0f : 0.0f,
                               detail,
                               (detail > 0.0f && (reduced || geometric)) ? 1.0f : 0.0f,
-                              0.0f};
+                              denoise_axis};
     gfx::set_uniform(common_.u_gtao_params3, params3);
 }
 
@@ -222,7 +222,8 @@ auto gtao_pass::run_denoise(gfx::render_view& rview,
         auto output = (i % 2 == 0) ? tex_a : tex_b;
         gfx::render_pass pass("GTAO/Denoise");
         pass.set_view_proj(ctx.cam->get_view(), ctx.cam->get_projection());
-        set_common_uniforms(ctx);
+        // Separable: even passes blur along x, odd along y.
+        set_common_uniforms(ctx, (i % 2 == 0) ? 0.0f : 1.0f);
         gfx::set_texture(denoise_program_.s_gtao_input, 0, input);
         gfx::set_texture(denoise_program_.s_gtao_depth_mips, 1, depth_mips);
         gfx::set_texture(denoise_program_.s_gtao_normal, 2, params.g_buffer->get_texture(1));

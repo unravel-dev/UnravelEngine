@@ -68,13 +68,13 @@ REFLECT_INLINE(gtao_pass::settings)
             entt::attribute{"max", 1.0f},
             entt::attribute{"tooltip", "Blend between no occlusion (0) and the full visibility (1) at the lighting."},
         })
-        .data<&settings::thin_occluder_compensation>("thin_occluder_compensation"_hs)
+        .data<&settings::occluder_thickness>("occluder_thickness"_hs)
         .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "thin_occluder_compensation"},
-            entt::attribute{"pretty_name", "Thin Occluder Compensation"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 0.9f},
-            entt::attribute{"tooltip", "Lets horizons relax behind thin occluders (railings, foliage) instead of treating\nthem as walls. 0 = off."},
+            entt::attribute{"name", "occluder_thickness"},
+            entt::attribute{"pretty_name", "Occluder Thickness"},
+            entt::attribute{"min", 0.02f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"tooltip", "How deep an occluder is assumed to be behind the surface the depth buffer shows, as a\nfraction of the radius. The visibility bitmask marks only the sectors between that front\nface and this back face, so what lies beyond a railing or a post stays visible. Larger\nvalues shade more like walls; 1 = the whole radius (the classic horizon look)."},
         })
         .data<&settings::quality_level>("quality_level"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -159,7 +159,7 @@ SAVE_INLINE(gtao_pass::settings)
     try_save(ar, ser20::make_nvp("max_screen_radius", obj.max_screen_radius));
     try_save(ar, ser20::make_nvp("final_power", obj.final_power));
     try_save(ar, ser20::make_nvp("intensity", obj.intensity));
-    try_save(ar, ser20::make_nvp("thin_occluder_compensation", obj.thin_occluder_compensation));
+    try_save(ar, ser20::make_nvp("occluder_thickness", obj.occluder_thickness));
     try_save(ar, ser20::make_nvp("quality_level", obj.quality_level));
     try_save(ar, ser20::make_nvp("resolution", obj.resolution));
     try_save(ar, ser20::make_nvp("denoise_passes", obj.denoise_passes));
@@ -181,7 +181,7 @@ LOAD_INLINE(gtao_pass::settings)
     try_load(ar, ser20::make_nvp("max_screen_radius", obj.max_screen_radius));
     try_load(ar, ser20::make_nvp("final_power", obj.final_power));
     try_load(ar, ser20::make_nvp("intensity", obj.intensity));
-    try_load(ar, ser20::make_nvp("thin_occluder_compensation", obj.thin_occluder_compensation));
+    try_load(ar, ser20::make_nvp("occluder_thickness", obj.occluder_thickness));
     try_load(ar, ser20::make_nvp("quality_level", obj.quality_level));
     try_load(ar, ser20::make_nvp("resolution", obj.resolution));
     try_load(ar, ser20::make_nvp("denoise_passes", obj.denoise_passes));

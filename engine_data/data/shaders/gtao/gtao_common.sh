@@ -29,6 +29,19 @@
 #define GTAO_SKY_DEVICE_DEPTH 0.999999
 /// Sample offsets shorter than this many pixels read the centre texel and are skipped.
 #define GTAO_PIXEL_TOO_CLOSE 1.3
+/// Sectors of the visibility bitmask per slice: the projected normal's hemisphere split into
+/// this many equal angles, one bit each (32 = the machine word; the paper's choice).
+#define GTAO_SECTOR_COUNT 32
+
+/// acos to within 0.001 rad without the transcendental (the usual polynomial), for the
+/// four horizon angles every sample of the bitmask needs.
+float GtaoFastAcos(float x)
+{
+	float ax = abs(x);
+	float result = ((-0.0187293 * ax + 0.0742610) * ax - 0.2121144) * ax + 1.5707288;
+	result *= sqrt(saturate(1.0 - ax));
+	return x >= 0.0 ? result : GTAO_PI - result;
+}
 /// Lower clamp on the visibility (XeGTAO): a fully black cavity reads as no surface.
 #define GTAO_MIN_VISIBILITY 0.03
 /// The raw per-frame visibility can overshoot 1 (noise); it is stored divided by this scale
@@ -70,7 +83,7 @@ uniform vec4 u_gtao_params3;
 #define u_gtao_radius             u_gtao_params0.x
 #define u_gtao_falloff_range      u_gtao_params0.y
 #define u_gtao_final_power        u_gtao_params0.z
-#define u_gtao_thin_compensation  u_gtao_params0.w
+#define u_gtao_occluder_thickness u_gtao_params0.w
 #define u_gtao_slice_count        u_gtao_params1.x
 #define u_gtao_steps_per_slice    u_gtao_params1.y
 #define u_gtao_noise_index        u_gtao_params1.z
@@ -82,6 +95,8 @@ uniform vec4 u_gtao_params3;
 #define u_gtao_normal_source      u_gtao_params3.x
 #define u_gtao_detail_strength    u_gtao_params3.y
 #define u_gtao_detail_enabled     u_gtao_params3.z
+/// The denoise pass's axis: 0 = along x, 1 = along y (the 5x5 blur is run separably).
+#define u_gtao_denoise_axis       u_gtao_params3.w
 
 /// View-space depth (positive distance along the view axis) of a device depth value.
 float GtaoViewDepthFromDevice(float device_depth)
