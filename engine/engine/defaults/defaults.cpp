@@ -9,6 +9,7 @@
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/ecs/components/assao_component.h>
+#include <engine/rendering/ecs/components/gtao_component.h>
 #include <engine/rendering/ecs/components/auto_exposure_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
@@ -972,7 +973,7 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
     auto& volume_comp = object.emplace<volume_component>();
     volume_comp.mode = mode;
 
-    object.emplace<assao_component>();
+    object.emplace<gtao_component>();
     object.emplace<auto_exposure_component>();
     object.emplace<bloom_component>();
     object.emplace<tonemapping_component>();
@@ -1148,7 +1149,7 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
 
         if(preset == scene_preset::low)
         {
-            if(auto* comp = volume.try_get<assao_component>())
+            if(auto* comp = volume.try_get<gtao_component>())
                 comp->enabled = false;
             if(auto* comp = volume.try_get<bloom_component>())
                 comp->enabled = false;

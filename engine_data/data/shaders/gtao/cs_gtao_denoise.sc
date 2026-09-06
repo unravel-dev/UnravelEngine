@@ -2,9 +2,11 @@
  * GTAO spatial denoise: a 5x5 blur of the visibility and bent normal at the AO resolution,
  * weighted by XeGTAO's depth edges (slope-adjusted relative depth differences to the
  * centre) so the noise of the stochastic slices averages out within a surface and never
- * across a silhouette. No G-buffer normal in the weights: it carries the normal map, and
- * stopping the blur at every bump would keep the noise the blur exists to remove. Run one
- * to three times (ping-pong); the values stay at the stored occlusion-term scale.
+ * across a silhouette. When the shading normal is the receiver normal the G-buffer normal
+ * joins the weights: the bump-scale response the normal map produced must survive the
+ * blur (with the geometric source there is none to keep, and stopping at every bump would
+ * only preserve noise). Run one to three times (ping-pong); the values stay at the stored
+ * occlusion-term scale.
  */
 
 #include "../bgfx_compute.sh"
@@ -36,6 +38,8 @@ void main()
 	// XeGTAO's edge scale: a relative depth difference of 1.1% of the centre depth is a
 	// half edge, 1.375% a full edge.
 	float edge_scale = center_depth * 0.011;
+	bool normal_weights = u_gtao_normal_source < 0.5;
+	vec3 center_normal = GtaoWorldNormal(s_gtao_normal, texel);
 	vec3 bent_sum = vec3_splat(0.0);
 	float ao_sum = 0.0;
 	float w_sum = 0.0;
@@ -55,6 +59,11 @@ void main()
 			float spatial = exp(-float(dx * dx + dy * dy) * 0.25);
 			float edge_w = saturate(1.25 - abs(tap_depth - center_depth) / edge_scale);
 			float w = spatial * edge_w;
+			if(normal_weights)
+			{
+				vec3 tap_normal = GtaoWorldNormal(s_gtao_normal, tap);
+				w *= pow(saturate(dot(tap_normal, center_normal)), u_gtao_normal_power);
+			}
 			ao_sum += tap_value.a * w;
 			bent_sum += (tap_value.xyz * 2.0 - vec3_splat(1.0)) * w;
 			w_sum += w;

@@ -1505,6 +1505,42 @@ float ComputeSpecularOcclusion(float NoV, float Roughness, float AO, float Light
 
 // Indirect lighting only - environment BRDF + indirect diffuse, evaluated once per pixel.
 // EnergyPreservationFactor accounts for specular layer absorbing energy from the diffuse layer.
+/// The indirect terms with SEPARATE occlusion for the diffuse and the specular lobe: a
+/// consumer that folds a per-channel (multi-bounce) screen AO into IndirectDiffuse passes the
+/// material AO alone as DiffuseAO and the full scalar occlusion as SpecularAO.
+vec3 StandardShadingIndirectAO(
+ vec3 DiffuseColor,
+ vec3 IndirectDiffuse,
+ vec3 SpecularColor,
+ vec3 IndirectSpecular,
+ sampler2D BRDFIntegrationMap,
+ float Roughness,
+ float DiffuseAO,
+ float SpecularAO,
+ float LightingVisibility,
+ vec3 V,
+ vec3 N )
+{
+    N = normalize(N);
+    Roughness = MakeRoughnessSafe(Roughness);
+    const float kNoVEpsilon = 1e-5f;
+    float NoV = max(saturate(dot(N, V)), kNoVEpsilon);
+
+    float SpecularOcclusion = ComputeSpecularOcclusion(NoV, Roughness, SpecularAO, LightingVisibility);
+
+#if USE_ENERGY_CONSERVATION > 0
+    FBxDFEnergyTerms SpecularEnergyTerms = ComputeGGXSpecEnergyTerms(Roughness, NoV, SpecularColor);
+    vec3 EnvBRDFValue = SpecularEnergyTerms.E;
+    float EnergyPreservationFactor = ComputeEnergyPreservation(SpecularEnergyTerms);
+#else
+    vec3 EnvBRDFValue = GetEnvBRDF(SpecularColor, Roughness, NoV, BRDFIntegrationMap);
+    float EnergyPreservationFactor = 1.0f;
+#endif
+
+    return (DiffuseColor * DiffuseAO * IndirectDiffuse * EnergyPreservationFactor)
+         + (IndirectSpecular * EnvBRDFValue * SpecularOcclusion);
+}
+
 vec3 StandardShadingIndirect(
  vec3 DiffuseColor,
  vec3 IndirectDiffuse,
@@ -1517,24 +1553,20 @@ vec3 StandardShadingIndirect(
  vec3 V,
  vec3 N )
 {
-    N = normalize(N);
-    Roughness = MakeRoughnessSafe(Roughness);
-    const float kNoVEpsilon = 1e-5f;
-    float NoV = max(saturate(dot(N, V)), kNoVEpsilon);
+    return StandardShadingIndirectAO(DiffuseColor, IndirectDiffuse, SpecularColor, IndirectSpecular,
+                                     BRDFIntegrationMap, Roughness, AO, AO, LightingVisibility, V, N);
+}
 
-    float SpecularOcclusion = ComputeSpecularOcclusion(NoV, Roughness, AO, LightingVisibility);
-
-#if USE_ENERGY_CONSERVATION > 0
-    FBxDFEnergyTerms SpecularEnergyTerms = ComputeGGXSpecEnergyTerms(Roughness, NoV, SpecularColor);
-    vec3 EnvBRDFValue = SpecularEnergyTerms.E;
-    float EnergyPreservationFactor = ComputeEnergyPreservation(SpecularEnergyTerms);
-#else
-    vec3 EnvBRDFValue = GetEnvBRDF(SpecularColor, Roughness, NoV, BRDFIntegrationMap);
-    float EnergyPreservationFactor = 1.0f;
-#endif
-
-    return (DiffuseColor * AO * IndirectDiffuse * EnergyPreservationFactor)
-         + (IndirectSpecular * EnvBRDFValue * SpecularOcclusion);
+/// Multi-bounce ambient occlusion (Jimenez et al. 2016, eq. 9): the fit of a path-traced
+/// interreflection ground truth that brightens the occlusion on light albedos - the light a
+/// crevice loses to occlusion partly comes back from its own walls, and white walls give
+/// more of it back than dark ones. Per channel, never below the single-bounce visibility.
+vec3 MultiBounceAO(float visibility, vec3 albedo)
+{
+    vec3 a = 2.0404 * albedo - vec3_splat(0.3324);
+    vec3 b = -4.7951 * albedo + vec3_splat(0.6417);
+    vec3 c = 2.7552 * albedo + vec3_splat(0.6903);
+    return max(vec3_splat(visibility), ((visibility * a + b) * visibility + c) * visibility);
 }
 
 

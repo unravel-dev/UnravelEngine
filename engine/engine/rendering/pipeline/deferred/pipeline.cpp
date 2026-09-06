@@ -2023,7 +2023,7 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     const float gtao_params[4] = {gtao_tex ? 1.0f : 0.0f,
                                   gtao_settings.bent_normal_strength,
                                   gtao_settings.intensity,
-                                  0.0f};
+                                  gtao_settings.multi_bounce ? 1.0f : 0.0f};
     gfx::set_uniform(iprogram.u_gtao_params, gtao_params);
     gfx::set_texture(iprogram.s_gtao, 9, gtao_tex ? gtao_tex : default_textures::get().white_texture());
     

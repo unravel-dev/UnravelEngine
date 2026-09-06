@@ -128,7 +128,27 @@ REFLECT_INLINE(gtao_pass::settings)
             entt::attribute{"pretty_name", "Bent Normal Strength"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.0f},
-            entt::attribute{"tooltip", "How far the environment diffuse lookup follows the bent normal (the mean unoccluded\ndirection) instead of the geometric normal."},
+            entt::attribute{"tooltip", "How far the diffuse lookups (the GI probes and the environment SH) follow the bent\nnormal - the mean unoccluded direction - instead of the geometric normal."},
+        })
+        .data<&settings::multi_bounce>("multi_bounce"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "multi_bounce"},
+            entt::attribute{"pretty_name", "Multi-Bounce"},
+            entt::attribute{"tooltip", "Brighten the diffuse occlusion on light albedos by the light a crevice gets back from\nits own walls. Off = single-bounce visibility."},
+        })
+        .data<&settings::generate_normals>("generate_normals"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "generate_normals"},
+            entt::attribute{"pretty_name", "Generate Normals"},
+            entt::attribute{"tooltip", "Generate the receiver normal from the depth buffer instead of the G-buffer shading normal."},
+        })
+        .data<&settings::normal_map_detail>("normal_map_detail"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "normal_map_detail"},
+            entt::attribute{"pretty_name", "Normal Map Detail"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"tooltip", "Full-resolution detail term: the pixel's shading normal against the AO texel's bent cone,\nand the map's perturbation carried into the bent normal. Applies with generated normals or\nat reduced resolution, so the crevices are there either way. 0 = off."},
         });
 }
 
@@ -147,6 +167,9 @@ SAVE_INLINE(gtao_pass::settings)
     try_save(ar, ser20::make_nvp("temporal_history", obj.temporal_history));
     try_save(ar, ser20::make_nvp("temporal_depth_threshold", obj.temporal_depth_threshold));
     try_save(ar, ser20::make_nvp("bent_normal_strength", obj.bent_normal_strength));
+    try_save(ar, ser20::make_nvp("multi_bounce", obj.multi_bounce));
+    try_save(ar, ser20::make_nvp("generate_normals", obj.generate_normals));
+    try_save(ar, ser20::make_nvp("normal_map_detail", obj.normal_map_detail));
 }
 SAVE_INSTANTIATE(gtao_pass::settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(gtao_pass::settings, ser20::oarchive_binary_t);
@@ -166,6 +189,9 @@ LOAD_INLINE(gtao_pass::settings)
     try_load(ar, ser20::make_nvp("temporal_history", obj.temporal_history));
     try_load(ar, ser20::make_nvp("temporal_depth_threshold", obj.temporal_depth_threshold));
     try_load(ar, ser20::make_nvp("bent_normal_strength", obj.bent_normal_strength));
+    try_load(ar, ser20::make_nvp("multi_bounce", obj.multi_bounce));
+    try_load(ar, ser20::make_nvp("generate_normals", obj.generate_normals));
+    try_load(ar, ser20::make_nvp("normal_map_detail", obj.normal_map_detail));
 }
 LOAD_INSTANTIATE(gtao_pass::settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(gtao_pass::settings, ser20::iarchive_binary_t);

@@ -4,6 +4,7 @@
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/rendering/gi/gi_constants.h>
+#include <engine/rendering/pipeline/passes/gtao_pass.h>
 
 #include <graphics/graphics.h>
 #include <logging/logging.h>
@@ -664,6 +665,13 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_buffer(7, probe_buffer_, gfx::access::Read);
                 gfx::set_texture(integrate_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
                 gfx::set_texture(integrate_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+                // GTAO bent normal for the lookup direction (the kernel's u_gi_intensity note);
+                // white stands in when the pass did not run and the flag lane keeps it unread.
+                const auto gtao_tex = rview.tex_safe_get("GTAO");
+                const auto* gtao_settings = rview.data().try_get<gtao_pass::settings>("GTAO_SETTINGS");
+                gfx::set_texture(integrate_program_.s_gi_gtao,
+                                 13,
+                                 gtao_tex ? gtao_tex : default_textures::get().white_texture());
                 gfx::set_texture(integrate_program_.s_world_probe_irradiance,
                                  11,
                                  clipmap_gpu.get_world_probe_irradiance());
@@ -679,7 +687,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(integrate_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(integrate_program_.u_gi_camera, gi_camera);
                 gfx::set_uniform(integrate_program_.u_gi_jitter, gi_jitter);
-                const float gi_intensity[4] = {math::max(s.intensity, 0.0f), 0.0f, 0.0f, 0.0f};
+                const float gi_intensity[4] = {math::max(s.intensity, 0.0f),
+                                               gtao_tex ? 1.0f : 0.0f,
+                                               gtao_settings ? gtao_settings->bent_normal_strength : 0.0f,
+                                               0.0f};
                 gfx::set_uniform(integrate_program_.u_gi_intensity, gi_intensity);
                 gfx::set_uniform(integrate_program_.u_gi_world_probe_params, wp_params);
                 gfx::set_uniform(integrate_program_.u_gi_world_probe_atlas,

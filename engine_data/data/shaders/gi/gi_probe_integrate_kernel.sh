@@ -29,6 +29,10 @@ SAMPLER2D(s_gi_depth, 8);
 SAMPLER2D(s_gi_normal, 9);
 /// The convolved irradiance tiles from cs_gi_screen_probe_filter.
 SAMPLER2D(s_probe_irradiance, 2);
+/// The GTAO output (rgb = world bent normal * 0.5 + 0.5, a = visibility), full resolution.
+/// Stage 13 is b_sdf_grid_instances in sdf_common.sh, which this program never references
+/// (no SDF march here), so the register is free on every backend.
+SAMPLER2D(s_gi_gtao, 13);
 
 /// xyz = camera position, w = frame index.
 uniform vec4 u_gi_camera;
@@ -39,10 +43,16 @@ uniform vec4 u_gi_jitter;
 /// x = settings.intensity, the artistic multiplier on the gathered bounce. Applied to the
 /// output rgb only: alpha keeps the measured weight that replaces the environment term
 /// downstream, so the knob scales the scene's bounce without eating the sky fallback.
-/// yzw unused. (Contact AO deliberately does NOT live here: within-plane AO structure is
-/// exactly what the plane-guided denoise chain dilutes - it applies at FULL resolution after
-/// the chain, in fs_gi_upsample.)
+/// y = 1 when the GTAO texture is bound, z = its bent-normal strength: the irradiance tiles
+/// (and the world-probe fallback) are then read at the BENT normal - the mean unoccluded
+/// direction - so a pixel under an overhang gathers the light it can actually see instead
+/// of the full cosine lobe around its geometric normal. Only the lookup direction moves; the
+/// plane tests keep the geometric normal. The VISIBILITY multiply stays out of here on
+/// purpose: within-plane AO structure is exactly what the plane-guided denoise chain
+/// dilutes, so it applies at full resolution after the chain, in the lighting. w unused.
 uniform vec4 u_gi_intensity;
+#define u_gi_gtao_bound     u_gi_intensity.y
+#define u_gi_gtao_bent      u_gi_intensity.z
 
 #define GI_INTEGRATE_PLANE_TOLERANCE 0.05
 
@@ -120,6 +130,18 @@ vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 o
 		return vec4_splat(0.0);
 	}
 	vec3 world_normal = normalize(nd.world_normal);
+	// The direction the irradiance is read at: the GTAO bent normal when bound (see the
+	// u_gi_intensity note), the geometric normal otherwise.
+	vec3 lookup_normal = world_normal;
+	if(u_gi_gtao_bound > 0.5)
+	{
+		vec4 gtao = texture2DLod(s_gi_gtao, uv, 0.0);
+		vec3 bent_normal = gtao.xyz * 2.0 - vec3_splat(1.0);
+		if(dot(bent_normal, bent_normal) > 1e-4)
+		{
+			lookup_normal = normalize(mix(world_normal, normalize(bent_normal), u_gi_gtao_bent));
+		}
+	}
 	float view_distance = max(length(world_position - u_gi_camera.xyz), 1e-3);
 	float plane_tolerance = GI_INTEGRATE_PLANE_TOLERANCE * view_distance;
 	vec2 pixel = uv * u_gi_probe_screen.xy;
@@ -134,8 +156,8 @@ vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 o
 	vec2 jittered_grid = grid + jitter;
 	vec2 base = floor(jittered_grid);
 	vec2 frac = jittered_grid - base;
-	// The pixel normal in octahedral texel space, shared by every probe tap.
-	vec2 oct_texel = GiOctEncode(world_normal) * float(GI_PROBE_DIR_EDGE) - vec2_splat(0.5);
+	// The lookup normal in octahedral texel space, shared by every probe tap.
+	vec2 oct_texel = GiOctEncode(lookup_normal) * float(GI_PROBE_DIR_EDGE) - vec2_splat(0.5);
 	vec2 oct_base = floor(oct_texel);
 	vec2 oct_frac = oct_texel - oct_base;
 	vec3 irradiance = vec3_splat(0.0);
@@ -166,7 +188,7 @@ vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 o
 	vec3 world_irradiance;
 	float sky_fraction;
 	if(GiWorldProbeIrradianceCascade(world_position,
-	                                 world_normal,
+	                                 lookup_normal,
 	                                 normalize(u_gi_camera.xyz - world_position),
 	                                 u_gi_camera.xyz,
 	                                 world_irradiance,

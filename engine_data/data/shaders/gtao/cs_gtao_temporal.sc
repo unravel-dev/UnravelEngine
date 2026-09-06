@@ -48,8 +48,10 @@ void main()
 		imageStore(i_gtao_out, texel, current);
 		return;
 	}
-	// Camera-consistent reprojection: this pixel's world position through last frame's matrix.
-	vec3 view_position = GtaoViewPosition(uv, view_depth);
+	// Camera-consistent reprojection: this texel's pixel (the one its depth belongs to) through
+	// last frame's matrix; prev_uv is that pixel's previous uv.
+	vec2 pixel_uv = GtaoRayUv(uv);
+	vec3 view_position = GtaoViewPosition(pixel_uv, view_depth);
 	vec3 world_position = mul(u_invView, vec4(view_position, 1.0)).xyz;
 	vec4 prev_clip = mul(u_gtao_prev_view_proj, vec4(world_position, 1.0));
 	float history_weight = u_gtao_history_strength;
@@ -65,9 +67,9 @@ void main()
 	float mover = 0.0;
 	if(u_gtao_velocity_bound > 0.5)
 	{
-		vec4 velocity = texture2DLod(s_gtao_velocity, uv, 0.0);
+		vec4 velocity = texture2DLod(s_gtao_velocity, pixel_uv, 0.0);
 		mover = smoothstep(0.5, 1.5, length(velocity.zw * u_gtao_full_size.xy));
-		prev_uv = mix(prev_uv, uv - velocity.xy, mover);
+		prev_uv = mix(prev_uv, pixel_uv - velocity.xy, mover);
 	}
 	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
 	{
@@ -84,7 +86,7 @@ void main()
 		float relative = abs(prev_depth - expected_prev_depth) / max(expected_prev_depth, 1e-4);
 		history_weight *= 1.0 - smoothstep(u_gtao_depth_tolerance * 0.5, u_gtao_depth_tolerance, relative);
 	}
-	vec4 history = texture2DLod(s_gtao_history, prev_uv, 0.0);
+	vec4 history = texture2DLod(s_gtao_history, GtaoTexelUvFromRay(prev_uv), 0.0);
 	// Neighbourhood clamp of the history to the current 3x3 range (bent normal and
 	// visibility alike): bounded ghosting on any motion the tests above let through.
 	vec4 box_min = current;

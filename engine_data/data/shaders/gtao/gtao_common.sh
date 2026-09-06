@@ -38,10 +38,14 @@
 /// The receiver is pulled this fraction toward the camera before the horizon search, so
 /// its own surface's depth quantisation never reads as an occluder (XeGTAO, FP32 depth).
 #define GTAO_DEPTH_BIAS 0.99999
-/// 1 = the receiver normal is reconstructed from the depth buffer (geometric); 0 = the
-/// G-buffer normal. The G-buffer normal carries the normal map, and a bumped tangent
-/// plane turns every flat mapped wall into false self-occlusion (measured: mottled walls).
-#define GTAO_NORMALS_FROM_DEPTH 1
+/// The receiver normal source rides u_gtao_params3.x (settings.generate_normals): 1 = the
+/// geometric normal reconstructed from depth (the default: the horizon integral then matches
+/// the depth it marches and cannot self-occlude on a normal map; the map's crevices come from
+/// the upsample's detail term); 0 = the G-buffer shading normal, normal map included, which
+/// is what Intel recommends when a G-buffer normal exists and gives the bump response
+/// inside the integral itself.
+#define GTAO_NORMAL_SOURCE_GBUFFER 0.0
+#define GTAO_NORMAL_SOURCE_GEOMETRIC 1.0
 /// Width of the procedural Hilbert curve driving the R2 noise (XeGTAO: level 6).
 #define GTAO_HILBERT_WIDTH 64
 
@@ -58,6 +62,10 @@ uniform vec4 u_gtao_params1;
 /// x = denoise depth sigma (fraction of view depth), y = denoise normal power,
 /// z = sample distribution power, w = maximum screen radius as a fraction of the height.
 uniform vec4 u_gtao_params2;
+/// x = normal source (GTAO_NORMAL_SOURCE_*), y = normal-map detail strength of the upsample,
+/// z = 1 when the upsample applies that detail (reduced resolution, or the geometric source),
+/// w unused.
+uniform vec4 u_gtao_params3;
 
 #define u_gtao_radius             u_gtao_params0.x
 #define u_gtao_falloff_range      u_gtao_params0.y
@@ -71,6 +79,9 @@ uniform vec4 u_gtao_params2;
 #define u_gtao_normal_power       u_gtao_params2.y
 #define u_gtao_distribution_power u_gtao_params2.z
 #define u_gtao_max_screen_radius  u_gtao_params2.w
+#define u_gtao_normal_source      u_gtao_params3.x
+#define u_gtao_detail_strength    u_gtao_params3.y
+#define u_gtao_detail_enabled     u_gtao_params3.z
 
 /// View-space depth (positive distance along the view axis) of a device depth value.
 float GtaoViewDepthFromDevice(float device_depth)
@@ -88,6 +99,33 @@ vec3 GtaoViewPosition(vec2 uv, float view_depth)
 {
 	vec3 ray = computeViewSpacePosition(uv, 0.5);
 	return ray * (view_depth / max(abs(ray.z), 1e-6));
+}
+
+/// The uv of the full-resolution pixel an AO-resolution uv stands for. An AO texel's depth
+/// is its block's top-left pixel's, so its position must lie on THAT pixel's ray, not on the
+/// ray through the block centre (the texture uv). On a flat surface the mismatch shifts
+/// every point by the same slope-proportional amount and cancels; where the slope changes,
+/// a convex edge, the two faces shift by different amounts and the near face's points rise
+/// above the other face's plane - a line of false occlusion along every edge at reduced
+/// resolution. Identity at full resolution.
+vec2 GtaoRayUv(vec2 ao_uv)
+{
+	vec2 divisor = floor(u_gtao_full_size.xy / u_gtao_size.xy + vec2_splat(0.5));
+	return ao_uv - (divisor * 0.5 - vec2_splat(0.5)) * u_gtao_full_size.zw;
+}
+
+/// The inverse of GtaoRayUv: the AO-texture uv whose texel holds the pixel at ray_uv.
+vec2 GtaoTexelUvFromRay(vec2 ray_uv)
+{
+	vec2 divisor = floor(u_gtao_full_size.xy / u_gtao_size.xy + vec2_splat(0.5));
+	return ray_uv + (divisor * 0.5 - vec2_splat(0.5)) * u_gtao_full_size.zw;
+}
+
+/// View-space position of an AO-resolution texture uv at the given view depth: the depth
+/// chain's sample for that uv lies on its top-left pixel's ray (see GtaoRayUv).
+vec3 GtaoAoViewPosition(vec2 ao_uv, float view_depth)
+{
+	return GtaoViewPosition(GtaoRayUv(ao_uv), view_depth);
 }
 
 /// The full-resolution pixel an AO texel stands for: the top-left pixel of its block. Depth
@@ -162,17 +200,49 @@ vec4 GtaoCalculateEdges(float center_z, float left_z, float right_z, float top_z
 	return saturate(vec4_splat(1.25) - edges / (center_z * 0.011));
 }
 
+/// Sharpness of the shading-normal guidance in GtaoNormalFromDepth: a quadrant whose plane
+/// straddles a 90-degree edge (45 degrees off the guide) keeps 0.71^16 = 0.4% of its weight.
+#define GTAO_NORMAL_GUIDE_POWER 16.0
+
+/// One quadrant's unit plane normal from two neighbour directions, facing the viewer.
+vec3 GtaoQuadrantNormal(vec3 first, vec3 second, vec3 view_vec)
+{
+	vec3 n = cross(first, second);
+	n = dot(n, n) > 1e-12 ? normalize(n) : vec3_splat(0.0);
+	return dot(n, view_vec) < 0.0 ? -n : n;
+}
+
+/// Weight of one quadrant: its two depth edges, and its agreement with the shading normal.
+float GtaoQuadrantWeight(float accepted, vec3 quadrant_normal, vec3 guide)
+{
+	return accepted * pow(saturate(dot(quadrant_normal, guide)), GTAO_NORMAL_GUIDE_POWER);
+}
+
 /// XeGTAO's geometric normal from the four neighbours' view positions, each quadrant
-/// weighted by its two edges so a silhouette neighbour never tilts the plane.
-vec3 GtaoNormalFromDepth(vec4 edges, vec3 center, vec3 left, vec3 right, vec3 top, vec3 bottom)
+/// weighted by its two edges so a silhouette neighbour never tilts the plane, and by its
+/// agreement with the G-buffer shading normal (view space). The depth alone cannot tell
+/// which face a pixel on a convex edge belongs to, and XeGTAO's plain quadrant mean gives
+/// such a pixel a normal halfway between the two faces - a line of false occlusion along
+/// every edge and every facet seam. The shading normal knows the face; the depth still
+/// supplies the flat plane, free of the normal map. Zero where no accepted quadrant faces
+/// the shading normal (the caller falls back to the shading normal).
+vec3 GtaoNormalFromDepth(vec4 edges, vec3 center, vec3 left, vec3 right, vec3 top, vec3 bottom, vec3 guide)
 {
 	vec4 accepted = saturate(vec4(edges.x * edges.z, edges.z * edges.y, edges.y * edges.w, edges.w * edges.x) + vec4_splat(0.01));
+	vec3 view_vec = normalize(-center);
 	vec3 l = normalize(left - center);
 	vec3 r = normalize(right - center);
 	vec3 t = normalize(top - center);
 	vec3 b = normalize(bottom - center);
-	vec3 n = accepted.x * cross(l, t) + accepted.y * cross(t, r) + accepted.z * cross(r, b) + accepted.w * cross(b, l);
-	return normalize(n);
+	vec3 n_lt = GtaoQuadrantNormal(l, t, view_vec);
+	vec3 n_tr = GtaoQuadrantNormal(t, r, view_vec);
+	vec3 n_rb = GtaoQuadrantNormal(r, b, view_vec);
+	vec3 n_bl = GtaoQuadrantNormal(b, l, view_vec);
+	vec3 n = GtaoQuadrantWeight(accepted.x, n_lt, guide) * n_lt +
+	         GtaoQuadrantWeight(accepted.y, n_tr, guide) * n_tr +
+	         GtaoQuadrantWeight(accepted.z, n_rb, guide) * n_rb +
+	         GtaoQuadrantWeight(accepted.w, n_bl, guide) * n_bl;
+	return dot(n, n) > 1e-12 ? normalize(n) : vec3_splat(0.0);
 }
 
 vec4 GtaoEncode(vec3 world_bent_normal, float visibility)

@@ -59,27 +59,29 @@ void main()
 	// Pull the receiver toward the camera by a hair: its own surface's depth noise must never
 	// register as an occluder (XeGTAO; the value for an FP32 depth buffer).
 	view_depth *= GTAO_DEPTH_BIAS;
-	vec3 position = GtaoViewPosition(uv, view_depth);
+	vec3 position = GtaoAoViewPosition(uv, view_depth);
 	vec3 view_vec = normalize(-position);
-	vec3 normal;
-#if GTAO_NORMALS_FROM_DEPTH
-	normal = GtaoNormalFromDepth(edges, position,
-	                             GtaoViewPosition(uv_l, z_l), GtaoViewPosition(uv_r, z_r),
-	                             GtaoViewPosition(uv_t, z_t), GtaoViewPosition(uv_b, z_b));
-	// The reconstruction's winding is that of the view space; make it face the camera, and
-	// fall back to the G-buffer normal where the neighbourhood is all edges.
+	// The receiver normal (see u_gtao_params3): the G-buffer shading normal carries the
+	// normal map and gives the bump-scale response; the geometric one is reconstructed from
+	// the four neighbours, edge-aware and guided by the shading normal to the pixel's own
+	// face, and falls back to the G-buffer where the neighbourhood is all edges.
 	vec3 gbuffer_normal = normalize(mul(u_view, vec4(world_normal, 0.0)).xyz);
-	if(dot(normal, view_vec) < 0.0)
+	vec3 normal = gbuffer_normal;
+	if(u_gtao_normal_source > 0.5)
 	{
-		normal = -normal;
+		vec3 geometric = GtaoNormalFromDepth(edges, position,
+		                                     GtaoAoViewPosition(uv_l, z_l), GtaoAoViewPosition(uv_r, z_r),
+		                                     GtaoAoViewPosition(uv_t, z_t), GtaoAoViewPosition(uv_b, z_b),
+		                                     gbuffer_normal);
+		if(dot(geometric, view_vec) < 0.0)
+		{
+			geometric = -geometric;
+		}
+		if(dot(edges, vec4_splat(1.0)) >= 0.5 && dot(geometric, geometric) > 0.5)
+		{
+			normal = geometric;
+		}
 	}
-	if(dot(edges, vec4_splat(1.0)) < 0.5 || dot(normal, normal) < 0.5)
-	{
-		normal = gbuffer_normal;
-	}
-#else
-	normal = normalize(mul(u_view, vec4(world_normal, 0.0)).xyz);
-#endif
 	// The radius in AO-resolution pixels: the projection's y scale over the view depth.
 	float pixels_per_unit = 0.5 * u_gtao_size.y * u_proj[1][1] / max(view_depth, 1e-4);
 	float radius = u_gtao_radius;
@@ -120,7 +122,7 @@ void main()
 		vec2 omega = vec2(cos(phi), sin(phi));
 		// The slice direction in view space: the offset between two view positions at the
 		// SAME depth one texel apart along omega (exact for the backend's screen mapping).
-		vec3 direction_vec = normalize(GtaoViewPosition(uv + omega * u_gtao_size.zw, view_depth) - position);
+		vec3 direction_vec = normalize(GtaoAoViewPosition(uv + omega * u_gtao_size.zw, view_depth) - position);
 		vec3 ortho_direction = direction_vec - dot(direction_vec, view_vec) * view_vec;
 		vec3 axis = normalize(cross(ortho_direction, view_vec));
 		vec3 projected_normal = normal - axis * dot(normal, axis);
@@ -155,8 +157,8 @@ void main()
 			vec2 uv1 = uv - sample_offset_uv;
 			float depth0 = texture2DLod(s_gtao_depth_mips, uv0, mip).x;
 			float depth1 = texture2DLod(s_gtao_depth_mips, uv1, mip).x;
-			vec3 delta0 = GtaoViewPosition(uv0, depth0) - position;
-			vec3 delta1 = GtaoViewPosition(uv1, depth1) - position;
+			vec3 delta0 = GtaoAoViewPosition(uv0, depth0) - position;
+			vec3 delta1 = GtaoAoViewPosition(uv1, depth1) - position;
 			float dist0 = length(delta0);
 			float dist1 = length(delta1);
 			float shc0 = dot(delta0, view_vec) / max(dist0, 1e-5);

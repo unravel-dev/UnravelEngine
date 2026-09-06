@@ -505,6 +505,8 @@ private:
         gfx::program::uniform_ptr s_probe_irradiance;
         gfx::program::uniform_ptr s_gi_depth;
         gfx::program::uniform_ptr s_gi_normal;
+        /// The GTAO output, for the bent-normal lookup direction (stage 13, see the kernel).
+        gfx::program::uniform_ptr s_gi_gtao;
         gfx::program::uniform_ptr s_world_probe_irradiance;
         gfx::program::uniform_ptr s_world_probe_depth;
         /// Declared by sdf_common.sh but never sampled here. Bound anyway: on OpenGL the
@@ -531,6 +533,7 @@ private:
             cache_uniform(program.get(), s_probe_irradiance, "s_probe_irradiance", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_depth, "s_gi_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_gtao, "s_gi_gtao", gfx::uniform_type::Sampler);
             cache_uniform(program.get(),
                           s_world_probe_irradiance,
                           "s_world_probe_irradiance",

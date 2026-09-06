@@ -44,7 +44,7 @@ SAMPLER2D(s_shadowMap2, 9);
 SAMPLER2D(s_shadowMap3, 10);
 #endif
 
-// x = GTAO bound (0/1), y = bent normal strength, z = intensity, w = unused.
+// x = GTAO bound (0/1), y = bent normal strength, z = intensity, w = multi-bounce (0/1).
 uniform vec4 u_gtao_params;
 uniform vec4 u_params0;
 uniform vec4 u_params1;
@@ -779,10 +779,12 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     vec3 N = normalize(data.world_normal);
     vec3 V = normalize(u_camera_position.xyz - world_position);
 
-    // GTAO (screen-space, contact scale): its visibility multiplies the material AO for the
-    // indirect terms, and its bent normal - the mean unoccluded direction - steers the
-    // environment diffuse lookup, so a corner reads the sky it can actually see. Direct
-    // light is untouched by design.
+    // GTAO: its visibility occludes the indirect terms (the GI resolve already reads its
+    // probes at the bent normal - the mean unoccluded direction - and so does the SH lookup
+    // below; the visibility itself is applied here, at full resolution, after the GI's
+    // denoise chain). The diffuse takes the MULTI-BOUNCE form (per channel: light albedos
+    // give part of the occluded energy back through interreflection); the specular
+    // occlusion keeps the plain visibility. Direct light is untouched by design.
     float screen_ao = 1.0;
     vec3 diffuse_normal = N;
     if(u_gtao_params.x > 0.5)
@@ -792,6 +794,8 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
         vec3 bent_normal = normalize(gtao.xyz * 2.0 - 1.0);
         diffuse_normal = normalize(mix(N, bent_normal, u_gtao_params.y));
     }
+    vec3 diffuse_screen_ao = u_gtao_params.w > 0.5 ? MultiBounceAO(screen_ao, data.diffuse_color)
+                                                   : vec3_splat(screen_ao);
     float combined_ao = data.ambient_occlusion * screen_ao;
 
     vec3 irradiance = eval_irradiance_sh(s_irradiance, diffuse_normal);
@@ -810,12 +814,14 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // temporal is off, accumulated screen-hit evidence when temporal is on. When both are
     // disabled the bound fallback has alpha 0 -> pure SH.
     vec4 ssil_sample = texture2D(s_ssil, texcoord0);
-    vec3 indirect_diffuse = mix(irradiance * RECIP_PI, ssil_sample.rgb, ssil_sample.a);
+    vec3 indirect_diffuse = mix(irradiance * RECIP_PI, ssil_sample.rgb, ssil_sample.a) * diffuse_screen_ao;
 
     float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
     float lighting_visibility = saturate(sqrt(Luminance(indirect_diffuse)));
 
-    vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, combined_ao, lighting_visibility, V, N);
+    // Diffuse: the material AO (the screen term is already folded into indirect_diffuse per
+    // channel); specular occlusion: material x plain screen visibility.
+    vec3 indirect_lighting = StandardShadingIndirectAO(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, data.ambient_occlusion, combined_ao, lighting_visibility, V, N);
     return vec4(indirect_lighting + data.emissive_color, 1.0f);
 }
 #endif

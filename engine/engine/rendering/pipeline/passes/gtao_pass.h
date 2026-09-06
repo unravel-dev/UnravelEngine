@@ -51,7 +51,7 @@ public:
         /// them as walls. 0 = off, 0.7 = strong.
         float thin_occluder_compensation = 0.0f;
         /// 0 = low (1 slice x 2 steps), 1 = medium (2 x 2), 2 = high (3 x 3), 3 = ultra (9 x 3).
-        int32_t quality_level = 2;
+        int32_t quality_level = 3;
         /// Resolution the visibility is computed at; the result is upsampled edge-aware.
         /// Half is the default for the wide-radius look (a quarter of the cost, and the
         /// signal is low-frequency at that radius); Full for contact-scale reference.
@@ -63,8 +63,20 @@ public:
         float temporal_history = 0.9f;
         /// Relative view-depth tolerance for the temporal disocclusion test.
         float temporal_depth_threshold = 0.1f;
-        /// How far the diffuse environment lookup follows the bent normal (0 = geometric normal).
+        /// How far the diffuse lookups (the GI probes and the environment SH) follow the bent
+        /// normal instead of the geometric normal (0 = geometric normal).
         float bent_normal_strength = 1.0f;
+        /// Multi-bounce approximation (Jimenez 2016): brightens the diffuse occlusion on light
+        /// albedos by the interreflection a crevice gets back from its own walls.
+        bool multi_bounce = false;
+        /// Generate the receiver normal from the depth buffer (the geometric normal, edge-aware)
+        /// instead of reading the G-buffer.
+        bool generate_normals = false;
+        /// Strength of the full-resolution normal-map detail term: the pixel's shading normal
+        /// against the AO texel's bent cone, and the map's perturbation carried into the bent
+        /// normal. Applied where the main pass did not see the shading normal at every pixel
+        /// (generated normals, or reduced resolution).
+        float normal_map_detail = 1.0f;
     };
 
     struct run_params
@@ -125,6 +137,7 @@ private:
         gfx::program::uniform_ptr u_gtao_params0;
         gfx::program::uniform_ptr u_gtao_params1;
         gfx::program::uniform_ptr u_gtao_params2;
+        gfx::program::uniform_ptr u_gtao_params3;
     };
 
     struct prefilter_program : uniforms_cache
@@ -195,11 +208,13 @@ private:
         gfx::program::uniform_ptr s_gtao_input;
         gfx::program::uniform_ptr s_gtao_depth_mips;
         gfx::program::uniform_ptr s_gtao_depth;
+        gfx::program::uniform_ptr s_gtao_normal;
         void cache_uniforms()
         {
             cache_uniform(program.get(), s_gtao_input, "s_gtao_input", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gtao_depth_mips, "s_gtao_depth_mips", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gtao_depth, "s_gtao_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gtao_normal, "s_gtao_normal", gfx::uniform_type::Sampler);
         }
         auto is_valid() const -> bool { return program && program->is_valid(); }
     } upsample_program_;

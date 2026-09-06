@@ -44,6 +44,9 @@ public:
         result.temporal_depth_threshold =
             std::lerp(result.temporal_depth_threshold, from.temporal_depth_threshold, contribution);
         result.bent_normal_strength = std::lerp(result.bent_normal_strength, from.bent_normal_strength, contribution);
+        result.multi_bounce = contribution >= 0.5f ? from.multi_bounce : result.multi_bounce;
+        result.generate_normals = contribution >= 0.5f ? from.generate_normals : result.generate_normals;
+        result.normal_map_detail = std::lerp(result.normal_map_detail, from.normal_map_detail, contribution);
     }
 };
 

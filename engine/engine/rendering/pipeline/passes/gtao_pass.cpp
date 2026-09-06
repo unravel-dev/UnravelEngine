@@ -86,6 +86,7 @@ auto gtao_pass::init(rtti::context& ctx) -> bool
     common_cache_.cache_uniform(nullptr, common_.u_gtao_params0, "u_gtao_params0", gfx::uniform_type::Vec4);
     common_cache_.cache_uniform(nullptr, common_.u_gtao_params1, "u_gtao_params1", gfx::uniform_type::Vec4);
     common_cache_.cache_uniform(nullptr, common_.u_gtao_params2, "u_gtao_params2", gfx::uniform_type::Vec4);
+    common_cache_.cache_uniform(nullptr, common_.u_gtao_params3, "u_gtao_params3", gfx::uniform_type::Vec4);
     prefilter_program_.cache_uniforms();
     prefilter_program_.program = std::make_unique<gpu_program>(cs_prefilter);
     main_program_.cache_uniforms();
@@ -148,6 +149,16 @@ void gtao_pass::set_common_uniforms(const frame_context& ctx) const
     gfx::set_uniform(common_.u_gtao_params0, params0);
     gfx::set_uniform(common_.u_gtao_params1, params1);
     gfx::set_uniform(common_.u_gtao_params2, params2);
+    // The upsample's detail term applies where the main pass did not see the shading normal
+    // at every pixel: reduced resolution, or the geometric normal source.
+    const bool geometric = ctx.config.generate_normals;
+    const bool reduced = ctx.config.resolution != trace_resolution::full;
+    const float detail = std::clamp(ctx.config.normal_map_detail, 0.0f, 1.0f);
+    const float params3[4] = {geometric ? 1.0f : 0.0f,
+                              detail,
+                              (detail > 0.0f && (reduced || geometric)) ? 1.0f : 0.0f,
+                              0.0f};
+    gfx::set_uniform(common_.u_gtao_params3, params3);
 }
 
 void gtao_pass::run_prefilter(gfx::render_view& rview,
@@ -291,6 +302,7 @@ auto gtao_pass::run_upsample(gfx::render_view& rview,
     gfx::set_texture(upsample_program_.s_gtao_depth_mips, 1, depth_mips);
     gfx::set_texture(upsample_program_.s_gtao_depth, 2, params.g_buffer->get_texture(4));
     gfx::set_image(3, output->native_handle(), 0, bgfx::Access::Write);
+    gfx::set_texture(upsample_program_.s_gtao_normal, 4, params.g_buffer->get_texture(1));
     gfx::dispatch(pass.id,
                   upsample_program_.program->native_handle(),
                   group_count(ctx.full_size.width, group_size),
