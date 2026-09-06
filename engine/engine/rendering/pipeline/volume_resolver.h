@@ -8,6 +8,7 @@
 #include <engine/rendering/pipeline/passes/fxaa_pass.h>
 #include <engine/rendering/pipeline/passes/ssr_pass.h>
 #include <engine/rendering/pipeline/passes/ssil_pass.h>
+#include <engine/rendering/pipeline/passes/gtao_pass.h>
 #include <engine/rendering/pipeline/passes/tonemapping_pass.h>
 #include <engine/rendering/pipeline/passes/taa_pass.h>
 #include <entt/entt.hpp>
@@ -38,6 +39,8 @@ struct resolved_post_process_settings
     assao_pass::settings assao{};
     bool has_ssil = false;
     ssil_pass::ssil_settings ssil{};
+    bool has_gtao = false;
+    gtao_pass::settings gtao{};
     bool has_gi = false;
     gi_settings gi{};
 };

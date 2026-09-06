@@ -140,6 +140,10 @@ auto get_component_icon() -> std::string
     {
         return ICON_MDI_FILTER_OUTLINE;
     }
+    else if constexpr(std::is_same<T, gtao_component>::value)
+    {
+        return ICON_MDI_CIRCLE_HALF_FULL;
+    }
     else if constexpr(std::is_same<T, ssr_component>::value)
     {
         return ICON_MDI_MIRROR;

@@ -81,7 +81,7 @@ latter also shader-compiles every GI shader).
 Post-FX are ECS volume components with priority and blend:
 
 - `bloom_component`, `tonemapping_component`, `fxaa_component`
-- `taa_component`, `assao_component`, `ssr_component`, `ssil_component`
+- `taa_component`, `assao_component`, `gtao_component`, `ssr_component`, `ssil_component`
 - `auto_exposure_component`
 
 Each has meta registration in `engine/engine/meta/ecs/components/`.

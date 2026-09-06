@@ -35,6 +35,8 @@ SAMPLER2D(s_cloudShadow, 11);
 #if PBR_INDIRECT
 SAMPLER2D(s_irradiance, 7);
 SAMPLER2D(s_ssil, 8);
+// GTAO: rgb = world bent normal * 0.5 + 0.5, a = visibility (gtao_pass).
+SAMPLER2D(s_gtao, 9);
 #else
 SAMPLER2D(s_shadowMap0, 7);
 SAMPLER2D(s_shadowMap1, 8);
@@ -42,6 +44,8 @@ SAMPLER2D(s_shadowMap2, 9);
 SAMPLER2D(s_shadowMap3, 10);
 #endif
 
+// x = GTAO bound (0/1), y = bent normal strength, z = intensity, w = unused.
+uniform vec4 u_gtao_params;
 uniform vec4 u_params0;
 uniform vec4 u_params1;
 // u_params2 (texel size, coverage) is declared by shadowmaps/common_shadow.sh.
@@ -775,7 +779,22 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     vec3 N = normalize(data.world_normal);
     vec3 V = normalize(u_camera_position.xyz - world_position);
 
-    vec3 irradiance = eval_irradiance_sh(s_irradiance, N);
+    // GTAO (screen-space, contact scale): its visibility multiplies the material AO for the
+    // indirect terms, and its bent normal - the mean unoccluded direction - steers the
+    // environment diffuse lookup, so a corner reads the sky it can actually see. Direct
+    // light is untouched by design.
+    float screen_ao = 1.0;
+    vec3 diffuse_normal = N;
+    if(u_gtao_params.x > 0.5)
+    {
+        vec4 gtao = texture2D(s_gtao, texcoord0);
+        screen_ao = mix(1.0, gtao.a, u_gtao_params.z);
+        vec3 bent_normal = normalize(gtao.xyz * 2.0 - 1.0);
+        diffuse_normal = normalize(mix(N, bent_normal, u_gtao_params.y));
+    }
+    float combined_ao = data.ambient_occlusion * screen_ao;
+
+    vec3 irradiance = eval_irradiance_sh(s_irradiance, diffuse_normal);
     // THE INDIRECT DIFFUSE CONTRACT (energy audit): this slot carries E/pi - the
     // cosine-weighted MEAN incoming radiance - because StandardShadingIndirect multiplies it
     // by plain DiffuseColor. Lambert's BRDF is albedo/pi and the direct path pays its pi in
@@ -796,7 +815,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
     float lighting_visibility = saturate(sqrt(Luminance(indirect_diffuse)));
 
-    vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, data.ambient_occlusion, lighting_visibility, V, N);
+    vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, combined_ao, lighting_visibility, V, N);
     return vec4(indirect_lighting + data.emissive_color, 1.0f);
 }
 #endif

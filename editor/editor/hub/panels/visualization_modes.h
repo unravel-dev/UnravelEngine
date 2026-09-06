@@ -47,6 +47,8 @@ enum class visualization_mode : int
     sdf_probe_sky = 27,
     sdf_vis_memo = 28,
     velocity = 29,
+    gtao = 30,
+    gtao_bent_normal = 31,
 };
 
 struct visualization_mode_entry

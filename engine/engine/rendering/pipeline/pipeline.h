@@ -12,6 +12,7 @@
 
 
 #include "passes/assao_pass.h"
+#include "passes/gtao_pass.h"
 #include "passes/atmospheric_pass_perez.h"
 #include "passes/atmospheric_pass_skybox.h"
 #include "passes/auto_exposure_pass.h"
@@ -156,6 +157,7 @@ public:
         std::function<void(camera&, const usize32_t& viewport_size)> apply_taa_params;
         std::function<void(ssr_pass::run_params& params)> fill_ssr_params;
         std::function<void(ssil_pass::run_params& params)> fill_ssil_params;
+        std::function<void(gtao_pass::run_params& params)> fill_gtao_params;
         /// Surface cache GI. Both halves travel together because they are one feature: the cache
         /// pass populates the world-space entries and the resolve pass gathers them, so settings
         /// resolved from different sources would describe two different configurations.
@@ -268,6 +270,7 @@ protected:
     ssr_pass ssr_pass_{};
     hiz_pass hiz_pass_{}; ///< Hi-Z buffer generation pass
     ssil_pass ssil_pass_{};
+    gtao_pass gtao_pass_{};
     gi_clipmap_compose_pass gi_clipmap_compose_pass_{};
     gi_light_voxel_pass gi_light_voxel_pass_{};
     gi_world_probe_pass gi_world_probe_pass_{};

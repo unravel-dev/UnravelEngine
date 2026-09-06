@@ -11,6 +11,8 @@ SAMPLER2D(s_tex4, 4);
 SAMPLER2D(s_tex5, 5);
 SAMPLER2D(s_tex6, 6);
 SAMPLER2D(s_tex7, 7);
+// GTAO output: rgb = world bent normal * 0.5 + 0.5, a = visibility.
+SAMPLER2D(s_tex8, 8);
 
 uniform vec4 u_params;
 
@@ -31,6 +33,8 @@ uniform vec4 u_params;
 #define SSIL 12
 #define RADIANCE_ALPHA 13
 #define SPECULAR_OCCLUSION 14
+#define GTAO 15
+#define GTAO_BENT_NORMAL 16
 
 vec4 gbuffer_visualize(vec2 texcoord0)
 {
@@ -105,6 +109,14 @@ vec4 gbuffer_visualize(vec2 texcoord0)
         float lighting_visibility = saturate(sqrt(Luminance(eval_irradiance_sh(s_tex6, data.world_normal))));
         float occlusion = ComputeSpecularOcclusion(NoV, data.roughness, data.ambient_occlusion, lighting_visibility);
         color = vec3_splat(occlusion);
+    }
+    else if(u_mode == GTAO)
+    {
+        color = vec3_splat(texture2D(s_tex8, texcoord0).a);
+    }
+    else if(u_mode == GTAO_BENT_NORMAL)
+    {
+        color = texture2D(s_tex8, texcoord0).rgb;
     }
 
     // The decode helpers now return LINEAR base color (and colors derived from

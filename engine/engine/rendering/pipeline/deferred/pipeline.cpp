@@ -803,6 +803,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     run_velocity_pass(visibility_set, camera, rview);
 
     run_assao_pass(camera, rview, dt, params);
+    run_gtao_pass(camera, rview, params);
 
     run_reflection_probe_pass(scn, camera, rview, build_reflection_probes, dt);
 
@@ -896,6 +897,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         {
             run_velocity_debug_pass(camera, rview, output);
         }
+        else if(debug_pass_ == debug_pass_gtao || debug_pass_ == debug_pass_gtao_bent_normal)
+        {
+            run_debug_visualization_pass(camera, rview, output);
+        }
         else if(debug_pass_ >= debug_pass_sdf_normals)
         {
             run_sdf_debug_pass(camera, rview, params, output);
@@ -916,7 +921,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // expected depth against this snapshot (a null snapshot degrades the test to a
     // same-frame approximation on frame 0 only).
     const bool taa_active = static_cast<bool>(params.fill_taa_params);
-    if(hiz_active || gi_resolve_active || taa_active)
+    // GTAO is a fourth consumer: its temporal accumulation reprojects against this depth and
+    // treats a missing one as "no history" (raw per-frame noise).
+    const bool gtao_active = static_cast<bool>(rview.tex_safe_get("GTAO"));
+    if(hiz_active || gi_resolve_active || taa_active || gtao_active)
     {
         snapshot_prev_depth(rview, viewport_size);
     }
@@ -2007,6 +2015,17 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     gfx::set_texture(iprogram.s_ssil,
                      8,
                      indirect_diffuse_tex ? indirect_diffuse_tex : default_textures::get().transparent_texture());
+    // GTAO: bent normal + visibility for the indirect terms only (never direct light). The
+    // flag lane tells the shader whether the texture carries anything; the strengths come
+    // from the settings the pass ran with this frame.
+    auto gtao_tex = rview.tex_safe_get("GTAO");
+    const auto& gtao_settings = rview.data().get_or_emplace<gtao_pass::settings>("GTAO_SETTINGS");
+    const float gtao_params[4] = {gtao_tex ? 1.0f : 0.0f,
+                                  gtao_settings.bent_normal_strength,
+                                  gtao_settings.intensity,
+                                  0.0f};
+    gfx::set_uniform(iprogram.u_gtao_params, gtao_params);
+    gfx::set_texture(iprogram.s_gtao, 9, gtao_tex ? gtao_tex : default_textures::get().white_texture());
     
 
     auto topology = gfx::clip_quad(1.0f);
@@ -2331,6 +2350,32 @@ void deferred::run_ssr_pass(const camera& camera,
     ssr_params.settings.fidelityfx.enable_cone_tracing = false;
 
     ssr_pass_.run(rview, ssr_params);
+}
+
+void deferred::run_gtao_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
+{
+    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_gtao_params)
+    {
+        gtao_pass_.release_resources(rview);
+        rview.tex_remove("GTAO");
+        return;
+    }
+    gtao_pass::run_params gtao_params;
+    gtao_params.g_buffer = rview.fbo_get("GBUFFER");
+    // This frame's velocity buffer and last frame's depth; a null texture disables the
+    // respective temporal path inside the pass.
+    gtao_params.velocity = rview.tex_safe_get("VELOCITY");
+    gtao_params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
+    gtao_params.cam = &camera;
+    rparams.fill_gtao_params(gtao_params);
+    auto result = gtao_pass_.run(rview, gtao_params);
+    if(!result)
+    {
+        rview.tex_remove("GTAO");
+        return;
+    }
+    rview.tex_get_or_emplace("GTAO") = result;
+    rview.data().get_or_emplace<gtao_pass::settings>("GTAO_SETTINGS") = gtao_params.config;
 }
 
 void deferred::run_ssil_pass(const camera& camera,
@@ -2890,7 +2935,17 @@ void deferred::run_debug_visualization_pass(const camera& camera,
 
     debug_visualization_program_.program->begin();
 
-    float u_params[4] = {float(debug_pass_), 0.0f, 0.0f, 0.0f};
+    // The GTAO views live past the SDF range in the pass ids; the shader knows them as 15 / 16.
+    int shader_mode = debug_pass_;
+    if(debug_pass_ == debug_pass_gtao)
+    {
+        shader_mode = 15;
+    }
+    else if(debug_pass_ == debug_pass_gtao_bent_normal)
+    {
+        shader_mode = 16;
+    }
+    float u_params[4] = {float(shader_mode), 0.0f, 0.0f, 0.0f};
 
     gfx::set_uniform(debug_visualization_program_.u_params, u_params);
 
@@ -2916,6 +2971,10 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     {
         gfx::set_texture(debug_visualization_program_.s_tex[i], i, indirect_diffuse_tex);
     }
+    auto gtao_tex = rview.tex_safe_get("GTAO");
+    gfx::set_texture(debug_visualization_program_.s_tex[8],
+                     8,
+                     gtao_tex ? gtao_tex : default_textures::get().white_texture());
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
     gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());

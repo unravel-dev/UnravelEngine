@@ -112,6 +112,9 @@ public:
     void run_ssr_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 
     void run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
+    /// Ground Truth Ambient Occlusion into the "GTAO" texture (runs right after the G-buffer,
+    /// consumed by the indirect lighting).
+    void run_gtao_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 
     auto run_taa_pass(const camera& camera,
                       gfx::render_view& rview,
@@ -159,6 +162,10 @@ public:
     /// BEFORE the >= debug_pass_sdf_normals check. Selecting it forces velocity production
     /// for camera runs even when no other consumer (TAA) is active.
     static constexpr int debug_pass_velocity = 29;
+    /// GTAO visibility and bent normal (the "GTAO" texture), through the G-buffer visualization
+    /// program (shader modes 15 / 16); dispatched BEFORE the >= debug_pass_sdf_normals check.
+    static constexpr int debug_pass_gtao = 30;
+    static constexpr int debug_pass_gtao_bent_normal = 31;
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,
                             const run_params& rparams,
@@ -436,12 +443,16 @@ private:
             cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_irradiance, "s_irradiance", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_ssil, "s_ssil", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gtao, "s_gtao", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_gtao_params, "u_gtao_params", gfx::uniform_type::Vec4);
         }
         gfx::program::uniform_ptr u_light_data;
         gfx::program::uniform_ptr u_camera_position;
         std::array<gfx::program::uniform_ptr, 7> s_tex;
         gfx::program::uniform_ptr s_irradiance;
         gfx::program::uniform_ptr s_ssil;
+        gfx::program::uniform_ptr s_gtao;
+        gfx::program::uniform_ptr u_gtao_params;
 
         std::unique_ptr<gpu_program> program;
 
@@ -460,10 +471,11 @@ private:
             cache_uniform(program.get(), s_tex[5], "s_tex5", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[7], "s_tex7", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex[8], "s_tex8", gfx::uniform_type::Sampler);
         }
 
         gfx::program::uniform_ptr u_params;
-        std::array<gfx::program::uniform_ptr, 8> s_tex;
+        std::array<gfx::program::uniform_ptr, 9> s_tex;
 
         std::unique_ptr<gpu_program> program;
 

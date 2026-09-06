@@ -9,7 +9,7 @@ namespace unravel
 namespace
 {
 
-constexpr std::array<visualization_mode_entry, 31> k_visualization_modes = {{
+constexpr std::array<visualization_mode_entry, 33> k_visualization_modes = {{
     {visualization_mode::full, "full", "Full"},
     {visualization_mode::base_color, "base_color", "Base Color"},
     {visualization_mode::diffuse_color, "diffuse_color", "Diffuse Color"},
@@ -41,6 +41,8 @@ constexpr std::array<visualization_mode_entry, 31> k_visualization_modes = {{
     {visualization_mode::sdf_probe_sky, "sdf_probe_sky", "SDF (Probe Sky)"},
     {visualization_mode::sdf_vis_memo, "sdf_vis_memo", "SDF (Vis Memo)"},
     {visualization_mode::velocity, "velocity", "Velocity"},
+    {visualization_mode::gtao, "gtao", "GTAO (Visibility)"},
+    {visualization_mode::gtao_bent_normal, "gtao_bent_normal", "GTAO (Bent Normal)"},
 }};
 
 // Drift guards: the enum is the editor-side mirror of the engine's debug pass ids.
@@ -50,6 +52,10 @@ static_assert(static_cast<int>(visualization_mode::sdf_vis_memo) == rendering::d
               "visualization_mode drifted from deferred::debug_pass_sdf_vis_memo");
 static_assert(static_cast<int>(visualization_mode::velocity) == rendering::deferred::debug_pass_velocity,
               "visualization_mode drifted from deferred::debug_pass_velocity");
+static_assert(static_cast<int>(visualization_mode::gtao) == rendering::deferred::debug_pass_gtao,
+              "visualization_mode drifted from deferred::debug_pass_gtao");
+static_assert(static_cast<int>(visualization_mode::gtao_bent_normal) == rendering::deferred::debug_pass_gtao_bent_normal,
+              "visualization_mode drifted from deferred::debug_pass_gtao_bent_normal");
 
 } // namespace
 

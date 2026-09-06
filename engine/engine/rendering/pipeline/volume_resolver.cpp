@@ -8,6 +8,7 @@
 #include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/ecs/components/gi_component.h>
 #include <engine/rendering/ecs/components/ssil_component.h>
+#include <engine/rendering/ecs/components/gtao_component.h>
 #include <engine/rendering/ecs/components/tonemapping_component.h>
 #include <engine/rendering/ecs/components/taa_component.h>
 #include <algorithm>
@@ -153,6 +154,7 @@ auto resolve_post_process_volumes(scene& scn,
     bool first_assao = true;
     bool first_ssr = true;
     bool first_ssil = true;
+    bool first_gtao = true;
     bool first_gi = true;
     bool first_taa = true;
     enabled_resolver auto_exposure_enabled;
@@ -162,6 +164,7 @@ auto resolve_post_process_volumes(scene& scn,
     enabled_resolver ssr_enabled;
     enabled_resolver assao_enabled;
     enabled_resolver ssil_enabled;
+    enabled_resolver gtao_enabled;
     enabled_resolver gi_enabled;
     enabled_resolver taa_enabled;
 
@@ -245,6 +248,16 @@ auto resolve_post_process_volumes(scene& scn,
             }
         }
 
+        if(auto* gtao = handle.try_get<gtao_component>(); gtao && contrib > 0.0f)
+        {
+            gtao_enabled.accumulate(gtao->enabled, contrib);
+            if(gtao->enabled)
+            {
+                gtao_component::merge_into(result.gtao, gtao->settings, contrib, first_gtao);
+                first_gtao = false;
+            }
+        }
+
         if(auto* gi = handle.try_get<gi_component>(); gi && contrib > 0.0f)
         {
             gi_enabled.accumulate(gi->enabled, contrib);
@@ -264,6 +277,7 @@ auto resolve_post_process_volumes(scene& scn,
     result.has_ssr = ssr_enabled.resolve();
     result.has_assao = assao_enabled.resolve();
     result.has_ssil = ssil_enabled.resolve();
+    result.has_gtao = gtao_enabled.resolve();
     result.has_gi = gi_enabled.resolve();
 
     return result;
