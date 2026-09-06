@@ -450,6 +450,16 @@ REFLECT_INLINE(physics_backend_type)
             entt::attribute{"name", "physics_backend_type"},
             entt::attribute{"pretty_name", "Physics Backend"},
         })
+        .data<physics_backend_type::auto_detect>("auto"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "auto"},
+            entt::attribute{"pretty_name", "Auto (Box3D)"},
+        })
+        .data<physics_backend_type::box3d>("box3d"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "box3d"},
+            entt::attribute{"pretty_name", "Box3D"},
+        })
         .data<physics_backend_type::bullet>("bullet"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bullet"},

@@ -1544,11 +1544,15 @@ public:
 } // namespace
 } // namespace bullet
 
-namespace unravel
+// Free helpers live in the backend namespace. Outside Debug the engine is a unity build:
+// anonymous namespaces merge across the concatenated sources, so an unravel-level helper
+// here would collide with its twin in the other backend.
+namespace bullet
 {
-
 namespace
 {
+using namespace unravel;
+
 const uint8_t system_id = transform_component::dirty_ids::physics;
 
 void wake_up(bullet::rigidbody& body)
@@ -2560,6 +2564,10 @@ auto add_torque(btRigidBody* body, const btVector3& torque, force_mode mode) -> 
 }
 
 } // namespace
+} // namespace bullet
+
+namespace unravel
+{
 
 void bullet_backend::init()
 {
@@ -2596,7 +2604,7 @@ void bullet_backend::on_create_component(entt::registry& r, entt::entity e)
     {
         entt::handle entity(r, e);
         auto& phisics = entity.get<physics_component>();
-        sync_physics_body(*world, phisics, true);
+        bullet::sync_physics_body(*world, phisics, true);
     }
 }
 
@@ -2607,7 +2615,7 @@ void bullet_backend::on_destroy_component(entt::registry& r, entt::entity e)
     if(world)
     {
         entt::handle entity(r, e);
-        destroy_phyisics_body(*world, entity, true);
+        bullet::destroy_phyisics_body(*world, entity, true);
     }
 }
 
@@ -2618,7 +2626,7 @@ void bullet_backend::on_destroy_bullet_rigidbody_component(entt::registry& r, en
     if(world)
     {
         entt::handle entity(r, e);
-        destroy_phyisics_body(*world, entity, false);
+        bullet::destroy_phyisics_body(*world, entity, false);
     }
 }
 
@@ -2629,7 +2637,7 @@ void bullet_backend::on_create_cc_component(entt::registry& r, entt::entity e)
     {
         entt::handle entity(r, e);
         auto& comp = entity.get<character_controller_component>();
-        sync_character_controller_body(*world, comp, true);
+        bullet::sync_character_controller_body(*world, comp, true);
     }
 }
 
@@ -2639,7 +2647,7 @@ void bullet_backend::on_destroy_cc_component(entt::registry& r, entt::entity e)
     if(world)
     {
         entt::handle entity(r, e);
-        destroy_character_controller_body(*world, entity, true);
+        bullet::destroy_character_controller_body(*world, entity, true);
     }
 }
 
@@ -2649,7 +2657,7 @@ void bullet_backend::on_destroy_bullet_cc_component(entt::registry& r, entt::ent
     if(world)
     {
         entt::handle entity(r, e);
-        destroy_character_controller_body(*world, entity, false);
+        bullet::destroy_character_controller_body(*world, entity, false);
     }
 }
 
@@ -2753,7 +2761,7 @@ void bullet_backend::on_create_active_component(entt::registry& r, entt::entity 
         auto body = entity.try_get<bullet::rigidbody>();
         if(body)
         {
-            set_rigidbody_active(*world, *body, true);
+            bullet::set_rigidbody_active(*world, *body, true);
         }
         auto cc = entity.try_get<bullet::character_controller>();
         if(cc)
@@ -2784,7 +2792,7 @@ void bullet_backend::on_destroy_active_component(entt::registry& r, entt::entity
         auto body = entity.try_get<bullet::rigidbody>();
         if(body)
         {
-            set_rigidbody_active(*world, *body, false);
+            bullet::set_rigidbody_active(*world, *body, false);
         }
         auto cc = entity.try_get<bullet::character_controller>();
         if(cc)
@@ -2806,7 +2814,7 @@ void bullet_backend::apply_explosion_force(physics_component& comp,
         return;
     }
 
-    auto* world = find_bullet_world();
+    auto* world = bullet::find_bullet_world();
     if(!world)
     {
         return;
@@ -2815,7 +2823,7 @@ void bullet_backend::apply_explosion_force(physics_component& comp,
     auto owner = comp.get_owner();
     // Flush pending prefab/spawn dirty state so the impulse hits a correct dynamic body.
     const bool force_recreate = !owner.all_of<bullet::rigidbody>();
-    sync_physics_body(*world, comp, force_recreate);
+    bullet::sync_physics_body(*world, comp, force_recreate);
 
     auto* bbody = owner.try_get<bullet::rigidbody>();
     if(!bbody || !bbody->internal || bbody->internal->getInvMass() <= 0.0f)
@@ -2851,7 +2859,7 @@ void bullet_backend::apply_explosion_force(physics_component& comp,
     float attenuation = explosion_radius > 0.0f ? (1.0f - (distance / explosion_radius)) : 1.0f;
     btVector3 force = direction * explosion_force * attenuation;
 
-    if(add_force(body.get(), force, mode))
+    if(bullet::add_force(body.get(), force, mode))
     {
         comp.set_velocity_internal(bullet::from_bullet(body->getLinearVelocity()));
         body->forceActivationState(ACTIVE_TAG);
@@ -2866,7 +2874,7 @@ void bullet_backend::apply_force(physics_component& comp, const math::vec3& forc
         return;
     }
 
-    auto* world = find_bullet_world();
+    auto* world = bullet::find_bullet_world();
     if(!world)
     {
         return;
@@ -2875,7 +2883,7 @@ void bullet_backend::apply_force(physics_component& comp, const math::vec3& forc
     auto owner = comp.get_owner();
     // Flush pending prefab/spawn dirty state so the impulse hits a correct dynamic body.
     const bool force_recreate = !owner.all_of<bullet::rigidbody>();
-    sync_physics_body(*world, comp, force_recreate);
+    bullet::sync_physics_body(*world, comp, force_recreate);
 
     auto* bbody = owner.try_get<bullet::rigidbody>();
     if(!bbody || !bbody->internal || bbody->internal->getInvMass() <= 0.0f)
@@ -2884,7 +2892,7 @@ void bullet_backend::apply_force(physics_component& comp, const math::vec3& forc
     }
 
     auto vector = bullet::to_bullet(force);
-    if(!add_force(bbody->internal.get(), vector, mode))
+    if(!bullet::add_force(bbody->internal.get(), vector, mode))
     {
         return;
     }
@@ -2902,7 +2910,7 @@ void bullet_backend::apply_torque(physics_component& comp, const math::vec3& tor
         return;
     }
 
-    auto* world = find_bullet_world();
+    auto* world = bullet::find_bullet_world();
     if(!world)
     {
         return;
@@ -2910,7 +2918,7 @@ void bullet_backend::apply_torque(physics_component& comp, const math::vec3& tor
 
     auto owner = comp.get_owner();
     const bool force_recreate = !owner.all_of<bullet::rigidbody>();
-    sync_physics_body(*world, comp, force_recreate);
+    bullet::sync_physics_body(*world, comp, force_recreate);
 
     auto* bbody = owner.try_get<bullet::rigidbody>();
     if(!bbody || !bbody->internal || bbody->internal->getInvMass() <= 0.0f)
@@ -2919,7 +2927,7 @@ void bullet_backend::apply_torque(physics_component& comp, const math::vec3& tor
     }
 
     auto vector = bullet::to_bullet(torque);
-    if(!add_torque(bbody->internal.get(), vector, mode))
+    if(!bullet::add_torque(bbody->internal.get(), vector, mode))
     {
         return;
     }
@@ -3041,12 +3049,12 @@ void bullet_backend::on_play_begin(rtti::context& ctx)
     registry.view<physics_component>().each(
         [&](auto e, auto&& comp)
         {
-            sync_physics_body(world, comp, true);
+            bullet::sync_physics_body(world, comp, true);
         });
     registry.view<character_controller_component>().each(
         [&](auto e, auto&& comp)
         {
-            sync_character_controller_body(world, comp, true);
+            bullet::sync_character_controller_body(world, comp, true);
         });
 }
 
@@ -3064,12 +3072,12 @@ void bullet_backend::on_play_end(rtti::context& ctx)
     registry.view<character_controller_component>().each(
         [&](auto e, auto&& comp)
         {
-            destroy_character_controller_body(world, comp.get_owner(), true);
+            bullet::destroy_character_controller_body(world, comp.get_owner(), true);
         });
     registry.view<physics_component>().each(
         [&](auto e, auto&& comp)
         {
-            destroy_phyisics_body(world, comp.get_owner(), true);
+            bullet::destroy_phyisics_body(world, comp.get_owner(), true);
         });
 
     on_pre_destroy(registry).disconnect<&on_pre_destroy_entity>();
@@ -3100,12 +3108,12 @@ void bullet_backend::sync_to_physics(rtti::context& ctx, delta_t step_dt)
     registry.view<transform_component, physics_component, active_component>().each(
         [&](auto e, auto&& transform, auto&& rigidbody, auto&& active_comp)
         {
-            to_physics(world, transform, rigidbody, dt);
+            bullet::to_physics(world, transform, rigidbody, dt);
         });
     registry.view<transform_component, character_controller_component, active_component>().each(
         [&](auto e, auto&& transform, auto&& cc_comp, auto&& active_comp)
         {
-            to_physics_cc(world, transform, cc_comp);
+            bullet::to_physics_cc(world, transform, cc_comp);
         });
 }
 
@@ -3142,12 +3150,12 @@ void bullet_backend::sync_from_physics(rtti::context& ctx)
     registry.view<transform_component, physics_component, active_component>().each(
         [&](auto e, auto&& transform, auto&& rigidbody, auto&& active_comp)
         {
-            from_physics(transform, rigidbody);
+            bullet::from_physics(transform, rigidbody);
         });
     registry.view<transform_component, character_controller_component, active_component>().each(
         [&](auto e, auto&& transform, auto&& cc_comp, auto&& active_comp)
         {
-            from_physics_cc(world, transform, cc_comp);
+            bullet::from_physics_cc(world, transform, cc_comp);
         });
 }
 

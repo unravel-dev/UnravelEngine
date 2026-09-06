@@ -44,14 +44,15 @@ auto physics_system::init(rtti::context& ctx) -> bool
 {
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
 
-    physics_backend_type backend_type = physics_backend_type::bullet;
+    physics_backend_type backend_type = physics_backend_type::auto_detect;
     if(ctx.has<boot_config>())
     {
         backend_type = ctx.get<boot_config>().physics;
     }
-    APPLOG_INFO("{}::{}: creating physics backend {}",
+    APPLOG_INFO("{}::{}: creating physics backend {} (selected: {})",
                 hpp::type_name_str(*this),
                 __func__,
+                physics_backend_to_string(resolve_physics_backend(backend_type)),
                 physics_backend_to_string(backend_type));
     backend_ = create_physics_backend(backend_type);
     if(!backend_)

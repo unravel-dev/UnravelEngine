@@ -21,6 +21,7 @@ target_link_libraries (${target_name}
     PUBLIC
     EnTT::EnTT
     Bullet3::Bullet3
+    box3d
     RmlUi::RmlUi
     service
     context

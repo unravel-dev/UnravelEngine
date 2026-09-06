@@ -159,7 +159,7 @@ struct settings
     struct physics_settings
     {
         /// Cold: physics engine adapter. Applied at process start; changing it requires restart.
-        physics_backend_type backend{physics_backend_type::bullet};
+        physics_backend_type backend{physics_backend_type::auto_detect};
         float fixed_timestep{0.02f};
         int max_fixed_steps{3};
 

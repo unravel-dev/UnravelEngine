@@ -1006,7 +1006,7 @@ void draw_physics_settings(rtti::context& ctx)
     if(inspect(ctx, settings.physics).edit_finished)
     {
         pm.save_project_settings(ctx);
-        if(settings.physics.backend != backend_before)
+        if(resolve_physics_backend(settings.physics.backend) != resolve_physics_backend(backend_before))
         {
             ImBox::ShowQuestion(
                 "Restart required",

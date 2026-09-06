@@ -141,9 +141,13 @@ auto physics_backend_to_string(physics_backend_type value) -> hpp::string_view
 {
     switch(value)
     {
+        case physics_backend_type::box3d:
+            return "box3d";
         case physics_backend_type::bullet:
-        default:
             return "bullet";
+        case physics_backend_type::auto_detect:
+        default:
+            return "auto";
     }
 }
 
@@ -151,9 +155,13 @@ auto physics_backend_pretty_name(physics_backend_type value) -> hpp::string_view
 {
     switch(value)
     {
+        case physics_backend_type::box3d:
+            return "Box3D";
         case physics_backend_type::bullet:
-        default:
             return "Bullet";
+        case physics_backend_type::auto_detect:
+        default:
+            return "Auto";
     }
 }
 
@@ -163,12 +171,18 @@ auto physics_backend_from_string(hpp::string_view value) -> physics_backend_type
     {
         return physics_backend_type::bullet;
     }
-    return physics_backend_type::bullet;
+    if(value == "box3d")
+    {
+        return physics_backend_type::box3d;
+    }
+    return physics_backend_type::auto_detect;
 }
 
 auto available_physics_backends() -> hpp::span<const physics_backend_type>
 {
-    static constexpr physics_backend_type backends[] = {physics_backend_type::bullet};
+    static constexpr physics_backend_type backends[] = {physics_backend_type::auto_detect,
+                                                        physics_backend_type::box3d,
+                                                        physics_backend_type::bullet};
     return backends;
 }
 
@@ -230,7 +244,12 @@ auto boot_config_requires_restart(const boot_config& active, const boot_config& 
     {
         effective.physics = active.physics;
     }
-    return active != effective;
+    // Auto and an explicit choice of the same engine boot the same backend; do not
+    // restart over the spelling.
+    effective.physics = resolve_physics_backend(effective.physics);
+    boot_config resolved_active = active;
+    resolved_active.physics = resolve_physics_backend(active.physics);
+    return resolved_active != effective;
 }
 
 } // namespace unravel

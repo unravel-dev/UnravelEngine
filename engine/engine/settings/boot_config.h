@@ -83,7 +83,7 @@ struct platform_renderer_settings
 struct boot_config
 {
     preferred_renderer renderer{preferred_renderer::auto_detect};
-    physics_backend_type physics{physics_backend_type::bullet};
+    physics_backend_type physics{physics_backend_type::auto_detect};
 
     struct cli_overrides
     {

@@ -1,9 +1,9 @@
 ---
 name: unravel-physics
 description: >-
-  Works on UnravelEngine physics: Bullet3 backend, rigid bodies, collision shapes,
-  character controllers, layer filtering, and script collision callbacks. Use for
-  physics bugs, collision detection, triggers, or character movement.
+  Works on UnravelEngine physics: Bullet3 and Box3D backends, rigid bodies, collision
+  shapes, character controllers, layer filtering, and script collision callbacks. Use
+  for physics bugs, collision detection, triggers, or character movement.
 ---
 
 # Unravel Physics
@@ -13,7 +13,9 @@ description: >-
 | Purpose | Path |
 |---------|------|
 | Physics system | `engine/engine/physics/ecs/systems/physics_system.h` |
-| Backend | `engine/engine/physics/backend/bullet/` |
+| Backend interface | `engine/engine/physics/backend/physics_backend.h` (+ `physics_backend_factory.cpp`) |
+| Bullet backend | `engine/engine/physics/backend/bullet/` |
+| Box3D backend | `engine/engine/physics/backend/box3d/` |
 | Physics component | `engine/engine/physics/ecs/components/physics_component.h` |
 | Character controller | `engine/engine/physics/ecs/components/character_controller_component.h` |
 | Meta | `engine/engine/meta/ecs/components/physics_component.hpp`, `character_controller_component.hpp` |
@@ -23,7 +25,17 @@ description: >-
 
 ## Architecture
 
-- **Bullet3** backend behind physics abstraction
+- Two backends behind `physics_backend`: **Box3D** (engine default) and **Bullet3**. The
+  backend is a cold boot setting (`settings.physics.backend`, `boot_config.physics`,
+  `physics_backend_type`: `auto_detect` (default, resolves to Box3D via
+  `resolve_physics_backend`), `box3d`, `bullet`); it is persisted by value, so keep the
+  enum order. Changing it requires a process restart
+- Box3D specifics: entity scale is baked into shapes (a scale change rebuilds them),
+  the authored mass overrides the density-derived mass, `solver_iterations` is Bullet-only
+  (Box3D steps once per fixed step with a fixed solver sub-step count, `sub_step_count` in
+  `box3d_backend.cpp`), concave meshes only collide on static bodies, and the character controller
+  is a capsule mover (`b3World_CastMover` / `b3World_CollideMover` / `b3SolvePlanes`)
+  with a kinematic proxy body so sensors and dynamic bodies still see it
 - `physics_system` owns simulation step in `on_frame_update`
 - Play mode lifecycle: `on_play_begin` / `on_play_end` / `on_pause` / `on_resume`
 - Components use `component_crtp` + `owned_component` pattern

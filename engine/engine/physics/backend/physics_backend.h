@@ -119,10 +119,10 @@ public:
 
 /**
  * @brief Create a physics backend instance.
- * @param type Backend to create. Must be compiled into this build.
+ * @param type Backend to create. auto_detect resolves to the engine default.
  * @return Backend instance, or nullptr if the type is unavailable in this build.
  */
-auto create_physics_backend(physics_backend_type type = physics_backend_type::bullet)
+auto create_physics_backend(physics_backend_type type = physics_backend_type::auto_detect)
     -> std::unique_ptr<physics_backend>;
 
 } // namespace unravel

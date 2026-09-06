@@ -15,11 +15,25 @@ namespace unravel
 /**
  * @enum physics_backend_type
  * @brief Runtime selection for create_physics_backend.
+ *
+ * Persisted by value, so the order is a contract: auto_detect took over the slot Bullet
+ * used to have, which is how every legacy project silently moves onto the engine default.
  */
 enum class physics_backend_type : uint8_t
 {
+    /// Engine default. Resolved by resolve_physics_backend.
+    auto_detect,
+    box3d,
     bullet,
 };
+
+/**
+ * @brief The concrete backend a selection stands for. Box3D is the engine default.
+ */
+constexpr auto resolve_physics_backend(physics_backend_type type) noexcept -> physics_backend_type
+{
+    return type == physics_backend_type::auto_detect ? physics_backend_type::box3d : type;
+}
 
 /**
  * @enum rigidbody_type
