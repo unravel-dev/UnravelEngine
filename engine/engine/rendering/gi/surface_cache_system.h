@@ -176,8 +176,9 @@ public:
         math::vec3 center{0.0f, 0.0f, 0.0f};
         float radius = 0.0f;
         math::vec3 radiance{0.0f, 0.0f, 0.0f};
-        /// Luminance x bounds surface area, the ordering key for the cap. CPU only: the
-        /// upload packs @ref extent into this lane instead (no shader consumed the power).
+        /// Luminance x emitting surface area (gi::emitter_selection_weight), the ordering key
+        /// for the cap. CPU only: the upload packs @ref extent into this lane instead, and the
+        /// shader rebuilds the same weight from the extent it decodes.
         float power = 0.0f;
         /// The axis-aligned extent of this piece, metres (at most GI_EMISSIVE_NEE_SEGMENT
         /// per axis) - the reflection tier's near-field term samples the piece along its

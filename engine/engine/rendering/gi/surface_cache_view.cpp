@@ -90,6 +90,7 @@ void surface_cache_view::update(const std::vector<global_sdf_instance>& instance
 }
 
 auto surface_cache_view::update_quiescence(uint64_t light_hash,
+                                           uint64_t environment_hash,
                                            const math::vec3& camera_position,
                                            const relight_sample& relight) -> bool
 {
@@ -98,6 +99,18 @@ auto surface_cache_view::update_quiescence(uint64_t light_hash,
     if(light_hash != quiescence_light_hash_)
     {
         quiescence_light_hash_ = light_hash;
+        changed = true;
+        lighting_changed = true;
+    }
+    // The ENVIRONMENT is lighting too, and it was the one input this gate could not see: world
+    // probes integrate the sky SH on every miss, so a tint, an intensity, a turbidity or a
+    // swapped cubemap changed on its own left the atlas holding the old sky behind a gate with
+    // no reason to open. Editing a sky next to its directional light hid this, because the light
+    // set changed with it. Counted as a LIGHTING change, so the temporal's screen-wide fast
+    // window flushes the stale sky bounce exactly as it does for a light edit.
+    if(environment_hash != quiescence_environment_hash_)
+    {
+        quiescence_environment_hash_ = environment_hash;
         changed = true;
         lighting_changed = true;
     }

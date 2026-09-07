@@ -73,8 +73,8 @@ uniform vec4 u_gi_probe_temporal;
 
 /**
  * Octahedral decode: maps a [0,1]^2 tile coordinate to a unit direction on the full sphere.
- * The standard equal-area-ish octahedral mapping; its inverse is not needed anywhere because
- * directions are only ever produced from texels, never searched for.
+ * The normalized octahedral mapping is not equal-area; jittered UV samples require the
+ * directional PDF below when integrated in solid angle.
  */
 vec3 GiOctDecode(vec2 tile_uv)
 {
@@ -84,6 +84,17 @@ vec3 GiOctDecode(vec2 tile_uv)
 	n.x += n.x >= 0.0 ? -t : t;
 	n.y += n.y >= 0.0 ? -t : t;
 	return normalize(n);
+}
+
+/// Solid-angle density of uniform UV sampling inside a span-by-span cell of an edge-by-edge
+/// octahedral tile. The direction must be normalized and inside the caller's cell.
+/// Radial projection has dOmega/du dv = 4 / |n|^3 = 4 * |direction|_1^3 on every folded
+/// octahedron face. Dividing the UV density by this Jacobian keeps both MIS proposals in
+/// the same measure; 1 / cell solid angle would only describe an equal-area sampler.
+float GiOctCellDirectionalPdf(vec3 direction, int span, int edge)
+{
+	float l1 = dot(abs(direction), vec3_splat(1.0));
+	return float(edge * edge) / (4.0 * float(span * span) * l1 * l1 * l1);
 }
 
 /// Octahedral encode: inverse of GiOctDecode, mapping a unit direction to [0,1]^2 tile space.

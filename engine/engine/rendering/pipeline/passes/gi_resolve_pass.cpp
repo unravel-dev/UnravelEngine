@@ -1006,7 +1006,23 @@ auto gi_resolve_pass::bind_dirty_regions(const run_params& params, float margin)
         count = params.surface_cache->pack_dirty_regions(bounds, max_regions);
         overflow = params.surface_cache->get_dirty_regions().size() > size_t(max_regions);
     }
-    const float dirty_params[4] = {float(count), math::max(margin, 1e-3f), camera_motion_, 0.0f};
+    // World units one unit of screen uv spans, used by the temporal to turn a moving pixel's
+    // screen displacement into the world displacement its history has to tolerate. The
+    // projection's first two diagonal terms carry view space to clip and uv is half of NDC, so
+    // 2 / P[i][i] is the span at unit depth; the WIDER axis is taken because the value bounds a
+    // tolerance and a generous bound only costs a little stale history, while a tight one throws
+    // a mover's own history away. The sign carries the projection mode, this lane being the only
+    // one free: a perspective span scales with view distance and an orthographic one does not.
+    const auto& projection = params.cam->get_projection_unjittered().get_matrix();
+    const float uv_world_scale = math::max(2.0f / math::max(std::abs(projection[0][0]), 1e-6f),
+                                           2.0f / math::max(std::abs(projection[1][1]), 1e-6f));
+    const float signed_uv_world_scale = params.cam->get_projection_mode() == projection_mode::orthographic
+                                            ? -uv_world_scale
+                                            : uv_world_scale;
+    const float dirty_params[4] = {float(count),
+                                   math::max(margin, 1e-3f),
+                                   camera_motion_,
+                                   signed_uv_world_scale};
     gfx::set_uniform(temporal_program_.u_gi_temporal_dirty, dirty_params);
     // Attribution log, throttled, for the OVER-BUDGET case only: it means more placements
     // changed than the region budget holds and the screen-wide fast cap is back. Legitimate
@@ -1071,6 +1087,23 @@ auto gi_resolve_pass::acquire_history(gfx::render_view& rview,
     auto& parity = rview.data_get_or_emplace("GI_HISTORY_PARITY", 0u);
     const bool even_frame = (parity & 1u) == 0u;
     ++parity;
+    // CONTINUITY GENERATION. Existence, size and a previous depth do not say WHEN the history
+    // was written. Its targets outlive the pass -- the render view only releases a slot after
+    // release_unused frames -- so any interval this pass does not run (GI switched off and back
+    // on, a hidden viewport, a debug-only frame) leaves a correctly sized, perfectly readable
+    // history from an arbitrary earlier moment. The depth test then validates it against
+    // params.prev_depth, which is ALWAYS the immediately preceding frame's, so a camera that
+    // came back to where it was accepts radiance from before the scene changed and blends it in
+    // at full weight. History is only comparable with that depth when it too was written on the
+    // frame that depth came from, and the parity is not enough to say so: it advances per
+    // acquisition, not per frame. bgfx's frame counter steps exactly once per rendered frame,
+    // and every view of a frame is submitted inside it, so consecutive acquisitions of a live
+    // view differ by exactly one.
+    auto& written_frame = rview.data_get_or_emplace("GI_HISTORY_FRAME", 0u);
+    const uint32_t render_frame = gfx::get_render_frame();
+    const uint32_t previous_frame = written_frame;
+    const bool continuous = previous_frame != 0u && render_frame == previous_frame + 1u;
+    written_frame = render_frame;
     const char* write_name = even_frame ? "GI_HISTORY_A" : "GI_HISTORY_B";
     const char* read_name = even_frame ? "GI_HISTORY_B" : "GI_HISTORY_A";
     history_targets history;
@@ -1086,7 +1119,7 @@ auto gi_resolve_pass::acquire_history(gfx::render_view& rview,
     // No history on the first frame, after a resize, or without a previous depth to validate
     // against. Signalled to the shader rather than papered over by binding something neutral,
     // because there is no neutral history: whatever is bound gets blended in as if it were real.
-    history.has_history = history.read_tex && history.read_moments && history.read_fast &&
+    history.has_history = continuous && history.read_tex && history.read_moments && history.read_fast &&
                           params.prev_depth &&
                           history.read_tex->get_size().width == target_size.width &&
                           history.read_tex->get_size().height == target_size.height;
@@ -1100,11 +1133,15 @@ auto gi_resolve_pass::acquire_history(gfx::render_view& rview,
     else if(++frames_without_history_ == history_warning_frames)
     {
         APPLOG_WARNING("GI resolve has had no temporal history for {} frames. read target '{}' {}, "
-                       "previous depth {}. Accumulation is disabled until this resolves.",
+                       "previous depth {}, continuity {} (written on render frame {}, now {}). "
+                       "Accumulation is disabled until this resolves.",
                        history_warning_frames,
                        read_name,
                        history.read_tex ? "present" : "MISSING",
-                       params.prev_depth ? "present" : "MISSING");
+                       params.prev_depth ? "present" : "MISSING",
+                       continuous ? "intact" : "BROKEN",
+                       previous_frame,
+                       render_frame);
     }
     return history;
 }

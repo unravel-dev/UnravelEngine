@@ -17,15 +17,19 @@
  * Combined with the cone rays by multiple importance sampling (the balance heuristic
  * over fixed sample counts): every ray, cell-jittered or aimed, contributes
  *
- *     L(w) / (n_c(cell) / Omega_cell + sum over aimed cones containing w of n_e / Omega_e)
+ *     L(w) / (n_c(cell) * p_c(w) + sum over aimed cones containing w of n_e / Omega_e)
  *
  * to the cell its direction lands in, and the cell's radiance is that sum over Omega_cell.
- * With no emitter aimed at, this is exactly the per-cell mean the kernel always stored.
+ * p_c is the solid-angle PDF of the cell's uniform octahedral UV sampler, including its
+ * projection Jacobian. With no emitter aimed at, this estimates the cell's solid-angle
+ * mean rather than its UV mean; those differ because the octahedral map is not equal-area.
  *
  * The emitter table rides after the instances in b_sdf_instances (the tracers bind it
  * already; no stage was free for a buffer of its own): SDF_EMITTER_STRIDE vec4s each,
- * (center, radius), (radiance, power), u_sdf_emitter_count entries.
- * MIRROR OF surface_cache_system::emitter / upload_instances.
+ * (center, radius), (radiance, packed extent), u_sdf_emitter_count entries. The fourth lane
+ * carries the piece's extent, not its power - the ranking weight is rebuilt from the extent
+ * and the radiance (GiLoadEmitter).
+ * MIRROR OF surface_cache_system::emitter / upload_instances and gi_emitter_packing.h.
  *
  * Every helper returns by value: the shaderc HLSL path miscompiles out-parameters in
  * .sh helpers silently (tasks/lessons.md).
@@ -42,6 +46,9 @@ struct GiEmitter
 	vec3 center;
 	float radius;
 	vec3 radiance;
+	/// The piece's ranking weight, luminance x emitting area - ALWAYS POSITIVE. The upload
+	/// spends the fourth lane on the extent, so this is RECONSTRUCTED from the decode below
+	/// rather than read; only a legacy table (a positive lane) supplies it directly.
 	float power;
 	/// The piece's axis-aligned extent in metres, decoded from the power lane (the upload
 	/// packs it there, negated and offset by one); zero with has_extent false when the
@@ -49,6 +56,17 @@ struct GiEmitter
 	vec3 extent;
 	bool has_extent;
 };
+
+float GiEmitterLuminance(GiEmitter e)
+{
+	return dot(e.radiance, vec3(0.2126, 0.7152, 0.0722));
+}
+
+/// Emitting area of an axis-aligned piece. MIRROR OF gi::emitter_surface_area.
+float GiEmitterSurfaceArea(vec3 extent)
+{
+	return 2.0 * (extent.x * extent.y + extent.y * extent.z + extent.z * extent.x);
+}
 
 /// The emitter's bounding-sphere cone as seen from one point.
 struct GiEmitterCone
@@ -80,13 +98,13 @@ GiEmitter GiLoadEmitter(int index)
 		float y8 = floor(mod(packed / 256.0, 256.0));
 		float z8 = floor(packed / 65536.0);
 		e.extent = vec3(x8, y8, z8) * (GI_EMISSIVE_NEE_SEGMENT / 255.0);
+		// The packed lane is NEGATIVE, so leaving it in power made every consumer's score
+		// negative: the reflection near-field's descending top-K starts its scores at zero,
+		// so no piece was ever selected and the correction silently returned its identity.
+		// MIRROR OF gi::emitter_selection_weight - the same weight the CPU ranks the table by.
+		e.power = GiEmitterLuminance(e) * GiEmitterSurfaceArea(e.extent);
 	}
 	return e;
-}
-
-float GiEmitterLuminance(GiEmitter e)
-{
-	return dot(e.radiance, vec3(0.2126, 0.7152, 0.0722));
 }
 
 GiEmitterCone GiEmitterConeFrom(GiEmitter e, vec3 origin)

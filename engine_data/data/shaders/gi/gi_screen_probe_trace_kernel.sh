@@ -765,7 +765,8 @@ void GiPublishCell(int slot, ivec2 base, int span, int jittered_samples, int nee
 /// jittered density plus every aimed cone that contains the direction.
 float GiSampleDenominator(int slot, ivec2 base, int span, vec3 direction)
 {
-	float denominator = float(s_cell_rays[GiCellIndex(slot, base)]) / max(GiCellSolidAngle(base, span), 1e-6);
+	float denominator = float(s_cell_rays[GiCellIndex(slot, base)]) *
+	                    GiOctCellDirectionalPdf(direction, span, GI_PROBE_DIR_EDGE);
 	for(int k = 0; k < GI_NEE_K; ++k)
 	{
 		float cos_k = s_nee_cos[slot * GI_NEE_K + k];

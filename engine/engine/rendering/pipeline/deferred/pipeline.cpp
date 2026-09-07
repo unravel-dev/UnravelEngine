@@ -43,6 +43,48 @@ namespace ANONYMOUS
 constexpr float cloud_shadow_border_fade = 0.08f;
 /// Period of the contact-shadow dither's temporal offset (frames); TAA integrates it.
 constexpr int contact_shadow_dither_frames = 16;
+
+/// Where the environment revision is published on a render view, for the GI world side to read
+/// next to the IRRADIANCE_SH texture it belongs to (see run_irradiance_pass).
+constexpr const char* environment_hash_key = "GI_ENVIRONMENT_HASH";
+
+/// FNV-1a, the fold gpu_light_buffer's content hash already uses. Values are folded ONE AT A
+/// TIME rather than as struct bytes: padding is not zero-initialised, and hashing it once made
+/// a parked scene report a change every frame.
+constexpr uint64_t fnv_offset_basis = 1469598103934665603ull;
+constexpr uint64_t fnv_prime = 1099511628211ull;
+
+auto fold_bytes(uint64_t hash, const void* data, size_t size) -> uint64_t
+{
+    const auto* bytes = static_cast<const uint8_t*>(data);
+    for(size_t i = 0; i < size; ++i)
+    {
+        hash = (hash ^ bytes[i]) * fnv_prime;
+    }
+    return hash;
+}
+
+auto fold_float(uint64_t hash, float value) -> uint64_t
+{
+    // Normalise the one float whose bit pattern is not unique for its value, so a sign flip on
+    // an otherwise-zero uniform cannot read as an environment change.
+    const float normalized = value == 0.0f ? 0.0f : value;
+    return fold_bytes(hash, &normalized, sizeof(normalized));
+}
+
+auto fold_floats(uint64_t hash, const float* values, size_t count) -> uint64_t
+{
+    for(size_t i = 0; i < count; ++i)
+    {
+        hash = fold_float(hash, values[i]);
+    }
+    return hash;
+}
+
+auto fold_uint(uint64_t hash, uint64_t value) -> uint64_t
+{
+    return fold_bytes(hash, &value, sizeof(value));
+}
 } // namespace ANONYMOUS
 } // namespace unravel
 
@@ -1752,6 +1794,38 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         float mode_vec[4] = {float(mode), dominant.sun_weight, couple_clouds ? 1.0f : 0.0f, 0.0f};
         gfx::set_uniform(irradiance_compute_program_.u_mode, mode_vec);
 
+        // ENVIRONMENT REVISION. The world GI's wake-up keys are the analytic light set and the
+        // clipmap's content epoch; neither of them moves when only the SKY changes. World probes
+        // sample this texture, so a tint, an intensity, a turbidity or a swapped cubemap edited
+        // on its own used to land in the probes' radiance and then sit behind a quiescence gate
+        // that had no reason to open -- invisible until something else happened to wake the
+        // world side. Editing a sky alongside its directional light masked it, because the light
+        // set changed too. Everything the dispatch below can vary is folded in, so consumers can
+        // treat a changed value as "the environment radiance is different now".
+        // Animated cloud COVERAGE is deliberately absent: it is a continuous signal, not a
+        // revision, and folding the shadow map in would report a change on every frame it drifts.
+        uint64_t environment_hash = ANONYMOUS::fnv_offset_basis;
+        environment_hash = ANONYMOUS::fold_floats(environment_hash, ambient_vec, 4);
+        environment_hash = ANONYMOUS::fold_float(environment_hash, exp_val);
+        environment_hash = ANONYMOUS::fold_floats(environment_hash, mode_vec, 4);
+        environment_hash = ANONYMOUS::fold_uint(environment_hash, use_cubemap ? 1ull : 0ull);
+        if(use_cubemap)
+        {
+            // The cubemap's ASSET identity, not its texture handle: a freed handle's index is
+            // reused, so a swapped skybox could otherwise hash to the value it replaced.
+            environment_hash =
+                ANONYMOUS::fold_uint(environment_hash, uint64_t(std::hash<hpp::uuid>{}(dominant.cubemap.uid())));
+        }
+        if(dominant.use_perez)
+        {
+            environment_hash = ANONYMOUS::fold_floats(environment_hash, &dominant.perez.sun_direction.x, 3);
+            environment_hash = ANONYMOUS::fold_floats(environment_hash, &dominant.perez.sun_luminance_rgb.x, 3);
+            environment_hash = ANONYMOUS::fold_floats(environment_hash, &dominant.perez.sky_luminance_xyz.x, 3);
+            environment_hash = ANONYMOUS::fold_floats(environment_hash, &dominant.perez.perez_coeff[0][0], 5 * 4);
+        }
+        result.environment_hash = environment_hash;
+        rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_hash_key, 0ull) = environment_hash;
+
         bgfx::dispatch(irr_pass.id, irradiance_compute_program_.program->native_handle(), 1, 1, 1);
         irradiance_compute_program_.program->end();
 
@@ -2672,8 +2746,13 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
         // anything changes. Held open while an SDF debug view is up: those views paint per
         // frame through these very dispatches.
         const uint64_t light_hash = surface_cache.get_light_buffer().get_content_hash();
+        // The environment revision the irradiance pass published beside IRRADIANCE_SH. Read
+        // from the view rather than passed down, so it always describes the texture the probes
+        // are about to sample - whichever side of this block the irradiance pass ran on.
+        const uint64_t environment_hash = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_hash_key, 0ull);
         const bool quiescent =
             view_cache.update_quiescence(light_hash,
+                                         environment_hash,
                                          camera.get_position(),
                                          gi_light_voxel_pass_.get_relight_sample()) &&
             !wants_sdf_debug;
@@ -2726,6 +2805,9 @@ void deferred::run_gi_world_probe_pass(const camera& camera,
     probe_params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
     probe_params.frame = light_voxel_frame_;
     probe_params.light_hash = surface_cache.get_light_buffer().get_content_hash();
+    // The probes integrate the environment SH on every sky miss, so a sky edit stales the whole
+    // atlas exactly as a light edit does and earns the same fast window.
+    probe_params.environment_hash = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_hash_key, 0ull);
     probe_params.jitter_directions = gi.resolve.world_probe_jitter;
     gi_world_probe_pass_.run(rview, probe_params);
 }

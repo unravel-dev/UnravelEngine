@@ -120,11 +120,12 @@ public:
      * @ref quiescence_settle_frames remains.
      */
     auto update_quiescence(uint64_t light_hash,
+                           uint64_t environment_hash,
                            const math::vec3& camera_position,
                            const relight_sample& relight) -> bool;
 
-    /// Frames the full quiescence input set (light hash, content epoch, window origins,
-    /// probe cells) has held unchanged - 0 on any change.
+    /// Frames the full quiescence input set (light hash, environment revision, content epoch,
+    /// window origins, probe cells) has held unchanged - 0 on any change.
     auto get_quiet_frames() const -> uint32_t
     {
         return quiescence_frames_;
@@ -166,6 +167,10 @@ private:
     bool log_composition_stats_ = false;
     /// update_quiescence state: the last-seen input set and how long it has held.
     uint64_t quiescence_light_hash_ = 0;
+    /// The environment radiance revision (deferred::irradiance_pass_result::environment_hash).
+    /// Treated exactly like the light hash: the world probes integrate the environment SH on
+    /// every sky miss, so a sky edit stales the atlas globally.
+    uint64_t quiescence_environment_hash_ = 0;
     uint64_t quiescence_content_epoch_ = 0;
     std::array<math::vec3, global_sdf_clipmap::level_count> quiescence_origins_{};
     std::array<math::ivec3, global_sdf_clipmap::level_count> quiescence_probe_cells_{};

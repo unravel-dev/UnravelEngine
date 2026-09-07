@@ -486,6 +486,11 @@ private:
         gfx::texture::ptr irradiance_tex;
         math::vec3 global_color = {1.0f, 1.0f, 1.0f};
         float global_intensity = 0.0f;
+        /// Revision of the environment radiance this pass baked: every input that can change
+        /// IRRADIANCE_SH, folded. The GI world side keys its wake-up on it, because neither the
+        /// analytic light set nor the clipmap content epoch moves when only the sky changes.
+        /// Also published on the render view under GI_ENVIRONMENT_HASH, next to the texture.
+        uint64_t environment_hash = 0;
     };
     auto run_irradiance_pass(scene& scn, gfx::render_view& rview) -> irradiance_pass_result;
 

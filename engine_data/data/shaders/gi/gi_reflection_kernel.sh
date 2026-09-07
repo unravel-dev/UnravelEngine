@@ -84,8 +84,7 @@ float GiReflectionPieceIrradiance(GiEmitter e, vec3 position, vec3 normal)
 		axis = vec3(0.0, 0.0, 1.0);
 		half_length = 0.5 * ext.z;
 	}
-	float area = 2.0 * (ext.x * ext.y + ext.y * ext.z + ext.z * ext.x);
-	float patch = area / float(GI_REFLECTION_NEAR_FIELD_SAMPLES);
+	float patch = GiEmitterSurfaceArea(ext) / float(GI_REFLECTION_NEAR_FIELD_SAMPLES);
 	// Never closer than the piece's own half thickness: the surface, not its centre line.
 	float d_min = max(0.5 * min(ext.x, min(ext.y, ext.z)), 0.02);
 	float sum = 0.0;

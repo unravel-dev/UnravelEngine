@@ -747,6 +747,26 @@
       " 1/n_slow); a luminance gap beyond three such sigmas is a mean SHIFT (lighting"             \
       " changed), not noise - the slow lane snaps to the fast one and re-accumulates."             \
       " Three sigma = ~0.3% false-snap rate, and a false snap only costs one count reset")         \
+    X(GI_TEMPORAL_CHANGE_CHROMA_FLOOR, 0.02f,                                                      \
+      "chromaticity", "derived: the detector above compares LUMINANCE, so an equal-luminance"      \
+      " change of colour - a red emitter swapped for a green one, a coloured mover carrying its"   \
+      " bounce across a wall - never fires it, and the slow lane holds the old hue for its whole"  \
+      " window. The chromaticity gap is tested alongside it, against the luminance's RELATIVE"     \
+      " noise over the same pair of counts, plus this floor: on a near-black pixel chromaticity"   \
+      " is a ratio of two small numbers and its rounding alone would snap the count forever."      \
+      " Two percent sits under a just-noticeable hue shift at the amplitudes the reflection"       \
+      " path applies")                                                                             \
+    X(GI_TEMPORAL_OBJECT_MOTION_SLACK, 4.0f,                                                       \
+      "multiples of the observed screen displacement", "derived: a moving receiver's history is"   \
+      " validated against a tolerance widened by its own one-frame world displacement. The"        \
+      " velocity buffer's object lane gives that displacement LATERALLY (screen motion x view"     \
+      " distance x the projection's world-per-uv span); the component along the view ray leaves"   \
+      " no screen trace at all, so the lateral part is multiplied by this to stand for the"        \
+      " whole. Four covers a mover heading three quarters into the screen while keeping the"       \
+      " total under the depth gap of any occluder worth rejecting. Before this the validity"       \
+      " test was SKIPPED for moving pixels entirely - the only way to keep a mover's own"          \
+      " history at the time - so a mover emerging from behind an occluder inherited the"           \
+      " occluder's lighting outright")                                                             \
     X(GI_TEMPORAL_DEPTH_TOLERANCE, 0.1f,                                                           \
       "relative depth per unit view distance", "Lumen's Temporal.DistanceThreshold = 0.005"        \
       " assumes motion-vector reprojection; ours still reconstructs the previous position"         \

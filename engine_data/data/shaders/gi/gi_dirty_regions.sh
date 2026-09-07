@@ -6,7 +6,9 @@
 /// placement's region is inflated to its light's reach). x = how many (min, max) pairs of
 /// u_gi_temporal_bounds are live, y = the soft margin around each in metres (one level-0
 /// probe spacing: the reach of a small mover's bounce pool), z = the camera's motion this
-/// frame (gi_temporal_kernel.sh). Two consumers: inside a region the temporal's slow lane
+/// frame, w = world units spanned by one unit of screen uv at unit view distance, the widest
+/// of the two axes (gi_temporal_kernel.sh turns an object's screen motion into the world
+/// displacement its history has to tolerate). Two consumers: inside a region the temporal's slow lane
 /// collapses to the fast cap so the stale light flushes, and the screen probe trace stops
 /// reading last frame's composite at hits inside it - that read carries the accumulated
 /// glow back into the gather, and with the lane's memory on top the residual of a moved

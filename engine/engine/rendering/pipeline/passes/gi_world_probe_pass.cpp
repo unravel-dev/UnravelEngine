@@ -80,6 +80,13 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         last_light_hash_ = params.light_hash;
         fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
     }
+    // The environment SH is the other global light source these probes read (every sky miss
+    // integrates it), and nothing else in this chain moves when only the sky is edited.
+    if(params.environment_hash != last_environment_hash_)
+    {
+        last_environment_hash_ = params.environment_hash;
+        fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
+    }
     // COMPOSED epoch: the probes trace the composed field and read the light voxels, so the
     // fast window keys on content actually landing - during an edit drag the target epoch
     // churns every frame while recomposes coalesce, and each landing re-arms the window.

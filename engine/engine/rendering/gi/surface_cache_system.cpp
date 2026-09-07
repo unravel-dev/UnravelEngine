@@ -1,6 +1,7 @@
 #include "surface_cache_system.h"
 
 #include <engine/rendering/gi/gi_constants.h>
+#include <engine/rendering/gi/gi_emitter_packing.h>
 
 #include <algorithm>
 #include <cmath>
@@ -876,8 +877,10 @@ void surface_cache_system::rebuild_emitters()
                                  math::max(1, int(std::ceil(extent.y / segment))),
                                  math::max(1, int(std::ceil(extent.z / segment))));
         const math::vec3 piece_extent(extent.x / float(pieces.x), extent.y / float(pieces.y), extent.z / float(pieces.z));
-        const float piece_area = 2.0f * (piece_extent.x * piece_extent.y + piece_extent.y * piece_extent.z +
-                                         piece_extent.z * piece_extent.x);
+        // Ranked by the SHARED weight (gi_emitter_packing.h), the same expression the shader
+        // reconstructs from the packed extent - so the table's order and the reflection tier's
+        // near-field top-K cannot disagree about which pieces matter.
+        const float piece_power = gi::emitter_selection_weight(luminance, piece_extent);
         for(int z = 0; z < pieces.z; ++z)
         {
             for(int y = 0; y < pieces.y; ++y)
@@ -889,7 +892,7 @@ void surface_cache_system::rebuild_emitters()
                                piece_extent * (math::vec3(float(x), float(y), float(z)) + math::vec3(0.5f));
                     e.radius = 0.5f * math::length(piece_extent);
                     e.radiance = radiance;
-                    e.power = luminance * piece_area;
+                    e.power = piece_power;
                     e.extent = piece_extent;
                     emitters_.push_back(e);
                 }
@@ -927,15 +930,12 @@ void surface_cache_system::upload_instances()
         dst[4] = e.radiance.x;
         dst[5] = e.radiance.y;
         dst[6] = e.radiance.z;
-        // The piece extent rides the power lane (see emitter::extent): 8 bits per axis as a
-        // fraction of GI_EMISSIVE_NEE_SEGMENT, exact in a float, negated and offset so a
-        // shader fed by an older upload (a positive power) reads "no extent".
-        const auto pack_axis = [](float metres)
-        {
-            const float unit = metres / float(gi::GI_EMISSIVE_NEE_SEGMENT);
-            return float(math::clamp(int(std::lround(unit * 255.0f)), 0, 255));
-        };
-        dst[7] = -(pack_axis(e.extent.x) + pack_axis(e.extent.y) * 256.0f + pack_axis(e.extent.z) * 65536.0f) - 1.0f;
+        // The piece extent rides the power lane (see emitter::extent and gi_emitter_packing.h):
+        // 8 bits per axis as a fraction of GI_EMISSIVE_NEE_SEGMENT, exact in a float, negated
+        // and offset so a shader fed by an older upload (a positive power) reads "no extent".
+        // The power itself does not survive; GiLoadEmitter rebuilds it from this extent and the
+        // radiance with gi::emitter_selection_weight's shader mirror.
+        dst[7] = gi::pack_emitter_extent_lane(e.extent);
     }
     for(size_t i = 0; i < instances_.size(); ++i)
     {

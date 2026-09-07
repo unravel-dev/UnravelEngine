@@ -32,6 +32,12 @@ public:
         /// Hash of the resident light set; a change halves the probe refresh window for one
         /// full window (the DDGI event pattern, plan section 8).
         uint64_t light_hash = 0;
+        /// Revision of the environment radiance behind @ref irradiance_sh
+        /// (deferred::irradiance_pass_result::environment_hash). Every sky miss integrates that
+        /// SH, so a sky edit stales the whole atlas exactly as a light edit does and earns the
+        /// same fast window; without it a sky changed on its own arrived at the probes' own slow
+        /// stratum rate, if the quiescence gate let them run at all.
+        uint64_t environment_hash = 0;
         /// gi_resolve_pass::settings::world_probe_jitter: sub-texel direction jitter plus the
         /// converging running mean. Off = fixed texel centres written through (the
         /// deterministic atlas).
@@ -131,6 +137,7 @@ private:
     /// Light-change reactivity state: while frames remain, the trace covers two strata per
     /// frame (window halves to 8), then settles back to one.
     uint64_t last_light_hash_ = 0;
+    uint64_t last_environment_hash_ = 0;
     uint64_t last_content_epoch_ = 0;
     uint32_t fast_frames_ = 0;
 };
