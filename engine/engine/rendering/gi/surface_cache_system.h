@@ -402,7 +402,7 @@ private:
      * @brief Appends one placement of a resident field to this frame's instance list.
      * @param local_to_world The transform the RENDERER draws the geometry with, which for a
      *        model with submesh nodes is the node's transform, not the model root's.
-     * @param mat The material this submesh is DRAWN with, override included. Null falls back to a
+     * @param mat The material this submesh is DRAWN with. Null falls back to a
      *        neutral albedo; it must resolve the same way the renderer does, or a bounce would
      *        tint light with a colour the surface is not actually painted.
      */
@@ -473,16 +473,14 @@ private:
                       const material::sptr& mat);
 
     /**
-     * @brief The material a submesh is drawn with, resolving per-submesh overrides first.
+     * @brief The material a submesh is drawn with: the model material of its data group.
      *
-     * Mirrors resolve_submesh_material in model.cpp. The renderer is the authority on what colour
-     * a surface actually is, so bouncing light off a different one would tint the scene with a
-     * material nothing on screen is painted with.
+     * Mirrors what the submit paths in model.cpp bind. The renderer is the authority on what
+     * colour a surface actually is, so bouncing light off a different one would tint the scene
+     * with a material nothing on screen is painted with.
      */
-    static auto resolve_submesh_material(const model& mdl,
-                                         const model_component& model_comp,
-                                         const mesh& m,
-                                         uint32_t submesh_index) -> material::sptr;
+    static auto resolve_submesh_material(const model& mdl, const mesh& m, uint32_t submesh_index)
+        -> material::sptr;
 
     /**
      * @brief Slot of a colour map's mean in the GPU texture-mean buffer, allocating on first sight.

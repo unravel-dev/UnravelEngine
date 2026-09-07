@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.CompilerServices;
 
 namespace Unravel.Core
@@ -76,26 +75,6 @@ namespace Unravel.Core
             internal_m2n_submesh_set_casts_shadow(owner, index, castsShadow);
         }
 
-        /// <summary>
-        /// Gets the material override uid for the entry at <paramref name="index"/>, or <see cref="Guid.Empty"/>.
-        /// </summary>
-        /// <param name="index">Zero-based entry index.</param>
-        /// <returns>Material asset uid, or empty when using the model material.</returns>
-        public Guid GetMaterialOverrideUid(int index)
-        {
-            return internal_m2n_submesh_get_material_override(owner, index);
-        }
-
-        /// <summary>
-        /// Sets the material override for the entry at <paramref name="index"/>. Pass null to clear.
-        /// </summary>
-        /// <param name="index">Zero-based entry index.</param>
-        /// <param name="material">Material override, or <c>null</c> to use the model material.</param>
-        public void SetMaterialOverride(int index, Material material)
-        {
-            internal_m2n_submesh_set_material_override(owner, index, material?.uid ?? Guid.Empty);
-        }
-
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern int internal_m2n_submesh_get_entry_count(Entity eid);
 
@@ -116,11 +95,5 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_submesh_set_casts_shadow(Entity eid, int index, bool castsShadow);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern Guid internal_m2n_submesh_get_material_override(Entity eid, int index);
-
-        [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_submesh_set_material_override(Entity eid, int index, Guid uid);
     }
 }

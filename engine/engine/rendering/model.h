@@ -259,10 +259,6 @@ struct model_submit_extras
     /// OBB classification (large meshes) or are conservatively drawn.
     const submesh_render_proxies* proxies{nullptr};
 
-    /// Per-submesh material overrides indexed by submesh index. Null entries use the model
-    /// material for the submesh's data group.
-    const std::vector<material::sptr>* material_overrides{nullptr};
-
     /// True when submitting into a shadow pass. Instances flagged as not casting shadows
     /// (see submesh_pose_mat4::transform_index::casts_shadow) are skipped.
     bool shadow_pass{false};

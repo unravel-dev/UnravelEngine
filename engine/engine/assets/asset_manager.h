@@ -169,6 +169,7 @@ public:
                                                 mode,
                                                 storage.container_mutex,
                                                 storage.container,
+                                                storage.container_by_uid,
                                                 storage.load_from_file);
         }
         const std::string resolved_key = ex::resolve_key_missing_extension<T>(key);
@@ -177,6 +178,7 @@ public:
                                             mode,
                                             storage.container_mutex,
                                             storage.container,
+                                            storage.container_by_uid,
                                             storage.load_from_file);
     }
 
@@ -193,6 +195,20 @@ public:
                    load_flags flags = load_flags::standard,
                    load_mode mode = load_mode::immediate) -> asset_handle<T>
     {
+        // Fast path: an already-requested asset is indexed by uid, so we can skip resolving
+        // the uid to a location through the metadata databases and re-hashing the key. A
+        // reload must go through the slow path since it has to re-dispatch the load task.
+        if(flags != load_flags::reload)
+        {
+            auto& storage = get_storage<T>();
+            std::unique_lock<std::recursive_mutex> lock(storage.container_mutex);
+            auto it = storage.container_by_uid.find(uid);
+            if(it != storage.container_by_uid.end())
+            {
+                return it->second;
+            }
+        }
+
         auto meta = get_metadata(uid);
         if(!meta.location.empty())
         {
@@ -223,12 +239,14 @@ public:
             return register_asset_impl<T>(key,
                                           storage.container_mutex,
                                           storage.container,
+                                          storage.container_by_uid,
                                           storage.load_from_file);
         }
         const std::string resolved_key = ex::resolve_key_missing_extension<T>(key);
         return register_asset_impl<T>(resolved_key,
                                       storage.container_mutex,
                                       storage.container,
+                                      storage.container_by_uid,
                                       storage.load_from_file);
     }
 
@@ -306,6 +324,7 @@ public:
                                             entry,
                                             storage.container_mutex,
                                             storage.container,
+                                            storage.container_by_uid,
                                             storage.load_from_instance);
     }
 
@@ -471,6 +490,7 @@ private:
      * @param mode Whether to load immediately or defer until first get().
      * @param container_mutex The mutex for the asset container.
      * @param container The container for the assets.
+     * @param container_by_uid The uid index mirroring the container.
      * @param load_func The function to load the asset.
      * @return The handle to the asset.
      */
@@ -480,6 +500,7 @@ private:
                                    load_mode mode,
                                    std::recursive_mutex& container_mutex,
                                    typename asset_storage<T>::request_container_t& container,
+                                   typename asset_storage<T>::uid_container_t& container_by_uid,
                                    F&& load_func) -> asset_handle<T>
     {
         if(flags != load_flags::reload)
@@ -505,6 +526,7 @@ private:
             }
 
             handle.set_internal_ids(uid, key);
+            container_by_uid[uid] = handle;
             load_func(pool_, handle, key, mode);
         }
 
@@ -518,6 +540,7 @@ private:
      * @param key The key of the asset.
      * @param container_mutex The mutex for the asset container.
      * @param container The container for the assets.
+     * @param container_by_uid The uid index mirroring the container.
      * @param load_func The function to load the asset (called with deferred mode).
      * @return A deferred handle to the asset.
      */
@@ -525,6 +548,7 @@ private:
     auto register_asset_impl(const std::string& key,
                              std::recursive_mutex& container_mutex,
                              typename asset_storage<T>::request_container_t& container,
+                             typename asset_storage<T>::uid_container_t& container_by_uid,
                              typename asset_storage<T>::load_from_file_t& load_func) -> asset_handle<T>
     {
         auto inst = find_asset_impl<T>(key, container_mutex, container);
@@ -538,6 +562,7 @@ private:
         auto& handle = container[key];
         auto uid = add_asset(key);
         handle.set_internal_ids(uid, key);
+        container_by_uid[uid] = handle;
         load_func(pool_, handle, key, load_mode::deferred);
 
         return handle;
@@ -551,6 +576,7 @@ private:
      * @param entry The shared pointer to the asset instance.
      * @param container_mutex The mutex for the asset container.
      * @param container The container for the assets.
+     * @param container_by_uid The uid index mirroring the container.
      * @param load_func The function to load the asset.
      * @return The handle to the asset.
      */
@@ -559,6 +585,7 @@ private:
                                       std::shared_ptr<T> entry,
                                       std::recursive_mutex& container_mutex,
                                       typename asset_storage<T>::request_container_t& container,
+                                      typename asset_storage<T>::uid_container_t& container_by_uid,
                                       F&& load_func) -> asset_handle<T>
     {
         auto inst = find_asset_impl<T>(key, container_mutex, container);
@@ -580,6 +607,7 @@ private:
             // do much except add tasks to the
             // executor
             handle.set_internal_ids(uid, key);
+            container_by_uid[uid] = handle;
             load_func(pool_, handle, entry);
         }
 

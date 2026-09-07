@@ -526,6 +526,8 @@ struct asset_storage : public basic_storage
 {
     /// Container for asset requests.
     using request_container_t = std::unordered_map<std::string, asset_handle<T>>;
+    /// Index from asset uid to the handle stored in @ref container.
+    using uid_container_t = std::unordered_map<hpp::uuid, asset_handle<T>>;
     /// Type alias for callable functions.
     template<typename F>
     using callable = std::function<F>;
@@ -563,6 +565,8 @@ struct asset_storage : public basic_storage
             if(predicate(it->second))
             {
                 auto& handle = it->second;
+                // The uid is cleared by unload_handle, so drop the index entry first.
+                container_by_uid.erase(handle.uid());
                 unload_handle(pool, handle);
                 it = container.erase(it);
             }
@@ -708,6 +712,10 @@ struct asset_storage : public basic_storage
     load_from_instance_t load_from_instance;
     /// Container for asset requests.
     request_container_t container;
+    /// Uid index mirroring @ref container, so uid lookups skip the metadata database scan.
+    /// Handles are cheap shared references to the same link, so entries stay in sync with
+    /// @ref container automatically; only insertion and erasure need mirroring.
+    uid_container_t container_by_uid;
     /// Mutex for container operations.
     mutable std::recursive_mutex container_mutex;
 };

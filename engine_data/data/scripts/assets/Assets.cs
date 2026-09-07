@@ -24,6 +24,7 @@ public class Assets
         var asset_uid = internal_m2n_get_asset_by_key(key, typeof(T));
         T asset = new T();
         asset.uid = asset_uid;
+        asset.OnResolved();
         return asset;
     }
 
@@ -38,35 +39,8 @@ public class Assets
         var asset_uid = internal_m2n_get_asset_by_uuid(uid, typeof(T));
         T asset = new T();
         asset.uid = asset_uid;
+        asset.OnResolved();
         return asset;
-    }
-
-    /// <summary>
-    /// Loads a <see cref="Material"/> by asset key and populates its properties.
-    /// </summary>
-    /// <param name="key">The material asset key (extension optional).</param>
-    /// <returns>The loaded material.</returns>
-    public static Material GetAsset(string key)
-    {
-        var asset_uid = internal_m2n_get_asset_by_key(key, typeof(Material));
-        Material material = new Material();
-        material.uid = asset_uid;
-        material.SetProperties(internal_m2n_get_material_properties(material.uid));
-        return material;
-    }
-
-    /// <summary>
-    /// Loads a <see cref="Material"/> by unique identifier and populates its properties.
-    /// </summary>
-    /// <param name="uid">The material unique identifier.</param>
-    /// <returns>The loaded material.</returns>
-    public static Material GetAsset(Guid uid)
-    {
-        var asset_uid = internal_m2n_get_asset_by_uuid(uid, typeof(Material));
-        Material material = new Material();
-        material.uid = asset_uid;
-        material.SetProperties(internal_m2n_get_material_properties(material.uid));
-        return material;
     }
 
     [MethodImpl(MethodImplOptions.InternalCall)]
@@ -129,8 +103,13 @@ public struct MaterialProperties
 }
 
 /// <summary>
-/// Material asset with editable shading properties.
+/// Material with editable shading properties.
 /// </summary>
+/// <remarks>
+/// A material with a non-empty <see cref="Asset{T}.uid"/> refers to a shared material asset.
+/// A material with an empty uid is a standalone property block that can only be applied as a
+/// per-renderer override, for example through <see cref="ModelComponent.SetMaterial"/>.
+/// </remarks>
 public class Material : Asset<Material>
 {
     /// <summary>
@@ -141,12 +120,21 @@ public class Material : Asset<Material>
     }
 
     /// <summary>
-    /// Creates a material copy with the same properties as <paramref name="rhs"/>.
+    /// Creates a copy of <paramref name="rhs"/> that is not bound to any asset.
     /// </summary>
+    /// <remarks>
+    /// The uid is deliberately not copied, so the result is a standalone property block. This
+    /// is the idiomatic way to derive an editable material from a shared asset.
+    /// </remarks>
     /// <param name="rhs">The material to copy properties from.</param>
     public Material(Material rhs)
     {
         SetProperties(rhs.GetProperties());
+    }
+
+    internal override void OnResolved()
+    {
+        SetProperties(Assets.internal_m2n_get_material_properties(uid));
     }
 
     internal void SetProperties(MaterialProperties props)

@@ -48,9 +48,9 @@ using submesh_accum_list = std::vector<submesh_accum>;
  * The mesh is the source of truth for which submesh indices the node references -
  * @p node_submeshes must be the FULL set for this entity (accumulated across all
  * armature nodes that map to it; duplicates are fine, they are dedup'd here). Any
- * previously authored per-submesh settings (material overrides, shadow/enabled flags)
- * are preserved by matching on the import-stable submesh id first, then - for legacy
- * data without ids - on the raw index.
+ * previously authored per-submesh settings (shadow/enabled flags) are preserved by
+ * matching on the import-stable submesh id first, then - for legacy data without ids -
+ * on the raw index.
  */
 void rebuild_submesh_entries(submesh_component& comp,
                              const std::vector<uint32_t>& node_submeshes,
@@ -95,7 +95,6 @@ void rebuild_submesh_entries(submesh_component& comp,
         }
         if(match != nullptr)
         {
-            entry.material_override = match->material_override;
             entry.casts_shadow = match->casts_shadow;
             entry.enabled = match->enabled;
         }
@@ -248,7 +247,6 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
                                  submesh_pose_mat4& submesh_pose,
                                  pose_mat4& bone_pose,
                                  submesh_render_proxies& proxies,
-                                 std::vector<material::sptr>& material_overrides,
                                  bool force) -> bool
 {
     // Reused per pool-thread; update_armature runs one task per model with no interleaving.
@@ -278,7 +276,6 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
     submesh_pose.reserve(submesh_count);
     bone_pose.transforms.resize(bone_count);
     proxies.begin_refresh(submesh_count);
-    material_overrides.assign(submesh_count, nullptr);
 
     for(size_t i = 0; i < entities.size(); ++i)
     {
@@ -332,11 +329,6 @@ auto get_transforms_for_entities(const std::vector<entt::handle>& entities,
                     world_bounds = math::bbox::mul(sm->bbox, transform_global);
                 }
                 proxies.add_instance_bounds(submesh_index, world_bounds);
-
-                if(submesh_index < material_overrides.size() && entry.material_override.is_valid())
-                {
-                    material_overrides[submesh_index] = entry.material_override.get();
-                }
             }
         }
 
@@ -453,7 +445,6 @@ auto model_component::update_armature() -> bool
                                                        submesh_pose_,
                                                        bone_pose_,
                                                        render_proxies_,
-                                                       submesh_material_overrides_,
                                                        pose_dirty_);
     if(!refreshed)
     {
@@ -878,6 +869,29 @@ void model_component::set_model(const model& model)
     touch();
 }
 
+void model_component::set_shared_material(const asset_handle<material>& material, uint32_t index)
+{
+    model_.set_material(material, index);
+
+    touch();
+}
+
+void model_component::set_material_instance(const material::sptr& instance, uint32_t index)
+{
+    model_.set_material_instance(instance, index);
+
+    touch();
+}
+
+auto model_component::get_or_emplace_material_instance(uint32_t index) -> material::sptr
+{
+    auto instance = model_.get_or_emplace_material_instance(index);
+
+    touch();
+
+    return instance;
+}
+
 auto model_component::get_bone_transforms() const -> const pose_mat4&
 {
     return bone_pose_;
@@ -972,11 +986,6 @@ auto model_component::get_render_proxies() const -> const submesh_render_proxies
     return render_proxies_;
 }
 
-auto model_component::get_submesh_material_overrides() const -> const std::vector<material::sptr>&
-{
-    return submesh_material_overrides_;
-}
-
 auto model_component::get_submit_extras(bool shadow_pass) const -> model_submit_extras
 {
     model_submit_extras extras;
@@ -985,7 +994,6 @@ auto model_component::get_submit_extras(bool shadow_pass) const -> model_submit_
     // conservatively", which only costs extra draws on the re-entry frame. The next
     // update_armature runs a full refresh and clears the flag.
     extras.proxies = render_proxies_stale_ ? nullptr : &render_proxies_;
-    extras.material_overrides = &submesh_material_overrides_;
     extras.shadow_pass = shadow_pass;
     return extras;
 }

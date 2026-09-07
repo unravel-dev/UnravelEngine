@@ -79,6 +79,34 @@ public:
     void set_model(const model& model);
 
     /**
+     * @brief Assigns the shared material asset for a slot.
+     *
+     * Materials are resolved live at submit time and cannot move geometry, so this skips
+     * the pose, proxy and bounds invalidation @ref set_model performs. Prefer it over the
+     * get_model / mutate / set_model round trip, which copies the whole model twice and
+     * forces a redundant armature refresh.
+     * @param material The material asset to assign.
+     * @param index The material slot index.
+     */
+    void set_shared_material(const asset_handle<material>& material, uint32_t index);
+
+    /**
+     * @brief Assigns the runtime material instance override for a slot.
+     * @param instance The material instance to assign, or null to fall back to the shared asset.
+     * @param index The material slot index.
+     */
+    void set_material_instance(const material::sptr& instance, uint32_t index);
+
+    /**
+     * @brief Returns the material instance for a slot, cloning the shared asset on first edit.
+     *
+     * The returned material is owned by this component; mutating it takes effect immediately.
+     * @param index The material slot index.
+     * @return The owned material instance for the slot.
+     */
+    auto get_or_emplace_material_instance(uint32_t index) -> material::sptr;
+
+    /**
      * @brief Gets the bone transforms.
      * @return A constant reference to the vector of bone transforms.
      */
@@ -113,7 +141,7 @@ public:
 
     /**
      * @brief Refreshes pose-derived render data: submesh/bone poses, cached world-space
-     * render-proxy bounds, material overrides and skinning palettes.
+     * render-proxy bounds and skinning palettes.
      *
      * Two gates keep this cheap:
      *  - Visibility: models not consumed by any view (camera/shadow) recently skip both the
@@ -168,12 +196,6 @@ public:
      * animated bounds for skinned submeshes) refreshed alongside the pose data.
      */
     auto get_render_proxies() const -> const submesh_render_proxies&;
-
-    /**
-     * @brief Per-submesh material overrides (indexed by submesh index; null = model material),
-     * resolved from the submesh_component entries on the armature node entities.
-     */
-    auto get_submesh_material_overrides() const -> const std::vector<material::sptr>&;
 
     /**
      * @brief Convenience: builds the submit extras referencing the retained proxy data.
@@ -313,11 +335,6 @@ private:
     submesh_render_proxies render_proxies_;
 
     /**
-     * @brief Per-submesh material overrides resolved from submesh_component entries.
-     */
-    std::vector<material::sptr> submesh_material_overrides_;
-
-    /**
      * @brief World bounds
      */
     math::bbox world_bounds_;
@@ -427,9 +444,6 @@ struct submesh_entry
     /// Import-stable submesh id (see mesh::submesh::stable_id). 0 = unknown; falls back to
     /// index-based matching during migration of legacy data.
     uint32_t stable_id{0};
-
-    /// Optional material override for this submesh instance (null = model material).
-    asset_handle<material> material_override{};
 
     /// Whether this submesh instance casts shadows.
     bool casts_shadow{true};

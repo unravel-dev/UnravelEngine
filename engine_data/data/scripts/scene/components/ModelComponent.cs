@@ -140,12 +140,23 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Sets the material at the specified index for the model.
+        /// Sets the shared material asset at the specified index for the model.
         /// </summary>
+        /// <remarks>
+        /// Only asset-backed materials can occupy a shared slot. A material with an empty
+        /// <see cref="Asset{T}.uid"/>, such as one returned by <see cref="GetMaterial"/> or built
+        /// with <see cref="Material(Material)"/>, is applied as this renderer's material instance
+        /// instead of clearing the slot.
+        /// </remarks>
         /// <param name="material">The <see cref="Material"/> to assign, or <c>null</c> to remove the material.</param>
         /// <param name="index">The index of the material to set.</param>
         public void SetSharedMaterial(Material material, uint index = 0)
         {
+            if (material != null && material.uid == Guid.Empty)
+            {
+                SetMaterial(material, index);
+                return;
+            }
             internal_m2n_model_set_shared_material(owner, material?.uid ?? Guid.Empty, index);
         }
 

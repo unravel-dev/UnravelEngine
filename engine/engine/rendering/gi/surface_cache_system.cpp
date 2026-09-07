@@ -377,20 +377,11 @@ void surface_cache_system::release_unused_fields()
 }
 
 
-auto surface_cache_system::resolve_submesh_material(const model& mdl,
-                                                     const model_component& model_comp,
-                                                     const mesh& m,
-                                                     uint32_t submesh_index) -> material::sptr
+auto surface_cache_system::resolve_submesh_material(const model& mdl, const mesh& m, uint32_t submesh_index)
+    -> material::sptr
 {
-    // Per-submesh override first, exactly as the renderer does: an overridden submesh is painted
-    // with the override, so that is the colour its bounced light must carry.
-    const auto& overrides = model_comp.get_submesh_material_overrides();
-    if(submesh_index < overrides.size() && overrides[submesh_index])
-    {
-        return overrides[submesh_index];
-    }
-    // Otherwise the material of the submesh's DATA GROUP, which is its material index. Submeshes
-    // sharing a material share this entry, which is correct: they are painted the same.
+    // The material of the submesh's DATA GROUP, which is its material index. Submeshes sharing a
+    // material share this entry, which is correct: they are painted the same.
     const auto* sub = m.get_submesh(submesh_index, 0);
     if(sub == nullptr)
     {
@@ -1127,7 +1118,7 @@ void surface_cache_system::update_world(scene& scn)
                 {
                     continue;
                 }
-                const auto mat = resolve_submesh_material(mdl, model_comp, *mesh_ptr, submesh_index);
+                const auto mat = resolve_submesh_material(mdl, *mesh_ptr, submesh_index);
                 const auto* pbr = dynamic_cast<const pbr_material*>(mat.get());
                 if(pbr == nullptr)
                 {
@@ -1205,7 +1196,7 @@ void surface_cache_system::update_world(scene& scn)
                 // submesh is drawn with the same material. Hoisted above acquire_field because
                 // the material can veto the placement outright, and a vetoed submesh must not
                 // take an atlas slot.
-                const auto mat = resolve_submesh_material(mdl, model_comp, *mesh_ptr, submesh_index);
+                const auto mat = resolve_submesh_material(mdl, *mesh_ptr, submesh_index);
                 // Alpha-blended submeshes never occlude, even when the compiled asset carries a
                 // field (assets baked before the compiler learned to refuse them still do). A
                 // blended surface transmits light, so a field there blocks bounces that should

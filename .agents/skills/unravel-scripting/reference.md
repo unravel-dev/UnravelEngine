@@ -21,7 +21,7 @@ Expose via: C# wrapper in `engine_data/data/scripts/scene/components/` +
 | `audio_source_component` | `AudioSourceComponent` | Strong |
 | `audio_listener_component` | `AudioListenerComponent` | Marker |
 | `bone_component` | `BoneComponent` | `boneIndex` |
-| `submesh_component` | `SubmeshComponent` | entry enable/shadow/material override |
+| `submesh_component` | `SubmeshComponent` | entry enable/shadow |
 | `text_component` | `TextComponent` | Strong |
 | `particle_emitter_component` | `ParticleEmitterComponent` | Strong |
 | `ui_document_component` | `UIDocumentComponent` | Strong |

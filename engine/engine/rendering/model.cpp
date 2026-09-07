@@ -65,25 +65,6 @@ auto is_submesh_visible_cached(const math::frustum& frustum,
            math::volume_query::outside;
 }
 
-/**
- * Resolves the material used for a specific submesh: per-submesh override first (when
- * provided via extras), then the model material for the submesh's data group.
- */
-auto resolve_submesh_material(const model_submit_extras& extras,
-                              uint32_t submesh_index,
-                              const material::sptr& group_material) -> const material::sptr&
-{
-    if(extras.material_overrides != nullptr && submesh_index < extras.material_overrides->size())
-    {
-        const auto& override_material = (*extras.material_overrides)[submesh_index];
-        if(override_material)
-        {
-            return override_material;
-        }
-    }
-    return group_material;
-}
-
 auto compute_bounds_screen_radius_squared(const math::vec3& origin,
                                                 float radius,
                                                 const math::vec3& view_origin,
@@ -329,10 +310,7 @@ auto model::get_or_emplace_material_instance(uint32_t index) -> material::sptr
 {
     if(index >= material_instances_.size())
     {
-        auto asset_instance = get_material_instance(index);
-
         material_instances_.resize(index + 1, nullptr);
-        material_instances_[index] = asset_instance->clone();
     }
 
     auto& instance = material_instances_[index];
@@ -770,6 +748,10 @@ void model::submit(const math::mat4& world_transform,
                                const submit_callbacks& callbacks)
         {
             auto group_mat = get_material_instance(group_id);
+            if(!group_mat)
+            {
+                return;
+            }
 
             const auto& submeshes = mesh->get_submeshes(lod);
             const auto& indices = mesh->get_non_skinned_submeshes_indices(group_id, lod);
@@ -809,12 +791,6 @@ void model::submit(const math::mat4& world_transform,
 
             for(const auto& index : indices)
             {
-                const auto& mat = resolve_submesh_material(extras, static_cast<uint32_t>(index), group_mat);
-                if(!mat)
-                {
-                    continue;
-                }
-
                 if(pose.has_transforms(index))
                 {
                     const size_t transform_count = pose.get_transform_count(index);
@@ -845,7 +821,7 @@ void model::submit(const math::mat4& world_transform,
                             }
                             mesh->bind_render_buffers_for_submesh(sm, sm_lod);
                             params.preserve_state = (&index != &indices.back());
-                            callbacks.setup_params_per_submesh(params, *mat);
+                            callbacks.setup_params_per_submesh(params, *group_mat);
                         }
                     }
                 }
@@ -864,7 +840,7 @@ void model::submit(const math::mat4& world_transform,
                     }
                     mesh->bind_render_buffers_for_submesh(sm, sm_lod);
                     params.preserve_state = &index != &indices.back();
-                    callbacks.setup_params_per_submesh(params, *mat);
+                    callbacks.setup_params_per_submesh(params, *group_mat);
                 }
             }
         };
@@ -905,6 +881,10 @@ void model::submit(const math::mat4& world_transform,
                                        const submit_callbacks& callbacks)
         {
             auto group_mat = get_material_instance(group_id);
+            if(!group_mat)
+            {
+                return;
+            }
 
             const auto& submeshes = mesh->get_submeshes(lod);
             const auto& indices = mesh->get_skinned_submeshes_indices(group_id, lod);
@@ -912,12 +892,6 @@ void model::submit(const math::mat4& world_transform,
             for(const auto& index : indices)
             {
                 if(index >= skinning_transforms.size())
-                {
-                    continue;
-                }
-
-                const auto& mat = resolve_submesh_material(extras, static_cast<uint32_t>(index), group_mat);
-                if(!mat)
                 {
                     continue;
                 }
@@ -989,7 +963,7 @@ void model::submit(const math::mat4& world_transform,
 
                     mesh->bind_render_buffers_for_submesh(sm, sm_lod);
                     params.preserve_state = &index != &indices.back();
-                    callbacks.setup_params_per_submesh(params, *mat);
+                    callbacks.setup_params_per_submesh(params, *group_mat);
                 }
                 
             }
@@ -1304,6 +1278,10 @@ void model::submit_for_batching(batch_collector& collector,
     {
         // Get material for this data group
         auto group_material = get_material_instance(data_group_id);
+        if(!group_material)
+        {
+            continue; // Skip data groups without a valid material
+        }
 
         // Get all non-skinned submeshes for this data group
         const auto& submesh_indices = mesh->get_non_skinned_submeshes_indices(data_group_id, lod_index);
@@ -1312,14 +1290,6 @@ void model::submit_for_batching(batch_collector& collector,
         for (size_t submesh_idx : submesh_indices)
         {
             uint32_t submesh_index = static_cast<uint32_t>(submesh_idx);
-
-            // Per-submesh material overrides participate in the batch key, so overridden
-            // instances automatically batch separately from the model-material ones.
-            const auto& material_ptr = resolve_submesh_material(extras, submesh_index, group_material);
-            if(!material_ptr)
-            {
-                continue; // Skip submeshes without valid materials
-            }
 
             // Check if this submesh has specific transforms
             if (submesh_transforms.has_transforms(submesh_index))
@@ -1361,7 +1331,7 @@ void model::submit_for_batching(batch_collector& collector,
                                 : calculate_submesh_lod(*mesh, submesh_index, lod_index, *transform_ptr, *view);
                     }
 
-                    batch_key key(mesh, material_ptr, effective_lod, submesh_index);
+                    batch_key key(mesh, group_material, effective_lod, submesh_index);
                     if (!key.is_valid())
                     {
                         continue;
@@ -1392,7 +1362,7 @@ void model::submit_for_batching(batch_collector& collector,
                     ? calculate_submesh_lod(*mesh, submesh_index, lod_index, world_transform, *view)
                     : lod_index;
 
-                batch_key key(mesh, material_ptr, effective_lod, submesh_index);
+                batch_key key(mesh, group_material, effective_lod, submesh_index);
                 if (!key.is_valid())
                 {
                     continue;
@@ -1462,19 +1432,17 @@ auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collect
     for(uint32_t data_group_id = 0; data_group_id < data_group_count; ++data_group_id)
     {
         auto group_material = get_material_instance(data_group_id);
+        if(!group_material)
+        {
+            continue;
+        }
 
         const auto& submesh_indices = mesh->get_non_skinned_submeshes_indices(data_group_id, lod_index);
         for(size_t submesh_idx : submesh_indices)
         {
             const uint32_t submesh_index = static_cast<uint32_t>(submesh_idx);
 
-            const auto& material_ptr = resolve_submesh_material(extras, submesh_index, group_material);
-            if(!material_ptr)
-            {
-                continue;
-            }
-
-            shadow_batch_key key = make_shadow_batch_key(mesh, lod_index, submesh_index, material_ptr);
+            shadow_batch_key key = make_shadow_batch_key(mesh, lod_index, submesh_index, group_material);
             if(!key.is_valid())
             {
                 continue;

@@ -3,9 +3,7 @@
 
 #include "../script_interop.h"
 
-#include <engine/assets/asset_manager.h>
 #include <engine/rendering/ecs/components/model_component.h>
-#include <engine/rendering/material.h>
 
 namespace unravel
 {
@@ -82,25 +80,6 @@ void internal_m2n_submesh_set_casts_shadow(entt::entity id, int index, bool cast
     }
 }
 
-auto internal_m2n_submesh_get_material_override(entt::entity id, int index) -> hpp::uuid
-{
-    if(auto* entry = get_entry(safe_get_component<submesh_component>(id), index))
-    {
-        return entry->material_override.uid();
-    }
-    return {};
-}
-
-void internal_m2n_submesh_set_material_override(entt::entity id, int index, const hpp::uuid& uid)
-{
-    if(auto* entry = get_entry(safe_get_component<submesh_component>(id), index))
-    {
-        auto& ctx = engine::context();
-        auto& am = ctx.get_cached<asset_manager>();
-        entry->material_override = am.get_asset<material>(uid);
-    }
-}
-
 } // namespace
 
 void register_submesh_component_script_bindings()
@@ -121,10 +100,6 @@ void register_submesh_component_script_bindings()
                           dotnet_internal_call(internal_m2n_submesh_get_casts_shadow));
     reg.add_internal_call("internal_m2n_submesh_set_casts_shadow",
                           dotnet_internal_call(internal_m2n_submesh_set_casts_shadow));
-    reg.add_internal_call("internal_m2n_submesh_get_material_override",
-                          dotnet_internal_call(internal_m2n_submesh_get_material_override));
-    reg.add_internal_call("internal_m2n_submesh_set_material_override",
-                          dotnet_internal_call(internal_m2n_submesh_set_material_override));
 }
 
 } // namespace unravel

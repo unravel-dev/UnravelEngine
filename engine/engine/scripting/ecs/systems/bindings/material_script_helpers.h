@@ -47,6 +47,7 @@ inline void set_material_properties(const material::sptr& material,
         auto tiling =
             converter::convert<dotnetpp_backend::managed_interface::vector2, math::vec2>(props.tiling);
         pbr->set_tiling(tiling);
+        pbr->set_roughness(props.roughness);
         pbr->set_metalness(props.metalness);
         pbr->set_bumpiness(props.bumpiness);
     }

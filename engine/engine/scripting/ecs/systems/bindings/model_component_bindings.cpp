@@ -146,9 +146,7 @@ void internal_m2n_model_set_shared_material(entt::entity id, const hpp::uuid& ui
         auto& am = ctx.get_cached<asset_manager>();
         auto asset = am.get_asset<material>(uid);
 
-        auto model = comp->get_model();
-        model.set_material(asset, index);
-        comp->set_model(model);
+        comp->set_shared_material(asset, index);
     }
 }
 
@@ -156,23 +154,16 @@ void internal_m2n_model_set_material_instance(entt::entity id,
                                               const dotnetpp_backend::managed_interface::material_properties& props,
                                               uint32_t index)
 {
-    using converter = dotnet::managed_interface::converter;
-
     if(auto comp = safe_get_component<model_component>(id))
     {
-        auto model = comp->get_model();
-
         if(props.valid)
         {
-            auto material = model.get_or_emplace_material_instance(index);
-            set_material_properties(material, props);
-            model.set_material_instance(material, index);
+            set_material_properties(comp->get_or_emplace_material_instance(index), props);
         }
         else
         {
-            model.set_material_instance(nullptr, index);
+            comp->set_material_instance(nullptr, index);
         }
-        comp->set_model(model);
     }
 }
 

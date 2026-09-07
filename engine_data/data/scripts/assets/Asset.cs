@@ -15,6 +15,14 @@ namespace Unravel.Core
         public Guid uid { get; internal set; }
 
         /// <summary>
+        /// Called by <see cref="Assets"/> once <see cref="uid"/> has been resolved, so asset
+        /// types that cache native data alongside the uid can populate themselves.
+        /// </summary>
+        internal virtual void OnResolved()
+        {
+        }
+
+        /// <summary>
         /// Determines whether the specified object is equal to the current asset.
         /// </summary>
         /// <param name="obj">The object to compare with the current asset.</param>
