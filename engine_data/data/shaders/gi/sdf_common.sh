@@ -37,7 +37,7 @@
 /// vec4 elements per field header, per sdf_atlas::header_vec4_count.
 #define SDF_HEADER_STRIDE 3
 /// vec4 elements per instance, per surface_cache_system::instance_vec4_stride.
-#define SDF_INSTANCE_STRIDE 10
+#define SDF_INSTANCE_STRIDE 11
 /// No instance produced this hit: either nothing was hit, or the global cascade answered, which
 /// is composed from many fields and cannot attribute a sample to one.
 #define SDF_NO_INSTANCE (-1)
@@ -100,6 +100,15 @@ uniform vec4 u_sdf_params;
 /// Emissive instances in the table appended to b_sdf_instances after the instances (see
 /// gi_emissive_nee.sh); 0 when the probes have nothing to sample explicitly.
 #define u_sdf_emitter_count   int(u_sdf_params.w)
+
+/// The instance's world displacement since its previous frame (surface_cache_system packs
+/// lane 10: xyz = the bounds centre delta, w = the largest corner displacement, which a
+/// spinning placement has while its centre stays put): the gather temporal's hit-motion
+/// signal.
+vec4 SdfInstanceVelocity(int index)
+{
+	return b_sdf_instances[uint(index) * uint(SDF_INSTANCE_STRIDE) + 10u];
+}
 
 struct SdfHeader
 {

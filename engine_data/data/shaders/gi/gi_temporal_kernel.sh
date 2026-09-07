@@ -83,6 +83,7 @@ uniform vec4 u_gi_temporal_camera;
 #define u_gi_velocity_available (u_gi_temporal_camera.w > 0.5)
 
 #include "gi/gi_dirty_regions.sh"
+#include "gi/gi_noise.sh"
 // z = the camera's motion this frame against the GI_TEMPORAL_CAMERA_*_FULL rates, [0, 1].
 #define u_gi_camera_motion    u_gi_temporal_dirty.z
 
@@ -190,6 +191,42 @@ vec4 GiFreshMoments(vec4 current)
 }
 
 /**
+ * 1 when the history texel centred at @p tap_uv held THIS surface last frame: the world
+ * position reconstructed from the previous depth buffer under that texel lies within
+ * @p tolerance of @p world_position. The depth is a POINT fetch of the full-resolution
+ * previous depth under the history texel's centre - a filtered depth at a silhouette is a
+ * value between two surfaces that belongs to neither, exactly what the test must not see.
+ * Sky (depth 1) is never a valid history for a surface.
+ */
+float GiHistoryTapValid(vec2 tap_uv, vec3 world_position, float tolerance)
+{
+	ivec2 prev_depth_size = textureSize(s_gi_prev_depth, 0);
+	ivec2 depth_texel = clamp(ivec2(tap_uv * vec2(prev_depth_size)),
+	                          ivec2(0, 0),
+	                          prev_depth_size - ivec2(1, 1));
+	float prev_depth = texelFetch(s_gi_prev_depth, depth_texel, 0).x;
+	if(prev_depth >= 1.0)
+	{
+		return 0.0;
+	}
+	vec3 prev_clip_stored = clipTransform(vec3(tap_uv * 2.0 - 1.0, toClipSpaceDepth(prev_depth)));
+	vec3 prev_world = clipToWorld(u_gi_prev_inv_view_proj, prev_clip_stored);
+	return length(prev_world - world_position) <= tolerance ? 1.0 : 0.0;
+}
+
+/// The 2x2 history footprint at integer @p base (texel units), each tap scaled by its entry
+/// of @p weights (bilinear x validity); the caller divides by the weight sum.
+vec4 GiGatherHistoryTaps(sampler2D tex, vec2 base, vec4 weights, vec2 tex_size)
+{
+	vec2 inv_tex_size = vec2_splat(1.0) / max(tex_size, vec2_splat(1.0));
+	vec4 sum = GiSanitize(texture2DLod(tex, (base + vec2(0.5, 0.5)) * inv_tex_size, 0.0)) * weights.x;
+	sum += GiSanitize(texture2DLod(tex, (base + vec2(1.5, 0.5)) * inv_tex_size, 0.0)) * weights.y;
+	sum += GiSanitize(texture2DLod(tex, (base + vec2(0.5, 1.5)) * inv_tex_size, 0.0)) * weights.z;
+	sum += GiSanitize(texture2DLod(tex, (base + vec2(1.5, 1.5)) * inv_tex_size, 0.0)) * weights.w;
+	return sum;
+}
+
+/**
  * All of the accumulation logic, returning through out parameters.
  *
  * @p current is this frame's (sanitized) gather for the pixel, @p depth its device depth and
@@ -203,7 +240,7 @@ vec4 GiFreshMoments(vec4 current)
  * not name the output.
  */
 void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, float screen_share,
-                       out vec4 out_color, out vec4 out_fast, out vec4 out_moments)
+                       float moving_share, out vec4 out_color, out vec4 out_fast, out vec4 out_moments)
 {
 	if(!u_gi_has_history)
 	{
@@ -255,35 +292,54 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 		out_moments = GiFreshMoments(current);
 		return;
 	}
-	// Validate by reconstructing the world position the previous frame actually held there.
-	// Comparing WORLD positions keeps the test independent of the depth encoding and projection.
-	// OBJECT-MOTION pixels skip it: a mover's world position legitimately changed, so the test
-	// would reject its own valid history. Newly revealed background behind a mover is
-	// camera-consistent (object_w = 0) and keeps the full test; a mover emerging from behind an
-	// occluder can briefly accept the occluder's history, which the dual-rate change detector
-	// snaps away within the fast window.
+	// PER-TAP VALIDITY: the history is read through its own
+	// 2x2 bilinear footprint and every tap is validated on its OWN stored depth - the world
+	// position last frame's depth buffer held under THAT texel against this pixel's - with
+	// the failing taps weighted out and the rest renormalised. The single reprojected tap
+	// this replaced sat between two surfaces at every silhouette (a filtered depth belongs to
+	// neither), so a pixel on a depth edge lost its whole history on half the frames of any
+	// camera translation and shimmered (F10). A pixel now keeps the taps on its own surface;
+	// only a pixel with no valid tap starts fresh. Comparing WORLD positions keeps the test
+	// independent of the depth encoding and projection; the tolerance scales with view
+	// distance so one value works near and far, and is DITHERED per pixel
+	// (GI_TEMPORAL_VALIDITY_DITHER) so the rejection edge is a soft band
+	// rather than a hard temporal seam.
+	// OBJECT-MOTION pixels skip the test: a mover's world position legitimately changed, so
+	// the test would reject its own valid history. Newly revealed background behind a mover
+	// is camera-consistent (object_w = 0) and keeps the full test; a mover emerging from
+	// behind an occluder can briefly accept the occluder's history, which the dual-rate
+	// change detector snaps away within the fast window.
+	vec2 history_size = u_gi_temporal_texel.zw;
+	vec2 history_pos = prev_uv * history_size - vec2_splat(0.5);
+	vec2 history_base = floor(history_pos);
+	vec2 history_frac = history_pos - history_base;
+	vec4 tap_weights = vec4((1.0 - history_frac.x) * (1.0 - history_frac.y),
+	                        history_frac.x * (1.0 - history_frac.y),
+	                        (1.0 - history_frac.x) * history_frac.y,
+	                        history_frac.x * history_frac.y);
+	bool every_tap_valid = true;
 	if(object_w < 0.5)
 	{
-		float prev_depth = texture2DLod(s_gi_prev_depth, prev_uv, 0.0).x;
-		if(prev_depth >= 1.0)
-		{
-			out_color = current;
-			out_fast = current;
-			out_moments = GiFreshMoments(current);
-			return;
-		}
-		vec3 prev_clip_stored = clipTransform(vec3(prev_uv * 2.0 - 1.0, toClipSpaceDepth(prev_depth)));
-		vec3 prev_world = clipToWorld(u_gi_prev_inv_view_proj, prev_clip_stored);
-		// Tolerance scales with view distance so one value works near and far: reprojection error and
-		// depth precision both grow with distance.
 		float view_distance = max(length(world_position - u_gi_temporal_camera.xyz), 1e-4);
-		if(length(prev_world - world_position) > u_gi_depth_tolerance * view_distance)
-		{
-			out_color = current;
-			out_fast = current;
-			out_moments = GiFreshMoments(current);
-			return;
-		}
+		float dither = 1.0 + (GiIgnNoise(ivec2(uv * history_size)).x * 2.0 - 1.0) *
+		                         GI_TEMPORAL_VALIDITY_DITHER;
+		float tolerance = u_gi_depth_tolerance * dither * view_distance;
+		vec2 tap_base_uv = (history_base + vec2_splat(0.5)) / history_size;
+		vec2 tap_step = vec2_splat(1.0) / history_size;
+		vec4 tap_valid = vec4(GiHistoryTapValid(tap_base_uv, world_position, tolerance),
+		                      GiHistoryTapValid(tap_base_uv + vec2(tap_step.x, 0.0), world_position, tolerance),
+		                      GiHistoryTapValid(tap_base_uv + vec2(0.0, tap_step.y), world_position, tolerance),
+		                      GiHistoryTapValid(tap_base_uv + tap_step, world_position, tolerance));
+		every_tap_valid = all(greaterThan(tap_valid, vec4_splat(0.5)));
+		tap_weights *= tap_valid;
+	}
+	float tap_weight_sum = tap_weights.x + tap_weights.y + tap_weights.z + tap_weights.w;
+	if(tap_weight_sum <= 1e-4)
+	{
+		out_color = current;
+		out_fast = current;
+		out_moments = GiFreshMoments(current);
+		return;
 	}
 	// The normal agreement test that used to sit here is gone, and deliberately.
 	//
@@ -296,7 +352,32 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	// camera completely still, because the jitter moves even when nothing else does.
 	//
 	// The neighbourhood clamp below covers what this was meant to catch, without a cliff.
-	vec4 history = GiSampleHistoryCatmullRom(s_gi_history, prev_uv, u_gi_temporal_texel.zw);
+	vec4 history;
+	vec4 fast_history;
+	vec4 history_moments;
+	BRANCH
+	if(every_tap_valid)
+	{
+		// Interior of a surface: Catmull-Rom for the colour lanes. Moments stay BILINEAR on
+		// purpose - Catmull-Rom reads a 4x4 footprint, which during disocclusion would pull
+		// variance from a neighbouring surface and collapse the luminance stop on this one.
+		history = GiSampleHistoryCatmullRom(s_gi_history, prev_uv, history_size);
+		fast_history = GiSampleHistoryCatmullRom(s_gi_history_fast, prev_uv, history_size);
+		history_moments = GiSanitize(texture2DLod(s_gi_history_moments, prev_uv, 0.0));
+	}
+	else
+	{
+		// A silhouette footprint: the valid taps only, bilinear, renormalised. Catmull-Rom's
+		// 4x4 support would reach across the very edge the validity just rejected.
+		history = GiGatherHistoryTaps(s_gi_history, history_base, tap_weights, history_size) /
+		          tap_weight_sum;
+		fast_history =
+		    GiGatherHistoryTaps(s_gi_history_fast, history_base, tap_weights, history_size) /
+		    tap_weight_sum;
+		history_moments =
+		    GiGatherHistoryTaps(s_gi_history_moments, history_base, tap_weights, history_size) /
+		    tap_weight_sum;
+	}
 #ifndef GI_TEMPORAL_FUSED
 	if(u_gi_clamp_sigma > 0.0)
 	{
@@ -306,11 +387,6 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 		history.xyz = clamp(history.xyz, range_min, range_max);
 	}
 #endif
-	vec4 fast_history = GiSampleHistoryCatmullRom(s_gi_history_fast, prev_uv, u_gi_temporal_texel.zw);
-	// Moments stay BILINEAR on purpose. Catmull-Rom reads a 4x4 footprint, which during
-	// disocclusion would pull variance from a neighbouring surface and collapse the luminance
-	// stop on this one.
-	vec4 history_moments = GiSanitize(texture2DLod(s_gi_history_moments, prev_uv, 0.0));
 	// 1/n while n grows, so early frames converge fast and the average is a true mean rather than
 	// an exponential one with a permanent noise floor. The caps are the two lanes' windows; the
 	// fast count is DERIVED from the shared one (a snap resets the shared count to it, so the
@@ -332,6 +408,21 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	float motion_collapse = u_gi_camera_motion * saturate(screen_share);
 	float collapse = max(GiDirtyRegionFactor(world_position), motion_collapse);
 	float slow_cap = mix(max(u_gi_max_accum, 1.0), max(u_gi_fast_accum, 1.0), collapse);
+	// HIT-MOTION FAST UPDATE: the fraction of the gather's rays
+	// that hit MOVING geometry (the probe records' moving share, bracket-weighted per pixel)
+	// caps the slow lane toward GI_TEMPORAL_MOVING_MIN_FRAMES. Keyed on what the rays HIT,
+	// not on the receiver: a static floor under a moving shadow, a wall lit by a mover's
+	// bounce, collapse exactly where the light changes and nowhere else - what neither the
+	// velocity buffer (the receiver's motion only) nor the dirty regions (a box around the
+	// placement, sixteen at most) resolve. The amount is carried one frame in the moments'
+	// w lane (max with the reprojected history) so the frames right after a mover passed
+	// still flush; it stores the CURRENT amount, so it decays the frame the hits stop.
+	float moving_amount = saturate(moving_share / GI_TEMPORAL_MOVING_FRACTION_FULL);
+	moving_amount = saturate(min((moving_amount - GI_TEMPORAL_MOVING_DEAD_ZONE) /
+	                                 (1.0 - GI_TEMPORAL_MOVING_DEAD_ZONE),
+	                             GI_TEMPORAL_MOVING_MAX));
+	float moving_effective = max(moving_amount, saturate(history_moments.w));
+	slow_cap = mix(slow_cap, max(GI_TEMPORAL_MOVING_MIN_FRAMES, 1.0), moving_effective);
 	float count = min(history_moments.z + 1.0, slow_cap);
 	float count_fast = min(count, max(u_gi_fast_accum, 1.0));
 	float alpha = 1.0 / count;
@@ -365,7 +456,7 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	out_moments = vec4(mix(history_moments.x, luma, moments_alpha),
 	                   mix(history_moments.y, luma * luma, moments_alpha),
 	                   count,
-	                   0.0);
+	                   moving_amount);
 }
 
 #endif // __GI_TEMPORAL_KERNEL_SH__

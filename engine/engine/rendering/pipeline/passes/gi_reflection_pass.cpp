@@ -212,8 +212,12 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                       "The args pass stages the whole mean buffer into the trace list; the "
                       "shader-side block size must match the buffer's capacity.");
         const uint32_t mean_block_indices = uint32_t(gi::GI_REFLECTION_MEAN_SLOTS) * 3u;
+        // The environment SH rides the list too (rgb float bits per coefficient): the trace
+        // kernel reads the sky from the block the args pass stages, which freed its stage 14
+        // for last frame's colour (layout in cs_gi_reflection_args.sc).
+        const uint32_t env_sh_indices = uint32_t(gi::GI_ENV_SH_COEFFS) * 3u;
         const uint32_t required_indices =
-            2u + mean_block_indices + trace_size.width * trace_size.height;
+            2u + mean_block_indices + env_sh_indices + trace_size.width * trace_size.height;
         bool list_created = false;
         if(!bgfx::isValid(refl_list_) || required_indices > refl_list_capacity_)
         {
@@ -244,6 +248,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             gfx::set_buffer(0, refl_args_, gfx::access::Write);
             gfx::set_buffer(1, refl_list_, gfx::access::ReadWrite);
             gfx::set_buffer(2, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
+            gfx::set_texture(args_program_.s_gi_env_sh, 3, env_sh_tex);
             gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
             args_program_.program->end();
         }
@@ -274,6 +279,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             gfx::set_buffer(0, refl_args_, gfx::access::Write);
             gfx::set_buffer(1, refl_list_, gfx::access::ReadWrite);
             gfx::set_buffer(2, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
+            gfx::set_texture(args_program_.s_gi_env_sh, 3, env_sh_tex);
             gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
             args_program_.program->end();
         }
@@ -305,8 +311,26 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                              BGFX_SAMPLER_W_CLAMP);
             gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
             gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
-            gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh_tex);
+            // Stage 14: last frame's composited colour for the on-screen hit upgrade (the sky
+            // SH now rides the list buffer's SH block). Black stands in when absent; the
+            // flag lane keeps it unread then.
+            const bool has_prev_color = params.prev_color && params.prev_color->is_valid();
+            const bool prev_color_carries_depth =
+                has_prev_color && params.prev_color->info.format == bgfx::TextureFormat::RGBA16F;
+            gfx::set_texture(trace_program_.s_gi_prev_color,
+                             14,
+                             has_prev_color ? params.prev_color : default_textures::get().black_texture(),
+                             BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
             gfx::set_buffer(15, refl_list_, gfx::access::Read);
+            // The TAA-unjittered previous pair, the same convention as the temporal pass:
+            // a still camera must reproject a hit onto itself.
+            const auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
+            gfx::set_uniform(trace_program_.u_gi_refl_prev_view_proj, prev_view_proj.get_matrix());
+            const float reflection_screen[4] = {has_prev_color ? (prev_color_carries_depth ? 2.0f : 1.0f) : 0.0f,
+                                                0.0f,
+                                                0.0f,
+                                                0.0f};
+            gfx::set_uniform(trace_program_.u_gi_reflection_screen, reflection_screen);
             gfx::set_uniform(trace_program_.u_gi_reflection_camera, reflection_camera);
             gfx::set_uniform(trace_program_.u_gi_reflection_jitter, jitter);
             gfx::set_uniform(trace_program_.u_gi_reflection_texel, refl_texel);

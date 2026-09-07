@@ -56,6 +56,15 @@ public:
         ///< scale uses the smallest axis, which keeps the field conservative (a sphere trace
         ///< under-steps rather than overshooting through geometry).
         float local_to_world_scale = 1.0f;
+        ///< World displacement of the field's bounds centre since the placement's previous
+        ///< frame (zero for a static placement or a first sighting). The gather's temporal
+        ///< shortens a receiver's history by the fraction of its rays that hit MOVING
+        ///< instances - the receivers of a mover's shadow and bounce, which the per-pixel
+        ///< velocity buffer cannot see.
+        math::vec3 velocity{0.0f};
+        ///< The largest displacement of any corner of the field's local bounds over the same
+        ///< frame: a spinning placement moves its surface while its centre stays put.
+        float max_corner_displacement = 0.0f;
         ///< Diffuse colour of this placement's material, and its emission.
         ///
         ///< A distance field carries geometry only, so a cell first discovered by a BOUNCE ray
@@ -184,9 +193,9 @@ public:
     static constexpr uint32_t emitter_vec4_stride = 2;
 
     /// vec4 elements per packed instance. Must match SDF_INSTANCE_STRIDE in gi/sdf_common.sh.
-    /// Two of the ten carry the material; emission is HDR, so it gets its own vec4 rather than
-    /// being packed into a spare component.
-    static constexpr uint32_t instance_vec4_stride = 10;
+    /// Two of the eleven carry the material; emission is HDR, so it gets its own vec4 rather
+    /// than being packed into a spare component; the eleventh is the instance velocity.
+    static constexpr uint32_t instance_vec4_stride = 11;
 
     /// Slot capacity of the mean buffer (16 KiB of vec4s). Overflow falls back to the white
     /// slot with a one-time warning rather than growing - a scene with a thousand distinct
@@ -354,6 +363,10 @@ private:
         bool has_pose = false;
         math::mat4 world_to_local{1.0f};
         float local_to_world_scale = 1.0f;
+        /// The placement's transform as of the previous frame, for the instance velocity
+        /// (the bounds centre's delta and the largest corner displacement).
+        math::mat4 last_local_to_world{1.0f};
+        bool has_last_pose = false;
         uint64_t seen_frame = 0;
         /// Set once the sweep recorded the placement's disappearance; cleared if it returns.
         bool swept = false;

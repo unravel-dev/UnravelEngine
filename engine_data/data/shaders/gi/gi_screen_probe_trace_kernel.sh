@@ -80,6 +80,7 @@
 #define GI_WORLD_PROBE_SKIP_IRRADIANCE
 #include "gi/gi_world_probes.sh"
 #include "gi/gi_noise.sh"
+#include "gi/gi_env_sh.sh"
 
 /// LAST frame's composited output (the SSR convention, same source): the far-field radiance
 /// for hits BEYOND the cascades, where the light voxels have nothing. Bound in place of the
@@ -98,7 +99,12 @@ BUFFER_RW(b_gi_probes, vec4, 7);
 /// reconstruction below reads the same values from both.
 SAMPLER2D(s_hiz, 8);
 SAMPLER2D(s_gi_normal, 9);
-SAMPLER2D(s_gi_env_sh, 14);
+/// This frame's velocity buffer (full camera resolution): RG = total uv-delta, BA = the
+/// OBJECT-ONLY component. A screen hit on an object-motion pixel reprojects through it to
+/// the mover's own last-frame pixel instead of being declined by the depth test (the
+/// camera reprojection lands where the mover was NOT). Stage 14 was the environment SH,
+/// which now rides the probe buffer's SH block (GiProbeEnvShBase, staged by the args pass).
+SAMPLER2D(s_gi_velocity, 14);
 
 /// xyz = camera position (world-probe window centre), w = frame index.
 uniform vec4 u_gi_camera;
@@ -176,15 +182,50 @@ SHARED uint s_acc_t[GI_TRACE_SLOT_COUNT * GI_PROBE_DIR_COUNT];
 // stored to its record for the temporal's camera-motion collapse (gi_temporal_kernel.sh).
 SHARED uint s_screen_rays[GI_TRACE_SLOT_COUNT];
 SHARED uint s_traced_rays[GI_TRACE_SLOT_COUNT];
+/// Rays that hit MOVING geometry: a screen hit on an object-motion
+/// pixel, or an SDF hit on an instance displaced by more than GI_TEMPORAL_MOVING_SPEED of
+/// the probe's depth since last frame. The temporal shortens the history of every pixel
+/// this probe serves by the fraction (gi_temporal_kernel.sh) - the receivers of a mover's
+/// shadow and bounce, which the per-pixel velocity buffer cannot see.
+SHARED uint s_moving_rays[GI_TRACE_SLOT_COUNT];
 
-/// The probe's screen share for the temporal: rays the screen tier answered over rays
-/// traced (both counted where the tier is decided). Written by the slot leader after the
-/// trace barrier; interpolated probes get their parents' mean from the interp pass.
+/// The probe's screen share (x) and moving share (y) for the temporal: rays the screen tier
+/// answered, and rays that hit moving geometry, over rays traced (all counted where the
+/// tier is decided). Written by the slot leader after the trace barrier; interpolated probes
+/// get their parents' mean from the interp pass.
 void GiStoreScreenShare(int slot, uint record)
 {
 	uint traced = s_traced_rays[slot];
 	float share = traced > 0u ? float(s_screen_rays[slot]) / float(traced) : 0.0;
-	b_gi_probes[record + uint(GI_PROBE_SCREEN_SHARE)] = vec4(share, 0.0, 0.0, 0.0);
+	float moving = traced > 0u ? float(s_moving_rays[slot]) / float(traced) : 0.0;
+	b_gi_probes[record + uint(GI_PROBE_SCREEN_SHARE)] = vec4(share, moving, 0.0, 0.0);
+}
+
+/// 1 when the velocity buffer marks the pixel at @p hit_uv as OBJECT motion (the BA lanes),
+/// 0 when static or when the buffer is not bound to this trace.
+float GiHitObjectMotion(vec2 hit_uv)
+{
+	if(u_gi_screen_trace.w <= 2.5)
+	{
+		return 0.0;
+	}
+	vec4 vel4 = texture2DLod(s_gi_velocity, hit_uv, 0.0);
+	vec2 vel_dim = vec2(textureSize(s_gi_velocity, 0));
+	return smoothstep(0.5, 1.5, length(vel4.zw * vel_dim));
+}
+
+/// The environment radiance along @p dir from the SH block the args pass staged into the
+/// probe buffer (GiProbeEnvShBase) - eval_radiance_sh's sum, with the coefficients read
+/// from the buffer instead of the IRRADIANCE_SH texture. Ringing is clamped non-negative.
+vec3 GiProbeEnvRadiance(vec3 dir)
+{
+	uint sh_base = GiProbeEnvShBase();
+	vec3 radiance = vec3_splat(0.0);
+	for(int k = 0; k < GI_ENV_SH_COEFFS; ++k)
+	{
+		radiance += b_gi_probes[sh_base + uint(k)].xyz * GiEnvShBasis(k, dir);
+	}
+	return max(radiance, vec3_splat(0.0));
 }
 
 /*
@@ -243,7 +284,49 @@ vec3 GiFarFieldRadiance(vec3 hit_position, vec3 sample_dir)
 	{
 		return history;
 	}
-	return eval_radiance_sh(s_gi_env_sh, sample_dir);
+	return GiProbeEnvRadiance(sample_dir);
+}
+
+/*
+ * The screen tier's history read: a hit ON A MOVER (the velocity buffer's object-only lanes
+ * at the hit pixel) reprojects through the mover's own velocity to the pixel it occupied
+ * last frame - which holds the mover's own lit colour - while everything else takes the
+ * camera reprojection with its depth validation (GiReadHistory). Without this every hit on
+ * moving geometry was declined (the camera reprojection lands where the mover was NOT and
+ * the stored depth disagrees) and shaded from a voxel up to a relight rotation old. The
+ * velocity buffer carries no depth, so a mover's pixel gets only a loose depth agreement
+ * (twice the camera path's tolerance) against gross occlusion changes; the neighbourhood
+ * the temporal accumulates over bounds the rest, as it does for the mover's own history.
+ */
+bool GiReadHistoryScreen(vec3 hit_position, vec2 hit_uv, out vec3 radiance)
+{
+	radiance = vec3_splat(0.0);
+	BRANCH
+	if(u_gi_screen_trace.w > 2.5)
+	{
+		vec4 vel4 = texture2DLod(s_gi_velocity, hit_uv, 0.0);
+		vec2 vel_dim = vec2(textureSize(s_gi_velocity, 0));
+		float object_w = smoothstep(0.5, 1.5, length(vel4.zw * vel_dim));
+		BRANCH
+		if(object_w >= 0.5)
+		{
+			vec2 prev_uv = hit_uv - vel4.xy;
+			if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
+			{
+				return false;
+			}
+			vec4 prev_clip = mul(u_gi_prev_view_proj, vec4(hit_position, 1.0));
+			vec4 history = texture2DLod(s_gi_prev_color, prev_uv, 0.0);
+			if(prev_clip.w <= 0.0 ||
+			   abs(history.w - prev_clip.w) > 2.0 * GI_TEMPORAL_DEPTH_TOLERANCE * prev_clip.w)
+			{
+				return false;
+			}
+			radiance = history.xyz;
+			return true;
+		}
+	}
+	return GiReadHistory(hit_position, radiance);
 }
 
 /// The checked form for callers without a level search of their own (the screen tier).
@@ -360,6 +443,8 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 	{
 		vec3 radiance = vec3_splat(0.0);
 		bool committed = false;
+		// The hit landed on moving geometry (see s_moving_rays).
+		bool moving = false;
 		// 1 = screen commit, 2 = SDF hit, 3 = completion; consumed by the tier debug view.
 		int answered_tier = 3;
 		// SCREEN TIER: Hi-Z march from the anchor pixel. A confident on-screen hit inside the
@@ -452,8 +537,9 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 							// the temporal's memory on top, a moved emissive's pool decayed
 							// over seconds. Inside a region the voxel read answers (relit
 							// within a rotation) until the hold expires.
+							moving = GiHitObjectMotion(ss_hit.xy) >= 0.5;
 							bool screen_lit = GiDirtyRegionFactor(hit_position) < 0.5 &&
-							                  GiReadHistory(hit_position, radiance);
+							                  GiReadHistoryScreen(hit_position, ss_hit.xy, radiance);
 							if(!screen_lit && !GiLightVoxelReadBlend(hit_position, hit_normal,
 							                                         GI_LIGHT_VOXEL_FADE_VOXELS, radiance))
 							{
@@ -482,6 +568,17 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 			{
 				answered_tier = 2;
 				hit_t = max(hit_t, hit.t);
+				// A mesh-exact hit knows its instance: moving when the instance's
+				// displacement since last frame exceeds GI_TEMPORAL_MOVING_SPEED of the
+				// probe's depth (a relative-speed test). Cascade hits carry no
+				// instance and never flag - an accepted limitation.
+				if(hit.instance_index != SDF_NO_INSTANCE)
+				{
+					vec4 instance_velocity = SdfInstanceVelocity(hit.instance_index);
+					float speed = max(length(instance_velocity.xyz), instance_velocity.w);
+					float probe_depth = max(length(s_origin[slot] - u_gi_camera.xyz), 1.0);
+					moving = speed > GI_TEMPORAL_MOVING_SPEED * probe_depth;
+				}
 				vec3 hit_position = s_origin[slot] + sample_dir * hit.t;
 				vec3 hit_normal = hit.normal;
 				if(dot(hit_normal, sample_dir) > 0.0)
@@ -538,7 +635,7 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 				if(!GiWorldProbeRadiance(s_origin[slot] + sample_dir * s_short_range[slot],
 				                         sample_dir, u_gi_camera.xyz, radiance))
 				{
-					radiance = eval_radiance_sh(s_gi_env_sh, sample_dir);
+					radiance = GiProbeEnvRadiance(sample_dir);
 				}
 			}
 		}
@@ -548,11 +645,20 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 			radiance = answered_tier == 1 ? vec3(0.0, 1.0, 0.0)
 			                              : (answered_tier == 2 ? vec3(1.0, 0.0, 0.0)
 			                                                    : vec3(0.0, 0.0, 1.0));
+			// Magenta: the hit landed on moving geometry (the temporal's fast update).
+			if(moving)
+			{
+				radiance = vec3(1.0, 0.0, 1.0);
+			}
 		}
 		atomicAdd(s_traced_rays[slot], 1u);
 		if(answered_tier == 1)
 		{
 			atomicAdd(s_screen_rays[slot], 1u);
+		}
+		if(moving)
+		{
+			atomicAdd(s_moving_rays[slot], 1u);
 		}
 		return vec4(radiance, hit_t);
 	}
@@ -891,6 +997,7 @@ void main()
 			s_importance_mean[slot] = 0.0;
 			s_screen_rays[slot] = 0u;
 			s_traced_rays[slot] = 0u;
+			s_moving_rays[slot] = 0u;
 			// Placement computed the anchor, classification put this probe on the traced
 			// list - the records are valid by construction; this thread only unpacks them
 			// and reprojects the anchor for the importance mip.

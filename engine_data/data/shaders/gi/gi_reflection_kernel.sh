@@ -63,6 +63,7 @@
 #include "gi/gi_light_voxels.sh"
 #include "gi/gi_emissive_nee.sh"
 #include "gi/gi_noise.sh"
+#include "gi/gi_env_sh.sh"
 
 /// Analytic irradiance from one emitter piece at @p position for a receiver facing @p normal:
 /// GI_REFLECTION_NEAR_FIELD_SAMPLES Lambertian patches along the piece's longest axis, each
@@ -189,12 +190,120 @@ SAMPLER2D(s_hiz, 8);
 /// diffuse irradiance, and this is the smoothest estimate of it the engine owns. Reading the
 /// raw world-probe cage here instead produced 2 m-scale mottling.
 SAMPLER2D(s_gi_diffuse, 9);
+#if defined(GI_REFLECTION_ENV_SH_FROM_LIST)
+/// LAST frame's composited output with each pixel's view depth in alpha (the gather's
+/// screen tier and SSR read the same snapshot): the ON-SCREEN HIT UPGRADE below serves a
+/// world hit the exact lit pixel when the depth buffer, the hit normal and the stored
+/// depth all agree. The sky SH that held this stage rides the trace list's SH block.
+SAMPLER2D(s_gi_prev_color, 14);
+/// Reprojection of a world hit into last frame's snapshot (the unjittered pair).
+uniform mat4 u_gi_refl_prev_view_proj;
+/// x = 0 no previous colour, 1 colour only, 2 colour with view depth in alpha (the
+/// upgrade needs the depth); yzw unused.
+uniform vec4 u_gi_reflection_screen;
+#else
 SAMPLER2D(s_gi_env_sh, 14);
+#endif // GI_REFLECTION_ENV_SH_FROM_LIST
 
 /// xyz = camera position, w > 0 when s_gi_diffuse holds last frame's resolve.
 uniform vec4 u_gi_reflection_camera;
 /// xy = this frame's R2 low-discrepancy offset for the GGX sample; zw unused.
 uniform vec4 u_gi_reflection_jitter;
+
+/// The environment radiance along @p direction: from the list's SH block in the compute
+/// form, from the IRRADIANCE_SH texture in the fragment fallback. Ringing is clamped.
+vec3 GiReflectionEnvRadiance(vec3 direction)
+{
+#if defined(GI_REFLECTION_ENV_SH_FROM_LIST)
+	vec3 radiance = vec3_splat(0.0);
+	for(int k = 0; k < GI_ENV_SH_COEFFS; ++k)
+	{
+		radiance += GiReflectionEnvSh(k) * GiEnvShBasis(k, direction);
+	}
+	return max(radiance, vec3_splat(0.0));
+#else
+	return eval_radiance_sh(s_gi_env_sh, direction);
+#endif // GI_REFLECTION_ENV_SH_FROM_LIST
+}
+
+#if defined(GI_REFLECTION_SCREEN_COLOR)
+/*
+ * ON-SCREEN HIT UPGRADE: a world hit that the depth
+ * buffer shows THIS frame is served last frame's composited pixel - the exact lit surface
+ * at pixel precision, direct light, shadows and all - instead of the voxel walk's cell
+ * estimate. This is the tier SSR cannot reach (its screen march gave up behind a
+ * foreground object, or its confidence faded) and where the voxel lattice printed as
+ * blocks on reflected walls. Four gates, every one a rejection back to the voxel read:
+ *   1. the hit faces the camera (a back-facing hit is not the pixel the depth shows),
+ *   2. it projects on screen inside a dithered vignette (no hard edge at the border),
+ *   3. the visible surface at that pixel is the hit, within a small fraction of its
+ *      distance (the hit is not behind a nearer occluder),
+ *   4. last frame's snapshot held THIS surface at the reprojected pixel - the gather
+ *      screen tier's own depth validation, which is what keeps a departed mover's pixels
+ *      from being read (the stored depth there was the mover's).
+ * Returns the previous-frame colour; the caller applies the ray clamp.
+ */
+bool GiReflectionScreenColorAtHit(vec3 hit_position, vec3 hit_normal, vec2 frag_coord,
+                                  out vec3 out_radiance)
+{
+	out_radiance = vec3_splat(0.0);
+	vec3 to_camera = u_gi_reflection_camera.xyz - hit_position;
+	float hit_distance = max(length(to_camera), 1e-4);
+	if(dot(to_camera / hit_distance, hit_normal) < GI_REFLECTION_SCREEN_HIT_NORMAL_COS)
+	{
+		return false;
+	}
+	vec4 clip = mul(u_viewProj, vec4(hit_position, 1.0));
+	if(clip.w <= 1e-6)
+	{
+		return false;
+	}
+	vec3 ndc = clipTransform(clip.xyz / clip.w);
+	vec2 hit_uv = ndc.xy * 0.5 + 0.5;
+	if(any(lessThan(hit_uv, vec2_splat(0.0))) || any(greaterThan(hit_uv, vec2_splat(1.0))))
+	{
+		return false;
+	}
+	// Dithered vignette: the fade over the outer band compared against the pixel's noise.
+	vec2 edge = saturate((abs(ndc.xy) - vec2_splat(GI_SCREEN_HIT_VIGNETTE_START)) /
+	                     (1.0 - GI_SCREEN_HIT_VIGNETTE_START));
+	float vignette = 1.0 - max(edge.x * edge.x, edge.y * edge.y);
+	if(vignette < GiIgnNoise(ivec2(frag_coord)).x)
+	{
+		return false;
+	}
+	float scene_depth = texture2DLod(s_hiz, hit_uv, 0.0).x;
+	if(scene_depth >= 1.0)
+	{
+		return false;
+	}
+	vec3 scene_clip = clipTransform(vec3(hit_uv * 2.0 - 1.0, toClipSpaceDepth(scene_depth)));
+	vec3 scene_position = clipToWorld(u_invViewProj, scene_clip);
+	float scene_distance = length(scene_position - u_gi_reflection_camera.xyz);
+	if(abs(scene_distance - hit_distance) > GI_REFLECTION_SCREEN_HIT_DEPTH_TOLERANCE * hit_distance)
+	{
+		return false;
+	}
+	vec4 prev_clip = mul(u_gi_refl_prev_view_proj, vec4(hit_position, 1.0));
+	if(prev_clip.w <= 0.0)
+	{
+		return false;
+	}
+	vec3 prev_ndc = clipTransform(prev_clip.xyz / prev_clip.w);
+	vec2 prev_uv = prev_ndc.xy * 0.5 + 0.5;
+	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
+	{
+		return false;
+	}
+	vec4 history = texture2DLod(s_gi_prev_color, prev_uv, 0.0);
+	if(abs(history.w - prev_clip.w) > GI_TEMPORAL_DEPTH_TOLERANCE * prev_clip.w)
+	{
+		return false;
+	}
+	out_radiance = history.xyz;
+	return true;
+}
+#endif // GI_REFLECTION_SCREEN_COLOR
 
 /// Heitz 2018 visible-normal GGX sampling; view and result in tangent space (z = normal).
 vec3 SampleGGXVNDF(vec3 view_ts, float alpha, float u1, float u2)
@@ -238,7 +347,7 @@ vec3 GiReflectionSkyFallback(vec2 uv, vec3 direction)
 	{
 		return probe_layer.xyz;
 	}
-	vec3 sky_sh = eval_radiance_sh(s_gi_env_sh, direction);
+	vec3 sky_sh = GiReflectionEnvRadiance(direction);
 	return mix(sky_sh, probe_layer.xyz, probe_alpha);
 }
 
@@ -328,7 +437,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	}
 	else
 	{
-		rough_value = eval_radiance_sh(s_gi_env_sh, reflected);
+		rough_value = GiReflectionEnvRadiance(reflected);
 	}
 	BRANCH
 	if(roughness >= GI_REFLECTION_ROUGH_CUTOFF)
@@ -446,8 +555,24 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		// Branched, never an || chain: HLSL's || may evaluate both operands, and the
 		// light-voxel read is up to two dozen 3D fetches that an exhausted hit discards.
 		radiance = rough_value;
+		bool screen_lit = false;
+#if defined(GI_REFLECTION_SCREEN_COLOR)
+		// The on-screen hit upgrade first (GiReflectionScreenColorAtHit): a hit the depth
+		// buffer shows is the exact lit pixel; the voxel walk answers only what it rejects.
 		BRANCH
-		if(!hit.exhausted && shape_ok > 0.0)
+		if(!hit.exhausted && shape_ok > 0.0 && u_gi_reflection_screen.x > 1.5)
+		{
+			vec3 screen_radiance;
+			screen_lit = GiReflectionScreenColorAtHit(hit_position, hit_normal, frag_coord, screen_radiance);
+			if(screen_lit)
+			{
+				// The gather's per-ray contract: the snapshot carries emissive unbounded too.
+				radiance = min(screen_radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
+			}
+		}
+#endif // GI_REFLECTION_SCREEN_COLOR
+		BRANCH
+		if(!screen_lit && !hit.exhausted && shape_ok > 0.0)
 		{
 			vec3 measured;
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)

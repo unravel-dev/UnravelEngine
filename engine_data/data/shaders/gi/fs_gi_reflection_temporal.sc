@@ -69,6 +69,14 @@ float GiReflLuma(vec3 color)
 	return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
+/// The confidence test's colour space: a bounded (tonemapped) range, so one bright spike in
+/// the neighbourhood box does not read as a huge extent that hides every real disagreement
+/// (GI_REFLECTION_CONFIDENCE_TONEMAP_RANGE).
+vec3 GiReflTonemap(vec3 color)
+{
+	return color / (1.0 + GiReflLuma(color) / GI_REFLECTION_CONFIDENCE_TONEMAP_RANGE);
+}
+
 void main()
 {
 	vec2 uv = v_texcoord0;
@@ -411,10 +419,35 @@ void main()
 	// about a quarter of the sample spread at weight 1/8 - which read as reflections that
 	// never converge exactly where the stochastic spread is widest (measured, round 13).
 	// The count clamp keeps steady-state responsiveness at one over the settings window.
-	vec3 history_rgb = history_texel.w >= 0.5
-	                       ? mix(clamp(history_texel.xyz, lo.xyz, hi.xyz), history_texel.xyz, still)
-	                       : curr.xyz;
-	float prev_count = history_texel.w >= 0.5 ? history_texel.w : 0.0;
+	vec3 history_rgb = curr.xyz;
+	float prev_count = 0.0;
+	BRANCH
+	if(history_texel.w >= 0.5)
+	{
+		vec3 clamped = clamp(history_texel.xyz, lo.xyz, hi.xyz);
+		history_rgb = mix(clamped, history_texel.xyz, still);
+		prev_count = history_texel.w;
+		// CONFIDENCE COLLAPSE: the clamp bounds what a stale
+		// history may SHOW, but not how long it takes to catch up - the running mean still
+		// converges at 1/count, and on a blurred high-contrast boundary that catch-up is the
+		// smear band behind a reflected mover (the receiver's own stillness never sees
+		// reflected motion, so the motion window cannot help there). The distance the
+		// history had to be clamped, in units of the neighbourhood's extent, is a per-pixel
+		// measure of exactly that disagreement, and it scales the count down: a history far
+		// outside the box re-accumulates with a large alpha in the frames that follow instead
+		// of only being pinned to the box edge. The floor keeps a little history on a merely
+		// noisy pixel; the release (stillness) lifts the collapse in step with the clamp, so
+		// sparse-bright content under a parked camera converges exactly as before - the
+		// mover cap keeps the collapse engaged while anything moves.
+		vec3 t_history = GiReflTonemap(history_texel.xyz);
+		vec3 t_clamped = GiReflTonemap(clamped);
+		vec3 t_extent = max(GiReflTonemap(hi.xyz) - GiReflTonemap(lo.xyz),
+		                    vec3_splat(GI_REFLECTION_CONFIDENCE_EXTENT_FLOOR));
+		float confidence = saturate(1.0 - length((t_history - t_clamped) / t_extent));
+		confidence = GI_REFLECTION_CONFIDENCE_FLOOR +
+		             (1.0 - GI_REFLECTION_CONFIDENCE_FLOOR) * confidence;
+		prev_count *= mix(confidence, 1.0, still);
+	}
 	// The count cap grows with stillness (see the release note above) and collapses to the
 	// MOTION window on the first moving frame, so trails shorten to a few frames of
 	// catch-up while the camera moves.

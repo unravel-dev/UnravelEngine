@@ -336,8 +336,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         // Both record halves plus the traced-LIST region (one bit-cast coordinate per vec4 -
         // see GiProbeTracedListBase): the trace has no spare binding stage for a dedicated
         // list buffer, so the list rides in this one.
+        // ... plus the environment SH block past the list (GI_ENV_SH_COEFFS vec4, staged by
+        // the args pass): the trace's completion sky reads it from here, which freed the
+        // kernel's last sampler stage for the velocity buffer.
         const uint32_t required_probe_vec4 =
-            2u * records_per_half * probe_vec4_stride + probe_count;
+            2u * records_per_half * probe_vec4_stride + probe_count + uint32_t(gi::GI_ENV_SH_COEFFS);
         if(!bgfx::isValid(probe_buffer_) || required_probe_vec4 > probe_buffer_capacity_)
         {
             if(bgfx::isValid(probe_buffer_))
@@ -468,10 +471,14 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             // TAA-unjittered record for the same reason: still camera, exact reprojection.
             const math::transform gather_projection = params.cam->get_projection_unjittered();
             const auto gather_prev_view_proj = params.cam->get_prev_view_projection_unjittered();
+            // w: 0 no previous colour, 1 colour, 2 colour with view depth in alpha, 3 that
+            // plus the velocity buffer bound at the trace (screen hits on movers reproject
+            // through it).
+            const bool trace_velocity = prev_color_carries_depth && params.velocity != nullptr;
             const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
                                                   float(s.debug_view),
                                                   adaptive ? 1.0f : 0.0f,
-                                                  has_prev_color ? (prev_color_carries_depth ? 2.0f : 1.0f)
+                                                  has_prev_color ? (trace_velocity ? 3.0f : prev_color_carries_depth ? 2.0f : 1.0f)
                                                                  : 0.0f};
             {
                 // PLACEMENT (adaptive gather): every probe's anchor lands in the records
@@ -524,6 +531,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 // bounds check, so it needs the probe buffer and the lattice descriptor.
                 gfx::render_pass pass("GI/Probe Args");
                 args_program_.program->begin();
+                gfx::set_texture(args_program_.s_gi_env_sh, 0, env_sh_tex);
                 gfx::set_buffer(5, probe_args_, gfx::access::Write);
                 gfx::set_buffer(6, probe_traced_, gfx::access::Read);
                 gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
@@ -575,7 +583,14 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                                 : default_textures::get().black_texture());
                 gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
                 gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
-                gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh_tex);
+                // Stage 14: this frame's velocity buffer (the sky SH rides the probe buffer's
+                // SH block now). A screen hit on an OBJECT-motion pixel reprojects through it
+                // to the mover's own last-frame pixel; black stands in when absent and the
+                // screen-trace flag lane keeps it unread then.
+                gfx::set_texture(trace_program_.s_gi_velocity,
+                                 14,
+                                 trace_velocity ? params.velocity : default_textures::get().black_texture(),
+                                 BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
                 gfx::set_texture(trace_program_.s_world_probe_depth,
                                  15,
                                  clipmap_gpu.get_world_probe_depth());

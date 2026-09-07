@@ -22,11 +22,18 @@
  * until then), so unwritten slots' bits are copied dead; the a < 0.5 -> WHITE guard exists so
  * a NaN-poisoned or half-landed slot answers "no mean" rather than garbage.
  *
+ * ENVIRONMENT SH: the trace kernel's sky (misses past the probe layer, the rough value
+ * before a resolve exists) was a 9x1 texture on the kernel's last sampler stage; that
+ * stage now carries last frame's colour for the on-screen hit upgrade, so this pass stages
+ * the nine coefficients into the list as well (rgb float bits each).
+ *
  * List layout (keep in step with cs_gi_reflection_classify.sc / cs_gi_reflection_trace.sc):
  *   [0]                                  append cursor
  *   [1]                                  staged trace count
  *   [2 .. 2 + GI_REFLECTION_MEAN_SLOTS*3)  means, rgb float bits per slot
- *   [2 + GI_REFLECTION_MEAN_SLOTS*3 + i]   packed texel coords, y in the high 16 bits
+ *   [.. + GI_ENV_SH_COEFFS*3)              environment SH, rgb float bits per coefficient
+ *   [2 + GI_REFLECTION_MEAN_SLOTS*3 + GI_ENV_SH_COEFFS*3 + i]
+ *                                        packed texel coords, y in the high 16 bits
  */
 
 #include "bgfx_compute.sh"
@@ -36,6 +43,8 @@ BUFFER_RW(b_gi_refl_args, uvec4, 0);
 BUFFER_RW(b_gi_refl_list, uint, 1);
 /// vec4 per slot: rgb = mean colour, a = 1 once captured (cs_gi_texture_mean.sc).
 BUFFER_RO(b_gi_texture_means, vec4, 2);
+/// Last frame's environment SH (IRRADIANCE_SH, 9x1), staged into the list's SH block.
+SAMPLER2D(s_gi_env_sh, 3);
 
 /// Keep in step with cs_gi_reflection_trace.sc.
 #define GI_REFLECTION_DISPATCH_STRIDE 4096u
@@ -62,5 +71,15 @@ void main()
 		b_gi_refl_list[base + 0u] = floatBitsToUint(value.x);
 		b_gi_refl_list[base + 1u] = floatBitsToUint(value.y);
 		b_gi_refl_list[base + 2u] = floatBitsToUint(value.z);
+	}
+	// The environment SH block past the means: one lane per coefficient.
+	if(gl_LocalInvocationID.x < uint(GI_ENV_SH_COEFFS))
+	{
+		uint k = gl_LocalInvocationID.x;
+		vec3 coefficient = texelFetch(s_gi_env_sh, ivec2(int(k), 0), 0).xyz;
+		uint base = 2u + uint(GI_REFLECTION_MEAN_SLOTS) * 3u + k * 3u;
+		b_gi_refl_list[base + 0u] = floatBitsToUint(coefficient.x);
+		b_gi_refl_list[base + 1u] = floatBitsToUint(coefficient.y);
+		b_gi_refl_list[base + 2u] = floatBitsToUint(coefficient.z);
 	}
 }

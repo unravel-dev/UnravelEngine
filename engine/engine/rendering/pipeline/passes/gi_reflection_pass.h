@@ -51,6 +51,11 @@ public:
         /// smoothest per-pixel estimate the engine owns (the Lumen recipe - reuse the gather,
         /// never a raw world lattice). Null on the first frames; the shader falls back to SH.
         gfx::texture::ptr gi_diffuse;
+        /// Last frame's composited scene colour (PREV_SCENE_HDR, view depth in alpha when
+        /// RGBA16F): the compute trace upgrades an on-screen world hit to the exact lit
+        /// pixel when the depth buffer, the hit normal and last frame's stored depth all
+        /// agree. Null degrades those hits to the voxel walk.
+        gfx::texture::ptr prev_color;
         /// Temporal window in frames for the stochastic ray; <= 1 bypasses the accumulation
         /// (raw passthrough) - the A/B knob for verifying the temporal is alive.
         int temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
@@ -162,9 +167,14 @@ private:
     struct reflection_args_program : uniforms_cache
     {
         gpu_program::ptr program;
+        /// The environment SH texture the args pass stages into the list's SH block: the
+        /// trace kernel reads the sky from the list, which freed its stage 14 for the
+        /// previous-frame colour.
+        gfx::program::uniform_ptr s_gi_env_sh;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -191,14 +201,25 @@ private:
         gfx::program::uniform_ptr s_hiz;
         gfx::program::uniform_ptr s_gi_diffuse;
         gfx::program::uniform_ptr s_light_voxels;
-        gfx::program::uniform_ptr s_gi_env_sh;
+        /// Stage 14 of the compute form: last frame's composited colour (the sky SH moved
+        /// into the list buffer's SH block to free the stage).
+        gfx::program::uniform_ptr s_gi_prev_color;
         gfx::program::uniform_ptr s_gi_attr_albedo;
+        /// Reprojection of a world hit into last frame's snapshot (the unjittered pair).
+        gfx::program::uniform_ptr u_gi_refl_prev_view_proj;
+        /// x = 0 no previous colour, 1 colour only, 2 colour with view depth in alpha.
+        gfx::program::uniform_ptr u_gi_reflection_screen;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_texel, "u_gi_reflection_texel", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_gi_refl_prev_view_proj,
+                          "u_gi_refl_prev_view_proj",
+                          gfx::uniform_type::Mat4);
+            cache_uniform(program.get(), u_gi_reflection_screen, "u_gi_reflection_screen", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
@@ -212,7 +233,7 @@ private:
             cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_prev_color, "s_gi_prev_color", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_attr_albedo, "s_gi_attr_albedo", gfx::uniform_type::Sampler);
         }
 

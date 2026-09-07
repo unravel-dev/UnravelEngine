@@ -530,6 +530,24 @@
       " 0.125 keeps 87.5% of the neighbourhood clamp engaged: ghosts flush within about one"       \
       " window while converged static content under a parked camera loses at most the release's"   \
       " tail. Costs nothing while no mover is on screen")                                          \
+    X(GI_REFLECTION_CONFIDENCE_FLOOR, 0.25f,                                                        \
+      "fraction of the accumulated count", "derived: a history clamped far outside the"             \
+      " neighbourhood box keeps a quarter of its count - enough to smooth the transition (a"        \
+      " full reset re-enters at alpha 1, the one-frame flash the clamp exists to avoid)"            \
+      " while the next frames blend at alpha 1/2 to 1/4. The clamp bounds what a stale"             \
+      " history may SHOW; the confidence collapse of the count bounds how long the running"         \
+      " mean takes to catch up behind a reflected mover, which the receiver's stillness"            \
+      " cannot see")                                                                                \
+    X(GI_REFLECTION_CONFIDENCE_EXTENT_FLOOR, 0.1f,                                                  \
+      "tonemapped radiance", "derived: the clamp distance is measured in units of the"              \
+      " neighbourhood's extent, so a flat neighbourhood (extent near zero) would turn"              \
+      " quantisation-level disagreement into a full collapse; the extent is floored at a"           \
+      " tenth of the tonemapped unit")                                                              \
+    X(GI_REFLECTION_CONFIDENCE_TONEMAP_RANGE, 10.0f,                                                \
+      "radiance", "derived: the confidence distance is measured in the bounded space L / (1"        \
+      " + Lum / range) so one bright spike in the 3x3 box cannot stretch the extent and hide"       \
+      " every real disagreement behind it; 10 keeps the space near-linear up to"                    \
+      " scene-referred whites and compresses only fireflies")                                       \
     X(GI_REFLECTION_GATHER_FADE_START, 0.3f,                                                       \
       "GGX roughness", "derived: 0.75 x GI_REFLECTION_ROUGH_CUTOFF. The traced tiers now"          \
       " SPREAD with roughness (screen hits average a GGX-cone disk, world hits blend toward"       \
@@ -729,6 +747,53 @@
       " those now skip it via the velocity buffer's object split, so the slack tightened to"       \
       " 0.1 - less stale-light bleed across depth edges under camera motion. Live-tunable as"      \
       " gi_resolve_pass::settings::reprojection_tolerance (this is its default)")                \
+    X(GI_ENV_SH_COEFFS, 9,                                                                         \
+      "coefficients", "derived: the environment radiance is an L2 spherical harmonic (nine"       \
+      " coefficients, IRRADIANCE_SH's 9x1 texture). The screen-probe trace and the reflection"    \
+      " trace have no sampler stage left for it, so their args passes stage the nine rgb"         \
+      " coefficients into the buffers those kernels already bind (the probe buffer past the"      \
+      " traced list, the reflection list past the texture means) and the freed stage 14"          \
+      " carries the velocity buffer / last frame's colour instead")                               \
+    X(GI_REFLECTION_SCREEN_HIT_DEPTH_TOLERANCE, 0.01f,                                              \
+      "fraction of the hit's distance", "derived: a world hit is served the on-screen pixel"        \
+      " only when the visible surface there lies within one percent of the hit's distance -"        \
+      " the mesh-exact hit's own precision at the trace resolution - so a hit behind a"             \
+      " nearer occluder keeps the voxel answer")                                                    \
+    X(GI_REFLECTION_SCREEN_HIT_NORMAL_COS, 0.0872f,                                                 \
+      "cosine", "derived: cos(85 deg) - a hit whose surface faces away from the camera, or"         \
+      " grazes it, is not the pixel the depth buffer shows")                                        \
+    X(GI_SCREEN_HIT_VIGNETTE_START, 0.8f,                                                           \
+      "fraction of the half screen", "derived: an on-screen colour read fades over the"             \
+      " outer fifth of the screen, compared against per-pixel noise, so it has no hard"             \
+      " border where it stops answering")                                                           \
+    X(GI_TEMPORAL_VALIDITY_DITHER, 0.5f,                                                            \
+      "fraction of the tolerance", "derived: the per-tap validity tolerance is scaled by"           \
+      " +-50% per pixel with the IGN pattern, so the rejection edge is a dithered band"             \
+      " rather than a hard temporal seam that prints as a line where history restarts")             \
+    X(GI_TEMPORAL_MOVING_SPEED, 0.005f,                                                             \
+      "world displacement per frame per unit of probe view distance", "derived: a ray whose hit"    \
+      " moved by more than this fraction of the probe's depth since last frame is a MOVING"         \
+      " ray - half a percent of the depth is about a pixel of screen motion at the gather's"        \
+      " resolution, the smallest displacement its history could tell from noise. A"                 \
+      " receiver's history is shortened by the fraction of its rays that hit movers, which"         \
+      " reaches the receivers of a mover's shadow and bounce - what a per-pixel velocity"           \
+      " buffer, which only knows the receiver itself, cannot see")                                  \
+    X(GI_TEMPORAL_MOVING_FRACTION_FULL, 0.1f,                                                       \
+      "fraction of a probe's rays", "derived: one in ten moving rays (six of 64) saturates"         \
+      " the fast update - a mover covering a tenth of a probe's hemisphere already owns the"        \
+      " pixel's lighting change")                                                                   \
+    X(GI_TEMPORAL_MOVING_DEAD_ZONE, 0.2f,                                                           \
+      "of the saturated fraction", "derived: the remap (f - 0.2) / 0.8 - a probe with under"        \
+      " 2 percent moving rays (one ray of 64) keeps its full history: a single stray hit is"        \
+      " noise, not a mover")                                                                        \
+    X(GI_TEMPORAL_MOVING_MAX, 0.9f,                                                                 \
+      "unitless", "derived: the collapse never removes the whole window - a fully moving"           \
+      " pixel still averages GI_TEMPORAL_MOVING_MIN_FRAMES plus a tenth of the slow window")        \
+    X(GI_TEMPORAL_MOVING_MIN_FRAMES, 2.0f,                                                          \
+      "frames", "derived: the slow lane's cap under a saturated moving fraction. This"              \
+      " gather takes four rays per pixel of a bimodal signal, so one frame of it is"                \
+      " fireflies - two keeps alpha at 1/3 while a moving shadow still follows within a few"        \
+      " frames instead of a 24-frame trail")                                                        \
     X(GI_TEMPORAL_DIRTY_HOLD_FRAMES, 48,                                                           \
       "frames", "derived: how long a moved instance's region keeps the temporal's FAST cap"       \
       " after its last change. The stale light a mover leaves behind reaches the gather"          \

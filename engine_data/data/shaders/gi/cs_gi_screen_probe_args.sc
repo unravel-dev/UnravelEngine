@@ -21,6 +21,9 @@
 #include "gi/gi_constants.sh"
 #include "gi/gi_probe_common.sh"
 
+/// Last frame's environment SH (IRRADIANCE_SH, 9x1): staged into the probe buffer's SH
+/// block for the trace, whose sampler stages are all spoken for.
+SAMPLER2D(s_gi_env_sh, 0);
 BUFFER_RO(b_gi_probe_traced, uint, 6);
 BUFFER_RW(b_gi_probe_args, uvec4, 5);
 BUFFER_RW(b_gi_probes, vec4, 7);
@@ -36,4 +39,11 @@ void main()
 	// Whole-vec4 store: the D3D path binds this as a typed UAV, and typed UAV stores must
 	// write every component (the same rule the classify pass documents).
 	b_gi_probes[list_base] = vec4(head.x, float(count), head.z, head.w);
+	// The environment SH block (GiProbeEnvShBase): the trace's completion sky.
+	uint sh_base = GiProbeEnvShBase();
+	for(int k = 0; k < GI_ENV_SH_COEFFS; ++k)
+	{
+		vec3 coefficient = texelFetch(s_gi_env_sh, ivec2(k, 0), 0).xyz;
+		b_gi_probes[sh_base + uint(k)] = vec4(coefficient, 0.0);
+	}
 }

@@ -2759,6 +2759,9 @@ void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
     // LAST frame's denoised result - the rough-specular source (one frame of lag, the
     // same convention as prev_color).
     grp.gi_diffuse = rview.tex_safe_get("GI_RESOLVE");
+    // Last frame's composited colour (the same snapshot the gather's screen tier and SSR
+    // read): the compute trace upgrades on-screen world hits to the lit pixel with it.
+    grp.prev_color = rview.tex_safe_get("PREV_SCENE_HDR");
     grp.temporal_frames = gi_reflection_settings.resolve.reflection_temporal_frames;
     // This frame's velocity buffer, handed to the pass explicitly (a valid texture IS the enable).
     grp.velocity = rview.tex_safe_get("VELOCITY");

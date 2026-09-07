@@ -20,7 +20,9 @@
  *   [1] = the staged trace count the kernel bounds-checks against.
  *   [2 .. 2 + GI_REFLECTION_MEAN_SLOTS*3) = the texture means the args pass stages for the
  *         trace kernel's albedo remodulation (this pass neither reads nor writes them).
- *   [2 + GI_REFLECTION_MEAN_SLOTS*3 + i] = packed texel coords, y in the high 16 bits.
+ *   [.. + GI_ENV_SH_COEFFS*3) = the environment SH the args pass stages for the kernel's sky.
+ *   [2 + GI_REFLECTION_MEAN_SLOTS*3 + GI_ENV_SH_COEFFS*3 + i] = packed texel coords, y in
+ *         the high 16 bits.
  */
 
 #include "bgfx_compute.sh"
@@ -91,5 +93,6 @@ void main()
 	}
 	uint slot;
 	atomicFetchAndAdd(b_gi_refl_list[0], 1u, slot);
-	b_gi_refl_list[2u + uint(GI_REFLECTION_MEAN_SLOTS) * 3u + slot] = (uint(pixel.y) << 16u) | uint(pixel.x);
+	b_gi_refl_list[2u + uint(GI_REFLECTION_MEAN_SLOTS) * 3u + uint(GI_ENV_SH_COEFFS) * 3u + slot] =
+	    (uint(pixel.y) << 16u) | uint(pixel.x);
 }

@@ -59,14 +59,16 @@ void main()
 	{
 		// The screen share the temporal weights by: an interpolated probe carries its
 		// parents' mean, so the record never holds a stale value from an older trace.
-		float screen_share = 0.0;
+		// x = screen share, y = moving share (rays that hit moving geometry), both the
+		// parents' mean.
+		vec2 shares = vec2_splat(0.0);
 		for(int share_p = 0; share_p < 4; ++share_p)
 		{
 			uint parent_record = (GiProbeRecord(parents[share_p].x, parents[share_p].y, 0) +
 			                      u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
-			screen_share += b_gi_probes[parent_record + uint(GI_PROBE_SCREEN_SHARE)].x * 0.25;
+			shares += b_gi_probes[parent_record + uint(GI_PROBE_SCREEN_SHARE)].xy * 0.25;
 		}
-		b_gi_probes[record + uint(GI_PROBE_SCREEN_SHARE)] = vec4(screen_share, 0.0, 0.0, 0.0);
+		b_gi_probes[record + uint(GI_PROBE_SCREEN_SHARE)] = vec4(shares.x, shares.y, 0.0, 0.0);
 	}
 	vec3 radiance = vec3_splat(0.0);
 	float alpha = 0.0;

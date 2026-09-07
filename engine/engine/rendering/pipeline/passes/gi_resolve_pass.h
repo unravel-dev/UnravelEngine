@@ -299,7 +299,10 @@ private:
         gfx::program::uniform_ptr s_light_voxels;
         gfx::program::uniform_ptr s_world_probe_depth;
         gfx::program::uniform_ptr s_world_probe_radiance_read;
-        gfx::program::uniform_ptr s_gi_env_sh;
+        /// Stage 14: this frame's velocity buffer, so a screen hit ON a mover reads the
+        /// mover's own last-frame pixel (the sky SH moved into the probe buffer's SH block
+        /// to free the stage; the args pass stages it).
+        gfx::program::uniform_ptr s_gi_velocity;
         gfx::program::uniform_ptr s_gi_prev_color;
 
         void cache_uniforms()
@@ -339,7 +342,7 @@ private:
                           s_world_probe_radiance_read,
                           "s_world_probe_radiance_read",
                           gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_velocity, "s_gi_velocity", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gi_prev_color, "s_gi_prev_color", gfx::uniform_type::Sampler);
         }
 
@@ -447,10 +450,14 @@ private:
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_gi_probe_params;
+        /// The environment SH the pass stages into the probe buffer's SH block (past the
+        /// traced list), where the trace kernel reads the completion sky from.
+        gfx::program::uniform_ptr s_gi_env_sh;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
         }
 
         auto is_valid() const -> bool

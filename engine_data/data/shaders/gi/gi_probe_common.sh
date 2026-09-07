@@ -252,6 +252,15 @@ uint GiProbeTracedListBase()
 	       uint(GI_PROBE_STRIDE);
 }
 
+/// First vec4 of the environment SH block: past the traced list (one entry per lattice
+/// probe). GI_ENV_SH_COEFFS vec4s, rgb = the coefficient, staged by the args pass from the
+/// IRRADIANCE_SH texture; the trace reads the completion sky from here because its last
+/// sampler stage now carries the velocity buffer.
+uint GiProbeEnvShBase()
+{
+	return GiProbeTracedListBase() + uint(u_gi_probe_count_x * u_gi_probe_count_y);
+}
+
 uint GiProbeIndex(int px, int py)
 {
 	return uint(py) * uint(u_gi_probe_count_x) + uint(px);

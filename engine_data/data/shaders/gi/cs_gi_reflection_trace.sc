@@ -34,9 +34,24 @@ vec3 GiReflectionMeanAlbedo(uint slot)
 	            uintBitsToFloat(b_gi_refl_list[base + 2u]));
 }
 
+/// The k-th environment SH coefficient from the list's SH block (layout in
+/// cs_gi_reflection_args.sc): the kernel's sky reads it from here, which freed stage 14
+/// for last frame's colour.
+vec3 GiReflectionEnvSh(int k)
+{
+	uint base = 2u + uint(GI_REFLECTION_MEAN_SLOTS) * 3u + uint(k) * 3u;
+	return vec3(uintBitsToFloat(b_gi_refl_list[base + 0u]),
+	            uintBitsToFloat(b_gi_refl_list[base + 1u]),
+	            uintBitsToFloat(b_gi_refl_list[base + 2u]));
+}
+
 // Arms the kernel's remodulation block and gi_light_voxels.sh's attribute-albedo read
-// (SAMPLER3D stage 11). Must precede the kernel include.
+// (SAMPLER3D stage 11), the list-sourced sky SH (GiReflectionEnvSh above) and, on the
+// freed stage 14, last frame's colour for the on-screen hit upgrade. Must precede the
+// kernel include.
 #define GI_LIGHT_VOXEL_READ_ALBEDO
+#define GI_REFLECTION_ENV_SH_FROM_LIST
+#define GI_REFLECTION_SCREEN_COLOR
 #include "gi/gi_reflection_kernel.sh"
 
 IMAGE2D_WO(s_gi_refl_out, rgba16f, 7);
@@ -57,7 +72,8 @@ void main()
 		return;
 	}
 	// (packed is a reserved word in GLSL)
-	uint packed_pixel = b_gi_refl_list[2u + uint(GI_REFLECTION_MEAN_SLOTS) * 3u + index];
+	uint packed_pixel =
+	    b_gi_refl_list[2u + uint(GI_REFLECTION_MEAN_SLOTS) * 3u + uint(GI_ENV_SH_COEFFS) * 3u + index];
 	ivec2 pixel = ivec2(int(packed_pixel & 0xffffu), int(packed_pixel >> 16u));
 	vec2 frag_coord = vec2(pixel) + vec2_splat(0.5);
 	vec2 uv = frag_coord * u_gi_reflection_texel.xy;

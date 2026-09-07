@@ -602,6 +602,28 @@ void surface_cache_system::add_instance(uint64_t identity,
     tracked.has_pose = true;
     tracked.world_to_local = inst.world_to_local;
     tracked.local_to_world_scale = inst.local_to_world_scale;
+    // INSTANCE VELOCITY (the gather temporal's hit-motion signal): the bounds centre's
+    // displacement since this placement's previous frame, and the largest displacement of
+    // any local-bounds corner (a spinning placement moves its surface, not its centre);
+    // both zero on a first sighting.
+    if(tracked.has_last_pose)
+    {
+        auto& moving = instances_.back();
+        const math::vec4 center_local(math::vec3(sdf.bounds.get_center()), 1.0f);
+        moving.velocity = math::vec3(local_to_world * center_local) -
+                          math::vec3(tracked.last_local_to_world * center_local);
+        float max_corner = 0.0f;
+        for(const auto& corner : sdf.bounds.get_corners())
+        {
+            const math::vec4 corner4(corner, 1.0f);
+            const math::vec3 displacement =
+                math::vec3(local_to_world * corner4) - math::vec3(tracked.last_local_to_world * corner4);
+            max_corner = math::max(max_corner, math::length(displacement));
+        }
+        moving.max_corner_displacement = max_corner;
+    }
+    tracked.last_local_to_world = local_to_world;
+    tracked.has_last_pose = true;
     // The clipmap composer borrows a raw mesh_sdf pointer, so the owning mesh has to be kept
     // alive for as long as the composition input list references it.
     clipmap_keepalive_.push_back(owner);
@@ -803,6 +825,12 @@ void surface_cache_system::upload_instances()
         dst[36] = inst.emissive.x;
         dst[37] = inst.emissive.y;
         dst[38] = inst.emissive.z;
+        // Lane 10: the instance velocity (see instance::velocity), w = the largest corner
+        // displacement over the same frame (rotation).
+        dst[40] = inst.velocity.x;
+        dst[41] = inst.velocity.y;
+        dst[42] = inst.velocity.z;
+        dst[43] = inst.max_corner_displacement;
         dst[39] = 0.0f;
     }
     // Content hash over the exact bytes the GPU receives: any change to a transform, material
