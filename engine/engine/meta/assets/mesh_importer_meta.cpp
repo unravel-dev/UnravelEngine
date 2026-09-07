@@ -109,13 +109,39 @@ REFLECT(mesh_importer_meta)
                             "The surface cache GI tracer needs it to see this mesh; without one the\n"
                             "mesh neither occludes nor bounces indirect light."},
         })
+        .data<&mesh_importer_meta::sdf_meta::target_voxel_size>("target_voxel_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "target_voxel_size"},
+            entt::attribute{"pretty_name", "Voxel Size"},
+            entt::attribute{"tooltip",
+                            "Edge length of one voxel, in local units. 0 = Auto (derive it from\n"
+                            "Resolution, which is what every existing asset does).\n"
+                            "\n"
+                            "The setting worth reaching for, because everything else follows from it:\n"
+                            "  detail  - the field resolves features about this size and cannot\n"
+                            "            represent thinner geometry at all;\n"
+                            "  range   - it can report a distance out to 4x this, and saturates\n"
+                            "            past that, so finer is NOT simply better;\n"
+                            "  cost    - a surface is 2D, so halving this costs about 4x, not 8x.\n"
+                            "\n"
+                            "Set it to the smallest feature you need this mesh to occlude with:\n"
+                            "0.05 resolves 5 cm detail and reports distance out to 20 cm.\n"
+                            "The limits below only ever coarsen, so a request can be refused but\n"
+                            "never exceeded - the compile log says when one was."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.01f},
+        })
         .data<&mesh_importer_meta::sdf_meta::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "resolution"},
-            entt::attribute{"pretty_name", "Resolution"},
+            entt::attribute{"pretty_name", "Resolution (Auto only)"},
+            entt::attribute{"group", "Advanced"},
             entt::attribute{"tooltip",
-                            "Target voxel count along the longest bounds axis. Higher resolves finer\n"
-                            "detail and occludes thinner geometry, at a proportional memory cost."},
+                            "Used only when Voxel Size is 0 (Auto): target voxel count along the\n"
+                            "longest BOUNDS axis.\n"
+                            "A poor description of quality, because it is relative to the mesh rather\n"
+                            "than to the world - a 10 m wall and a 1 m prop at 64 differ seventeenfold\n"
+                            "in the size they actually resolve. Prefer setting Voxel Size."},
             entt::attribute{"min", 8},
             entt::attribute{"max", 256},
         })
@@ -123,7 +149,8 @@ REFLECT(mesh_importer_meta)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "min_voxel_size"},
             entt::attribute{"pretty_name", "Min Voxel Size"},
-            entt::attribute{"tooltip", "Lower clamp on the derived voxel size, in local units."},
+            entt::attribute{"group", "Advanced"},
+            entt::attribute{"tooltip", "Lower clamp on the voxel size, in local units."},
             entt::attribute{"min", 0.001f},
             entt::attribute{"step", 0.001f},
         })
@@ -131,19 +158,23 @@ REFLECT(mesh_importer_meta)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_voxel_size"},
             entt::attribute{"pretty_name", "Max Voxel Size"},
-            entt::attribute{"tooltip", "Upper clamp on the derived voxel size, in local units."},
+            entt::attribute{"group", "Advanced"},
+            entt::attribute{"tooltip", "Upper clamp on the voxel size, in local units."},
             entt::attribute{"min", 0.001f},
             entt::attribute{"step", 0.01f},
         })
         .data<&mesh_importer_meta::sdf_meta::max_total_voxels>("max_total_voxels"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_total_voxels"},
+            entt::attribute{"group", "Advanced"},
             entt::attribute{"pretty_name", "Max Total Voxels"},
             entt::attribute{"tooltip",
-                            "Ceiling on total grid voxels in ONE field.\n"
-                            "The dominant control on both bake time and atlas footprint: each scales\n"
-                            "with voxel count, and voxel count is cubic in resolution, so a per-axis\n"
-                            "limit alone still permits millions of voxels in a single field.\n"
+                            "Ceiling on total grid voxels in ONE field, empty space included.\n"
+                            "The dominant control on both bake time and atlas footprint: each\n"
+                            "scales with voxel count, and voxel count is cubic in resolution, so\n"
+                            "a per-axis limit alone still permits millions of voxels in a single\n"
+                            "field. For a compact mesh it is usually this, not Resolution, that\n"
+                            "settles the size.\n"
                             "Enforced by coarsening the voxel, so a field always covers its whole mesh.\n"
                             "Lower this on models split into very many submeshes."},
             entt::attribute{"min", 4096.0f},
@@ -152,6 +183,7 @@ REFLECT(mesh_importer_meta)
         .data<&mesh_importer_meta::sdf_meta::lod_index>("lod_index"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "lod_index"},
+            entt::attribute{"group", "Advanced"},
             entt::attribute{"pretty_name", "Bake From LOD"},
             entt::attribute{"tooltip",
                             "LOD the distance field is baked from. 0 is full detail.\n"
@@ -174,6 +206,27 @@ REFLECT(mesh_importer_meta)
                             "Required for foliage cards and any other mesh that is not a closed\n"
                             "surface: inside/outside is undefined there, and a signed bake produces\n"
                             "randomly signed voxels that make the mesh flicker between solid and open."},
+        })
+        .data<&mesh_importer_meta::sdf_meta::max_component_spread>("max_component_spread"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_component_spread"},
+            entt::attribute{"pretty_name", "Max Scatter"},
+            entt::attribute{"group", "Advanced"},
+            entt::attribute{"tooltip",
+                            "Refuse a submesh whose bounds span more than this many times its\n"
+                            "largest connected piece. 0 disables the check.\n"
+                            "\n"
+                            "A submesh grouped by MATERIAL rather than by location is scattered\n"
+                            "across the whole model, so its field gets a voxel sized to the GAPS\n"
+                            "between its parts and cannot resolve the parts at all. What it bakes\n"
+                            "instead is a phantom the size of the spread, which occludes and steals\n"
+                            "GI over a whole neighbourhood - and costs a full field of atlas doing it.\n"
+                            "\n"
+                            "The compile log prints 'spread NNNx' for every offending submesh: set\n"
+                            "this below the values you see there. Refusing costs only the parts'\n"
+                            "own contribution, which the voxel was too coarse to represent anyway."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 1.0f},
         })
         .data<&mesh_importer_meta::sdf_meta::two_sided_thickness>("two_sided_thickness"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -281,6 +334,7 @@ LOAD_INSTANTIATE(mesh_importer_meta::model_meta, ser20::iarchive_binary_t);
 SAVE(mesh_importer_meta::sdf_meta)
 {
     try_save(ar, ser20::make_nvp("generate_sdf", obj.generate_sdf));
+    try_save(ar, ser20::make_nvp("target_voxel_size", obj.target_voxel_size));
     try_save(ar, ser20::make_nvp("resolution", obj.resolution));
     try_save(ar, ser20::make_nvp("min_voxel_size", obj.min_voxel_size));
     try_save(ar, ser20::make_nvp("max_voxel_size", obj.max_voxel_size));
@@ -288,6 +342,7 @@ SAVE(mesh_importer_meta::sdf_meta)
     try_save(ar, ser20::make_nvp("lod_index", obj.lod_index));
     try_save(ar, ser20::make_nvp("two_sided", obj.two_sided));
     try_save(ar, ser20::make_nvp("two_sided_thickness", obj.two_sided_thickness));
+    try_save(ar, ser20::make_nvp("max_component_spread", obj.max_component_spread));
 }
 SAVE_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::oarchive_binary_t);
@@ -295,6 +350,7 @@ SAVE_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::oarchive_binary_t);
 LOAD(mesh_importer_meta::sdf_meta)
 {
     try_load(ar, ser20::make_nvp("generate_sdf", obj.generate_sdf));
+    try_load(ar, ser20::make_nvp("target_voxel_size", obj.target_voxel_size));
     try_load(ar, ser20::make_nvp("resolution", obj.resolution));
     try_load(ar, ser20::make_nvp("min_voxel_size", obj.min_voxel_size));
     try_load(ar, ser20::make_nvp("max_voxel_size", obj.max_voxel_size));
@@ -302,6 +358,7 @@ LOAD(mesh_importer_meta::sdf_meta)
     try_load(ar, ser20::make_nvp("lod_index", obj.lod_index));
     try_load(ar, ser20::make_nvp("two_sided", obj.two_sided));
     try_load(ar, ser20::make_nvp("two_sided_thickness", obj.two_sided_thickness));
+    try_load(ar, ser20::make_nvp("max_component_spread", obj.max_component_spread));
 }
 LOAD_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::iarchive_binary_t);

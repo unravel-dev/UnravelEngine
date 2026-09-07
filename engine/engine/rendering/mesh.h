@@ -493,6 +493,18 @@ public:
         ///< An individual entry may be invalid when that submesh is degenerate or sub-voxel; the
         ///< vector is empty when the asset opted out entirely.
         std::vector<mesh_sdf> submesh_sdfs;
+
+        ///< Coarser levels for each submesh, [submesh][level], where level 0 here is the FIRST
+        ///< level coarser than @ref submesh_sdfs -- which always holds the finest.
+        ///
+        ///< Split this way rather than storing whole chains so an asset compiled before mips
+        ///< existed still loads: its saved field lands in @ref submesh_sdfs and this stays empty,
+        ///< which reads as a one-level chain and behaves exactly as it did.
+        ///
+        ///< The levels exist so the atlas can fall back to one that FITS instead of dropping a
+        ///< submesh out of global illumination entirely. Each doubles the voxel, so it holds
+        ///< about a quarter of the bricks.
+        std::vector<std::vector<mesh_sdf>> submesh_sdf_coarse_mips;
     };
 
     /**
@@ -885,7 +897,15 @@ public:
      * @param submesh_index Index of the submesh, matching the order the renderer draws them in.
      * @return const mesh_sdf& The baked field, in mesh local space.
      */
-    auto get_sdf(uint32_t submesh_index = 0) const -> const mesh_sdf&;
+    auto get_sdf(uint32_t submesh_index = 0, uint32_t mip_level = 0) const -> const mesh_sdf&;
+
+    /**
+     * @brief Levels available for a submesh, at least 1 for any submesh that has a field.
+     *
+     * Level 0 is the finest. A request past the end is clamped to the coarsest, so a caller
+     * walking levels never has to bounds check.
+     */
+    auto get_sdf_mip_count(uint32_t submesh_index) const -> uint32_t;
 
     /// @brief Number of baked fields, one per submesh. Zero when the mesh has none.
     auto get_sdf_count() const -> uint32_t;
@@ -1371,6 +1391,8 @@ protected:
     ///< Signed distance field baked at asset compile time, in object space. Consumed by the
     ///< GI tracer; invalid when the asset has none.
     std::vector<mesh_sdf> submesh_sdfs_;
+    ///< Coarser levels per submesh; see load_data::submesh_sdf_coarse_mips.
+    std::vector<std::vector<mesh_sdf>> submesh_sdf_coarse_mips_;
     ///< Total number of faces in the prepared mesh.
     uint32_t face_count_ = 0;
     ///< Total number of vertices in the prepared mesh.

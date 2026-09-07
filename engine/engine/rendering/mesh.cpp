@@ -835,6 +835,7 @@ auto mesh::load_mesh(load_data&& data) -> bool
 
     default_material_uids_ = std::move(data.default_material_uids);
     submesh_sdfs_ = std::move(data.submesh_sdfs);
+    submesh_sdf_coarse_mips_ = std::move(data.submesh_sdf_coarse_mips);
 
     const bool has_skin_data = data.skin_data.has_bones();
     const bool skin_is_prepared = data.skin_is_prepared;
@@ -1612,8 +1613,9 @@ auto mesh::runtime_sdf_bake_settings() -> mesh_sdf_bake_settings
     // voxel, and the voxel scales with the entity transform - a unit cube scaled to room size
     // at 32^3 rounded its corners by ~0.5 m, opening grazing-angle gaps that leaked direct sun
     // into sealed interiors through the GI's traced shadow rays (measured: the sealed-box
-    // energy-injection hunt). 64^3 halves the rounding, bakes 12-triangle primitives in
-    // negligible time, and sits exactly at the importer's default voxel budget (64^3 = 262144).
+    // energy-injection hunt). 64^3 halves the rounding and bakes 12-triangle primitives in
+    // negligible time. It is a starting point rather than the final size: the sizing refines
+    // against the surface-brick budget from here, the same as an imported mesh.
     settings.resolution = 64;
     return settings;
 }
@@ -1622,6 +1624,7 @@ auto mesh::generate_sdf(const mesh_sdf_bake_settings& settings) -> bool
 {
     APP_SCOPE_PERF("GI/Bake/Runtime Mesh SDF");
     submesh_sdfs_.clear();
+    submesh_sdf_coarse_mips_.clear();
     sdf_source_geometry geometry;
     if(!extract_sdf_source_geometry(system_vb_, vertex_count_, vertex_format_, system_ib_, face_count_, geometry))
     {
@@ -1656,7 +1659,7 @@ auto mesh::end_prepare_primitive(bool hardware_copy) -> bool
     return true;
 }
 
-auto mesh::get_sdf(uint32_t submesh_index) const -> const mesh_sdf&
+auto mesh::get_sdf(uint32_t submesh_index, uint32_t mip_level) const -> const mesh_sdf&
 {
     // A shared empty field for out-of-range requests, so callers can rely on a reference and
     // detect absence with mesh_sdf::is_valid rather than having to bounds check first.
@@ -1665,7 +1668,36 @@ auto mesh::get_sdf(uint32_t submesh_index) const -> const mesh_sdf&
     {
         return empty_field;
     }
-    return submesh_sdfs_[submesh_index];
+    if(mip_level == 0)
+    {
+        return submesh_sdfs_[submesh_index];
+    }
+    if(submesh_index >= submesh_sdf_coarse_mips_.size())
+    {
+        return submesh_sdfs_[submesh_index];
+    }
+    const auto& coarse = submesh_sdf_coarse_mips_[submesh_index];
+    if(coarse.empty())
+    {
+        return submesh_sdfs_[submesh_index];
+    }
+    // Clamped rather than refused: a caller walking levels for one that fits should keep getting
+    // the coarsest available, not fall off the end into an invalid field.
+    const size_t index = math::min<size_t>(mip_level - 1, coarse.size() - 1);
+    return coarse[index];
+}
+
+auto mesh::get_sdf_mip_count(uint32_t submesh_index) const -> uint32_t
+{
+    if(submesh_index >= submesh_sdfs_.size() || !submesh_sdfs_[submesh_index].is_sampleable())
+    {
+        return 0;
+    }
+    if(submesh_index >= submesh_sdf_coarse_mips_.size())
+    {
+        return 1;
+    }
+    return 1u + uint32_t(submesh_sdf_coarse_mips_[submesh_index].size());
 }
 
 auto mesh::get_sdf_count() const -> uint32_t

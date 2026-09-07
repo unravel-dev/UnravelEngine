@@ -110,7 +110,11 @@ struct mesh_importer_meta : crtp_meta_type<mesh_importer_meta, asset_importer_me
     {
         ///< Generate a distance field for this mesh at compile time.
         bool generate_sdf{true};
-        ///< Target voxel count along the longest bounds axis.
+        ///< Edge length of one voxel, in local units. 0 = Auto, which derives it from
+        ///< @ref resolution. The one setting worth reaching for: it is what decides the detail
+        ///< the field resolves, how far it can report a distance, and what it costs.
+        float target_voxel_size{0.0f};
+        ///< Fallback for Auto: target voxel count along the longest bounds axis.
         uint32_t resolution{64};
         ///< Clamps on the derived voxel size, in local units.
         float min_voxel_size{0.01f};
@@ -130,6 +134,11 @@ struct mesh_importer_meta : crtp_meta_type<mesh_importer_meta, asset_importer_me
         bool two_sided{false};
         ///< Local-space half thickness given to the shell when @ref two_sided is set.
         float two_sided_thickness{0.05f};
+        ///< Refuse a submesh whose bounds span more than this many times its largest connected
+        ///< piece. A submesh grouped by MATERIAL rather than by location is scattered over the
+        ///< whole model, so its field is sized to the gaps and cannot resolve the parts; what it
+        ///< bakes instead is a phantom the size of the spread. 0 disables the check.
+        float max_component_spread{32.0f};
     } sdf;
 
     struct rig_meta

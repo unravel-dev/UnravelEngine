@@ -9,6 +9,7 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
@@ -131,8 +132,48 @@ auto surface_cache_system::deinit(rtti::context& ctx) -> bool
     return true;
 }
 
-auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid, const mesh& m, uint32_t submesh_index)
-    -> uint32_t
+auto surface_cache_system::compute_wanted_mip(const math::bbox& world_bounds) const -> uint32_t
+{
+    /// Distance at which a placement drops a level, as a multiple of its own longest axis. A big
+    /// building keeps its finest field far further away than a bolt does, which is the point.
+    constexpr float k_finest_band = 6.0f;
+    constexpr float k_middle_band = 24.0f;
+    if(camera_positions_.empty())
+    {
+        // No camera is not "everything is far": an editor frame before any view exists would
+        // otherwise place the whole scene at its coarsest level and then have to promote all of it.
+        return 0;
+    }
+    const math::vec3 extent = world_bounds.get_dimensions();
+    const float size = math::max(extent.x, math::max(extent.y, extent.z));
+    if(!(size > 0.0f))
+    {
+        return 0;
+    }
+    float nearest = std::numeric_limits<float>::max();
+    for(const auto& eye : camera_positions_)
+    {
+        // Distance to the BOX, not to its centre, so a placement the camera is standing inside
+        // reads as zero rather than as half its own diagonal.
+        const math::vec3 clamped = math::clamp(eye, world_bounds.min, world_bounds.max);
+        nearest = math::min(nearest, math::length(eye - clamped));
+    }
+    const float relative = nearest / size;
+    if(relative <= k_finest_band)
+    {
+        return 0;
+    }
+    if(relative <= k_middle_band)
+    {
+        return 1;
+    }
+    return mesh_sdf::mip_count - 1;
+}
+
+auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
+                                        const mesh& m,
+                                        uint32_t submesh_index,
+                                        uint32_t wanted_mip) -> acquired_field
 {
     // Keyed by submesh as well as mesh: each submesh has its own field, and they are uploaded to
     // the atlas independently.
@@ -145,11 +186,32 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid, const mesh& 
     record.last_used_frame = world_frame_;
     if(record.has_no_field)
     {
-        return sdf_atlas::invalid_index;
+        return {};
     }
     if(record.header_index != sdf_atlas::invalid_index)
     {
-        return record.header_index;
+        // Already resident, but perhaps at a level chosen when this was further away or when the
+        // atlas was busier. Promote only when the finer level fits with room to spare: promoting
+        // into the last few slots would refuse the next field and trigger a growth or a scene-wide
+        // demotion, which is a far worse trade than one placement staying coarse a little longer.
+        // The margin is also the hysteresis that stops a placement on a band edge from being
+        // released and re-uploaded every frame.
+        if(wanted_mip < record.resident_mip)
+        {
+            const auto& finer = m.get_sdf(submesh_index, wanted_mip);
+            const uint32_t headroom = atlas_.get_atlas_brick_dim() * atlas_.get_atlas_brick_dim();
+            if(finer.is_valid() && atlas_.has_upload_budget(finer) &&
+               finer.get_surface_brick_count() + headroom <= atlas_.get_free_brick_count())
+            {
+                atlas_.release(record.header_index);
+                record.header_index = sdf_atlas::invalid_index;
+                ++content_revision_;
+            }
+        }
+        if(record.header_index != sdf_atlas::invalid_index)
+        {
+            return {record.header_index, record.resident_mip};
+        }
     }
     const auto& sdf = m.get_sdf(submesh_index);
     if(!sdf.is_valid())
@@ -158,7 +220,7 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid, const mesh& 
         // property of the mesh and can never change while it is loaded, so it is recorded and not
         // retried for the rest of the session.
         record.has_no_field = true;
-        return sdf_atlas::invalid_index;
+        return {};
     }
     // Name the phantom fields, once each: a shell floored this fat means the geometry is far
     // below its own field's resolution (a rope or curtain submesh whose bounds span a building
@@ -188,7 +250,7 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid, const mesh& 
     // something unrelated released bricks).
     if(!atlas_.has_upload_budget(sdf))
     {
-        return sdf_atlas::invalid_index;
+        return {};
     }
     // Reached on first use, or after a previous attempt was refused for want of atlas room. A
     // refusal describes the atlas at a moment rather than the mesh, so it must be retried once the
@@ -198,17 +260,100 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid, const mesh& 
     const uint32_t generation = atlas_.get_release_generation();
     if(record.attempt_generation == generation)
     {
-        return sdf_atlas::invalid_index;
+        return {};
     }
     record.attempt_generation = generation;
-    record.header_index = atlas_.upload(sdf);
-    if(record.header_index != sdf_atlas::invalid_index)
+    // Finest level that FITS, not finest level full stop. A scene whose fields do not all fit the
+    // shared atlas used to lose whole submeshes from GI -- silently in the image, since a missing
+    // occluder just leaks light somewhere else. With a chain the same scene loses RESOLUTION
+    // instead: each level down holds about a quarter of the bricks and reaches twice as far before
+    // saturating, which for a distant or small submesh is a trade nobody sees.
+    //
+    // Checked against free slots BEFORE committing, because a refused upload is not free: it burns
+    // the generation stamp and the submesh then waits for an unrelated release to retry.
+    const uint32_t mip_count = m.get_sdf_mip_count(submesh_index);
+    // Starts at the scene-wide bias, not at 0. See global_mip_bias_: choosing the finest level
+    // that happens to fit is greedy, and greedy means the first arrivals spend the whole atlas.
+    // The coarser of what distance asks for and what atlas pressure imposes. Neither may be
+    // overridden by the other: a near placement still cannot have a level the atlas cannot hold.
+    const uint32_t requested = math::max(wanted_mip, global_mip_bias_);
+    const uint32_t first_mip = math::min(requested, mip_count > 0 ? mip_count - 1 : 0);
+    for(uint32_t mip = first_mip; mip < mip_count; ++mip)
     {
-        // Residency moved: a level fingerprint hashes the sdf pointer, which the packed
-        // instance bytes do not carry.
-        ++content_revision_;
+        const auto& level = m.get_sdf(submesh_index, mip);
+        if(!level.is_valid())
+        {
+            continue;
+        }
+        // The coarsest level is attempted whether or not it looks like it fits, so the "no room at
+        // all" path still reaches atlas_.upload and reports through its own diagnostics rather
+        // than failing silently here.
+        const bool is_last = (mip + 1 == mip_count);
+        if(!is_last && level.get_surface_brick_count() > atlas_.get_free_brick_count())
+        {
+            continue;
+        }
+        record.header_index = atlas_.upload(level);
+        if(record.header_index != sdf_atlas::invalid_index)
+        {
+            record.resident_mip = mip;
+            // Residency moved: a level fingerprint hashes the sdf pointer, which the packed
+            // instance bytes do not carry.
+            ++content_revision_;
+            return {record.header_index, record.resident_mip};
+        }
     }
-    return record.header_index;
+    return {};
+}
+
+void surface_cache_system::apply_atlas_pressure()
+{
+    APP_SCOPE_PERF("GI/SurfaceCache/Apply Atlas Pressure");
+    const uint64_t rejected = atlas_.get_rejected_brick_total();
+    if(rejected <= acknowledged_rejected_bricks_)
+    {
+        return;
+    }
+    acknowledged_rejected_bricks_ = rejected;
+    // MEMORY FIRST, RESOLUTION SECOND. A bigger atlas costs VRAM; a coarser field costs the
+    // quality of every occluder in the scene. Growing is also what UE does -- its brick atlas
+    // grows and its documented maximum is a target rather than a cap -- so degradation is the
+    // last resort rather than the first response.
+    if(atlas_.grow())
+    {
+        // grow() drops everything resident, because a slot index means a different position in a
+        // differently sized atlas, and it resets its own refusal counters with them.
+        acknowledged_rejected_bricks_ = 0;
+        residency_.clear();
+        ++content_revision_;
+        return;
+    }
+    if(global_mip_bias_ + 1 >= mesh_sdf::mip_count)
+    {
+        // At the memory ceiling AND as coarse as the chains go. Nothing left to trade; the atlas
+        // says what it needs.
+        return;
+    }
+    ++global_mip_bias_;
+    // Everything currently resident chose its level under the OLD bias, and most of it chose the
+    // finest. Leaving those in place would leave the atlas exactly as full as it is now, so the
+    // bias would apply only to fields that had not been placed yet -- which is the same
+    // first-come-first-served failure one level down. Releasing the lot costs a frame of GI
+    // during load and re-places everything at the new level.
+    for(auto& entry : residency_)
+    {
+        if(entry.second.header_index != sdf_atlas::invalid_index)
+        {
+            atlas_.release(entry.second.header_index);
+        }
+    }
+    residency_.clear();
+    ++content_revision_;
+    APPLOG_INFO("[SurfaceCache] SDF atlas is at its memory ceiling, so every field drops to mip {0} "
+                "and is replaced. "
+                "Each level down holds about a quarter of the bricks and reaches twice as far "
+                "before saturating, so the scene keeps its occluders and loses resolution instead.",
+                global_mip_bias_);
 }
 
 void surface_cache_system::release_unused_fields()
@@ -902,6 +1047,18 @@ void surface_cache_system::update_world(scene& scn)
         return;
     }
     world_frame_ = frame;
+    // Before anything is placed: if the atlas ran out since the last frame, drop the whole scene a
+    // level first. Doing it here rather than inside the walk is the point -- the walk sees one
+    // field at a time and cannot know the scene overruns until it already has.
+    apply_atlas_pressure();
+    // Every camera, not the one rendering: residency is shared, so the level a field gets must be
+    // a function of the world. Gathered before any placement so compute_wanted_mip sees them all.
+    camera_positions_.clear();
+    scn.registry->view<transform_component, camera_component>().each(
+        [&](auto /*entity*/, auto&& camera_transform, auto&& /*camera*/)
+        {
+            camera_positions_.push_back(camera_transform.get_transform_global().get_position());
+        });
     instances_.clear();
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();
@@ -964,13 +1121,24 @@ void surface_cache_system::update_world(scene& scn)
             for(uint32_t submesh_index = 0; submesh_index < uint32_t(drawn_submesh_count); ++submesh_index)
             {
                 const auto* submesh = mesh_ptr->get_submesh(submesh_index);
-                if(submesh == nullptr || (submesh_index < sdf_count && !submesh->skinned))
+                if(submesh == nullptr)
                 {
                     continue;
                 }
                 const auto mat = resolve_submesh_material(mdl, model_comp, *mesh_ptr, submesh_index);
                 const auto* pbr = dynamic_cast<const pbr_material*>(mat.get());
                 if(pbr == nullptr)
+                {
+                    continue;
+                }
+                // "Has a field" must mean the same thing here as in the field walk below, or the
+                // two sets stop being disjoint and a submesh falls through both. Carrying a baked
+                // field is not sufficient: the walk also declines skinned and alpha-blended
+                // submeshes, and an emissive blended panel -- a screen, a hologram, a glowing
+                // decal -- is exactly the geometry that would otherwise be tracked by neither and
+                // silently stop emitting.
+                const bool is_blended = pbr->get_alpha_mode() == alpha_mode::blend;
+                if(submesh_index < sdf_count && !submesh->skinned && !is_blended)
                 {
                     continue;
                 }
@@ -1031,15 +1199,51 @@ void surface_cache_system::update_world(scene& scn)
                 {
                     continue;
                 }
-                const uint32_t header_index = acquire_field(mesh_handle.uid(), *mesh_ptr, submesh_index);
+                // Resolved once per submesh rather than per placement: every instance of a
+                // submesh is drawn with the same material. Hoisted above acquire_field because
+                // the material can veto the placement outright, and a vetoed submesh must not
+                // take an atlas slot.
+                const auto mat = resolve_submesh_material(mdl, model_comp, *mesh_ptr, submesh_index);
+                // Alpha-blended submeshes never occlude, even when the compiled asset carries a
+                // field (assets baked before the compiler learned to refuse them still do). A
+                // blended surface transmits light, so a field there blocks bounces that should
+                // pass straight through -- glass that darkens the room behind it.
+                //
+                // Decided HERE rather than only at bake time because the material is a property of
+                // the INSTANCE: a component can override a submesh's material, so the same compiled
+                // mesh may be opaque in one placement and blended in another. The compile-time
+                // refusal saves the bake; this is what makes the answer match what is drawn.
+                // Cutout stays -- it is opaque wherever it is not discarded.
+                if(const auto* pbr = dynamic_cast<const pbr_material*>(mat.get()))
+                {
+                    if(pbr->get_alpha_mode() == alpha_mode::blend)
+                    {
+                        continue;
+                    }
+                }
+                // World bounds of the submesh at the ENTITY's transform. A submesh drawn at several
+                // node transforms is banded by the entity rather than per placement: the field is
+                // shared by all of them, so there is one level to choose, and the placements are
+                // offsets within one model rather than scattered across the world.
+                math::bbox submesh_world_bounds;
+                submesh_world_bounds.reset();
+                for(const auto& corner : submesh->bbox.get_corners())
+                {
+                    submesh_world_bounds.add_point(math::vec3(world_transform * math::vec4(corner, 1.0f)));
+                }
+                const auto acquired = acquire_field(mesh_handle.uid(),
+                                                    *mesh_ptr,
+                                                    submesh_index,
+                                                    compute_wanted_mip(submesh_world_bounds));
+                const uint32_t header_index = acquired.header_index;
                 if(header_index == sdf_atlas::invalid_index)
                 {
                     continue;
                 }
-                const auto& sdf = mesh_ptr->get_sdf(submesh_index);
-                // Resolved once per submesh rather than per placement: every instance of a
-                // submesh is drawn with the same material.
-                const auto mat = resolve_submesh_material(mdl, model_comp, *mesh_ptr, submesh_index);
+                // The level the atlas actually took, which under pressure is not the finest one.
+                // Its bounds and voxel differ from the finest level's, and those are what the
+                // placement and the tracer must agree on.
+                const auto& sdf = mesh_ptr->get_sdf(submesh_index, acquired.mip_level);
                 // Placement identity for the dirty-region tracker: entity, submesh, placement
                 // index - stable across frames for as long as the placement exists.
                 const uint64_t entity_key = uint64_t(static_cast<uint32_t>(entity)) << 32u;

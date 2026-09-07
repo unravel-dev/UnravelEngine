@@ -47,6 +47,11 @@ public:
         /// submesh, and running out is silent in the image -- the geometry simply stops
         /// contributing to global illumination -- so it is worth leaving headroom.
         uint32_t atlas_brick_dim = 72;
+        /// Ceiling @ref grow may raise the brick dimension to. 96 is a 960^3 texture at 885 MB,
+        /// which is a lot of VRAM but is the point: a scene that needs it currently loses its
+        /// occluders instead, silently. Growth stops here and the fields start dropping to
+        /// coarser mips, which is the graceful end of the same trade.
+        uint32_t max_atlas_brick_dim = 96;
         /// Brick bytes @ref upload may push in one frame before @ref has_upload_budget starts
         /// deferring whole fields to later frames. A large scene enabling GI otherwise uploads
         /// every field at once - hundreds of megabytes of per-brick texture updates in a single
@@ -93,6 +98,32 @@ public:
     auto has_upload_budget(const mesh_sdf& sdf) const -> bool;
 
     /**
+     * @brief Brick slots currently free.
+     *
+     * Lets a caller holding a mip chain pick the finest level that will actually fit before
+     * committing to an upload, instead of discovering the refusal afterwards and losing the
+     * submesh from GI. Slots are allocated individually, so a field needs no more than its own
+     * @ref mesh_sdf::get_surface_brick_count of them and there is no fragmentation to allow for.
+     */
+    auto get_free_brick_count() const -> uint32_t
+    {
+        // Slots never handed out yet, plus those handed back by a release.
+        return (total_brick_slots_ - next_brick_slot_) + uint32_t(free_brick_slots_.size());
+    }
+
+    /**
+     * @brief Bricks refused for want of room since the atlas was created.
+     *
+     * A scene that has ever refused anything is over budget at the level its fields chose, which
+     * is what tells the caller to place the NEXT ones coarser. Monotonic, so a caller compares it
+     * against its own last reading rather than expecting a reset.
+     */
+    auto get_rejected_brick_total() const -> uint64_t
+    {
+        return rejected_brick_total_;
+    }
+
+    /**
      * @brief Releases a resident field, returning its bricks to the free list.
      */
     void release(uint32_t header_index);
@@ -111,16 +142,38 @@ public:
     }
 
     /// Atlas size in bricks per axis; the tracer needs it to turn a slot into atlas coords.
+    /// The CURRENT dimension, which @ref grow may have raised above the configured one.
     auto get_atlas_brick_dim() const -> uint32_t
     {
-        return settings_.atlas_brick_dim;
+        return brick_dim_;
     }
 
     /// Atlas size in voxels per axis, borders included.
     auto get_atlas_voxel_dim() const -> uint32_t
     {
-        return settings_.atlas_brick_dim * mesh_sdf::brick_stride;
+        return brick_dim_ * mesh_sdf::brick_stride;
     }
+
+    /**
+     * @brief Reallocates the atlas larger, and DISCARDS everything currently resident.
+     *
+     * A fixed atlas is a wall: a scene needing more than it holds loses its overflow from global
+     * illumination entirely, and no per-field decision can fix that because by the time a field is
+     * refused the space is already spent. Growing is what UE does -- its brick atlas grows in Z and
+     * its documented maximum is a target rather than a cap -- and it is the difference between a
+     * scene that costs more memory and a scene that is quietly wrong.
+     *
+     * Everything resident is dropped because a slot's position is derived from the atlas dimension
+     * (slot -> x + y*dim + z*dim*dim), so every existing slot means something different afterwards.
+     * Re-uploading is bounded by settings::max_upload_bytes_per_frame and costs a short ramp; the
+     * alternative is a GPU copy pass, which UE does and this can adopt later.
+     *
+     * The CALLER must drop its own residency records: this cannot know about them.
+     *
+     * @return false when already at @ref settings::max_atlas_brick_dim or the allocation failed,
+     *         in which case the atlas is left exactly as it was.
+     */
+    auto grow() -> bool;
 
     auto get_header_buffer() const -> gfx::dynamic_vertex_buffer_handle
     {
@@ -179,6 +232,8 @@ private:
     void ensure_buffer_capacity();
 
     settings settings_{};
+    /// Current bricks per axis. Starts at settings::atlas_brick_dim and rises through @ref grow.
+    uint32_t brick_dim_ = 0;
     gfx::texture::ptr atlas_texture_;
     /// vec4 elements; @ref header_vec4_count per field.
     gfx::dynamic_vertex_buffer_handle header_buffer_{bgfx::kInvalidHandle};

@@ -45,6 +45,8 @@ auto sdf_atlas::init(const settings& settings) -> bool
     settings_ = settings;
     const uint32_t brick_dim = std::max(settings_.atlas_brick_dim, 1u);
     settings_.atlas_brick_dim = brick_dim;
+    settings_.max_atlas_brick_dim = std::max(settings_.max_atlas_brick_dim, brick_dim);
+    brick_dim_ = brick_dim;
     const uint32_t voxel_dim = ANONYMOUS::compute_atlas_voxel_dim(brick_dim);
     if(voxel_dim > 2048u)
     {
@@ -108,6 +110,7 @@ void sdf_atlas::shutdown()
     free_brick_slots_.clear();
     next_brick_slot_ = 0;
     total_brick_slots_ = 0;
+    brick_dim_ = 0;
     header_capacity_vec4_ = 0;
     indirection_capacity_ = 0;
     headers_dirty_ = false;
@@ -115,6 +118,78 @@ void sdf_atlas::shutdown()
     indirection_dirty_max_ = 0;
     pending_bricks_.clear();
     pending_brick_voxels_.clear();
+}
+
+auto sdf_atlas::grow() -> bool
+{
+    if(brick_dim_ >= settings_.max_atlas_brick_dim)
+    {
+        return false;
+    }
+    // Each step is about half again as many bricks: the dimension is cubed, so 1.15 per axis is
+    // roughly 1.5x capacity. Small enough not to overshoot a scene's needs by much, large enough
+    // that a scene converges in a couple of steps rather than re-uploading itself ten times.
+    constexpr float growth_per_axis = 1.15f;
+    const uint32_t requested =
+        std::max(brick_dim_ + 1u, uint32_t(std::ceil(float(brick_dim_) * growth_per_axis)));
+    const uint32_t new_dim = std::min(requested, settings_.max_atlas_brick_dim);
+    const uint32_t new_voxel_dim = ANONYMOUS::compute_atlas_voxel_dim(new_dim);
+    if(new_voxel_dim > 2048u)
+    {
+        return false;
+    }
+    const uint64_t flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_W_CLAMP;
+    auto grown = std::make_shared<gfx::texture>(static_cast<uint16_t>(new_voxel_dim),
+                                                static_cast<uint16_t>(new_voxel_dim),
+                                                static_cast<uint16_t>(new_voxel_dim),
+                                                false,
+                                                gfx::texture_format::R8,
+                                                flags);
+    if(!grown || !grown->is_valid())
+    {
+        // Left exactly as it was, so a scene that cannot grow keeps the fields it already has
+        // rather than losing them to a failed reallocation.
+        APPLOG_WARNING("[SurfaceCache] Could not allocate a {}^3 SDF atlas ({} MB). Staying at {}^3.",
+                       new_voxel_dim,
+                       (uint64_t(new_voxel_dim) * new_voxel_dim * new_voxel_dim) >> 20u,
+                       brick_dim_ * mesh_sdf::brick_stride);
+        return false;
+    }
+    const uint32_t previous_dim = brick_dim_;
+    atlas_texture_ = std::move(grown);
+    brick_dim_ = new_dim;
+    total_brick_slots_ = new_dim * new_dim * new_dim;
+    // Every slot index means a different position now, so nothing resident survives. The header and
+    // indirection tables describe those fields, so they go with them.
+    next_brick_slot_ = 0;
+    free_brick_slots_.clear();
+    fields_.clear();
+    free_field_indices_.clear();
+    free_indirection_ranges_.clear();
+    header_data_.assign(4u * header_vec4_count, 0.0f);
+    indirection_data_.assign(1, 0u);
+    headers_dirty_ = true;
+    indirection_dirty_min_ = 0;
+    indirection_dirty_max_ = uint32_t(indirection_data_.size());
+    pending_bricks_.clear();
+    pending_brick_voxels_.clear();
+    frame_upload_bytes_ = 0;
+    // The refusal counters described the OLD atlas. Leaving them would keep the caller believing
+    // the scene still overruns, and it would demote fields it no longer needs to demote.
+    rejected_mesh_count_ = 0;
+    rejected_brick_total_ = 0;
+    next_rejection_report_ = 1;
+    // Anything that cached a refusal against the generation must retry: there is room now.
+    ++release_generation_;
+    APPLOG_INFO("[SurfaceCache] SDF atlas grown from {}^3 to {}^3 bricks ({} -> {} MB, {} slots). "
+                "Resident fields are re-uploaded over the next few frames.",
+                previous_dim,
+                new_dim,
+                (uint64_t(previous_dim * mesh_sdf::brick_stride) * (previous_dim * mesh_sdf::brick_stride) *
+                 (previous_dim * mesh_sdf::brick_stride)) >> 20u,
+                (uint64_t(new_voxel_dim) * new_voxel_dim * new_voxel_dim) >> 20u,
+                total_brick_slots_);
+    return true;
 }
 
 auto sdf_atlas::allocate_brick() -> uint32_t
@@ -158,7 +233,7 @@ void sdf_atlas::flush_pending_bricks()
     std::sort(pending_bricks_.begin(),
               pending_bricks_.end(),
               [](const pending_brick& a, const pending_brick& b) { return a.slot < b.slot; });
-    const uint32_t brick_dim = settings_.atlas_brick_dim;
+    const uint32_t brick_dim = brick_dim_;
     constexpr uint32_t stride = mesh_sdf::brick_stride;
     const uint32_t total = uint32_t(pending_bricks_.size());
     uint32_t begin = 0;
@@ -346,11 +421,22 @@ auto sdf_atlas::upload(const mesh_sdf& sdf) -> uint32_t
                 next_rejection_report_ = rejected_brick_total_ > (UINT64_MAX / 2u)
                                              ? UINT64_MAX
                                              : rejected_brick_total_ * 2u;
+                // Deliberately does NOT lead with "coarsen the fields". On the scenes that actually
+                // overrun this, the fields eating the atlas are already the coarsest ones: a
+                // submesh grouped by material is scattered over the whole model, so it is sized to
+                // the gaps between its parts, pinned at the voxel budget, and stores a phantom the
+                // size of the spread. Coarsening those makes the phantom worse while freeing
+                // nothing. Look for them first -- the compile log flags them per submesh -- and
+                // only then trade resolution across the board.
                 APPLOG_WARNING("[SurfaceCache] SDF atlas is full ({0} bricks). {1} meshes refused so "
                                "far, needing {2} bricks in total, so they do not contribute to global "
-                               "illumination. Raise sdf_atlas::settings::atlas_brick_dim past {3} "
-                               "(memory is cubic in it), or lower the mesh importer's Max Total "
-                               "Voxels to make each field cheaper.",
+                               "illumination. Check the mesh compile logs for submeshes flagged "
+                               "'SCATTERED PARTS' or 'FIELD IS NOT SIZED TO THIS SUBMESH' first: "
+                               "those are grouped by material rather than by location, and each one "
+                               "spends a whole field on a phantom. Lower the mesh importer's Max "
+                               "Scatter to refuse them. Otherwise raise "
+                               "sdf_atlas::settings::atlas_brick_dim past {3} (memory is cubic in "
+                               "it), or set a coarser Voxel Size across the model.",
                                total_brick_slots_,
                                rejected_mesh_count_,
                                rejected_brick_total_,
@@ -538,7 +624,7 @@ auto sdf_atlas::get_stats() const -> stats
             ++result.resident_fields;
         }
     }
-    const uint32_t voxel_dim = ANONYMOUS::compute_atlas_voxel_dim(settings_.atlas_brick_dim);
+    const uint32_t voxel_dim = ANONYMOUS::compute_atlas_voxel_dim(brick_dim_);
     result.atlas_bytes = size_t(voxel_dim) * voxel_dim * voxel_dim;
     return result;
 }

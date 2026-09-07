@@ -1185,16 +1185,19 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         APPLOG_INFO("Baking SDF for {0}", str_input);
         APP_SCOPE_PERF("Bake Mesh SDF");
         mesh_sdf_bake_settings sdf_settings;
+        sdf_settings.target_voxel_size = importer->sdf.target_voxel_size;
         sdf_settings.resolution = importer->sdf.resolution;
         sdf_settings.min_voxel_size = importer->sdf.min_voxel_size;
         sdf_settings.max_voxel_size = importer->sdf.max_voxel_size;
         sdf_settings.max_total_voxels = importer->sdf.max_total_voxels;
         sdf_settings.two_sided = importer->sdf.two_sided;
         sdf_settings.two_sided_thickness = importer->sdf.two_sided_thickness;
+        sdf_settings.max_component_spread = importer->sdf.max_component_spread;
         // One field PER SUBMESH, in submesh order. Submeshes are drawn at their own node
         // transforms, so a single field covering the whole mesh could only be placed correctly
         // for one of them; the GI registration relies on this indexing to match.
         data.submesh_sdfs.assign(data.submeshes.size(), mesh_sdf{});
+        data.submesh_sdf_coarse_mips.assign(data.submeshes.size(), std::vector<mesh_sdf>{});
 
         // data.lods holds the GENERATED levels only -- LOD 0 is the base topology in
         // triangle_data -- so the valid request range is [0, lods.size()] and a mesh that
@@ -1215,6 +1218,41 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         const bool parallel_submeshes = data.submeshes.size() >= worker_count;
         const auto threading =
             parallel_submeshes ? sdf_bake_threading::serial : sdf_bake_threading::parallel;
+
+        /// What a submesh's material says about the field that represents it.
+        struct sdf_material_traits
+        {
+            ///< Alpha-blended. The surface transmits light, so a field that occludes it is a lie:
+            ///< glass, water and blended decal cards would each block GI outright.
+            bool is_translucent = false;
+            ///< Rendered with culling off, which is how cards and sheets are authored. Such a
+            ///< surface has no interior for the sign to describe, so it wants the unsigned shell
+            ///< path even when its topology happens to close.
+            bool is_two_sided = false;
+        };
+        // Resolved once per data group rather than per submesh: several submeshes share a material,
+        // and the lookups below run inside a parallel range where a shared_ptr cast per submesh
+        // would be pure repeat work.
+        //
+        // Alpha CUTOUT is deliberately absent from this table. A masked surface is opaque wherever
+        // it is not discarded -- foliage, fences, grates -- so it occludes and belongs in the field;
+        // only true blending transmits. Same split UE draws (bIncludeTranslucentTriangles).
+        std::vector<sdf_material_traits> material_traits(materials.size());
+        for(size_t m = 0; m < materials.size(); ++m)
+        {
+            const auto& mat = materials[m].mat;
+            if(!mat)
+            {
+                continue;
+            }
+            material_traits[m].is_two_sided = mat->get_cull_type() == cull_type::none;
+            const auto pbr = std::dynamic_pointer_cast<pbr_material>(mat);
+            material_traits[m].is_translucent = pbr && pbr->get_alpha_mode() == alpha_mode::blend;
+        }
+        // Counted for the summary: a submesh that vanishes from GI has to say why, or the only
+        // symptom is light behaving oddly somewhere else in the level.
+        std::atomic<uint64_t> translucent_submesh_count{0};
+        std::atomic<uint64_t> two_sided_by_material_count{0};
 
         // Junk geometry is worth a number rather than silence: a submesh made ENTIRELY of slivers
         // renders nothing and now bakes nothing, so without this it would simply be absent from GI
@@ -1248,6 +1286,22 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                 {
                     return;
                 }
+                // The material this submesh is drawn with decides two things about its field, and
+                // both are properties of the SURFACE rather than of the mesh, so neither is
+                // recoverable from the triangles. A data group with no entry in the table (a mesh
+                // whose materials failed to import) falls through to the asset-level settings.
+                const uint32_t data_group = data.submeshes[i].data_group_id;
+                const sdf_material_traits traits =
+                    data_group < material_traits.size() ? material_traits[data_group]
+                                                        : sdf_material_traits{};
+                if(traits.is_translucent)
+                {
+                    // No field at all. A blended surface that occludes is worse than one that is
+                    // absent: absent costs the bounce it would have contributed, present blocks
+                    // every bounce that should have passed through it.
+                    ++translucent_submesh_count;
+                    return;
+                }
                 sdf_source_geometry sdf_geometry;
                 const bool extracted = extract_sdf_source_geometry(data, lod_index, i, sdf_geometry);
                 discarded_triangles += sdf_geometry.discarded_triangles;
@@ -1256,12 +1310,27 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                     return;
                 }
                 component_summaries[i] = summarize_connected_components(sdf_geometry);
-                mesh_sdf field;
-                if(!bake_mesh_sdf(sdf_geometry, sdf_settings, field, threading))
+                // Per submesh, so a kitbash keeps the signed path on its solid sections while only
+                // its card sections take the shell. The asset-level flag still forces every
+                // submesh, and the baker's own topology fallback still fires underneath both.
+                mesh_sdf_bake_settings submesh_settings = sdf_settings;
+                if(traits.is_two_sided && !submesh_settings.two_sided)
+                {
+                    submesh_settings.two_sided = true;
+                    ++two_sided_by_material_count;
+                }
+                // The whole chain, not just the finest level. The coarser ones exist so the
+                // runtime atlas can fall back to a level that FITS rather than dropping the
+                // submesh out of GI, and they cost about a third extra to bake because each
+                // holds roughly a quarter of the bricks of the one above.
+                std::vector<mesh_sdf> chain;
+                if(!bake_mesh_sdf_mips(sdf_geometry, submesh_settings, chain, mesh_sdf::mip_count, threading))
                 {
                     return;
                 }
-                data.submesh_sdfs[i] = std::move(field);
+                data.submesh_sdfs[i] = std::move(chain.front());
+                data.submesh_sdf_coarse_mips[i].assign(std::make_move_iterator(chain.begin() + 1),
+                                                       std::make_move_iterator(chain.end()));
             });
         // Totalled after the loop rather than inside it, so the reported numbers do not depend
         // on thread interleaving and the loop needs no atomics. A bake only succeeds when it
@@ -1286,6 +1355,8 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
             float largest_component_extent = 0.0f;
             float sparsity = 0.0f;
         };
+        size_t scattered_submesh_count = 0;
+        size_t scattered_bricks = 0;
         std::vector<dilated_shell_report> dilated_shells;
         // A field is padded outward from its submesh by a few voxels on every side, so it is always
         // somewhat larger than the geometry. Several TIMES larger means the field is not sized to the
@@ -1345,6 +1416,15 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
             // artist to group geometry.
             const auto& summary = component_summaries[i];
             const bool is_sparse = summary.get_sparsity() > sparse_submesh_ratio;
+            if(is_sparse)
+            {
+                // What the scattered submeshes actually COST, not just how many there are. This is
+                // the number that decides whether tightening Max Scatter is enough on its own or
+                // whether the atlas is genuinely short: a scene whose scattered submeshes hold most
+                // of its bricks is one bad export away from fitting, not one short of memory.
+                ++scattered_submesh_count;
+                scattered_bricks += bricks;
+            }
             if(is_dilated || is_oversized || is_sparse)
             {
                 // The submesh's own extent, the field's extent and the voxel are reported together
@@ -1424,6 +1504,23 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                         str_input,
                         skinned_submesh_count);
         }
+        // Same reasoning as the skinned note, and the same failure without it: a translucent
+        // submesh renders exactly as authored while being silently absent from GI.
+        if(translucent_submesh_count > 0)
+        {
+            APPLOG_INFO("  {0}: {1} alpha-blended submeshes were not given a distance field. A "
+                        "blended surface transmits light, so a field there would occlude bounces "
+                        "that should pass through it. Alpha-cutout submeshes are unaffected.",
+                        str_input,
+                        translucent_submesh_count.load());
+        }
+        if(two_sided_by_material_count > 0)
+        {
+            APPLOG_INFO("  {0}: {1} submeshes were baked as unsigned shells because their material "
+                        "disables culling.",
+                        str_input,
+                        two_sided_by_material_count.load());
+        }
         if(baked_count > 0)
         {
             APPLOG_INFO("Baked SDF for {0}: {1}/{2} submeshes, {3} surface bricks, {4} KB",
@@ -1432,11 +1529,64 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                         data.submeshes.size(),
                         surface_bricks,
                         memory_bytes / 1024);
+            // An explicit Voxel Size that the limits had to refuse must SAY so. The setting can
+            // only ever be coarsened, so a silent refusal reads as the field simply ignoring what
+            // the author typed -- and the next thing they try is typing a smaller number, which
+            // the same limit refuses again.
+            if(sdf_settings.target_voxel_size > 0.0f)
+            {
+                // A hair of slack: the sizing rounds the grid up to whole bricks, so an honoured
+                // request lands a fraction above what was typed rather than exactly on it.
+                const float honoured_ceiling = sdf_settings.target_voxel_size * 1.05f;
+                std::vector<float> refused_sizes;
+                for(const auto& field : data.submesh_sdfs)
+                {
+                    if(field.voxel_size > honoured_ceiling)
+                    {
+                        refused_sizes.push_back(field.voxel_size);
+                    }
+                }
+                if(!refused_sizes.empty())
+                {
+                    // How MANY and how TYPICAL, not just the worst. On a model of hundreds of
+                    // submeshes the single coarsest field is an outlier -- usually one submesh
+                    // whose parts are scattered across the whole model -- and reporting it alone
+                    // reads as though the request failed everywhere, which sends the reader to
+                    // raise a budget when the real fix is to split that one submesh.
+                    std::sort(refused_sizes.begin(), refused_sizes.end());
+                    const float median = refused_sizes[refused_sizes.size() / 2];
+                    APPLOG_INFO("  {0}: Voxel Size {1:.4f} was met on {2} of {3} submeshes. The "
+                                "other {4} were coarsened by the limits, typically to {5:.4f} and "
+                                "at worst to {6:.4f}. A submesh far coarser than the rest is "
+                                "usually one whose parts are scattered rather than one that needs "
+                                "a bigger budget -- check the scatter report above before raising "
+                                "Max Total Voxels.",
+                                str_input,
+                                sdf_settings.target_voxel_size,
+                                baked_count - refused_sizes.size(),
+                                baked_count,
+                                refused_sizes.size(),
+                                median,
+                                refused_sizes.back());
+                }
+            }
             // Bricks, not megabytes, are what the runtime is actually short of: they are slots in
             // a fixed atlas shared by the whole scene. Reporting the per-submesh average alongside
             // the total makes an over-budget model diagnosable at import time rather than at the
             // point the atlas silently starts dropping fields, and says which way to move
             // Max Total Voxels -- bake time moves with it in the same proportion.
+            if(scattered_submesh_count > 0)
+            {
+                APPLOG_WARNING("  {0}: {1} scattered submeshes hold {2} of the {3} bricks ({4}%). "
+                               "Their voxel cannot resolve their own parts, so those bricks buy "
+                               "phantom occluders rather than detail -- lowering Max Scatter below "
+                               "the spreads listed above reclaims them AND removes the phantoms.",
+                               str_input,
+                               scattered_submesh_count,
+                               scattered_bricks,
+                               surface_bricks,
+                               surface_bricks > 0 ? (scattered_bricks * 100) / surface_bricks : 0);
+            }
             APPLOG_INFO("  {0} bricks average per submesh, baked from LOD {1}. Lower the mesh's Max "
                         "Total Voxels if the scene overruns the SDF atlas; both the atlas footprint "
                         "and the bake time scale with it. Raising Bake From LOD cuts the bake time "

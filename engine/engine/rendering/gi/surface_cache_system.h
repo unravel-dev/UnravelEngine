@@ -299,6 +299,10 @@ private:
     struct mesh_residency
     {
         uint32_t header_index = sdf_atlas::invalid_index;
+        ///< Level of the mip chain actually made resident. Everything downstream -- the instance
+        ///< bounds, the level fingerprint -- has to describe the level the atlas took, not the
+        ///< finest one the mesh owns, or the placement will not match what the tracer samples.
+        uint32_t resident_mip = 0;
         ///< Set when the mesh has no baked field at all. PERMANENT, and deliberately distinct from
         ///< the atlas refusing an upload for want of room: that is a statement about the atlas at
         ///< one moment, not about the mesh, and it stops being true as soon as anything is
@@ -325,7 +329,60 @@ private:
      * Also marks the record as used this frame, which is what keeps it out of the sweep at the end
      * of @ref update_world.
      */
-    auto acquire_field(const hpp::uuid& mesh_uid, const mesh& m, uint32_t submesh_index) -> uint32_t;
+    /// What a submesh got from the atlas: a header index, and which level of its chain is behind
+    /// it. @ref sdf_atlas::invalid_index means no field this frame.
+    struct acquired_field
+    {
+        uint32_t header_index = sdf_atlas::invalid_index;
+        uint32_t mip_level = 0;
+    };
+
+    auto acquire_field(const hpp::uuid& mesh_uid,
+                       const mesh& m,
+                       uint32_t submesh_index,
+                       uint32_t wanted_mip) -> acquired_field;
+
+    /**
+     * @brief Level a placement deserves, from how far it is from the nearest camera.
+     *
+     * UE bands this on ABSOLUTE distance -- its Mip1 box is the outermost global distance field
+     * clipmap extent and its Mip2 box a middle one -- and takes the finest any view wants. That
+     * cannot be copied directly: those extents belong to a view's clipmap, and update_world is
+     * deliberately camera-agnostic. Absolute distances would also be wrong here in a way they are
+     * not for UE, because a project's world scale is not fixed: the same numbers that band a
+     * metre-scale prop put an entire centimetre-scale building in the coarsest level.
+     *
+     * Banded on distance RELATIVE TO THE PLACEMENT'S OWN SIZE instead, which is scale free and
+     * needs no per-project tuning. It also reproduces the part of UE's rule that matters: their
+     * test is box against box and so includes the object's extent, which is exactly why a large
+     * object keeps its detail from further away.
+     */
+    auto compute_wanted_mip(const math::bbox& world_bounds) const -> uint32_t;
+
+    ///< Every active camera's position this frame, gathered at the top of update_world.
+    ///
+    ///< Residency is SHARED by every camera, so it must not depend on which one is rendering --
+    ///< that split is the whole reason update_world takes no camera. Taking the finest level any
+    ///< camera wants keeps it a function of the world: the set of cameras is scene state, and two
+    ///< cameras produce one answer rather than fighting over it. Same resolution UE reaches with
+    ///< its InterlockedMax across views.
+    std::vector<math::vec3> camera_positions_;
+
+    /// Drops every field to a coarser level once the atlas has run out, and re-places them.
+    void apply_atlas_pressure();
+
+    ///< Level every field STARTS its residency walk at, raised when the atlas runs out.
+    ///
+    ///< Without it the walk is greedy and first-come-first-served: while the atlas has room every
+    ///< field takes its finest level, so the first arrivals spend the whole atlas and the fallback
+    ///< only engages for the stragglers -- by which point nothing fits, not even their coarsest
+    ///< level. Measured on Bistro: 1291 submeshes at their finest level filled 373,248 bricks
+    ///< exactly, and the remaining 204 were refused outright. Biasing the START of the walk is
+    ///< what turns "the last ones lose" into "everyone is a little coarser".
+    uint32_t global_mip_bias_ = 0;
+    ///< Rejected-brick total at the last bias decision, so a bump happens once per overrun rather
+    ///< than once per refused mesh.
+    uint64_t acknowledged_rejected_bricks_ = 0;
 
     /**
      * @brief Releases every field nothing referenced this frame.

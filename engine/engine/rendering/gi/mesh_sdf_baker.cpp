@@ -8,6 +8,7 @@
 #include <concurrency/parallel.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -21,6 +22,31 @@ namespace
 /// Maximum triangles referenced by a single BVH leaf. Small leaves keep the closest-point
 /// query's inner loop short; the traversal overhead of going smaller stops paying off.
 constexpr uint32_t bvh_max_leaf_triangles = 4;
+
+/// No triangle. Distinguishes "the query found nothing within its bound" from "the query found
+/// triangle 0", which a plain 0 sentinel cannot.
+constexpr uint32_t invalid_triangle = 0xFFFFFFFFu;
+
+/// Widening applied to a caller's distance hint before it is used as the traversal's incumbent.
+///
+/// The hint is an upper bound and the traversal prunes on a STRICT less-than, so a candidate
+/// sitting exactly on the bound would be rejected and the query would return nothing. The
+/// Lipschitz bounds the bake feeds in are attained exactly in ordinary configurations -- a voxel
+/// row marching straight at a plane hits equality at every step -- so this is the common case,
+/// not a rounding curiosity.
+constexpr float k_query_hint_slack = 1.0f + 1e-5f;
+
+/// Hints at or above this are treated as absent: squaring them would overflow.
+constexpr float k_max_query_hint = 1e18f;
+
+/// Above this many candidates a brick falls back to per-voxel BVH traversal.
+///
+/// The candidate list turns each voxel into a flat loop, which beats a traversal only while the
+/// list is short: a bounded query costs roughly a dozen node tests plus a handful of triangle
+/// tests, so somewhere around this many candidates the flat loop stops being the cheaper of the
+/// two. Bricks over the limit are the ones sitting on finely tessellated geometry, where the BVH
+/// is doing real work and should keep doing it.
+constexpr size_t k_max_brick_candidates = 64;
 
 /// How far the one-voxel shell floor may exceed the authored two-sided thickness before the
 /// bake spends resolution to close the gap (see the thin-geometry escalation in bake_mesh_sdf).
@@ -119,6 +145,19 @@ auto distance_squared_to_bounds(const math::bbox& bounds, const math::vec3& p) -
 }
 
 /**
+ * @brief Squared distance between two axis-aligned boxes, zero when they overlap.
+ *
+ * Per axis the gap is whichever box starts after the other ends, or zero when they overlap; the
+ * separation is the length of those gaps. Conservative for triangles: a triangle's box can be far
+ * closer than the triangle, which only ever admits an extra candidate.
+ */
+auto distance_squared_between_bounds(const math::bbox& a, const math::bbox& b) -> float
+{
+    const math::vec3 gap = math::max(math::max(a.min - b.max, b.min - a.max), math::vec3(0.0f));
+    return math::dot(gap, gap);
+}
+
+/**
  * @brief Interior angle of triangle (a, b, c) at corner @p a.
  *
  * Used to weight vertex pseudonormals. Angle weighting is what makes the pseudonormal test
@@ -190,8 +229,56 @@ public:
      * Positive outside, negative inside. When @p unsigned_only is set the sign is skipped
      * entirely and the unsigned distance is returned, which is the correct answer for
      * geometry that is not a closed surface.
+     *
+     * @param max_distance_hint Any UPPER BOUND on the unsigned distance at @p p. The traversal
+     *        starts with this as its incumbent instead of infinity, so every subtree farther
+     *        away is rejected on its bounds rather than descended. The result is unchanged --
+     *        this is a pruning bound, not a clamp. A bound that turns out to be too tight is
+     *        detected and the query is redone unbounded, so a caller cannot silently corrupt
+     *        the field with a bad hint; see @ref k_query_hint_slack.
      */
-    auto signed_distance(const math::vec3& p, bool unsigned_only) const -> float;
+    auto signed_distance(const math::vec3& p,
+                         bool unsigned_only,
+                         float max_distance_hint = std::numeric_limits<float>::max()) const -> float;
+
+    /**
+     * @brief Every triangle that can be the closest one for any point of @p region whose distance
+     *        to the surface is at most @p reach.
+     *
+     * One BVH descent for a whole brick, so the per-voxel query becomes a flat loop over a short
+     * list instead of a fresh traversal. The list is a SUPERSET of what is strictly needed --
+     * extra entries only cost loop iterations, never accuracy.
+     *
+     * Writes into a caller-supplied buffer and STOPS as soon as it overflows: a brick with more
+     * candidates than the buffer holds is going to use the traversal anyway, so gathering the rest
+     * is pure waste. The buffer also keeps this off the heap, which matters because it runs once
+     * per brick on every pool thread at once.
+     *
+     * @return the number collected, or @p capacity + 1 when the list overflowed.
+     */
+    auto collect_candidates(const math::bbox& region, float reach, uint32_t* out, uint32_t capacity) const
+        -> uint32_t;
+
+    /**
+     * @brief Closest-point query restricted to a precollected candidate list.
+     *
+     * THE CONTRACT, which the caller must respect or the field is wrong: let R be the @p reach the
+     * list was collected for, t the true distance at @p p, and L the magnitude this returns.
+     *
+     *   - L is never smaller than t: the list can only miss triangles, not invent nearer ones.
+     *   - If t <= R the true nearest triangle is in the list, so L == t exactly, and the sign is
+     *     the true sign.
+     *   - Therefore L >= R implies t >= R. The magnitude is then untrustworthy, and so is the
+     *     sign, because it came from whichever triangle the list happened to hold.
+     *
+     * So a result whose magnitude is under R is exact and complete, and one at or above it says
+     * only "at least R away" -- which is all a saturating narrow band needs from it, provided the
+     * caller sources the sign elsewhere. @p p must lie inside @p region.
+     */
+    auto signed_distance_in_list(const math::vec3& p,
+                                 bool unsigned_only,
+                                 const uint32_t* candidates,
+                                 uint32_t count) const -> float;
 
     /**
      * @brief Whether the surface has a meaningful signed interior: closed, manifold, AND
@@ -234,6 +321,15 @@ private:
     auto build_recursive(uint32_t begin, uint32_t end, const std::vector<math::vec3>& centroids) -> uint32_t;
     void query_recursive(uint32_t node_index, const math::vec3& p, float& best_dist_sq, uint32_t& best_tri,
                          closest_point_result& best_hit) const;
+    void collect_recursive(uint32_t node_index, const math::bbox& region, float reach_sq,
+                           uint32_t* out, uint32_t capacity, uint32_t& count) const;
+    /// Closest point on one triangle, folded into the running best. Shared by the BVH traversal
+    /// and the candidate-list loop so the two can never disagree about which feature was hit.
+    void accumulate_triangle(uint32_t t, const math::vec3& p, float& best_dist_sq, uint32_t& best_tri,
+                             closest_point_result& best_hit) const;
+    /// Signs a magnitude using the pseudonormal of the feature @p best_hit landed on.
+    auto apply_sign(const math::vec3& p, uint32_t best_tri, const closest_point_result& best_hit,
+                    float distance) const -> float;
 
     std::vector<math::vec3> positions_;
     std::vector<uint32_t> indices_;
@@ -530,19 +626,7 @@ void sdf_triangle_accelerator::query_recursive(uint32_t node_index,
     {
         for(uint32_t i = 0; i < n.count; ++i)
         {
-            const uint32_t t = order_[n.first + i];
-            const closest_point_result hit = closest_point_on_triangle(p,
-                                                                       positions_[indices_[t * 3 + 0]],
-                                                                       positions_[indices_[t * 3 + 1]],
-                                                                       positions_[indices_[t * 3 + 2]]);
-            const math::vec3 delta = p - hit.point;
-            const float dist_sq = math::dot(delta, delta);
-            if(dist_sq < best_dist_sq)
-            {
-                best_dist_sq = dist_sq;
-                best_tri = t;
-                best_hit = hit;
-            }
+            accumulate_triangle(order_[n.first + i], p, best_dist_sq, best_tri, best_hit);
         }
         return;
     }
@@ -553,25 +637,78 @@ void sdf_triangle_accelerator::query_recursive(uint32_t node_index,
     const float right_dist = distance_squared_to_bounds(nodes_[right].bounds, p);
     const uint32_t first_child = left_dist <= right_dist ? left : right;
     const uint32_t second_child = left_dist <= right_dist ? right : left;
+    const float first_dist = left_dist <= right_dist ? left_dist : right_dist;
     const float second_dist = left_dist <= right_dist ? right_dist : left_dist;
-    query_recursive(first_child, p, best_dist_sq, best_tri, best_hit);
+    // BOTH children are tested, not just the farther one. With an infinite starting incumbent the
+    // near child can never be pruned, so testing it looks redundant -- but the whole point of the
+    // caller's distance hint is that the incumbent starts finite, and then the near chain is
+    // exactly what needs rejecting. Without this test a seeded query still descends to a leaf on
+    // every call and the hint buys nothing.
+    if(first_dist < best_dist_sq)
+    {
+        query_recursive(first_child, p, best_dist_sq, best_tri, best_hit);
+    }
     if(second_dist < best_dist_sq)
     {
         query_recursive(second_child, p, best_dist_sq, best_tri, best_hit);
     }
 }
 
-auto sdf_triangle_accelerator::signed_distance(const math::vec3& p, bool unsigned_only) const -> float
+auto sdf_triangle_accelerator::signed_distance(const math::vec3& p,
+                                               bool unsigned_only,
+                                               float max_distance_hint) const -> float
 {
-    float best_dist_sq = std::numeric_limits<float>::max();
-    uint32_t best_tri = 0;
+    uint32_t best_tri = invalid_triangle;
     closest_point_result best_hit{};
-    query_recursive(0, p, best_dist_sq, best_tri, best_hit);
+    const float bound = max_distance_hint * k_query_hint_slack;
+    float best_dist_sq =
+        bound < k_max_query_hint ? bound * bound : std::numeric_limits<float>::max();
+    if(distance_squared_to_bounds(nodes_[0].bounds, p) < best_dist_sq)
+    {
+        query_recursive(0, p, best_dist_sq, best_tri, best_hit);
+    }
+    if(best_tri == invalid_triangle)
+    {
+        // The hint was not an upper bound after all, so the pruned traversal rejected every
+        // triangle. Redo it unbounded rather than returning the hint itself: a hint is a
+        // performance promise from the caller, and honouring a broken one would bake a distance
+        // that is simply wrong, silently and only on whichever geometry broke it.
+        best_dist_sq = std::numeric_limits<float>::max();
+        query_recursive(0, p, best_dist_sq, best_tri, best_hit);
+    }
     const float distance = std::sqrt(math::max(best_dist_sq, 0.0f));
     if(unsigned_only)
     {
         return distance;
     }
+    return apply_sign(p, best_tri, best_hit, distance);
+}
+
+void sdf_triangle_accelerator::accumulate_triangle(uint32_t t,
+                                                   const math::vec3& p,
+                                                   float& best_dist_sq,
+                                                   uint32_t& best_tri,
+                                                   closest_point_result& best_hit) const
+{
+    const closest_point_result hit = closest_point_on_triangle(p,
+                                                               positions_[indices_[t * 3 + 0]],
+                                                               positions_[indices_[t * 3 + 1]],
+                                                               positions_[indices_[t * 3 + 2]]);
+    const math::vec3 delta = p - hit.point;
+    const float dist_sq = math::dot(delta, delta);
+    if(dist_sq < best_dist_sq)
+    {
+        best_dist_sq = dist_sq;
+        best_tri = t;
+        best_hit = hit;
+    }
+}
+
+auto sdf_triangle_accelerator::apply_sign(const math::vec3& p,
+                                          uint32_t best_tri,
+                                          const closest_point_result& best_hit,
+                                          float distance) const -> float
+{
     // Pseudonormal of the feature the closest point landed on. Using the face normal for an
     // edge or vertex hit is the classic source of wrongly signed voxels on convex corners.
     math::vec3 pseudonormal;
@@ -601,6 +738,89 @@ auto sdf_triangle_accelerator::signed_distance(const math::vec3& p, bool unsigne
     }
     const float side = math::dot(p - best_hit.point, pseudonormal);
     return side < 0.0f ? -distance : distance;
+}
+
+void sdf_triangle_accelerator::collect_recursive(uint32_t node_index,
+                                                 const math::bbox& region,
+                                                 float reach_sq,
+                                                 uint32_t* out,
+                                                 uint32_t capacity,
+                                                 uint32_t& count) const
+{
+    if(count > capacity)
+    {
+        return;
+    }
+    const node& n = nodes_[node_index];
+    if(distance_squared_between_bounds(n.bounds, region) > reach_sq)
+    {
+        return;
+    }
+    if(n.count > 0)
+    {
+        for(uint32_t i = 0; i < n.count; ++i)
+        {
+            // Re-tested per triangle rather than accepting the whole leaf: a leaf's bounds are the
+            // union of up to four triangles, so one triangle reaching the region drags the others
+            // in with it. They would be harmless but they are also the inner loop.
+            const uint32_t t = order_[n.first + i];
+            math::bbox triangle_bounds;
+            triangle_bounds.reset();
+            triangle_bounds.add_point(positions_[indices_[t * 3 + 0]]);
+            triangle_bounds.add_point(positions_[indices_[t * 3 + 1]]);
+            triangle_bounds.add_point(positions_[indices_[t * 3 + 2]]);
+            if(distance_squared_between_bounds(triangle_bounds, region) > reach_sq)
+            {
+                continue;
+            }
+            if(count >= capacity)
+            {
+                // Overflow. Recorded as capacity + 1 and unwound immediately, so the caller learns
+                // "too many" without this walking the rest of the tree for a list it will discard.
+                count = capacity + 1;
+                return;
+            }
+            out[count++] = t;
+        }
+        return;
+    }
+    collect_recursive(node_index + 1, region, reach_sq, out, capacity, count);
+    collect_recursive(n.first, region, reach_sq, out, capacity, count);
+}
+
+auto sdf_triangle_accelerator::collect_candidates(const math::bbox& region,
+                                                  float reach,
+                                                  uint32_t* out,
+                                                  uint32_t capacity) const -> uint32_t
+{
+    uint32_t count = 0;
+    collect_recursive(0, region, reach * reach, out, capacity, count);
+    return count;
+}
+
+auto sdf_triangle_accelerator::signed_distance_in_list(const math::vec3& p,
+                                                       bool unsigned_only,
+                                                       const uint32_t* candidates,
+                                                       uint32_t count) const -> float
+{
+    float best_dist_sq = std::numeric_limits<float>::max();
+    uint32_t best_tri = invalid_triangle;
+    closest_point_result best_hit{};
+    for(uint32_t i = 0; i < count; ++i)
+    {
+        accumulate_triangle(candidates[i], p, best_dist_sq, best_tri, best_hit);
+    }
+    if(best_tri == invalid_triangle)
+    {
+        // Only reachable on an empty list, which the caller is expected to have ruled out.
+        return std::numeric_limits<float>::max();
+    }
+    const float distance = std::sqrt(math::max(best_dist_sq, 0.0f));
+    if(unsigned_only)
+    {
+        return distance;
+    }
+    return apply_sign(p, best_tri, best_hit, distance);
 }
 
 /// Exact-position key for welding. Seams duplicate a position for a different normal or UV, so
@@ -642,19 +862,50 @@ auto find_root(std::vector<uint32_t>& parent, uint32_t node) -> uint32_t
     return node;
 }
 
-} // namespace
 
-auto bake_mesh_sdf(const sdf_source_geometry& geometry,
-                   const mesh_sdf_bake_settings& settings,
-                   mesh_sdf& out,
-                   sdf_bake_threading threading) -> bool
+/**
+ * @brief Padding a field adds around its geometry, per side, for a given voxel.
+ *
+ * The band reaches @ref mesh_sdf::encode_range voxels, so the padding scales WITH the voxel. That
+ * has a consequence worth stating where it can be seen: a coarser field covers a proportionally
+ * larger region, so its grid does not shrink the way its voxel grows. Once the padding dominates
+ * the mesh's own extent the grid stops shrinking altogether, and a coarser level costs the same as
+ * the one above it. See @ref bake_mesh_sdf_mips, which refuses to bake levels that would.
+ */
+auto compute_field_padding(const mesh_sdf_bake_settings& settings, bool use_unsigned, float voxel) -> float
 {
-    APP_SCOPE_PERF("GI/Bake/Mesh SDF");
-    // Both voxel passes below run under this flag. When it is false the range runs inline on the
-    // calling thread, which is what keeps a caller that is already inside a parallel range from
-    // nesting one dispatch inside another -- see sdf_bake_threading.
-    const bool parallel_voxels = (threading == sdf_bake_threading::parallel);
-    out = {};
+    const float shell = use_unsigned ? math::max(settings.two_sided_thickness, voxel) : 0.0f;
+    return mesh_sdf::encode_range * voxel + shell;
+}
+
+/**
+ * @brief Grid size in bricks for a given voxel, padding included.
+ */
+auto compute_field_brick_dim(const math::vec3& surface_extent,
+                             const mesh_sdf_bake_settings& settings,
+                             bool use_unsigned,
+                             float voxel) -> math::uvec3
+{
+    const math::vec3 extent =
+        surface_extent + math::vec3(2.0f * compute_field_padding(settings, use_unsigned, voxel));
+    const auto axis_bricks = [&](float axis_extent) -> uint32_t
+    {
+        const uint32_t voxels = uint32_t(std::ceil(axis_extent / voxel));
+        return math::max(1u, (voxels + mesh_sdf::brick_size - 1u) / mesh_sdf::brick_size);
+    };
+    return math::uvec3(axis_bricks(extent.x), axis_bricks(extent.y), axis_bricks(extent.z));
+}
+
+/**
+ * @brief The per-GEOMETRY half of a bake: the refusals, the accelerator, and whether the surface
+ *        has a usable inside. Independent of the voxel size, so a mip chain does it once.
+ */
+auto prepare_bake(const sdf_source_geometry& geometry,
+                  const mesh_sdf_bake_settings& settings,
+                  sdf_triangle_accelerator& accelerator,
+                  bool& use_unsigned) -> bool
+{
+    APP_SCOPE_PERF("GI/Bake/Prepare");
     if(!geometry.is_valid() || !geometry.bounds.is_populated() || geometry.bounds.is_degenerate())
     {
         return false;
@@ -678,7 +929,6 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
             return false;
         }
     }
-    sdf_triangle_accelerator accelerator;
     if(!accelerator.build(geometry))
     {
         return false;
@@ -693,13 +943,43 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
     // Erring toward unsigned is deliberate. Treating a nearly-closed mesh as a shell only
     // loses interior solidity (the shell still occludes); treating an open mesh as closed
     // produces phantom geometry.
-    const bool use_unsigned = settings.two_sided || !accelerator.is_closed();
+    use_unsigned = settings.two_sided || !accelerator.is_closed();
+    return true;
+}
+
+
+/**
+ * @brief Everything a bake does once its accelerator exists: sizing, classification, fill.
+ *
+ * Split out so a mip chain can share ONE accelerator across its levels. The BVH build and the
+ * connected-component scan are linear-ish in the TRIANGLE count and do not shrink when the voxel
+ * grows, so rebuilding them per level made a three-level chain cost about twice a single bake
+ * instead of the third extra its voxel work actually needs (measured on Bistro: 11.1 s -> 21.7 s).
+ */
+auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
+                                 const mesh_sdf_bake_settings& settings,
+                                 const sdf_triangle_accelerator& accelerator,
+                                 bool use_unsigned,
+                                 bool parallel_voxels,
+                                 mesh_sdf& out) -> bool
+{
+    out = {};
+
     const math::vec3 surface_extent = geometry.bounds.get_dimensions();
     const float longest_axis = math::max(surface_extent.x, math::max(surface_extent.y, surface_extent.z));
-    const uint32_t target_resolution = math::max(settings.resolution, 1u);
-    float voxel_size = math::clamp(longest_axis / float(target_resolution),
-                                   settings.min_voxel_size,
-                                   settings.max_voxel_size);
+    // The size the author asked for, in local units, or derived from the bounds when they left it
+    // on Auto.
+    //
+    // Asking in world units is the direct question -- the voxel is what decides the detail the
+    // field resolves, the reach of its narrow band (encode_range voxels), the size of a brick
+    // (brick_size voxels) and its memory (a surface is 2D, so cost goes as the inverse square).
+    // Auto answers it with the longest BOUNDS axis over @ref resolution, which is a poor proxy:
+    // a 10 m wall and a 1 m prop at the same resolution differ seventeenfold in the size they
+    // actually resolve, and walls and floors are the surfaces light leaks through.
+    const float requested_voxel_size =
+        settings.target_voxel_size > 0.0f ? settings.target_voxel_size
+                                          : longest_axis / float(math::max(settings.resolution, 1u));
+    float voxel_size = math::clamp(requested_voxel_size, settings.min_voxel_size, settings.max_voxel_size);
     // Thin-geometry escalation: the shell floor is one voxel, so a voxel derived from LARGE
     // bounds wraps thin geometry in a shell many times fatter than the author intended - at
     // material-merged scales (a 3 cm parapet rope spanning 30 m bakes metre voxels) the result
@@ -732,20 +1012,14 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
     };
     const auto compute_padding = [&](float voxels) -> float
     {
-        return mesh_sdf::encode_range * voxels + compute_shell_thickness(voxels);
+        return compute_field_padding(settings, use_unsigned, voxels);
     };
     // Grid sizing. The voxel size only ever GROWS from here: every cap is satisfied by making
     // voxels coarser, never by cropping the grid, because a cropped field would let rays pass
     // straight through the uncovered part of the geometry.
     const auto compute_brick_dim = [&](float voxel) -> math::uvec3
     {
-        const math::vec3 extent = surface_extent + math::vec3(2.0f * compute_padding(voxel));
-        const auto axis_bricks = [&](float axis_extent) -> uint32_t
-        {
-            const uint32_t voxels = uint32_t(std::ceil(axis_extent / voxel));
-            return math::max(1u, (voxels + mesh_sdf::brick_size - 1u) / mesh_sdf::brick_size);
-        };
-        return math::uvec3(axis_bricks(extent.x), axis_bricks(extent.y), axis_bricks(extent.z));
+        return compute_field_brick_dim(surface_extent, settings, use_unsigned, voxel);
     };
     const auto count_grid_voxels = [](const math::uvec3& bricks) -> uint64_t
     {
@@ -764,6 +1038,25 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
     // of submeshes that overruns the atlas by an order of magnitude -- and since bake time is
     // proportional to voxel count, it is simultaneously the reason the bake takes minutes. The
     // total cap is what makes the cost of a field bounded rather than merely shaped.
+    //
+    // The dense grid is admittedly the wrong SHAPE for a cost measure: a surface is
+    // two-dimensional, so it charges a hollow or flat mesh for space it never stores. Budgeting
+    // the bricks actually stored instead was built and reverted, because without somewhere to
+    // spend the difference it only loosens this cap, and loosening it is what the note below
+    // rules out. If it comes back, it replaces this cap rather than joining it -- one budget.
+    //
+    // The voxel size only ever GROWS from here. Spending leftover budget on a FINER voxel was
+    // implemented and reverted: the band is mesh_sdf::encode_range voxels WIDE, so its reach in
+    // world units is proportional to the voxel. Halving the voxel doubles surface detail and
+    // halves the distance over which the field can report anything at all, and every consumer
+    // that reads a DISTANCE rather than a hit degrades with it -- the clipmap composition,
+    // sphere-trace step lengths, the soft-shadow penumbra term. Measured on the oracle suite's
+    // colonnade (test_shadow_through_colonnade): refining the columns from a 0.33 m band to a
+    // 0.11 m one made grazing sun rays through the gaps read as shadowed. Floored so the band
+    // stayed at 0.25 m, the global clipmap's own finest voxel, it still misreported and started
+    // leaking shadow as well. The sizes this produces today are already close to the shortest
+    // band the composition tolerates, so finer fields need a wider encode_range first -- a
+    // storage-format change shared with the tracing shaders, not a sizing change.
     //
     // Iterated because each correction changes the padding, which changes the grid. Growth is
     // monotone, so this converges in a couple of rounds; the bound is a guard, not a limit.
@@ -889,6 +1182,47 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
             const math::vec3 brick_origin =
                 padded_min + math::vec3(float(bx), float(by), float(bz)) * brick_world_size;
             uint8_t* dst = out.brick_voxels.data() + size_t(slot) * mesh_sdf::brick_voxel_count;
+            // Unsigned distance at each voxel of the plane being filled, used to bound the next
+            // voxel's query. An unsigned distance field is 1-Lipschitz, so a neighbour one voxel
+            // away is never farther from the surface than |d| + voxel_size -- an upper bound the
+            // traversal can start from instead of infinity, which lets it reject whole subtrees on
+            // their bounds rather than descending to a leaf every time. Exact, not an
+            // approximation: the query still returns the true nearest triangle.
+            //
+            // One plane is enough because the scan writes each entry after reading it: at (lx, ly)
+            // the slot still holds the previous z, while the -1 and -stride neighbours already hold
+            // the current z. All three are one voxel away, so all three are valid bounds.
+            std::array<float, mesh_sdf::brick_stride * mesh_sdf::brick_stride> plane_distance{};
+            const math::vec3 brick_center = brick_origin + math::vec3(0.5f * brick_world_size);
+            const float center_distance = std::abs(brick_center_distance[brick_index]);
+            // One BVH descent for the whole brick instead of one per voxel. Every triangle that can
+            // be the nearest for any voxel this brick stores is gathered up front, and the voxels
+            // then run a flat loop over that list.
+            //
+            // The reach is what makes it exact. Beyond `collect_reach` the stored value saturates,
+            // so a triangle farther away than that cannot change any byte this brick writes -- it
+            // can only change a magnitude that is about to be clamped. An unsigned shell subtracts
+            // its thickness before storing, which shifts the whole band outward by exactly that,
+            // hence the extra term.
+            const math::vec3 stored_min =
+                brick_origin + math::vec3((0.5f - float(mesh_sdf::brick_border)) * voxel_size);
+            const math::vec3 stored_max =
+                brick_origin +
+                math::vec3((float(mesh_sdf::brick_stride) - float(mesh_sdf::brick_border) - 0.5f) *
+                           voxel_size);
+            const math::bbox stored_region(stored_min, stored_max);
+            const float collect_reach =
+                mesh_sdf::encode_range * voxel_size + (use_unsigned ? out.two_sided_thickness : 0.0f);
+            // Deliberately uninitialised: only entries below the returned count are ever read.
+            std::array<uint32_t, k_max_brick_candidates> candidates;
+            const uint32_t candidate_count = accelerator.collect_candidates(stored_region,
+                                                                            collect_reach,
+                                                                            candidates.data(),
+                                                                            uint32_t(candidates.size()));
+            // An over-full list is slower to scan than the traversal it replaced, and an empty one
+            // carries no sign at all. Both fall back to the per-voxel query, which is exactly the
+            // pre-existing path.
+            const bool use_candidates = candidate_count > 0 && candidate_count <= candidates.size();
             for(uint32_t lz = 0; lz < mesh_sdf::brick_stride; ++lz)
             {
                 for(uint32_t ly = 0; ly < mesh_sdf::brick_stride; ++ly)
@@ -901,7 +1235,83 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
                                                       float(ly) - float(mesh_sdf::brick_border) + 0.5f,
                                                       float(lz) - float(mesh_sdf::brick_border) + 0.5f);
                         const math::vec3 p = brick_origin + voxel_offset * voxel_size;
-                        float distance = accelerator.signed_distance(p, use_unsigned);
+                        const uint32_t plane_index = lx + ly * mesh_sdf::brick_stride;
+                        // The nearest already-computed voxel, one voxel away in whichever axis is
+                        // available. It supplies two things: an upper bound for the query, and --
+                        // when this voxel turns out to be beyond the band -- its sign.
+                        // Straight-line rather than a lambda over the three axes: a lambda
+                        // capturing these by reference stops them living in registers, and this
+                        // runs once per voxel around a query that can be a handful of triangle
+                        // tests.
+                        float neighbour = 0.0f;
+                        float nearest = std::numeric_limits<float>::max();
+                        if(lz > 0)
+                        {
+                            const float value = plane_distance[plane_index];
+                            const float magnitude = std::abs(value);
+                            if(magnitude < nearest)
+                            {
+                                nearest = magnitude;
+                                neighbour = value;
+                            }
+                        }
+                        if(ly > 0)
+                        {
+                            const float value = plane_distance[plane_index - mesh_sdf::brick_stride];
+                            const float magnitude = std::abs(value);
+                            if(magnitude < nearest)
+                            {
+                                nearest = magnitude;
+                                neighbour = value;
+                            }
+                        }
+                        if(lx > 0)
+                        {
+                            const float value = plane_distance[plane_index - 1];
+                            const float magnitude = std::abs(value);
+                            if(magnitude < nearest)
+                            {
+                                nearest = magnitude;
+                                neighbour = value;
+                            }
+                        }
+                        const bool has_neighbour = nearest < std::numeric_limits<float>::max();
+                        // The first voxel of a brick has no neighbour, so it falls back to the
+                        // brick centre, whose distance pass 1 already measured. Same bound, longer
+                        // reach: it costs one deeper descent per brick instead of per voxel.
+                        const float hint = has_neighbour
+                                               ? nearest + voxel_size
+                                               : center_distance + math::length(p - brick_center);
+                        float distance = 0.0f;
+                        if(use_candidates)
+                        {
+                            distance = accelerator.signed_distance_in_list(p,
+                                                                           use_unsigned,
+                                                                           candidates.data(),
+                                                                           candidate_count);
+                            // At or beyond the reach the list was collected for, the list may not
+                            // hold the true nearest triangle. The magnitude does not matter -- the
+                            // encoding saturates either way, and the true distance is provably at
+                            // least this far. The SIGN does, and it came from whichever triangle the
+                            // list did hold, so it is not usable.
+                            //
+                            // Take it from an adjacent voxel instead, which is exact: the field is
+                            // 1-Lipschitz, so a point more than one voxel from the surface cannot be
+                            // on the other side of it from its immediate neighbour, and this voxel is
+                            // at least `collect_reach` away -- four voxels at the narrowest. The
+                            // neighbour's own sign was established the same way or measured directly,
+                            // so the induction bottoms out at the brick's first voxel.
+                            if(!use_unsigned && std::abs(distance) >= collect_reach)
+                            {
+                                distance = has_neighbour ? std::copysign(distance, neighbour)
+                                                         : accelerator.signed_distance(p, false, hint);
+                            }
+                        }
+                        else
+                        {
+                            distance = accelerator.signed_distance(p, use_unsigned, hint);
+                        }
+                        plane_distance[plane_index] = distance;
                         if(use_unsigned)
                         {
                             // Unsigned shell: the surface is treated as a slab of the
@@ -916,6 +1326,110 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
                 }
             }
         });
+    return true;
+}
+} // namespace
+
+auto bake_mesh_sdf(const sdf_source_geometry& geometry,
+                   const mesh_sdf_bake_settings& settings,
+                   mesh_sdf& out,
+                   sdf_bake_threading threading) -> bool
+{
+    APP_SCOPE_PERF("GI/Bake/Mesh SDF");
+    out = {};
+    sdf_triangle_accelerator accelerator;
+    bool use_unsigned = false;
+    if(!prepare_bake(geometry, settings, accelerator, use_unsigned))
+    {
+        return false;
+    }
+    return bake_field_with_accelerator(geometry,
+                                       settings,
+                                       accelerator,
+                                       use_unsigned,
+                                       threading == sdf_bake_threading::parallel,
+                                       out);
+}
+
+auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
+                        const mesh_sdf_bake_settings& settings,
+                        std::vector<mesh_sdf>& out,
+                        uint32_t mip_count,
+                        sdf_bake_threading threading) -> bool
+{
+    APP_SCOPE_PERF("GI/Bake/Mesh SDF Mips");
+    out.clear();
+    if(mip_count == 0)
+    {
+        return false;
+    }
+    // ONE accelerator for the whole chain. The BVH build and the connected-component scan are
+    // linear-ish in the TRIANGLE count and do not shrink when the voxel grows, so paying for them
+    // per level is what made a three-level chain cost about twice a single bake rather than the
+    // third extra its voxel work needs.
+    sdf_triangle_accelerator accelerator;
+    bool use_unsigned = false;
+    if(!prepare_bake(geometry, settings, accelerator, use_unsigned))
+    {
+        return false;
+    }
+    const bool parallel_voxels = (threading == sdf_bake_threading::parallel);
+    mesh_sdf finest;
+    if(!bake_field_with_accelerator(geometry, settings, accelerator, use_unsigned, parallel_voxels, finest))
+    {
+        return false;
+    }
+    // Every level is a multiple of the voxel the FINEST one actually got, not of the one that was
+    // requested. The caps routinely coarsen the request, and a chain built from the request would
+    // then start with two identical levels.
+    const float base_voxel = finest.voxel_size;
+    const math::vec3 surface_extent = geometry.bounds.get_dimensions();
+    out.reserve(mip_count);
+    out.push_back(std::move(finest));
+    for(uint32_t mip = 1; mip < mip_count; ++mip)
+    {
+        mesh_sdf_bake_settings coarse = settings;
+        coarse.target_voxel_size = base_voxel * float(1u << mip);
+        // The clamps exist to stop a field being too FINE. A mip is deliberately coarse, so
+        // leaving them in place would clamp it back onto the level above and the chain would be
+        // three copies of the same field.
+        coarse.max_voxel_size = math::max(settings.max_voxel_size, coarse.target_voxel_size);
+        coarse.min_voxel_size = math::min(settings.min_voxel_size, coarse.target_voxel_size);
+        // PREDICT the level's grid before baking it, and stop if it would not actually be cheaper.
+        //
+        // A coarser level is not automatically a smaller one. The padding is encode_range voxels
+        // per side, so it grows with the voxel: a level covers a proportionally larger region at a
+        // proportionally larger voxel, and once that padding dominates the mesh's own extent the
+        // grid stops shrinking at all. A small submesh then bakes three levels of identical cost
+        // that are identically expensive to store -- measured on a 49k-triangle sphere at
+        // resolution 8, where a three-level chain cost 2.5x a single bake instead of 1.3x, and on
+        // Bistro, where the chain doubled a 1591-submesh bake.
+        //
+        // Predicted rather than measured-then-discarded because the point is not to pay for it.
+        const math::uvec3 predicted =
+            compute_field_brick_dim(surface_extent, coarse, use_unsigned, coarse.target_voxel_size);
+        const uint64_t predicted_cells = uint64_t(predicted.x) * predicted.y * predicted.z;
+        const math::uvec3& previous = out.back().brick_dim;
+        const uint64_t previous_cells = uint64_t(previous.x) * previous.y * previous.z;
+        // Two thirds: enough of a saving to be worth a level's bake time and its atlas slot. A
+        // level that only shaves a fraction buys neither resolution nor residency.
+        if(predicted_cells * 3u > previous_cells * 2u)
+        {
+            break;
+        }
+        mesh_sdf level;
+        if(!bake_field_with_accelerator(geometry, coarse, accelerator, use_unsigned, parallel_voxels, level))
+        {
+            break;
+        }
+        // A level that did not actually get coarser buys nothing and would cost atlas space to
+        // hold. Happens when a cap the mip settings cannot relax is already binding.
+        if(!(level.voxel_size > out.back().voxel_size * 1.5f))
+        {
+            break;
+        }
+        out.push_back(std::move(level));
+    }
     return true;
 }
 

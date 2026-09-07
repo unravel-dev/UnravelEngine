@@ -39,6 +39,16 @@ struct mesh_sdf
     static constexpr uint32_t brick_stride = brick_size + 2u * brick_border;
     static constexpr uint32_t brick_voxel_count = brick_stride * brick_stride * brick_stride;
 
+    /// Levels in a field's mip chain, finest first. Each level doubles the voxel, so it holds
+    /// about a quarter of the bricks (a surface is two-dimensional) and reaches twice as far
+    /// before saturating.
+    ///
+    /// The point is residency, not detail. A scene whose fields do not all fit the shared atlas
+    /// currently loses whole meshes from GI; with a chain it loses RESOLUTION instead, because the
+    /// atlas can fall back to a level that fits. Three matches UE's DistanceField::NumMips, whose
+    /// coarsest level is always resident for exactly this reason.
+    static constexpr uint32_t mip_count = 3;
+
     /// Voxel distances are stored as R8 unorm covering [-encode_range, +encode_range]
     /// voxels and saturate beyond it.
     ///

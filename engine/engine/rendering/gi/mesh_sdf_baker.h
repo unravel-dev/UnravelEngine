@@ -89,7 +89,28 @@ auto summarize_connected_components(const sdf_source_geometry& geometry) -> sdf_
  */
 struct mesh_sdf_bake_settings
 {
-    ///< Target voxel count along the longest bounds axis. Voxel size derives from this.
+    ///< THE knob. Edge length of one voxel, in local units; 0 means derive it from
+    ///< @ref resolution, which is what every existing asset does.
+    ///<
+    ///< This is the quantity everything else is a function of, which is why it is the one worth
+    ///< setting directly:
+    ///<   - detail: the field resolves features about this size, and cannot represent thinner
+    ///<     geometry at all;
+    ///<   - range: the narrow band reaches @ref mesh_sdf::encode_range voxels, so four times
+    ///<     this, and past it a stored brick saturates;
+    ///<   - memory and bake time: a surface is two-dimensional, so both go as the inverse SQUARE
+    ///<     -- halving this costs about four times as much, not eight.
+    ///<
+    ///< Finer is not simply better, and the range line above is why: see the sizing comment in
+    ///< bake_mesh_sdf for the measurement that settles it.
+    ///<
+    ///< The caps only ever coarsen, so a request can be refused but never exceeded. When one
+    ///< does refuse, the asset compiler says so rather than leaving the setting looking ignored.
+    float target_voxel_size = 0.0f;
+    ///< Fallback used when @ref target_voxel_size is 0: target voxel count along the longest
+    ///< BOUNDS axis. A poor proxy for quality, because it is relative to the mesh rather than to
+    ///< the world -- a 10 m wall and a 1 m prop at 64 differ seventeenfold in the size they
+    ///< actually resolve. Kept so existing assets bake exactly as they did.
     uint32_t resolution = 64;
     ///< Lower clamp on the derived voxel size, in local units. Stops tiny props from
     ///< producing needlessly dense fields.
@@ -100,15 +121,21 @@ struct mesh_sdf_bake_settings
     ///< Hard ceiling on grid voxels per axis, after clamping. Bounds the SHAPE of a field, not
     ///< its cost: see @ref max_total_voxels.
     uint32_t max_resolution = 256;
-    ///< Hard ceiling on TOTAL grid voxels in one field. This is the setting that actually
-    ///< bounds a bake, because both the time it takes and the atlas space it occupies are
-    ///< proportional to voxel count, and voxel count is cubic in resolution -- a per-axis cap
-    ///< of 256 still permits 16.7M voxels in a single field, which is far more than the whole
-    ///< scene's atlas holds. Enforced by growing the voxel size, so the field always still
-    ///< covers the whole mesh; the cost is detail, never coverage.
+    ///< Hard ceiling on TOTAL grid voxels in one field. THE cost budget, and the only one:
+    ///< both bake time and atlas footprint scale with voxel count, and voxel count is cubic in
+    ///< resolution, so a per-axis cap of 256 still permits 16.7M voxels in a single field --
+    ///< far more than the whole scene's atlas holds. Enforced by growing the voxel size, so the
+    ///< field always still covers the whole mesh; the cost is detail, never coverage.
     ///<
     ///< The default is what a cubic mesh at @ref resolution 64 asks for, so it does not bite on
-    ///< the nominal case and only catches fields that would otherwise run away.
+    ///< the nominal case and only catches fields that would otherwise run away. In practice it
+    ///< is this rather than @ref resolution that settles the size of a compact mesh.
+    ///<
+    ///< It measures the DENSE grid, which is admittedly the wrong shape: a surface is
+    ///< two-dimensional, so this charges a hollow or flat mesh for space it never stores.
+    ///< Budgeting stored bricks instead was built and reverted -- see the sizing comment in
+    ///< bake_mesh_sdf. If it returns it replaces this setting rather than joining it; one field
+    ///< should not need two budgets to describe its cost.
     uint64_t max_total_voxels = 262144;
     ///< Bake an unsigned shell instead of a signed field. Required for foliage cards and
     ///< any other geometry that is not a closed surface, where the inside/outside test is
@@ -170,6 +197,30 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
                    const mesh_sdf_bake_settings& settings,
                    mesh_sdf& out,
                    sdf_bake_threading threading = sdf_bake_threading::parallel) -> bool;
+
+/**
+ * @brief Bakes a field and its coarser levels, finest first.
+ *
+ * Each level doubles the voxel of the one before it, so it costs about a quarter as much: a
+ * surface is two-dimensional, and stored bricks track the surface. A three-level chain is
+ * therefore roughly a third more work than the finest level alone, not three times.
+ *
+ * Levels are baked INDEPENDENTLY rather than downsampled from the level above. Resampling a
+ * stored field would be cheaper, but the stored field is a saturating narrow band and a
+ * conservative under-estimate; interpolating it does not reliably stay conservative, and "never
+ * over-estimate" is the one property sphere tracing cannot survive losing. UE rebuilds each mip
+ * from the source geometry for the same reason.
+ *
+ * A level that cannot be produced ends the chain rather than failing the bake, so the result is
+ * always usable and never longer than @p mip_count.
+ *
+ * @return false only when the finest level itself could not be baked.
+ */
+auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
+                        const mesh_sdf_bake_settings& settings,
+                        std::vector<mesh_sdf>& out,
+                        uint32_t mip_count = mesh_sdf::mip_count,
+                        sdf_bake_threading threading = sdf_bake_threading::parallel) -> bool;
 
 /**
  * @brief Samples a baked field at a local-space point, in local units.

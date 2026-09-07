@@ -275,6 +275,7 @@ SAVE(mesh::load_data)
     try_save(ar, ser20::make_nvp("lods", obj.lods));
     try_save(ar, ser20::make_nvp("default_material_uids", obj.default_material_uids));
     try_save(ar, ser20::make_nvp("submesh_sdfs", obj.submesh_sdfs));
+    try_save(ar, ser20::make_nvp("submesh_sdf_coarse_mips", obj.submesh_sdf_coarse_mips));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }
@@ -298,6 +299,7 @@ LOAD(mesh::load_data)
     try_load(ar, ser20::make_nvp("lods", obj.lods));
     try_load(ar, ser20::make_nvp("default_material_uids", obj.default_material_uids));
     try_load(ar, ser20::make_nvp("submesh_sdfs", obj.submesh_sdfs));
+    try_load(ar, ser20::make_nvp("submesh_sdf_coarse_mips", obj.submesh_sdf_coarse_mips));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }
