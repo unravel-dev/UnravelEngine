@@ -42,6 +42,11 @@ uniform mat4 u_prev_view_proj;
 #define HAMMERSLEY_SAMPLES 16
 #define HAMMERSLEY_TYPE 1
 #define MAX_ROUGHNESS 0.6
+// Decoded G-buffer roughness at or below which the trace is a single deterministic
+// mirror ray. The encoder clamps roughness to >= 0.05 at write, so an AUTHORED mirror
+// decodes at the floor plus up to one UNORM8 quantum; keep in step with
+// GI_REFLECTION_MIRROR_ROUGHNESS, which gates the GI reflection tier the same way.
+#define SSR_MIRROR_ROUGHNESS 0.06
 
 
 /*
@@ -472,6 +477,19 @@ void main()
 #if HAMMERSLEY_TYPE > 0
 	num_rays = uint(u_max_rays);
 #endif
+    // MIRRORS TRACE ONE EXACT RAY. With several rays every one of them was GGX-jittered
+    // even on an authored mirror, whose roughness only decodes at the encoder floor:
+    // alpha^2 is ~1e-6 there, yet the NDF's tail still tilts a ray by a degree whenever
+    // E.y lands within 0.3% of 1 - about one ray per hundred pixels per frame - and at
+    // five metres a degree is ten centimetres, enough to land on a thin emissive strip
+    // instead of the wall beside it. Those rays arrived as full-radiance fireflies the
+    // temporal window could only smear (the GI reflection tier recorded the same lesson
+    // at its decoded-roughness floor). One ray also costs a quarter of the marches.
+    BRANCH
+    if(roughness <= SSR_MIRROR_ROUGHNESS)
+    {
+        num_rays = uint(1);
+    }
 
 	int frame_number = int(u_frame_index_mod);
 	

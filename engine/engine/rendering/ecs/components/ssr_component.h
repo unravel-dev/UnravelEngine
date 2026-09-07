@@ -49,7 +49,6 @@ public:
         r.enable_temporal_accumulation = contribution >= 0.5f ? f.enable_temporal_accumulation : r.enable_temporal_accumulation;
         r.temporal.history_strength = std::lerp(r.temporal.history_strength, f.temporal.history_strength, contribution);
         r.temporal.depth_threshold = std::lerp(r.temporal.depth_threshold, f.temporal.depth_threshold, contribution);
-        r.temporal.roughness_sensitivity = std::lerp(r.temporal.roughness_sensitivity, f.temporal.roughness_sensitivity, contribution);
         r.temporal.motion_scale_pixels = std::lerp(r.temporal.motion_scale_pixels, f.temporal.motion_scale_pixels, contribution);
         r.temporal.normal_dot_threshold = std::lerp(r.temporal.normal_dot_threshold, f.temporal.normal_dot_threshold, contribution);
         r.temporal.motion_scale_pixels = std::lerp(r.temporal.motion_scale_pixels, f.temporal.motion_scale_pixels, contribution);

@@ -135,18 +135,6 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "Skip the spatial denoise kernel on pixels whose temporal estimate "
                             "has fully settled."},
         })
-        .data<&settings::debug_view>("debug_view"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "debug_view"},
-            entt::attribute{"pretty_name", "Debug View"},
-            entt::attribute{"group", "Gather"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"tooltip",
-                            "1 = ray tiers (green = screen commit, red = SDF hit, blue = "
-                            "world-probe/sky completion, magenta = probe reconstructed from "
-                            "neighbours). Session-only, not saved."},
-        })
         .data<&settings::enable_temporal>("enable_temporal"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_temporal"},
@@ -422,7 +410,6 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("intensity", obj.intensity));
     try_save(ar, ser20::make_nvp("resolution", obj.resolution));
     try_save(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
-    // debug_view is deliberately NOT saved: a scene must never load with a diagnostic view on.
     try_save(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
     try_save(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
     try_save(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));

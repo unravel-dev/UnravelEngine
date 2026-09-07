@@ -36,11 +36,20 @@ void main()
     vec4 curr_ssr = texture2D(s_ssr_curr, uv);
     float ssr_confidence = curr_ssr.a;
 
-    // History stabilizes color only; it should not keep overwriting the probe when
-    // the current frame has a weak/missing screen-space hit.
+    // The temporal resolve's colour IS the running mean of every frame including this
+    // one (or the current frame verbatim when temporal accumulation is off), so it is
+    // the image at every accumulation count. Its alpha is the stored weight over
+    // max_accum_frames, written for the NEXT frame's merge - not a blend factor. This
+    // pass used to lerp the RAW current frame back in by 1 - alpha: a cap of 32 then
+    // showed 31/32 raw noise on the first frame after any history reset, and wherever a
+    // hit's confidence stays below 1 (edge fades, the facing cone, the depth dead zone)
+    // the weight never fills the cap at all (steady state decay x W + confidence < cap),
+    // so a fixed share of raw noise stayed in the output for good. That is why a small
+    // cap looked MORE converged than a large one: only a cap the weight could fill
+    // showed the mean. The current confidence alone decides how much of the mean
+    // replaces the probe layer beneath.
     vec4 ssr_history = texture2D(s_ssr_history, uv);
-    float history_weight = saturate(ssr_history.a);
-    vec3 ssr_color = mix(curr_ssr.rgb, ssr_history.rgb, history_weight);
+    vec3 ssr_color = ssr_history.rgb;
 
     GBufferDataNormalMetalRoughness normal_data = DecodeGBufferNormalMetalRoughness(uv, s_normal);
 

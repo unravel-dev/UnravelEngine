@@ -112,10 +112,7 @@ uniform vec4 u_gi_camera;
 /// fract(R2 x float(frame)) here had 1/128 precision after ~1e5 frames and the jitter
 /// collapsed to a few positions in long sessions. zw unused.
 uniform vec4 u_gi_jitter;
-/// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs.
-/// y > 0 = RAY TIER debug: rays paint which tier answered instead of radiance
-/// (green = screen commit, red = SDF hit, blue = world-probe/sky completion; the interp pass
-/// paints interpolated tiles magenta under the same flag).
+/// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs. y unused.
 /// z = the adaptive flag - consumed by the CLASSIFY pass, bound here only for layout parity.
 /// w > 0 when s_gi_prev_color holds last frame's composited output; > 1.5 when its alpha
 /// also carries each pixel's view depth (the RGBA16F history), which GiReadHistory then
@@ -445,7 +442,7 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 		bool committed = false;
 		// The hit landed on moving geometry (see s_moving_rays).
 		bool moving = false;
-		// 1 = screen commit, 2 = SDF hit, 3 = completion; consumed by the tier debug view.
+		// 1 = screen commit, 2 = SDF hit, 3 = completion; 1 feeds the probe's screen share.
 		int answered_tier = 3;
 		// SCREEN TIER: Hi-Z march from the anchor pixel. A confident on-screen hit inside the
 		// ray's own range commits at PIXEL precision; everything else falls through to the SDF.
@@ -637,18 +634,6 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 				{
 					radiance = GiProbeEnvRadiance(sample_dir);
 				}
-			}
-		}
-		BRANCH
-		if(u_gi_screen_trace.y > 0.5)
-		{
-			radiance = answered_tier == 1 ? vec3(0.0, 1.0, 0.0)
-			                              : (answered_tier == 2 ? vec3(1.0, 0.0, 0.0)
-			                                                    : vec3(0.0, 0.0, 1.0));
-			// Magenta: the hit landed on moving geometry (the temporal's fast update).
-			if(moving)
-			{
-				radiance = vec3(1.0, 0.0, 1.0);
 			}
 		}
 		atomicAdd(s_traced_rays[slot], 1u);

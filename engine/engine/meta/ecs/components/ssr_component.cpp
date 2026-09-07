@@ -120,14 +120,6 @@ REFLECT_INLINE(ssr_pass::fidelityfx_ssr_settings)
             entt::attribute{"max", 0.030f},
             entt::attribute{"tooltip", "Depth difference allowed before history is discarded.\nLower = crisper edges, higher = smoother but risk of bleed"},
         })
-        .data<&temporal_settings::roughness_sensitivity>("roughness_sensitivity"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "roughness_sensitivity"},
-            entt::attribute{"pretty_name", "Material Sensitivity"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"tooltip", "How strongly rough surfaces shorten history.\n0 = same for every material   ·   1 = glossy keeps more history"},
-        })
         .data<&temporal_settings::motion_scale_pixels>("motion_scale_pixels"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "motion_scale_pixels"},
@@ -361,7 +353,6 @@ SAVE_INLINE(ssr_pass::fidelityfx_ssr_settings::temporal_settings)
 {
     try_save(ar, ser20::make_nvp("history_strength", obj.history_strength));
     try_save(ar, ser20::make_nvp("depth_threshold", obj.depth_threshold));
-    try_save(ar, ser20::make_nvp("roughness_sensitivity", obj.roughness_sensitivity));
     try_save(ar, ser20::make_nvp("motion_scale_pixels", obj.motion_scale_pixels));
     try_save(ar, ser20::make_nvp("normal_dot_threshold", obj.normal_dot_threshold));
     try_save(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));
@@ -373,7 +364,6 @@ LOAD_INLINE(ssr_pass::fidelityfx_ssr_settings::temporal_settings)
 {
     try_load(ar, ser20::make_nvp("history_strength", obj.history_strength));
     try_load(ar, ser20::make_nvp("depth_threshold", obj.depth_threshold));
-    try_load(ar, ser20::make_nvp("roughness_sensitivity", obj.roughness_sensitivity));
     try_load(ar, ser20::make_nvp("motion_scale_pixels", obj.motion_scale_pixels));
     try_load(ar, ser20::make_nvp("normal_dot_threshold", obj.normal_dot_threshold));
     try_load(ar, ser20::make_nvp("max_accum_frames", obj.max_accum_frames));

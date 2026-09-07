@@ -33,7 +33,6 @@ public:
         {
             float history_strength     = 0.9f;   // 0 … 1  (was blend_factor)
             float depth_threshold      = 0.01f;  // clip-space 0 … ~0.03
-            float roughness_sensitivity= 0.3f;   // 0 … 1
             float motion_scale_pixels = 120.0f;   // Motion scale in pixels
             float normal_dot_threshold = 0.95f;   // Normal dot threshold for motion detection
             int max_accum_frames = 8;        // Maximum accumulation frames
@@ -234,7 +233,7 @@ private:
     struct temporal_resolve_program : uniforms_cache
     {
         gpu_program::ptr program;
-        gfx::program::uniform_ptr u_temporal_params;  // x: enable_temporal, y: history_strength, z: depth_threshold, w: roughness_sensitivity
+        gfx::program::uniform_ptr u_temporal_params;  // x: enable_temporal, y: history_strength, z: depth_threshold, w: unused
         gfx::program::uniform_ptr u_motion_params;    // x: motion_scale_pixels, y: normal_dot_threshold, z: max_accum_frames, w: unused
         gfx::program::uniform_ptr u_fade_params;      // x: content-lag release ceiling, y: unused, z: trace_scale_x, w: trace_scale_y
         gfx::program::uniform_ptr u_prev_view_proj;   // Previous frame view-projection matrix

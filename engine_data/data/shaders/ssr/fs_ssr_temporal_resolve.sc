@@ -25,7 +25,7 @@ uniform vec4 u_temporal_params;
 #define u_enable_temporal         u_temporal_params.x
 #define u_history_strength        u_temporal_params.y
 #define u_depth_threshold         u_temporal_params.z
-#define u_roughness_sensitivity   u_temporal_params.w
+// w unused.
 
 uniform vec4 u_motion_params;
 #define u_motion_scale_pixels     u_motion_params.x
@@ -102,11 +102,6 @@ vec2 ComputePreviousFrameUV(vec2 uv, float z)
     vec3 vs_pos = ComputeViewspacePosition(uv, z);
     vec4 ws_pos = mul(u_invView, vec4(vs_pos, 1.0));
     return WorldToScreenPrevious(ws_pos.xyz);
-}
-
-float GetRoughnessFade(float roughness)
-{
-    return MAX_ROUGHNESS - min(roughness, MAX_ROUGHNESS);
 }
 
 // ---------------------------------------------------------------------------
@@ -302,9 +297,16 @@ SsrTemporalResult ApplyTemporalAccumulation(
 
     // == 5. decay & roughness modulation ===================================
     float decay_user = mix(DECAY_MIN, DECAY_MAX, clamp(u_history_strength,0.0,1.0));
-    float decay      = decay_user * motion_f *
-                       mix(1.0, GetRoughnessFade(roughness),
-                           clamp(u_roughness_sensitivity,0.0,1.0));
+    // NO roughness term in the decay. It used to multiply in mix(1, 0.6 - roughness,
+    // sensitivity): at roughness 0.28 that is 0.80, so the running weight settled at
+    // 1 / (1 - 0.97 * 0.80) = 4.3 frames whatever max_accum_frames said (measured 4.3/32
+    // on the test-suite floor), and rough pixels - the ones whose four jittered rays
+    // need the window most - converged least. Rough reflections are also the blurriest,
+    // so they are the least at risk from a long window, and the per-pixel gates (depth,
+    // normal, motion, neighbourhood clamp, hit-distance confirmation, hit velocity) own
+    // ghosting now. The window is history_strength's: 1 / (1 - decay_user), capped by
+    // max_accum_frames. The "Material Sensitivity" knob went with the term.
+    float decay      = decay_user * motion_f;
 
     W_hist *= decay;
 

@@ -25,10 +25,6 @@
 IMAGE2D_RW(s_probe_radiance_rw, rgba16f, 5);
 BUFFER_RW(b_gi_probes, vec4, 7);
 
-/// y > 0 = tier debug view: interpolated tiles paint magenta so the adaptive coverage is
-/// visible in the same view that shows the trace's tiers. Other components unused here.
-uniform vec4 u_gi_screen_trace;
-
 NUM_THREADS(8, 8, 1)
 void main()
 {
@@ -81,10 +77,6 @@ void main()
 		{
 			alpha = value.w;
 		}
-	}
-	if(u_gi_screen_trace.y > 0.5)
-	{
-		radiance = vec3(1.0, 0.0, 1.0);
 	}
 	imageStore(s_probe_radiance_rw, GiProbeAtlasBase(probe.x, probe.y, 0) + local,
 	           vec4(radiance, alpha));

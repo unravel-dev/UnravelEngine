@@ -90,16 +90,10 @@ public:
         /// weight is one over this. 0 or 1 disables the reflection temporal entirely, the
         /// A/B knob for verifying the accumulation is alive.
         int reflection_temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
-        /// 0 = off. 1 = RAY TIERS: every gather ray paints its answering tier instead of
-        /// radiance - green = screen-trace commit, red = SDF hit, blue = world-probe/sky
-        /// completion - and the mix survives the whole chain, so the lit image shows the
-        /// screen tier's actual coverage. Session-only, deliberately not serialized.
-        ///
-        /// A screen-space contact AO stage was tried here and REMOVED: it duplicated ASSAO's
-        /// role at best. The under-overhang darkness it chased is a RADIANCE property - the
-        /// bounce term's cavity occlusion (GiBounceCavityVisibility in cs_gi_light_voxels) -
-        /// not a post-multiply. Screen-space AO stays ASSAO's job.
-        int debug_view = 0;
+        // A screen-space contact AO stage was tried in this pass and REMOVED: it duplicated
+        // ASSAO's role at best. The under-overhang darkness it chased is a RADIANCE property
+        // - the bounce term's cavity occlusion (GiBounceCavityVisibility in
+        // cs_gi_light_voxels) - not a post-multiply. Screen-space AO stays ASSAO's job.
         /// Full-resolution temporal accumulation over the integrated irradiance.
         bool enable_temporal = true;
         /// The full-res temporal's SLOW lane cap - the stability window: three placement
@@ -474,13 +468,11 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_temporal;
-        gfx::program::uniform_ptr u_gi_screen_trace;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_screen_trace, "u_gi_screen_trace", gfx::uniform_type::Vec4);
         }
 
         auto is_valid() const -> bool

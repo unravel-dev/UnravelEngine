@@ -631,11 +631,11 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     gfx::set_texture(temporal_resolve_program_.s_ssr_curr_hit_t, 5, curr_hit_t);
     gfx::set_texture(temporal_resolve_program_.s_ssr_hist_hit_t, 6, history_t_tex);
 
-    // Set temporal parameters (enable_temporal, history_strength, depth_threshold, roughness_sensitivity)
+    // Set temporal parameters (enable_temporal, history_strength, depth_threshold; w unused)
     float temporal_params[4] = {settings.enable_temporal_accumulation ? 1.0f : 0.0f,
                                 settings.temporal.history_strength,
                                 settings.temporal.depth_threshold,
-                                settings.temporal.roughness_sensitivity};
+                                0.0f};
     gfx::set_uniform(temporal_resolve_program_.u_temporal_params, temporal_params);
 
     // Set motion parameters (motion_scale_pixels, normal_dot_threshold, max_accum_frames, velocity flag)

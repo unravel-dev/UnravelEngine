@@ -42,6 +42,11 @@ uniform vec4 u_denoise_params;
 #define u_luma_sigma   u_denoise_params.w
 
 #define MAX_ROUGHNESS 0.6
+// Roughness at which the filter reaches full strength. It used to ramp all the way to the
+// trace cutoff (0.6), which left it at 4% on a 0.15 gloss and 40% on a 0.35 brushed metal -
+// the band where four jittered rays speckle most and the lobe is already wide enough to
+// hide a screen-space blur. Mirrors (the encoder floor) still bypass it entirely.
+#define SSR_DENOISE_FULL_ROUGHNESS 0.3
 
 // 5-tap a-trous 1D kernel: [1/16, 1/4, 3/8, 1/4, 1/16]
 #define KW0 0.375
@@ -96,7 +101,7 @@ void main()
 		return;
 	}
 
-	float roughness_blend = smoothstep(0.05, MAX_ROUGHNESS, roughness);
+	float roughness_blend = smoothstep(0.05, SSR_DENOISE_FULL_ROUGHNESS, roughness);
 	float center_luma = Luminance(center.rgb);
 	int   step = int(u_step_size);
 
@@ -117,7 +122,15 @@ void main()
 	#define MAX_VARIANCE_BOOST 4.0
 	float center_conf = clamp(center.a, 0.25, 1.0);
 	float variance_boost = min(1.0 / center_conf, MAX_VARIANCE_BOOST);
-	float effective_luma_sigma = u_luma_sigma * variance_boost;
+	// The luminance stop scales with the CENTRE's own luminance (floored at one HDR unit,
+	// below which the knob is the plain absolute sigma it always was). A stochastic ray
+	// that landed on an emissive strip is ten to fifty units over its neighbours: with a
+	// fixed sigma of one every neighbour weighed zero and the firefly survived every
+	// pass, which is why raising the knob to four "helped" - it was the only way past
+	// the strips. Scaling by the centre makes the stop one-sided: a bright outlier opens
+	// its own kernel and gets averaged down, while a dim pixel beside a bright
+	// reflection keeps rejecting it and never absorbs it.
+	float effective_luma_sigma = u_luma_sigma * variance_boost * max(center_luma, 1.0);
 
 	// Weight the centre by its own confidence so a noisy hit doesn't anchor
 	// the result if better neighbours exist.

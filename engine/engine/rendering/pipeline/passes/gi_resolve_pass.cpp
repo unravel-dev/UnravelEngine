@@ -471,12 +471,12 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             // TAA-unjittered record for the same reason: still camera, exact reprojection.
             const math::transform gather_projection = params.cam->get_projection_unjittered();
             const auto gather_prev_view_proj = params.cam->get_prev_view_projection_unjittered();
-            // w: 0 no previous colour, 1 colour, 2 colour with view depth in alpha, 3 that
-            // plus the velocity buffer bound at the trace (screen hits on movers reproject
-            // through it).
+            // y unused. w: 0 no previous colour, 1 colour, 2 colour with view depth in
+            // alpha, 3 that plus the velocity buffer bound at the trace (screen hits on
+            // movers reproject through it).
             const bool trace_velocity = prev_color_carries_depth && params.velocity != nullptr;
             const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
-                                                  float(s.debug_view),
+                                                  0.0f,
                                                   adaptive ? 1.0f : 0.0f,
                                                   has_prev_color ? (trace_velocity ? 3.0f : prev_color_carries_depth ? 2.0f : 1.0f)
                                                                  : 0.0f};
@@ -637,7 +637,6 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
                 gfx::set_uniform(interp_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(interp_program_.u_gi_probe_temporal, probe_temporal);
-                gfx::set_uniform(interp_program_.u_gi_screen_trace, screen_trace_params);
                 gfx::dispatch(pass.id, interp_program_.program->native_handle(), probes_x, probes_y, 1);
                 interp_program_.program->end();
             }

@@ -61,7 +61,6 @@ public:
             dominant ? f.reflection_temporal_frames : r.reflection_temporal_frames;
         r.denoise_converged_early_out =
             dominant ? f.denoise_converged_early_out : r.denoise_converged_early_out;
-        r.debug_view = dominant ? f.debug_view : r.debug_view;
         r.enable_temporal = dominant ? f.enable_temporal : r.enable_temporal;
         r.temporal_slow_frames = std::lerp(r.temporal_slow_frames, f.temporal_slow_frames, contribution);
         r.denoise_luma_floor = std::lerp(r.denoise_luma_floor, f.denoise_luma_floor, contribution);
