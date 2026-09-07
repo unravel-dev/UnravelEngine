@@ -695,6 +695,7 @@ void surface_cache_system::add_instance(uint64_t identity,
         const auto emissive_color = pbr->get_emissive_color().to_linear();
         inst.emissive = math::vec3(emissive_color.value.r, emissive_color.value.g, emissive_color.value.b) *
                         pbr->get_emissive_intensity();
+        inst.metalness = math::clamp(pbr->get_metalness(), 0.0f, 1.0f);
     }
     inst.local_to_world = local_to_world;
     inst.header_index = header_index;
@@ -970,13 +971,14 @@ void surface_cache_system::upload_instances()
         dst[36] = inst.emissive.x;
         dst[37] = inst.emissive.y;
         dst[38] = inst.emissive.z;
+        // Lane 9 w: metalness, read by the reflection trace kernel next to the emission.
+        dst[39] = inst.metalness;
         // Lane 10: the instance velocity (see instance::velocity), w = the largest corner
         // displacement over the same frame (rotation).
         dst[40] = inst.velocity.x;
         dst[41] = inst.velocity.y;
         dst[42] = inst.velocity.z;
         dst[43] = inst.max_corner_displacement;
-        dst[39] = 0.0f;
     }
     // Content hash over the exact bytes the GPU receives: any change to a transform, material
     // colour, bounds, or field index flips it. Eight bytes per round instead of the byte-serial

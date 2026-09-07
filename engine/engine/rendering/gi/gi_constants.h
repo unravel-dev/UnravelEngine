@@ -473,6 +473,15 @@
       " (mid 0.5 hit beside a dark 0.125 cell mix) reaches about 4; anything above is a"           \
       " mismatched read (radiance and albedo answered by different cascade levels, occupancy"      \
       " holes) and must not multiply energy")                                                      \
+    X(GI_REFLECTION_MEASURED_MASS_MIN, 0.05f,                                                      \
+      "alpha-weighted share of a light-voxel footprint", "derived: a culled face stores the"        \
+      " provenance alpha GI_LIGHT_VOXEL_CULLED_ALPHA (1/256), so a footprint holding only culled"   \
+      " faces reads a measured share of about 0.004 while one measured face reads 1. Below this"    \
+      " share (a sliver under 5 percent of the footprint) the reflection kernel serves its"         \
+      " material stand-in instead of the normalised culled black: the gather must answer DARK"      \
+      " there (a closed cone cannot be allowed to leak), but an image cannot leak light into the"   \
+      " scene, and black punched a cube-shaped hole into a mirror floor under a floating box"       \
+      " (its underside is culled toward the floor 0.4 m below it)")                                 \
     X(GI_REFLECTION_MIRROR_ROUGHNESS, 0.06f,                                                       \
       "decoded G-buffer roughness", "derived: the G-buffer encoder clamps roughness to >= 0.05"    \
       " at write (fs_deferred_geom.sc), so an AUTHORED mirror decodes at the floor - plus up to"   \

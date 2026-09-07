@@ -556,6 +556,33 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		// light-voxel read is up to two dozen 3D fetches that an exhausted hit discards.
 		radiance = rough_value;
 		bool screen_lit = false;
+#if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
+		// The hit's own material (compute form): the remodulation ratio's numerator, the
+		// metal blend and the tint of the stand-in below. Emission is already scaled by its
+		// intensity; the albedo is the base-colour factor times the texture mean the args
+		// pass staged; metalness rides lane 9's w (surface_cache_system packs it).
+		bool hit_has_material = hit.instance_index != SDF_NO_INSTANCE && !hit.exhausted;
+		vec3 hit_albedo = vec3_splat(0.0);
+		vec3 hit_emissive = vec3_splat(0.0);
+		float hit_metalness = 0.0;
+		BRANCH
+		if(hit_has_material)
+		{
+			uint material_base = uint(hit.instance_index) * uint(SDF_INSTANCE_STRIDE);
+			vec4 material0 = b_sdf_instances[material_base + 8u];
+			vec4 material1 = b_sdf_instances[material_base + 9u];
+			hit_emissive = material1.xyz;
+			hit_metalness = saturate(material1.w);
+			hit_albedo = material0.xyz;
+			uint mean_slot = uint(material0.w);
+			// Slot 0 is the composer's "no mean" convention: factor only.
+			if(mean_slot != 0u)
+			{
+				hit_albedo *= GiReflectionMeanAlbedo(mean_slot);
+			}
+			hit_albedo = min(hit_albedo, vec3_splat(GI_MAX_ALBEDO));
+		}
+#endif // GI_LIGHT_VOXEL_READ_ALBEDO
 #if defined(GI_REFLECTION_SCREEN_COLOR)
 		// The on-screen hit upgrade first (GiReflectionScreenColorAtHit): a hit the depth
 		// buffer shows is the exact lit pixel; the voxel walk answers only what it rejects.
@@ -589,18 +616,29 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			vec3 measured_lit;
 			float measured_lit_share;
 			vec3 measured_lit_position;
+			float measured_mass;
 			bool measured_ok = GiLightVoxelReadFadeRemod(hit_position, hit_normal, rough_value,
 			                                             GI_REFLECTION_CASCADE_FADE_VOXELS,
 			                                             measured, measured_albedo,
 			                                             measured_albedo_ok, measured_lit,
 			                                             measured_lit_share,
-			                                             measured_lit_position);
+			                                             measured_lit_position, measured_mass);
+			// CULLED IS DARK FOR THE GATHER, A HOLE FOR AN IMAGE. A face whose cavity cone is
+			// closed stores the provenance alpha GI_LIGHT_VOXEL_CULLED_ALPHA, which the read
+			// above normalises into a MEASURED black - right for irradiance (a closed cone must
+			// not leak), wrong here: the underside of a box floating 0.4 m over a mirror floor
+			// is culled toward that floor, and the floor reflected it as a black rectangle
+			// framed by the lit side faces bleeding in at its edges (the "projection of the
+			// cube" under the mover). A footprint whose measured share is only that epsilon
+			// takes the stand-in path below with the unmeasured ones.
+			bool measured_image = measured_ok && measured_mass >= GI_REFLECTION_MEASURED_MASS_MIN;
 #else
 			bool measured_ok = GiLightVoxelReadFade(hit_position, hit_normal, rough_value,
 			                                        GI_REFLECTION_CASCADE_FADE_VOXELS, measured);
+			bool measured_image = measured_ok;
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
 			BRANCH
-			if(measured_ok)
+			if(measured_image)
 			{
 				radiance = measured;
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
@@ -620,11 +658,8 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 				// footprint. A fallback-mixed answer carries no matching albedo
 				// (measured_albedo_ok false) and is served unremodulated.
 				BRANCH
-				if(hit.instance_index != SDF_NO_INSTANCE && measured_albedo_ok)
+				if(hit_has_material && measured_albedo_ok)
 				{
-					uint material_base = uint(hit.instance_index) * uint(SDF_INSTANCE_STRIDE);
-					vec4 material0 = b_sdf_instances[material_base + 8u];
-					vec3 hit_emissive = b_sdf_instances[material_base + 9u].xyz;
 					// SOURCE SPLIT: the volume mixes a voxelised emitter's own emission into
 					// every read within a cell or two of it, so a mirror showed the strip's
 					// exact silhouette next to a fat glowing bar of the ceiling's voxels
@@ -635,14 +670,6 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 					// ceiling reflects the strip's light as a smooth gradient, the strip
 					// reflects as itself. A footprint with no lit face (all source) borrows
 					// the first coarser level's lit estimate inside the walk.
-					vec3 hit_albedo = material0.xyz;
-					uint mean_slot = uint(material0.w);
-					// Slot 0 is the composer's "no mean" convention: factor only.
-					if(mean_slot != 0u)
-					{
-						hit_albedo *= GiReflectionMeanAlbedo(mean_slot);
-					}
-					hit_albedo = min(hit_albedo, vec3_splat(GI_MAX_ALBEDO));
 					vec3 voxel_albedo = min(measured_albedo, vec3_splat(GI_MAX_ALBEDO));
 					vec3 ratio = hit_albedo /
 					             max(voxel_albedo,
@@ -669,7 +696,20 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 						lit *= GiReflectionNearFieldFactor(hit_position, hit_normal, measured_lit_position,
 						                                   measured_lit, measured_albedo);
 					}
-					radiance = lit + hit_emissive;
+					// METAL LIFT: the lattice holds diffuse bounce (albedo x E / pi) and a metal
+					// has none - its appearance is F0 times the radiance arriving from its mirror
+					// direction, which no diffuse lattice can hold, so a metal reached through
+					// this tier can come back near black wherever its own cell measured little.
+					// Through the mirror floor the brushed north wall, in the band hidden behind
+					// the floating box on screen (neither SSR nor the on-screen upgrade can see
+					// it), reflected as a black rectangle beside the bright rendered wall SSR
+					// shows around it. The receiver's own irradiance is a second isotropic
+					// estimate of the light arriving at the hit, and the base colour is F0; a
+					// metal takes the BRIGHTER of the two estimates, so a cell the lattice already
+					// lit keeps its answer and only the dark ones are lifted; blended by metalness
+					// so dielectrics keep their measured bounce untouched.
+					vec3 metal_lift = max(lit, hit_albedo * rough_value);
+					radiance = mix(lit, metal_lift, hit_metalness) + hit_emissive;
 				}
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
 				// FIREFLY CLAMP, the gather's per-ray contract applied to the one tier that
@@ -681,6 +721,21 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 				// neither a stochastic spike source.
 				radiance = min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
 			}
+#if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
+			else if(hit_has_material)
+			{
+				// MATERIAL STAND-IN for a hit the lattice holds nothing usable for (never
+				// measured, or culled - see measured_image above). rough_value alone is the
+				// receiver's own E/pi, the same energy-plausible stand-in the exhausted path
+				// serves - but a hit with a known material is that surface, not the receiver:
+				// its albedo over the receiver's irradiance is what it would bounce if that
+				// light reached it (for a mirror receiver exactly the mirror image's light,
+				// which no diffuse lattice can hold), and its own emission rides on top. The
+				// culled underside now reflects as the dim orange of the box it belongs to,
+				// continuous with the front face's reflection, instead of neutral grey or black.
+				radiance = min(hit_albedo * rough_value + hit_emissive, vec3_splat(GI_MAX_RAY_RADIANCE));
+			}
+#endif // GI_LIGHT_VOXEL_READ_ALBEDO
 		}
 		if(clipmap_shape)
 		{

@@ -79,6 +79,10 @@ public:
         ///< true average reflectance rather than its (usually white) tint.
         math::vec3 albedo{0.5f, 0.5f, 0.5f};
         math::vec3 emissive{0.0f, 0.0f, 0.0f};
+        ///< Material metalness factor. The light lattice stores diffuse bounce only, which a
+        ///< metal has none of; the reflection tier blends a hit's lattice answer toward its
+        ///< base colour over the receiver's irradiance by this (gi_reflection_kernel.sh).
+        float metalness = 0.0f;
         ///< Slot of the material's colour map in the texture-mean buffer; 0 is reserved white.
         uint32_t mean_slot = 0;
         ///< Whether that mean has been captured (fingerprint input; see global_sdf_instance).
