@@ -28,9 +28,10 @@ constexpr std::array<visualization_swatch, 1> k_legend_diffuse_color = {{
     {{0.0f, 0.0f, 0.0f}, "Pure metal - metalness 1 leaves no diffuse lobe"},
 }};
 
-constexpr std::array<visualization_swatch, 2> k_legend_specular_color = {{
-    {{0.04f, 0.04f, 0.04f}, "Dielectric - the flat ~4% F0 of a non-metal"},
-    {{0.8f, 0.6f, 0.3f}, "Metal - F0 is the base color itself"},
+/// ComputeF0(0.5, base, metalness) gives every dielectric F0 = 0.04 LINEAR, and this view
+/// sRGB-encodes before writing, so the constant reads as ~0.22 grey on screen - not near-black.
+constexpr std::array<visualization_swatch, 1> k_legend_specular_color = {{
+    {{0.22f, 0.22f, 0.22f}, "Dielectric - the one flat F0 every non-metal shares (0.04 linear)"},
 }};
 
 constexpr std::array<visualization_swatch, 4> k_legend_normals = {{
@@ -45,23 +46,26 @@ constexpr std::array<visualization_swatch, 2> k_legend_velocity = {{
     {{1.0f, 0.0f, 1.0f}, "NaN or infinite velocity - a broken previous transform"},
 }};
 
-constexpr std::array<visualization_swatch, 4> k_legend_sdf_step_count = {{
+constexpr std::array<visualization_swatch, 3> k_legend_sdf_step_count = {{
     {{0.0f, 1.0f, 0.0f}, "Cheap - the ray resolved in few steps"},
     {{1.0f, 0.0f, 0.0f}, "Expensive - close to the step budget"},
     {{0.0f, 0.0f, 1.0f}, "Budget exhausted without resolving (grazing ray, or too far)"},
-    {{0.0f, 0.0f, 0.0f}, "No hit - the shaded scene shows through"},
 }};
 
-constexpr std::array<visualization_swatch, 3> k_legend_sdf_headers = {{
-    {{0.5f, 0.5f, 1.0f}, "Red = voxel size x20, green = grid dimension / 256, blue = header present"},
-    {{0.0f, 0.0f, 1.0f}, "Header present but carries no voxel size"},
-    {{0.0f, 0.0f, 0.0f}, "No header at all - the buffer never arrived"},
+/// A channel readout, so there is one categorical color: all-zero. Blue IS the voxel-size
+/// presence flag, which is why "blue but no voxel size" cannot occur.
+constexpr std::array<visualization_swatch, 1> k_legend_sdf_headers = {{
+    {{0.0f, 0.0f, 0.0f}, "Every channel zero - no header at all, the buffer never arrived"},
 }};
 
-constexpr std::array<visualization_swatch, 3> k_legend_sdf_brick_probe = {{
-    {{1.0f, 0.0f, 0.0f}, "Empty brick - correct, the residency path works"},
-    {{0.0f, 1.0f, 0.0f}, "Surface brick with data - the indirection resolved to the wrong brick"},
-    {{0.0f, 0.0f, 0.0f}, "Surface brick reading a zero texel - the atlas was never written"},
+/// Only the red entry is a flag; the rest is SdfProbeLocal's raw texel value, so the ramp is
+/// the legend. Bright green just inside the bounds is EXPECTED - the bake keeps the surface
+/// encode_range (4) voxels away from the boundary, and an 8-voxel brick straddles both.
+constexpr std::array<visualization_swatch, 4> k_legend_sdf_brick_probe = {{
+    {{1.0f, 0.0f, 0.0f}, "Empty brick - the indirection entry says it owns no voxels"},
+    {{0.0f, 1.0f, 0.0f}, "Surface brick, texel saturated OUTSIDE (+4 voxels) - the normal reading in the bounds padding"},
+    {{0.0f, 0.5f, 0.0f}, "Surface brick, texel near distance zero - the probe point is on the surface"},
+    {{0.0f, 0.0f, 0.0f}, "Surface brick, texel saturated INSIDE (-4 voxels) - the probe point is in solid geometry"},
 }};
 
 constexpr std::array<visualization_swatch, 3> k_legend_sdf_bounds_entry = {{
@@ -98,27 +102,32 @@ constexpr std::array<visualization_swatch, 6> k_legend_gi_probe_sky = {{
     {{0.0f, 0.08f, 0.0f}, "Zero sky - what a sealed interior must read"},
     {{0.5f, 0.0f, 0.0f}, "Low sky fraction"},
     {{1.0f, 1.0f, 0.2f}, "High sky fraction (the ramp is 4x scaled, so it saturates early)"},
-    {{0.2f, 0.2f, 0.8f}, "Blue tint added: inside the blend band, where the next level is mixed in"},
+    {{0.0f, 0.08f, 0.5f}, "Blue channel forced up over any of the above: inside the blend band, where the reader mixes the next level in"},
     {{0.1f, 0.3f, 1.0f}, "Pure blue: the hit landed INSIDE the field - a trace artifact, not a leak"},
     {{1.0f, 0.0f, 1.0f}, "No level cage answered"},
 }};
 
-constexpr std::array<visualization_swatch, 6> k_legend_gi_sun_tiers = {{
+constexpr std::array<visualization_swatch, 7> k_legend_gi_sun_tiers = {{
     {{0.0f, 0.8f, 0.0f}, "Shadow map (CSM cascade 0) answered; brightness = lit fraction"},
     {{1.0f, 0.0f, 0.0f}, "Traced field answered OCCLUDED - the face injects nothing"},
     {{0.85f, 0.85f, 0.85f}, "Traced field answered LIT; brightness = clearance visibility"},
     {{0.0f, 0.2f, 1.0f}, "Never queried - no directional sun, or the face points away from it"},
     {{0.0f, 0.05f, 0.35f}, "Culled by the pass gates (tunnel guard, cavity visibility)"},
-    {{1.0f, 0.0f, 1.0f}, "STALE radiance - the lighting pass has not rewritten this texel"},
+    {{1.0f, 0.9f, 0.0f}, "Not attributed at any level (from the shared attribution pre-check)"},
+    {{1.0f, 0.0f, 1.0f}, "OVERLOADED: hit outside every cascade level, OR a stale texel the pass has not rewritten"},
 }};
 
-constexpr std::array<visualization_swatch, 6> k_legend_gi_vis_memo = {{
+/// This view is DISPLAYED through the sun-tier reader, so the last three rows come from that
+/// shared path (attribution pre-check, then the alpha classifier) rather than from the memo.
+constexpr std::array<visualization_swatch, 8> k_legend_gi_vis_memo = {{
     {{0.0f, 0.8f, 0.0f}, "Memo HIT - the stored verdict was served (healthy steady state)"},
     {{1.0f, 0.0f, 0.0f}, "Memo MISS - marched and restamped (one sweep after a generation bump is the fill)"},
     {{0.0f, 0.7f, 0.7f}, "Far-band hit - a stored far verdict served in the blend band"},
     {{1.0f, 0.5f, 0.0f}, "Far-band miss - the gated far read"},
     {{0.1f, 0.3f, 1.0f}, "Generation 0 - the memo was never seeded, or the uniform never arrived"},
     {{0.15f, 0.15f, 0.15f}, "No covering cage answered"},
+    {{0.0f, 0.05f, 0.35f}, "Culled by the pass gates before the memo is ever consulted"},
+    {{1.0f, 0.0f, 1.0f}, "OVERLOADED: hit outside every cascade level, OR a stale texel the pass has not rewritten"},
 }};
 
 // -----------------------------------------------------------------------------
@@ -197,7 +206,8 @@ constexpr std::array<visualization_mode_entry, 33> k_visualization_modes = {{
      visualization_group::surface,
      "specular_color",
      "Specular Color (F0)",
-     "Normal-incidence reflectance F0, sRGB-encoded.",
+     "Normal-incidence reflectance F0, sRGB-encoded. Metals show their own base color; every "
+     "dielectric shares one flat grey.",
      k_legend_specular_color},
     {visualization_mode::normals,
      visualization_group::surface,
@@ -241,9 +251,10 @@ constexpr std::array<visualization_mode_entry, 33> k_visualization_modes = {{
     {visualization_mode::ambient_occlusion,
      visualization_group::occlusion,
      "ambient_occlusion",
-     "Material AO (G-Buffer)",
-     "The AO channel packed into the G-Buffer - baked and material occlusion only, with no "
-     "screen-space term. White = unoccluded.",
+     "G-Buffer AO",
+     "The AO channel packed into the G-Buffer alpha: material and baked occlusion, multiplied "
+     "in place by ASSAO when that pass runs - so this is NOT a pure material readout. "
+     "White = unoccluded.",
      {}},
     {visualization_mode::gtao,
      visualization_group::occlusion,
@@ -257,7 +268,8 @@ constexpr std::array<visualization_mode_entry, 33> k_visualization_modes = {{
      "gtao_bent_normal",
      "GTAO Bent Normal",
      "The GTAO pass world-space bent normal, encoded n * 0.5 + 0.5, so an unoccluded surface "
-     "reads as its normal shifted into the 0..1 range. Flat mid-grey = none produced.",
+     "reads as its normal shifted into the 0..1 range. Flat WHITE = the pass produced nothing "
+     "and the white fallback texture is bound.",
      {}},
     {visualization_mode::specular_occlusion,
      visualization_group::occlusion,
@@ -318,7 +330,8 @@ constexpr std::array<visualization_mode_entry, 33> k_visualization_modes = {{
      visualization_group::distance_field,
      "sdf_step_count",
      "Trace Step Count",
-     "Heat map of sphere-trace steps per pixel - where the fields refuse to let rays skip.",
+     "Heat map of sphere-trace steps per pixel - where the fields refuse to let rays skip. A "
+     "ray that hits nothing draws nothing, so the shaded scene shows through.",
      k_legend_sdf_step_count},
     {visualization_mode::sdf_cascade_levels,
      visualization_group::distance_field,
@@ -338,22 +351,27 @@ constexpr std::array<visualization_mode_entry, 33> k_visualization_modes = {{
      visualization_group::distance_field,
      "sdf_headers",
      "Field Headers",
-     "Paints each resident field's bounds with its header contents, so a buffer that never "
-     "arrived reads as black instead of being inferred from a wrong-looking trace.",
+     "Paints each resident field's bounds with its header channels: red = voxel size x20, "
+     "green = grid dimension / 256, blue = 1 when the header carries a voxel size. A readout, "
+     "not a verdict - it exists so a header that never arrived reads black rather than being "
+     "inferred from a wrong-looking trace. First field in buffer order, not depth sorted.",
      k_legend_sdf_headers},
     {visualization_mode::sdf_brick_probe,
      visualization_group::distance_field,
      "sdf_brick_probe",
      "Brick Probe",
-     "What the brick indirection resolves to just inside each field's bounds, where a correct "
-     "field must report an empty brick.",
+     "What the brick indirection resolves to 0.05 units inside each field's bounds. Red is a "
+     "flag; green is the raw encoded distance texel there, so a healthy field reads mostly "
+     "green. A fault looks like per-pixel noise, not like the presence of green. Answers the "
+     "first field in buffer order the ray enters, so it is not depth sorted.",
      k_legend_sdf_brick_probe},
     {visualization_mode::sdf_bounds_entry,
      visualization_group::distance_field,
      "sdf_bounds_entry",
      "Bounds Entry Sample",
      "Classifies the FIRST field sample of the march, at the bounds entry point - the only "
-     "place instance scale and the hit threshold are applied.",
+     "place instance scale and the hit threshold are applied. Answers the first field in "
+     "buffer order the ray enters, so it is not depth sorted.",
      k_legend_sdf_bounds_entry},
 
     // -- Global Illumination --------------------------------------------------

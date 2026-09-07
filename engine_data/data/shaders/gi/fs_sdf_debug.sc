@@ -117,12 +117,25 @@ bool RunDiagnosticMode(vec3 ray_origin, vec3 ray_dir, out vec4 out_color)
 		}
 		if(u_debug_mode == SDF_DEBUG_PROBE)
 		{
-			// What the brick lookup resolved to just inside the bounds, where a correct field
-			// must report an EMPTY brick.
-			//   RED   -> empty brick, as expected. The residency path is working.
-			//   GREEN -> surface brick with a non-zero texel: atlas has data but the
-			//            indirection resolved to the wrong brick.
-			//   BLACK -> surface brick reading a zero texel: the atlas was never written.
+			// What the brick lookup resolved to 0.05 world units inside the bounds. This paints
+			// SdfProbeLocal's channels verbatim (see its contract there), so only RED is a flag
+			// -- the rest is a VALUE, not a verdict:
+			//   RED   -> the indirection entry carries the empty flag: the brick owns no voxels.
+			//   GREEN -> a surface brick's RAW ENCODED TEXEL at the probe point. 1 is saturated
+			//            4 voxels OUTSIDE, 0.5 is distance zero, 0 is saturated 4 voxels INSIDE.
+			//            The bake guarantees encode_range (4) voxels of padding between the
+			//            bounds and the surface, so bright green just inside the bounds is the
+			//            EXPECTED reading, not a fault -- an 8-voxel brick straddles that padding
+			//            and the surface behind it, so it is a surface brick reading saturated
+			//            positive. Black likewise means the probe point is inside solid geometry.
+			//   BLUE  -> the atlas slot over the atlas capacity. Capacity is brick_dim^3, so this
+			//            is ~0 for every real slot and never visibly tints. Do not read it.
+			// A genuine residency fault shows as per-pixel noise or a field-wide flat black where
+			// the geometry is known to be elsewhere -- not as the presence of green.
+			//
+			// NOTE this loop answers with the FIRST instance in buffer order whose bounds the ray
+			// crosses, not the nearest, and t_near clamps to 0 inside a field's bounds. The image
+			// is per-instance introspection, not a depth-sorted view of the scene.
 			vec3 probe_local = SdfTransformPoint(inst.world_to_local_rows,
 			                                     ray_origin + ray_dir * (t_near + 0.05));
 			vec4 probe = SdfProbeLocal(header, probe_local);
