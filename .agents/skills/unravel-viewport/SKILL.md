@@ -24,7 +24,8 @@ World axes match entities: **X-right, Y-up, Z-forward**. Camera `position` / `lo
 | `viewport_orbit_camera` | Orbit around `pivot` by `yaw`/`pitch` degrees |
 | `viewport_reset_camera` | UI "Reset Camera" parity |
 | `viewport_capture_scene` / `viewport_capture_game` | PNG capture; `wait_ms` (default 500), `scale` (default 1, bimg linear resize) |
-| `viewport_set_debug_view` | Set Scene panel debug visualization: `mode` = name (`"full"`, `"base_color"`, `"normals"`, `"depth"`, `"velocity"`, `"sdf_normals"`, ...) or raw id (-1..29); returns applied + previous mode |
+| `viewport_set_debug_view` | Set Scene panel debug visualization: `mode` = name (`"full"`, `"base_color"`, `"normals"`, `"gi_light_voxels"`, ...) or raw id (-1..31); returns applied + previous mode |
+| `viewport_list_debug_views` | Every debug view grouped, with what it shows and its color legend; optional `group`, `include_legend` |
 | `panel_focus_scene` | Focus Scene panel tab (editing camera) |
 | `panel_focus_game` | Focus Game panel tab (game camera) |
 
@@ -33,6 +34,21 @@ Prefer `panel_focus_game` before play-mode verification / game captures when the
 For agent loops, prefer `scale:0.5` to cut token cost. Default `wait_ms` is 500. Scaling/encoding uses bimg.
 
 Mutation tools return lean `{ok:true}` (plus small args). Full pose only from `viewport_get_camera`.
+
+## Debug views
+
+`viewport_list_debug_views` is the source of truth - it returns the live table, so nothing
+here can go stale. Groups: `surface` (G-Buffer channels), `occlusion` (material AO, GTAO,
+specular occlusion), `lighting` (env irradiance SH, indirect diffuse, reflections and their
+coverage), `motion` (motion vectors), `distance_field` (field integrity, sphere-traced from
+the camera), `global_illumination` (voxel albedo, light voxels, world probes, probe sky, sun
+tiers, bounce visibility memo - same trace).
+
+- Always restore `full` when done. `gi_sun_tiers` and `gi_vis_memo` REPLACE the light
+  volume's radiance while active, so GI ingests debug colors until they are switched off.
+- The traced groups composite over the shaded scene and need the surface cache enabled with
+  at least one resident field; rays that hit nothing leave the normal image showing through.
+- Do not judge a traced view captured from inside geometry.
 
 ## Focus notes
 

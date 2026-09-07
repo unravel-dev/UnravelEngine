@@ -2,7 +2,7 @@
 #include "../panel.h"
 #include "../panels_defs.h"
 #include "../viewport_resolution.h"
-#include "../visualization_modes.h"
+#include "../visualization_menu.h"
 #include "imgui/imgui.h"
 #include "imgui_widgets/utils.h"
 #include <engine/engine.h>
@@ -191,6 +191,7 @@ void game_panel::draw_ui(rtti::context& ctx)
       
                             
         viewport_stats_overlay::draw(pstats, stats_overlay_state_, "game");
+        visualization_menu::draw_legend_overlay(visualize_passes_, visualization_menu_state_, "game");
 
         if(stats_overlay_state_.open_profiler_requested)
         {
@@ -234,15 +235,7 @@ void game_panel::draw_menubar(rtti::context& ctx)
             }
         }
 
-        if(ImGui::BeginMenu(ICON_MDI_DRAWING_BOX ICON_MDI_ARROW_DOWN_BOLD))
-        {
-            for(const auto& entry : get_visualization_modes())
-            {
-                ImGui::RadioButton(entry.label, &visualize_passes_, static_cast<int>(entry.mode));
-            }
-            ImGui::EndMenu();
-        }
-        ImGui::SetItemTooltipEx("%s", "Visualize Render Passes");
+        visualization_menu::draw_menu(visualize_passes_, visualization_menu_state_);
 
         auto& ui    = ctx.get_cached<ui_system>();
         bool debugger_enabled = ui.is_debugger_enabled();

@@ -5,6 +5,7 @@
 
 #include "gizmos/gizmos_renderer.h"
 #include "../viewport_stats_overlay.h"
+#include "../visualization_menu.h"
 
 namespace unravel
 {
@@ -114,6 +115,7 @@ private:
     std::string fullscreen_name_{};
 
     viewport_stats_overlay::state stats_overlay_state_{};
+    visualization_menu::state visualization_menu_state_{};
 
     int m_skip_frames_{0};
 };

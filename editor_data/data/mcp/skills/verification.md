@@ -20,7 +20,9 @@ order: 70
   viewport_reset_camera (default pose). Use duration 0 for instant moves
   before captures.
 - viewport_set_debug_view switches visualization ("full", "base_color",
-  "normals", "depth", "velocity", ...). Always restore "full" afterwards.
+  "normals", "depth", "velocity", "gi_light_voxels", ...). Always restore
+  "full" afterwards. viewport_list_debug_views lists every mode grouped, with
+  what it shows and what its colors mean - call it instead of guessing a name.
 
 ## Play mode testing (physics, animation, particles, scripts)
 

@@ -32,6 +32,8 @@ auto debug_view_name_for_value(int value) -> const char*
     return entry != nullptr ? entry->name : "unknown";
 }
 
+/// Flat id list for error messages. Grouped output with descriptions and legends comes from
+/// viewport_list_debug_views instead - this stays short enough to read in a failure.
 auto list_debug_view_names() -> std::string
 {
     std::string names;
@@ -44,6 +46,38 @@ auto list_debug_view_names() -> std::string
         names += entry.name;
     }
     return names;
+}
+
+auto debug_view_mode_json(const visualization_mode_entry& entry, bool include_legend) -> std::string
+{
+    std::string json = fmt::format(R"({{"id":{},"name":{},"label":{},"description":{})",
+                                   static_cast<int>(entry.mode),
+                                   make_json_string(entry.name),
+                                   make_json_string(entry.label),
+                                   make_json_string(entry.description));
+    if(include_legend && !entry.legend.empty())
+    {
+        json += R"(,"legend":[)";
+        bool first = true;
+        for(const auto& swatch : entry.legend)
+        {
+            if(!first)
+            {
+                json += ",";
+            }
+            first = false;
+            // Colors are the literal values the debug shader writes, so an agent reading a
+            // capture can match a pixel against them without opening the shader.
+            json += fmt::format(R"({{"color":[{:.3g},{:.3g},{:.3g}],"meaning":{}}})",
+                                swatch.color[0],
+                                swatch.color[1],
+                                swatch.color[2],
+                                make_json_string(swatch.meaning));
+        }
+        json += "]";
+    }
+    json += "}";
+    return json;
 }
 
 auto resolve_scene_camera(rtti::context& ctx, std::string& error) -> entt::handle
@@ -505,9 +539,10 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "viewport_set_debug_view",
          .description = "Set the Scene panel debug visualization mode. Pass mode as a name string "
-                        "(e.g. \"full\", \"base_color\", \"normals\", \"depth\", \"velocity\", "
-                        "\"sdf_normals\") or as the raw integer id (-1..29). \"full\" (-1) restores "
-                        "the normal render. Returns the applied mode.",
+                        "(e.g. \"full\", \"base_color\", \"normals\", \"gi_light_voxels\") or as the "
+                        "raw integer id (-1..31). \"full\" (-1) restores the normal render. Call "
+                        "viewport_list_debug_views for every mode with its group, what it actually "
+                        "shows and its color legend.",
          .input_schema_json = R"({"type":"object","properties":{"mode":{"description":"Mode name or raw integer id"}},"required":["mode"]})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
@@ -550,16 +585,99 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          .is_error = true};
              }
 
-             auto& panel = resolve_scene_panel(ctx);
-             const int previous = panel.get_visualization_mode();
-             panel.set_visualization_mode(mode_value);
+             resolve_scene_panel(ctx).set_visualization_mode(mode_value);
 
-             return {.text = fmt::format(R"({{"ok":true,"mode":{},"name":"{}","previous":{},"previous_name":"{}"}})",
+             const auto* entry = find_visualization_mode(mode_value);
+             const auto* group = entry != nullptr ? find_visualization_group(entry->group) : nullptr;
+
+             return {.text = fmt::format(R"({{"ok":true,"mode":{},"name":"{}","label":{},"group":"{}"}})",
                                          mode_value,
                                          debug_view_name_for_value(mode_value),
-                                         previous,
-                                         debug_view_name_for_value(previous)),
+                                         make_json_string(entry != nullptr ? entry->label : "unknown"),
+                                         group != nullptr ? group->name : "none"),
                      .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "viewport_list_debug_views",
+         .description = "List every debug visualization mode for viewport_set_debug_view, grouped, "
+                        "with what each one actually shows and the meaning of its categorical "
+                        "colors. Optional \"group\" restricts the listing to one group (surface, "
+                        "occlusion, lighting, motion, distance_field, global_illumination); optional "
+                        "\"include_legend\" (default true) drops the color tables for a short list. "
+                        "Also returns the currently applied mode.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"group":{"type":"string","description":"Restrict the listing to one group id"},"include_legend":{"type":"boolean","description":"Include per-mode color legends; default true"}}})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             bool include_legend = true;
+             read_bool(args, "include_legend", include_legend);
+
+             std::string group_filter;
+             read_string(args, "group", group_filter);
+             const visualization_group_entry* only_group = nullptr;
+             if(!group_filter.empty())
+             {
+                 only_group = find_visualization_group(group_filter);
+                 if(only_group == nullptr)
+                 {
+                     std::string ids;
+                     for(const auto& group : get_visualization_groups())
+                     {
+                         if(!ids.empty())
+                         {
+                             ids += ", ";
+                         }
+                         ids += group.name;
+                     }
+                     return {.text = fmt::format(R"(Unknown group "{}". Valid groups: {})", group_filter, ids),
+                             .is_error = true};
+                 }
+             }
+
+             const int active = resolve_scene_panel(ctx).get_visualization_mode();
+             const auto* off = find_visualization_mode(static_cast<int>(visualization_mode::full));
+
+             std::string json =
+                 fmt::format(R"({{"active":{{"id":{},"name":"{}"}},"off":{},"groups":[)",
+                             active,
+                             debug_view_name_for_value(active),
+                             off != nullptr ? debug_view_mode_json(*off, include_legend) : "null");
+
+             bool first_group = true;
+             for(const auto& group : get_visualization_groups())
+             {
+                 if(only_group != nullptr && only_group->group != group.group)
+                 {
+                     continue;
+                 }
+                 if(!first_group)
+                 {
+                     json += ",";
+                 }
+                 first_group = false;
+
+                 json += fmt::format(R"({{"id":{},"label":{},"description":{},"modes":[)",
+                                     make_json_string(group.name),
+                                     make_json_string(group.label),
+                                     make_json_string(group.description));
+                 bool first_mode = true;
+                 for(const auto& entry : get_visualization_modes(group.group))
+                 {
+                     if(!first_mode)
+                     {
+                         json += ",";
+                     }
+                     first_mode = false;
+                     json += debug_view_mode_json(entry, include_legend);
+                 }
+                 json += "]}";
+             }
+             json += "]}";
+
+             return {.text = json, .is_error = false};
          },
          .mutates_scene = false});
 }

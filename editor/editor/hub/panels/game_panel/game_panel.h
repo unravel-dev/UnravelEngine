@@ -5,6 +5,7 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include "../viewport_stats_overlay.h"
+#include "../visualization_menu.h"
 
 namespace unravel
 {
@@ -37,5 +38,6 @@ private:
 
     imgui_panels* parent_{};
     viewport_stats_overlay::state stats_overlay_state_{};
+    visualization_menu::state visualization_menu_state_{};
 };
 } // namespace unravel

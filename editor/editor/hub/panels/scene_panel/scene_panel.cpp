@@ -2,7 +2,7 @@
 #include "../panel.h"
 #include "../panels_defs.h"
 #include "../viewport_resolution.h"
-#include "../visualization_modes.h"
+#include "../visualization_menu.h"
 #include "imgui_widgets/utils.h"
 #include <editor/editing/actions/entity_actions.h>
 #include <editor/editing/editing_manager.h>
@@ -1786,18 +1786,7 @@ void scene_panel::draw_gizmos_settings_menu(editing_manager& em)
 
 void scene_panel::draw_visualization_menu()
 {
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::BeginMenu(ICON_MDI_DRAWING_BOX ICON_MDI_ARROW_DOWN_BOLD))
-    {
-        for(const auto& entry : get_visualization_modes())
-        {
-            ImGui::RadioButton(entry.label, &visualize_passes_, static_cast<int>(entry.mode));
-        }
-
-        ImGui::EndMenu();
-    }
-    ImGui::SetItemTooltipEx("%s", "Visualize Render Passes");
+    visualization_menu::draw_menu(visualize_passes_, visualization_menu_state_);
 }
 
 void scene_panel::set_visualization_mode(int mode)
@@ -2121,6 +2110,7 @@ void scene_panel::draw_ui(rtti::context& ctx)
 
     const auto& pstats = camera_comp.get_pipeline_data().get_pipeline()->get_stats();
     viewport_stats_overlay::draw(pstats, stats_overlay_state_, "scene");
+    visualization_menu::draw_legend_overlay(visualize_passes_, visualization_menu_state_, "scene");
 
     if(stats_overlay_state_.open_profiler_requested)
     {
