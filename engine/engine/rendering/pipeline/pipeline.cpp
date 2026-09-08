@@ -129,8 +129,6 @@ void pipeline::gather_visible_models(scene& scn,
     static const std::string thread_name = "Rendering/Gather Models Thread";
     tpp::this_thread::register_this_thread(thread_name, true);
     auto view = scn.registry->view<transform_component, model_component, layer_component, active_component>();
-    
-    moodycamel::ConcurrentQueue<std::pair<entt::entity, lod_data>> queue;
 
     if(cam)
     {
@@ -140,14 +138,31 @@ void pipeline::gather_visible_models(scene& scn,
         BX_UNUSED(frustum);
     }
 
-    //get_lod_data_for_camera is not thread safe but we are only operating on a single model once
-    //so we can use parallel execution here
-    poolstl::for_each_par_if(true,
-        view.begin(),
-        view.end(),
-        [&](auto entity)
+    // Dispatched over the view's LEADING POOL (for_each_entity_par): its packed entity array is
+    // random access, so the pool carves chunks in O(1), and the view's filter - the three
+    // membership tests its forward-only iterator ran serially per step - runs inside each task.
+    // One result slot per packed position, sized once per call and reused across calls.
+    const auto* leading = view.handle();
+    if(leading == nullptr)
+    {
+        return;
+    }
+    const size_t slot_count = leading->size();
+    cull_lod_data_.resize(slot_count);
+    cull_visible_.assign(slot_count, 0u);
+    const uint64_t frame = gfx::get_render_frame();
+
+    // get_lod_data_for_camera is not thread safe, but each entity is visited by exactly one
+    // task, so the per-entity state is never shared. Results land in per-entity slots and are
+    // emitted below in pool order: the visibility set is deterministic frame to frame (the
+    // concurrent queue this replaced returned them in whatever order the pool threads finished)
+    // and nothing is allocated per call.
+    poolstl::for_each_entity_par(true,
+        view,
+        [&](const entt::entity entity)
         {
             tpp::this_thread::register_this_thread(thread_name, true);
+            const size_t index = leading->index(entity);
 
             auto&& [transform_comp, model_comp, layer_comp, active_comp] = view.get(entity);
             
@@ -174,7 +189,7 @@ void pipeline::gather_visible_models(scene& scn,
                 return;
             }
             
-            auto& current_lod_data = model_comp.get_lod_data_for_camera(cam, gfx::get_render_frame());
+            auto& current_lod_data = model_comp.get_lod_data_for_camera(cam, frame);
             bool is_visible = true;
 
             if(cam)
@@ -223,16 +238,20 @@ void pipeline::gather_visible_models(scene& scn,
 
             if(is_visible)
             {
-                // lod_data_callback(scn.create_handle(entity), current_lod_data);
-                queue.enqueue(std::make_pair(entity, current_lod_data));
+                cull_lod_data_[index] = current_lod_data;
+                cull_visible_[index] = 1u;
             }
-            
         });
 
-    std::pair<entt::entity, lod_data> entity_lod_data;
-    while(queue.try_dequeue_non_interleaved(entity_lod_data))
+    // Nothing touches the pool between the dispatch and here, so a slot's packed position still
+    // names its entity.
+    const entt::entity* packed = leading->data();
+    for(size_t index = 0; index < slot_count; ++index)
     {
-        lod_data_callback(scn.create_handle(entity_lod_data.first), entity_lod_data.second);
+        if(cull_visible_[index] != 0u)
+        {
+            lod_data_callback(scn.create_handle(packed[index]), cull_lod_data_[index]);
+        }
     }
 }
 

@@ -159,6 +159,11 @@ private:
     float cell_size_ = 0.0f;
     std::vector<uint32_t> cell_offsets_;
     std::vector<uint32_t> cell_instances_;
+    /// build() scratch, kept so a rebuild reuses its allocations: a scene with movers rebuilds
+    /// the grid every frame, and constructing these fresh was three 128 KiB allocations (and a
+    /// zero-fill) per frame at the default 32^3 cells. Not part of the grid's state.
+    std::vector<uint32_t> counts_scratch_;
+    std::vector<uint32_t> cursor_scratch_;
 };
 
 } // namespace unravel

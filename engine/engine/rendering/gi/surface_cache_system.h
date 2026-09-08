@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <limits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace unravel
@@ -141,10 +142,20 @@ public:
         uint64_t last_change_frame = 0;
     };
 
-    /// The regions changed within the hold window, rebuilt by @ref update_world.
+    /// The most recent regions changed within the hold window, at most
+    /// GI_TEMPORAL_DIRTY_MAX_BOUNDS of them, newest first - exactly the set any consumer reads.
+    /// Rebuilt by @ref update_world.
     auto get_dirty_regions() const -> const std::vector<dirty_region>&
     {
         return dirty_regions_;
+    }
+
+    /// How many regions there were this frame BEFORE the list was cut to the shader budget.
+    /// Past GI_TEMPORAL_DIRTY_MAX_BOUNDS the consumers fall back to their screen-wide behaviour;
+    /// compare this, not get_dirty_regions().size(), which never exceeds the budget.
+    auto get_dirty_region_total() const -> size_t
+    {
+        return dirty_region_total_;
     }
 
     /**
@@ -447,40 +458,87 @@ private:
             math::bbox bounds{};
         };
         std::vector<history_entry> history;
+        /// Index of the first entry still inside the hold window. Entries are appended in frame
+        /// order, so the aged ones are a prefix; advancing this is O(1) where erasing them
+        /// shifted the whole vector every frame. Compacted once the dead prefix outweighs the
+        /// live tail (rebuild_dirty_regions).
+        size_t history_begin = 0;
     };
 
-    /// FNV-1a over the pose and the material the attribute voxels bake, component by
-    /// component (never over sizeof: math::vec3 carries indeterminate padding bytes).
-    static auto compute_placement_hash(const math::mat4& local_to_world,
+    /// FNV-1a over the pose and the material the attribute voxels bake, continued from the
+    /// placement's matrix hash (hash_matrix in the .cpp) so the sixteen matrix floats are hashed
+    /// once per placement and shared with the pose key. Component by component, never over
+    /// sizeof: math::vec3 carries indeterminate padding bytes.
+    static auto compute_placement_hash(uint64_t matrix_hash,
                                        const math::vec3& albedo,
                                        const math::vec3& emissive) -> uint64_t;
+
+    /**
+     * @brief The tracker record for a placement, created on first sight.
+     *
+     * @param identity Stable key of the placement (entity, submesh, placement index), so a pose
+     *        can be compared against the same placement's previous frame.
+     * @return The record and whether this call created it. One lookup serves both the pose
+     *         cache and @ref record_placement; the find-then-try_emplace pair this replaced
+     *         hashed the identity twice per placement.
+     */
+    auto acquire_tracked(uint64_t identity) -> std::pair<tracked_placement&, bool>;
 
     /**
      * @brief Records a placement's pose for @ref get_dirty_regions: a new, moved, re-materialed
      *        or vanished placement adds the bounds it occupied to its region history.
      *
-     * @param identity Stable key of the placement (entity, submesh, placement index), so a pose
-     *        can be compared against the same placement's previous frame.
+     * @param tracked The placement's record from @ref acquire_tracked.
+     * @param inserted Whether that call created the record (a first sighting is a change).
      * @param placement_hash The frame's compute_placement_hash of the placement.
      * @param field_bounds The placement's raw world bounds; the region bounds are derived here
      *        (an emissive placement inflates by its light's reach).
-     * @return The placement's record, for the pose cache.
      */
-    auto track_placement(uint64_t identity,
-                         uint64_t placement_hash,
-                         const math::vec3& emissive,
-                         const math::bbox& field_bounds) -> tracked_placement&;
+    void record_placement(tracked_placement& tracked,
+                          bool inserted,
+                          uint64_t placement_hash,
+                          const math::vec3& emissive,
+                          const math::bbox& field_bounds);
 
     /// Sweeps placements not seen this frame (their last bounds go stale too), drops history
     /// older than the hold window and rebuilds @ref dirty_regions_.
     void rebuild_dirty_regions();
+
+    /**
+     * @brief What the walk needs from a material, decoded once per material per frame.
+     *
+     * Two thousand placements of one material used to decode its colours (six pow() calls),
+     * cast it and look up its texture-mean slots two thousand times; the answers are the same
+     * for every placement in the frame, so they are memoised by material pointer for the
+     * duration of the walk (see @ref summarize_material).
+     */
+    struct material_summary
+    {
+        bool is_pbr = false;
+        bool is_blended = false;
+        math::vec3 albedo{0.5f, 0.5f, 0.5f};
+        math::vec3 emissive{0.0f, 0.0f, 0.0f};
+        float emissive_luminance = 0.0f;
+        float metalness = 0.0f;
+        uint32_t mean_slot = 0;
+        bool mean_captured = false;
+        uint32_t emissive_mean_slot = 0;
+        bool emissive_mean_captured = false;
+    };
+
+    /// The summary of @p mat for this frame, decoded on first sight (see material_summary).
+    auto summarize_material(const material::sptr& mat) -> const material_summary&;
+
+    /// The scene walk of @ref update_world: every drawn submesh of every active model either
+    /// places its field or, lacking one, registers its emissive bounds with the dirty tracker.
+    void walk_scene(scene& scn);
 
     void add_instance(uint64_t identity,
                       uint32_t header_index,
                       const mesh_sdf& sdf,
                       const math::mat4& local_to_world,
                       const std::shared_ptr<mesh>& owner,
-                      const material::sptr& mat);
+                      const material_summary& material);
 
     /**
      * @brief The material a submesh is drawn with: the model material of its data group.
@@ -564,7 +622,14 @@ private:
     /// Clipmap composition input, rebuilt each frame alongside @ref instances_.
     std::vector<global_sdf_instance> clipmap_instances_;
     std::unordered_map<uint64_t, tracked_placement> tracked_placements_;
+    /// At most GI_TEMPORAL_DIRTY_MAX_BOUNDS regions, newest first: the only ones any consumer
+    /// reads. @ref dirty_region_total_ is how many there were before the cut.
     std::vector<dirty_region> dirty_regions_;
+    size_t dirty_region_total_ = 0;
+    /// rebuild_dirty_regions scratch: (latest change frame, placement) per live history.
+    std::vector<std::pair<uint64_t, tracked_placement*>> dirty_candidates_;
+    /// Per-frame memo behind summarize_material, keyed by material pointer; cleared each walk.
+    std::unordered_map<const material*, material_summary> material_summaries_;
     /// Keeps every mesh referenced by @ref clipmap_instances_ alive for the duration of
     /// composition. The composer borrows raw mesh_sdf pointers, so an asset unloading
     /// mid-compose would otherwise dangle.

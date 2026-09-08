@@ -103,7 +103,8 @@ void sdf_instance_grid::build(const std::vector<math::bbox>& instance_bounds, co
     // Counting pass, then a prefix sum, then a fill. Two passes over the instances rather than a
     // vector per cell: the cell count is large and most cells hold a handful of entries, so the
     // per-cell allocation would dominate the build.
-    std::vector<uint32_t> counts(cell_count, 0u);
+    auto& counts = counts_scratch_;
+    counts.assign(cell_count, 0u);
     const auto for_each_overlapped_cell = [&](const math::bbox& bounds, const auto& fn)
     {
         const math::ivec3 lo = to_cell(bounds.min);
@@ -142,7 +143,8 @@ void sdf_instance_grid::build(const std::vector<math::bbox>& instance_bounds, co
     cell_instances_.resize(running);
     // Separate write cursors, so the offsets stay the finished CSR structure rather than being
     // consumed as scratch during the fill.
-    std::vector<uint32_t> cursor(cell_offsets_.begin(), cell_offsets_.end() - 1);
+    auto& cursor = cursor_scratch_;
+    cursor.assign(cell_offsets_.begin(), cell_offsets_.end() - 1);
     for(uint32_t instance = 0; instance < uint32_t(instance_bounds.size()); ++instance)
     {
         for_each_overlapped_cell(instance_bounds[instance],

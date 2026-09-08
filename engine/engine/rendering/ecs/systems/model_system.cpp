@@ -75,9 +75,10 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
     auto frame = gfx::get_render_frame();
     // this code should be thread safe as each task works with a whole hierarchy and
     // there is no interleaving between tasks.
-    poolstl::for_each_par_if(true,
-                  view.begin(),
-                  view.end(),
+    // Over the view's leading pool, not its iterator: an entt view iterator is forward-only and
+    // poolstl re-walks it once per chunk (see for_each_entity_par).
+    poolstl::for_each_entity_par(true,
+                  view,
                   [&](entt::entity entity)
                   {
                       APP_SCOPE_PERF_THREAD("Model/Skinning/Update Armature & World Bounds","Pool Thread");

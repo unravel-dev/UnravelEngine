@@ -367,6 +367,8 @@ void animation_system::on_update(scene& scn, delta_t dt, bool force)
                       }
                   };
 
+    // A vector of ranges, not a view: already random access, so the plain range form is the
+    // right one here (for_each_entity_par is for entt views, whose iterators are forward-only).
     poolstl::for_each_par_if(true,
                   group_ranges_.begin(),
                   group_ranges_.end(),

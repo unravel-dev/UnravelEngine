@@ -233,9 +233,14 @@ auto model::get_lods_count() const -> uint32_t
     if(mesh_lods_.size() == 1)
     {
         const auto& mesh_asset = mesh_lods_[0];
-        if(mesh_asset && mesh_asset.get())
+        if(mesh_asset)
         {
-            return mesh_asset.get()->get_lod_count();
+            // One get(), not two: each resolves through the shared asset link (mutex, access
+            // stamp, refcount), and this runs per model per frame from every pool thread.
+            if(const auto mesh_ptr = mesh_asset.get())
+            {
+                return mesh_ptr->get_lod_count();
+            }
         }
     }
     // Otherwise, return the number of separate mesh LODs (manual LODs)
@@ -338,12 +343,30 @@ auto model::get_or_emplace_material_instance(uint32_t index) -> material::sptr
 auto model::calculate_lod_data(lod_data& data, const math::bbox& world_bounds, const camera& cam, float dt) const -> bool
 {
     data.transition_time = get_lod_transition_time().count();
-    const auto lod_count = get_lods_count();
-    const auto base_mesh = get_lod(0);
-    if(!base_mesh)
+    // The first LOD's handle, checked in place. get_lod(0) returned it BY VALUE, and every
+    // handle copy and get() touches the asset LINK that a crowd drawing one mesh shares:
+    // refcounts, the weak-asset mutex, the access stamp, and std::atomic_load on a shared_ptr,
+    // which the MS STL serialises on a global spinlock. Run from every pool thread at once, once
+    // per model, that lock traffic was the cost of the cull - not the culling.
+    if(mesh_lods_.empty() || !mesh_lods_.front())
     {
         return false;
     }
+    // The LOD count is resolved on demand, because for a single mesh with internal LODs it lives
+    // on the LOADED asset and get_lods_count() pays a get() to ask (see above). The selection
+    // loop needs a screen-size limit per LOD, so with fewer than two limits it can never run
+    // whatever the count is; without an override or a bias the count is never needed at all.
+    uint32_t lod_count = 0;
+    bool lod_count_resolved = false;
+    const auto resolve_lod_count = [&]() -> uint32_t
+    {
+        if(!lod_count_resolved)
+        {
+            lod_count = get_lods_count();
+            lod_count_resolved = true;
+        }
+        return lod_count;
+    };
 
     // Unpopulated bounds mean the mesh has not been loaded/measured yet - nothing to size.
     if(!world_bounds.is_populated())
@@ -371,9 +394,11 @@ auto model::calculate_lod_data(lod_data& data, const math::bbox& world_bounds, c
     std::size_t lod = 0;
     if(lod_override_enabled_)
     {
-        lod = math::clamp<std::size_t>(lod_override_level_, 0, lod_count - 1);
+        lod = math::clamp<std::size_t>(lod_override_level_, 0, resolve_lod_count() - 1);
     }
-    else if(lod_count > 1 && lod_screen_sizes_.size() >= lod_count)
+    // Left to right: the count is only resolved once the limits exist for it to matter, and
+    // the third test reads the value that resolution stored.
+    else if(lod_screen_sizes_.size() > 1 && resolve_lod_count() > 1 && lod_screen_sizes_.size() >= lod_count)
     {
         // Use current LOD for hysteresis (what's being displayed, accounting for transitions)
         const uint32_t prev_lod = data.current_lod_index;
@@ -410,9 +435,14 @@ auto model::calculate_lod_data(lod_data& data, const math::bbox& world_bounds, c
         }
     }
 
-    float biased_lod = static_cast<float>(lod) + lod_selection_bias_;
-    biased_lod = math::clamp(biased_lod, 0.0f, static_cast<float>(lod_count - 1));
-    lod = static_cast<std::size_t>(biased_lod);
+    // Every path above leaves lod below the count, so with no bias the clamp is an identity and
+    // the count it would need stays unresolved.
+    if(lod_selection_bias_ != 0.0f)
+    {
+        float biased_lod = static_cast<float>(lod) + lod_selection_bias_;
+        biased_lod = math::clamp(biased_lod, 0.0f, static_cast<float>(resolve_lod_count() - 1));
+        lod = static_cast<std::size_t>(biased_lod);
+    }
 
     // Hysteresis determined new LOD - now handle transition timing
     // Only trigger a new transition if we're not currently transitioning

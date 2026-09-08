@@ -290,6 +290,12 @@ protected:
 
     entt::registry cache_registry_;
     entt::entity cache_entity_;
+
+    /// gather_visible_models scratch, reused across calls: one result slot per packed position
+    /// of the view's leading pool (see poolstl::for_each_entity_par), emitted in pool order once
+    /// the dispatch is done.
+    std::vector<lod_data> cull_lod_data_;
+    std::vector<uint8_t> cull_visible_;
 };
 } // namespace rendering
 } // namespace unravel

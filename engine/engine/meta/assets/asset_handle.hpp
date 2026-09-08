@@ -23,15 +23,10 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, asset_handle<T>& obj)
     hpp::uuid uid{};
     try_load(ar, ser20::make_nvp("uid", uid));
 
-    if(uid.is_nil())
-    {
-        obj = {};
-    }
-    else
-    {
-        auto& ctx = unravel::engine::context();
-        auto& am = ctx.get_cached<unravel::asset_manager>();
-        obj = am.get_asset<T>(uid, unravel::load_flags::standard, unravel::load_mode::deferred);
-    }
+    // try_get_asset rather than get_asset: a handle can be read before asset_manager::init
+    // has registered the storages - cold boot peeks project settings before any system is
+    // initialized - and an unresolvable handle has to come back empty, not take the load down.
+    auto& am = unravel::engine::context().get_cached<unravel::asset_manager>();
+    obj = am.try_get_asset<T>(uid, unravel::load_flags::standard, unravel::load_mode::deferred);
 }
 } // namespace ser20

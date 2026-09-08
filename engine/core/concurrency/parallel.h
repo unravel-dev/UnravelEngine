@@ -44,4 +44,27 @@ void for_each_par_if(bool parallel, Iterator first, Iterator last, Function func
     std::for_each(first, last, func);
 }
 
+
+template <typename View, typename Fn>
+void for_each_entity_par(bool parallel, const View& view, Fn fn)
+{
+    // The view's leading pool: a packed, random-access entity array. Chunking it is O(1)
+    // per chunk, and the filter the view's own ++ would have applied serially - "is this
+    // entity in every other pool" - runs inside each task instead, in parallel.
+    const auto* leading = view.handle();
+    if(leading == nullptr)
+    {
+        return;
+    }
+    for_each_par_if(parallel, leading->begin(), leading->end(),
+        [&](const auto entity) -> void
+        {
+            if(!view.contains(entity))   // the filter, now parallel; also rejects tombstones
+            {
+                return;
+            }
+            fn(entity);
+        });
+}
+
 } // namespace poolstl

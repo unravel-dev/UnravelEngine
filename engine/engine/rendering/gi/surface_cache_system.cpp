@@ -15,6 +15,7 @@
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
 
+#include <concurrency/parallel.h>
 #include <logging/logging.h>
 
 namespace
@@ -470,72 +471,88 @@ auto surface_cache_system::take_texture_mean_captures(uint32_t budget)
     return captures;
 }
 
-auto surface_cache_system::compute_placement_hash(const math::mat4& local_to_world,
-                                                   const math::vec3& albedo,
-                                                   const math::vec3& emissive) -> uint64_t
+namespace
 {
-    // FNV-1a over the pose and the material the attribute voxels bake: either moving makes the
-    // light this placement bounced (or emitted) stale wherever it stood. Component by
-    // component, never over sizeof: math::vec3 carries alignment padding whose bytes are
-    // indeterminate, and hashing them made every static placement read as moved every frame
-    // (measured: 163 regions per frame in a parked scene, the whole screen at the fast cap).
+/// One FNV-1a round over a float's bits. Component by component, never over sizeof:
+/// math::vec3 carries alignment padding whose bytes are indeterminate, and hashing them made
+/// every static placement read as moved every frame (measured: 163 regions per frame in a
+/// parked scene, the whole screen at the fast cap).
+auto mix_float(uint64_t hash, float value) -> uint64_t
+{
+    uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return (hash ^ uint64_t(bits)) * 0x100000001b3ull;
+}
+
+auto mix_vec3(uint64_t hash, const math::vec3& v) -> uint64_t
+{
+    return mix_float(mix_float(mix_float(hash, v.x), v.y), v.z);
+}
+
+/// FNV-1a over a placement's sixteen matrix floats. Both keys a placement needs - the pose
+/// cache's and the dirty tracker's - continue from this with their own inputs, so the matrix
+/// is hashed once per placement instead of once per key.
+auto hash_matrix(const math::mat4& m) -> uint64_t
+{
     uint64_t hash = 0xcbf29ce484222325ull;
-    const auto mix_float = [&hash](float value)
-    {
-        uint32_t bits = 0;
-        std::memcpy(&bits, &value, sizeof(bits));
-        hash = (hash ^ uint64_t(bits)) * 0x100000001b3ull;
-    };
     for(int column = 0; column < 4; ++column)
     {
         for(int row = 0; row < 4; ++row)
         {
-            mix_float(local_to_world[column][row]);
+            hash = mix_float(hash, m[column][row]);
         }
     }
-    mix_float(albedo.x);
-    mix_float(albedo.y);
-    mix_float(albedo.z);
-    mix_float(emissive.x);
-    mix_float(emissive.y);
-    mix_float(emissive.z);
     return hash;
 }
 
-namespace
-{
 /// The pose cache's key: the transform and the field's local bounds, the two inputs of the
-/// inverse and the transformed corners (the material is deliberately not part of it).
-auto compute_pose_key(const math::mat4& local_to_world, const math::bbox& local_bounds) -> uint64_t
+/// inverse and the transformed bounds (the material is deliberately not part of it).
+auto compute_pose_key(uint64_t matrix_hash, const math::bbox& local_bounds) -> uint64_t
 {
-    uint64_t hash = 0x84222325cbf29ce4ull;
-    const auto mix_float = [&hash](float value)
-    {
-        uint32_t bits = 0;
-        std::memcpy(&bits, &value, sizeof(bits));
-        hash = (hash ^ uint64_t(bits)) * 0x100000001b3ull;
-    };
-    for(int column = 0; column < 4; ++column)
-    {
-        for(int row = 0; row < 4; ++row)
-        {
-            mix_float(local_to_world[column][row]);
-        }
-    }
-    mix_float(local_bounds.min.x);
-    mix_float(local_bounds.min.y);
-    mix_float(local_bounds.min.z);
-    mix_float(local_bounds.max.x);
-    mix_float(local_bounds.max.y);
-    mix_float(local_bounds.max.z);
-    return hash;
+    return mix_vec3(mix_vec3(matrix_hash, local_bounds.min), local_bounds.max);
+}
+
+/// World bounds of a local box under an affine matrix, by the per-axis min/max method
+/// bbox::mul uses for a transform: each world axis contributes the smaller and the larger of
+/// its two scaled endpoints and the translation rides on top. Exact - it IS the box of the
+/// eight transformed corners - at six vec3 scales instead of eight mat4 x vec4 products.
+auto transform_bounds(const math::mat4& m, const math::bbox& local) -> math::bbox
+{
+    const math::vec3 x_axis(m[0]);
+    const math::vec3 y_axis(m[1]);
+    const math::vec3 z_axis(m[2]);
+    const math::vec3 translation(m[3]);
+    const math::vec3 xa = x_axis * local.min.x;
+    const math::vec3 xb = x_axis * local.max.x;
+    const math::vec3 ya = y_axis * local.min.y;
+    const math::vec3 yb = y_axis * local.max.y;
+    const math::vec3 za = z_axis * local.min.z;
+    const math::vec3 zb = z_axis * local.max.z;
+    return math::bbox(math::min(xa, xb) + math::min(ya, yb) + math::min(za, zb) + translation,
+                      math::max(xa, xb) + math::max(ya, yb) + math::max(za, zb) + translation);
 }
 } // namespace
 
-auto surface_cache_system::track_placement(uint64_t identity,
+auto surface_cache_system::compute_placement_hash(uint64_t matrix_hash,
+                                                   const math::vec3& albedo,
+                                                   const math::vec3& emissive) -> uint64_t
+{
+    // The pose and the material the attribute voxels bake: either moving makes the light this
+    // placement bounced (or emitted) stale wherever it stood.
+    return mix_vec3(mix_vec3(matrix_hash, albedo), emissive);
+}
+
+auto surface_cache_system::acquire_tracked(uint64_t identity) -> std::pair<tracked_placement&, bool>
+{
+    auto [it, inserted] = tracked_placements_.try_emplace(identity);
+    return {it->second, inserted};
+}
+
+void surface_cache_system::record_placement(tracked_placement& tracked,
+                                            bool inserted,
                                             uint64_t placement_hash,
                                             const math::vec3& emissive,
-                                            const math::bbox& bounds) -> tracked_placement&
+                                            const math::bbox& bounds)
 {
     const uint64_t hash = placement_hash;
     // EMISSIVE REACH: a bounced pool sits within a probe spacing of its placement (the
@@ -557,8 +574,6 @@ auto surface_cache_system::track_placement(uint64_t identity,
         region_bounds.min -= math::vec3(reach);
         region_bounds.max += math::vec3(reach);
     }
-    auto [it, inserted] = tracked_placements_.try_emplace(identity);
-    auto& tracked = it->second;
     if(inserted || tracked.swept)
     {
         // A placement appearing (or re-appearing after a sweep) lights and occludes where
@@ -577,7 +592,6 @@ auto surface_cache_system::track_placement(uint64_t identity,
     tracked.field_bounds = bounds;
     tracked.seen_frame = world_frame_;
     tracked.swept = false;
-    return tracked;
 }
 
 auto surface_cache_system::pack_dirty_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t
@@ -605,7 +619,9 @@ auto surface_cache_system::pack_dirty_regions(float* out_bounds, uint32_t max_re
 
 void surface_cache_system::rebuild_dirty_regions()
 {
+    APP_SCOPE_PERF("GI/SurfaceCache/Rebuild Dirty Regions");
     dirty_regions_.clear();
+    dirty_candidates_.clear();
     const uint64_t hold = uint64_t(gi::GI_TEMPORAL_DIRTY_HOLD_FRAMES);
     for(auto it = tracked_placements_.begin(); it != tracked_placements_.end();)
     {
@@ -617,17 +633,21 @@ void surface_cache_system::rebuild_dirty_regions()
             tracked.history.push_back({world_frame_, tracked.bounds});
             tracked.swept = true;
         }
-        // Age out the history beyond the hold window.
+        // Age out the history beyond the hold window. Entries are appended in frame order, so
+        // the aged ones are a PREFIX: the begin index steps past them in O(1) per frame, where
+        // the erase this replaced shifted every surviving entry - about 96 of them, 32 bytes
+        // each, for every mover, every frame, which was most of this function's cost with a
+        // crowd. Compacted once the dead prefix outweighs the live tail, so memory stays bounded.
         auto& history = tracked.history;
-        history.erase(std::remove_if(history.begin(),
-                                     history.end(),
-                                     [&](const tracked_placement::history_entry& entry)
-                                     {
-                                         return world_frame_ - entry.frame > hold;
-                                     }),
-                      history.end());
-        if(history.empty())
+        size_t& begin = tracked.history_begin;
+        while(begin < history.size() && world_frame_ - history[begin].frame > hold)
         {
+            ++begin;
+        }
+        if(begin == history.size())
+        {
+            history.clear();
+            begin = 0;
             if(tracked.swept)
             {
                 it = tracked_placements_.erase(it);
@@ -636,10 +656,48 @@ void surface_cache_system::rebuild_dirty_regions()
             ++it;
             continue;
         }
+        if(begin > history.size() / 2)
+        {
+            history.erase(history.begin(), history.begin() + ptrdiff_t(begin));
+            begin = 0;
+        }
+        // The newest entry is the last appended, so the placement's latest change is O(1).
+        dirty_candidates_.push_back({history.back().frame, &tracked});
+        ++it;
+    }
+    // Only the GI_TEMPORAL_DIRTY_MAX_BOUNDS most recent regions ever reach a shader
+    // (pack_dirty_regions); past that count the consumers switch to their screen-wide fallback
+    // and never read the rest. So the unions - each a walk of a placement's whole window - are
+    // computed for the top of the list only, and the full sort that ordered two thousand
+    // regions to hand over sixteen is a partial one. At or under the budget the output is
+    // exactly what it was.
+    constexpr size_t budget = size_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS);
+    const auto newer_first = [](const std::pair<uint64_t, tracked_placement*>& a,
+                                const std::pair<uint64_t, tracked_placement*>& b)
+    {
+        return a.first > b.first;
+    };
+    const size_t candidate_total = dirty_candidates_.size();
+    if(candidate_total > budget)
+    {
+        std::partial_sort(dirty_candidates_.begin(),
+                          dirty_candidates_.begin() + ptrdiff_t(budget),
+                          dirty_candidates_.end(),
+                          newer_first);
+        dirty_candidates_.resize(budget);
+    }
+    else
+    {
+        std::sort(dirty_candidates_.begin(), dirty_candidates_.end(), newer_first);
+    }
+    for(const auto& [latest_frame, tracked] : dirty_candidates_)
+    {
         dirty_region region;
         region.bounds.reset();
-        for(const auto& entry : history)
+        const auto& history = tracked->history;
+        for(size_t i = tracked->history_begin; i < history.size(); ++i)
         {
+            const auto& entry = history[i];
             // Skip an inverted (never set) box; add_point of its sentinels would span the
             // world.
             if(entry.bounds.min.x > entry.bounds.max.x)
@@ -654,15 +712,10 @@ void surface_cache_system::rebuild_dirty_regions()
         {
             dirty_regions_.push_back(region);
         }
-        ++it;
     }
-    // Most recent first, so a consumer with a fixed budget keeps the regions still flushing.
-    std::sort(dirty_regions_.begin(),
-              dirty_regions_.end(),
-              [](const dirty_region& a, const dirty_region& b)
-              {
-                  return a.last_change_frame > b.last_change_frame;
-              });
+    // Over budget the total is the candidate count (the cut discarded the rest); under it every
+    // candidate with a populated box is in the list, so the list is the exact count.
+    dirty_region_total_ = candidate_total > budget ? candidate_total : dirty_regions_.size();
 }
 
 void surface_cache_system::add_instance(uint64_t identity,
@@ -670,52 +723,42 @@ void surface_cache_system::add_instance(uint64_t identity,
                                          const mesh_sdf& sdf,
                                          const math::mat4& local_to_world,
                                          const std::shared_ptr<mesh>& owner,
-                                         const material::sptr& mat)
+                                         const material_summary& material)
 {
     instance inst;
-    // Colour lives on pbr_material, not on the material base. A material of some other kind keeps
-    // the neutral default rather than guessing, which is the same answer this had before and is
-    // strictly better than tinting the scene with a colour nothing is painted with.
-    if(const auto* pbr = mat.get()->safe_cast<pbr_material>())
-    {
-        // Linear decode matches the G-buffer path (picker colors are sRGB-encoded).
-        const auto base_color = pbr->get_base_color().to_linear();
-        inst.albedo = math::vec3(base_color.value.r, base_color.value.g, base_color.value.b);
-        inst.mean_slot = acquire_texture_mean_slot(pbr->get_color_map(), inst.mean_captured);
-        // Pre-multiplied by intensity, so the shader stores radiance directly and never has to
-        // know that emission is authored as a colour and a separate scale.
-        const auto emissive_color = pbr->get_emissive_color().to_linear();
-        inst.emissive = math::vec3(emissive_color.value.r, emissive_color.value.g, emissive_color.value.b) *
-                        pbr->get_emissive_intensity();
-        // The emissive MAP's mean, the same treatment the colour map gets above. Emission is a
-        // source, so this is the difference between bouncing what a sign actually emits and
-        // bouncing its factor across the whole submesh - see cs_gi_clipmap_attributes.sc.
-        inst.emissive_mean_slot =
-            acquire_texture_mean_slot(pbr->get_emissive_map(), inst.emissive_mean_captured);
-        inst.metalness = math::clamp(pbr->get_metalness(), 0.0f, 1.0f);
-    }
+    // Decoded once per material per frame (summarize_material); a non-PBR material keeps the
+    // neutral defaults rather than guessing at a colour nothing on screen is painted with.
+    inst.albedo = material.albedo;
+    inst.emissive = material.emissive;
+    inst.metalness = material.metalness;
+    inst.mean_slot = material.mean_slot;
+    inst.mean_captured = material.mean_captured;
+    inst.emissive_mean_slot = material.emissive_mean_slot;
+    inst.emissive_mean_captured = material.emissive_mean_captured;
     inst.local_to_world = local_to_world;
     inst.header_index = header_index;
-    // POSE CACHE: the inverse, the smallest scale axis and the transformed corners are pure
+    // POSE CACHE: the inverse, the smallest scale axis and the transformed bounds are pure
     // functions of the transform and the field's local bounds, and a static placement
-    // presents the same pair every frame - the tracker below already keys placements by
-    // identity, so it carries them across frames. Recomputed only when the key moves.
-    const uint64_t pose_key = compute_pose_key(local_to_world, sdf.bounds);
-    const auto cached_it = tracked_placements_.find(identity);
-    const bool pose_cached = cached_it != tracked_placements_.end() && cached_it->second.has_pose &&
-                             cached_it->second.pose_key == pose_key;
-    if(pose_cached)
+    // presents the same pair every frame - the tracker keys placements by identity, so it
+    // carries them across frames. Recomputed only when the key moves. One lookup serves the
+    // cache and the tracker both (acquire_tracked); a fresh record has no pose to offer.
+    const uint64_t matrix_hash = hash_matrix(local_to_world);
+    const uint64_t pose_key = compute_pose_key(matrix_hash, sdf.bounds);
+    auto [tracked, inserted] = acquire_tracked(identity);
+    if(tracked.has_pose && tracked.pose_key == pose_key)
     {
-        const auto& cached = cached_it->second;
-        inst.world_to_local = cached.world_to_local;
-        inst.local_to_world_scale = cached.local_to_world_scale;
-        inst.world_bounds = cached.field_bounds;
+        inst.world_to_local = tracked.world_to_local;
+        inst.local_to_world_scale = tracked.local_to_world_scale;
+        inst.world_bounds = tracked.field_bounds;
     }
     else
     {
-        // glm::inverse explicitly: namespace math declares its own inverse() for math::transform,
-        // which hides the glm overloads from qualified lookup as math::inverse.
-        inst.world_to_local = glm::inverse(local_to_world);
+        // A placement matrix is affine (rotation, scale, skew, translation - never a
+        // projection), so the 3x3 inverse plus a translation is the whole answer, at a fraction
+        // of the general 4x4 cofactor expansion glm::inverse runs. glm:: explicitly: namespace
+        // math declares its own inverse() for math::transform, which hides the glm overloads
+        // from qualified lookup as math::inverse.
+        inst.world_to_local = glm::affineInverse(local_to_world);
         // Scale is recovered from the matrix rather than from a transform object, because the
         // renderer hands out plain matrices for submesh nodes.
         const float scale_x = math::length(math::vec3(local_to_world[0]));
@@ -726,21 +769,17 @@ void surface_cache_system::add_instance(uint64_t identity,
         // mean would let a sphere trace overshoot a non-uniformly scaled instance and pass
         // through it.
         inst.local_to_world_scale = math::max(math::min(scale_x, math::min(scale_y, scale_z)), 1e-6f);
-        // World-space AABB of the field's local bounds, for the tracer's broad phase. Built from
-        // the transformed corners so a rotated instance still gets a bound that contains it.
-        inst.world_bounds.reset();
-        const auto corners = sdf.bounds.get_corners();
-        for(const auto& corner : corners)
-        {
-            const math::vec4 world_corner = local_to_world * math::vec4(corner, 1.0f);
-            inst.world_bounds.add_point(math::vec3(world_corner));
-        }
+        // World-space AABB of the field's local bounds, for the tracer's broad phase: the exact
+        // box of the transformed corners, so a rotated instance still gets a bound that
+        // contains it.
+        inst.world_bounds = transform_bounds(local_to_world, sdf.bounds);
     }
     instances_.push_back(inst);
-    auto& tracked = track_placement(identity,
-                                    compute_placement_hash(local_to_world, inst.albedo, inst.emissive),
-                                    inst.emissive,
-                                    inst.world_bounds);
+    record_placement(tracked,
+                     inserted,
+                     compute_placement_hash(matrix_hash, inst.albedo, inst.emissive),
+                     inst.emissive,
+                     inst.world_bounds);
     tracked.pose_key = pose_key;
     tracked.has_pose = true;
     tracked.world_to_local = inst.world_to_local;
@@ -752,24 +791,27 @@ void surface_cache_system::add_instance(uint64_t identity,
     if(tracked.has_last_pose)
     {
         auto& moving = instances_.back();
-        const math::vec4 center_local(math::vec3(sdf.bounds.get_center()), 1.0f);
-        moving.velocity = math::vec3(local_to_world * center_local) -
-                          math::vec3(tracked.last_local_to_world * center_local);
+        // A point's displacement is (L1 - L0) x point: one matrix difference and eight
+        // products, where two transforms per corner was sixteen.
+        const math::mat4 delta = local_to_world - tracked.last_local_to_world;
+        moving.velocity = math::vec3(delta * math::vec4(sdf.bounds.get_center(), 1.0f));
         float max_corner = 0.0f;
         for(const auto& corner : sdf.bounds.get_corners())
         {
-            const math::vec4 corner4(corner, 1.0f);
-            const math::vec3 displacement =
-                math::vec3(local_to_world * corner4) - math::vec3(tracked.last_local_to_world * corner4);
-            max_corner = math::max(max_corner, math::length(displacement));
+            max_corner = math::max(max_corner, math::length(math::vec3(delta * math::vec4(corner, 1.0f))));
         }
         moving.max_corner_displacement = max_corner;
     }
     tracked.last_local_to_world = local_to_world;
     tracked.has_last_pose = true;
     // The clipmap composer borrows a raw mesh_sdf pointer, so the owning mesh has to be kept
-    // alive for as long as the composition input list references it.
-    clipmap_keepalive_.push_back(owner);
+    // alive for as long as the composition input list references it. A crowd of one mesh pushed
+    // the same pointer once per placement; consecutive placements of one mesh now share an
+    // entry. A repeat is harmless and an omission is not, so only the previous entry is compared.
+    if(clipmap_keepalive_.empty() || clipmap_keepalive_.back().get() != owner.get())
+    {
+        clipmap_keepalive_.push_back(owner);
+    }
     global_sdf_instance clipmap_instance;
     clipmap_instance.sdf = &sdf;
     clipmap_instance.world_to_local = inst.world_to_local;
@@ -975,46 +1017,55 @@ void surface_cache_system::upload_instances()
         // radiance with gi::emitter_selection_weight's shader mirror.
         dst[7] = gi::pack_emitter_extent_lane(e.extent);
     }
-    for(size_t i = 0; i < instances_.size(); ++i)
-    {
-        const auto& inst = instances_[i];
-        float* dst = instance_data_.data() + i * instance_vec4_stride * 4u;
-        ANONYMOUS::write_affine_row(dst + 0, inst.world_to_local, 0);
-        ANONYMOUS::write_affine_row(dst + 4, inst.world_to_local, 1);
-        ANONYMOUS::write_affine_row(dst + 8, inst.world_to_local, 2);
-        ANONYMOUS::write_affine_row(dst + 12, inst.local_to_world, 0);
-        ANONYMOUS::write_affine_row(dst + 16, inst.local_to_world, 1);
-        ANONYMOUS::write_affine_row(dst + 20, inst.local_to_world, 2);
-        dst[24] = inst.world_bounds.min.x;
-        dst[25] = inst.world_bounds.min.y;
-        dst[26] = inst.world_bounds.min.z;
-        dst[27] = float(inst.header_index);
-        dst[28] = inst.world_bounds.max.x;
-        dst[29] = inst.world_bounds.max.y;
-        dst[30] = inst.world_bounds.max.z;
-        dst[31] = inst.local_to_world_scale;
-        dst[32] = inst.albedo.x;
-        dst[33] = inst.albedo.y;
-        dst[34] = inst.albedo.z;
-        // Both texture-mean slots share this lane, the colour map's below the emissive map's:
-        // every one of the record's 44 floats is spoken for, and both slots are under
-        // texture_mean_capacity (1024), so the packed integer stays under 2^21 and exact in a
-        // float. MIRROR OF SdfMeanSlotColor / SdfMeanSlotEmissive in sdf_common.sh.
-        static_assert(texture_mean_capacity <= mean_slot_radix,
-                      "a mean slot must fit below the packing radix");
-        dst[35] = float(inst.mean_slot) + float(inst.emissive_mean_slot) * float(mean_slot_radix);
-        dst[36] = inst.emissive.x;
-        dst[37] = inst.emissive.y;
-        dst[38] = inst.emissive.z;
-        // Lane 9 w: metalness, read by the reflection trace kernel next to the emission.
-        dst[39] = inst.metalness;
-        // Lane 10: the instance velocity (see instance::velocity), w = the largest corner
-        // displacement over the same frame (rotation).
-        dst[40] = inst.velocity.x;
-        dst[41] = inst.velocity.y;
-        dst[42] = inst.velocity.z;
-        dst[43] = inst.max_corner_displacement;
-    }
+    // The pack is an indexed write per instance into a pre-sized array - no shared state, order
+    // preserved by construction - so it runs across the pool once the list is large enough to
+    // pay for the dispatch; below that the same loop runs inline on this thread.
+    constexpr size_t parallel_pack_threshold = 512;
+    float* const instance_base = instance_data_.data();
+    poolstl::for_each_par_if(
+        instances_.size() >= parallel_pack_threshold,
+        instances_.begin(),
+        instances_.end(),
+        [&](const instance& inst)
+        {
+            const size_t i = size_t(&inst - instances_.data());
+            float* dst = instance_base + i * instance_vec4_stride * 4u;
+            ANONYMOUS::write_affine_row(dst + 0, inst.world_to_local, 0);
+            ANONYMOUS::write_affine_row(dst + 4, inst.world_to_local, 1);
+            ANONYMOUS::write_affine_row(dst + 8, inst.world_to_local, 2);
+            ANONYMOUS::write_affine_row(dst + 12, inst.local_to_world, 0);
+            ANONYMOUS::write_affine_row(dst + 16, inst.local_to_world, 1);
+            ANONYMOUS::write_affine_row(dst + 20, inst.local_to_world, 2);
+            dst[24] = inst.world_bounds.min.x;
+            dst[25] = inst.world_bounds.min.y;
+            dst[26] = inst.world_bounds.min.z;
+            dst[27] = float(inst.header_index);
+            dst[28] = inst.world_bounds.max.x;
+            dst[29] = inst.world_bounds.max.y;
+            dst[30] = inst.world_bounds.max.z;
+            dst[31] = inst.local_to_world_scale;
+            dst[32] = inst.albedo.x;
+            dst[33] = inst.albedo.y;
+            dst[34] = inst.albedo.z;
+            // Both texture-mean slots share this lane, the colour map's below the emissive map's:
+            // every one of the record's 44 floats is spoken for, and both slots are under
+            // texture_mean_capacity (1024), so the packed integer stays under 2^21 and exact in a
+            // float. MIRROR OF SdfMeanSlotColor / SdfMeanSlotEmissive in sdf_common.sh.
+            static_assert(texture_mean_capacity <= mean_slot_radix,
+                          "a mean slot must fit below the packing radix");
+            dst[35] = float(inst.mean_slot) + float(inst.emissive_mean_slot) * float(mean_slot_radix);
+            dst[36] = inst.emissive.x;
+            dst[37] = inst.emissive.y;
+            dst[38] = inst.emissive.z;
+            // Lane 9 w: metalness, read by the reflection trace kernel next to the emission.
+            dst[39] = inst.metalness;
+            // Lane 10: the instance velocity (see instance::velocity), w = the largest corner
+            // displacement over the same frame (rotation).
+            dst[40] = inst.velocity.x;
+            dst[41] = inst.velocity.y;
+            dst[42] = inst.velocity.z;
+            dst[43] = inst.max_corner_displacement;
+        });
     // Content hash over the exact bytes the GPU receives: any change to a transform, material
     // colour, bounds, or field index flips it. Eight bytes per round instead of the byte-serial
     // FNV chain this used to run - the old loop was ~256K dependent multiplies at Bistro scale,
@@ -1067,44 +1118,50 @@ void surface_cache_system::upload_instances()
     instance_fingerprint_ = fingerprint;
 }
 
-void surface_cache_system::update_world(scene& scn)
+auto surface_cache_system::summarize_material(const material::sptr& mat) -> const material_summary&
 {
-    APP_SCOPE_PERF("GI/SurfaceCache/Update World");
-    // The debug views keep this alive even with GI off, but an unsupported backend has nothing
-    // to keep alive: no dispatch downstream can consume what this uploads.
-    if(!supported_)
+    auto [it, inserted] = material_summaries_.try_emplace(mat.get());
+    material_summary& summary = it->second;
+    if(!inserted)
     {
-        return;
+        return summary;
     }
-    // Once per frame, however many cameras ask. All of this is a function of the scene, so a second
-    // camera would rebuild an identical instance list and re-upload an identical grid.
-    const uint64_t frame = uint64_t(gfx::get_render_frame());
-    if(world_frame_ == frame)
+    // Colour lives on pbr_material, not on the material base. A material of some other kind -
+    // or a submesh with none at all - keeps the neutral defaults rather than guessing, which is
+    // strictly better than tinting the scene with a colour nothing is painted with.
+    const auto* pbr = mat ? mat->safe_cast<pbr_material>() : nullptr;
+    if(pbr == nullptr)
     {
-        return;
+        return summary;
     }
-    world_frame_ = frame;
-    // Before anything is placed: if the atlas ran out since the last frame, drop the whole scene a
-    // level first. Doing it here rather than inside the walk is the point -- the walk sees one
-    // field at a time and cannot know the scene overruns until it already has.
-    apply_atlas_pressure();
-    // Every camera, not the one rendering: residency is shared, so the level a field gets must be
-    // a function of the world. Gathered before any placement so compute_wanted_mip sees them all.
-    camera_positions_.clear();
-    scn.registry->view<transform_component, camera_component>().each(
-        [&](auto /*entity*/, auto&& camera_transform, auto&& /*camera*/)
-        {
-            camera_positions_.push_back(camera_transform.get_transform_global().get_position());
-        });
-    instances_.clear();
-    clipmap_instances_.clear();
-    clipmap_keepalive_.clear();
-    if(!is_enabled())
-    {
-        return;
-    }
+    summary.is_pbr = true;
+    summary.is_blended = pbr->get_alpha_mode() == alpha_mode::blend;
+    // Linear decode matches the G-buffer path (picker colors are sRGB-encoded).
+    const auto base_color = pbr->get_base_color().to_linear();
+    summary.albedo = math::vec3(base_color.value.r, base_color.value.g, base_color.value.b);
+    // Pre-multiplied by intensity, so the shader stores radiance directly and never has to
+    // know that emission is authored as a colour and a separate scale.
+    const auto emissive_color = pbr->get_emissive_color().to_linear();
+    summary.emissive = math::vec3(emissive_color.value.r, emissive_color.value.g, emissive_color.value.b) *
+                       pbr->get_emissive_intensity();
+    summary.emissive_luminance =
+        0.2126f * summary.emissive.x + 0.7152f * summary.emissive.y + 0.0722f * summary.emissive.z;
+    summary.metalness = math::clamp(pbr->get_metalness(), 0.0f, 1.0f);
+    summary.mean_slot = acquire_texture_mean_slot(pbr->get_color_map(), summary.mean_captured);
+    // The emissive MAP's mean, the same treatment the colour map gets above. Emission is a
+    // source, so this is the difference between bouncing what a sign actually emits and
+    // bouncing its factor across the whole submesh - see cs_gi_clipmap_attributes.sc.
+    summary.emissive_mean_slot =
+        acquire_texture_mean_slot(pbr->get_emissive_map(), summary.emissive_mean_captured);
+    return summary;
+}
+
+void surface_cache_system::walk_scene(scene& scn)
+{
+    APP_SCOPE_PERF("GI/SurfaceCache/Walk Scene");
+    material_summaries_.clear();
     scn.registry->view<transform_component, model_component, active_component>().each(
-        [&](auto entity, auto&& transform_comp, auto&& model_comp, auto&& active)
+        [&](auto entity, auto&& transform_comp, auto&& model_comp, auto&& /*active*/)
         {
             const auto& mdl = model_comp.get_model();
             if(!mdl.is_valid())
@@ -1146,128 +1203,83 @@ void surface_cache_system::update_world(scene& scn)
             const auto& submesh_transforms = model_comp.get_submesh_transforms();
             const math::mat4& world_transform = transform_comp.get_transform_global().get_matrix();
             const uint32_t sdf_count = mesh_ptr->get_sdf_count();
-            // EMISSIVE SUBMESHES WITHOUT A FIELD (no baked SDF, or skinned) are not voxelised:
-            // they light the gather through the screen tier alone. The light one leaves behind
-            // when it moves is exactly the residual the dirty regions flush, and without a
-            // placement it never registered one - an emissive moved in the editor kept its old
-            // glow on the walls until the camera moved (the screen-history loop's memory). They
-            // are tracked here with their drawn bounds; the field walk below tracks every
-            // submesh that has one, so the two sets are disjoint.
-            const uint64_t drawn_entity_key = uint64_t(static_cast<uint32_t>(entity)) << 32u;
-            const size_t drawn_submesh_count = mesh_ptr->get_submeshes_count();
-            for(uint32_t submesh_index = 0; submesh_index < uint32_t(drawn_submesh_count); ++submesh_index)
+            const uint64_t entity_key = uint64_t(static_cast<uint32_t>(entity)) << 32u;
+            const size_t submesh_count = mesh_ptr->get_submeshes_count();
+            for(uint32_t submesh_index = 0; submesh_index < uint32_t(submesh_count); ++submesh_index)
             {
                 const auto* submesh = mesh_ptr->get_submesh(submesh_index);
                 if(submesh == nullptr)
                 {
                     continue;
                 }
-                const auto mat = resolve_submesh_material(mdl, *mesh_ptr, submesh_index);
-                const auto* pbr = mat.get()->template safe_cast<pbr_material>();
-                if(pbr == nullptr)
+                // ONE material resolve per submesh (every instance of a submesh is drawn with the
+                // same material), decoded once per material per frame, and shared by both paths
+                // below. Hoisted above acquire_field because the material can veto the placement
+                // outright, and a vetoed submesh must not take an atlas slot.
+                const material_summary& material =
+                    summarize_material(resolve_submesh_material(mdl, *mesh_ptr, submesh_index));
+                // THE ONE DEFINITION of "has a field", so the two paths below stay disjoint and no
+                // submesh falls through both. Skinned submeshes never place a field, even when
+                // the compiled asset carries one (assets baked before the compiler learned to
+                // refuse them still do): the field is bind-pose geometry and pinning it to the
+                // entity's root transform drags a rigid statue through the clipmap in a pose the
+                // character is not in - deforming geometry receives GI without contributing.
+                // Alpha-blended submeshes never occlude either: a blended surface transmits
+                // light, so a field there blocks bounces that should pass straight through -
+                // glass that darkens the room behind it. Decided here rather than only at bake
+                // time because the material is a property of the INSTANCE (a component can
+                // override it), so the same compiled mesh may be opaque in one placement and
+                // blended in another. Cutout stays: it is opaque wherever it is not discarded.
+                const bool has_field =
+                    submesh_index < sdf_count && !submesh->skinned && !material.is_blended;
+                const uint64_t submesh_key = entity_key | (uint64_t(submesh_index) << 16u);
+                if(!has_field)
                 {
-                    continue;
-                }
-                // "Has a field" must mean the same thing here as in the field walk below, or the
-                // two sets stop being disjoint and a submesh falls through both. Carrying a baked
-                // field is not sufficient: the walk also declines skinned and alpha-blended
-                // submeshes, and an emissive blended panel -- a screen, a hologram, a glowing
-                // decal -- is exactly the geometry that would otherwise be tracked by neither and
-                // silently stop emitting.
-                const bool is_blended = pbr->get_alpha_mode() == alpha_mode::blend;
-                if(submesh_index < sdf_count && !submesh->skinned && !is_blended)
-                {
-                    continue;
-                }
-                const auto emissive_color = pbr->get_emissive_color().to_linear();
-                const math::vec3 emissive =
-                    math::vec3(emissive_color.value.r, emissive_color.value.g, emissive_color.value.b) *
-                    pbr->get_emissive_intensity();
-                const float luminance = 0.2126f * emissive.x + 0.7152f * emissive.y + 0.0722f * emissive.z;
-                if(luminance < float(gi::GI_EMISSIVE_NEE_MIN_LUMINANCE))
-                {
-                    continue;
-                }
-                const auto base_color = pbr->get_base_color().to_linear();
-                const math::vec3 albedo(base_color.value.r, base_color.value.g, base_color.value.b);
-                const auto track_drawn = [&](uint64_t identity, const math::mat4& local_to_world)
-                {
-                    math::bbox world_bounds;
-                    world_bounds.reset();
-                    for(const auto& corner : submesh->bbox.get_corners())
-                    {
-                        world_bounds.add_point(math::vec3(local_to_world * math::vec4(corner, 1.0f)));
-                    }
-                    track_placement(identity,
-                                    compute_placement_hash(local_to_world, albedo, emissive),
-                                    emissive,
-                                    world_bounds);
-                };
-                if(!submesh_transforms.has_transforms(submesh_index))
-                {
-                    track_drawn(drawn_entity_key | (uint64_t(submesh_index) << 16u), world_transform);
-                    continue;
-                }
-                const size_t drawn_transform_count = submesh_transforms.get_transform_count(submesh_index);
-                for(size_t instance_index = 0; instance_index < drawn_transform_count; ++instance_index)
-                {
-                    const math::mat4* transform_ptr = submesh_transforms.get_transform(submesh_index, instance_index);
-                    if(transform_ptr != nullptr)
-                    {
-                        track_drawn(drawn_entity_key | (uint64_t(submesh_index) << 16u) |
-                                        (uint64_t(instance_index) & 0xFFFFu),
-                                    *transform_ptr);
-                    }
-                }
-            }
-            for(uint32_t submesh_index = 0; submesh_index < sdf_count; ++submesh_index)
-            {
-                // Skinned submeshes never place a field, even when the compiled asset carries one
-                // (assets baked before the compiler learned to refuse them still do). The field
-                // is bind-pose geometry and this walk would pin it to the entity's root
-                // transform: a rigid statue dragged through the clipmap by an animating
-                // character, occluding in a pose the character is not in. Deforming geometry
-                // receives GI through the screen-space resolve without contributing; rigid
-                // movable meshes keep contributing, because a rigid transform keeps a baked
-                // field valid -- the split that matters is deforming vs rigid, not dynamic vs
-                // static.
-                const auto* submesh = mesh_ptr->get_submesh(submesh_index);
-                if(submesh != nullptr && submesh->skinned)
-                {
-                    continue;
-                }
-                // Resolved once per submesh rather than per placement: every instance of a
-                // submesh is drawn with the same material. Hoisted above acquire_field because
-                // the material can veto the placement outright, and a vetoed submesh must not
-                // take an atlas slot.
-                const auto mat = resolve_submesh_material(mdl, *mesh_ptr, submesh_index);
-                // Alpha-blended submeshes never occlude, even when the compiled asset carries a
-                // field (assets baked before the compiler learned to refuse them still do). A
-                // blended surface transmits light, so a field there blocks bounces that should
-                // pass straight through -- glass that darkens the room behind it.
-                //
-                // Decided HERE rather than only at bake time because the material is a property of
-                // the INSTANCE: a component can override a submesh's material, so the same compiled
-                // mesh may be opaque in one placement and blended in another. The compile-time
-                // refusal saves the bake; this is what makes the answer match what is drawn.
-                // Cutout stays -- it is opaque wherever it is not discarded.
-                if(const auto* pbr = mat.get()->template safe_cast<pbr_material>())
-                {
-                    if(pbr->get_alpha_mode() == alpha_mode::blend)
+                    // EMISSIVE SUBMESHES WITHOUT A FIELD (no baked SDF, skinned, or blended - a
+                    // screen, a hologram, a glowing decal) are not voxelised: they light the gather
+                    // through the screen tier alone. The light one leaves behind when it moves is
+                    // exactly the residual the dirty regions flush, and without a placement it
+                    // never registered one - an emissive moved in the editor kept its old glow on
+                    // the walls until the camera moved (the screen-history loop's memory). They are
+                    // tracked here with their drawn bounds.
+                    if(!material.is_pbr ||
+                       material.emissive_luminance < float(gi::GI_EMISSIVE_NEE_MIN_LUMINANCE))
                     {
                         continue;
                     }
+                    const auto track_drawn = [&](uint64_t identity, const math::mat4& local_to_world)
+                    {
+                        auto [tracked, inserted] = acquire_tracked(identity);
+                        record_placement(tracked,
+                                         inserted,
+                                         compute_placement_hash(hash_matrix(local_to_world),
+                                                                material.albedo,
+                                                                material.emissive),
+                                         material.emissive,
+                                         transform_bounds(local_to_world, submesh->bbox));
+                    };
+                    if(!submesh_transforms.has_transforms(submesh_index))
+                    {
+                        track_drawn(submesh_key, world_transform);
+                        continue;
+                    }
+                    const size_t drawn_transform_count = submesh_transforms.get_transform_count(submesh_index);
+                    for(size_t instance_index = 0; instance_index < drawn_transform_count; ++instance_index)
+                    {
+                        const math::mat4* transform_ptr =
+                            submesh_transforms.get_transform(submesh_index, instance_index);
+                        if(transform_ptr != nullptr)
+                        {
+                            track_drawn(submesh_key | (uint64_t(instance_index) & 0xFFFFu), *transform_ptr);
+                        }
+                    }
+                    continue;
                 }
                 // World bounds of the submesh at the ENTITY's transform. A submesh drawn at several
                 // node transforms is banded by the entity rather than per placement: the field is
                 // shared by all of them, so there is one level to choose, and the placements are
                 // offsets within one model rather than scattered across the world.
-                math::bbox submesh_world_bounds;
-                submesh_world_bounds.reset();
-                for(const auto& corner : submesh->bbox.get_corners())
-                {
-                    submesh_world_bounds.add_point(math::vec3(world_transform * math::vec4(corner, 1.0f)));
-                }
+                const math::bbox submesh_world_bounds = transform_bounds(world_transform, submesh->bbox);
                 const auto acquired = acquire_field(mesh_handle.uid(),
                                                     *mesh_ptr,
                                                     submesh_index,
@@ -1281,17 +1293,9 @@ void surface_cache_system::update_world(scene& scn)
                 // Its bounds and voxel differ from the finest level's, and those are what the
                 // placement and the tracer must agree on.
                 const auto& sdf = mesh_ptr->get_sdf(submesh_index, acquired.mip_level);
-                // Placement identity for the dirty-region tracker: entity, submesh, placement
-                // index - stable across frames for as long as the placement exists.
-                const uint64_t entity_key = uint64_t(static_cast<uint32_t>(entity)) << 32u;
                 if(!submesh_transforms.has_transforms(submesh_index))
                 {
-                    add_instance(entity_key | (uint64_t(submesh_index) << 16u),
-                                 header_index,
-                                 sdf,
-                                 world_transform,
-                                 mesh_ptr,
-                                 mat);
+                    add_instance(submesh_key, header_index, sdf, world_transform, mesh_ptr, material);
                     continue;
                 }
                 const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
@@ -1306,16 +1310,54 @@ void surface_cache_system::update_world(scene& scn)
                     {
                         continue;
                     }
-                    add_instance(entity_key | (uint64_t(submesh_index) << 16u) |
-                                     (uint64_t(instance_index) & 0xFFFFu),
+                    add_instance(submesh_key | (uint64_t(instance_index) & 0xFFFFu),
                                  header_index,
                                  sdf,
                                  *transform_ptr,
                                  mesh_ptr,
-                                 mat);
+                                 material);
                 }
             }
         });
+}
+
+void surface_cache_system::update_world(scene& scn)
+{
+    APP_SCOPE_PERF("GI/SurfaceCache/Update World");
+    // The debug views keep this alive even with GI off, but an unsupported backend has nothing
+    // to keep alive: no dispatch downstream can consume what this uploads.
+    if(!supported_)
+    {
+        return;
+    }
+    // Once per frame, however many cameras ask. All of this is a function of the scene, so a second
+    // camera would rebuild an identical instance list and re-upload an identical grid.
+    const uint64_t frame = uint64_t(gfx::get_render_frame());
+    if(world_frame_ == frame)
+    {
+        return;
+    }
+    world_frame_ = frame;
+    // Before anything is placed: if the atlas ran out since the last frame, drop the whole scene a
+    // level first. Doing it here rather than inside the walk is the point -- the walk sees one
+    // field at a time and cannot know the scene overruns until it already has.
+    apply_atlas_pressure();
+    // Every camera, not the one rendering: residency is shared, so the level a field gets must be
+    // a function of the world. Gathered before any placement so compute_wanted_mip sees them all.
+    camera_positions_.clear();
+    scn.registry->view<transform_component, camera_component>().each(
+        [&](auto /*entity*/, auto&& camera_transform, auto&& /*camera*/)
+        {
+            camera_positions_.push_back(camera_transform.get_transform_global().get_position());
+        });
+    instances_.clear();
+    clipmap_instances_.clear();
+    clipmap_keepalive_.clear();
+    if(!is_enabled())
+    {
+        return;
+    }
+    walk_scene(scn);
     // Swept AFTER the walk, so the set of what is still wanted is complete. The cost is that a
     // scene change takes one extra frame to show GI: the incoming meshes are refused while the
     // outgoing ones still hold their bricks, and succeed on the retry once this has run. Sweeping

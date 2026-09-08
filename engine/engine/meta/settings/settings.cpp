@@ -776,4 +776,40 @@ auto load_from_file_bin(const std::string& absolute_path, settings& obj) -> bool
     return false;
 }
 
+/**
+ * @brief Load-only view of the cold-boot sections of a settings document.
+ *
+ * Deliberately a separate type from @ref settings: loading it visits the "graphics" and
+ * "physics" nodes and nothing else, so it can never reach an asset handle.
+ */
+struct settings_boot_sections
+{
+    settings::graphics_settings graphics{};
+    settings::physics_settings physics{};
+};
+
+LOAD_INLINE(settings_boot_sections)
+{
+    try_load(ar, ser20::make_nvp("graphics", obj.graphics));
+    try_load(ar, ser20::make_nvp("physics", obj.physics));
+}
+
+auto load_boot_sections_from_file(const std::string& absolute_path, settings& obj) -> bool
+{
+    std::ifstream stream(absolute_path);
+    if(!stream.good())
+    {
+        return false;
+    }
+    settings_boot_sections sections{};
+    auto ar = ser20::create_iarchive_associative(stream);
+    if(!try_load(ar, ser20::make_nvp("settings", sections)))
+    {
+        return false;
+    }
+    obj.graphics = sections.graphics;
+    obj.physics = sections.physics;
+    return true;
+}
+
 } // namespace unravel

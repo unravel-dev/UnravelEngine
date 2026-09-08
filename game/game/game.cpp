@@ -55,8 +55,9 @@ auto game::init(const cmd_line::parser& parser) -> bool
 
     auto& ctx = engine::context();
 
-    // Peek settings for cold boot fields only. Asset handles inside settings.cfg
-    // cannot resolve yet (databases not loaded); that is expected here.
+    // Peek settings for cold boot fields only: nothing is initialized yet, so the peek
+    // must not visit the asset handles inside settings.cfg. The full load happens below,
+    // once the asset databases can resolve them.
     if(!prepare_boot_config(ctx, parser))
     {
         return false;

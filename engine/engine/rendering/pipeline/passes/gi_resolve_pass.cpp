@@ -1004,7 +1004,9 @@ auto gi_resolve_pass::bind_dirty_regions(const run_params& params, float margin)
     if(params.surface_cache != nullptr)
     {
         count = params.surface_cache->pack_dirty_regions(bounds, max_regions);
-        overflow = params.surface_cache->get_dirty_regions().size() > size_t(max_regions);
+        // The region list is cut to the budget before it gets here; the total is what says
+        // whether more placements changed than the budget holds.
+        overflow = params.surface_cache->get_dirty_region_total() > size_t(max_regions);
     }
     // World units one unit of screen uv spans, used by the temporal to turn a moving pixel's
     // screen displacement into the world displacement its history has to tolerate. The
@@ -1034,7 +1036,7 @@ auto gi_resolve_pass::bind_dirty_regions(const run_params& params, float margin)
         const auto& first = regions.front().bounds;
         APPLOG_DEBUG("[SurfaceCache] {} dirty GI region(s) this frame{}; first spans ({:.1f}, {:.1f}, {:.1f}) "
                      "to ({:.1f}, {:.1f}, {:.1f}), last change frame {}.",
-                     regions.size(),
+                     params.surface_cache->get_dirty_region_total(),
                      overflow ? " (over budget: screen-wide fast cap)" : "",
                      first.min.x,
                      first.min.y,

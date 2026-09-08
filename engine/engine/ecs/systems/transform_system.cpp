@@ -32,9 +32,10 @@ void transform_system::on_frame_update(scene& scn, delta_t dt)
     // Create a view for entities with transform_component and submesh_component
     auto view_root = scn.registry->view<transform_component, root_component>();
 
-    poolstl::for_each_par_if(true,
-                  view_root.begin(),
-                  view_root.end(),
+    // Over the view's leading pool, not its iterator: an entt view iterator is forward-only and
+    // poolstl re-walks it once per chunk (see for_each_entity_par).
+    poolstl::for_each_entity_par(true,
+                  view_root,
                   [&view_root](entt::entity entity)
                   {
                       APP_SCOPE_PERF_THREAD("Transform/Resolve Transform Global","Pool Thread");

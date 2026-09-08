@@ -224,6 +224,32 @@ public:
     }
 
     /**
+     * @brief Gets an asset by its UUID, or an empty handle when it cannot be resolved.
+     *
+     * Unlike @ref get_asset this tolerates a manager that is not initialized yet: the
+     * per-type storages are registered in @ref init, and the context holds the manager from
+     * engine::create onwards, so anything running in between - deserializing an asset handle
+     * out of the project settings peeked for cold boot, for instance - would otherwise ask
+     * for a storage that does not exist. A nil uid is answered the same way.
+     * @tparam T The type of the asset.
+     * @param uid The UUID of the asset.
+     * @param flags The load flags for the asset.
+     * @param mode Whether to load immediately or defer until first get().
+     * @return The handle to the asset, or an empty handle.
+     */
+    template<typename T>
+    auto try_get_asset(const hpp::uuid& uid,
+                       load_flags flags = load_flags::standard,
+                       load_mode mode = load_mode::immediate) -> asset_handle<T>
+    {
+        if(uid.is_nil() || !has_storage<T>())
+        {
+            return {};
+        }
+        return get_asset<T>(uid, flags, mode);
+    }
+
+    /**
      * @brief Registers an asset by key without loading it.
      * The actual load is triggered on the first handle.get() call.
      * @tparam T The type of the asset.
@@ -643,6 +669,17 @@ private:
     }
 
     /**
+     * @brief Checks whether the storage for an asset type has been registered.
+     * @tparam S The type of the asset.
+     * @return True if assets of this type can be requested.
+     */
+    template<typename S>
+    auto has_storage() const -> bool
+    {
+        return storages_.find(hpp::type_id<asset_storage<S>>().hash_code()) != storages_.end();
+    }
+
+    /**
      * @brief Gets the storage for a specific type.
      * @tparam S The type of the storage.
      * @return A reference to the storage.
@@ -650,9 +687,11 @@ private:
     template<typename S>
     auto get_storage() -> asset_storage<S>&
     {
-        auto it = storages_.find(hpp::type_id<asset_storage<S>>().hash_code());
-        assert(it != storages_.end());
-        return (static_cast<asset_storage<S>&>(*it->second.get()));
+        // at() over find(): storages are registered in init(), so a miss means an asset was
+        // requested before the manager was initialized. That has to report - dereferencing
+        // the end iterator crashed inside the storage mutex instead. Matches the const overload.
+        auto& storage = storages_.at(hpp::type_id<asset_storage<S>>().hash_code());
+        return (static_cast<asset_storage<S>&>(*storage.get()));
     }
 
     /**

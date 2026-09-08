@@ -224,8 +224,11 @@ auto peek_project_boot_config(const fs::path& project_path) -> boot_config
     {
         return {};
     }
+    // Boot configuration is peeked before any system is initialized, so only the cold
+    // sections may be read: a full settings load resolves asset handles through the
+    // asset manager, whose per-type storages do not exist until asset_manager::init.
     settings project_settings{};
-    if(!load_from_file(settings_path.string(), project_settings))
+    if(!load_boot_sections_from_file(settings_path.string(), project_settings))
     {
         APPLOG_WARNING("Failed to peek project settings at {}", settings_path.string());
         return {};
