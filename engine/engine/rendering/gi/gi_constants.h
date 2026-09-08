@@ -936,6 +936,20 @@
     X(GI_EMISSIVE_NEE_MIN_LUMINANCE, 0.05f,                                                        \
       "radiance luminance", "derived: emissive below this never enters the table - the readers'" \
       " measured-darkness level; a faintly glowing surface is fine on the cone rays alone")       \
+    X(GI_EMISSIVE_NEE_MAX_PIECES, 16,                                                              \
+      "pieces per instance", "derived: a quarter of GI_EMISSIVE_NEE_MAX_EMITTERS, so at least"     \
+      " four distinct emissive objects can always be represented in the table. Bounds two"        \
+      " failures at once. Every piece of one instance carries the SAME power (it is luminance x"  \
+      " the piece's emitting area, and the pieces are congruent), so before this cap a single"    \
+      " large panel - a 20x20 m surface is 400 pieces - filled the whole table by itself and"     \
+      " evicted every bulb, strip and screen in the level: the aimed rays that emitter sampling" \
+      " exists for went only to the biggest object in the scene, and the feature silently"        \
+      " switched itself off for everything else. And subdivision is VOLUMETRIC while emission"    \
+      " is a surface, so piece counts grow cubically for content that grows quadratically - a"    \
+      " 40 m card is 1600 pieces and a mis-scaled 100 m one is a million, every one of them"      \
+      " built before the cap threw it away. Enforced by halving the longest axis until the"       \
+      " count fits, so the whole object stays covered - the segments simply get longer than"      \
+      " GI_EMISSIVE_NEE_SEGMENT - rather than by dropping a spatial subset of it")                \
     X(GI_WORLD_PROBE_BLEND_BAND, 0.5f,                                                             \
       "probe spacings", "derived: width of the cross-fade between a cascade's cage and the"        \
       " next, measured inward from the usable extent (3 spacings). Half a spacing is one sixth"   \

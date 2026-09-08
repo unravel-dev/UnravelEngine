@@ -573,7 +573,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			hit_emissive = material1.xyz;
 			hit_metalness = saturate(material1.w);
 			hit_albedo = material0.xyz;
-			uint mean_slot = uint(material0.w);
+			uint mean_slot = SdfMeanSlotColor(material0.w);
 			// Slot 0 is the composer's "no mean" convention: factor only.
 			if(mean_slot != 0u)
 			{
@@ -593,7 +593,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			if(screen_lit)
 			{
 				// The gather's per-ray contract: the snapshot carries emissive unbounded too.
-				radiance = min(screen_radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
+				radiance = GiClampRayRadiance(screen_radiance, GI_MAX_RAY_RADIANCE);
 			}
 		}
 #endif // GI_REFLECTION_SCREEN_COLOR
@@ -718,7 +718,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 				// needed). Only the voxel-measured answer is capped: rough_value is last
 				// frame's denoised resolve and the sky fallback is a stable per-pixel image,
 				// neither a stochastic spike source.
-				radiance = min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
+				radiance = GiClampRayRadiance(radiance, GI_MAX_RAY_RADIANCE);
 			}
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
 			else if(hit_has_material)
@@ -732,7 +732,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 				// which no diffuse lattice can hold), and its own emission rides on top. The
 				// culled underside now reflects as the dim orange of the box it belongs to,
 				// continuous with the front face's reflection, instead of neutral grey or black.
-				radiance = min(hit_albedo * rough_value + hit_emissive, vec3_splat(GI_MAX_RAY_RADIANCE));
+				radiance = GiClampRayRadiance(hit_albedo * rough_value + hit_emissive, GI_MAX_RAY_RADIANCE);
 			}
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
 		}

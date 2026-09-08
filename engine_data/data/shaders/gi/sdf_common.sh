@@ -158,13 +158,30 @@ struct SdfInstance
 	/// Smallest scale axis: converts a local-space distance to a conservative world distance.
 	float local_to_world_scale;
 	/// Material of the submesh this placement draws, so a bounce ray can colour a cell it
-	/// discovers. Albedo is the base colour FACTOR; the attribute composer multiplies it by
-	/// the texture mean at mean_slot. Emission is already scaled by its intensity.
+	/// discovers. Albedo is the base colour FACTOR and emissive is the emissive colour FACTOR
+	/// times its intensity; the attribute composer multiplies each by the texture mean at its
+	/// own slot, so a texture-dominated material bounces what it really reflects and emits.
 	vec3 albedo;
 	vec3 emissive;
-	/// Slot in the texture-mean buffer (cs_gi_texture_mean.sc); 0 is reserved white.
+	/// Slots in the texture-mean buffer (cs_gi_texture_mean.sc); 0 is reserved white.
 	uint mean_slot;
+	uint emissive_mean_slot;
 };
+
+/// The two texture-mean slots share one float lane, the colour map's below the emissive map's.
+/// Both are under surface_cache_system::texture_mean_capacity (1024), so the packed value is an
+/// integer under 2^21 and exact in a float32 mantissa; the radix is a power of two, so the
+/// divide below is an exponent shift and cannot round the high slot down.
+/// MIRROR OF surface_cache_system::upload_instances.
+#define SDF_MEAN_SLOT_RADIX 2048.0
+uint SdfMeanSlotColor(float lane)
+{
+	return uint(mod(lane, SDF_MEAN_SLOT_RADIX));
+}
+uint SdfMeanSlotEmissive(float lane)
+{
+	return uint(lane / SDF_MEAN_SLOT_RADIX);
+}
 
 SdfInstance SdfLoadInstance(int index)
 {
@@ -184,7 +201,8 @@ SdfInstance SdfLoadInstance(int index)
 	inst.local_to_world_scale = b1.w;
 	vec4 material0 = b_sdf_instances[base + 8u];
 	inst.albedo = material0.xyz;
-	inst.mean_slot = uint(material0.w);
+	inst.mean_slot = SdfMeanSlotColor(material0.w);
+	inst.emissive_mean_slot = SdfMeanSlotEmissive(material0.w);
 	inst.emissive = b_sdf_instances[base + 9u].xyz;
 	return inst;
 }

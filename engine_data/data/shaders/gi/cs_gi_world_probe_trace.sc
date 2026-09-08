@@ -294,7 +294,7 @@ void main()
 		// stochastic-ray tier: emissive is stored unbounded in the light voxels, and a single
 		// stratum ray skewering a small bright emitter otherwise holds its full radiance in
 		// the mean for a whole window - the probe-side shimmer near emissives.
-		vec3 stored = min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
+		vec3 stored = GiClampRayRadiance(radiance, GI_MAX_RAY_RADIANCE);
 		float stored_t = hit_t;
 		BRANCH
 		if(mean_blend < 1.0)

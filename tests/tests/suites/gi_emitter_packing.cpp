@@ -99,11 +99,17 @@ auto shader_decode_extent(float lane) -> math::vec3
     return math::vec3(x8, y8, z8) * (float(gi::GI_EMISSIVE_NEE_SEGMENT) / 255.0f);
 }
 
-/// LITERAL transcription of GiEmitterSurfaceArea and the weight GiLoadEmitter rebuilds.
+/// LITERAL transcription of GiEmitterEmittingArea and the weight GiLoadEmitter rebuilds.
+/// The two LARGEST faces, not the full box area: subdivision is volumetric while emission is
+/// a surface, so box area rewards a thick solid's interior pieces - which emit nothing - over
+/// the thin panel pieces that do.
 auto shader_selection_weight(const math::vec3& radiance, const math::vec3& extent) -> float
 {
     const float luminance = 0.2126f * radiance.x + 0.7152f * radiance.y + 0.0722f * radiance.z;
-    return luminance * (2.0f * (extent.x * extent.y + extent.y * extent.z + extent.z * extent.x));
+    const float smallest = std::min(extent.x, std::min(extent.y, extent.z));
+    const float largest = std::max(extent.x, std::max(extent.y, extent.z));
+    const float middle = (extent.x + extent.y + extent.z) - smallest - largest;
+    return luminance * (2.0f * largest * middle);
 }
 
 /// The shader file with every space and tab removed, so a substring check pins the arithmetic
@@ -180,14 +186,14 @@ void test_reconstructed_weight()
         const float cpu_weight = gi::emitter_selection_weight(luminance, extent);
         const float shader_weight = shader_selection_weight(radiance, decoded);
         // The shader ranks by the weight of the QUANTISED extent, so the two agree only to the
-        // quantisation. One step per axis bounds the area error.
+        // quantisation. d(2*L*M) <= 2*(step*span + span*step) bounds the emitting-area error.
         const double step = double(gi::GI_EMISSIVE_NEE_SEGMENT) / 255.0;
         const double span = double(gi::GI_EMISSIVE_NEE_SEGMENT);
-        const double tolerance = double(luminance) * 6.0 * step * span + 1e-5;
+        const double tolerance = double(luminance) * 4.0 * step * span + 1e-5;
         check_near(shader_weight, cpu_weight, tolerance, "the reconstructed weight tracks the CPU ordering key");
         // THE REGRESSION: a descending top-K initialised at zero can only ever select a piece
         // whose score is strictly positive. Anything with area must qualify.
-        const bool has_area = gi::emitter_surface_area(decoded) > 0.0f;
+        const bool has_area = gi::emitter_emitting_area(decoded) > 0.0f;
         check(!has_area || shader_weight > 0.0f, "a piece with emitting area scores above a zero-initialised top-K");
     }
 }
@@ -209,8 +215,12 @@ void test_shader_source_still_matches()
         "floaty8=floor(mod(packed/256.0,256.0));",
         "floatz8=floor(packed/65536.0);",
         "e.extent=vec3(x8,y8,z8)*(GI_EMISSIVE_NEE_SEGMENT/255.0);",
-        "e.power=GiEmitterLuminance(e)*GiEmitterSurfaceArea(e.extent);",
+        "e.power=GiEmitterLuminance(e)*GiEmitterEmittingArea(e.extent);",
         "return2.0*(extent.x*extent.y+extent.y*extent.z+extent.z*extent.x);",
+        "floatsmallest=min(extent.x,min(extent.y,extent.z));",
+        "floatlargest=max(extent.x,max(extent.y,extent.z));",
+        "floatmiddle=(extent.x+extent.y+extent.z)-smallest-largest;",
+        "return2.0*largest*middle;",
         "returndot(e.radiance,vec3(0.2126,0.7152,0.0722));",
     };
     for(const std::string& fragment : expected)

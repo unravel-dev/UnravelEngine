@@ -132,6 +132,9 @@ auto global_sdf_clipmap::compute_instance_entry_hash(const global_sdf_instance& 
     // attribute voxels via a single recompose.
     entry = (entry ^ (uint64_t(instance.mean_slot) | (instance.mean_captured ? 0x100000000ull : 0ull))) *
             0x100000001b3ull;
+    entry = (entry ^ (uint64_t(instance.emissive_mean_slot) |
+                      (instance.emissive_mean_captured ? 0x100000000ull : 0ull))) *
+            0x100000001b3ull;
     return entry;
 }
 

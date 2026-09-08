@@ -62,10 +62,20 @@ float GiEmitterLuminance(GiEmitter e)
 	return dot(e.radiance, vec3(0.2126, 0.7152, 0.0722));
 }
 
-/// Emitting area of an axis-aligned piece. MIRROR OF gi::emitter_surface_area.
+/// Full box area of an axis-aligned piece. MIRROR OF gi::emitter_surface_area.
 float GiEmitterSurfaceArea(vec3 extent)
 {
 	return 2.0 * (extent.x * extent.y + extent.y * extent.z + extent.z * extent.x);
+}
+
+/// The area of a piece that can radiate - its two largest faces, the ranking weight's basis.
+/// MIRROR OF gi::emitter_emitting_area; see that function for why the box area is wrong here.
+float GiEmitterEmittingArea(vec3 extent)
+{
+	float smallest = min(extent.x, min(extent.y, extent.z));
+	float largest = max(extent.x, max(extent.y, extent.z));
+	float middle = (extent.x + extent.y + extent.z) - smallest - largest;
+	return 2.0 * largest * middle;
 }
 
 /// The emitter's bounding-sphere cone as seen from one point.
@@ -102,7 +112,7 @@ GiEmitter GiLoadEmitter(int index)
 		// negative: the reflection near-field's descending top-K starts its scores at zero,
 		// so no piece was ever selected and the correction silently returned its identity.
 		// MIRROR OF gi::emitter_selection_weight - the same weight the CPU ranks the table by.
-		e.power = GiEmitterLuminance(e) * GiEmitterSurfaceArea(e.extent);
+		e.power = GiEmitterLuminance(e) * GiEmitterEmittingArea(e.extent);
 	}
 	return e;
 }

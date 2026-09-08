@@ -317,8 +317,19 @@ void main()
 	{
 		first_albedo *= b_gi_texture_means[first.mean_slot].xyz;
 	}
-	vec3 first_emissive =
-	    first.emissive * GiAttrEmissiveAreaFraction(first.world_bounds_min, first.world_bounds_max);
+	// The EMISSIVE map's mean, exactly as albedo takes the colour map's one line above. Without
+	// it the GI never saw the emissive texture at all and bounced the colour FACTOR over the
+	// whole silhouette: a sign whose texture is a few percent lit glyphs on black lit the room
+	// as a fully lit panel at peak radiance - about 1/mean too much energy, routinely 5-20x,
+	// with the glyphs' shape replaced by the submesh's outline. Stable and noise-free, so it
+	// never read as a filtering artefact; it read as the GI being wrong.
+	vec3 first_emissive_factor = first.emissive;
+	if(first.emissive_mean_slot != 0u)
+	{
+		first_emissive_factor *= b_gi_texture_means[first.emissive_mean_slot].xyz;
+	}
+	vec3 first_emissive = first_emissive_factor *
+	                      GiAttrEmissiveAreaFraction(first.world_bounds_min, first.world_bounds_max);
 	// Single-source voxels copy EXACTLY: (a * w) / w is not an identity in float, and a
 	// one-ULP wobble flips quantisation on boundary values (see the CPU reference).
 	vec3 blended_albedo = first_albedo;
@@ -331,8 +342,14 @@ void main()
 		{
 			second_albedo *= b_gi_texture_means[second.mean_slot].xyz;
 		}
-		vec3 second_emissive = second.emissive * GiAttrEmissiveAreaFraction(second.world_bounds_min,
-		                                                                    second.world_bounds_max);
+		vec3 second_emissive_factor = second.emissive;
+		if(second.emissive_mean_slot != 0u)
+		{
+			second_emissive_factor *= b_gi_texture_means[second.emissive_mean_slot].xyz;
+		}
+		vec3 second_emissive = second_emissive_factor *
+		                       GiAttrEmissiveAreaFraction(second.world_bounds_min,
+		                                                  second.world_bounds_max);
 		// COVERAGE-scaled proximity, not proximity alone: the blend approximates the mixture
 		// of surfaces INSIDE the cell, and a thin shell's volume fraction is bounded by its
 		// thickness over the cell size - a 3 cm rope equidistant with the floor is 2% of the

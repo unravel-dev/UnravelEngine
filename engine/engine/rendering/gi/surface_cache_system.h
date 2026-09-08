@@ -87,6 +87,11 @@ public:
         uint32_t mean_slot = 0;
         ///< Whether that mean has been captured (fingerprint input; see global_sdf_instance).
         bool mean_captured = false;
+        ///< The same pair for the material's EMISSIVE map. Emission is a source, so its mean
+        ///< is what decides how much energy a textured emitter actually puts into the scene:
+        ///< without it a sign bounces its colour factor over its whole silhouette.
+        uint32_t emissive_mean_slot = 0;
+        bool emissive_mean_captured = false;
     };
 
     /// One texture whose mean is waiting to be captured on the GPU.
@@ -208,6 +213,10 @@ public:
     /// pass stages the whole buffer into its trace list (GI_REFLECTION_MEAN_SLOTS must equal
     /// this; static_assert at the staging site).
     static constexpr uint32_t texture_mean_capacity = 1024;
+    /// Radix packing the colour and emissive mean slots into one float lane of the instance
+    /// record (see upload_instances). A power of two, so the shader's divide is an exponent
+    /// shift. MIRROR OF SDF_MEAN_SLOT_RADIX in sdf_common.sh.
+    static constexpr uint32_t mean_slot_radix = 2048;
 
     /// The per-texture mean buffer the attribute composer reads (slot 0 = white).
     auto get_texture_mean_buffer() const -> gfx::dynamic_vertex_buffer_handle

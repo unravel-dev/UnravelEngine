@@ -158,14 +158,35 @@ SHARED vec2 s_frame_r2;
 /// ordered float bits. One MIS sum per cell needs every technique's count before the first
 /// ray is traced, hence the two extra barriers in main.
 #define GI_NEE_K GI_EMISSIVE_NEE_PER_PROBE
-/// Fixed-point scale of the accumulators: 6e-5 radiance per unit (below the atlas's own
-/// 16-bit-float resolution in dark rooms), and with samples capped at GI_NEE_SAMPLE_MAX
-/// a cell's sum stays two orders below the 32-bit ceiling.
-#define GI_NEE_FIXED 16384.0
-/// Per-sample radiance cap before the splat, 16x the stored-texel clamp: a far-field or
-/// sky-disc hit of thousands would otherwise wrap the fixed-point sum; anything above this
-/// is a firefly the store clamps to GI_MAX_RAY_RADIANCE anyway.
-#define GI_NEE_SAMPLE_MAX (16.0 * GI_MAX_RAY_RADIANCE)
+/// Fixed-point scale of the accumulators. A unit is 1 / (GI_NEE_FIXED x omega) of RADIANCE,
+/// not 1 / GI_NEE_FIXED - the resolve divides the sum by the cell's solid angle - so at the
+/// old 16384 one unit was 2.1e-4 to 5.9e-4 across an 8x8 tile, and since GiSplatSample rounds
+/// each sample independently, every ray measuring under ~1e-4 radiance rounded to EXACTLY
+/// ZERO. That is the regime this engine works in (GI_LIGHT_VOXEL_INHERIT_FLOOR 1e-4) and
+/// where auto exposure's dark adaptation makes it visible; worse, the threshold varies 5x
+/// with the octahedral |d|_1, so the truncation printed as a direction-dependent pattern.
+/// Eight times finer puts the floor at 1.5e-5 to 4.1e-5, under anything the light voxels
+/// carry. The ceiling stays safe because the cap below now bounds the CONTRIBUTION: a cell
+/// would need 409 capped samples to wrap 2^32, against the ~20 it actually receives.
+#define GI_NEE_FIXED 131072.0
+/// Per-sample cap on the CONTRIBUTION - L / pdf, the estimator's own output - not on L.
+///
+/// Capping L was wrong in a way that defeated the whole point of aiming rays. A JITTERED
+/// sample's denominator is the cell PDF (3 to 16), so its contribution is about L and a cap
+/// on L is nearly a cap on the contribution. An AIMED sample is divided by n_e / Omega_e,
+/// which for a small emitter is enormous - a bulb subtending 6e-4 sr gives ~1600 - so its
+/// contribution is a hundredth of L or less, far under any ceiling, while a cap on L cut its
+/// radiance directly. A bulb of radiance 5000 resolved to 2.05 instead of 16.0: an 8x
+/// under-estimate scaling as cap/L, worst for the smallest and brightest emitters, which are
+/// exactly what explicit emissive sampling exists to find. The jittered technique cannot make
+/// it back, because near the emitter the balance-heuristic denominator is dominated by the
+/// aimed density.
+///
+/// The value is what one sample may contribute to the cell's MEAN radiance. A single sample
+/// carrying a whole coarse cell that resolves at the store's GI_MAX_RAY_RADIANCE needs about
+/// 46 (40 x the largest coarse omega), so twice the store clamp leaves headroom without
+/// letting a genuine firefly through - the store clamp and the governor below still see it.
+#define GI_NEE_CONTRIBUTION_MAX (2.0 * GI_MAX_RAY_RADIANCE)
 SHARED vec3 s_nee_axis[GI_TRACE_SLOT_COUNT * GI_NEE_K];
 SHARED float s_nee_cos[GI_TRACE_SLOT_COUNT * GI_NEE_K];
 SHARED uint s_nee_rays[GI_TRACE_SLOT_COUNT * GI_NEE_K];
@@ -340,7 +361,7 @@ vec3 GiFarFieldFallback(vec3 hit_position, vec3 sample_dir)
 
 void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 {
-	vec3 averaged = min(radiance, vec3_splat(GI_MAX_RAY_RADIANCE));
+	vec3 averaged = GiClampRayRadiance(radiance, GI_MAX_RAY_RADIANCE);
 	// FIREFLY GOVERNOR: a ray landing on a small bright emitter dominates the whole tile
 	// when it enters at full weight - the probe's screen footprint pops for a frame. Each
 	// new sample is capped at GI_GATHER_FIREFLY_CLAMP x its reference: LAST frame's value
@@ -781,8 +802,9 @@ float GiSampleDenominator(int slot, ivec2 base, int span, vec3 direction)
 /// Adds one traced sample to the accumulators of the cell its direction lands in.
 void GiSplatSample(int slot, ivec2 base, int span, vec3 direction, vec3 radiance, float hit_t)
 {
-	vec3 contribution =
-	    min(radiance, vec3_splat(GI_NEE_SAMPLE_MAX)) / GiSampleDenominator(slot, base, span, direction);
+	// The cap goes on the ESTIMATOR OUTPUT, after the division - see GI_NEE_CONTRIBUTION_MAX.
+	vec3 contribution = min(radiance / GiSampleDenominator(slot, base, span, direction),
+	                        vec3_splat(GI_NEE_CONTRIBUTION_MAX));
 	uvec3 fixed_point = uvec3(max(contribution, vec3_splat(0.0)) * GI_NEE_FIXED + vec3_splat(0.5));
 	uint hit_bits = floatBitsToUint(max(hit_t, 0.0));
 	for(int y = 0; y < span; ++y)

@@ -33,6 +33,26 @@ vec3 GiFiniteOrZero(vec3 v)
 }
 #endif // GI_FINITE_OR_ZERO_DEFINED
 
+#ifndef GI_CLAMP_RAY_RADIANCE_DEFINED
+#define GI_CLAMP_RAY_RADIANCE_DEFINED
+/// The firefly ceiling on one ray's radiance, applied to LUMINANCE so the ray keeps its hue.
+///
+/// A componentwise min() is not a clamp on brightness, it is a clamp on each channel
+/// separately: a saturated emitter at (200, 10, 5) comes back (40, 10, 5), its channel ratio
+/// collapsed from 20:1 to 4:1, so a coloured neon strip desaturates toward white in the bounce
+/// while a grey one of the same luminance does not change at all. Scaling the whole triple by
+/// ceiling/luma removes exactly as much energy and none of the colour. This is the same
+/// treatment GI_GATHER_FIREFLY_CLAMP already gives the relative ceiling in the screen probe
+/// gather; the two clamps disagreed for no reason.
+///
+/// Luminance is spelled out rather than taken from lighting.sh so this header stands alone.
+vec3 GiClampRayRadiance(vec3 radiance, float ceiling)
+{
+	float luma = dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+	return luma > ceiling ? radiance * (ceiling / luma) : radiance;
+}
+#endif // GI_CLAMP_RAY_RADIANCE_DEFINED
+
 // See sdf_common.sh: modern GLSL removed the legacy entry point and bgfx never mapped the 3D
 // variant; guarded here too so this header stands alone.
 #if BGFX_SHADER_LANGUAGE_GLSL >= 130 && !defined(texture3DLod)

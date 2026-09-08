@@ -687,6 +687,11 @@ void surface_cache_system::add_instance(uint64_t identity,
         const auto emissive_color = pbr->get_emissive_color().to_linear();
         inst.emissive = math::vec3(emissive_color.value.r, emissive_color.value.g, emissive_color.value.b) *
                         pbr->get_emissive_intensity();
+        // The emissive MAP's mean, the same treatment the colour map gets above. Emission is a
+        // source, so this is the difference between bouncing what a sign actually emits and
+        // bouncing its factor across the whole submesh - see cs_gi_clipmap_attributes.sc.
+        inst.emissive_mean_slot =
+            acquire_texture_mean_slot(pbr->get_emissive_map(), inst.emissive_mean_captured);
         inst.metalness = math::clamp(pbr->get_metalness(), 0.0f, 1.0f);
     }
     inst.local_to_world = local_to_world;
@@ -777,6 +782,8 @@ void surface_cache_system::add_instance(uint64_t identity,
     clipmap_instance.emissive = inst.emissive;
     clipmap_instance.mean_slot = inst.mean_slot;
     clipmap_instance.mean_captured = inst.mean_captured;
+    clipmap_instance.emissive_mean_slot = inst.emissive_mean_slot;
+    clipmap_instance.emissive_mean_captured = inst.emissive_mean_captured;
     clipmap_instances_.push_back(clipmap_instance);
 }
 
@@ -860,6 +867,17 @@ void surface_cache_system::rebuild_emitters()
     emitters_.clear();
     for(const auto& inst : instances_)
     {
+        // THE FACTOR, NOT THE EMITTED RADIANCE. The attribute composer scales emission by the
+        // emissive map's texture mean, but that mean is written by a compute shader and never
+        // read back, so this side cannot see it: a textured emitter's table entry is up to
+        // 1/mean too bright relative to the volume every ray actually reads. Bounded, because
+        // the entry is only ever used as a RANKING - which pieces enter the table and which the
+        // probes aim at - and aiming at a dimmer-than-expected emitter costs sampling
+        // efficiency, never energy: the aimed ray traces the real field like any other. The one
+        // numeric consumer is the reflection near-field's emitter_fraction, whose ratio cancels
+        // the factor but whose fraction does not, so a textured emitter reads as accounting for
+        // more of the cell than it does. Reading the means back to the CPU would close all of
+        // it - and would let the CPU composer apply the albedo mean it also skips today.
         const math::vec3& radiance = inst.emissive;
         const float luminance = 0.2126f * radiance.x + 0.7152f * radiance.y + 0.0722f * radiance.z;
         if(luminance < float(gi::GI_EMISSIVE_NEE_MIN_LUMINANCE))
@@ -873,9 +891,29 @@ void surface_cache_system::rebuild_emitters()
         // on directions past it - those rays read whatever stands behind, which is the right
         // answer for that direction.
         const float segment = float(gi::GI_EMISSIVE_NEE_SEGMENT);
-        const math::ivec3 pieces(math::max(1, int(std::ceil(extent.x / segment))),
-                                 math::max(1, int(std::ceil(extent.y / segment))),
-                                 math::max(1, int(std::ceil(extent.z / segment))));
+        math::ivec3 pieces(math::max(1, int(std::ceil(extent.x / segment))),
+                           math::max(1, int(std::ceil(extent.y / segment))),
+                           math::max(1, int(std::ceil(extent.z / segment))));
+        // BOUNDED per instance (see GI_EMISSIVE_NEE_MAX_PIECES): the longest axis is halved
+        // until the count fits, so a large or rotated bound keeps whole-object coverage with
+        // longer segments instead of monopolising the table and building thousands of pieces
+        // to be thrown away. The loop always shrinks - a product above the cap needs an axis
+        // of at least three - and stops at (1, 1, 1).
+        while(pieces.x * pieces.y * pieces.z > int(gi::GI_EMISSIVE_NEE_MAX_PIECES))
+        {
+            if(pieces.x >= pieces.y && pieces.x >= pieces.z)
+            {
+                pieces.x = math::max(1, pieces.x / 2);
+            }
+            else if(pieces.y >= pieces.z)
+            {
+                pieces.y = math::max(1, pieces.y / 2);
+            }
+            else
+            {
+                pieces.z = math::max(1, pieces.z / 2);
+            }
+        }
         const math::vec3 piece_extent(extent.x / float(pieces.x), extent.y / float(pieces.y), extent.z / float(pieces.z));
         // Ranked by the SHARED weight (gi_emitter_packing.h), the same expression the shader
         // reconstructs from the packed extent - so the table's order and the reflection tier's
@@ -958,7 +996,13 @@ void surface_cache_system::upload_instances()
         dst[32] = inst.albedo.x;
         dst[33] = inst.albedo.y;
         dst[34] = inst.albedo.z;
-        dst[35] = float(inst.mean_slot);
+        // Both texture-mean slots share this lane, the colour map's below the emissive map's:
+        // every one of the record's 44 floats is spoken for, and both slots are under
+        // texture_mean_capacity (1024), so the packed integer stays under 2^21 and exact in a
+        // float. MIRROR OF SdfMeanSlotColor / SdfMeanSlotEmissive in sdf_common.sh.
+        static_assert(texture_mean_capacity <= mean_slot_radix,
+                      "a mean slot must fit below the packing radix");
+        dst[35] = float(inst.mean_slot) + float(inst.emissive_mean_slot) * float(mean_slot_radix);
         dst[36] = inst.emissive.x;
         dst[37] = inst.emissive.y;
         dst[38] = inst.emissive.z;

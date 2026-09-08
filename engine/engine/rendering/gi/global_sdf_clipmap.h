@@ -39,6 +39,10 @@ struct global_sdf_instance
     ///< Whether the mean at @ref mean_slot has been captured. Hashed into the content
     ///< fingerprint so the level recomposes exactly once when a mean lands.
     bool mean_captured = false;
+    ///< The same pair for the EMISSIVE map, which the GPU composer applies to @ref emissive
+    ///< exactly as it applies @ref mean_slot to @ref albedo.
+    uint32_t emissive_mean_slot = 0;
+    bool emissive_mean_captured = false;
 };
 
 /**
