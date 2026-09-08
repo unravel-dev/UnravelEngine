@@ -11,6 +11,30 @@
 
 namespace unravel
 {
+namespace
+{
+/// Four probes per 64-lane group (PROBE_TRACE_SLOTS in cs_gi_world_probe_trace.sc): a 16-lane
+/// group left half or three quarters of every wave idle.
+constexpr uint32_t probes_per_trace_group = 4u;
+} // namespace
+
+auto gi_world_probe_pass::get_trace_dispatch_groups() -> gi_quiescence_gate_pass::dispatch_groups
+{
+    gi_quiescence_gate_pass::dispatch_groups groups;
+    groups.x = (probe_count + probes_per_trace_group - 1u) / probes_per_trace_group;
+    groups.y = 1u;
+    groups.z = 1u;
+    return groups;
+}
+
+auto gi_world_probe_pass::get_convolve_dispatch_groups() -> gi_quiescence_gate_pass::dispatch_groups
+{
+    gi_quiescence_gate_pass::dispatch_groups groups;
+    groups.x = probe_count;
+    groups.y = 1u;
+    groups.z = 1u;
+    return groups;
+}
 
 auto gi_world_probe_pass::init(rtti::context& ctx) -> bool
 {
@@ -45,8 +69,6 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
     }
     auto& atlas = surface_cache.get_atlas();
     const auto& instances = surface_cache.get_instances();
-    constexpr uint32_t axis = global_sdf_clipmap_gpu::world_probe_axis;
-    const uint32_t probe_count = axis * axis * axis * global_sdf_clipmap::level_count;
     // Rays reach the whole traceable world: the outermost cascade's half extent, the same
     // derivation the gather's max distance uses (a longer promise would be fiction).
     const float trace_reach = clipmap.get_level_extent(global_sdf_clipmap::level_count - 1u) * 0.5f;
@@ -163,14 +185,19 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_uniform(trace_program_.u_gi_light_voxel_params, light_voxel_params);
         gfx::set_uniform(trace_program_.u_gi_world_probe_params, probe_params);
         gfx::set_uniform(trace_program_.u_gi_world_probe_window, window, global_sdf_clipmap::level_count);
-        // Four probes per 64-lane group (PROBE_TRACE_SLOTS in the kernel): a 16-lane group
-        // left half or three quarters of every wave idle.
-        constexpr uint32_t probes_per_group = 4u;
-        gfx::dispatch(pass.id,
-                      trace_program_.program->native_handle(),
-                      (probe_count + probes_per_group - 1u) / probes_per_group,
-                      1,
-                      1);
+        if(bgfx::isValid(params.indirect))
+        {
+            gfx::dispatch_indirect(pass.id,
+                                   trace_program_.program->native_handle(),
+                                   params.indirect,
+                                   params.indirect_entry_trace,
+                                   1);
+        }
+        else
+        {
+            const auto groups = get_trace_dispatch_groups();
+            gfx::dispatch(pass.id, trace_program_.program->native_handle(), groups.x, groups.y, groups.z);
+        }
         trace_program_.program->end();
     }
     {
@@ -190,7 +217,19 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
                        gfx::access::Write,
                        gfx::texture_format::RG16F);
         gfx::set_uniform(convolve_program_.u_gi_world_probe_params, probe_params);
-        gfx::dispatch(pass.id, convolve_program_.program->native_handle(), probe_count, 1, 1);
+        if(bgfx::isValid(params.indirect))
+        {
+            gfx::dispatch_indirect(pass.id,
+                                   convolve_program_.program->native_handle(),
+                                   params.indirect,
+                                   params.indirect_entry_convolve,
+                                   1);
+        }
+        else
+        {
+            const auto groups = get_convolve_dispatch_groups();
+            gfx::dispatch(pass.id, convolve_program_.program->native_handle(), groups.x, groups.y, groups.z);
+        }
         convolve_program_.program->end();
     }
     return true;

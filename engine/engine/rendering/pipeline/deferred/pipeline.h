@@ -183,19 +183,28 @@ public:
 
     /// Lights the resident surface voxels (GI v2 plan 3.2), with sun visibility
     /// answered by the sun's CSM cascade 0 when one was rendered this frame.
+    /// @param indirect The quiescence gate's argument buffer when it decides on the GPU,
+    ///        invalid when the CPU already decided (see gi_quiescence_gate_pass).
+    /// @param collect_stats Stage the convergence readback this frame; only ever true on the
+    ///        readback path, and only while the CPU-side inputs are still enough for the
+    ///        sample to survive update_quiescence.
     void run_gi_light_voxel_pass(scene& scn,
                                  const camera& camera,
                                  gfx::render_view& rview,
                                  surface_cache_system& surface_cache,
                                  surface_cache_view& view_cache,
-                                 const gi_settings& gi);
+                                 const gi_settings& gi,
+                                 gfx::indirect_buffer_handle indirect,
+                                 bool collect_stats);
 
     /// Traces world probes against the freshly lit voxels (GI v2 plan 3.3).
+    /// @param indirect See run_gi_light_voxel_pass.
     void run_gi_world_probe_pass(const camera& camera,
                                  gfx::render_view& rview,
                                  surface_cache_system& surface_cache,
                                  surface_cache_view& view_cache,
-                                 const gi_settings& gi);
+                                 const gi_settings& gi,
+                                 gfx::indirect_buffer_handle indirect);
 
     /// World-space specular tier into RBUFFER, layered UNDER SSR. No-op unless a
     /// camera run with GI reflections enabled.

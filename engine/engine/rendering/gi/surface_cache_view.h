@@ -44,6 +44,33 @@ public:
         float mean_change = 0.0f;
     };
 
+    /// How much of the gate decision the CPU settled on its own. The convergence half of the
+    /// test needs a statistic the GPU produces, and the GPU-resident gate
+    /// (gi_quiescence_gate_pass) evaluates it without a readback - so update_quiescence
+    /// reports which of the two answered, rather than only its own verdict.
+    enum class quiescence_mode : uint8_t
+    {
+        /// A tracked input changed, the settle floor has not been reached, or a writer-side
+        /// debug view is up: the passes must run whatever the relight is doing.
+        run,
+        /// Every CPU-known condition is satisfied; convergence alone decides.
+        measure,
+        /// GI_QUIESCENCE_MAX_FRAMES reached: skip regardless of convergence.
+        skip,
+    };
+
+    /// The full result of update_quiescence: @ref quiescent is the CPU path's own answer
+    /// (unchanged semantics, used when no GPU gate is available), @ref mode is what the
+    /// GPU-resident gate needs to combine with its measured verdict.
+    struct quiescence_verdict
+    {
+        bool quiescent = false;
+        quiescence_mode mode = quiescence_mode::run;
+        /// A tracked input changed THIS frame, so the GPU gate's sample ring is stale and
+        /// must be cleared along with the CPU's.
+        bool changed = false;
+    };
+
     /**
      * @brief Recomposes the stale levels around @p camera_position and uploads them.
      *
@@ -118,11 +145,19 @@ public:
      * equilibrium: GI_QUIESCENCE_STATIONARY_FRACTION), never before GI_QUIESCENCE_MIN_FRAMES
      * and always by GI_QUIESCENCE_MAX_FRAMES. Without the statistic (index 0) the fixed
      * @ref quiescence_settle_frames remains.
+     *
+     * @param wants_debug A writer-side SDF debug view is up: those views paint per frame
+     *        through these very dispatches, so the gate is held open.
+     *
+     * @return Both halves of the decision - see @ref quiescence_verdict. The returned
+     *         @c quiescent is the answer for the readback path; a GPU-resident gate reads
+     *         @c mode instead and supplies the convergence half itself.
      */
     auto update_quiescence(uint64_t light_hash,
                            uint64_t environment_hash,
                            const math::vec3& camera_position,
-                           const relight_sample& relight) -> bool;
+                           const relight_sample& relight,
+                           bool wants_debug) -> quiescence_verdict;
 
     /// Frames the full quiescence input set (light hash, environment revision, content epoch,
     /// window origins, probe cells) has held unchanged - 0 on any change.
@@ -159,6 +194,11 @@ public:
     static_assert(quiescence_settle_frames >= 32u, "must cover at least two probe windows");
 
 private:
+    /// The convergence half of update_quiescence: the sample ring's two tests, plus the
+    /// frame-count floor and ceiling. Split out so the mode the GPU gate reads is settled
+    /// before any statistic is consulted. Mirrored by cs_gi_quiescence_gate.sc.
+    auto evaluate_relight_quiescence(const relight_sample& relight) const -> bool;
+
     global_sdf_clipmap clipmap_;
     global_sdf_clipmap_gpu clipmap_gpu_;
     /// Deferred to the first update so that constructing a view costs nothing. A camera that never

@@ -16,6 +16,25 @@ namespace
 constexpr uint32_t light_voxel_group_size = 64u;
 } // namespace
 
+auto gi_light_voxel_pass::get_dispatch_groups(const surface_cache_view& view_cache)
+    -> gi_quiescence_gate_pass::dispatch_groups
+{
+    // One thread per entry due THIS frame: the 4-frame rotation is folded into the launch
+    // (the kernel maps thread id -> entry = denom * id + phase), so the X extent covers a
+    // quarter of the capacity, and the level rides Y so the kernel never divides. The
+    // early-out beyond the per-level count remains; a still-tighter launch needs indirect
+    // args from the GPU-side counts - a measured optimisation, not a correctness matter.
+    const uint32_t attr_resolution = view_cache.get_clipmap_gpu().get_attr_resolution();
+    const uint32_t capacity = attr_resolution * attr_resolution * attr_resolution;
+    const uint32_t rotation_slice =
+        (capacity + uint32_t(gi::GI_LIGHT_VOXEL_UPDATE_DENOM) - 1u) / uint32_t(gi::GI_LIGHT_VOXEL_UPDATE_DENOM);
+    gi_quiescence_gate_pass::dispatch_groups groups;
+    groups.x = (rotation_slice + light_voxel_group_size - 1u) / light_voxel_group_size;
+    groups.y = global_sdf_clipmap::level_count;
+    groups.z = 1u;
+    return groups;
+}
+
 auto gi_light_voxel_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
@@ -331,21 +350,23 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_texture(program_.s_world_probe_irradiance, 11, black);
         gfx::set_texture(program_.s_world_probe_depth, 15, black);
     }
-    // One thread per entry due THIS frame: the 4-frame rotation is folded into the launch
-    // (the kernel maps thread id -> entry = denom * id + phase), so the X extent covers a
-    // quarter of the capacity, and the level rides Y so the kernel never divides. The
-    // early-out beyond the per-level count remains; a still-tighter launch needs indirect
-    // args from the GPU-side counts - a measured optimisation, not a correctness matter.
-    const uint32_t capacity = attr_resolution * attr_resolution * attr_resolution;
-    const uint32_t rotation_slice =
-        (capacity + uint32_t(gi::GI_LIGHT_VOXEL_UPDATE_DENOM) - 1u) / uint32_t(gi::GI_LIGHT_VOXEL_UPDATE_DENOM);
-    gfx::dispatch(pass.id,
-                  active_program.native_handle(),
-                  (rotation_slice + light_voxel_group_size - 1u) / light_voxel_group_size,
-                  global_sdf_clipmap::level_count,
-                  1);
+    if(bgfx::isValid(params.indirect))
+    {
+        // The GPU gate already decided: this entry holds either the counts
+        // get_dispatch_groups derived or zeros. A zero-group dispatch is a no-op on every
+        // backend, which is the whole point - the skip costs no CPU-GPU sync to discover.
+        gfx::dispatch_indirect(pass.id, active_program.native_handle(), params.indirect, params.indirect_entry, 1);
+    }
+    else
+    {
+        const auto groups = get_dispatch_groups(view_cache);
+        gfx::dispatch(pass.id, active_program.native_handle(), groups.x, groups.y, groups.z);
+    }
     active_program.end();
-    collect_relight_stats(vis_memo, attr_resolution);
+    if(params.collect_stats)
+    {
+        collect_relight_stats(vis_memo, attr_resolution);
+    }
     return true;
 }
 

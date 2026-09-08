@@ -4,6 +4,7 @@
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/passes/gi_quiescence_gate_pass.h>
 
 #include <graphics/render_pass.h>
 #include <graphics/render_view.h>
@@ -74,11 +75,33 @@ public:
         /// instead of radiance, for the vis_memo debug view. Same compiled-variant
         /// discipline as sun_tier_debug; takes precedence over it when both are set.
         bool vis_memo_debug = false;
+        /// When valid, the dispatch takes its group counts from @ref indirect_entry of this
+        /// buffer instead of the CPU-side counts - the GPU quiescence gate wrote either the
+        /// real counts or zeros there earlier this frame (gi_quiescence_gate_pass). The
+        /// pass's CPU half still runs: it is idempotent in the regime the gate can close
+        /// (nothing the light hash or the vis-memo generation tracks has moved), so the
+        /// bindings and uniforms it publishes describe a dispatch that may do nothing.
+        gfx::indirect_buffer_handle indirect{bgfx::kInvalidHandle};
+        uint16_t indirect_entry = gi_quiescence_gate_pass::entry_light_voxels;
+        /// Stage and read back the convergence statistic for the CPU gate. False whenever
+        /// the GPU gate owns the decision - it drains the same statistics slice itself - and
+        /// on frames the CPU gate could not use the sample anyway, which is where the
+        /// readback's stall used to be paid for nothing.
+        bool collect_stats = true;
     };
 
     auto init(rtti::context& ctx) -> bool;
 
     auto run(gfx::render_view& rview, const run_params& params) -> bool;
+
+    /**
+     * @brief The dispatch this pass would issue for @p view_cache.
+     *
+     * The quiescence gate has to write these counts into its indirect entry before the pass
+     * itself runs, so the derivation lives here and both callers share it.
+     */
+    static auto get_dispatch_groups(const surface_cache_view& view_cache)
+        -> gi_quiescence_gate_pass::dispatch_groups;
 
     auto is_valid() const -> bool
     {

@@ -3,6 +3,7 @@
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/passes/gi_quiescence_gate_pass.h>
 
 #include <graphics/render_pass.h>
 #include <graphics/render_view.h>
@@ -42,6 +43,14 @@ public:
         /// converging running mean. Off = fixed texel centres written through (the
         /// deterministic atlas).
         bool jitter_directions = false;
+        /// When valid, both dispatches take their group counts from this buffer instead of
+        /// the CPU-side counts - the GPU quiescence gate wrote the real counts or zeros there
+        /// earlier this frame (gi_quiescence_gate_pass). The pass's CPU half still runs; it
+        /// is idempotent in the regime the gate can close, because every input that arms
+        /// @ref fast_frames_ also forces the gate open.
+        gfx::indirect_buffer_handle indirect{bgfx::kInvalidHandle};
+        uint16_t indirect_entry_trace = gi_quiescence_gate_pass::entry_probe_trace;
+        uint16_t indirect_entry_convolve = gi_quiescence_gate_pass::entry_probe_convolve;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -52,6 +61,19 @@ public:
     {
         return trace_program_.is_valid() && convolve_program_.is_valid();
     }
+
+    /// Probes in the whole cascade set - the convolve's thread count, and the base of the
+    /// trace's group count.
+    static constexpr uint32_t probe_count = global_sdf_clipmap_gpu::world_probe_axis *
+                                            global_sdf_clipmap_gpu::world_probe_axis *
+                                            global_sdf_clipmap_gpu::world_probe_axis *
+                                            global_sdf_clipmap::level_count;
+
+    /// The trace dispatch's groups; the gate writes these before the pass runs.
+    static auto get_trace_dispatch_groups() -> gi_quiescence_gate_pass::dispatch_groups;
+
+    /// The convolve dispatch's groups; see @ref get_trace_dispatch_groups.
+    static auto get_convolve_dispatch_groups() -> gi_quiescence_gate_pass::dispatch_groups;
 
 private:
     struct trace_program : uniforms_cache

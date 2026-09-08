@@ -23,6 +23,28 @@ struct crtp_meta_type :  public Args...
         return get_meta_type() == entt::resolve<U>();
     }
 
+    template<typename U>
+    auto safe_cast() -> U*
+    {
+        if(!is<U>())
+        {
+            return nullptr;
+        }
+
+        return static_cast<U*>(this);
+    }
+
+    template<typename U>
+    auto safe_cast() const -> const U*
+    {
+        if(!is<U>())
+        {
+            return nullptr;
+        }
+
+        return static_cast<const U*>(this);
+    }
+
     auto is(const entt::meta_type& type) const -> bool
     {
         return get_meta_type() == type;

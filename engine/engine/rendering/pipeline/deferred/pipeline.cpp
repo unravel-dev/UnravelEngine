@@ -2750,16 +2750,39 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
         // from the view rather than passed down, so it always describes the texture the probes
         // are about to sample - whichever side of this block the irradiance pass ran on.
         const uint64_t environment_hash = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_hash_key, 0ull);
-        const bool quiescent =
-            view_cache.update_quiescence(light_hash,
-                                         environment_hash,
-                                         camera.get_position(),
-                                         gi_light_voxel_pass_.get_relight_sample()) &&
-            !wants_sdf_debug;
-        if(!quiescent)
+        const auto verdict = view_cache.update_quiescence(light_hash,
+                                                          environment_hash,
+                                                          camera.get_position(),
+                                                          gi_light_voxel_pass_.get_relight_sample(),
+                                                          wants_sdf_debug);
+        // WHERE THE VERDICT COMES FROM. The convergence half of the gate needs a statistic
+        // only the GPU can produce, and carrying it back per frame cost a full CPU-GPU sync
+        // (see gi_quiescence_gate_pass). When the backend can dispatch indirectly the gate
+        // evaluates that half in place and publishes group counts - or zeros - for all three
+        // dispatches; the passes then run their CPU half unconditionally and the GPU decides
+        // whether anything executes. Otherwise the readback path answers here as before.
+        gi_quiescence_gate_pass::run_params gate_params;
+        gate_params.view_cache = &view_cache;
+        gate_params.mode = verdict.mode;
+        gate_params.reset = verdict.changed;
+        gate_params.groups[gi_quiescence_gate_pass::entry_light_voxels] =
+            gi_light_voxel_pass::get_dispatch_groups(view_cache);
+        gate_params.groups[gi_quiescence_gate_pass::entry_probe_trace] =
+            gi_world_probe_pass::get_trace_dispatch_groups();
+        gate_params.groups[gi_quiescence_gate_pass::entry_probe_convolve] =
+            gi_world_probe_pass::get_convolve_dispatch_groups();
+        const bool gpu_gated = gi_quiescence_gate_pass_.run(rview, gate_params);
+        const auto indirect = gpu_gated ? gi_quiescence_gate_pass_.get_indirect_buffer()
+                                        : gfx::indirect_buffer_handle{bgfx::kInvalidHandle};
+        if(gpu_gated || !verdict.quiescent)
         {
-            run_gi_light_voxel_pass(scn, camera, rview, surface_cache, view_cache, gi);
-            run_gi_world_probe_pass(camera, rview, surface_cache, view_cache, gi);
+            // On the readback path the sample is only worth its stall while the CPU-side
+            // inputs are still: update_quiescence clears the ring on any change, so a
+            // statistic taken during camera motion is deleted on arrival.
+            const bool collect_stats =
+                !gpu_gated && verdict.mode == surface_cache_view::quiescence_mode::measure;
+            run_gi_light_voxel_pass(scn, camera, rview, surface_cache, view_cache, gi, indirect, collect_stats);
+            run_gi_world_probe_pass(camera, rview, surface_cache, view_cache, gi, indirect);
         }
         // One frame counter for both passes; each consumer keys its own rotation off it.
         ++light_voxel_frame_;
@@ -2771,9 +2794,13 @@ void deferred::run_gi_light_voxel_pass(scene& scn,
                                        gfx::render_view& rview,
                                        surface_cache_system& surface_cache,
                                        surface_cache_view& view_cache,
-                                       const gi_settings& gi)
+                                       const gi_settings& gi,
+                                       gfx::indirect_buffer_handle indirect,
+                                       bool collect_stats)
 {
     gi_light_voxel_pass::run_params light_params;
+    light_params.indirect = indirect;
+    light_params.collect_stats = collect_stats;
     light_params.surface_cache = &surface_cache;
     light_params.view_cache = &view_cache;
     light_params.frame = light_voxel_frame_;
@@ -2795,10 +2822,12 @@ void deferred::run_gi_world_probe_pass(const camera& camera,
                                        gfx::render_view& rview,
                                        surface_cache_system& surface_cache,
                                        surface_cache_view& view_cache,
-                                       const gi_settings& gi)
+                                       const gi_settings& gi,
+                                       gfx::indirect_buffer_handle indirect)
 {
     // World probes trace against the freshly lit voxels (GI v2 plan 3.3).
     gi_world_probe_pass::run_params probe_params;
+    probe_params.indirect = indirect;
     probe_params.surface_cache = &surface_cache;
     probe_params.view_cache = &view_cache;
     probe_params.camera_position = camera.get_position();

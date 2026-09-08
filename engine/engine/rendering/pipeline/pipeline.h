@@ -23,6 +23,7 @@
 #include "passes/ssr_pass.h"
 #include "passes/gi_clipmap_compose_pass.h"
 #include "passes/gi_light_voxel_pass.h"
+#include "passes/gi_quiescence_gate_pass.h"
 #include "passes/gi_world_probe_pass.h"
 #include "passes/gi_reflection_pass.h"
 #include "passes/gi_resolve_pass.h"
@@ -272,6 +273,7 @@ protected:
     ssil_pass ssil_pass_{};
     gtao_pass gtao_pass_{};
     gi_clipmap_compose_pass gi_clipmap_compose_pass_{};
+    gi_quiescence_gate_pass gi_quiescence_gate_pass_{};
     gi_light_voxel_pass gi_light_voxel_pass_{};
     gi_world_probe_pass gi_world_probe_pass_{};
     gi_resolve_pass gi_resolve_pass_{};

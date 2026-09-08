@@ -676,7 +676,7 @@ void surface_cache_system::add_instance(uint64_t identity,
     // Colour lives on pbr_material, not on the material base. A material of some other kind keeps
     // the neutral default rather than guessing, which is the same answer this had before and is
     // strictly better than tinting the scene with a colour nothing is painted with.
-    if(const auto* pbr = dynamic_cast<const pbr_material*>(mat.get()))
+    if(const auto* pbr = mat.get()->safe_cast<pbr_material>())
     {
         // Linear decode matches the G-buffer path (picker colors are sRGB-encoded).
         const auto base_color = pbr->get_base_color().to_linear();
@@ -1163,7 +1163,7 @@ void surface_cache_system::update_world(scene& scn)
                     continue;
                 }
                 const auto mat = resolve_submesh_material(mdl, *mesh_ptr, submesh_index);
-                const auto* pbr = dynamic_cast<const pbr_material*>(mat.get());
+                const auto* pbr = mat.get()->template safe_cast<pbr_material>();
                 if(pbr == nullptr)
                 {
                     continue;
@@ -1251,7 +1251,7 @@ void surface_cache_system::update_world(scene& scn)
                 // mesh may be opaque in one placement and blended in another. The compile-time
                 // refusal saves the bake; this is what makes the answer match what is drawn.
                 // Cutout stays -- it is opaque wherever it is not discarded.
-                if(const auto* pbr = dynamic_cast<const pbr_material*>(mat.get()))
+                if(const auto* pbr = mat.get()->template safe_cast<pbr_material>())
                 {
                     if(pbr->get_alpha_mode() == alpha_mode::blend)
                     {

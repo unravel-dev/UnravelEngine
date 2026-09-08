@@ -92,8 +92,10 @@ void surface_cache_view::update(const std::vector<global_sdf_instance>& instance
 auto surface_cache_view::update_quiescence(uint64_t light_hash,
                                            uint64_t environment_hash,
                                            const math::vec3& camera_position,
-                                           const relight_sample& relight) -> bool
+                                           const relight_sample& relight,
+                                           bool wants_debug) -> quiescence_verdict
 {
+    quiescence_verdict verdict;
     bool changed = false;
     bool lighting_changed = false;
     if(light_hash != quiescence_light_hash_)
@@ -164,11 +166,32 @@ auto surface_cache_view::update_quiescence(uint64_t light_hash,
     {
         quiescence_frames_ = 0;
         relight_ring_count_ = 0;
-        return false;
+        // A readback still in flight when the change landed measured the OLD input set. The
+        // ring it would join has just been cleared, so admitting it would seed the fresh
+        // window with a stale mean; mark it consumed here instead.
+        relight_sample_consumed_ = relight.index;
+        verdict.changed = true;
+        verdict.mode = quiescence_mode::run;
+        verdict.quiescent = false;
+        return verdict;
     }
     if(quiescence_frames_ < uint32_t(gi::GI_QUIESCENCE_MAX_FRAMES))
     {
         ++quiescence_frames_;
+    }
+    // The CPU half of the decision, settled before any statistic is consulted: this is what a
+    // GPU-resident gate combines with its own measured verdict.
+    if(wants_debug || quiescence_frames_ < uint32_t(gi::GI_QUIESCENCE_MIN_FRAMES))
+    {
+        verdict.mode = quiescence_mode::run;
+    }
+    else if(quiescence_frames_ >= uint32_t(gi::GI_QUIESCENCE_MAX_FRAMES))
+    {
+        verdict.mode = quiescence_mode::skip;
+    }
+    else
+    {
+        verdict.mode = quiescence_mode::measure;
     }
     // One sample per completed readback; only those taken since the last change count.
     if(relight.index != 0 && relight.index != relight_sample_consumed_)
@@ -178,6 +201,15 @@ auto surface_cache_view::update_quiescence(uint64_t light_hash,
         relight_ring_head_ = (relight_ring_head_ + 1u) % uint32_t(relight_ring_.size());
         relight_ring_count_ = std::min(relight_ring_count_ + 1u, uint32_t(relight_ring_.size()));
     }
+    // The readback path's own verdict. A GPU-resident gate ignores it and answers the
+    // convergence half itself from verdict.mode; the tests are mirrored in
+    // cs_gi_quiescence_gate.sc.
+    verdict.quiescent = !wants_debug && evaluate_relight_quiescence(relight);
+    return verdict;
+}
+
+auto surface_cache_view::evaluate_relight_quiescence(const relight_sample& relight) const -> bool
+{
     if(quiescence_frames_ < uint32_t(gi::GI_QUIESCENCE_MIN_FRAMES))
     {
         return false;
