@@ -4,6 +4,7 @@
 #include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
+#include <engine/rendering/pipeline/passes/gi_resolve_pass.h>
 #include <engine/rendering/gpu_program.h>
 
 #include <graphics/render_pass.h>
@@ -54,6 +55,22 @@ public:
         ///< must read zero; warm colors mean probe rays complete with sky - the bounce-path
         ///< injection channel the sun-tier view cannot see. Pure read, no debug write needed.
         probe_sky = 12,
+        ///< GI v2: the EMISSIVE attribute voxel at the traced hit - what a gather ray reads as
+        ///< emitted radiance, and the only view of the emissive texture-mean scaling.
+        attr_emissive = 13,
+        ///< GI v2: how much of the world-probe cage survived at the traced hit. The consequence
+        ///< view for probe placement: red is where the lattice left nothing usable.
+        cage_health = 14,
+        ///< GI v2: the temporal's dirty regions, shaded on the traced surface.
+        dirty_regions = 15,
+        ///< GI v2: the level-0 probe lattice drawn as spheres, coloured by probe state. The
+        ///< only view that shows a probe BURIED in geometry or a room the lattice missed.
+        probe_lattice = 16,
+        ///< GI v2: screen-probe placement and ray allocation, as a screen-space overlay.
+        screen_probes = 17,
+        ///< GI v2: the temporal accumulator's health per pixel - how many frames each pixel
+        ///< has actually integrated, and where the change detector reset it.
+        temporal_health = 18,
     };
 
     struct settings
@@ -120,6 +137,10 @@ public:
         /// This camera's cascade. The cascade is snapped around a viewer, so it cannot live on
         /// the service without two cameras fighting over one set of levels.
         surface_cache_view* view_cache{};
+        /// This frame's screen-probe layout, for the screen_probes view (see gi_resolve_pass).
+        gi_resolve_pass::probe_debug_view probes{};
+        /// The temporal accumulator's moments, for the temporal_health view. Null disables it.
+        gfx::texture::ptr moments;
         settings settings;
     };
 
@@ -144,6 +165,13 @@ private:
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_attr_albedo;
+        gfx::program::uniform_ptr s_attr_emissive;
+        gfx::program::uniform_ptr s_gi_moments;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_temporal_dirty;
+        gfx::program::uniform_ptr u_gi_temporal_bounds;
         gfx::program::uniform_ptr s_light_voxels;
         gfx::program::uniform_ptr s_world_probe_irradiance;
         gfx::program::uniform_ptr s_world_probe_depth;
@@ -165,6 +193,17 @@ private:
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_attr_albedo, "s_attr_albedo", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_attr_emissive, "s_attr_emissive", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_moments, "s_gi_moments", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_temporal_dirty, "u_gi_temporal_dirty", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_gi_temporal_bounds,
+                          "u_gi_temporal_bounds",
+                          gfx::uniform_type::Vec4,
+                          uint16_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS) * 2u);
             cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);
             cache_uniform(program.get(),
                           s_world_probe_irradiance,

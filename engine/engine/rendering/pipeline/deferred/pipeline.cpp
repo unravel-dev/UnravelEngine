@@ -2963,6 +2963,11 @@ void deferred::run_sdf_debug_pass(const camera& camera,
     params.cam = &camera;
     params.surface_cache = &surface_cache;
     params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+    // The screen-space GI views read what the gather just produced: its probe records and the
+    // temporal's moments. Both are empty when the resolve did not run this frame, which the
+    // shader answers as "no data" rather than by reading a stale buffer.
+    params.probes = gi_resolve_pass_.get_probe_debug_view();
+    params.moments = rview.tex_safe_get("GI_MOMENTS");
     // The world-probe debug views must read the cages exactly as the lit path does, so the
     // authored variance gate rides along; the constant default covers the no-gi_component
     // case (these views stay usable while GI itself is off).
@@ -3019,6 +3024,30 @@ void deferred::run_sdf_debug_pass(const camera& camera,
     else if(debug_pass_ == debug_pass_sdf_probe_sky)
     {
         params.settings.mode = sdf_debug_pass::debug_mode::probe_sky;
+    }
+    else if(debug_pass_ == debug_pass_gi_attr_emissive)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::attr_emissive;
+    }
+    else if(debug_pass_ == debug_pass_gi_cage_health)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::cage_health;
+    }
+    else if(debug_pass_ == debug_pass_gi_dirty_regions)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::dirty_regions;
+    }
+    else if(debug_pass_ == debug_pass_gi_probe_lattice)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::probe_lattice;
+    }
+    else if(debug_pass_ == debug_pass_gi_screen_probes)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::screen_probes;
+    }
+    else if(debug_pass_ == debug_pass_gi_temporal)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::temporal_health;
     }
     else if(debug_pass_ == debug_pass_sdf_vis_memo)
     {

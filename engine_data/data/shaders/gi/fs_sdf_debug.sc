@@ -47,13 +47,41 @@ uniform vec4 u_gi_debug_camera;
 #define SDF_DEBUG_WORLD_PROBES 10
 #define SDF_DEBUG_SUN_TIERS 11
 #define SDF_DEBUG_PROBE_SKY 12
+#define SDF_DEBUG_ATTR_EMISSIVE 13
+#define SDF_DEBUG_CAGE_HEALTH 14
+#define SDF_DEBUG_DIRTY_REGIONS 15
+#define SDF_DEBUG_PROBE_LATTICE 16
+#define SDF_DEBUG_SCREEN_PROBES 17
+#define SDF_DEBUG_TEMPORAL_HEALTH 18
 
 #define GI_WORLD_PROBE_READ
 #include "gi/gi_world_probes.sh"
+/// The temporal's dirty regions, read here exactly as the gather and the relight read them.
+#include "gi/gi_dirty_regions.sh"
 
 /// Attribute albedo volume (toroidal slots, levels stacked along Z at attribute resolution).
 /// The light volume and its slot math come from gi_light_voxels.sh (stage 10).
 SAMPLER3D(s_attr_albedo, 8);
+/// The EMISSIVE half of the same volume, same slot math. Carries radiance with no validity
+/// lane of its own - the albedo's alpha is the composer's surface flag for both.
+SAMPLER3D(s_attr_emissive, 9);
+/// World probe per-slot bookkeeping, read-only here: which world CELL each atlas slot currently
+/// serves. The trace owns it as a read-write buffer (cs_gi_world_probe_trace.sc stage 6); this
+/// view only looks.
+///
+/// The companion window-COUNT buffer is deliberately not bound. It is written as
+/// `(fast_window || jitter off) ? 0 : ...`, and world_probe_jitter defaults to OFF - so in the
+/// shipping configuration that count is zero for every probe on every frame and carries no
+/// state at all. The claimed cell is meaningful in both configurations. D3D shares its 16 SRV
+/// registers between buffers and textures, so this view gets one of the two, not both.
+BUFFER_RO(b_world_probe_cells_debug, uint, 6);
+
+/// SCREEN-PROBE records and the temporal's moments, for the two screen-space views. The record
+/// layout, its addressing and the u_gi_probe_* uniforms come from gi_probe_common.sh - the same
+/// header every gather kernel uses, so this view cannot drift from what it displays.
+#include "gi/gi_probe_common.sh"
+BUFFER_RO(b_gi_probes, vec4, 14);
+SAMPLER2D(s_gi_moments, 7);
 #define GI_LIGHT_VOXEL_READ
 #include "gi/gi_light_voxels.sh"
 
@@ -224,7 +252,12 @@ void main()
 		return;
 	}
 
-	if(!hit.hit)
+	// The three views that do not shade a traced SURFACE are exempt: the two screen-space ones
+	// read screen buffers and ignore the march entirely, and the probe lattice draws spheres in
+	// the air, which is exactly where no surface was hit. Every mode below is guarded by its own
+	// id, so a missed ray reaching them costs a wasted march and nothing else.
+	if(!hit.hit && u_debug_mode != SDF_DEBUG_SCREEN_PROBES &&
+	   u_debug_mode != SDF_DEBUG_TEMPORAL_HEALTH && u_debug_mode != SDF_DEBUG_PROBE_LATTICE)
 	{
 		gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
 		return;
@@ -495,6 +528,357 @@ void main()
 			return;
 		}
 		gl_FragColor = vec4(probe_irradiance, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_SCREEN_PROBES)
+	{
+		// The screen-probe lattice: where the adaptive gather placed a probe, what it decided to
+		// do with it, and how many rays it spent. Every other GI view shows the RESULT of the
+		// gather; this shows its plan.
+		//
+		// Tile hue is the probe's mode, tile brightness is the ray budget the importance mip
+		// asked for - so it is a cost map as much as a correctness one: bright green is where
+		// Probe Trace's time actually goes.
+		//
+		//   GREEN   -> traced this frame; brightness = allocated rays.
+		//   BLUE    -> interpolated from its even-lattice parents (the adaptive saving).
+		//   RED     -> placed but no geometry under it.
+		//   BLACK   -> outside the lattice, or the gather did not run this frame.
+		//   WHITE GRID -> probe tile borders, so the spacing is readable.
+		if(u_gi_probe_count_x <= 0 || u_gi_probe_count_y <= 0)
+		{
+			gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
+		// The gather's lattice is sized in TRACE-resolution pixels; this pass runs at full
+		// resolution, so the uv maps through the trace target rather than through gl_FragCoord.
+		vec2 trace_pixel = v_texcoord0 * u_gi_probe_screen.xy;
+		vec2 probe_f = trace_pixel / max(u_gi_probe_spacing, 1.0);
+		ivec2 probe_xy = ivec2(floor(probe_f));
+		if(probe_xy.x >= u_gi_probe_count_x || probe_xy.y >= u_gi_probe_count_y ||
+		   probe_xy.x < 0 || probe_xy.y < 0)
+		{
+			gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
+		uint record = (GiProbeRecord(probe_xy.x, probe_xy.y, 0) + u_gi_probe_write_offset) *
+		              uint(GI_PROBE_STRIDE);
+		vec4 meta = b_gi_probes[record + uint(GI_PROBE_META)];
+		// The 4x4 importance mip the filter wrote for this frame's allocation: its total is
+		// what the args pass turned into a ray count.
+		float importance = 0.0;
+		for(int mip_row = 0; mip_row < 4; ++mip_row)
+		{
+			vec4 mip = b_gi_probes[record + uint(mip_row)];
+			importance += mip.x + mip.y + mip.z + mip.w;
+		}
+		vec3 probe_color;
+		if(meta.w < 0.5)
+		{
+			probe_color = vec3(0.6, 0.0, 0.0);
+		}
+		else if(meta.w > 1.5)
+		{
+			probe_color = vec3(0.1, 0.35, 1.0);
+		}
+		else
+		{
+			// Log-ish so a single hot probe does not flatten every other tile to black.
+			float budget = saturate(log2(1.0 + importance) * 0.15);
+			probe_color = mix(vec3(0.0, 0.25, 0.05), vec3(0.2, 1.0, 0.3), budget);
+		}
+		// Tile borders, so probe spacing and the lattice origin are both readable.
+		vec2 within = fract(probe_f);
+		float border = min(min(within.x, within.y), min(1.0 - within.x, 1.0 - within.y));
+		float edge = 1.0 - smoothstep(0.0, 0.06, border);
+		gl_FragColor = vec4(mix(probe_color, vec3_splat(1.0), edge * 0.5), 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_TEMPORAL_HEALTH)
+	{
+		// What the GI temporal has actually integrated per pixel. The accumulation COUNT is the
+		// whole story behind "why is this area noisy" and "why is this lagging": a pixel at its
+		// cap is averaging its full window, and a pixel pinned low is being reset every frame -
+		// by disocclusion, by a dirty region, by the moving-hit response, or by the change
+		// detector firing on it.
+		//
+		//   BLACK -> RED   -> 1-2 frames: effectively unfiltered, this is where fireflies live.
+		//   ORANGE         -> re-converging.
+		//   GREEN          -> at or near the slow cap; a settled pixel.
+		//   BLUE TINT      -> the moving-hit share is shortening this pixel's window on purpose.
+		//   NOTHING        -> the resolve did not run this frame.
+		vec4 moments = texture2DLod(s_gi_moments, v_texcoord0, 0.0);
+		// z = the accumulated frame count, w = the moving-hit amount the trace measured.
+		float count = moments.z;
+		if(count <= 0.0)
+		{
+			gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
+		// Against the SLOW cap the pass actually runs; 24 is the shipped default and the ramp
+		// saturates there rather than pretending to know the live setting.
+		float converged = saturate(count / 24.0);
+		vec3 health = mix(vec3(0.6, 0.0, 0.0), vec3(0.1, 1.0, 0.2), converged);
+		health = mix(health, vec3(1.0, 0.5, 0.0), (1.0 - abs(converged * 2.0 - 1.0)) * 0.45);
+		// The moving-hit share rides the blue channel: a short window that is INTENDED reads
+		// differently from one that is being reset by something unexplained.
+		health.z = max(health.z, saturate(moments.w));
+		gl_FragColor = vec4(health, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_PROBE_LATTICE)
+	{
+		// The LEVEL-0 world probe lattice itself, drawn as spheres where the probes actually
+		// sit. Every other probe view shades a SURFACE by what the cage answered there, which
+		// cannot show a probe buried inside a wall or a room the lattice missed entirely - the
+		// two states that decide whether probe relocation is worth building. Level 0 alone: it
+		// is the finest lattice and the one whose spacing decides whether a small room gets any
+		// probe at all.
+		//
+		// "Which probes update" is not a binary: every probe traces one stratum of its
+		// directions every frame, so they all update, partially. What varies - and what this
+		// colours - is whether a probe is alive, freshly claimed, and how many windows its
+		// running mean has folded in.
+		//
+		//   RED    -> DEAD: the trace's buried-probe gate zeroed it, because the lattice point
+		//             sits inside geometry. Every cage using it renormalises onto its neighbours,
+		//             and a room whose corners are all red is one the lattice missed entirely.
+		//   GREY   -> the lattice point is not served by this cascade's window at all (its atlas
+		//             slot is currently claimed by a different cell).
+		//   LIT    -> alive: the probe's own convolved irradiance toward the viewer, so the view
+		//             shows what each probe actually contributes.
+		//
+		// There is deliberately no "updated this frame" colour: every probe traces one stratum of
+		// its directions every frame, and with world_probe_jitter off - the default - the atlas is
+		// written through every window, so no per-probe update state exists to show.
+		//
+		// Spheres are drawn only where they are nearer than the traced surface, so the lattice
+		// reads against the geometry rather than through it.
+		float spacing = GiWorldProbeSpacing(0);
+		float radius = spacing * 0.09;
+		float limit = hit.hit ? hit.t : u_max_distance;
+		// No point marching past the cascade's own probe window.
+		limit = min(limit, spacing * float(GI_WORLD_PROBE_AXIS));
+		float best_t = limit;
+		ivec3 best_cell = ivec3(0, 0, 0);
+		bool found = false;
+		float step_size = spacing * 0.5;
+		LOOP
+		for(int probe_step = 0; probe_step < 48; ++probe_step)
+		{
+			float t = step_size * (float(probe_step) + 0.5);
+			if(t > limit)
+			{
+				break;
+			}
+			vec3 sample_position = ray_origin + ray_dir * t;
+			ivec3 cell = ivec3(floor(sample_position / spacing + vec3_splat(0.5)));
+			vec3 probe_position = GiWorldProbeCellPosition(cell, 0);
+			// The EXACT closest approach to this lattice point rather than the sampled
+			// distance, so a sphere that falls between two steps is still found.
+			float t_center = dot(probe_position - ray_origin, ray_dir);
+			float miss = length((ray_origin + ray_dir * t_center) - probe_position);
+			if(t_center > 0.0 && miss < radius)
+			{
+				float t_enter = t_center - sqrt(max(radius * radius - miss * miss, 0.0));
+				if(t_enter > 0.0 && t_enter < best_t)
+				{
+					best_t = t_enter;
+					best_cell = cell;
+					found = true;
+				}
+			}
+		}
+		if(!found)
+		{
+			// Behind the lattice: the traced surface, dimmed, so the spheres read against it.
+			if(!hit.hit)
+			{
+				gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+				return;
+			}
+			gl_FragColor = vec4(ShadeNormal(hit.normal).xyz * 0.22, 1.0);
+			return;
+		}
+		ivec3 probe_slot = GiWorldProbeSlot(best_cell);
+		int slot_index = GiWorldProbeSlotIndex(probe_slot, 0);
+		bool resident = b_world_probe_cells_debug[slot_index] == GiWorldProbePackCell(best_cell, 0);
+		// The DEAD test the cage read itself makes: a buried probe stores zero-distance hits,
+		// so its depth mean collapses to the never-measured zero. Sampled along the view axis
+		// AND its opposite and taken as the max, so one genuinely close wall cannot read as
+		// death.
+		int depth_tile_edge = GI_WORLD_PROBE_OCT_DEPTH + 2;
+		ivec2 depth_tile = GiWorldProbeTileBase(probe_slot, 0, depth_tile_edge);
+		vec2 depth_uv_a = (vec2(depth_tile) + vec2_splat(1.0) +
+		                   GiOctEncode(ray_dir) * float(GI_WORLD_PROBE_OCT_DEPTH)) *
+		                  u_gi_world_probe_atlas.xy;
+		vec2 depth_uv_b = (vec2(depth_tile) + vec2_splat(1.0) +
+		                   GiOctEncode(-ray_dir) * float(GI_WORLD_PROBE_OCT_DEPTH)) *
+		                  u_gi_world_probe_atlas.xy;
+		float depth_mean = max(texture2DLod(s_world_probe_depth, depth_uv_a, 0.0).x,
+		                       texture2DLod(s_world_probe_depth, depth_uv_b, 0.0).x);
+		vec3 sphere_normal =
+		    normalize((ray_origin + ray_dir * best_t) - GiWorldProbeCellPosition(best_cell, 0));
+		vec3 probe_color;
+		if(!resident)
+		{
+			probe_color = vec3_splat(0.12);
+		}
+		else if(depth_mean <= 1e-4)
+		{
+			probe_color = vec3(1.0, 0.0, 0.0);
+		}
+		else
+		{
+			// What this probe would hand a surface facing the viewer: its convolved irradiance
+			// in the sphere's own normal direction, read exactly as the cage read samples it.
+			int irradiance_tile_edge = GI_WORLD_PROBE_OCT_IRRADIANCE + 2;
+			ivec2 irradiance_tile = GiWorldProbeTileBase(probe_slot, 0, irradiance_tile_edge);
+			vec2 irradiance_uv =
+			    (vec2(irradiance_tile) + vec2_splat(1.0) +
+			     GiOctEncode(sphere_normal) * float(GI_WORLD_PROBE_OCT_IRRADIANCE)) *
+			    u_gi_world_probe_atlas.xy;
+			probe_color = max(texture2DLod(s_world_probe_irradiance, irradiance_uv, 0.0).xyz,
+			                  vec3_splat(0.0));
+		}
+		// A headlight lambert so the lattice reads as spheres rather than flat discs.
+		float sphere_shade = 0.45 + 0.55 * max(dot(sphere_normal, -ray_dir), 0.0);
+		gl_FragColor = vec4(probe_color * sphere_shade, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_ATTR_EMISSIVE)
+	{
+		// The EMISSIVE half of the attribute volume: what a gather ray reads as EMITTED radiance
+		// at a cascade hit. The only view of the emissive texture-mean scaling the composer
+		// applies (cs_gi_clipmap_attributes.sc) - without that mean a textured emitter bounces
+		// its colour FACTOR across its whole silhouette, so a sign whose texture is a few percent
+		// lit glyphs reads here as a fully lit panel at peak radiance.
+		//
+		//   BLACK   -> attributed and genuinely not emissive (the common case).
+		//   YELLOW  -> attributed at no level.
+		//   MAGENTA -> hit outside every cascade level.
+		vec3 hit_position = ray_origin + ray_dir * hit.t;
+		float attr_blend;
+		float attr_answered_voxel;
+		int attr_level = SdfFindClipmapLevel(hit_position, attr_blend, attr_answered_voxel);
+		if(attr_level >= SDF_CLIPMAP_LEVEL_COUNT)
+		{
+			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+			return;
+		}
+		int attr_res = u_light_voxel_resolution;
+		vec3 emissive = vec3_splat(0.0);
+		bool attributed = false;
+		// The same level fallback the albedo view and GiLightVoxelRead perform: the blended
+		// isosurface can sit a coarse voxel off the finest level's own.
+		LOOP
+		for(int probe_level = attr_level; probe_level < SDF_CLIPMAP_LEVEL_COUNT; ++probe_level)
+		{
+			vec4 level_data = u_sdf_clipmap_levels[probe_level];
+			if(!(level_data.w > 0.0))
+			{
+				continue;
+			}
+			float attr_voxel_size = level_data.w * 2.0;
+			ivec3 slot = GiLightVoxelSlot(GiLightVoxelCell(hit_position, attr_voxel_size));
+			ivec3 attr_texel = ivec3(slot.x, slot.y, slot.z + probe_level * attr_res);
+			if(texelFetch(s_attr_albedo, attr_texel, 0).a > 0.0)
+			{
+				emissive = texelFetch(s_attr_emissive, attr_texel, 0).xyz;
+				attributed = true;
+				break;
+			}
+		}
+		if(!attributed)
+		{
+			gl_FragColor = vec4(1.0, 0.9, 0.0, 1.0);
+			return;
+		}
+		gl_FragColor = vec4(emissive, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_CAGE_HEALTH)
+	{
+		// How much of the world-probe CAGE survives at this point: the weight the DDGI chain
+		// granted, minus everything the dead-probe gate, Chebyshev and the field-visibility
+		// march took away (GiWorldProbeIrradianceInternal's visible fraction).
+		//
+		// This is the consequence view for probe PLACEMENT. The lattice is world-anchored at
+		// whole multiples of the spacing, so a room whose air holds no lattice point has every
+		// corner of its cage buried and zeroed - and no other view shows that directly, because
+		// a starved cage renormalises onto whatever survived and still returns a plausible
+		// colour. Red here is where relocation would pay.
+		//
+		//   GREEN   -> the cage answered at full weight.
+		//   ORANGE  -> partly rejected; the read renormalised onto the survivors.
+		//   RED     -> answered with almost nothing surviving (sealed, or an all-dead cage).
+		//   MAGENTA -> no level's cage answered at all.
+		vec3 hit_position = ray_origin + ray_dir * hit.t;
+		vec3 view_direction = normalize(u_gi_debug_camera.xyz - hit_position);
+		float visible = -1.0;
+		LOOP
+		for(int cage_level = 0; cage_level < SDF_CLIPMAP_LEVEL_COUNT; ++cage_level)
+		{
+			vec3 level_irradiance;
+			float level_sky;
+			float level_visible;
+			if(GiWorldProbeIrradianceInternal(hit_position, hit.normal, view_direction, cage_level,
+			                                  false, 0u, level_irradiance, level_sky, level_visible))
+			{
+				visible = saturate(level_visible);
+				break;
+			}
+		}
+		if(visible < 0.0)
+		{
+			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+			return;
+		}
+		// Red -> orange -> green, with the mid band pushed toward orange so a half-dead cage
+		// does not read as a muddy yellow-green that looks healthy.
+		vec3 health = mix(vec3(1.0, 0.05, 0.0), vec3(0.0, 1.0, 0.1), visible);
+		health = mix(health, vec3(1.0, 0.5, 0.0), (1.0 - abs(visible * 2.0 - 1.0)) * 0.5);
+		gl_FragColor = vec4(health, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_DIRTY_REGIONS)
+	{
+		// The world regions the GI temporal is flushing: where a placement moved, appeared,
+		// vanished or changed material within GI_TEMPORAL_DIRTY_HOLD_FRAMES. Inside one, the
+		// gather's slow lane collapses to the fast cap, the screen tier stops reading last
+		// frame's composite, and the relight writes through instead of folding into its EMA.
+		//
+		// Only GI_TEMPORAL_DIRTY_MAX_BOUNDS regions ever reach a shader; past that count the
+		// consumers fall back to their screen-wide behaviour and this view shows the survivors
+		// alone, which is exactly what the lit path is acting on.
+		//
+		// The factor is 1 only INSIDE a box and fades to 0 over the margin outside it, so the two
+		// are shown as different answers rather than as one ramp: the margin is a soft skirt one
+		// probe spacing wide, and painting it at full strength made a single small mover look
+		// like a scene-wide flush.
+		//
+		//   RED     -> inside a region: full flush weight.
+		//   AMBER   -> in the soft margin around one, by how much.
+		//   GREY    -> outside every region; the temporal keeps its full history here.
+		//
+		// If a small mover still paints a large volume, the region genuinely IS that large: an
+		// EMISSIVE placement inflates its region by its light's reach, up to
+		// GI_TEMPORAL_DIRTY_EMISSIVE_REACH_MAX metres, so the pool it left behind flushes too.
+		vec3 hit_position = ray_origin + ray_dir * hit.t;
+		float factor = GiDirtyRegionFactor(hit_position);
+		vec3 shade = ShadeNormal(hit.normal).xyz * 0.3;
+		if(factor >= 0.999)
+		{
+			gl_FragColor = vec4(1.0, 0.1, 0.05, 1.0);
+			return;
+		}
+		gl_FragColor = vec4(mix(shade, vec3(1.0, 0.75, 0.1), factor), 1.0);
 		return;
 	}
 

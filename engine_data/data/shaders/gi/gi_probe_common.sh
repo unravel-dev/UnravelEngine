@@ -206,7 +206,11 @@ vec2 GiHalton8(uint frame)
 	float h2 = 0.0;
 	float f2 = 0.5;
 	uint n2 = index + 1u;
-	for(int i = 0; i < 4 && n2 > 0u; ++i)
+	// Distinct loop variables per digit: HLSL's legacy for-scope leaks the control variable
+	// into the enclosing function, so two `for(int i ...)` in one body is a redeclaration
+	// (X3078). fxc reports it as a warning in the compute profiles and FAILS the fragment one,
+	// which is how it surfaced when the SDF debug view first included this header.
+	for(int digit2 = 0; digit2 < 4 && n2 > 0u; ++digit2)
 	{
 		h2 += f2 * float(n2 % 2u);
 		n2 /= 2u;
@@ -215,7 +219,7 @@ vec2 GiHalton8(uint frame)
 	float h3 = 0.0;
 	float f3 = 1.0 / 3.0;
 	uint n3 = index + 1u;
-	for(int i = 0; i < 3 && n3 > 0u; ++i)
+	for(int digit3 = 0; digit3 < 3 && n3 > 0u; ++digit3)
 	{
 		h3 += f3 * float(n3 % 3u);
 		n3 /= 3u;

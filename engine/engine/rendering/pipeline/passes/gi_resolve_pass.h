@@ -561,6 +561,36 @@ private:
     uint32_t probe_grid_x_ = 0;
     uint32_t probe_grid_y_ = 0;
 
+public:
+    /**
+     * @brief Everything a debug view needs to address this frame's screen-probe records.
+     *
+     * The probe buffer is double buffered and its lattice is derived from the trace-resolution
+     * target, so a reader outside this pass cannot work out where a probe's record lives. Rather
+     * than re-deriving it (and drifting), the pass publishes what it just used.
+     */
+    struct probe_debug_view
+    {
+        gfx::dynamic_vertex_buffer_handle buffer{bgfx::kInvalidHandle};
+        uint32_t count_x = 0;
+        uint32_t count_y = 0;
+        /// Probe spacing in TRACE-resolution pixels.
+        float spacing = 0.0f;
+        /// Offset in PROBES of the half written this frame.
+        uint32_t write_offset = 0;
+        /// The trace-resolution target the lattice was sized against.
+        usize32_t trace_size{};
+    };
+
+    /// This frame's probe layout, or a default-constructed value when the gather did not run.
+    auto get_probe_debug_view() const -> const probe_debug_view&
+    {
+        return probe_debug_view_;
+    }
+
+private:
+    probe_debug_view probe_debug_view_{};
+
     /// Probe SH + meta storage. A member rather than a render-view resource because it is a
     /// buffer, and its capacity only ever grows.
     gfx::dynamic_vertex_buffer_handle probe_buffer_{bgfx::kInvalidHandle};

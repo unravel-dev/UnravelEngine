@@ -166,6 +166,19 @@ public:
     /// program (shader modes 15 / 16); dispatched BEFORE the >= debug_pass_sdf_normals check.
     static constexpr int debug_pass_gtao = 30;
     static constexpr int debug_pass_gtao_bent_normal = 31;
+
+    /// GI views added after the velocity/GTAO ids, so those keep the numbers the editor's
+    /// static_asserts pin. All four are >= debug_pass_sdf_normals, so they route to the SDF
+    /// debug pass and keep the GI world state alive exactly like the rest of that group.
+    static constexpr int debug_pass_gi_attr_emissive = 32;
+    static constexpr int debug_pass_gi_cage_health = 33;
+    static constexpr int debug_pass_gi_dirty_regions = 34;
+    static constexpr int debug_pass_gi_probe_lattice = 35;
+    /// SCREEN-SPACE GI views. Also handled by the SDF debug pass (it is the one fullscreen pass
+    /// with the GI bindings), but they read screen buffers rather than tracing, so the shader
+    /// answers them before the march.
+    static constexpr int debug_pass_gi_screen_probes = 36;
+    static constexpr int debug_pass_gi_temporal = 37;
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,
                             const run_params& rparams,

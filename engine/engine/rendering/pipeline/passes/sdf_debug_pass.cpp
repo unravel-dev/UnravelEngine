@@ -69,6 +69,66 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
                      8,
                      clipmap_gpu.get_attr_albedo_texture() ? clipmap_gpu.get_attr_albedo_texture()
                                                            : atlas.get_atlas_texture());
+    gfx::set_texture(debug_program_.s_attr_emissive,
+                     9,
+                     clipmap_gpu.get_attr_emissive_texture() ? clipmap_gpu.get_attr_emissive_texture()
+                                                             : atlas.get_atlas_texture());
+    // Per-slot world-probe bookkeeping for the lattice view. Bound unconditionally for the same
+    // reason every sampler above is: an unbound stage is a hard draw failure on OpenGL, not a
+    // silently empty read.
+    if(clipmap_gpu.has_world_probes())
+    {
+        // The claimed CELL, not the window count: the count is forced to zero unless
+        // world_probe_jitter is on (off by default), so it carries no state to show.
+        gfx::set_buffer(6, clipmap_gpu.get_world_probe_cells(), gfx::access::Read);
+    }
+    // Screen-probe records and the temporal moments, for the two SCREEN-SPACE views. The
+    // probe buffer rides stage 14 (the trace uses 7, which the world-probe bookkeeping takes
+    // here); both are bound unconditionally for the same OpenGL reason as the samplers above.
+    if(bgfx::isValid(params.probes.buffer))
+    {
+        gfx::set_buffer(14, params.probes.buffer, gfx::access::Read);
+    }
+    {
+        const float probe_params[4] = {float(params.probes.count_x),
+                                       float(params.probes.count_y),
+                                       params.probes.spacing,
+                                       0.0f};
+        gfx::set_uniform(debug_program_.u_gi_probe_params, probe_params);
+        const float probe_screen[4] = {float(params.probes.trace_size.width),
+                                       float(params.probes.trace_size.height),
+                                       params.probes.trace_size.width > 0u
+                                           ? 1.0f / float(params.probes.trace_size.width)
+                                           : 0.0f,
+                                       params.probes.trace_size.height > 0u
+                                           ? 1.0f / float(params.probes.trace_size.height)
+                                           : 0.0f};
+        gfx::set_uniform(debug_program_.u_gi_probe_screen, probe_screen);
+        // Only the WRITE half matters here: this view shows what the gather just produced.
+        const float probe_temporal[4] = {0.0f, 0.0f, float(params.probes.write_offset), 0.0f};
+        gfx::set_uniform(debug_program_.u_gi_probe_temporal, probe_temporal);
+    }
+    // Stage 7: D3D shares its 16 SRV registers between buffers and textures, and every other
+    // one is taken - which is why the probe window-COUNT buffer is not bound (see the shader).
+    gfx::set_texture(debug_program_.s_gi_moments,
+                     7,
+                     params.moments ? params.moments : default_textures::get().black_texture());
+
+    // The temporal's dirty regions, packed exactly as the gather and the relight receive them
+    // (surface_cache_system::pack_dirty_regions), so the view shows the set the lit path is
+    // acting on rather than a second opinion. A zero count leaves every hit outside a region.
+    {
+        constexpr uint32_t max_regions = uint32_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS);
+        float dirty_bounds[max_regions * 2u * 4u] = {};
+        const uint32_t dirty_count = surface_cache.pack_dirty_regions(dirty_bounds, max_regions);
+        // The margin the consumers use: one level-0 probe spacing, the reach of a small mover's
+        // bounce pool.
+        const float dirty_margin =
+            clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
+        const float dirty_params[4] = {float(dirty_count), math::max(dirty_margin, 1e-3f), 0.0f, 0.0f};
+        gfx::set_uniform(debug_program_.u_gi_temporal_dirty, dirty_params);
+        gfx::set_uniform(debug_program_.u_gi_temporal_bounds, dirty_bounds, uint16_t(2u * max_regions));
+    }
     if(clipmap_gpu.get_light_voxel_texture())
     {
         gfx::set_texture(debug_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());

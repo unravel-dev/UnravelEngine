@@ -406,6 +406,14 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                          0.0f,
                                          float(write_probe_offset),
                                          float(read_probe_offset)};
+        // Published for the probe debug view: the lattice and the half just written, so a
+        // reader outside this pass never has to re-derive them (see probe_debug_view).
+        probe_debug_view_.buffer = probe_buffer_;
+        probe_debug_view_.count_x = probes_x;
+        probe_debug_view_.count_y = probes_y;
+        probe_debug_view_.spacing = float(spacing);
+        probe_debug_view_.write_offset = write_probe_offset;
+        probe_debug_view_.trace_size = target_size;
         // The one gather (plan phase 8: the v1 paths and the radiance hash are gone). Without
         // the world structures there is nothing correct to gather from, so the output clears
         // to zero weight and the consumer's environment term covers the frame.
@@ -1162,6 +1170,9 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
     const auto& read_moments = history.read_moments;
     const bool has_history = history.has_history;
     out_moments = history.write_moments;
+    // Published under a stable name for the temporal debug view: the ping-pong means neither
+    // GI_HISTORY_A_MOMENTS nor _B is "the current one" from outside this pass.
+    rview.tex_get_or_emplace("GI_MOMENTS") = history.write_moments;
 
     gfx::render_pass temporal_pass("GI/Temporal Pass");
     temporal_pass.bind(write_fbo.get());

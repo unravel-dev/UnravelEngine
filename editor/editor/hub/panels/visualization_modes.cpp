@@ -130,6 +130,47 @@ constexpr std::array<visualization_swatch, 8> k_legend_gi_vis_memo = {{
     {{1.0f, 0.0f, 1.0f}, "OVERLOADED: hit outside every cascade level, OR a stale texel the pass has not rewritten"},
 }};
 
+constexpr std::array<visualization_swatch, 3> k_legend_gi_attr_emissive = {{
+    {{0.0f, 0.0f, 0.0f}, "Attributed and genuinely not emissive - the common case"},
+    {{1.0f, 0.9f, 0.0f}, "Not attributed at any level"},
+    {{1.0f, 0.0f, 1.0f}, "Hit outside every cascade level"},
+}};
+
+constexpr std::array<visualization_swatch, 4> k_legend_gi_cage_health = {{
+    {{0.0f, 1.0f, 0.1f}, "The cage answered at full weight"},
+    {{1.0f, 0.5f, 0.0f}, "Partly rejected - the read renormalised onto the survivors"},
+    {{1.0f, 0.05f, 0.0f}, "Almost nothing survived - sealed, or every cage probe dead"},
+    {{1.0f, 0.0f, 1.0f}, "No level's cage answered at all"},
+}};
+
+constexpr std::array<visualization_swatch, 3> k_legend_gi_dirty_regions = {{
+    {{1.0f, 0.1f, 0.05f}, "Inside a dirty region - full flush weight"},
+    {{1.0f, 0.75f, 0.1f}, "In the soft margin around one (one probe spacing wide), by how much"},
+    {{0.3f, 0.3f, 0.3f}, "Outside every region - the temporal keeps its full history here"},
+}};
+
+constexpr std::array<visualization_swatch, 3> k_legend_gi_probe_lattice = {{
+    {{1.0f, 0.0f, 0.0f}, "DEAD - the lattice point is inside geometry, so the buried-probe gate "
+                         "zeroed it; a room whose corners are all red is one the lattice missed"},
+    {{0.12f, 0.12f, 0.12f}, "Not served by this cascade's window (its atlas slot holds another cell)"},
+    {{0.6f, 0.6f, 0.5f}, "Alive - shaded with the probe's own irradiance toward the viewer"},
+}};
+
+constexpr std::array<visualization_swatch, 5> k_legend_gi_screen_probes = {{
+    {{0.2f, 1.0f, 0.3f}, "Traced this frame - brightness is the ray budget it was allocated"},
+    {{0.1f, 0.35f, 1.0f}, "Interpolated from its even-lattice parents (the adaptive saving)"},
+    {{0.6f, 0.0f, 0.0f}, "Placed but no geometry under it"},
+    {{1.0f, 1.0f, 1.0f}, "Tile borders, so probe spacing and lattice origin are readable"},
+    {{0.0f, 0.0f, 0.0f}, "Outside the lattice, or the gather did not run this frame"},
+}};
+
+constexpr std::array<visualization_swatch, 4> k_legend_gi_temporal = {{
+    {{0.6f, 0.0f, 0.0f}, "1-2 frames integrated - effectively unfiltered; fireflies live here"},
+    {{1.0f, 0.5f, 0.0f}, "Re-converging"},
+    {{0.1f, 1.0f, 0.2f}, "At or near the slow cap - a settled pixel"},
+    {{0.1f, 0.2f, 1.0f}, "Blue lift: the moving-hit share is shortening this window on purpose"},
+}};
+
 // -----------------------------------------------------------------------------
 // Groups
 // -----------------------------------------------------------------------------
@@ -180,7 +221,7 @@ constexpr std::array<visualization_group_entry, 6> k_visualization_groups = {{
 // get_visualization_modes(group) relies on that contiguity.
 // -----------------------------------------------------------------------------
 
-constexpr std::array<visualization_mode_entry, 33> k_visualization_modes = {{
+constexpr std::array<visualization_mode_entry, 39> k_visualization_modes = {{
     {visualization_mode::full,
      visualization_group::none,
      "full",
@@ -423,6 +464,48 @@ constexpr std::array<visualization_mode_entry, 33> k_visualization_modes = {{
      "The live bounce visibility-memo transaction per face - the instrument for whether the "
      "memo is actually hitting. Runs the real load / miss-march / restamp path.",
      k_legend_gi_vis_memo},
+    {visualization_mode::gi_attr_emissive,
+     visualization_group::global_illumination,
+     "gi_attr_emissive",
+     "Voxel Emissive",
+     "Emitted radiance in the attribute volume at the traced hit - what a gather ray reads as "
+     "emission, and the only view of the emissive texture-mean scaling.",
+     k_legend_gi_attr_emissive},
+    {visualization_mode::gi_cage_health,
+     visualization_group::global_illumination,
+     "gi_cage_health",
+     "Probe Cage Health",
+     "How much of the world-probe cage survived at the traced hit, after the dead-probe gate, "
+     "Chebyshev and the field march. Red is where the lattice left nothing usable.",
+     k_legend_gi_cage_health},
+    {visualization_mode::gi_dirty_regions,
+     visualization_group::global_illumination,
+     "gi_dirty_regions",
+     "Dirty Regions",
+     "Where the temporal is flushing accumulated light because a placement moved, appeared, "
+     "vanished or changed material. Only the regions that fit the shader budget are shown.",
+     k_legend_gi_dirty_regions},
+    {visualization_mode::gi_probe_lattice,
+     visualization_group::global_illumination,
+     "gi_probe_lattice",
+     "Probe Lattice",
+     "The level-0 world probes drawn as spheres where they actually sit: red where the lattice "
+     "point is buried in geometry, otherwise the irradiance that probe actually holds.",
+     k_legend_gi_probe_lattice},
+    {visualization_mode::gi_screen_probes,
+     visualization_group::global_illumination,
+     "gi_screen_probes",
+     "Screen Probes",
+     "Where the adaptive gather placed a probe, whether it traced or interpolated it, and the "
+     "ray budget it spent - a cost map as much as a correctness one.",
+     k_legend_gi_screen_probes},
+    {visualization_mode::gi_temporal,
+     visualization_group::global_illumination,
+     "gi_temporal",
+     "Temporal Health",
+     "How many frames each pixel has actually integrated. Answers 'why is this noisy' and "
+     "'why is this lagging': pinned-low pixels are being reset every frame.",
+     k_legend_gi_temporal},
 }};
 
 // Drift guards: the enum is the editor-side mirror of the engine's debug pass ids.
@@ -452,6 +535,22 @@ static_assert(static_cast<int>(visualization_mode::gtao) == rendering::deferred:
               "visualization_mode drifted from deferred::debug_pass_gtao");
 static_assert(static_cast<int>(visualization_mode::gtao_bent_normal) == rendering::deferred::debug_pass_gtao_bent_normal,
               "visualization_mode drifted from deferred::debug_pass_gtao_bent_normal");
+static_assert(static_cast<int>(visualization_mode::gi_attr_emissive) ==
+                  rendering::deferred::debug_pass_gi_attr_emissive,
+              "visualization_mode drifted from deferred::debug_pass_gi_attr_emissive");
+static_assert(static_cast<int>(visualization_mode::gi_cage_health) == rendering::deferred::debug_pass_gi_cage_health,
+              "visualization_mode drifted from deferred::debug_pass_gi_cage_health");
+static_assert(static_cast<int>(visualization_mode::gi_dirty_regions) ==
+                  rendering::deferred::debug_pass_gi_dirty_regions,
+              "visualization_mode drifted from deferred::debug_pass_gi_dirty_regions");
+static_assert(static_cast<int>(visualization_mode::gi_probe_lattice) ==
+                  rendering::deferred::debug_pass_gi_probe_lattice,
+              "visualization_mode drifted from deferred::debug_pass_gi_probe_lattice");
+static_assert(static_cast<int>(visualization_mode::gi_screen_probes) ==
+                  rendering::deferred::debug_pass_gi_screen_probes,
+              "visualization_mode drifted from deferred::debug_pass_gi_screen_probes");
+static_assert(static_cast<int>(visualization_mode::gi_temporal) == rendering::deferred::debug_pass_gi_temporal,
+              "visualization_mode drifted from deferred::debug_pass_gi_temporal");
 
 } // namespace
 

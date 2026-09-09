@@ -55,6 +55,12 @@ enum class visualization_mode : int
     velocity = 29,
     gtao = 30,
     gtao_bent_normal = 31,
+    gi_attr_emissive = 32,
+    gi_cage_health = 33,
+    gi_dirty_regions = 34,
+    gi_probe_lattice = 35,
+    gi_screen_probes = 36,
+    gi_temporal = 37,
 };
 
 /// Menu grouping. Ordering here is the order the groups appear in the viewport menu.
