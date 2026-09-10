@@ -134,4 +134,17 @@ void main()
 		uvec3 groups = run ? uvec3(u_gi_gate_groups[entry].xyz) : uvec3(0u, 0u, 0u);
 		dispatchIndirect(s_gi_gate_indirect, entry, groups.x, groups.y, groups.z);
 	}
+	// The census rows (GI_STATS_RELIGHT_FACES_MOVED onward) are zeroed only when the passes
+	// are about to accumulate a fresh one, so a snapshot taken while the gate is closed still
+	// reads the last frame that did any work - the frame the ledger wants.
+	if(run)
+	{
+		for(int census_level = 0; census_level < SDF_CLIPMAP_LEVEL_COUNT; ++census_level)
+		{
+			for(int quantity = GI_STATS_RELIGHT_FACES_MOVED; quantity < GI_STATS_QUANTITY_COUNT; ++quantity)
+			{
+				imageStore(s_gi_vis_memo, GiLightVoxelStatsTexel(census_level, quantity), uvec4(0u, 0u, 0u, 0u));
+			}
+		}
+	}
 }

@@ -1057,8 +1057,8 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         const auto target_lod_index = lod_data.target_lod_index;
 
         // Optimized single-component LOD transition parameters
-        // Positive: current LOD fading out (1.0 → 0.0)
-        // Negative: target LOD fading in (0.0 → -1.0)
+        // Positive: current LOD fading out (1.0 -> 0.0)
+        // Negative: target LOD fading in (0.0 -> -1.0)
         const float transition_progress = lod_data.transition_time > 0.0f 
             ? current_time / lod_data.transition_time 
             : 1.0f;
@@ -1659,7 +1659,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                 if(!is_skybox)
                 {
                     float sun_elevation = -light_dir.y;
-                    // sun_weight: 0 at horizon, 1 at zenith. Smooth ramp over ~20° to avoid near-1 at low angles.
+                    // sun_weight: 0 at horizon, 1 at zenith. Smooth ramp over ~20 deg to avoid near-1 at low angles.
                     float x = math::clamp(sun_elevation / 0.35f, 0.0f, 1.0f);
                     sun_weight = x * x * (3.0f - 2.0f * x);
                 }
@@ -1992,7 +1992,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
             {
                 gfx::set_texture(lprogram.s_tex[i], i, gbuffer->get_texture(i));
             }
-            // Skip s_tex5 (RBUFFER) and s_tex6 (BRDF LUT) — not used by per-light direct shaders.
+            // Skip s_tex5 (RBUFFER) and s_tex6 (BRDF LUT) - not used by per-light direct shaders.
             // Shadow maps start at slot 7.
             i = 7;
 
@@ -3048,6 +3048,10 @@ void deferred::run_sdf_debug_pass(const camera& camera,
     else if(debug_pass_ == debug_pass_gi_temporal)
     {
         params.settings.mode = sdf_debug_pass::debug_mode::temporal_health;
+    }
+    else if(debug_pass_ == debug_pass_gi_probe_tiers)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::probe_tiers;
     }
     else if(debug_pass_ == debug_pass_sdf_vis_memo)
     {

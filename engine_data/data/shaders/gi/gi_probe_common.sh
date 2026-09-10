@@ -30,8 +30,11 @@
  *              2 = interpolated from its even-lattice parents (adaptive gather). Consumers
  *              that only care about validity keep testing w > 0.5.
  *      [10]    xyz = anchor world normal, w = anchor view distance
- *      [11]    reserved (held the removed probe-space temporal's accumulation count -
- *              kept for layout stability)
+ *      [11]    the RAY TIER SHARES of a traced probe's rays this frame: x = screen tier,
+ *              y = mesh SDF, z = clipmap SDF, w = sky (a completion the world probes could
+ *              not answer); the world-probe completion share is the remainder. Written by
+ *              the trace only (interpolated probes keep whatever the slot held) and read by
+ *              the gi_probe_tiers debug view - the waste ledger's ray-budget instrument.
  */
 
 #define GI_PROBE_DIR_EDGE   8
@@ -42,7 +45,7 @@
 #define GI_PROBE_SCREEN_SHARE 6
 #define GI_PROBE_META       9
 #define GI_PROBE_META2      10
-#define GI_PROBE_HISTORY    11
+#define GI_PROBE_TIERS      11
 /// Single layer: the gather anchors one probe per tile (Phase 8 removed the v1
 /// two-layer machinery); the record indexing keeps the parameter for layout stability.
 #define GI_PROBE_LAYERS     1

@@ -92,6 +92,42 @@ public:
         return indirect_;
     }
 
+    /**
+     * @brief One copy of the statistics slice (GI_STATS_* rows x cascade levels): the waste
+     *        census - relit faces against relit faces that changed, probes by state, traced
+     *        probe texels against texels that changed.
+     *
+     * ON DEMAND ONLY. The copy ends in gfx::read_texture, which is a full CPU-GPU sync on
+     * every desktop backend (the reason the per-frame gate moved onto the GPU), so this is
+     * an instrument for a tool to ask for, never something a frame path calls. Rows 0-1
+     * are the gate's own sums for the frame before the snapshot; the census rows hold the
+     * last frame the gated passes actually ran (the gate zeroes them only on those frames).
+     */
+    struct stats_snapshot
+    {
+        /// Mirrors GI_STATS_QUANTITY_COUNT in gi_light_voxels.sh (row order = GI_STATS_*).
+        static constexpr uint32_t quantity_count = 10u;
+        static constexpr uint32_t level_count = uint32_t(global_sdf_clipmap::level_count);
+        /// Row-major: values[quantity * level_count + level].
+        std::array<uint32_t, quantity_count * level_count> values{};
+        /// The render frame the copy was issued on.
+        uint32_t frame = 0;
+        bool valid = false;
+
+        auto at(uint32_t quantity, uint32_t level) const -> uint32_t
+        {
+            return values[quantity * level_count + level];
+        }
+    };
+
+    /// Asks the next run() to copy the slice out and read it back; get_stats_snapshot()
+    /// turns valid with a frame stamp at or after this call's frame a few frames later.
+    void request_stats_snapshot();
+    auto get_stats_snapshot() const -> const stats_snapshot&
+    {
+        return stats_snapshot_;
+    }
+
     /// Whether this backend and build can gate on the GPU at all. False sends the pipeline
     /// down the readback path for the whole session.
     auto is_available() const -> bool;
@@ -102,6 +138,10 @@ private:
     /// Allocates the indirect and ring buffers on first use. Separate from init() because a
     /// pass that is never run on a backend without indirect support must not allocate.
     auto ensure_buffers() -> bool;
+
+    /// The snapshot machinery (request_stats_snapshot): issue the copy before the gate
+    /// drains the slice, and collect a landed readback.
+    void service_stats_snapshot(const gfx::texture::ptr& vis_memo, uint32_t attr_resolution);
 
     struct gate_program : uniforms_cache
     {
@@ -144,6 +184,16 @@ private:
     /// statistics slice, so the first frame against a new one resets the ring.
     const gfx::texture* stats_source_ = nullptr;
     bool unavailable_warning_emitted_ = false;
+    /// Snapshot state: the copy kernel (cs_gi_light_voxel_stats.sc, in copy-only mode), its
+    /// compute target, the readback staging texture, and the request / in-flight flags.
+    std::unique_ptr<gpu_program> stats_program_;
+    gfx::texture::ptr snapshot_texture_;
+    gfx::texture::ptr snapshot_readback_;
+    stats_snapshot stats_snapshot_{};
+    std::array<uint32_t, stats_snapshot::quantity_count * stats_snapshot::level_count> snapshot_data_{};
+    uint32_t snapshot_ready_frame_ = 0;
+    bool snapshot_requested_ = false;
+    bool snapshot_pending_ = false;
 };
 
 } // namespace unravel

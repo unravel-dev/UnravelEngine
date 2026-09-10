@@ -402,11 +402,16 @@
       " visibility there belongs to the pixel-precise screen trace, but the cap keeps the"         \
       " probe-space filter from ever dissolving it outright")                                      \
     /* --- reflections (plan phase 9) --- */                                                       \
-    X(GI_REFLECTION_ROUGH_CUTOFF, 0.4f,                                                            \
-      "GGX roughness", "derived: the world-probe radiance atlas texel (16x16 octahedral,"          \
-      " about a 13-degree half-angle) subtends the same solid angle as a GGX lobe of"              \
-      " roughness ~0.4. A rougher lobe is already prefiltered by the atlas - those pixels"         \
-      " read the probe cage along the reflection and pay no ray; sharper lobes trace")             \
+    X(GI_REFLECTION_ROUGH_CUTOFF, 0.6f,                                                             \
+      "GGX roughness", "matched to the SSR: fs_ssr_composite.sc fades the screen-space"             \
+      " reflection out over 0.3..0.6 (MAX_ROUGHNESS), so the traced GI tier hands over to the"      \
+      " diffuse gather at the same 0.6 - with the two at different marks (0.4 here) the GI"         \
+      " reflection dissolved into the gather while the SSR beside it still blurred. The"            \
+      " world-probe radiance atlas texel (16x16 octahedral, ~13-degree half-angle) subtends"        \
+      " a GGX lobe of roughness ~0.4; past that the traced rays are already blended toward"         \
+      " the prefiltered probe radiance by the lobe/texel ratio, so the 0.4..0.6 band costs"         \
+      " rays on its pixels and changes little else. At and past the cutoff a pixel reads the"       \
+      " probe cage along the reflection and pays no ray")                                           \
     X(GI_REFLECTION_TEMPORAL_FRAMES, 8,                                                            \
       "frames", "derived: the stochastic GGX reflection ray (VNDF, R2 sequence per frame)"         \
       " integrates its lobe over this many frames of history. One 8-frame R2 cycle matches"        \
@@ -557,7 +562,7 @@
       " + Lum / range) so one bright spike in the 3x3 box cannot stretch the extent and hide"       \
       " every real disagreement behind it; 10 keeps the space near-linear up to"                    \
       " scene-referred whites and compresses only fireflies")                                       \
-    X(GI_REFLECTION_GATHER_FADE_START, 0.3f,                                                       \
+    X(GI_REFLECTION_GATHER_FADE_START, 0.45f,                                                       \
       "GGX roughness", "derived: 0.75 x GI_REFLECTION_ROUGH_CUTOFF. The traced tiers now"          \
       " SPREAD with roughness (screen hits average a GGX-cone disk, world hits blend toward"       \
       " the 13-degree prefiltered probe radiance by the lobe/texel angle ratio), so the fade"      \
@@ -893,6 +898,60 @@
       " cannot resolve a small emitter under the lobe (measured: speckle on brushed metal at"     \
       " roughness 0.35), and nine samples per frame is the cheapest variance reduction the pass"  \
       " already fetches")                                                                          \
+    X(GI_WORLD_PROBE_SLEEP_SPACINGS, 1.75f,                                                       \
+      "probe spacings of clearance", "instrument: a LEVEL-0 probe with no geometry within this"   \
+      " many spacings is COUNTED as unoccupied (census row GI_STATS_PROBES_ASLEEP, blue in the"   \
+      " Probe Lattice view) - it keeps tracing. The bound is provable for on-surface queries: a"   \
+      " query sits inside one of the eight cells meeting a probe, so it is at most sqrt(3)"       \
+      " spacings from it, and 1.75 clears sqrt(3) = 1.732 with margin for the query bias. LEVEL"  \
+      " 0 ONLY, a hard limit: the cascade is a NARROW BAND storing +-mesh_sdf::encode_range"      \
+      " VOXELS (4) and saturating beyond, so it certifies at most 4 x voxel_size of clearance -"  \
+      " 4 m at the coarsest level's 1 m voxel, which is what the test samples; 1.75 x 2 m fits,"  \
+      " no coarser threshold would. SLEEPING such probes (zero radiance and depth, like a buried" \
+      " one) was built and measured 2026-09-09: 39% of level 0 asleep, no measurable saving"      \
+      " (World Probe Trace 0.068 -> 0.064 ms median on open-gate frames; 729 four-probe groups"   \
+      " are latency-bound), while screen-probe COMPLETIONS query the lattice in the air, where"   \
+      " such a probe is a legitimate cage corner - so the skip was removed, the count kept")      \
+    X(GI_STATS_VISIBLE_CHANGE, 0.05f,                                                             \
+      "relative luminance change", "instrument, not a tuning knob: the waste census"              \
+      " (GI_STATS_* in gi_light_voxels.sh) counts a relit face or a traced probe texel as"        \
+      " VISIBLY changed when its stored luminance moved by more than this fraction of itself -"   \
+      " about a 5 percent step, the smallest a viewer notices on a lit wall after the"            \
+      " tonemap. The census's other threshold is the gate's own GI_QUIESCENCE_CONVERGED_MEAN."    \
+      " Read back on demand only (gi_quiescence_gate_pass::request_stats_snapshot)")              \
+    X(GI_VIS_MEMO_GENERATION_WRAP, 63,                                                              \
+      "generations", "derived: the bounce vis-memo's generation tag is 6 bits with 0 reserved"      \
+      " for never-stamped (gi_world_probes.sh PackProbe), so live generations count 1..63 and"      \
+      " wrap. The segment-local keep (gi_light_voxels_kernel.sh GiVisMemoWordKeepable) measures"    \
+      " a stale word's age modulo this; a word a whole wrap old can alias young and serve one"      \
+      " stale corner set for one rotation - the bounded collision the tag's hit test already"       \
+      " accepts")                                                                                   \
+    X(GI_VIS_MEMO_KEEP_MAX_AGE, 15,                                                                 \
+      "generations", "derived: how many generations old a stale vis-memo word may be for the"       \
+      " segment-local keep to trust its untouched corners (GiSegmentTouchesBox). Every face is"     \
+      " relit and restamped within one rotation (GI_LIGHT_VOXEL_UPDATE_DENOM frames) of any"        \
+      " bump, so an age past a handful means the relight stood still; the cap keeps the age"        \
+      " test a quarter of GI_VIS_MEMO_GENERATION_WRAP away from the tag's alias. The CPU"           \
+      " (gi_light_voxel_pass) resets the age to 0 on a generation that lands after a level's"       \
+      " composed origin moved - a scroll's slabs change which level answers the march and no"       \
+      " region names them - so those words re-march in full, exactly as before")                    \
+    X(GI_VIS_MEMO_REGION_HOLD_FRAMES, 24,                                                           \
+      "frames", "derived: how long a placement's RAW field bounds stay in the vis-memo's own"       \
+      " region list (surface_cache_system::pack_vis_memo_regions) after its last change. The"       \
+      " keep needs a change visible from its landing - at most GI_CLIPMAP_EDIT_THROTTLE_FRAMES"     \
+      " (8) plus the compose budget's deferral (3 levels) after the change - until every face"      \
+      " has relit and restamped, one rotation (4) later: 15, held at 24 for margin. Half the"       \
+      " temporal's GI_TEMPORAL_DIRTY_HOLD_FRAMES, so a mover's box spans half the path, and"        \
+      " never the emissive inflation: the field does not care what a placement emits")              \
+    X(GI_DENOISE_CONVERGED_NOISE, 0.05f,                                                          \
+      "fraction of the pixel's luminance", "derived: an 8x8 denoise tile is copied through"       \
+      " instead of filtered when every pixel sits at the temporal's slow cap, carries no"         \
+      " moving-hit share, and the standard error of its accumulated mean (sqrt(variance /"        \
+      " count) from the temporal's own moments) is under this fraction of its luminance - the"    \
+      " 5 percent step a viewer can just notice on a lit wall after the tonemap. Measured"        \
+      " 2026-09-09 (tasks/gi_perf_research_2026-09.md 4.5): copying the at-cap pixels through"    \
+      " changed the parked frame by less than the launch-to-launch capture noise; the saving"     \
+      " is the denoise's whole cost at rest and nothing in motion, where nothing is at the cap")  \
     X(GI_WORLD_PROBE_EMA_WINDOWS, 16,                                                              \
       "probe windows", "derived: the world-probe atlas is now a converging running mean over"     \
       " this many complete windows (256 frames) of directions JITTERED inside their texel, in"     \

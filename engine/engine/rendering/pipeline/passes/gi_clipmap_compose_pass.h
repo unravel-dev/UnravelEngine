@@ -257,7 +257,10 @@ private:
     void compose_level_voxels(const global_sdf_clipmap& clipmap,
                               const global_sdf_clipmap_gpu& clipmap_gpu,
                               surface_cache_system& surface_cache,
-                              uint32_t level);
+                              uint32_t level,
+                              gfx::render_pass& scroll_copy_pass,
+                              gfx::render_pass& scroll_place_pass,
+                              gfx::render_pass& compose_pass);
 
     /// Dispatches the compose kernel over one voxel box of @p level.
     void dispatch_compose_box(gfx::render_pass& pass,
@@ -270,8 +273,10 @@ private:
 
     /// The staging copy of one level slab for a scroll-only recompose (R8, resolution^3): a
     /// blit cannot move voxels within one texture, so the slab goes out and the overlap
-    /// comes back shifted. Recreated when the resolution changes.
-    gfx::texture::ptr scroll_scratch_;
+    /// comes back shifted. Recreated when the resolution changes. One per level, because
+    /// every dirty level's copy is issued in the same view before any placement (the stable
+    /// view layout in run()), so two scrolling levels must not share a scratch.
+    std::array<gfx::texture::ptr, global_sdf_clipmap::level_count> scroll_scratch_{};
 
     /// One-time diagnostics: captures flowing is the positive signal, helper shaders failing
     /// to compile is the silent-failure mode worth a loud line.

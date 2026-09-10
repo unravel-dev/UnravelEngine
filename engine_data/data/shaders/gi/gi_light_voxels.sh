@@ -68,14 +68,69 @@ uniform vec4 u_gi_light_voxel_params;
 #define u_light_voxel_frame      uint(u_gi_light_voxel_params.z)
 #define u_light_voxel_ready      (u_gi_light_voxel_params.w > 0.0)
 
+/// The quantities of the statistics slice (GiLightVoxelStatsTexel's y). The first two feed
+/// the quiescence gate every frame (cs_gi_quiescence_gate.sc drains them); the rest are the
+/// WASTE CENSUS - work done against work that changed the output - accumulated by the relight
+/// and the world-probe trace, zeroed by the gate on the frames it dispatches them, and read
+/// back only on demand (gi_quiescence_gate_pass::request_stats_snapshot), never per frame:
+/// a readback is a full CPU-GPU sync on every desktop backend.
+#define GI_STATS_RELIGHT_CHANGE        0
+#define GI_STATS_RELIGHT_FACES         1
+/// Relit faces whose relative change exceeded GI_QUIESCENCE_CONVERGED_MEAN (the gate's own
+/// floor) and GI_STATS_VISIBLE_CHANGE (a step a reader could notice).
+#define GI_STATS_RELIGHT_FACES_MOVED   2
+#define GI_STATS_RELIGHT_FACES_VISIBLE 3
+/// World probes by state this frame, and their traced texels by the same two thresholds on
+/// the stored (running-mean) value.
+#define GI_STATS_PROBES_ACTIVE         4
+#define GI_STATS_PROBES_ASLEEP         5
+#define GI_STATS_PROBES_BURIED         6
+#define GI_STATS_PROBE_TEXELS          7
+#define GI_STATS_PROBE_TEXELS_MOVED    8
+#define GI_STATS_PROBE_TEXELS_VISIBLE  9
+#define GI_STATS_QUANTITY_COUNT        10
+
 /// The relight convergence statistic's texel: one slice past the last face slab of the
 /// bounce vis-memo texture (allocated one slice deeper than the light volume for it); x =
-/// level, y = quantity (0 = summed relative change x GI_QUIESCENCE_STATS_SCALE, 1 = relit
-/// face count). Written by the group reduction in gi_light_voxels_kernel.sh, copied out
-/// and zeroed by cs_gi_light_voxel_stats.sc.
+/// level, y = quantity (GI_STATS_*: 0 = summed relative change x GI_QUIESCENCE_STATS_SCALE,
+/// 1 = relit face count, then the census). Written by the group reduction in
+/// gi_light_voxels_kernel.sh, copied out (and, on the readback path, zeroed) by
+/// cs_gi_light_voxel_stats.sc.
 ivec3 GiLightVoxelStatsTexel(int level, int quantity)
 {
 	return ivec3(level, quantity, u_light_voxel_resolution * SDF_CLIPMAP_LEVEL_COUNT * 6);
+}
+
+#ifndef GI_IMAGE_ATOMIC_ADD_3D_DEFINED
+#define GI_IMAGE_ATOMIC_ADD_3D_DEFINED
+#if !BGFX_SHADER_LANGUAGE_GLSL
+/// Scalar 3D image atomic add with GLSL's native signature (imageAtomicAdd(uimage3D,
+/// ivec3, uint)) for the HLSL-syntax family - D3D, and SPIR-V / Metal, which bgfx
+/// compiles through the HLSL front-end too (the compute header splits on the same
+/// test). bgfx_compute.sh covers only the 2D form; without this the SPIR-V build silently
+/// matched the 2D template and emitted a mistyped OpStore. Lives here, in the header the
+/// statistics-slice writers share (the relight kernel and the world-probe trace), because
+/// bgfx_compute.sh is overwritten from deps on every build.
+void imageAtomicAdd(RWTexture3D<uint> _image, ivec3 _uvw, uint _value)
+{
+	InterlockedAdd(_image[_uvw], _value);
+}
+#endif // !BGFX_SHADER_LANGUAGE_GLSL
+#endif // GI_IMAGE_ATOMIC_ADD_3D_DEFINED
+
+/// Rec. 709 luminance, the convergence statistic's measure of a face (and of a probe texel).
+float GiStatsLuminance(vec3 radiance)
+{
+	return dot(radiance, vec3(0.2126, 0.7152, 0.0722));
+}
+
+/// The relative luminance change between two stored values, on the scale the quiescence
+/// statistic uses (GI_QUIESCENCE_LUMINANCE_FLOOR keeps a dark face from reading as an
+/// infinite change).
+float GiStatsRelativeChange(float lum_new, float lum_old)
+{
+	float lum_scale = max(max(lum_new, lum_old), GI_QUIESCENCE_LUMINANCE_FLOOR);
+	return abs(lum_new - lum_old) / lum_scale;
 }
 
 /// TOROIDAL world anchoring: a voxel's storage SLOT is its absolute world cell

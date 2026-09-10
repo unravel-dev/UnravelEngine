@@ -280,7 +280,8 @@ vec3 GiWorldProbeBiasedQuery(vec3 position, vec3 normal, vec3 view_direction, fl
  * what lets the masked read apply the verdicts to every probe (a strictly wider leak margin
  * than gated marching). CPU transcription in gi_tests.cpp (cage_mask): keep in step by hand.
  */
-uint GiWorldProbeCageMask(vec3 position, vec3 normal, vec3 view_direction, int level)
+uint GiWorldProbeCageMask(vec3 position, vec3 normal, vec3 view_direction, int level,
+                          uint keep_mask, uint stored_mask)
 {
 	float spacing = GiWorldProbeSpacing(level);
 	vec3 biased = GiWorldProbeBiasedQuery(position, normal, view_direction, spacing);
@@ -288,11 +289,24 @@ uint GiWorldProbeCageMask(vec3 position, vec3 normal, vec3 view_direction, int l
 	uint mask = 0u;
 	LOOP for(int corner = 0; corner < 8; ++corner)
 	{
-		ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
-		vec3 probe_position = GiWorldProbeCellPosition(base_cell + offset, level);
-		if(GiWorldProbeCageVisibility(biased, probe_position, spacing) > 0.0)
+		uint bit = 1u << uint(corner);
+		// SEGMENT-LOCAL KEEP (gi_light_voxels_kernel.sh, GiSegmentTouchesBox): a corner the
+		// caller has proven untouched by every changed region since it was stamped keeps its
+		// stored verdict - the field along its segment is byte-identical, so the march would
+		// return the same bit. keep_mask 0 is the plain full march.
+		BRANCH
+		if((keep_mask & bit) != 0u)
 		{
-			mask |= 1u << uint(corner);
+			mask |= stored_mask & bit;
+		}
+		else
+		{
+			ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
+			vec3 probe_position = GiWorldProbeCellPosition(base_cell + offset, level);
+			if(GiWorldProbeCageVisibility(biased, probe_position, spacing) > 0.0)
+			{
+				mask |= bit;
+			}
 		}
 	}
 	return mask;

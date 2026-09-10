@@ -167,6 +167,20 @@ public:
      */
     auto pack_dirty_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t;
 
+    /**
+     * @brief The bounce vis-memo's own change list (gi_light_voxels_kernel.sh, the segment-local
+     *        keep): the same placements' RAW field bounds over GI_VIS_MEMO_REGION_HOLD_FRAMES,
+     *        packed like @ref pack_dirty_regions. The temporal's list is inflated to an
+     *        emitter's light reach, which is the light a mover left, not the field it changed.
+     */
+    auto pack_vis_memo_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t;
+
+    /// As @ref get_dirty_region_total, for the vis-memo's list.
+    auto get_vis_memo_region_total() const -> size_t
+    {
+        return vis_memo_region_total_;
+    }
+
     auto get_atlas() -> sdf_atlas&
     {
         return atlas_;
@@ -455,7 +469,10 @@ private:
         struct history_entry
         {
             uint64_t frame = 0;
+            /// The region bounds (emissive-inflated) the temporal flushes.
             math::bbox bounds{};
+            /// The raw world bounds - the field the placement changed (the vis-memo's list).
+            math::bbox field_bounds{};
         };
         std::vector<history_entry> history;
         /// Index of the first entry still inside the hold window. Entries are appended in frame
@@ -626,6 +643,9 @@ private:
     /// reads. @ref dirty_region_total_ is how many there were before the cut.
     std::vector<dirty_region> dirty_regions_;
     size_t dirty_region_total_ = 0;
+    /// The vis-memo's list (pack_vis_memo_regions), built beside @ref dirty_regions_.
+    std::vector<dirty_region> vis_memo_regions_;
+    size_t vis_memo_region_total_ = 0;
     /// rebuild_dirty_regions scratch: (latest change frame, placement) per live history.
     std::vector<std::pair<uint64_t, tracked_placement*>> dirty_candidates_;
     /// Per-frame memo behind summarize_material, keyed by material pointer; cleared each walk.

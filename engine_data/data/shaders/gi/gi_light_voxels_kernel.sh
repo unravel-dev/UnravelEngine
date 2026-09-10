@@ -73,27 +73,16 @@ IMAGE3D_RW(s_light_voxels_out, rgba16f, 7);
 /// GiBounceProbeIrradiance. Stage 6 is an IMAGE on purpose: OpenGL guarantees only eight
 /// image units (bindings 0-7), which is why the surface list vacated it.
 UIMAGE3D_RW(s_gi_vis_memo, r32ui, 6);
-#if !BGFX_SHADER_LANGUAGE_GLSL
-/// Scalar 3D image atomic add with GLSL's native signature (imageAtomicAdd(uimage3D,
-/// ivec3, uint)) for the HLSL-syntax family - D3D, and SPIR-V / Metal, which bgfx
-/// compiles through the HLSL front-end too (the compute header splits on the same
-/// test). It covers only the 2D form; without this the SPIR-V build silently matched
-/// the 2D template and emitted a mistyped OpStore.
-void imageAtomicAdd(RWTexture3D<uint> _image, ivec3 _uvw, uint _value)
-{
-	InterlockedAdd(_image[_uvw], _value);
-}
-#endif // !BGFX_SHADER_LANGUAGE_GLSL
+// imageAtomicAdd for 3D uimages: GiImageAtomicAdd3D in gi_light_voxels.sh (shared with the
+// world-probe trace's census).
 
 /// Group scratch for the relight convergence statistic (see main).
 SHARED float s_stats_change[64];
 SHARED float s_stats_faces[64];
-
-/// Rec. 709 luminance, the convergence statistic's measure of a face.
-float GiStatsLuminance(vec3 radiance)
-{
-	return dot(radiance, vec3(0.2126, 0.7152, 0.0722));
-}
+/// The census half (GI_STATS_RELIGHT_FACES_MOVED / _VISIBLE): faces whose relight changed
+/// the stored value past each threshold.
+SHARED float s_stats_moved[64];
+SHARED float s_stats_visible[64];
 
 /// Defined locally rather than taken from lighting.sh, which this shader does not include. The
 /// D3D backend happens to supply one anyway, so relying on it compiles there and fails on GLSL.
@@ -111,8 +100,19 @@ uniform vec4 u_gi_light_voxel_camera;
 /// writes), so real changes land in one relight and only the dither/limit-cycle noise is
 /// integrated (GI_LIGHT_VOXEL_EMA_BLEND).
 uniform vec4 u_gi_vis_memo_params;
+/// The vis-memo's changed regions (surface_cache_system::pack_vis_memo_regions): the RAW
+/// field bounds of the placements that moved, appeared or vanished within
+/// GI_VIS_MEMO_REGION_HOLD_FRAMES, as (min, max) pairs, newest first. Not the temporal's
+/// list: that one is inflated to an emitter's light reach (16 m for a room's emissive
+/// sphere), which is the light a mover left, not the field it changed.
+uniform vec4 u_gi_vis_memo_bounds[GI_TEMPORAL_DIRTY_MAX_BOUNDS * 2];
 #define u_vis_memo_generation uint(u_gi_vis_memo_params.x)
 #define u_light_voxel_ema_blend u_gi_vis_memo_params.y
+/// The segment-local keep's inputs (see GiSegmentTouchesBox): how many generations old a
+/// stale word may be for its untouched corners to be kept, and how many region pairs are
+/// live (negative: the list overflowed its budget and every stale word marches in full).
+#define u_vis_memo_keep_age uint(u_gi_vis_memo_params.z)
+#define u_vis_memo_region_count int(u_gi_vis_memo_params.w)
 /// COMPILE-TIME variant switch, deliberately NOT a uniform. The debug write spent two hunts
 /// dead behind runtime flags that provably left the CPU (two independent lanes, current
 /// binaries, one camera, per-submit capture semantics) yet never steered the kernel - never
@@ -348,6 +348,9 @@ bool GiBounceBlockerRadiance(vec3 position, vec3 direction, float attr_voxel, in
  *    amortised), and restamp the texel with the level that actually ANSWERED, so an all-dead
  *    finest cage never pins the tag to a level that returns nothing (its cage costs no
  *    marches anyway: dead probes exit before the field verdict).
+ *  - Memo MISS on a STALE generation of a word stamped at this level: the segment-local
+ *    keep (GiSegmentTouchesBox below) re-marches only the corners a changed region can
+ *    have touched and keeps the rest of the stored verdicts.
  *  - Generation 0: the memo was never seeded (its clear shader missing) - run exactly the
  *    gated read every other consumer runs. Safe-slow, never a leak.
  *
@@ -375,6 +378,149 @@ bool GiBounceBlockerRadiance(vec3 position, vec3 direction, float attr_voxel, in
 #define GI_VIS_MEMO_STATE_NONE     3
 #define GI_VIS_MEMO_STATE_HIT_FAR  4
 #define GI_VIS_MEMO_STATE_MISS_FAR 5
+
+/*
+ * SEGMENT-LOCAL INVALIDATION of the bounce vis-memo.
+ *
+ * The memo's generation bumps on every composed content landing and every probe-window
+ * cell crossing, and a bump used to mean "every face re-marches its whole cage once" -
+ * with movers a level lands every few frames, so every face paid the 8-corner march on
+ * every rotation: measured 2026-09-09 as 1.4 ms of the 2.25 ms world block with five movers
+ * (a variant that treated a stale generation as a hit dropped the relight from 1.9 to
+ * 0.49 ms), against 0.25 ms for the masked read the memo exists to feed.
+ *
+ * A corner's verdict is a pure function of the field along ONE segment, from the biased
+ * query to that probe. The field changed only within the composed reach of a placement
+ * that moved, appeared or vanished, whose RAW field bounds the surface cache lists for the
+ * memo (u_gi_vis_memo_bounds). So on a generation mismatch a face re-marches only the
+ * corners whose segment passes within reach of a live region and keeps the others' bits; a
+ * face whose corners are all untouched keeps its whole word and restamps it. What makes
+ * this exact:
+ *  - every face is relit within one rotation (GI_LIGHT_VOXEL_UPDATE_DENOM frames) of any
+ *    bump and restamped, and a region outlives its change by GI_VIS_MEMO_REGION_HOLD_FRAMES
+ *    against a landing lag of at most the edit throttle plus the compose budget's deferral
+ *    - so every change since a word's stamp is a live region when the word is tested;
+ *  - the reach is the encode range plus one voxel (the march's acceptance and crossing
+ *    band, and the trilinear footprint) of the coarsest level that can answer a sample on
+ *    the segment (GiVisMemoChangeReach);
+ *  - a level scroll changes which level answers the samples near its edge and no region
+ *    names its slabs, so the CPU's keep age (u_gi_vis_memo_params.z) is 0 on a generation
+ *    that landed after any composed origin moved: older words march in full, as before;
+ *  - an overflowed region list (u_gi_vis_memo_params.w < 0) and a slot claimed since the
+ *    face was last relit (its faces read alpha 0: the attribute pass zeroes them on a claim)
+ *    march everything, exactly as before.
+ * The 2026-09-04 region-local build inflated each box by the whole cage diagonal - 3.5 m at
+ * level 0, 28 m at level 3 - and the first segment build read the temporal's regions, which
+ * an emissive placement inflates to its light's reach (16 m): both touched nearly every
+ * face and measured neutral. CPU transcriptions in gi_oracle.cpp (segment_touches_box,
+ * cage_corners_untouched): keep in step by hand.
+ */
+bool GiSegmentTouchesBox(vec3 a, vec3 b, vec3 box_min, vec3 box_max)
+{
+	// Slab test of the closed segment a -> b against the box; a degenerate axis is handled
+	// by the bounds test on that axis alone.
+	vec3 d = b - a;
+	float t_min = 0.0;
+	float t_max = 1.0;
+	for(int axis = 0; axis < 3; ++axis)
+	{
+		float dir = d[axis];
+		float lo = box_min[axis] - a[axis];
+		float hi = box_max[axis] - a[axis];
+		if(abs(dir) < 1e-6)
+		{
+			if(lo > 0.0 || hi < 0.0)
+			{
+				return false;
+			}
+		}
+		else
+		{
+			float inv = 1.0 / dir;
+			float t0 = lo * inv;
+			float t1 = hi * inv;
+			t_min = max(t_min, min(t0, t1));
+			t_max = min(t_max, max(t0, t1));
+		}
+	}
+	return t_min <= t_max;
+}
+
+/// How far a changed placement's composed field reaches from its bounds along the segment
+/// a -> b: the encode range plus one voxel of the coarsest level that can answer a sample
+/// on it. A segment inside `level`'s addressable box and clear of its blend band is
+/// answered by that level or a finer one (a shorter reach); one that leaves the box is
+/// answered by level + 1, whose voxel is twice the size.
+float GiVisMemoChangeReach(int level, vec3 a, vec3 b)
+{
+	vec4 level_box = u_sdf_clipmap_levels[level];
+	float voxel = max(level_box.w, 1e-6);
+	float inset = 0.5 + u_sdf_clipmap_blend_voxels + 1.0;
+	vec3 lo = level_box.xyz + vec3_splat(inset * voxel);
+	vec3 hi = level_box.xyz + vec3_splat((u_sdf_clipmap_resolution - inset) * voxel);
+	bool inside = all(greaterThanEqual(a, lo)) && all(lessThanEqual(a, hi)) &&
+	              all(greaterThanEqual(b, lo)) && all(lessThanEqual(b, hi));
+	float coarsest = inside ? voxel : 2.0 * voxel;
+	return (SDF_ENCODE_RANGE + 1.0) * coarsest;
+}
+
+/// Whether any live changed region, inflated by `reach`, touches the segment a -> b. An
+/// overflowed region list is "everything changed": the temporal falls back the same way.
+bool GiSegmentTouchesChange(vec3 a, vec3 b, float reach)
+{
+	int region_count = u_vis_memo_region_count;
+	if(region_count < 0)
+	{
+		return true;
+	}
+	LOOP
+	for(int i = 0; i < GI_TEMPORAL_DIRTY_MAX_BOUNDS; ++i)
+	{
+		if(i >= region_count)
+		{
+			break;
+		}
+		vec3 region_min = u_gi_vis_memo_bounds[i * 2].xyz - vec3_splat(reach);
+		vec3 region_max = u_gi_vis_memo_bounds[i * 2 + 1].xyz + vec3_splat(reach);
+		if(GiSegmentTouchesBox(a, b, region_min, region_max))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+/// Whether a stale word is young enough for the segment keep: the CPU's keep age counts
+/// the generations since one landed after a level scroll, and the comparison runs modulo
+/// the tag's wrap (GI_VIS_MEMO_GENERATION_WRAP; a word a whole wrap old aliases young for
+/// one rotation - the bounded collision the tag's hit test already accepts).
+bool GiVisMemoWordKeepable(uint memo_word)
+{
+	uint wrap = uint(GI_VIS_MEMO_GENERATION_WRAP);
+	uint age = (u_vis_memo_generation + wrap - GiWorldProbeVisMemoGeneration(memo_word)) % wrap;
+	return age <= u_vis_memo_keep_age;
+}
+
+/// The corners of the cage at `level` around the biased query whose segment no changed
+/// region touches - the bits a stale memo word may keep.
+uint GiCageCornersUntouched(vec3 position, vec3 normal, vec3 view_direction, int level)
+{
+	float spacing = GiWorldProbeSpacing(level);
+	vec3 biased = GiWorldProbeBiasedQuery(position, normal, view_direction, spacing);
+	ivec3 base_cell = ivec3(floor(biased / spacing));
+	uint keep = 0u;
+	LOOP for(int corner = 0; corner < 8; ++corner)
+	{
+		ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
+		vec3 probe_position = GiWorldProbeCellPosition(base_cell + offset, level);
+		float reach = GiVisMemoChangeReach(level, biased, probe_position);
+		if(!GiSegmentTouchesChange(biased, probe_position, reach))
+		{
+			keep |= 1u << uint(corner);
+		}
+	}
+	return keep;
+}
 bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texel,
                              uint memo_word, uint face_half,
                              out vec3 out_irradiance, out float out_sky_fraction,
@@ -405,6 +551,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 		float near_visible = 0.0;
 		bool answered;
 		bool restamp = false;
+		bool far_kept = false;
 		uint mask = 0u;
 		if(!memo_live)
 		{
@@ -413,8 +560,26 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 		}
 		else
 		{
-			bool hit = generation_ok && GiWorldProbeVisMemoProbeValid(memo_word) &&
-			           GiWorldProbeVisMemoLevel(memo_word) == level;
+			bool stamped = GiWorldProbeVisMemoProbeValid(memo_word) &&
+			               GiWorldProbeVisMemoLevel(memo_word) == level;
+			bool hit = generation_ok && stamped;
+			// SEGMENT-LOCAL KEEP (see the note at GiSegmentTouchesBox): a stale word whose
+			// cell was not re-claimed keeps every corner no changed region can have touched.
+			uint keep = 0u;
+			if(!hit && stamped && GiVisMemoWordKeepable(memo_word))
+			{
+				// The fresh-claim test on the stale path only: the attribute pass clears a
+				// claimed slot's faces to alpha 0 and seeds a LISTED claim at
+				// GI_LIGHT_VOXEL_SEED_ALPHA; every relight path stores another alpha, so either
+				// value means the memo word belongs to the departed cell.
+				float previous_alpha = imageLoad(s_light_voxels_out, memo_texel).w;
+				bool fresh_face = previous_alpha <= 0.0 ||
+				                  abs(previous_alpha - GI_LIGHT_VOXEL_SEED_ALPHA) < 1e-3;
+				if(!fresh_face)
+				{
+					keep = GiCageCornersUntouched(position, face_direction, face_direction, level);
+				}
+			}
 			// A real BRANCH, never a ternary: HLSL's ?: is a SELECT that may evaluate BOTH
 			// operands, and with the 8-corner march on the miss side the fill executed on
 			// every face and was discarded on hits - the memo classified perfectly (view 28
@@ -426,9 +591,16 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 			}
 			else
 			{
-				mask = GiWorldProbeCageMask(position, face_direction, face_direction, level);
+				mask = GiWorldProbeCageMask(position, face_direction, face_direction, level, keep,
+				                            GiWorldProbeVisMemoMask(memo_word));
 			}
 			restamp = !hit;
+			// Every corner kept: the far half survives too when its own segments are
+			// untouched, so a hit-equivalent restamp costs no march at either level.
+			if(restamp && keep == 0xFFu && wants_far && GiWorldProbeVisMemoFarFilled(memo_word))
+			{
+				far_kept = GiCageCornersUntouched(position, face_direction, face_direction, level + 1) == 0xFFu;
+			}
 			answered = GiWorldProbeIrradianceMasked(position, face_direction, face_direction,
 			                                        level, mask, near_irradiance, near_sky, near_visible);
 		}
@@ -453,7 +625,8 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 			// frames, where every rotation is a miss and this store is per-face per-frame.
 			imageStore(s_gi_vis_memo, memo_texel,
 			           uvec4(GiWorldProbeVisMemoPackProbe(mask, u_vis_memo_generation, level,
-			                                              0u, false) |
+			                                              far_kept ? GiWorldProbeVisMemoFarMask(memo_word) : 0u,
+			                                              far_kept) |
 			                     face_half,
 			                 0u, 0u, 0u));
 		}
@@ -465,7 +638,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 			float far_sky;
 			float far_visible = 0.0;
 			bool far_answered;
-			BRANCH if(!memo_live || restamp)
+			BRANCH if(!memo_live || (restamp && !far_kept))
 			{
 				// Memo off, or a miss rotation: the plain gated read - exactly the pre-memo
 				// cost, so churning generations (window re-snaps under camera motion) never
@@ -476,7 +649,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 			else
 			{
 				uint far_mask;
-				BRANCH if(GiWorldProbeVisMemoFarFilled(memo_word))
+				BRANCH if(GiWorldProbeVisMemoFarFilled(memo_word) && (!restamp || far_kept))
 				{
 					far_mask = GiWorldProbeVisMemoFarMask(memo_word);
 				}
@@ -486,7 +659,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 					// so it is stable enough to amortise - march the far cage once and seal
 					// it into the word (near mask, level and face half preserved).
 					far_mask = GiWorldProbeCageMask(position, face_direction, face_direction,
-					                                level + 1);
+					                                level + 1, 0u, 0u);
 					imageStore(s_gi_vis_memo, memo_texel,
 					           uvec4(GiWorldProbeVisMemoPackProbe(mask, u_vis_memo_generation,
 					                                              level, far_mask, true) |
@@ -600,7 +773,8 @@ vec4 GiDebugSunTierColor(vec3 world_position, vec3 world_normal, float voxel_siz
  * lane's early return is illegal, and re-indenting this body under a flag would have
  * touched the whole file.
  */
-void GiRelightEntry(uint level, uint entry, inout float stats_change, inout float stats_faces)
+void GiRelightEntry(uint level, uint entry, inout float stats_change, inout float stats_faces,
+                    inout float stats_moved, inout float stats_visible)
 {
 	if(entry >= b_surface_list[level])
 	{
@@ -1039,9 +1213,12 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// changed - the first relight of a scrolled-in slab is a change by definition.
 		float lum_new = GiStatsLuminance(radiance);
 		float lum_old = previous_measured ? GiStatsLuminance(previous.xyz) : 0.0;
-		float lum_scale = max(max(lum_new, lum_old), GI_QUIESCENCE_LUMINANCE_FLOOR);
-		stats_change += abs(lum_new - lum_old) / lum_scale;
+		float relative_change = GiStatsRelativeChange(lum_new, lum_old);
+		stats_change += relative_change;
 		stats_faces += 1.0;
+		// The census: did this relight change anything a reader could tell apart?
+		stats_moved += relative_change > GI_QUIESCENCE_CONVERGED_MEAN ? 1.0 : 0.0;
+		stats_visible += relative_change > GI_STATS_VISIBLE_CHANGE ? 1.0 : 0.0;
 		imageStore(s_light_voxels_out, texel,
 		           vec4(radiance, source_dominated ? GI_LIGHT_VOXEL_SOURCE_ALPHA : 1.0));
 	}
@@ -1066,6 +1243,8 @@ void main()
 	uint level = gl_WorkGroupID.y;
 	float stats_change = 0.0;
 	float stats_faces = 0.0;
+	float stats_moved = 0.0;
+	float stats_visible = 0.0;
 	// Wave-uniform (the level rides the group id), so the barrier below never diverges.
 	if(level < uint(SDF_CLIPMAP_LEVEL_COUNT))
 	{
@@ -1073,7 +1252,7 @@ void main()
 		uint denom = uint(GI_LIGHT_VOXEL_UPDATE_DENOM);
 		uint phase = (denom - (u_light_voxel_frame % denom)) % denom;
 		uint entry = (gl_WorkGroupID.x * 64u + gl_LocalInvocationID.x) * denom + phase;
-		GiRelightEntry(level, entry, stats_change, stats_faces);
+		GiRelightEntry(level, entry, stats_change, stats_faces, stats_moved, stats_visible);
 	}
 	// CONVERGENCE STATISTIC (GI_QUIESCENCE_STATS_SCALE): the group's relative change and
 	// relit face count, reduced through shared memory and added to the memo texture's
@@ -1084,22 +1263,35 @@ void main()
 	// of frames that a decaying closed-room tail can outlast.
 	s_stats_change[gl_LocalInvocationID.x] = stats_change;
 	s_stats_faces[gl_LocalInvocationID.x] = stats_faces;
+	s_stats_moved[gl_LocalInvocationID.x] = stats_moved;
+	s_stats_visible[gl_LocalInvocationID.x] = stats_visible;
 	barrier();
 	if(gl_LocalInvocationID.x == 0u && level < uint(SDF_CLIPMAP_LEVEL_COUNT))
 	{
 		float change = 0.0;
 		float faces = 0.0;
+		float moved = 0.0;
+		float visible = 0.0;
 		LOOP
 		for(uint lane = 0u; lane < 64u; ++lane)
 		{
 			change += s_stats_change[lane];
 			faces += s_stats_faces[lane];
+			moved += s_stats_moved[lane];
+			visible += s_stats_visible[lane];
 		}
 		if(faces > 0.0)
 		{
-			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), 0),
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_CHANGE),
 			               uint(change * GI_QUIESCENCE_STATS_SCALE + 0.5));
-			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), 1), uint(faces + 0.5));
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_FACES),
+			               uint(faces + 0.5));
+			// The census rows are cheap here (two more atomics per group) and would cost a
+			// readback to observe any other way.
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_FACES_MOVED),
+			               uint(moved + 0.5));
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_FACES_VISIBLE),
+			               uint(visible + 0.5));
 		}
 	}
 }

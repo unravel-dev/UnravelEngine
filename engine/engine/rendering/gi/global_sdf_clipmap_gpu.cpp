@@ -1,4 +1,5 @@
 #include "global_sdf_clipmap_gpu.h"
+#include "gi_constants.h"
 
 #include <engine/profiler/profiler.h>
 
@@ -400,7 +401,7 @@ auto global_sdf_clipmap_gpu::refresh_bounce_vis_generation(uint64_t content_epoc
         // generations wrap 1..63. A 63-bump-old texel could collide with the wrapped tag and
         // serve one stale verdict set for one rotation - bounded, and it self-heals on the
         // next bump.
-        bounce_vis_generation_ = bounce_vis_generation_ % 63u + 1u;
+        bounce_vis_generation_ = bounce_vis_generation_ % uint32_t(gi::GI_VIS_MEMO_GENERATION_WRAP) + 1u;
     }
     return bounce_vis_generation_;
 }

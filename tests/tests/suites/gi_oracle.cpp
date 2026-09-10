@@ -2273,6 +2273,157 @@ void test_world_probe_vis_memo_mask_matches_fresh_march()
 
 } // namespace
 
+
+/// Transcriptions of the segment-local vis-memo invalidation (GiSegmentTouchesBox,
+/// GiSegmentTouchesChange, GiCageCornersUntouched in gi_light_voxels_kernel.sh); keep in
+/// step by hand.
+auto segment_touches_box(const math::vec3& a, const math::vec3& b, const math::vec3& box_min, const math::vec3& box_max)
+    -> bool
+{
+    const math::vec3 d = b - a;
+    float t_min = 0.0f;
+    float t_max = 1.0f;
+    for(int axis = 0; axis < 3; ++axis)
+    {
+        const float dir = d[axis];
+        const float lo = box_min[axis] - a[axis];
+        const float hi = box_max[axis] - a[axis];
+        if(std::abs(dir) < 1e-6f)
+        {
+            if(lo > 0.0f || hi < 0.0f)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            const float inv = 1.0f / dir;
+            const float t0 = lo * inv;
+            const float t1 = hi * inv;
+            t_min = std::max(t_min, std::min(t0, t1));
+            t_max = std::min(t_max, std::max(t0, t1));
+        }
+    }
+    return t_min <= t_max;
+}
+
+auto segment_touches_change(const math::vec3& a,
+                            const math::vec3& b,
+                            const std::vector<math::bbox>& regions,
+                            float reach) -> bool
+{
+    for(const auto& region : regions)
+    {
+        if(segment_touches_box(a, b, region.min - math::vec3(reach), region.max + math::vec3(reach)))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+auto cage_corners_untouched(const math::vec3& position,
+                            const math::vec3& normal,
+                            const math::vec3& view_direction,
+                            float spacing,
+                            const std::vector<math::bbox>& regions) -> uint32_t
+{
+    const float field_voxel = spacing / float(gi::GI_WORLD_PROBE_DIVISOR);
+    // GiVisMemoChangeReach's inside-the-box arm: the fixture's queries and cages sit deep
+    // inside level 0, so the coarser-level arm (twice this, for a segment that leaves the
+    // level's addressable box) is never taken here.
+    const float reach = (float(mesh_sdf::encode_range) + 1.0f) * field_voxel;
+    const math::vec3 biased = world_probe_biased_query(position, normal, view_direction, spacing);
+    const math::ivec3 base_cell(int(std::floor(biased.x / spacing)),
+                                int(std::floor(biased.y / spacing)),
+                                int(std::floor(biased.z / spacing)));
+    uint32_t keep = 0u;
+    for(int corner = 0; corner < 8; ++corner)
+    {
+        const math::ivec3 offset(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
+        const math::vec3 probe = math::vec3(base_cell + offset) * spacing;
+        if(!segment_touches_change(biased, probe, regions, reach))
+        {
+            keep |= 1u << uint32_t(corner);
+        }
+    }
+    return keep;
+}
+
+/// The segment-local vis-memo keep (2026-09-09): on a generation bump a face keeps the cage
+/// corners whose query -> probe segment no changed region can have touched. This pins the
+/// keep's CONSERVATIVENESS on the CPU transcription: a box moves 2 m across a floor, every
+/// corner verdict of a lattice of faces is re-marched against both composed fields, and no
+/// corner whose verdict changed may be one the keep test kept. It also pins that the keep is
+/// not vacuous - faces away from the box keep most of their corners - which is the whole
+/// saving (1.4 ms of a 2.25 ms world block with five movers, measured before the build).
+void test_world_probe_vis_memo_segment_keep_is_conservative()
+{
+    std::printf("test_world_probe_vis_memo_segment_keep_is_conservative\n");
+    mesh_sdf floor_sdf;
+    mesh_sdf box_sdf;
+    check(bake_slab({6.0f, 0.2f, 6.0f}, floor_sdf) && bake_slab({0.75f, 0.75f, 0.75f}, box_sdf),
+          "segment keep fixture bakes");
+    const math::vec3 albedo(0.7f);
+    const math::vec3 emissive(0.0f);
+    const math::vec3 box_before(-1.0f, 0.95f, 0.5f);
+    const math::vec3 box_after(1.0f, 0.95f, 0.5f);
+    global_sdf_clipmap::settings settings;
+    settings.resolution = 128;
+    settings.base_extent = 16.0f;
+    settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    auto compose = [&](const math::vec3& box_position, global_sdf_clipmap& clipmap) -> global_sdf_instance
+    {
+        std::vector<global_sdf_instance> instances;
+        instances.push_back(make_clipmap_instance(floor_sdf, {0.0f, 0.0f, 0.0f}, albedo, emissive));
+        instances.push_back(make_clipmap_instance(box_sdf, box_position, albedo, emissive));
+        clipmap.init(settings);
+        clipmap.update(instances, math::vec3(0.0f));
+        return instances.back();
+    };
+    global_sdf_clipmap before;
+    global_sdf_clipmap after;
+    const global_sdf_instance box_instance_before = compose(box_before, before);
+    const global_sdf_instance box_instance_after = compose(box_after, after);
+    // The dirty regions a moved placement leaves: the bounds it vacated and the ones it took.
+    const std::vector<math::bbox> regions = {box_instance_before.world_bounds, box_instance_after.world_bounds};
+    const float spacing = before.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
+    const float floor_top = 0.2f;
+    const math::vec3 up(0.0f, 1.0f, 0.0f);
+    int corners = 0;
+    int changed = 0;
+    int kept = 0;
+    int kept_but_changed = 0;
+    for(int qx = -5; qx <= 5; ++qx)
+    {
+        for(int qz = -5; qz <= 5; ++qz)
+        {
+            const math::vec3 query(float(qx) * 0.9f, floor_top + 0.125f, float(qz) * 0.9f);
+            const uint32_t mask_before = cage_mask(before, query, up, up, spacing);
+            const uint32_t mask_after = cage_mask(after, query, up, up, spacing);
+            const uint32_t keep = cage_corners_untouched(query, up, up, spacing, regions);
+            for(int corner = 0; corner < 8; ++corner)
+            {
+                const uint32_t bit = 1u << uint32_t(corner);
+                ++corners;
+                const bool corner_changed = (mask_before & bit) != (mask_after & bit);
+                const bool corner_kept = (keep & bit) != 0u;
+                changed += corner_changed ? 1 : 0;
+                kept += corner_kept ? 1 : 0;
+                kept_but_changed += (corner_changed && corner_kept) ? 1 : 0;
+            }
+        }
+    }
+    std::printf("  %d corners, %d verdicts changed by the move, %d kept, %d kept-but-changed\n",
+                corners,
+                changed,
+                kept,
+                kept_but_changed);
+    check(changed > 0, "the move changes some cage verdicts (the test has teeth)");
+    check(kept_but_changed == 0, "no corner whose verdict changed was kept");
+    check(kept * 2 > corners, "faces away from the box keep most of their corners");
+}
+
 auto run_gi_oracle_suite(rtti::context& /*ctx*/) -> int
 {
     test_shader_constants_match_cpp();
@@ -2291,6 +2442,7 @@ auto run_gi_oracle_suite(rtti::context& /*ctx*/) -> int
     test_world_probe_cage_visibility_seals_box();
     test_world_probe_cage_visibility_seals_thin_wall();
     test_world_probe_vis_memo_mask_matches_fresh_march();
+    test_world_probe_vis_memo_segment_keep_is_conservative();
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

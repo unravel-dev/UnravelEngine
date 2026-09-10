@@ -40,6 +40,10 @@ SAMPLER2D(s_gi_env_sh, 14);
 /// The PARENT cascade's convolved irradiance, for scroll-in seeding. Read-only and a
 /// DIFFERENT texture from the radiance atlas being written, so sampling it here is legal.
 SAMPLER2D(s_world_probe_irradiance_seed, 11);
+/// The bounce vis-memo, bound for its statistics slice alone: the world-probe census
+/// (GI_STATS_PROBES_*, GI_STATS_PROBE_TEXELS_*) the waste ledger reads back on demand.
+/// Stage 8 is one of this kernel's three free stages (8, 9, 15).
+UIMAGE3D_RW(s_gi_vis_memo, r32ui, 8);
 /// xy = 1 / irradiance-depth atlas size (the seeding read shares the irradiance tile layout).
 /// z = strata per frame (the fast-refresh window). Carried HERE, in a trace-only uniform,
 /// rather than in u_gi_world_probe_params.w: that lane is the cage-visibility variance gate
@@ -56,6 +60,14 @@ uniform vec4 u_gi_world_probe_window[SDF_CLIPMAP_LEVEL_COUNT];
 /// its own leader lane and claim logic; the group barrier stays uniform. Mirror of
 /// gi_world_probe_pass.cpp's dispatch (ceil(probe count / this)).
 #define PROBE_TRACE_SLOTS 4
+/// Per-slot census accumulators and the lane-completion counter that elects the lane
+/// flushing them: a barrier cannot follow the partial-group early return below, so the
+/// last of a slot's lanes to finish its texels does the image atomics (four per slot,
+/// against tens of thousands per frame if every lane flushed its own).
+SHARED uint s_census_texels[PROBE_TRACE_SLOTS];
+SHARED uint s_census_moved[PROBE_TRACE_SLOTS];
+SHARED uint s_census_visible[PROBE_TRACE_SLOTS];
+SHARED uint s_census_done[PROBE_TRACE_SLOTS];
 
 // = GI_WORLD_PROBE_RAYS_PER_FRAME x PROBE_TRACE_SLOTS: a literal, as the OpenGL backend
 // rejects expressions in local_size.
@@ -112,6 +124,36 @@ void main()
 	// zero radiance with ZERO-DISTANCE hits collapses its convolved depth, and the visibility
 	// test itself then kills it at every read. Cost: one field sample per probe slice.
 	bool buried = SdfSampleClipmap(origin) < 0.0;
+	// OCCUPANCY CLASSIFICATION (RTXGI's probe classification, answered by the field like the gate
+	// above): a level-0 probe with no geometry within GI_WORLD_PROBE_SLEEP_SPACINGS of it cannot
+	// be a cage corner for any ON-SURFACE query. It is COUNTED, not slept: it goes to the census
+	// (GI_STATS_PROBES_ASLEEP) and the Probe Lattice view, and keeps tracing. Putting such probes
+	// to sleep - zero radiance and depth, like a buried probe - was measured 2026-09-09 (same
+	// session, interleaved launches, tasks/gi_perf_research_2026-09.md section 3): 39% of level
+	// 0 asleep, 42% fewer level-0 texels traced, World Probe Trace 0.068 -> 0.064 ms median on
+	// open-gate frames, i.e. nothing outside noise, because 729 four-probe groups are
+	// latency-bound whatever their lanes do. What sleeping changes in principle is the
+	// completion read of screen-probe rays, which queries the lattice in the AIR (origin +
+	// direction x short range), where such a probe IS a legitimate cage corner. No saving to
+	// pay for a behaviour change: the mechanism went, the measurement stayed.
+	//
+	// Sampled from the COARSEST level, not the one covering the probe. The cascade is a narrow
+	// band saturating at mesh_sdf::encode_range (4) VOXELS, so level 0's own field certifies only
+	// half a metre of clearance while the coarsest level's 1 m voxel certifies four - which is
+	// what the 3.5 m threshold needs. That is also why only LEVEL 0 is classified: every coarser
+	// level's threshold is beyond what any level can certify.
+	bool asleep = false;
+	if(level == 0)
+	{
+		float clearance = SdfSampleClipmapLevel(SDF_CLIPMAP_LEVEL_COUNT - 1, origin);
+		// A level that did not answer (outside its window, or no cascade at all) reports the
+		// give-up value and proves nothing; stay awake on it.
+		asleep = clearance < SDF_CLIPMAP_OUTSIDE &&
+		         clearance >= GI_WORLD_PROBE_SLEEP_SPACINGS * GiWorldProbeSpacing(0);
+	}
+	// One word for "this probe writes nothing this frame". Only buried probes are inactive;
+	// the occupancy classification above is a count, never a skip (see it).
+	bool inactive = buried;
 	bool fresh = b_world_probe_cells[slot_index] != packed_cell;
 	// CONVERGING MEAN (GI_WORLD_PROBE_EMA_WINDOWS). The atlas used to be a windowed mean over
 	// FIXED texel-centre directions: zero variance, but BIASED per probe - a small emitter is
@@ -130,10 +172,25 @@ void main()
 		windows_seen = 0u;
 	}
 	float mean_blend = 1.0 / float(min(windows_seen + 1u, uint(GI_WORLD_PROBE_EMA_WINDOWS)));
+	if(thread == 0)
+	{
+		s_census_texels[slot_in_group] = 0u;
+		s_census_moved[slot_in_group] = 0u;
+		s_census_visible[slot_in_group] = 0u;
+		s_census_done[slot_in_group] = 0u;
+	}
 	barrier();
 	if(!probe_active)
 	{
 		return;
+	}
+	if(thread == 0)
+	{
+		// The probe's state this frame, one atomic per probe. Inactive probes never reach
+		// the texel flush below, so their state is the whole of their census.
+		int state_quantity = asleep ? GI_STATS_PROBES_ASLEEP
+		                            : (buried ? GI_STATS_PROBES_BURIED : GI_STATS_PROBES_ACTIVE);
+		imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(level, state_quantity), 1u);
 	}
 	if(thread == 0)
 	{
@@ -158,7 +215,7 @@ void main()
 		// energy-consistent, refined stratum by stratum over the window. Without it every
 		// window edge dragged a dark frontier that took a full window (a quarter second) to
 		// converge. The outermost level has no parent and keeps the dark clear (energy loss,
-		// never invention); buried probes stay dead.
+		// never invention); buried and sleeping probes stay dead.
 		//
 		// The seed is RADIANCE ONLY. hitT is left at 0 - the "never measured" value the atlas
 		// clear writes - never at the -1 sky marker this claim used to stamp. That marker was
@@ -179,7 +236,7 @@ void main()
 		int parent_level = level + 1;
 		bool parent_valid = false;
 		ivec2 parent_tile = ivec2(0, 0);
-		if(!buried && parent_level < SDF_CLIPMAP_LEVEL_COUNT)
+		if(!inactive && parent_level < SDF_CLIPMAP_LEVEL_COUNT)
 		{
 			float parent_spacing = GiWorldProbeSpacing(parent_level);
 			ivec3 parent_cell = ivec3(floor(origin / parent_spacing + vec3_splat(0.5)));
@@ -218,12 +275,15 @@ void main()
 		}
 	}
 	float t_max = u_gi_world_probe_window[level].w;
+	uint census_texels = 0u;
+	uint census_moved = 0u;
+	uint census_visible = 0u;
 	for(int si = 0; si < stratum_count; ++si)
 	{
 		int texel_index = thread * GI_WORLD_PROBE_WINDOW + int(stratum_base) + si;
 		ivec2 texel = tile + ivec2(texel_index % GI_WORLD_PROBE_OCT_RADIANCE,
 		                           texel_index / GI_WORLD_PROBE_OCT_RADIANCE);
-		if(buried)
+		if(inactive)
 		{
 			imageStore(s_world_probe_radiance_out, texel, vec4_splat(0.0));
 			continue;
@@ -264,7 +324,8 @@ void main()
 		// the same sky share), always positive, so it can ride the running mean like the
 		// radiance - under the direction jitter a "latest sample" depth made the Chebyshev
 		// moments flicker per window and tripped the cage-visibility marches (measured: Light
-		// Voxels 2x). Zero stays the never-measured mark (fresh clear, buried probes).
+		// Voxels 2x). Zero stays the never-measured mark (fresh clear, buried or sleeping
+		// probes).
 		float depth_clamp = GI_WORLD_PROBE_DEPTH_CLAMP * GiWorldProbeSpacing(level);
 		if(!hit.hit)
 		{
@@ -296,6 +357,9 @@ void main()
 		// the mean for a whole window - the probe-side shimmer near emissives.
 		vec3 stored = GiClampRayRadiance(radiance, GI_MAX_RAY_RADIANCE);
 		float stored_t = hit_t;
+		// The texel's previous value: the running mean's base below, and the census's
+		// "did this ray change anything" reference either way.
+		vec4 previous = imageLoad(s_world_probe_radiance_out, texel);
 		BRANCH
 		if(mean_blend < 1.0)
 		{
@@ -303,7 +367,6 @@ void main()
 			// this thread's slot one window ago (the seed or the clear on a fresh claim -
 			// both replaced at write-through while the count is zero). A never-measured depth
 			// (0) is not averaged into.
-			vec4 previous = imageLoad(s_world_probe_radiance_out, texel);
 			stored = mix(GiFiniteOrZero(previous.xyz), stored, mean_blend);
 			if(previous.w > 0.0)
 			{
@@ -311,5 +374,34 @@ void main()
 			}
 		}
 		imageStore(s_world_probe_radiance_out, texel, vec4(stored, stored_t));
+		float relative_change = GiStatsRelativeChange(GiStatsLuminance(stored),
+		                                              GiStatsLuminance(GiFiniteOrZero(previous.xyz)));
+		census_texels += 1u;
+		census_moved += relative_change > GI_QUIESCENCE_CONVERGED_MEAN ? 1u : 0u;
+		census_visible += relative_change > GI_STATS_VISIBLE_CHANGE ? 1u : 0u;
+	}
+	// CENSUS FLUSH. Shared atomics from every lane, then the last lane of the slot to arrive
+	// (the completion counter) publishes the slot's sums. Reads go through atomics too, so
+	// they queue behind the other lanes' adds in the shared-memory pipeline without a group
+	// barrier - which the early return above forbids.
+	if(census_texels > 0u)
+	{
+		atomicAdd(s_census_texels[slot_in_group], census_texels);
+		atomicAdd(s_census_moved[slot_in_group], census_moved);
+		atomicAdd(s_census_visible[slot_in_group], census_visible);
+		uint arrived = 0u;
+		atomicFetchAndAdd(s_census_done[slot_in_group], 1u, arrived);
+		if(arrived == uint(GI_WORLD_PROBE_RAYS_PER_FRAME - 1))
+		{
+			uint texels = 0u;
+			uint moved = 0u;
+			uint visible = 0u;
+			atomicFetchAndAdd(s_census_texels[slot_in_group], 0u, texels);
+			atomicFetchAndAdd(s_census_moved[slot_in_group], 0u, moved);
+			atomicFetchAndAdd(s_census_visible[slot_in_group], 0u, visible);
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(level, GI_STATS_PROBE_TEXELS), texels);
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(level, GI_STATS_PROBE_TEXELS_MOVED), moved);
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(level, GI_STATS_PROBE_TEXELS_VISIBLE), visible);
+		}
 	}
 }

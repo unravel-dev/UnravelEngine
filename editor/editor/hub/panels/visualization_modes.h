@@ -61,6 +61,7 @@ enum class visualization_mode : int
     gi_probe_lattice = 35,
     gi_screen_probes = 36,
     gi_temporal = 37,
+    gi_probe_tiers = 38,
 };
 
 /// Menu grouping. Ordering here is the order the groups appear in the viewport menu.

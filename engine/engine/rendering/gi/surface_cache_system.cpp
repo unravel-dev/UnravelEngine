@@ -578,14 +578,14 @@ void surface_cache_system::record_placement(tracked_placement& tracked,
     {
         // A placement appearing (or re-appearing after a sweep) lights and occludes where
         // nothing did: its bounds are stale from the first frame.
-        tracked.history.push_back({world_frame_, region_bounds});
+        tracked.history.push_back({world_frame_, region_bounds, bounds});
     }
     else if(tracked.placement_hash != hash)
     {
         // Both the vacated spot and the new one: the light the placement bounced where it WAS
         // is exactly the trail the flush exists for.
-        tracked.history.push_back({world_frame_, tracked.bounds});
-        tracked.history.push_back({world_frame_, region_bounds});
+        tracked.history.push_back({world_frame_, tracked.bounds, tracked.field_bounds});
+        tracked.history.push_back({world_frame_, region_bounds, bounds});
     }
     tracked.placement_hash = hash;
     tracked.bounds = region_bounds;
@@ -594,10 +594,14 @@ void surface_cache_system::record_placement(tracked_placement& tracked,
     tracked.swept = false;
 }
 
-auto surface_cache_system::pack_dirty_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t
+namespace
+{
+auto pack_region_list(const std::vector<surface_cache_system::dirty_region>& regions,
+                      float* out_bounds,
+                      uint32_t max_regions) -> uint32_t
 {
     uint32_t count = 0;
-    for(const auto& region : dirty_regions_)
+    for(const auto& region : regions)
     {
         if(count >= max_regions)
         {
@@ -616,6 +620,17 @@ auto surface_cache_system::pack_dirty_regions(float* out_bounds, uint32_t max_re
     }
     return count;
 }
+} // namespace
+
+auto surface_cache_system::pack_dirty_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t
+{
+    return pack_region_list(dirty_regions_, out_bounds, max_regions);
+}
+
+auto surface_cache_system::pack_vis_memo_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t
+{
+    return pack_region_list(vis_memo_regions_, out_bounds, max_regions);
+}
 
 void surface_cache_system::rebuild_dirty_regions()
 {
@@ -630,7 +645,7 @@ void surface_cache_system::rebuild_dirty_regions()
         {
             // Vanished this frame: the spot it left is stale like a move's vacated spot.
             // Recorded once; the entry is erased below once the history ages out.
-            tracked.history.push_back({world_frame_, tracked.bounds});
+            tracked.history.push_back({world_frame_, tracked.bounds, tracked.field_bounds});
             tracked.swept = true;
         }
         // Age out the history beyond the hold window. Entries are appended in frame order, so
@@ -672,6 +687,19 @@ void surface_cache_system::rebuild_dirty_regions()
     // regions to hand over sixteen is a partial one. At or under the budget the output is
     // exactly what it was.
     constexpr size_t budget = size_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS);
+    // The vis-memo's list (pack_vis_memo_regions) is the same placements over its shorter
+    // hold, so its total is counted before the cut: the cut keeps the newest, which is every
+    // placement inside that hold whenever the total fits the budget.
+    const uint64_t memo_hold = uint64_t(gi::GI_VIS_MEMO_REGION_HOLD_FRAMES);
+    vis_memo_regions_.clear();
+    size_t memo_total = 0;
+    for(const auto& candidate : dirty_candidates_)
+    {
+        if(world_frame_ - candidate.first <= memo_hold)
+        {
+            ++memo_total;
+        }
+    }
     const auto newer_first = [](const std::pair<uint64_t, tracked_placement*>& a,
                                 const std::pair<uint64_t, tracked_placement*>& b)
     {
@@ -712,10 +740,32 @@ void surface_cache_system::rebuild_dirty_regions()
         {
             dirty_regions_.push_back(region);
         }
+        if(world_frame_ - latest_frame > memo_hold)
+        {
+            continue;
+        }
+        dirty_region memo_region;
+        memo_region.bounds.reset();
+        for(size_t i = tracked->history_begin; i < history.size(); ++i)
+        {
+            const auto& entry = history[i];
+            if(world_frame_ - entry.frame > memo_hold || entry.field_bounds.min.x > entry.field_bounds.max.x)
+            {
+                continue;
+            }
+            memo_region.bounds.add_point(entry.field_bounds.min);
+            memo_region.bounds.add_point(entry.field_bounds.max);
+            memo_region.last_change_frame = std::max(memo_region.last_change_frame, entry.frame);
+        }
+        if(!(memo_region.bounds.min.x > memo_region.bounds.max.x))
+        {
+            vis_memo_regions_.push_back(memo_region);
+        }
     }
     // Over budget the total is the candidate count (the cut discarded the rest); under it every
     // candidate with a populated box is in the list, so the list is the exact count.
     dirty_region_total_ = candidate_total > budget ? candidate_total : dirty_regions_.size();
+    vis_memo_region_total_ = memo_total > budget ? memo_total : vis_memo_regions_.size();
 }
 
 void surface_cache_system::add_instance(uint64_t identity,

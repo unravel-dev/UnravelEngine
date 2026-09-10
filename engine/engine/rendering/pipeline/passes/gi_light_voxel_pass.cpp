@@ -267,6 +267,52 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                 view_clipmap.get_composed_content_epoch(), params.camera_position, base_spacing);
         gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
     }
+    // SEGMENT-LOCAL KEEP AGE (u_gi_vis_memo_params.z; the kernel's GiSegmentTouchesBox note).
+    // A stale word keeps the corners no changed region touched only while every field
+    // change since its stamp is one the memo's regions describe. A placement change is; a
+    // level scroll is not - the entering and leaving slabs change which level answers the
+    // march's samples and no region names them - so a generation that lands after any
+    // level's composed origin moved admits no keep, and the age a word may be counts up
+    // from there. The origins are compared every frame because a scroll whose fingerprint
+    // held still lands WITHOUT a bump; it is charged to the next one. A probe-window cell
+    // crossing counts as a scroll as well: the crossing bumps the generation on the frame
+    // the camera moved, while the composed origin follows one frame later, and on that one
+    // frame every stale word would otherwise keep its verdicts against probe slots the
+    // window has just re-assigned (measured 2026-09-10: 24k corners and 17k face verdicts
+    // kept on the jump frame, a different one-rotation transient than stock's march, and
+    // the quiescence gate froze its residual in the emissive cell).
+    for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
+    {
+        const math::vec3& origin = view_clipmap.get_level(level).origin;
+        if(origin != vis_memo_keep_origins_[level])
+        {
+            vis_memo_keep_origins_[level] = origin;
+            vis_memo_scroll_pending_ = true;
+        }
+        const float spacing = base_spacing * float(1u << level);
+        const std::array<int32_t, 3> cell = {int32_t(std::floor(params.camera_position.x / spacing)),
+                                             int32_t(std::floor(params.camera_position.y / spacing)),
+                                             int32_t(std::floor(params.camera_position.z / spacing))};
+        if(cell != vis_memo_keep_cells_[level])
+        {
+            vis_memo_keep_cells_[level] = cell;
+            vis_memo_scroll_pending_ = true;
+        }
+    }
+    if(vis_memo_generation != vis_memo_keep_generation_)
+    {
+        vis_memo_keep_age_ = vis_memo_scroll_pending_
+                                 ? 0u
+                                 : std::min(vis_memo_keep_age_ + 1u, uint32_t(gi::GI_VIS_MEMO_KEEP_MAX_AGE));
+        vis_memo_scroll_pending_ = false;
+        vis_memo_keep_generation_ = vis_memo_generation;
+    }
+    // The memo's region count rides lane w; past the uniform budget the kernel cannot see
+    // every change, so the lane goes negative and no stale word keeps anything this frame.
+    const size_t memo_region_total = surface_cache.get_vis_memo_region_total();
+    const float memo_region_lane = memo_region_total > size_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS)
+                                       ? -1.0f
+                                       : float(memo_region_total);
     // Every change is logged: bumps are legitimate on edits and window scrolls, but a stream
     // of these with a parked camera in a static scene means an invalidation tracker churns
     // and the memo can never hit - the CPU-side discriminator for a miss-shaped cost.
@@ -317,7 +363,10 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     {
         ema_blend = float(gi::GI_LIGHT_VOXEL_EMA_BLEND);
     }
-    const float vis_memo_params[4] = {float(vis_memo_generation), ema_blend, 0.0f, 0.0f};
+    const float vis_memo_params[4] = {float(vis_memo_generation),
+                                      ema_blend,
+                                      float(vis_memo_keep_age_),
+                                      memo_region_lane};
     gfx::set_uniform(program_.u_gi_vis_memo_params, vis_memo_params);
     // DIRTY REGIONS (gi_dirty_regions.sh): inside one the radiance store writes through
     // instead of folding into the EMA - the bounce it integrates there is the light a moved
@@ -332,6 +381,11 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         const float dirty_params[4] = {float(dirty_count), math::max(dirty_margin, 1e-3f), 0.0f, 0.0f};
         gfx::set_uniform(program_.u_gi_temporal_dirty, dirty_params);
         gfx::set_uniform(program_.u_gi_temporal_bounds, dirty_bounds, uint16_t(2u * max_regions));
+        // The vis-memo's own list (the raw field bounds over its shorter hold): the segment
+        // keep in the kernel reads these, count in u_gi_vis_memo_params.w.
+        float memo_bounds[max_regions * 2u * 4u] = {};
+        surface_cache.pack_vis_memo_regions(memo_bounds, max_regions);
+        gfx::set_uniform(program_.u_gi_vis_memo_bounds, memo_bounds, uint16_t(2u * max_regions));
     }
     if(probes_ready)
     {
@@ -377,7 +431,7 @@ void gi_light_voxel_pass::collect_relight_stats(const gfx::texture::ptr& vis_mem
         return;
     }
     const auto width = static_cast<uint16_t>(global_sdf_clipmap::level_count);
-    const uint16_t height = 2;
+    const auto height = static_cast<uint16_t>(gi_quiescence_gate_pass::stats_snapshot::quantity_count);
     if(!stats_texture_ || !stats_texture_->is_valid())
     {
         stats_texture_ = std::make_shared<gfx::texture>(width,
@@ -434,7 +488,8 @@ void gi_light_voxel_pass::collect_relight_stats(const gfx::texture::ptr& vis_mem
     stats_program_->begin();
     gfx::set_image_3d(0, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
     gfx::set_image(1, stats_texture_->native_handle(), 0, gfx::access::Write, gfx::texture_format::R32U);
-    const float voxel_params[4] = {float(attr_resolution), 0.0f, 0.0f, 0.0f};
+    // y = 1: on this path the copy is the drain (no GPU gate zeroes the slice).
+    const float voxel_params[4] = {float(attr_resolution), 1.0f, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_gi_light_voxel_params, voxel_params);
     gfx::dispatch(copy_pass.id, stats_program_->native_handle(), 1, 1, 1);
     stats_program_->end();

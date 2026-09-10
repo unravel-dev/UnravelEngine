@@ -239,6 +239,18 @@ public:
 
     virtual void set_debug_pass(int pass) = 0;
 
+    /// The GI waste census (gi_quiescence_gate_pass::stats_snapshot): a tool asks, the next
+    /// frame copies the statistics slice out, and the readback lands a few frames later.
+    /// Never call per frame - the readback is a CPU-GPU sync.
+    void request_gi_stats_snapshot()
+    {
+        gi_quiescence_gate_pass_.request_stats_snapshot();
+    }
+    auto get_gi_stats_snapshot() const -> const gi_quiescence_gate_pass::stats_snapshot&
+    {
+        return gi_quiescence_gate_pass_.get_stats_snapshot();
+    }
+
     virtual void run_ui_pass(scene& scn,
                          const camera& camera,
                          gfx::render_view& rview,

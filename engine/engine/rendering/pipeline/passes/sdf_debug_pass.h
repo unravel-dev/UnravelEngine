@@ -71,6 +71,9 @@ public:
         ///< GI v2: the temporal accumulator's health per pixel - how many frames each pixel
         ///< has actually integrated, and where the change detector reset it.
         temporal_health = 18,
+        ///< GI v2: which tier answered each traced screen probe's rays (record [11]) - the
+        ///< ray-budget instrument: the screen-tier share is the idle-lane fraction.
+        probe_tiers = 19,
     };
 
     struct settings

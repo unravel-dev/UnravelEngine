@@ -106,9 +106,12 @@ public:
         float reprojection_tolerance = gi::GI_TEMPORAL_DEPTH_TOLERANCE;
         /// A-trous spatial denoise over the accumulated result.
         bool enable_spatial_denoise = true;
-        /// Converged early-out: a pixel at the full accumulation count whose variance has
-        /// collapsed skips the 24-tap kernel - the edge stops make the filter an identity
-        /// there. The A/B switch for verifying no residual chroma structure is lost.
+        /// Converged-tile skip: an 8x8 tile whose every pixel sits at the slow cap with no
+        /// moving-hit share and an accumulated-mean noise under GI_DENOISE_CONVERGED_NOISE is
+        /// copied through the a-trous passes instead of filtered (cs_gi_denoise.sc). The old
+        /// per-pixel criterion compared the edge-stop width to a noise floor and never fired;
+        /// the tile form is what actually saves the pass at rest (measured 2026-09-09). The
+        /// A/B switch for verifying no residual chroma structure is lost.
         bool denoise_converged_early_out = true;
         int denoise_passes = 3;
         float denoise_normal_power = 32.0f;

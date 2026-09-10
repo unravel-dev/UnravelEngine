@@ -801,6 +801,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     fused_temporal_ran = true;
                     fused_out = history.write_tex;
                     fused_moments = history.write_moments;
+                    // The temporal debug view reads the moments under this stable name; the
+                    // split path publishes it in run_temporal, and the fused path (the
+                    // shipping one) has to publish it too or the view draws nothing.
+                    rview.tex_get_or_emplace("GI_MOMENTS") = history.write_moments;
                 }
             }
             gfx::discard();

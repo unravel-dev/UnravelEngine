@@ -11,9 +11,16 @@
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/ecs.h>
 #include <engine/ecs/components/transform_component.h>
+#include <engine/profiler/profiler.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/rendering/gi/gi_constants.h>
+#include <engine/rendering/pipeline/passes/gi_quiescence_gate_pass.h>
+#include <engine/rendering/pipeline/pipeline.h>
 #include <seq/seq.h>
 
+#include <chrono>
+#include <map>
+#include <thread>
 #include <vector>
 
 namespace unravel::mcp
@@ -598,6 +605,225 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      .is_error = false};
          },
          .mutates_scene = false});
+
+    registry.add(
+        {.name = "gi_get_stats",
+         .description =
+             "The GI waste census for the Scene panel camera: one on-demand readback of the "
+             "relight / world-probe statistics slice (never per frame - it is a GPU sync). Per "
+             "cascade level: relit faces and how many changed past the quiescence floor "
+             "(GI_QUIESCENCE_CONVERGED_MEAN) and past GI_STATS_VISIBLE_CHANGE, world probes by "
+             "state (active / asleep / buried) and their traced texels by the same thresholds. "
+             "Rows 0-1 describe the frame before the snapshot; the census rows hold the last "
+             "frame the gated passes actually ran. camera = \"scene\" (default, the Scene "
+             "panel's editing camera) or \"game\" (the scene's rendering camera - the only one "
+             "that renders while the Game panel is focused, e.g. in play mode).",
+         .input_schema_json = R"({"type":"object","properties":{"timeout_ms":{"type":"integer","minimum":100,"maximum":10000},"camera":{"type":"string","enum":["scene","game"]}}})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             int64_t timeout_ms = 3000;
+             if(args["timeout_ms"].get(timeout_ms))
+             {
+                 timeout_ms = 3000;
+             }
+             std::string camera_arg = "scene";
+             read_string(args, "camera", camera_arg);
+             const bool game_camera = camera_arg == "game";
+             auto resolve_pipeline = [&ctx, game_camera]() -> rendering::pipeline*
+             {
+                 if(game_camera)
+                 {
+                     auto& em = ctx.get_cached<editing_manager>();
+                     auto* scn = em.get_active_scene(ctx);
+                     if(scn == nullptr)
+                     {
+                         return nullptr;
+                     }
+                     rendering::pipeline* found = nullptr;
+                     scn->registry->view<camera_component, active_component>().each(
+                         [&](auto, auto& cc, auto&)
+                         {
+                             if(found == nullptr && cc.get_pipeline_data().get_pipeline())
+                             {
+                                 found = cc.get_pipeline_data().get_pipeline().get();
+                             }
+                         });
+                     return found;
+                 }
+                 auto camera_ent = resolve_scene_panel(ctx).get_camera();
+                 if(!camera_ent || !camera_ent.all_of<camera_component>())
+                 {
+                     return nullptr;
+                 }
+                 return camera_ent.get<camera_component>().get_pipeline_data().get_pipeline().get();
+             };
+             auto requested = mcp.invoke_on_main(
+                 [&]() -> uint32_t
+                 {
+                     auto* pipeline = resolve_pipeline();
+                     if(pipeline == nullptr)
+                     {
+                         return uint32_t(-1);
+                     }
+                     pipeline->request_gi_stats_snapshot();
+                     return gfx::get_render_frame();
+                 });
+             if(!requested || *requested == uint32_t(-1))
+             {
+                 return {.text = "Scene panel camera has no pipeline", .is_error = true};
+             }
+             const uint32_t request_frame = *requested;
+             const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+             while(std::chrono::steady_clock::now() < deadline)
+             {
+                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
+                 auto fetched = mcp.invoke_on_main(
+                     [&]() -> std::string
+                     {
+                         auto* pipeline = resolve_pipeline();
+                         if(pipeline == nullptr)
+                         {
+                             return {};
+                         }
+                         const auto& snap = pipeline->get_gi_stats_snapshot();
+                         if(!snap.valid || snap.frame < request_frame)
+                         {
+                             return {};
+                         }
+                         using snapshot = gi_quiescence_gate_pass::stats_snapshot;
+                         static constexpr const char* names[snapshot::quantity_count] = {
+                             "relight_change_sum", "relight_faces", "relight_faces_moved", "relight_faces_visible",
+                             "probes_active", "probes_asleep", "probes_buried", "probe_texels", "probe_texels_moved",
+                             "probe_texels_visible"};
+                         std::string json = fmt::format(R"({{"frame":{},"levels":[)", snap.frame);
+                         for(uint32_t level = 0; level < snapshot::level_count; ++level)
+                         {
+                             json += level == 0 ? "{" : ",{";
+                             for(uint32_t q = 0; q < snapshot::quantity_count; ++q)
+                             {
+                                 const uint32_t raw = snap.at(q, level);
+                                 if(q == 0)
+                                 {
+                                     json += fmt::format(R"("{}":{:.4f})",
+                                                         names[q],
+                                                         double(raw) / double(gi::GI_QUIESCENCE_STATS_SCALE));
+                                 }
+                                 else
+                                 {
+                                     json += fmt::format(R"(,"{}":{})", names[q], raw);
+                                 }
+                             }
+                             json += "}";
+                         }
+                         json += fmt::format(R"(],"thresholds":{{"moved":{},"visible":{}}}}})",
+                                             double(gi::GI_QUIESCENCE_CONVERGED_MEAN),
+                                             double(gi::GI_STATS_VISIBLE_CHANGE));
+                         return json;
+                     });
+                 if(fetched && !fetched->empty())
+                 {
+                     return {.text = *fetched, .is_error = false};
+                 }
+             }
+             return {.text = "Timed out waiting for the GI stats readback (is the profiler / GI running?)",
+                     .is_error = true};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
+        {.name = "profiler_get_cpu_scopes",
+         .description =
+             "CPU profiler scopes (APP_SCOPE_PERF) of the newest captured frames, wall ms per "
+             "scope name, averaged over `frames` (default 1) newest frames. Optional prefix "
+             "filters names (e.g. \"GI/SurfaceCache\"). Starts the profiler recording if it is "
+             "off; the first call after that returns no frames, call again.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"prefix":{"type":"string"},"frames":{"type":"integer","minimum":1,"maximum":256}}})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::string prefix;
+             read_string(args, "prefix", prefix);
+             int64_t frames = 1;
+             if(args["frames"].get(frames))
+             {
+                 frames = 1;
+             }
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             auto result = mcp.invoke_on_main(
+                 [&]() -> std::string
+                 {
+                     auto* profiler = get_app_profiler();
+                     if(profiler == nullptr)
+                     {
+                         return R"({"error":"no profiler"})";
+                     }
+                     if(profiler->get_recording_state() != recording_state::recording)
+                     {
+                         profiler->set_recording_state(recording_state::recording);
+                     }
+                     const uint32_t available = profiler->get_frame_count();
+                     const uint32_t take = std::min<uint32_t>(available, uint32_t(frames));
+                     struct scope_stats
+                     {
+                         double sum_ms = 0.0;
+                         double max_ms = 0.0;
+                         uint32_t calls = 0;
+                         std::string thread;
+                     };
+                     std::map<std::string, scope_stats> scopes;
+                     for(uint32_t i = 0; i < take; ++i)
+                     {
+                         const auto* snap = profiler->get_frame_snapshot(available - 1 - i);
+                         if(snap == nullptr)
+                         {
+                             continue;
+                         }
+                         for(const auto& thread : snap->threads)
+                         {
+                             for(const auto& ev : thread.events)
+                             {
+                                 const std::string name(ev.name());
+                                 if(!prefix.empty() && name.rfind(prefix, 0) != 0)
+                                 {
+                                     continue;
+                                 }
+                                 const double ms = double(ev.end_ns - ev.start_ns) / 1'000'000.0;
+                                 auto& s = scopes[name];
+                                 s.sum_ms += ms;
+                                 s.max_ms = std::max(s.max_ms, ms);
+                                 ++s.calls;
+                                 s.thread = thread.name;
+                             }
+                         }
+                     }
+                     std::string json = fmt::format(R"({{"frames":{},"scopes":[)", take);
+                     bool first = true;
+                     for(const auto& [name, s] : scopes)
+                     {
+                         json += fmt::format(R"({}{{"name":{},"ms_per_frame":{:.4f},"max_ms":{:.4f},"calls_per_frame":{:.2f},"thread":{}}})",
+                                             first ? "" : ",",
+                                             make_json_string(name),
+                                             take > 0 ? s.sum_ms / double(take) : 0.0,
+                                             s.max_ms,
+                                             take > 0 ? double(s.calls) / double(take) : 0.0,
+                                             make_json_string(s.thread));
+                         first = false;
+                     }
+                     json += "]}";
+                     return json;
+                 });
+             if(!result)
+             {
+                 return {.text = "profiler query failed on the main thread", .is_error = true};
+             }
+             return {.text = *result, .is_error = false};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
 
     registry.add(
         {.name = "viewport_list_debug_views",

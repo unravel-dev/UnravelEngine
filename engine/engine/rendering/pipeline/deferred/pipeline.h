@@ -179,6 +179,7 @@ public:
     /// answers them before the march.
     static constexpr int debug_pass_gi_screen_probes = 36;
     static constexpr int debug_pass_gi_temporal = 37;
+    static constexpr int debug_pass_gi_probe_tiers = 38;
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,
                             const run_params& rparams,

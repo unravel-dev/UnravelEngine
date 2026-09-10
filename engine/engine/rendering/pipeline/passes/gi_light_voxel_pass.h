@@ -147,11 +147,25 @@ private:
     uint64_t ema_light_hash_ = 0;
     uint32_t ema_generation_ = uint32_t(-1);
     uint32_t ema_snap_frames_ = 0;
+    /// Segment-local vis-memo keep (u_gi_vis_memo_params.zw; the kernel's GiSegmentTouchesBox
+    /// note): the composed origin each level had when the memo's generation last changed,
+    /// whether one moved since, the generation the age was last advanced for, and how many
+    /// generations old a stale word may be for its untouched corners to be kept.
+    std::array<math::vec3, global_sdf_clipmap::level_count> vis_memo_keep_origins_{};
+    /// The probe-window cell the camera sat in per level (refresh_bounce_vis_generation's
+    /// cell): a crossing is charged like a scroll.
+    std::array<std::array<int32_t, 3>, global_sdf_clipmap::level_count> vis_memo_keep_cells_{};
+    bool vis_memo_scroll_pending_ = true;
+    uint32_t vis_memo_keep_generation_ = 0;
+    uint32_t vis_memo_keep_age_ = 0;
     /// Relight convergence statistic state (collect_relight_stats).
     struct stats_readback_slot
     {
         gfx::texture::ptr texture;
-        std::array<uint32_t, 2u * global_sdf_clipmap::level_count> data{};
+        /// Every row of the slice (the copy kernel writes them all); the gate reads rows 0-1.
+        std::array<uint32_t,
+                   gi_quiescence_gate_pass::stats_snapshot::quantity_count * global_sdf_clipmap::level_count>
+            data{};
         uint32_t ready_frame = 0;
         bool pending = false;
     };
@@ -189,6 +203,7 @@ private:
         gfx::program::uniform_ptr u_gi_world_probe_atlas;
         gfx::program::uniform_ptr u_gi_temporal_dirty;
         gfx::program::uniform_ptr u_gi_temporal_bounds;
+        gfx::program::uniform_ptr u_gi_vis_memo_bounds;
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_attr_albedo;
@@ -225,6 +240,11 @@ private:
             cache_uniform(program.get(),
                           u_gi_temporal_bounds,
                           "u_gi_temporal_bounds",
+                          gfx::uniform_type::Vec4,
+                          2u * uint16_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS));
+            cache_uniform(program.get(),
+                          u_gi_vis_memo_bounds,
+                          "u_gi_vis_memo_bounds",
                           gfx::uniform_type::Vec4,
                           2u * uint16_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS));
             cache_uniform(program.get(),

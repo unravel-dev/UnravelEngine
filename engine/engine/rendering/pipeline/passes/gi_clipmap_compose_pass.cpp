@@ -248,6 +248,18 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             }
         }
     }
+    // STABLE VIEW LAYOUT. These four views exist every frame, in this order, empty when the
+    // frame has nothing to compose. bgfx reports a view's GPU time from an OLDER frame's
+    // timestamp query for the same VIEW ID under the current frame's name (renderer.h
+    // viewStats), so a layout that only gains these views on dirty frames shifted every
+    // later GI row's timing by two to four rows for a frame or two after each change - the
+    // relight's time was read under "Clipmap Attributes" and "World Probe Convolve" in every
+    // profile taken under motion. Four touched-but-empty views cost nothing measurable and
+    // make the per-pass rows trustworthy exactly where they matter, on the moving frames.
+    gfx::render_pass scroll_copy_pass("GI/Clipmap Scroll Copy");
+    gfx::render_pass scroll_place_pass("GI/Clipmap Scroll Place");
+    gfx::render_pass compose_pass("GI/Clipmap Compose");
+    gfx::render_pass attributes_pass("GI/Clipmap Attributes");
     const uint32_t dirty = clipmap.get_dirty_levels();
     if(dirty == 0)
     {
@@ -272,7 +284,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         {
             continue;
         }
-        compose_level_voxels(clipmap, clipmap_gpu, surface_cache, level);
+        compose_level_voxels(clipmap, clipmap_gpu, surface_cache, level, scroll_copy_pass, scroll_place_pass, compose_pass);
         ++composed;
     }
     // Attributes compose AFTER every distance level is written: the attribute shader samples the
@@ -293,7 +305,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             {
                 continue;
             }
-            gfx::render_pass pass("GI/Clipmap Attributes");
+            gfx::render_pass& pass = attributes_pass;
             // The level's append cursor was reset by the compose dispatch above; the sampled
             // read of the freshly composed distance volume below is the resource transition
             // that orders that reset ahead of the appends on every backend.
@@ -379,8 +391,12 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
 void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& clipmap,
                                                    const global_sdf_clipmap_gpu& clipmap_gpu,
                                                    surface_cache_system& surface_cache,
-                                                   uint32_t level)
+                                                   uint32_t level,
+                                                   gfx::render_pass& scroll_copy_pass,
+                                                   gfx::render_pass& scroll_place_pass,
+                                                   gfx::render_pass& compose_pass)
 {
+    auto& scroll_scratch = scroll_scratch_[level];
     const auto& lvl = clipmap.get_level(level);
     const uint32_t resolution = clipmap.get_settings().resolution;
     global_sdf_clipmap::voxel_box overlap;
@@ -399,19 +415,19 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
     }
     if(exposed_count > 0)
     {
-        const bool scratch_stale = !scroll_scratch_ || !scroll_scratch_->is_valid() ||
-                                   scroll_scratch_->info.width != resolution ||
-                                   scroll_scratch_->info.depth != resolution;
+        const bool scratch_stale = !scroll_scratch || !scroll_scratch->is_valid() ||
+                                   scroll_scratch->info.width != resolution ||
+                                   scroll_scratch->info.depth != resolution;
         if(scratch_stale)
         {
-            scroll_scratch_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(resolution),
+            scroll_scratch = std::make_shared<gfx::texture>(static_cast<uint16_t>(resolution),
                                                              static_cast<uint16_t>(resolution),
                                                              static_cast<uint16_t>(resolution),
                                                              false,
                                                              gfx::texture_format::R8,
                                                              BGFX_TEXTURE_BLIT_DST);
         }
-        if(!scroll_scratch_ || !scroll_scratch_->is_valid())
+        if(!scroll_scratch || !scroll_scratch->is_valid())
         {
             exposed_count = 0;
         }
@@ -423,9 +439,9 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
         {
             // Blits run at the start of their view, so the copy out and the placement back
             // each take a view of their own, ahead of the compose dispatches.
-            gfx::render_pass copy_pass("GI/Clipmap Scroll Copy");
+            gfx::render_pass& copy_pass = scroll_copy_pass;
             gfx::blit(copy_pass.id,
-                      scroll_scratch_->native_handle(),
+                      scroll_scratch->native_handle(),
                       0,
                       0,
                       0,
@@ -442,14 +458,14 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
         {
             // New-window voxel v came from old-window voxel v + shift.
             const math::ivec3 source = overlap.min + lvl.scroll_shift;
-            gfx::render_pass place_pass("GI/Clipmap Scroll Place");
+            gfx::render_pass& place_pass = scroll_place_pass;
             gfx::blit(place_pass.id,
                       clipmap_gpu.get_texture()->native_handle(),
                       0,
                       static_cast<uint16_t>(overlap.min.x),
                       static_cast<uint16_t>(overlap.min.y),
                       static_cast<uint16_t>(slab_z + overlap.min.z),
-                      scroll_scratch_->native_handle(),
+                      scroll_scratch->native_handle(),
                       0,
                       static_cast<uint16_t>(source.x),
                       static_cast<uint16_t>(source.y),
@@ -458,18 +474,16 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
                       static_cast<uint16_t>(overlap.size.y),
                       static_cast<uint16_t>(overlap.size.z));
         }
-        gfx::render_pass pass("GI/Clipmap Compose");
         for(uint32_t box = 0; box < exposed_count; ++box)
         {
-            dispatch_compose_box(pass, clipmap, clipmap_gpu, surface_cache, level, exposed[box], box == 0);
+            dispatch_compose_box(compose_pass, clipmap, clipmap_gpu, surface_cache, level, exposed[box], box == 0);
         }
         return;
     }
     global_sdf_clipmap::voxel_box whole;
     whole.min = math::ivec3(0);
     whole.size = math::ivec3(int(resolution));
-    gfx::render_pass pass("GI/Clipmap Compose");
-    dispatch_compose_box(pass, clipmap, clipmap_gpu, surface_cache, level, whole, true);
+    dispatch_compose_box(compose_pass, clipmap, clipmap_gpu, surface_cache, level, whole, true);
 }
 
 void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,

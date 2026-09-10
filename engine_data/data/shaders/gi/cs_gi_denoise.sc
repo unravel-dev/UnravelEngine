@@ -18,6 +18,7 @@
 #include "bgfx_compute.sh"
 #include "../common.sh"
 #include "../lighting.sh"
+#include "gi/gi_constants.sh"
 
 SAMPLER2D(s_gi_input, 0);
 SAMPLER2D(s_gi_depth, 1);
@@ -55,6 +56,30 @@ SHARED vec4 s_stage_color[DENOISE_MAX_STAGE_EDGE * DENOISE_MAX_STAGE_EDGE];
 /// xyz = normalized world normal, zero when the G-buffer's is degenerate; w = device depth,
 /// >= 1 for sky and for staged texels outside the image.
 SHARED vec4 s_stage_guide[DENOISE_MAX_STAGE_EDGE * DENOISE_MAX_STAGE_EDGE];
+/// The tile's "someone still needs the filter" flag (see the converged-tile skip in main).
+SHARED uint s_tile_unconverged;
+
+/// Whether this pixel's temporal accumulation has converged past what the filter can add:
+/// at the slow cap (the count the temporal reaches only with an unbroken, undisturbed history
+/// - a dirty region, a disocclusion or the change detector all reset it), no moving-hit share
+/// shortening its window, and the accumulated mean's own noise below GI_DENOISE_CONVERGED_NOISE
+/// of its luminance. Sky and unfiltered pixels count as converged: the kernel passes them
+/// through untouched anyway.
+bool GiDenoisePixelConverged(vec2 uv, float device_depth)
+{
+	if(device_depth >= 1.0)
+	{
+		return true;
+	}
+	vec4 moments = texture2DLod(s_gi_moments, uv, 0.0);
+	if(moments.z < u_gi_denoise_converged_cap || moments.w > 0.0)
+	{
+		return false;
+	}
+	float variance = max(moments.y - moments.x * moments.x, 0.0);
+	float noise = sqrt(variance / max(moments.z, 1.0));
+	return noise <= GI_DENOISE_CONVERGED_NOISE * max(moments.x, 1e-3);
+}
 
 NUM_THREADS(DENOISE_TILE, DENOISE_TILE, 1)
 void main()
@@ -65,6 +90,51 @@ void main()
 	ivec2 image_size = ivec2(u_gi_denoise_texel.zw);
 	ivec2 stage_base = ivec2(gl_WorkGroupID.xy) * DENOISE_TILE - ivec2(reach, reach);
 	int lane = int(gl_LocalInvocationID.y) * DENOISE_TILE + int(gl_LocalInvocationID.x);
+	// CONVERGED-TILE SKIP (u_gi_denoise_converged_cap > 0, the converged early-out setting).
+	// The old per-pixel early-out never fired (its sigma test compared an edge-stop width to
+	// a noise floor) and could not have saved much if it had: this kernel stages the whole
+	// 24x24 footprint before any pixel decides. A tile is skipped as a GROUP - every pixel
+	// at the temporal's slow cap with no moving-hit share and an accumulated-mean noise
+	// under GI_DENOISE_CONVERGED_NOISE (measured: at rest 99% of the non-sky frame sits at
+	// the cap, and copying those tiles through changed the image by less than the
+	// launch-to-launch noise floor) - and copies its input to its output instead, so the
+	// later passes and the neighbouring tiles' taps read exactly what a filtered pass would
+	// have written for a settled pixel. Group-uniform, so the staging barrier below never
+	// diverges; in motion nothing is at the cap and nothing changes.
+	ivec2 own_pixel = ivec2(gl_WorkGroupID.xy) * DENOISE_TILE + ivec2(gl_LocalInvocationID.xy);
+	if(lane == 0)
+	{
+		s_tile_unconverged = 0u;
+	}
+	barrier();
+	BRANCH
+	if(u_gi_denoise_converged_cap > 0.0)
+	{
+		bool own_inside = own_pixel.x < image_size.x && own_pixel.y < image_size.y;
+		vec2 own_uv = (vec2(own_pixel) + vec2_splat(0.5)) * u_gi_denoise_texel.xy;
+		float own_depth = own_inside ? texture2DLod(s_gi_depth, own_uv, 0.0).x : 1.0;
+		if(own_inside && !GiDenoisePixelConverged(own_uv, own_depth))
+		{
+			atomicOr(s_tile_unconverged, 1u);
+		}
+	}
+	else
+	{
+		if(lane == 0)
+		{
+			s_tile_unconverged = 1u;
+		}
+	}
+	barrier();
+	if(s_tile_unconverged == 0u)
+	{
+		if(own_pixel.x < image_size.x && own_pixel.y < image_size.y)
+		{
+			vec2 own_uv = (vec2(own_pixel) + vec2_splat(0.5)) * u_gi_denoise_texel.xy;
+			imageStore(s_gi_denoise_out, own_pixel, texture2DLod(s_gi_input, own_uv, 0.0));
+		}
+		return;
+	}
 	int stage_count = stage_edge * stage_edge;
 	LOOP
 	for(int i = lane; i < stage_count; i += DENOISE_TILE * DENOISE_TILE)
@@ -127,15 +197,8 @@ void main()
 	float center_luma = Luminance(center.xyz);
 	// Coherent-structure floor - see the fragment form's note; keep the two in step.
 	luma_sigma = max(luma_sigma, u_gi_denoise_luma_floor * max(center_luma, 1e-3));
-	BRANCH
-	if(u_gi_denoise_converged_cap > 0.0)
-	{
-		if(count >= u_gi_denoise_converged_cap && luma_sigma < 0.002 * max(center_luma, 1e-3))
-		{
-			imageStore(s_gi_denoise_out, pixel, center);
-			return;
-		}
-	}
+	// The per-pixel converged early-out lived here; the tile skip at the top of main is what
+	// replaced it (see the note there).
 	// One mat4 fold per pixel; taps evaluate the centre's plane with two dot4s (see the
 	// fragment form's derivation).
 	vec4 plane_row = mul(vec4(center_normal, 0.0), u_invViewProj);

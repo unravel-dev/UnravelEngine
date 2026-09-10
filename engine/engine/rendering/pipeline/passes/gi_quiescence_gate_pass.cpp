@@ -23,7 +23,70 @@ auto gi_quiescence_gate_pass::init(rtti::context& ctx) -> bool
     auto cs = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_quiescence_gate.sc");
     program_.cache_uniforms();
     program_.program = std::make_unique<gpu_program>(cs);
+    // The slice copy for the on-demand census snapshot; the same kernel the readback path
+    // drains with, run here in copy-only mode. Optional: a missing program only disables
+    // the instrument.
+    auto cs_stats = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_light_voxel_stats.sc");
+    stats_program_ = std::make_unique<gpu_program>(cs_stats);
     return program_.is_valid();
+}
+
+void gi_quiescence_gate_pass::request_stats_snapshot()
+{
+    snapshot_requested_ = true;
+}
+
+void gi_quiescence_gate_pass::service_stats_snapshot(const gfx::texture::ptr& vis_memo, uint32_t attr_resolution)
+{
+    // A landed readback first: the data was written by bgfx on the render thread once the
+    // frame it was asked for retired.
+    if(snapshot_pending_ && gfx::get_render_frame() >= snapshot_ready_frame_)
+    {
+        snapshot_pending_ = false;
+        snapshot_requested_ = false;
+        stats_snapshot_.values = snapshot_data_;
+        stats_snapshot_.valid = true;
+    }
+    if(!snapshot_requested_ || snapshot_pending_)
+    {
+        return;
+    }
+    if(!stats_program_ || !stats_program_->is_valid())
+    {
+        return;
+    }
+    const auto width = static_cast<uint16_t>(stats_snapshot::level_count);
+    const auto height = static_cast<uint16_t>(stats_snapshot::quantity_count);
+    if(!snapshot_texture_ || !snapshot_texture_->is_valid())
+    {
+        snapshot_texture_ = std::make_shared<gfx::texture>(width,
+                                                           height,
+                                                           false,
+                                                           1,
+                                                           gfx::texture_format::R32U,
+                                                           BGFX_TEXTURE_COMPUTE_WRITE);
+        snapshot_readback_ = std::make_shared<gfx::texture>(width,
+                                                            height,
+                                                            false,
+                                                            1,
+                                                            gfx::texture_format::R32U,
+                                                            BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+    }
+    // Copy only (u_gi_light_voxel_params.y = 0): the gate kernel that follows in this same
+    // frame drains rows 0-1 and the census rows on the frames it dispatches.
+    gfx::render_pass copy_pass("GI/Stats Snapshot");
+    stats_program_->begin();
+    gfx::set_image_3d(0, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
+    gfx::set_image(1, snapshot_texture_->native_handle(), 0, gfx::access::Write, gfx::texture_format::R32U);
+    const float voxel_params[4] = {float(attr_resolution), 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(program_.u_gi_light_voxel_params, voxel_params);
+    gfx::dispatch(copy_pass.id, stats_program_->native_handle(), 1, 1, 1);
+    stats_program_->end();
+    gfx::render_pass readback_pass("GI/Stats Snapshot Readback");
+    gfx::blit(readback_pass.id, snapshot_readback_->native_handle(), 0, 0, snapshot_texture_->native_handle(), 0, 0, width, height);
+    snapshot_ready_frame_ = gfx::read_texture(snapshot_readback_->native_handle(), snapshot_data_.data());
+    stats_snapshot_.frame = gfx::get_render_frame();
+    snapshot_pending_ = true;
 }
 
 gi_quiescence_gate_pass::~gi_quiescence_gate_pass()
@@ -102,6 +165,9 @@ auto gi_quiescence_gate_pass::run(gfx::render_view& rview, const run_params& par
         stats_source_ = vis_memo.get();
         reset = true;
     }
+    // The census snapshot copies the slice BEFORE the gate drains it, so rows 0-1 describe
+    // the frame that just finished.
+    service_stats_snapshot(vis_memo, clipmap_gpu.get_attr_resolution());
     gfx::render_pass pass("GI/Quiescence Gate");
     program_.program->begin();
     gfx::set_image_3d(0, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);

@@ -152,8 +152,12 @@ constexpr std::array<visualization_swatch, 3> k_legend_gi_dirty_regions = {{
 constexpr std::array<visualization_swatch, 3> k_legend_gi_probe_lattice = {{
     {{1.0f, 0.0f, 0.0f}, "DEAD - the lattice point is inside geometry, so the buried-probe gate "
                          "zeroed it; a room whose corners are all red is one the lattice missed"},
-    {{0.12f, 0.12f, 0.12f}, "Not served by this cascade's window (its atlas slot holds another cell)"},
-    {{0.6f, 0.6f, 0.5f}, "Alive - shaded with the probe's own irradiance toward the viewer"},
+    {{0.15f, 0.3f, 1.0f}, "UNOCCUPIED - no geometry within GI_WORLD_PROBE_SLEEP_SPACINGS; it still "
+                          "traces (sleeping it measured no saving). The share of blue is the "
+                          "occupancy: mostly blue means a sparse lattice could cover the same slots "
+                          "at a far finer spacing"},
+    {{0.6f, 0.6f, 0.5f}, "Alive - the probe's own irradiance toward the viewer, tonemapped with a "
+                         "floor so a dim probe still reads as a sphere"},
 }};
 
 constexpr std::array<visualization_swatch, 5> k_legend_gi_screen_probes = {{
@@ -162,6 +166,16 @@ constexpr std::array<visualization_swatch, 5> k_legend_gi_screen_probes = {{
     {{0.6f, 0.0f, 0.0f}, "Placed but no geometry under it"},
     {{1.0f, 1.0f, 1.0f}, "Tile borders, so probe spacing and lattice origin are readable"},
     {{0.0f, 0.0f, 0.0f}, "Outside the lattice, or the gather did not run this frame"},
+}};
+
+constexpr std::array<visualization_swatch, 6> k_legend_gi_probe_tiers = {{
+    {{1.0f, 0.0f, 0.0f}, "Screen tier answered (Hi-Z hit read from last frame's composite) - these "
+                         "lanes idle while the rest of the 8x8 group marches the SDF"},
+    {{0.0f, 1.0f, 0.0f}, "SDF hit (mesh tier or clipmap)"},
+    {{0.0f, 0.0f, 1.0f}, "Sky: a completion the world probes could not answer"},
+    {{0.1f, 0.1f, 0.1f}, "The remainder: world-probe completions"},
+    {{0.25f, 0.25f, 0.25f}, "Interpolated probe - no rays of its own"},
+    {{0.0f, 0.0f, 0.0f}, "No geometry under the probe, or the gather did not run"},
 }};
 
 constexpr std::array<visualization_swatch, 4> k_legend_gi_temporal = {{
@@ -221,7 +235,7 @@ constexpr std::array<visualization_group_entry, 6> k_visualization_groups = {{
 // get_visualization_modes(group) relies on that contiguity.
 // -----------------------------------------------------------------------------
 
-constexpr std::array<visualization_mode_entry, 39> k_visualization_modes = {{
+constexpr std::array<visualization_mode_entry, 40> k_visualization_modes = {{
     {visualization_mode::full,
      visualization_group::none,
      "full",
@@ -489,8 +503,9 @@ constexpr std::array<visualization_mode_entry, 39> k_visualization_modes = {{
      visualization_group::global_illumination,
      "gi_probe_lattice",
      "Probe Lattice",
-     "The level-0 world probes drawn as spheres where they actually sit: red where the lattice "
-     "point is buried in geometry, otherwise the irradiance that probe actually holds.",
+     "Only the level-0 probes, drawn as spheres where they actually sit and composited over the "
+     "normal image. Blue is unoccupied (no geometry within reach); the share of blue is the "
+     "lattice's occupancy.",
      k_legend_gi_probe_lattice},
     {visualization_mode::gi_screen_probes,
      visualization_group::global_illumination,
@@ -506,6 +521,13 @@ constexpr std::array<visualization_mode_entry, 39> k_visualization_modes = {{
      "How many frames each pixel has actually integrated. Answers 'why is this noisy' and "
      "'why is this lagging': pinned-low pixels are being reset every frame.",
      k_legend_gi_temporal},
+    {visualization_mode::gi_probe_tiers,
+     visualization_group::global_illumination,
+     "gi_probe_tiers",
+     "Probe Ray Tiers",
+     "Which tier answered each traced screen probe's rays, as a share per tile: the red share "
+     "is the fraction of the trace group's lanes that idle while their neighbours march the SDF.",
+     k_legend_gi_probe_tiers},
 }};
 
 // Drift guards: the enum is the editor-side mirror of the engine's debug pass ids.
@@ -551,6 +573,8 @@ static_assert(static_cast<int>(visualization_mode::gi_screen_probes) ==
               "visualization_mode drifted from deferred::debug_pass_gi_screen_probes");
 static_assert(static_cast<int>(visualization_mode::gi_temporal) == rendering::deferred::debug_pass_gi_temporal,
               "visualization_mode drifted from deferred::debug_pass_gi_temporal");
+static_assert(static_cast<int>(visualization_mode::gi_probe_tiers) == rendering::deferred::debug_pass_gi_probe_tiers,
+              "visualization_mode drifted from deferred::debug_pass_gi_probe_tiers");
 
 } // namespace
 

@@ -206,17 +206,29 @@ SHARED uint s_traced_rays[GI_TRACE_SLOT_COUNT];
 /// this probe serves by the fraction (gi_temporal_kernel.sh) - the receivers of a mover's
 /// shadow and bounce, which the per-pixel velocity buffer cannot see.
 SHARED uint s_moving_rays[GI_TRACE_SLOT_COUNT];
+/// The rest of the tier census (record [11], GI_PROBE_TIERS): rays the mesh SDF answered,
+/// rays the clipmap answered, and completions that ended in the sky. The world-probe
+/// completions are the remainder.
+SHARED uint s_mesh_rays[GI_TRACE_SLOT_COUNT];
+SHARED uint s_clipmap_rays[GI_TRACE_SLOT_COUNT];
+SHARED uint s_sky_rays[GI_TRACE_SLOT_COUNT];
 
 /// The probe's screen share (x) and moving share (y) for the temporal: rays the screen tier
 /// answered, and rays that hit moving geometry, over rays traced (all counted where the
 /// tier is decided). Written by the slot leader after the trace barrier; interpolated probes
-/// get their parents' mean from the interp pass.
+/// get their parents' mean from the interp pass. The full tier split goes to record [11]
+/// for the gi_probe_tiers debug view.
 void GiStoreScreenShare(int slot, uint record)
 {
 	uint traced = s_traced_rays[slot];
-	float share = traced > 0u ? float(s_screen_rays[slot]) / float(traced) : 0.0;
-	float moving = traced > 0u ? float(s_moving_rays[slot]) / float(traced) : 0.0;
+	float inv_traced = traced > 0u ? 1.0 / float(traced) : 0.0;
+	float share = float(s_screen_rays[slot]) * inv_traced;
+	float moving = float(s_moving_rays[slot]) * inv_traced;
 	b_gi_probes[record + uint(GI_PROBE_SCREEN_SHARE)] = vec4(share, moving, 0.0, 0.0);
+	b_gi_probes[record + uint(GI_PROBE_TIERS)] = vec4(share,
+	                                                   float(s_mesh_rays[slot]) * inv_traced,
+	                                                   float(s_clipmap_rays[slot]) * inv_traced,
+	                                                   float(s_sky_rays[slot]) * inv_traced);
 }
 
 /// 1 when the velocity buffer marks the pixel at @p hit_uv as OBJECT motion (the BA lanes),
@@ -465,6 +477,10 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 		bool moving = false;
 		// 1 = screen commit, 2 = SDF hit, 3 = completion; 1 feeds the probe's screen share.
 		int answered_tier = 3;
+		// The census detail under tier 2 / 3: a mesh-exact SDF hit, and a completion the
+		// world probes could not answer (the sky SH did).
+		bool mesh_hit = false;
+		bool sky_completion = false;
 		// SCREEN TIER: Hi-Z march from the anchor pixel. A confident on-screen hit inside the
 		// ray's own range commits at PIXEL precision; everything else falls through to the SDF.
 		BRANCH
@@ -585,6 +601,7 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 			if(hit.hit)
 			{
 				answered_tier = 2;
+				mesh_hit = hit.instance_index != SDF_NO_INSTANCE;
 				hit_t = max(hit_t, hit.t);
 				// A mesh-exact hit knows its instance: moving when the instance's
 				// displacement since last frame exceeds GI_TEMPORAL_MOVING_SPEED of the
@@ -654,6 +671,7 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 				                         sample_dir, u_gi_camera.xyz, radiance))
 				{
 					radiance = GiProbeEnvRadiance(sample_dir);
+					sky_completion = true;
 				}
 			}
 		}
@@ -661,6 +679,21 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 		if(answered_tier == 1)
 		{
 			atomicAdd(s_screen_rays[slot], 1u);
+		}
+		else if(answered_tier == 2)
+		{
+			if(mesh_hit)
+			{
+				atomicAdd(s_mesh_rays[slot], 1u);
+			}
+			else
+			{
+				atomicAdd(s_clipmap_rays[slot], 1u);
+			}
+		}
+		else if(sky_completion)
+		{
+			atomicAdd(s_sky_rays[slot], 1u);
 		}
 		if(moving)
 		{
@@ -1006,6 +1039,9 @@ void main()
 			s_screen_rays[slot] = 0u;
 			s_traced_rays[slot] = 0u;
 			s_moving_rays[slot] = 0u;
+			s_mesh_rays[slot] = 0u;
+			s_clipmap_rays[slot] = 0u;
+			s_sky_rays[slot] = 0u;
 			// Placement computed the anchor, classification put this probe on the traced
 			// list - the records are valid by construction; this thread only unpacks them
 			// and reprojects the anchor for the importance mip.
