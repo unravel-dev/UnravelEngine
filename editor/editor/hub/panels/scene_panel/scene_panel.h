@@ -39,6 +39,9 @@ public:
     /// would be overwritten by the panel on the next frame.
     void set_visualization_mode(int mode);
     auto get_visualization_mode() const -> int;
+    /// Linear readback scale of the radiance-valued debug views (pipeline::set_debug_view_scale).
+    void set_visualization_scale(float scale);
+    auto get_visualization_scale() const -> float;
 
     void on_project_opened();
 
@@ -89,6 +92,7 @@ private:
 
     bool is_dragging_{};
     int visualize_passes_{-1};
+    float visualize_scale_{1.0f};
     int current_resolution_index_{0};
     scene panel_scene_{"scene_panel"};
 

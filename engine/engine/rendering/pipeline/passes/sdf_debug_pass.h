@@ -74,6 +74,14 @@ public:
         ///< GI v2: which tier answered each traced screen probe's rays (record [11]) - the
         ///< ray-budget instrument: the screen-tier share is the idle-lane fraction.
         probe_tiers = 19,
+        ///< GI v2: WHY the temporal limited each pixel's accumulation count this frame - the
+        ///< cause code the kernel writes into the fast lane's alpha (fresh / dirty region /
+        ///< camera motion / moving hits / change detector). The fast history is bound in
+        ///< place of the moments for this mode.
+        temporal_cause = 20,
+        ///< GI v2: the explicit emitter sampling census per traced screen probe (record [7]):
+        ///< the aimed rays' share of the probe's energy, of its rays, and the emitters selected.
+        emitter_share = 21,
     };
 
     struct settings
@@ -130,6 +138,8 @@ public:
         /// The cage-visibility variance gate (gi_resolve_pass::settings), so the world-probe
         /// debug views (world_probes, probe_sky) read the cages exactly as the lit path does.
         float probe_visibility_variance_gate = gi::GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE;
+        /// Linear readback scale of the radiance-valued views (pipeline::set_debug_view_scale).
+        float view_scale = 1.0f;
     };
 
     struct run_params
@@ -144,6 +154,9 @@ public:
         gi_resolve_pass::probe_debug_view probes{};
         /// The temporal accumulator's moments, for the temporal_health view. Null disables it.
         gfx::texture::ptr moments;
+        /// The temporal's fast history (its alpha is the reset-cause code), for the
+        /// temporal_cause view. Null disables it.
+        gfx::texture::ptr fast;
         settings settings;
     };
 

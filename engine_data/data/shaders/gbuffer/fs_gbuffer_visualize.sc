@@ -97,6 +97,10 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     {
         vec4 ssil = texture2D(s_tex7, texcoord0);
 		color = ssil.rgb * PI * ssil.a;
+        // Linear readback scale (the scene panel's debug-view scale, u_params.y; 0 = 1): the
+        // target is the LDR frame, so a scale lets a capture read the gather's radiance at
+        // any magnitude to 8-bit precision.
+        color *= u_params.y > 0.0 ? u_params.y : 1.0;
     }
     else if(u_mode == SPECULAR_OCCLUSION)
     {

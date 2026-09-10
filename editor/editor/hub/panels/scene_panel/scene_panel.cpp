@@ -1799,6 +1799,16 @@ auto scene_panel::get_visualization_mode() const -> int
     return visualize_passes_;
 }
 
+void scene_panel::set_visualization_scale(float scale)
+{
+    visualize_scale_ = scale > 0.0f ? scale : 1.0f;
+}
+
+auto scene_panel::get_visualization_scale() const -> float
+{
+    return visualize_scale_;
+}
+
 void scene_panel::draw_snapping_menu(editing_manager& em)
 {
     ImGui::SetNextWindowViewportToCurrent();
@@ -2031,6 +2041,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
     }
 
     camera_comp.get_pipeline_data().get_pipeline()->set_debug_pass(visualize_passes_);
+    camera_comp.get_pipeline_data().get_pipeline()->set_debug_view_scale(visualize_scale_);
 
     auto window = ImGui::GetCurrentWindow();
     auto draw_list = window->DrawList;

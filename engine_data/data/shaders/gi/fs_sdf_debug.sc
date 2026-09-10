@@ -30,6 +30,13 @@ uniform vec4 u_sdf_debug_params2;
 #define u_near_field_distance u_sdf_debug_params2.x
 /// Minimum march step as a fraction of distance travelled. See SdfMinStep.
 #define u_step_relaxation     u_sdf_debug_params2.y
+/// LINEAR READBACK SCALE for the radiance-valued views (light voxels, world probes, emissive
+/// attribute, direct): the frame these views composite into is the 8-bit LDR target, so a
+/// value above 1 saturates and a value under 1/255 vanishes. The scene panel's debug-view
+/// scale (viewport_set_debug_view "scale") multiplies the value before the store, so a
+/// capture at a chosen scale reads the linear radiance to 8-bit precision at any
+/// magnitude - the instrument for intensity-linearity measurements. 0 or absent = 1.
+#define u_view_scale          (u_sdf_debug_params2.z > 0.0 ? u_sdf_debug_params2.z : 1.0)
 /// Camera position, needed to pick a cache level for a traced hit.
 uniform vec4 u_gi_debug_camera;
 #define u_gi_debug_max_samples u_gi_debug_camera.w
@@ -54,6 +61,8 @@ uniform vec4 u_gi_debug_camera;
 #define SDF_DEBUG_SCREEN_PROBES 17
 #define SDF_DEBUG_TEMPORAL_HEALTH 18
 #define SDF_DEBUG_PROBE_TIERS 19
+#define SDF_DEBUG_TEMPORAL_CAUSE 20
+#define SDF_DEBUG_EMITTER_SHARE 21
 
 #define GI_WORLD_PROBE_READ
 #include "gi/gi_world_probes.sh"
@@ -258,7 +267,8 @@ void main()
 	// the air, which is exactly where no surface was hit. Every mode below is guarded by its own
 	// id, so a missed ray reaching them costs a wasted march and nothing else.
 	if(!hit.hit && u_debug_mode != SDF_DEBUG_SCREEN_PROBES && u_debug_mode != SDF_DEBUG_PROBE_TIERS &&
-	   u_debug_mode != SDF_DEBUG_TEMPORAL_HEALTH && u_debug_mode != SDF_DEBUG_PROBE_LATTICE)
+	   u_debug_mode != SDF_DEBUG_TEMPORAL_HEALTH && u_debug_mode != SDF_DEBUG_PROBE_LATTICE &&
+	   u_debug_mode != SDF_DEBUG_TEMPORAL_CAUSE && u_debug_mode != SDF_DEBUG_EMITTER_SHARE)
 	{
 		gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
 		return;
@@ -420,7 +430,7 @@ void main()
 			gl_FragColor = vec4(0.0, 0.05, 0.35, 1.0);
 			return;
 		}
-		gl_FragColor = vec4(radiance, 1.0);
+		gl_FragColor = vec4(radiance * u_view_scale, 1.0);
 		return;
 	}
 
@@ -528,7 +538,7 @@ void main()
 			gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
 			return;
 		}
-		gl_FragColor = vec4(probe_irradiance, 1.0);
+		gl_FragColor = vec4(probe_irradiance * u_view_scale, 1.0);
 		return;
 	}
 
@@ -590,6 +600,102 @@ void main()
 			probe_color = mix(vec3(0.0, 0.25, 0.05), vec3(0.2, 1.0, 0.3), budget);
 		}
 		// Tile borders, so probe spacing and the lattice origin are both readable.
+		vec2 within = fract(probe_f);
+		float border = min(min(within.x, within.y), min(1.0 - within.x, 1.0 - within.y));
+		float edge = 1.0 - smoothstep(0.0, 0.06, border);
+		gl_FragColor = vec4(mix(probe_color, vec3_splat(1.0), edge * 0.5), 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_TEMPORAL_CAUSE)
+	{
+		// WHY the temporal limited a pixel's accumulation count this frame: the cause code the
+		// kernel writes into the fast lane's alpha (gi_temporal_kernel.sh GI_TEMPORAL_CAUSE_*;
+		// the CPU binds the FAST history at stage 7 for this mode). The health view shows a
+		// short window; this one names the mechanism that shortened it.
+		//
+		//   DARK GREEN -> no cause: the count grew, or sits at the settings window.
+		//   WHITE      -> fresh: no usable history (first frame, off-screen, disocclusion).
+		//   RED        -> a dirty region collapsed the slow lane (a placement changed nearby).
+		//   BLUE       -> the camera-motion collapse (screen-share weighted).
+		//   MAGENTA    -> the moving-hit share is shortening the window.
+		//   YELLOW     -> the change detector snapped the slow lane to the fast one.
+		//   NOTHING    -> the resolve did not run this frame.
+		vec4 fast = texture2DLod(s_gi_moments, v_texcoord0, 0.0);
+		if(dot(fast, vec4_splat(1.0)) <= 0.0 && fast.w <= 0.0)
+		{
+			gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
+		int cause = int(floor(fast.w * 8.0 + 0.5));
+		vec3 cause_color = vec3(0.05, 0.35, 0.1);
+		if(cause == 1)
+		{
+			cause_color = vec3(1.0, 1.0, 1.0);
+		}
+		else if(cause == 2)
+		{
+			cause_color = vec3(1.0, 0.1, 0.05);
+		}
+		else if(cause == 3)
+		{
+			cause_color = vec3(0.1, 0.3, 1.0);
+		}
+		else if(cause == 4)
+		{
+			cause_color = vec3(1.0, 0.1, 1.0);
+		}
+		else if(cause == 5)
+		{
+			cause_color = vec3(1.0, 0.9, 0.1);
+		}
+		gl_FragColor = vec4(cause_color, 1.0);
+		return;
+	}
+
+	if(u_debug_mode == SDF_DEBUG_EMITTER_SHARE)
+	{
+		// The explicit emitter sampling per traced screen probe (record [7], written by the
+		// trace): how much of the probe's gathered energy the AIMED rays delivered, how many of
+		// its rays were aimed, and how many emitters it selected. The attribution instrument
+		// for emissive noise: a tile whose energy is mostly aimed samples is estimated by the
+		// NEE technique, one whose energy arrives through the cone rays by the cell technique.
+		//
+		//   RED   -> share of the probe's energy (sum of MIS contributions) from aimed rays
+		//   GREEN -> aimed rays over traced rays
+		//   BLUE  -> emitters selected over GI_EMISSIVE_NEE_PER_PROBE
+		//   GREY  -> interpolated probe; BLACK -> no geometry; WHITE GRID -> tile borders
+		if(u_gi_probe_count_x <= 0 || u_gi_probe_count_y <= 0)
+		{
+			gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
+		vec2 trace_pixel = v_texcoord0 * u_gi_probe_screen.xy;
+		vec2 probe_f = trace_pixel / max(u_gi_probe_spacing, 1.0);
+		ivec2 probe_xy = ivec2(floor(probe_f));
+		if(probe_xy.x >= u_gi_probe_count_x || probe_xy.y >= u_gi_probe_count_y ||
+		   probe_xy.x < 0 || probe_xy.y < 0)
+		{
+			gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
+		uint record = (GiProbeRecord(probe_xy.x, probe_xy.y, 0) + u_gi_probe_write_offset) *
+		              uint(GI_PROBE_STRIDE);
+		vec4 meta = b_gi_probes[record + uint(GI_PROBE_META)];
+		vec3 probe_color;
+		if(meta.w < 0.5)
+		{
+			probe_color = vec3_splat(0.0);
+		}
+		else if(meta.w > 1.5)
+		{
+			probe_color = vec3_splat(0.25);
+		}
+		else
+		{
+			vec4 emitter = saturate(b_gi_probes[record + uint(GI_PROBE_EMITTER)]);
+			probe_color = vec3(emitter.x, emitter.y, emitter.z);
+		}
 		vec2 within = fract(probe_f);
 		float border = min(min(within.x, within.y), min(1.0 - within.x, 1.0 - within.y));
 		float edge = 1.0 - smoothstep(0.0, 0.06, border);
@@ -875,7 +981,7 @@ void main()
 			gl_FragColor = vec4(1.0, 0.9, 0.0, 1.0);
 			return;
 		}
-		gl_FragColor = vec4(emissive, 1.0);
+		gl_FragColor = vec4(emissive * u_view_scale, 1.0);
 		return;
 	}
 
@@ -979,7 +1085,7 @@ void main()
 		                                       u_gi_shadow_near_field);
 		// A neutral albedo keeps this a view of the LIGHTING rather than of surface colour,
 		// which the fields do not carry yet (material voxels are a later phase).
-		gl_FragColor = vec4(irradiance * 0.8, 1.0);
+		gl_FragColor = vec4(irradiance * 0.8 * u_view_scale, 1.0);
 		return;
 	}
 

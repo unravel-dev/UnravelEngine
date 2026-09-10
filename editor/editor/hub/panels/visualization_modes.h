@@ -62,6 +62,10 @@ enum class visualization_mode : int
     gi_screen_probes = 36,
     gi_temporal = 37,
     gi_probe_tiers = 38,
+    /// The temporal's reset cause per pixel (fresh / dirty region / camera / moving / detector).
+    gi_temporal_cause = 39,
+    /// Explicit emitter sampling census per screen probe (aimed energy share, aimed rays, emitters).
+    gi_emitter_share = 40,
 };
 
 /// Menu grouping. Ordering here is the order the groups appear in the viewport menu.

@@ -22,6 +22,51 @@
 #include "gi/gi_light_voxels.sh"
 #include "gi/gi_world_probes.sh"
 #include "gi/gi_noise.sh"
+#include "gi/gi_emissive_nee.sh"
+
+/// Solid angle of one radiance-atlas texel (the octahedral map is near equal-area).
+#define GI_WORLD_PROBE_TEXEL_SOLID_ANGLE (4.0 * 3.1415926535897932 / float(GI_WORLD_PROBE_OCT_RADIANCE * GI_WORLD_PROBE_OCT_RADIANCE))
+
+/// How much of a texel's cone the emitter table covers around @p direction, seen from
+/// @p origin: the solid angles of every piece whose bounding cone intersects the texel's,
+/// over the texel's solid angle, saturated. A centre ray that skewers a small emitter
+/// would otherwise hold the emitter's full radiance as the texel's mean - the aliasing the
+/// old absolute clamp (GI_MAX_RAY_RADIANCE) bounded by capping radiance, which also capped
+/// every large emitter's spread (gi_emissive_research 1.5). This bounds it by the geometry
+/// instead: a big panel's pieces add up to the whole texel (1, energy-preserving), a lone
+/// small piece gives the cone's mean. The single hit piece's own fraction darkened a
+/// segmented panel's far texels (land1, cell 11 -7%), hence the union. Pieces come from
+/// the emitter table the probe tracers aim at (gi_emissive_nee.sh; the instance buffer and
+/// the count are bound to this pass); a direction no piece covers is left unscaled.
+float GiWorldProbeEmitterCoverage(vec3 direction, vec3 origin)
+{
+	int emitter_count = min(u_sdf_emitter_count, GI_EMISSIVE_NEE_MAX_EMITTERS);
+	// The texel's half angle: its solid angle as a cone.
+	float texel_cos = 1.0 - GI_WORLD_PROBE_TEXEL_SOLID_ANGLE / (2.0 * 3.1415926535897932);
+	float texel_sin = sqrt(max(1.0 - texel_cos * texel_cos, 0.0));
+	float covered = 0.0;
+	bool any_piece = false;
+	LOOP
+	for(int ei = 0; ei < emitter_count; ++ei)
+	{
+		GiEmitter e = GiLoadEmitter(ei);
+		GiEmitterCone cone = GiEmitterConeFrom(e, origin);
+		if(!cone.valid)
+		{
+			continue;
+		}
+		// The piece's cone intersects the texel's when the axes are within the sum of the half angles.
+		float piece_sin = sqrt(max(1.0 - cone.cos_max * cone.cos_max, 0.0));
+		float sum_cos = cone.cos_max * texel_cos - piece_sin * texel_sin;
+		if(dot(direction, cone.axis) < sum_cos)
+		{
+			continue;
+		}
+		any_piece = true;
+		covered += GiConeSolidAngle(cone.cos_max);
+	}
+	return any_piece ? saturate(covered / GI_WORLD_PROBE_TEXEL_SOLID_ANGLE) : 1.0;
+}
 
 /// rgb = radiance, a = hitT (negative = sky/miss). READ-write: the radiance is a converging
 /// running mean over windows (GI_WORLD_PROBE_EMA_WINDOWS) - the read is this texel's own
@@ -350,12 +395,18 @@ void main()
 				voxel_radiance = vec3_splat(0.0);
 			}
 			radiance = voxel_radiance;
+			// The cone bound only where the old absolute clamp would have acted (a hit brighter
+			// than GI_MAX_RAY_RADIANCE): the table walk per hit measured +0.08 ms on the world
+			// probe trace with movers when every hit paid it (gi_emissive_research 3.5).
+			if(GiStatsLuminance(voxel_radiance) > GI_MAX_RAY_RADIANCE)
+			{
+				radiance *= GiWorldProbeEmitterCoverage(direction, origin);
+			}
 		}
-		// The gather's per-ray firefly clamp (GI_MAX_RAY_RADIANCE), applied at the one other
-		// stochastic-ray tier: emissive is stored unbounded in the light voxels, and a single
-		// stratum ray skewering a small bright emitter otherwise holds its full radiance in
-		// the mean for a whole window - the probe-side shimmer near emissives.
-		vec3 stored = GiClampRayRadiance(radiance, GI_MAX_RAY_RADIANCE);
+		// No absolute radiance clamp: a small emitter's texel is bounded by its cone fraction
+		// above (the geometry), a large one keeps its radiance (measured 2026-09-10: the clamp
+		// at 40 held a 192-radiance panel's probe irradiance at 6.2x for a 16x intensity).
+		vec3 stored = radiance;
 		float stored_t = hit_t;
 		// The texel's previous value: the running mean's base below, and the census's
 		// "did this ray change anything" reference either way.

@@ -770,6 +770,11 @@ void deferred::set_debug_pass(int pass)
     debug_pass_ = pass;
 }
 
+void deferred::set_debug_view_scale(float scale)
+{
+    debug_view_scale_ = scale > 0.0f ? scale : 1.0f;
+}
+
 void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                                  scene& scn,
                                  const camera& camera,
@@ -2914,6 +2919,7 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
     {
         gi_resolve_pass::run_params params;
         params.settings = resolve_settings;
+        params.cause_lane = debug_pass_ == debug_pass_gi_temporal_cause;
         params.g_buffer = rview.fbo_safe_get("GBUFFER");
         // Still the PREVIOUS frame's depth at this point: the snapshot happens later in the
         // frame, which is exactly what temporal reprojection needs to validate history.
@@ -2968,6 +2974,10 @@ void deferred::run_sdf_debug_pass(const camera& camera,
     // shader answers as "no data" rather than by reading a stale buffer.
     params.probes = gi_resolve_pass_.get_probe_debug_view();
     params.moments = rview.tex_safe_get("GI_MOMENTS");
+    // The fast history carries the temporal's reset-cause code in its alpha (the
+    // gi_temporal_cause view); published by the resolve under a stable name like the moments.
+    params.fast = rview.tex_safe_get("GI_FAST");
+    params.settings.view_scale = debug_view_scale_;
     // The world-probe debug views must read the cages exactly as the lit path does, so the
     // authored variance gate rides along; the constant default covers the no-gi_component
     // case (these views stay usable while GI itself is off).
@@ -3053,6 +3063,14 @@ void deferred::run_sdf_debug_pass(const camera& camera,
     {
         params.settings.mode = sdf_debug_pass::debug_mode::probe_tiers;
     }
+    else if(debug_pass_ == debug_pass_gi_temporal_cause)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::temporal_cause;
+    }
+    else if(debug_pass_ == debug_pass_gi_emitter_share)
+    {
+        params.settings.mode = sdf_debug_pass::debug_mode::emitter_share;
+    }
     else if(debug_pass_ == debug_pass_sdf_vis_memo)
     {
         // The vis-memo variant stamps its categorical colors into the light volume; the
@@ -3092,7 +3110,8 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     {
         shader_mode = 16;
     }
-    float u_params[4] = {float(shader_mode), 0.0f, 0.0f, 0.0f};
+    // y = the linear readback scale of the indirect-diffuse view (see set_debug_view_scale).
+    float u_params[4] = {float(shader_mode), debug_view_scale_, 0.0f, 0.0f};
 
     gfx::set_uniform(debug_visualization_program_.u_params, u_params);
 

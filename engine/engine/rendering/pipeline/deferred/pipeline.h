@@ -42,6 +42,7 @@ public:
                       const run_params& params,
                       layer_mask render_mask = layer_mask{layer_reserved::everything_layer}) override;
     void set_debug_pass(int pass) override;
+    void set_debug_view_scale(float scale) override;
 
     /// Bitmask for @c pipeline::run_params::pflags (deferred path only).
     enum pipeline_steps : uint32_t
@@ -180,6 +181,10 @@ public:
     static constexpr int debug_pass_gi_screen_probes = 36;
     static constexpr int debug_pass_gi_temporal = 37;
     static constexpr int debug_pass_gi_probe_tiers = 38;
+    /// The temporal's reset CAUSE per pixel (which mechanism limited the accumulation count)
+    /// and the explicit emitter sampling census per screen probe (record [7]).
+    static constexpr int debug_pass_gi_temporal_cause = 39;
+    static constexpr int debug_pass_gi_emitter_share = 40;
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,
                             const run_params& rparams,
@@ -550,6 +555,8 @@ private:
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     int debug_pass_{-1};
+    /// See pipeline::set_debug_view_scale.
+    float debug_view_scale_{1.0f};
     /// Velocity buffer production is active for the CURRENT run (camera run + velocity_pass
     /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
     /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).

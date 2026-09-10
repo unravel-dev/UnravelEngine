@@ -320,8 +320,15 @@
       " of the skipped rays; the phase hash keeps neighbouring probes from revalidating in the"    \
       " same frame, so the cost is spread, never pulsed")                                          \
     X(GI_MAX_RAY_RADIANCE, 40.0f,                                                                  \
-      "pre-exposed radiance", "published: [CVar] ScreenProbeGather.MaxRayIntensity = 40 firefly"   \
-      " clamp at trace time")                                                                      \
+      "radiance", "published: [CVar] ScreenProbeGather.MaxRayIntensity = 40 firefly clamp at"       \
+      " trace time - in Lumen a PRE-EXPOSED value. This engine's GI runs in absolute radiance,"    \
+      " so as an absolute clamp on the screen-probe cell and the world-probe texel it capped"      \
+      " every emitter brighter than 40: measured 2026-09-10 (gi_emissive_research 1.5) a"         \
+      " 16x intensity spread 6.5x. Neither site clamps radiance any more (the MIS contribution"    \
+      " cap and the governor bound the screen estimator; the emitter cone fraction bounds a"       \
+      " world-probe texel); the value remains the base of GI_NEE_CONTRIBUTION_MAX and the"        \
+      " reflection tier's clamp on its voxel-measured LIT estimate (the exact emission rides"     \
+      " unclamped on top)")                                                                        \
     /* --- screen-trace-first (Lumen: HZB traces resolve the near field at pixel precision      \
        [S21 s66-68]; the SDF answers only where the screen cannot) --- */                          \
     X(GI_SCREEN_TRACE_MAX_STEPS, 64,                                                               \

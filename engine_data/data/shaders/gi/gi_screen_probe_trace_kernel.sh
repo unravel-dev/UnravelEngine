@@ -212,6 +212,15 @@ SHARED uint s_moving_rays[GI_TRACE_SLOT_COUNT];
 SHARED uint s_mesh_rays[GI_TRACE_SLOT_COUNT];
 SHARED uint s_clipmap_rays[GI_TRACE_SLOT_COUNT];
 SHARED uint s_sky_rays[GI_TRACE_SLOT_COUNT];
+/// EMITTER SAMPLING CENSUS (record [7], GI_PROBE_EMITTER): the luminance of the MIS
+/// contributions splatted by AIMED rays and by every ray (fixed point, GI_NEE_CENSUS_FIXED
+/// per unit), the aimed-ray count and the emitters the leader selected. An instrument for
+/// the gi_emitter_share view; nothing lit reads it.
+#define GI_NEE_CENSUS_FIXED 1024.0
+SHARED uint s_aimed_contribution[GI_TRACE_SLOT_COUNT];
+SHARED uint s_total_contribution[GI_TRACE_SLOT_COUNT];
+SHARED uint s_aimed_rays[GI_TRACE_SLOT_COUNT];
+SHARED uint s_selected_emitters[GI_TRACE_SLOT_COUNT];
 
 /// The probe's screen share (x) and moving share (y) for the temporal: rays the screen tier
 /// answered, and rays that hit moving geometry, over rays traced (all counted where the
@@ -229,6 +238,13 @@ void GiStoreScreenShare(int slot, uint record)
 	                                                   float(s_mesh_rays[slot]) * inv_traced,
 	                                                   float(s_clipmap_rays[slot]) * inv_traced,
 	                                                   float(s_sky_rays[slot]) * inv_traced);
+	float total_contribution = float(s_total_contribution[slot]) / GI_NEE_CENSUS_FIXED;
+	float aimed_contribution = float(s_aimed_contribution[slot]) / GI_NEE_CENSUS_FIXED;
+	b_gi_probes[record + uint(GI_PROBE_EMITTER)] =
+	    vec4(total_contribution > 0.0 ? aimed_contribution / total_contribution : 0.0,
+	         float(s_aimed_rays[slot]) * inv_traced,
+	         float(s_selected_emitters[slot]) / float(GI_NEE_K),
+	         total_contribution);
 }
 
 /// 1 when the velocity buffer marks the pixel at @p hit_uv as OBJECT motion (the BA lanes),
@@ -373,7 +389,11 @@ vec3 GiFarFieldFallback(vec3 hit_position, vec3 sample_dir)
 
 void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 {
-	vec3 averaged = GiClampRayRadiance(radiance, GI_MAX_RAY_RADIANCE);
+	// No absolute clamp on the cell's radiance (measured 2026-09-10, gi_emissive_research 1.5:
+	// the clamp at GI_MAX_RAY_RADIANCE plateaued a white panel's spread at 6.5x for a 16x
+	// intensity). An emitter that fills the cell is not a firefly; the MIS contribution cap
+	// (GI_NEE_CONTRIBUTION_MAX, per sample) and the governor below bound the estimator's step.
+	vec3 averaged = radiance;
 	// FIREFLY GOVERNOR: a ray landing on a small bright emitter dominates the whole tile
 	// when it enters at full weight - the probe's screen footprint pops for a frame. Each
 	// new sample is capped at GI_GATHER_FIREFLY_CLAMP x its reference: LAST frame's value
@@ -833,13 +853,22 @@ float GiSampleDenominator(int slot, ivec2 base, int span, vec3 direction)
 }
 
 /// Adds one traced sample to the accumulators of the cell its direction lands in.
-void GiSplatSample(int slot, ivec2 base, int span, vec3 direction, vec3 radiance, float hit_t)
+void GiSplatSample(int slot, ivec2 base, int span, vec3 direction, vec3 radiance, float hit_t,
+                   bool is_aimed)
 {
 	// The cap goes on the ESTIMATOR OUTPUT, after the division - see GI_NEE_CONTRIBUTION_MAX.
 	vec3 contribution = min(radiance / GiSampleDenominator(slot, base, span, direction),
 	                        vec3_splat(GI_NEE_CONTRIBUTION_MAX));
 	uvec3 fixed_point = uvec3(max(contribution, vec3_splat(0.0)) * GI_NEE_FIXED + vec3_splat(0.5));
 	uint hit_bits = floatBitsToUint(max(hit_t, 0.0));
+	// The census (record [7]): luminance of this contribution, by technique.
+	uint census = uint(max(dot(contribution, vec3(0.2126, 0.7152, 0.0722)), 0.0) * GI_NEE_CENSUS_FIXED + 0.5);
+	atomicAdd(s_total_contribution[slot], census);
+	if(is_aimed)
+	{
+		atomicAdd(s_aimed_contribution[slot], census);
+		atomicAdd(s_aimed_rays[slot], 1u);
+	}
 	for(int y = 0; y < span; ++y)
 	{
 		for(int x = 0; x < span; ++x)
@@ -920,7 +949,7 @@ void GiTraceRayUnit(int slot, ivec2 atlas_base, GiRayUnit unit)
 			land_base = land.base;
 			land_span = land.span;
 		}
-		GiSplatSample(slot, land_base, land_span, direction, traced.xyz, traced.w);
+		GiSplatSample(slot, land_base, land_span, direction, traced.xyz, traced.w, is_aimed);
 	}
 }
 
@@ -1042,6 +1071,10 @@ void main()
 			s_mesh_rays[slot] = 0u;
 			s_clipmap_rays[slot] = 0u;
 			s_sky_rays[slot] = 0u;
+			s_aimed_contribution[slot] = 0u;
+			s_total_contribution[slot] = 0u;
+			s_aimed_rays[slot] = 0u;
+			s_selected_emitters[slot] = 0u;
 			// Placement computed the anchor, classification put this probe on the traced
 			// list - the records are valid by construction; this thread only unpacks them
 			// and reprojects the anchor for the importance mip.
@@ -1110,6 +1143,10 @@ void main()
 					s_nee_axis[slot * GI_NEE_K + k2] = nee_axis[k2];
 					s_nee_cos[slot * GI_NEE_K + k2] = nee_cos[k2];
 					s_nee_rays[slot * GI_NEE_K + k2] = 0u;
+					if(nee_cos[k2] <= 1.0)
+					{
+						s_selected_emitters[slot] += 1u;
+					}
 				}
 			}
 			// Reproject the anchor into LAST frame's lattice for the importance mip. The

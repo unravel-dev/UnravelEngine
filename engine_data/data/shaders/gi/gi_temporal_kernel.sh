@@ -92,6 +92,22 @@ uniform vec4 u_gi_temporal_camera;
 // with distance and its magnitude is the span itself.
 #define u_gi_uv_world_scale   u_gi_temporal_dirty.w
 
+/// RESET CAUSE (instrument, read by the gi_temporal_cause debug view). The fast lane's alpha
+/// is written by this kernel and read by nothing - the consumers take the slow lane's
+/// weight, and the fast history's own alpha is only ever fed back into this blend - so it
+/// carries, as code / 8 (exact in fp16), WHY this pixel's accumulation count was limited
+/// this frame: which of the five mechanisms bound. The lit result is untouched.
+#define GI_TEMPORAL_CAUSE_NONE      0.0
+#define GI_TEMPORAL_CAUSE_FRESH     1.0
+#define GI_TEMPORAL_CAUSE_DIRTY     2.0
+#define GI_TEMPORAL_CAUSE_CAMERA    3.0
+#define GI_TEMPORAL_CAUSE_MOVING    4.0
+#define GI_TEMPORAL_CAUSE_DETECTOR  5.0
+#define GI_TEMPORAL_CAUSE_SCALE     8.0
+/// The threshold below which a collapse term is not counted as a cause: a term this small
+/// shortens the cap by under one frame of a 24-frame window.
+#define GI_TEMPORAL_CAUSE_MIN_TERM  0.05
+
 /// Replaces any non-finite component. A single NaN in the history is otherwise permanent: it
 /// propagates through every subsequent blend and spreads outward through the spatial filter.
 /// Do not call isnan()/isinf() here: shaderc lowers them to equal/notEqual(float, float),
@@ -142,13 +158,16 @@ vec4 GiSampleHistoryCatmullRom(sampler2D tex, vec2 uv, vec2 tex_size)
 	return result / max(weight_sum, 1e-6);
 }
 
-#ifndef GI_TEMPORAL_FUSED
-/// x = history clamp width in neighbourhood standard deviations; 0 disables clamping.
-/// Split form only: the clamp needs this frame's gather as a TEXTURE (nine neighbour taps),
-/// which the fused form does not have.
+/// x = history clamp width in neighbourhood standard deviations; 0 disables clamping. The
+/// clamp is the split form's only: it needs this frame's gather as a TEXTURE (nine neighbour
+/// taps), which the fused form does not have. y > 0.5 while the Temporal Reset Cause view is
+/// displayed: the cause code rides in the fast lane's alpha only then (see GiFastOutput) -
+/// both forms.
 uniform vec4 u_gi_temporal_clamp;
 #define u_gi_clamp_sigma u_gi_temporal_clamp.x
+#define u_gi_cause_lane (u_gi_temporal_clamp.y > 0.5)
 
+#ifndef GI_TEMPORAL_FUSED
 /**
  * Colour range the current frame's 3x3 neighbourhood spans, as mean +/- @p sigma_scale deviations.
  *
@@ -193,6 +212,21 @@ vec4 GiFreshMoments(vec4 current)
 {
 	float luma = Luminance(current.xyz);
 	return vec4(luma, luma * luma, 1.0, 0.0);
+}
+
+/**
+ * The fast lane's output. Its ALPHA is the fast-accumulated resolve weight: the detector
+ * snap copies it into the slow lane, the denoise filters it and the composite blends with
+ * it. The cause code (GI_TEMPORAL_CAUSE_*) takes that alpha over ONLY while the Temporal
+ * Reset Cause view is displayed (u_gi_cause_lane). Written unconditionally, every snap
+ * handed the consumer a cause code for a weight - a blob per snap for a window, visible as
+ * white patches at the far end of an emitter's reach (gi_emissive_research 7: cell 07's
+ * spill zone, strong-flicker pixels 0.16-0.83 % of the frame against 0.06-0.08 % with the
+ * alpha left alone).
+ */
+vec4 GiFastOutput(vec4 fast, float cause)
+{
+	return vec4(fast.xyz, u_gi_cause_lane ? cause / GI_TEMPORAL_CAUSE_SCALE : fast.w);
 }
 
 /**
@@ -271,7 +305,7 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	if(!u_gi_has_history)
 	{
 		out_color = current;
-		out_fast = current;
+		out_fast = GiFastOutput(current, GI_TEMPORAL_CAUSE_FRESH);
 		out_moments = GiFreshMoments(current);
 		return;
 	}
@@ -279,7 +313,7 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	if(depth >= 1.0)
 	{
 		out_color = current;
-		out_fast = current;
+		out_fast = GiFastOutput(current, GI_TEMPORAL_CAUSE_FRESH);
 		out_moments = GiFreshMoments(current);
 		return;
 	}
@@ -307,7 +341,7 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	if(prev_clip4.w <= 0.0 && object_w < 0.5)
 	{
 		out_color = current;
-		out_fast = current;
+		out_fast = GiFastOutput(current, GI_TEMPORAL_CAUSE_FRESH);
 		out_moments = GiFreshMoments(current);
 		return;
 	}
@@ -318,7 +352,7 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))
 	{
 		out_color = current;
-		out_fast = current;
+		out_fast = GiFastOutput(current, GI_TEMPORAL_CAUSE_FRESH);
 		out_moments = GiFreshMoments(current);
 		return;
 	}
@@ -373,7 +407,7 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	if(tap_weight_sum <= 1e-4)
 	{
 		out_color = current;
-		out_fast = current;
+		out_fast = GiFastOutput(current, GI_TEMPORAL_CAUSE_FRESH);
 		out_moments = GiFreshMoments(current);
 		return;
 	}
@@ -464,7 +498,12 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	// GI_TEMPORAL_CAMERA_*_FULL rates, saturated. Object motion is the dirty regions' and
 	// the velocity buffer's business already.
 	float motion_collapse = u_gi_camera_motion * saturate(screen_share);
-	float collapse = max(GiDirtyRegionFactor(world_position), motion_collapse);
+	// RAW regions only (GiDirtyRegionFactorRaw): an emissive placement's reach-inflated
+	// region collapsed every pixel it covered (83% of the arena's frame for a 1 m sphere,
+	// gi_emissive_research 2.4); the pool a moved emitter lights is shortened through the
+	// moving-hit lane instead - the probes that aim at a moved emitter carry its contribution
+	// share as moving share (gi_screen_probe_trace_kernel.sh GiStoreScreenShare).
+	float collapse = max(GiDirtyRegionFactorRaw(world_position), motion_collapse);
 	float slow_cap = mix(max(u_gi_max_accum, 1.0), max(u_gi_fast_accum, 1.0), collapse);
 	// HIT-MOTION FAST UPDATE: the fraction of the gather's rays
 	// that hit MOVING geometry (the probe records' moving share, bracket-weighted per pixel)
@@ -514,17 +553,41 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	float chroma_gate =
 	    GI_TEMPORAL_CHANGE_SIGMA * relative_sigma * sqrt(inverse_counts) + GI_TEMPORAL_CHANGE_CHROMA_FLOOR;
 	float moments_alpha = alpha;
+	// The cause lane (see GI_TEMPORAL_CAUSE_*): which mechanism limited the count this frame.
+	// A cap only counts when it BOUND (the history would have grown past it) and is shorter
+	// than the settings window; the largest term wins the attribution.
+	float cause = GI_TEMPORAL_CAUSE_NONE;
+	bool cap_bound = history_moments.z + 1.0 > slow_cap + 0.5 && slow_cap < max(u_gi_max_accum, 1.0) - 0.5;
+	if(cap_bound)
+	{
+		float dirty_term = GiDirtyRegionFactorRaw(world_position);
+		if(moving_effective >= GI_TEMPORAL_CAUSE_MIN_TERM && moving_effective >= dirty_term &&
+		   moving_effective >= motion_collapse)
+		{
+			cause = GI_TEMPORAL_CAUSE_MOVING;
+		}
+		else if(dirty_term >= GI_TEMPORAL_CAUSE_MIN_TERM && dirty_term >= motion_collapse)
+		{
+			cause = GI_TEMPORAL_CAUSE_DIRTY;
+		}
+		else if(motion_collapse >= GI_TEMPORAL_CAUSE_MIN_TERM)
+		{
+			cause = GI_TEMPORAL_CAUSE_CAMERA;
+		}
+	}
 	if(gap * gap > gate || chroma_gap > chroma_gate)
 	{
-		slow = fast;
+		// The weight follows the estimate, except while the fast alpha carries a cause code.
+		slow = vec4(fast.xyz, u_gi_cause_lane ? slow.w : fast.w);
 		count = count_fast;
 		moments_alpha = 1.0 / count_fast;
+		cause = GI_TEMPORAL_CAUSE_DETECTOR;
 	}
 	// Both the estimate AND its resolve weight are accumulated. The weight is the fraction of
 	// rays that resolved and is every bit as noisy at four rays per pixel; leaving it unfiltered
 	// keeps the consumer's blend flickering after the colour has settled.
 	out_color = slow;
-	out_fast = fast;
+	out_fast = GiFastOutput(fast, cause);
 	out_moments = vec4(mix(history_moments.x, luma, moments_alpha),
 	                   mix(history_moments.y, luma * luma, moments_alpha),
 	                   count,

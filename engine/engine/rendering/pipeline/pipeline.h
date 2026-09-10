@@ -239,6 +239,16 @@ public:
 
     virtual void set_debug_pass(int pass) = 0;
 
+    /// Linear readback scale for the radiance-valued debug views: the light-voxel, world-probe,
+    /// emissive-attribute, direct and indirect-diffuse views multiply their value by it before
+    /// the LDR store, so a capture reads linear radiance at any magnitude to 8-bit precision.
+    /// An instrument for the editor's debug-view tooling (viewport_set_debug_view "scale");
+    /// 1 = the views as shipped. The lit path never reads it.
+    virtual void set_debug_view_scale(float scale)
+    {
+        (void)scale;
+    }
+
     /// The GI waste census (gi_quiescence_gate_pass::stats_snapshot): a tool asks, the next
     /// frame copies the statistics slice out, and the readback lands a few frames later.
     /// Never call per frame - the readback is a CPU-GPU sync.

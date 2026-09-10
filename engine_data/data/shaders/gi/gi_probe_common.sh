@@ -26,6 +26,12 @@
  *      [6]     x = the SCREEN-TIER SHARE of the probe's traced rays this frame (the trace;
  *              the interp pass mirrors its parents' mean) - the temporal's camera-motion
  *              collapse weight, yzw = 0
+ *      [7]     the EXPLICIT EMITTER SAMPLING census of a traced probe (the trace writes it,
+ *              interpolated probes keep the slot): x = share of the probe's gathered energy
+ *              (the sum of MIS contributions, luminance) that AIMED rays delivered, y = aimed
+ *              rays over traced rays, z = emitters selected over GI_EMISSIVE_NEE_PER_PROBE,
+ *              w = the probe's total contribution luminance. Read by the gi_emitter_share
+ *              debug view - an instrument, no lit consumer
  *      [9]     xyz = anchor world position, w = the probe MODE: 0 = no geometry, 1 = traced,
  *              2 = interpolated from its even-lattice parents (adaptive gather). Consumers
  *              that only care about validity keep testing w > 0.5.
@@ -43,6 +49,7 @@
 #define GI_PROBE_ORIGIN     4
 #define GI_PROBE_ANCHOR     5
 #define GI_PROBE_SCREEN_SHARE 6
+#define GI_PROBE_EMITTER    7
 #define GI_PROBE_META       9
 #define GI_PROBE_META2      10
 #define GI_PROBE_TIERS      11

@@ -637,6 +637,13 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			bool measured_image = measured_ok;
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
 			BRANCH
+#if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
+			// The hit's exact emission is added AFTER the firefly clamp when the remodulated
+			// branch composes it: a mirror's emission is deterministic, never a firefly, and
+			// clamping it capped every reflected emitter at GI_MAX_RAY_RADIANCE
+			// (gi_emissive_research 2026-09-10).
+			bool exact_emission = false;
+#endif // GI_LIGHT_VOXEL_READ_ALBEDO
 			if(measured_image)
 			{
 				radiance = measured;
@@ -708,7 +715,8 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 					// lit keeps its answer and only the dark ones are lifted; blended by metalness
 					// so dielectrics keep their measured bounce untouched.
 					vec3 metal_lift = max(lit, hit_albedo * rough_value);
-					radiance = mix(lit, metal_lift, hit_metalness) + hit_emissive;
+					radiance = mix(lit, metal_lift, hit_metalness);
+					exact_emission = true;
 				}
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
 				// FIREFLY CLAMP, the gather's per-ray contract applied to the one tier that
@@ -719,6 +727,12 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 				// frame's denoised resolve and the sky fallback is a stable per-pixel image,
 				// neither a stochastic spike source.
 				radiance = GiClampRayRadiance(radiance, GI_MAX_RAY_RADIANCE);
+#if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
+				if(exact_emission)
+				{
+					radiance += hit_emissive;
+				}
+#endif // GI_LIGHT_VOXEL_READ_ALBEDO
 			}
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
 			else if(hit_has_material)
@@ -732,7 +746,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 				// which no diffuse lattice can hold), and its own emission rides on top. The
 				// culled underside now reflects as the dim orange of the box it belongs to,
 				// continuous with the front face's reflection, instead of neutral grey or black.
-				radiance = GiClampRayRadiance(hit_albedo * rough_value + hit_emissive, GI_MAX_RAY_RADIANCE);
+				radiance = GiClampRayRadiance(hit_albedo * rough_value, GI_MAX_RAY_RADIANCE) + hit_emissive;
 			}
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
 		}

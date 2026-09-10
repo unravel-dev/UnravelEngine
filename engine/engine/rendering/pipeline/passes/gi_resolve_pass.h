@@ -161,6 +161,11 @@ public:
         /// This camera's cascade. The cascade is snapped around a viewer, so it cannot live on
         /// the service without two cameras fighting over one set of levels.
         surface_cache_view* view_cache{};
+        /// The Temporal Reset Cause debug view is displayed: the temporal writes each pixel's
+        /// cause code into the fast lane's alpha for it. Off, that alpha stays the
+        /// fast-accumulated resolve weight the detector snap copies into the slow lane and
+        /// the consumer blends with (gi_temporal_kernel.sh GiFastOutput).
+        bool cause_lane{};
         settings settings;
     };
 

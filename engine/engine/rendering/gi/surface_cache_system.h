@@ -140,6 +140,11 @@ public:
         math::bbox bounds{};
         /// Frame of the most recent change inside the region.
         uint64_t last_change_frame = 0;
+        /// The largest emissive light reach (metres) folded into this region's bounds - zero
+        /// for a region that is a placement's own bounds plus the margin. Packed into the
+        /// min lane's w for the consumers (gi_dirty_regions.sh), an attribution instrument
+        /// today: nothing lit reads it.
+        float emissive_reach = 0.0f;
     };
 
     /// The most recent regions changed within the hold window, at most
@@ -221,6 +226,13 @@ public:
     auto get_emitters() const -> const std::vector<emitter>&
     {
         return emitters_;
+    }
+
+    /// Emitter pieces built this frame BEFORE the GI_EMISSIVE_NEE_MAX_EMITTERS cut - how many
+    /// the table could not hold (an instrument for the gi_get_stats readout).
+    auto get_emitter_total() const -> size_t
+    {
+        return emitter_total_;
     }
 
     /// vec4 elements per emitter in the table appended to the instance buffer. Must match
@@ -452,6 +464,8 @@ private:
         /// The region bounds (emissive-inflated) and the raw world bounds as of the last frame.
         math::bbox bounds{};
         math::bbox field_bounds{};
+        /// The emissive light reach (metres) `bounds` was inflated by, 0 if none.
+        float emissive_reach = 0.0f;
         /// Pose-derived cache: valid while @ref pose_key matches the frame's (transform, field
         /// bounds) - the inverse and the transformed corners are pure functions of those, so
         /// a static placement reuses them instead of paying an inverse per frame.
@@ -473,6 +487,8 @@ private:
             math::bbox bounds{};
             /// The raw world bounds - the field the placement changed (the vis-memo's list).
             math::bbox field_bounds{};
+            /// The emissive light reach (metres) the region bounds were inflated by, 0 if none.
+            float emissive_reach = 0.0f;
         };
         std::vector<history_entry> history;
         /// Index of the first entry still inside the hold window. Entries are appended in frame
@@ -596,6 +612,7 @@ private:
     sdf_atlas atlas_;
     gpu_light_buffer light_buffer_;
     std::vector<emitter> emitters_;
+    size_t emitter_total_ = 0;
     /// Identifies one submesh's field. Residency is per SUBMESH, not per mesh: each submesh has
     /// its own field and is uploaded to the atlas independently.
     struct field_key

@@ -110,9 +110,13 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
     }
     // Stage 7: D3D shares its 16 SRV registers between buffers and textures, and every other
     // one is taken - which is why the probe window-COUNT buffer is not bound (see the shader).
+    // The temporal_cause view reads the FAST history through the same sampler: no stage is
+    // free for a second screen texture, and the two views never run in the same frame.
+    const auto& screen_history =
+        params.settings.mode == debug_mode::temporal_cause ? params.fast : params.moments;
     gfx::set_texture(debug_program_.s_gi_moments,
                      7,
-                     params.moments ? params.moments : default_textures::get().black_texture());
+                     screen_history ? screen_history : default_textures::get().black_texture());
 
     // The temporal's dirty regions, packed exactly as the gather and the relight receive them
     // (surface_cache_system::pack_dirty_regions), so the view shows the set the lit path is
@@ -212,7 +216,7 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
 
     const float debug_params2[4] = {params.settings.near_field_distance,
                                     params.settings.step_relaxation,
-                                    0.0f,
+                                    params.settings.view_scale,
                                     0.0f};
     gfx::set_uniform(debug_program_.u_sdf_debug_params2, debug_params2);
 

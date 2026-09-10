@@ -779,6 +779,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                                       slow_cap,
                                                       history.has_history ? 1.0f : 0.0f};
                     gfx::set_uniform(temporal_program_.u_gi_temporal_params, temporal_params);
+                    // x: no neighbourhood clamp (see the split form). y: the cause lane, on only
+                    // while the Temporal Reset Cause view is displayed (run_params::cause_lane).
+                    const float temporal_clamp[4] = {0.0f, params.cause_lane ? 1.0f : 0.0f, 0.0f, 0.0f};
+                    gfx::set_uniform(temporal_program_.u_gi_temporal_clamp, temporal_clamp);
                     const float temporal_texel[4] = {1.0f / float(target_size.width),
                                                      1.0f / float(target_size.height),
                                                      float(target_size.width),
@@ -805,6 +809,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     // split path publishes it in run_temporal, and the fused path (the
                     // shipping one) has to publish it too or the view draws nothing.
                     rview.tex_get_or_emplace("GI_MOMENTS") = history.write_moments;
+                    rview.tex_get_or_emplace("GI_FAST") = history.write_fast;
                 }
             }
             gfx::discard();
@@ -1177,6 +1182,7 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
     // Published under a stable name for the temporal debug view: the ping-pong means neither
     // GI_HISTORY_A_MOMENTS nor _B is "the current one" from outside this pass.
     rview.tex_get_or_emplace("GI_MOMENTS") = history.write_moments;
+    rview.tex_get_or_emplace("GI_FAST") = history.write_fast;
 
     gfx::render_pass temporal_pass("GI/Temporal Pass");
     temporal_pass.bind(write_fbo.get());
@@ -1229,8 +1235,9 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
                                       has_history ? 1.0f : 0.0f};
     gfx::set_uniform(temporal_program_.u_gi_temporal_params, temporal_params);
     // No neighbourhood clamp: it fights the placement jitter and eats history under
-    // motion; depth rejection is the whole gate [S21 s98].
-    const float temporal_clamp[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    // motion; depth rejection is the whole gate [S21 s98]. y: the cause lane, on only while
+    // the Temporal Reset Cause view is displayed (run_params::cause_lane).
+    const float temporal_clamp[4] = {0.0f, params.cause_lane ? 1.0f : 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(temporal_program_.u_gi_temporal_clamp, temporal_clamp);
     const float temporal_texel[4] = {1.0f / float(target_size.width),
                                      1.0f / float(target_size.height),

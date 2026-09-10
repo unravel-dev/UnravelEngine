@@ -564,13 +564,14 @@ void surface_cache_system::record_placement(tracked_placement& tracked,
     // room.
     math::bbox region_bounds = bounds;
     const float luminance = 0.2126f * emissive.x + 0.7152f * emissive.y + 0.0722f * emissive.z;
+    float reach = 0.0f;
     if(luminance > 0.0f && !(bounds.min.x > bounds.max.x))
     {
         const math::vec3 extent = math::max(bounds.max - bounds.min, math::vec3(0.0f));
         const float area = 2.0f * (extent.x * extent.y + extent.y * extent.z + extent.z * extent.x);
-        const float reach = math::clamp(std::sqrt(luminance * area / float(gi::GI_TEMPORAL_DIRTY_EMISSIVE_IRRADIANCE)),
-                                        0.0f,
-                                        float(gi::GI_TEMPORAL_DIRTY_EMISSIVE_REACH_MAX));
+        reach = math::clamp(std::sqrt(luminance * area / float(gi::GI_TEMPORAL_DIRTY_EMISSIVE_IRRADIANCE)),
+                            0.0f,
+                            float(gi::GI_TEMPORAL_DIRTY_EMISSIVE_REACH_MAX));
         region_bounds.min -= math::vec3(reach);
         region_bounds.max += math::vec3(reach);
     }
@@ -578,18 +579,19 @@ void surface_cache_system::record_placement(tracked_placement& tracked,
     {
         // A placement appearing (or re-appearing after a sweep) lights and occludes where
         // nothing did: its bounds are stale from the first frame.
-        tracked.history.push_back({world_frame_, region_bounds, bounds});
+        tracked.history.push_back({world_frame_, region_bounds, bounds, reach});
     }
     else if(tracked.placement_hash != hash)
     {
         // Both the vacated spot and the new one: the light the placement bounced where it WAS
         // is exactly the trail the flush exists for.
-        tracked.history.push_back({world_frame_, tracked.bounds, tracked.field_bounds});
-        tracked.history.push_back({world_frame_, region_bounds, bounds});
+        tracked.history.push_back({world_frame_, tracked.bounds, tracked.field_bounds, tracked.emissive_reach});
+        tracked.history.push_back({world_frame_, region_bounds, bounds, reach});
     }
     tracked.placement_hash = hash;
     tracked.bounds = region_bounds;
     tracked.field_bounds = bounds;
+    tracked.emissive_reach = reach;
     tracked.seen_frame = world_frame_;
     tracked.swept = false;
 }
@@ -611,7 +613,9 @@ auto pack_region_list(const std::vector<surface_cache_system::dirty_region>& reg
         slot[0] = region.bounds.min.x;
         slot[1] = region.bounds.min.y;
         slot[2] = region.bounds.min.z;
-        slot[3] = 0.0f;
+        // The emissive reach the box was inflated by (0 = a raw placement region): an
+        // attribution lane for the consumers and the debug readouts.
+        slot[3] = region.emissive_reach;
         slot[4] = region.bounds.max.x;
         slot[5] = region.bounds.max.y;
         slot[6] = region.bounds.max.z;
@@ -645,7 +649,7 @@ void surface_cache_system::rebuild_dirty_regions()
         {
             // Vanished this frame: the spot it left is stale like a move's vacated spot.
             // Recorded once; the entry is erased below once the history ages out.
-            tracked.history.push_back({world_frame_, tracked.bounds, tracked.field_bounds});
+            tracked.history.push_back({world_frame_, tracked.bounds, tracked.field_bounds, tracked.emissive_reach});
             tracked.swept = true;
         }
         // Age out the history beyond the hold window. Entries are appended in frame order, so
@@ -735,6 +739,7 @@ void surface_cache_system::rebuild_dirty_regions()
             region.bounds.add_point(entry.bounds.min);
             region.bounds.add_point(entry.bounds.max);
             region.last_change_frame = std::max(region.last_change_frame, entry.frame);
+            region.emissive_reach = std::max(region.emissive_reach, entry.emissive_reach);
         }
         if(!(region.bounds.min.x > region.bounds.max.x))
         {
@@ -1030,6 +1035,7 @@ void surface_cache_system::rebuild_emitters()
         }
     }
     const size_t cap = size_t(gi::GI_EMISSIVE_NEE_MAX_EMITTERS);
+    emitter_total_ = emitters_.size();
     if(emitters_.size() > cap)
     {
         std::partial_sort(emitters_.begin(),

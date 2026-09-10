@@ -185,6 +185,23 @@ constexpr std::array<visualization_swatch, 4> k_legend_gi_temporal = {{
     {{0.1f, 0.2f, 1.0f}, "Blue lift: the moving-hit share is shortening this window on purpose"},
 }};
 
+constexpr std::array<visualization_swatch, 6> k_legend_gi_temporal_cause = {{
+    {{0.05f, 0.35f, 0.1f}, "No cause: the count grew this frame, or sits at the settings window"},
+    {{1.0f, 1.0f, 1.0f}, "Fresh: no usable history (first frame, off-screen last frame, disocclusion)"},
+    {{1.0f, 0.1f, 0.05f}, "Dirty region: a placement changed nearby and collapsed the slow lane"},
+    {{0.1f, 0.3f, 1.0f}, "Camera motion: the screen-share weighted collapse"},
+    {{1.0f, 0.1f, 1.0f}, "Moving hits: the probe's rays hit moving geometry"},
+    {{1.0f, 0.9f, 0.1f}, "Change detector: the slow lane snapped to the fast one"},
+}};
+
+constexpr std::array<visualization_swatch, 5> k_legend_gi_emitter_share = {{
+    {{1.0f, 0.0f, 0.0f}, "Share of the probe's gathered energy the AIMED emitter rays delivered"},
+    {{0.0f, 1.0f, 0.0f}, "Aimed rays over traced rays"},
+    {{0.0f, 0.0f, 1.0f}, "Emitters selected over GI_EMISSIVE_NEE_PER_PROBE"},
+    {{0.25f, 0.25f, 0.25f}, "Interpolated probe - no rays of its own"},
+    {{0.0f, 0.0f, 0.0f}, "No geometry under the probe, or no emitter in reach"},
+}};
+
 // -----------------------------------------------------------------------------
 // Groups
 // -----------------------------------------------------------------------------
@@ -235,7 +252,7 @@ constexpr std::array<visualization_group_entry, 6> k_visualization_groups = {{
 // get_visualization_modes(group) relies on that contiguity.
 // -----------------------------------------------------------------------------
 
-constexpr std::array<visualization_mode_entry, 40> k_visualization_modes = {{
+constexpr std::array<visualization_mode_entry, 42> k_visualization_modes = {{
     {visualization_mode::full,
      visualization_group::none,
      "full",
@@ -528,6 +545,20 @@ constexpr std::array<visualization_mode_entry, 40> k_visualization_modes = {{
      "Which tier answered each traced screen probe's rays, as a share per tile: the red share "
      "is the fraction of the trace group's lanes that idle while their neighbours march the SDF.",
      k_legend_gi_probe_tiers},
+    {visualization_mode::gi_temporal_cause,
+     visualization_group::global_illumination,
+     "gi_temporal_cause",
+     "Temporal Reset Cause",
+     "Which mechanism limited each pixel's accumulation count this frame: fresh history, a "
+     "dirty region, the camera-motion collapse, moving hits, or the change detector.",
+     k_legend_gi_temporal_cause},
+    {visualization_mode::gi_emitter_share,
+     visualization_group::global_illumination,
+     "gi_emitter_share",
+     "Emitter Sampling Share",
+     "Explicit emitter sampling per traced screen probe: the aimed rays' share of the probe's "
+     "energy (red), of its rays (green), and the emitters it selected (blue).",
+     k_legend_gi_emitter_share},
 }};
 
 // Drift guards: the enum is the editor-side mirror of the engine's debug pass ids.
@@ -575,6 +606,12 @@ static_assert(static_cast<int>(visualization_mode::gi_temporal) == rendering::de
               "visualization_mode drifted from deferred::debug_pass_gi_temporal");
 static_assert(static_cast<int>(visualization_mode::gi_probe_tiers) == rendering::deferred::debug_pass_gi_probe_tiers,
               "visualization_mode drifted from deferred::debug_pass_gi_probe_tiers");
+static_assert(static_cast<int>(visualization_mode::gi_temporal_cause) ==
+                  rendering::deferred::debug_pass_gi_temporal_cause,
+              "visualization_mode drifted from deferred::debug_pass_gi_temporal_cause");
+static_assert(static_cast<int>(visualization_mode::gi_emitter_share) ==
+                  rendering::deferred::debug_pass_gi_emitter_share,
+              "visualization_mode drifted from deferred::debug_pass_gi_emitter_share");
 
 } // namespace
 

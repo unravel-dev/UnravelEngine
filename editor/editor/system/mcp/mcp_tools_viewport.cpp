@@ -14,6 +14,7 @@
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/gi/gi_constants.h>
+#include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/pipeline/passes/gi_quiescence_gate_pass.h>
 #include <engine/rendering/pipeline/pipeline.h>
 #include <seq/seq.h>
@@ -549,8 +550,11 @@ void register_viewport_tools(mcp_tool_registry& registry)
                         "(e.g. \"full\", \"base_color\", \"normals\", \"gi_light_voxels\") or as the "
                         "raw integer id (-1..31). \"full\" (-1) restores the normal render. Call "
                         "viewport_list_debug_views for every mode with its group, what it actually "
-                        "shows and its color legend.",
-         .input_schema_json = R"({"type":"object","properties":{"mode":{"description":"Mode name or raw integer id"}},"required":["mode"]})",
+                        "shows and its color legend. Optional scale (default 1): a linear readback "
+                        "multiplier for the radiance-valued views (gi_light_voxels, gi_world_probes, "
+                        "gi_attr_emissive, gi_direct_lighting, indirect_diffuse), applied before the "
+                        "8-bit store so a capture reads linear radiance at any magnitude.",
+         .input_schema_json = R"({"type":"object","properties":{"mode":{"description":"Mode name or raw integer id"},"scale":{"type":"number","minimum":0.0000001,"maximum":1000000}},"required":["mode"]})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -592,7 +596,13 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          .is_error = true};
              }
 
+             double view_scale = 1.0;
+             if(args["scale"].get(view_scale) != simdjson::SUCCESS || !(view_scale > 0.0))
+             {
+                 view_scale = 1.0;
+             }
              resolve_scene_panel(ctx).set_visualization_mode(mode_value);
+             resolve_scene_panel(ctx).set_visualization_scale(static_cast<float>(view_scale));
 
              const auto* entry = find_visualization_mode(mode_value);
              const auto* group = entry != nullptr ? find_visualization_group(entry->group) : nullptr;
@@ -717,7 +727,54 @@ void register_viewport_tools(mcp_tool_registry& registry)
                              }
                              json += "}";
                          }
-                         json += fmt::format(R"(],"thresholds":{{"moved":{},"visible":{}}}}})",
+                         // The emitter table the tracers aim at (surface_cache_system::rebuild_emitters):
+                         // count after the cap, pieces built before it, and the strongest entries.
+                         {
+                             const auto& surface_cache = ctx.get_cached<surface_cache_system>();
+                             const auto& emitters = surface_cache.get_emitters();
+                             json += fmt::format(R"(],"emitters":{{"count":{},"total":{},"listed":[)",
+                                                 emitters.size(),
+                                                 surface_cache.get_emitter_total());
+                             constexpr size_t listed_max = 16;
+                             for(size_t i = 0; i < emitters.size() && i < listed_max; ++i)
+                             {
+                                 const auto& e = emitters[i];
+                                 const float luminance = 0.2126f * e.radiance.x + 0.7152f * e.radiance.y + 0.0722f * e.radiance.z;
+                                 json += fmt::format(R"({}{{"center":[{:.3f},{:.3f},{:.3f}],"radius":{:.3f},"luminance":{:.4f},"extent":[{:.3f},{:.3f},{:.3f}],"power":{:.4f}}})",
+                                                     i == 0 ? "" : ",",
+                                                     e.center.x,
+                                                     e.center.y,
+                                                     e.center.z,
+                                                     e.radius,
+                                                     luminance,
+                                                     e.extent.x,
+                                                     e.extent.y,
+                                                     e.extent.z,
+                                                     e.power);
+                             }
+                             json += "]}";
+                             // The temporal's dirty regions as the shaders receive them (the budget cut
+                             // applied), with the total before the cut.
+                             const auto& regions = surface_cache.get_dirty_regions();
+                             json += fmt::format(R"(,"dirty_regions":{{"count":{},"total":{},"bounds":[)",
+                                                 regions.size(),
+                                                 surface_cache.get_dirty_region_total());
+                             for(size_t i = 0; i < regions.size(); ++i)
+                             {
+                                 const auto& region = regions[i].bounds;
+                                 json += fmt::format(R"({}[{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f}])",
+                                                     i == 0 ? "" : ",",
+                                                     region.min.x,
+                                                     region.min.y,
+                                                     region.min.z,
+                                                     region.max.x,
+                                                     region.max.y,
+                                                     region.max.z,
+                                                     regions[i].emissive_reach);
+                             }
+                             json += "]}";
+                         }
+                         json += fmt::format(R"(,"thresholds":{{"moved":{},"visible":{}}}}})",
                                              double(gi::GI_QUIESCENCE_CONVERGED_MEAN),
                                              double(gi::GI_STATS_VISIBLE_CHANGE));
                          return json;
