@@ -175,7 +175,7 @@ REFLECT(bloom_component)
         .type("bloom_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bloom_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "Bloom"},
         })
         .func<&component_meta<bloom_component>::exists>("component_exists"_hs)

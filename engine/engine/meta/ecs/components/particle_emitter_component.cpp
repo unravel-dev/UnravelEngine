@@ -332,7 +332,7 @@ REFLECT(particle_emitter_component)
         .type("particle_emitter_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "particle_emitter_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering"},
             entt::attribute{"pretty_name", "Particle Emitter"},
         })
         .func<&component_meta<particle_emitter_component>::exists>("component_exists"_hs)

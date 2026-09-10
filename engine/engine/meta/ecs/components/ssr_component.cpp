@@ -455,7 +455,7 @@ REFLECT(ssr_component)
         .type("ssr_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "ssr_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "SSR"},
         })
         .func<&component_meta<ssr_component>::exists>("component_exists"_hs)

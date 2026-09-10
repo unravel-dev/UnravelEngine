@@ -90,7 +90,7 @@ REFLECT(prefab_component)
         .type("prefab_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "prefab_component"},
-            entt::attribute{"category", "BASIC"},
+            entt::attribute{"category", "Basic"},
             entt::attribute{"pretty_name", "Prefab"},
         })
         .func<&component_meta<prefab_component>::exists>("component_exists"_hs)
@@ -185,7 +185,7 @@ REFLECT(prefab_id_component)
         .type("prefab_id_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "prefab_id_component"},
-            entt::attribute{"category", "BASIC"},
+            entt::attribute{"category", "Basic"},
             entt::attribute{"pretty_name", "Prefab Id"},
         })
         .func<&component_meta<prefab_id_component>::exists>("component_exists"_hs)

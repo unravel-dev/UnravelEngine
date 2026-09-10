@@ -253,7 +253,7 @@ REFLECT(tonemapping_component)
         .type("tonemapping_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "tonemapping_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "Tonemapping"},
         })
         .func<&component_meta<tonemapping_component>::exists>("component_exists"_hs)

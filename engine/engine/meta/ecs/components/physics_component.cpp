@@ -325,7 +325,7 @@ REFLECT(physics_component)
         .type("physics_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "physics_component"},
-            entt::attribute{"category", "PHYSICS"},
+            entt::attribute{"category", "Physics"},
             entt::attribute{"pretty_name", "Physics"},
         })
         .func<&component_meta<physics_component>::exists>("component_exists"_hs)

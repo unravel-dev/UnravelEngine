@@ -20,7 +20,7 @@ REFLECT(reflection_probe_component)
         .type("reflection_probe_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "reflection_probe_component"},
-            entt::attribute{"category", "LIGHTING"},
+            entt::attribute{"category", "Lighting"},
             entt::attribute{"pretty_name", "Reflection Probe"},
         })
         .func<&component_meta<reflection_probe_component>::exists>("component_exists"_hs)

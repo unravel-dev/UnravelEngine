@@ -20,7 +20,7 @@ REFLECT(model_component)
         .type("model_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "model_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering"},
             entt::attribute{"pretty_name", "Model"},
         })
         .func<&component_meta<model_component>::exists>("component_exists"_hs)
@@ -104,7 +104,7 @@ REFLECT(bone_component)
         .type("bone_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "bone_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering"},
             entt::attribute{"pretty_name", "Bone"},
         })
         .func<&component_meta<bone_component>::exists>("component_exists"_hs)
@@ -168,7 +168,7 @@ REFLECT(submesh_component)
         .type("submesh_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "submesh_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering"},
             entt::attribute{"pretty_name", "Submesh"},
         })
         .func<&component_meta<submesh_component>::exists>("component_exists"_hs)

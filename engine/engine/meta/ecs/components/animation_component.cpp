@@ -51,7 +51,7 @@ REFLECT(animation_component)
         .type("animation_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "animation_component"},
-            entt::attribute{"category", "ANIMATION"},
+            entt::attribute{"category", "Animation"},
             entt::attribute{"pretty_name", "Animation"},
         })
         .func<&component_meta<animation_component>::exists>("component_exists"_hs)

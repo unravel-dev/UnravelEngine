@@ -13,7 +13,7 @@ REFLECT(layer_component)
         .type("layer_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "layer_component"},
-            entt::attribute{"category", "BASIC"},
+            entt::attribute{"category", "Basic"},
             entt::attribute{"pretty_name", "Layer"},
         })
         .func<&component_meta<layer_component>::exists>("component_exists"_hs)

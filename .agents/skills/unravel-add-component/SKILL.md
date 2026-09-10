@@ -44,6 +44,8 @@ REFLECT_EXTERN(my_component);
 Copy from `test_component.cpp`:
 
 - `REFLECT(my_component)` with factory type, category, pretty_name
+  - `category` is the "Add Component" menu path as displayed, nested with `/`
+    (e.g. `"Rendering"`, `"Rendering/Post Processing"`)
 - `.func<>` for component_exists/add/remove/save/load
 - `.data<>` for each field with name attribute
 - `SAVE` / `LOAD` with both archive instantiations

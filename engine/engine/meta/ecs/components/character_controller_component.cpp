@@ -14,7 +14,7 @@ REFLECT(character_controller_component)
         .type("character_controller_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "character_controller_component"},
-            entt::attribute{"category", "PHYSICS"},
+            entt::attribute{"category", "Physics"},
             entt::attribute{"pretty_name", "Character Controller"},
         })
         .func<&component_meta<character_controller_component>::exists>("component_exists"_hs)

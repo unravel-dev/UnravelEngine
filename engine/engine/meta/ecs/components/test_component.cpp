@@ -13,7 +13,7 @@ REFLECT(test_component)
         .type("named_anim"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "named_anim"},
-            entt::attribute{"category", "BASIC"},
+            entt::attribute{"category", "Basic"},
             entt::attribute{"pretty_name", "Named Anim"},
         })
         .data<&named_anim::name>("name"_hs)
@@ -30,7 +30,7 @@ REFLECT(test_component)
         .type("test_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "test_component"},
-            entt::attribute{"category", "BASIC"},
+            entt::attribute{"category", "Testing"},
             entt::attribute{"pretty_name", "Test"},
         })
         .func<&component_meta<test_component>::exists>("component_exists"_hs)

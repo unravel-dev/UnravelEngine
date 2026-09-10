@@ -73,7 +73,7 @@ REFLECT(script_component)
         .type("script_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "script_component"},
-            entt::attribute{"category", "SCRIPTING"},
+            entt::attribute{"category", "Scripting"},
             entt::attribute{"pretty_name", "Script"},
         })
         .func<&component_meta<script_component>::exists>("component_exists"_hs)

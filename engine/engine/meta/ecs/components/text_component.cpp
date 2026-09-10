@@ -181,7 +181,7 @@ REFLECT(text_component)
         .type("text_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "text_component"},
-            entt::attribute{"category", "UI"},
+            entt::attribute{"category", "Rendering"},
             entt::attribute{"pretty_name", "Text"},
         })
         .func<&component_meta<text_component>::exists>("component_exists"_hs)

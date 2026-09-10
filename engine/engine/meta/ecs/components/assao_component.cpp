@@ -179,7 +179,7 @@ REFLECT(assao_component)
         .type("assao_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "assao_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "ASSAO"},
         })
         .func<&component_meta<assao_component>::exists>("component_exists"_hs)

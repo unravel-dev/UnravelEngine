@@ -67,7 +67,7 @@ REFLECT(transform_component)
         .type("transform_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "transform_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Basic"},
             entt::attribute{"pretty_name", "Transform"},
         })
         .func<&component_meta<transform_component>::exists>("component_exists"_hs)

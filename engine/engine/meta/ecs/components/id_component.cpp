@@ -13,7 +13,7 @@ REFLECT(id_component)
         .type("id_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "id_component"},
-            entt::attribute{"category", "BASIC"},
+            entt::attribute{"category", "Basic"},
             entt::attribute{"pretty_name", "Id"},
         })
         .func<&component_meta<id_component>::exists>("component_exists"_hs)

@@ -161,7 +161,7 @@ REFLECT(taa_component)
         .type("taa_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "taa_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "Temporal AA"},
         })
         .func<&component_meta<taa_component>::exists>("component_exists"_hs)

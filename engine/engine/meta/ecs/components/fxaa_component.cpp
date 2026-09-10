@@ -12,7 +12,7 @@ REFLECT(fxaa_component)
         .type("fxaa_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "fxaa_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "FXAA"},
         })
         .func<&component_meta<fxaa_component>::exists>("component_exists"_hs)

@@ -40,7 +40,7 @@ REFLECT(audio_source_component)
         .type("audio_source_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "audio_source_component"},
-            entt::attribute{"category", "AUDIO"},
+            entt::attribute{"category", "Audio"},
             entt::attribute{"pretty_name", "Audio Source"},
         })
         .func<&component_meta<audio_source_component>::exists>("component_exists"_hs)

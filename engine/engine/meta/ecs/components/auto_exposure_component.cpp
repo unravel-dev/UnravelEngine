@@ -174,7 +174,7 @@ REFLECT(auto_exposure_component)
         .type("auto_exposure_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "auto_exposure_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "Auto Exposure"},
         })
         .func<&component_meta<auto_exposure_component>::exists>("component_exists"_hs)

@@ -210,7 +210,7 @@ REFLECT(gtao_component)
         .type("gtao_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gtao_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "GTAO"},
         })
         .func<&component_meta<gtao_component>::exists>("component_exists"_hs)

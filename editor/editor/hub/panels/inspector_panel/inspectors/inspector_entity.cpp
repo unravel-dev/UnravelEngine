@@ -22,11 +22,31 @@
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
+
+#include <algorithm>
+#include <map>
 namespace unravel
 {
 
 namespace
 {
+// Meta attribute holding a component's menu category; nested levels use the separator, e.g. "Physics/Colliders".
+constexpr const char* COMPONENT_MENU_CATEGORY_ATTRIBUTE = "category";
+constexpr const char* COMPONENT_MENU_CATEGORY_SEPARATOR = "/";
+// C# script components carry no meta attribute; they are listed under this category.
+constexpr const char* SCRIPT_COMPONENT_MENU_CATEGORY = "Scripting";
+// Menu metrics: sizes in font-size units scale with the UI font; paddings are pixels like the rest of the style.
+constexpr float COMPONENT_MENU_WIDTH_EM = 20.0f;
+constexpr float COMPONENT_MENU_LIST_HEIGHT_EM = 20.0f;
+constexpr float COMPONENT_MENU_ROW_PADDING_EM = 0.35f;
+constexpr float COMPONENT_MENU_ICON_COLUMN_EM = 1.7f;
+constexpr float COMPONENT_MENU_ROW_GAP = 2.0f;
+constexpr float COMPONENT_MENU_ROUNDING = 4.0f;
+constexpr float COMPONENT_MENU_SEARCH_PADDING_X = 8.0f;
+constexpr float COMPONENT_MENU_SEARCH_PADDING_Y = 6.0f;
+// Secondary elements (folder icons, chevrons, category hints) use the text color at this alpha.
+constexpr float COMPONENT_MENU_MUTED_ALPHA = 0.6f;
+
 template<typename T>
 auto get_component_icon() -> std::string
 {
@@ -279,27 +299,305 @@ auto inspect_component(const std::string& name, const inspect_callbacks& callbac
     return result;
 }
 
-auto list_component(ImGuiTextFilter& filter, const std::string& name, const inspect_callbacks& callbacks)
-    -> inspect_result
+struct component_menu_entry
+{
+    std::string name;
+    std::string icon;
+    /// Category path as shown to the user, e.g. "Rendering / Post Processing".
+    std::string category;
+    std::function<void()> on_pick;
+};
+
+/// One level of the "Add Component" menu: its sub-categories and the components listed at this level.
+struct component_menu_node
+{
+    std::map<std::string, component_menu_node> children;
+    std::vector<component_menu_entry> entries;
+};
+
+auto add_component_menu_entry(component_menu_node& root, const std::string& category, component_menu_entry entry)
+    -> void
+{
+    component_menu_node* node = &root;
+    entry.category.clear();
+    for(const auto& segment : string_utils::tokenize(category, COMPONENT_MENU_CATEGORY_SEPARATOR))
+    {
+        node = &node->children[segment];
+        entry.category += entry.category.empty() ? segment : " / " + segment;
+    }
+    node->entries.emplace_back(std::move(entry));
+}
+
+auto find_component_menu_node(const component_menu_node& root, const std::vector<std::string>& path)
+    -> const component_menu_node*
+{
+    const component_menu_node* node = &root;
+    for(const auto& segment : path)
+    {
+        auto it = node->children.find(segment);
+        if(it == node->children.end())
+        {
+            return nullptr;
+        }
+        node = &it->second;
+    }
+    return node;
+}
+
+auto sort_component_menu_entries(component_menu_node& node) -> void
+{
+    std::sort(node.entries.begin(),
+              node.entries.end(),
+              [](const component_menu_entry& lhs, const component_menu_entry& rhs)
+              {
+                  return lhs.name < rhs.name;
+              });
+    for(auto& [name, child] : node.children)
+    {
+        sort_component_menu_entries(child);
+    }
+}
+
+auto build_component_menu(rtti::context& ctx, entt::handle& data, inspect_result& result) -> component_menu_node
+{
+    component_menu_node root;
+    const auto& scr = ctx.get_cached<script_system>();
+    for(const auto& type : scr.get_all_scriptable_components())
+    {
+        component_menu_entry entry;
+        entry.name = type.get_fullname();
+        entry.icon = ICON_MDI_LANGUAGE_CSHARP;
+        entry.on_pick = [&ctx, &data, &result, name = entry.name]()
+        {
+            auto& em = ctx.get_cached<editing_manager>();
+            em.do_action<entity_add_script_component_action_t>({}, data, name);
+            result.changed |= true;
+            result.edit_finished |= true;
+        };
+        add_component_menu_entry(root, SCRIPT_COMPONENT_MENU_CATEGORY, std::move(entry));
+    }
+    hpp::for_each_tuple_type<all_addable_components>(
+        [&](auto index)
+        {
+            using ctype = std::tuple_element_t<decltype(index)::value, all_addable_components>;
+            const auto type = entt::resolve<ctype>();
+            component_menu_entry entry;
+            entry.name = entt::get_pretty_name(type);
+            entry.icon = get_component_icon<ctype>();
+            entry.on_pick = [&ctx, &data, &result, type]()
+            {
+                auto& em = ctx.get_cached<editing_manager>();
+                if(data.all_of<ctype>())
+                {
+                    em.do_action<entity_remove_component_action_t>({}, data, type);
+                }
+                em.do_action<entity_add_component_action_t>({}, data, type);
+                result.changed |= true;
+                result.edit_finished |= true;
+            };
+            const auto category = entt::get_attribute_as<std::string>(type, COMPONENT_MENU_CATEGORY_ATTRIBUTE);
+            add_component_menu_entry(root, category, std::move(entry));
+        });
+    sort_component_menu_entries(root);
+    return root;
+}
+
+auto get_component_menu_muted_color() -> ImU32
+{
+    ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    color.w *= COMPONENT_MENU_MUTED_ALPHA;
+    return ImGui::GetColorU32(color);
+}
+
+struct component_menu_row
+{
+    std::string id;
+    std::string icon;
+    ImU32 icon_color = 0;
+    std::string label;
+    /// Right-aligned muted text: a chevron for categories, the category path for search hits.
+    std::string trailing;
+    ImGui::Font::Enum font = ImGui::Font::Regular;
+};
+
+/// Draws one full-width row: a fixed icon column, the label, and optional trailing text, with a rounded hover highlight.
+auto draw_component_menu_row(const component_menu_row& row) -> bool
+{
+    const auto& style = ImGui::GetStyle();
+    const float font_size = ImGui::GetFontSize();
+    const float row_height = font_size + COMPONENT_MENU_ROW_PADDING_EM * font_size * 2.0f;
+    const float icon_column = COMPONENT_MENU_ICON_COLUMN_EM * font_size;
+    // The selectable supplies the item, hover and click; its flat highlight is hidden in favor of a rounded one.
+    ImGui::PushStyleColor(ImGuiCol_Header, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, IM_COL32(0, 0, 0, 0));
+    const bool clicked = ImGui::Selectable(("##" + row.id).c_str(),
+                                           false,
+                                           ImGuiSelectableFlags_NoPadWithHalfSpacing,
+                                           ImVec2(0.0f, row_height));
+    ImGui::PopStyleColor(3);
+    const ImVec2 row_min = ImGui::GetItemRectMin();
+    const ImVec2 row_max = ImGui::GetItemRectMax();
+    auto* draw_list = ImGui::GetWindowDrawList();
+    if(ImGui::IsItemHovered() || ImGui::IsItemActive())
+    {
+        const ImGuiCol highlight = ImGui::IsItemActive() ? ImGuiCol_HeaderActive : ImGuiCol_HeaderHovered;
+        draw_list->AddRectFilled(row_min, row_max, ImGui::GetColorU32(highlight), COMPONENT_MENU_ROUNDING);
+    }
+    const float text_y = row_min.y + (row_height - font_size) * 0.5f;
+    const float content_min_x = row_min.x + style.FramePadding.x;
+    const float content_max_x = row_max.x - style.FramePadding.x;
+    if(!row.icon.empty())
+    {
+        const float icon_width = ImGui::CalcTextSize(row.icon.c_str()).x;
+        const ImVec2 icon_pos(content_min_x + (icon_column - icon_width) * 0.5f, text_y);
+        draw_list->AddText(icon_pos, row.icon_color, row.icon.c_str());
+    }
+    ImGui::PushFont(row.font);
+    draw_list->AddText(ImVec2(content_min_x + icon_column, text_y), ImGui::GetColorU32(ImGuiCol_Text), row.label.c_str());
+    ImGui::PopFont();
+    if(!row.trailing.empty())
+    {
+        const float trailing_width = ImGui::CalcTextSize(row.trailing.c_str()).x;
+        const ImVec2 trailing_pos(content_max_x - trailing_width, text_y);
+        draw_list->AddText(trailing_pos, get_component_menu_muted_color(), row.trailing.c_str());
+    }
+    return clicked;
+}
+
+auto draw_component_menu_separator() -> void
+{
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+}
+
+auto draw_component_menu_empty(const char* message) -> void
+{
+    const float avail_x = ImGui::GetContentRegionAvail().x;
+    const float text_width = ImGui::CalcTextSize(message).x;
+    ImGui::Spacing();
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail_x - text_width) * 0.5f);
+    ImGui::TextDisabled("%s", message);
+}
+
+auto draw_component_menu_search_field(ImGuiTextFilter& filter) -> void
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, COMPONENT_MENU_ROUNDING);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        ImVec2(COMPONENT_MENU_SEARCH_PADDING_X, COMPONENT_MENU_SEARCH_PADDING_Y));
+    ImGui::DrawFilterWithHint(filter, ICON_MDI_MAGNIFY " Search components...", ImGui::GetContentRegionAvail().x);
+    ImGui::DrawItemActivityOutline();
+    ImGui::PopStyleVar(2);
+}
+
+auto draw_component_menu_entry(const component_menu_entry& entry, bool show_category) -> inspect_result
 {
     inspect_result result{};
-    if(!filter.PassFilter(name.c_str()))
+    component_menu_row row;
+    row.id = entry.category + "/" + entry.name;
+    row.icon = entry.icon;
+    row.icon_color = ImGui::GetColorU32(ImGuiCol_Text);
+    row.label = entry.name;
+    if(show_category)
     {
-        return result;
+        row.trailing = entry.category;
     }
-
-    if(ImGui::Selectable(fmt::format("{} {}", callbacks.icon, name).c_str()))
+    if(draw_component_menu_row(row))
     {
-        callbacks.on_remove();
-        callbacks.on_add();
-
+        entry.on_pick();
         result.changed = true;
         result.edit_finished = true;
-
         ImGui::CloseCurrentPopup();
     }
     return result;
 }
+
+auto draw_component_menu_category(const std::string& name) -> bool
+{
+    component_menu_row row;
+    row.id = "category/" + name;
+    row.icon = ICON_MDI_FOLDER_OUTLINE;
+    row.icon_color = get_component_menu_muted_color();
+    row.label = name;
+    row.trailing = ICON_MDI_CHEVRON_RIGHT;
+    return draw_component_menu_row(row);
+}
+
+auto draw_component_menu_back(const std::string& name) -> bool
+{
+    component_menu_row row;
+    row.id = "back";
+    row.icon = ICON_MDI_CHEVRON_LEFT;
+    row.icon_color = get_component_menu_muted_color();
+    row.label = name;
+    row.font = ImGui::Font::SemiBold;
+    return draw_component_menu_row(row);
+}
+
+/// Draws one menu level: a back row when inside a category, then sub-categories, then components.
+auto draw_component_menu_level(const component_menu_node& node, std::vector<std::string>& path) -> inspect_result
+{
+    inspect_result result{};
+    if(!path.empty())
+    {
+        if(draw_component_menu_back(path.back()))
+        {
+            path.pop_back();
+        }
+        draw_component_menu_separator();
+    }
+    for(const auto& [name, child] : node.children)
+    {
+        if(draw_component_menu_category(name))
+        {
+            path.push_back(name);
+        }
+    }
+    if(!node.children.empty() && !node.entries.empty())
+    {
+        draw_component_menu_separator();
+    }
+    for(const auto& entry : node.entries)
+    {
+        result |= draw_component_menu_entry(entry, false);
+    }
+    return result;
+}
+
+auto count_component_menu_matches(const ImGuiTextFilter& filter, const component_menu_node& node) -> size_t
+{
+    size_t count = std::count_if(node.entries.begin(),
+                                 node.entries.end(),
+                                 [&filter](const component_menu_entry& entry)
+                                 {
+                                     return filter.PassFilter(entry.name.c_str());
+                                 });
+    for(const auto& [name, child] : node.children)
+    {
+        count += count_component_menu_matches(filter, child);
+    }
+    return count;
+}
+
+/// Flat list of every component whose name passes the filter, regardless of the opened category.
+auto draw_component_menu_search(const ImGuiTextFilter& filter, const component_menu_node& node) -> inspect_result
+{
+    inspect_result result{};
+    for(const auto& entry : node.entries)
+    {
+        if(filter.PassFilter(entry.name.c_str()))
+        {
+            result |= draw_component_menu_entry(entry, true);
+        }
+    }
+    for(const auto& [name, child] : node.children)
+    {
+        result |= draw_component_menu_search(filter, child);
+    }
+    return result;
+}
+
 auto get_entity_pretty_name(entt::handle entity) -> const std::string&
 {
     if(!entity)
@@ -922,119 +1220,75 @@ auto inspector_entity::inspect(rtti::context& ctx,
         auto avail = ImGui::GetContentRegionAvail();
         ImVec2 size = ImGui::CalcItemSize(label);
         size.x *= 2.0f;
+        ImVec2 button_pos{};
         ImGui::AlignedItem(0.5f,
                            avail.x,
                            size.x,
                            [&]()
                            {
-                               auto pos = ImGui::GetCursorScreenPos();
+                               button_pos = ImGui::GetCursorScreenPos();
                                if(ImGui::Button(label, size))
                                {
                                    ImGui::OpenPopup("COMPONENT_MENU");
-                                   ImGui::SetNextWindowPos(pos);
                                }
                            });
 
-        if(ImGui::BeginPopup("COMPONENT_MENU"))
+        // The menu opens over the button like a dropdown, centered on it and pinned there while open.
+        const float menu_width = COMPONENT_MENU_WIDTH_EM * ImGui::GetFontSize();
+        ImGui::SetNextWindowPos(ImVec2(button_pos.x + (size.x - menu_width) * 0.5f, button_pos.y));
+        ImGui::SetNextWindowSize(ImVec2(menu_width, 0.0f));
         {
-            if(ImGui::IsWindowAppearing())
+            ImGui::ContextMenuStyleScope menu_style;
+            if(ImGui::BeginPopup("COMPONENT_MENU"))
             {
-                ImGui::SetKeyboardFocusHere();
+                if(ImGui::IsWindowAppearing())
+                {
+                    ImGui::SetKeyboardFocusHere();
+                    component_menu_path_.clear();
+                }
+
+                draw_component_menu_search_field(filter_);
+                ImGui::Spacing();
+
+                const float list_height = COMPONENT_MENU_LIST_HEIGHT_EM * ImGui::GetFontSize();
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                                    ImVec2(ImGui::GetStyle().ItemSpacing.x, COMPONENT_MENU_ROW_GAP));
+                ImGui::BeginChild("COMPONENT_MENU_CONTEXT", ImVec2(0.0f, list_height));
+
+                const auto menu = build_component_menu(ctx, data, result);
+                inspect_result menu_result{};
+                if(filter_.IsActive())
+                {
+                    if(count_component_menu_matches(filter_, menu) == 0)
+                    {
+                        draw_component_menu_empty("No matching components");
+                    }
+                    else
+                    {
+                        menu_result = draw_component_menu_search(filter_, menu);
+                    }
+                }
+                else
+                {
+                    const auto* level = find_component_menu_node(menu, component_menu_path_);
+                    if(level == nullptr)
+                    {
+                        // The opened category no longer exists (e.g. scripts were reloaded); fall back to the root.
+                        component_menu_path_.clear();
+                        level = &menu;
+                    }
+                    menu_result = draw_component_menu_level(*level, component_menu_path_);
+                }
+                if(menu_result.changed)
+                {
+                    component_menu_path_.clear();
+                }
+                result |= menu_result;
+
+                ImGui::EndChild();
+                ImGui::PopStyleVar();
+                ImGui::EndPopup();
             }
-
-            ImGui::DrawFilterWithHint(filter_, ICON_MDI_SELECT_SEARCH " Search...", size.x);
-            ImGui::DrawItemActivityOutline();
-
-            ImGui::Separator();
-            ImGui::BeginChild("COMPONENT_MENU_CONTEXT", ImVec2(ImGui::GetContentRegionAvail().x, size.x));
-
-            const auto& scr = ctx.get_cached<script_system>();
-            for(const auto& type : scr.get_all_scriptable_components())
-            {
-                const auto& name = type.get_fullname();
-
-                inspect_callbacks callbacks;
-
-                callbacks.on_add = [&]()
-                {
-                    //data.get_or_emplace<script_component>().add_script_component(type);
-                    auto& em = ctx.get_cached<editing_manager>();
-                    em.do_action<entity_add_script_component_action_t>({}, data, name);
-                    result.changed |= true;
-                    result.edit_finished |= true;
-                };
-
-                callbacks.on_remove = [&]()
-                {
-                };
-
-                callbacks.can_remove = []()
-                {
-                    return true;
-                };
-
-                callbacks.can_merge = []()
-                {
-                    return false;
-                };
-
-                callbacks.icon = ICON_MDI_LANGUAGE_CSHARP;
-
-                result |= list_component(filter_, name, callbacks);
-            }
-
-            hpp::for_each_tuple_type<all_addable_components>(
-                [&](auto index)
-                {
-                    using ctype = std::tuple_element_t<decltype(index)::value, all_addable_components>;
-
-                    auto name = entt::get_pretty_name(entt::resolve<ctype>());
-
-                    auto type = entt::resolve<ctype>();
-
-                    inspect_callbacks callbacks;
-
-                    callbacks.on_add = [&]()
-                    {
-                        // data.emplace<ctype>();
-                        auto& em = ctx.get_cached<editing_manager>();
-                        em.do_action<entity_add_component_action_t>({}, data, type);
-
-
-                        result.changed |= true;
-                        result.edit_finished |= true;
-                    };
-
-                    callbacks.on_remove = [&]()
-                    {
-                        if(data.all_of<ctype>())
-                        {
-                            auto& em = ctx.get_cached<editing_manager>();
-                            em.do_action<entity_remove_component_action_t>({}, data, type);
-                            result.changed |= true;
-                            result.edit_finished |= true;
-                        }
-                        
-                        
-                    };
-
-                    callbacks.can_remove = []()
-                    {
-                        return true;
-                    };
-
-                    callbacks.can_merge = []()
-                    {
-                        return false;
-                    };
-
-                    // callbacks.icon = ICON_MDI_GRID;
-
-                    result |= list_component(filter_, name, callbacks);
-                });
-
-            ImGui::EndChild();
-            ImGui::EndPopup();
         }
     }
 

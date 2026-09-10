@@ -11,7 +11,7 @@ REFLECT(audio_listener_component)
         .type("audio_listener_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "audio_listener_component"},
-            entt::attribute{"category", "AUDIO"},
+            entt::attribute{"category", "Audio"},
             entt::attribute{"pretty_name", "Audio Listener"},
         })
         .func<&component_meta<audio_listener_component>::exists>("component_exists"_hs)

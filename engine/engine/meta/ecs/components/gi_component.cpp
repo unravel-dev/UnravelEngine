@@ -517,7 +517,7 @@ REFLECT(gi_component)
         .type("gi_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gi_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "Global Illumination"},
         })
         .func<&component_meta<gi_component>::exists>("component_exists"_hs)

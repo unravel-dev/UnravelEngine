@@ -3,6 +3,9 @@
 
 #include <engine/ecs/ecs.h>
 
+#include <string>
+#include <vector>
+
 namespace unravel
 {
 struct inspector_entity : public crtp_meta_type<inspector_entity, inspector>
@@ -12,6 +15,8 @@ struct inspector_entity : public crtp_meta_type<inspector_entity, inspector>
 
 private:
     ImGuiTextFilter filter_;
+    /// Category path opened in the "Add Component" menu; empty means the root level.
+    std::vector<std::string> component_menu_path_;
 };
 
 REFLECT_INSPECTOR_INLINE(inspector_entity, entt::handle)

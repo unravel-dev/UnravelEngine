@@ -15,7 +15,7 @@ REFLECT(light_component)
         .type("light_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "light_component"},
-            entt::attribute{"category", "LIGHTING"},
+            entt::attribute{"category", "Lighting"},
             entt::attribute{"pretty_name", "Light"},
         })
         .func<&component_meta<light_component>::exists>("component_exists"_hs)
@@ -153,7 +153,7 @@ REFLECT(skylight_component)
         .type("skylight_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "skylight_component"},
-            entt::attribute{"category", "LIGHTING"},
+            entt::attribute{"category", "Lighting"},
             entt::attribute{"pretty_name", "Skylight"},
         })
         .func<&component_meta<skylight_component>::exists>("component_exists"_hs)

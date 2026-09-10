@@ -26,7 +26,7 @@ REFLECT(camera_component)
         .type("camera_component"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "camera_component"},
-            entt::attribute{"category", "RENDERING"},
+            entt::attribute{"category", "Rendering"},
             entt::attribute{"pretty_name", "Camera"},
         })
         .func<&component_meta<camera_component>::exists>("component_exists"_hs)
