@@ -46,6 +46,9 @@ constexpr float COMPONENT_MENU_SEARCH_PADDING_X = 8.0f;
 constexpr float COMPONENT_MENU_SEARCH_PADDING_Y = 6.0f;
 // Secondary elements (folder icons, chevrons, category hints) use the text color at this alpha.
 constexpr float COMPONENT_MENU_MUTED_ALPHA = 0.6f;
+// Drop-target frame drawn around the component list and the "Add Component" button while a script file is dragged.
+constexpr float SCRIPT_DROP_FRAME_THICKNESS = 2.0f;
+constexpr ImVec4 DRAG_DROP_TARGET_COLOR{1.0f, 1.0f, 0.0f, 1.0f};
 
 template<typename T>
 auto get_component_icon() -> std::string
@@ -649,6 +652,101 @@ auto process_drag_drop_target(rtti::context& ctx, entt::handle& obj) -> bool
     return result;
 }
 
+/// Scriptable component types defined in a script source file: those whose ScriptSourceFile attribute
+/// records the file, else those named after the file stem (the new-script template convention).
+auto find_script_component_types(const script_system& scr, const fs::path& source_path) -> std::vector<dotnet::type>
+{
+    std::vector<dotnet::type> by_source;
+    std::vector<dotnet::type> by_name;
+    const std::string stem = source_path.stem().string();
+    for(const auto& type : scr.get_all_scriptable_components())
+    {
+        const fs::path type_source = script_component::get_script_type_source_location(type);
+        fs::error_code ec;
+        if(!type_source.empty() && fs::equivalent(type_source, source_path, ec))
+        {
+            by_source.push_back(type);
+        }
+        else if(type.get_name() == stem)
+        {
+            by_name.push_back(type);
+        }
+    }
+    return by_source.empty() ? by_name : by_source;
+}
+
+/// Attaches every script component type defined in the dropped source file, as the "Add Component" menu would.
+auto add_script_components_from_source(rtti::context& ctx,
+                                       entt::handle& data,
+                                       const fs::path& source_path,
+                                       inspect_result& result) -> void
+{
+    const auto& scr = ctx.get_cached<script_system>();
+    const auto types = find_script_component_types(scr, source_path);
+    if(types.empty())
+    {
+        APPLOG_WARNING("No compiled script component was found for '{}'. Check that it derives from "
+                       "ScriptComponent and that the scripts compiled without errors.",
+                       source_path.generic_string());
+        return;
+    }
+    auto& em = ctx.get_cached<editing_manager>();
+    for(const auto& type : types)
+    {
+        em.do_action<entity_add_script_component_action_t>({}, data, type.get_fullname());
+    }
+    result.changed |= true;
+    result.edit_finished |= true;
+}
+
+auto is_script_drag_active() -> bool
+{
+    const auto& formats = ex::get_suported_formats<script>();
+    return std::any_of(formats.begin(),
+                       formats.end(),
+                       [](const std::string& format)
+                       {
+                           return ImGui::IsDragDropPossibleTargetForType(format.c_str());
+                       });
+}
+
+/// Makes the last item a drop target for script files dragged from the content browser.
+/// The highlight sits just outside the item: a frame on its edge would be hidden beneath an opaque child window.
+auto process_script_drop_target(rtti::context& ctx, entt::handle& data, inspect_result& result) -> void
+{
+    const bool is_script_drag = is_script_drag_active();
+    if(is_script_drag)
+    {
+        ImRect frame(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+        frame.Expand(SCRIPT_DROP_FRAME_THICKNESS * 0.5f);
+        ImGui::GetWindowDrawList()->AddRect(frame.Min,
+                                            frame.Max,
+                                            ImGui::GetColorU32(DRAG_DROP_TARGET_COLOR),
+                                            ImGui::GetStyle().FrameRounding,
+                                            0,
+                                            SCRIPT_DROP_FRAME_THICKNESS);
+    }
+    if(!ImGui::BeginDragDropTarget())
+    {
+        return;
+    }
+    if(is_script_drag)
+    {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+    for(const auto& format : ex::get_suported_formats<script>())
+    {
+        const auto* payload = ImGui::AcceptDragDropPayload(format.c_str());
+        if(payload == nullptr)
+        {
+            continue;
+        }
+        const std::string absolute_path(reinterpret_cast<const char*>(payload->Data), std::size_t(payload->DataSize));
+        add_script_components_from_source(ctx, data, fs::path(absolute_path), result);
+    }
+    ImGui::EndDragDropTarget();
+}
+
 auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override_context& override_ctx) -> inspect_result
 {
     inspect_result result{};
@@ -1213,6 +1311,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
         }
 
         ImGui::EndChild();
+        process_script_drop_target(ctx, data, result);
 
         ImGui::Spacing();
         ImGui::Spacing();
@@ -1231,6 +1330,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                                {
                                    ImGui::OpenPopup("COMPONENT_MENU");
                                }
+                               process_script_drop_target(ctx, data, result);
                            });
 
         // The menu opens over the button like a dropdown, centered on it and pinned there while open.

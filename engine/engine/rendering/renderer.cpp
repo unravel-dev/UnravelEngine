@@ -410,7 +410,7 @@ auto renderer::get_reset_flags(const cmd_line::parser& parser) const -> uint32_t
 
 auto renderer::get_reset_flags(bool vsync) const -> uint32_t
 {
-    uint32_t flags = BGFX_RESET_MAXANISOTROPY | BGFX_RESET_HIDPI;
+    uint32_t flags = BGFX_RESET_MAXANISOTROPY | BGFX_RESET_HIDPI | BGFX_RESET_HDR10;
 
     if(vsync)
     {
