@@ -78,6 +78,8 @@
 DirectX 11 • DirectX 12 • Vulkan • OpenGL
 
 ## 📸 Screenshots
+<img width="2557" height="1383" alt="Screenshot 2026-09-11 085940" src="https://github.com/user-attachments/assets/0651a2d6-ac33-43a2-b6c1-264c5e44a8e2" />
+<img width="2557" height="1383" alt="Screenshot 2026-09-11 091154" src="https://github.com/user-attachments/assets/e61f2f7a-77fc-4476-8f5d-49b3f69bb64a" />
 <img width="2560" height="1380" alt="Screenshot 2026-06-09 235910" src="https://github.com/user-attachments/assets/7bdbe702-ad80-418b-a2be-81d6c46fa305" />
 <img width="2560" height="1380" alt="Screenshot 2025-08-10 234456" src="https://github.com/user-attachments/assets/1fc3ccc8-1ad1-4a8a-b335-7e478eb8f479" />
 <img width="2560" height="1380" alt="Screenshot 2025-08-10 234618" src="https://github.com/user-attachments/assets/98475418-1f0f-41be-9dac-4e2268c9feda" />
@@ -184,6 +186,7 @@ Unravel Engine is built upon these excellent open-source libraries:
 |---------|---------|------------|
 | [bgfx](https://github.com/bkaradzic/bgfx) | Cross-platform rendering | [Link](https://github.com/bkaradzic/bgfx) |
 | [EnTT](https://github.com/skypjack/entt) | Entity-Component-System | [Link](https://github.com/skypjack/entt) |
+| [Box3D](https://github.com/erincatto/box3d) | Physics simulation | [Link](https://github.com/erincatto/box3d) |
 | [Bullet3](https://github.com/bulletphysics/bullet3) | Physics simulation | [Link](https://github.com/bulletphysics/bullet3) |
 | [Dear ImGui](https://github.com/ocornut/imgui) | Immediate mode GUI | [Link](https://github.com/ocornut/imgui) |
 | [RmlUi](https://github.com/mikke89/RmlUi) | HTML+CSS game UI | [Link](https://github.com/mikke89/RmlUi) |
