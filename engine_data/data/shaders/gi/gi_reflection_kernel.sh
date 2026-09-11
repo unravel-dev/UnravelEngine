@@ -84,7 +84,8 @@ float GiReflectionPieceIrradiance(GiEmitter e, vec3 position, vec3 normal)
 		axis = vec3(0.0, 0.0, 1.0);
 		half_length = 0.5 * ext.z;
 	}
-	float patch = GiEmitterSurfaceArea(ext) / float(GI_REFLECTION_NEAR_FIELD_SAMPLES);
+	// 'patch' is a GLSL keyword (tessellation); the area of one sampled patch of the piece.
+	float patch_area = GiEmitterSurfaceArea(ext) / float(GI_REFLECTION_NEAR_FIELD_SAMPLES);
 	// Never closer than the piece's own half thickness: the surface, not its centre line.
 	float d_min = max(0.5 * min(ext.x, min(ext.y, ext.z)), 0.02);
 	float sum = 0.0;
@@ -94,10 +95,11 @@ float GiReflectionPieceIrradiance(GiEmitter e, vec3 position, vec3 normal)
 		float t = (float(i) + 0.5) / float(GI_REFLECTION_NEAR_FIELD_SAMPLES) * 2.0 - 1.0;
 		vec3 to_patch = e.center + axis * (t * half_length) - position;
 		float d2 = max(dot(to_patch, to_patch), d_min * d_min);
-		float cos_receiver = max(dot(normal, to_patch * rsqrt(d2)), 0.0);
+		// inversesqrt: GLSL's spelling, mapped to rsqrt for HLSL by bgfx_shader.sh.
+		float cos_receiver = max(dot(normal, to_patch * inversesqrt(d2)), 0.0);
 		sum += cos_receiver / d2;
 	}
-	return 0.5 * GiEmitterLuminance(e) * patch * sum;
+	return 0.5 * GiEmitterLuminance(e) * patch_area * sum;
 }
 
 /// The near-field factor for a mirror hit's lit voxel value: the strongest

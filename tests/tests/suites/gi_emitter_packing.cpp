@@ -92,10 +92,10 @@ auto shader_decode_extent(float lane) -> math::vec3
     {
         return math::vec3(0.0f, 0.0f, 0.0f);
     }
-    const float packed = -lane - 1.0f;
-    const float x8 = std::floor(std::fmod(packed, 256.0f));
-    const float y8 = std::floor(std::fmod(packed / 256.0f, 256.0f));
-    const float z8 = std::floor(packed / 65536.0f);
+    const float extent_bits = -lane - 1.0f;
+    const float x8 = std::floor(std::fmod(extent_bits, 256.0f));
+    const float y8 = std::floor(std::fmod(extent_bits / 256.0f, 256.0f));
+    const float z8 = std::floor(extent_bits / 65536.0f);
     return math::vec3(x8, y8, z8) * (float(gi::GI_EMISSIVE_NEE_SEGMENT) / 255.0f);
 }
 
@@ -210,10 +210,10 @@ void test_shader_source_still_matches()
     // does not update the other lands here instead of in a scene.
     const std::vector<std::string> expected = {
         "e.has_extent=e1.w<-0.5;",
-        "floatpacked=-e1.w-1.0;",
-        "floatx8=floor(mod(packed,256.0));",
-        "floaty8=floor(mod(packed/256.0,256.0));",
-        "floatz8=floor(packed/65536.0);",
+        "floatextent_bits=-e1.w-1.0;",
+        "floatx8=floor(mod(extent_bits,256.0));",
+        "floaty8=floor(mod(extent_bits/256.0,256.0));",
+        "floatz8=floor(extent_bits/65536.0);",
         "e.extent=vec3(x8,y8,z8)*(GI_EMISSIVE_NEE_SEGMENT/255.0);",
         "e.power=GiEmitterLuminance(e)*GiEmitterEmittingArea(e.extent);",
         "return2.0*(extent.x*extent.y+extent.y*extent.z+extent.z*extent.x);",

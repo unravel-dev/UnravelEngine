@@ -130,7 +130,9 @@ uniform mat4 u_gi_prev_view_proj;
 #	define GI_TRACE_SLOT_COUNT 1
 #endif
 /// Lanes per probe in the adaptive program = the 4x4 block count of the 8x8 tile.
-#define GI_TRACE_ADAPTIVE_LANES ((GI_PROBE_DIR_EDGE / 2) * (GI_PROBE_DIR_EDGE / 2))
+// = (GI_PROBE_DIR_EDGE / 2) squared, written as a literal: it feeds NUM_THREADS, and a GLSL
+// 430 layout id takes no expression (glslang: 'non-literal layout-id value').
+#define GI_TRACE_ADAPTIVE_LANES 16
 
 SHARED vec3 s_anchor_normal[GI_TRACE_SLOT_COUNT];
 SHARED vec3 s_origin[GI_TRACE_SLOT_COUNT];

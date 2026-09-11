@@ -72,8 +72,10 @@ float GiWorldProbeEmitterCoverage(vec3 direction, vec3 origin)
 /// running mean over windows (GI_WORLD_PROBE_EMA_WINDOWS) - the read is this texel's own
 /// previous value; hitT stays the latest sample.
 IMAGE2D_RW(s_world_probe_radiance_out, rgba16f, 5);
-/// One packed cell id per probe slot across all cascades (GiWorldProbePackCell).
-BUFFER_RW(b_world_probe_cells, uint, 6);
+/// One packed cell id per probe slot across all cascades (GiWorldProbePackCell). Stage 8: a
+/// buffer may sit past 7 on every backend; an IMAGE may not on OpenGL (eight image units,
+/// 0-7), so the vis-memo image below holds this kernel's stage 6.
+BUFFER_RW(b_world_probe_cells, uint, 8);
 /// Complete windows accumulated per probe slot since its claim or the last fast window - the
 /// running mean's count (saturating at GI_WORLD_PROBE_EMA_WINDOWS).
 BUFFER_RW(b_world_probe_counts, uint, 7);
@@ -87,8 +89,9 @@ SAMPLER2D(s_gi_env_sh, 14);
 SAMPLER2D(s_world_probe_irradiance_seed, 11);
 /// The bounce vis-memo, bound for its statistics slice alone: the world-probe census
 /// (GI_STATS_PROBES_*, GI_STATS_PROBE_TEXELS_*) the waste ledger reads back on demand.
-/// Stage 8 is one of this kernel's three free stages (8, 9, 15).
-UIMAGE3D_RW(s_gi_vis_memo, r32ui, 8);
+/// Stage 6 (an image stage must stay below 8 for OpenGL's image units); the free stages
+/// are 9 and 15.
+UIMAGE3D_RW(s_gi_vis_memo, r32ui, 6);
 /// xy = 1 / irradiance-depth atlas size (the seeding read shares the irradiance tile layout).
 /// z = strata per frame (the fast-refresh window). Carried HERE, in a trace-only uniform,
 /// rather than in u_gi_world_probe_params.w: that lane is the cage-visibility variance gate

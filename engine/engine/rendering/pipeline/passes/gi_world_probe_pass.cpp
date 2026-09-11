@@ -148,14 +148,16 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
                        0,
                        gfx::access::ReadWrite,
                        gfx::texture_format::RGBA16F);
-        gfx::set_buffer(6, clipmap_gpu.get_world_probe_cells(), gfx::access::ReadWrite);
+        // Stage 8 for the cells buffer and 6 for the vis-memo image: OpenGL has eight image
+        // units (0-7), buffers may bind past them (cs_gi_world_probe_trace.sc).
+        gfx::set_buffer(8, clipmap_gpu.get_world_probe_cells(), gfx::access::ReadWrite);
         gfx::set_buffer(7, clipmap_gpu.get_world_probe_counts(), gfx::access::ReadWrite);
         // The bounce vis-memo for its statistics slice alone: the probe census the waste
         // ledger reads back on demand (GI_STATS_PROBES_*). Stage 8 is free in this kernel.
         const auto& vis_memo = clipmap_gpu.get_bounce_vis_memo();
         if(vis_memo && vis_memo->is_valid())
         {
-            gfx::set_image_3d(8, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
+            gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
         }
         // The window index's R2 offset in double (a float(frame) product loses the jitter
         // over a long session); the fast window advances windows four times faster.

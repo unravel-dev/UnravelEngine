@@ -103,10 +103,11 @@ GiEmitter GiLoadEmitter(int index)
 	e.has_extent = e1.w < -0.5;
 	if(e.has_extent)
 	{
-		float packed = -e1.w - 1.0;
-		float x8 = floor(mod(packed, 256.0));
-		float y8 = floor(mod(packed / 256.0, 256.0));
-		float z8 = floor(packed / 65536.0);
+		// 'packed' is a GLSL keyword (a layout qualifier); the lane is named for what it holds.
+		float extent_bits = -e1.w - 1.0;
+		float x8 = floor(mod(extent_bits, 256.0));
+		float y8 = floor(mod(extent_bits / 256.0, 256.0));
+		float z8 = floor(extent_bits / 65536.0);
 		e.extent = vec3(x8, y8, z8) * (GI_EMISSIVE_NEE_SEGMENT / 255.0);
 		// The packed lane is NEGATIVE, so leaving it in power made every consumer's score
 		// negative: the reflection near-field's descending top-K starts its scores at zero,
