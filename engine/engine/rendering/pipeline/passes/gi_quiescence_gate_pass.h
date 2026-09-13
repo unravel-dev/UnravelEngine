@@ -123,6 +123,10 @@ public:
     /// Asks the next run() to copy the slice out and read it back; get_stats_snapshot()
     /// turns valid with a frame stamp at or after this call's frame a few frames later.
     void request_stats_snapshot();
+    /// Whether the census rows (GI_STATS_RELIGHT_FACES_MOVED onward, except the allocation
+    /// count the gate itself reads) should accumulate this frame: instrument work the passes
+    /// skip unless a snapshot was requested within census_hold_frames.
+    auto is_census_armed() const -> bool;
     auto get_stats_snapshot() const -> const stats_snapshot&
     {
         return stats_snapshot_;
@@ -195,6 +199,13 @@ private:
     uint32_t snapshot_ready_frame_ = 0;
     bool snapshot_requested_ = false;
     bool snapshot_pending_ = false;
+    /// Frames a snapshot request keeps the census armed (a tool sampling every few seconds
+    /// keeps it on), and the frames the copy waits so the armed rows accumulate first.
+    static constexpr uint32_t census_hold_frames = 240u;
+    static constexpr uint32_t census_warmup_frames = 4u;
+    /// Render frame until which the census stays armed / before which the copy is not issued.
+    uint32_t census_until_frame_ = 0;
+    uint32_t snapshot_not_before_frame_ = 0;
 };
 
 } // namespace unravel

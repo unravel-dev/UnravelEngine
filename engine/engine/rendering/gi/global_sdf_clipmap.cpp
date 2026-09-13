@@ -385,10 +385,18 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
                 lvl.scroll_shift = shift;
             }
         }
+        // A compose that only scrolled: the origin moved while the instance content revision
+        // held since this level's last compose (get_edited_content_epoch).
+        const bool scroll_compose = instances_revision != 0 && instances_revision == lvl.composed_revision &&
+                                    target_origin[best] != lvl.origin;
         lvl.origin = target_origin[best];
         if(lvl.content_fingerprint != target_fingerprint[best])
         {
             ++composed_content_epoch_;
+            if(!scroll_compose)
+            {
+                ++edited_content_epoch_;
+            }
         }
         lvl.content_fingerprint = target_fingerprint[best];
         lvl.composed_revision = instances_revision;

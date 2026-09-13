@@ -49,8 +49,10 @@
       " and the same floor read E/pi 1.2 from 2.5 m and 0.25 from 15 m. 8 m keeps the completion" \
       " point inside the open courtyard well (a probe at the roof's height sees the roof, not"    \
       " the sky) and matches GI_MESH_SDF_TRACE_RANGE so the whole own-visibility length is"       \
-      " mesh-exact; the level-0 probe window (+-18 m) then covers the completion points of"       \
-      " every surface within ~14 m of the camera")                                                 \
+      " mesh-exact. NOT SHORTER: 3.6 m (Lumen's hand-off) saved 0.3-0.4 ms of gather in motion"  \
+      " but the GI test suite's 5 cm-walled sealed cell read 0.0157 -> 0.0824 (target 0.0235):"  \
+      " shorter rays complete from world-probe cages sooner, and near a thin wall the cage's"    \
+      " clipmap-marched visibility cannot see the wall (gi_perf_investigation_2026-09-13.md)")    \
     X(GI_RELIGHT_SHADOW_NEAR_FIELD, 2.0f,                                                          \
       "m", "published: [S22 p44] the light-voxel relight's shadow rays keep the 2 m mesh-exact"   \
       " near field (scaled per level by the kernel) when GI_MESH_SDF_TRACE_RANGE grew to 8 m for"  \
@@ -163,28 +165,24 @@
       " voxel, and a 25 cm slab (a full voxel at level 1) always receives one inside its dip."     \
       " Four trilinear fetches per voxel per relight, on the memo-establishing face only,"         \
       " against the ~100 m sphere trace they guard")                                               \
-    X(GI_SUN_SHADOWMAP_MAX_VOXEL, 0.125f,                                                          \
-      "m", "derived: the sun shadow-map tier's ceiling on the ANSWERING LEVEL's voxel. The"        \
-      " tier biases the receiver by one level voxel of light-space depth"                          \
-      " (GI_SUN_SHADOWMAP_SLOPE_COVER_VOXELS, which the +-0.5-voxel quadrature over a whole"       \
-      " attribute face genuinely needs), so it reports LIT through any occluder thinner than"      \
-      " that voxel - a field-free sun injector into every sealed room whose roof is thinner"       \
-      " than a coarse cascade cell, bypassing the SDF, the cage visibility and the dead-probe"     \
-      " gate alike (measured: interior ceiling brightest, sun-white, falling off downward,"        \
-      " walls merely bouncing it). At metre-scale faces NO bias is simultaneously acne-free"       \
-      " and leak-free, so the tier must decline rather than guess: above this the traced"          \
-      " field answers, exactly as it did before the tier existed. 0.125 m keeps ONLY level 0"      \
-      " at the runtime cascade (resolution 128 over a 16 m base extent = 0.125 m voxels):"         \
-      " the bias must stay below the thinnest geometry a scene is expected to seal, and at"        \
-      " level 1 the 0.25 m bias EQUALS a 25 cm door slab or baffle, which the tier then"           \
-      " reports lit for any sun within 60 degrees of grazing (depth through the slab ="            \
-      " thickness x cos(incidence) < bias). Level 0 sits 2x below that slab; CSM cascade 0 -"      \
-      " the only split the tier binds - covers the near frustum slice where level 0 lives."       \
-      " Coarser levels inside the level-0 window inherit its faces instead (the light-voxel"     \
-      " kernel's fine-level pull), so the map's answer reaches them without a tap of their own;"  \
-      " a lifted single-tap variant for the coarse levels was measured and rejected (a second"   \
-      " launch per cascade cost +0.4 ms, and one launch under cascade 0 lit thin-walled sealed"   \
-      " cells)")                                                                                   \
+    X(GI_SUN_SHADOWMAP_MAX_VOXEL, 1.0f,                                                            \
+      "m", "the sun shadow-map tier's ceiling on the ANSWERING LEVEL's voxel: 1 m admits every"    \
+      " cascade level (phase E, audit section 23). It was 0.125 (level 0 only) while the"          \
+      " receiver bias grew with the level voxel and the tier bound cascade 0 alone: at level 1"    \
+      " a 0.25 m bias equalled a 25 cm door slab, lit through for any sun within 60 degrees of"    \
+      " grazing (depth through the slab = thickness x cos(incidence) < bias), and at the coarse"   \
+      " levels a metre - a field-free sun injector into every sealed room (measured: interior"    \
+      " ceiling brightest, sun-white, falling off downward). The slope cover is now capped at"     \
+      " GI_SUN_SHADOWMAP_SLOPE_CAP, so a coarse face's bias stays at level 0's; its outer taps"    \
+      " may self-shadow on a tilted surface (a darker pool, never a lit sealed room), and the"     \
+      " traced field answers only beyond the last cascade's crop")                                 \
+    X(GI_SUN_SHADOWMAP_SLOPE_CAP, 0.125f,                                                          \
+      "m", "the largest voxel the sun tier's slope cover is computed for: the receiver bias is"    \
+      " the cascade's constant bias plus min(level voxel, this) x"                                 \
+      " GI_SUN_SHADOWMAP_SLOPE_COVER_VOXELS of light-space depth. Level 0's own voxel, so level"   \
+      " 0 is unchanged and every coarser level biases like level 0 instead of by its metre-scale"  \
+      " voxel (which lit sealed rooms through their roofs); the bias stays below the thinnest"     \
+      " geometry a scene seals")                                                                   \
     X(GI_WORLD_PROBE_DIVISOR, 16,                                                                  \
       "SDF voxels per probe cell", "published: [SDFGI] PROBE_DIVISOR - 9^3 probe lattice per"      \
       " cascade at resolution 128")                                                                \
@@ -524,19 +522,21 @@
       " must track moving content faster than irradiance, so one cycle, ~130 ms at 60 Hz."         \
       " The temporal pass clamps history to the 3x3 neighbourhood of the current frame's"         \
       " samples, so stale content cannot outlive a frame regardless of this length")               \
-    X(GI_REFLECTION_MESH_SDF_RANGE_SHARP, 16.0f,                                                   \
-      "meters", "derived: a mirror is one image-ray, so the mesh-exact walk may run past the"      \
-      " gather's 2 m contact bound - but beyond a few metres the clipmap-finder + refine path"     \
-      " already snaps hits back to the mesh (GI_REFLECTION_REFINE_*) at a tenth of the long"       \
-      " grid walk's cost, so the walk only needs to cover the range where refine's window can"     \
-      " miss thin silhouettes: level 0's 16 m cube. Was 40 m, which duplicated refine's job on"    \
-      " the dominant-cost pixels; the A/B metric is the unrefined-clipmap fraction"                \
-      " (instance_index == SDF_NO_INSTANCE && !exhausted) - widen the refine window before"        \
-      " raising this back")                                                                        \
-    X(GI_REFLECTION_MESH_SDF_RANGE_GLOSS, 8.0f,                                                    \
-      "meters", "derived: at GI_REFLECTION_GATHER_FADE_START the GGX lobe already spans"           \
-      " clipmap voxels, so mesh-exact silhouettes stop mattering. 8 m is 4x the gather's"          \
-      " 2 m contact bound and half the old flat 16 m - the budget that funds the sharp end")       \
+    X(GI_REFLECTION_MESH_SDF_RANGE_SHARP, 8.0f,                                                     \
+      "meters", "measured: a mirror is one image-ray, so the mesh-exact walk may run past the"      \
+      " gather's contact bound - but beyond a few metres the clipmap-finder + refine path"          \
+      " already snaps hits back to the mesh (GI_REFLECTION_REFINE_*) at a tenth of the long"        \
+      " grid walk's cost. Was 40 m, then 16 m (level 0's cube); 8 m, with"                          \
+      " GI_REFLECTION_MESH_SDF_RANGE_GLOSS at 3.6 m, measured 2026-09-13 on Sponza:"                \
+      " Reflections Trace 0.75 / 0.72 -> 0.60 / 0.49 ms in motion, the reflections view within"     \
+      " 1 percent at five poses including two grazing floor views"                                  \
+      " (gi_perf_investigation_2026-09-13.md)")                                                     \
+    X(GI_REFLECTION_MESH_SDF_RANGE_GLOSS, 3.6f,                                                     \
+      "meters", "measured: at GI_REFLECTION_GATHER_FADE_START the GGX lobe already spans"           \
+      " clipmap voxels, so mesh-exact silhouettes stop mattering well before the sharp end."        \
+      " 3.6 m since 2026-09-13 (was 8 m), in one A/B with GI_REFLECTION_MESH_SDF_RANGE_SHARP:"      \
+      " Reflections Trace -0.15 to -0.23 ms in motion, the reflections view within 1 percent"       \
+      " (gi_perf_investigation_2026-09-13.md)")                                                     \
     X(GI_REFLECTION_TRACE_SURFACE_BIAS, 0.25f,                                                     \
       "voxels of the answering field", "derived: half of GI_PROBE_TRACE_SURFACE_BIAS."             \
       " Lumen prefers a bit of leak over fattened silhouettes on reflections [S22 p695];"          \
@@ -1135,12 +1135,46 @@
       " visible fraction. The irradiance cascade, the radiance completion and the light-voxel"    \
       " bounce twin all read it - they must stay in step")                                        \
     /* --- sparse level-0 probes (gi_single_lighting_plan.md phase D) --- */                       \
+    X(GI_WORLD_PROBE_RELOCATE_CLEARANCE, 0.15f,                                                    \
+      "probe spacings", "[DDGI19 relocation] the clearance a sparse level-0 probe keeps from"      \
+      " the mesh fields: a lattice point nearer than this (or inside geometry) traces from a"     \
+      " point pushed out along the field gradient. 0.3 m at level 0 - past the trace bias and"   \
+      " two field voxels, so a relocated probe's rays leave the wall cleanly and its depth"       \
+      " lobe toward the room measures the room. Audit section 22: on covered faces the 2 m"      \
+      " cage answered black for a third of them, its corners dead inside walls and floors")      \
+    X(GI_WORLD_PROBE_RELOCATE_RADIUS, 0.45f,                                                       \
+      "probe spacings", "[DDGI19 relocation] the farthest a probe moves from its lattice"          \
+      " point: under half a spacing, so it stays inside its own cell and the nominal"             \
+      " trilinear weights remain a sane blend. A point that cannot reach the clearance within"    \
+      " this radius stays buried (dead) and never claims a slot")                                 \
+    X(GI_WORLD_PROBE_RELOCATE_STEPS, 3,                                                            \
+      "iterations", "gradient-descent steps of the relocation (seven field samples each); the"    \
+      " field's gradient turns at edges and corners, so one step overshoots into the next wall"   \
+      " while three settle")                                                                      \
+    X(GI_WORLD_PROBE_RELOCATE_RETEST_TICKS, 64,                                                    \
+      "clock ticks", "a cell the relocation pass found buried (marked in the index lane) is"      \
+      " re-claimed and re-tested only every this many ticks, so a wall that moved away frees"    \
+      " its lattice points within a second while a static wall costs one claim-and-free per"     \
+      " cell per period instead of one per frame")                                                \
+    X(GI_WORLD_PROBE_RELOCATE_REFRESH_FRAMES, 16,                                                  \
+      "frames", "the world-probe trace re-runs a live level-0 probe's relocation once per this"   \
+      " many frames, a rotation over the pool, and reads the stored offset otherwise: the mesh"  \
+      " fields a lattice point sits in change only with movers and field streaming, and the"     \
+      " per-frame refresh cost 0.6 ms of a 2.4-3.1 ms trace in motion"                            \
+      " (gi_perf_investigation_2026-09-13.md). Claims relocate at once in the relocation pass")    \
+    X(GI_WORLD_PROBE_CONVOLVE_PERIOD, 4,                                                           \
+      "frames", "a settled world probe (two complete windows since its claim or its last fast"   \
+      " window) is re-convolved once per this many frames, a rotation over the slots; younger"   \
+      " probes every frame, so a fresh claim never serves its slot's previous tiles. The trace"  \
+      " refreshes one stratum in sixteen per frame, so the settled irradiance lags by at most"   \
+      " three frames; the convolve integrated all 21,507 slots every open frame")                 \
     X(GI_WORLD_PROBE_EVICT_IDLE_FRAMES, 1024,                                                      \
       "frames", "derived: GI_QUIESCENCE_MAX_FRAMES - a sparse level-0 probe nobody has requested" \
       " for this long is freed while the pool is comfortable. The relight is the requester for"   \
       " the surface cells' cages and it stops running under the quiescence gate, so a shorter"    \
       " age would evict a parked shot's cages and re-allocate (and re-converge) them on the"      \
-      " next light edit: the age matches the longest the gate can hold the relight off")          \
+      " next light edit: the age matches the longest the gate can hold the relight off. The ticks" \
+      " advance only on frames the world-probe trace runs, so a parked shot does not age at all")          \
     X(GI_WORLD_PROBE_EVICT_PRESSURE_FRAMES, 16,                                                    \
       "frames", "derived: one probe window (GI_WORLD_PROBE_WINDOW) - under pool pressure a"       \
       " probe unrequested for a whole window has no reader this window; the gather stamps its"    \
@@ -1148,7 +1182,7 @@
       " frames), so live cages survive it")                                                       \
     X(GI_WORLD_PROBE_POOL_PRESSURE_DIVISOR, 8,                                                     \
       "divisor", "derived: pressure eviction starts when fewer than a divisor-th of"              \
-      " GI_WORLD_PROBE_POOL_L0 is free (1024 slots of 8192) - enough headroom for one frame's"   \
+      " GI_WORLD_PROBE_POOL_L0 is free (2048 slots of 16384) - enough headroom for one frame's"   \
       " worth of new requests on a camera turn before the pool is actually empty")                \
     X(GI_WORLD_PROBE_REQUEST_AGE, 2,                                                               \
       "clock ticks", "derived: the allocation pass runs before the consumers that stamp, so a"   \

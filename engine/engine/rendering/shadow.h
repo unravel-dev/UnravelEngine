@@ -740,6 +740,25 @@ public:
         return uniforms_.m_csmFarDistances[split];
     }
 
+    /// World size of one texel of one directional split - the unit its biases are expressed
+    /// in (the GI light-voxel pass scales cascade 0's constant bias by it per split).
+    auto get_cascade_texel_world(uint8_t split) const -> float
+    {
+        return uniforms_.m_csmTexelWorld[split];
+    }
+
+    /// Active directional splits (the maps get_rt_texture answers for).
+    auto get_num_splits() const -> uint8_t
+    {
+        return uint8_t(settings_.m_numSplits);
+    }
+
+    /// Edge of every split's map in texels.
+    auto get_shadow_map_size() const -> uint16_t
+    {
+        return current_shadow_map_size_;
+    }
+
     // Configuration methods for improved shadow mapping
     void set_frustum_calculation_method(frustum_calculation_method::Enum method) { frustum_method_ = method; }
     auto get_frustum_calculation_method() const -> frustum_calculation_method::Enum { return frustum_method_; }

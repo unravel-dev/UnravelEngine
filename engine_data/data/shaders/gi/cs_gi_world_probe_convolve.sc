@@ -34,6 +34,13 @@ IMAGE2D_WO(s_world_probe_depth_out, rg16f, 6);
 /// The per-slot cell ids, read for one bit: a FREE sparse slot has no tile worth convolving
 /// (nothing points at it), and most of the pool is free.
 BUFFER_RO(b_world_probe_cells, uint, 7);
+/// The per-slot window counts (the trace's b_world_probe_counts): windows since the claim or
+/// the last fast window, for the rotation below.
+BUFFER_RO(b_world_probe_counts, uint, 8);
+/// A probe younger than this many complete windows convolves every frame (a fresh claim must
+/// never serve the tiles its slot's previous cell left, and a fast window's re-measure must
+/// land at once); older ones on the GI_WORLD_PROBE_CONVOLVE_PERIOD rotation.
+#define CONVOLVE_SETTLED_WINDOWS 2u
 
 #define GUTTER_EDGE (GI_WORLD_PROBE_OCT_IRRADIANCE + 2)
 #define RADIANCE_TEXELS (GI_WORLD_PROBE_OCT_RADIANCE * GI_WORLD_PROBE_OCT_RADIANCE)
@@ -57,6 +64,14 @@ void main()
 	}
 	// A free sparse slot: uniform per group, so the whole group leaves before the barrier.
 	if(level == 0 && b_world_probe_cells[slot_linear] == GI_WORLD_PROBE_NONE)
+	{
+		return;
+	}
+	// ROTATION (GI_WORLD_PROBE_CONVOLVE_PERIOD): a settled probe's atlas changes by one stratum
+	// in sixteen per frame, so its integral is re-taken once per period; the group leaves
+	// before the barrier like a free slot, which costs an eighth of a convolved probe.
+	if(b_world_probe_counts[slot_linear] >= CONVOLVE_SETTLED_WINDOWS &&
+	   ((uint(slot_linear) + u_world_probe_frame) % uint(GI_WORLD_PROBE_CONVOLVE_PERIOD)) != 0u)
 	{
 		return;
 	}

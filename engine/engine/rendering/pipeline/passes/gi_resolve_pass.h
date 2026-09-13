@@ -166,6 +166,10 @@ public:
         /// fast-accumulated resolve weight the detector snap copies into the slow lane and
         /// the consumer blends with (gi_temporal_kernel.sh GiFastOutput).
         bool cause_lane{};
+        /// The Probe Tiers or Emitter Share debug view is displayed: the gather keeps its
+        /// tier and emitter census and writes probe records [7] / [11] for them. Off, that
+        /// per-ray and per-sample instrument work does not run.
+        bool probe_census{};
         settings settings;
     };
 

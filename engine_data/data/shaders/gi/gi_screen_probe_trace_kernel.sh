@@ -240,17 +240,21 @@ void GiStoreScreenShare(int slot, uint record)
 	float share = float(s_screen_rays[slot]) * inv_traced;
 	float moving = float(s_moving_rays[slot]) * inv_traced;
 	b_gi_probes[record + uint(GI_PROBE_SCREEN_SHARE)] = vec4(share, moving, 0.0, 0.0);
-	b_gi_probes[record + uint(GI_PROBE_TIERS)] = vec4(share,
-	                                                   float(s_mesh_rays[slot]) * inv_traced,
-	                                                   float(s_clipmap_rays[slot]) * inv_traced,
-	                                                   float(s_sky_rays[slot]) * inv_traced);
-	float total_contribution = float(s_total_contribution[slot]) / GI_NEE_CENSUS_FIXED;
-	float aimed_contribution = float(s_aimed_contribution[slot]) / GI_NEE_CENSUS_FIXED;
-	b_gi_probes[record + uint(GI_PROBE_EMITTER)] =
-	    vec4(total_contribution > 0.0 ? aimed_contribution / total_contribution : 0.0,
-	         float(s_aimed_rays[slot]) * inv_traced,
-	         float(s_selected_emitters[slot]) / float(GI_NEE_K),
-	         total_contribution);
+	// The debug records: only while their views are displayed (u_gi_probe_debug_census).
+	if(u_gi_probe_debug_census)
+	{
+		b_gi_probes[record + uint(GI_PROBE_TIERS)] = vec4(share,
+		                                                   float(s_mesh_rays[slot]) * inv_traced,
+		                                                   float(s_clipmap_rays[slot]) * inv_traced,
+		                                                   float(s_sky_rays[slot]) * inv_traced);
+		float total_contribution = float(s_total_contribution[slot]) / GI_NEE_CENSUS_FIXED;
+		float aimed_contribution = float(s_aimed_contribution[slot]) / GI_NEE_CENSUS_FIXED;
+		b_gi_probes[record + uint(GI_PROBE_EMITTER)] =
+		    vec4(total_contribution > 0.0 ? aimed_contribution / total_contribution : 0.0,
+		         float(s_aimed_rays[slot]) * inv_traced,
+		         float(s_selected_emitters[slot]) / float(GI_NEE_K),
+		         total_contribution);
+	}
 }
 
 /// 1 when the velocity buffer marks the pixel at @p hit_uv as OBJECT motion (the BA lanes),
@@ -706,20 +710,24 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 		{
 			atomicAdd(s_screen_rays[slot], 1u);
 		}
-		else if(answered_tier == 2)
+		else if(u_gi_probe_debug_census)
 		{
-			if(mesh_hit)
+			// The rest of the tier split feeds only the Probe Tiers view.
+			if(answered_tier == 2)
 			{
-				atomicAdd(s_mesh_rays[slot], 1u);
+				if(mesh_hit)
+				{
+					atomicAdd(s_mesh_rays[slot], 1u);
+				}
+				else
+				{
+					atomicAdd(s_clipmap_rays[slot], 1u);
+				}
 			}
-			else
+			else if(sky_completion)
 			{
-				atomicAdd(s_clipmap_rays[slot], 1u);
+				atomicAdd(s_sky_rays[slot], 1u);
 			}
-		}
-		else if(sky_completion)
-		{
-			atomicAdd(s_sky_rays[slot], 1u);
 		}
 		if(moving)
 		{
@@ -867,13 +875,17 @@ void GiSplatSample(int slot, ivec2 base, int span, vec3 direction, vec3 radiance
 	                        vec3_splat(GI_NEE_CONTRIBUTION_MAX));
 	uvec3 fixed_point = uvec3(max(contribution, vec3_splat(0.0)) * GI_NEE_FIXED + vec3_splat(0.5));
 	uint hit_bits = floatBitsToUint(max(hit_t, 0.0));
-	// The census (record [7]): luminance of this contribution, by technique.
-	uint census = uint(max(dot(contribution, vec3(0.2126, 0.7152, 0.0722)), 0.0) * GI_NEE_CENSUS_FIXED + 0.5);
-	atomicAdd(s_total_contribution[slot], census);
-	if(is_aimed)
+	// The census (record [7]): luminance of this contribution, by technique - only while the
+	// Emitter Share view (or Probe Tiers) is displayed.
+	if(u_gi_probe_debug_census)
 	{
-		atomicAdd(s_aimed_contribution[slot], census);
-		atomicAdd(s_aimed_rays[slot], 1u);
+		uint census = uint(max(dot(contribution, vec3(0.2126, 0.7152, 0.0722)), 0.0) * GI_NEE_CENSUS_FIXED + 0.5);
+		atomicAdd(s_total_contribution[slot], census);
+		if(is_aimed)
+		{
+			atomicAdd(s_aimed_contribution[slot], census);
+			atomicAdd(s_aimed_rays[slot], 1u);
+		}
 	}
 	for(int y = 0; y < span; ++y)
 	{
@@ -1149,7 +1161,7 @@ void main()
 					s_nee_axis[slot * GI_NEE_K + k2] = nee_axis[k2];
 					s_nee_cos[slot * GI_NEE_K + k2] = nee_cos[k2];
 					s_nee_rays[slot * GI_NEE_K + k2] = 0u;
-					if(nee_cos[k2] <= 1.0)
+					if(u_gi_probe_debug_census && nee_cos[k2] <= 1.0)
 					{
 						s_selected_emitters[slot] += 1u;
 					}

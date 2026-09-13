@@ -400,10 +400,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         {
             lighting_hot_streak_ = 0;
         }
-        // x = records trusted (gates the trace's importance reprojection),
-        // y = unused, zw = the double-buffered record offsets.
+        // x = records trusted (gates the trace's importance reprojection), y = the probe
+        // debug census (run_params::probe_census), zw = the double-buffered record offsets.
         const float probe_temporal[4] = {records_trusted_ ? 1.0f : 0.0f,
-                                         0.0f,
+                                         params.probe_census ? 1.0f : 0.0f,
                                          float(write_probe_offset),
                                          float(read_probe_offset)};
         // Published for the probe debug view: the lattice and the half just written, so a

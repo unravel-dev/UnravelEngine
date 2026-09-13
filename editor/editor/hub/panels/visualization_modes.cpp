@@ -108,7 +108,8 @@ constexpr std::array<visualization_swatch, 6> k_legend_gi_probe_sky = {{
 }};
 
 constexpr std::array<visualization_swatch, 7> k_legend_gi_sun_tiers = {{
-    {{0.0f, 0.8f, 0.0f}, "Shadow map (CSM cascade 0) answered; brightness = lit fraction"},
+    {{0.0f, 0.8f, 0.0f}, "Shadow map answered (the smallest CSM cascade whose crop holds the face; "
+                         "blue = 0.04 x cascade); brightness = lit fraction"},
     {{1.0f, 0.0f, 0.0f}, "Traced field answered OCCLUDED - the face injects nothing"},
     {{0.85f, 0.85f, 0.85f}, "Traced field answered LIT; brightness = clearance visibility"},
     {{0.0f, 0.2f, 1.0f}, "Never queried - no directional sun, or the face points away from it"},

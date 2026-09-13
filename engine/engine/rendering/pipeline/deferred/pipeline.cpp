@@ -2778,6 +2778,7 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
             alloc_params.surface_cache = &surface_cache;
             alloc_params.view_cache = &view_cache;
             alloc_params.camera_position = camera.get_position();
+            alloc_params.census = gi_quiescence_gate_pass_.is_census_armed();
             gi_world_probe_pass_.run_alloc(rview, alloc_params);
         }
         // QUIESCENCE GATE: with the light set, the clipmap content and origins, and the
@@ -2856,6 +2857,7 @@ void deferred::run_gi_light_voxel_pass(scene& scn,
     // merely displays them.
     light_params.sun_tier_debug = debug_pass_ == debug_pass_sdf_sun_tiers;
     light_params.vis_memo_debug = debug_pass_ == debug_pass_sdf_vis_memo;
+    light_params.census = gi_quiescence_gate_pass_.is_census_armed();
     find_sun_shadowmap(scn, light_params);
     gi_light_voxel_pass_.run(rview, light_params);
 }
@@ -2880,6 +2882,7 @@ void deferred::run_gi_world_probe_pass(const camera& camera,
     // atlas exactly as a light edit does and earns the same fast window.
     probe_params.environment_hash = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_hash_key, 0ull);
     probe_params.jitter_directions = gi.resolve.world_probe_jitter;
+    probe_params.census = gi_quiescence_gate_pass_.is_census_armed();
     gi_world_probe_pass_.run(rview, probe_params);
 }
 
@@ -2957,6 +2960,7 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
         gi_resolve_pass::run_params params;
         params.settings = resolve_settings;
         params.cause_lane = debug_pass_ == debug_pass_gi_temporal_cause;
+        params.probe_census = debug_pass_ == debug_pass_gi_probe_tiers || debug_pass_ == debug_pass_gi_emitter_share;
         params.g_buffer = rview.fbo_safe_get("GBUFFER");
         // Still the PREVIOUS frame's depth at this point: the snapshot happens later in the
         // frame, which is exactly what temporal reprojection needs to validate history.

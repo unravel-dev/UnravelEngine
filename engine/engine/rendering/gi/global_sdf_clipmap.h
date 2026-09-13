@@ -193,6 +193,22 @@ public:
         return composed_content_epoch_;
     }
 
+    /**
+     * @brief The composed epoch without camera scrolls: bumped when a recompose lands a
+     *        content change that is not a pure scroll (the instances revision moved since
+     *        the level's last compose, or the origin held still).
+     *
+     * The composed epoch above also moves whenever a window scroll brings different instances
+     * into a level, which is every few metres of camera travel. The world-probe fast window
+     * keyed on it quadrupled every probe's rays for a window after each scroll during camera
+     * motion (1.5-2.2 ms of a 6 ms frame, gi_perf_investigation_2026-09-13.md). Consumers
+     * that react to scene changes rather than to the field's contents key on this one.
+     */
+    auto get_edited_content_epoch() const -> uint64_t
+    {
+        return edited_content_epoch_;
+    }
+
     struct level
     {
         ///< World-space minimum corner, snapped to a whole multiple of @ref voxel_size.
@@ -466,6 +482,8 @@ private:
     /// See get_composed_content_epoch - bumped in the compose pass when a level lands a
     /// content_fingerprint it did not hold before.
     uint64_t composed_content_epoch_ = 0;
+    /// See get_edited_content_epoch.
+    uint64_t edited_content_epoch_ = 0;
     /// The fingerprint cache update() recalls when neither the instances revision nor a
     /// level's target origin moved. Revision 0 = nothing cached.
     std::array<math::vec3, level_count> cached_target_origin_{};

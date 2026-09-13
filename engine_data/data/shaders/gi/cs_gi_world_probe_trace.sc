@@ -22,6 +22,9 @@
 #include "gi/sdf_common.sh"
 #define GI_LIGHT_VOXEL_READ
 #include "gi/gi_light_voxels.sh"
+/// The sparse index (stage 13, read-write): the relocation lane, refreshed here every frame.
+#define GI_WORLD_PROBE_INDEX_RW
+#define GI_WORLD_PROBE_RELOCATE
 #include "gi/gi_world_probes.sh"
 #include "gi/gi_noise.sh"
 #include "gi/gi_emissive_nee.sh"
@@ -82,8 +85,10 @@ BUFFER_RW(b_world_probe_cells, uint, 8);
 /// running mean's count (saturating at GI_WORLD_PROBE_EMA_WINDOWS).
 BUFFER_RW(b_world_probe_counts, uint, 7);
 /// xy = this window's R2 offset for the sub-texel direction jitter (double on the CPU, from
-/// the window index). zw unused.
+/// the window index). z = the jitter/mean enable. w = 1 while the editor's GI census is armed:
+/// the occupancy classification and the texel census run only then.
 uniform vec4 u_gi_world_probe_jitter;
+#define u_world_probe_census (u_gi_world_probe_jitter.w > 0.5)
 /// The lighting pass's environment SH probe, for the sky at ray miss.
 SAMPLER2D(s_gi_env_sh, 14);
 /// The PARENT cascade's convolved irradiance, for scroll-in seeding. Read-only and a
@@ -118,6 +123,8 @@ SHARED uint s_census_texels[PROBE_TRACE_SLOTS];
 SHARED uint s_census_moved[PROBE_TRACE_SLOTS];
 SHARED uint s_census_visible[PROBE_TRACE_SLOTS];
 SHARED uint s_census_done[PROBE_TRACE_SLOTS];
+/// The slot's relocation offset, computed by its leader lane and shared before the trace.
+SHARED vec3 s_probe_offset[PROBE_TRACE_SLOTS];
 
 // = GI_WORLD_PROBE_RAYS_PER_FRAME x PROBE_TRACE_SLOTS: a literal, as the OpenGL backend
 // rejects expressions in local_size.
@@ -165,8 +172,45 @@ void main()
 		packed_cell = GiWorldProbePackCell(cell, level);
 		fresh = b_world_probe_cells[slot_index] != packed_cell;
 	}
-	vec3 origin = GiWorldProbeCellPosition(cell, level);
+	vec3 nominal = GiWorldProbeCellPosition(cell, level);
 	int thread = int(gl_LocalInvocationID.x) % GI_WORLD_PROBE_RAYS_PER_FRAME;
+	// PROBE RELOCATION (GiWorldProbeRelocate, sparse level only): the leader lane shares the
+	// probe's offset from its lattice point with the probe's other lanes. The relocation
+	// pass computed it at claim; the trace re-runs it on a rotation of
+	// GI_WORLD_PROBE_RELOCATE_REFRESH_FRAMES (a mover or a field streamed in after the claim
+	// changes the origin within that many frames) and reads the stored lane otherwise - every
+	// frame for every probe cost 0.6 ms of the pass in motion. The barrier is uniform: no lane
+	// has returned yet.
+	if(thread == 0)
+	{
+		// THE ALLOCATION CLOCK advances here, once per frame the trace runs (slot 0's leader),
+		// not in the ungated allocation pass: a closed gate freezes every request age, so a
+		// parked shot cannot age its cages into pressure eviction and re-allocation.
+		if(slot_linear == 0)
+		{
+			b_world_probe_index[GI_WORLD_PROBE_INDEX_CLOCK] = b_world_probe_index[GI_WORLD_PROBE_INDEX_CLOCK] + 1u;
+		}
+		vec3 relocation = vec3_splat(0.0);
+		if(probe_active && level == 0)
+		{
+			bool refresh = ((uint(slot_linear) + u_world_probe_frame) %
+			                uint(GI_WORLD_PROBE_RELOCATE_REFRESH_FRAMES)) == 0u;
+			BRANCH
+			if(refresh)
+			{
+				relocation = GiWorldProbeRelocate(nominal, GiWorldProbeSpacing(0));
+				b_world_probe_index[GI_WORLD_PROBE_INDEX_OFFSET_BASE + GiWorldProbeIndexSlot(cell)] =
+				    GiWorldProbePackOffset(relocation, GiWorldProbeSpacing(0));
+			}
+			else
+			{
+				relocation = GiWorldProbeOffset(cell, 0);
+			}
+		}
+		s_probe_offset[slot_in_group] = relocation;
+	}
+	barrier();
+	vec3 origin = nominal + s_probe_offset[slot_in_group];
 	// FAST-REFRESH WINDOW (gi_rewrite_plan.md section 8, the DDGI event pattern adapted): while the
 	// light set is changing, each frame covers TWO strata instead of one, halving the window to
 	// 8 frames so a moved or toggled light propagates through the probes at double speed. The
@@ -218,8 +262,9 @@ void main()
 	// half a metre of clearance while the coarsest level's 1 m voxel certifies four - which is
 	// what the 3.5 m threshold needs. That is also why only LEVEL 0 is classified: every coarser
 	// level's threshold is beyond what any level can certify.
+	// Editor statistics only (the Probe Lattice view classifies for itself): census armed.
 	bool asleep = false;
-	if(level == 0)
+	if(level == 0 && u_world_probe_census)
 	{
 		float clearance = SdfSampleClipmapLevel(SDF_CLIPMAP_LEVEL_COUNT - 1, origin);
 		// A level that did not answer (outside its window, or no cascade at all) reports the
@@ -238,6 +283,10 @@ void main()
 	// claim or a fast (light/content change) window resets the count so changes still land
 	// in one window at write-through. Every thread reads the count before thread 0 advances it.
 	uint windows_seen = fresh ? 0u : b_world_probe_counts[slot_index];
+	// The stored count is windows since the claim or the last fast window WHATEVER the jitter
+	// setting: the convolve rotates settled probes on it (GI_WORLD_PROBE_CONVOLVE_PERIOD). The
+	// running mean below still restarts every window while the jitter is off.
+	uint windows_counted = windows_seen;
 	bool fast_window = stratum_count > 1;
 	// The jitter/mean is a SETTING (u_gi_world_probe_jitter.z, gi_resolve_pass::settings::
 	// world_probe_jitter): off, every window is a fast one in this sense - texel centres at
@@ -259,7 +308,7 @@ void main()
 	{
 		return;
 	}
-	if(thread == 0)
+	if(thread == 0 && u_world_probe_census)
 	{
 		// The probe's state this frame, one atomic per probe. Inactive probes never reach
 		// the texel flush below, so their state is the whole of their census.
@@ -272,9 +321,7 @@ void main()
 		// A window completes on the frame that traces its last strata.
 		bool window_end = stratum_base + uint(stratum_count) >= uint(GI_WORLD_PROBE_WINDOW);
 		b_world_probe_counts[slot_index] =
-		    (fast_window || u_gi_world_probe_jitter.z < 0.5)
-		        ? 0u
-		        : (window_end ? min(windows_seen + 1u, 255u) : windows_seen);
+		    fast_window ? 0u : (window_end ? min(windows_counted + 1u, 255u) : windows_counted);
 	}
 	if(fresh)
 	{
@@ -311,7 +358,14 @@ void main()
 		int parent_level = level + 1;
 		bool parent_valid = false;
 		ivec2 parent_tile = ivec2(0, 0);
-		if(!inactive && parent_level < SDF_CLIPMAP_LEVEL_COUNT)
+		// The SPARSE level seeds BLACK (energy loss for one window, never invention): its
+		// parent is the 4 m lattice, whose probes straddle every wall thinner than their
+		// spacing, and a sparse slot is claimed for exactly the cells that matter - a sealed
+		// room's own air. Seeding those from the exterior cage put the sunlit outdoors into
+		// the GI test suite's thin-walled cell for a window after every claim (2026-09-13).
+		// Until the slot's first window completes the cage reads it as dead (depth 0) and
+		// the coarser lattice answers, which is what happened before the slot existed.
+		if(!inactive && level > 0 && parent_level < SDF_CLIPMAP_LEVEL_COUNT)
 		{
 			float parent_spacing = GiWorldProbeSpacing(parent_level);
 			ivec3 parent_cell = ivec3(floor(origin / parent_spacing + vec3_splat(0.5)));
@@ -502,11 +556,16 @@ void main()
 			}
 		}
 		imageStore(s_world_probe_radiance_out, texel, vec4(stored, stored_t));
-		float relative_change = GiStatsRelativeChange(GiStatsLuminance(stored),
-		                                              GiStatsLuminance(GiFiniteOrZero(previous.xyz)));
-		census_texels += 1u;
-		census_moved += relative_change > GI_QUIESCENCE_CONVERGED_MEAN ? 1u : 0u;
-		census_visible += relative_change > GI_STATS_VISIBLE_CHANGE ? 1u : 0u;
+		// The texel census (editor statistics): census armed only; the flush below then
+		// never runs either.
+		if(u_world_probe_census)
+		{
+			float relative_change = GiStatsRelativeChange(GiStatsLuminance(stored),
+			                                              GiStatsLuminance(GiFiniteOrZero(previous.xyz)));
+			census_texels += 1u;
+			census_moved += relative_change > GI_QUIESCENCE_CONVERGED_MEAN ? 1u : 0u;
+			census_visible += relative_change > GI_STATS_VISIBLE_CHANGE ? 1u : 0u;
+		}
 	}
 	// CENSUS FLUSH. Shared atomics from every lane, then the last lane of the slot to arrive
 	// (the completion counter) publishes the slot's sums. Reads go through atomics too, so

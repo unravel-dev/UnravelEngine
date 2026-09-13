@@ -14,6 +14,16 @@ namespace unravel
 {
 namespace
 {
+/// A camera move of more than this many level-0 probe cells in one frame is a JUMP (a teleport,
+/// a focus jump, a scene open) and re-arms the fast window: the probes of the new region
+/// re-measure within four frames, and the relight loop around them converges before the
+/// quiescence gate's scene-wide change mean reads rest. Continuous flight moves a fraction of a
+/// 2 m cell per frame and stays at one stratum.
+constexpr float fast_window_jump_cells = 2.0f;
+/// Windows of fast refresh a jump arms. The scroll composes that used to arm the window after a
+/// jump landed over several frames, keeping it on for about a window and a quarter; three
+/// windows (48 frames) keep a margin for the budgeted recomposes of a long jump.
+constexpr uint32_t fast_window_jump_windows = 3u;
 /// Four probes per 64-lane group (PROBE_TRACE_SLOTS in cs_gi_world_probe_trace.sc): a 16-lane
 /// group left half or three quarters of every wave idle.
 constexpr uint32_t probes_per_trace_group = 4u;
@@ -55,13 +65,17 @@ auto gi_world_probe_pass::init(rtti::context& ctx) -> bool
     auto cs_alloc = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_world_probe_alloc.sc");
     alloc_program_.cache_uniforms();
     alloc_program_.program = std::make_unique<gpu_program>(cs_alloc);
+    auto cs_relocate = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_world_probe_relocate.sc");
+    relocate_program_.cache_uniforms();
+    relocate_program_.program = std::make_unique<gpu_program>(cs_relocate);
     return is_valid();
 }
 
 auto gi_world_probe_pass::run_alloc(gfx::render_view& rview, const run_params& params) -> bool
 {
     APP_SCOPE_PERF("Rendering/GI/World Probe Alloc");
-    if(!alloc_program_.is_valid() || !params.surface_cache || !params.view_cache)
+    if(!alloc_program_.is_valid() || !relocate_program_.is_valid() || !params.surface_cache ||
+       !params.view_cache)
     {
         return false;
     }
@@ -69,6 +83,7 @@ auto gi_world_probe_pass::run_alloc(gfx::render_view& rview, const run_params& p
     {
         return false;
     }
+    auto& surface_cache = *params.surface_cache;
     auto& view_cache = *params.view_cache;
     auto& clipmap_gpu = view_cache.get_clipmap_gpu_mutable();
     const auto& clipmap = view_cache.get_clipmap();
@@ -102,8 +117,9 @@ auto gi_world_probe_pass::run_alloc(gfx::render_view& rview, const run_params& p
         gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
         const float alloc_params[4] = {phase, center[0], center[1], center[2]};
         gfx::set_uniform(alloc_program_.u_gi_world_probe_alloc, alloc_params);
-        // The resolution lane alone: GiLightVoxelStatsTexel needs it to address the slice.
-        const float voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 0.0f};
+        // x = the resolution GiLightVoxelStatsTexel needs to address the slice; y = the editor
+        // census (the eviction count is instrument work).
+        const float voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), params.census ? 1.0f : 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(alloc_program_.u_gi_light_voxel_params, voxel_params);
         gfx::dispatch(pass.id,
                       alloc_program_.program->native_handle(),
@@ -123,6 +139,39 @@ auto gi_world_probe_pass::run_alloc(gfx::render_view& rview, const run_params& p
     // only its counter's atomics.
     dispatch_phase(alloc_phase_evict, pool);
     dispatch_phase(alloc_phase_allocate, index_cells);
+    // The relocation pass over the frame's fresh claims: the mesh fields (sdf_common.sh's
+    // fixed stages, as every tracer binds them) plus the same index, cell, count and census
+    // bindings; a buried claim is pushed back onto the free stack here.
+    {
+        relocate_program_.program->begin();
+        gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
+        gfx::set_buffer(8, clipmap_gpu.get_world_probe_cells(), gfx::access::ReadWrite);
+        gfx::set_buffer(7, clipmap_gpu.get_world_probe_counts(), gfx::access::ReadWrite);
+        gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
+        auto& atlas = surface_cache.get_atlas();
+        gfx::set_texture(relocate_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
+        gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
+        gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
+        gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+        gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+        const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
+                                     float(atlas.get_atlas_voxel_dim()),
+                                     float(surface_cache.get_instances().size()),
+                                     float(surface_cache.get_emitters().size())};
+        gfx::set_uniform(relocate_program_.u_sdf_params, sdf_params);
+        gfx::set_uniform(relocate_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+        // The spacing lane alone drives GiWorldProbeRelocate; the rest as the trace sets it.
+        const float probe_params[4] = {safe_spacing, 0.0f, 1.0f, 0.0f};
+        gfx::set_uniform(relocate_program_.u_gi_world_probe_params, probe_params);
+        const float voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 0.0f};
+        gfx::set_uniform(relocate_program_.u_gi_light_voxel_params, voxel_params);
+        gfx::dispatch(pass.id,
+                      relocate_program_.program->native_handle(),
+                      (pool + alloc_threads_per_group - 1u) / alloc_threads_per_group,
+                      1,
+                      1);
+        relocate_program_.program->end();
+    }
     return true;
 }
 
@@ -187,14 +236,34 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         last_environment_hash_ = params.environment_hash;
         fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
     }
-    // COMPOSED epoch: the probes trace the composed field and read the light voxels, so the
+    // EDITED epoch: the probes trace the composed field and read the light voxels, so the
     // fast window keys on content actually landing - during an edit drag the target epoch
-    // churns every frame while recomposes coalesce, and each landing re-arms the window.
-    if(clipmap.get_composed_content_epoch() != last_content_epoch_)
+    // churns every frame while recomposes coalesce, and each landing re-arms the window. Not
+    // the composed epoch itself: that one also moves on every window scroll that brings new
+    // instances into a level, and keyed on it camera motion held the whole atlas at four
+    // strata per frame (1.5-2.2 ms of a 6 ms frame, gi_perf_investigation_2026-09-13.md).
+    if(clipmap.get_edited_content_epoch() != last_content_epoch_)
     {
-        last_content_epoch_ = clipmap.get_composed_content_epoch();
+        last_content_epoch_ = clipmap.get_edited_content_epoch();
         fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
     }
+    // CAMERA JUMP (fast_window_jump_cells): the scroll composes no longer arm the window, so
+    // a teleport into a new region re-measured its probes over a whole window while the gate's
+    // scene-wide change mean already read rest - the GI test suite's thin-walled sealed cell
+    // then froze at 2.7x its converged indirect (0.0431 against 0.0157; the trace at four
+    // strata every frame restored 0.0157, the convolve without its rotation did not).
+    const float jump_cells = std::max(std::abs(window[0] - last_level0_cell_[0]),
+                                      std::max(std::abs(window[1] - last_level0_cell_[1]),
+                                               std::abs(window[2] - last_level0_cell_[2])));
+    if(has_last_level0_cell_ && jump_cells > fast_window_jump_cells)
+    {
+        fast_frames_ = std::max<uint32_t>(fast_frames_,
+                                          uint32_t(gi::GI_WORLD_PROBE_WINDOW) * fast_window_jump_windows);
+    }
+    last_level0_cell_[0] = window[0];
+    last_level0_cell_[1] = window[1];
+    last_level0_cell_[2] = window[2];
+    has_last_level0_cell_ = true;
     const uint32_t strata_per_frame = fast_frames_ > 0 ? 4u : 1u;
     static_assert(gi::GI_WORLD_PROBE_WINDOW % 4 == 0,
                   "fast-window strata must divide the probe window (exhaustive coverage)");
@@ -242,10 +311,11 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         const double window_index =
             std::floor(double(params.frame) * double(strata_per_frame) / double(gi::GI_WORLD_PROBE_WINDOW));
         // z = the jitter/mean enable (the settings knob); 0 keeps texel centres at write-through.
+        // w = the editor census (run_params::census).
         const float jitter[4] = {float(std::fmod(0.754877666 * window_index, 1.0)),
                                  float(std::fmod(0.569840291 * window_index, 1.0)),
                                  params.jitter_directions ? 1.0f : 0.0f,
-                                 0.0f};
+                                 params.census ? 1.0f : 0.0f};
         gfx::set_uniform(trace_program_.u_gi_world_probe_jitter, jitter);
         gfx::set_texture(trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
         gfx::set_texture(trace_program_.s_world_probe_irradiance_seed,
@@ -256,6 +326,8 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         seed_atlas[2] = float(strata_per_frame);
         gfx::set_uniform(trace_program_.u_gi_world_probe_seed_atlas, seed_atlas);
         gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+        // The sparse index: the trace refreshes the relocation lane every frame.
+        gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
         gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh);
         const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                      float(atlas.get_atlas_voxel_dim()),
@@ -294,6 +366,8 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
                          clipmap_gpu.get_world_probe_radiance());
         // The cell ids, for the free-slot skip (most of the sparse pool is free).
         gfx::set_buffer(7, clipmap_gpu.get_world_probe_cells(), gfx::access::Read);
+        // The window counts: settled probes convolve on a rotation (GI_WORLD_PROBE_CONVOLVE_PERIOD).
+        gfx::set_buffer(8, clipmap_gpu.get_world_probe_counts(), gfx::access::Read);
         gfx::set_image(5,
                        clipmap_gpu.get_world_probe_irradiance()->native_handle(),
                        0,

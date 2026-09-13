@@ -845,7 +845,7 @@ void main()
 			}
 			vec3 sample_position = ray_origin + ray_dir * t;
 			ivec3 cell = ivec3(floor(sample_position / spacing + vec3_splat(0.5)));
-			vec3 probe_position = GiWorldProbeCellPosition(cell, 0);
+			vec3 probe_position = GiWorldProbeCellPosition(cell, 0) + GiWorldProbeOffset(cell, 0);
 			// The EXACT closest approach to this lattice point rather than the sampled
 			// distance, so a sphere that falls between two steps is still found.
 			float t_center = dot(probe_position - ray_origin, ray_dir);
@@ -896,11 +896,13 @@ void main()
 		float depth_mean = max(texture2DLod(s_world_probe_depth, depth_uv_a, 0.0).x,
 		                       texture2DLod(s_world_probe_depth, depth_uv_b, 0.0).x);
 		vec3 sphere_normal =
-		    normalize((ray_origin + ray_dir * best_t) - GiWorldProbeCellPosition(best_cell, 0));
+		    normalize((ray_origin + ray_dir * best_t) -
+		              (GiWorldProbeCellPosition(best_cell, 0) + GiWorldProbeOffset(best_cell, 0)));
 		// The same test the trace makes, from the same field - not a second opinion. Evaluated
 		// here rather than read back, so it is shown whatever the trace decided to do with it.
 		float probe_clearance =
-		    SdfSampleClipmapLevel(SDF_CLIPMAP_LEVEL_COUNT - 1, GiWorldProbeCellPosition(best_cell, 0));
+		    SdfSampleClipmapLevel(SDF_CLIPMAP_LEVEL_COUNT - 1,
+		                          GiWorldProbeCellPosition(best_cell, 0) + GiWorldProbeOffset(best_cell, 0));
 		bool probe_asleep = probe_clearance < SDF_CLIPMAP_OUTSIDE &&
 		                    probe_clearance >= GI_WORLD_PROBE_SLEEP_SPACINGS * spacing;
 		vec3 probe_color;

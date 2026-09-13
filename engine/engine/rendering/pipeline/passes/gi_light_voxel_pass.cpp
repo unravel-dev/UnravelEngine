@@ -8,6 +8,12 @@
 
 #include <graphics/graphics.h>
 
+#include <algorithm>
+#include <cstring>
+
+static_assert(unravel::gi_light_voxel_pass::sun_cascade_count == unravel::shadow::ShadowMapRenderTargets::Count,
+              "the sun tier's matrix array must hold one matrix per shadow cascade");
+
 namespace unravel
 {
 namespace
@@ -165,55 +171,115 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                                     float(gi::GI_RELIGHT_SHADOW_NEAR_FIELD),
                                     float(gi::GI_TRACE_MAX_STEPS)};
     gfx::set_uniform(program_.u_gi_shadow_params, shadow_params);
+    // z = the editor census (run_params::census; u_gi_stats_census in gi_lighting.sh).
     const float shadow_params2[4] = {float(gi::GI_SHADOW_SURFACE_BIAS),
                                      float(gi::GI_SHADOW_RELAXATION),
-                                     0.0f,
+                                     params.census ? 1.0f : 0.0f,
                                      float(gi::GI_SHADOW_RAY_START_VOXELS)};
     gfx::set_uniform(program_.u_gi_shadow_params2, shadow_params2);
-    // Sun shadow-map tier (see gi_lighting.sh): cascade 0 of the sun's CSM answers sun
-    // visibility for the voxels it covers; the traced field remains the answer beyond it.
-    // VSM packs moment pairs rather than RGBA depth, so it falls back to tracing entirely.
+    // Sun shadow-map tier (see gi_lighting.sh): the sun's CSM cascades answer sun visibility
+    // for the voxels their crops cover; the traced field remains the answer beyond them.
+    // VSM packs moment pairs rather than a depth, so it falls back to tracing entirely.
+    // The cascades reach the kernel as the layers of ONE texture array (its only free stage):
+    // the generator's maps are blitted into it here, on the frames this gated pass runs -
+    // nothing is re-rendered and the shadow pass's per-cascade caster sets are untouched.
     float sun_params[4] = {-1.0f, 0.0f, 0.0f, 0.0f};
-    gfx::texture_handle sun_map = {bgfx::kInvalidHandle};
+    bool sun_maps_bound = false;
     if(params.sun_shadows != nullptr && params.sun_light_index >= 0 &&
        params.sun_shadows->get_depth_type() == shadow::PackDepth::RGBA)
     {
-        sun_map = params.sun_shadows->get_rt_texture(0);
+        const auto& shadows = *params.sun_shadows;
+        const uint16_t size = shadows.get_shadow_map_size();
+        uint8_t splits = std::min<uint8_t>(shadows.get_num_splits(), uint8_t(shadow::ShadowMapRenderTargets::Count));
+        for(uint8_t split = 0; split < splits; ++split)
+        {
+            if(!bgfx::isValid(shadows.get_rt_texture(split)))
+            {
+                splits = split;
+                break;
+            }
+        }
+        if(splits > 0 && size > 0)
+        {
+            if(!sun_cascades_ || !sun_cascades_->is_valid() || sun_cascades_size_ != size)
+            {
+                sun_cascades_ = std::make_shared<gfx::texture>(size,
+                                                               size,
+                                                               false,
+                                                               uint16_t(shadow::ShadowMapRenderTargets::Count),
+                                                               gfx::texture_format::R32F,
+                                                               BGFX_TEXTURE_BLIT_DST);
+                sun_cascades_size_ = size;
+            }
+            float matrices[shadow::ShadowMapRenderTargets::Count * 16] = {};
+            float slice_params[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            float bias_params[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+            // Cascade 0's constant receiver bias, scaled per split by its texel size - the
+            // raster's own cascadeScale.
+            const float bias0 = shadows.get_shadow_map_bias();
+            const float texel0 = std::max(shadows.get_cascade_texel_world(0), 1e-6f);
+            for(uint8_t split = 0; split < splits; ++split)
+            {
+                gfx::blit(pass.id,
+                          sun_cascades_->native_handle(),
+                          0,
+                          0,
+                          0,
+                          split,
+                          shadows.get_rt_texture(split),
+                          0,
+                          0,
+                          0,
+                          0,
+                          size,
+                          size,
+                          1);
+                std::memcpy(matrices + split * 16, shadows.get_shadow_map_matrix(split), sizeof(float) * 16);
+                slice_params[split] = shadows.get_cascade_far_distance(split);
+                bias_params[split] = bias0 * shadows.get_cascade_texel_world(split) / texel0;
+            }
+            gfx::set_uniform(program_.u_gi_sun_shadowmap_mtx, matrices, shadow::ShadowMapRenderTargets::Count);
+            // The maps' CONTRACT: the cascades are fitted to the camera's frustum slices and
+            // the raster samples them for nothing outside the frustum. A crop footprint (a
+            // bounding sphere of its slice) reaches metres behind and beside the camera, and
+            // receivers there project INTO a map while nothing about the fit is contracted
+            // for them - measured as LIT verdicts for sealed-room faces behind the camera
+            // (the room lights up while the camera faces away and decays when it turns: the
+            // first-look glow). The kernel declines outside the frustum and the traced
+            // field answers, exactly as it does past the maps' edges.
+            gfx::set_uniform(program_.u_gi_sun_shadowmap_camera_vp, params.camera_view_proj);
+            gfx::set_uniform(program_.u_gi_sun_shadowmap_slice, slice_params);
+            gfx::set_uniform(program_.u_gi_sun_shadowmap_bias, bias_params);
+            sun_params[0] = float(params.sun_light_index);
+            sun_params[1] = float(splits);
+            // One filter footprint inside the edge, mirroring the lighting shader's cascade
+            // selection bounds, so a clamped tap never answers for a position outside a crop.
+            sun_params[2] = 0.01f;
+            // World -> stored depth, so the kernel can cover its slope allowance in depth.
+            sun_params[3] = shadows.get_shadow_map_world_to_depth();
+            // Raw float depth: point sampled and clamped, as the lighting pass binds it.
+            gfx::set_texture(14,
+                             program_.s_gi_sun_shadowmap->native_handle(),
+                             sun_cascades_->native_handle(),
+                             BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+            sun_maps_bound = true;
+        }
     }
-    if(bgfx::isValid(sun_map))
+    if(!sun_maps_bound)
     {
-        gfx::set_uniform(program_.u_gi_sun_shadowmap_mtx, params.sun_shadows->get_shadow_map_matrix(0));
-        // The map's CONTRACT: cascade 0 is fitted to the camera's near frustum slice and the
-        // raster samples it for nothing outside that slice. Its crop footprint (a bounding
-        // sphere of the slice) reaches metres behind and beside the camera, and receivers
-        // there project INTO the map while nothing about the fit is contracted for them -
-        // measured as LIT verdicts for sealed-room faces behind the camera (the room lights
-        // up while the camera faces away and decays when it turns: the first-look glow).
-        // The kernel declines outside the slice and the traced field answers, exactly as
-        // it does past the map's edge.
-        gfx::set_uniform(program_.u_gi_sun_shadowmap_camera_vp, params.camera_view_proj);
-        const float slice_params[4] = {params.sun_shadows->get_cascade_far_distance(0), 0.0f, 0.0f, 0.0f};
-        gfx::set_uniform(program_.u_gi_sun_shadowmap_slice, slice_params);
-        sun_params[0] = float(params.sun_light_index);
-        sun_params[1] = params.sun_shadows->get_shadow_map_bias();
-        // One filter footprint inside the edge, mirroring the lighting shader's cascade
-        // selection bounds, so a clamped tap never answers for a position outside the crop.
-        sun_params[2] = 0.01f;
-        // World -> stored depth, so the kernel can cover a voxel of slope per answering level.
-        sun_params[3] = params.sun_shadows->get_shadow_map_world_to_depth();
-        // Raw float depth: point sampled and clamped, as the lighting pass binds it.
-        gfx::set_texture(14,
-                         program_.s_gi_sun_shadowmap->native_handle(),
-                         sun_map,
-                         BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
-    }
-    else
-    {
-        // The stage must hold SOMETHING valid on backends that validate bindings; the tier is
+        // The stage must hold an ARRAY on backends that validate bindings; the tier is
         // disabled by the negative index, so the content is never read.
-        gfx::set_texture(14,
-                         program_.s_gi_sun_shadowmap->native_handle(),
-                         default_textures::get().black_texture()->native_handle());
+        if(!sun_cascades_ || !sun_cascades_->is_valid())
+        {
+            sun_cascades_ = std::make_shared<gfx::texture>(1,
+                                                           1,
+                                                           false,
+                                                           uint16_t(shadow::ShadowMapRenderTargets::Count),
+                                                           gfx::texture_format::R32F,
+                                                           BGFX_TEXTURE_BLIT_DST);
+            sun_cascades_size_ = 1;
+        }
+        gfx::set_texture(14, program_.s_gi_sun_shadowmap->native_handle(), sun_cascades_->native_handle());
     }
     gfx::set_uniform(program_.u_gi_sun_shadowmap_params, sun_params);
     const uint32_t attr_resolution = clipmap_gpu.get_attr_resolution();

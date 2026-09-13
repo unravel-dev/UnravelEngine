@@ -625,7 +625,10 @@ void register_viewport_tools(mcp_tool_registry& registry)
              "(GI_QUIESCENCE_CONVERGED_MEAN) and past GI_STATS_VISIBLE_CHANGE, world probes by "
              "state (active / asleep / buried) and their traced texels by the same thresholds. "
              "Rows 0-2 describe the frame before the snapshot; the census rows hold the last "
-             "frame the gated passes actually ran. camera = \"scene\" (default, the Scene "
+             "frame the gated passes actually ran. The census rows are instrument work the "
+             "passes do only while this tool has been called within the last ~240 frames: "
+             "the first call arms them and holds the copy a few frames so they accumulate "
+             "(a closed gate keeps them at their last armed frame). camera = \"scene\" (default, the Scene "
              "panel's editing camera) or \"game\" (the scene's rendering camera - the only one "
              "that renders while the Game panel is focused, e.g. in play mode).",
          .input_schema_json = R"({"type":"object","properties":{"timeout_ms":{"type":"integer","minimum":100,"maximum":10000},"camera":{"type":"string","enum":["scene","game"]}}})",

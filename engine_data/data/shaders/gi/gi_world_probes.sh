@@ -82,29 +82,33 @@ vec3 GiFiniteOrZero(vec3 v)
 #define GI_WORLD_PROBE_AXIS_L1 13
 #define GI_WORLD_PROBE_AXIS_L2 13
 #define GI_WORLD_PROBE_AXIS_L3 9
-/// Level 0's probe POOL: the slots the index hands out. Sponza's live set measured a few
-/// thousand (the building's surface cells' cages plus the completion points 8 m off them);
-/// the pool is sized for a margin over that, and the allocation pass tightens its eviction
-/// age when fewer than a GI_WORLD_PROBE_POOL_PRESSURE_DIVISOR-th of it is free. A multiple of
-/// the trace's four-probe groups.
-#define GI_WORLD_PROBE_POOL_L0 8192
+/// Level 0's probe POOL: the slots the index hands out. Sponza's live set measured ~4900;
+/// the GI test suite (twelve cells spread over the window) filled 8192 exactly and its
+/// sealed thin-walled cell then read 3x brighter, its cages handed to the wall-straddling
+/// 4 m lattice while requests waited (2026-09-13). 16384 with buried cells never claiming
+/// a slot leaves both scenes headroom; the allocation pass tightens its eviction age when
+/// fewer than a GI_WORLD_PROBE_POOL_PRESSURE_DIVISOR-th is free. A multiple of the trace's
+/// four-probe groups.
+#define GI_WORLD_PROBE_POOL_L0 16384
 /// Tiles per atlas row (every level's tiles in one linear run): 128 x 16 = 2048 texels of
-/// radiance per row, the pool alone filling 64 rows.
+/// radiance per row, the pool alone filling 128 rows.
 #define GI_WORLD_PROBE_ATLAS_TILES_X 128
 /// The index buffer (stage 13 of every cage reader, read-write for the ones that request):
-/// three lanes of GI_WORLD_PROBE_INDEX_CELLS entries - the pool slot serving the cell
+/// four lanes of GI_WORLD_PROBE_INDEX_CELLS entries - the pool slot serving the cell
 /// (GI_WORLD_PROBE_NONE when unallocated), the packed cell of the last request stamped at
-/// the entry, the clock tick of that stamp - then the allocation clock, the free stack's
-/// count and the free stack itself. Cells are addressed by GiWorldProbeIndexSlot (cell mod
-/// axis, toroidal like the dense windows).
+/// the entry, the clock tick of that stamp, the probe's RELOCATION offset (packed, see
+/// GiWorldProbePackOffset; written at claim and refreshed by the trace) - then the
+/// allocation clock, the free stack's count and the free stack itself. Cells are addressed
+/// by GiWorldProbeIndexSlot (cell mod axis, toroidal like the dense windows).
 #define GI_WORLD_PROBE_INDEX_CELLS        (GI_WORLD_PROBE_AXIS_L0 * GI_WORLD_PROBE_AXIS_L0 * GI_WORLD_PROBE_AXIS_L0)
 #define GI_WORLD_PROBE_INDEX_SLOT_BASE    0
 #define GI_WORLD_PROBE_INDEX_REQUEST_BASE GI_WORLD_PROBE_INDEX_CELLS
 #define GI_WORLD_PROBE_INDEX_STAMP_BASE   (2 * GI_WORLD_PROBE_INDEX_CELLS)
-#define GI_WORLD_PROBE_INDEX_CLOCK        (3 * GI_WORLD_PROBE_INDEX_CELLS)
-#define GI_WORLD_PROBE_INDEX_FREE_COUNT   (3 * GI_WORLD_PROBE_INDEX_CELLS + 1)
-#define GI_WORLD_PROBE_INDEX_FREE_BASE    (3 * GI_WORLD_PROBE_INDEX_CELLS + 2)
-#define GI_WORLD_PROBE_INDEX_SIZE         (3 * GI_WORLD_PROBE_INDEX_CELLS + 2 + GI_WORLD_PROBE_POOL_L0)
+#define GI_WORLD_PROBE_INDEX_OFFSET_BASE  (3 * GI_WORLD_PROBE_INDEX_CELLS)
+#define GI_WORLD_PROBE_INDEX_CLOCK        (4 * GI_WORLD_PROBE_INDEX_CELLS)
+#define GI_WORLD_PROBE_INDEX_FREE_COUNT   (4 * GI_WORLD_PROBE_INDEX_CELLS + 1)
+#define GI_WORLD_PROBE_INDEX_FREE_BASE    (4 * GI_WORLD_PROBE_INDEX_CELLS + 2)
+#define GI_WORLD_PROBE_INDEX_SIZE         (4 * GI_WORLD_PROBE_INDEX_CELLS + 2 + GI_WORLD_PROBE_POOL_L0)
 /// An unallocated index entry, and the cell id of a FREE pool slot (the cell buffer's seed
 /// sentinel, which the dense levels also start from).
 #define GI_WORLD_PROBE_NONE 0xFFFFFFFFu
@@ -249,6 +253,28 @@ ivec3 GiWorldProbeUnpackCell(uint packed)
 	       ivec3(512, 512, 512);
 }
 
+/// A sparse probe's RELOCATION offset from its lattice point (DDGI / RTXGI probe relocation,
+/// audit section 22): 10 bits per axis in 1/1024ths of the level-0 spacing (2 mm; the
+/// radius is under half a spacing). The zero offset is the index lane's seed value; the
+/// BURIED marker is what the relocation pass leaves on a cell whose lattice point could not
+/// be moved out of geometry - the allocation pass skips such a cell until its re-test tick.
+#define GI_WORLD_PROBE_OFFSET_ZERO   0x20080200u
+#define GI_WORLD_PROBE_OFFSET_BURIED 0xFFFFFFFFu
+uint GiWorldProbePackOffset(vec3 offset, float spacing)
+{
+	ivec3 quantised = clamp(ivec3(round(offset / spacing * 1024.0)), ivec3(-511, -511, -511),
+	                        ivec3(511, 511, 511)) +
+	                  ivec3(512, 512, 512);
+	return uint(quantised.x) | (uint(quantised.y) << 10u) | (uint(quantised.z) << 20u);
+}
+
+vec3 GiWorldProbeUnpackOffset(uint packed, float spacing)
+{
+	ivec3 quantised = ivec3(int(packed & 0x3FFu), int((packed >> 10u) & 0x3FFu), int((packed >> 20u) & 0x3FFu)) -
+	                  ivec3(512, 512, 512);
+	return vec3(quantised) * (spacing / 1024.0);
+}
+
 /// The finest level COARSER than @p level whose window covers a point @p largest (Chebyshev
 /// distance) from the window centre; SDF_CLIPMAP_LEVEL_COUNT when none does. The cascade
 /// readers blend a cage into this one over its window's outer band. It used to be level + 1
@@ -344,6 +370,31 @@ bool GiWorldProbeCellWanted(ivec3 cell, uint clock, uint max_age)
 		}
 	}
 	return false;
+}
+
+/// Where a cage corner's probe actually stands relative to its lattice point: the sparse
+/// level's relocation offset (zero for the dense levels, whose lattice is not relocated).
+/// Readers keep the NOMINAL trilinear weights and test visibility - Chebyshev, the field
+/// march, the sphere parallax - from the relocated point, as DDGI does. A lane read for a
+/// cell whose slot is unallocated is harmless: every reader skips that corner.
+vec3 GiWorldProbeOffset(ivec3 cell, int level)
+{
+	vec3 offset = vec3_splat(0.0);
+	if(level == 0)
+	{
+		uint packed = b_world_probe_index[GI_WORLD_PROBE_INDEX_OFFSET_BASE + GiWorldProbeIndexSlot(cell)];
+		if(packed != GI_WORLD_PROBE_OFFSET_BURIED)
+		{
+			offset = GiWorldProbeUnpackOffset(packed, GiWorldProbeSpacing(0));
+		}
+	}
+	return offset;
+}
+#else
+/// No index bound: the lattice point itself (consumers that never read the sparse level).
+vec3 GiWorldProbeOffset(ivec3 cell, int level)
+{
+	return vec3_splat(0.0);
 }
 #endif // GI_WORLD_PROBE_INDEX_BOUND
 
@@ -543,7 +594,8 @@ uint GiWorldProbeCageMask(vec3 position, vec3 normal, vec3 view_direction, int l
 		else
 		{
 			ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
-			vec3 probe_position = GiWorldProbeCellPosition(base_cell + offset, level);
+			vec3 probe_position = GiWorldProbeCellPosition(base_cell + offset, level) +
+			                      GiWorldProbeOffset(base_cell + offset, level);
 			if(GiWorldProbeCageVisibility(biased, probe_position, spacing) > 0.0)
 			{
 				mask |= bit;
@@ -704,7 +756,9 @@ bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direct
 	{
 		ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
 		ivec3 cell = base_cell + offset;
-		vec3 probe_position = GiWorldProbeCellPosition(cell, level);
+		// The relocated probe (GiWorldProbeOffset): the visibility terms below are measured
+		// from where the probe traced; the trilinear weights stay on the lattice.
+		vec3 probe_position = GiWorldProbeCellPosition(cell, level) + GiWorldProbeOffset(cell, level);
 		// Trilinear, floored so a query exactly on a probe plane cannot zero the whole cage.
 		vec3 tri = mix(vec3_splat(1.0) - frac, frac, vec3(offset));
 		float weight = max(tri.x, 0.001) * max(tri.y, 0.001) * max(tri.z, 0.001);
@@ -982,7 +1036,8 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 			{
 				ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
 				ivec3 cell = base_cell + offset;
-				vec3 probe_position = GiWorldProbeCellPosition(cell, cage_level);
+				vec3 probe_position =
+				    GiWorldProbeCellPosition(cell, cage_level) + GiWorldProbeOffset(cell, cage_level);
 				vec3 tri = mix(vec3_splat(1.0) - frac, frac, vec3(offset));
 				float weight = max(tri.x, 0.001) * max(tri.y, 0.001) * max(tri.z, 0.001);
 				// An unallocated level-0 cell: a DEAD corner (see the irradiance read).
@@ -1121,5 +1176,58 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 #endif // GI_WORLD_PROBE_READ_RADIANCE
 
 #endif // GI_WORLD_PROBE_READ
+
+#if defined(GI_WORLD_PROBE_RELOCATE)
+/// PROBE RELOCATION [DDGI19, RTXGI] for the sparse level, answered by the mesh fields: the
+/// offset that moves a level-0 lattice point out of geometry and to at least
+/// GI_WORLD_PROBE_RELOCATE_CLEARANCE spacings of clearance, following the field gradient
+/// for GI_WORLD_PROBE_RELOCATE_STEPS steps, never beyond GI_WORLD_PROBE_RELOCATE_RADIUS
+/// spacings. A point that cannot reach the clearance within the radius keeps its clamped
+/// offset and the caller's buried test (SdfSampleInstancesPoint at nominal + offset) makes
+/// it dead. Why it exists: a 2 m lattice puts a corner of most covered faces' cages inside
+/// a wall, a floor slab or a column, and a dead corner is weight the cage loses - on
+/// covered faces the level-0 cage kept 44% of its weight and answered black for a third of
+/// them (audit section 22). Moving the corner to the room's side of its wall gives the cage
+/// a live probe that measured the room; a corner pushed to the FAR side of a thin wall stays
+/// rejected by the visibility test, as a buried one was, so no coarse cage is imported.
+/// Consumers that define GI_WORLD_PROBE_RELOCATE include sdf_common.sh first (the trace and
+/// the relocation pass, cs_gi_world_probe_relocate.sc).
+vec3 GiWorldProbeRelocate(vec3 nominal, float spacing)
+{
+	float clearance = GI_WORLD_PROBE_RELOCATE_CLEARANCE * spacing;
+	float radius = GI_WORLD_PROBE_RELOCATE_RADIUS * spacing;
+	float tap = 0.25 * clearance;
+	vec3 offset = vec3_splat(0.0);
+	LOOP
+	for(int step = 0; step < GI_WORLD_PROBE_RELOCATE_STEPS; ++step)
+	{
+		vec3 probe = nominal + offset;
+		float distance = SdfSampleInstancesPoint(probe);
+		if(distance >= clearance)
+		{
+			break;
+		}
+		vec3 gradient = vec3(SdfSampleInstancesPoint(probe + vec3(tap, 0.0, 0.0)) -
+		                         SdfSampleInstancesPoint(probe - vec3(tap, 0.0, 0.0)),
+		                     SdfSampleInstancesPoint(probe + vec3(0.0, tap, 0.0)) -
+		                         SdfSampleInstancesPoint(probe - vec3(0.0, tap, 0.0)),
+		                     SdfSampleInstancesPoint(probe + vec3(0.0, 0.0, tap)) -
+		                         SdfSampleInstancesPoint(probe - vec3(0.0, 0.0, tap)));
+		float gradient_length = length(gradient);
+		if(gradient_length < 1e-5)
+		{
+			break;
+		}
+		offset += gradient * ((clearance - distance) / gradient_length);
+		float offset_length = length(offset);
+		if(offset_length > radius)
+		{
+			offset *= radius / offset_length;
+			break;
+		}
+	}
+	return offset;
+}
+#endif // GI_WORLD_PROBE_RELOCATE
 
 #endif // __GI_WORLD_PROBES_SH__

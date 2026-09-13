@@ -43,6 +43,10 @@ public:
         /// converging running mean. Off = fixed texel centres written through (the
         /// deterministic atlas).
         bool jitter_directions = false;
+        /// The editor's GI census is armed (gi_quiescence_gate_pass::is_census_armed): the
+        /// trace classifies its probes and counts its texels and the allocation pass counts
+        /// its evictions. Off, that instrument work does not run.
+        bool census = false;
         /// When valid, both dispatches take their group counts from this buffer instead of
         /// the CPU-side counts - the GPU quiescence gate wrote the real counts or zeros there
         /// earlier this frame (gi_quiescence_gate_pass). The pass's CPU half still runs; it
@@ -181,12 +185,41 @@ private:
         }
     } alloc_program_;
 
+    /// The relocation pass (cs_gi_world_probe_relocate.sc): the frame's fresh claims moved
+    /// out of geometry by the mesh fields, or freed and marked buried.
+    struct relocate_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_world_probe_params;
+        gfx::program::uniform_ptr u_gi_light_voxel_params;
+        gfx::program::uniform_ptr u_sdf_params;
+        gfx::program::uniform_ptr u_sdf_grid_params;
+        gfx::program::uniform_ptr s_sdf_atlas;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } relocate_program_;
+
     /// Light-change reactivity state: while frames remain, the trace covers two strata per
     /// frame (window halves to 8), then settles back to one.
     uint64_t last_light_hash_ = 0;
     uint64_t last_environment_hash_ = 0;
     uint64_t last_content_epoch_ = 0;
     uint32_t fast_frames_ = 0;
+    /// Level 0's window centre cell last frame, for the camera-jump trigger of the fast window.
+    float last_level0_cell_[3] = {0.0f, 0.0f, 0.0f};
+    bool has_last_level0_cell_ = false;
 };
 
 } // namespace unravel

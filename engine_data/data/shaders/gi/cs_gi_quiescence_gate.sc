@@ -42,7 +42,8 @@ BUFFER_WO(s_gi_gate_indirect, uvec4, 2);
 #define GI_GATE_ENTRY_COUNT 3
 
 /// x = gate mode (0 run, 1 measure, 2 skip - surface_cache_view::quiescence_mode),
-/// y = non-zero to clear the ring (a tracked input changed), z, w unused.
+/// y = non-zero to clear the ring (a tracked input changed), z = non-zero while the editor
+/// census is armed (the census rows are cleared for accumulation only then), w unused.
 uniform vec4 u_gi_gate_params;
 #define u_gate_mode  int(u_gi_gate_params.x)
 #define u_gate_reset (u_gi_gate_params.y > 0.0)
@@ -182,7 +183,7 @@ void main()
 	// The census rows (GI_STATS_RELIGHT_FACES_MOVED onward) are zeroed only when the passes
 	// are about to accumulate a fresh one, so a snapshot taken while the gate is closed still
 	// reads the last frame that did any work - the frame the ledger wants.
-	if(run)
+	if(run && u_gi_gate_params.z > 0.5)
 	{
 		for(int census_level = 0; census_level < SDF_CLIPMAP_LEVEL_COUNT; ++census_level)
 		{

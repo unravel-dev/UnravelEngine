@@ -71,13 +71,15 @@ uniform vec4 u_gi_probe_screen;
 /// x = 1 when both record halves hold real data (0 on the first frames after allocation
 ///     or a lattice change) - gates the trace's importance reprojection so freshly
 ///     allocated garbage is never read as history.
-/// y = unused (held the removed probe-space temporal's window).
+/// y = 1 while the Probe Tiers or Emitter Share debug view is displayed: the gather's tier and
+///     emitter census and probe records [7] / [11] are written only then.
 /// z = WRITE half offset into the probe buffer, w = READ half offset -- both in PROBES.
 ///
 /// The probe buffer is double buffered because the importance reprojection reads LAST
 /// frame's records (meta + mip) while this frame's are being written.
 uniform vec4 u_gi_probe_temporal;
 #define u_gi_probe_trusted       (u_gi_probe_temporal.x > 0.5)
+#define u_gi_probe_debug_census  (u_gi_probe_temporal.y > 0.5)
 #define u_gi_probe_write_offset  uint(u_gi_probe_temporal.z)
 #define u_gi_probe_read_offset   uint(u_gi_probe_temporal.w)
 

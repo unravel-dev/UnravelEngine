@@ -34,6 +34,19 @@ auto gi_quiescence_gate_pass::init(rtti::context& ctx) -> bool
 void gi_quiescence_gate_pass::request_stats_snapshot()
 {
     snapshot_requested_ = true;
+    // The census rows are instrument work the passes skip until a tool asks: arm them, and
+    // when they were not armed already hold the copy back until they have accumulated.
+    const uint32_t frame = gfx::get_render_frame();
+    if(!is_census_armed())
+    {
+        snapshot_not_before_frame_ = frame + census_warmup_frames;
+    }
+    census_until_frame_ = frame + census_hold_frames;
+}
+
+auto gi_quiescence_gate_pass::is_census_armed() const -> bool
+{
+    return gfx::get_render_frame() < census_until_frame_;
 }
 
 void gi_quiescence_gate_pass::service_stats_snapshot(const gfx::texture::ptr& vis_memo, uint32_t attr_resolution)
@@ -48,6 +61,10 @@ void gi_quiescence_gate_pass::service_stats_snapshot(const gfx::texture::ptr& vi
         stats_snapshot_.valid = true;
     }
     if(!snapshot_requested_ || snapshot_pending_)
+    {
+        return;
+    }
+    if(gfx::get_render_frame() < snapshot_not_before_frame_)
     {
         return;
     }
@@ -176,7 +193,8 @@ auto gi_quiescence_gate_pass::run(gfx::render_view& rview, const run_params& par
     // The resolution lane alone: GiLightVoxelStatsTexel needs it to address the slice.
     const float voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_gi_light_voxel_params, voxel_params);
-    const float gate_params[4] = {float(uint32_t(params.mode)), reset ? 1.0f : 0.0f, 0.0f, 0.0f};
+    // z = the census armed: the census rows are cleared for accumulation only then.
+    const float gate_params[4] = {float(uint32_t(params.mode)), reset ? 1.0f : 0.0f, is_census_armed() ? 1.0f : 0.0f, 0.0f};
     gfx::set_uniform(program_.u_gi_gate_params, gate_params);
     float groups[entry_count * 4] = {};
     for(uint16_t i = 0; i < entry_count; ++i)

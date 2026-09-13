@@ -35,28 +35,43 @@
  * GI's notion of "where the sun lands" agree with the image by construction, and one tap is
  * far cheaper than the sphere trace it replaces.
  *
- * ONE split only, deliberately: the includer (cs_gi_light_voxels) has exactly one free
- * resource stage, and split 0 is the sharpest and covers the camera's neighbourhood - which
- * is where level-0/1 voxels live, the only cells fine enough to hold a sun pool anyway.
- * Outside its texcoord bounds, outside the frustum slice it was fitted to (see the
+ * EVERY split (phase E of gi_single_lighting_plan.md): the includer (cs_gi_light_voxels) has
+ * exactly one free resource stage, so the cascades arrive as the layers of ONE texture array
+ * (gi_light_voxel_pass.cpp blits the generator's maps into it on the frames the relight runs;
+ * nothing is re-rendered and the shadow pass's per-cascade caster sets are untouched). The
+ * receiver picks the SMALLEST cascade whose crop contains it, exactly the raster's rule
+ * (fs_pbr_lighting.sh): that rule is what the shadow pass's nested-cascade caster culling is
+ * exact for (shadow.cpp - a caster fully inside a nearer crop is drawn into that map only,
+ * and whatever can shadow a receiver of crop j shares its light-space column and is in map
+ * j). Selecting by view distance instead would read maps that lack the near casters.
+ * Outside every crop, outside the frustum slices the cascades were fitted to (see the
  * contract in GiSunShadowmapVisibility), and for every other light, the traced field
  * remains the answer. A world-stable map of the GI's own would answer the unseen faces
  * too, but it costs a second scene render per window scroll, which was judged not worth
  * it. Gated by a define so the debug direct view keeps showing the PURE traced tier -
  * the diagnostic contrast that found this bug.
  */
-SAMPLER2D(s_gi_sun_shadowmap, 14);
-uniform mat4 u_gi_sun_shadowmap_mtx;
-/// x = light-buffer index of the sun the bound map belongs to (< 0 disables the tier),
-/// y = cascade-0 constant receiver bias in stored depth (the generator's texel bias converted),
-/// z = texcoord border, w = d(stored depth)/d(world distance along the sun).
+SAMPLER2DARRAY(s_gi_sun_shadowmap, 14);
+/// bgfx_shader.sh maps the array samplers for HLSL and ESSL but leaves texture2DArrayLod
+/// undefined on desktop GLSL, where the native call is textureLod on a sampler2DArray.
+#if BGFX_SHADER_LANGUAGE_GLSL && !defined(texture2DArrayLod)
+#	define texture2DArrayLod(_sampler, _coord, _lod) textureLod(_sampler, _coord, _lod)
+#endif
+/// World -> shadow texcoord of every cascade (the raster's u_shadowMapMtx0..3), layer = split.
+uniform mat4 u_gi_sun_shadowmap_mtx[4];
+/// x = light-buffer index of the sun the bound maps belong to (< 0 disables the tier),
+/// y = the number of active splits, z = texcoord border, w = d(stored depth)/d(world
+/// distance along the sun) - the base ortho depth range is shared by every cascade.
 uniform vec4 u_gi_sun_shadowmap_params;
-/// The camera's (TAA-unjittered) view-projection - the frustum cascade 0 was fitted to.
+/// The camera's (TAA-unjittered) view-projection - the frustum the cascades were fitted to.
 uniform mat4 u_gi_sun_shadowmap_camera_vp;
-/// x = cascade 0's view-space far distance (the slice's far plane); yzw unused.
+/// xyzw = the cascades' view-space far distances (the slices' far planes), 0 past the count.
 uniform vec4 u_gi_sun_shadowmap_slice;
+/// xyzw = each cascade's constant receiver bias in stored depth (cascade 0's texel bias
+/// scaled by the cascade's texel size, as the raster scales its own).
+uniform vec4 u_gi_sun_shadowmap_bias;
 #define u_gi_sun_index          u_gi_sun_shadowmap_params.x
-#define u_gi_sun_bias           u_gi_sun_shadowmap_params.y
+#define u_gi_sun_splits         int(u_gi_sun_shadowmap_params.y)
 #define u_gi_sun_border         u_gi_sun_shadowmap_params.z
 #define u_gi_sun_world_to_depth u_gi_sun_shadowmap_params.w
 
@@ -66,7 +81,7 @@ uniform vec4 u_gi_sun_shadowmap_slice;
 #define GI_SUN_SHADOWMAP_SLOPE_COVER_VOXELS 1.0
 
 /**
- * Sun visibility from the bound cascade-0 map, when it covers @p world_position.
+ * Sun visibility from the bound cascades, when one of them covers @p world_position.
  *
  * AREA average, not a point sample: the receiver is a whole attribute-voxel FACE (up to
  * metres at coarse levels), and sun pools at that scale are cell-sized - a single centre
@@ -81,40 +96,49 @@ uniform vec4 u_gi_sun_shadowmap_slice;
  * coverage through EXACTLY the code the lighting takes - a parallel implementation would
  * drift and the attribution would lie.
  *
- * COARSE LEVELS DECLINE (GI_SUN_SHADOWMAP_MAX_VOXEL). The receiver bias below is one LEVEL
- * voxel of light-space depth, which the quadrature genuinely needs - and which also means the
- * tier reports LIT through any occluder thinner than that voxel. At the coarse cascades that
- * is metres, so a sealed room whose roof is thinner than one cell is lit from outside through
- * a path no field defence can see: not the SDF, not the cage visibility, not the dead-probe
- * gate (measured: interior ceiling brightest, sun-white, falling off downward, the walls
- * merely bouncing it). There is no bias that is simultaneously acne-free and leak-free over a
- * metre-wide face, so the honest move is to decline and let the traced field answer, exactly
- * as it did before this tier existed. The gate sits FIRST: declining costs one compare, and
- * it skips the projection and the four taps as well.
+ * THE RECEIVER BIAS IS CAPPED (GI_SUN_SHADOWMAP_SLOPE_CAP): the slope cover the quadrature
+ * needs was one LEVEL voxel of light-space depth, which also meant the tier reported LIT
+ * through any occluder thinner than that voxel - at the coarse cascades metres, a sealed
+ * room lit from outside through its roof by a path no field defence can see (measured:
+ * interior ceiling brightest, sun-white, falling off downward). The coarse levels declined
+ * the map for that (GI_SUN_SHADOWMAP_MAX_VOXEL 0.125 kept only level 0). Now every level
+ * biases by min(voxel, cap) - level 0 is unchanged and a coarse face carries level 0's
+ * bias: a tilted coarse face may self-shadow at its outer taps (a darker pool), never light
+ * a sealed room, and the large axis-aligned sunlit surfaces (floors, sun-facing walls) read
+ * the raster's exact answer at every level. The level gate sits FIRST: declining costs one
+ * compare and skips the projection and the taps.
  *
  * @param voxel_size Voxel of the answering cascade level: the quadrature half-extent.
- * @return true when the map answered; @p out_lit then holds the lit fraction. False means
- *         out of cascade-0 coverage or too coarse a level, and the traced field must answer.
+ * @return true when a map answered; @p out_lit then holds the lit fraction and
+ *         @p out_cascade the split that answered. False means no cascade covers the point
+ *         (or too coarse a level), and the traced field must answer.
  */
-bool GiSunShadowmapVisibility(vec3 world_position, vec3 world_normal, float voxel_size, out float out_lit)
+bool GiSunShadowmapVisibility(vec3 world_position, vec3 world_normal, float voxel_size, out float out_lit,
+                              out int out_cascade)
 {
 	out_lit = 0.0;
+	out_cascade = -1;
 	if(voxel_size > GI_SUN_SHADOWMAP_MAX_VOXEL)
 	{
 		return false;
 	}
-	// THE SLICE CONTRACT. Cascade 0 is fitted to the camera's near frustum slice, and the
-	// raster samples it for nothing outside that slice. Its crop footprint - a bounding sphere
-	// of the slice - reaches metres BEHIND and beside the camera, so a world-space receiver
-	// there projects inside the map's texcoords while nothing about the fit is contracted for
-	// it. Measured: faces of a sealed room BEHIND the camera read LIT through this map while
-	// the camera faced away, and every camera turn then revealed a lit room that decayed over
-	// seconds through the relight EMA and the closed-room bounce (the first-look glow). A
-	// receiver outside the slice - behind the near plane, past cascade 0's far plane, or
-	// outside the field of view - declines here and the traced field answers, exactly as it
-	// does past the map's edge. Costs one mat4 transform per face.
+	// THE SLICE CONTRACT. The cascades are fitted to the camera's frustum slices, and the
+	// raster samples them for nothing outside the frustum. A crop footprint - a bounding
+	// sphere of its slice - reaches metres BEHIND and beside the camera, so a world-space
+	// receiver there projects inside a map's texcoords while nothing about the fit is
+	// contracted for it. Measured: faces of a sealed room BEHIND the camera read LIT through
+	// cascade 0 while the camera faced away, and every camera turn then revealed a lit room
+	// that decayed over seconds through the relight EMA and the closed-room bounce (the
+	// first-look glow). A receiver outside the frustum - behind the near plane, past the last
+	// cascade's far plane, or outside the field of view - declines here and the traced field
+	// answers, exactly as it does past the maps' edges. Costs one mat4 transform per face.
+	int splits = clamp(u_gi_sun_splits, 1, 4);
+	float far_last = splits == 1 ? u_gi_sun_shadowmap_slice.x
+	                             : (splits == 2 ? u_gi_sun_shadowmap_slice.y
+	                                            : (splits == 3 ? u_gi_sun_shadowmap_slice.z
+	                                                           : u_gi_sun_shadowmap_slice.w));
 	vec4 camera_clip = mul(u_gi_sun_shadowmap_camera_vp, vec4(world_position, 1.0));
-	if(camera_clip.w <= 0.0 || camera_clip.w > u_gi_sun_shadowmap_slice.x)
+	if(camera_clip.w <= 0.0 || camera_clip.w > far_last)
 	{
 		return false;
 	}
@@ -123,14 +147,32 @@ bool GiSunShadowmapVisibility(vec3 world_position, vec3 world_normal, float voxe
 	{
 		return false;
 	}
-	vec4 shadow_coord = mul(u_gi_sun_shadowmap_mtx, vec4(world_position, 1.0));
-	if(shadow_coord.w <= 1e-6)
+	// THE CROP CONTRACT: the smallest cascade whose crop contains the receiver (xy inside the
+	// crop's border, depth inside the map's range), in the raster's order. A near crop is as
+	// deep as the shadow range, so it answers for far ground at low sun too - with its full
+	// resolution and, by the nested-cascade culling, every caster of its column.
+	int cascade = -1;
+	vec4 shadow_coord = vec4_splat(0.0);
+	LOOP
+	for(int split = 0; split < splits; ++split)
 	{
-		return false;
+		vec4 candidate = mul(u_gi_sun_shadowmap_mtx[split], vec4(world_position, 1.0));
+		if(candidate.w <= 1e-6)
+		{
+			continue;
+		}
+		vec3 projected = candidate.xyz / candidate.w;
+		if(any(lessThanEqual(projected.xy, vec2_splat(u_gi_sun_border))) ||
+		   any(greaterThanEqual(projected.xy, vec2_splat(1.0 - u_gi_sun_border))) ||
+		   projected.z <= 0.0 || projected.z >= 1.0)
+		{
+			continue;
+		}
+		cascade = split;
+		shadow_coord = candidate;
+		break;
 	}
-	vec2 texcoord = shadow_coord.xy / shadow_coord.w;
-	if(any(lessThanEqual(texcoord, vec2_splat(u_gi_sun_border))) ||
-	   any(greaterThanEqual(texcoord, vec2_splat(1.0 - u_gi_sun_border))))
+	if(cascade < 0)
 	{
 		return false;
 	}
@@ -139,20 +181,28 @@ bool GiSunShadowmapVisibility(vec3 world_position, vec3 world_normal, float voxe
 	float h = 0.5 * voxel_size;
 	vec3 tangent = world_normal.yzx * h;
 	vec3 bitangent = world_normal.zxy * h;
-	vec4 delta_t = mul(u_gi_sun_shadowmap_mtx, vec4(tangent, 0.0));
-	vec4 delta_b = mul(u_gi_sun_shadowmap_mtx, vec4(bitangent, 0.0));
+	vec4 delta_t = mul(u_gi_sun_shadowmap_mtx[cascade], vec4(tangent, 0.0));
+	vec4 delta_b = mul(u_gi_sun_shadowmap_mtx[cascade], vec4(bitangent, 0.0));
+	float constant_bias = cascade == 0 ? u_gi_sun_shadowmap_bias.x
+	                                   : (cascade == 1 ? u_gi_sun_shadowmap_bias.y
+	                                                   : (cascade == 2 ? u_gi_sun_shadowmap_bias.z
+	                                                                   : u_gi_sun_shadowmap_bias.w));
+	float bias = constant_bias + min(voxel_size, GI_SUN_SHADOWMAP_SLOPE_CAP) *
+	                                 GI_SUN_SHADOWMAP_SLOPE_COVER_VOXELS * u_gi_sun_world_to_depth;
+	float layer = float(cascade);
 	float lit = 0.0;
-	float bias = u_gi_sun_bias + voxel_size * GI_SUN_SHADOWMAP_SLOPE_COVER_VOXELS * u_gi_sun_world_to_depth;
 	for(int tap = 0; tap < 4; ++tap)
 	{
 		vec4 tap_coord = shadow_coord +
 		                 (tap < 2 ? delta_t : -delta_t) +
 		                 ((tap & 1) != 0 ? delta_b : -delta_b);
 		float receiver = (tap_coord.z - bias) / tap_coord.w;
-		float occluder = texture2DLod(s_gi_sun_shadowmap, tap_coord.xy / tap_coord.w, 0.0).x;
+		float occluder =
+		    texture2DArrayLod(s_gi_sun_shadowmap, vec3(tap_coord.xy / tap_coord.w, layer), 0.0).x;
 		lit += step(receiver, occluder);
 	}
 	out_lit = lit * 0.25;
+	out_cascade = cascade;
 	return true;
 }
 #endif // GI_SUN_SHADOWMAP_TIER
@@ -177,8 +227,10 @@ uniform vec4 u_gi_shadow_params;
 uniform vec4 u_gi_shadow_params2;
 #define u_gi_shadow_surface_bias u_gi_shadow_params2.x
 #define u_gi_shadow_relaxation   u_gi_shadow_params2.y
-/// z is reserved. It carried the finest cascade voxel while the normal bias was clamped to it;
-/// the bias now scales by the level that answers and nothing reads it any more.
+/// z = 1 while the editor's GI census is armed (gi_quiescence_gate_pass::is_census_armed): the
+/// relight's census rows (GI_STATS_RELIGHT_FACES_MOVED / _VISIBLE) accumulate only then. A lane
+/// of a uniform every relight consumer binds anyway (it carried the finest cascade voxel once).
+#define u_gi_stats_census        (u_gi_shadow_params2.z > 0.5)
 /// How far along the ray a shadow ray starts, in voxels. Same reasoning as the gather ray:
 /// see gi_resolve_pass::settings::ray_start_voxels.
 #define u_gi_shadow_ray_start    u_gi_shadow_params2.w
@@ -287,14 +339,15 @@ vec3 GiEvalLight(GpuLight light, int light_index, vec3 world_position, vec3 worl
 	{
 		light_distance = u_gi_shadow_distance;
 #if defined(GI_SUN_SHADOWMAP_TIER)
-		// The sun's own map answers inside cascade 0 (see the tier note above); four taps
-		// replace the whole sphere trace. Out of bounds falls through to the trace.
+		// The sun's own maps answer inside the cascades (see the tier note above); four taps
+		// replace the whole sphere trace. Out of every crop falls through to the trace.
 		if(u_gi_sun_index >= 0.0)
 		{
 			if(float(light_index) == u_gi_sun_index)
 			{
 				float lit;
-				if(GiSunShadowmapVisibility(world_position, world_normal, voxel_size, lit))
+				int cascade;
+				if(GiSunShadowmapVisibility(world_position, world_normal, voxel_size, lit, cascade))
 				{
 					return unshadowed * lit;
 				}
@@ -403,7 +456,8 @@ vec3 GiEvalDirectLightingVoxel(vec3 world_position, vec3 world_normal, float vox
 				if(float(i) == u_gi_sun_index)
 				{
 					float lit;
-					if(GiSunShadowmapVisibility(world_position, world_normal, voxel_size, lit))
+					int cascade;
+					if(GiSunShadowmapVisibility(world_position, world_normal, voxel_size, lit, cascade))
 					{
 						total += unshadowed * lit;
 						continue;

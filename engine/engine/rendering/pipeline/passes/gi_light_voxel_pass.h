@@ -33,6 +33,11 @@ class shadowmap_generator;
 class gi_light_voxel_pass
 {
 public:
+    /// Cascades the sun tier's matrix array and texture array hold: mirrors
+    /// shadow::ShadowMapRenderTargets::Count, which this header only forward-declares (a
+    /// static_assert in the .cpp keeps them equal).
+    static constexpr uint16_t sun_cascade_count = 4;
+
     struct run_params
     {
         surface_cache_system* surface_cache = nullptr;
@@ -88,6 +93,9 @@ public:
         /// on frames the CPU gate could not use the sample anyway, which is where the
         /// readback's stall used to be paid for nothing.
         bool collect_stats = true;
+        /// The editor's GI census is armed (gi_quiescence_gate_pass::is_census_armed): the
+        /// relight accumulates its census rows (GI_STATS_RELIGHT_FACES_MOVED / _VISIBLE).
+        bool census = false;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -171,6 +179,11 @@ private:
     };
     std::unique_ptr<gpu_program> stats_program_;
     gfx::texture::ptr stats_texture_;
+    /// The sun's CSM cascades copied into the layers of one texture array: the tier's single
+    /// stage holds every split (phase E). Rebuilt when the generator's map size changes,
+    /// blitted on the frames the relight runs with the tier active.
+    gfx::texture::ptr sun_cascades_;
+    uint16_t sun_cascades_size_ = 0;
     std::array<stats_readback_slot, 3> stats_slots_{};
     uint32_t stats_slot_cursor_ = 0;
     /// The memo texture the statistic was last collected from: a fresh allocation carries
@@ -214,11 +227,20 @@ private:
         gfx::program::uniform_ptr u_gi_sun_shadowmap_params;
         gfx::program::uniform_ptr u_gi_sun_shadowmap_camera_vp;
         gfx::program::uniform_ptr u_gi_sun_shadowmap_slice;
+        gfx::program::uniform_ptr u_gi_sun_shadowmap_bias;
         gfx::program::uniform_ptr s_gi_sun_shadowmap;
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_sun_shadowmap_mtx, "u_gi_sun_shadowmap_mtx", gfx::uniform_type::Mat4);
+            cache_uniform(program.get(),
+                          u_gi_sun_shadowmap_mtx,
+                          "u_gi_sun_shadowmap_mtx",
+                          gfx::uniform_type::Mat4,
+                          sun_cascade_count);
+            cache_uniform(program.get(),
+                          u_gi_sun_shadowmap_bias,
+                          "u_gi_sun_shadowmap_bias",
+                          gfx::uniform_type::Vec4);
             cache_uniform(program.get(),
                           u_gi_sun_shadowmap_camera_vp,
                           "u_gi_sun_shadowmap_camera_vp",

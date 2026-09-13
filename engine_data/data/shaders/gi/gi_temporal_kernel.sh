@@ -558,7 +558,9 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	// than the settings window; the largest term wins the attribution.
 	float cause = GI_TEMPORAL_CAUSE_NONE;
 	bool cap_bound = history_moments.z + 1.0 > slow_cap + 0.5 && slow_cap < max(u_gi_max_accum, 1.0) - 0.5;
-	if(cap_bound)
+	// Only while the Temporal Reset Cause view is displayed: nothing else reads the code, and
+	// the attribution walks the dirty regions a second time.
+	if(u_gi_cause_lane && cap_bound)
 	{
 		float dirty_term = GiDirtyRegionFactorRaw(world_position);
 		if(moving_effective >= GI_TEMPORAL_CAUSE_MIN_TERM && moving_effective >= dirty_term &&

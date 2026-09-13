@@ -158,7 +158,7 @@ public:
     static constexpr std::array<uint32_t, global_sdf_clipmap::level_count> world_probe_axis{49u, 13u, 13u, 9u};
     static_assert(global_sdf_clipmap::level_count == 4u, "world_probe_axis lists one axis per level");
     /// Level 0's probe pool (GI_WORLD_PROBE_POOL_L0): the slots the sparse index allocates.
-    static constexpr uint32_t world_probe_pool_l0 = 8192u;
+    static constexpr uint32_t world_probe_pool_l0 = 16384u;
     static_assert(world_probe_pool_l0 % 4u == 0u, "the trace packs four probes per group");
     /// Tiles per atlas row, every level's tiles in one linear run (GI_WORLD_PROBE_ATLAS_TILES_X).
     static constexpr uint32_t world_probe_atlas_tiles_x = 128u;
@@ -179,11 +179,12 @@ public:
         return world_probe_axis[0] * world_probe_axis[0] * world_probe_axis[0];
     }
 
-    /// Entries of the sparse index buffer: three lanes per index cell (slot, request, stamp),
-    /// the clock, the free count and the free stack (GI_WORLD_PROBE_INDEX_SIZE).
+    /// Entries of the sparse index buffer: four lanes per index cell (slot, request, stamp,
+    /// relocation offset), the clock, the free count and the free stack
+    /// (GI_WORLD_PROBE_INDEX_SIZE).
     static constexpr auto get_world_probe_index_count() -> uint32_t
     {
-        return 3u * get_world_probe_index_cell_count() + 2u + world_probe_pool_l0;
+        return 4u * get_world_probe_index_cell_count() + 2u + world_probe_pool_l0;
     }
 
     /// Probes of the whole cascade set (the cell-id / count buffers, the convolve's thread

@@ -552,7 +552,8 @@ uint GiCageCornersUntouched(vec3 position, vec3 normal, vec3 view_direction, int
 	LOOP for(int corner = 0; corner < 8; ++corner)
 	{
 		ivec3 offset = ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
-		vec3 probe_position = GiWorldProbeCellPosition(base_cell + offset, level);
+		vec3 probe_position = GiWorldProbeCellPosition(base_cell + offset, level) +
+		                      GiWorldProbeOffset(base_cell + offset, level);
 		float reach = GiVisMemoChangeReach(level, biased, probe_position);
 		if(!GiSegmentTouchesChange(biased, probe_position, reach))
 		{
@@ -811,11 +812,14 @@ vec4 GiDebugSunTierColor(vec3 world_position, vec3 world_normal, float voxel_siz
 	{
 		return vec4(0.0, 0.2, 1.0, GI_SUN_TIER_DEBUG_ALPHA);
 	}
-	// The exact tier order of GiEvalLight: the map answers where it covers, the trace beyond.
+	// The exact tier order of GiEvalLight: the maps answer where they cover, the trace beyond.
+	// Blue carries the answering cascade (0.04 per split) under the green lit fraction.
 	float lit;
-	if(u_gi_sun_index >= 0.0 && GiSunShadowmapVisibility(world_position, world_normal, voxel_size, lit))
+	int cascade;
+	if(u_gi_sun_index >= 0.0 &&
+	   GiSunShadowmapVisibility(world_position, world_normal, voxel_size, lit, cascade))
 	{
-		return vec4(0.0, 0.25 + 0.75 * lit, 0.0, GI_SUN_TIER_DEBUG_ALPHA);
+		return vec4(0.0, 0.25 + 0.75 * lit, 0.04 * float(cascade), GI_SUN_TIER_DEBUG_ALPHA);
 	}
 	float visibility = GiTraceShadow(world_position, world_normal, -sun.direction,
 	                                 u_gi_shadow_distance, voxel_size, near_field);
@@ -1336,9 +1340,13 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// The signed half: rises alone, so the gate can take rise - (change - rise) as the
 		// volume's drift without a signed atomic (GI_QUIESCENCE_DRIFT_FRACTION).
 		stats_rise += lum_new > lum_old ? relative_change : 0.0;
-		// The census: did this relight change anything a reader could tell apart?
-		stats_moved += relative_change > GI_QUIESCENCE_CONVERGED_MEAN ? 1.0 : 0.0;
-		stats_visible += relative_change > GI_STATS_VISIBLE_CHANGE ? 1.0 : 0.0;
+		// The census: did this relight change anything a reader could tell apart? Editor
+		// statistics only (the gate reads rows 0-2), so only while the census is armed.
+		if(u_gi_stats_census)
+		{
+			stats_moved += relative_change > GI_QUIESCENCE_CONVERGED_MEAN ? 1.0 : 0.0;
+			stats_visible += relative_change > GI_STATS_VISIBLE_CHANGE ? 1.0 : 0.0;
+		}
 		imageStore(s_light_voxels_out, texel,
 		           vec4(radiance, source_dominated ? GI_LIGHT_VOXEL_SOURCE_ALPHA : 1.0));
 	}
@@ -1412,12 +1420,14 @@ void main()
 			               uint(faces + 0.5));
 			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_RISE),
 			               uint(rise * GI_QUIESCENCE_STATS_SCALE + 0.5));
-			// The census rows are cheap here (two more atomics per group) and would cost a
-			// readback to observe any other way.
-			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_FACES_MOVED),
-			               uint(moved + 0.5));
-			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_FACES_VISIBLE),
-			               uint(visible + 0.5));
+			// The census rows: editor statistics only, published while the census is armed.
+			if(u_gi_stats_census)
+			{
+				imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_FACES_MOVED),
+				               uint(moved + 0.5));
+				imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_FACES_VISIBLE),
+				               uint(visible + 0.5));
+			}
 		}
 	}
 }

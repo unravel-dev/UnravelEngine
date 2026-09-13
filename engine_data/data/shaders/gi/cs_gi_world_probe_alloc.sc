@@ -10,10 +10,14 @@
  *    GI_WORLD_PROBE_POOL_PRESSURE_DIVISOR-th of it is free (a parked camera with the relight
  *    gated off stamps nothing from the relight for minutes; its cages must not churn). The
  *    index entry still pointing at the slot is cleared and the slot pushed on the free stack.
- *    Thread 0 advances the allocation clock the request stamps carry (the ages this phase
- *    reads are off by at most one tick, which the ages tolerate).
+ *    The allocation clock the request stamps carry is advanced by the world-probe trace,
+ *    once per frame it runs (cs_gi_world_probe_trace.sc): a closed gate freezes every age, so
+ *    a parked shot never evicts and re-allocates its cages - with a full pool that churn
+ *    re-opened the gate through the allocation hold and kept the world side running at rest.
  *  - ALLOCATE, one thread per index entry: an unallocated cell that any of the eight base
- *    cells around it stamped within GI_WORLD_PROBE_REQUEST_AGE ticks pops a free slot, writes
+ *    cells around it stamped within GI_WORLD_PROBE_REQUEST_AGE ticks, and that the relocation
+ *    pass (cs_gi_world_probe_relocate.sc, run right after) has not marked BURIED since its
+ *    last re-test tick, pops a free slot, writes
  *    its cell id and the FRESH count sentinel (cs_gi_world_probe_trace.sc seeds and traces it
  *    the same frame) and binds the entry to it. An empty stack leaves the cell unallocated
  *    and its readers on the coarser cage until pressure eviction frees something.
@@ -58,6 +62,7 @@ void main()
 			b_world_probe_index[GI_WORLD_PROBE_INDEX_SLOT_BASE + index] = GI_WORLD_PROBE_NONE;
 			b_world_probe_index[GI_WORLD_PROBE_INDEX_REQUEST_BASE + index] = GI_WORLD_PROBE_NONE;
 			b_world_probe_index[GI_WORLD_PROBE_INDEX_STAMP_BASE + index] = 0u;
+			b_world_probe_index[GI_WORLD_PROBE_INDEX_OFFSET_BASE + index] = GI_WORLD_PROBE_OFFSET_ZERO;
 		}
 		if(index < GI_WORLD_PROBE_POOL_L0)
 		{
@@ -75,10 +80,6 @@ void main()
 	uint clock = b_world_probe_index[GI_WORLD_PROBE_INDEX_CLOCK];
 	if(u_alloc_phase == ALLOC_PHASE_EVICT)
 	{
-		if(index == 0)
-		{
-			b_world_probe_index[GI_WORLD_PROBE_INDEX_CLOCK] = clock + 1u;
-		}
 		if(index >= GI_WORLD_PROBE_POOL_L0)
 		{
 			return;
@@ -110,7 +111,11 @@ void main()
 		uint position = 0u;
 		atomicFetchAndAdd(b_world_probe_index[GI_WORLD_PROBE_INDEX_FREE_COUNT], 1u, position);
 		b_world_probe_index[GI_WORLD_PROBE_INDEX_FREE_BASE + int(position)] = uint(index);
-		imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(0, GI_STATS_PROBES_EVICTED), 1u);
+		// The eviction count is editor statistics only (u_gi_light_voxel_params.y = census).
+		if(u_gi_light_voxel_params.y > 0.5)
+		{
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(0, GI_STATS_PROBES_EVICTED), 1u);
+		}
 		return;
 	}
 	// ALLOCATE: this thread's index entry and the window cell it stands for - the unique cell
@@ -136,6 +141,19 @@ void main()
 	{
 		return;
 	}
+	// A cell the relocation pass found BURIED (its lattice point inside geometry even after
+	// relocation) is a dead probe for every reader, so it needs no slot: without this the GI
+	// test suite's twelve cells filled the pool with 13% buried slots and its sealed
+	// thin-walled cell's cages waited on the stack while the wall-straddling 4 m lattice
+	// answered for them (2026-09-13). The verdict is the relocation pass's, made on the
+	// claim it frees again the same frame; it is re-made every
+	// GI_WORLD_PROBE_RELOCATE_RETEST_TICKS ticks (a mover may have left). The fields are not
+	// sampled here on purpose: inlined, they tripled this kernel's cost through occupancy.
+	if(b_world_probe_index[GI_WORLD_PROBE_INDEX_OFFSET_BASE + index] == GI_WORLD_PROBE_OFFSET_BURIED &&
+	   (clock + uint(index)) % uint(GI_WORLD_PROBE_RELOCATE_RETEST_TICKS) != 0u)
+	{
+		return;
+	}
 	// Pop. A decrement past zero is undone: the pool is exhausted and the cell waits.
 	uint previous = 0u;
 	atomicFetchAndAdd(b_world_probe_index[GI_WORLD_PROBE_INDEX_FREE_COUNT], 0xFFFFFFFFu, previous);
@@ -149,5 +167,7 @@ void main()
 	b_world_probe_cells[int(slot)] = GiWorldProbePackCell(cell, 0);
 	b_world_probe_counts[int(slot)] = GI_WORLD_PROBE_COUNT_FRESH;
 	b_world_probe_index[GI_WORLD_PROBE_INDEX_SLOT_BASE + index] = slot;
+	// The relocation pass writes the offset (or the BURIED marker) this frame.
+	b_world_probe_index[GI_WORLD_PROBE_INDEX_OFFSET_BASE + index] = GI_WORLD_PROBE_OFFSET_ZERO;
 	imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(0, GI_STATS_PROBES_ALLOCATED), 1u);
 }
