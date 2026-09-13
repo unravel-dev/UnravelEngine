@@ -206,22 +206,16 @@ auto scene_distance(const reference_scene& scene, const math::vec3& world_positi
     {
         const reference_instance& instance = scene.instances[i];
         const float to_bounds = distance_to_bounds(instance.world_bounds, world_position);
+        const math::vec3 local = math::vec3(instance.world_to_local * math::vec4(world_position, 1.0f));
+        // Outside the bounds sample_mesh_sdf reports the larger of the padding bound and the
+        // field's boundary reading minus the distance to it (both conservative); the world
+        // AABB's own padding bound is a third valid floor, kept for the rotated case.
+        float distance = sample_mesh_sdf(*instance.sdf, local) * instance.local_to_world_scale;
         if(to_bounds > 0.0f)
         {
-            // Conservative lower bound without sampling: the surface lies inside the bounds by
-            // at least the field's padding, so this cannot over-estimate.
-            const float bound =
-                to_bounds + instance.sdf->get_bounds_padding() * instance.local_to_world_scale;
-            if(bound < nearest)
-            {
-                nearest = bound;
-                out_instance = i;
-            }
-            continue;
+            distance = std::max(distance,
+                                to_bounds + instance.sdf->get_bounds_padding() * instance.local_to_world_scale);
         }
-        const math::vec3 local = math::vec3(instance.world_to_local * math::vec4(world_position, 1.0f));
-        const float distance =
-            sample_mesh_sdf(*instance.sdf, local) * instance.local_to_world_scale;
         if(distance < nearest)
         {
             nearest = distance;

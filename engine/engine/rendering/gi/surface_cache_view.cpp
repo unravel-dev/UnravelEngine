@@ -6,6 +6,7 @@
 #include <logging/logging.h>
 
 #include <algorithm>
+#include <cmath>
 
 namespace unravel
 {
@@ -198,6 +199,7 @@ auto surface_cache_view::update_quiescence(uint64_t light_hash,
     {
         relight_sample_consumed_ = relight.index;
         relight_ring_[relight_ring_head_] = relight.mean_change;
+        relight_drift_ring_[relight_ring_head_] = relight.mean_drift;
         relight_ring_head_ = (relight_ring_head_ + 1u) % uint32_t(relight_ring_.size());
         relight_ring_count_ = std::min(relight_ring_count_ + 1u, uint32_t(relight_ring_.size()));
     }
@@ -224,15 +226,14 @@ auto surface_cache_view::evaluate_relight_quiescence(const relight_sample& relig
         return quiescence_frames_ >= quiescence_settle_frames;
     }
     // Mean of `count` samples ending `back` samples before the newest.
-    const auto ring_mean = [&](uint32_t back, uint32_t count) -> float
+    const auto ring_mean = [&](const std::array<float, 64>& ring, uint32_t back, uint32_t count) -> float
     {
         float sum = 0.0f;
         for(uint32_t i = 0; i < count; ++i)
         {
             const uint32_t offset = back + i + 1u;
-            const uint32_t slot = (relight_ring_head_ + uint32_t(relight_ring_.size()) - offset) %
-                                  uint32_t(relight_ring_.size());
-            sum += relight_ring_[slot];
+            const uint32_t slot = (relight_ring_head_ + uint32_t(ring.size()) - offset) % uint32_t(ring.size());
+            sum += ring[slot];
         }
         return sum / float(count);
     };
@@ -244,7 +245,7 @@ auto surface_cache_view::evaluate_relight_quiescence(const relight_sample& relig
     {
         return false;
     }
-    const float recent = ring_mean(0, window);
+    const float recent = ring_mean(relight_ring_, 0, window);
     if(recent < float(gi::GI_QUIESCENCE_CONVERGED_MEAN))
     {
         return true;
@@ -254,9 +255,13 @@ auto surface_cache_view::evaluate_relight_quiescence(const relight_sample& relig
         return false;
     }
     // Stationary: the change has stopped falling. A decaying tail shrinks between the two
-    // windows; the dithered equilibrium of shadow edges does not.
-    const float earlier = ring_mean(compare, window);
-    return recent >= float(gi::GI_QUIESCENCE_STATIONARY_FRACTION) * earlier;
+    // windows; the dithered equilibrium of shadow edges does not. Trending is not stationary
+    // either: a volume climbing through its bounce loop is a steady change whose signed part
+    // stays a large share of the absolute one (GI_QUIESCENCE_DRIFT_FRACTION).
+    const float earlier = ring_mean(relight_ring_, compare, window);
+    const float recent_drift = std::abs(ring_mean(relight_drift_ring_, 0, window));
+    return recent >= float(gi::GI_QUIESCENCE_STATIONARY_FRACTION) * earlier &&
+           recent_drift <= float(gi::GI_QUIESCENCE_DRIFT_FRACTION) * recent;
 }
 
 } // namespace unravel

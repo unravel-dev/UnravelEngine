@@ -230,4 +230,11 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
  */
 auto sample_mesh_sdf(const mesh_sdf& sdf, const math::vec3& local_position) -> float;
 
+/**
+ * @brief The brick lookup behind @ref sample_mesh_sdf for a point INSIDE the field, addressed
+ * in voxels from the field origin. Also what an outside point reads at its nearest boundary
+ * point (the Lipschitz bound in sample_mesh_sdf).
+ */
+auto sample_mesh_sdf_grid(const mesh_sdf& sdf, const math::vec3& grid_position) -> float;
+
 } // namespace unravel

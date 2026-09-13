@@ -21,6 +21,7 @@
 
 #include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
+#include <engine/rendering/gi/global_sdf_clipmap_gpu.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
@@ -94,6 +95,40 @@ auto parse_shader_constants(const std::string& path) -> std::map<std::string, do
         result[name] = value;
     }
     return result;
+}
+
+/// The per-level world-probe window axis, the sparse pool and the atlas row width are
+/// hardcoded on both sides (gi_world_probes.sh for the index and dispatch decode and the atlas
+/// layout, global_sdf_clipmap_gpu for the atlas and buffer sizes); a drift between them
+/// silently addresses the wrong tiles.
+void test_world_probe_axis_matches_cpp()
+{
+    std::printf("test_world_probe_axis_matches_cpp\n");
+#ifndef GI_TESTS_SHADER_DIR
+    check(false, "GI_TESTS_SHADER_DIR not defined by the build - the parity test cannot run");
+#else
+    const std::string path = std::string(GI_TESTS_SHADER_DIR) + "/gi/gi_world_probes.sh";
+    const auto shader_constants = parse_shader_constants(path);
+    using clipmap_gpu = unravel::global_sdf_clipmap_gpu;
+    const std::pair<const char*, double> expected[] = {
+        {"GI_WORLD_PROBE_AXIS_L0", double(clipmap_gpu::world_probe_axis[0])},
+        {"GI_WORLD_PROBE_AXIS_L1", double(clipmap_gpu::world_probe_axis[1])},
+        {"GI_WORLD_PROBE_AXIS_L2", double(clipmap_gpu::world_probe_axis[2])},
+        {"GI_WORLD_PROBE_AXIS_L3", double(clipmap_gpu::world_probe_axis[3])},
+        {"GI_WORLD_PROBE_POOL_L0", double(clipmap_gpu::world_probe_pool_l0)},
+        {"GI_WORLD_PROBE_ATLAS_TILES_X", double(clipmap_gpu::world_probe_atlas_tiles_x)},
+    };
+    for(const auto& [name, value] : expected)
+    {
+        const auto found = shader_constants.find(name);
+        if(found == shader_constants.end())
+        {
+            check(false, std::string(name) + " missing from gi_world_probes.sh");
+            continue;
+        }
+        check_near(found->second, value, 1e-9, std::string(name) + " matches global_sdf_clipmap_gpu");
+    }
+#endif
 }
 
 void test_shader_constants_match_cpp()
@@ -2427,6 +2462,7 @@ void test_world_probe_vis_memo_segment_keep_is_conservative()
 auto run_gi_oracle_suite(rtti::context& /*ctx*/) -> int
 {
     test_shader_constants_match_cpp();
+    test_world_probe_axis_matches_cpp();
     test_gi_shaders_compile_sm50();
     test_attribute_voxels_mark_the_surface_band();
     test_clipmap_attribute_transcription_matches_cpu();

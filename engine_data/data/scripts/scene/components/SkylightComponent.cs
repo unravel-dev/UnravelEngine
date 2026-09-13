@@ -210,7 +210,8 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Strength of indirect diffuse irradiance.
+        /// Multiplier on the sky ambient. 1 is the calibrated sky, whose horizontal irradiance
+        /// is a fixed fraction of the directional light's intensity; 0 disables the ambient.
         /// </summary>
         public float irradianceIntensity
         {

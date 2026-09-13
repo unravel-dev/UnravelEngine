@@ -261,7 +261,9 @@ public:
     void set_cloud_shadow_opacity(float opacity);
 
     /**
-     * @brief Gets the irradiance intensity (strength of indirect diffuse).
+     * @brief Gets the irradiance intensity: a multiplier on the sky ambient. 1 is the
+     * calibrated sky - its horizontal irradiance is perez_sky_to_sun_ratio x the directional
+     * light's luminous intensity (perez_luminance.h); 0 disables the ambient.
      * @return The irradiance intensity value.
      */
     auto get_irradiance_intensity() const noexcept -> float;
@@ -423,7 +425,7 @@ private:
     /**
      * @brief Strength of indirect diffuse lighting.
      */
-    float irradiance_intensity_{0.05f};
+    float irradiance_intensity_{1.0f};
 
     /**
      * @brief Optional tint override for irradiance (white = use sky-derived color).

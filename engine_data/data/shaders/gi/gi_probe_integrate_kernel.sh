@@ -30,9 +30,12 @@ SAMPLER2D(s_gi_normal, 9);
 /// The convolved irradiance tiles from cs_gi_screen_probe_filter.
 SAMPLER2D(s_probe_irradiance, 2);
 /// The GTAO output (rgb = world bent normal * 0.5 + 0.5, a = visibility), full resolution.
-/// Stage 13 is b_sdf_grid_instances in sdf_common.sh, which this program never references
-/// (no SDF march here), so the register is free on every backend.
-SAMPLER2D(s_gi_gtao, 13);
+/// Stage 3 is the mesh-SDF instance buffer in sdf_common.sh, which this program never
+/// references (no instance trace here - the cage-visibility march reads the clipmap alone),
+/// so the register is free on every backend. 13 became the sparse world-probe index
+/// (gi_world_probes.sh), live here through the irradiance cascade read; 14 is the temporal
+/// variant's velocity buffer.
+SAMPLER2D(s_gi_gtao, 3);
 
 /// xyz = camera position, w = frame index.
 uniform vec4 u_gi_camera;

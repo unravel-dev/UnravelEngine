@@ -68,7 +68,7 @@ uniform vec4 u_gi_light_voxel_params;
 #define u_light_voxel_frame      uint(u_gi_light_voxel_params.z)
 #define u_light_voxel_ready      (u_gi_light_voxel_params.w > 0.0)
 
-/// The quantities of the statistics slice (GiLightVoxelStatsTexel's y). The first two feed
+/// The quantities of the statistics slice (GiLightVoxelStatsTexel's y). The first three feed
 /// the quiescence gate every frame (cs_gi_quiescence_gate.sc drains them); the rest are the
 /// WASTE CENSUS - work done against work that changed the output - accumulated by the relight
 /// and the world-probe trace, zeroed by the gate on the frames it dispatches them, and read
@@ -76,24 +76,35 @@ uniform vec4 u_gi_light_voxel_params;
 /// a readback is a full CPU-GPU sync on every desktop backend.
 #define GI_STATS_RELIGHT_CHANGE        0
 #define GI_STATS_RELIGHT_FACES         1
+/// The RISING share of GI_STATS_RELIGHT_CHANGE (faces whose luminance went up). Rise minus
+/// fall is the volume's signed drift, which tells a volume climbing through its bounce loop
+/// (a steady change the ratio test alone reads as rest) from one dithering at rest (rises and
+/// falls cancel). See GI_QUIESCENCE_DRIFT_FRACTION.
+#define GI_STATS_RELIGHT_RISE          2
 /// Relit faces whose relative change exceeded GI_QUIESCENCE_CONVERGED_MEAN (the gate's own
 /// floor) and GI_STATS_VISIBLE_CHANGE (a step a reader could notice).
-#define GI_STATS_RELIGHT_FACES_MOVED   2
-#define GI_STATS_RELIGHT_FACES_VISIBLE 3
+#define GI_STATS_RELIGHT_FACES_MOVED   3
+#define GI_STATS_RELIGHT_FACES_VISIBLE 4
 /// World probes by state this frame, and their traced texels by the same two thresholds on
 /// the stored (running-mean) value.
-#define GI_STATS_PROBES_ACTIVE         4
-#define GI_STATS_PROBES_ASLEEP         5
-#define GI_STATS_PROBES_BURIED         6
-#define GI_STATS_PROBE_TEXELS          7
-#define GI_STATS_PROBE_TEXELS_MOVED    8
-#define GI_STATS_PROBE_TEXELS_VISIBLE  9
-#define GI_STATS_QUANTITY_COUNT        10
+#define GI_STATS_PROBES_ACTIVE         5
+#define GI_STATS_PROBES_ASLEEP         6
+#define GI_STATS_PROBES_BURIED         7
+#define GI_STATS_PROBE_TEXELS          8
+#define GI_STATS_PROBE_TEXELS_MOVED    9
+#define GI_STATS_PROBE_TEXELS_VISIBLE  10
+/// Sparse level-0 probes claimed and freed this frame by cs_gi_world_probe_alloc.sc (level-0
+/// column only). Drained by the gate every frame like the relight rows - the allocation count
+/// is what holds the gate open for the fresh probes' convergence.
+#define GI_STATS_PROBES_ALLOCATED      11
+#define GI_STATS_PROBES_EVICTED        12
+#define GI_STATS_QUANTITY_COUNT        13
 
 /// The relight convergence statistic's texel: one slice past the last face slab of the
 /// bounce vis-memo texture (allocated one slice deeper than the light volume for it); x =
 /// level, y = quantity (GI_STATS_*: 0 = summed relative change x GI_QUIESCENCE_STATS_SCALE,
-/// 1 = relit face count, then the census). Written by the group reduction in
+/// 1 = relit face count, 2 = the rising share of 0, then the census). Written by the group
+/// reduction in
 /// gi_light_voxels_kernel.sh, copied out (and, on the readback path, zeroed) by
 /// cs_gi_light_voxel_stats.sc.
 ivec3 GiLightVoxelStatsTexel(int level, int quantity)

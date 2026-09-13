@@ -115,18 +115,12 @@ auto surface_cache_system::deinit(rtti::context& ctx) -> bool
     texture_mean_overflow_warned_ = false;
     instance_buffer_capacity_ = 0;
     instance_data_.clear();
-    if(bgfx::isValid(grid_offset_buffer_))
+    if(bgfx::isValid(grid_buffer_))
     {
-        gfx::destroy(grid_offset_buffer_);
-        grid_offset_buffer_ = {bgfx::kInvalidHandle};
+        gfx::destroy(grid_buffer_);
+        grid_buffer_ = {bgfx::kInvalidHandle};
     }
-    if(bgfx::isValid(grid_instance_buffer_))
-    {
-        gfx::destroy(grid_instance_buffer_);
-        grid_instance_buffer_ = {bgfx::kInvalidHandle};
-    }
-    grid_offset_capacity_ = 0;
-    grid_instance_capacity_ = 0;
+    grid_capacity_ = 0;
     grid_bounds_.clear();
     grid_params_.fill(0.0f);
     light_buffer_.shutdown();
@@ -893,7 +887,7 @@ void surface_cache_system::upload_instance_grid()
     // structure every frame - at Bistro scale that alone kept the Vulkan backend allocating
     // staging memory continuously.
     if(grid_uploaded_fingerprint_ == instance_fingerprint_ && grid_.is_valid() &&
-       bgfx::isValid(grid_offset_buffer_) && bgfx::isValid(grid_instance_buffer_))
+       bgfx::isValid(grid_buffer_))
     {
         return;
     }
@@ -932,21 +926,17 @@ void surface_cache_system::upload_instance_grid()
         capacity = required + required / 2u + 64u;
         buffer = gfx::create_dynamic_index_buffer(capacity, BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
     };
-    ensure_capacity(grid_offset_buffer_, grid_offset_capacity_, math::max(uint32_t(offsets.size()), 1u));
-    ensure_capacity(grid_instance_buffer_,
-                    grid_instance_capacity_,
-                    math::max(uint32_t(cell_instances.size()), 1u));
-    if(!bgfx::isValid(grid_offset_buffer_) || !bgfx::isValid(grid_instance_buffer_))
+    // One buffer, one upload: the offsets then the instance list (sdf_common.sh b_sdf_grid).
+    grid_upload_.clear();
+    grid_upload_.reserve(offsets.size() + cell_instances.size());
+    grid_upload_.insert(grid_upload_.end(), offsets.begin(), offsets.end());
+    grid_upload_.insert(grid_upload_.end(), cell_instances.begin(), cell_instances.end());
+    ensure_capacity(grid_buffer_, grid_capacity_, math::max(uint32_t(grid_upload_.size()), 1u));
+    if(!bgfx::isValid(grid_buffer_))
     {
         return;
     }
-    gfx::update(grid_offset_buffer_, 0, gfx::copy(offsets.data(), uint32_t(offsets.size() * sizeof(uint32_t))));
-    if(!cell_instances.empty())
-    {
-        gfx::update(grid_instance_buffer_,
-                    0,
-                    gfx::copy(cell_instances.data(), uint32_t(cell_instances.size() * sizeof(uint32_t))));
-    }
+    gfx::update(grid_buffer_, 0, gfx::copy(grid_upload_.data(), uint32_t(grid_upload_.size() * sizeof(uint32_t))));
     const auto& origin = grid_.get_origin();
     const auto& dim = grid_.get_dim();
     grid_params_[0] = origin.x;
@@ -956,7 +946,9 @@ void surface_cache_system::upload_instance_grid()
     grid_params_[4] = float(dim.x);
     grid_params_[5] = float(dim.y);
     grid_params_[6] = float(dim.z);
-    grid_params_[7] = 1.0f;
+    // The instance list's base entry doubles as the enable flag (the offsets hold at least
+    // the terminator, so it is never zero for a valid grid).
+    grid_params_[7] = float(offsets.size());
 }
 
 void surface_cache_system::rebuild_emitters()

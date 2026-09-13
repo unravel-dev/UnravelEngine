@@ -32,22 +32,28 @@ public:
         /// Integrate each slice as a 32-sector visibility bitmask (what lies beyond a thin
         /// occluder stays visible) instead of the two-horizon closed form.
         bool visibility_bitmask = false;
-        /// World-space radius of the occlusion search. 4 m adds the room-scale term the
-        /// GI's probe lattice under-delivers (evaluated against 0.5 and 16 in the Bistro and
-        /// the GI test suite); the search is capped on screen by max_screen_radius, so the
-        /// value mostly matters for far geometry. Contact-only: 0.5-1 m.
-        float radius = 4.0f;
+        /// World-space radius of the occlusion search. Contact scale (XeGTAO ships 0.5): the
+        /// GI already resolves the room-scale term twice - the screen probes march the Hi-Z
+        /// pyramid from the pixel, the light voxels attenuate their bounce by the cavity cone -
+        /// so the 4 m radius this replaced cut a further 30-40 percent from surfaces whose
+        /// occlusion the gather had integrated (audit 2026-09-12, section 4: arcades 0.58 ->
+        /// 0.73, shadowed courtyard wall 0.69 -> 0.93 at 0.5 m). Lumen's short-range AO is a
+        /// few percent of the screen for the same reason: it fills only what the probe
+        /// interpolation misses. The search is capped on screen by max_screen_radius.
+        float radius = 0.5f;
         /// Portion of the radius over which an occluder's influence fades to zero. 0.3 keeps
         /// most of the radius at full weight without the pop a hard cutoff shows when an
         /// occluder crosses the boundary (XeGTAO's 0.615 is softer, 0.2 pops).
         float falloff_range = 0.3f;
         /// Power applied to the visibility (XeGTAO's final value power). 1 = ground truth
-        /// for the depth buffer; 1.6 pairs with the wide world radius.
+        /// for the depth buffer; 1.6 paired with the old 4 m room-scale radius.
         float final_power = 1.0f;
         /// Longest horizon search as a fraction of the AO target height. Bounds the cost and
-        /// the sample spacing of a wide radius; the world radius shrinks with it so the
-        /// falloff stays consistent. 0.25 = XeGTAO-like contact scale, 0.4 = wide.
-        float max_screen_radius = 0.4f;
+        /// the sample spacing; the world radius shrinks with it so the falloff stays
+        /// consistent. 0.05 ~ the 32 px screen-probe spacing, the footprint the GI's probe
+        /// interpolation cannot resolve (0.25 = XeGTAO-like contact scale, 0.4 = the old
+        /// room-scale term, see radius).
+        float max_screen_radius = 0.05f;
         /// Blend between no occlusion (0) and the full visibility (1) at the consumer.
         float intensity = 1.0f;
         /// The bitmask's slab depth as a fraction of the radius.

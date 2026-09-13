@@ -42,6 +42,10 @@ public:
         uint64_t index = 0;
         /// Mean relative change per relit face (see GI_QUIESCENCE_LUMINANCE_FLOOR).
         float mean_change = 0.0f;
+        /// Mean SIGNED relative change per relit face (rises minus falls): the trending part
+        /// of mean_change, which alone reads a climbing volume as stationary
+        /// (GI_QUIESCENCE_DRIFT_FRACTION).
+        float mean_drift = 0.0f;
     };
 
     /// How much of the gate decision the CPU settled on its own. The convergence half of the
@@ -142,8 +146,10 @@ public:
      * had reached (a room that read lit and stayed lit). The light-voxel pass now reads back
      * the mean relative change per relit face (@p relight); the gate opens when that mean is
      * below GI_QUIESCENCE_CONVERGED_MEAN, or has stopped falling (a stationary dithered
-     * equilibrium: GI_QUIESCENCE_STATIONARY_FRACTION), never before GI_QUIESCENCE_MIN_FRAMES
-     * and always by GI_QUIESCENCE_MAX_FRAMES. Without the statistic (index 0) the fixed
+     * equilibrium: GI_QUIESCENCE_STATIONARY_FRACTION) without trending (the signed change
+     * a small share of the absolute one: GI_QUIESCENCE_DRIFT_FRACTION), never before
+     * GI_QUIESCENCE_MIN_FRAMES and always by GI_QUIESCENCE_MAX_FRAMES. Without the statistic
+     * (index 0) the fixed
      * @ref quiescence_settle_frames remains.
      *
      * @param wants_debug A writer-side SDF debug view is up: those views paint per frame
@@ -218,8 +224,10 @@ private:
     /// See get_lighting_quiet_frames; saturates so it never wraps back into "recent".
     uint32_t lighting_quiet_frames_ = 0;
     /// The convergence samples seen since the last input change, newest at head - 1; sized
-    /// for the stationarity comparison (two windows GI_QUIESCENCE_COMPARE_FRAMES apart).
+    /// for the stationarity comparison (two windows GI_QUIESCENCE_COMPARE_FRAMES apart). The
+    /// signed drift ring shares the head and count.
     std::array<float, 64> relight_ring_{};
+    std::array<float, 64> relight_drift_ring_{};
     uint32_t relight_ring_head_ = 0;
     uint32_t relight_ring_count_ = 0;
     uint64_t relight_sample_consumed_ = 0;

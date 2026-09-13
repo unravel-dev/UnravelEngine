@@ -624,7 +624,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              "cascade level: relit faces and how many changed past the quiescence floor "
              "(GI_QUIESCENCE_CONVERGED_MEAN) and past GI_STATS_VISIBLE_CHANGE, world probes by "
              "state (active / asleep / buried) and their traced texels by the same thresholds. "
-             "Rows 0-1 describe the frame before the snapshot; the census rows hold the last "
+             "Rows 0-2 describe the frame before the snapshot; the census rows hold the last "
              "frame the gated passes actually ran. camera = \"scene\" (default, the Scene "
              "panel's editing camera) or \"game\" (the scene's rendering camera - the only one "
              "that renders while the Game panel is focused, e.g. in play mode).",
@@ -704,9 +704,12 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          }
                          using snapshot = gi_quiescence_gate_pass::stats_snapshot;
                          static constexpr const char* names[snapshot::quantity_count] = {
-                             "relight_change_sum", "relight_faces", "relight_faces_moved", "relight_faces_visible",
-                             "probes_active", "probes_asleep", "probes_buried", "probe_texels", "probe_texels_moved",
-                             "probe_texels_visible"};
+                             "relight_change_sum", "relight_faces", "relight_rise_sum", "relight_faces_moved",
+                             "relight_faces_visible", "probes_active", "probes_asleep", "probes_buried",
+                             "probe_texels", "probe_texels_moved", "probe_texels_visible",
+                             "probes_allocated", "probes_evicted"};
+                         // The two fixed-point sums (GI_STATS_RELIGHT_CHANGE / _RISE).
+                         static constexpr uint32_t rise_row = 2u;
                          std::string json = fmt::format(R"({{"frame":{},"levels":[)", snap.frame);
                          for(uint32_t level = 0; level < snapshot::level_count; ++level)
                          {
@@ -714,9 +717,10 @@ void register_viewport_tools(mcp_tool_registry& registry)
                              for(uint32_t q = 0; q < snapshot::quantity_count; ++q)
                              {
                                  const uint32_t raw = snap.at(q, level);
-                                 if(q == 0)
+                                 if(q == 0 || q == rise_row)
                                  {
-                                     json += fmt::format(R"("{}":{:.4f})",
+                                     json += fmt::format(R"({}"{}":{:.4f})",
+                                                         q == 0 ? "" : ",",
                                                          names[q],
                                                          double(raw) / double(gi::GI_QUIESCENCE_STATS_SCALE));
                                  }

@@ -81,6 +81,8 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
         // The claimed CELL, not the window count: the count is forced to zero unless
         // world_probe_jitter is on (off by default), so it carries no state to show.
         gfx::set_buffer(6, clipmap_gpu.get_world_probe_cells(), gfx::access::Read);
+        // The sparse level-0 index (stage 13, read-only here): the lattice view's residency.
+        gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::Read);
     }
     // Screen-probe records and the temporal moments, for the two SCREEN-SPACE views. The
     // probe buffer rides stage 14 (the trace uses 7, which the world-probe bookkeeping takes
@@ -204,8 +206,7 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
                                  float(instances.size()),
                                  float(surface_cache.get_emitters().size())};
     gfx::set_uniform(debug_program_.u_sdf_params, sdf_params);
-    gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-    gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+    gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
     gfx::set_uniform(debug_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
 
     const float debug_params[4] = {float(params.settings.max_steps),

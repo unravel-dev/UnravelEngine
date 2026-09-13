@@ -76,8 +76,8 @@ SAMPLER3D(s_attr_albedo, 8);
 /// lane of its own - the albedo's alpha is the composer's surface flag for both.
 SAMPLER3D(s_attr_emissive, 9);
 /// World probe per-slot bookkeeping, read-only here: which world CELL each atlas slot currently
-/// serves. The trace owns it as a read-write buffer (cs_gi_world_probe_trace.sc stage 6); this
-/// view only looks.
+/// serves. The trace owns it as a read-write buffer (cs_gi_world_probe_trace.sc stage 8); this
+/// view only looks. The sparse level-0 INDEX rides stage 13 through gi_world_probes.sh.
 ///
 /// The companion window-COUNT buffer is deliberately not bound. It is written as
 /// `(fast_window || jitter off) ? 0 : ...`, and world_probe_jitter defaults to OFF - so in the
@@ -485,7 +485,7 @@ void main()
 			for(int probe_level = 0; probe_level < SDF_CLIPMAP_LEVEL_COUNT; ++probe_level)
 			{
 				float spacing = GiWorldProbeSpacing(probe_level);
-				float half_extent = (float(GI_WORLD_PROBE_AXIS - 1) * 0.5 - 1.0) * spacing;
+				float half_extent = GiWorldProbeHalfExtent(probe_level);
 				vec3 delta = abs(hit_position - u_gi_debug_camera.xyz);
 				float largest = max(delta.x, max(delta.y, delta.z));
 				if(largest > half_extent)
@@ -810,8 +810,10 @@ void main()
 		//             measured and dropped, see the constant). The share of blue IS the occupancy
 		//             measurement: a lattice that is mostly blue is one a sparse, on-demand
 		//             allocation could cover at a far finer spacing for the same slot count.
-		//   (nothing drawn) -> the lattice point is not served by this cascade's window (its atlas
-		//             slot is claimed by another cell), so it is not a probe.
+		//   (nothing drawn) -> no probe: the sparse level-0 pool holds a slot only for cells a
+		//             cage reader requested (gi_world_probes.sh), so an empty lattice point is
+		//             one nothing has asked for - the air of a space no gather ray completes in
+		//             and no relit face sits in.
 		//   LIT    -> alive: the probe's own convolved irradiance toward the viewer, so the view
 		//             shows what each probe actually contributes.
 		//
@@ -824,11 +826,11 @@ void main()
 		float spacing = GiWorldProbeSpacing(0);
 		float radius = spacing * 0.09;
 		float limit = hit.hit ? hit.t : u_max_distance;
-		// Only as far as the window actually REACHES. It is GI_WORLD_PROBE_AXIS cells wide and
-		// centred on the camera's cell, so it extends half that in each direction; marching the
-		// full width drew lattice points whose atlas slot serves a different cell entirely -
+		// Only as far as the window actually REACHES. It is GI_WORLD_PROBE_AXIS_L0 cells wide
+		// and centred on the camera's cell, so it extends half that in each direction; marching
+		// the full width drew lattice points whose atlas slot serves a different cell entirely -
 		// grey spheres that are not probes at all, and most of the clutter in this view.
-		limit = min(limit, spacing * float((GI_WORLD_PROBE_AXIS - 1) / 2));
+		limit = min(limit, spacing * float((GI_WORLD_PROBE_AXIS_L0 - 1) / 2));
 		float best_t = limit;
 		ivec3 best_cell = ivec3(0, 0, 0);
 		bool found = false;
@@ -868,15 +870,23 @@ void main()
 			gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
 			return;
 		}
-		ivec3 probe_slot = GiWorldProbeSlot(best_cell);
-		int slot_index = GiWorldProbeSlotIndex(probe_slot, 0);
-		bool resident = b_world_probe_cells_debug[slot_index] == GiWorldProbePackCell(best_cell, 0);
+		// Residency through the sparse index, then the slot's own cell id as the cage read's
+		// invariant has it (a mismatch here would be an allocation-pass defect, shown as no
+		// probe rather than as someone else's lighting). Nothing is drawn for an empty cell.
+		int probe_slot = GiWorldProbeLookupSlot(best_cell, 0);
+		bool resident = probe_slot >= 0 &&
+		                b_world_probe_cells_debug[probe_slot] == GiWorldProbePackCell(best_cell, 0);
+		if(!resident)
+		{
+			gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
 		// The DEAD test the cage read itself makes: a buried probe stores zero-distance hits,
 		// so its depth mean collapses to the never-measured zero. Sampled along the view axis
 		// AND its opposite and taken as the max, so one genuinely close wall cannot read as
 		// death.
 		int depth_tile_edge = GI_WORLD_PROBE_OCT_DEPTH + 2;
-		ivec2 depth_tile = GiWorldProbeTileBase(probe_slot, 0, depth_tile_edge);
+		ivec2 depth_tile = GiWorldProbeTileBase(probe_slot, depth_tile_edge);
 		vec2 depth_uv_a = (vec2(depth_tile) + vec2_splat(1.0) +
 		                   GiOctEncode(ray_dir) * float(GI_WORLD_PROBE_OCT_DEPTH)) *
 		                  u_gi_world_probe_atlas.xy;
@@ -893,14 +903,6 @@ void main()
 		    SdfSampleClipmapLevel(SDF_CLIPMAP_LEVEL_COUNT - 1, GiWorldProbeCellPosition(best_cell, 0));
 		bool probe_asleep = probe_clearance < SDF_CLIPMAP_OUTSIDE &&
 		                    probe_clearance >= GI_WORLD_PROBE_SLEEP_SPACINGS * spacing;
-		// A lattice point whose slot serves another cell is not a probe; nothing is drawn for it.
-		// The march limit above makes this rare - it catches a ray that leaves the window box
-		// diagonally before it runs out of length.
-		if(!resident)
-		{
-			gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
-			return;
-		}
 		vec3 probe_color;
 		if(probe_asleep)
 		{
@@ -915,7 +917,7 @@ void main()
 			// What this probe would hand a surface facing the viewer: its convolved irradiance
 			// in the sphere's own normal direction, read exactly as the cage read samples it.
 			int irradiance_tile_edge = GI_WORLD_PROBE_OCT_IRRADIANCE + 2;
-			ivec2 irradiance_tile = GiWorldProbeTileBase(probe_slot, 0, irradiance_tile_edge);
+			ivec2 irradiance_tile = GiWorldProbeTileBase(probe_slot, irradiance_tile_edge);
 			vec2 irradiance_uv =
 			    (vec2(irradiance_tile) + vec2_splat(1.0) +
 			     GiOctEncode(sphere_normal) * float(GI_WORLD_PROBE_OCT_IRRADIANCE)) *

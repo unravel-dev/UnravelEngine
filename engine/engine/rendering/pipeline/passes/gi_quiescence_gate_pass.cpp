@@ -73,7 +73,7 @@ void gi_quiescence_gate_pass::service_stats_snapshot(const gfx::texture::ptr& vi
                                                             BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
     }
     // Copy only (u_gi_light_voxel_params.y = 0): the gate kernel that follows in this same
-    // frame drains rows 0-1 and the census rows on the frames it dispatches.
+    // frame drains rows 0-2 and the census rows on the frames it dispatches.
     gfx::render_pass copy_pass("GI/Stats Snapshot");
     stats_program_->begin();
     gfx::set_image_3d(0, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
@@ -165,7 +165,7 @@ auto gi_quiescence_gate_pass::run(gfx::render_view& rview, const run_params& par
         stats_source_ = vis_memo.get();
         reset = true;
     }
-    // The census snapshot copies the slice BEFORE the gate drains it, so rows 0-1 describe
+    // The census snapshot copies the slice BEFORE the gate drains it, so rows 0-2 describe
     // the frame that just finished.
     service_stats_snapshot(vis_memo, clipmap_gpu.get_attr_resolution());
     gfx::render_pass pass("GI/Quiescence Gate");

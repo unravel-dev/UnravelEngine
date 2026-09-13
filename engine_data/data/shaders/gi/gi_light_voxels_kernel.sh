@@ -38,6 +38,10 @@
 // The bounce term (gi_rewrite_plan.md Phase 4): last frame's world-probe irradiance closes the
 // infinite-bounce loop - probes read voxels, voxels read probes, gain bounded by GI_MAX_ALBEDO.
 #define GI_WORLD_PROBE_READ
+// The bounce REQUESTS the sparse level-0 cages it reads (stage 13, read-write): the cells
+// around every relit face's biased point are what the alcove's own 2 m probes get allocated
+// for (gi_world_probes.sh, the sparse-level note).
+#define GI_WORLD_PROBE_INDEX_RW
 #include "gi/gi_world_probes.sh"
 #include "gi/gi_dirty_regions.sh"
 
@@ -79,6 +83,8 @@ UIMAGE3D_RW(s_gi_vis_memo, r32ui, 6);
 /// Group scratch for the relight convergence statistic (see main).
 SHARED float s_stats_change[64];
 SHARED float s_stats_faces[64];
+/// The rising share of s_stats_change (GI_STATS_RELIGHT_RISE): the gate's drift lane.
+SHARED float s_stats_rise[64];
 /// The census half (GI_STATS_RELIGHT_FACES_MOVED / _VISIBLE): faces whose relight changed
 /// the stored value past each threshold.
 SHARED float s_stats_moved[64];
@@ -140,66 +146,98 @@ uniform vec4 u_gi_vis_memo_bounds[GI_TEMPORAL_DIRTY_MAX_BOUNDS * 2];
 #endif
 
 /*
- * CAVITY visibility for the bounce term - distance-field cone occlusion, the [DFAO] role:
- * sample the composed field at doubling distances along the face; wherever the field reads
- * less than the distance travelled, geometry encroaches on the face's hemisphere. This
- * measures EXACTLY the band the world probes cannot: from one attribute voxel (below which
- * the voxel's own surface dominates the field) out to about the probe spacing (beyond which
- * the probes' own Chebyshev visibility already handles occlusion). Without it, a voxel inside
- * a sub-spacing cavity - an awning's underside, a window reveal, a doorway - receives the
- * OPEN ambient of the probe cage around it and glows in exactly the places that should be
- * darkest; every gather ray that hits the cavity then reads that false brightness back.
+ * CAVITY visibility for the bounce term - the [DFAO] role at hemisphere scale: the fraction
+ * of the face's cosine-weighted hemisphere that ESCAPES its enclosure within one probe
+ * spacing. GI_BOUNCE_ESCAPE_RAYS fixed cosine-distributed directions (two equal-area rings,
+ * rotated per voxel by a hash) are sphere-traced through the composed field to the face's
+ * probe spacing; a ray that reads a surface is blocked, one that reaches the spacing (or
+ * exhausts its budget without a hit) has escaped. This measures EXACTLY the band the world
+ * probes cannot: below the spacing the probe cage cannot see the enclosure, above it the
+ * probes' own Chebyshev visibility already handles occlusion. It replaced three field
+ * samples along the face normal, which only saw what stood in FRONT of the face: a room
+ * behind an arch, a vault over an arcade, a wall beside a floor all read fully open, and the
+ * face took the whole ambient of a probe cage standing outside - the far-end niche of the
+ * Sponza atrium rendered from the coarse levels 12x brighter than from level 0 (2026-09-12).
+ * The blocked share is not lost: the caller fills it with what the rays hit
+ * (GiBounceRayFillRadiance), so an enclosure keeps its own inter-reflection.
+ *
+ * Memoised by the caller (the vis-memo face half) and KEPT across generation bumps while the
+ * slot holds the same cell and no changed region reaches the escape sphere: the rays sample
+ * the face's OWN level, so the verdict is a function of the composed field alone - a camera
+ * crossing or a window scroll cannot change it, only content can. The sixteen rays therefore
+ * run once per face per content change, never per relight and never per crossing.
  */
-float GiBounceCavityVisibility(vec3 position, vec3 direction, float attr_voxel)
+vec3 GiBounceEscapeDirection(vec3 direction, int ray, float rotation)
 {
-	float t = attr_voxel;
-	float d1 = SdfSampleClipmap(position + direction * t);
-	// EXACT early-outs from the field's 1-Lipschitz bound. The samples sit on one line at
-	// t_i = 1/2/4 attribute voxels, so |d_i - d1| <= t_i - t1 and a sample's occlusion term
-	// saturates to zero exactly when d_i >= t_i:
-	//  - d1 >= 2*t_last - t1 (= 2*4 - 1 = 7 attribute voxels at the shipped 3 steps): then
-	//    d_i >= d1 - (t_i - t1) >= t_i for EVERY farther sample - all terms provably zero,
-	//    the march answers fully visible from this one sample. Open exteriors resolve here.
-	//  - d1 <= 0: the first sample sits inside composed geometry - the face is buried, the
-	//    march answers fully occluded.
-	// In between, the remaining samples run exactly as before; the bounds trade nothing but
-	// the redundant samples.
-	float t_last = t * float(1 << (GI_BOUNCE_AO_STEPS - 1));
-	if(d1 >= 2.0 * t_last - t)
+	// Two cosine-weighted equal-area rings (sin^2 = 1/2 splits the hemisphere) of
+	// GI_BOUNCE_ESCAPE_RAYS / 2 azimuths, the outer ring offset by half a step; each ring's
+	// polar angle is its cosine-weighted median, 30 and 60 degrees.
+	int per_ring = GI_BOUNCE_ESCAPE_RAYS / 2;
+	int ring = ray / per_ring;
+	float cos_theta = ring == 0 ? 0.8660254 : 0.5;
+	float sin_theta = ring == 0 ? 0.5 : 0.8660254;
+	float phi = rotation + (float(ray - ring * per_ring) + 0.5 * float(ring)) * (6.2831853 / float(per_ring));
+	vec3 up = abs(direction.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+	vec3 tangent = normalize(cross(up, direction));
+	vec3 bitangent = cross(direction, tangent);
+	return direction * cos_theta + (tangent * cos(phi) + bitangent * sin(phi)) * sin_theta;
+}
+
+/// One escape ray: sphere-traced from the lifted launch point to `reach`. True with the hit
+/// point and the field reading there when a surface is read (field under
+/// GI_BOUNCE_ESCAPE_HIT_VOXELS); false when the ray reaches the spacing or exhausts its step
+/// budget without one. The first station sits one minimum step out, so the face's own plane
+/// (the launch is half an attribute voxel above it) reads at least 0.75 voxel along every
+/// ring direction and never registers as a hit.
+bool GiBounceEscapeRayHit(vec3 origin, vec3 ray_direction, float attr_voxel, float reach,
+                          int level, out vec3 out_hit, out float out_field)
+{
+	out_hit = origin;
+	out_field = 0.0;
+	float hit_threshold = GI_BOUNCE_ESCAPE_HIT_VOXELS * attr_voxel;
+	float min_step = GI_BOUNCE_ESCAPE_MIN_STEP_VOXELS * attr_voxel;
+	float t = min_step;
+	LOOP for(int step = 0; step < GI_BOUNCE_ESCAPE_STEPS; ++step)
 	{
-		return 1.0;
+		vec3 p = origin + ray_direction * t;
+		// The face's own level: outside its window the level reports the give-up value,
+		// which reads as open - a ray that leaves the window has left the enclosure.
+		float d = SdfSampleClipmapLevel(level, p);
+		if(d < hit_threshold)
+		{
+			out_hit = p;
+			out_field = d;
+			return true;
+		}
+		t += max(d, min_step);
+		if(t >= reach)
+		{
+			return false;
+		}
 	}
-	if(d1 <= 0.0)
+	return false;
+}
+
+float GiBounceCavityVisibility(vec3 position, vec3 direction, float attr_voxel, float reach,
+                               float rotation, int level)
+{
+	// Buried: the lifted launch point itself reads inside composed geometry.
+	if(SdfSampleClipmapLevel(level, position) <= 0.0)
 	{
 		return 0.0;
 	}
-	// Field >= travel distance: the cone is clear at this scale, no contribution. Field
-	// negative (inside geometry): fully occluded. The weights halve so near encroachment
-	// - the strongest visibility signal - dominates.
-	float occlusion = saturate(1.0 - d1 / t);
-	float weight = 0.5;
-	float weight_sum = 1.0;
-	LOOP for(int i = 1; i < GI_BOUNCE_AO_STEPS; ++i)
+	int escaped = 0;
+	LOOP for(int ray = 0; ray < GI_BOUNCE_ESCAPE_RAYS; ++ray)
 	{
-		t *= 2.0;
-		float d = SdfSampleClipmap(position + direction * t);
-		occlusion += weight * saturate(1.0 - d / t);
-		weight_sum += weight;
-		weight *= 0.5;
-		// With one sample left, if even a fully open reading cannot lift visibility past the
-		// cull gate, the face is culled whatever that sample says - the value below the gate
-		// is never consumed (the gate stores zero and the bounce attenuator only reads values
-		// that cleared it), so returning early is exact. Occlusion only grows, and the bound
-		// uses the largest weight_sum the final division could see.
-		if(i == GI_BOUNCE_AO_STEPS - 2)
+		vec3 hit;
+		float field;
+		if(!GiBounceEscapeRayHit(position, GiBounceEscapeDirection(direction, ray, rotation),
+		                         attr_voxel, reach, level, hit, field))
 		{
-			if(occlusion > (1.0 - GI_LIGHT_VOXEL_VISIBILITY_MIN) * (weight_sum + weight))
-			{
-				return 0.0;
-			}
+			escaped += 1;
 		}
 	}
-	return saturate(1.0 - occlusion / weight_sum);
+	return float(escaped) / float(GI_BOUNCE_ESCAPE_RAYS);
 }
 
 /*
@@ -209,10 +247,11 @@ float GiBounceCavityVisibility(vec3 position, vec3 direction, float attr_voxel)
  * sub-spacing colour adjacency the probe cage cannot represent (the DDGI-family chroma
  * wash near edges and corners). The blocked fraction is owned by whatever surface
  * encroaches within the march's own band, and that surface's outgoing radiance is already
- * measured - in this very volume. This helper re-locates the encroaching surface (the
- * march's 1/2/4-voxel stations, strongest encroachment wins, one tetrahedral gradient
- * resolves the contact) and reads its back-facing light-voxel face via imageLoad; the
- * caller injects it at weight (1 - visibility), the energy the attenuation removed.
+ * measured - in this very volume. This helper takes the encroaching surface as an escape
+ * ray's hit (GiBounceRayFillRadiance: the same direction set the visibility was measured
+ * with, one tetrahedral gradient resolves the contact) and reads its back-facing
+ * light-voxel face via imageLoad; the caller injects it at weight (1 - visibility), the
+ * energy the attenuation removed.
  *
  * Runs per relight, deliberately un-memoised: the geometry verdicts above are frozen
  * within a generation, but the blocker's RADIANCE changes with every relight - and the
@@ -228,35 +267,12 @@ float GiBounceCavityVisibility(vec3 position, vec3 direction, float attr_voxel)
  * surface's OWN side, and the two sides of a wall live in different face slabs, so the
  * face selected by the outward normal is the reader's side by construction.
  */
-bool GiBounceBlockerRadiance(vec3 position, vec3 direction, float attr_voxel, int level,
-                             ivec3 own_cell, ivec3 window_base, int attr_res,
+bool GiBounceBlockerRadiance(vec3 position, vec3 best_point, float best_distance, float attr_voxel,
+                             int level, ivec3 own_cell, ivec3 window_base, int attr_res,
                              out vec3 out_radiance)
 {
 	out_radiance = vec3_splat(0.0);
-	// The march's stations, the march's measure (1 - d/t): the fill's reach is exactly the
-	// band the attenuation measured. A buried station (d < 0) saturates to full encroachment.
-	float best_encroach = 0.0;
-	vec3 best_point = vec3_splat(0.0);
-	float best_distance = 0.0;
-	float t = attr_voxel;
-	LOOP for(int i = 0; i < GI_BOUNCE_AO_STEPS; ++i)
-	{
-		vec3 p = position + direction * t;
-		float d = SdfSampleClipmap(p);
-		float encroach = saturate(1.0 - d / t);
-		if(encroach > best_encroach)
-		{
-			best_encroach = encroach;
-			best_point = p;
-			best_distance = d;
-		}
-		t *= 2.0;
-	}
-	if(best_encroach <= 0.0)
-	{
-		return false;
-	}
-	// Tetrahedral gradient at the winning station (the trace exhaustion path's pattern): the
+	// Tetrahedral gradient at the ray's hit (the trace exhaustion path's pattern): the
 	// nearest surface lies distance x -normal away.
 	float e = max(attr_voxel * 0.5, 1e-3);
 	vec3 k0 = vec3(1.0, -1.0, -1.0);
@@ -333,6 +349,30 @@ bool GiBounceBlockerRadiance(vec3 position, vec3 direction, float attr_voxel, in
 	return true;
 }
 
+/// The blocked share's fill for one relight: the FIRST hit among GI_BOUNCE_FILL_RAYS
+/// consecutive directions of the visibility's own set, starting at `ray_base` (advanced by
+/// the count every relight, offset per voxel) - a uniform sample of the blockers, whose mean
+/// the relight EMA takes over its window. A relight whose rays all escape fills nothing.
+bool GiBounceRayFillRadiance(vec3 position, vec3 direction, float rotation, uint ray_base,
+                             float attr_voxel, float reach, int level, ivec3 own_cell,
+                             ivec3 window_base, int attr_res, out vec3 out_radiance)
+{
+	out_radiance = vec3_splat(0.0);
+	LOOP for(int i = 0; i < GI_BOUNCE_FILL_RAYS; ++i)
+	{
+		int ray = int((ray_base + uint(i)) % uint(GI_BOUNCE_ESCAPE_RAYS));
+		vec3 hit;
+		float field;
+		if(GiBounceEscapeRayHit(position, GiBounceEscapeDirection(direction, ray, rotation),
+		                        attr_voxel, reach, level, hit, field))
+		{
+			return GiBounceBlockerRadiance(position, hit, field, attr_voxel, level, own_cell,
+			                               window_base, attr_res, out_radiance);
+		}
+	}
+	return false;
+}
+
 /*
  * The bounce's world-probe read, memoised: the twin of GiWorldProbeIrradianceCascade
  * (gi_world_probes.sh - coverage test, all-dead fall-through and blend band kept in step BY
@@ -355,7 +395,7 @@ bool GiBounceBlockerRadiance(vec3 position, vec3 direction, float attr_voxel, in
  *    gated read every other consumer runs. Safe-slow, never a leak.
  *
  * The far-blend read (the outer half-cell of the window) is memoised the same way: its
- * cage mask (always level + 1 of the answering level) rides the texel's top byte, stamped
+ * cage mask (for the far level of the answering level) rides the texel's top byte, stamped
  * by the same transaction. Whether the band is open at all is a pure function of the
  * texel's position and the window - both frozen within a generation - so the byte needs no
  * flag of its own; where the band is closed it is stamped 0 and never consumed.
@@ -535,17 +575,20 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 	LOOP for(int level = 0; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
 	{
 		float spacing = GiWorldProbeSpacing(level);
-		float half_extent = (float(GI_WORLD_PROBE_AXIS - 1) * 0.5 - 1.0) * spacing;
+		float half_extent = GiWorldProbeHalfExtent(level);
 		vec3 delta = abs(position - u_gi_light_voxel_camera.xyz);
 		float largest = max(delta.x, max(delta.y, delta.z));
 		if(largest > half_extent)
 		{
 			continue;
 		}
-		// The blend band, computed up front: the far mask below belongs to the stamp.
+		// The blend band, computed up front: the far mask below belongs to the stamp. The far
+		// level is the finest COARSER window covering the point (GiWorldProbeFarLevel) - a
+		// pure function of the position and the window, so the memo's far byte stays valid.
 		float band = GI_WORLD_PROBE_BLEND_BAND * spacing;
 		float blend = saturate((largest - (half_extent - band)) / band);
-		bool wants_far = blend > 0.0 && level + 1 < SDF_CLIPMAP_LEVEL_COUNT;
+		int far_level = GiWorldProbeFarLevel(level, largest);
+		bool wants_far = blend > 0.0 && far_level < SDF_CLIPMAP_LEVEL_COUNT;
 		vec3 near_irradiance;
 		float near_sky;
 		float near_visible = 0.0;
@@ -599,7 +642,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 			// untouched, so a hit-equivalent restamp costs no march at either level.
 			if(restamp && keep == 0xFFu && wants_far && GiWorldProbeVisMemoFarFilled(memo_word))
 			{
-				far_kept = GiCageCornersUntouched(position, face_direction, face_direction, level + 1) == 0xFFu;
+				far_kept = GiCageCornersUntouched(position, face_direction, face_direction, far_level) == 0xFFu;
 			}
 			answered = GiWorldProbeIrradianceMasked(position, face_direction, face_direction,
 			                                        level, mask, near_irradiance, near_sky, near_visible);
@@ -644,7 +687,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 				// cost, so churning generations (window re-snaps under camera motion) never
 				// pay the 8-corner far march on top of the near one they already marched.
 				far_answered = GiWorldProbeIrradiance(position, face_direction, face_direction,
-				                                      level + 1, far_irradiance, far_sky, far_visible);
+				                                      far_level, far_irradiance, far_sky, far_visible);
 			}
 			else
 			{
@@ -659,7 +702,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 					// so it is stable enough to amortise - march the far cage once and seal
 					// it into the word (near mask, level and face half preserved).
 					far_mask = GiWorldProbeCageMask(position, face_direction, face_direction,
-					                                level + 1, 0u, 0u);
+					                                far_level, 0u, 0u);
 					imageStore(s_gi_vis_memo, memo_texel,
 					           uvec4(GiWorldProbeVisMemoPackProbe(mask, u_vis_memo_generation,
 					                                              level, far_mask, true) |
@@ -667,7 +710,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 					                 0u, 0u, 0u));
 				}
 				far_answered = GiWorldProbeIrradianceMasked(position, face_direction,
-				                                            face_direction, level + 1, far_mask,
+				                                            face_direction, far_level, far_mask,
 				                                            far_irradiance, far_sky, far_visible);
 			}
 			if(far_answered)
@@ -725,6 +768,23 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
  * rotation and temporal windows once it is switched off. Diagnostic only.
  */
 #define GI_SUN_TIER_DEBUG_ALPHA 0.5
+/// Gradient of one cascade level's field at @p position: four tetrahedral taps half a level
+/// voxel apart, unnormalised (near zero only far from every surface). The level's OWN field,
+/// unblended, for the same reason the escape rays sample it: a verdict about this level's
+/// geometry must not import the next level's isosurface.
+vec3 GiFaceFieldGradient(int level, vec3 position, float voxel)
+{
+	float e = max(0.5 * voxel, 1e-3);
+	vec3 k0 = vec3(1.0, -1.0, -1.0);
+	vec3 k1 = vec3(-1.0, -1.0, 1.0);
+	vec3 k2 = vec3(-1.0, 1.0, -1.0);
+	vec3 k3 = vec3(1.0, 1.0, 1.0);
+	return k0 * SdfSampleClipmapLevel(level, position + k0 * e) +
+	       k1 * SdfSampleClipmapLevel(level, position + k1 * e) +
+	       k2 * SdfSampleClipmapLevel(level, position + k2 * e) +
+	       k3 * SdfSampleClipmapLevel(level, position + k3 * e);
+}
+
 vec4 GiDebugSunTierColor(vec3 world_position, vec3 world_normal, float voxel_size, float near_field)
 {
 	int sun_index = int(u_gi_sun_index);
@@ -774,7 +834,7 @@ vec4 GiDebugSunTierColor(vec3 world_position, vec3 world_normal, float voxel_siz
  * touched the whole file.
  */
 void GiRelightEntry(uint level, uint entry, inout float stats_change, inout float stats_faces,
-                    inout float stats_moved, inout float stats_visible)
+                    inout float stats_rise, inout float stats_moved, inout float stats_visible)
 {
 	if(entry >= b_surface_list[level])
 	{
@@ -824,6 +884,18 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 	float cached_dir_visibility = 0.0;
 	int cached_dir_index = -1;
 	float center_lift = max(0.0, -d_center) + 0.5 * attr_voxel;
+	// ESCAPE RAYS (GiBounceCavityVisibility / GiBounceRayFillRadiance): marched to this
+	// level's probe spacing, the fixed direction set rotated per voxel by an integer hash so
+	// neighbours never share the pattern's bias; the fill's start direction rotates per
+	// relight by the fill count, offset by the same hash.
+	float escape_reach = GiWorldProbeSpacing(int(level));
+	uint escape_seed = (uint(cell.x) * 73856093u) ^ (uint(cell.y) * 19349663u) ^ (uint(cell.z) * 83492791u);
+	escape_seed ^= escape_seed >> 13u;
+	escape_seed *= 0x5bd1e995u;
+	escape_seed ^= escape_seed >> 15u;
+	float escape_rotation = float(escape_seed & 0xFFFFu) * (6.2831853 / 65536.0);
+	uint fill_ray_base = ((u_light_voxel_frame / uint(GI_LIGHT_VOXEL_UPDATE_DENOM)) * uint(GI_BOUNCE_FILL_RAYS) +
+	                      (escape_seed >> 16u)) % uint(GI_BOUNCE_ESCAPE_RAYS);
 	// DIRECT-LIGHTING DITHER (GI_LIGHT_VOXEL_SUN_DITHER): the evaluation point walks within
 	// the voxel per relight, so shadow edges land in the volume as temporal dither instead of
 	// a voxel staircase - the probes' stratum window and the gather temporal integrate it
@@ -902,13 +974,31 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// memo_live in the shipping variant.
 		bool face_memo_live = memo_live && !u_light_voxel_debug_sun_tiers &&
 		                      !u_light_voxel_debug_vis_memo;
-		bool face_hit = face_memo_live &&
-		                GiWorldProbeVisMemoGeneration(memo_word) == u_vis_memo_generation;
+		bool face_fresh = GiWorldProbeVisMemoGeneration(memo_word) == u_vis_memo_generation;
 		// Launch point clear of the surface: out by however deep the centre sits, plus half an
 		// attribute voxel - in the units of the thing being cleared. Loop-invariant, hoisted
 		// as center_lift above (the per-voxel sun memo launches by the same amount).
 		float lift = center_lift;
 		vec3 position = center + direction * lift;
+		// FACE KEEP across generation bumps. The escape verdict is a function of this level's
+		// field around the face alone (the rays sample the face's own level), so it survives
+		// a probe-window crossing or a scroll as long as (a) the slot still holds the same
+		// cell - the attribute pass zeroes a re-claimed slot's light texels, so a measured or
+		// a culled alpha proves survival while a parent-seeded claim (GI_LIGHT_VOXEL_SEED_ALPHA)
+		// does not - and (b) no changed region reaches the escape sphere (an overflowed region
+		// list touches everything). The probe half still re-marches on every bump; without
+		// this keep every crossing re-marched the sixteen rays of every face (measured
+		// 2026-09-12: a 6 ms relight spike against a 1.4 ms probe-half sweep).
+		bool face_keep = false;
+		BRANCH
+		if(face_memo_live && !face_fresh && GiWorldProbeVisMemoGeneration(memo_word) != 0u)
+		{
+			float stored_alpha = imageLoad(s_light_voxels_out, texel).w;
+			bool cell_survived = stored_alpha > 0.5 ||
+			                     abs(stored_alpha - GI_LIGHT_VOXEL_CULLED_ALPHA) < 0.5 * GI_LIGHT_VOXEL_CULLED_ALPHA;
+			face_keep = cell_survived && !GiSegmentTouchesChange(position, position, escape_reach);
+		}
+		bool face_hit = face_memo_live && (face_fresh || face_keep);
 		float visibility = 0.0;
 		uint face_half = 0u;
 		BRANCH
@@ -952,19 +1042,44 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 					culled = true;
 				}
 			}
-			// A face is MEASURABLE when enough of its cavity cone escapes - the same
-			// multi-scale visibility the ambient below is weighted by, computed once and
-			// shared. This replaced a single-step field-rise test, which cannot see past a
-			// coarse level's blob plateau: small geometry merges into blobs whose shell voxels
-			// sit a voxel or more deep, the one-voxel step stays inside, and every face read
-			// as unexposed - whole objects went black wherever only coarse levels covered them
-			// (the far-distance failure). The march at 1/2/4 voxels from the LIFTED point sees
-			// past the plateau; a face pointing into real interior still reads closed at every
-			// scale and stays dark, both sides of a thin wall still measure open through their
-			// own slabs.
+			// FACING GATE (2026-09-13, plan phase C). A face is a stand-in for the surface in
+			// its cell that FACES that direction; a cell holds six faces whether or not such a
+			// surface exists, and the ones that stand for nothing were still lit. A 0.25 m
+			// cell straddling a 0.05 m roof has its +-x and +-z face points ABOVE the roof
+			// (the centre lies above it, the lift puts the point at the cell boundary at that
+			// height), where the sky and the sun light them; a wall hit just below the ceiling
+			// reads the -x face slab trilinearly over its neighbours and blends those roof
+			// cells in - measured as the seam leak into the GI test suite's thin sealed cell
+			// once exact hits landed on the surface (audit section 19). Every flat surface's
+			// tangent faces carried the same kind of value. The field's gradient at the launch
+			// point is the local surface normal; a face whose direction lies more than ~72
+			// degrees from it (GI_LIGHT_VOXEL_FACING_MIN) stands for no surface here and is
+			// culled like a closed one. A pure function of the level's field, so the memo
+			// stamp below serves it for the generation. Four field taps per face.
 			if(!culled)
 			{
-				visibility = GiBounceCavityVisibility(position, direction, attr_voxel);
+				vec3 face_gradient = GiFaceFieldGradient(int(level), position, level_data.w);
+				float gradient_length = length(face_gradient);
+				if(gradient_length > 1e-6 &&
+				   dot(face_gradient, direction) < GI_LIGHT_VOXEL_FACING_MIN * gradient_length)
+				{
+					culled = true;
+				}
+			}
+			// A face is MEASURABLE when any of its hemisphere escapes - the same visibility
+			// the ambient below is weighted by, computed once and shared. This replaced a
+			// single-step field-rise test, which cannot see past a coarse level's blob
+			// plateau: small geometry merges into blobs whose shell voxels sit a voxel or
+			// more deep, the one-voxel step stays inside, and every face read as unexposed -
+			// whole objects went black wherever only coarse levels covered them (the
+			// far-distance failure). The rays leave the LIFTED point at 30 and 60 degrees and
+			// see past the plateau; a face pointing into real interior still reads closed in
+			// every direction and stays dark, both sides of a thin wall still measure open
+			// through their own slabs.
+			if(!culled)
+			{
+				visibility = GiBounceCavityVisibility(position, direction, attr_voxel,
+				                                      escape_reach, escape_rotation, int(level));
 				culled = visibility < GI_LIGHT_VOXEL_VISIBILITY_MIN;
 			}
 			if(culled)
@@ -1168,16 +1283,18 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 				// face above, so the gate costs nothing extra.
 				irradiance += probe_value * GI_PI * visibility;
 			}
-			// The attenuation's complement: the blocked fraction of the cone is filled with the
-			// encroaching surface's own radiance instead of black (see GiBounceBlockerRadiance).
-			// A surface of radiance L covering the whole cosine hemisphere delivers E = pi x L,
-			// so the fraction mirrors the probe term's convention exactly. Branched, never a
-			// gated ternary or && chain - the helper does an imageLoad.
+			// The attenuation's complement: the blocked share of the hemisphere is filled with
+			// what the escape rays hit instead of black (see GiBounceRayFillRadiance) - the
+			// enclosure's own inter-reflection, at this relight's radiance. A surface of
+			// radiance L covering the whole cosine hemisphere delivers E = pi x L, so the
+			// share mirrors the probe term's convention exactly. Branched, never a gated
+			// ternary or && chain - the helper does an imageLoad.
 			BRANCH
 			if(visibility < GI_BOUNCE_TINT_MAX_VISIBILITY)
 			{
 				vec3 blocker_radiance;
-				if(GiBounceBlockerRadiance(position, direction, attr_voxel, int(level), cell,
+				if(GiBounceRayFillRadiance(position, direction, escape_rotation, fill_ray_base,
+				                           attr_voxel, escape_reach, int(level), cell,
 				                           window_base, attr_res, blocker_radiance))
 				{
 					irradiance += blocker_radiance * GI_PI * (1.0 - visibility);
@@ -1216,6 +1333,9 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		float relative_change = GiStatsRelativeChange(lum_new, lum_old);
 		stats_change += relative_change;
 		stats_faces += 1.0;
+		// The signed half: rises alone, so the gate can take rise - (change - rise) as the
+		// volume's drift without a signed atomic (GI_QUIESCENCE_DRIFT_FRACTION).
+		stats_rise += lum_new > lum_old ? relative_change : 0.0;
 		// The census: did this relight change anything a reader could tell apart?
 		stats_moved += relative_change > GI_QUIESCENCE_CONVERGED_MEAN ? 1.0 : 0.0;
 		stats_visible += relative_change > GI_STATS_VISIBLE_CHANGE ? 1.0 : 0.0;
@@ -1243,6 +1363,7 @@ void main()
 	uint level = gl_WorkGroupID.y;
 	float stats_change = 0.0;
 	float stats_faces = 0.0;
+	float stats_rise = 0.0;
 	float stats_moved = 0.0;
 	float stats_visible = 0.0;
 	// Wave-uniform (the level rides the group id), so the barrier below never diverges.
@@ -1252,7 +1373,7 @@ void main()
 		uint denom = uint(GI_LIGHT_VOXEL_UPDATE_DENOM);
 		uint phase = (denom - (u_light_voxel_frame % denom)) % denom;
 		uint entry = (gl_WorkGroupID.x * 64u + gl_LocalInvocationID.x) * denom + phase;
-		GiRelightEntry(level, entry, stats_change, stats_faces, stats_moved, stats_visible);
+		GiRelightEntry(level, entry, stats_change, stats_faces, stats_rise, stats_moved, stats_visible);
 	}
 	// CONVERGENCE STATISTIC (GI_QUIESCENCE_STATS_SCALE): the group's relative change and
 	// relit face count, reduced through shared memory and added to the memo texture's
@@ -1263,6 +1384,7 @@ void main()
 	// of frames that a decaying closed-room tail can outlast.
 	s_stats_change[gl_LocalInvocationID.x] = stats_change;
 	s_stats_faces[gl_LocalInvocationID.x] = stats_faces;
+	s_stats_rise[gl_LocalInvocationID.x] = stats_rise;
 	s_stats_moved[gl_LocalInvocationID.x] = stats_moved;
 	s_stats_visible[gl_LocalInvocationID.x] = stats_visible;
 	barrier();
@@ -1270,6 +1392,7 @@ void main()
 	{
 		float change = 0.0;
 		float faces = 0.0;
+		float rise = 0.0;
 		float moved = 0.0;
 		float visible = 0.0;
 		LOOP
@@ -1277,6 +1400,7 @@ void main()
 		{
 			change += s_stats_change[lane];
 			faces += s_stats_faces[lane];
+			rise += s_stats_rise[lane];
 			moved += s_stats_moved[lane];
 			visible += s_stats_visible[lane];
 		}
@@ -1286,6 +1410,8 @@ void main()
 			               uint(change * GI_QUIESCENCE_STATS_SCALE + 0.5));
 			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_FACES),
 			               uint(faces + 0.5));
+			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_RISE),
+			               uint(rise * GI_QUIESCENCE_STATS_SCALE + 0.5));
 			// The census rows are cheap here (two more atomics per group) and would cost a
 			// readback to observe any other way.
 			imageAtomicAdd(s_gi_vis_memo, GiLightVoxelStatsTexel(int(level), GI_STATS_RELIGHT_FACES_MOVED),

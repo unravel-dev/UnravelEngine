@@ -7,6 +7,7 @@
 
 #include <graphics/graphics.h>
 
+#include <algorithm>
 #include <cmath>
 
 namespace unravel
@@ -16,6 +17,12 @@ namespace
 /// Four probes per 64-lane group (PROBE_TRACE_SLOTS in cs_gi_world_probe_trace.sc): a 16-lane
 /// group left half or three quarters of every wave idle.
 constexpr uint32_t probes_per_trace_group = 4u;
+/// One thread per pool slot or index cell (NUM_THREADS of cs_gi_world_probe_alloc.sc).
+constexpr uint32_t alloc_threads_per_group = 64u;
+/// The allocation kernel's phases (ALLOC_PHASE_* in cs_gi_world_probe_alloc.sc).
+constexpr float alloc_phase_init = 0.0f;
+constexpr float alloc_phase_evict = 1.0f;
+constexpr float alloc_phase_allocate = 2.0f;
 } // namespace
 
 auto gi_world_probe_pass::get_trace_dispatch_groups() -> gi_quiescence_gate_pass::dispatch_groups
@@ -45,7 +52,78 @@ auto gi_world_probe_pass::init(rtti::context& ctx) -> bool
     auto cs_convolve = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_world_probe_convolve.sc");
     convolve_program_.cache_uniforms();
     convolve_program_.program = std::make_unique<gpu_program>(cs_convolve);
+    auto cs_alloc = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_world_probe_alloc.sc");
+    alloc_program_.cache_uniforms();
+    alloc_program_.program = std::make_unique<gpu_program>(cs_alloc);
     return is_valid();
+}
+
+auto gi_world_probe_pass::run_alloc(gfx::render_view& rview, const run_params& params) -> bool
+{
+    APP_SCOPE_PERF("Rendering/GI/World Probe Alloc");
+    if(!alloc_program_.is_valid() || !params.surface_cache || !params.view_cache)
+    {
+        return false;
+    }
+    if(!params.surface_cache->is_enabled())
+    {
+        return false;
+    }
+    auto& view_cache = *params.view_cache;
+    auto& clipmap_gpu = view_cache.get_clipmap_gpu_mutable();
+    const auto& clipmap = view_cache.get_clipmap();
+    if(!clipmap_gpu.is_valid() || !clipmap_gpu.has_world_probes())
+    {
+        return false;
+    }
+    // The census rows this pass reports through (the gate's hold) live in the vis-memo's
+    // statistics slice, and the evict phase reads the cell buffer's sentinels: both are seeded
+    // by the compose pass earlier this frame, so a seed still pending means a helper shader is
+    // missing - no allocation until the bookkeeping it depends on exists.
+    const auto& vis_memo = clipmap_gpu.get_bounce_vis_memo();
+    if(!vis_memo || !vis_memo->is_valid() || clipmap_gpu.needs_bounce_vis_memo_seed() ||
+       clipmap_gpu.needs_buffer_seed())
+    {
+        return false;
+    }
+    // The level-0 window centre, in whole cells, exactly as the trace derives it.
+    const float spacing = clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
+    const float safe_spacing = spacing > 0.0f ? spacing : 1.0f;
+    const float center[3] = {std::floor(params.camera_position.x / safe_spacing + 0.5f),
+                             std::floor(params.camera_position.y / safe_spacing + 0.5f),
+                             std::floor(params.camera_position.z / safe_spacing + 0.5f)};
+    gfx::render_pass pass("GI/World Probe Alloc");
+    const auto dispatch_phase = [&](float phase, uint32_t threads)
+    {
+        alloc_program_.program->begin();
+        gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
+        gfx::set_buffer(8, clipmap_gpu.get_world_probe_cells(), gfx::access::ReadWrite);
+        gfx::set_buffer(7, clipmap_gpu.get_world_probe_counts(), gfx::access::ReadWrite);
+        gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
+        const float alloc_params[4] = {phase, center[0], center[1], center[2]};
+        gfx::set_uniform(alloc_program_.u_gi_world_probe_alloc, alloc_params);
+        // The resolution lane alone: GiLightVoxelStatsTexel needs it to address the slice.
+        const float voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 0.0f};
+        gfx::set_uniform(alloc_program_.u_gi_light_voxel_params, voxel_params);
+        gfx::dispatch(pass.id,
+                      alloc_program_.program->native_handle(),
+                      (threads + alloc_threads_per_group - 1u) / alloc_threads_per_group,
+                      1,
+                      1);
+        alloc_program_.program->end();
+    };
+    const uint32_t index_cells = global_sdf_clipmap_gpu::get_world_probe_index_cell_count();
+    const uint32_t pool = global_sdf_clipmap_gpu::world_probe_pool_l0;
+    if(clipmap_gpu.needs_world_probe_index_seed())
+    {
+        dispatch_phase(alloc_phase_init, std::max(index_cells, pool));
+        clipmap_gpu.mark_world_probe_index_seeded();
+    }
+    // Pushes (evict) and pops (allocate) in separate dispatches: the free stack then needs
+    // only its counter's atomics.
+    dispatch_phase(alloc_phase_evict, pool);
+    dispatch_phase(alloc_phase_allocate, index_cells);
+    return true;
 }
 
 auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params) -> bool
@@ -177,8 +255,7 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         std::memcpy(seed_atlas, clipmap_gpu.get_world_probe_atlas_params(), sizeof(seed_atlas));
         seed_atlas[2] = float(strata_per_frame);
         gfx::set_uniform(trace_program_.u_gi_world_probe_seed_atlas, seed_atlas);
-        gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-        gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+        gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
         gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh);
         const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                      float(atlas.get_atlas_voxel_dim()),
@@ -215,6 +292,8 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_texture(convolve_program_.s_world_probe_radiance,
                          11,
                          clipmap_gpu.get_world_probe_radiance());
+        // The cell ids, for the free-slot skip (most of the sparse pool is free).
+        gfx::set_buffer(7, clipmap_gpu.get_world_probe_cells(), gfx::access::Read);
         gfx::set_image(5,
                        clipmap_gpu.get_world_probe_irradiance()->native_handle(),
                        0,

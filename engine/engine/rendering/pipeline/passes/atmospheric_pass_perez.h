@@ -152,6 +152,10 @@ public:
         // [1.9 - 10.0f]
         float turbidity = 1.9f;
 
+        /// The directional light's luminous intensity (intensity x colour luminance), the knob
+        /// the sky's exposition follows (perez_luminance.h). 0 = no sun, fixed conversion.
+        float sun_intensity = 0.0f;
+
         /// Cloud mode: 0=none, 1=flat, 2=volumetric. Defaults mirror skylight_component; the
         /// pipeline always copies the component values (see deferred::run_atmospherics_pass).
         int cloud_mode = 2;

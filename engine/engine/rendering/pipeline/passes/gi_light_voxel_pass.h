@@ -162,7 +162,7 @@ private:
     struct stats_readback_slot
     {
         gfx::texture::ptr texture;
-        /// Every row of the slice (the copy kernel writes them all); the gate reads rows 0-1.
+        /// Every row of the slice (the copy kernel writes them all); the gate reads rows 0-2.
         std::array<uint32_t,
                    gi_quiescence_gate_pass::stats_snapshot::quantity_count * global_sdf_clipmap::level_count>
             data{};

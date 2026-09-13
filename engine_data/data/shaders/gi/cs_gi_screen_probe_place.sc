@@ -45,24 +45,18 @@ void GiCommitScreenProbe(uint record, vec3 world_position, vec3 world_normal, ve
 	float d = SdfSampleClipmapEx(world_position, voxel);
 	voxel = max(voxel, 0.01);
 	float lift = max(0.0, -d) + GI_PROBE_TRACE_SURFACE_BIAS * voxel;
-	float blend;
-	float answered_voxel;
-	int level = SdfFindClipmapLevel(world_position, blend, answered_voxel);
-	int clamped = level >= SDF_CLIPMAP_LEVEL_COUNT ? SDF_CLIPMAP_LEVEL_COUNT - 1 : level;
-	// The shortened-ray range follows the cascade's own cross-fade: at a level face it used to
-	// jump from 2 x 2 m to 2 x 4 m outright, moving the voxel/probe energy split of every ray
-	// at a knife edge the camera drags across the scene. Blending the spacing over the field's
-	// blend band makes the range continuous in the anchor's position.
-	float spacing = GiWorldProbeSpacing(clamped);
-	if(blend > 0.0 && clamped + 1 < SDF_CLIPMAP_LEVEL_COUNT)
-	{
-		spacing = mix(spacing, GiWorldProbeSpacing(clamped + 1), blend);
-	}
+	// The shortened-ray range is the SAME at every camera distance (GI_SCREEN_PROBE_SHORT_RANGE,
+	// mesh-exact over its whole length). It used to be twice the covering cascade's probe
+	// spacing - 4 m near the camera, 8 m and 16 m further out - so a surface's rays established
+	// their own visibility through a fatter field and completed from a higher, coarser cage the
+	// farther the camera stood from it; the same floor read E/pi 1.2 from 2.5 m and 0.25 from
+	// 15 m (gi_lighting_audit section 18). A surface's lighting must not know where the camera
+	// is.
 	b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 1.0);
 	b_gi_probes[record + uint(GI_PROBE_META2)] =
 	    vec4(world_normal, length(world_position - u_gi_camera.xyz));
 	b_gi_probes[record + uint(GI_PROBE_ORIGIN)] =
-	    vec4(world_position + world_normal * lift, 2.0 * spacing);
+	    vec4(world_position + world_normal * lift, GI_SCREEN_PROBE_SHORT_RANGE);
 	// ANCHOR.w is reserved (the removed probe-space temporal's walk flag); kept zero for
 	// layout stability.
 	b_gi_probes[record + uint(GI_PROBE_ANCHOR)] = vec4(uv, depth, 0.0);

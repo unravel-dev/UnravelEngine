@@ -309,8 +309,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                              11,
                              clipmap_gpu.get_attr_albedo_texture(),
                              BGFX_SAMPLER_W_CLAMP);
-            gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-            gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+            gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
             // Stage 14: last frame's composited colour for the on-screen hit upgrade (the sky
             // SH now rides the list buffer's SH block). Black stands in when absent; the
             // flag lane keeps it unread then.
@@ -362,8 +361,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::set_texture(program_.s_hiz, 8, params.hiz);
         gfx::set_texture(program_.s_gi_diffuse, 9, gi_diffuse_tex);
         gfx::set_texture(program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
-        gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-        gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+        gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
         gfx::set_texture(program_.s_gi_env_sh, 14, env_sh_tex);
         gfx::set_uniform(program_.u_gi_reflection_camera, reflection_camera);
         gfx::set_uniform(program_.u_gi_reflection_jitter, jitter);

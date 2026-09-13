@@ -360,7 +360,10 @@ auto watch_assets_depenencies(rtti::context& ctx, const fs::path& dir, const fs:
 
         for(const auto& entry : entries)
         {
-            // APPLOG_TRACE("{}", fs::to_string(entry));
+            APPLOG_TRACE("[DEPWATCH] event {} type={} status={}",
+                        entry.path.string(),
+                        int(entry.type),
+                        int(entry.status));
 
             if(entry.type == fs::file_type::regular)
             {
@@ -376,16 +379,25 @@ auto watch_assets_depenencies(rtti::context& ctx, const fs::path& dir, const fs:
                                                   [&am, entry]()
                                                   {
                                                       auto assets = am.get_assets<T>();
+                                                      APPLOG_TRACE("[DEPWATCH] job for {}: {} assets", entry.path.string(), assets.size());
+                                                      size_t touched = 0;
                                                       for(const auto& asset : assets)
                                                       {
                                                           auto meta = am.get_metadata(asset.uid());
                                                           auto absolute_path = fs::resolve_protocol(meta.location);
-
+                                                          if(meta.location.empty())
+                                                          {
+                                                              APPLOG_TRACE("[DEPWATCH] asset {} has empty location", asset.id());
+                                                              continue;
+                                                          }
                                                           if(has_depencency<T>(absolute_path, entry.path))
                                                           {
+                                                              APPLOG_TRACE("[DEPWATCH] touch {}", absolute_path.string());
                                                               fs::watcher::touch(absolute_path, false);
+                                                              ++touched;
                                                           }
                                                       }
+                                                      APPLOG_INFO("[DEPWATCH] {} changed: touched {} dependent shader sources", entry.path.filename().string(), touched);
                                                   });
                 }
             }

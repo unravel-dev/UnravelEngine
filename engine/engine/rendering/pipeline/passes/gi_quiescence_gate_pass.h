@@ -99,14 +99,14 @@ public:
      *
      * ON DEMAND ONLY. The copy ends in gfx::read_texture, which is a full CPU-GPU sync on
      * every desktop backend (the reason the per-frame gate moved onto the GPU), so this is
-     * an instrument for a tool to ask for, never something a frame path calls. Rows 0-1
+     * an instrument for a tool to ask for, never something a frame path calls. Rows 0-2
      * are the gate's own sums for the frame before the snapshot; the census rows hold the
      * last frame the gated passes actually ran (the gate zeroes them only on those frames).
      */
     struct stats_snapshot
     {
         /// Mirrors GI_STATS_QUANTITY_COUNT in gi_light_voxels.sh (row order = GI_STATS_*).
-        static constexpr uint32_t quantity_count = 10u;
+        static constexpr uint32_t quantity_count = 13u;
         static constexpr uint32_t level_count = uint32_t(global_sdf_clipmap::level_count);
         /// Row-major: values[quantity * level_count + level].
         std::array<uint32_t, quantity_count * level_count> values{};
@@ -172,14 +172,15 @@ private:
 
     gate_program program_;
     gfx::indirect_buffer_handle indirect_{bgfx::kInvalidHandle};
-    /// The sample ring: two header slots (count, head) then the samples as float bits. Never
-    /// written by the CPU - bgfx forbids updating a compute-writable buffer - so the kernel
-    /// clears it from the reset lane instead.
+    /// The sample ring: three header slots (count, head, the sparse-probe hold) then the
+    /// samples as float bits. Never written by the CPU - bgfx forbids updating a
+    /// compute-writable buffer - so the kernel clears it from the reset lane instead.
     gfx::dynamic_index_buffer_handle ring_{bgfx::kInvalidHandle};
-    /// Slots the ring buffer holds: the header plus both compared windows.
-    static constexpr uint32_t ring_header_slots = 2u;
+    /// Slots the ring buffer holds: the header plus both compared windows, twice - the
+    /// absolute change ring and the signed drift ring (GI_QUIESCENCE_DRIFT_FRACTION).
+    static constexpr uint32_t ring_header_slots = 3u;
     static constexpr uint32_t ring_sample_slots =
-        uint32_t(gi::GI_QUIESCENCE_COMPARE_FRAMES) + uint32_t(gi::GI_QUIESCENCE_WINDOW_FRAMES);
+        2u * (uint32_t(gi::GI_QUIESCENCE_COMPARE_FRAMES) + uint32_t(gi::GI_QUIESCENCE_WINDOW_FRAMES));
     /// The memo texture the ring was last fed from: a fresh allocation carries an unwritten
     /// statistics slice, so the first frame against a new one resets the ring.
     const gfx::texture* stats_source_ = nullptr;

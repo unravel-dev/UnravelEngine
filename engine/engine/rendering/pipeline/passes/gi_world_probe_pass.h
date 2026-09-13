@@ -57,6 +57,16 @@ public:
 
     auto run(gfx::render_view& rview, const run_params& params) -> bool;
 
+    /**
+     * @brief The sparse level-0 allocation (cs_gi_world_probe_alloc.sc): frees departed and
+     *        unrequested pool slots, claims slots for last frame's requests.
+     *
+     * Ungated and run BEFORE the quiescence gate every frame - its allocation count is what
+     * the gate reads to hold itself open while the fresh probes converge. Uses only the
+     * surface cache, the view cache and the camera position of @p params.
+     */
+    auto run_alloc(gfx::render_view& rview, const run_params& params) -> bool;
+
     auto is_valid() const -> bool
     {
         return trace_program_.is_valid() && convolve_program_.is_valid();
@@ -64,10 +74,7 @@ public:
 
     /// Probes in the whole cascade set - the convolve's thread count, and the base of the
     /// trace's group count.
-    static constexpr uint32_t probe_count = global_sdf_clipmap_gpu::world_probe_axis *
-                                            global_sdf_clipmap_gpu::world_probe_axis *
-                                            global_sdf_clipmap_gpu::world_probe_axis *
-                                            global_sdf_clipmap::level_count;
+    static constexpr uint32_t probe_count = global_sdf_clipmap_gpu::get_world_probe_count();
 
     /// The trace dispatch's groups; the gate writes these before the pass runs.
     static auto get_trace_dispatch_groups() -> gi_quiescence_gate_pass::dispatch_groups;
@@ -155,6 +162,24 @@ private:
             return program && program->is_valid();
         }
     } convolve_program_;
+
+    struct alloc_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_world_probe_alloc;
+        gfx::program::uniform_ptr u_gi_light_voxel_params;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_world_probe_alloc, "u_gi_world_probe_alloc", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } alloc_program_;
 
     /// Light-change reactivity state: while frames remain, the trace covers two strata per
     /// frame (window halves to 8), then settles back to one.

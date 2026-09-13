@@ -243,11 +243,11 @@ void main()
 				for(int cx = lo.x; cx <= hi.x; ++cx)
 				{
 					uint cell = uint(cx + cy * dim_x + cz * dim_xy);
-					uint candidate_begin = b_sdf_grid_offsets[cell];
-					uint candidate_end = b_sdf_grid_offsets[cell + 1u];
+					uint candidate_begin = b_sdf_grid[cell] + u_sdf_grid_instance_base;
+					uint candidate_end = b_sdf_grid[cell + 1u] + u_sdf_grid_instance_base;
 					for(uint candidate = candidate_begin; candidate < candidate_end; ++candidate)
 					{
-						int index = int(b_sdf_grid_instances[candidate]);
+						int index = int(b_sdf_grid[candidate]);
 						if(index == best_index || index == second_index)
 						{
 							continue;

@@ -7,6 +7,7 @@
 
 #include <bx/math.h>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -156,16 +157,17 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
     // A level's cursor is only meaningful once that level has composed; the compose pass's seed
     // dispatch zeroes them all so a consumer reading an as-yet-uncomposed level sees an empty
     // list rather than allocation garbage.
-    // World probes (GI v2 plan 3.3): only when the shader's hardcoded axis matches this
-    // resolution's derivation - the trace/convolve group layouts bake the axis in.
-    if(resolution / 16u + 1u == world_probe_axis)
+    // World probes (GI v2 plan 3.3). The atlases hold every level's tiles in one row-major run
+    // over the linear slot index - level 0's sparse pool first, then the dense levels
+    // (gi_world_probes.sh, GiWorldProbeTileBase); the lattice extents are independent of the
+    // cascade resolution.
     {
-        const uint32_t tile_grid_x = world_probe_axis * world_probe_axis;
-        const uint32_t tile_grid_y = world_probe_axis * global_sdf_clipmap::level_count;
-        const uint32_t radiance_w = tile_grid_x * 16u;
-        const uint32_t radiance_h = tile_grid_y * 16u;
-        const uint32_t gutter_w = tile_grid_x * 10u;
-        const uint32_t gutter_h = tile_grid_y * 10u;
+        const uint32_t probe_count = get_world_probe_count();
+        const uint32_t tile_rows = (probe_count + world_probe_atlas_tiles_x - 1u) / world_probe_atlas_tiles_x;
+        const uint32_t radiance_w = world_probe_atlas_tiles_x * 16u;
+        const uint32_t radiance_h = tile_rows * 16u;
+        const uint32_t gutter_w = world_probe_atlas_tiles_x * 10u;
+        const uint32_t gutter_h = tile_rows * 10u;
         world_probe_radiance_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(radiance_w),
                                                                static_cast<uint16_t>(radiance_h),
                                                                false,
@@ -184,21 +186,26 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
                                                             1,
                                                             gfx::texture_format::RG16F,
                                                             flags);
-        const uint32_t probe_count =
-            world_probe_axis * world_probe_axis * world_probe_axis * global_sdf_clipmap::level_count;
         world_probe_cells_ = gfx::create_dynamic_index_buffer(probe_count,
                                                               BGFX_BUFFER_COMPUTE_READ_WRITE |
                                                                   BGFX_BUFFER_INDEX32);
         world_probe_counts_ = gfx::create_dynamic_index_buffer(probe_count,
                                                                BGFX_BUFFER_COMPUTE_READ_WRITE |
                                                                    BGFX_BUFFER_INDEX32);
+        // The sparse level-0 index; its sentinels and free stack are written by the allocation
+        // pass's init phase (needs_world_probe_index_seed), as CPU updates are forbidden.
+        world_probe_index_ = gfx::create_dynamic_index_buffer(get_world_probe_index_count(),
+                                                              BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                                  BGFX_BUFFER_INDEX32);
+        needs_world_probe_index_seed_ = true;
         world_probe_atlas_params_[0] = 1.0f / float(gutter_w);
         world_probe_atlas_params_[1] = 1.0f / float(gutter_h);
         world_probe_atlas_params_[2] = float(gutter_w);
         world_probe_atlas_params_[3] = float(gutter_h);
         if(!world_probe_radiance_ || !world_probe_radiance_->is_valid() || !world_probe_irradiance_ ||
            !world_probe_irradiance_->is_valid() || !world_probe_depth_ || !world_probe_depth_->is_valid() ||
-           !bgfx::isValid(world_probe_cells_) || !bgfx::isValid(world_probe_counts_))
+           !bgfx::isValid(world_probe_cells_) || !bgfx::isValid(world_probe_counts_) ||
+           !bgfx::isValid(world_probe_index_))
         {
             APPLOG_ERROR("[SurfaceCache] Failed to create the world probe resources.");
             shutdown();
@@ -207,13 +214,6 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
         // Sentinel cell ids (every slot claims and zeroes its strata on first trace) are seeded
         // by the compose pass's GPU fill - see needs_buffer_seed.
         world_probe_cell_count_ = probe_count;
-    }
-    else
-    {
-        APPLOG_WARNING("[SurfaceCache] World probes disabled: resolution {} does not derive the"
-                       " compiled probe axis {}.",
-                       resolution,
-                       world_probe_axis);
     }
     APPLOG_INFO("[SurfaceCache] Global SDF clipmap ready: {} levels of {}^3 + {}^3 attributes ({} KB).",
                 global_sdf_clipmap::level_count,
@@ -247,6 +247,12 @@ void global_sdf_clipmap_gpu::shutdown()
         gfx::destroy(world_probe_counts_);
         world_probe_counts_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
     }
+    if(bgfx::isValid(world_probe_index_))
+    {
+        gfx::destroy(world_probe_index_);
+        world_probe_index_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+    }
+    needs_world_probe_index_seed_ = false;
     world_probe_cell_count_ = 0;
     needs_buffer_seed_ = false;
     if(bgfx::isValid(attr_cells_))

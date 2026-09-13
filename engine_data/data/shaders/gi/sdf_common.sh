@@ -53,10 +53,12 @@ BUFFER_RO(b_sdf_instances, vec4, 3);
 /// [i * resolution, (i + 1) * resolution). See global_sdf_clipmap_gpu.
 SAMPLER3D(s_sdf_clipmap, 4);
 /// Uniform world-space grid over the instances, so a ray tests the ones near it rather than all
-/// of them. CSR: cell c owns [b_sdf_grid_offsets[c], b_sdf_grid_offsets[c + 1]) of
-/// b_sdf_grid_instances. See sdf_instance_grid.
-BUFFER_RO(b_sdf_grid_offsets, uint, 12);
-BUFFER_RO(b_sdf_grid_instances, uint, 13);
+/// of them. ONE buffer: the CSR offsets first (cell c owns [offsets[c], offsets[c + 1]) of the
+/// instance list), then the instance indices from u_sdf_grid_instance_base. See
+/// sdf_instance_grid. Merged from two buffers on 2026-09-13 to free stage 13 in every tracer
+/// for the sparse world-probe index (gi_world_probes.sh): the gather, the relight and the SDF
+/// debug view had all sixteen bgfx stages spoken for.
+BUFFER_RO(b_sdf_grid, uint, 12);
 
 /// Per cascade: xyz = world-space origin, w = voxel size. Zero w means the level is absent.
 uniform vec4 u_sdf_clipmap_levels[SDF_CLIPMAP_LEVEL_COUNT];
@@ -75,7 +77,8 @@ uniform vec4 u_sdf_clipmap_params;
 /// assumes, so the total depth is derived rather than uploaded -- one less value to disagree.
 #define u_sdf_clipmap_depth        (u_sdf_clipmap_resolution * float(SDF_CLIPMAP_LEVEL_COUNT))
 
-/// [0] = grid origin xyz, cell size w. [1] = cell counts xyz, non-zero w when the grid is usable.
+/// [0] = grid origin xyz, cell size w. [1] = cell counts xyz, w = the instance list's base entry
+/// in b_sdf_grid (the offset count) - non-zero when the grid is usable.
 /// Filled by surface_cache_system::get_grid_params, the single owner: every pass that traces
 /// must walk the same cells, and a pass that derived different ones would simply find different
 /// instances -- geometry that occludes in one pass and not another, with no error anywhere.
@@ -84,6 +87,7 @@ uniform vec4 u_sdf_grid_params[2];
 #define u_sdf_grid_cell_size u_sdf_grid_params[0].w
 #define u_sdf_grid_dim       u_sdf_grid_params[1].xyz
 #define u_sdf_grid_enabled   (u_sdf_grid_params[1].w > 0.0)
+#define u_sdf_grid_instance_base uint(u_sdf_grid_params[1].w)
 /// Cells a traversal may visit before giving up. A ray crossing an n-cell grid diagonally touches
 /// about 3n, so this is generous; it exists so a denormal direction cannot spin, not as a budget.
 #define SDF_GRID_MAX_STEPS 256
@@ -253,10 +257,11 @@ float SdfSampleLocal(SdfHeader header, vec3 local_position)
 	vec3 clamped_grid = clamp(grid, vec3_splat(0.0), header.grid_dim);
 	vec3 outside_delta = (grid - clamped_grid) * header.voxel_size;
 	float outside_distance = length(outside_delta);
-	if(outside_distance > 0.0)
-	{
-		return outside_distance + SDF_ENCODE_RANGE * header.voxel_size;
-	}
+	// Outside the field the reading below is taken at the nearest BOUNDARY point and the two
+	// lower bounds are combined at the end (see the CPU transcription, sample_mesh_sdf: the
+	// padding bound alone made every bounding-box face a phantom surface at the coarse
+	// cascade levels).
+	grid = clamped_grid;
 	vec3 brick_coord = clamp(floor(grid / SDF_BRICK_SIZE), vec3_splat(0.0), header.brick_dim - vec3_splat(1.0));
 	uint brick_index = uint(brick_coord.x) +
 	                   uint(brick_coord.y) * uint(header.brick_dim.x) +
@@ -265,7 +270,10 @@ float SdfSampleLocal(SdfHeader header, vec3 local_position)
 	if((entry & SDF_INDIRECTION_EMPTY_FLAG) != 0u)
 	{
 		float distance = float(entry & SDF_INDIRECTION_DISTANCE_MASK) * header.voxel_size;
-		return (entry & SDF_INDIRECTION_INSIDE_FLAG) != 0u ? -distance : distance;
+		distance = (entry & SDF_INDIRECTION_INSIDE_FLAG) != 0u ? -distance : distance;
+		return outside_distance > 0.0
+		           ? max(outside_distance + SDF_ENCODE_RANGE * header.voxel_size, distance - outside_distance)
+		           : distance;
 	}
 	// Surface brick: `entry` is the absolute atlas slot.
 	float atlas_brick_dim = u_sdf_atlas_brick_dim;
@@ -289,7 +297,10 @@ float SdfSampleLocal(SdfHeader header, vec3 local_position)
 	// inward by the thickness, which turns the samples just inside the bounds negative -- and
 	// the tracer reads any negative sample as a hit, so the field's bounding box renders solid,
 	// dithering in and out as the ray direction crosses the sign boundary.
-	return distance_voxels * header.voxel_size;
+	float distance = distance_voxels * header.voxel_size;
+	return outside_distance > 0.0
+	           ? max(outside_distance + SDF_ENCODE_RANGE * header.voxel_size, distance - outside_distance)
+	           : distance;
 }
 
 /**
@@ -529,6 +540,67 @@ float SdfSampleClipmap(vec3 world_position)
 }
 
 /**
+ * The mesh fields at a POINT: the minimum over the resident instances whose cull-grid cell
+ * holds it, in world units - SDF_CLIPMAP_OUTSIDE when no instance is near. Exact to the
+ * resident mips and CAMERA-INDEPENDENT, which the clipmap is not: its finest level covering a
+ * point is the camera's, and from 20 m that is the 1 m level, whose voxels straddle a floor
+ * slab or a niche wall. The world-probe trace's dead-probe gate asks this instead (measured
+ * 2026-09-13: a niche's lattice points buried in its floor and side walls read as alive from
+ * 21 m, traced from inside the geometry, mixed the sky beneath the floor into their atlas and
+ * the cage read fell through to the 8 m lattice standing in the open hall - the niche
+ * rendered 20x brighter than from 3 m). The composer's per-voxel loop
+ * (cs_gi_clipmap_compose.sc) is the same walk with a reach; this is its reach-0 form.
+ * Outside an instance's bounds its field reports the distance to the bounds plus the bake
+ * padding, so only a point genuinely inside a mesh reads negative.
+ */
+float SdfSampleInstancesPoint(vec3 world_position)
+{
+	float nearest = SDF_CLIPMAP_OUTSIDE;
+	if(!u_sdf_grid_enabled)
+	{
+		LOOP
+		for(int i = 0; i < u_sdf_instance_count; ++i)
+		{
+			SdfInstance inst = SdfLoadInstance(i);
+			vec3 clamped_to_bounds = clamp(world_position, inst.world_bounds_min, inst.world_bounds_max);
+			if(length(world_position - clamped_to_bounds) >= nearest)
+			{
+				continue;
+			}
+			SdfHeader header = SdfLoadHeader(inst.header_index);
+			vec3 local_position = SdfTransformPoint(inst.world_to_local_rows, world_position);
+			nearest = min(nearest, SdfSampleLocal(header, local_position) * inst.local_to_world_scale);
+		}
+		return nearest;
+	}
+	vec3 last_cell = u_sdf_grid_dim - vec3_splat(1.0);
+	vec3 cell_f = floor((world_position - u_sdf_grid_origin) / u_sdf_grid_cell_size);
+	if(any(lessThan(cell_f, vec3_splat(0.0))) || any(greaterThan(cell_f, last_cell)))
+	{
+		return nearest;
+	}
+	int cell_index = int(cell_f.x + cell_f.y * u_sdf_grid_dim.x + cell_f.z * u_sdf_grid_dim.x * u_sdf_grid_dim.y);
+	uint begin = b_sdf_grid[cell_index] + u_sdf_grid_instance_base;
+	uint end = b_sdf_grid[cell_index + 1] + u_sdf_grid_instance_base;
+	LOOP
+	for(uint entry_index = begin; entry_index < end; ++entry_index)
+	{
+		SdfInstance inst = SdfLoadInstance(int(b_sdf_grid[entry_index]));
+		// Outside the bounds the distance to them is already a valid lower bound, and never a
+		// negative one: a bounds reject can only skip instances that cannot bury the point.
+		vec3 clamped_to_bounds = clamp(world_position, inst.world_bounds_min, inst.world_bounds_max);
+		if(length(world_position - clamped_to_bounds) >= nearest)
+		{
+			continue;
+		}
+		SdfHeader header = SdfLoadHeader(inst.header_index);
+		vec3 local_position = SdfTransformPoint(inst.world_to_local_rows, world_position);
+		nearest = min(nearest, SdfSampleLocal(header, local_position) * inst.local_to_world_scale);
+	}
+	return nearest;
+}
+
+/**
  * Slab test of a ray against an axis-aligned box. Returns false when the ray misses.
  * `t_near` is clamped to zero so a ray starting inside the box begins at its origin.
  */
@@ -562,6 +634,15 @@ struct SdfRayHit
 	/// with spatial extent (a light voxel) is partially occluded whenever the clearance is
 	/// smaller than its half-width. Costs one min per march step.
 	float clearance;
+	/// The RAW field reading at the accepted point, in world units (0 for a miss). The march
+	/// accepts a hit bias + expand voxels short of the surface, and no surface lies within
+	/// this reading of that point, so t + hit_field never exceeds the distance along the ray
+	/// to the first surface: a consumer storing a DEPTH for a visibility test adds it. The
+	/// world probes' Chebyshev moments needed it - without it every flat surface measured
+	/// ~1.4 voxels nearer than its own query biased 0.4 voxel off it, and a low-variance
+	/// depth lobe rejected the probe with confidence (measured: the courtyard floor, whose
+	/// only live cage probes sit straight above it, read zero irradiance).
+	float hit_field;
 	/// Instance that produced the hit, or SDF_NO_INSTANCE when the global cascade answered.
 	///
 	/// Carries the MATERIAL to the caller. A distance field stores geometry only, so a bounce ray
@@ -608,6 +689,7 @@ SdfRayHit SdfMakeMiss()
 	result.exhausted = false;
 	result.instance_index = SDF_NO_INSTANCE;
 	result.clearance = 1e8;
+	result.hit_field = 0.0;
 	return result;
 }
 
@@ -785,6 +867,7 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 				result.hit = true;
 				result.clearance = 0.0;
 				result.t = t;
+				result.hit_field = max(world_distance, 0.0);
 				if(want_normal)
 				{
 					vec3 local_normal = SdfGradientLocal(header, local_position);
@@ -905,12 +988,12 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 		float t_cell_min = max(t_min, t_cell_enter);
 		float t_cell_max = min(t_max, min(t_step, t_exit));
 		int cell_index = int(cell_f.x + cell_f.y * dim.x + cell_f.z * dim.x * dim.y);
-		uint begin = b_sdf_grid_offsets[cell_index];
-		uint end = b_sdf_grid_offsets[cell_index + 1];
+		uint begin = b_sdf_grid[cell_index] + u_sdf_grid_instance_base;
+		uint end = b_sdf_grid[cell_index + 1] + u_sdf_grid_instance_base;
 		LOOP
 		for(uint entry_index = begin; entry_index < end; ++entry_index)
 		{
-			SdfTestInstance(int(b_sdf_grid_instances[entry_index]), origin, direction, inv_dir,
+			SdfTestInstance(int(b_sdf_grid[entry_index]), origin, direction, inv_dir,
 			                t_cell_min, t_cell_max, max_steps, surface_bias, relaxation, want_normal,
 			                result);
 		}
@@ -1129,6 +1212,7 @@ SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max,
 			result.hit = true;
 			result.clearance = 0.0;
 			result.t = t;
+			result.hit_field = max(d_raw, 0.0);
 			if(want_normal)
 			{
 				// Tetrahedral taps over one voxel OF THE ANSWERING LEVEL.

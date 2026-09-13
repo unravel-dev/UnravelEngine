@@ -7,11 +7,28 @@
  * complete shortened gather rays, and feed the light voxels' bounce term.
  *
  * LATTICE. Probes live on an absolute world grid of spacing = cascade voxel *
- * GI_WORLD_PROBE_DIVISOR (2 m at level 0). The window covers GI_WORLD_PROBE_AXIS^3 cells around
- * the cascade; a probe's storage slot is its world cell index mod GI_WORLD_PROBE_AXIS, so
- * camera motion never moves or copies a probe - cells enter and leave the window, and a slot
- * whose cell changed is detected by the cell-id buffer and refilled. Camera ROTATION touches
+ * GI_WORLD_PROBE_DIVISOR (2 m at level 0). A level's window covers GiWorldProbeAxis(level)^3
+ * cells around the camera's cell (the axis is PER LEVEL, see the axis note below). Levels
+ * 1-3 are DENSE: a probe's storage slot is its world cell index mod the axis, so camera
+ * motion never moves or copies a probe - cells enter and leave the window, and a slot whose
+ * cell changed is detected by the cell-id buffer and refilled. Camera ROTATION touches
  * nothing (R1 by construction).
+ *
+ * LEVEL 0 IS SPARSE (2026-09-13, gi_single_lighting_plan.md phase D, the shape of Lumen's
+ * radiance cache): its window is wide (+-46 m) but only the cells a consumer ASKED FOR hold
+ * a probe. A dense toroidal INDEX (one entry per window cell, GI_WORLD_PROBE_AXIS_L0^3) maps
+ * a cell to a slot of a fixed POOL (GI_WORLD_PROBE_POOL_L0), or to none. Every reader that
+ * resolves a level-0 cage stamps its base cell into the index's request lane
+ * (GiWorldProbeRequest); an ungated allocation pass before the quiescence gate
+ * (cs_gi_world_probe_alloc.sc) claims free pool slots for the eight cells around every
+ * recent stamp, frees slots whose cell left the window or went unrequested, and the trace
+ * seeds and traces a fresh slot the same frame. A cell without a probe reads as a DEAD cage
+ * corner (no data, no verdict), so a cage arriving probe by probe renormalises onto what it
+ * has and an all-absent cage falls through to the coarser lattice - exactly the buried-probe
+ * contract. Why: the 2 m cage must answer in the alcove's own air from ANY camera distance
+ * (the lion niche read 0.078 from 2.8 m and 1.41 from 21 m through the hall's 4 m probes,
+ * gi_lighting_audit section 20), and a dense 2 m lattice over the same reach would be 36k
+ * probes; Sponza's live set is a few thousand.
  *
  * UPDATE. Every probe, every frame, GI_WORLD_PROBE_RAYS_PER_FRAME rays at FIXED octahedral
  * texel centres: stratum s = frame mod GI_WORLD_PROBE_WINDOW covers texels where
@@ -19,10 +36,11 @@
  * radiance atlas is a zero-variance windowed mean. Rays read the light voxels at hits and the
  * sky SH at miss.
  *
- * ATLASES (2D, cascades stacked vertically):
- *  - radiance: GI_WORLD_PROBE_AXIS^2 probe tiles of OCT_RADIANCE^2 texels, probe-major
- *    (tile x = slot.x + slot.z * AXIS, tile y = slot.y + level * AXIS). rgb radiance, a hitT
- *    (negative = miss/sky). Point-fetched only, so no gutter.
+ * ATLASES (2D; every probe slot of every level in ONE row-major run of
+ * GI_WORLD_PROBE_ATLAS_TILES_X tiles per row, addressed by the LINEAR slot index - level 0's
+ * pool first, then the dense levels in order - GiWorldProbeTileBase):
+ *  - radiance: probe tiles of OCT_RADIANCE^2 texels. rgb radiance, a hitT (negative =
+ *    miss/sky). Point-fetched only, so no gutter.
  *  - irradiance: same tile grid at (OCT_IRRADIANCE+2)^2 texels - 1-texel octahedral gutter for
  *    hardware bilinear. rgb = E/pi at the texel's normal direction, a = sky fraction.
  *  - depth: same gutter layout, RG16F = (mean, mean^2) of hitT under a
@@ -46,9 +64,53 @@ vec3 GiFiniteOrZero(vec3 v)
 }
 #endif // GI_FINITE_OR_ZERO_DEFINED
 
-/// Probes per axis of one cascade's window: cascade resolution / divisor + 1 (lattice includes
-/// both endpoints). Runtime resolution 128 => 9.
-#define GI_WORLD_PROBE_AXIS 9
+/// Cells per axis of each level's window - odd, so a window has a centre cell. LEVEL 0 IS
+/// WIDE ON PURPOSE (measured 2026-09-13, gi_lighting_audit sections 18 and 20): a gather ray
+/// completes from the finest probe cage covering its completion point and the relight's
+/// bounce reads the finest cage covering its cell, and only the 2 m lattice resolves the
+/// courtyard's sky visibility or an alcove's own opening - a 4 m or 8 m cage blends gallery
+/// probes into open-well queries and hall probes into the alcove, and the same floor read
+/// E/pi 1.2 from 2.5 m and 0.25 from 15 m. Level 0 is the sparse pool's INDEX window: 49
+/// cells reach +-46 m usable, so a surface up to ~40 m from the camera resolves its 2 m cage
+/// at any camera distance, paid for only where probes were requested (see the header). The
+/// coarser lattices answer where level 0 has no probe yet and beyond its reach (levels 1 and
+/// 2 at 13: +-24 m / +-40 m; level 3 at 9: +-56 m). The lattice does not derive from the
+/// cascade resolution: the SDF window and the probe window are independent extents. Mirrored
+/// by global_sdf_clipmap_gpu::world_probe_axis / world_probe_pool_l0 /
+/// world_probe_atlas_tiles_x (atlas and buffer sizes) and verified by the gi oracle suite.
+#define GI_WORLD_PROBE_AXIS_L0 49
+#define GI_WORLD_PROBE_AXIS_L1 13
+#define GI_WORLD_PROBE_AXIS_L2 13
+#define GI_WORLD_PROBE_AXIS_L3 9
+/// Level 0's probe POOL: the slots the index hands out. Sponza's live set measured a few
+/// thousand (the building's surface cells' cages plus the completion points 8 m off them);
+/// the pool is sized for a margin over that, and the allocation pass tightens its eviction
+/// age when fewer than a GI_WORLD_PROBE_POOL_PRESSURE_DIVISOR-th of it is free. A multiple of
+/// the trace's four-probe groups.
+#define GI_WORLD_PROBE_POOL_L0 8192
+/// Tiles per atlas row (every level's tiles in one linear run): 128 x 16 = 2048 texels of
+/// radiance per row, the pool alone filling 64 rows.
+#define GI_WORLD_PROBE_ATLAS_TILES_X 128
+/// The index buffer (stage 13 of every cage reader, read-write for the ones that request):
+/// three lanes of GI_WORLD_PROBE_INDEX_CELLS entries - the pool slot serving the cell
+/// (GI_WORLD_PROBE_NONE when unallocated), the packed cell of the last request stamped at
+/// the entry, the clock tick of that stamp - then the allocation clock, the free stack's
+/// count and the free stack itself. Cells are addressed by GiWorldProbeIndexSlot (cell mod
+/// axis, toroidal like the dense windows).
+#define GI_WORLD_PROBE_INDEX_CELLS        (GI_WORLD_PROBE_AXIS_L0 * GI_WORLD_PROBE_AXIS_L0 * GI_WORLD_PROBE_AXIS_L0)
+#define GI_WORLD_PROBE_INDEX_SLOT_BASE    0
+#define GI_WORLD_PROBE_INDEX_REQUEST_BASE GI_WORLD_PROBE_INDEX_CELLS
+#define GI_WORLD_PROBE_INDEX_STAMP_BASE   (2 * GI_WORLD_PROBE_INDEX_CELLS)
+#define GI_WORLD_PROBE_INDEX_CLOCK        (3 * GI_WORLD_PROBE_INDEX_CELLS)
+#define GI_WORLD_PROBE_INDEX_FREE_COUNT   (3 * GI_WORLD_PROBE_INDEX_CELLS + 1)
+#define GI_WORLD_PROBE_INDEX_FREE_BASE    (3 * GI_WORLD_PROBE_INDEX_CELLS + 2)
+#define GI_WORLD_PROBE_INDEX_SIZE         (3 * GI_WORLD_PROBE_INDEX_CELLS + 2 + GI_WORLD_PROBE_POOL_L0)
+/// An unallocated index entry, and the cell id of a FREE pool slot (the cell buffer's seed
+/// sentinel, which the dense levels also start from).
+#define GI_WORLD_PROBE_NONE 0xFFFFFFFFu
+/// The window count the allocation pass writes into a freshly claimed pool slot: the trace
+/// reads it as "seed and clear me" and replaces it with a real count the same frame.
+#define GI_WORLD_PROBE_COUNT_FRESH 0xFFFFFFFFu
 
 /// x = probe spacing of level 0 in world units (doubles per level), y = frame index,
 /// z = non-zero when the probe atlases are resident, w = the cage-visibility variance gate
@@ -66,22 +128,94 @@ float GiWorldProbeSpacing(int level)
 	return u_world_probe_base_spacing * float(1 << level);
 }
 
-/// Wraps a world cell index onto its storage slot.
-ivec3 GiWorldProbeSlot(ivec3 cell)
+/// Probes per axis of a level's window (see the axis note above).
+int GiWorldProbeAxis(int level)
+{
+	return level == 0 ? GI_WORLD_PROBE_AXIS_L0
+	                  : (level == 1 ? GI_WORLD_PROBE_AXIS_L1
+	                                : (level == 2 ? GI_WORLD_PROBE_AXIS_L2 : GI_WORLD_PROBE_AXIS_L3));
+}
+
+/// Probe SLOTS of one level: the pool for the sparse level 0, the window's cells for the
+/// dense levels.
+int GiWorldProbeLevelCount(int level)
+{
+	if(level == 0)
+	{
+		return GI_WORLD_PROBE_POOL_L0;
+	}
+	int axis = GiWorldProbeAxis(level);
+	return axis * axis * axis;
+}
+
+/// First linear slot of a level: the cell-id and count buffers are level-major.
+int GiWorldProbeLevelBase(int level)
+{
+	int base = 0;
+	if(level > 0)
+	{
+		base += GiWorldProbeLevelCount(0);
+	}
+	if(level > 1)
+	{
+		base += GiWorldProbeLevelCount(1);
+	}
+	if(level > 2)
+	{
+		base += GiWorldProbeLevelCount(2);
+	}
+	return base;
+}
+
+/// The level a linear slot belongs to; SDF_CLIPMAP_LEVEL_COUNT past the last probe (a
+/// partial final dispatch group).
+int GiWorldProbeLevelOfSlot(int slot_linear)
+{
+	int level = 0;
+	int base = 0;
+	LOOP
+	for(int l = 0; l < SDF_CLIPMAP_LEVEL_COUNT; ++l)
+	{
+		base += GiWorldProbeLevelCount(l);
+		if(slot_linear >= base)
+		{
+			level = l + 1;
+		}
+	}
+	return level;
+}
+
+/// Usable half extent of a level's window around its centre, in world units: the outermost
+/// cell on each side is excluded (the blend band, and the cells that may be mid-refill).
+float GiWorldProbeHalfExtent(int level)
+{
+	return (float(GiWorldProbeAxis(level) - 1) * 0.5 - 1.0) * GiWorldProbeSpacing(level);
+}
+
+/// Wraps a world cell index onto its toroidal slot within @p level's window: the storage
+/// slot of a dense level, the INDEX entry of the sparse level 0.
+ivec3 GiWorldProbeSlot(ivec3 cell, int level)
 {
 	// True mathematical modulo for negative cells; HLSL/GLSL % is implementation-inconvenient
 	// on negatives, so bias well into positives first (cells are bounded far below 1<<20).
+	int axis = GiWorldProbeAxis(level);
 	ivec3 biased = cell + ivec3(1048576, 1048576, 1048576);
-	return ivec3(biased.x % GI_WORLD_PROBE_AXIS,
-	             biased.y % GI_WORLD_PROBE_AXIS,
-	             biased.z % GI_WORLD_PROBE_AXIS);
+	return ivec3(biased.x % axis, biased.y % axis, biased.z % axis);
 }
 
-/// Top-left texel of a probe slot's tile in an atlas with @p tile_edge texels per tile.
-ivec2 GiWorldProbeTileBase(ivec3 slot, int level, int tile_edge)
+/// The level-0 index entry of a world cell (a lane-relative offset into the index buffer).
+int GiWorldProbeIndexSlot(ivec3 cell)
 {
-	return ivec2((slot.x + slot.z * GI_WORLD_PROBE_AXIS) * tile_edge,
-	             (slot.y + level * GI_WORLD_PROBE_AXIS) * tile_edge);
+	ivec3 slot = GiWorldProbeSlot(cell, 0);
+	return (slot.z * GI_WORLD_PROBE_AXIS_L0 + slot.y) * GI_WORLD_PROBE_AXIS_L0 + slot.x;
+}
+
+/// Top-left texel of a probe slot's tile in an atlas with @p tile_edge texels per tile:
+/// one row-major run over the LINEAR slot index (level 0's pool, then the dense levels).
+ivec2 GiWorldProbeTileBase(int slot_linear, int tile_edge)
+{
+	return ivec2((slot_linear % GI_WORLD_PROBE_ATLAS_TILES_X) * tile_edge,
+	             (slot_linear / GI_WORLD_PROBE_ATLAS_TILES_X) * tile_edge);
 }
 
 /// World position of a probe cell's lattice point.
@@ -90,11 +224,12 @@ vec3 GiWorldProbeCellPosition(ivec3 cell, int level)
 	return vec3(cell) * GiWorldProbeSpacing(level);
 }
 
-/// Linear index of a probe slot within one cascade, for the cell-id buffer.
+/// Linear slot index of a DENSE level's toroidal slot (levels 1-3): the cell-id buffer's and
+/// the atlases' addressing. Level 0's slots come from the index (GiWorldProbeLookupSlot).
 int GiWorldProbeSlotIndex(ivec3 slot, int level)
 {
-	return ((level * GI_WORLD_PROBE_AXIS + slot.z) * GI_WORLD_PROBE_AXIS + slot.y) * GI_WORLD_PROBE_AXIS +
-	       slot.x;
+	int axis = GiWorldProbeAxis(level);
+	return GiWorldProbeLevelBase(level) + (slot.z * axis + slot.y) * axis + slot.x;
 }
 
 /// Packs a world cell for the cell-id buffer. 10 bits per axis (biased), 2 bits of level - the
@@ -105,6 +240,112 @@ uint GiWorldProbePackCell(ivec3 cell, int level)
 	return uint(biased.x & 0x3FF) | (uint(biased.y & 0x3FF) << 10u) | (uint(biased.z & 0x3FF) << 20u) |
 	       (uint(level) << 30u);
 }
+
+/// The world cell of a packed id (the level bits dropped): how a sparse level-0 slot learns
+/// which cell it was claimed for.
+ivec3 GiWorldProbeUnpackCell(uint packed)
+{
+	return ivec3(int(packed & 0x3FFu), int((packed >> 10u) & 0x3FFu), int((packed >> 20u) & 0x3FFu)) -
+	       ivec3(512, 512, 512);
+}
+
+/// The finest level COARSER than @p level whose window covers a point @p largest (Chebyshev
+/// distance) from the window centre; SDF_CLIPMAP_LEVEL_COUNT when none does. The cascade
+/// readers blend a cage into this one over its window's outer band. It used to be level + 1
+/// by construction (each window enclosed the finer one); level 0's +-46 m index window now
+/// reaches past levels 1 and 2, so its outer band blends into level 3.
+int GiWorldProbeFarLevel(int level, float largest)
+{
+	LOOP
+	for(int far = level + 1; far < SDF_CLIPMAP_LEVEL_COUNT; ++far)
+	{
+		if(largest <= GiWorldProbeHalfExtent(far))
+		{
+			return far;
+		}
+	}
+	return SDF_CLIPMAP_LEVEL_COUNT;
+}
+
+/// The sparse index (see the layout defines). Stage 13, which the cull grid's second buffer
+/// held until the two were merged (sdf_common.sh b_sdf_grid). Read-write for the consumers
+/// that REQUEST probes (GI_WORLD_PROBE_INDEX_RW: the gather, the relight, the allocation pass
+/// itself), read-only for the rest of the cage readers.
+#if defined(GI_WORLD_PROBE_INDEX_RW)
+BUFFER_RW(b_world_probe_index, uint, 13);
+#define GI_WORLD_PROBE_INDEX_BOUND
+#elif defined(GI_WORLD_PROBE_READ)
+BUFFER_RO(b_world_probe_index, uint, 13);
+#define GI_WORLD_PROBE_INDEX_BOUND
+#endif
+
+#if defined(GI_WORLD_PROBE_INDEX_BOUND)
+/// The linear probe slot serving @p cell at @p level, or -1 when level 0 holds no probe for
+/// it yet (the reader treats that corner as DEAD - no data, no verdict - and requests it).
+/// The allocation pass keeps the invariant that a live index entry's slot holds exactly the
+/// cell the entry stands for under this frame's window, so no cell check is needed here.
+int GiWorldProbeLookupSlot(ivec3 cell, int level)
+{
+	int slot = -1;
+	if(level == 0)
+	{
+		uint entry = b_world_probe_index[GI_WORLD_PROBE_INDEX_SLOT_BASE + GiWorldProbeIndexSlot(cell)];
+		if(entry != GI_WORLD_PROBE_NONE)
+		{
+			slot = int(entry);
+		}
+	}
+	else
+	{
+		slot = GiWorldProbeSlotIndex(GiWorldProbeSlot(cell, level), level);
+	}
+	return slot;
+}
+
+/// A level-0 cage reader asks for the eight probes around @p base_cell (its trilinear base):
+/// one stamp per read, at the base cell; the allocation pass dilates it to the cage. Kept
+/// cheap on the gather's completion path: a read first, the two stores only when the entry
+/// does not already carry this frame's stamp for this cell (most completions in a frame
+/// share cells). Requests also keep a live probe ALIVE: eviction is by stamp age. A no-op in
+/// read-only consumers (the debug view).
+void GiWorldProbeRequest(ivec3 base_cell)
+{
+#if defined(GI_WORLD_PROBE_INDEX_RW)
+	int index_slot = GiWorldProbeIndexSlot(base_cell);
+	uint clock = b_world_probe_index[GI_WORLD_PROBE_INDEX_CLOCK];
+	uint packed = GiWorldProbePackCell(base_cell, 0);
+	if(b_world_probe_index[GI_WORLD_PROBE_INDEX_STAMP_BASE + index_slot] != clock ||
+	   b_world_probe_index[GI_WORLD_PROBE_INDEX_REQUEST_BASE + index_slot] != packed)
+	{
+		b_world_probe_index[GI_WORLD_PROBE_INDEX_REQUEST_BASE + index_slot] = packed;
+		b_world_probe_index[GI_WORLD_PROBE_INDEX_STAMP_BASE + index_slot] = clock;
+	}
+#endif
+}
+
+/// Whether a level-0 @p cell (inside the index window) was requested within @p max_age clock
+/// ticks: a stamp for any of the eight base cells whose cage contains it. The stamp's packed
+/// cell must match - the toroidal entry may still hold a departed cell's request.
+bool GiWorldProbeCellWanted(ivec3 cell, uint clock, uint max_age)
+{
+	LOOP
+	for(int corner = 0; corner < 8; ++corner)
+	{
+		ivec3 base_cell = cell - ivec3(corner & 1, (corner >> 1) & 1, (corner >> 2) & 1);
+		int index_slot = GiWorldProbeIndexSlot(base_cell);
+		if(b_world_probe_index[GI_WORLD_PROBE_INDEX_REQUEST_BASE + index_slot] ==
+		   GiWorldProbePackCell(base_cell, 0))
+		{
+			uint age = clock - b_world_probe_index[GI_WORLD_PROBE_INDEX_STAMP_BASE + index_slot];
+			if(age <= max_age)
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+#endif // GI_WORLD_PROBE_INDEX_BOUND
 
 #if defined(GI_WORLD_PROBE_READ)
 
@@ -320,8 +561,8 @@ uint GiWorldProbeCageMask(vec3 position, vec3 normal, vec3 view_direction, int l
 ///   bits 16-21 = the face's cavity visibility quantised to 6 bits (error <= 1/126, consumed
 ///                only as the bounce attenuator and to skip the cavity march). Quantised 0
 ///                doubles as the CULLED sentinel: a stored non-culled face passed the
-///                GI_LIGHT_VOXEL_VISIBILITY_MIN (0.25) gate, so its quantised value is >= 16
-///                and the encodings can never collide.
+///                GI_LIGHT_VOXEL_VISIBILITY_MIN gate with at least one escaping ray of
+///                GI_BOUNCE_ESCAPE_RAYS (1/16 quantises to 4), so the encodings never collide.
 ///   bit  22    = the FAR mask (below) is filled. Filled LAZILY, on the first probe-half HIT
 ///                whose blend band is open - never on a miss: a miss marches enough already
 ///                (the near cage), and on churning generations (camera motion re-snapping
@@ -332,7 +573,8 @@ uint GiWorldProbeCageMask(vec3 position, vec3 normal, vec3 view_direction, int l
 ///                face stamps only the face half; fabricating mask 0 + level 0 instead would
 ///                decode as a valid "all-dead level 0" verdict and pin the texel's cage
 ///                fall-through to the wrong level for the whole generation.
-///   bits 24-31 = the FAR-blend cage mask, always for level + 1 of the near tag. Whether the
+///   bits 24-31 = the FAR-blend cage mask, for the far level of the near tag
+///                (GiWorldProbeFarLevel - a pure function of position and window). Whether the
 ///                blend band is open is a pure function of the texel's position and the
 ///                window, both frozen within a generation.
 /// Every store writes the whole word (both halves share the one generation), and validity is
@@ -440,6 +682,12 @@ bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direct
 	vec3 grid = biased / spacing;
 	ivec3 base_cell = ivec3(floor(grid));
 	vec3 frac = grid - vec3(base_cell);
+	// The sparse level: ask for this cage (a no-op in read-only consumers), whether or not it
+	// is allocated yet - the stamp is also what keeps a live cage from being evicted.
+	if(level == 0)
+	{
+		GiWorldProbeRequest(base_cell);
+	}
 	int tile_edge = GI_WORLD_PROBE_OCT_IRRADIANCE + 2;
 	vec2 oct_uv = GiOctEncode(normal);
 	vec3 sum = vec3_splat(0.0);
@@ -470,8 +718,15 @@ bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direct
 		// Chebyshev visibility from the depth moments, tested from the BIASED point.
 		vec3 biased_to_probe = probe_position - biased;
 		float distance_to_probe = max(length(biased_to_probe), 1e-4);
-		ivec3 slot = GiWorldProbeSlot(cell);
-		ivec2 tile = GiWorldProbeTileBase(slot, level, tile_edge);
+		// An unallocated level-0 cell is a DEAD corner: no data, no verdict, no covered_sum
+		// (the same contract as the buried-probe gate below), so an all-absent cage falls
+		// through to the coarser level while the requested probes arrive.
+		int probe_slot = GiWorldProbeLookupSlot(cell, level);
+		if(probe_slot < 0)
+		{
+			continue;
+		}
+		ivec2 tile = GiWorldProbeTileBase(probe_slot, tile_edge);
 		vec2 depth_oct = GiOctEncode(-biased_to_probe / distance_to_probe);
 		vec2 depth_uv =
 		    (vec2(tile) + vec2_splat(1.0) + depth_oct * float(GI_WORLD_PROBE_OCT_DEPTH)) *
@@ -601,9 +856,7 @@ bool GiWorldProbeIrradianceCascade(vec3 position, vec3 normal, vec3 view_directi
 	for(int level = 0; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
 	{
 		float spacing = GiWorldProbeSpacing(level);
-		// The window covers AXIS cells centred on the camera's cell; usable extent excludes the
-		// outermost cell on each side (the blend band, and the cells that may be mid-refill).
-		float half_extent = (float(GI_WORLD_PROBE_AXIS - 1) * 0.5 - 1.0) * spacing;
+		float half_extent = GiWorldProbeHalfExtent(level);
 		vec3 delta = abs(position - window_center);
 		float largest = max(delta.x, max(delta.y, delta.z));
 		if(largest > half_extent)
@@ -618,15 +871,16 @@ bool GiWorldProbeIrradianceCascade(vec3 position, vec3 normal, vec3 view_directi
 		{
 			continue;
 		}
-		// Blend toward the next level over the outer half of the last usable cell.
+		// Blend toward the next COVERING level over the outer half of the last usable cell.
 		float band = GI_WORLD_PROBE_BLEND_BAND * spacing;
 		float blend = saturate((largest - (half_extent - band)) / band);
-		if(blend > 0.0 && level + 1 < SDF_CLIPMAP_LEVEL_COUNT)
+		int far_level = GiWorldProbeFarLevel(level, largest);
+		if(blend > 0.0 && far_level < SDF_CLIPMAP_LEVEL_COUNT)
 		{
 			vec3 far_irradiance;
 			float far_sky;
 			float far_visible;
-			if(GiWorldProbeIrradiance(position, normal, view_direction, level + 1, far_irradiance, far_sky,
+			if(GiWorldProbeIrradiance(position, normal, view_direction, far_level, far_irradiance, far_sky,
 			                          far_visible))
 			{
 				// Scaled by the NEAR cage's visible fraction: the finer field is the authority, so
@@ -678,7 +932,7 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 	for(int level = 0; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
 	{
 		float level_spacing = GiWorldProbeSpacing(level);
-		float half_extent = (float(GI_WORLD_PROBE_AXIS - 1) * 0.5 - 1.0) * level_spacing;
+		float half_extent = GiWorldProbeHalfExtent(level);
 		vec3 delta = abs(position - window_center);
 		float largest = max(delta.x, max(delta.y, delta.z));
 		if(largest > half_extent)
@@ -693,7 +947,8 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 		// walk once (the one-call-site contract of the trace mega-bodies).
 		float band = GI_WORLD_PROBE_BLEND_BAND * level_spacing;
 		float blend = saturate((largest - (half_extent - band)) / band);
-		bool wants_far = blend > 0.0 && level + 1 < SDF_CLIPMAP_LEVEL_COUNT;
+		int far_level = GiWorldProbeFarLevel(level, largest);
+		bool wants_far = blend > 0.0 && far_level < SDF_CLIPMAP_LEVEL_COUNT;
 		vec3 near_radiance = vec3_splat(0.0);
 		vec3 far_radiance = vec3_splat(0.0);
 		bool near_answered = false;
@@ -706,11 +961,16 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 			{
 				break;
 			}
-			int cage_level = level + k;
+			int cage_level = k == 0 ? level : far_level;
 			float spacing = GiWorldProbeSpacing(cage_level);
 			vec3 grid = position / spacing;
 			ivec3 base_cell = ivec3(floor(grid));
 			vec3 frac = grid - vec3(base_cell);
+			// The sparse level: request this cage (see the irradiance read).
+			if(cage_level == 0)
+			{
+				GiWorldProbeRequest(base_cell);
+			}
 			vec3 sum = vec3_splat(0.0);
 			float weight_sum = 0.0;
 			// Same bookkeeping as the irradiance cage: the weight the statistical chain
@@ -725,14 +985,18 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 				vec3 probe_position = GiWorldProbeCellPosition(cell, cage_level);
 				vec3 tri = mix(vec3_splat(1.0) - frac, frac, vec3(offset));
 				float weight = max(tri.x, 0.001) * max(tri.y, 0.001) * max(tri.z, 0.001);
-				ivec3 slot = GiWorldProbeSlot(cell);
+				// An unallocated level-0 cell: a DEAD corner (see the irradiance read).
+				int probe_slot = GiWorldProbeLookupSlot(cell, cage_level);
+				if(probe_slot < 0)
+				{
+					continue;
+				}
 				// Chebyshev visibility of the QUERY POINT from the probe, exactly as the
 				// irradiance read tests it - a probe behind a wall must not complete rays
 				// through it.
 				vec3 to_query = position - probe_position;
 				float query_distance = max(length(to_query), 1e-4);
-				ivec2 depth_tile =
-				    GiWorldProbeTileBase(slot, cage_level, GI_WORLD_PROBE_OCT_IRRADIANCE + 2);
+				ivec2 depth_tile = GiWorldProbeTileBase(probe_slot, GI_WORLD_PROBE_OCT_IRRADIANCE + 2);
 				vec2 depth_uv = (vec2(depth_tile) + vec2_splat(1.0) +
 				                 GiOctEncode(to_query / query_distance) * float(GI_WORLD_PROBE_OCT_DEPTH)) *
 				                u_gi_world_probe_atlas.xy;
@@ -786,13 +1050,23 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 				}
 				// Sphere parallax: read toward where the ray meets the probe's visibility
 				// sphere. The stored mean depth toward the RAY direction is the sphere radius
-				// estimate.
-				ivec2 tile = GiWorldProbeTileBase(slot, cage_level, GI_WORLD_PROBE_OCT_RADIANCE);
+				// estimate - EXCEPT at the depth clamp, which marks "beyond" (the sky, or a hit
+				// past GI_WORLD_PROBE_DEPTH_CLAMP spacings), not a radius: treating the clamp as
+				// one pulled a vertical sky completion 2 m beside a level-0 probe 34 degrees off
+				// the zenith into the walls, so mid-cell completions never read a probe's sky
+				// texels (measured 2026-09-12: the courtyard floor's completions returned
+				// exactly zero under a sky of E(up) 3). Beyond the clamp the ray's own
+				// direction is the better estimate.
+				ivec2 tile = GiWorldProbeTileBase(probe_slot, GI_WORLD_PROBE_OCT_RADIANCE);
 				vec2 radius_uv = (vec2(depth_tile) + vec2_splat(1.0) +
 				                  GiOctEncode(direction) * float(GI_WORLD_PROBE_OCT_DEPTH)) *
 				                 u_gi_world_probe_atlas.xy;
-				float radius = max(texture2DLod(s_world_probe_depth, radius_uv, 0.0).x, 0.25 * spacing);
-				vec3 corrected = normalize(position + direction * radius - probe_position);
+				float radius = texture2DLod(s_world_probe_depth, radius_uv, 0.0).x;
+				vec3 corrected = direction;
+				if(radius < 0.999 * GI_WORLD_PROBE_DEPTH_CLAMP * spacing)
+				{
+					corrected = normalize(position + direction * max(radius, 0.25 * spacing) - probe_position);
+				}
 				vec2 radiance_uv =
 				    (vec2(tile) + (GiOctEncode(corrected) * float(GI_WORLD_PROBE_OCT_RADIANCE))) *
 				    u_gi_world_probe_radiance_atlas.xy;

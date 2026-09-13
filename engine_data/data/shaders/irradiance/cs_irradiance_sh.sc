@@ -3,7 +3,7 @@
  * Projects sky/sun radiance to spherical harmonics (L0-L2, 9 coeffs per channel).
  * Output: 9x1 RGBA32F texture (x=coeff index 0..8, rgb=channel R,G,B; a unused).
  * Mode 0: uniform - write L0 only from ambient color * intensity.
- * Mode 1: perez - sample Perez sky, project to SH.
+ * Mode 1: perez - sample the Perez sky (sky only, no sun disc), project to SH.
  * Mode 2: environment cubemap - sample textureCube(s_env, L), full L0-L2 SH.
  * Mode 3: environment cubemap flat - average cubemap into L0 only (no normal variation).
  * Mode 4: tint gradient - hemisphere gradient from tint color only (no sky), L0 + vertical L1.
@@ -92,8 +92,6 @@ vec3 cloud_covered_sky(vec3 radiance, float mean_luma, float coverage)
 uniform vec4 u_irradiance_tint_intensity;
 // For Perez: sun direction (points toward sun)
 uniform vec4 u_sun_direction;
-// Perez: sun luminance RGB
-uniform vec4 u_sun_luminance;
 // Perez: sky luminance XYZ (for Perez formula)
 uniform vec4 u_sky_luminance_xyz;
 // Perez: exposition factor
@@ -127,14 +125,12 @@ vec3 sample_perez_sky(vec3 dir, vec3 P0_inv, vec3 sky_color_xyY, vec3 light_dir)
     float yp_y_safe = max(Yp.y, 0.0001);
     vec3 sky_color_xyz = vec3(Yp.x * Yp.z / yp_y_safe, Yp.z, (1.0 - Yp.x - Yp.y) * Yp.z / yp_y_safe);
     vec3 sky_color = max(irradiance_convertXYZ2RGB(sky_color_xyz), vec3_splat(0.0));
-    float sun_cos = dot(dir, light_dir);
-    float sun_disc = exp(-2.0 * (1.0 - sun_cos) / 0.02);
-    // Exposition is applied ONCE to sky and sun together below, matching the sky
-    // dome (vs_sky applies it to the sky, fs_sky to the sun disc, each once).
-    // Scaling the sun here as well squared it (exposition^2), breaking the
-    // sun/sky ratio contract from perez_luminance.h.
-    vec3 sun_color = u_sun_luminance.xyz * sun_disc;
-    vec3 irradiance = (sky_color + sun_color) * u_exposition.x;
+    // SKY ONLY. The sun disc used to be added here (a ~10 degree lobe of the sun luminance):
+    // with 64 fixed samples one sample landing on it added up to a quarter of E(up) and
+    // pumped the ambient as the sun moved, and it was an unshadowed sun on every surface -
+    // the directional light IS the sun. compute_perez_horizontal_irradiance (the CPU
+    // transcription that solves the exposition) integrates exactly this sky-only chain.
+    vec3 irradiance = sky_color * u_exposition.x;
     // NON-PHYSICAL art-directed saturation boost: pushes color away from luma to better
     // match the perceived vividness of the visible sky (1.15 at horizon, 1.45 at zenith).
     // This intentionally diverges from true radiometric irradiance.

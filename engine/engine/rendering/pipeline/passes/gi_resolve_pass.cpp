@@ -589,8 +589,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                  11,
                                  has_prev_color ? params.prev_color
                                                 : default_textures::get().black_texture());
-                gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-                gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+                gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+                // Stage 13: the sparse world-probe index, read-write - every completion
+                // requests the level-0 cage it reads (gi_world_probes.sh).
+                gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
                 // Stage 14: this frame's velocity buffer (the sky SH rides the probe buffer's
                 // SH block now). A screen hit on an OBJECT-motion pixel reprojects through it
                 // to the mover's own last-frame pixel; black stands in when absent and the
@@ -692,7 +694,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 const auto gtao_tex = rview.tex_safe_get("GTAO");
                 const auto* gtao_settings = rview.data().try_get<gtao_pass::settings>("GTAO_SETTINGS");
                 gfx::set_texture(integrate_program_.s_gi_gtao,
-                                 13,
+                                 3,
                                  gtao_tex ? gtao_tex : default_textures::get().white_texture());
                 gfx::set_texture(integrate_program_.s_world_probe_irradiance,
                                  11,
@@ -700,6 +702,12 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_texture(integrate_program_.s_world_probe_depth,
                                  15,
                                  clipmap_gpu.get_world_probe_depth());
+                // Stage 13: the sparse world-probe index the cascade fallback resolves level 0
+                // through (read-only here). Left unbound it reads as zero on D3D11, which the
+                // lookup takes for pool slot 0: every pixel without screen-probe coverage - the
+                // silhouette edges - then read one arbitrary probe's tile and rendered as a
+                // white halo that the temporal could not settle (measured 2026-09-13).
+                gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::Read);
                 gfx::set_uniform(integrate_program_.u_sdf_clipmap_levels,
                                  clipmap_gpu.get_level_params(),
                                  global_sdf_clipmap::level_count);

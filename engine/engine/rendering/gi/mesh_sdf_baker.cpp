@@ -1449,12 +1449,27 @@ auto sample_mesh_sdf(const mesh_sdf& sdf, const math::vec3& local_position) -> f
     if(math::any(math::lessThan(grid_position, math::vec3(0.0f))) ||
        math::any(math::greaterThan(grid_position, grid_max)))
     {
-        // Outside the field: distance to the bounds plus the guaranteed padding between the
-        // bounds and the surface. See mesh_sdf::get_bounds_padding for why the padding term
-        // is required rather than merely nice -- without it this is zero exactly on the
-        // boundary, where every entering ray starts.
-        return std::sqrt(distance_squared_to_bounds(sdf.bounds, local_position)) + sdf.get_bounds_padding();
+        // Outside the field: two valid lower bounds on the distance to the surface, the larger
+        // wins. (1) Distance to the bounds plus the guaranteed padding between the bounds and
+        // the surface - see mesh_sdf::get_bounds_padding for why the padding term is required
+        // rather than merely nice: without it this is zero exactly on the boundary, where
+        // every entering ray starts. (2) The field's own reading at the nearest boundary point
+        // minus the distance to it (the field is 1-Lipschitz). (1) alone reads four mesh
+        // voxels on every box face however far the surface is, and the coarse cascade levels'
+        // acceptance plus expand (up to 1.87 m) accepted that as a hit: every bounding box was
+        // a phantom surface at levels 1-3 - a solid ceiling over an open courtyard where the
+        // building's box top crosses the atrium (measured 2026-09-12). (2) keeps the box faces
+        // open wherever the field behind them is.
+        const float to_bounds = std::sqrt(distance_squared_to_bounds(sdf.bounds, local_position));
+        const math::vec3 boundary_grid = math::clamp(grid_position, math::vec3(0.0f), grid_max);
+        return std::max(to_bounds + sdf.get_bounds_padding(),
+                        sample_mesh_sdf_grid(sdf, boundary_grid) - to_bounds);
     }
+    return sample_mesh_sdf_grid(sdf, grid_position);
+}
+
+auto sample_mesh_sdf_grid(const mesh_sdf& sdf, const math::vec3& grid_position) -> float
+{
     // Resolve the brick ONCE from the sample position, then filter entirely inside that
     // brick's bordered storage. Resolving per trilinear tap instead would defeat the whole
     // point of the border: taps would cross into neighbouring bricks, where an empty

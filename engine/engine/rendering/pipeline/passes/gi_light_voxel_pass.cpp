@@ -136,8 +136,14 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                       0,
                       gfx::access::ReadWrite,
                       gfx::texture_format::RGBA16F);
-    gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-    gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+    gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+    // Stage 13: the sparse world-probe index, read-write - the bounce requests the level-0
+    // cages it reads (gi_world_probes.sh). Bound whenever it exists; the ready flag in
+    // u_gi_world_probe_params gates the reads.
+    if(clipmap_gpu.has_world_probes())
+    {
+        gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
+    }
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                  float(atlas.get_atlas_voxel_dim()),
                                  float(instances.size()),
@@ -156,7 +162,7 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     // Shadow tracing wholly owned by gi_constants (Phase 8): no settings, one source.
     const float shadow_params[4] = {float(gi::GI_SHADOW_DISTANCE),
                                     float(gi::GI_SHADOW_NORMAL_BIAS_VOXELS),
-                                    float(gi::GI_MESH_SDF_TRACE_RANGE),
+                                    float(gi::GI_RELIGHT_SHADOW_NEAR_FIELD),
                                     float(gi::GI_TRACE_MAX_STEPS)};
     gfx::set_uniform(program_.u_gi_shadow_params, shadow_params);
     const float shadow_params2[4] = {float(gi::GI_SHADOW_SURFACE_BIAS),
@@ -472,15 +478,21 @@ void gi_light_voxel_pass::collect_relight_stats(const gfx::texture::ptr& vis_mem
             stats_primed_ = true;
             continue;
         }
+        // Rows GI_STATS_RELIGHT_CHANGE, _FACES and _RISE of the slice (gi_light_voxels.sh).
+        constexpr uint32_t rise_row = 2u;
         float change = 0.0f;
         float faces = 0.0f;
+        float rise = 0.0f;
         for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
         {
             change += float(slot.data[level]) / float(gi::GI_QUIESCENCE_STATS_SCALE);
             faces += float(slot.data[global_sdf_clipmap::level_count + level]);
+            rise += float(slot.data[rise_row * global_sdf_clipmap::level_count + level]) /
+                    float(gi::GI_QUIESCENCE_STATS_SCALE);
         }
         ++relight_sample_.index;
         relight_sample_.mean_change = faces > 0.0f ? change / faces : 0.0f;
+        relight_sample_.mean_drift = faces > 0.0f ? (2.0f * rise - change) / faces : 0.0f;
     }
     // Copy and zero this frame's sums (a view of its own: a blit executes before the
     // dispatches of its view, so the staging copy needs the next one).

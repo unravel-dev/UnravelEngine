@@ -384,7 +384,7 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
     }
 
     irradiance_perez_params perez;
-    compute_irradiance_perez_params(params.light_direction, params.turbidity, perez);
+    compute_irradiance_perez_params(params.light_direction, params.turbidity, params.sun_intensity, perez);
     const float hour = ANONYMOUS::hour_of_day(-params.light_direction);
     const cloud_uniform_block uniforms = make_cloud_uniforms(params, camera, perez.exposition, hour);
 
@@ -653,7 +653,7 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     const auto output_size = surface->get_size();
 
     irradiance_perez_params perez;
-    compute_irradiance_perez_params(params.light_direction, params.turbidity, perez);
+    compute_irradiance_perez_params(params.light_direction, params.turbidity, params.sun_intensity, perez);
     perez.exposition *= params.sky_brightness;
 
     const float hour = ANONYMOUS::hour_of_day(-params.light_direction);
@@ -728,6 +728,101 @@ auto compute_perez_exposition(float sun_altitude) -> float
     return perez_luminance_to_engine * altitude_factor;
 }
 
+auto compute_perez_sun_weight(float sun_altitude) -> float
+{
+    const float x = bx::clamp(sun_altitude / perez_sun_weight_altitude, 0.0f, 1.0f);
+    return x * x * (3.0f - 2.0f * x);
+}
+
+namespace
+{
+/// cs_irradiance_sh.sc num_samples: the bake's fixed Hammersley set.
+constexpr int k_perez_bake_samples = 64;
+/// Below this the luminance tables have collapsed (night); a solved exposition would only
+/// amplify their residual, so the fixed conversion takes over.
+constexpr float k_perez_min_unit_irradiance = 1e-3f;
+
+auto radical_inverse_vdc(uint32_t bits) -> float
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10f;
+}
+
+/// The shader's Perez() for one channel.
+auto perez_channel(float a, float b, float c, float d, float e, float costeta, float cosgamma) -> float
+{
+    const float inv_costeta = 1.0f / std::max(costeta, 0.01f);
+    return (1.0f + a * std::exp(b * inv_costeta)) *
+           (1.0f + c * std::exp(d * std::acos(cosgamma)) + e * cosgamma * cosgamma);
+}
+} // namespace
+
+auto compute_perez_horizontal_irradiance(const irradiance_perez_params& perez) -> float
+{
+    // The shader's chain, per channel of the xyY coefficients (perez_coeff[row][channel]).
+    const float* A = perez.perez_coeff[0];
+    const float* B = perez.perez_coeff[1];
+    const float* C = perez.perez_coeff[2];
+    const float* D = perez.perez_coeff[3];
+    const float* E = perez.perez_coeff[4];
+    const math::vec3 sun_dir = math::normalize(perez.sun_direction);
+    const float cosgammas = std::clamp(sun_dir.y, -0.9999f, 0.9999f);
+    float p0_inv[3];
+    for(int c = 0; c < 3; ++c)
+    {
+        p0_inv[c] = 1.0f / std::max(perez_channel(A[c], B[c], C[c], D[c], E[c], 1.0f, cosgammas), 0.0001f);
+    }
+    const math::vec3& xyz = perez.sky_luminance_xyz;
+    const float denom = std::max(xyz.x + xyz.y + xyz.z, 0.0001f);
+    const float sky_xyY[3] = {xyz.x / denom, xyz.y / denom, xyz.y};
+    // Only the SH bands that survive at the zenith: Y00, Y1(y), Y2(3z^2 - 1), Y2(x^2 - y^2).
+    float sh0 = 0.0f;
+    float sh1 = 0.0f;
+    float sh7 = 0.0f;
+    float sh8 = 0.0f;
+    const float d_omega = 2.0f * math::pi<float>() / float(k_perez_bake_samples);
+    for(int i = 0; i < k_perez_bake_samples; ++i)
+    {
+        const float e_x = float(i) / float(k_perez_bake_samples);
+        const float e_y = radical_inverse_vdc(uint32_t(i));
+        const float phi = 2.0f * math::pi<float>() * e_x;
+        const float cos_theta = 1.0f - e_y;
+        const float sin_theta = std::sqrt(std::max(0.0f, 1.0f - cos_theta * cos_theta));
+        const math::vec3 dir(sin_theta * std::cos(phi), cos_theta, sin_theta * std::sin(phi));
+        const float costeta = std::max(dir.y, 0.01f);
+        const float cosgamma = std::clamp(math::dot(dir, sun_dir), -0.9999f, 0.9999f);
+        float Yp[3];
+        for(int c = 0; c < 3; ++c)
+        {
+            Yp[c] = sky_xyY[c] * perez_channel(A[c], B[c], C[c], D[c], E[c], costeta, cosgamma) * p0_inv[c];
+        }
+        const float yp_y = std::max(Yp[1], 0.0001f);
+        const float X = Yp[0] * Yp[2] / yp_y;
+        const float Y = Yp[2];
+        const float Z = (1.0f - Yp[0] - Yp[1]) * Yp[2] / yp_y;
+        // irradiance_convertXYZ2RGB, clamped at zero per channel like the shader; the
+        // shader's saturation boost preserves this luma and so does not appear.
+        const float r = std::max(3.2404542f * X - 1.5371385f * Y - 0.4985314f * Z, 0.0f);
+        const float g = std::max(-0.9692660f * X + 1.8760108f * Y + 0.0415560f * Z, 0.0f);
+        const float b = std::max(0.0556434f * X - 0.2040259f * Y + 1.0572252f * Z, 0.0f);
+        const float luma = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+        sh0 += luma * 0.282095f * d_omega;
+        sh1 += luma * 0.488603f * dir.y * d_omega;
+        sh7 += luma * 0.315392f * (3.0f * dir.z * dir.z - 1.0f) * d_omega;
+        sh8 += luma * 0.546274f * (dir.x - dir.y) * (dir.x + dir.y) * d_omega;
+    }
+    // eval_irradiance_sh at N = (0, 1, 0): lobes A0, A1 * y, A2 * (3z^2 - 1) = -A2, A2 * (x^2 - y^2) = -A2.
+    const float A0 = math::pi<float>();
+    const float A1 = 2.0f * math::pi<float>() / 3.0f;
+    const float A2 = math::pi<float>() * 0.25f;
+    const float irradiance = A0 * 0.282095f * sh0 + A1 * 0.488603f * sh1 - A2 * 0.315392f * sh7 - A2 * 0.546274f * sh8;
+    return std::max(irradiance, 0.0f);
+}
+
 void compute_perez_luminance(const math::vec3& light_direction,
                              math::vec3& out_sky_luminance_rgb,
                              math::vec3& out_sun_luminance_rgb)
@@ -745,6 +840,7 @@ void compute_perez_luminance(const math::vec3& light_direction,
 
 void compute_irradiance_perez_params(const math::vec3& light_direction,
                                      float turbidity,
+                                     float sun_intensity,
                                      irradiance_perez_params& out)
 {
     math::vec3 sun_dir(-light_direction.x, -light_direction.y, -light_direction.z);
@@ -765,12 +861,25 @@ void compute_irradiance_perez_params(const math::vec3& light_direction,
 
     out.sun_direction = sun_dir;
 
+    ANONYMOUS::compute_perez_coeff(turbidity, &out.perez_coeff[0][0]);
+    out.horizontal_irradiance_unit = compute_perez_horizontal_irradiance(out);
+
     // The one shared Perez -> engine conversion (see perez_luminance.h): the sky dome,
     // the irradiance bake and the flat ambient all inherit this value, so their ratios
-    // cannot drift apart.
-    out.exposition = compute_perez_exposition(sun_dir.y);
-
-    ANONYMOUS::compute_perez_coeff(turbidity, &out.perez_coeff[0][0]);
+    // cannot drift apart. SUN-RELATIVE when a directional light exists: the exposition that
+    // puts the bake's horizontal irradiance at perez_sky_to_sun_ratio x the sun's luminous
+    // intensity, faded into the fixed conversion through the ambient's own day/night ramp -
+    // at the horizon the luminance tables collapse and a solved exposition would amplify
+    // their residual into a night-time sky.
+    const float fixed_exposition = compute_perez_exposition(sun_dir.y);
+    out.exposition = fixed_exposition;
+    out.sun_relative = false;
+    if(sun_intensity > 0.0f && out.horizontal_irradiance_unit > k_perez_min_unit_irradiance)
+    {
+        const float solved = perez_sky_to_sun_ratio * sun_intensity / out.horizontal_irradiance_unit;
+        out.exposition = bx::lerp(fixed_exposition, solved, compute_perez_sun_weight(sun_dir.y));
+        out.sun_relative = true;
+    }
 }
 
 } // namespace unravel

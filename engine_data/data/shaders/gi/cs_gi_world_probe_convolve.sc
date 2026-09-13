@@ -27,10 +27,13 @@
 #include "gi/sdf_common.sh"
 #include "gi/gi_world_probes.sh"
 
-// Stages chosen clear of sdf_common.sh's fixed set (0-4 samplers/buffers, 12-13 grid).
+// Stages chosen clear of sdf_common.sh's fixed set (0-4 samplers/buffers, 12 grid).
 SAMPLER2D(s_world_probe_radiance, 11);
 IMAGE2D_WO(s_world_probe_irradiance_out, rgba16f, 5);
 IMAGE2D_WO(s_world_probe_depth_out, rg16f, 6);
+/// The per-slot cell ids, read for one bit: a FREE sparse slot has no tile worth convolving
+/// (nothing points at it), and most of the pool is free.
+BUFFER_RO(b_world_probe_cells, uint, 7);
 
 #define GUTTER_EDGE (GI_WORLD_PROBE_OCT_IRRADIANCE + 2)
 #define RADIANCE_TEXELS (GI_WORLD_PROBE_OCT_RADIANCE * GI_WORLD_PROBE_OCT_RADIANCE)
@@ -47,20 +50,20 @@ NUM_THREADS(8, 8, 1)
 void main()
 {
 	int slot_linear = int(gl_WorkGroupID.x);
-	int per_level = GI_WORLD_PROBE_AXIS * GI_WORLD_PROBE_AXIS * GI_WORLD_PROBE_AXIS;
-	int level = slot_linear / per_level;
+	int level = GiWorldProbeLevelOfSlot(slot_linear);
 	if(level >= SDF_CLIPMAP_LEVEL_COUNT)
 	{
 		return;
 	}
-	int in_level = slot_linear % per_level;
-	ivec3 slot = ivec3(in_level % GI_WORLD_PROBE_AXIS,
-	                   (in_level / GI_WORLD_PROBE_AXIS) % GI_WORLD_PROBE_AXIS,
-	                   in_level / (GI_WORLD_PROBE_AXIS * GI_WORLD_PROBE_AXIS));
+	// A free sparse slot: uniform per group, so the whole group leaves before the barrier.
+	if(level == 0 && b_world_probe_cells[slot_linear] == GI_WORLD_PROBE_NONE)
+	{
+		return;
+	}
 	ivec2 local = ivec2(gl_LocalInvocationID.xy);
 	int lane = local.y * GI_WORLD_PROBE_OCT_IRRADIANCE + local.x;
-	ivec2 radiance_tile = GiWorldProbeTileBase(slot, level, GI_WORLD_PROBE_OCT_RADIANCE);
-	ivec2 out_tile = GiWorldProbeTileBase(slot, level, GUTTER_EDGE);
+	ivec2 radiance_tile = GiWorldProbeTileBase(slot_linear, GI_WORLD_PROBE_OCT_RADIANCE);
+	ivec2 out_tile = GiWorldProbeTileBase(slot_linear, GUTTER_EDGE);
 	float depth_clamp = GI_WORLD_PROBE_DEPTH_CLAMP * GiWorldProbeSpacing(level);
 	// Cooperative stage: 4 radiance texels + 4 direction decodes per thread.
 	UNROLL

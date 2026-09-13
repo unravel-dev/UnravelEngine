@@ -1611,6 +1611,31 @@ void deferred::run_assao_pass(const camera& camera,
     assao_pass_.run(camera, rview, params);
 }
 
+namespace
+{
+/// The directional light's luminous intensity in engine units (intensity x the luminance of
+/// its linear colour): the one knob the sun-relative Perez sky follows (perez_luminance.h).
+/// The strongest active directional light wins; 0 when the scene has none, which keeps the
+/// fixed conversion.
+auto find_sun_luminous_intensity(scene& scn) -> float
+{
+    float strongest = 0.0f;
+    scn.registry->view<light_component, active_component>().each(
+        [&](auto e, auto&& light_comp_ref, auto&& active)
+        {
+            const auto& light = light_comp_ref.get_light();
+            if(light.type != light_type::directional)
+            {
+                return;
+            }
+            const auto color = light.color.to_linear();
+            const float luminance = 0.2126f * color.value.r + 0.7152f * color.value.g + 0.0722f * color.value.b;
+            strongest = math::max(strongest, light.intensity * luminance);
+        });
+    return strongest;
+}
+} // namespace
+
 auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> deferred::irradiance_pass_result
 {
     APP_SCOPE_PERF("Rendering/Irradiance Pass");
@@ -1638,6 +1663,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
             asset_handle<gfx::texture> cubemap;
         };
         skylight_params dominant;
+        const float sun_intensity = find_sun_luminous_intensity(scn);
 
         scn.registry->view<transform_component, skylight_component, active_component>().each(
             [&](auto e, auto&& transform_comp_ref, auto&& skylight_comp_ref, auto&& active)
@@ -1663,10 +1689,9 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
 
                 if(!is_skybox)
                 {
-                    float sun_elevation = -light_dir.y;
-                    // sun_weight: 0 at horizon, 1 at zenith. Smooth ramp over ~20 deg to avoid near-1 at low angles.
-                    float x = math::clamp(sun_elevation / 0.35f, 0.0f, 1.0f);
-                    sun_weight = x * x * (3.0f - 2.0f * x);
+                    // The shared day/night ramp (perez_luminance.h): 0 at the horizon, 1 from
+                    // ~20 degrees up - the ramp the sun-relative exposition fades with too.
+                    sun_weight = compute_perez_sun_weight(-light_dir.y);
                 }
                 float exposition = perez_luminance_to_engine;
 
@@ -1687,7 +1712,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                     // Computed into a candidate-local struct: writing into dominant.perez here
                     // let any later-iterated skylight stomp the true dominant's Perez params.
                     use_perez = true;
-                    compute_irradiance_perez_params(light_dir, skylight.get_turbidity(), candidate_perez);
+                    compute_irradiance_perez_params(light_dir, skylight.get_turbidity(), sun_intensity, candidate_perez);
                     irradiance_color = glm::mix(candidate_perez.sky_luminance_rgb, candidate_perez.sun_luminance_rgb, sun_weight);
                     // The shared Perez -> engine conversion (perez_luminance.h); the sky dome
                     // pass uses this same value, so ambient and dome cannot drift apart.
@@ -1748,14 +1773,16 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
 
         // Perez sky modes use physical luminance (exposition-scaled); cubemaps are typically
         // pre-baked in display range. The parity constant (perez_luminance.h) keeps the two
-        // source types comparable at the same user-facing intensity slider. The flat
-        // tint-only ambient is already in display range, so it gets no boost -- and that
-        // includes the skybox-without-cubemap fallback (use_sky set but the texture missing
-        // or still loading), which also renders the flat mode: gating on use_sky boosted
-        // that fallback 2x and made the ambient pop when the cubemap finished loading.
+        // source types comparable at the same user-facing intensity slider - on the FIXED
+        // conversion only: the sun-relative exposition already lands the slider's 1.0 on the
+        // calibrated sky (perez_sky_to_sun_ratio x the sun), a parity factor would double it.
+        // The flat tint-only ambient is already in display range, so it gets no boost -- and
+        // that includes the skybox-without-cubemap fallback (use_sky set but the texture
+        // missing or still loading), which also renders the flat mode: gating on use_sky
+        // boosted that fallback 2x and made the ambient pop when the cubemap finished loading.
         if(use_cubemap)
             ambient_vec[3] *= dominant.sky_brightness;
-        else if(dominant.use_perez)
+        else if(dominant.use_perez && !dominant.perez.sun_relative)
             ambient_vec[3] *= sky_ambient_cubemap_parity;
 
         gfx::set_uniform(irradiance_compute_program_.u_irradiance_tint_intensity, ambient_vec);
@@ -1771,7 +1798,6 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
             // truncated to L0), mirroring the cubemap pair below.
             mode = dominant.directional ? 1 : 5;
             gfx::set_uniform(irradiance_compute_program_.u_sun_direction, dominant.perez.sun_direction);
-            gfx::set_uniform(irradiance_compute_program_.u_sun_luminance, dominant.perez.sun_luminance_rgb);
             gfx::set_uniform(irradiance_compute_program_.u_sky_luminance_xyz, dominant.perez.sky_luminance_xyz);
             gfx::set_uniform(irradiance_compute_program_.u_perez_coeff, &dominant.perez.perez_coeff[0][0], 5);
         }
@@ -1862,9 +1888,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
                     math::vec3 sky_luminance_rgb;
                     math::vec3 sun_luminance_rgb;
                     compute_perez_luminance(light_dir, sky_luminance_rgb, sun_luminance_rgb);
-                    float sun_elevation = -light_dir.y;
-                    float x = math::clamp(sun_elevation / 0.35f, 0.0f, 1.0f);
-                    float sun_weight = x * x * (3.0f - 2.0f * x);
+                    float sun_weight = compute_perez_sun_weight(-light_dir.y);
                     irradiance_color = glm::mix(sky_luminance_rgb, sun_luminance_rgb, sun_weight);
                     irradiance_intensity *= sun_weight;
                 }
@@ -2311,6 +2335,7 @@ auto gather_skylight_params(scene& scn,
             params_perez.cloud_shadow_opacity = light_comp_ref.get_cloud_shadow_opacity();
             params_perez.cloud_wind_offset = light_comp_ref.get_cloud_wind_offset();
             params_perez.cloud_time = light_comp_ref.get_cloud_time();
+            params_perez.sun_intensity = find_sun_luminous_intensity(scn);
 
             if(auto light_comp = entity.template try_get<light_component>())
             {
@@ -2743,6 +2768,18 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
     // sdf-debug-only path keeps the cascade alive but has no lights to spend.
     if(params.fill_gi_params)
     {
+        // SPARSE LEVEL-0 PROBE ALLOCATION (gi_world_probes.sh): ungated and AHEAD of the gate.
+        // It claims probes for the cells last frame's cage readers stamped, frees the ones
+        // nobody asks for any more, and its allocation count is what the gate below reads to
+        // hold every world-side dispatch open while the fresh probes converge - a camera turn
+        // reveals a room without scrolling a window, and the gate would otherwise sleep on it.
+        {
+            gi_world_probe_pass::run_params alloc_params;
+            alloc_params.surface_cache = &surface_cache;
+            alloc_params.view_cache = &view_cache;
+            alloc_params.camera_position = camera.get_position();
+            gi_world_probe_pass_.run_alloc(rview, alloc_params);
+        }
         // QUIESCENCE GATE: with the light set, the clipmap content and origins, and the
         // probe window all provably still for several complete windows, re-running the
         // world side rewrites bit-identical values - the trace re-traces the same stratum,

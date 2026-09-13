@@ -288,16 +288,12 @@ public:
         return content_revision_;
     }
 
-    /// CSR offsets of the instance cull grid, one entry per cell plus a terminator.
-    auto get_grid_offset_buffer() const -> gfx::dynamic_index_buffer_handle
+    /// The instance cull grid as the tracers bind it (sdf_common.sh stage 12): the CSR offsets
+    /// (one per cell plus a terminator) followed by the instance indices the cells refer to;
+    /// the instance base rides get_grid_params()[7].
+    auto get_grid_buffer() const -> gfx::dynamic_index_buffer_handle
     {
-        return grid_offset_buffer_;
-    }
-
-    /// Instance indices the cull grid's cells refer to.
-    auto get_grid_instance_buffer() const -> gfx::dynamic_index_buffer_handle
-    {
-        return grid_instance_buffer_;
+        return grid_buffer_;
     }
 
     auto get_instance_grid() const -> const sdf_instance_grid&
@@ -308,8 +304,9 @@ public:
     /**
      * @brief The two vec4s every tracer binds to address the cull grid.
      *
-     * [0] = grid origin xyz, cell size w. [1] = cell counts xyz, non-zero w when the grid is
-     * usable. Built here for the same reason the clipmap's sampling parameters are: several
+     * [0] = grid origin xyz, cell size w. [1] = cell counts xyz, w = the instance list's base
+     * entry in the grid buffer (the offset count), non-zero when the grid is usable. Built here
+     * for the same reason the clipmap's sampling parameters are: several
      * passes traverse this grid and any disagreement between them changes which instances a ray
      * finds, which does not fail loudly -- it just means some geometry stops occluding for one
      * pass and not another.
@@ -696,10 +693,10 @@ private:
     /// them. Rebuilt whenever the instance fingerprint changes.
     sdf_instance_grid grid_;
     std::vector<math::bbox> grid_bounds_;
-    gfx::dynamic_index_buffer_handle grid_offset_buffer_{bgfx::kInvalidHandle};
-    gfx::dynamic_index_buffer_handle grid_instance_buffer_{bgfx::kInvalidHandle};
-    uint32_t grid_offset_capacity_ = 0;
-    uint32_t grid_instance_capacity_ = 0;
+    gfx::dynamic_index_buffer_handle grid_buffer_{bgfx::kInvalidHandle};
+    uint32_t grid_capacity_ = 0;
+    /// The offsets and instance indices concatenated for the one-buffer upload.
+    std::vector<uint32_t> grid_upload_;
     std::array<float, 8> grid_params_{};
     bool enabled_ = true;
     /// Backend capability, decided once at init: without compute shaders nothing here can run.

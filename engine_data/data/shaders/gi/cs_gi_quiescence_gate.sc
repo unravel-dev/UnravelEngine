@@ -15,7 +15,7 @@
  * backends without BGFX_CAPS_DRAW_INDIRECT; see gi_quiescence_gate_pass.
  *
  * The convergence tests mirror surface_cache_view::evaluate_relight_quiescence exactly.
- * One thread: the whole job is a handful of loads and a 40-entry ring.
+ * One thread: the whole job is a handful of loads and two 40-entry rings.
  */
 
 #include "bgfx_compute.sh"
@@ -51,22 +51,28 @@ uniform vec4 u_gi_gate_params;
 /// when the gate runs, zeroed when it does not.
 uniform vec4 u_gi_gate_groups[GI_GATE_ENTRY_COUNT];
 
-/// Ring header, then the samples as float bits (exact, and the buffer is typed uint).
+/// Ring header, then the samples as float bits (exact, and the buffer is typed uint): the
+/// absolute change ring, then the signed drift ring, one head and count for both. The third
+/// header slot is the sparse-probe HOLD: frames the gate stays open after an allocation.
 #define GI_GATE_RING_COUNT_SLOT 0
 #define GI_GATE_RING_HEAD_SLOT  1
-#define GI_GATE_RING_BASE       2
+#define GI_GATE_RING_HOLD_SLOT  2
+#define GI_GATE_RING_BASE       3
+/// The hold armed by an allocation: GI_WORLD_PROBE_ALLOC_HOLD_WINDOWS probe windows.
+#define GI_GATE_ALLOC_HOLD_FRAMES (GI_WORLD_PROBE_ALLOC_HOLD_WINDOWS * GI_WORLD_PROBE_WINDOW)
 #define GI_GATE_RING_SIZE       (GI_QUIESCENCE_COMPARE_FRAMES + GI_QUIESCENCE_WINDOW_FRAMES)
+#define GI_GATE_DRIFT_RING_BASE (GI_GATE_RING_BASE + GI_GATE_RING_SIZE)
 
-/// Mean of `count` samples ending `back` samples before the newest - the same walk the CPU
-/// ring does, with `head` pointing one past the newest.
-float GiGateRingMean(uint head, int back, int count)
+/// Mean of `count` samples ending `back` samples before the newest in the ring at `base` -
+/// the same walk the CPU ring does, with `head` pointing one past the newest.
+float GiGateRingMean(int base, uint head, int back, int count)
 {
 	float sum = 0.0;
 	for(int i = 0; i < count; ++i)
 	{
 		int offset = back + i + 1;
 		int slot = int((head + uint(GI_GATE_RING_SIZE) - uint(offset)) % uint(GI_GATE_RING_SIZE));
-		sum += uintBitsToFloat(s_gi_gate_ring[GI_GATE_RING_BASE + slot]);
+		sum += uintBitsToFloat(s_gi_gate_ring[base + slot]);
 	}
 	return sum / float(count);
 }
@@ -80,16 +86,49 @@ void main()
 	// path reaches, and only a CPU-side change (the reset lane) leaves it.
 	float change = 0.0;
 	float faces = 0.0;
+	float rise = 0.0;
 	for(int level = 0; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
 	{
-		ivec3 change_texel = GiLightVoxelStatsTexel(level, 0);
-		ivec3 faces_texel = GiLightVoxelStatsTexel(level, 1);
+		ivec3 change_texel = GiLightVoxelStatsTexel(level, GI_STATS_RELIGHT_CHANGE);
+		ivec3 faces_texel = GiLightVoxelStatsTexel(level, GI_STATS_RELIGHT_FACES);
+		ivec3 rise_texel = GiLightVoxelStatsTexel(level, GI_STATS_RELIGHT_RISE);
 		change += float(imageLoad(s_gi_vis_memo, change_texel).x) / GI_QUIESCENCE_STATS_SCALE;
 		faces += float(imageLoad(s_gi_vis_memo, faces_texel).x);
+		rise += float(imageLoad(s_gi_vis_memo, rise_texel).x) / GI_QUIESCENCE_STATS_SCALE;
 		imageStore(s_gi_vis_memo, change_texel, uvec4(0u, 0u, 0u, 0u));
 		imageStore(s_gi_vis_memo, faces_texel, uvec4(0u, 0u, 0u, 0u));
+		imageStore(s_gi_vis_memo, rise_texel, uvec4(0u, 0u, 0u, 0u));
 	}
 	float mean = faces > 0.0 ? change / faces : 0.0;
+	// Signed: the rising share minus the falling one (change - rise), per relit face.
+	float drift = faces > 0.0 ? (2.0 * rise - change) / faces : 0.0;
+	// SPARSE PROBES (cs_gi_world_probe_alloc.sc ran just before this gate): any allocation
+	// this frame arms a hold that keeps every gated dispatch running for
+	// GI_WORLD_PROBE_ALLOC_HOLD_WINDOWS windows, whatever the relight census says and even
+	// under the CPU's skip mode - that mode caps a PARKED shot's cost, and a fresh probe means
+	// something new came into view (a camera turn needs no window scroll to reveal a room).
+	// Both rows are drained every frame like the relight rows above.
+	ivec3 allocated_texel = GiLightVoxelStatsTexel(0, GI_STATS_PROBES_ALLOCATED);
+	ivec3 evicted_texel = GiLightVoxelStatsTexel(0, GI_STATS_PROBES_EVICTED);
+	uint allocated = imageLoad(s_gi_vis_memo, allocated_texel).x;
+	imageStore(s_gi_vis_memo, allocated_texel, uvec4(0u, 0u, 0u, 0u));
+	imageStore(s_gi_vis_memo, evicted_texel, uvec4(0u, 0u, 0u, 0u));
+	uint hold = s_gi_gate_ring[GI_GATE_RING_HOLD_SLOT];
+	// A never-written buffer reads as garbage on some backends: anything past the arm value
+	// is not a hold.
+	if(hold > uint(GI_GATE_ALLOC_HOLD_FRAMES))
+	{
+		hold = 0u;
+	}
+	if(allocated > 0u)
+	{
+		hold = uint(GI_GATE_ALLOC_HOLD_FRAMES);
+	}
+	else if(hold > 0u)
+	{
+		hold -= 1u;
+	}
+	s_gi_gate_ring[GI_GATE_RING_HOLD_SLOT] = hold;
 
 	uint count = s_gi_gate_ring[GI_GATE_RING_COUNT_SLOT];
 	uint head = s_gi_gate_ring[GI_GATE_RING_HEAD_SLOT];
@@ -102,6 +141,7 @@ void main()
 	// wrapped rather than trusted; the count is clamped by the same bound below.
 	head = head % uint(GI_GATE_RING_SIZE);
 	s_gi_gate_ring[GI_GATE_RING_BASE + int(head)] = floatBitsToUint(mean);
+	s_gi_gate_ring[GI_GATE_DRIFT_RING_BASE + int(head)] = floatBitsToUint(drift);
 	head = (head + 1u) % uint(GI_GATE_RING_SIZE);
 	count = min(count + 1u, uint(GI_GATE_RING_SIZE));
 	s_gi_gate_ring[GI_GATE_RING_COUNT_SLOT] = count;
@@ -110,25 +150,30 @@ void main()
 	// Converged when the mean relative change per relit face is below what any reader can
 	// distinguish, or when it has stopped falling (a stationary dithered equilibrium at
 	// shadow edges never reaches the floor, while a decaying tail shrinks between the two
-	// windows). surface_cache_view::evaluate_relight_quiescence is the same test.
+	// windows) AND is not trending: a volume climbing through its bounce loop is also a
+	// steady change (GI_QUIESCENCE_DRIFT_FRACTION), which the ratio alone called rest.
+	// surface_cache_view::evaluate_relight_quiescence is the same test.
 	bool converged = false;
 	if(count >= uint(GI_QUIESCENCE_WINDOW_FRAMES))
 	{
-		float recent = GiGateRingMean(head, 0, GI_QUIESCENCE_WINDOW_FRAMES);
+		float recent = GiGateRingMean(GI_GATE_RING_BASE, head, 0, GI_QUIESCENCE_WINDOW_FRAMES);
 		if(recent < GI_QUIESCENCE_CONVERGED_MEAN)
 		{
 			converged = true;
 		}
 		else if(count >= uint(GI_QUIESCENCE_COMPARE_FRAMES + GI_QUIESCENCE_WINDOW_FRAMES))
 		{
-			float earlier = GiGateRingMean(head, GI_QUIESCENCE_COMPARE_FRAMES, GI_QUIESCENCE_WINDOW_FRAMES);
-			converged = recent >= GI_QUIESCENCE_STATIONARY_FRACTION * earlier;
+			float earlier = GiGateRingMean(GI_GATE_RING_BASE, head, GI_QUIESCENCE_COMPARE_FRAMES, GI_QUIESCENCE_WINDOW_FRAMES);
+			float recent_drift = abs(GiGateRingMean(GI_GATE_DRIFT_RING_BASE, head, 0, GI_QUIESCENCE_WINDOW_FRAMES));
+			converged = recent >= GI_QUIESCENCE_STATIONARY_FRACTION * earlier &&
+			            recent_drift <= GI_QUIESCENCE_DRIFT_FRACTION * recent;
 		}
 	}
 
 	// The CPU settled everything except convergence: mode 0 forces the dispatches, mode 2
-	// (GI_QUIESCENCE_MAX_FRAMES) forces them off, mode 1 defers to the measurement.
-	bool run = u_gate_mode == 0 || (u_gate_mode == 1 && !converged);
+	// (GI_QUIESCENCE_MAX_FRAMES) forces them off, mode 1 defers to the measurement - and the
+	// sparse-probe hold overrides both closed answers.
+	bool run = u_gate_mode == 0 || hold > 0u || (u_gate_mode == 1 && !converged);
 	for(int entry = 0; entry < GI_GATE_ENTRY_COUNT; ++entry)
 	{
 		uvec3 groups = run ? uvec3(u_gi_gate_groups[entry].xyz) : uvec3(0u, 0u, 0u);

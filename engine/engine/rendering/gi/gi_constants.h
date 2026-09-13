@@ -31,8 +31,42 @@
     X(GI_TRACE_MAX_STEPS, 64,                                                                      \
       "steps", "published: [S22 p36] mesh SDF march cap; exhaustion REPORTS A HIT (over-occlude,"  \
       " never launder a give-up into lit)")                                                        \
-    X(GI_MESH_SDF_TRACE_RANGE, 2.0f,                                                               \
-      "m", "published: [S22 p44] per-instance detail tracing capped at 2 m, global SDF beyond")    \
+    X(GI_MESH_SDF_TRACE_RANGE, 8.0f,                                                               \
+      "m", "measured: per-instance (mesh-exact) tracing over the whole screen-probe short range"  \
+      " (GI_SCREEN_PROBE_SHORT_RANGE), the global SDF beyond. Lumen caps detail tracing at 2 m"    \
+      " [S22 p44] and so did this until 2026-09-13; measured on Sponza the cascade's fattening"    \
+      " between 2 and 8 m is what made a surface's lighting follow the camera: rays traced from"   \
+      " the same courtyard floor through the level-0 field read E/pi 0.52, through the level-1"    \
+      " and level-2 fields 0.37 and 0.20 (trace-only gather, no cache), because a coarser field"  \
+      " closes more of the balconies, curtains and railings between the floor and the sky. Over"  \
+      " 8 m of mesh-exact tracing the same floor reads within 25 percent from 2.5, 10 and 15 m"   \
+      " (audit section 18). Cost: +0.33 ms on the gather at 1080p (1.24 -> 1.57 ms still)")        \
+    X(GI_SCREEN_PROBE_SHORT_RANGE, 8.0f,                                                           \
+      "m", "measured: how far a screen-probe ray establishes its own visibility before it"        \
+      " completes from the world-probe radiance cache - the same at every camera distance. It"    \
+      " used to be twice the covering cascade's probe spacing (4 / 8 / 16 m), so the farther the" \
+      " camera stood from a surface the higher and coarser the cage its rays completed from,"    \
+      " and the same floor read E/pi 1.2 from 2.5 m and 0.25 from 15 m. 8 m keeps the completion" \
+      " point inside the open courtyard well (a probe at the roof's height sees the roof, not"    \
+      " the sky) and matches GI_MESH_SDF_TRACE_RANGE so the whole own-visibility length is"       \
+      " mesh-exact; the level-0 probe window (+-18 m) then covers the completion points of"       \
+      " every surface within ~14 m of the camera")                                                 \
+    X(GI_RELIGHT_SHADOW_NEAR_FIELD, 2.0f,                                                          \
+      "m", "published: [S22 p44] the light-voxel relight's shadow rays keep the 2 m mesh-exact"   \
+      " near field (scaled per level by the kernel) when GI_MESH_SDF_TRACE_RANGE grew to 8 m for"  \
+      " the gather: the relight's direct term is answered by the shadow map at level 0 and its"   \
+      " traced tier at coarser levels gains little from 8 m of mesh tracing, while the pass"      \
+      " measured +0.3-0.5 ms awake with it (2026-09-13)")                                          \
+    X(GI_WORLD_PROBE_MESH_RANGE, 20.0f,                                                            \
+      "m", "measured: how far a WORLD-PROBE ray marches the per-instance (mesh-exact) fields"    \
+      " before the cascade answers. Longer than the gather's GI_MESH_SDF_TRACE_RANGE because a"   \
+      " probe ray has no radiance cache to complete from: beyond its exact range it sees the"     \
+      " cascade, whose level 1-2 fattening closes the upper arcades and the hanging curtains"    \
+      " between 8 and 20 m of the Sponza courtyard floor. Measured 2026-09-13: with 8 m the"      \
+      " floor cage's sky share was 3.7% against a geometric ~8% and its E/pi 0.58-0.61; with"     \
+      " 20 m 0.69-0.83 (+30-50%), and the gather's own rays traced through the cascade over"      \
+      " 8-20 m instead lost 60% of the floor's light. Cost: the world-probe trace 0.8 -> ~1.3 ms" \
+      " mean awake (crossing peaks 3-6 ms), zero at rest under the gate")                          \
     X(GI_EXPAND_MAX_VOXEL_DIAGONALS, 0.5f,                                                         \
       "voxel diagonals", "published: [S22 p48] runtime thin-surface expand cap = half the voxel"   \
       " diagonal; grows linearly from zero at the ray origin so contact shadows survive")          \
@@ -48,14 +82,25 @@
     X(GI_LIGHT_VOXEL_UPDATE_DENOM, 4,                                                              \
       "frames", "published: [SDFGI] frames_to_update_light default - dynamic light re-injection"   \
       " amortised over 4 frames")                                                                  \
-    X(GI_LIGHT_VOXEL_VISIBILITY_MIN, 0.25f,                                                        \
-      "of the face's cavity cone", "derived: a face is measurable when at least a quarter of"      \
-      " its sub-probe-spacing cone escapes (GiBounceCavityVisibility, the same value the"          \
-      " ambient is weighted by). Replaced a single-step field-rise gate, which cannot see past"    \
-      " a coarse level's blob plateau - small geometry merged into blobs read unexposed on"        \
-      " every face and went black wherever only coarse levels covered them; a quarter still"       \
-      " separates a blob-buried outward shell (partial escape at 2-4 voxels) from a genuine"       \
-      " interior face (closed at every scale)")                                                    \
+    X(GI_LIGHT_VOXEL_VISIBILITY_MIN, 0.05f,                                                        \
+      "of the face's cosine hemisphere", "derived: a face is measurable when at least one of"     \
+      " its GI_BOUNCE_ESCAPE_RAYS escapes its enclosure within a probe spacing"                    \
+      " (GiBounceCavityVisibility, the same value the ambient is weighted by) - 0.05 sits under"   \
+      " one ray of sixteen (0.0625), so only a face closed in every sampled direction is culled."  \
+      " Was a quarter of a three-sample march along the normal, which cannot see oblique"          \
+      " enclosure: a room behind an arch read fully open and took a courtyard cage's whole"        \
+      " ambient (measured 2026-09-12: the Sponza far-end niche 12x brighter from the coarse"       \
+      " levels than from level 0). A partly open face now keeps its escaping share instead of"     \
+      " being culled black; a culled face still writes the measured-dark epsilon, so readers"      \
+      " never fall through to a coarser level")                                                    \
+    X(GI_LIGHT_VOXEL_FACING_MIN, 0.3f,                                                             \
+      "cosine", "derived: a light-voxel face is measurable only when the level field's gradient" \
+      " at its launch point (the local surface normal) lies within ~72 degrees of the face"      \
+      " direction; below this the face stands for no surface in its cell and is culled like a"   \
+      " closed one. 0.3 keeps every face of a 45-degree slope (cos 45 = 0.71) and of a curved"   \
+      " surface while rejecting the tangent faces of flat geometry (cos 90 = 0) - the sky-lit"   \
+      " side faces of a cell straddling a thin roof that a wall read next to the ceiling blended"  \
+      " in (audit section 19, the thin sealed cell's seam leak)")                                  \
     X(GI_LIGHT_VOXEL_SOURCE_ALPHA, 0.9990234375f,                                                \
       "unitless", "derived: 1 - 1/1024, the alpha a measured face stores when its value is"      \
       " mostly its OWN emission (emissive luminance above the lit part). Representable in"       \
@@ -164,19 +209,51 @@
       "voxels of the answering level", "derived: half-voxel hit acceptance - the midpoint of the"  \
       " voxel the field cannot resolve below; the tracing default for settings-less consumers"     \
       " (screen gather, reflections, debug), matching the shadow-ray default")                     \
-    X(GI_WORLD_PROBE_TRACE_BIAS, 1.0f,                                                             \
-      "voxels of the answering level", "derived: FULL-voxel acceptance for world-probe rays"       \
-      " alone, the acceptance cap - they are the one consumer tracing the cascade with no mesh"    \
-      " tier (near_field 0) while launching inside rooms, and a sub-voxel wall's through-field"    \
-      " minimum reaches ~0.87 voxel on diagonal crossings while the far-field expand is still"     \
-      " inside its ramp: at the half-voxel default probe rays threaded sealed geometry along the"  \
-      " level cross-fade shell (the sealed-box leak: camera-locked porosity fans in the Probe"     \
-      " Sky debug view, escaped rays ingesting env SH / sunlit exterior). One voxel covers the"    \
-      " worst case; probe reads over-occlude by at most one voxel - the graceful direction")       \
+    X(GI_WORLD_PROBE_TRACE_BIAS, 0.5f,                                                             \
+      "voxels of the answering level", "derived: the half-voxel tracing default. Watertightness"   \
+      " against sub-voxel walls for world-probe rays - the one consumer tracing the cascade with"  \
+      " no mesh tier (near_field 0) while launching inside rooms - comes from the surface expand"  \
+      " taken WHOLE from launch (cs_gi_world_probe_trace): the expand subtracts from the step as"  \
+      " well as the test, so the fattened field stays 1-Lipschitz and the march cannot step over"  \
+      " its isosurface, and a wall's through-field minimum (at most ~0.87 voxel, half a diagonal)" \
+      " lies inside the 0.87-voxel expand. The bias only adds margin. The full-voxel value this"   \
+      " replaced predates the expand-from-launch (it closed the sealed-box leak while the expand"  \
+      " was still ramped) and had become 1.87 voxels of fattening around every cornice, balcony"   \
+      " and roof edge: the GI's sky term measured exactly zero on the Sponza courtyard (audit"     \
+      " 2026-09-12, section 3)")                                                                   \
     X(GI_PROBE_TRACE_RELAXATION, 0.05f,                                                            \
       "acceptance growth per unit t", "derived: the cone that bounds grazing-ray cost; carried"    \
       " from the measured resolve-pass default (audit: bounds the near-parallel case that"         \
       " otherwise burns the whole step budget), capped at one voxel inside the trace")             \
+    X(GI_WORLD_PROBE_TRACE_RELAXATION, 0.0f,                                                       \
+      "acceptance growth per unit t", "derived: an EXACT sphere trace for world-probe rays. The"   \
+      " gather's cone reaches its one-voxel cap after 20 voxels of travel, so beyond 2.5 m at"     \
+      " level 0 a probe ray accepted anything within a voxel plus the expand of its path - on"     \
+      " the Sponza courtyard every steep probe ray from the wall cages resolved such a hit at"     \
+      " 4-6 m (audit 2026-09-12, section 3). Grazing rays spend their budget instead"              \
+      " and exhaustion is graded by clearance (GI_WORLD_PROBE_OPEN_CLEARANCE_VOXELS); the gather"  \
+      " keeps its cone, its rays are short and complete from these probes")                        \
+    X(GI_WORLD_PROBE_TRACE_STEPS, 128,                                                             \
+      "steps", "derived: twice GI_TRACE_MAX_STEPS for world-probe rays alone. Without the cone"    \
+      " a ray grazing geometry at one to two voxels steps by its expanded reading (a fraction"     \
+      " of a voxel) and 64 steps die within a few metres: in a sealed room short of the end wall"  \
+      " (an undecided ray), on a courtyard wall short of the sky. The doubled budget lets those"   \
+      " rays reach the surface or the window (t_max) and costs only on the rays that would have"   \
+      " exhausted - every other ray terminates as before. A runtime parameter of the trace, so"   \
+      " no unroll cost")                                                                           \
+    X(GI_WORLD_PROBE_OPEN_CLEARANCE_VOXELS, 2.0f,                                                  \
+      "voxels of the probe's level", "derived: a world-probe ray that exhausted its budget with"   \
+      " at least two voxels of RAW clearance (the expand does not count) never came within two"    \
+      " voxels of composed geometry, so it cannot have been inside a sub-voxel wall (through-field" \
+      " minimum at most ~0.87 voxel) and, while its own level answered, every step it took was"    \
+      " at least 2 - 0.87 voxels: over GI_WORLD_PROBE_TRACE_STEPS about 145 voxels of open air"    \
+      " (18 m at level 0), not a room-scale grazer. It reads the sky - the miss contract -"        \
+      " instead of the exhaustion hit."                                                            \
+      " The forced hit of [S22 p36] is an occlusion contract for surface-born rays; a budget-dead" \
+      " radiance-cache ray in open air is not an occluder, and GiTraceShadow grades its own"       \
+      " exhaustion by clearance too. At ONE voxel the rule leaked: a level-0 ray hugging a"        \
+      " sealed room's wall at 1.4-2 voxels steps under a voxel, dies inside the room and read"     \
+      " the sky (GI test suite cells 02 / 03 measured 0.033 / 0.013 GI where 0 is the answer)")   \
     X(GI_WORLD_PROBE_DEPTH_CLAMP, 1.5f,                                                            \
       "probe spacings", "published: [RTXGI] probeMaxRayDistance = 1.5 * spacing during distance"   \
       " blending - Chebyshev only ever asks about the cage around the query, so recording depth"   \
@@ -354,26 +431,47 @@
       "confidence", "derived: commit-or-fall-through, never blend - below half confidence the"     \
       " watertight SDF answer replaces the screen answer outright, because blending two"           \
       " radiance estimates of the same ray double-counts whichever is wrong")                      \
-    /* --- bounce cavity occlusion (the [DFAO] role: sub-probe-spacing visibility for              \
-       the ambient the world probes inject) --- */                                                 \
-    X(GI_BOUNCE_AO_STEPS, 3,                                                                       \
-      "field samples along the face", "derived: doubling distances from one attribute"             \
-      " voxel reach 1 + 2 + 4 = 7 voxels, about the world-probe spacing (16 SDF = 8"               \
-      " attribute voxels) - EXACTLY the band the probes cannot see: below it the"                  \
-      " voxel's own surface dominates the field, above it the probes' Chebyshev"                   \
-      " visibility already measures occlusion. Without this term a voxel inside a"                 \
-      " sub-spacing cavity (an awning's underside, a window reveal) receives the OPEN"             \
-      " ambient of the probe cage around it and glows in exactly the places that"                  \
-      " should be darkest")                                                                        \
+    /* --- bounce cavity occlusion (the [DFAO] role at hemisphere scale: sub-probe-spacing        \
+       visibility for the ambient the world probes inject, and the blocked share's fill) --- */   \
+    X(GI_BOUNCE_ESCAPE_RAYS, 16,                                                                   \
+      "directions per face", "derived: two cosine-weighted equal-area rings (sin^2 = 1/2 splits"  \
+      " the hemisphere) of eight azimuths, rotated per voxel by an integer hash so the fixed"      \
+      " pattern never lines up across neighbours; each ray is 1/16 of the hemisphere, so a room"   \
+      " seen through an opening of a few percent still registers a ray. Marched only when the"     \
+      " vis-memo misses (once per generation per face), so the count buys precision, not"          \
+      " per-frame cost. Must be even (one ring each)")                                             \
+    X(GI_BOUNCE_ESCAPE_STEPS, 8,                                                                   \
+      "sphere-trace steps per ray", "derived: with GI_BOUNCE_ESCAPE_MIN_STEP_VOXELS the budget"   \
+      " covers at least 4 of the 8 attribute voxels to the probe spacing at the floor step;"       \
+      " sphere steps in open air grow past the spacing in 3-4 steps and an enclosure is hit"       \
+      " within a few, so only a ray grazing a surface for its whole length exhausts - it read"     \
+      " no surface and counts as escaped (toward light, never toward a leak). 12 measured the"     \
+      " same verdicts on Sponza at a third more cost")                                             \
+    X(GI_BOUNCE_ESCAPE_HIT_VOXELS, 0.25f,                                                          \
+      "attribute voxels", "derived: the hit threshold. The launch sits half an attribute voxel"    \
+      " off the face's own surface and the first station a further half step out, so the"         \
+      " face's own plane reads at least 0.75 voxel along every ring direction and never hits,"     \
+      " while a wall's band does")                                                                 \
+    X(GI_BOUNCE_ESCAPE_MIN_STEP_VOXELS, 0.5f,                                                      \
+      "attribute voxels", "derived: the sphere trace's floor step - twice the hit threshold, so"   \
+      " a step can start outside the hit band and land inside it but never cross a wall's"        \
+      " band unseen (the field is 1-Lipschitz)")                                                   \
+    X(GI_BOUNCE_FILL_RAYS, 2,                                                                      \
+      "rays per relight", "derived: the blocked share is filled per relight from the FIRST hit"   \
+      " among this many consecutive directions of the visibility's own set, the start rotating"    \
+      " by this count per relight - a uniform sample of the blockers whose mean the relight EMA"   \
+      " takes over its window; two keeps the fill present on most relights of a mostly enclosed"   \
+      " face (probability 1 - visibility^2) at an eighth of the memo march's cost")                \
     X(GI_BOUNCE_TINT_MAX_VISIBILITY, 0.95f,                                                        \
       "cavity visibility", "derived: gate for the bounce's near-edge tint fill. The cavity"        \
       " march attenuates the cage ambient by its visibility, but the BLOCKED fraction of the"      \
       " face's cone contributed black - a white floor face beside a red wall lost exactly the"     \
       " wall's red, the sub-spacing colour adjacency a probe-spacing cage cannot represent"        \
-      " (the DDGI-family chroma wash). The fill re-locates the encroaching surface within the"     \
-      " march's own band and injects its light-voxel radiance at weight (1 - visibility), the"     \
-      " energy the attenuation removed. Above this visibility the blocked sliver is"               \
-      " negligible and the locator's field taps are all cost. Stability: the new"                  \
+      " (the DDGI-family chroma wash). The fill takes a rotating escape ray's hit"                 \
+      " (GI_BOUNCE_FILL_RAYS) and injects its light-voxel radiance at weight (1 - visibility),"    \
+      " the energy the attenuation removed. Above this visibility the blocked sliver is"           \
+      " negligible and the fill rays are all cost (one blocked ray of sixteen reads 0.9375,"       \
+      " under the gate). Stability: the new"                                                       \
       " voxel->voxel edge multiplies albedo x (1 - visibility) per hop, bounded by"                \
       " GI_MAX_ALBEDO x (1 - GI_LIGHT_VOXEL_VISIBILITY_MIN) < 1 on every surviving face"           \
       " (culled faces still store zero), and a same-cell self-read is refused outright -"          \
@@ -739,6 +837,18 @@
       "frames", "derived: eight rotations apart - far enough for the slowest decay to show (see"   \
       " GI_QUIESCENCE_STATIONARY_FRACTION), short enough that a stationary scene freezes"          \
       " within 40 frames of stillness")                                                            \
+    X(GI_QUIESCENCE_DRIFT_FRACTION, 0.25f,                                                         \
+      "unitless", "derived: the stationarity ratio reads a STEADY per-relight change as rest,"     \
+      " but a volume climbing or falling through its bounce loop is a steady change too - the"     \
+      " EMA moves every face 1/8 of a slowly moving residual per relight while the probes'"        \
+      " running mean integrates, and that slow tail is what the ratio cannot tell from the"        \
+      " dither. The relight also sums the rising share of the change (GI_STATS_RELIGHT_RISE);"     \
+      " rises minus falls is the signed drift, a share of the absolute change near 1 while the"    \
+      " volume trends and near 0 at a dithered rest (the per-cell dither decorrelates the"         \
+      " signs, so the mean over 10^5 relit faces is noise of order 1/sqrt(N)). Measured"           \
+      " 2026-09-12 on Sponza: -0.9 to -1.0 while the volume settles after a launch or a light"     \
+      " edit, within +-0.1 at rest. Stationary is accepted only under a quarter: the"              \
+      " directional part is then a minor share of what the ratio test already tolerates")          \
     X(GI_GATHER_FIREFLY_CLAMP, 8.0f,                                                               \
       "x the governor's reference", "derived: a gather ray that lands on a small bright"           \
       " emitter returns a radiance that dominates its probe's whole tile - and a probe whose"      \
@@ -1023,7 +1133,31 @@
       " spacing was measured and reverted: the wider band admitted half-visible coarse cages"     \
       " and brightened a corridor interior even with the far blend scaled by the near cage's"     \
       " visible fraction. The irradiance cascade, the radiance completion and the light-voxel"    \
-      " bounce twin all read it - they must stay in step")
+      " bounce twin all read it - they must stay in step")                                        \
+    /* --- sparse level-0 probes (gi_single_lighting_plan.md phase D) --- */                       \
+    X(GI_WORLD_PROBE_EVICT_IDLE_FRAMES, 1024,                                                      \
+      "frames", "derived: GI_QUIESCENCE_MAX_FRAMES - a sparse level-0 probe nobody has requested" \
+      " for this long is freed while the pool is comfortable. The relight is the requester for"   \
+      " the surface cells' cages and it stops running under the quiescence gate, so a shorter"    \
+      " age would evict a parked shot's cages and re-allocate (and re-converge) them on the"      \
+      " next light edit: the age matches the longest the gate can hold the relight off")          \
+    X(GI_WORLD_PROBE_EVICT_PRESSURE_FRAMES, 16,                                                    \
+      "frames", "derived: one probe window (GI_WORLD_PROBE_WINDOW) - under pool pressure a"       \
+      " probe unrequested for a whole window has no reader this window; the gather stamps its"    \
+      " completions every frame and the relight every rotation (GI_LIGHT_VOXEL_UPDATE_DENOM"      \
+      " frames), so live cages survive it")                                                       \
+    X(GI_WORLD_PROBE_POOL_PRESSURE_DIVISOR, 8,                                                     \
+      "divisor", "derived: pressure eviction starts when fewer than a divisor-th of"              \
+      " GI_WORLD_PROBE_POOL_L0 is free (1024 slots of 8192) - enough headroom for one frame's"   \
+      " worth of new requests on a camera turn before the pool is actually empty")                \
+    X(GI_WORLD_PROBE_REQUEST_AGE, 2,                                                               \
+      "clock ticks", "derived: the allocation pass runs before the consumers that stamp, so a"   \
+      " request made last frame is one tick old when the pass reads it; two covers the one-tick" \
+      " race between the clock advance and the evict phase's own reads")                          \
+    X(GI_WORLD_PROBE_ALLOC_HOLD_WINDOWS, 2,                                                        \
+      "probe windows", "derived: a freshly allocated probe is seeded from its parent and"        \
+      " converges over one GI_WORLD_PROBE_WINDOW of strata; the gate stays open for two after"   \
+      " the last allocation so the relight re-reads the converged cage once before resting")
 // clang-format on
 
 namespace unravel::gi

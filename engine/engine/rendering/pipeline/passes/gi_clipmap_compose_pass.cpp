@@ -340,8 +340,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
                               0,
                               gfx::access::ReadWrite,
                               gfx::texture_format::RGBA16F);
-            gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-            gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+            gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
             const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                          float(atlas.get_atlas_voxel_dim()),
                                          float(instances.size()),
@@ -504,8 +503,7 @@ void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
     gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
     gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
     gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
-    gfx::set_buffer(12, surface_cache.get_grid_offset_buffer(), gfx::access::Read);
-    gfx::set_buffer(13, surface_cache.get_grid_instance_buffer(), gfx::access::Read);
+    gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
     // Stage 5 is the clipmap as an IMAGE here, where the tracing passes bind it as a sampler at
     // stage 4. Writing the level in place is what avoids a staging copy and the per-level
     // update_texture_3d the CPU path pays.

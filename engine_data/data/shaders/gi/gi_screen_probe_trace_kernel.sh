@@ -38,8 +38,9 @@
  * placement jitter deliberately feeds with a slightly different probe set each frame
  * [S21 s37-39].
  *
- * Rays are SHORTENED [S21 s69]: each establishes its own visibility out to twice the local
- * world-probe spacing, reads the light voxels at a hit, and COMPLETES from the world probes'
+ * Rays are SHORTENED [S21 s69]: each establishes its own visibility out to
+ * GI_SCREEN_PROBE_SHORT_RANGE (the same 8 m at every camera distance, mesh-exact over its whole
+ * length), reads the light voxels at a hit, and COMPLETES from the world probes'
  * radiance atlas on a miss (sphere-parallax corrected). Sky enters through the world probes or
  * directly past the outermost cascade. Every ray therefore measures something: the gather owes
  * nothing to a screen-space history or an environment fallback.
@@ -78,6 +79,9 @@
 // Completion reads radiance + depth, never the irradiance cage - skipping it frees stage 11
 // for the prev-color read below.
 #define GI_WORLD_PROBE_SKIP_IRRADIANCE
+// Completions REQUEST the sparse level-0 cages they read (stage 13, read-write): the cells
+// around every completion point are what gets the 2 m probes allocated there.
+#define GI_WORLD_PROBE_INDEX_RW
 #include "gi/gi_world_probes.sh"
 #include "gi/gi_noise.sh"
 #include "gi/gi_env_sh.sh"

@@ -147,19 +147,65 @@ public:
                                        const math::vec3& camera_position,
                                        float base_spacing) -> uint32_t;
 
-    /// World probes per cascade axis. MUST equal GI_WORLD_PROBE_AXIS in gi_world_probes.sh;
-    /// derived as resolution / GI_WORLD_PROBE_DIVISOR + 1 at the runtime resolution of 128, and
-    /// the probe resources are only created when that derivation holds, because the shader
-    /// hardcodes the axis for its group-shared layout.
-    static constexpr uint32_t world_probe_axis = 9;
+    /// World-probe window cells per axis of each level. MUST equal GI_WORLD_PROBE_AXIS_L0..L3
+    /// in gi_world_probes.sh (the shaders hardcode them for the index and dispatch decode; the
+    /// gi oracle suite checks the mirror). Level 0 is the SPARSE level's index window - wide on
+    /// purpose, since the gather completes its rays and the relight reads its bounce from the
+    /// finest probe cage covering the point, and only the 2 m lattice resolves an opening's sky
+    /// visibility (gi_lighting_audit sections 18 and 20); its probes live in a pool of
+    /// @ref world_probe_pool_l0 slots handed out on request. Independent of the cascade
+    /// resolution.
+    static constexpr std::array<uint32_t, global_sdf_clipmap::level_count> world_probe_axis{49u, 13u, 13u, 9u};
+    static_assert(global_sdf_clipmap::level_count == 4u, "world_probe_axis lists one axis per level");
+    /// Level 0's probe pool (GI_WORLD_PROBE_POOL_L0): the slots the sparse index allocates.
+    static constexpr uint32_t world_probe_pool_l0 = 8192u;
+    static_assert(world_probe_pool_l0 % 4u == 0u, "the trace packs four probes per group");
+    /// Tiles per atlas row, every level's tiles in one linear run (GI_WORLD_PROBE_ATLAS_TILES_X).
+    static constexpr uint32_t world_probe_atlas_tiles_x = 128u;
+
+    /// Probe SLOTS of one level: the pool for level 0, the window's cells for the dense levels.
+    static constexpr auto get_world_probe_level_count(uint32_t level) -> uint32_t
+    {
+        if(level == 0u)
+        {
+            return world_probe_pool_l0;
+        }
+        return world_probe_axis[level] * world_probe_axis[level] * world_probe_axis[level];
+    }
+
+    /// Cells of the level-0 index window (one index entry each).
+    static constexpr auto get_world_probe_index_cell_count() -> uint32_t
+    {
+        return world_probe_axis[0] * world_probe_axis[0] * world_probe_axis[0];
+    }
+
+    /// Entries of the sparse index buffer: three lanes per index cell (slot, request, stamp),
+    /// the clock, the free count and the free stack (GI_WORLD_PROBE_INDEX_SIZE).
+    static constexpr auto get_world_probe_index_count() -> uint32_t
+    {
+        return 3u * get_world_probe_index_cell_count() + 2u + world_probe_pool_l0;
+    }
+
+    /// Probes of the whole cascade set (the cell-id / count buffers, the convolve's thread
+    /// count and the base of the trace's group count).
+    static constexpr auto get_world_probe_count() -> uint32_t
+    {
+        uint32_t count = 0;
+        for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
+        {
+            count += get_world_probe_level_count(level);
+        }
+        return count;
+    }
 
     auto has_world_probes() const -> bool
     {
         return static_cast<bool>(world_probe_radiance_);
     }
 
-    /// 16x16 octahedral radiance tiles (rgb radiance, a hitT; a < 0 = sky), tile grid
-    /// (axis * axis) wide by (axis * levels) tall - see gi_world_probes.sh.
+    /// 16x16 octahedral radiance tiles (rgb radiance, a hitT; a < 0 = sky), one row-major run
+    /// of tiles over the linear slot index, @ref world_probe_atlas_tiles_x per row - see
+    /// gi_world_probes.sh.
     auto get_world_probe_radiance() const -> const gfx::texture::ptr&
     {
         return world_probe_radiance_;
@@ -190,10 +236,31 @@ public:
     }
 
     /// One uint per probe slot: complete windows accumulated by the trace's running mean
-    /// (GI_WORLD_PROBE_EMA_WINDOWS); zero-seeded by the compose pass's buffer seed.
+    /// (GI_WORLD_PROBE_EMA_WINDOWS); zero-seeded by the compose pass's buffer seed. A sparse
+    /// level-0 slot the allocation pass just claimed holds the FRESH sentinel instead.
     auto get_world_probe_counts() const -> gfx::dynamic_index_buffer_handle
     {
         return world_probe_counts_;
+    }
+
+    /// The sparse level-0 index (gi_world_probes.sh GI_WORLD_PROBE_INDEX_*): bound at stage 13
+    /// by every cage reader, read-write by the ones that request probes and by the allocation
+    /// pass.
+    auto get_world_probe_index() const -> gfx::dynamic_index_buffer_handle
+    {
+        return world_probe_index_;
+    }
+
+    /// True until the allocation pass's init phase has written the index's sentinels and the
+    /// free stack (a compute-writable buffer the CPU may not fill; see needs_buffer_seed).
+    auto needs_world_probe_index_seed() const -> bool
+    {
+        return needs_world_probe_index_seed_;
+    }
+
+    void mark_world_probe_index_seeded()
+    {
+        needs_world_probe_index_seed_ = false;
     }
 
     /**
@@ -292,7 +359,9 @@ private:
     gfx::dynamic_index_buffer_handle attr_cells_{bgfx::kInvalidHandle};
     gfx::dynamic_index_buffer_handle world_probe_cells_{bgfx::kInvalidHandle};
     gfx::dynamic_index_buffer_handle world_probe_counts_{bgfx::kInvalidHandle};
+    gfx::dynamic_index_buffer_handle world_probe_index_{bgfx::kInvalidHandle};
     uint32_t world_probe_cell_count_ = 0;
+    bool needs_world_probe_index_seed_ = false;
     bool needs_buffer_seed_ = false;
     bool needs_texture_clear_ = false;
     bool compose_on_gpu_ = true;
