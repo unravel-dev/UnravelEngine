@@ -211,7 +211,7 @@ void main()
 	}
 	// ROUGHNESS-SCALED WINDOW (GI_REFLECTION_ROUGH_WINDOW_SCALE): a wide lobe integrates one
 	// VNDF ray per frame slowest, so its running mean may grow to several times the settings
-	// window (Lumen reflections accumulate 32); mirrors keep the short window and its
+	// window (this engine's tuning; Lumen 5.7 caps at 12, 2 on mirrors); mirrors keep the short window and its
 	// responsiveness. The mover gate and the clamp still bound ghosting on the longer mean.
 	float rough_window_scale =
 	    mix(1.0, GI_REFLECTION_ROUGH_WINDOW_SCALE, saturate(nd.roughness / GI_REFLECTION_ROUGH_CUTOFF));

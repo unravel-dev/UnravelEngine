@@ -203,7 +203,7 @@ private:
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
             cache_uniform(program.get(), u_sdf_debug_params, "u_sdf_debug_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_debug_params2, "u_sdf_debug_params2", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);

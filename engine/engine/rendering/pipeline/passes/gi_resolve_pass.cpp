@@ -437,7 +437,15 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             // 1/128 precision after ~1e5 frames and 1/16 after 1e6, so a long session's cone
             // and interpolation jitter collapsed to a few positions (the reflection pass
             // already computes its offset here for the same reason).
-            const double frame_index = double(gfx::get_render_frame());
+            // PERIODIC GATHER NOISE (plan item 1.1, tasks/lumen57_deep_dive_2026-09-14.md M4): the
+            // R2 index wraps every gather_jitter_period_frames, so each texel's sub-sample
+            // position and each pixel's interpolation jitter repeat on a cycle the temporal window
+            // holds whole. Lumen repeats its probe directions and placement every 8 frames inside
+            // a 10-frame window; an aperiodic sequence never lets a pixel's running mean see the
+            // same sample set twice, which reads as rest shimmer. The placement's Halton index
+            // already wraps at 8 (GiHalton8).
+            constexpr uint32_t gather_jitter_period_frames = 8u;
+            const double frame_index = double(gfx::get_render_frame() % gather_jitter_period_frames);
             const float gi_jitter[4] = {float(std::fmod(0.754877666 * frame_index, 1.0)),
                                         float(std::fmod(0.569840291 * frame_index, 1.0)),
                                         0.0f,
@@ -605,7 +613,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                  15,
                                  clipmap_gpu.get_world_probe_depth());
                 gfx::set_uniform(trace_program_.u_sdf_params, sdf_params);
-                gfx::set_uniform(trace_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+                gfx::set_uniform(trace_program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
                 gfx::set_uniform(trace_program_.u_sdf_clipmap_levels,
                                  clipmap_gpu.get_level_params(),
                                  global_sdf_clipmap::level_count);

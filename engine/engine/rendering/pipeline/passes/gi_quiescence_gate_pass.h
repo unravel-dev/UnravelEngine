@@ -47,11 +47,15 @@ public:
         entry_light_voxels = 0,
         entry_probe_trace = 1,
         entry_probe_convolve = 2,
-        entry_count = 3,
+        /// The world-probe trace scheduler's three phases (cs_gi_world_probe_select.sc).
+        entry_probe_select_histogram = 3,
+        entry_probe_select_threshold = 4,
+        entry_probe_select_emit = 5,
+        entry_count = 6,
     };
     /// Mirrors GI_GATE_ENTRY_COUNT in cs_gi_quiescence_gate.sc, which sizes the uniform array
     /// this pass fills.
-    static constexpr uint16_t shader_entry_count = 3;
+    static constexpr uint16_t shader_entry_count = 6;
     static_assert(entry_count == shader_entry_count,
                   "GI_GATE_ENTRY_COUNT in cs_gi_quiescence_gate.sc must match entry_count");
 

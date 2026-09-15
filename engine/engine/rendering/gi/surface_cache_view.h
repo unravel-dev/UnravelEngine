@@ -152,6 +152,13 @@ public:
      * (index 0) the fixed
      * @ref quiescence_settle_frames remains.
      *
+     * @param light_revision gpu_light_buffer::get_global_revision: GLOBAL light changes (a
+     *        directional light added, removed or past the 4x brightness rule). With
+     *        @p environment_revision the only inputs that reset the lighting-only counter which
+     *        pins the screen temporal at its fast cap; the hashes change on ANY light or sky
+     *        byte and only wake the gate (plan item 1.2).
+     * @param environment_revision The deferred irradiance pass's graded environment revision
+     *        (the sky changed kind, or brightness past the same ratio).
      * @param wants_debug A writer-side SDF debug view is up: those views paint per frame
      *        through these very dispatches, so the gate is held open.
      *
@@ -161,6 +168,8 @@ public:
      */
     auto update_quiescence(uint64_t light_hash,
                            uint64_t environment_hash,
+                           uint64_t light_revision,
+                           uint64_t environment_revision,
                            const math::vec3& camera_position,
                            const relight_sample& relight,
                            bool wants_debug) -> quiescence_verdict;
@@ -217,6 +226,8 @@ private:
     /// Treated exactly like the light hash: the world probes integrate the environment SH on
     /// every sky miss, so a sky edit stales the atlas globally.
     uint64_t quiescence_environment_hash_ = 0;
+    uint64_t quiescence_light_revision_ = 0;
+    uint64_t quiescence_environment_revision_ = 0;
     uint64_t quiescence_content_epoch_ = 0;
     std::array<math::vec3, global_sdf_clipmap::level_count> quiescence_origins_{};
     std::array<math::ivec3, global_sdf_clipmap::level_count> quiescence_probe_cells_{};

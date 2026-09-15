@@ -1,9 +1,8 @@
 /*
  * Convolves each world probe's 16x16 radiance atlas into its 8x8 irradiance tile and 8x8 depth
- * moment tile, gutters included - one thread group per probe. Runs every frame over every
- * probe: the radiance atlas is the windowed mean, so this is the one place its integral
- * materialises, and doing it unconditionally is what makes the result exactly as stable as the
- * atlas itself.
+ * moment tile, gutters included - one thread group per probe the trace scheduler listed this
+ * frame (cs_gi_world_probe_select.sc, plan item 2.1): exactly the probes whose radiance just
+ * changed, so every integral stays as current as its atlas at the scheduler's cost.
  *
  *  - Irradiance: E(n)/pi = sum(L_d * max(0, n . w_d)) / (N / 4) - equal-solid-angle octahedral
  *    texels (the same identity the screen probe filter uses). Sky rides in alpha: the
@@ -34,13 +33,9 @@ IMAGE2D_WO(s_world_probe_depth_out, rg16f, 6);
 /// The per-slot cell ids, read for one bit: a FREE sparse slot has no tile worth convolving
 /// (nothing points at it), and most of the pool is free.
 BUFFER_RO(b_world_probe_cells, uint, 7);
-/// The per-slot window counts (the trace's b_world_probe_counts): windows since the claim or
-/// the last fast window, for the rotation below.
-BUFFER_RO(b_world_probe_counts, uint, 8);
-/// A probe younger than this many complete windows convolves every frame (a fresh claim must
-/// never serve the tiles its slot's previous cell left, and a fast window's re-measure must
-/// land at once); older ones on the GI_WORLD_PROBE_CONVOLVE_PERIOD rotation.
-#define CONVOLVE_SETTLED_WINDOWS 2u
+/// The scheduler's list and state (cs_gi_world_probe_select.sc): one group per listed probe.
+BUFFER_RO(b_world_probe_list, uint, 9);
+BUFFER_RO(b_world_probe_select, uint, 10);
 
 #define GUTTER_EDGE (GI_WORLD_PROBE_OCT_IRRADIANCE + 2)
 #define RADIANCE_TEXELS (GI_WORLD_PROBE_OCT_RADIANCE * GI_WORLD_PROBE_OCT_RADIANCE)
@@ -56,7 +51,12 @@ SHARED float s_sample_omega[RADIANCE_TEXELS];
 NUM_THREADS(8, 8, 1)
 void main()
 {
-	int slot_linear = int(gl_WorkGroupID.x);
+	int list_index = int(gl_WorkGroupID.x);
+	if(list_index >= int(b_world_probe_select[GI_WORLD_PROBE_SELECT_COUNT]))
+	{
+		return;
+	}
+	int slot_linear = int(b_world_probe_list[list_index]);
 	int level = GiWorldProbeLevelOfSlot(slot_linear);
 	if(level >= SDF_CLIPMAP_LEVEL_COUNT)
 	{
@@ -64,14 +64,6 @@ void main()
 	}
 	// A free sparse slot: uniform per group, so the whole group leaves before the barrier.
 	if(level == 0 && b_world_probe_cells[slot_linear] == GI_WORLD_PROBE_NONE)
-	{
-		return;
-	}
-	// ROTATION (GI_WORLD_PROBE_CONVOLVE_PERIOD): a settled probe's atlas changes by one stratum
-	// in sixteen per frame, so its integral is re-taken once per period; the group leaves
-	// before the barrier like a free slot, which costs an eighth of a convolved probe.
-	if(b_world_probe_counts[slot_linear] >= CONVOLVE_SETTLED_WINDOWS &&
-	   ((uint(slot_linear) + u_world_probe_frame) % uint(GI_WORLD_PROBE_CONVOLVE_PERIOD)) != 0u)
 	{
 		return;
 	}

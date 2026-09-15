@@ -74,7 +74,7 @@ vec3 GiFiniteOrZero(vec3 v)
 /// cells reach +-46 m usable, so a surface up to ~40 m from the camera resolves its 2 m cage
 /// at any camera distance, paid for only where probes were requested (see the header). The
 /// coarser lattices answer where level 0 has no probe yet and beyond its reach (levels 1 and
-/// 2 at 13: +-24 m / +-40 m; level 3 at 9: +-56 m). The lattice does not derive from the
+/// 2 at 13: +-20 m / +-40 m; level 3 at 9: +-48 m). The lattice does not derive from the
 /// cascade resolution: the SDF window and the probe window are independent extents. Mirrored
 /// by global_sdf_clipmap_gpu::world_probe_axis / world_probe_pool_l0 /
 /// world_probe_atlas_tiles_x (atlas and buffer sizes) and verified by the gi oracle suite.
@@ -115,6 +115,44 @@ vec3 GiFiniteOrZero(vec3 v)
 /// The window count the allocation pass writes into a freshly claimed pool slot: the trace
 /// reads it as "seed and clear me" and replaces it with a real count the same frame.
 #define GI_WORLD_PROBE_COUNT_FRESH 0xFFFFFFFFu
+/// THE SCHEDULE WORD (b_world_probe_counts, plan item 2.1): GI_WORLD_PROBE_COUNT_FRESH on a claim,
+/// otherwise the windows the probe has completed (8 bits, saturating below the sentinel's byte),
+/// the next stratum its trace covers (4 bits) and the frame of its last trace (20 bits, wrapping -
+/// ages are taken modulo 2^20). Zero, the seed and an evicted slot, reads as no windows, stratum 0.
+#define GI_WORLD_PROBE_COUNT_WINDOWS_MAX 254u
+#define GI_WORLD_PROBE_COUNT_FRAME_MASK  0xFFFFFu
+uint GiWorldProbeCountWindows(uint word)
+{
+	return word == GI_WORLD_PROBE_COUNT_FRESH ? 0u : (word & 0xFFu);
+}
+uint GiWorldProbeCountCursor(uint word)
+{
+	return word == GI_WORLD_PROBE_COUNT_FRESH ? 0u : ((word >> 8u) & 0xFu);
+}
+uint GiWorldProbeCountFrame(uint word)
+{
+	return (word >> 12u) & GI_WORLD_PROBE_COUNT_FRAME_MASK;
+}
+uint GiWorldProbePackCount(uint windows, uint cursor, uint frame)
+{
+	return min(windows, GI_WORLD_PROBE_COUNT_WINDOWS_MAX) | ((cursor & 0xFu) << 8u) |
+	       ((frame & GI_WORLD_PROBE_COUNT_FRAME_MASK) << 12u);
+}
+/// The trace scheduler's state buffer (b_world_probe_select, cs_gi_world_probe_select.sc): the
+/// priority histogram, the bucket the frame's budget ends in, the quota left in it, the listed
+/// count, and the PENDING count - the probes in buckets 0 to GI_WORLD_PROBE_SELECT_FIRST_WINDOW_BUCKETS
+/// (claims, scrolled-in slots, first windows) at the last selection, which the quiescence gate holds
+/// open for. Mirrored by
+/// global_sdf_clipmap_gpu::world_probe_select_size.
+#define GI_WORLD_PROBE_SELECT_BUCKETS   16
+#define GI_WORLD_PROBE_SELECT_THRESHOLD 16
+#define GI_WORLD_PROBE_SELECT_QUOTA     17
+#define GI_WORLD_PROBE_SELECT_COUNT     18
+#define GI_WORLD_PROBE_SELECT_PENDING   19
+/// The last bucket of the first-window band (1 to this, by the log2 of the age since the last
+/// trace); settled probes take the buckets above it (cs_gi_world_probe_select.sc).
+#define GI_WORLD_PROBE_SELECT_FIRST_WINDOW_BUCKETS 7
+#define GI_WORLD_PROBE_SELECT_SIZE      20
 
 /// x = probe spacing of level 0 in world units (doubles per level), y = frame index,
 /// z = non-zero when the probe atlases are resident, w = the cage-visibility variance gate
@@ -243,6 +281,30 @@ uint GiWorldProbePackCell(ivec3 cell, int level)
 	ivec3 biased = cell + ivec3(512, 512, 512);
 	return uint(biased.x & 0x3FF) | (uint(biased.y & 0x3FF) << 10u) | (uint(biased.z & 0x3FF) << 20u) |
 	       (uint(level) << 30u);
+}
+
+/// The world cell a DENSE level's slot represents under a window centred on @p center_cell: the
+/// unique cell in [centre - half, centre + half] whose mod-axis equals the slot. Shared by the
+/// trace and the scheduler, which must agree on when a scrolled slot is fresh.
+ivec3 GiWorldProbeDenseSlotCell(int slot_linear, int level, ivec3 center_cell)
+{
+	int axis = GiWorldProbeAxis(level);
+	int in_level = slot_linear - GiWorldProbeLevelBase(level);
+	ivec3 slot = ivec3(in_level % axis, (in_level / axis) % axis, in_level / (axis * axis));
+	int half_axis = (axis - 1) / 2;
+	ivec3 window_base = center_cell - ivec3(half_axis, half_axis, half_axis);
+	ivec3 base_slot = GiWorldProbeSlot(window_base, level);
+	ivec3 offset = ivec3((slot.x - base_slot.x + axis) % axis,
+	                     (slot.y - base_slot.y + axis) % axis,
+	                     (slot.z - base_slot.z + axis) % axis);
+	return window_base + offset;
+}
+
+/// Slots across every level: one past the last slot, the trace's index for an unused list entry.
+int GiWorldProbeSlotTotal()
+{
+	return GiWorldProbeLevelCount(0) + GiWorldProbeLevelCount(1) + GiWorldProbeLevelCount(2) +
+	       GiWorldProbeLevelCount(3);
 }
 
 /// The world cell of a packed id (the level bits dropped): how a sparse level-0 slot learns

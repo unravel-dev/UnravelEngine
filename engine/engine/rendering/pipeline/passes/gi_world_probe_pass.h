@@ -14,9 +14,10 @@ namespace unravel
 /**
  * @brief Traces and convolves the world probe cascades (GI v2 plan 3.3, revised design).
  *
- * Every probe, every frame, one direction stratum: the 16x16 radiance atlas is a 16-frame
- * windowed mean with zero steady-state variance, and the convolution materialises its
- * irradiance + Chebyshev depth moments each frame. Camera rotation is a no-op on all of it;
+ * Every scheduled probe traces its next direction stratum (cs_gi_world_probe_select.sc, plan
+ * item 2.1: up to GI_WORLD_PROBE_TRACE_BUDGET probes per frame, claims first, then the stalest):
+ * the 16x16 radiance atlas is a windowed mean over the probe's own sixteen traces, and the
+ * convolution materialises the listed probes' irradiance + Chebyshev depth moments. Camera rotation is a no-op on all of it;
  * translation re-claims only the slots whose world cell changed.
  */
 class gi_world_probe_pass
@@ -30,11 +31,13 @@ public:
         /// The lighting pass's environment SH probe (sky at ray miss); black when absent.
         gfx::texture::ptr irradiance_sh;
         uint32_t frame = 0;
-        /// Hash of the resident light set; a change halves the probe refresh window for one
-        /// full window (the DDGI event pattern, plan section 8).
+        /// Global light revision (gpu_light_buffer::get_global_revision); a change arms the fast
+        /// refresh window for one full window (the DDGI event pattern, plan section 8). Local
+        /// light changes do not bump it (tasks/lumen57_deep_dive_2026-09-14.md plan item 1.2).
         uint64_t light_hash = 0;
-        /// Revision of the environment radiance behind @ref irradiance_sh
-        /// (deferred::irradiance_pass_result::environment_hash). Every sky miss integrates that
+        /// GLOBAL revision of the environment radiance behind @ref irradiance_sh (the deferred
+        /// irradiance pass's graded revision: a kind change or a brightness change past the 4x
+        /// rule; plan item 1.2). Every sky miss integrates that
         /// SH, so a sky edit stales the whole atlas exactly as a light edit does and earns the
         /// same fast window; without it a sky changed on its own arrived at the probes' own slow
         /// stratum rate, if the quiescence gate let them run at all.
@@ -73,18 +76,22 @@ public:
 
     auto is_valid() const -> bool
     {
-        return trace_program_.is_valid() && convolve_program_.is_valid();
+        return trace_program_.is_valid() && convolve_program_.is_valid() && select_program_.is_valid();
     }
 
     /// Probes in the whole cascade set - the convolve's thread count, and the base of the
     /// trace's group count.
     static constexpr uint32_t probe_count = global_sdf_clipmap_gpu::get_world_probe_count();
 
-    /// The trace dispatch's groups; the gate writes these before the pass runs.
-    static auto get_trace_dispatch_groups() -> gi_quiescence_gate_pass::dispatch_groups;
+    /// The trace dispatch's groups for the budget this pass set on its last run; the gate writes
+    /// these before the pass runs (a fast window arming this frame widens the trace next frame).
+    auto get_trace_dispatch_groups() const -> gi_quiescence_gate_pass::dispatch_groups;
 
     /// The convolve dispatch's groups; see @ref get_trace_dispatch_groups.
-    static auto get_convolve_dispatch_groups() -> gi_quiescence_gate_pass::dispatch_groups;
+    auto get_convolve_dispatch_groups() const -> gi_quiescence_gate_pass::dispatch_groups;
+
+    /// The scheduler's groups for one of its three gate entries.
+    static auto get_select_dispatch_groups(uint16_t entry) -> gi_quiescence_gate_pass::dispatch_groups;
 
 private:
     struct trace_program : uniforms_cache
@@ -130,7 +137,7 @@ private:
                           global_sdf_clipmap::level_count);
             cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
             cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(),
                           u_sdf_clipmap_levels,
@@ -185,6 +192,29 @@ private:
         }
     } alloc_program_;
 
+    /// The trace scheduler (cs_gi_world_probe_select.sc): histogram, threshold and list emit.
+    struct select_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_world_probe_select;
+        gfx::program::uniform_ptr u_gi_world_probe_window;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_world_probe_select, "u_gi_world_probe_select", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_gi_world_probe_window,
+                          "u_gi_world_probe_window",
+                          gfx::uniform_type::Vec4,
+                          global_sdf_clipmap::level_count);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } select_program_;
+
     /// The relocation pass (cs_gi_world_probe_relocate.sc): the frame's fresh claims moved
     /// out of geometry by the mesh fields, or freed and marked buried.
     struct relocate_program : uniforms_cache
@@ -201,7 +231,7 @@ private:
             cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
         }
 
@@ -220,6 +250,9 @@ private:
     /// Level 0's window centre cell last frame, for the camera-jump trigger of the fast window.
     float last_level0_cell_[3] = {0.0f, 0.0f, 0.0f};
     bool has_last_level0_cell_ = false;
+    /// Probes the scheduler lists per frame: GI_WORLD_PROBE_TRACE_BUDGET, or every slot while a fast
+    /// window is armed. Set by run(), read by the gate's group counts the next frame.
+    uint32_t frame_budget_ = probe_count;
 };
 
 } // namespace unravel

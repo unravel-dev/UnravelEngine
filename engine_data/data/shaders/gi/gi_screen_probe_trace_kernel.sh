@@ -624,10 +624,14 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 		BRANCH
 		if(!committed)
 		{
+			// Mesh-exact over GI_MESH_SDF_TRACE_RANGE, then the cascade WITHOUT the surface expand
+			// (expand start -1): the exact first metres are the thin-wall defence, and past them the
+			// ramped expand closed the arcades and columns a radiance ray should see through - the
+			// world-probe rays' finding again (GI_MESH_SDF_TRACE_RANGE, GI_WORLD_PROBE_MESH_RANGE).
 			SdfRayHit hit = SdfTraceRayEx(s_origin[slot], sample_dir, s_short_range[slot],
 			                              GI_MESH_SDF_TRACE_RANGE, GI_TRACE_MAX_STEPS,
 			                              GI_PROBE_TRACE_SURFACE_BIAS, GI_PROBE_TRACE_RELAXATION,
-			                              true, 0.0);
+			                              true, -1.0);
 			if(hit.hit)
 			{
 				answered_tier = 2;

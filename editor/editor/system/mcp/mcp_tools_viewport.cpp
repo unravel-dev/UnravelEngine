@@ -617,6 +617,200 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .mutates_scene = false});
 
     registry.add(
+        {.name = "viewport_measure_temporal",
+         .description =
+             "Temporal stability of the Scene panel image (temporal_probe_pass): folds `frames` "
+             "consecutive rendered frames into per-pixel statistics on the GPU, then one readback. "
+             "Reports, in 8-bit display levels: the per-pixel luminance std over the frames (meaningful "
+             "for a still camera) and the mean reprojected frame-to-frame change (valid in motion; object "
+             "motion, disocclusions and depth edges are excluded), as percentiles, shares and an 8x8 "
+             "screen grid (row-major from the top). The image is the pipeline output before the editor "
+             "overlays: the lit frame or the active debug view. Optional `motion` drives the Scene camera "
+             "across exactly the measured frames: {\"type\":\"path\",\"from_position\":[..],"
+             "\"from_target\":[..],\"to_position\":[..],\"to_target\":[..]} or {\"type\":\"orbit\","
+             "\"center\":[..],\"radius\":r,\"height\":h,\"start_degrees\":a,\"degrees\":sweep}.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"frames":{"type":"integer","minimum":2,"maximum":4096},"timeout_ms":{"type":"integer","minimum":1000,"maximum":600000},"motion":{"type":"object"}}})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             int64_t frames = 120;
+             if(args["frames"].get(frames))
+             {
+                 frames = 120;
+             }
+             frames = std::clamp<int64_t>(frames, 2, 4096);
+             int64_t timeout_ms = 30000 + frames * 100;
+             int64_t requested_timeout = 0;
+             if(!args["timeout_ms"].get(requested_timeout))
+             {
+                 timeout_ms = requested_timeout;
+             }
+             struct motion_spec
+             {
+                 std::string type;
+                 math::vec3 from_position{};
+                 math::vec3 from_target{};
+                 math::vec3 to_position{};
+                 math::vec3 to_target{};
+                 math::vec3 center{};
+                 float radius = 4.0f;
+                 float height = 2.0f;
+                 float start_degrees = 0.0f;
+                 float degrees = 30.0f;
+             };
+             motion_spec motion;
+             simdjson::dom::object motion_args;
+             if(!args["motion"].get(motion_args))
+             {
+                 read_string(motion_args, "type", motion.type);
+                 auto read_float = [&motion_args](const char* key, float& value)
+                 {
+                     double number = 0.0;
+                     if(!motion_args[key].get(number))
+                     {
+                         value = float(number);
+                     }
+                 };
+                 read_float("radius", motion.radius);
+                 read_float("height", motion.height);
+                 read_float("start_degrees", motion.start_degrees);
+                 read_float("degrees", motion.degrees);
+                 if(motion.type == "path")
+                 {
+                     if(!read_vec3(motion_args, "from_position", motion.from_position) ||
+                        !read_vec3(motion_args, "from_target", motion.from_target) ||
+                        !read_vec3(motion_args, "to_position", motion.to_position) ||
+                        !read_vec3(motion_args, "to_target", motion.to_target))
+                     {
+                         return {.text = "motion path needs from_position, from_target, to_position, to_target",
+                                 .is_error = true};
+                     }
+                 }
+                 else if(motion.type == "orbit")
+                 {
+                     if(!read_vec3(motion_args, "center", motion.center))
+                     {
+                         return {.text = "motion orbit needs center", .is_error = true};
+                     }
+                 }
+                 else if(!motion.type.empty())
+                 {
+                     return {.text = "motion type must be \"path\" or \"orbit\"", .is_error = true};
+                 }
+             }
+             const bool has_motion = !motion.type.empty();
+             auto apply_pose = [&ctx, &motion](float u)
+             {
+                 std::string error;
+                 auto camera = resolve_scene_camera(ctx, error);
+                 if(!camera)
+                 {
+                     return;
+                 }
+                 math::vec3 position{};
+                 math::vec3 target{};
+                 if(motion.type == "path")
+                 {
+                     position = motion.from_position + (motion.to_position - motion.from_position) * u;
+                     target = motion.from_target + (motion.to_target - motion.from_target) * u;
+                 }
+                 else
+                 {
+                     constexpr float degrees_to_radians = 0.017453292f;
+                     const float angle = (motion.start_degrees + motion.degrees * u) * degrees_to_radians;
+                     position = motion.center +
+                                math::vec3(std::cos(angle) * motion.radius, motion.height, std::sin(angle) * motion.radius);
+                     target = motion.center;
+                 }
+                 cancel_camera_focus();
+                 auto& tc = camera.get<transform_component>();
+                 tc.set_position_global(position);
+                 tc.look_at(target);
+             };
+             auto resolve_pipeline = [&ctx]() -> rendering::pipeline*
+             {
+                 auto camera_ent = resolve_scene_panel(ctx).get_camera();
+                 if(!camera_ent || !camera_ent.all_of<camera_component>())
+                 {
+                     return nullptr;
+                 }
+                 return camera_ent.get<camera_component>().get_pipeline_data().get_pipeline().get();
+             };
+             auto armed = mcp.invoke_on_main(
+                 [&]() -> bool
+                 {
+                     auto* pipeline = resolve_pipeline();
+                     if(pipeline == nullptr)
+                     {
+                         return false;
+                     }
+                     if(has_motion)
+                     {
+                         apply_pose(0.0f);
+                     }
+                     pipeline->request_temporal_probe(uint32_t(frames));
+                     return true;
+                 });
+             if(!armed || !*armed)
+             {
+                 return {.text = "Scene panel camera has no pipeline", .is_error = true};
+             }
+             auto format_grid = [](const std::vector<float>& grid) -> std::string
+             {
+                 std::string json = "[";
+                 for(size_t i = 0; i < grid.size(); ++i)
+                 {
+                     json += fmt::format("{}{:.3f}", i == 0 ? "" : ",", grid[i]);
+                 }
+                 return json + "]";
+             };
+             const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+             while(std::chrono::steady_clock::now() < deadline)
+             {
+                 auto polled = mcp.invoke_on_main(
+                     [&]() -> std::string
+                     {
+                         auto* pipeline = resolve_pipeline();
+                         if(pipeline == nullptr)
+                         {
+                             return "!";
+                         }
+                         const auto& probe = pipeline->get_temporal_probe();
+                         if(has_motion && probe.get_frames_done() < probe.get_frames_requested())
+                         {
+                             apply_pose(float(probe.get_frames_done() + 1u) / float(probe.get_frames_requested()));
+                         }
+                         if(probe.is_busy() || !probe.get_result().valid)
+                         {
+                             return {};
+                         }
+                         const auto& r = probe.get_result();
+                         return fmt::format(
+                             R"({{"frames":{},"width":{},"height":{},"std":{{"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1_5":{:.5f},"share_gt_4":{:.5f}}},"delta":{{"pixels":{},"mean":{:.3f},"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1":{:.5f},"share_gt_4":{:.5f}}},"std_grid":{},"delta_grid":{}}})",
+                             r.frames, r.width, r.height, r.std_percentiles[0], r.std_percentiles[1],
+                             r.std_percentiles[2], r.std_shares[0], r.std_shares[1], r.delta_pixels, r.delta_mean,
+                             r.delta_percentiles[0], r.delta_percentiles[1], r.delta_percentiles[2],
+                             r.delta_shares[0], r.delta_shares[1], format_grid(r.std_grid),
+                             format_grid(r.delta_grid));
+                     });
+                 if(polled && !polled->empty())
+                 {
+                     if(*polled == "!")
+                     {
+                         return {.text = "Scene panel camera has no pipeline", .is_error = true};
+                     }
+                     return {.text = *polled, .is_error = false};
+                 }
+                 std::this_thread::sleep_for(std::chrono::milliseconds(2));
+             }
+             return {.text = "Timed out waiting for the temporal probe", .is_error = true};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
         {.name = "gi_get_stats",
          .description =
              "The GI waste census for the Scene panel camera: one on-demand readback of the "
@@ -883,6 +1077,38 @@ void register_viewport_tools(mcp_tool_registry& registry)
              if(!result)
              {
                  return {.text = "profiler query failed on the main thread", .is_error = true};
+             }
+             return {.text = *result, .is_error = false};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
+        {.name = "gi_set_experiment_flags",
+         .description =
+             "Runtime experiment flags every GI tracer reads (u_sdf_grid_params[2].x, sdf_common.sh "
+             "u_sdf_experiment_flags; no experiment is compiled in at the moment). Two code paths "
+             "compiled into one program alternate "
+             "inside ONE editor launch for cost A/Bs. 0 is production. Returns the new and previous flags.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"flags":{"type":"integer","minimum":0}},"required":["flags"]})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             double flags = 0.0;
+             read_double(args, "flags", flags);
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             auto result = mcp.invoke_on_main(
+                 [&]() -> std::string
+                 {
+                     auto& surface_cache = ctx.get_cached<surface_cache_system>();
+                     const uint32_t previous = surface_cache.get_experiment_flags();
+                     surface_cache.set_experiment_flags(uint32_t(math::max(flags, 0.0)));
+                     return fmt::format(R"({{"flags":{},"previous":{}}})", surface_cache.get_experiment_flags(), previous);
+                 });
+             if(!result)
+             {
+                 return {.text = "experiment flags update failed on the main thread", .is_error = true};
              }
              return {.text = *result, .is_error = false};
          },

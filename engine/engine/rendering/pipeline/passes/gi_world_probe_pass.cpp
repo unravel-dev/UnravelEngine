@@ -33,21 +33,40 @@ constexpr uint32_t alloc_threads_per_group = 64u;
 constexpr float alloc_phase_init = 0.0f;
 constexpr float alloc_phase_evict = 1.0f;
 constexpr float alloc_phase_allocate = 2.0f;
+/// The trace scheduler's phases (SELECT_PHASE_* in cs_gi_world_probe_select.sc).
+constexpr float select_phase_histogram = 0.0f;
+constexpr float select_phase_threshold = 1.0f;
+constexpr float select_phase_emit = 2.0f;
+/// One thread per slot (NUM_THREADS of cs_gi_world_probe_select.sc).
+constexpr uint32_t select_threads_per_group = 64u;
+/// The schedule word's frame field (GI_WORLD_PROBE_COUNT_FRAME_MASK in gi_world_probes.sh).
+constexpr uint32_t schedule_frame_mask = 0xFFFFFu;
 } // namespace
 
-auto gi_world_probe_pass::get_trace_dispatch_groups() -> gi_quiescence_gate_pass::dispatch_groups
+auto gi_world_probe_pass::get_trace_dispatch_groups() const -> gi_quiescence_gate_pass::dispatch_groups
 {
     gi_quiescence_gate_pass::dispatch_groups groups;
-    groups.x = (probe_count + probes_per_trace_group - 1u) / probes_per_trace_group;
+    groups.x = (frame_budget_ + probes_per_trace_group - 1u) / probes_per_trace_group;
     groups.y = 1u;
     groups.z = 1u;
     return groups;
 }
 
-auto gi_world_probe_pass::get_convolve_dispatch_groups() -> gi_quiescence_gate_pass::dispatch_groups
+auto gi_world_probe_pass::get_convolve_dispatch_groups() const -> gi_quiescence_gate_pass::dispatch_groups
 {
     gi_quiescence_gate_pass::dispatch_groups groups;
-    groups.x = probe_count;
+    groups.x = frame_budget_;
+    groups.y = 1u;
+    groups.z = 1u;
+    return groups;
+}
+
+auto gi_world_probe_pass::get_select_dispatch_groups(uint16_t entry) -> gi_quiescence_gate_pass::dispatch_groups
+{
+    gi_quiescence_gate_pass::dispatch_groups groups;
+    groups.x = entry == gi_quiescence_gate_pass::entry_probe_select_threshold
+                   ? 1u
+                   : (probe_count + select_threads_per_group - 1u) / select_threads_per_group;
     groups.y = 1u;
     groups.z = 1u;
     return groups;
@@ -68,6 +87,9 @@ auto gi_world_probe_pass::init(rtti::context& ctx) -> bool
     auto cs_relocate = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_world_probe_relocate.sc");
     relocate_program_.cache_uniforms();
     relocate_program_.program = std::make_unique<gpu_program>(cs_relocate);
+    auto cs_select = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_world_probe_select.sc");
+    select_program_.cache_uniforms();
+    select_program_.program = std::make_unique<gpu_program>(cs_select);
     return is_valid();
 }
 
@@ -159,7 +181,7 @@ auto gi_world_probe_pass::run_alloc(gfx::render_view& rview, const run_params& p
                                      float(surface_cache.get_instances().size()),
                                      float(surface_cache.get_emitters().size())};
         gfx::set_uniform(relocate_program_.u_sdf_params, sdf_params);
-        gfx::set_uniform(relocate_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+        gfx::set_uniform(relocate_program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
         // The spacing lane alone drives GiWorldProbeRelocate; the rest as the trace sets it.
         const float probe_params[4] = {safe_spacing, 0.0f, 1.0f, 0.0f};
         gfx::set_uniform(relocate_program_.u_gi_world_probe_params, probe_params);
@@ -281,6 +303,41 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
                                    gi::GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE};
     const auto env_sh =
         params.irradiance_sh ? params.irradiance_sh : default_textures::get().black_texture();
+    // TRACE SCHEDULER (plan item 2.1, Lumen's radiance-cache update budget): the probes this
+    // frame's trace and convolve process, listed by cs_gi_world_probe_select.sc - claims and
+    // scrolled-in slots first, then first-window probes, then the stalest by level-weighted age -
+    // up to GI_WORLD_PROBE_TRACE_BUDGET, or every live probe while a fast window is armed. Each
+    // phase rides its own gate entry, so a closed gate stops it with the passes it feeds.
+    const uint32_t budget = strata_per_frame > 1u ? probe_count : uint32_t(gi::GI_WORLD_PROBE_TRACE_BUDGET);
+    frame_budget_ = budget;
+    {
+        gfx::render_pass pass("GI/World Probe Select");
+        const auto dispatch_select = [&](float phase, uint16_t entry)
+        {
+            select_program_.program->begin();
+            gfx::set_buffer(7, clipmap_gpu.get_world_probe_counts(), gfx::access::Read);
+            gfx::set_buffer(8, clipmap_gpu.get_world_probe_cells(), gfx::access::Read);
+            gfx::set_buffer(9, clipmap_gpu.get_world_probe_select(), gfx::access::ReadWrite);
+            gfx::set_buffer(10, clipmap_gpu.get_world_probe_list(), gfx::access::ReadWrite);
+            gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
+            const float select_params[4] = {phase, float(budget), float(params.frame & schedule_frame_mask), 0.0f};
+            gfx::set_uniform(select_program_.u_gi_world_probe_select, select_params);
+            gfx::set_uniform(select_program_.u_gi_world_probe_window, window, global_sdf_clipmap::level_count);
+            if(bgfx::isValid(params.indirect))
+            {
+                gfx::dispatch_indirect(pass.id, select_program_.program->native_handle(), params.indirect, entry, 1);
+            }
+            else
+            {
+                const auto groups = get_select_dispatch_groups(entry);
+                gfx::dispatch(pass.id, select_program_.program->native_handle(), groups.x, groups.y, groups.z);
+            }
+            select_program_.program->end();
+        };
+        dispatch_select(select_phase_histogram, gi_quiescence_gate_pass::entry_probe_select_histogram);
+        dispatch_select(select_phase_threshold, gi_quiescence_gate_pass::entry_probe_select_threshold);
+        dispatch_select(select_phase_emit, gi_quiescence_gate_pass::entry_probe_select_emit);
+    }
     {
         gfx::render_pass pass("GI/World Probe Trace");
         trace_program_.program->begin();
@@ -326,15 +383,18 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         seed_atlas[2] = float(strata_per_frame);
         gfx::set_uniform(trace_program_.u_gi_world_probe_seed_atlas, seed_atlas);
         gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
-        // The sparse index: the trace refreshes the relocation lane every frame.
+        // The sparse index: the trace refreshes the relocation lane once per probe window.
         gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
+        // The scheduler's list and state (plan item 2.1).
+        gfx::set_buffer(9, clipmap_gpu.get_world_probe_list(), gfx::access::Read);
+        gfx::set_buffer(15, clipmap_gpu.get_world_probe_select(), gfx::access::Read);
         gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh);
         const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                      float(atlas.get_atlas_voxel_dim()),
                                      float(instances.size()),
                                      float(surface_cache.get_emitters().size())};
         gfx::set_uniform(trace_program_.u_sdf_params, sdf_params);
-        gfx::set_uniform(trace_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+        gfx::set_uniform(trace_program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
         gfx::set_uniform(trace_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
         gfx::set_uniform(trace_program_.u_sdf_clipmap_levels,
                          clipmap_gpu.get_level_params(),
@@ -366,8 +426,9 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
                          clipmap_gpu.get_world_probe_radiance());
         // The cell ids, for the free-slot skip (most of the sparse pool is free).
         gfx::set_buffer(7, clipmap_gpu.get_world_probe_cells(), gfx::access::Read);
-        // The window counts: settled probes convolve on a rotation (GI_WORLD_PROBE_CONVOLVE_PERIOD).
-        gfx::set_buffer(8, clipmap_gpu.get_world_probe_counts(), gfx::access::Read);
+        // The scheduler's list and state: exactly the probes the trace refreshed (plan item 2.1).
+        gfx::set_buffer(9, clipmap_gpu.get_world_probe_list(), gfx::access::Read);
+        gfx::set_buffer(10, clipmap_gpu.get_world_probe_select(), gfx::access::Read);
         gfx::set_image(5,
                        clipmap_gpu.get_world_probe_irradiance()->native_handle(),
                        0,

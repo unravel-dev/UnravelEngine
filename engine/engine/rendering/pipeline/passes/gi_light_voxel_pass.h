@@ -152,8 +152,10 @@ private:
     /// computed against, and how many write-through frames remain so every voxel's first
     /// relight after a change snaps (one full rotation); see the blend block in run().
     bool ema_history_valid_ = false;
-    uint64_t ema_light_hash_ = 0;
-    uint32_t ema_generation_ = uint32_t(-1);
+    /// The global light revision (gpu_light_buffer::get_global_revision) and the edited content
+    /// epoch the EMA history was integrated under; a change of either snaps one rotation.
+    uint64_t ema_light_revision_ = 0;
+    uint64_t ema_edited_epoch_ = uint64_t(-1);
     uint32_t ema_snap_frames_ = 0;
     /// Segment-local vis-memo keep (u_gi_vis_memo_params.zw; the kernel's GiSegmentTouchesBox
     /// note): the composed origin each level had when the memo's generation last changed,
@@ -279,7 +281,7 @@ private:
                           "u_gi_light_voxel_params",
                           gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, 2);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
             cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(),
                           u_sdf_clipmap_levels,

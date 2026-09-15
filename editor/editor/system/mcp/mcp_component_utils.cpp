@@ -10,6 +10,9 @@
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/rendering/ecs/components/bloom_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/meta/ecs/components/gi_component.hpp>
+#include <engine/meta/ecs/components/ssr_component.hpp>
+#include <engine/meta/ecs/components/taa_component.hpp>
 #include <engine/rendering/ecs/components/gtao_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/ecs/components/particle_emitter_component.h>
@@ -26,6 +29,8 @@
 #include <cctype>
 #include <memory>
 #include <optional>
+#include <serialization/associative_archive.h>
+#include <sstream>
 #include <unordered_set>
 
 namespace unravel::mcp
@@ -3351,6 +3356,123 @@ auto to_filter_set(const std::vector<std::string>* filter) -> std::unique_ptr<st
     return std::make_unique<std::unordered_set<std::string>>(filter->begin(), filter->end());
 }
 
+/// The component as the scene file stores it: its own associative-archive save, compact. This is
+/// the typed-properties path for components whose settings are too wide to mirror field by field
+/// (Global Illumination, SSR, Temporal AA) - the archive stays the single source of the property
+/// names, so a renamed or added setting needs no MCP change.
+template<typename Component>
+auto save_component_document(const Component& comp) -> std::string
+{
+    std::stringstream stream;
+    {
+        serialization::scoped_output_format format(serialization::output_format::compact);
+        auto ar = ser20::create_oarchive_associative(stream);
+        try_save(ar, ser20::make_nvp("component", comp));
+    }
+    return stream.str();
+}
+
+template<typename Component>
+auto serialized_component_to_json(const Component& comp,
+                                  const std::unordered_set<std::string>* filter,
+                                  std::string& error) -> std::string
+{
+    const std::string document = save_component_document(comp);
+    simdjson::dom::parser parser;
+    simdjson::dom::object root;
+    simdjson::dom::object component;
+    if(parser.parse(document).get(root) || root["component"].get(component))
+    {
+        error = "Component serialization produced no object";
+        return {};
+    }
+    std::string json = "{";
+    bool first = true;
+    for(auto field : component)
+    {
+        const std::string key(field.key);
+        if(wants_key(filter, key.c_str()))
+        {
+            append_prop(json, first, key.c_str(), std::string(simdjson::minify(field.value)));
+        }
+    }
+    json += "}";
+    return json;
+}
+
+/// @p base with the values of @p overlay in place, objects merged recursively. Keys @p base does
+/// not hold are reported in result.unknown instead of written: the load would drop them silently.
+auto merge_json_objects(const simdjson::dom::object& base,
+                        const simdjson::dom::object& overlay,
+                        const std::string& path,
+                        component_apply_result& result) -> std::string
+{
+    for(auto field : overlay)
+    {
+        simdjson::dom::element existing;
+        if(base[field.key].get(existing))
+        {
+            result.unknown.push_back(path + std::string(field.key));
+        }
+    }
+    std::string json = "{";
+    bool first = true;
+    for(auto field : base)
+    {
+        const std::string key(field.key);
+        simdjson::dom::element replacement;
+        simdjson::dom::object base_object;
+        simdjson::dom::object overlay_object;
+        std::string value;
+        if(overlay[field.key].get(replacement))
+        {
+            value = std::string(simdjson::minify(field.value));
+        }
+        else if(!field.value.get(base_object) && !replacement.get(overlay_object))
+        {
+            value = merge_json_objects(base_object, overlay_object, path + key + ".", result);
+        }
+        else
+        {
+            value = std::string(simdjson::minify(replacement));
+            result.applied.push_back(path + key);
+        }
+        append_prop(json, first, key.c_str(), value);
+    }
+    json += "}";
+    return json;
+}
+
+template<typename Component>
+auto apply_serialized_component_properties(Component& comp,
+                                           const simdjson::dom::object& properties,
+                                           component_apply_result& result) -> void
+{
+    const std::string document = save_component_document(comp);
+    simdjson::dom::parser parser;
+    simdjson::dom::object root;
+    simdjson::dom::object current;
+    if(parser.parse(document).get(root) || root["component"].get(current))
+    {
+        result.ok = false;
+        result.errors.push_back("Component serialization produced no object");
+        return;
+    }
+    const std::string merged = R"({"component":)" + merge_json_objects(current, properties, "", result) + "}";
+    if(!result.unknown.empty())
+    {
+        result.ok = false;
+        result.errors.push_back("Unknown properties; nothing applied");
+        return;
+    }
+    auto ar = ser20::create_iarchive_associative(merged.data(), merged.size());
+    if(!try_load(ar, ser20::make_nvp("component", comp)))
+    {
+        result.ok = false;
+        result.errors.push_back("The component's load rejected the merged properties");
+    }
+}
+
 } // namespace
 
 auto list_component_property_schema_json(const std::string& component_filter) -> std::string
@@ -3547,6 +3669,16 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("GTAO", "multi_bounce", "boolean");
     add("GTAO", "generate_normals", "boolean");
     add("GTAO", "normal_map_detail", "number");
+    // Serialized components: "settings" is the object the scene file stores, and a partial object
+    // merges into the current one (apply_serialized_component_properties).
+    for(const char* serialized : {"Global Illumination", "SSR", "Temporal AA"})
+    {
+        add(serialized, "enabled", "boolean");
+        add(serialized,
+            "settings",
+            "object",
+            R"("description":"The settings object as the scene file stores it; a partial object merges into the current one")");
+    }
     if(all || component_filter == "Script")
     {
         if(!first)
@@ -3569,7 +3701,8 @@ auto is_supported_component_pretty_name(const std::string& component_pretty_name
            component_pretty_name == "Particle Emitter" || component_pretty_name == "Physics" ||
            component_pretty_name == "Animation" || component_pretty_name == "Text" ||
            component_pretty_name == "Reflection Probe" || component_pretty_name == "Bloom" ||
-           component_pretty_name == "GTAO";
+           component_pretty_name == "GTAO" || component_pretty_name == "Global Illumination" ||
+           component_pretty_name == "SSR" || component_pretty_name == "Temporal AA";
 }
 
 auto component_properties_to_json(rtti::context& ctx,
@@ -3716,6 +3849,36 @@ auto component_properties_to_json(rtti::context& ctx,
             return {};
         }
         return gtao_to_json(*comp, filter_ptr);
+    }
+    if(component_pretty_name == "Global Illumination")
+    {
+        auto* comp = entity.try_get<gi_component>();
+        if(!comp)
+        {
+            error = "Component not present on entity: Global Illumination";
+            return {};
+        }
+        return serialized_component_to_json(*comp, filter_ptr, error);
+    }
+    if(component_pretty_name == "SSR")
+    {
+        auto* comp = entity.try_get<ssr_component>();
+        if(!comp)
+        {
+            error = "Component not present on entity: SSR";
+            return {};
+        }
+        return serialized_component_to_json(*comp, filter_ptr, error);
+    }
+    if(component_pretty_name == "Temporal AA")
+    {
+        auto* comp = entity.try_get<taa_component>();
+        if(!comp)
+        {
+            error = "Component not present on entity: Temporal AA";
+            return {};
+        }
+        return serialized_component_to_json(*comp, filter_ptr, error);
     }
     error = "Unsupported component for typed properties: " + component_pretty_name;
     return {};
@@ -3888,6 +4051,42 @@ auto apply_component_properties(rtti::context& ctx,
             return result;
         }
         apply_gtao_properties(*comp, properties, result);
+        return result;
+    }
+    if(component_pretty_name == "Global Illumination")
+    {
+        auto* comp = entity.try_get<gi_component>();
+        if(!comp)
+        {
+            result.ok = false;
+            result.errors.push_back("Component not present on entity: Global Illumination");
+            return result;
+        }
+        apply_serialized_component_properties(*comp, properties, result);
+        return result;
+    }
+    if(component_pretty_name == "SSR")
+    {
+        auto* comp = entity.try_get<ssr_component>();
+        if(!comp)
+        {
+            result.ok = false;
+            result.errors.push_back("Component not present on entity: SSR");
+            return result;
+        }
+        apply_serialized_component_properties(*comp, properties, result);
+        return result;
+    }
+    if(component_pretty_name == "Temporal AA")
+    {
+        auto* comp = entity.try_get<taa_component>();
+        if(!comp)
+        {
+            result.ok = false;
+            result.errors.push_back("Component not present on entity: Temporal AA");
+            return result;
+        }
+        apply_serialized_component_properties(*comp, properties, result);
         return result;
     }
     result.ok = false;

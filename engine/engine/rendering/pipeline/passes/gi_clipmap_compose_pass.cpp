@@ -123,6 +123,8 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         fill(clipmap_gpu.get_world_probe_cells(), clipmap_gpu.get_world_probe_cell_count(), 0xFFFFFFFFu);
         // The running-mean window counts start at zero: every probe's first window writes through.
         fill(clipmap_gpu.get_world_probe_counts(), clipmap_gpu.get_world_probe_cell_count(), 0u);
+        // The trace scheduler's histogram starts empty; its threshold phase zeroes it every run.
+        fill(clipmap_gpu.get_world_probe_select(), global_sdf_clipmap_gpu::world_probe_select_size, 0u);
         // Only when the GPU owns the counts: the CPU-composed variant carries no COMPUTE_WRITE
         // (a compute fill would be invalid on it) and was zero-seeded from the CPU at creation.
         // The cursors are the surface list's HEADER (first level_count entries), so the fill
@@ -346,7 +348,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
                                          float(instances.size()),
                                          float(surface_cache.get_emitters().size())};
             gfx::set_uniform(attributes_program_.u_sdf_params, sdf_params);
-            gfx::set_uniform(attributes_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+            gfx::set_uniform(attributes_program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
             gfx::set_uniform(attributes_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
             gfx::set_uniform(attributes_program_.u_sdf_clipmap_levels,
                              clipmap_gpu.get_level_params(),
@@ -518,7 +520,7 @@ void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
                                  float(instances.size()),
                                  float(surface_cache.get_emitters().size())};
     gfx::set_uniform(compose_program_.u_sdf_params, sdf_params);
-    gfx::set_uniform(compose_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+    gfx::set_uniform(compose_program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
     gfx::set_uniform(compose_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
     // The reach is what the CPU composer seeds `nearest` with, and it must be the same value:
     // it is simultaneously the cheap-reject bound and the saturated output, so a mismatch

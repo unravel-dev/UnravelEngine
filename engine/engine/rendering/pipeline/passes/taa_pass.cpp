@@ -8,12 +8,37 @@
 
 #include <bgfx/bgfx.h>
 
+#include <cmath>
+
 namespace unravel
 {
 namespace
 {
 /// Avoid WRAP at RT edges when sampling history / scene color in TAA (reduces border streaks).
 constexpr std::uint32_t k_taa_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+/// Largest per-element difference between this frame's and last frame's unjittered view-projection that still
+/// counts as a PARKED camera (a parked camera rebuilds bit-identical matrices; this only absorbs float noise).
+constexpr float k_taa_parked_matrix_epsilon = 1e-5f;
+
+/// True when the camera did not move since last frame: its unjittered view-projections match per element.
+auto is_camera_parked(const camera& cam) -> bool
+{
+    const auto current = cam.get_view_projection_unjittered();
+    const auto previous = cam.get_prev_view_projection_unjittered();
+    const auto& current_matrix = current.get_matrix();
+    const auto& previous_matrix = previous.get_matrix();
+    for(int column = 0; column < 4; ++column)
+    {
+        for(int row = 0; row < 4; ++row)
+        {
+            if(std::abs(current_matrix[column][row] - previous_matrix[column][row]) > k_taa_parked_matrix_epsilon)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 } // namespace
 
 auto taa_pass::init(rtti::context& ctx) -> bool
@@ -50,18 +75,25 @@ auto taa_pass::create_or_update_temp_fb(gfx::render_view& rview,
 {
     const auto sz = reference_color->get_size();
     const auto fmt = reference_color->get_texture(0)->info.format;
-    auto& out_tex = rview.tex_get_or_emplace("TAA_TEMP");
-    if(gfx::needs_recreate(out_tex, sz, fmt))
+    // Attachment 0 is the displayed resolve (sharpened), attachment 1 the history resolve (never
+    // sharpened): the sharpen must stay out of the history feedback loop (fs_taa.sc).
+    bool is_recreated = false;
+    for(const char* id : {"TAA_TEMP", "TAA_TEMP_HISTORY"})
     {
-        out_tex.reset();
-        out_tex = std::make_shared<gfx::texture>(sz.width, sz.height, false, 1, fmt, BGFX_TEXTURE_RT);
+        auto& tex = rview.tex_get_or_emplace(id);
+        if(gfx::needs_recreate(tex, sz, fmt))
+        {
+            tex.reset();
+            tex = std::make_shared<gfx::texture>(sz.width, sz.height, false, 1, fmt, BGFX_TEXTURE_RT);
+            is_recreated = true;
+        }
     }
     auto& fbo = rview.fbo_get_or_emplace("TAA_TEMP");
-    if(gfx::needs_recreate(fbo, sz))
+    if(is_recreated || gfx::needs_recreate(fbo, sz))
     {
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
-        fbo->populate({out_tex});
+        fbo->populate({rview.tex_safe_get("TAA_TEMP"), rview.tex_safe_get("TAA_TEMP_HISTORY")});
     }
     return fbo;
 }
@@ -127,7 +159,8 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
                                  params.config.variance_clip_scale};
     gfx::set_uniform(program_.u_taa_params, taa_params);
 
-    const float taa_params2[4] = {use_velocity ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    // y = 1 while the camera is parked: the shader's display average of still pixels with last frame's history.
+    const float taa_params2[4] = {use_velocity ? 1.0f : 0.0f, is_camera_parked(*params.cam) ? 1.0f : 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_taa_params2, taa_params2);
 
     const auto topology = gfx::clip_quad(1.0f);
@@ -143,7 +176,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
               history_tex->native_handle(),
               0,
               0,
-              temp_fbo->get_texture(0)->native_handle(),
+              temp_fbo->get_texture(1)->native_handle(),
               0,
               0);
 
@@ -168,6 +201,7 @@ void taa_pass::release_resources(gfx::render_view& rview)
     rview.tex_remove("TAA_HISTORY");
     rview.fbo_remove("TAA_TEMP");
     rview.tex_remove("TAA_TEMP");
+    rview.tex_remove("TAA_TEMP_HISTORY");
 }
 
 } // namespace unravel

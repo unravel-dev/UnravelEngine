@@ -92,6 +92,8 @@ void surface_cache_view::update(const std::vector<global_sdf_instance>& instance
 
 auto surface_cache_view::update_quiescence(uint64_t light_hash,
                                            uint64_t environment_hash,
+                                           uint64_t light_revision,
+                                           uint64_t environment_revision,
                                            const math::vec3& camera_position,
                                            const relight_sample& relight,
                                            bool wants_debug) -> quiescence_verdict
@@ -99,21 +101,36 @@ auto surface_cache_view::update_quiescence(uint64_t light_hash,
     quiescence_verdict verdict;
     bool changed = false;
     bool lighting_changed = false;
+    // ANY light or sky byte wakes the world side: the relight and the probes must see it.
     if(light_hash != quiescence_light_hash_)
     {
         quiescence_light_hash_ = light_hash;
         changed = true;
-        lighting_changed = true;
     }
     // The ENVIRONMENT is lighting too, and it was the one input this gate could not see: world
     // probes integrate the sky SH on every miss, so a tint, an intensity, a turbidity or a
     // swapped cubemap changed on its own left the atlas holding the old sky behind a gate with
     // no reason to open. Editing a sky next to its directional light hid this, because the light
-    // set changed with it. Counted as a LIGHTING change, so the temporal's screen-wide fast
-    // window flushes the stale sky bounce exactly as it does for a light edit.
+    // set changed with it.
     if(environment_hash != quiescence_environment_hash_)
     {
         quiescence_environment_hash_ = environment_hash;
+        changed = true;
+    }
+    // GRADED (plan item 1.2, Lumen's sun / sky rule): only a GLOBAL revision - a directional
+    // light or the sky past the 4x brightness ratio, or one added or removed - is a LIGHTING
+    // change that pins the screen temporal's scene-wide fast window. A moving local light
+    // flushes only its own influence region (the dirty regions), and a drifting sun or sky
+    // refreshes through the normal cadence instead of holding every pixel at the fast cap.
+    if(light_revision != quiescence_light_revision_)
+    {
+        quiescence_light_revision_ = light_revision;
+        changed = true;
+        lighting_changed = true;
+    }
+    if(environment_revision != quiescence_environment_revision_)
+    {
+        quiescence_environment_revision_ = environment_revision;
         changed = true;
         lighting_changed = true;
     }

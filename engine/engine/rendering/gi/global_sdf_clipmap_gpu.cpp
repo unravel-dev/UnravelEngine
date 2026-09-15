@@ -197,6 +197,13 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
         world_probe_index_ = gfx::create_dynamic_index_buffer(get_world_probe_index_count(),
                                                               BGFX_BUFFER_COMPUTE_READ_WRITE |
                                                                   BGFX_BUFFER_INDEX32);
+        // The trace scheduler's state (seeded by the compose pass's GPU fill) and its list.
+        world_probe_select_ = gfx::create_dynamic_index_buffer(world_probe_select_size,
+                                                               BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                                   BGFX_BUFFER_INDEX32);
+        world_probe_list_ = gfx::create_dynamic_index_buffer(probe_count,
+                                                             BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                                 BGFX_BUFFER_INDEX32);
         needs_world_probe_index_seed_ = true;
         world_probe_atlas_params_[0] = 1.0f / float(gutter_w);
         world_probe_atlas_params_[1] = 1.0f / float(gutter_h);
@@ -205,7 +212,8 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
         if(!world_probe_radiance_ || !world_probe_radiance_->is_valid() || !world_probe_irradiance_ ||
            !world_probe_irradiance_->is_valid() || !world_probe_depth_ || !world_probe_depth_->is_valid() ||
            !bgfx::isValid(world_probe_cells_) || !bgfx::isValid(world_probe_counts_) ||
-           !bgfx::isValid(world_probe_index_))
+           !bgfx::isValid(world_probe_index_) || !bgfx::isValid(world_probe_select_) ||
+           !bgfx::isValid(world_probe_list_))
         {
             APPLOG_ERROR("[SurfaceCache] Failed to create the world probe resources.");
             shutdown();
@@ -251,6 +259,16 @@ void global_sdf_clipmap_gpu::shutdown()
     {
         gfx::destroy(world_probe_index_);
         world_probe_index_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+    }
+    if(bgfx::isValid(world_probe_select_))
+    {
+        gfx::destroy(world_probe_select_);
+        world_probe_select_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+    }
+    if(bgfx::isValid(world_probe_list_))
+    {
+        gfx::destroy(world_probe_list_);
+        world_probe_list_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
     }
     needs_world_probe_index_seed_ = false;
     world_probe_cell_count_ = 0;

@@ -31,16 +31,21 @@
     X(GI_TRACE_MAX_STEPS, 64,                                                                      \
       "steps", "published: [S22 p36] mesh SDF march cap; exhaustion REPORTS A HIT (over-occlude,"  \
       " never launder a give-up into lit)")                                                        \
-    X(GI_MESH_SDF_TRACE_RANGE, 8.0f,                                                               \
-      "m", "measured: per-instance (mesh-exact) tracing over the whole screen-probe short range"  \
-      " (GI_SCREEN_PROBE_SHORT_RANGE), the global SDF beyond. Lumen caps detail tracing at 2 m"    \
-      " [S22 p44] and so did this until 2026-09-13; measured on Sponza the cascade's fattening"    \
-      " between 2 and 8 m is what made a surface's lighting follow the camera: rays traced from"   \
-      " the same courtyard floor through the level-0 field read E/pi 0.52, through the level-1"    \
-      " and level-2 fields 0.37 and 0.20 (trace-only gather, no cache), because a coarser field"  \
-      " closes more of the balconies, curtains and railings between the floor and the sky. Over"  \
-      " 8 m of mesh-exact tracing the same floor reads within 25 percent from 2.5, 10 and 15 m"   \
-      " (audit section 18). Cost: +0.33 ms on the gather at 1080p (1.24 -> 1.57 ms still)")        \
+    X(GI_SDF_GRID_PARAMS_VEC4, 3,                                                                  \
+      "vec4s", "derived: u_sdf_grid_params - [0] grid origin + cell size, [1] cell counts + the"   \
+      " instance base, [2] x = the runtime experiment flags every tracer reads (in-session cost"   \
+      " A/Bs, zero in production; surface_cache_system::set_experiment_flags)")                    \
+    X(GI_MESH_SDF_TRACE_RANGE, 6.0f,                                                               \
+      "m", "measured: per-instance (mesh-exact) tracing over the first metres of the"              \
+      " screen-probe short range (GI_SCREEN_PROBE_SHORT_RANGE), the cascade WITHOUT the surface"   \
+      " expand beyond. Lumen caps detail tracing at 2 m [S22 p44] and so did this until"           \
+      " 2026-09-13, when the cascade's fattening between 2 and 8 m made a surface's lighting"      \
+      " follow the camera (the same courtyard floor read E/pi 0.52 / 0.37 / 0.20 through the"      \
+      " level-0 / 1 / 2 fields; audit section 18) and 8 m went mesh-exact. 2026-09-14: that"       \
+      " fattening was the expand, not the field - 6 m exact with no expand past it matches 8 m"    \
+      " within 1.6 percent of indirect at five poses, sealed cells unchanged, gather dolly"        \
+      " 1.55 -> 1.20 ms; 6 m WITH the ramped expand darkened indirect 8-16 percent; 4 m with no"   \
+      " expand -2.6..-3.9 percent")                                                                \
     X(GI_SCREEN_PROBE_SHORT_RANGE, 8.0f,                                                           \
       "m", "measured: how far a screen-probe ray establishes its own visibility before it"        \
       " completes from the world-probe radiance cache - the same at every camera distance. It"    \
@@ -48,27 +53,30 @@
       " camera stood from a surface the higher and coarser the cage its rays completed from,"    \
       " and the same floor read E/pi 1.2 from 2.5 m and 0.25 from 15 m. 8 m keeps the completion" \
       " point inside the open courtyard well (a probe at the roof's height sees the roof, not"    \
-      " the sky) and matches GI_MESH_SDF_TRACE_RANGE so the whole own-visibility length is"       \
-      " mesh-exact. NOT SHORTER: 3.6 m (Lumen's hand-off) saved 0.3-0.4 ms of gather in motion"  \
+      " the sky); its first GI_MESH_SDF_TRACE_RANGE metres are mesh-exact and the rest crosses the"       \
+      " unexpanded cascade. NOT SHORTER: 3.6 m (Lumen's hand-off) saved 0.3-0.4 ms of gather in motion"  \
       " but the GI test suite's 5 cm-walled sealed cell read 0.0157 -> 0.0824 (target 0.0235):"  \
       " shorter rays complete from world-probe cages sooner, and near a thin wall the cage's"    \
       " clipmap-marched visibility cannot see the wall (gi_perf_investigation_2026-09-13.md)")    \
-    X(GI_RELIGHT_SHADOW_NEAR_FIELD, 2.0f,                                                          \
-      "m", "published: [S22 p44] the light-voxel relight's shadow rays keep the 2 m mesh-exact"   \
-      " near field (scaled per level by the kernel) when GI_MESH_SDF_TRACE_RANGE grew to 8 m for"  \
-      " the gather: the relight's direct term is answered by the shadow map at level 0 and its"   \
-      " traced tier at coarser levels gains little from 8 m of mesh tracing, while the pass"      \
-      " measured +0.3-0.5 ms awake with it (2026-09-13)")                                          \
-    X(GI_WORLD_PROBE_MESH_RANGE, 20.0f,                                                            \
-      "m", "measured: how far a WORLD-PROBE ray marches the per-instance (mesh-exact) fields"    \
-      " before the cascade answers. Longer than the gather's GI_MESH_SDF_TRACE_RANGE because a"   \
-      " probe ray has no radiance cache to complete from: beyond its exact range it sees the"     \
-      " cascade, whose level 1-2 fattening closes the upper arcades and the hanging curtains"    \
-      " between 8 and 20 m of the Sponza courtyard floor. Measured 2026-09-13: with 8 m the"      \
-      " floor cage's sky share was 3.7% against a geometric ~8% and its E/pi 0.58-0.61; with"     \
-      " 20 m 0.69-0.83 (+30-50%), and the gather's own rays traced through the cascade over"      \
-      " 8-20 m instead lost 60% of the floor's light. Cost: the world-probe trace 0.8 -> ~1.3 ms" \
-      " mean awake (crossing peaks 3-6 ms), zero at rest under the gate")                          \
+    X(GI_RELIGHT_SHADOW_NEAR_FIELD, 0.5f, \
+      "m", "measured: the mesh-exact near field of the light-voxel relight's traced shadow rays" \
+      " (scaled per level by the kernel: level 1 half, coarser none) - the thin-wall sun defence the" \
+      " cascade cannot give. The traced sun shadow is half the relight's cost and that near field is" \
+      " the shadow's cost (distance and step budget measured flat). 2026-09-14 on Sponza: 2 m -> 0.5 m" \
+      " light voxels dolly 0.83 -> 0.69, orbit 0.71 -> 0.56 ms, sealed cells 0.0039 / 0.0157, indirect" \
+      " captures unchanged; 0 m 0.51 / 0.45 ms but the thick sealed cell rose to 0.0157 - the sun" \
+      " reached the room through its wall. Was 2 m, kept from before the gather grew to 8 m [S22 p44]") \
+    X(GI_WORLD_PROBE_MESH_RANGE, 6.0f, \
+      "m", "measured: how far a WORLD-PROBE ray marches the per-instance (mesh-exact) fields before" \
+      " the cascade answers, which it then does WITHOUT the surface expand. Was 20 m while the" \
+      " cascade tier fattened probe rays by half a voxel diagonal from launch - that fattening closed" \
+      " the Sponza courtyard's upper arcades and curtains past 8 m (floor cage sky share 3.7% against" \
+      " a geometric ~8%). The exact first metres are what closes the sealed-box leak the expand once" \
+      " did; past them the unexpanded cascade matches the 20 m reference within ~1% (2026-09-14: lit" \
+      " within -1.2%, indirect within +-1.4% at five poses, sealed cells unchanged) for ~30% of the" \
+      " world-probe trace (dolly 0.87 -> 0.57 ms); 6 m with the full expand darkened the lit image" \
+      " 13-20%. Accepted risk: a thin-walled sealed space larger than 6 m can leak through a" \
+      " sub-voxel wall at range - the thin-wall limitation Lumen documents") \
     X(GI_EXPAND_MAX_VOXEL_DIAGONALS, 0.5f,                                                         \
       "voxel diagonals", "published: [S22 p48] runtime thin-surface expand cap = half the voxel"   \
       " diagonal; grows linearly from zero at the ray origin so contact shadows survive")          \
@@ -395,8 +403,10 @@
       " of the skipped rays; the phase hash keeps neighbouring probes from revalidating in the"    \
       " same frame, so the cost is spread, never pulsed")                                          \
     X(GI_MAX_RAY_RADIANCE, 40.0f,                                                                  \
-      "radiance", "published: [CVar] ScreenProbeGather.MaxRayIntensity = 40 firefly clamp at"       \
-      " trace time - in Lumen a PRE-EXPOSED value. This engine's GI runs in absolute radiance,"    \
+      "radiance", "tuned: Lumen's [CVar] ScreenProbeGather.MaxRayIntensity (10 in UE 5.7,"         \
+      " LumenScreenProbeFiltering.cpp:58; this note used to read 40) clamps fireflies at trace"   \
+      " time on a PRE-EXPOSED value, so no absolute value corresponds to it. This engine's GI"     \
+      " runs in absolute radiance,"                                                                \
       " so as an absolute clamp on the screen-probe cell and the world-probe texel it capped"      \
       " every emitter brighter than 40: measured 2026-09-10 (gi_emissive_research 1.5) a"         \
       " 16x intensity spread 6.5x. Neither site clamps radiance any more (the MIS contribution"    \
@@ -509,19 +519,19 @@
       "GGX roughness", "matched to the SSR: fs_ssr_composite.sc fades the screen-space"             \
       " reflection out over 0.3..0.6 (MAX_ROUGHNESS), so the traced GI tier hands over to the"      \
       " diffuse gather at the same 0.6 - with the two at different marks (0.4 here) the GI"         \
-      " reflection dissolved into the gather while the SSR beside it still blurred. The"            \
-      " world-probe radiance atlas texel (16x16 octahedral, ~13-degree half-angle) subtends"        \
-      " a GGX lobe of roughness ~0.4; past that the traced rays are already blended toward"         \
-      " the prefiltered probe radiance by the lobe/texel ratio, so the 0.4..0.6 band costs"         \
-      " rays on its pixels and changes little else. At and past the cutoff a pixel reads the"       \
-      " probe cage along the reflection and pays no ray")                                           \
+      " reflection dissolved into the gather while the SSR beside it still blurred. At and"         \
+      " past the cutoff a pixel pays no ray and reuses last frame's resolved diffuse GI (the"       \
+      " sky SH when no resolve is bound); world-probe cage reads are deliberately absent from"      \
+      " the reflection kernel (gi_reflection_kernel.sh header)")                                    \
     X(GI_REFLECTION_TEMPORAL_FRAMES, 8,                                                            \
       "frames", "derived: the stochastic GGX reflection ray (VNDF, R2 sequence per frame)"         \
       " integrates its lobe over this many frames of history. One 8-frame R2 cycle matches"        \
       " the gather's anchor cycle (GI_TEMPORAL_MAX_FRAMES is three of them) - reflections"        \
       " must track moving content faster than irradiance, so one cycle, ~130 ms at 60 Hz."         \
       " The temporal pass clamps history to the 3x3 neighbourhood of the current frame's"         \
-      " samples, so stale content cannot outlive a frame regardless of this length")               \
+      " samples while the receiver moves; a still receiver releases the clamp"                     \
+      " (fs_gi_reflection_temporal.sc), and there this length, the mover gate and the"             \
+      " confidence collapse bound how long stale content lasts")                                   \
     X(GI_REFLECTION_MESH_SDF_RANGE_SHARP, 8.0f,                                                     \
       "meters", "measured: a mirror is one image-ray, so the mesh-exact walk may run past the"      \
       " gather's contact bound - but beyond a few metres the clipmap-finder + refine path"          \
@@ -668,14 +678,12 @@
       " every real disagreement behind it; 10 keeps the space near-linear up to"                    \
       " scene-referred whites and compresses only fireflies")                                       \
     X(GI_REFLECTION_GATHER_FADE_START, 0.45f,                                                       \
-      "GGX roughness", "derived: 0.75 x GI_REFLECTION_ROUGH_CUTOFF. The traced tiers now"          \
-      " SPREAD with roughness (screen hits average a GGX-cone disk, world hits blend toward"       \
-      " the 13-degree prefiltered probe radiance by the lobe/texel angle ratio), so the fade"      \
-      " toward the gather-based rough value has one job left: C0 continuity into the rough"        \
-      " tier at the cutoff. It starts where the lobe/texel blend has already replaced the"         \
-      " majority of the sharp trace ((0.75)^2 = 56 percent), reconciling only the residual -"      \
-      " a wide fade from the mirror end read as content dissolving instead of blurring"            \
-      " (measured, round 3)")                                                                      \
+      "GGX roughness", "derived: 0.75 x GI_REFLECTION_ROUGH_CUTOFF. The traced tier now"           \
+      " SPREADS with roughness on its own (one VNDF-sampled ray per frame, integrated by the"      \
+      " reflection temporal), so the fade toward the gather-based rough value has one job"         \
+      " left: C0 continuity into the rough tier at the cutoff, over the last quarter of the"       \
+      " traced range only - a wide fade from the mirror end read as content dissolving"            \
+      " instead of blurring (measured, round 3)")                                                  \
     /* --- temporal (plan 3.5) --- */                                                              \
     X(GI_INTERPOLATION_JITTER_TILES, 0.75f,                                                     \
       "probe tiles", "published-then-tuned: [CVar] ScreenProbeGather.FullResolutionJitterWidth"    \
@@ -890,11 +898,12 @@
       " history at the time - so a mover emerging from behind an occluder inherited the"           \
       " occluder's lighting outright")                                                             \
     X(GI_TEMPORAL_DEPTH_TOLERANCE, 0.1f,                                                           \
-      "relative depth per unit view distance", "Lumen's Temporal.DistanceThreshold = 0.005"        \
-      " assumes motion-vector reprojection; ours still reconstructs the previous position"         \
+      "relative depth per unit view distance", "Lumen's Temporal.DistanceThreshold = 0.01 (UE"     \
+      " 5.7, LumenScreenProbeGather.cpp:167-168; this note used to read 0.005) assumes"           \
+      " motion-vector reprojection; ours still reconstructs the previous position"                 \
       " from the depth buffer (velocity-era note: camera pixels keep the matrix+depth path,"       \
-      " so reconstruction error at edges and grazing angles remains and 0.005 still"               \
-      " over-rejects). The historical 0.25 also absorbed MOVING receivers failing the test;"       \
+      " so reconstruction error at edges and grazing angles remains; 0.005 over-rejected"          \
+      " here). The historical 0.25 also absorbed MOVING receivers failing the test;"               \
       " those now skip it via the velocity buffer's object split, so the slack tightened to"       \
       " 0.1 - less stale-light bleed across depth edges under camera motion. Live-tunable as"      \
       " gi_resolve_pass::settings::reprojection_tolerance (this is its default)")                \
@@ -1002,8 +1011,10 @@
       " the regular chain's reach suffices (measured: revealed regions stayed 3-4x noisier than"  \
       " converged ones for 14+ frames with the fixed reach)")                                     \
     X(GI_REFLECTION_ROUGH_WINDOW_SCALE, 4.0f,                                                      \
-      "x the reflection temporal window", "published: Lumen reflections accumulate 32 frames"     \
-      " (Reflections.Temporal.MaxFramesAccumulated) against the gather's 10; the window here"      \
+      "x the reflection temporal window", "historical: justified by a misread of Lumen - UE"     \
+      " 5.7's Reflections.Temporal.MaxFramesAccumulated is 12 (LumenReflections.cpp:154-155; 32"   \
+      " is only the history packing range, mirrors use 2) and does not grow with roughness;"       \
+      " plan items 1.5 / 1.6 revisit it. The window here"                                           \
       " scales from the settings value at mirror roughness to this multiple at"                   \
       " GI_REFLECTION_ROUGH_CUTOFF, where the lobe is widest and one VNDF ray per frame"          \
       " integrates slowest. Sharp reflections keep the short window and its responsiveness")      \
@@ -1156,18 +1167,14 @@
       " re-claimed and re-tested only every this many ticks, so a wall that moved away frees"    \
       " its lattice points within a second while a static wall costs one claim-and-free per"     \
       " cell per period instead of one per frame")                                                \
-    X(GI_WORLD_PROBE_RELOCATE_REFRESH_FRAMES, 16,                                                  \
-      "frames", "the world-probe trace re-runs a live level-0 probe's relocation once per this"   \
-      " many frames, a rotation over the pool, and reads the stored offset otherwise: the mesh"  \
-      " fields a lattice point sits in change only with movers and field streaming, and the"     \
-      " per-frame refresh cost 0.6 ms of a 2.4-3.1 ms trace in motion"                            \
-      " (gi_perf_investigation_2026-09-13.md). Claims relocate at once in the relocation pass")    \
-    X(GI_WORLD_PROBE_CONVOLVE_PERIOD, 4,                                                           \
-      "frames", "a settled world probe (two complete windows since its claim or its last fast"   \
-      " window) is re-convolved once per this many frames, a rotation over the slots; younger"   \
-      " probes every frame, so a fresh claim never serves its slot's previous tiles. The trace"  \
-      " refreshes one stratum in sixteen per frame, so the settled irradiance lags by at most"   \
-      " three frames; the convolve integrated all 21,507 slots every open frame")                 \
+    X(GI_WORLD_PROBE_TRACE_BUDGET, 3072,                                                           \
+      "probes per frame", "published + derived: Lumen traces a fixed 100 radiance-cache probes"  \
+      " per frame (x 1024 rays at Epic, ~102k rays) chosen by age (plan item 2.1,"                \
+      " tasks/research/lumen57_2026-09-14/b_radiance_cache.md). The scheduler lists at most this"  \
+      " many world probes per frame, 16 rays each (~49k rays): claims and scrolled-in slots"      \
+      " first, then first-window probes, then the stalest by level-weighted age; every live probe" \
+      " while a fast window is armed. The trace used to process every live probe every open"      \
+      " frame - ~146k rays on Sponza, 585k in a fast window")                                    \
     X(GI_WORLD_PROBE_EVICT_IDLE_FRAMES, 1024,                                                      \
       "frames", "derived: GI_QUIESCENCE_MAX_FRAMES - a sparse level-0 probe nobody has requested" \
       " for this long is freed while the pool is comfortable. The relight is the requester for"   \

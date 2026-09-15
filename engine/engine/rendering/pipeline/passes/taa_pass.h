@@ -30,7 +30,7 @@ public:
         float jitter_temporal_phase_scale = 0.45f;
         /// Blend toward clipped history (lower = less gray cast, slightly more aliasing).
         float history_blend = 0.82f;
-        /// Unsharp on current neighborhood; keep low to avoid edge shimmer.
+        /// Unsharp on the displayed resolve only - never written to the history; keep low.
         float sharpen = 0.5f;
         float depth_reject_scale = 1.0f;
         /// Standard deviations for RGB variance clip (typical 1.0–1.75).

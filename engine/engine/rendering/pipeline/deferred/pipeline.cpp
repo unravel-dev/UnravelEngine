@@ -47,6 +47,10 @@ constexpr int contact_shadow_dither_frames = 16;
 /// Where the environment revision is published on a render view, for the GI world side to read
 /// next to the IRRADIANCE_SH texture it belongs to (see run_irradiance_pass).
 constexpr const char* environment_hash_key = "GI_ENVIRONMENT_HASH";
+/// The graded environment revision (plan item 1.2) and the state it was last bumped under.
+constexpr const char* environment_revision_key = "GI_ENVIRONMENT_REVISION";
+constexpr const char* environment_revision_structure_key = "GI_ENVIRONMENT_REVISION_STRUCTURE";
+constexpr const char* environment_revision_level_key = "GI_ENVIRONMENT_REVISION_LEVEL";
 
 /// FNV-1a, the fold gpu_light_buffer's content hash already uses. Values are folded ONE AT A
 /// TIME rather than as struct bytes: padding is not zero-initialised, and hashing it once made
@@ -958,6 +962,21 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         }
     }
 
+    // The temporal-stability instrument measures the finished image (the lit frame or the active
+    // debug view, before the editor draws its overlays) and must read LAST frame's depth, so it
+    // runs before the depth snapshot below. It dispatches nothing unless a tool armed it.
+    if(is_camera_run)
+    {
+        temporal_probe_pass::run_params probe_params;
+        probe_params.color = output->get_texture(0);
+        probe_params.velocity = rview.tex_safe_get("VELOCITY");
+        const auto& probe_gbuffer = rview.fbo_get("GBUFFER");
+        probe_params.depth = probe_gbuffer ? probe_gbuffer->get_texture(4) : nullptr;
+        probe_params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
+        probe_params.cam = &camera;
+        temporal_probe_pass_.run(probe_params);
+    }
+
     // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path).
     //
     // The GI resolve is a second, independent consumer: its temporal accumulation validates
@@ -1856,6 +1875,48 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         }
         result.environment_hash = environment_hash;
         rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_hash_key, 0ull) = environment_hash;
+        // GRADED ENVIRONMENT CHANGE (plan item 1.2, Lumen's sun / sky rule). The hash above wakes
+        // the world side on any sky edit; the REVISION bumps only when the environment changes
+        // kind (mode, cubemap identity, Perez on / off) or its brightness moves past
+        // gpu_light_buffer::global_change_ratio since the last revision. The probes' fast window,
+        // the relight's EMA snap and the screen temporal's scene-wide fast cap key on the
+        // revision, so a drifting time-of-day sky refreshes through the normal cadence instead of
+        // flushing every pixel every frame.
+        uint64_t environment_structure = ANONYMOUS::fnv_offset_basis;
+        environment_structure = ANONYMOUS::fold_uint(environment_structure, uint64_t(mode));
+        environment_structure = ANONYMOUS::fold_uint(environment_structure, use_cubemap ? 1ull : 0ull);
+        environment_structure = ANONYMOUS::fold_uint(environment_structure, dominant.use_perez ? 1ull : 0ull);
+        if(use_cubemap)
+        {
+            environment_structure = ANONYMOUS::fold_uint(environment_structure,
+                                                         uint64_t(std::hash<hpp::uuid>{}(dominant.cubemap.uid())));
+        }
+        constexpr float luminance_r = 0.2126f;
+        constexpr float luminance_g = 0.7152f;
+        constexpr float luminance_b = 0.0722f;
+        float environment_level =
+            (luminance_r * ambient_vec[0] + luminance_g * ambient_vec[1] + luminance_b * ambient_vec[2]) * ambient_vec[3];
+        if(dominant.use_perez)
+        {
+            const auto& sun = dominant.perez.sun_luminance_rgb;
+            const float sun_level = (luminance_r * sun.x + luminance_g * sun.y + luminance_b * sun.z) * dominant.sun_weight;
+            environment_level = math::max(environment_level, math::max(dominant.perez.sky_luminance_xyz.y, sun_level));
+        }
+        auto& environment_revision = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_revision_key, 0ull);
+        auto& revision_structure =
+            rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_revision_structure_key, 0ull);
+        auto& revision_level = rview.data().get_or_emplace<float>(ANONYMOUS::environment_revision_level_key, -1.0f);
+        const float level_low = math::min(environment_level, revision_level);
+        const float level_high = math::max(environment_level, revision_level);
+        const bool level_global =
+            revision_level < 0.0f ||
+            (level_high > 0.0f && (level_low <= 0.0f || level_high > gpu_light_buffer::global_change_ratio * level_low));
+        if(environment_revision == 0ull || environment_structure != revision_structure || level_global)
+        {
+            ++environment_revision;
+            revision_structure = environment_structure;
+            revision_level = environment_level;
+        }
 
         bgfx::dispatch(irr_pass.id, irradiance_compute_program_.program->native_handle(), 1, 1, 1);
         irradiance_compute_program_.program->end();
@@ -2793,8 +2854,13 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
         // from the view rather than passed down, so it always describes the texture the probes
         // are about to sample - whichever side of this block the irradiance pass ran on.
         const uint64_t environment_hash = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_hash_key, 0ull);
+        const uint64_t light_revision = surface_cache.get_light_buffer().get_global_revision();
+        const uint64_t environment_revision =
+            rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_revision_key, 0ull);
         const auto verdict = view_cache.update_quiescence(light_hash,
                                                           environment_hash,
+                                                          light_revision,
+                                                          environment_revision,
                                                           camera.get_position(),
                                                           gi_light_voxel_pass_.get_relight_sample(),
                                                           wants_sdf_debug);
@@ -2810,10 +2876,18 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
         gate_params.reset = verdict.changed;
         gate_params.groups[gi_quiescence_gate_pass::entry_light_voxels] =
             gi_light_voxel_pass::get_dispatch_groups(view_cache);
+        // The world-probe scheduler (plan item 2.1) runs on its own three entries ahead of the
+        // trace; the trace and the convolve are sized by the budget the probe pass last set.
+        gate_params.groups[gi_quiescence_gate_pass::entry_probe_select_histogram] =
+            gi_world_probe_pass::get_select_dispatch_groups(gi_quiescence_gate_pass::entry_probe_select_histogram);
+        gate_params.groups[gi_quiescence_gate_pass::entry_probe_select_threshold] =
+            gi_world_probe_pass::get_select_dispatch_groups(gi_quiescence_gate_pass::entry_probe_select_threshold);
+        gate_params.groups[gi_quiescence_gate_pass::entry_probe_select_emit] =
+            gi_world_probe_pass::get_select_dispatch_groups(gi_quiescence_gate_pass::entry_probe_select_emit);
         gate_params.groups[gi_quiescence_gate_pass::entry_probe_trace] =
-            gi_world_probe_pass::get_trace_dispatch_groups();
+            gi_world_probe_pass_.get_trace_dispatch_groups();
         gate_params.groups[gi_quiescence_gate_pass::entry_probe_convolve] =
-            gi_world_probe_pass::get_convolve_dispatch_groups();
+            gi_world_probe_pass_.get_convolve_dispatch_groups();
         const bool gpu_gated = gi_quiescence_gate_pass_.run(rview, gate_params);
         const auto indirect = gpu_gated ? gi_quiescence_gate_pass_.get_indirect_buffer()
                                         : gfx::indirect_buffer_handle{bgfx::kInvalidHandle};
@@ -2877,10 +2951,11 @@ void deferred::run_gi_world_probe_pass(const camera& camera,
     probe_params.camera_position = camera.get_position();
     probe_params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
     probe_params.frame = light_voxel_frame_;
-    probe_params.light_hash = surface_cache.get_light_buffer().get_content_hash();
-    // The probes integrate the environment SH on every sky miss, so a sky edit stales the whole
-    // atlas exactly as a light edit does and earns the same fast window.
-    probe_params.environment_hash = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_hash_key, 0ull);
+    // GLOBAL revisions only (plan item 1.2): a local light's change reaches the probes through
+    // their normal stratum cadence; the fast window stays for the changes that stale the whole
+    // atlas - a directional light or the sky past the 4x brightness rule, or a kind change.
+    probe_params.light_hash = surface_cache.get_light_buffer().get_global_revision();
+    probe_params.environment_hash = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_revision_key, 0ull);
     probe_params.jitter_directions = gi.resolve.world_probe_jitter;
     probe_params.census = gi_quiescence_gate_pass_.is_census_armed();
     gi_world_probe_pass_.run(rview, probe_params);

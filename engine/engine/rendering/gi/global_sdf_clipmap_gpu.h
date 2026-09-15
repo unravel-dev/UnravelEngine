@@ -252,6 +252,22 @@ public:
         return world_probe_index_;
     }
 
+    /// Entries of the trace scheduler's state buffer (GI_WORLD_PROBE_SELECT_SIZE in
+    /// gi_world_probes.sh): the priority histogram, the threshold, the quota, the listed count.
+    static constexpr uint32_t world_probe_select_size = 20u;
+
+    /// The trace scheduler's state (cs_gi_world_probe_select.sc, plan item 2.1).
+    auto get_world_probe_select() const -> gfx::dynamic_index_buffer_handle
+    {
+        return world_probe_select_;
+    }
+
+    /// The scheduler's per-frame probe list: one slot index per entry, capacity every slot.
+    auto get_world_probe_list() const -> gfx::dynamic_index_buffer_handle
+    {
+        return world_probe_list_;
+    }
+
     /// True until the allocation pass's init phase has written the index's sentinels and the
     /// free stack (a compute-writable buffer the CPU may not fill; see needs_buffer_seed).
     auto needs_world_probe_index_seed() const -> bool
@@ -361,6 +377,8 @@ private:
     gfx::dynamic_index_buffer_handle world_probe_cells_{bgfx::kInvalidHandle};
     gfx::dynamic_index_buffer_handle world_probe_counts_{bgfx::kInvalidHandle};
     gfx::dynamic_index_buffer_handle world_probe_index_{bgfx::kInvalidHandle};
+    gfx::dynamic_index_buffer_handle world_probe_select_{bgfx::kInvalidHandle};
+    gfx::dynamic_index_buffer_handle world_probe_list_{bgfx::kInvalidHandle};
     uint32_t world_probe_cell_count_ = 0;
     bool needs_world_probe_index_seed_ = false;
     bool needs_buffer_seed_ = false;

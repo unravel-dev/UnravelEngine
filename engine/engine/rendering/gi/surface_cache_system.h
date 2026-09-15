@@ -1,6 +1,7 @@
 #pragma once
 
 #include <engine/engine_export.h>
+#include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
 #include <engine/rendering/gi/global_sdf_clipmap_gpu.h>
 #include <engine/rendering/gi/sdf_atlas.h>
@@ -316,6 +317,23 @@ public:
         return grid_params_.data();
     }
 
+    /**
+     * @brief Runtime experiment flags every tracer reads (get_grid_params()[8], sdf_common.sh
+     *        SDF_EXPERIMENT_*): two code paths compiled into one program, alternated inside ONE editor
+     *        launch for cost A/Bs - a relaunch's own variance hides effects under ~20 percent. Zero in
+     *        production; set by the editor MCP tool gi_set_experiment_flags.
+     */
+    void set_experiment_flags(uint32_t flags)
+    {
+        experiment_flags_ = flags;
+        grid_params_[8] = float(flags);
+    }
+
+    auto get_experiment_flags() const -> uint32_t
+    {
+        return experiment_flags_;
+    }
+
     auto get_instances() const -> const std::vector<instance>&
     {
         return instances_;
@@ -533,6 +551,9 @@ private:
     /// Sweeps placements not seen this frame (their last bounds go stale too), drops history
     /// older than the hold window and rebuilds @ref dirty_regions_.
     void rebuild_dirty_regions();
+    /// Appends this frame's local light changes (gpu_light_buffer::get_local_changes) to their
+    /// lights' histories; rebuild_dirty_regions turns each history into one dirty region.
+    void record_light_changes();
 
     /**
      * @brief What the walk needs from a material, decoded once per material per frame.
@@ -656,6 +677,14 @@ private:
     /// At most GI_TEMPORAL_DIRTY_MAX_BOUNDS regions, newest first: the only ones any consumer
     /// reads. @ref dirty_region_total_ is how many there were before the cut.
     std::vector<dirty_region> dirty_regions_;
+    /// A local light's recent influence changes, by entity, aged out over
+    /// GI_TEMPORAL_DIRTY_HOLD_FRAMES like a placement's history (plan item 1.2).
+    struct light_change_entry
+    {
+        uint64_t frame = 0;
+        math::bbox bounds{};
+    };
+    std::unordered_map<uint32_t, std::vector<light_change_entry>> light_change_history_;
     size_t dirty_region_total_ = 0;
     /// The vis-memo's list (pack_vis_memo_regions), built beside @ref dirty_regions_.
     std::vector<dirty_region> vis_memo_regions_;
@@ -697,7 +726,8 @@ private:
     uint32_t grid_capacity_ = 0;
     /// The offsets and instance indices concatenated for the one-buffer upload.
     std::vector<uint32_t> grid_upload_;
-    std::array<float, 8> grid_params_{};
+    std::array<float, 4u * gi::GI_SDF_GRID_PARAMS_VEC4> grid_params_{};
+    uint32_t experiment_flags_ = 0;
     bool enabled_ = true;
     /// Backend capability, decided once at init: without compute shaders nothing here can run.
     bool supported_ = false;

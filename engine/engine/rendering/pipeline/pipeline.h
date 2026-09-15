@@ -24,6 +24,7 @@
 #include "passes/gi_clipmap_compose_pass.h"
 #include "passes/gi_light_voxel_pass.h"
 #include "passes/gi_quiescence_gate_pass.h"
+#include "passes/temporal_probe_pass.h"
 #include "passes/gi_world_probe_pass.h"
 #include "passes/gi_reflection_pass.h"
 #include "passes/gi_resolve_pass.h"
@@ -261,6 +262,18 @@ public:
         return gi_quiescence_gate_pass_.get_stats_snapshot();
     }
 
+    /// The temporal-stability instrument (temporal_probe_pass): a tool arms it for a number of
+    /// frames and reads the reduced statistics once the single readback lands. Nothing is
+    /// dispatched while no measurement is armed.
+    void request_temporal_probe(uint32_t frames)
+    {
+        temporal_probe_pass_.request(frames);
+    }
+    auto get_temporal_probe() const -> const temporal_probe_pass&
+    {
+        return temporal_probe_pass_;
+    }
+
     virtual void run_ui_pass(scene& scn,
                          const camera& camera,
                          gfx::render_view& rview,
@@ -296,6 +309,7 @@ protected:
     gtao_pass gtao_pass_{};
     gi_clipmap_compose_pass gi_clipmap_compose_pass_{};
     gi_quiescence_gate_pass gi_quiescence_gate_pass_{};
+    temporal_probe_pass temporal_probe_pass_{};
     gi_light_voxel_pass gi_light_voxel_pass_{};
     gi_world_probe_pass gi_world_probe_pass_{};
     gi_resolve_pass gi_resolve_pass_{};

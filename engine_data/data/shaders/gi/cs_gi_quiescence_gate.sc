@@ -36,14 +36,31 @@ BUFFER_RW(s_gi_gate_ring, uint, 1);
 /// entry order (light voxels, probe trace, probe convolve).
 BUFFER_WO(s_gi_gate_indirect, uvec4, 2);
 
+/// The relight's surface list (cs_gi_clipmap_attributes): its SDF_CLIPMAP_LEVEL_COUNT header
+/// entries are this frame's per-level counts, which size the light-voxel launch below. Stage 5:
+/// sdf_common.sh holds buffer stages 1-3 (b_sdf_instances is 3) in every includer.
+BUFFER_RO(b_surface_list, uint, 5);
+
+/// The world-probe scheduler's state (cs_gi_world_probe_select.sc), for its PENDING slot: probes
+/// still owed a first window at the last selection. Bound when u_gi_gate_params.w is set.
+BUFFER_RO(b_world_probe_select, uint, 6);
+/// GI_WORLD_PROBE_SELECT_PENDING in gi_world_probes.sh (not included here: that header's
+/// declarations would crowd this one-thread shader's stages).
+#define GI_GATE_PROBE_PENDING_SLOT 19
+
 /// One indirect entry per gated dispatch. STRUCTURAL, not tuned: it counts the dispatches the
 /// gate owns, so it lives here rather than in the gi_constants tables. Must equal
 /// gi_quiescence_gate_pass::entry_count, which static_asserts against this value's mirror.
-#define GI_GATE_ENTRY_COUNT 3
+#define GI_GATE_ENTRY_COUNT 6
+/// The light-voxel entry's index and its kernel's lanes per group: gi_quiescence_gate_pass
+/// entry_light_voxels and NUM_THREADS in gi_light_voxels_kernel.sh.
+#define GI_GATE_ENTRY_LIGHT_VOXELS 0
+#define GI_GATE_RELIGHT_THREADS    64u
 
 /// x = gate mode (0 run, 1 measure, 2 skip - surface_cache_view::quiescence_mode),
 /// y = non-zero to clear the ring (a tracked input changed), z = non-zero while the editor
-/// census is armed (the census rows are cleared for accumulation only then), w unused.
+/// census is armed (the census rows are cleared for accumulation only then), w = non-zero when the
+/// world-probe scheduler's buffer is bound at stage 6.
 uniform vec4 u_gi_gate_params;
 #define u_gate_mode  int(u_gi_gate_params.x)
 #define u_gate_reset (u_gi_gate_params.y > 0.0)
@@ -174,10 +191,33 @@ void main()
 	// The CPU settled everything except convergence: mode 0 forces the dispatches, mode 2
 	// (GI_QUIESCENCE_MAX_FRAMES) forces them off, mode 1 defers to the measurement - and the
 	// sparse-probe hold overrides both closed answers.
-	bool run = u_gate_mode == 0 || hold > 0u || (u_gate_mode == 1 && !converged);
+	// PENDING PROBES: under the trace budget a claim completes its first window over as many
+	// frames as the budget needs to reach it again; closing on the relight's convergence alone
+	// froze such probes with their seeded texels (the thick sealed cell, 0.0017 -> 0.0048). Like
+	// the allocation hold, this overrides both closed answers.
+	uint pending_probes = u_gi_gate_params.w > 0.5 ? b_world_probe_select[GI_GATE_PROBE_PENDING_SLOT] : 0u;
+	bool run = u_gate_mode == 0 || hold > 0u || pending_probes > 0u || (u_gate_mode == 1 && !converged);
+	// TIGHT RELIGHT LAUNCH: the CPU can only size the light-voxel entry for a full volume (a
+	// rotation slice of the whole capacity at every level), and every lane past a level's
+	// count returns at once - on Sponza most of the 262,144 lanes per open frame. The kernel
+	// maps lane i to entry i x GI_LIGHT_VOXEL_UPDATE_DENOM + phase and the level rides the
+	// group row, so ceil(count / denom) lanes of the largest level cover every level's due
+	// entries whatever the phase. The counts are the ones the attribute pass wrote this frame.
+	uint relight_entries = 0u;
+	for(int count_level = 0; count_level < SDF_CLIPMAP_LEVEL_COUNT; ++count_level)
+	{
+		relight_entries = max(relight_entries, b_surface_list[count_level]);
+	}
+	uint relight_denom = uint(GI_LIGHT_VOXEL_UPDATE_DENOM);
+	uint relight_lanes = (relight_entries + relight_denom - 1u) / relight_denom;
+	uint relight_groups = (relight_lanes + GI_GATE_RELIGHT_THREADS - 1u) / GI_GATE_RELIGHT_THREADS;
 	for(int entry = 0; entry < GI_GATE_ENTRY_COUNT; ++entry)
 	{
 		uvec3 groups = run ? uvec3(u_gi_gate_groups[entry].xyz) : uvec3(0u, 0u, 0u);
+		if(entry == GI_GATE_ENTRY_LIGHT_VOXELS)
+		{
+			groups.x = min(groups.x, relight_groups);
+		}
 		dispatchIndirect(s_gi_gate_indirect, entry, groups.x, groups.y, groups.z);
 	}
 	// The census rows (GI_STATS_RELIGHT_FACES_MOVED onward) are zeroed only when the passes

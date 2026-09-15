@@ -22,6 +22,15 @@ namespace
 {
 namespace ANONYMOUS
 {
+/// Cells of the tracers' instance grid along the scene's longest axis (sdf_instance_grid defaults to
+/// 32). A mesh-exact walk pays for every cell it crosses as well as for every instance a cell lists,
+/// and on Sponza the traversal dominated: 16 measured every tracer 2-9 percent cheaper (GI total dolly
+/// 4.60 -> 4.51 ms, orbit 4.47 -> 4.36, parked court 3.79 -> 3.70), 64 slower everywhere, and 12 or 8
+/// traded the gather's saving for long reflection and probe rays walking fuller cells
+/// (tasks/lumen_parity_log.md, the instance grid sweep). Lossless: every resolution lists the same
+/// instances for a ray.
+constexpr uint32_t instance_grid_resolution = 16u;
+
 /// Layout of the instance buffer: a flat array of vec4, matching BUFFER_RO(_, vec4, _).
 auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
 {
@@ -73,6 +82,7 @@ auto surface_cache_system::init(rtti::context& ctx) -> bool
         return false;
     }
     sdf_instance_grid::settings grid_settings;
+    grid_settings.resolution = ANONYMOUS::instance_grid_resolution;
     grid_.init(grid_settings);
     if(!light_buffer_.init())
     {
@@ -630,6 +640,14 @@ auto surface_cache_system::pack_vis_memo_regions(float* out_bounds, uint32_t max
     return pack_region_list(vis_memo_regions_, out_bounds, max_regions);
 }
 
+void surface_cache_system::record_light_changes()
+{
+    for(const auto& change : light_buffer_.get_local_changes())
+    {
+        light_change_history_[change.light_id].push_back({world_frame_, change.bounds});
+    }
+}
+
 void surface_cache_system::rebuild_dirty_regions()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Rebuild Dirty Regions");
@@ -763,7 +781,58 @@ void surface_cache_system::rebuild_dirty_regions()
     }
     // Over budget the total is the candidate count (the cut discarded the rest); under it every
     // candidate with a populated box is in the list, so the list is the exact count.
-    dirty_region_total_ = candidate_total > budget ? candidate_total : dirty_regions_.size();
+    size_t region_total = candidate_total > budget ? candidate_total : dirty_regions_.size();
+    // LOCAL LIGHT CHANGES (plan item 1.2): a point or spot light that appeared, vanished, moved
+    // or changed flushes the temporal and writes the relight through inside the influence
+    // spheres it lit and lights - one region per light over the hold - where every pixel used to
+    // drop to the fast cap on any light byte. Not a field change: the vis-memo's list never sees
+    // them.
+    const auto newer_region_first = [](const dirty_region& a, const dirty_region& b)
+    {
+        return a.last_change_frame > b.last_change_frame;
+    };
+    size_t light_regions = 0;
+    for(auto it = light_change_history_.begin(); it != light_change_history_.end();)
+    {
+        auto& history = it->second;
+        history.erase(std::remove_if(history.begin(),
+                                     history.end(),
+                                     [&](const light_change_entry& entry)
+                                     {
+                                         return world_frame_ - entry.frame > hold;
+                                     }),
+                      history.end());
+        if(history.empty())
+        {
+            it = light_change_history_.erase(it);
+            continue;
+        }
+        dirty_region region;
+        region.bounds.reset();
+        for(const auto& entry : history)
+        {
+            region.bounds.add_point(entry.bounds.min);
+            region.bounds.add_point(entry.bounds.max);
+            region.last_change_frame = std::max(region.last_change_frame, entry.frame);
+        }
+        dirty_regions_.push_back(region);
+        ++light_regions;
+        ++it;
+    }
+    region_total += light_regions;
+    if(dirty_regions_.size() > budget)
+    {
+        std::partial_sort(dirty_regions_.begin(),
+                          dirty_regions_.begin() + ptrdiff_t(budget),
+                          dirty_regions_.end(),
+                          newer_region_first);
+        dirty_regions_.resize(budget);
+    }
+    else if(light_regions > 0)
+    {
+        std::sort(dirty_regions_.begin(), dirty_regions_.end(), newer_region_first);
+    }
+    dirty_region_total_ = region_total > budget ? region_total : dirty_regions_.size();
     vis_memo_region_total_ = memo_total > budget ? memo_total : vis_memo_regions_.size();
 }
 
@@ -903,6 +972,7 @@ void surface_cache_system::upload_instance_grid()
     // grid switched off rather than pointing a tracer at a stale structure -- a tracer that walks
     // last frame's cells finds last frame's instances, which is worse than not culling at all.
     grid_params_.fill(0.0f);
+    grid_params_[8] = float(experiment_flags_);
     if(!grid_.is_valid())
     {
         return;
@@ -1411,9 +1481,12 @@ void surface_cache_system::update_world(scene& scn)
     // outgoing ones still hold their bricks, and succeed on the retry once this has run. Sweeping
     // first would need the whole scene walked twice to know what to keep.
     release_unused_fields();
+    // The lights before the regions: a local light's change joins this frame's dirty regions
+    // (plan item 1.2).
+    light_buffer_.update(scn);
+    record_light_changes();
     rebuild_dirty_regions();
     atlas_.flush();
-    light_buffer_.update(scn);
     rebuild_emitters();
     upload_instances();
     upload_instance_grid();

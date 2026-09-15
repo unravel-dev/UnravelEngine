@@ -207,7 +207,7 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
                                  float(surface_cache.get_emitters().size())};
     gfx::set_uniform(debug_program_.u_sdf_params, sdf_params);
     gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
-    gfx::set_uniform(debug_program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+    gfx::set_uniform(debug_program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
 
     const float debug_params[4] = {float(params.settings.max_steps),
                                    params.settings.max_distance,

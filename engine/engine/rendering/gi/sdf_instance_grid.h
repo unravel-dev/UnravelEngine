@@ -57,8 +57,9 @@ public:
     /**
      * @brief Rebuilds the grid over the given world-space instance bounds.
      *
-     * Rebuilt in full every frame because the instance list is: this is an acceleration structure
-     * with no state worth carrying between frames.
+     * Rebuilt in full whenever its instance set changes (surface_cache_system skips the rebuild
+     * while the instance fingerprint holds): an acceleration structure with no state worth
+     * carrying between builds.
      */
     void build(const std::vector<math::bbox>& instance_bounds);
 

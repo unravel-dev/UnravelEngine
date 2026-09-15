@@ -27,9 +27,10 @@ auto gi_light_voxel_pass::get_dispatch_groups(const surface_cache_view& view_cac
 {
     // One thread per entry due THIS frame: the 4-frame rotation is folded into the launch
     // (the kernel maps thread id -> entry = denom * id + phase), so the X extent covers a
-    // quarter of the capacity, and the level rides Y so the kernel never divides. The
-    // early-out beyond the per-level count remains; a still-tighter launch needs indirect
-    // args from the GPU-side counts - a measured optimisation, not a correctness matter.
+    // quarter of the capacity, and the level rides Y so the kernel never divides. This is the
+    // CPU's upper bound: on the indirect path the quiescence gate narrows X to the largest
+    // level's GPU-side count (cs_gi_quiescence_gate.sc); the kernel's early-out beyond each
+    // level's count remains for the smaller levels and for the direct fallback.
     const uint32_t attr_resolution = view_cache.get_clipmap_gpu().get_attr_resolution();
     const uint32_t capacity = attr_resolution * attr_resolution * attr_resolution;
     const uint32_t rotation_slice =
@@ -155,7 +156,7 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                                  float(instances.size()),
                                  float(surface_cache.get_emitters().size())};
     gfx::set_uniform(program_.u_sdf_params, sdf_params);
-    gfx::set_uniform(program_.u_sdf_grid_params, surface_cache.get_grid_params(), 2);
+    gfx::set_uniform(program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
     gfx::set_uniform(program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
     gfx::set_uniform(program_.u_sdf_clipmap_levels,
                      clipmap_gpu.get_level_params(),
@@ -407,25 +408,32 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         //                 ? (vis_memo_debug_available ? "vis-memo variant" : "MISSING - radiance fallback")
         //                 : "radiance");
     }
-    // RELIGHT EMA blend (u_gi_vis_memo_params.y; the radiance store in the kernel). Any
-    // change of the light set (hash) or of the field/window (the vis-memo generation, which
-    // also bumps on window scrolls - a scrolled-in slot must never fade in the departed
-    // cell's radiance) holds the blend at write-through for one FULL rotation: only a
-    // quarter of the surface set relights per frame, so every voxel's first relight after
-    // the change has to snap. Debug variants overwrite the volume with attribution colors,
-    // so the rotation after they clear snaps too. Generation 0 means the change tracker is
-    // unavailable - the EMA stays off rather than integrating over undetected changes.
+    // RELIGHT EMA blend (u_gi_vis_memo_params.y; the radiance store in the kernel). A GLOBAL
+    // lighting change (gpu_light_buffer::get_global_revision: a directional light added,
+    // removed or past the 4x brightness rule) or an EDIT of the field (the clipmap's edited
+    // content epoch) holds the blend at write-through for one FULL rotation: only a quarter
+    // of the surface set relights per frame, so every voxel's first relight after the change
+    // has to snap. A LOCAL light change needs no snap: its influence region rides the dirty
+    // regions, and inside one the kernel writes through per voxel (history_trusted).
+    // CAMERA TRAVEL DOES NOT SNAP (plan item 1.3): the attribute pass clears a scrolled-in
+    // slot to alpha 0 or seeds it at GI_LIGHT_VOXEL_SEED_ALPHA, and the kernel never blends a
+    // history below alpha 0.5 - keyed on the vis-memo generation, the snap discarded the whole
+    // volume's integration on every probe-cell crossing and scroll compose while moving.
+    // Debug variants overwrite the volume with attribution colors, so the rotation after they
+    // clear snaps too. Generation 0 means the change tracker is unavailable - the EMA stays
+    // off rather than integrating over undetected changes.
     const bool radiance_write = !((want_vis_memo_debug && vis_memo_debug_available) ||
                                   (want_debug && debug_available));
-    const uint64_t light_hash = light_buffer.is_valid() ? light_buffer.get_content_hash() : 0u;
-    if(!ema_history_valid_ || light_hash != ema_light_hash_ ||
-       vis_memo_generation != ema_generation_ || !radiance_write)
+    const uint64_t light_revision = light_buffer.is_valid() ? light_buffer.get_global_revision() : 0u;
+    const uint64_t edited_epoch = view_clipmap.get_edited_content_epoch();
+    if(!ema_history_valid_ || light_revision != ema_light_revision_ || edited_epoch != ema_edited_epoch_ ||
+       !radiance_write)
     {
         ema_snap_frames_ = uint32_t(gi::GI_LIGHT_VOXEL_UPDATE_DENOM);
     }
     ema_history_valid_ = radiance_write;
-    ema_light_hash_ = light_hash;
-    ema_generation_ = vis_memo_generation;
+    ema_light_revision_ = light_revision;
+    ema_edited_epoch_ = edited_epoch;
     float ema_blend = 1.0f;
     if(ema_snap_frames_ > 0u)
     {

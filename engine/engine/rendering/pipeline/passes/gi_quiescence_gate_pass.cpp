@@ -190,11 +190,22 @@ auto gi_quiescence_gate_pass::run(gfx::render_view& rview, const run_params& par
     gfx::set_image_3d(0, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
     gfx::set_buffer(1, ring_, gfx::access::ReadWrite);
     gfx::set_buffer(2, indirect_, gfx::access::Write);
+    // The per-level surface counts size the light-voxel launch (the shader's tight relight note).
+    gfx::set_buffer(5, clipmap_gpu.get_surface_list_buffer(), gfx::access::Read);
+    // The scheduler's pending count (see the shader's pending note); lane w says it is bound.
+    const bool probes_bound = clipmap_gpu.has_world_probes();
+    if(probes_bound)
+    {
+        gfx::set_buffer(6, clipmap_gpu.get_world_probe_select(), gfx::access::Read);
+    }
     // The resolution lane alone: GiLightVoxelStatsTexel needs it to address the slice.
     const float voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_gi_light_voxel_params, voxel_params);
     // z = the census armed: the census rows are cleared for accumulation only then.
-    const float gate_params[4] = {float(uint32_t(params.mode)), reset ? 1.0f : 0.0f, is_census_armed() ? 1.0f : 0.0f, 0.0f};
+    const float gate_params[4] = {float(uint32_t(params.mode)),
+                                  reset ? 1.0f : 0.0f,
+                                  is_census_armed() ? 1.0f : 0.0f,
+                                  probes_bound ? 1.0f : 0.0f};
     gfx::set_uniform(program_.u_gi_gate_params, gate_params);
     float groups[entry_count * 4] = {};
     for(uint16_t i = 0; i < entry_count; ++i)

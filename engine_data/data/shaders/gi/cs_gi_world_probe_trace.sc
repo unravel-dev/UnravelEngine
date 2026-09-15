@@ -84,6 +84,10 @@ BUFFER_RW(b_world_probe_cells, uint, 8);
 /// Complete windows accumulated per probe slot since its claim or the last fast window - the
 /// running mean's count (saturating at GI_WORLD_PROBE_EMA_WINDOWS).
 BUFFER_RW(b_world_probe_counts, uint, 7);
+/// The scheduler's list of this frame's probes and its state (cs_gi_world_probe_select.sc, plan
+/// item 2.1): a trace group's lanes serve list entries, not pool slots.
+BUFFER_RO(b_world_probe_list, uint, 9);
+BUFFER_RO(b_world_probe_select, uint, 15);
 /// xy = this window's R2 offset for the sub-texel direction jitter (double on the CPU, from
 /// the window index). z = the jitter/mean enable. w = 1 while the editor's GI census is armed:
 /// the occupancy classification and the texel census run only then.
@@ -132,7 +136,13 @@ NUM_THREADS(64, 1, 1)
 void main()
 {
 	int slot_in_group = int(gl_LocalInvocationID.x) / GI_WORLD_PROBE_RAYS_PER_FRAME;
-	int slot_linear = int(gl_WorkGroupID.x) * PROBE_TRACE_SLOTS + slot_in_group;
+	// THE SCHEDULED PROBE (plan item 2.1): the group's lanes serve list entries; an entry past the
+	// scheduler's count maps one slot past the last level, which the partial-group path below
+	// already treats as inactive.
+	int list_index = int(gl_WorkGroupID.x) * PROBE_TRACE_SLOTS + slot_in_group;
+	int slot_linear = list_index < int(b_world_probe_select[GI_WORLD_PROBE_SELECT_COUNT])
+	                      ? int(b_world_probe_list[list_index])
+	                      : GiWorldProbeSlotTotal();
 	int level = GiWorldProbeLevelOfSlot(slot_linear);
 	// A partial final group: the lanes past the last probe do no work but must still reach
 	// the barrier below (a return here is varying flow, which the barrier forbids), so the
@@ -156,45 +166,35 @@ void main()
 	}
 	else
 	{
-		int axis = GiWorldProbeAxis(level);
-		int in_level = slot_linear - GiWorldProbeLevelBase(level);
-		ivec3 slot = ivec3(in_level % axis, (in_level / axis) % axis, in_level / (axis * axis));
-		// The world cell this slot represents under the current window: the unique cell in
-		// [centre - half, centre + half] whose mod-axis equals the slot.
-		ivec3 center_cell = ivec3(u_gi_world_probe_window[level].xyz);
-		int half_axis = (axis - 1) / 2;
-		ivec3 window_base = center_cell - ivec3(half_axis, half_axis, half_axis);
-		ivec3 base_slot = GiWorldProbeSlot(window_base, level);
-		ivec3 offset = ivec3((slot.x - base_slot.x + axis) % axis,
-		                     (slot.y - base_slot.y + axis) % axis,
-		                     (slot.z - base_slot.z + axis) % axis);
-		cell = window_base + offset;
+		// The world cell this slot represents under the current window.
+		cell = GiWorldProbeDenseSlotCell(slot_linear, level, ivec3(u_gi_world_probe_window[level].xyz));
 		packed_cell = GiWorldProbePackCell(cell, level);
 		fresh = b_world_probe_cells[slot_index] != packed_cell;
 	}
+	// THE SCHEDULE (plan item 2.1): the probe's own stratum cursor, not the frame, picks the
+	// directions it traces - a probe traced on non-consecutive frames still covers its sixteen
+	// strata in order. A fast window's strata per frame align the cursor down to their multiple,
+	// so a window never spills into the next texel row. A fresh slot starts at stratum 0.
+	uint schedule_word = b_world_probe_counts[slot_index];
+	int stratum_count = int(max(u_gi_world_probe_seed_atlas.z, 1.0));
+	uint cursor = fresh ? 0u : GiWorldProbeCountCursor(schedule_word);
+	uint stratum_base = (cursor / uint(stratum_count)) * uint(stratum_count);
 	vec3 nominal = GiWorldProbeCellPosition(cell, level);
 	int thread = int(gl_LocalInvocationID.x) % GI_WORLD_PROBE_RAYS_PER_FRAME;
 	// PROBE RELOCATION (GiWorldProbeRelocate, sparse level only): the leader lane shares the
 	// probe's offset from its lattice point with the probe's other lanes. The relocation
-	// pass computed it at claim; the trace re-runs it on a rotation of
-	// GI_WORLD_PROBE_RELOCATE_REFRESH_FRAMES (a mover or a field streamed in after the claim
-	// changes the origin within that many frames) and reads the stored lane otherwise - every
-	// frame for every probe cost 0.6 ms of the pass in motion. The barrier is uniform: no lane
-	// has returned yet.
+	// pass computed it at claim; the trace re-runs it once per window of the probe's own traces
+	// (at its first stratum: a mover or a field streamed in after the claim moves the origin
+	// within one window) and reads the stored lane otherwise - every frame for every probe cost
+	// 0.6 ms of the pass in motion. The barrier is uniform: no lane has returned yet.
 	if(thread == 0)
 	{
-		// THE ALLOCATION CLOCK advances here, once per frame the trace runs (slot 0's leader),
-		// not in the ungated allocation pass: a closed gate freezes every request age, so a
-		// parked shot cannot age its cages into pressure eviction and re-allocation.
-		if(slot_linear == 0)
-		{
-			b_world_probe_index[GI_WORLD_PROBE_INDEX_CLOCK] = b_world_probe_index[GI_WORLD_PROBE_INDEX_CLOCK] + 1u;
-		}
+		// THE ALLOCATION CLOCK advances in the scheduler's threshold phase (plan item 2.1): still
+		// once per frame the world side runs, but slot 0 is no longer traced every frame.
 		vec3 relocation = vec3_splat(0.0);
 		if(probe_active && level == 0)
 		{
-			bool refresh = ((uint(slot_linear) + u_world_probe_frame) %
-			                uint(GI_WORLD_PROBE_RELOCATE_REFRESH_FRAMES)) == 0u;
+			bool refresh = stratum_base == 0u;
 			BRANCH
 			if(refresh)
 			{
@@ -216,8 +216,7 @@ void main()
 	// 8 frames so a moved or toggled light propagates through the probes at double speed. The
 	// stratum formula stays exhaustive either way: count consecutive strata per frame cover
 	// every direction once per (WINDOW / count) frames.
-	int stratum_count = int(max(u_gi_world_probe_seed_atlas.z, 1.0));
-	uint stratum_base = (u_world_probe_frame * uint(stratum_count)) % uint(GI_WORLD_PROBE_WINDOW);
+	// (stratum_count and stratum_base: the probe's schedule, decoded above.)
 	ivec2 tile = GiWorldProbeTileBase(slot_linear, GI_WORLD_PROBE_OCT_RADIANCE);
 	// Scroll claim (dense levels): the slot's stored cell is compared by every thread (uniform
 	// read), thread 0 rewrites it, and every thread zeroes the OTHER strata of its own texel
@@ -282,9 +281,9 @@ void main()
 	// their texel per window and each texel is a running mean over the last windows; a fresh
 	// claim or a fast (light/content change) window resets the count so changes still land
 	// in one window at write-through. Every thread reads the count before thread 0 advances it.
-	uint windows_seen = fresh ? 0u : b_world_probe_counts[slot_index];
+	uint windows_seen = fresh ? 0u : GiWorldProbeCountWindows(schedule_word);
 	// The stored count is windows since the claim or the last fast window WHATEVER the jitter
-	// setting: the convolve rotates settled probes on it (GI_WORLD_PROBE_CONVOLVE_PERIOD). The
+	// setting: the trace scheduler's first-window bucket reads it (plan item 2.1). The
 	// running mean below still restarts every window while the jitter is off.
 	uint windows_counted = windows_seen;
 	bool fast_window = stratum_count > 1;
@@ -320,8 +319,10 @@ void main()
 	{
 		// A window completes on the frame that traces its last strata.
 		bool window_end = stratum_base + uint(stratum_count) >= uint(GI_WORLD_PROBE_WINDOW);
-		b_world_probe_counts[slot_index] =
-		    fast_window ? 0u : (window_end ? min(windows_counted + 1u, 255u) : windows_counted);
+		uint next_cursor = (stratum_base + uint(stratum_count)) % uint(GI_WORLD_PROBE_WINDOW);
+		b_world_probe_counts[slot_index] = GiWorldProbePackCount(
+		    fast_window ? 0u : (window_end ? windows_counted + 1u : windows_counted), next_cursor,
+		    u_world_probe_frame);
 	}
 	if(fresh)
 	{
@@ -430,31 +431,23 @@ void main()
 		                                         : fract(GiIgnNoise(texel) + u_gi_world_probe_jitter.xy);
 		vec2 tile_uv = (vec2(texel - tile) + texel_jitter) / float(GI_WORLD_PROBE_OCT_RADIANCE);
 		vec3 direction = GiOctDecode(tile_uv);
-		// MESH-EXACT NEAR FIELD (2026-09-13, plan phase B): the first GI_WORLD_PROBE_MESH_RANGE
-		// metres of every probe ray march the per-instance fields, as the gather's rays do
-		// since phase A - and further than the gather's 8 m, because a probe ray has no cache
-		// to complete from: what it does not see exactly it sees through the cascade, whose
-		// fattening at levels 1-2 closes the upper arcades and the curtains between 8 and
-		// 20 m of the courtyard floor (measured: the floor cage's sky share 3.7% against a
-		// geometric ~8%, and its irradiance +30-50% with exact rays to 20 m; the gather's own
-		// rays traced through the cascade over 8-20 m lost 60% of the floor's light,
-		// gi_lighting_audit section 20). The cascade takes over beyond, with the
-		// probe-specific hardening below kept for it - the sealed-box leak channel was the
-		// cascade's porous field, which the exact tier does not have; the near tier's steps,
-		// exhaustion and clearance are carried into the far hit (SdfTraceRayEx does the same)
-		// so the open-exhaustion miss below reads the whole ray.
+		// MESH-EXACT NEAR FIELD (2026-09-13, plan phase B; 6 m since 2026-09-14): the first
+		// GI_WORLD_PROBE_MESH_RANGE metres of every probe ray march the per-instance fields, as the
+		// gather's rays do. The exact tier is the sealed-box defence - the leak channel was the
+		// cascade's porous field, which the exact tier does not have. The cascade takes over beyond
+		// (see the far tier's note); the near tier's steps, exhaustion and clearance are carried into
+		// the far hit (SdfTraceRayEx does the same) so the open-exhaustion miss below reads the
+		// whole ray.
 		float near_field = min(GI_WORLD_PROBE_MESH_RANGE, t_max);
 		SdfRayHit near_hit = SdfTraceInstances(origin, direction, 0.0, near_field,
 		                                       GI_WORLD_PROBE_TRACE_STEPS, GI_WORLD_PROBE_TRACE_BIAS,
 		                                       GI_WORLD_PROBE_TRACE_RELAXATION, true);
-		// Coarse world structure beyond the near field: the cascade tier called DIRECTLY, with
-		// the probe-specific hardening against the sealed-box leak: the surface expand at FULL
-		// strength from its start. The porous field overestimates distance and a march can hop
-		// a sub-voxel wall's dip without sampling it; the expand subtracts from the step as well
-		// as the test, so the fattened isosurface (a wall's through-field minimum is at most
-		// ~0.87 voxel, the expand is 0.87 voxel) cannot be stepped over. The ramp's contact-zone
-		// grace protects nothing here and its blind zone was exactly where rays threaded the
-		// level cross-fade shell out of sealed rooms (the camera-locked porosity fans).
+		// Coarse world structure beyond the near field: the cascade tier called DIRECTLY with NO
+		// surface expand (expand_start -1) and the probe-specific suppression hardening
+		// (expand_full). The full-strength expand was the sealed-box defence while probe rays were
+		// cascade-only; kept past a 6 m exact range it fattened every surface by up to 0.87 voxel
+		// and darkened the lit image 13-20 percent, while without it the leak does not return and
+		// the result matches 20 m exact rays within ~1 percent (GI_WORLD_PROBE_MESH_RANGE).
 		// Acceptance is the tracing default and the trace is EXACT (no cone): at a full voxel
 		// of acceptance plus the expand, with the cone capped at a voxel beyond 20 voxels of
 		// travel, a probe ray accepted anything within 1.87 voxels of its path. On the Sponza
@@ -470,7 +463,7 @@ void main()
 		{
 			hit = SdfTraceClipmap(origin, direction, near_field, t_max, GI_WORLD_PROBE_TRACE_STEPS,
 			                      GI_WORLD_PROBE_TRACE_BIAS, GI_WORLD_PROBE_TRACE_RELAXATION,
-			                      true, 0.0, true);
+			                      true, -1.0, true);
 			hit.steps += near_hit.steps;
 			hit.exhausted = hit.exhausted || near_hit.exhausted;
 			hit.clearance = min(hit.clearance, near_hit.clearance);

@@ -78,16 +78,22 @@ uniform vec4 u_sdf_clipmap_params;
 #define u_sdf_clipmap_depth        (u_sdf_clipmap_resolution * float(SDF_CLIPMAP_LEVEL_COUNT))
 
 /// [0] = grid origin xyz, cell size w. [1] = cell counts xyz, w = the instance list's base entry
-/// in b_sdf_grid (the offset count) - non-zero when the grid is usable.
+/// in b_sdf_grid (the offset count) - non-zero when the grid is usable. [2] x = the runtime
+/// EXPERIMENT flags (surface_cache_system::set_experiment_flags, MCP gi_set_experiment_flags): two
+/// code paths compiled into one program, alternated inside ONE editor launch for cost A/Bs - a
+/// relaunch's own variance hides effects under ~20 percent. Zero in production.
 /// Filled by surface_cache_system::get_grid_params, the single owner: every pass that traces
 /// must walk the same cells, and a pass that derived different ones would simply find different
 /// instances -- geometry that occludes in one pass and not another, with no error anywhere.
-uniform vec4 u_sdf_grid_params[2];
+uniform vec4 u_sdf_grid_params[GI_SDF_GRID_PARAMS_VEC4];
 #define u_sdf_grid_origin    u_sdf_grid_params[0].xyz
 #define u_sdf_grid_cell_size u_sdf_grid_params[0].w
 #define u_sdf_grid_dim       u_sdf_grid_params[1].xyz
 #define u_sdf_grid_enabled   (u_sdf_grid_params[1].w > 0.0)
 #define u_sdf_grid_instance_base uint(u_sdf_grid_params[1].w)
+#define u_sdf_experiment_flags   uint(u_sdf_grid_params[2].x)
+/// No experiment bit is compiled in: the measured ones (instance-visit dedupe, the supersample cap, the gather
+/// sampling and placement variants - tasks/lumen_parity_log.md) were removed after their A/Bs.
 /// Cells a traversal may visit before giving up. A ray crossing an n-cell grid diagonally touches
 /// about 3n, so this is generous; it exists so a denormal direction cannot spin, not as a budget.
 #define SDF_GRID_MAX_STEPS 256
