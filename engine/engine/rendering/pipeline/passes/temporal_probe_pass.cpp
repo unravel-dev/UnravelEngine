@@ -61,9 +61,10 @@ auto temporal_probe_pass::init(rtti::context& ctx) -> bool
     return program_.is_valid();
 }
 
-void temporal_probe_pass::request(uint32_t frames)
+void temporal_probe_pass::request(uint32_t frames, bool is_lowpass)
 {
     frames_requested_ = std::clamp(frames, 2u, max_frames);
+    is_lowpass_ = is_lowpass;
     frames_done_ = 0;
     armed_ = true;
     result_ = {};
@@ -178,7 +179,10 @@ void temporal_probe_pass::dispatch_frame(const run_params& params)
                                    params.velocity ? 1.0f : 0.0f,
                                    has_previous ? 1.0f : 0.0f};
     gfx::set_uniform(program_.u_probe_params, probe_params);
-    const float probe_params2[4] = {float(frames_done_ + 1u), params.prev_depth ? 1.0f : 0.0f, 0.0f, 0.0f};
+    const float probe_params2[4] = {float(frames_done_ + 1u),
+                                    params.prev_depth ? 1.0f : 0.0f,
+                                    is_lowpass_ ? 1.0f : 0.0f,
+                                    0.0f};
     gfx::set_uniform(program_.u_probe_params2, probe_params2);
     gfx::dispatch(pass.id,
                   program_.program->native_handle(),
@@ -196,6 +200,7 @@ void temporal_probe_pass::issue_readback()
     gfx::blit(pass.id, readback_->native_handle(), 0, 0, sums_->native_handle(), 0, 0, width_, height_);
     readback_ready_frame_ = gfx::read_texture(readback_->native_handle(), readback_data_.data());
     readback_frames_ = frames_done_;
+    readback_lowpass_ = is_lowpass_;
     readback_pending_ = true;
 }
 
@@ -240,6 +245,7 @@ void temporal_probe_pass::reduce_readback()
     next.frames = frames;
     next.width = width;
     next.height = height;
+    next.lowpass = readback_lowpass_;
     next.delta_pixels = static_cast<uint32_t>(changes.size());
     next.delta_mean = changes.empty() ? 0.0f : float(change_sum / double(changes.size()));
     next.std_shares = {share_above(deviations, std_share_low), share_above(deviations, std_share_high)};

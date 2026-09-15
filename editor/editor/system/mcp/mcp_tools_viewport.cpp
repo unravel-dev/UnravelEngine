@@ -625,12 +625,14 @@ void register_viewport_tools(mcp_tool_registry& registry)
              "for a still camera) and the mean reprojected frame-to-frame change (valid in motion; object "
              "motion, disocclusions and depth edges are excluded), as percentiles, shares and an 8x8 "
              "screen grid (row-major from the top). The image is the pipeline output before the editor "
-             "overlays: the lit frame or the active debug view. Optional `motion` drives the Scene camera "
+             "overlays: the lit frame or the active debug view. Optional `lowpass` (bool) runs every statistic on "
+             "a 5x5 box mean of the luminance: under camera motion the raw change is dominated by the sub-pixel "
+             "resampling of textured detail, which the box removes. Optional `motion` drives the Scene camera "
              "across exactly the measured frames: {\"type\":\"path\",\"from_position\":[..],"
              "\"from_target\":[..],\"to_position\":[..],\"to_target\":[..]} or {\"type\":\"orbit\","
              "\"center\":[..],\"radius\":r,\"height\":h,\"start_degrees\":a,\"degrees\":sweep}.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"frames":{"type":"integer","minimum":2,"maximum":4096},"timeout_ms":{"type":"integer","minimum":1000,"maximum":600000},"motion":{"type":"object"}}})json",
+             R"json({"type":"object","properties":{"frames":{"type":"integer","minimum":2,"maximum":4096},"timeout_ms":{"type":"integer","minimum":1000,"maximum":600000},"motion":{"type":"object"},"lowpass":{"type":"boolean"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -641,6 +643,11 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  frames = 120;
              }
              frames = std::clamp<int64_t>(frames, 2, 4096);
+             bool lowpass = false;
+             if(args["lowpass"].get(lowpass))
+             {
+                 lowpass = false;
+             }
              int64_t timeout_ms = 30000 + frames * 100;
              int64_t requested_timeout = 0;
              if(!args["timeout_ms"].get(requested_timeout))
@@ -750,7 +757,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      {
                          apply_pose(0.0f);
                      }
-                     pipeline->request_temporal_probe(uint32_t(frames));
+                     pipeline->request_temporal_probe(uint32_t(frames), lowpass);
                      return true;
                  });
              if(!armed || !*armed)
@@ -788,8 +795,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          }
                          const auto& r = probe.get_result();
                          return fmt::format(
-                             R"({{"frames":{},"width":{},"height":{},"std":{{"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1_5":{:.5f},"share_gt_4":{:.5f}}},"delta":{{"pixels":{},"mean":{:.3f},"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1":{:.5f},"share_gt_4":{:.5f}}},"std_grid":{},"delta_grid":{}}})",
-                             r.frames, r.width, r.height, r.std_percentiles[0], r.std_percentiles[1],
+                             R"({{"frames":{},"lowpass":{},"width":{},"height":{},"std":{{"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1_5":{:.5f},"share_gt_4":{:.5f}}},"delta":{{"pixels":{},"mean":{:.3f},"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1":{:.5f},"share_gt_4":{:.5f}}},"std_grid":{},"delta_grid":{}}})",
+                             r.frames, r.lowpass, r.width, r.height, r.std_percentiles[0], r.std_percentiles[1],
                              r.std_percentiles[2], r.std_shares[0], r.std_shares[1], r.delta_pixels, r.delta_mean,
                              r.delta_percentiles[0], r.delta_percentiles[1], r.delta_percentiles[2],
                              r.delta_shares[0], r.delta_shares[1], format_grid(r.std_grid),

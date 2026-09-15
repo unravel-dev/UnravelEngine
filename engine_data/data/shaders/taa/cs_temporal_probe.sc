@@ -25,7 +25,8 @@ IMAGE2D_WO(s_luma_out, r32f, 6);
 /// x, y = image size in pixels; z = 1 when the velocity buffer is bound; w = 1 when last frame's
 /// luminance exists (0 on the first frame of a measurement, which also resets the sums).
 uniform vec4 u_probe_params;
-/// x = this frame's 1-based index in the measurement; y = 1 when last frame's depth is bound.
+/// x = this frame's 1-based index in the measurement; y = 1 when last frame's depth is bound; z = 1 for the
+/// low-pass lane (PROBE_LOWPASS_RADIUS).
 uniform vec4 u_probe_params2;
 
 /// Relative linear-depth disagreement beyond which a neighbour or a reprojected sample is
@@ -33,6 +34,10 @@ uniform vec4 u_probe_params2;
 #define PROBE_DEPTH_TOLERANCE 0.05
 /// Object motion, in pixels, above which the change is not measured.
 #define PROBE_OBJECT_MOTION_PIXELS 0.5
+/// Box radius of the LOW-PASS lane: every statistic runs on the mean luminance of a (2r + 1)^2 box, so the
+/// sub-pixel offset of a reprojection under camera motion stops reading textured detail as change (a static Base
+/// Color view read 1.7 levels of raw change at 3 degrees per frame) while patch-scale flicker stays.
+#define PROBE_LOWPASS_RADIUS 2
 
 /// View-space depth from device depth: shaderlib.sh screenSpaceToViewSpaceDepth, repeated here
 /// so the probe stays free of the lighting includes.
@@ -50,6 +55,27 @@ bool ProbeSameSurface(float depth, float other)
 	return abs(other - depth) <= PROBE_DEPTH_TOLERANCE * max(abs(depth), 1e-4);
 }
 
+/// The displayed luminance at @p uv in 8-bit levels: the pixel itself, or the low-pass lane's box mean.
+float ProbeDisplayLuma(vec2 uv, vec2 texel)
+{
+	vec3 luma_weights = vec3(0.2126, 0.7152, 0.0722);
+	if(u_probe_params2.z < 0.5)
+	{
+		return dot(saturate(texture2DLod(s_color, uv, 0.0).rgb), luma_weights) * 255.0;
+	}
+	float sum = 0.0;
+	for(int y = -PROBE_LOWPASS_RADIUS; y <= PROBE_LOWPASS_RADIUS; ++y)
+	{
+		for(int x = -PROBE_LOWPASS_RADIUS; x <= PROBE_LOWPASS_RADIUS; ++x)
+		{
+			vec2 tap = uv + vec2(float(x), float(y)) * texel;
+			sum += dot(saturate(texture2DLod(s_color, tap, 0.0).rgb), luma_weights);
+		}
+	}
+	float taps = float((2 * PROBE_LOWPASS_RADIUS + 1) * (2 * PROBE_LOWPASS_RADIUS + 1));
+	return sum / taps * 255.0;
+}
+
 NUM_THREADS(8, 8, 1)
 void main()
 {
@@ -61,8 +87,7 @@ void main()
 	}
 	vec2 texel = vec2_splat(1.0) / size;
 	vec2 uv = (vec2(coord) + vec2_splat(0.5)) * texel;
-	vec3 color = saturate(texture2DLod(s_color, uv, 0.0).rgb);
-	float luma = dot(color, vec3(0.2126, 0.7152, 0.0722)) * 255.0;
+	float luma = ProbeDisplayLuma(uv, texel);
 	imageStore(s_luma_out, coord, vec4(luma, 0.0, 0.0, 1.0));
 	bool has_previous = u_probe_params.w > 0.5;
 	vec4 sums = has_previous ? imageLoad(s_sums, coord) : vec4_splat(0.0);

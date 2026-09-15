@@ -264,10 +264,11 @@ public:
 
     /// The temporal-stability instrument (temporal_probe_pass): a tool arms it for a number of
     /// frames and reads the reduced statistics once the single readback lands. Nothing is
-    /// dispatched while no measurement is armed.
-    void request_temporal_probe(uint32_t frames)
+    /// dispatched while no measurement is armed. @p is_lowpass selects the probe's low-pass lane
+    /// (temporal_probe_pass::request).
+    void request_temporal_probe(uint32_t frames, bool is_lowpass = false)
     {
-        temporal_probe_pass_.request(frames);
+        temporal_probe_pass_.request(frames, is_lowpass);
     }
     auto get_temporal_probe() const -> const temporal_probe_pass&
     {

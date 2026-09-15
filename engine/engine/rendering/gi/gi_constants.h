@@ -119,6 +119,13 @@
       " tier's matched-weight walk reads it exactly (texelFetch) and keeps source faces out"    \
       " of its lit estimate, adding the hit instance's own emission instead - a voxelised"     \
       " strip no longer smears its glow over the neighbouring ceiling in a mirror")             \
+    X(GI_LIGHT_VOXEL_INHERITED_ALPHA, 0.99951171875f,                                             \
+      "unitless", "derived: 1 - 1/2048, the provenance alpha of a coarse light-voxel face whose"   \
+      " value is the MEAN of its finer level's measured faces (the lit-once mip). One RGBA16F"    \
+      " step under 1: the half-float step in [0.5, 1) is 1/2048, so 1 - 1/4096 stores as 1.0"    \
+      " and loses the mark. Within 0.05% of 1 for every alpha-weighted read. A face holding it"   \
+      " KEEPS its value once the finer window has moved on instead of relighting at its own"      \
+      " scale; the source test splits halfway between this and GI_LIGHT_VOXEL_SOURCE_ALPHA")      \
     X(GI_LIGHT_VOXEL_CULLED_ALPHA, 0.00390625f,                                                    \
       "unitless", "derived: 1/256, the provenance alpha a CULLED voxel face stores. Alpha 0 is"    \
       " the never-measured mark that lets every light-voxel reader fall back to a coarser"         \
@@ -980,19 +987,6 @@
       " band mixes matching data at no leak cost, and what residual the levels still disagree"    \
       " on (fattening beyond the window) becomes a gradient over metres of travel instead of a"   \
       " step")                                                                                     \
-    X(GI_LIGHT_VOXEL_INHERIT_CONTRAST, 4.0f,                                                      \
-      "luminance ratio", "derived: a coarse light-voxel face inherits the mean of its measured"   \
-      " finer children only while their brightest and darkest lie within this ratio. Sun"        \
-      " against sky is 10x or more, relight noise between children well under 2x, so children"   \
-      " that disagree by more straddle a lighting edge (a sun pool's rim, a thin wall with a"      \
-      " lit and a dark side) that the coarse face cannot hold as one value; the coarse relight"  \
-      " answers at the face centre instead. Not the guard against the exterior leaking in - a"   \
-      " lone exposed child on the far side of a wall agrees with itself; that case is closed by"  \
-      " running the pull only after this level's own exposure gates (see the kernel)")            \
-    X(GI_LIGHT_VOXEL_INHERIT_FLOOR, 0.0001f,                                                       \
-      "radiance luminance", "derived: the darkest child's luminance is floored here before the"  \
-      " contrast ratio, so a black child beside any lit one reads as disagreement while two"      \
-      " near-black children (below the readers' own 1e-4 measured threshold) still agree")       \
     X(GI_LIGHT_VOXEL_SEED_ALPHA, 0.25f,                                                            \
       "unitless", "derived: the provenance alpha of a light-voxel face SEEDED from the parent"    \
       " level when its cell scrolls into a window. Above the readers' 1e-4 measured threshold"    \

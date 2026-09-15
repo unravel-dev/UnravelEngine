@@ -168,7 +168,7 @@ SHARED vec2 s_frame_r2;
 /// not 1 / GI_NEE_FIXED - the resolve divides the sum by the cell's solid angle - so at the
 /// old 16384 one unit was 2.1e-4 to 5.9e-4 across an 8x8 tile, and since GiSplatSample rounds
 /// each sample independently, every ray measuring under ~1e-4 radiance rounded to EXACTLY
-/// ZERO. That is the regime this engine works in (GI_LIGHT_VOXEL_INHERIT_FLOOR 1e-4) and
+/// ZERO. That is the regime this engine works in (radiance of order 1e-4) and
 /// where auto exposure's dark adaptation makes it visible; worse, the threshold varies 5x
 /// with the octahedral |d|_1, so the truncation printed as a direction-dependent pattern.
 /// Eight times finer puts the floor at 1.5e-5 to 4.1e-5, under anything the light voxels

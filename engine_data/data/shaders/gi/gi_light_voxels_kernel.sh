@@ -924,21 +924,25 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 	// finer verdict scale and (at level 0) the shadow-mapped sun. Relighting the coarse cell at
 	// its own scale gave a DIFFERENT answer for the same surface - fatter occluders, coarser
 	// cavity marches, the traced sun - and the camera-following window boundary dragged that
-	// disagreement across the scene as a lighting step. Where both levels exist the coarse
-	// face now takes the mean of its measured children (eight image loads in place of the
-	// shadow rays and the bounce read), so the cross-fade band blends identical values;
-	// once the finer window moves on, the coarse relight resumes from the inherited value
-	// through the EMA - a drift over a rotation window, not a step. Children never measured
-	// (no surface at the finer scale) leave the coarse relight to answer, and so does a face
-	// this level's own gates cull: the pull runs AFTER the gates (see the branch below
-	// them), because a finer child exposed on the far side of the geometry is a legitimate
-	// measurement the coarse face must not carry (measured: a bright full-height column at
-	// a convex wall corner, 3x its level, from one child face that looked onto the sunlit
-	// exterior). Children that DISAGREE beyond GI_LIGHT_VOXEL_INHERIT_CONTRAST also leave
-	// it to the relight: a parent straddling a lighting edge (a sun pool's rim, a thin wall
-	// with a lit and a dark side) cannot hold both as one value, and the relight's answer
-	// at the face centre is what the coarse field can represent there.
-	bool inherit_fine = false;
+	// disagreement across the scene as a lighting step. LIT ONCE (single lighting plan, phase
+	// C): wherever a finer level has measured the surface, the coarse face is that measurement's
+	// MIP - the mean of its measured children (eight image loads in place of the shadow rays and
+	// the bounce read) - so the cross-fade band blends identical values and every reader that
+	// ends on a coarse level (world-probe rays, the gather's far field) sees the finer answer.
+	// Every child inside the finer window counts, partial coverage included (a child outside it
+	// holds another cell's slot and is never read), and there is no contrast gate: a parent
+	// straddling a lighting edge (a sun pool's rim) holds the edge's mean, which is the
+	// downsample a coarse reader needs, and the lit and dark sides of a thin wall face opposite
+	// ways, so their children fill different face slabs. Once the finer window moves on, the
+	// face KEEPS the inherited value (marked GI_LIGHT_VOXEL_INHERITED_ALPHA) instead of relighting
+	// at its own scale, until a dirty region or a write-through relight replaces it. Children
+	// never measured (no surface at the finer scale) leave the coarse relight to answer, and so
+	// does a face this level's own gates cull: the pull runs AFTER the gates (see the branch
+	// below them), because a finer child exposed on the far side of the geometry is a legitimate
+	// measurement the coarse face must not carry (measured: a bright full-height column at a
+	// convex wall corner, 3x its level, from one child face that looked onto the sunlit
+	// exterior).
+	bool has_fine_level = false;
 	vec4 fine_level_data = vec4_splat(0.0);
 	float fine_attr_voxel = 0.0;
 	ivec3 fine_window_base = ivec3(0, 0, 0);
@@ -947,16 +951,10 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		fine_level_data = u_sdf_clipmap_levels[level - 1u];
 		if(fine_level_data.w > 0.0)
 		{
+			has_fine_level = true;
 			fine_attr_voxel = fine_level_data.w * 2.0;
 			// The finer window's cells: the level origin is attr-voxel aligned (the snap).
 			fine_window_base = ivec3(floor(fine_level_data.xyz / fine_attr_voxel + vec3_splat(0.5)));
-			// The parent's eight children occupy two finer cells per axis from 2 x cell; all
-			// must lie inside the finer window for the inheritance to be complete.
-			ivec3 child_base = cell * 2;
-			ivec3 span_lo = child_base - fine_window_base;
-			ivec3 span_hi = span_lo + ivec3(1, 1, 1);
-			inherit_fine = all(greaterThanEqual(span_lo, ivec3(0, 0, 0))) &&
-			               all(lessThan(span_hi, ivec3(attr_res, attr_res, attr_res)));
 		}
 	}
 	LOOP
@@ -1207,31 +1205,33 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// relight below is skipped through the flag, at the loop's own level.
 		bool inherited = false;
 		BRANCH
-		if(inherit_fine)
+		if(has_fine_level)
 		{
 			vec3 child_sum = vec3_splat(0.0);
 			float child_measured = 0.0;
-			float child_lum_min = 1e30;
-			float child_lum_max = 0.0;
+			float child_sources = 0.0;
 			LOOP
 			for(int child = 0; child < 8; ++child)
 			{
 				ivec3 child_cell = cell * 2 + ivec3(child & 1, (child >> 1) & 1, (child >> 2) & 1);
-				vec4 child_face = imageLoad(
-				    s_light_voxels_out,
-				    GiLightVoxelTexel(GiLightVoxelSlot(child_cell), int(level) - 1, face));
-				if(child_face.w > 0.5)
+				// A child outside the finer window holds some other cell's slot: skipped, never read.
+				ivec3 child_offset = child_cell - fine_window_base;
+				bool child_in_window = all(greaterThanEqual(child_offset, ivec3(0, 0, 0))) &&
+				                       all(lessThan(child_offset, ivec3(attr_res, attr_res, attr_res)));
+				if(child_in_window)
 				{
-					child_sum += child_face.xyz;
-					child_measured += 1.0;
-					float child_lum = GiStatsLuminance(child_face.xyz);
-					child_lum_min = min(child_lum_min, child_lum);
-					child_lum_max = max(child_lum_max, child_lum);
+					vec4 child_face = imageLoad(
+					    s_light_voxels_out,
+					    GiLightVoxelTexel(GiLightVoxelSlot(child_cell), int(level) - 1, face));
+					if(child_face.w > 0.5)
+					{
+						child_sum += child_face.xyz;
+						child_measured += 1.0;
+						child_sources += GiLightVoxelIsSourceAlpha(child_face.w) ? 1.0 : 0.0;
+					}
 				}
 			}
-			bool children_agree =
-			    child_lum_max <= GI_LIGHT_VOXEL_INHERIT_CONTRAST * max(child_lum_min, GI_LIGHT_VOXEL_INHERIT_FLOOR);
-			if(child_measured > 0.0 && children_agree)
+			if(child_measured > 0.0)
 			{
 				// Stamp the face half like the zero-radiance skip: the gates' verdict is
 				// generation-stable, so later rotations serve it from the memo instead of
@@ -1243,14 +1243,36 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 					                                                 u_vis_memo_generation),
 					                 0u, 0u, 0u));
 				}
+				// A mip of mostly source faces is a source face itself: the reflection tier's
+				// matched-weight walk keeps it out of the lit estimate, as it keeps the children.
+				float inherited_alpha = 2.0 * child_sources > child_measured ? GI_LIGHT_VOXEL_SOURCE_ALPHA
+				                                                             : GI_LIGHT_VOXEL_INHERITED_ALPHA;
 				imageStore(s_light_voxels_out, texel,
-				           vec4(GiFiniteOrZero(child_sum / child_measured), 1.0));
+				           vec4(GiFiniteOrZero(child_sum / child_measured), inherited_alpha));
 				inherited = true;
 			}
-			// Children all culled, or measured but disagreeing, or none at all (the finer
-			// level has no surface here): the coarse relight below answers. The all-culled
-			// case no longer forces a cull - this level's own gates above already judged the
-			// face exposed, and the finer children's cones are a different scale's verdict.
+			// Children all culled, all outside the finer window, or none at all (the finer level
+			// has no surface here): the provenance keep or the coarse relight below answers. The
+			// all-culled case no longer forces a cull - this level's own gates above already judged
+			// the face exposed, and the finer children's cones are a different scale's verdict.
+		}
+		// PROVENANCE KEEP: a face holding a finer level's mip keeps it when no measured child is
+		// available this rotation - the finer window moved on - instead of relighting at this
+		// level's scale. A dirty region (history_trusted) or a write-through relight (a global
+		// light change, a field edit) lets the relight answer, which replaces the mark; a
+		// re-claimed slot starts over (the attribute pass clears or seeds its faces).
+		BRANCH
+		if(!inherited && history_trusted && u_light_voxel_ema_blend < 1.0)
+		{
+			if(GiLightVoxelIsInheritedAlpha(imageLoad(s_light_voxels_out, texel).w))
+			{
+				if(face_memo_live && !face_hit)
+				{
+					imageStore(s_gi_vis_memo, texel,
+					           uvec4(GiWorldProbeVisMemoPackFaceOnly(face_half, u_vis_memo_generation), 0u, 0u, 0u));
+				}
+				inherited = true;
+			}
 		}
 		if(inherited)
 		{

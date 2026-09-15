@@ -200,6 +200,20 @@ ivec3 GiLightVoxelTexel(ivec3 voxel, int level, int face)
 	return ivec3(voxel.x, voxel.y, ((level * 6 + face) * u_light_voxel_resolution) + voxel.z);
 }
 
+/// A measured face flagged as mostly its own emission (GI_LIGHT_VOXEL_SOURCE_ALPHA). The split lies halfway
+/// between the source flag and the inherited mark, half a half-float step from each.
+bool GiLightVoxelIsSourceAlpha(float alpha)
+{
+	return alpha > 0.5 && alpha < 0.5 * (GI_LIGHT_VOXEL_SOURCE_ALPHA + GI_LIGHT_VOXEL_INHERITED_ALPHA);
+}
+
+/// A face whose value is its finer level's mip (GI_LIGHT_VOXEL_INHERITED_ALPHA): within a quarter of the
+/// half-float step between the mark and 1.
+bool GiLightVoxelIsInheritedAlpha(float alpha)
+{
+	return abs(alpha - GI_LIGHT_VOXEL_INHERITED_ALPHA) < 0.25 * (1.0 - GI_LIGHT_VOXEL_INHERITED_ALPHA);
+}
+
 #if defined(GI_LIGHT_VOXEL_READ)
 
 /// The light volume, for consumers. Include sdf_common.sh first (level lookup); the includer
@@ -515,7 +529,7 @@ bool GiLightVoxelReadLevelRemod(vec3 position,
 			// emission; a mirror hit on the surface NEXT to a voxelised strip must not read
 			// that emission as its lighting. They stay in the total (out_radiance, the
 			// clipmap-shape answer) and leave the lit estimate and its matched albedo.
-			bool source_face = face_texel.a > 0.5 && face_texel.a < 0.5 * (1.0 + GI_LIGHT_VOXEL_SOURCE_ALPHA);
+			bool source_face = GiLightVoxelIsSourceAlpha(face_texel.a);
 			float lit_face = source_face ? 0.0 : face_texel.a * face_weight;
 			lit_sum += face_texel.xyz * (source_face ? 0.0 : face_weight);
 			albedo_sum += cell_albedo * lit_face;

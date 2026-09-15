@@ -40,6 +40,8 @@ public:
     {
         bool valid = false;
         uint32_t frames = 0;
+        /// True when the statistics ran on the low-pass lane (see request).
+        bool lowpass = false;
         uint32_t width = 0;
         uint32_t height = 0;
         /// Pixels whose reprojected change was measured on at least half of the frames.
@@ -75,8 +77,11 @@ public:
 
     auto init(rtti::context& ctx) -> bool;
 
-    /// Arms a measurement of @p frames frames starting with the next run; a running one restarts.
-    void request(uint32_t frames);
+    /// Arms a measurement of @p frames frames starting with the next run; a running one restarts. @p is_lowpass
+    /// runs every statistic on a small box mean of the displayed luminance (cs_temporal_probe.sc,
+    /// PROBE_LOWPASS_RADIUS): under camera motion the raw reprojected change is dominated by the sub-pixel
+    /// resampling of textured detail, which the box removes while patch-scale flicker stays.
+    void request(uint32_t frames, bool is_lowpass = false);
 
     /// Frames folded in so far by the current or last measurement.
     auto get_frames_done() const -> uint32_t;
@@ -147,6 +152,9 @@ private:
     bool readback_pending_ = false;
     /// Set by a request made while a readback was in flight: that readback is discarded.
     bool discard_pending_readback_ = false;
+    /// The lane the current measurement runs on, and the lane the in-flight readback was measured on.
+    bool is_lowpass_ = false;
+    bool readback_lowpass_ = false;
 };
 
 } // namespace unravel

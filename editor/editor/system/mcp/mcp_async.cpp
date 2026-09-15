@@ -20,6 +20,7 @@
 #include <cmath>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 namespace unravel::mcp
@@ -36,6 +37,20 @@ struct fbo_capture_state
     gfx::texture_handle blit_tex = BGFX_INVALID_HANDLE;
     std::string error;
 };
+
+/// How long a capture waits for its readback however short the caller's wait_ms: the READ_BACK buffer must outlive
+/// bgfx's copy, which the render thread performs when it executes the frame the read was issued in.
+constexpr auto readback_guard_timeout = std::chrono::milliseconds(10000);
+
+/// Keeps a capture whose readback never landed alive for the rest of the session: its pixel buffer and blit texture
+/// may still be the target of a pending copy, and freeing them would hand the render thread freed memory.
+auto abandon_capture_state(std::shared_ptr<fbo_capture_state> state) -> void
+{
+    static std::mutex abandoned_mutex;
+    static std::vector<std::shared_ptr<fbo_capture_state>> abandoned;
+    std::lock_guard<std::mutex> lock(abandoned_mutex);
+    abandoned.push_back(std::move(state));
+}
 
 auto bimg_allocator() -> bx::AllocatorI*
 {
@@ -296,7 +311,10 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
         return {.text = state->error.empty() ? "Failed to request capture" : state->error, .is_error = true};
     }
 
-    const auto deadline = std::chrono::steady_clock::now() + options.wait_timeout;
+    // Never shorter than readback_guard_timeout: the caller's wait_ms bounds how long this tool is willing to wait,
+    // not when the READ_BACK buffer may be freed (wait_ms 0 freed it before bgfx copied into it and crashed the
+    // editor on the render thread). The loop still returns as soon as the readback lands.
+    const auto deadline = std::chrono::steady_clock::now() + std::max(options.wait_timeout, readback_guard_timeout);
     bool ready = false;
     while(std::chrono::steady_clock::now() < deadline)
     {
@@ -316,18 +334,10 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
 
     if(!ready)
     {
-        mcp.invoke_on_main(
-            [state]() -> bool
-            {
-                if(bgfx::isValid(state->blit_tex))
-                {
-                    gfx::destroy(state->blit_tex);
-                    state->blit_tex = BGFX_INVALID_HANDLE;
-                }
-                return true;
-            });
-        return {.text = fmt::format("Timed out waiting for GPU readback (frame {})", state->ready_frame),
-                .is_error = true};
+        // The readback never landed: its buffer and blit texture may still be the target of a pending copy.
+        const uint32_t ready_frame = state->ready_frame;
+        abandon_capture_state(std::move(state));
+        return {.text = fmt::format("Timed out waiting for GPU readback (frame {})", ready_frame), .is_error = true};
     }
 
     mcp.invoke_on_main(
