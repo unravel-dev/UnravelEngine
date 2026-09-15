@@ -700,6 +700,18 @@
       " 0.75 when the parallax-adaptive probe filter started removing lattice print-through"       \
       " upstream: the jitter's job shrank, and its amplitude is shimmer the temporal must"         \
       " re-integrate on every anchor cycle")                                                       \
+    X(GI_IMPORTANCE_SAMPLE_BUDGET, 48.0f,                                                          \
+      "jittered samples per probe", "measured: the full trace program's structured importance"     \
+      " budget (GiFullRayUnit), shared by the texels the BRDF cull keeps in proportion to cosine x"  \
+      " reprojected importance, 1 to GI_IMPORTANCE_SUPERSAMPLE_MAX each. 48 matches the importance" \
+      " ladder it replaced in probe trace cost (0.95 -> 0.98 ms during a 90 deg/s turn) and cut the" \
+      " court's per-frame change 10-15% at rest and in turns (2026-09-15)")                         \
+    X(GI_IMPORTANCE_MIN_COSINE, 0.1f,                                                               \
+      "cosine to the probe anchor normal", "measured: the BRDF cull of the structured importance"  \
+      " allocation - texels under it are not traced and store zero (Lumen's MinPDFToTrace value,"   \
+      " applied to the texel cosine). The allocation's gain comes from it, and so does a 3-9%"      \
+      " darkening of indirect that the user accepted; the old -0.2 kept the brightness and lost"   \
+      " most of the gain (turns -2..-4%, +16% trace)")                                             \
     X(GI_IMPORTANCE_SUPERSAMPLE_RATIO, 2.0f,                                                    \
       "x mean texel importance", "derived: a cone holding a concentrated emitter reads brighter"   \
       " than the probe mean; doubling its samples is the smallest step that resolves a bulb"       \
@@ -707,13 +719,10 @@
       " entirely), and gating at twice the mean keeps the extra budget bounded by the bright"      \
       " fraction of the sphere")                                                                   \
     X(GI_IMPORTANCE_SUPERSAMPLE_MAX, 4,                                                            \
-      "samples per cone", "derived: the ceiling of the importance-proportional allocation"         \
-      " ladder (2/4/8x the tile mean earn 2/3/4 samples - powers of"                               \
-      " GI_IMPORTANCE_SUPERSAMPLE_RATIO). Four is where the sub-cone (0,2)-net's"                  \
-      " stratification is still exact and where the self-budgeting bound settles: block"           \
-      " importances sum to sixteen means by definition, so however the energy concentrates a"      \
-      " stratum's extra samples stay near half the base ray count in the worst case - the"         \
-      " same order the old binary 2x gate already paid")                                           \
+      "samples per cone", "derived: the per-texel ceiling of the structured importance"             \
+      " allocation (GI_IMPORTANCE_SAMPLE_BUDGET). Four is where the sub-cone (0,2)-net's"             \
+      " stratification is still exact, and it bounds how much of the budget one bright texel can"     \
+      " take")                                           \
     X(GI_TEMPORAL_MAX_FRAMES, 24,                                                                  \
       "frames", "measured: with per-frame cone-direction jitter the window must integrate"         \
       " enough of each cone's R2 sequence that residual sample motion falls below visibility -"    \
@@ -1102,7 +1111,7 @@
       " last). A cone narrower than a cell is served by one cell, a wider one by every cell it"    \
       " touches - the aimed count grows with the emitter's apparent size until"                    \
       " GI_EMISSIVE_NEE_MIN_CONE_COS hands it back to the cell rays. One keeps every lane within"  \
-      " the importance ladder's four samples")                                                    \
+      " GI_IMPORTANCE_SUPERSAMPLE_MAX samples per texel")                                                    \
     X(GI_EMISSIVE_NEE_MIN_CONE_COS, 0.866f,                                                        \
       "cosine", "derived: an emitter whose bounding-sphere cone is wider than this (30 degrees"    \
       " half angle, 0.84 sr against a 0.2 sr octahedral cell) is not aimed at: the cell rays"     \

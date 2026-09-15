@@ -152,6 +152,9 @@ SHARED float s_importance_mean[GI_TRACE_SLOT_COUNT];
 /// The reprojected probe's 4x4 importance mip, staged by the leader: the per-ray lookup used
 /// to re-read the same four record vec4s the leader had already loaded for the mean.
 SHARED vec4 s_importance_mip[GI_TRACE_SLOT_COUNT * 4];
+/// The probe's importance PDF total - cosine to the anchor normal x the block's reprojected importance, over
+/// the texels the BRDF cull keeps - staged by the leader for the full program's allocation (GiFullRayUnit).
+SHARED float s_importance_pdf_sum[GI_TRACE_SLOT_COUNT];
 /// Dispatch-uniform values hoisted out of the per-ray loop.
 SHARED vec2 s_screen_size;
 SHARED vec2 s_frame_r2;
@@ -444,36 +447,6 @@ float GiScreenProbeBlockRatio(int slot, int block)
 	int lane = block % 4;
 	float importance = lane == 0 ? mip.x : (lane == 1 ? mip.y : (lane == 2 ? mip.z : mip.w));
 	return importance / s_importance_mean[slot];
-}
-
-/*
- * IMPORTANCE-PROPORTIONAL SAMPLE ALLOCATION for one 2x2 block: a cone whose reprojected
- * history reads brighter than the probe mean gets extra sub-cone samples on a geometric
- * ladder of the ratio - resolving an emitter smaller than the cone in proportion to how
- * much of the tile's energy it concentrates. The ladder is SELF-BUDGETING with no
- * reduction: ratios normalise by the tile MEAN, and the sixteen block importances sum to
- * sixteen means by definition - so however the energy is distributed, the extra samples
- * are bounded (about half the base ray count in the all-worst-case), and a uniformly lit
- * tile pays exactly one sample per cone as before.
- */
-int GiScreenProbeSampleCount(int slot, int block)
-{
-	float ratio = GiScreenProbeBlockRatio(slot, block);
-	int sample_count = 1;
-	if(ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO)
-	{
-		sample_count = 2;
-	}
-	if(ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO * GI_IMPORTANCE_SUPERSAMPLE_RATIO)
-	{
-		sample_count = 3;
-	}
-	if(ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO * GI_IMPORTANCE_SUPERSAMPLE_RATIO *
-	               GI_IMPORTANCE_SUPERSAMPLE_RATIO)
-	{
-		sample_count = GI_IMPORTANCE_SUPERSAMPLE_MAX;
-	}
-	return sample_count;
 }
 
 /*
@@ -1028,15 +1001,26 @@ GiRayUnit GiAdaptiveRayUnit(int slot, int r)
 	return unit;
 }
 #else
-/// The full program's ray unit: one texel with the whole importance ladder.
+/*
+ * The full program's ray unit: one texel, sampled by STRUCTURED IMPORTANCE [Lumen screen-probe importance
+ * sampling]. The BRDF culls the texels whose centre cosine to the anchor normal is under
+ * GI_IMPORTANCE_MIN_COSINE, and a fixed budget of GI_IMPORTANCE_SAMPLE_BUDGET jittered samples is shared by the
+ * rest in proportion to cosine x the block's reprojected importance (GiScreenProbeBlockRatio), 1 to
+ * GI_IMPORTANCE_SUPERSAMPLE_MAX per texel. Every texel's estimate stays unbiased at any count - the balance
+ * heuristic divides by the texel's own count - so the cull is the one bias, a darkening: measured 3-9% of
+ * indirect, accepted for 10-15% less per-frame change at the same trace cost (tasks/lumen_parity_log.md).
+ */
 GiRayUnit GiFullRayUnit(int slot, ivec2 local)
 {
 	GiRayUnit unit;
 	unit.base = local;
 	unit.span = 1;
-	unit.samples = GiScreenProbeSampleCount(slot, (local.y / 2) * 4 + (local.x / 2));
 	vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
-	unit.traced = dot(GiOctDecode(tile_uv), s_anchor_normal[slot]) >= -0.2;
+	float cosine = dot(GiOctDecode(tile_uv), s_anchor_normal[slot]);
+	unit.traced = cosine >= GI_IMPORTANCE_MIN_COSINE;
+	float pdf = max(cosine, 0.0) * GiScreenProbeBlockRatio(slot, (local.y / 2) * 4 + (local.x / 2));
+	float share = GI_IMPORTANCE_SAMPLE_BUDGET * pdf / max(s_importance_pdf_sum[slot], 1e-6);
+	unit.samples = int(clamp(floor(share + 0.5), 1.0, float(GI_IMPORTANCE_SUPERSAMPLE_MAX)));
 	return unit;
 }
 #endif
@@ -1209,6 +1193,22 @@ void main()
 					}
 				}
 			}
+#if !defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
+			// The importance PDF total GiFullRayUnit divides by, over the texels the BRDF cull keeps.
+			float pdf_sum = 0.0;
+			for(int pdf_texel = 0; pdf_texel < GI_PROBE_DIR_COUNT; ++pdf_texel)
+			{
+				ivec2 pdf_local = ivec2(pdf_texel % GI_PROBE_DIR_EDGE, pdf_texel / GI_PROBE_DIR_EDGE);
+				vec2 pdf_uv = (vec2(pdf_local) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
+				float pdf_cosine = dot(GiOctDecode(pdf_uv), world_normal);
+				if(pdf_cosine >= GI_IMPORTANCE_MIN_COSINE)
+				{
+					pdf_sum += max(pdf_cosine, 0.0) *
+					           GiScreenProbeBlockRatio(slot, (pdf_local.y / 2) * 4 + (pdf_local.x / 2));
+				}
+			}
+			s_importance_pdf_sum[slot] = pdf_sum;
+#endif
 		}
 	}
 	// Every lane clears the accumulators of the texels it will finalize (phase 3 below),

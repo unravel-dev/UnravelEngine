@@ -10,8 +10,11 @@
  *    is the fix for the naive test's failure - distant hits have no parallax, always pass, and
  *    leak over local shadowing.
  *
- * Then convolves the filtered sphere into the probe's 8x8 octahedral IRRADIANCE tile
- * (E(n)/pi = sum(L cos) / (N/4)), which is what integration samples at each pixel's own normal.
+ * Then projects the filtered sphere onto third-order spherical harmonics (nine solid-angle weighted
+ * coefficients per probe) and evaluates the clamped-cosine convolution from them into the probe's 8x8
+ * octahedral IRRADIANCE tile (E(n)/pi), which is what integration samples at each pixel's own normal - Lumen's
+ * irradiance path (ScreenProbeConvertToIrradiance). Against the exact per-direction cosine sum it replaced:
+ * per-frame noise unchanged, lit images 1-8% brighter (tasks/lumen_parity_log.md).
  */
 
 #include "bgfx_compute.sh"
@@ -37,12 +40,25 @@ SHARED vec4 s_nb_meta[9];
 SHARED float s_nb_weight[9];
 /// Anchor-to-anchor distance, the parallax baseline of the adaptive angle test below.
 SHARED float s_nb_baseline[9];
-/// Every thread's decoded direction, for the convolution below: 64 threads re-decoding all
+/// Every thread's decoded direction, for the SH3 projection below: 64 threads re-decoding all
 /// 64 directions ran GiOctDecode (a normalize among other things) 4096 times per probe for
 /// 64 distinct values each thread already computed once.
 SHARED vec3 s_dir[GI_PROBE_DIR_COUNT];
 /// Every texel's solid angle (GiOctTexelSolidAngle): the octahedral map is not equal-area.
 SHARED float s_omega[GI_PROBE_DIR_COUNT];
+/// The probe's filtered radiance in nine real SH coefficients (rgb, w = the measured lane), projected once per
+/// probe by thread 0 and evaluated by every thread.
+SHARED vec4 s_sh[9];
+
+/// Real spherical-harmonic basis normalisations for bands 0-2, and the clamped-cosine convolution's band scales
+/// in the E/pi convention (A_l / pi = 1, 2/3, 1/4 [Ramamoorthi and Hanrahan 2001]).
+#define GI_SH_BASIS_0        0.282095
+#define GI_SH_BASIS_1        0.488603
+#define GI_SH_BASIS_2_CROSS  1.092548
+#define GI_SH_BASIS_2_ZZ     0.315392
+#define GI_SH_BASIS_2_XX_YY  0.546274
+#define GI_SH_COSINE_BAND_1  (2.0 / 3.0)
+#define GI_SH_COSINE_BAND_2  0.25
 
 NUM_THREADS(8, 8, 1)
 void main()
@@ -140,6 +156,31 @@ void main()
 	}
 	s_filtered[dir_index] = filtered;
 	barrier();
+	// SH3 PROJECTION of the filtered sphere, once per probe: each direction weighted by its texel's SOLID ANGLE
+	// (the octahedral map is not equal-area - GiOctTexelSolidAngle), so a uniform field L projects to exactly
+	// E/pi = L below. The directions and solid angles come from shared memory.
+	if(center_valid && local.x == 0 && local.y == 0)
+	{
+		for(int c = 0; c < 9; ++c)
+		{
+			s_sh[c] = vec4_splat(0.0);
+		}
+		for(int d = 0; d < GI_PROBE_DIR_COUNT; ++d)
+		{
+			vec3 w = s_dir[d];
+			vec4 weighted = s_filtered[d] * s_omega[d];
+			s_sh[0] += weighted * GI_SH_BASIS_0;
+			s_sh[1] += weighted * (GI_SH_BASIS_1 * w.y);
+			s_sh[2] += weighted * (GI_SH_BASIS_1 * w.z);
+			s_sh[3] += weighted * (GI_SH_BASIS_1 * w.x);
+			s_sh[4] += weighted * (GI_SH_BASIS_2_CROSS * w.x * w.y);
+			s_sh[5] += weighted * (GI_SH_BASIS_2_CROSS * w.y * w.z);
+			s_sh[6] += weighted * (GI_SH_BASIS_2_ZZ * (3.0 * w.z * w.z - 1.0));
+			s_sh[7] += weighted * (GI_SH_BASIS_2_CROSS * w.x * w.z);
+			s_sh[8] += weighted * (GI_SH_BASIS_2_XX_YY * (w.x * w.x - w.y * w.y));
+		}
+	}
+	barrier();
 	// IMPORTANCE MIP for next frame's ray allocation: 16 blocks of 2x2 texels, each block's
 	// filtered luminance, packed four blocks per record vec4 in slots 0-3. Threads 0-3 write
 	// one vec4 each; the luminances come straight from shared memory, so this is free next to
@@ -166,30 +207,23 @@ void main()
 		b_gi_probes[base + uint(local.x)] =
 		    vec4(block_luminance[0], block_luminance[1], block_luminance[2], block_luminance[3]);
 	}
-	// Cosine convolution to irradiance at THIS texel's normal direction, each sample weighted
-	// by its texel's SOLID ANGLE (the octahedral map is not equal-area - see
-	// GiOctTexelSolidAngle) and normalised by sum(cos x omega), so a uniform radiance field
-	// integrates to exactly E/pi = L (the equal-weight sum over N/4 under-counted by ~8% and
-	// biased individual directions by up to 47%). The sample directions come from shared
-	// memory: each is the decode some thread already did.
+	// Irradiance at THIS texel's normal direction from the SH3 coefficients: the clamped-cosine convolution's band
+	// scales (GI_SH_COSINE_BAND_*), clamped at zero - band-limited SH rings slightly negative behind a bright lobe.
+	// w is the measured lane evaluated the same way: texels the trace refused hand their share to integration's
+	// weighting rather than reading as darkness.
 	vec3 normal = dir;
 	vec4 irradiance = vec4_splat(0.0);
 	if(center_valid)
 	{
-		float cos_omega_sum = 0.0;
-		for(int d = 0; d < GI_PROBE_DIR_COUNT; ++d)
-		{
-			float weight = max(dot(normal, s_dir[d]), 0.0) * s_omega[d];
-			irradiance.xyz += s_filtered[d].xyz * weight;
-			irradiance.w += s_filtered[d].w * weight;
-			cos_omega_sum += weight;
-		}
-		float norm = max(cos_omega_sum, 1e-6);
-		irradiance.xyz /= norm;
-		// w becomes the measured fraction of the cosine lobe: texels the trace refused (the
-		// below-tangent cap of an invalid neighbour set) hand their share to integration's
-		// weighting rather than reading as darkness.
-		irradiance.w /= norm;
+		vec4 value = s_sh[0] * GI_SH_BASIS_0;
+		value += (s_sh[1] * normal.y + s_sh[2] * normal.z + s_sh[3] * normal.x) * (GI_SH_BASIS_1 * GI_SH_COSINE_BAND_1);
+		value += (s_sh[4] * (GI_SH_BASIS_2_CROSS * normal.x * normal.y) +
+		          s_sh[5] * (GI_SH_BASIS_2_CROSS * normal.y * normal.z) +
+		          s_sh[6] * (GI_SH_BASIS_2_ZZ * (3.0 * normal.z * normal.z - 1.0)) +
+		          s_sh[7] * (GI_SH_BASIS_2_CROSS * normal.x * normal.z) +
+		          s_sh[8] * (GI_SH_BASIS_2_XX_YY * (normal.x * normal.x - normal.y * normal.y))) *
+		         GI_SH_COSINE_BAND_2;
+		irradiance = vec4(max(value.xyz, vec3_splat(0.0)), saturate(value.w));
 	}
 	imageStore(s_probe_irradiance_out, GiProbeAtlasBase(probe.x, probe.y, 0) + local, irradiance);
 }
