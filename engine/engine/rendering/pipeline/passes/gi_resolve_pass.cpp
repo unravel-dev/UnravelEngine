@@ -660,17 +660,48 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 interp_program_.program->end();
             }
             {
-                gfx::render_pass pass("GI/Probe Filter");
-                filter_program_.program->begin();
-                gfx::set_texture(filter_program_.s_probe_radiance, 0, probe_atlas);
-                gfx::set_image(2, irradiance_atlas->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
-                // ReadWrite: the filter writes the importance mip into the record slots.
-                gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
-                gfx::set_uniform(filter_program_.u_gi_probe_params, probe_params);
-                gfx::set_uniform(filter_program_.u_gi_probe_screen, probe_screen);
-                gfx::set_uniform(filter_program_.u_gi_probe_temporal, probe_temporal);
-                gfx::dispatch(pass.id, filter_program_.program->native_handle(), probes_x, probes_y, 1);
-                filter_program_.program->end();
+                // PROBE-SPACE FILTER, settings::probe_filter_passes times (Lumen's
+                // SpatialFilterNumPasses): every pass but the last filters the radiance into a
+                // derived atlas the next pass reads (two ping-pong atlases, never the trace
+                // atlas - the trace's firefly governor reads its own last-frame texel there);
+                // the last pass filters once more and convolves to irradiance.
+                const int filter_passes = std::clamp(s.probe_filter_passes, 1, 4);
+                auto filter_source = probe_atlas;
+                for(int filter_pass = 0; filter_pass < filter_passes; ++filter_pass)
+                {
+                    const bool final_pass = filter_pass == filter_passes - 1;
+                    gfx::render_pass pass("GI/Probe Filter");
+                    filter_program_.program->begin();
+                    gfx::set_texture(filter_program_.s_probe_radiance, 0, filter_source);
+                    // Both images stay bound on every pass (the kernel declares both; an
+                    // unbound image unit is undefined on some backends): the pass that does not
+                    // write one simply never stores to it.
+                    auto filter_target =
+                        ensure_atlas((filter_pass & 1) == 0 ? "GI_PROBE_FILTERED_A" : "GI_PROBE_FILTERED_B");
+                    gfx::set_image(2,
+                                   irradiance_atlas->native_handle(),
+                                   0,
+                                   gfx::access::Write,
+                                   gfx::texture_format::RGBA16F);
+                    gfx::set_image(3,
+                                   filter_target->native_handle(),
+                                   0,
+                                   gfx::access::Write,
+                                   gfx::texture_format::RGBA16F);
+                    // ReadWrite: the final pass writes the importance mip into the record slots.
+                    gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
+                    const float probe_filter[4] = {final_pass ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f};
+                    gfx::set_uniform(filter_program_.u_gi_probe_params, probe_params);
+                    gfx::set_uniform(filter_program_.u_gi_probe_screen, probe_screen);
+                    gfx::set_uniform(filter_program_.u_gi_probe_temporal, probe_temporal);
+                    gfx::set_uniform(filter_program_.u_gi_probe_filter, probe_filter);
+                    gfx::dispatch(pass.id, filter_program_.program->native_handle(), probes_x, probes_y, 1);
+                    filter_program_.program->end();
+                    if(!final_pass)
+                    {
+                        filter_source = filter_target;
+                    }
+                }
             }
             {
                 // Fused: bind the history MRT and blend in-register; split: write GI_TRACE
@@ -1101,6 +1132,10 @@ auto gi_resolve_pass::measure_camera_motion(const run_params& params) -> float
         const float travel = math::length(position - prev_camera_position_);
         const float half_chord = math::clamp(0.5f * math::length(axis - prev_camera_axis_), 0.0f, 1.0f);
         const float turn_degrees = math::degrees(2.0f * std::asin(half_chord));
+        // The turn term was A/B'd on 2026-09-17 (GI_TestSuite cell 07, translation-only
+        // collapse): the Indirect view's change under a 0.5 deg/frame turn fell 8 percent and
+        // did not move at 2 deg/frame - the turn shimmer is the gather's tier partition, not
+        // this collapse - so the term stays for the partition lag it was added against.
         motion = math::max(travel / gi::GI_TEMPORAL_CAMERA_MOTION_FULL,
                            turn_degrees / gi::GI_TEMPORAL_CAMERA_ROTATION_FULL);
     }

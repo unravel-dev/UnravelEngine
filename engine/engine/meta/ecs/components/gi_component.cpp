@@ -81,6 +81,18 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "statistics over a wider band: faster, with a wider leak margin "
                             "through silhouette gaps."},
         })
+        .data<&settings::probe_filter_passes>("probe_filter_passes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "probe_filter_passes"},
+            entt::attribute{"pretty_name", "Probe Filter Passes"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", 1.0f},
+            entt::attribute{"max", 4.0f},
+            entt::attribute{"tooltip",
+                            "Probe-space radiance filter passes before the irradiance convolution "
+                            "(Lumen runs 3). More passes share more neighbouring probes, which "
+                            "steadies the probe lattice under camera turns."},
+        })
         .data<&settings::adaptive_probes>("adaptive_probes"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "adaptive_probes"},
@@ -412,6 +424,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
     try_save(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
     try_save(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
+    try_save(ar, ser20::make_nvp("probe_filter_passes", obj.probe_filter_passes));
     try_save(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     // probe_space_temporal / max_accum_frames are gone with the removed probe-space
     // temporal; stored keys in old scenes are simply not read (the sparse-load rule).
@@ -444,6 +457,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("probe_spacing", obj.probe_spacing));
     try_load(ar, ser20::make_nvp("enable_screen_trace", obj.enable_screen_trace));
     try_load(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
+    try_load(ar, ser20::make_nvp("probe_filter_passes", obj.probe_filter_passes));
     try_load(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     try_load(ar, ser20::make_nvp("adaptive_rays", obj.adaptive_rays));
     try_load(ar, ser20::make_nvp("world_probe_jitter", obj.world_probe_jitter));

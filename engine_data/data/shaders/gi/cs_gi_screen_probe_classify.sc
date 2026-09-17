@@ -9,8 +9,14 @@
  * The gate chain, moved verbatim from the trace's first thread:
  *   dead anchor -> no list entry, no mode change (the interp pass clears the tile);
  *   even-lattice probes -> always traced (the coarse base everything else leans on);
- *   phased revalidation -> traced regardless, because an interpolated probe's own history
- *     is derived from its parents and no test below can see what the substitution erased;
+ *   phased revalidation -> traced regardless (mode 4), because an interpolated probe's own
+ *     history is derived from its parents and no test below can see what the substitution
+ *     erased. The traced tile is NOT shown as such: the interp pass compares it with the
+ *     parents' blend and either restores the blend (mode 2) or keeps the trace and marks the
+ *     probe STICKY-TRACED (mode 3) until its next revalidation. Showing the trace for its one
+ *     frame in eight was a periodic flash on every flat surface (measured 2026-09-17, Sponza
+ *     cloister: the Indirect view's at-rest median change 0.12 -> 0.31 with adaptive probes);
+ *   sticky-traced last frame -> traced again (mode 3) until the next revalidation;
  *   coplanarity of the parent anchors (cell plane / collinearity at parent scale).
  *
  * Importance-mip radiance agreement is not a live gate. It was written for a
@@ -54,8 +60,16 @@ void main()
 	bool revalidate =
 	    ((uint(probe.x) * 3u + uint(probe.y) * 5u + u_gi_probe_frame) %
 	     uint(GI_ADAPTIVE_REVALIDATE_FRAMES)) == 0u;
+	// LAST frame's mode, from the read half: a sticky-traced probe stays traced between
+	// revalidations. Its own revalidation frame re-decides.
+	uint last_record =
+	    (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_read_offset) * uint(GI_PROBE_STRIDE);
+	float last_mode = b_gi_probes[last_record + uint(GI_PROBE_META)].w;
+	bool odd = ((probe.x | probe.y) & 1) != 0;
+	bool adaptive = u_gi_screen_trace.z > 0.0 && odd;
+	bool sticky = adaptive && !revalidate && last_mode > 2.5 && last_mode < 3.5;
 	BRANCH
-	if(u_gi_screen_trace.z > 0.0 && !revalidate && ((probe.x | probe.y) & 1) != 0)
+	if(adaptive && !revalidate && !sticky)
 	{
 		ivec2 parents[4];
 		GiProbeParents(probe, parents);
@@ -107,6 +121,14 @@ void main()
 	{
 		b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 2.0);
 		return;
+	}
+	if(adaptive && revalidate)
+	{
+		b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 4.0);
+	}
+	else if(sticky)
+	{
+		b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 3.0);
 	}
 	uint slot;
 	atomicFetchAndAdd(b_gi_probe_traced[0], 1u, slot);

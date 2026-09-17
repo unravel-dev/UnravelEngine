@@ -43,6 +43,12 @@ public:
         /// spacing halves in trace-target pixels at half resolution, so probe density follows
         /// the trace resolution automatically.
         int probe_spacing = gi::GI_SCREEN_PROBE_SPACING;
+        /// How many times the 3x3 probe-space radiance filter runs before the irradiance
+        /// convolution (Lumen's SpatialFilterNumPasses). Each pass averages every direction
+        /// across the plane-agreeing neighbours, so per-probe sampling bias - the probe-sized
+        /// blobs that slide under a camera turn - falls with the probes shared. 1 = the single
+        /// pass fused into the convolution; the passes before it ping-pong two derived atlases.
+        int probe_filter_passes = gi::GI_PROBE_FILTER_PASSES;
         /// Hi-Z screen tier of the gather: rays march the depth pyramid first and commit
         /// pixel-precise on-screen hits before the SDF answers. Needs the pyramid (built when
         /// GI or the reflection stack is on); off degrades to pure SDF tracing.
@@ -382,6 +388,9 @@ private:
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
+        /// x = 1 for a radiance-only pass (writes the filtered atlas at image 3 and stops),
+        /// 0 for the final pass that convolves to irradiance and writes the importance mip.
+        gfx::program::uniform_ptr u_gi_probe_filter;
         gfx::program::uniform_ptr s_probe_radiance;
 
         void cache_uniforms()
@@ -389,6 +398,7 @@ private:
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_probe_filter, "u_gi_probe_filter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_probe_radiance, "s_probe_radiance", gfx::uniform_type::Sampler);
         }
 

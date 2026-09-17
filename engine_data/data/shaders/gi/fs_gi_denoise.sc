@@ -18,6 +18,7 @@ $input v_texcoord0
 
 #include "../common.sh"
 #include "../lighting.sh"
+#include "gi/gi_constants.sh"
 
 SAMPLER2D(s_gi_input, 0);
 SAMPLER2D(s_gi_depth, 1);
@@ -131,6 +132,16 @@ void main()
 	// convergence; contrast above it, and anything across a plane or normal break, is
 	// preserved exactly as before. Keep in step with the compute form.
 	luma_sigma = max(luma_sigma, u_gi_denoise_luma_floor * max(center_luma, 1e-3));
+	// BRIGHT-TAP BOUND (GI_DENOISE_TAP_LUMA_CAP / GI_DENOISE_LOG_LUMA_PHI): the variance stop
+	// above is inert against a compact bright feature - phi x the single-sample std over
+	// sqrt(count) is several times the luminance - so the wide passes copied the floor hotspot
+	// under an emitter to their tap offsets as disks. A tap's luminance is bounded to a
+	// multiple of the centre's, and a relative log-ratio stop weights it out beside the plane
+	// stop; both widen with the low-count boost so a young pixel still reconstructs from
+	// whatever its neighbours hold. Keep in step with the compute form.
+	float low_count_widen = max(u_gi_denoise_low_count_boost / count, 1.0);
+	float tap_luma_cap = GI_DENOISE_TAP_LUMA_CAP * low_count_widen * max(center_luma, 1e-3);
+	float log_luma_phi = GI_DENOISE_LOG_LUMA_PHI * low_count_widen;
 	// CONVERGED EARLY-OUT: at a full accumulation count with collapsed variance, the stops
 	// above reject every tap whose luminance differs meaningfully - the filter is an identity
 	// operator producing its input at 24 taps of cost (the note on the luminance stop above
@@ -211,13 +222,19 @@ void main()
 				normal_weight = pow(ndotn, u_gi_denoise_normal_pow);
 			}
 			vec4 tap_value = texture2DLod(s_gi_input, tap_uv, 0.0);
-			// One exponential for both stops: exp(-a) * exp(-b) = exp(-(a + b)) exactly, and
+			float tap_luma = Luminance(tap_value.xyz);
+			if(tap_luma > tap_luma_cap)
+			{
+				tap_value.xyz *= tap_luma_cap / tap_luma;
+			}
+			// One exponential for every stop: exp(-a) * exp(-b) = exp(-(a + b)) exactly, and
 			// the transcendental count is what this pass is bound by (keep in step with the
 			// compute form).
-			float attenuation = plane_distance / plane_tolerance;
+			float attenuation = plane_distance / plane_tolerance +
+			                    abs(log(max(tap_luma, 1e-4) / max(center_luma, 1e-4))) / log_luma_phi;
 			if(use_luma_stop)
 			{
-				attenuation += abs(center_luma - Luminance(tap_value.xyz)) / luma_sigma;
+				attenuation += abs(center_luma - tap_luma) / luma_sigma;
 			}
 			float spatial_weight = kernel[abs(x)] * kernel[abs(y)];
 			float weight = spatial_weight * normal_weight * exp(-attenuation);

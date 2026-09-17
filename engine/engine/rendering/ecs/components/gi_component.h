@@ -53,6 +53,7 @@ public:
         r.enable_screen_trace = dominant ? f.enable_screen_trace : r.enable_screen_trace;
         r.probe_visibility_variance_gate =
             std::lerp(r.probe_visibility_variance_gate, f.probe_visibility_variance_gate, contribution);
+        r.probe_filter_passes = dominant ? f.probe_filter_passes : r.probe_filter_passes;
         r.adaptive_probes = dominant ? f.adaptive_probes : r.adaptive_probes;
         r.adaptive_rays = dominant ? f.adaptive_rays : r.adaptive_rays;
         r.world_probe_jitter = dominant ? f.world_probe_jitter : r.world_probe_jitter;

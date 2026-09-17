@@ -687,7 +687,7 @@ void main()
 		{
 			probe_color = vec3_splat(0.0);
 		}
-		else if(meta.w > 1.5)
+		else if(meta.w > 1.5 && meta.w < 2.5)
 		{
 			probe_color = vec3_splat(0.25);
 		}
@@ -739,7 +739,7 @@ void main()
 		{
 			probe_color = vec3_splat(0.0);
 		}
-		else if(meta.w > 1.5)
+		else if(meta.w > 1.5 && meta.w < 2.5)
 		{
 			probe_color = vec3_splat(0.25);
 		}

@@ -33,8 +33,11 @@
  *              w = the probe's total contribution luminance. Read by the gi_emitter_share
  *              debug view - an instrument, no lit consumer
  *      [9]     xyz = anchor world position, w = the probe MODE: 0 = no geometry, 1 = traced,
- *              2 = interpolated from its even-lattice parents (adaptive gather). Consumers
- *              that only care about validity keep testing w > 0.5.
+ *              2 = interpolated from its even-lattice parents (adaptive gather), 3 = traced
+ *              because its last revalidation disagreed with the parents' blend (sticky until
+ *              the next one), 4 = revalidating this frame (traced; the interp pass compares
+ *              the tile against the parents' blend and writes 2 or 3). Consumers that only
+ *              care about validity keep testing w > 0.5; "interpolated" is 1.5 < w < 2.5.
  *      [10]    xyz = anchor world normal, w = anchor view distance
  *      [11]    the RAY TIER SHARES of a traced probe's rays this frame: x = screen tier,
  *              y = mesh SDF, z = clipmap SDF, w = sky (a completion the world probes could

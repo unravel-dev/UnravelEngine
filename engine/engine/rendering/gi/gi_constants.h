@@ -370,6 +370,14 @@
       " documented DDGI thin-wall failure). Two voxels clears the trace acceptance with margin"    \
       " and stays below any wall the field itself resolves")                                       \
     /* --- screen probe gather (plan 3.4) --- */                                                   \
+    X(GI_PROBE_FILTER_PASSES, 3,                                                                   \
+      "passes", "derived: the gi_resolve_pass::settings::probe_filter_passes default - how many"  \
+      " times the 3x3 probe-space filter (cs_gi_screen_probe_filter.sc) runs before the"          \
+      " irradiance convolution. Lumen runs its plus-shaped probe filter three times"             \
+      " (r.Lumen.ScreenProbeGather.SpatialFilterNumPasses 3); one pass shares 9 probes, three"   \
+      " share a 7x7 footprint, and the per-probe sampling bias that prints as probe-sized blobs"  \
+      " sliding under a camera turn falls with the probes averaged (user-found 2026-09-17,"       \
+      " GI_TestSuite cell 07). Passes past the first ping-pong two derived atlases")              \
     X(GI_SCREEN_PROBE_SPACING, 32,                                                                 \
       "full-resolution pixels", "measured: the gi_resolve_pass::settings::probe_spacing default"   \
       " - THE ray-budget knob now that the probe-space temporal is gone (cost scales with the"     \
@@ -401,17 +409,18 @@
       " twice). The parent positions ARE the surface sampled at exactly the scale being"           \
       " interpolated across; an anchor further off their plane than integration tolerates is"      \
       " genuine geometric detail and keeps its traced probe")                                      \
-    X(GI_ADAPTIVE_RADIANCE_TOLERANCE, 0.35f,                                                       \
-      "fraction of the parents' mean luminance", "derived: geometric sameness is necessary but"    \
+    X(GI_ADAPTIVE_RADIANCE_TOLERANCE, 1.0f,                                                        \
+      "fraction of the parents' blend luminance", "derived: geometric sameness is necessary but"   \
       " NOT sufficient - a shadow edge, a lamp falloff, an occlusion gradient live on perfectly"   \
       " flat walls, and substituting the parents' average there washes radiance structure out"     \
-      " of the probe field (measured on Bistro: visible smoothing of wall shading). The parents'"  \
-      " 4x4 importance mips - filtered probe-space luminance the records already carry - must"     \
-      " agree per directional block before the blend may stand in for a measurement. Filtered"     \
-      " radiance between neighbouring probes on uniformly lit surfaces varies well under a"        \
-      " quarter of the mean (the 3x3 probe filter guarantees smoothness); lighting structure at"   \
-      " cell scale moves whole blocks by the mean or more. A third of the mean separates the"      \
-      " regimes with the margin on the quality side")                                              \
+      " of the probe field. On a revalidation frame (GI_ADAPTIVE_REVALIDATE_FRAMES) the interp"    \
+      " pass compares the probe's own traced tile with the parents' blend, luminance summed over"  \
+      " the tile: within this fraction the blend stands in, beyond it the probe stays traced"      \
+      " until its next revalidation (the sticky mode 3). A single 48-ray tile against a blend of"  \
+      " two to four is NOISY: at 0.35 the sticky set in the Sponza cloister raised the probe"      \
+      " trace 2.7 -> 3.95 ms (measured 2026-09-17, spacing 8) while the flicker it exists to"      \
+      " remove had already gone; a factor of two catches a probe inside a shadow between lit"      \
+      " parents (3-5x) and lets sampling noise through as the blend")                              \
     X(GI_ADAPTIVE_REVALIDATE_FRAMES, 8,                                                            \
       "frames", "derived: an interpolated probe's own history mip is DERIVED from its parents,"    \
       " so no history test can see structure the first substitution erased - the evidence loop"    \
@@ -420,6 +429,13 @@
       " structure can stay hidden to less than the accumulation window absorbs, for an eighth"     \
       " of the skipped rays; the phase hash keeps neighbouring probes from revalidating in the"    \
       " same frame, so the cost is spread, never pulsed")                                          \
+    X(GI_ADAPTIVE_COARSE_SAMPLES, 1,                                                               \
+      "jittered samples per coarse 2x2 block", "measured: the adaptive-rays program traces one"    \
+      " cell per dim 2x2 block of the octahedral tile and splats it to all four texels. Two and"   \
+      " four samples per block were A/B'd on the Sponza cloister at spacing 8 (2026-09-17): the"   \
+      " Indirect view's at-rest p95 change stayed 1.50 / 1.52 / 1.50 while the probe trace went"   \
+      " from 42 to 70 percent of the full program's - the dim blocks are not where the adaptive"   \
+      " noise lives (the bright DETAIL blocks are, see GiAdaptiveRayUnit). One sample it is")      \
     X(GI_MAX_RAY_RADIANCE, 40.0f,                                                                  \
       "radiance", "tuned: Lumen's [CVar] ScreenProbeGather.MaxRayIntensity (10 in UE 5.7,"         \
       " LumenScreenProbeFiltering.cpp:58; this note used to read 40) clamps fireflies at trace"   \
@@ -1042,6 +1058,22 @@
       " count - one fast window, past which the running mean has averaged enough gathers that"    \
       " the regular chain's reach suffices (measured: revealed regions stayed 3-4x noisier than"  \
       " converged ones for 14+ frames with the fixed reach)")                                     \
+                                                                                                   \
+    X(GI_DENOISE_TAP_LUMA_CAP, 3.0f,                                                               \
+      "x the centre's luminance", "derived: the most a tap may contribute in luminance, as a"      \
+      " multiple of the centre's own (the colour is scaled down to the cap; at low counts the"     \
+      " cap widens with the low-count boost). The variance-driven luminance stop is inert on"      \
+      " a compact bright feature (its sigma is phi x the single-sample std / sqrt(count), 3-13x"   \
+      " the luminance at phi 32 / 128), so the wide a-trous passes printed the floor hotspot"      \
+      " under an emitter as disks at their tap offsets (user-found 2026-09-17, GI_TestSuite"       \
+      " cell 07 at six passes). Three keeps the halo around a hotspot (its own neighbours are"     \
+      " within that) and bounds a copy of a far brighter feature to a few percent")                \
+    X(GI_DENOISE_LOG_LUMA_PHI, 0.7f,                                                               \
+      "natural-log luminance ratio", "derived: a relative (log-ratio) luminance stop beside the"   \
+      " variance-driven one: weight exp(-|ln(tap / centre)| / phi), phi widened by the low-count"  \
+      " boost like the sigma. ln 2 = 0.69: a tap at twice the centre keeps 1/e, at five times"     \
+      " a tenth - with the cap above, a hotspot copy is under three percent of the centre;"        \
+      " the probe-scale blobs (20-40 percent contrast) keep 0.6-0.75 and still smooth")            \
     X(GI_REFLECTION_ROUGH_WINDOW_SCALE, 4.0f,                                                      \
       "x the reflection temporal window", "historical: justified by a misread of Lumen - UE"     \
       " 5.7's Reflections.Temporal.MaxFramesAccumulated is 12 (LumenReflections.cpp:154-155; 32"   \

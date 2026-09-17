@@ -27,6 +27,13 @@ SAMPLER2D(s_probe_radiance, 0);
 /// already binds - to supersample bright cones. No new bindings anywhere.
 BUFFER_RW(b_gi_probes, vec4, 7);
 IMAGE2D_WO(s_probe_irradiance_out, rgba16f, 2);
+/// The filtered RADIANCE (rgb, w = the probe's own hitT lane verbatim, so the next pass's
+/// hit-angle test still has it), written by every pass but the last - each pass reads the
+/// previous one's output through s_probe_radiance (gi_resolve_pass ping-pongs two atlases).
+IMAGE2D_WO(s_probe_filtered_out, rgba16f, 3);
+/// x = 1 for a radiance-only pass (write s_probe_filtered_out and stop), 0 for the final
+/// pass that convolves to irradiance and writes the importance mip.
+uniform vec4 u_gi_probe_filter;
 
 /// Plane tolerance as a fraction of view distance - the adaptive spatial-error rule every
 /// screen-space consumer shares (GI-1.0's cell_size heuristic, here in its simplest form).
@@ -104,11 +111,12 @@ void main()
 	}
 	barrier();
 	vec4 filtered = vec4_splat(0.0);
+	float own_hit_t = 0.0;
 	if(center_valid)
 	{
 		vec4 center_texel =
 		    texelFetch(s_probe_radiance, GiProbeAtlasBase(probe.x, probe.y, 0) + local, 0);
-		float own_hit_t = center_texel.w;
+		own_hit_t = center_texel.w;
 		float weight_sum = 0.0;
 		// Same neighbour order as the old oy-outer / ox-inner walk, so the summation order -
 		// and with it the floating-point result - is unchanged.
@@ -153,6 +161,15 @@ void main()
 		}
 		filtered.xyz = weight_sum > 1e-4 ? filtered.xyz / weight_sum : center_texel.xyz;
 		filtered.w = 1.0;
+	}
+	// RADIANCE-ONLY PASS: hand the filtered sphere to the next pass and stop. Group-uniform,
+	// so no thread reaches the barriers below alone; an invalid probe writes zeros so the
+	// derived atlas is fully rewritten like the trace atlas.
+	if(u_gi_probe_filter.x > 0.5)
+	{
+		imageStore(s_probe_filtered_out, GiProbeAtlasBase(probe.x, probe.y, 0) + local,
+		           vec4(filtered.xyz, own_hit_t));
+		return;
 	}
 	s_filtered[dir_index] = filtered;
 	barrier();

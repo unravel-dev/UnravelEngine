@@ -197,6 +197,10 @@ void main()
 	float center_luma = Luminance(center.xyz);
 	// Coherent-structure floor - see the fragment form's note; keep the two in step.
 	luma_sigma = max(luma_sigma, u_gi_denoise_luma_floor * max(center_luma, 1e-3));
+	// Bright-tap bound and log-ratio stop - see the fragment form's note; keep the two in step.
+	float low_count_widen = max(u_gi_denoise_low_count_boost / count, 1.0);
+	float tap_luma_cap = GI_DENOISE_TAP_LUMA_CAP * low_count_widen * max(center_luma, 1e-3);
+	float log_luma_phi = GI_DENOISE_LOG_LUMA_PHI * low_count_widen;
 	// The per-pixel converged early-out lived here; the tile skip at the top of main is what
 	// replaced it (see the note there).
 	// One mat4 fold per pixel; taps evaluate the centre's plane with two dot4s (see the
@@ -253,13 +257,19 @@ void main()
 				normal_weight = pow(ndotn, u_gi_denoise_normal_pow);
 			}
 			vec4 tap_value = s_stage_color[tap_index];
-			// The plane and luminance stops share one exponential: exp(-a) * exp(-b) is
-			// exp(-(a + b)) exactly, and the transcendental count per tap is what this pass
-			// is actually bound by (measured: LDS staging barely moved it).
-			float attenuation = plane_distance / plane_tolerance;
+			float tap_luma = Luminance(tap_value.xyz);
+			if(tap_luma > tap_luma_cap)
+			{
+				tap_value.xyz *= tap_luma_cap / tap_luma;
+			}
+			// Every stop shares one exponential: exp(-a) * exp(-b) is exp(-(a + b)) exactly,
+			// and the transcendental count per tap is what this pass is actually bound by
+			// (measured: LDS staging barely moved it).
+			float attenuation = plane_distance / plane_tolerance +
+			                    abs(log(max(tap_luma, 1e-4) / max(center_luma, 1e-4))) / log_luma_phi;
 			if(use_luma_stop)
 			{
-				attenuation += abs(center_luma - Luminance(tap_value.xyz)) / luma_sigma;
+				attenuation += abs(center_luma - tap_luma) / luma_sigma;
 			}
 			float spatial_weight = kernel[abs(x)] * kernel[abs(y)];
 			float weight = spatial_weight * normal_weight * exp(-attenuation);

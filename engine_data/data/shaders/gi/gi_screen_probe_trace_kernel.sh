@@ -11,8 +11,9 @@
  *    settings::adaptive_rays checkbox): Lumen's structured-importance-sampling shape at
  *    the same per-frame-complete contract - 2x2 blocks whose reprojected importance
  *    concentrates energy (ratio over the tile mean) trace at FULL per-texel detail (x2
- *    samples on the very brightest), every other block traces ONE cone jittered across
- *    its quad and splats it - 16 + 3K rays per probe instead of 64. FOUR probes pack
+ *    samples on the very brightest), every other block traces one cell jittered across
+ *    its quad with GI_ADAPTIVE_COARSE_SAMPLES samples and splats it - 16 + 3K rays per
+ *    probe plus the detail texels' supersamples, against the full program's 48-64. FOUR probes pack
  *    into each 64-lane group (16 lanes each, rays pulled round-robin so one bright
  *    block never idles the wave); a 16-thread group alone would leave three quarters
  *    of every wave idle. The trade is per-frame variance and 4x4 angular granularity
@@ -1011,15 +1012,19 @@ GiRayUnit GiAdaptiveRayUnit(int slot, int r)
 	bool detail = ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO;
 	ivec2 quad = ivec2((block % 4) * 2, (block / 4) * 2);
 	GiRayUnit unit;
-	// DETAIL: ray `scan` in [0,4) owns one texel of the 2x2 quad, double-sampled on the
-	// ladder's top rung. COARSE: one cone jittered across the whole quad footprint, its
-	// mean stored to all four texels.
+	// DETAIL: ray `scan` in [0,4) owns one texel of the 2x2 quad, on the full program's
+	// supersampling ladder - 2 samples past the ratio squared, GI_IMPORTANCE_SUPERSAMPLE_MAX
+	// past its cube (it used to reach 2 at the cube and stop there: the bright texels are
+	// where this program's extra noise lived - measured 2026-09-17, the dim blocks' sample
+	// count moved nothing). COARSE: one cell spanning the whole quad footprint, sampled
+	// GI_ADAPTIVE_COARSE_SAMPLES times with its mean stored to all four texels.
 	unit.base = detail ? quad + ivec2(scan & 1, scan >> 1) : quad;
 	unit.span = detail ? 1 : 2;
-	unit.samples = (detail && ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO * GI_IMPORTANCE_SUPERSAMPLE_RATIO *
-	                                     GI_IMPORTANCE_SUPERSAMPLE_RATIO)
-	                   ? 2
-	                   : 1;
+	float ratio_squared = GI_IMPORTANCE_SUPERSAMPLE_RATIO * GI_IMPORTANCE_SUPERSAMPLE_RATIO;
+	unit.samples = detail ? ((ratio > ratio_squared * GI_IMPORTANCE_SUPERSAMPLE_RATIO)
+	                             ? GI_IMPORTANCE_SUPERSAMPLE_MAX
+	                             : (ratio > ratio_squared ? 2 : 1))
+	                      : GI_ADAPTIVE_COARSE_SAMPLES;
 	// Cone-centre cull: the detail texel's own threshold, or the quad centre loosened by
 	// its cosine half-span (~0.25) - a quad it rejects has every texel at or under the
 	// tangent cap, where cosine weights vanish anyway.
