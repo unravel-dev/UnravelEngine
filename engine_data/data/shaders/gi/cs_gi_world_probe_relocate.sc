@@ -40,12 +40,12 @@ void main()
 	{
 		return;
 	}
-	uint packed = b_world_probe_cells[index];
-	if(packed == GI_WORLD_PROBE_NONE)
+	uint packed_word = b_world_probe_cells[index];
+	if(packed_word == GI_WORLD_PROBE_NONE)
 	{
 		return;
 	}
-	ivec3 cell = GiWorldProbeUnpackCell(packed);
+	ivec3 cell = GiWorldProbeUnpackCell(packed_word);
 	int index_slot = GiWorldProbeIndexSlot(cell);
 	vec3 nominal = GiWorldProbeCellPosition(cell, 0);
 	vec3 relocation = GiWorldProbeRelocate(nominal, GiWorldProbeSpacing(0));

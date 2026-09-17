@@ -84,12 +84,12 @@ void main()
 		{
 			return;
 		}
-		uint packed = b_world_probe_cells[index];
-		if(packed == GI_WORLD_PROBE_NONE)
+		uint packed_word = b_world_probe_cells[index];
+		if(packed_word == GI_WORLD_PROBE_NONE)
 		{
 			return;
 		}
-		ivec3 cell = GiWorldProbeUnpackCell(packed);
+		ivec3 cell = GiWorldProbeUnpackCell(packed_word);
 		ivec3 delta = abs(cell - u_alloc_center);
 		bool in_window = max(delta.x, max(delta.y, delta.z)) <= half_axis;
 		uint free_count = b_world_probe_index[GI_WORLD_PROBE_INDEX_FREE_COUNT];

@@ -316,9 +316,9 @@ int GiWorldProbeSlotTotal()
 
 /// The world cell of a packed id (the level bits dropped): how a sparse level-0 slot learns
 /// which cell it was claimed for.
-ivec3 GiWorldProbeUnpackCell(uint packed)
+ivec3 GiWorldProbeUnpackCell(uint packed_word)
 {
-	return ivec3(int(packed & 0x3FFu), int((packed >> 10u) & 0x3FFu), int((packed >> 20u) & 0x3FFu)) -
+	return ivec3(int(packed_word & 0x3FFu), int((packed_word >> 10u) & 0x3FFu), int((packed_word >> 20u) & 0x3FFu)) -
 	       ivec3(512, 512, 512);
 }
 
@@ -337,9 +337,9 @@ uint GiWorldProbePackOffset(vec3 offset, float spacing)
 	return uint(quantised.x) | (uint(quantised.y) << 10u) | (uint(quantised.z) << 20u);
 }
 
-vec3 GiWorldProbeUnpackOffset(uint packed, float spacing)
+vec3 GiWorldProbeUnpackOffset(uint packed_word, float spacing)
 {
-	ivec3 quantised = ivec3(int(packed & 0x3FFu), int((packed >> 10u) & 0x3FFu), int((packed >> 20u) & 0x3FFu)) -
+	ivec3 quantised = ivec3(int(packed_word & 0x3FFu), int((packed_word >> 10u) & 0x3FFu), int((packed_word >> 20u) & 0x3FFu)) -
 	                  ivec3(512, 512, 512);
 	return vec3(quantised) * (spacing / 1024.0);
 }
@@ -408,11 +408,11 @@ void GiWorldProbeRequest(ivec3 base_cell)
 #if defined(GI_WORLD_PROBE_INDEX_RW)
 	int index_slot = GiWorldProbeIndexSlot(base_cell);
 	uint clock = b_world_probe_index[GI_WORLD_PROBE_INDEX_CLOCK];
-	uint packed = GiWorldProbePackCell(base_cell, 0);
+	uint packed_word = GiWorldProbePackCell(base_cell, 0);
 	if(b_world_probe_index[GI_WORLD_PROBE_INDEX_STAMP_BASE + index_slot] != clock ||
-	   b_world_probe_index[GI_WORLD_PROBE_INDEX_REQUEST_BASE + index_slot] != packed)
+	   b_world_probe_index[GI_WORLD_PROBE_INDEX_REQUEST_BASE + index_slot] != packed_word)
 	{
-		b_world_probe_index[GI_WORLD_PROBE_INDEX_REQUEST_BASE + index_slot] = packed;
+		b_world_probe_index[GI_WORLD_PROBE_INDEX_REQUEST_BASE + index_slot] = packed_word;
 		b_world_probe_index[GI_WORLD_PROBE_INDEX_STAMP_BASE + index_slot] = clock;
 	}
 #endif
@@ -451,10 +451,10 @@ vec3 GiWorldProbeOffset(ivec3 cell, int level)
 	vec3 offset = vec3_splat(0.0);
 	if(level == 0)
 	{
-		uint packed = b_world_probe_index[GI_WORLD_PROBE_INDEX_OFFSET_BASE + GiWorldProbeIndexSlot(cell)];
-		if(packed != GI_WORLD_PROBE_OFFSET_BURIED)
+		uint packed_word = b_world_probe_index[GI_WORLD_PROBE_INDEX_OFFSET_BASE + GiWorldProbeIndexSlot(cell)];
+		if(packed_word != GI_WORLD_PROBE_OFFSET_BURIED)
 		{
-			offset = GiWorldProbeUnpackOffset(packed, GiWorldProbeSpacing(0));
+			offset = GiWorldProbeUnpackOffset(packed_word, GiWorldProbeSpacing(0));
 		}
 	}
 	return offset;

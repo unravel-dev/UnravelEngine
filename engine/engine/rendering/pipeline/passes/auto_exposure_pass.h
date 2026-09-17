@@ -168,18 +168,48 @@ public:
      * previous value while a submission is still resolving, and 1 before the first one or
      * when the device has no occlusion queries.
      */
-    auto resolve_exposure_readback() -> float;
+    auto resolve_exposure_readback(gfx::render_view& rview) -> float;
 
     /**
-     * @brief The last value @ref resolve_exposure_readback delivered, WITHOUT polling.
+     * @brief The occlusion-query readback channel of ONE render view, stored in that view's
+     *        data under @ref view_key.
      *
-     * Polling consumes the resolved queries, so only the pipeline's own per-frame call may do
-     * it; instruments (the MCP exposure readout) read the stored value instead.
+     * PER VIEW on purpose. This state used to live on the pass, which one pipeline instance
+     * runs for every view it renders: a reflection probe face or a thumbnail rendered through
+     * a camera's pipeline took the no-exposure path, whose release destroyed the CAMERA's
+     * queries and reset its readback to 1, so the camera's next frame pre-exposed at the manual
+     * value while its own exposure texture still held the adapted one, and the queries then
+     * came back a few frames later - a dark / normal alternation whenever such captures
+     * interleaved with the camera, every flip rescaling the TAA and GI histories by the whole
+     * adaptation ratio (user-found 2026-09-18 on GI_TestSuite at play start). The queries die
+     * with the view.
      */
-    auto get_last_exposure_readback() const -> float
+    /// Readback layout: tag bits, then code bits, then the tag bits again. Queries resolve in
+    /// submission order, so equal leading and trailing tags prove every query in between came
+    /// from the same submission.
+    static constexpr std::uint32_t readback_tag_bits = 2;
+    static constexpr std::uint32_t readback_code_bits = 10;
+    static constexpr std::uint32_t readback_query_count = readback_tag_bits * 2 + readback_code_bits;
+    /// log2 range of the encoded value; 10 bits over 40 stops step 0.04 stops.
+    static constexpr float readback_min_log2 = -28.0f;
+    static constexpr float readback_max_log2 = 12.0f;
+
+    struct readback_state
     {
-        return readback_value_;
-    }
+        static constexpr const char* view_key = "AUTO_EXPOSURE_READBACK_STATE";
+        readback_state();
+        ~readback_state();
+        readback_state(const readback_state&) = delete;
+        auto operator=(const readback_state&) -> readback_state& = delete;
+        /// Destroys the queries and forgets the value (the view goes back to manual exposure).
+        void reset();
+        std::array<bgfx::OcclusionQueryHandle, readback_query_count> queries{};
+        bool created = false;
+        /// Submissions so far; the tag is its low bits.
+        std::uint32_t submissions = 0;
+        /// Last value decoded for this view.
+        float value = 1.0f;
+    };
 
     /// Returns the AUTO_EXPOSURE texture (1x1 RGBA32F, layout in the class comment).
     auto get_exposure_texture(gfx::render_view& rview) const -> gfx::texture::ptr;
@@ -240,15 +270,6 @@ private:
     /// (UE kFrameTimeEps).
     static constexpr float slope_match_frame_time = 1.0f / 60.0f;
 
-    /// Readback layout: tag bits, then code bits, then the tag bits again. Queries resolve in
-    /// submission order, so equal leading and trailing tags prove every query in between came
-    /// from the same submission.
-    static constexpr std::uint32_t readback_tag_bits = 2;
-    static constexpr std::uint32_t readback_code_bits = 10;
-    static constexpr std::uint32_t readback_query_count = readback_tag_bits * 2 + readback_code_bits;
-    /// log2 range of the encoded value; 10 bits over 40 stops step 0.04 stops.
-    static constexpr float readback_min_log2 = -28.0f;
-    static constexpr float readback_max_log2 = 12.0f;
 
     void ensure_resources(gfx::render_view& rview);
     /// The metering grid for an input of @p input_size: one cell per @ref metering_cell_texels
@@ -262,8 +283,7 @@ private:
     void run_local_exposure(gfx::render_view& rview, const run_params& params);
     void run_average(gfx::render_view& rview, const run_params& params);
     void submit_exposure_readback(gfx::render_view& rview);
-    auto ensure_readback_queries() -> bool;
-    void destroy_readback_queries();
+    static auto ensure_readback_queries(readback_state& state) -> bool;
 
     struct histogram_program : uniforms_cache
     {
@@ -352,14 +372,6 @@ private:
     /// first measurement instead of adapting toward it.
     bool histogram_bins_valid_ = false;
 
-    /// Created on first use: bgfx has a small global pool of occlusion queries, and most
-    /// pipelines (probe captures, thumbnails) never run auto exposure.
-    std::array<bgfx::OcclusionQueryHandle, readback_query_count> readback_queries_{};
-    bool readback_queries_created_ = false;
-    /// Submissions so far; the tag is its low bits.
-    std::uint32_t readback_submissions_ = 0;
-    /// Last value decoded by resolve_exposure_readback.
-    float readback_value_ = 1.0f;
 };
 
 } // namespace unravel

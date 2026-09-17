@@ -121,9 +121,34 @@ auto auto_exposure_pass::shutdown() -> int32_t
         histogram_buffer_ = BGFX_INVALID_HANDLE;
     }
 
-    destroy_readback_queries();
-
     return 0;
+}
+
+auto_exposure_pass::readback_state::readback_state()
+{
+    for(auto& query : queries)
+    {
+        query = BGFX_INVALID_HANDLE;
+    }
+}
+
+auto_exposure_pass::readback_state::~readback_state()
+{
+    reset();
+}
+
+void auto_exposure_pass::readback_state::reset()
+{
+    for(auto& query : queries)
+    {
+        if(bgfx::isValid(query))
+        {
+            bgfx::destroy(query);
+        }
+        query = BGFX_INVALID_HANDLE;
+    }
+    created = false;
+    value = 1.0f;
 }
 
 void auto_exposure_pass::ensure_resources(gfx::render_view& rview)
@@ -435,9 +460,9 @@ void auto_exposure_pass::run_local_exposure(gfx::render_view& rview, const run_p
     }
 }
 
-auto auto_exposure_pass::ensure_readback_queries() -> bool
+auto auto_exposure_pass::ensure_readback_queries(readback_state& state) -> bool
 {
-    if(readback_queries_created_)
+    if(state.created)
     {
         return true;
     }
@@ -446,39 +471,26 @@ auto auto_exposure_pass::ensure_readback_queries() -> bool
     {
         return false;
     }
-    for(auto& query : readback_queries_)
+    for(auto& query : state.queries)
     {
         query = bgfx::createOcclusionQuery();
         if(!bgfx::isValid(query))
         {
             // The global pool is exhausted: give back what was taken and stay without a
             // readback (pre-exposure then follows the manual exposure only).
-            destroy_readback_queries();
+            state.reset();
             return false;
         }
     }
-    readback_queries_created_ = true;
+    state.created = true;
     return true;
-}
-
-void auto_exposure_pass::destroy_readback_queries()
-{
-    for(auto& query : readback_queries_)
-    {
-        if(bgfx::isValid(query))
-        {
-            bgfx::destroy(query);
-        }
-        query = BGFX_INVALID_HANDLE;
-    }
-    readback_queries_created_ = false;
-    readback_value_ = 1.0f;
 }
 
 void auto_exposure_pass::submit_exposure_readback(gfx::render_view& rview)
 {
     auto exposure_tex = rview.tex_get(exposure_key);
-    if(!exposure_tex || !readback_program_.program || !ensure_readback_queries())
+    auto& state = rview.data().get_or_emplace<readback_state>(readback_state::view_key);
+    if(!exposure_tex || !readback_program_.program || !ensure_readback_queries(state))
     {
         return;
     }
@@ -491,8 +503,8 @@ void auto_exposure_pass::submit_exposure_readback(gfx::render_view& rview)
         target->populate({target_tex});
     }
 
-    const std::uint32_t tag = readback_submissions_ & ((1u << readback_tag_bits) - 1u);
-    ++readback_submissions_;
+    const std::uint32_t tag = state.submissions & ((1u << readback_tag_bits) - 1u);
+    ++state.submissions;
 
     const float max_code = float((1u << readback_code_bits) - 1u);
     const float range[4] = {readback_min_log2, max_code / (readback_max_log2 - readback_min_log2), max_code, 0.0f};
@@ -517,26 +529,29 @@ void auto_exposure_pass::submit_exposure_readback(gfx::render_view& rview)
         gfx::set_texture(readback_program_.s_exposure, 0, exposure_tex);
         const auto topology = gfx::clip_quad(1.0f);
         gfx::set_state(topology | BGFX_STATE_WRITE_RGB);
-        gfx::submit(pass.id, readback_program_.program->native_handle(), readback_queries_[slot]);
+        gfx::submit(pass.id, readback_program_.program->native_handle(), state.queries[slot]);
     }
     gfx::set_state(BGFX_STATE_DEFAULT);
     readback_program_.program->end();
 }
 
-auto auto_exposure_pass::resolve_exposure_readback() -> float
+auto auto_exposure_pass::resolve_exposure_readback(gfx::render_view& rview) -> float
 {
-    if(!readback_queries_created_)
+    // A view without its own channel (never ran the readback, or its queries could not be
+    // created) follows the manual exposure: never another view's value.
+    auto* state = rview.data().try_get<readback_state>(readback_state::view_key);
+    if(!state || !state->created)
     {
-        return readback_value_;
+        return 1.0f;
     }
 
     std::array<bool, readback_query_count> bits{};
     for(std::uint32_t slot = 0; slot < readback_query_count; ++slot)
     {
-        const auto result = bgfx::getResult(readback_queries_[slot]);
+        const auto result = bgfx::getResult(state->queries[slot]);
         if(result == bgfx::OcclusionQueryResult::NoResult)
         {
-            return readback_value_;
+            return state->value;
         }
         bits[slot] = result == bgfx::OcclusionQueryResult::Visible;
     }
@@ -552,7 +567,7 @@ auto auto_exposure_pass::resolve_exposure_readback() -> float
     if(leading_tag != trailing_tag)
     {
         // A submission is still resolving: the queries in between may mix two frames.
-        return readback_value_;
+        return state->value;
     }
 
     std::uint32_t code = 0;
@@ -562,8 +577,8 @@ auto auto_exposure_pass::resolve_exposure_readback() -> float
     }
     const float max_code = float((1u << readback_code_bits) - 1u);
     const float stops_per_code = (readback_max_log2 - readback_min_log2) / max_code;
-    readback_value_ = std::pow(2.0f, readback_min_log2 + float(code) * stops_per_code);
-    return readback_value_;
+    state->value = std::pow(2.0f, readback_min_log2 + float(code) * stops_per_code);
+    return state->value;
 }
 
 void auto_exposure_pass::run(gfx::render_view& rview, const run_params& params)
@@ -591,7 +606,11 @@ void auto_exposure_pass::release_resources(gfx::render_view& rview)
     rview.tex_remove(local_blurred_key);
     rview.fbo_remove(readback_target_key);
     rview.data_get_or_emplace(snap_key, 1u) = 1u;
-    destroy_readback_queries();
+    // THIS view's channel only: the pass instance also serves other views' frames.
+    if(auto* state = rview.data().try_get<readback_state>(readback_state::view_key))
+    {
+        state->reset();
+    }
 }
 
 } // namespace unravel

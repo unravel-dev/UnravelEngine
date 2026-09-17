@@ -251,42 +251,10 @@ public:
         (void)scale;
     }
 
-    /// Forces the scene-color pre-exposure of camera runs to @p value; 0 = computed (UE
-    /// r.EyeAdaptation.PreExposureOverride). An instrument: the final image must not change
-    /// under any override, so a change exposes a pass that misses the scale.
-    virtual void set_pre_exposure_override(float value)
-    {
-        (void)value;
-    }
-
     /// The pre-exposure @p rview rendered its last frame with (1 when the pipeline has none).
     virtual auto get_pre_exposure(gfx::render_view& rview) const -> pre_exposure_state
     {
         (void)rview;
-        return {};
-    }
-
-    /// What the exposure chain did on the pipeline's last camera run - an instrument readout
-    /// (the MCP viewport_get_exposure tool), never a rendering input.
-    struct exposure_readout
-    {
-        /// The scene-color pre-exposure of the last camera run, and the one before it.
-        float pre_exposure = 1.0f;
-        float previous_pre_exposure = 1.0f;
-        /// The adapted exposure the GPU readback channel last delivered (auto exposure's own
-        /// output, a few frames old); 1 while auto exposure is off or no result has landed.
-        float adapted_exposure = 1.0f;
-        /// The tonemapper's manual exposure scale (UE FixedExposure), the other factor of the
-        /// pre-exposure.
-        float manual_exposure = 1.0f;
-        /// Auto exposure ran on that camera run (the pre-exposure tracks the adapted value).
-        bool is_auto_exposure_active = false;
-        /// set_pre_exposure_override is forcing the value.
-        bool is_override_active = false;
-    };
-
-    virtual auto get_exposure_readout() const -> exposure_readout
-    {
         return {};
     }
 

@@ -43,9 +43,7 @@ public:
                       layer_mask render_mask = layer_mask{layer_reserved::everything_layer}) override;
     void set_debug_pass(int pass) override;
     void set_debug_view_scale(float scale) override;
-    void set_pre_exposure_override(float value) override;
     auto get_pre_exposure(gfx::render_view& rview) const -> pre_exposure_state override;
-    auto get_exposure_readout() const -> exposure_readout override;
 
     /// Bitmask for @c pipeline::run_params::pflags (deferred path only).
     enum pipeline_steps : uint32_t
@@ -602,21 +600,14 @@ private:
     int debug_pass_{-1};
     /// See pipeline::set_debug_view_scale.
     float debug_view_scale_{1.0f};
-    /// See pipeline::set_pre_exposure_override; 0 = computed.
-    float pre_exposure_override_{0.0f};
-    /// The pre-exposure of the CURRENT run (update_pre_exposure), read by every pass that writes
-    /// or reads scene lighting. Nested probe-capture runs finish before a camera run sets it.
-    pre_exposure_state pre_exposure_{};
-    /// The last CAMERA run's other two exposure factors, for the instrument readout only
-    /// (get_exposure_readout): the tonemapper's manual scale and whether auto exposure ran.
-    float manual_exposure_{1.0f};
-    bool auto_exposure_active_{false};
-
     /**
      * @brief UE FViewInfo::UpdatePreExposure: this run's scene-color scale. Camera runs with HDR
      * output use the manual exposure times the adapted exposure the GPU delivered a few frames
-     * ago (1 before the first); probe captures and LDR runs render unscaled. The previous
-     * value is kept per render view for the history corrections.
+     * ago (1 before the first); probe captures and LDR runs render unscaled. The state is kept
+     * PER RENDER VIEW (pre_exposure_state::view_key, the previous value for the history
+     * corrections included) and read back through get_pre_exposure by every pass that writes
+     * or reads scene lighting - never held on this object, which serves every view of its
+     * camera (probe captures, thumbnails) in turn.
      */
     auto update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run) -> pre_exposure_state;
     /// Velocity buffer production is active for the CURRENT run (camera run + velocity_pass
