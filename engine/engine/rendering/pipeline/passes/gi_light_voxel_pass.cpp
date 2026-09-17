@@ -117,8 +117,7 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     }
     auto& active_program = (want_vis_memo_debug && vis_memo_debug_available)
                                ? *program_.vis_memo_debug_program
-                               : ((want_debug && debug_available) ? *program_.debug_program
-                                                                  : *program_.program);
+                               : ((want_debug && debug_available) ? *program_.debug_program : *program_.program);
     gfx::render_pass pass("GI/Light Voxels");
     active_program.begin();
     gfx::set_texture(program_.s_sdf_atlas, 0, atlas.get_atlas_texture());

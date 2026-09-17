@@ -139,7 +139,10 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
                                0.0f};
         gfx::set_uniform(downsample_program_.u_pixel_size, pixel_size);
 
-        float params_data[4] = {config.threshold, 0.0f, config.soft_knee, config.clamp};
+        // The shader divides the threshold by the adapted exposure to compare it against the
+        // input; the input is pre-exposed, so the threshold carries the pre-exposure too (UE
+        // compares the de-pre-exposed, exposed luminance against BloomThreshold).
+        float params_data[4] = {config.threshold * params.pre_exposure, 0.0f, config.soft_knee, config.clamp};
         gfx::set_uniform(downsample_program_.u_params, params_data);
 
         gfx::set_texture(downsample_program_.s_tex, 0, input->get_texture());

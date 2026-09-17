@@ -263,6 +263,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             gfx::set_texture(classify_program_.s_gi_env_sh, 3, env_sh_tex);
             gfx::set_image(4, raw_tex->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
             gfx::set_buffer(5, refl_list_, gfx::access::ReadWrite);
+            gfx::set_uniform(classify_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
             gfx::set_uniform(classify_program_.u_gi_reflection_camera, reflection_camera);
             gfx::set_uniform(classify_program_.u_gi_reflection_jitter, jitter);
             gfx::set_uniform(classify_program_.u_gi_reflection_texel, refl_texel);
@@ -330,6 +331,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                                                 0.0f,
                                                 0.0f};
             gfx::set_uniform(trace_program_.u_gi_reflection_screen, reflection_screen);
+            gfx::set_uniform(trace_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
             gfx::set_uniform(trace_program_.u_gi_reflection_camera, reflection_camera);
             gfx::set_uniform(trace_program_.u_gi_reflection_jitter, jitter);
             gfx::set_uniform(trace_program_.u_gi_reflection_texel, refl_texel);
@@ -363,6 +365,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::set_texture(program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
         gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
         gfx::set_texture(program_.s_gi_env_sh, 14, env_sh_tex);
+        gfx::set_uniform(program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
         gfx::set_uniform(program_.u_gi_reflection_camera, reflection_camera);
         gfx::set_uniform(program_.u_gi_reflection_jitter, jitter);
         gfx::set_uniform(program_.u_sdf_params, sdf_params);
@@ -435,6 +438,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                                     : 1.0f;
         const float velocity_params[4] = {use_velocity ? 1.0f : 0.0f, mover_cap, 0.0f, 0.0f};
         gfx::set_uniform(temporal_program_.u_gi_refl_velocity, velocity_params);
+        gfx::set_uniform(temporal_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
         gfx::set_uniform(temporal_program_.u_gi_reflection_camera, reflection_camera);
         // The topology helpers stage a transient vertex buffer consumed by ONE submit - every
         // draw needs its own call (reusing the trace's left this submit with no vertices).

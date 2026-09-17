@@ -10,6 +10,7 @@ $input v_texcoord0
 #include "../common.sh"
 #include "../lighting.sh"
 #include "../hiz_trace.sh"
+#include "../pre_exposure.sh"
 
 SAMPLER2D(s_ssil_curr, 0);
 SAMPLER2D(s_ssil_history, 1);
@@ -217,10 +218,13 @@ void main()
     // collapsing the luma stop on this one). Bilinear is the right footprint for a
     // statistic that needs to stay local.
     vec4 m_hist_full = SSIL_SanitizeRgba(texture2D(s_ssil_moments_history, prev_uv_c));
-    vec2 m_hist = m_hist_full.rg;
+    // Colour and moments were written under last frame's pre-exposure: the mean scales with the
+    // correction, the second moment with its square.
+    float history_correction = u_history_pre_exposure_correction;
+    vec2 m_hist = m_hist_full.rg * vec2(history_correction, history_correction * history_correction);
     float hit_hist = m_hist_full.b * u_max_accum_frames;
     float W_hist = m_hist_full.a * u_max_accum_frames;
-    vec3 C_hist = hist.rgb;
+    vec3 C_hist = hist.rgb * history_correction;
 
     // Each valid surface frame contributes one radiance sample. Trace alpha is not sample
     // validity here: env-only rays still carry valid SH radiance.

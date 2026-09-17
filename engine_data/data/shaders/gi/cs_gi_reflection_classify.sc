@@ -29,6 +29,8 @@
 #include "../common.sh"
 #include "../lighting.sh"
 #include "gi/gi_constants.sh"
+// The rough tier answers here, so it owes the same pre-exposed space the kernel writes in.
+#include "gi/gi_pre_exposure.sh"
 
 SAMPLER2D(s_hiz, 0);
 SAMPLER2D(s_gi_normal, 1);
@@ -77,7 +79,8 @@ void main()
 		BRANCH
 		if(u_gi_reflection_camera.w > 0.5)
 		{
-			rough_value = texture2DLod(s_gi_diffuse, uv, 0.0).xyz;
+			// LAST frame's resolve, written under the previous pre-exposure.
+			rough_value = texture2DLod(s_gi_diffuse, uv, 0.0).xyz * u_history_pre_exposure_correction;
 		}
 		else
 		{
@@ -86,7 +89,8 @@ void main()
 			vec3 world_position = clipToWorld(u_invViewProj, clip);
 			vec3 view = normalize(u_gi_reflection_camera.xyz - world_position);
 			vec3 reflected = normalize(reflect(-view, normal));
-			rough_value = eval_radiance_sh(s_gi_env_sh, reflected);
+			// Absolute environment radiance into the pre-exposed buffer.
+			rough_value = eval_radiance_sh(s_gi_env_sh, reflected) * u_pre_exposure_value;
 		}
 		imageStore(s_gi_refl_out, pixel, vec4(rough_value, 1.0));
 		return;

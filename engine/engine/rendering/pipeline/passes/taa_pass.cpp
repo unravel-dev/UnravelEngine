@@ -162,6 +162,7 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     // y = 1 while the camera is parked: the shader's display average of still pixels with last frame's history.
     const float taa_params2[4] = {use_velocity ? 1.0f : 0.0f, is_camera_parked(*params.cam) ? 1.0f : 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_taa_params2, taa_params2);
+    gfx::set_uniform(program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
 
     const auto topology = gfx::clip_quad(1.0f);
     gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);

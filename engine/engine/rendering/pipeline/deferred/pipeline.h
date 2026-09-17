@@ -43,6 +43,9 @@ public:
                       layer_mask render_mask = layer_mask{layer_reserved::everything_layer}) override;
     void set_debug_pass(int pass) override;
     void set_debug_view_scale(float scale) override;
+    void set_pre_exposure_override(float value) override;
+    auto get_pre_exposure(gfx::render_view& rview) const -> pre_exposure_state override;
+    auto get_exposure_readout() const -> exposure_readout override;
 
     /// Bitmask for @c pipeline::run_params::pflags (deferred path only).
     enum pipeline_steps : uint32_t
@@ -128,6 +131,7 @@ public:
         -> gfx::frame_buffer::ptr;
 
     void run_auto_exposure_pass(gfx::render_view& rview,
+                                const camera& camera,
                                 const gfx::frame_buffer::ptr& input,
                                 const run_params& rparams,
                                 delta_t dt);
@@ -185,6 +189,13 @@ public:
     /// and the explicit emitter sampling census per screen probe (record [7]).
     static constexpr int debug_pass_gi_temporal_cause = 39;
     static constexpr int debug_pass_gi_emitter_share = 40;
+    /// Auto exposure's own state, drawn as a blended panel OVER the finished image (UE's
+    /// Visualize HDR). Dispatched by an exact match before the >= debug_pass_sdf_normals
+    /// check, like velocity and GTAO - it is an overlay, not a replacement image.
+    static constexpr int debug_pass_exposure = 41;
+    void run_exposure_debug_pass(gfx::render_view& rview,
+                                 const gfx::frame_buffer::ptr& output,
+                                 const run_params& rparams);
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,
                             const run_params& rparams,
@@ -388,6 +399,33 @@ private:
         std::unique_ptr<gpu_program> program;
     } velocity_debug_program_;
 
+    /// The exposure overlay (exposure/fs_exposure_debug.sc): the adaptation trace and this
+    /// frame's metering histogram, drawn blended over the lit image.
+    struct exposure_debug_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), s_exposure, "s_exposure", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_exposure_history, "s_exposure_history", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_exposure_histogram, "s_exposure_histogram", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_exposure_debug_rect, "u_exposure_debug_rect", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_exposure_debug_range, "u_exposure_debug_range", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(),
+                          u_exposure_debug_settings,
+                          "u_exposure_debug_settings",
+                          gfx::uniform_type::Vec4);
+        }
+
+        gfx::program::uniform_ptr s_exposure;
+        gfx::program::uniform_ptr s_exposure_history;
+        gfx::program::uniform_ptr s_exposure_histogram;
+        gfx::program::uniform_ptr u_exposure_debug_rect;
+        gfx::program::uniform_ptr u_exposure_debug_range;
+        gfx::program::uniform_ptr u_exposure_debug_settings;
+
+        std::unique_ptr<gpu_program> program;
+    } exposure_debug_program_;
+
     struct color_lighting : uniforms_cache
     {
         void cache_uniforms()
@@ -471,7 +509,10 @@ private:
             cache_uniform(program.get(), s_ssil, "s_ssil", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_gtao, "s_gtao", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_gtao_params, "u_gtao_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_indirect_params, "u_indirect_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
         }
+        gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_light_data;
         gfx::program::uniform_ptr u_camera_position;
         std::array<gfx::program::uniform_ptr, 7> s_tex;
@@ -479,6 +520,10 @@ private:
         gfx::program::uniform_ptr s_ssil;
         gfx::program::uniform_ptr s_gtao;
         gfx::program::uniform_ptr u_gtao_params;
+        /// x = 1 when a real GI resolve / SSIL texture feeds s_ssil, 0 when the transparent
+        /// fallback does; the shader then takes the resolve outright instead of mixing the
+        /// environment SH back in (fs_pbr_lighting.sh, pbr_indirect).
+        gfx::program::uniform_ptr u_indirect_params;
 
         std::unique_ptr<gpu_program> program;
 
@@ -498,8 +543,10 @@ private:
             cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[7], "s_tex7", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_tex[8], "s_tex8", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
         }
 
+        gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_params;
         std::array<gfx::program::uniform_ptr, 9> s_tex;
 
@@ -555,6 +602,23 @@ private:
     int debug_pass_{-1};
     /// See pipeline::set_debug_view_scale.
     float debug_view_scale_{1.0f};
+    /// See pipeline::set_pre_exposure_override; 0 = computed.
+    float pre_exposure_override_{0.0f};
+    /// The pre-exposure of the CURRENT run (update_pre_exposure), read by every pass that writes
+    /// or reads scene lighting. Nested probe-capture runs finish before a camera run sets it.
+    pre_exposure_state pre_exposure_{};
+    /// The last CAMERA run's other two exposure factors, for the instrument readout only
+    /// (get_exposure_readout): the tonemapper's manual scale and whether auto exposure ran.
+    float manual_exposure_{1.0f};
+    bool auto_exposure_active_{false};
+
+    /**
+     * @brief UE FViewInfo::UpdatePreExposure: this run's scene-color scale. Camera runs with HDR
+     * output use the manual exposure times the adapted exposure the GPU delivered a few frames
+     * ago (1 before the first); probe captures and LDR runs render unscaled. The previous
+     * value is kept per render view for the history corrections.
+     */
+    auto update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run) -> pre_exposure_state;
     /// Velocity buffer production is active for the CURRENT run (camera run + velocity_pass
     /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
     /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).

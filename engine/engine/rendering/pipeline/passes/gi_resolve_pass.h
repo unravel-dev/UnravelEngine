@@ -5,6 +5,7 @@
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 
 #include <graphics/render_pass.h>
 #include <graphics/render_view.h>
@@ -170,6 +171,10 @@ public:
         /// tier and emitter census and writes probe records [7] / [11] for them. Off, that
         /// per-ray and per-sample instrument work does not run.
         bool probe_census{};
+        /// The view's scene-color pre-exposure. The gather, its history and the resolve are in
+        /// pre-exposed space (Lumen's screen probe gather): rays convert the persistent stores
+        /// on read, and the history is corrected by P / Pprev (gi_pre_exposure.sh).
+        pre_exposure_state pre_exposure{};
         settings settings;
     };
 
@@ -310,9 +315,12 @@ private:
         /// to free the stage; the args pass stages it).
         gfx::program::uniform_ptr s_gi_velocity;
         gfx::program::uniform_ptr s_gi_prev_color;
+        /// View pre-exposure (pre_exposure.sh): the space the traced radiance is written in.
+        gfx::program::uniform_ptr u_pre_exposure;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_camera, "u_gi_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_jitter, "u_gi_jitter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_screen_trace, "u_gi_screen_trace", gfx::uniform_type::Vec4);
@@ -525,9 +533,13 @@ private:
         /// sampler with no texture at its default unit 0 fails the whole draw.
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
+        /// View pre-exposure (pre_exposure.sh): the world-probe fallback converts with it, and
+        /// the fused form's temporal half corrects its history with it.
+        gfx::program::uniform_ptr u_pre_exposure;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_gi_camera, "u_gi_camera", gfx::uniform_type::Vec4);
@@ -636,9 +648,12 @@ private:
         gfx::program::uniform_ptr s_gi_history_fast;
         gfx::program::uniform_ptr s_gi_velocity;
         gfx::program::uniform_ptr u_gi_temporal_texel;
+        /// View pre-exposure (pre_exposure.sh): corrects the history from last frame's scale.
+        gfx::program::uniform_ptr u_pre_exposure;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_temporal_clamp, "u_gi_temporal_clamp", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_gi_velocity, "s_gi_velocity", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", gfx::uniform_type::Mat4);

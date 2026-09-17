@@ -32,6 +32,7 @@
 #include <engine/ecs/components/test_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/ecs/components/volume_component.h>
+#include <engine/rendering/ecs/components/auto_exposure_component.h>
 #include <engine/ecs/prefab.h>
 #include <engine/ecs/scene.h>
 #include <engine/engine.h>
@@ -998,6 +999,77 @@ void test_absent_components_do_not_throw()
     // hasNextName or try_serialize_direct stopped consulting it, and every scene load in
     // the engine just got several times slower.
     check_eq(size_t(thrown), 0, "none of those misses cost a throw");
+}
+
+void test_auto_exposure_settings_start_fresh_without_version()
+{
+    begin_test("auto exposure settings saved before settings version 2 load as defaults");
+
+    struct loaded_exposure
+    {
+        bool found = false;
+        bool enabled = true;
+        auto_exposure_pass::settings settings{};
+    };
+
+    const auto load_exposure = [](const std::string& document) -> loaded_exposure
+    {
+        scene dst("dst");
+        std::stringstream in(document);
+        load_from_stream(in, dst);
+        loaded_exposure loaded;
+        dst.registry->view<auto_exposure_component>().each(
+            [&](auto, auto&& component)
+            {
+                loaded.found = true;
+                loaded.enabled = component.enabled;
+                loaded.settings = component.settings;
+            });
+        return loaded;
+    };
+
+    const auto is_close = [](float actual, float expected) -> bool
+    {
+        return std::abs(actual - expected) < 1e-4f;
+    };
+
+    scene src("src");
+    auto volume = src.create_entity("volume");
+    auto& exposure = volume.emplace<auto_exposure_component>();
+    exposure.enabled = false;
+    exposure.settings.compensation = 2.5f;
+    exposure.settings.speed_up = 7.0f;
+    exposure.settings.metering_mode = exposure_metering_mode::spot;
+    // Local exposure was APPENDED to version 2, so it has to round trip without a version bump.
+    exposure.settings.local_highlight_contrast = 0.7f;
+    exposure.settings.local_blurred_kernel_percent = 35.0f;
+
+    std::stringstream ss;
+    save_to_stream(ss, src);
+    const std::string current_document = ss.str();
+
+    const auto current = load_exposure(current_document);
+    check(current.found, "a version-2 document loads the component");
+    check(!current.enabled, "a version-2 document keeps enabled");
+    check(is_close(current.settings.compensation, 2.5f), "a version-2 document keeps its compensation");
+    check(is_close(current.settings.speed_up, 7.0f), "a version-2 document keeps its speed");
+    check(current.settings.metering_mode == exposure_metering_mode::spot, "a version-2 document keeps its metering mode");
+    check(is_close(current.settings.local_highlight_contrast, 0.7f),
+          "a version-2 document keeps its local exposure contrast");
+    check(is_close(current.settings.local_blurred_kernel_percent, 35.0f),
+          "a version-2 document keeps its local exposure blur size");
+
+    const std::string legacy_document =
+        std::regex_replace(current_document, std::regex(R"("settings_version"\s*:\s*[0-9]+\s*,?)"), "");
+    check(legacy_document != current_document, "the legacy document has no settings version");
+
+    const auto legacy = load_exposure(legacy_document);
+    const auto_exposure_pass::settings defaults{};
+    check(legacy.found, "a legacy document still loads the component");
+    check(!legacy.enabled, "a legacy document still keeps enabled");
+    check(is_close(legacy.settings.compensation, defaults.compensation), "a legacy document falls back to the default compensation");
+    check(is_close(legacy.settings.speed_up, defaults.speed_up), "a legacy document falls back to the default speed");
+    check(legacy.settings.metering_mode == defaults.metering_mode, "a legacy document falls back to the default metering mode");
 }
 
 void test_prefab_asset_does_not_store_prefab_component()
@@ -5469,6 +5541,7 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_instantiate_sets_prefab_source();
         test_output_format_scope();
         test_absent_components_do_not_throw();
+        test_auto_exposure_settings_start_fresh_without_version();
         test_prefab_asset_does_not_store_prefab_component();
 
         test_resync_picks_up_prefab_changes();

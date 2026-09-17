@@ -567,6 +567,13 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
     auto prev_vp = camera.get_prev_view_projection_relative_unjittered();
     gfx::set_uniform(cloud_program_.u_prevViewProj, prev_vp.get_matrix());
 
+    // Layout of pre_exposure.sh; the cloud history is corrected from last frame's scale.
+    const float cloud_pre_exposure[4] = {params.pre_exposure,
+                                         1.0f / params.pre_exposure,
+                                         params.history_pre_exposure_correction,
+                                         params.pre_exposure / params.history_pre_exposure_correction};
+    gfx::set_uniform(cloud_program_.u_pre_exposure, cloud_pre_exposure);
+
     auto& cloud_noise = default_textures::get().cloud_noise();
     if(cloud_noise.base_noise)
     {
@@ -654,7 +661,8 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
 
     irradiance_perez_params perez;
     compute_irradiance_perez_params(params.light_direction, params.turbidity, params.sun_intensity, perez);
-    perez.exposition *= params.sky_brightness;
+    // The visible sky and the clouds are scene lighting: written with the view's pre-exposure.
+    perez.exposition *= params.sky_brightness * params.pre_exposure;
 
     const float hour = ANONYMOUS::hour_of_day(-params.light_direction);
     const cloud_uniform_block uniforms = make_cloud_uniforms(params, camera, perez.exposition, hour);
@@ -693,6 +701,13 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         gfx::set_uniform(atmospheric_program_.u_cloudParams3, uniforms.cloud_params3);
         gfx::set_uniform(atmospheric_program_.u_cloudParams4, uniforms.cloud_params4);
         gfx::set_uniform(atmospheric_program_.u_cloudCamera, uniforms.camera);
+
+        // Layout of pre_exposure.sh (the dome's constant terms take the value from here).
+        const float sky_pre_exposure[4] = {params.pre_exposure,
+                                           1.0f / params.pre_exposure,
+                                           params.history_pre_exposure_correction,
+                                           params.pre_exposure / params.history_pre_exposure_correction};
+        gfx::set_uniform(atmospheric_program_.u_pre_exposure, sky_pre_exposure);
 
         auto& cloud_noise = default_textures::get().cloud_noise();
         if(cloud_noise.flat_noise)

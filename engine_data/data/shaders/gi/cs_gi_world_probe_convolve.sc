@@ -47,7 +47,6 @@ SHARED vec3 s_sample_dir[RADIANCE_TEXELS];
 /// Per-texel solid angle (GiOctTexelSolidAngle): the octahedral map is not equal-area, and
 /// both the irradiance sum and the depth lobe weight by it.
 SHARED float s_sample_omega[RADIANCE_TEXELS];
-
 NUM_THREADS(8, 8, 1)
 void main()
 {
@@ -77,7 +76,11 @@ void main()
 	for(int chunk = 0; chunk < RADIANCE_TEXELS / 64; ++chunk)
 	{
 		int d = lane + chunk * 64;
-		ivec2 offset = ivec2(d % GI_WORLD_PROBE_OCT_RADIANCE, d / GI_WORLD_PROBE_OCT_RADIANCE);
+		// Unsigned split: d is a lane index and never negative, and fxc rejects the signed form
+		// when it compiles with warnings as errors (see GiWorldProbeTileBase for the same rule).
+		uint texel_index = uint(d);
+		uint radiance_edge = uint(GI_WORLD_PROBE_OCT_RADIANCE);
+		ivec2 offset = ivec2(int(texel_index % radiance_edge), int(texel_index / radiance_edge));
 		s_radiance[d] = texelFetch(s_world_probe_radiance, radiance_tile + offset, 0);
 		s_sample_dir[d] =
 		    GiOctDecode((vec2(offset) + vec2_splat(0.5)) / float(GI_WORLD_PROBE_OCT_RADIANCE));

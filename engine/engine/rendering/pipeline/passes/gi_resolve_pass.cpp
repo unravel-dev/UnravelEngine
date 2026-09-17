@@ -621,6 +621,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(trace_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(trace_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(trace_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(trace_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
                 gfx::set_uniform(trace_program_.u_gi_camera, gi_camera);
                 gfx::set_uniform(trace_program_.u_gi_jitter, gi_jitter);
                 gfx::set_uniform(trace_program_.u_gi_screen_trace, screen_trace_params);
@@ -730,6 +731,9 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                                gtao_settings ? gtao_settings->bent_normal_strength : 0.0f,
                                                0.0f};
                 gfx::set_uniform(integrate_program_.u_gi_intensity, gi_intensity);
+                // One value for both halves of the fused program: bgfx uniforms are name-global,
+                // so the temporal kernel's history correction rides this set too.
+                gfx::set_uniform(integrate_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
                 gfx::set_uniform(integrate_program_.u_gi_world_probe_params, wp_params);
                 gfx::set_uniform(integrate_program_.u_gi_world_probe_atlas,
                                  clipmap_gpu.get_world_probe_atlas_params());
@@ -1250,6 +1254,7 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
                                       slow_cap,
                                       has_history ? 1.0f : 0.0f};
     gfx::set_uniform(temporal_program_.u_gi_temporal_params, temporal_params);
+    gfx::set_uniform(temporal_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
     // No neighbourhood clamp: it fights the placement jitter and eats history under
     // motion; depth rejection is the whole gate [S21 s98]. y: the cause lane, on only while
     // the Temporal Reset Cause view is displayed (run_params::cause_lane).

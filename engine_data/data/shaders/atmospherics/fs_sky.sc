@@ -2,6 +2,7 @@ $input v_skyColor, v_clipPos, v_viewDir
 
 #include "../common.sh"
 #include "atmospherics/clouds.sh"
+#include "../pre_exposure.sh"
 
 uniform vec4 	u_parameters;
 uniform vec4 	u_sunDirection;
@@ -298,13 +299,14 @@ void main()
     // Ground color blending
     const vec3 u_ground_color = vec3(0.63, 0.6, 0.57);
     float light_angle = dot(-lightDir, vec3(0.0, 1.0, 0.0));
-    vec3 ground_color = (u_ground_color + vec3(1.0, 1.0, 1.0)) * saturate(-light_angle) * 0.1;
+    // u_exposition carries the pre-exposure; this constant term needs it applied here.
+    vec3 ground_color = (u_ground_color + vec3(1.0, 1.0, 1.0)) * saturate(-light_angle) * 0.1 * u_pre_exposure_value;
     float ground_mask = saturate(-viewDir.y / 0.06 + 0.4);
     color = mix(color, ground_color, ground_mask);
 
     // Dithering to reduce color banding
     float r = n4rand_ss(v_clipPos);
-    color += vec3(r, r, r) / 60.0;
+    color += vec3(r, r, r) / 60.0 * u_pre_exposure_value;
 
     // Ensure no negative values reach the tonemapper
     color = max(color, vec3_splat(0.0));

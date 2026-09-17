@@ -191,6 +191,10 @@ public:
         float cloud_time = 0.0f;
         /// Sky brightness multiplier (1.0 = neutral). Affects visible sky and irradiance.
         float sky_brightness = 1.0f;
+        /// The view's scene-color pre-exposure: the sky and the clouds are written with it.
+        float pre_exposure = 1.0f;
+        /// Pre-exposure / last frame's: rescales the cloud history into this frame's scale.
+        float history_pre_exposure_correction = 1.0f;
     };
 
     /// Cloud shadow map of one frame: sun transmittance of the cloud layer over a square of
@@ -240,8 +244,10 @@ private:
             cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
         }
 
+        gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_sunLuminance;
         gfx::program::uniform_ptr u_skyLuminanceXYZ;
         gfx::program::uniform_ptr u_skyLuminance;
@@ -283,6 +289,7 @@ private:
             cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_cloudHistory, "u_cloudHistory", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_prevViewProj, "u_prevViewProj", gfx::uniform_type::Mat4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
         }
 
         gfx::program::uniform_ptr u_skyLuminanceXYZ;
@@ -299,6 +306,7 @@ private:
         gfx::program::uniform_ptr u_cloudCamera;
         gfx::program::uniform_ptr u_cloudHistory;
         gfx::program::uniform_ptr u_prevViewProj;
+        gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr s_cloudNoise;
         gfx::program::uniform_ptr s_cloudNoise2D;
         gfx::program::uniform_ptr s_cloudHistory;

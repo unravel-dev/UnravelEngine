@@ -23,6 +23,9 @@
 #include "gi/gi_world_probes.sh"
 #include "gi/gi_probe_common.sh"
 #include "gi/gi_noise.sh"
+// The probe tiles are already pre-exposed (the gather traced them that way); the world-probe
+// fallback below reads a persistent store and converts.
+#include "gi/gi_pre_exposure.sh"
 
 BUFFER_RO(b_gi_probes, vec4, 7);
 SAMPLER2D(s_gi_depth, 8);
@@ -205,7 +208,7 @@ vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 o
 	                                 world_irradiance,
 	                                 sky_fraction))
 	{
-		return vec4(world_irradiance * u_gi_intensity.x, 1.0);
+		return vec4(GiCachedToView(world_irradiance) * u_gi_intensity.x, 1.0);
 	}
 	return vec4_splat(0.0);
 }

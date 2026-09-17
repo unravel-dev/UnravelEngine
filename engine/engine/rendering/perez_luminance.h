@@ -8,8 +8,9 @@ namespace unravel
 /// THE Perez -> engine conversion. The Perez tables produce luminance in their own
 /// (physical-ish) scale; every consumer of that data -- the atmospheric sky dome, the
 /// irradiance SH bake, the flat sky ambient -- must scale it by this ONE constant so
-/// their ratios hold by construction. Absolute magnitude is arbitrary (auto exposure
-/// is scale-invariant); what this buys is that retuning the sky can never desync the
+/// their ratios hold by construction. Absolute magnitude is arbitrary for auto exposure
+/// (scale-invariant while no EV clamp is hit and dark adaptation is 1); what this buys
+/// is that retuning the sky can never desync the
 /// ambient it feeds. Do not introduce per-consumer copies of this factor.
 constexpr float perez_luminance_to_engine = 0.1f;
 

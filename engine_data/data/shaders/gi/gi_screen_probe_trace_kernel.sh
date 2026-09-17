@@ -85,6 +85,9 @@
 #include "gi/gi_world_probes.sh"
 #include "gi/gi_noise.sh"
 #include "gi/gi_env_sh.sh"
+// The gather runs in the VIEW's pre-exposed space (Lumen's screen probe gather): store reads
+// convert, history reads correct from last frame's scale.
+#include "gi/gi_pre_exposure.sh"
 
 /// LAST frame's composited output (the SSR convention, same source): the far-field radiance
 /// for hits BEYOND the cascades, where the light voxels have nothing. Bound in place of the
@@ -284,7 +287,8 @@ vec3 GiProbeEnvRadiance(vec3 dir)
 	{
 		radiance += b_gi_probes[sh_base + uint(k)].xyz * GiEnvShBasis(k, dir);
 	}
-	return max(radiance, vec3_splat(0.0));
+	// The SH holds absolute environment radiance; the gather is pre-exposed.
+	return max(radiance, vec3_splat(0.0)) * u_pre_exposure_value;
 }
 
 /*
@@ -321,7 +325,8 @@ bool GiReadHistory(vec3 hit_position, out vec3 radiance)
 	{
 		return false;
 	}
-	radiance = history.xyz;
+	// The snapshot was written under LAST frame's pre-exposure (UE P / Pprev).
+	radiance = history.xyz * u_history_pre_exposure_correction;
 	return true;
 }
 
@@ -381,7 +386,8 @@ bool GiReadHistoryScreen(vec3 hit_position, vec2 hit_uv, out vec3 radiance)
 			{
 				return false;
 			}
-			radiance = history.xyz;
+			// Last frame's scale, as in GiReadHistory.
+			radiance = history.xyz * u_history_pre_exposure_correction;
 			return true;
 		}
 	}
@@ -420,8 +426,11 @@ void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 	// tile mean - that would crush a lone bright texel to mean x k / 256). No meaningful
 	// reference at all (fresh tile, failed reprojection): the first measurement stores
 	// unclamped - progressive ramps from black would dim every disocclusion instead.
+	// The texel and the tile mean are LAST frame's, written under the previous pre-exposure;
+	// the mean was corrected where it was staged, the texel is corrected here.
 	vec4 hist = imageLoad(s_probe_radiance_out, texel);
-	float reference = max(Luminance(hist.xyz), s_importance_mean[slot]);
+	float reference = max(Luminance(hist.xyz) * u_history_pre_exposure_correction,
+	                      s_importance_mean[slot]);
 	BRANCH
 	if(reference > 1e-3)
 	{
@@ -577,14 +586,22 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 							moving = GiHitObjectMotion(ss_hit.xy) >= 0.5;
 							bool screen_lit = GiDirtyRegionFactor(hit_position) < 0.5 &&
 							                  GiReadHistoryScreen(hit_position, ss_hit.xy, radiance);
-							if(!screen_lit && !GiLightVoxelReadBlend(hit_position, hit_normal,
-							                                         GI_LIGHT_VOXEL_FADE_VOXELS, radiance))
+							if(!screen_lit)
 							{
-								// Occluded but unmeasured: honest darkness within the
-								// cascades - for sub-voxel detail (railings, awning cloth)
-								// this IS the contact occlusion the voxel tier cannot
-								// express; past them, the far-field fallback.
-								radiance = GiFarFieldFallback(hit_position, sample_dir);
+								if(GiLightVoxelReadBlend(hit_position, hit_normal,
+								                         GI_LIGHT_VOXEL_FADE_VOXELS, radiance))
+								{
+									// Cached lighting into the gather's pre-exposed space.
+									radiance = GiCachedToView(radiance);
+								}
+								else
+								{
+									// Occluded but unmeasured: honest darkness within the
+									// cascades - for sub-voxel detail (railings, awning cloth)
+									// this IS the contact occlusion the voxel tier cannot
+									// express; past them, the far-field fallback.
+									radiance = GiFarFieldFallback(hit_position, sample_dir);
+								}
 							}
 							hit_t = max(hit_t, hit_dist);
 							committed = true;
@@ -654,8 +671,13 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 					// the camera dragged across every surface (measured pops at the level-0
 					// re-snap). The blend mixes two MEASURED answers only; a hole still
 					// falls through to the walk.
-					else if(!GiLightVoxelReadBlend(hit_position, hit_normal,
-					                               GI_LIGHT_VOXEL_FADE_VOXELS, radiance))
+					else if(GiLightVoxelReadBlend(hit_position, hit_normal,
+					                              GI_LIGHT_VOXEL_FADE_VOXELS, radiance))
+					{
+						// Cached lighting into the gather's pre-exposed space.
+						radiance = GiCachedToView(radiance);
+					}
+					else
 					{
 						// Occluded but unmeasured within the cascades: honest darkness (the
 						// sealed-room branch) - exactly what the old fallback's covered
@@ -674,8 +696,13 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 			{
 				// Completion: the world probes carry everything beyond the short range - scene
 				// AND sky.
-				if(!GiWorldProbeRadiance(s_origin[slot] + sample_dir * s_short_range[slot],
-				                         sample_dir, u_gi_camera.xyz, radiance))
+				if(GiWorldProbeRadiance(s_origin[slot] + sample_dir * s_short_range[slot],
+				                        sample_dir, u_gi_camera.xyz, radiance))
+				{
+					// The world-probe atlas is a persistent store (cached lighting).
+					radiance = GiCachedToView(radiance);
+				}
+				else
 				{
 					radiance = GiProbeEnvRadiance(sample_dir);
 					sky_completion = true;
@@ -1185,7 +1212,7 @@ void main()
 						float total = 0.0;
 						for(int m = 0; m < 4; ++m)
 						{
-							vec4 mip = b_gi_probes[history_base + uint(m)];
+							vec4 mip = b_gi_probes[history_base + uint(m)] * u_history_pre_exposure_correction;
 							s_importance_mip[slot * 4 + m] = mip;
 							total += mip.x + mip.y + mip.z + mip.w;
 						}

@@ -5,6 +5,7 @@
 #include <base/basetypes.hpp>
 #include <graphics/frame_buffer.h>
 #include <graphics/render_view.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 
 namespace unravel
 {
@@ -51,6 +52,8 @@ public:
         /// place that fetches it from the render view). A valid texture IS the enable;
         /// null = camera-only depth reprojection.
         gfx::texture::ptr velocity;
+        /// The view's scene-color pre-exposure; the history is corrected from last frame's.
+        pre_exposure_state pre_exposure{};
         settings config{};
     };
 
@@ -79,6 +82,7 @@ private:
             cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_taa_params, "u_taa_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_taa_params2, "u_taa_params2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
         }
 
         gfx::program::uniform_ptr s_curr;
@@ -89,6 +93,7 @@ private:
         gfx::program::uniform_ptr u_prev_view_proj;
         gfx::program::uniform_ptr u_taa_params;
         gfx::program::uniform_ptr u_taa_params2;
+        gfx::program::uniform_ptr u_pre_exposure;
         std::unique_ptr<gpu_program> program;
     } program_;
 };

@@ -374,6 +374,7 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
                                  params.jitter_directions ? 1.0f : 0.0f,
                                  params.census ? 1.0f : 0.0f};
         gfx::set_uniform(trace_program_.u_gi_world_probe_jitter, jitter);
+        gfx::set_uniform(trace_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
         gfx::set_texture(trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
         gfx::set_texture(trace_program_.s_world_probe_irradiance_seed,
                          11,

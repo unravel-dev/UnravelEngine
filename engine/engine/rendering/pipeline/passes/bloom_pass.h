@@ -80,6 +80,8 @@ public:
         gfx::frame_buffer::ptr output;
         settings config{};
         gfx::texture::ptr exposure_texture;
+        /// The view's scene-color pre-exposure: the input carries it.
+        float pre_exposure = 1.0f;
     };
 
     auto init(rtti::context& ctx) -> bool;

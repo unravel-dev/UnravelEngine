@@ -33,6 +33,8 @@ $input v_texcoord0
 // DecodeGBufferNormalMetalRoughnessLod, for the mirror-direction hit rebuild below.
 #include "../lighting.sh"
 #include "gi/gi_constants.sh"
+// The accumulated mean is pre-exposed; the history carries last frame's scale.
+#include "../pre_exposure.sh"
 
 SAMPLER2D(s_refl_raw, 0);
 SAMPLER2D(s_refl_history, 1);
@@ -169,6 +171,9 @@ void main()
 		return;
 	}
 	vec4 history_texel = texture2DLod(s_refl_history, prev_uv, 0.0);
+	// PRE-EXPOSURE CORRECTION (UE P / Pprev): the mean was accumulated under last frame's
+	// scale. The alpha lane carries coverage and the hit distance - unitless, left alone.
+	history_texel.xyz *= u_history_pre_exposure_correction;
 	// STILLNESS releases the neighbourhood clamp. The clamp exists for disocclusion, but for
 	// SPARSE-BRIGHT content (a small emissive under the lobe: hit probability p per frame)
 	// it erases the accumulated p*L mean on every miss frame - the estimator cannot converge

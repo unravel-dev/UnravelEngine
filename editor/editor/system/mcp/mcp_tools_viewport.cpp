@@ -20,6 +20,7 @@
 #include <seq/seq.h>
 
 #include <chrono>
+#include <cmath>
 #include <map>
 #include <thread>
 #include <vector>
@@ -195,6 +196,38 @@ auto resolve_focus_entities(rtti::context& ctx,
     }
 
     return resolve_entity_id_or_ids(*scn, args, out, error);
+}
+
+/// The pipeline of the Scene panel's editing camera, or - for @p game_camera - of the scene's
+/// active rendering camera (the only one that renders while the Game panel is focused).
+/// Main thread only: it walks the live registry.
+auto resolve_camera_pipeline(rtti::context& ctx, bool game_camera) -> rendering::pipeline*
+{
+    if(game_camera)
+    {
+        auto& em = ctx.get_cached<editing_manager>();
+        auto* scn = em.get_active_scene(ctx);
+        if(scn == nullptr)
+        {
+            return nullptr;
+        }
+        rendering::pipeline* found = nullptr;
+        scn->registry->view<camera_component, active_component>().each(
+            [&](auto, auto& cc, auto&)
+            {
+                if(found == nullptr && cc.get_pipeline_data().get_pipeline())
+                {
+                    found = cc.get_pipeline_data().get_pipeline().get();
+                }
+            });
+        return found;
+    }
+    auto camera_ent = resolve_scene_panel(ctx).get_camera();
+    if(!camera_ent || !camera_ent.all_of<camera_component>())
+    {
+        return nullptr;
+    }
+    return camera_ent.get<camera_component>().get_pipeline_data().get_pipeline().get();
 }
 
 } // namespace
@@ -1116,6 +1149,106 @@ void register_viewport_tools(mcp_tool_registry& registry)
              if(!result)
              {
                  return {.text = "experiment flags update failed on the main thread", .is_error = true};
+             }
+             return {.text = *result, .is_error = false};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
+        {.name = "viewport_get_exposure",
+         .description =
+             "The exposure chain's state on the camera's last rendered frame, read from the CPU "
+             "side (no GPU sync): pre_exposure (the scene-color scale every lighting pass "
+             "multiplies by, UE View.PreExposure) with the previous frame's value and their "
+             "ratio, adapted_exposure (auto exposure's own output, delivered by the occlusion-query "
+             "readback channel a few frames late), manual_exposure (the tonemapper's scale), and "
+             "log2 of each. auto_exposure tells whether the adaptation ran at all; "
+             "override_active whether viewport_set_pre_exposure_override is forcing the value. "
+             "camera = \"scene\" (default) or \"game\".",
+         .input_schema_json = R"({"type":"object","properties":{"camera":{"type":"string","enum":["scene","game"]}}})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             std::string camera_arg = "scene";
+             read_string(args, "camera", camera_arg);
+             const bool game_camera = camera_arg == "game";
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             auto result = mcp.invoke_on_main(
+                 [&]() -> std::string
+                 {
+                     auto* pipeline = resolve_camera_pipeline(ctx, game_camera);
+                     if(pipeline == nullptr)
+                     {
+                         return {};
+                     }
+                     const auto readout = pipeline->get_exposure_readout();
+                     const auto log2_or_zero = [](float value) -> float
+                     {
+                         return value > 0.0f ? std::log2(value) : 0.0f;
+                     };
+                     return fmt::format(
+                         R"({{"pre_exposure":{:.6g},"previous_pre_exposure":{:.6g},"history_correction":{:.6g},)"
+                         R"("adapted_exposure":{:.6g},"manual_exposure":{:.6g},)"
+                         R"("log2":{{"pre_exposure":{:.4f},"adapted_exposure":{:.4f},"manual_exposure":{:.4f}}},)"
+                         R"("auto_exposure":{},"override_active":{}}})",
+                         readout.pre_exposure,
+                         readout.previous_pre_exposure,
+                         readout.previous_pre_exposure > 0.0f ? readout.pre_exposure / readout.previous_pre_exposure
+                                                              : 1.0f,
+                         readout.adapted_exposure,
+                         readout.manual_exposure,
+                         log2_or_zero(readout.pre_exposure),
+                         log2_or_zero(readout.adapted_exposure),
+                         log2_or_zero(readout.manual_exposure),
+                         readout.is_auto_exposure_active,
+                         readout.is_override_active);
+                 });
+             if(!result || result->empty())
+             {
+                 return {.text = "That camera has no pipeline", .is_error = true};
+             }
+             return {.text = *result, .is_error = false};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
+        {.name = "viewport_set_pre_exposure_override",
+         .description =
+             "Force the scene-color pre-exposure of camera runs (UE r.EyeAdaptation.PreExposureOverride); "
+             "0 restores the computed value. An INSTRUMENT: the final image must not change under any "
+             "override, because every writer multiplies by the value and every consumer divides it out, "
+             "so a visible change means a pass is missing the scale. Values far from the computed one "
+             "(0.01, 100) are the useful test. camera = \"scene\" (default) or \"game\".",
+         .input_schema_json =
+             R"({"type":"object","properties":{"value":{"type":"number","minimum":0,"maximum":65536},"camera":{"type":"string","enum":["scene","game"]}},"required":["value"]})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             double value = 0.0;
+             read_double(args, "value", value);
+             std::string camera_arg = "scene";
+             read_string(args, "camera", camera_arg);
+             const bool game_camera = camera_arg == "game";
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             auto result = mcp.invoke_on_main(
+                 [&]() -> std::string
+                 {
+                     auto* pipeline = resolve_camera_pipeline(ctx, game_camera);
+                     if(pipeline == nullptr)
+                     {
+                         return {};
+                     }
+                     const auto previous = pipeline->get_exposure_readout();
+                     pipeline->set_pre_exposure_override(static_cast<float>(math::max(value, 0.0)));
+                     return fmt::format(R"({{"ok":true,"override":{:.6g},"previous_pre_exposure":{:.6g}}})",
+                                        value,
+                                        previous.pre_exposure);
+                 });
+             if(!result || result->empty())
+             {
+                 return {.text = "That camera has no pipeline", .is_error = true};
              }
              return {.text = *result, .is_error = false};
          },

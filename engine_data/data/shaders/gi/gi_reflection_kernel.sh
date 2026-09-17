@@ -64,6 +64,21 @@
 #include "gi/gi_emissive_nee.sh"
 #include "gi/gi_noise.sh"
 #include "gi/gi_env_sh.sh"
+// The trace runs in the VIEW's pre-exposed space (Lumen's reflections): store reads convert,
+// history reads correct from last frame's scale.
+#include "gi/gi_pre_exposure.sh"
+
+/// The per-ray firefly ceiling, in the pre-exposed space the radiance now lives in.
+///
+/// Lumen's MaxRayIntensity is a PRE-EXPOSED number, but GI_MAX_RAY_RADIANCE was tuned here as
+/// an ABSOLUTE radiance (gi_emissive_research 2026-09-10, on emitters of 5 to 192), and the two
+/// readings differ by the whole exposure range: in a sealed emissive room metering at P = 367,
+/// a pre-exposed 40 is 0.109 of absolute radiance and crushes the room's own bounce (measured
+/// 2026-09-16: the cell lost 24% of its display mean against the pre-pre-exposure baseline).
+/// Converting the constant keeps the clamp where it was tuned, at the cost of no longer
+/// following the adapted exposure the way Lumen's does. Measured: this site alone recovers
+/// about half the loss (0.166 -> 0.187), the world-probe emitter gate the rest (-> 0.234).
+#define GI_MAX_RAY_RADIANCE_VIEW (GI_MAX_RAY_RADIANCE * u_pre_exposure_value)
 
 /// Analytic irradiance from one emitter piece at @p position for a receiver facing @p normal:
 /// GI_REFLECTION_NEAR_FIELD_SAMPLES Lambertian patches along the piece's longest axis, each
@@ -221,9 +236,10 @@ vec3 GiReflectionEnvRadiance(vec3 direction)
 	{
 		radiance += GiReflectionEnvSh(k) * GiEnvShBasis(k, direction);
 	}
-	return max(radiance, vec3_splat(0.0));
+	// The SH holds absolute environment radiance; this pass is pre-exposed.
+	return max(radiance, vec3_splat(0.0)) * u_pre_exposure_value;
 #else
-	return eval_radiance_sh(s_gi_env_sh, direction);
+	return eval_radiance_sh(s_gi_env_sh, direction) * u_pre_exposure_value;
 #endif // GI_REFLECTION_ENV_SH_FROM_LIST
 }
 
@@ -301,7 +317,8 @@ bool GiReflectionScreenColorAtHit(vec3 hit_position, vec3 hit_normal, vec2 frag_
 	{
 		return false;
 	}
-	out_radiance = history.xyz;
+	// The snapshot carries LAST frame's pre-exposure (UE P / Pprev).
+	out_radiance = history.xyz * u_history_pre_exposure_correction;
 	return true;
 }
 #endif // GI_REFLECTION_SCREEN_COLOR
@@ -434,7 +451,8 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	BRANCH
 	if(u_gi_reflection_camera.w > 0.5)
 	{
-		rough_value = texture2DLod(s_gi_diffuse, uv, 0.0).xyz;
+		// LAST frame's resolve, written under the previous pre-exposure.
+		rough_value = texture2DLod(s_gi_diffuse, uv, 0.0).xyz * u_history_pre_exposure_correction;
 	}
 	else
 	{
@@ -572,7 +590,8 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			uint material_base = uint(hit.instance_index) * uint(SDF_INSTANCE_STRIDE);
 			vec4 material0 = b_sdf_instances[material_base + 8u];
 			vec4 material1 = b_sdf_instances[material_base + 9u];
-			hit_emissive = material1.xyz;
+			// An absolute material value entering a pre-exposed buffer.
+			hit_emissive = material1.xyz * u_pre_exposure_value;
 			hit_metalness = saturate(material1.w);
 			hit_albedo = material0.xyz;
 			uint mean_slot = SdfMeanSlotColor(material0.w);
@@ -595,7 +614,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			if(screen_lit)
 			{
 				// The gather's per-ray contract: the snapshot carries emissive unbounded too.
-				radiance = GiClampRayRadiance(screen_radiance, GI_MAX_RAY_RADIANCE);
+				radiance = GiClampRayRadiance(screen_radiance, GI_MAX_RAY_RADIANCE_VIEW);
 			}
 		}
 #endif // GI_REFLECTION_SCREEN_COLOR
@@ -618,12 +637,18 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			float measured_lit_share;
 			vec3 measured_lit_position;
 			float measured_mass;
-			bool measured_ok = GiLightVoxelReadFadeRemod(hit_position, hit_normal, rough_value,
+			// The walk is entirely in the store's cached-lighting space, so the receiver's
+			// own value goes IN de-pre-exposed and the radiance lanes come back converted;
+			// the albedo, share, position and mass lanes are unitless either way.
+			bool measured_ok = GiLightVoxelReadFadeRemod(hit_position, hit_normal,
+			                                             rough_value * u_pre_exposure_inverse,
 			                                             GI_REFLECTION_CASCADE_FADE_VOXELS,
 			                                             measured, measured_albedo,
 			                                             measured_albedo_ok, measured_lit,
 			                                             measured_lit_share,
 			                                             measured_lit_position, measured_mass);
+			measured = GiCachedToView(measured);
+			measured_lit = GiCachedToView(measured_lit);
 			// CULLED IS DARK FOR THE GATHER, A HOLE FOR AN IMAGE. A face whose cavity cone is
 			// closed stores the provenance alpha GI_LIGHT_VOXEL_CULLED_ALPHA, which the read
 			// above normalises into a MEASURED black - right for irradiance (a closed cone must
@@ -634,8 +659,11 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			// takes the stand-in path below with the unmeasured ones.
 			bool measured_image = measured_ok && measured_mass >= GI_REFLECTION_MEASURED_MASS_MIN;
 #else
-			bool measured_ok = GiLightVoxelReadFade(hit_position, hit_normal, rough_value,
-			                                        GI_REFLECTION_CASCADE_FADE_VOXELS, measured);
+			// De-pre-exposed in, converted out - see the remodulating form above.
+			bool measured_ok = GiLightVoxelReadFade(hit_position, hit_normal,
+			                                       rough_value * u_pre_exposure_inverse,
+			                                       GI_REFLECTION_CASCADE_FADE_VOXELS, measured);
+			measured = GiCachedToView(measured);
 			bool measured_image = measured_ok;
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
 			BRANCH
@@ -702,7 +730,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 						// gradient at pixel precision. Unshadowed on purpose: the voxel's
 						// own occlusion stays, the factor only reshapes it.
 						lit *= GiReflectionNearFieldFactor(hit_position, hit_normal, measured_lit_position,
-						                                   measured_lit, measured_albedo);
+						                                   measured_lit * u_pre_exposure_inverse, measured_albedo);
 					}
 					// METAL LIFT: the lattice holds diffuse bounce (albedo x E / pi) and a metal
 					// has none - its appearance is F0 times the radiance arriving from its mirror
@@ -728,7 +756,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 				// needed). Only the voxel-measured answer is capped: rough_value is last
 				// frame's denoised resolve and the sky fallback is a stable per-pixel image,
 				// neither a stochastic spike source.
-				radiance = GiClampRayRadiance(radiance, GI_MAX_RAY_RADIANCE);
+				radiance = GiClampRayRadiance(radiance, GI_MAX_RAY_RADIANCE_VIEW);
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
 				if(exact_emission)
 				{
@@ -748,7 +776,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 				// which no diffuse lattice can hold), and its own emission rides on top. The
 				// culled underside now reflects as the dim orange of the box it belongs to,
 				// continuous with the front face's reflection, instead of neutral grey or black.
-				radiance = GiClampRayRadiance(hit_albedo * rough_value, GI_MAX_RAY_RADIANCE) + hit_emissive;
+				radiance = GiClampRayRadiance(hit_albedo * rough_value, GI_MAX_RAY_RADIANCE_VIEW) + hit_emissive;
 			}
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
 		}

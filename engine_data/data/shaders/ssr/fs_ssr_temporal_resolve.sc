@@ -3,6 +3,7 @@ $input v_texcoord0
 #include "../common.sh"
 #include "../lighting.sh"
 #include "../hiz_trace.sh"
+#include "../pre_exposure.sh"
 
 // Current frame SSR result (rgb = color, a = confidence)
 SAMPLER2D(s_ssr_curr, 0);
@@ -161,7 +162,8 @@ SsrTemporalResult ApplyTemporalAccumulation(
     // == 2. fetch history ===================================================
     vec4  hist     = texture2D(s_ssr_history, prev_uv);
     float W_hist   = hist.a * u_max_accum_frames;     // 0 ... kMaxFrames
-    vec3  C_hist   = hist.rgb;
+    // The history was written under last frame's pre-exposure.
+    vec3  C_hist   = hist.rgb * u_history_pre_exposure_correction;
     float hist_t   = texture2DLod(s_ssr_hist_hit_t, prev_uv, 0.0).x;
 
     float W_curr   = curr.a;                         // confidence this frame

@@ -10,6 +10,11 @@
 #include <engine/physics/ecs/components/physics_component.h>
 #include <engine/rendering/ecs/components/bloom_component.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+// The serialized components go through ser20 here, so the META headers are what this file
+// needs: they carry the SAVE_EXTERN / LOAD_EXTERN declarations that point at the definitions
+// in the meta .cpp. Including only the component header makes the compiler try to instantiate
+// the serializers here and fail on "no output serialization functions".
+#include <engine/meta/ecs/components/auto_exposure_component.hpp>
 #include <engine/meta/ecs/components/gi_component.hpp>
 #include <engine/meta/ecs/components/ssr_component.hpp>
 #include <engine/meta/ecs/components/taa_component.hpp>
@@ -3671,7 +3676,7 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("GTAO", "normal_map_detail", "number");
     // Serialized components: "settings" is the object the scene file stores, and a partial object
     // merges into the current one (apply_serialized_component_properties).
-    for(const char* serialized : {"Global Illumination", "SSR", "Temporal AA"})
+    for(const char* serialized : {"Global Illumination", "SSR", "Temporal AA", "Auto Exposure"})
     {
         add(serialized, "enabled", "boolean");
         add(serialized,
@@ -3702,7 +3707,8 @@ auto is_supported_component_pretty_name(const std::string& component_pretty_name
            component_pretty_name == "Animation" || component_pretty_name == "Text" ||
            component_pretty_name == "Reflection Probe" || component_pretty_name == "Bloom" ||
            component_pretty_name == "GTAO" || component_pretty_name == "Global Illumination" ||
-           component_pretty_name == "SSR" || component_pretty_name == "Temporal AA";
+           component_pretty_name == "SSR" || component_pretty_name == "Temporal AA" ||
+           component_pretty_name == "Auto Exposure";
 }
 
 auto component_properties_to_json(rtti::context& ctx,
@@ -3866,6 +3872,16 @@ auto component_properties_to_json(rtti::context& ctx,
         if(!comp)
         {
             error = "Component not present on entity: SSR";
+            return {};
+        }
+        return serialized_component_to_json(*comp, filter_ptr, error);
+    }
+    if(component_pretty_name == "Auto Exposure")
+    {
+        auto* comp = entity.try_get<auto_exposure_component>();
+        if(!comp)
+        {
+            error = "Component not present on entity: Auto Exposure";
             return {};
         }
         return serialized_component_to_json(*comp, filter_ptr, error);
@@ -4074,6 +4090,20 @@ auto apply_component_properties(rtti::context& ctx,
             result.errors.push_back("Component not present on entity: SSR");
             return result;
         }
+        apply_serialized_component_properties(*comp, properties, result);
+        return result;
+    }
+    if(component_pretty_name == "Auto Exposure")
+    {
+        auto* comp = entity.try_get<auto_exposure_component>();
+        if(!comp)
+        {
+            result.ok = false;
+            result.errors.push_back("Component not present on entity: Auto Exposure");
+            return result;
+        }
+        // The settings object merges partially, which is what the exposure sweeps need: one
+        // key at a time, without restating the rest (and without touching the scene file).
         apply_serialized_component_properties(*comp, properties, result);
         return result;
     }

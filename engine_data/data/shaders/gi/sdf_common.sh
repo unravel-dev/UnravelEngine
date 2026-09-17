@@ -93,7 +93,8 @@ uniform vec4 u_sdf_grid_params[GI_SDF_GRID_PARAMS_VEC4];
 #define u_sdf_grid_instance_base uint(u_sdf_grid_params[1].w)
 #define u_sdf_experiment_flags   uint(u_sdf_grid_params[2].x)
 /// No experiment bit is compiled in: the measured ones (instance-visit dedupe, the supersample cap, the gather
-/// sampling and placement variants - tasks/lumen_parity_log.md) were removed after their A/Bs.
+/// sampling and placement variants - tasks/lumen_parity_log.md; the directional relight far field and the
+/// completion-parallax A/B of 2026-09-17) were removed after their A/Bs.
 /// Cells a traversal may visit before giving up. A ray crossing an n-cell grid diagonally touches
 /// about 3n, so this is generous; it exists so a denormal direction cannot spin, not as a budget.
 #define SDF_GRID_MAX_STEPS 256

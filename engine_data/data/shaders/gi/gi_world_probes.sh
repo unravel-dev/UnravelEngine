@@ -39,8 +39,9 @@
  * ATLASES (2D; every probe slot of every level in ONE row-major run of
  * GI_WORLD_PROBE_ATLAS_TILES_X tiles per row, addressed by the LINEAR slot index - level 0's
  * pool first, then the dense levels in order - GiWorldProbeTileBase):
- *  - radiance: probe tiles of OCT_RADIANCE^2 texels. rgb radiance, a hitT (negative =
- *    miss/sky). Point-fetched only, so no gutter.
+ *  - radiance: probe tiles of OCT_RADIANCE^2 texels. rgb radiance, a hitT (0 = never
+ *    measured, GI_WORLD_PROBE_DEPTH_CLAMP x spacing = miss/sky, a hit stores at most
+ *    GI_WORLD_PROBE_HIT_DEPTH_CAP of that). Point-fetched only, so no gutter.
  *  - irradiance: same tile grid at (OCT_IRRADIANCE+2)^2 texels - 1-texel octahedral gutter for
  *    hardware bilinear. rgb = E/pi at the texel's normal direction, a = sky fraction.
  *  - depth: same gutter layout, RG16F = (mean, mean^2) of hitT under a
@@ -182,12 +183,11 @@ int GiWorldProbeAxis(int level)
 /// dense levels.
 int GiWorldProbeLevelCount(int level)
 {
-	if(level == 0)
-	{
-		return GI_WORLD_PROBE_POOL_L0;
-	}
+	// ONE return, no early exit: fxc's uninitialized-data analysis (X4026) rejects the early
+	// return form when it compiles without optimization - which the shader-compile suite does -
+	// and then reports every caller that depends on this function as uninitialized too.
 	int axis = GiWorldProbeAxis(level);
-	return axis * axis * axis;
+	return level == 0 ? GI_WORLD_PROBE_POOL_L0 : axis * axis * axis;
 }
 
 /// First linear slot of a level: the cell-id and count buffers are level-major.
@@ -240,9 +240,12 @@ ivec3 GiWorldProbeSlot(ivec3 cell, int level)
 {
 	// True mathematical modulo for negative cells; HLSL/GLSL % is implementation-inconvenient
 	// on negatives, so bias well into positives first (cells are bounded far below 1<<20).
-	int axis = GiWorldProbeAxis(level);
-	ivec3 biased = cell + ivec3(1048576, 1048576, 1048576);
-	return ivec3(biased.x % axis, biased.y % axis, biased.z % axis);
+	// The remainder is taken in UNSIGNED arithmetic: the operands are non-negative by the bias
+	// above, and fxc rejects a signed modulus outright when it compiles with warnings as errors
+	// (the shader-compile suite's own invocation does - it failed there and nowhere else).
+	uint axis = uint(GiWorldProbeAxis(level));
+	uvec3 biased = uvec3(cell + ivec3(1048576, 1048576, 1048576));
+	return ivec3(int(biased.x % axis), int(biased.y % axis), int(biased.z % axis));
 }
 
 /// The level-0 index entry of a world cell (a lane-relative offset into the index buffer).
@@ -256,8 +259,12 @@ int GiWorldProbeIndexSlot(ivec3 cell)
 /// one row-major run over the LINEAR slot index (level 0's pool, then the dense levels).
 ivec2 GiWorldProbeTileBase(int slot_linear, int tile_edge)
 {
-	return ivec2((slot_linear % GI_WORLD_PROBE_ATLAS_TILES_X) * tile_edge,
-	             (slot_linear / GI_WORLD_PROBE_ATLAS_TILES_X) * tile_edge);
+	// Unsigned remainder and divide: a slot index is non-negative by construction, and fxc
+	// rejects a signed modulus outright when it compiles with warnings as errors - which the
+	// shader-compile suite's invocation does, and this line was the one it failed on.
+	uint slot = uint(max(slot_linear, 0));
+	uint tiles_x = uint(GI_WORLD_PROBE_ATLAS_TILES_X);
+	return ivec2(int(slot % tiles_x) * tile_edge, int(slot / tiles_x) * tile_edge);
 }
 
 /// World position of a probe cell's lattice point.
@@ -1236,6 +1243,7 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 }
 
 #endif // GI_WORLD_PROBE_READ_RADIANCE
+
 
 #endif // GI_WORLD_PROBE_READ
 

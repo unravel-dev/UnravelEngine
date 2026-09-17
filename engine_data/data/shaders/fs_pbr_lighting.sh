@@ -37,6 +37,7 @@ SAMPLER2D(s_irradiance, 7);
 SAMPLER2D(s_ssil, 8);
 // GTAO: rgb = world bent normal * 0.5 + 0.5, a = visibility (gtao_pass).
 SAMPLER2D(s_gtao, 9);
+#include "pre_exposure.sh"
 #else
 SAMPLER2D(s_shadowMap0, 7);
 SAMPLER2D(s_shadowMap1, 8);
@@ -47,6 +48,15 @@ SAMPLER2D(s_shadowMap3, 10);
 // x = GTAO bound (0/1), y = bent normal strength, z = intensity, w = multi-bounce (0/1).
 #define GTAO_MULTIBOUNCE_MAX_ALBEDO 0.5
 uniform vec4 u_gtao_params;
+// x = indirect diffuse bound (0/1): 1 when a real GI resolve / SSIL texture feeds s_ssil, 0
+// when the transparent fallback does (deferred/pipeline.cpp, beside the s_ssil bind). The
+// shader cannot derive it: an absent system and a pixel the GI resolved nothing for both
+// read (0,0,0,0). Same pattern as u_gtao_params.x.
+uniform vec4 u_indirect_params;
+/// The GI resolve alpha above which a pixel counts as SERVED by the GI (pbr_indirect): served
+/// pixels read 0.996-1.0, unserved ones 0, and the bilateral upsample leaves fractions only
+/// along sky silhouettes - the midpoint splits them by their majority neighbour.
+#define PBR_GI_SERVED_ALPHA 0.5
 uniform vec4 u_params0;
 uniform vec4 u_params1;
 // u_params2 (texel size, coverage) is declared by shadowmaps/common_shadow.sh.
@@ -819,7 +829,24 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // temporal is off, accumulated screen-hit evidence when temporal is on. When both are
     // disabled the bound fallback has alpha 0 -> pure SH.
     vec4 ssil_sample = texture2D(s_ssil, texcoord0);
-    vec3 indirect_diffuse = mix(irradiance * RECIP_PI, ssil_sample.rgb, ssil_sample.a) * diffuse_screen_ao;
+    // WHERE THE GI SERVES A PIXEL, THE GI OWNS THE INDIRECT DIFFUSE OUTRIGHT. The resolve
+    // already carries the sky where the sky is visible (its rays and completions read the sky
+    // SH per direction), so weighting the UNOCCLUDED environment SH by (1 - alpha) double
+    // counts it - and it lands exactly where the GI has least: alpha reads 0.996 on covered
+    // vertical faces (the filter stamps every live texel's weight as 1 and the SH3 projection
+    // of that constant lands just under it), and the unoccluded SH there is a hundred times
+    // the face's own GI, so 0.4 percent of it was 30-80 percent of a pier face's light
+    // (user-found 2026-09-17 on presets/Scene3D with a green sky tint). Alpha is NOT a sky
+    // visibility; it is the SERVED flag the original contract meant, and a threshold makes it
+    // one: a served pixel takes the resolve, an unserved one (sky silhouettes, degenerate
+    // normals, thin geometry no probe plane-agrees with and no cage covers - the bilateral
+    // upsample blends their alpha 0 into fractions at the edges) takes the SH as before.
+    // Where no GI / SSIL texture is bound at all the pure-SH probe answers unchanged.
+    // The SH holds absolute irradiance; SSIL / the GI resolve and RBUFFER already carry the
+    // view's pre-exposure.
+    float gi_served = saturate(u_indirect_params.x) * step(PBR_GI_SERVED_ALPHA, ssil_sample.a);
+    vec3 ambient_sh = irradiance * RECIP_PI * u_pre_exposure_value;
+    vec3 indirect_diffuse = mix(ambient_sh, ssil_sample.rgb, gi_served) * diffuse_screen_ao;
 
     float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
     float lighting_visibility = saturate(sqrt(Luminance(indirect_diffuse)));
@@ -834,7 +861,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // Diffuse: the material AO (the screen term is already folded into indirect_diffuse per
     // channel); specular: the material AO through the fit, times the GTSO cone term.
     vec3 indirect_lighting = StandardShadingIndirectAO(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, data.ambient_occlusion, data.ambient_occlusion, specular_screen_ao, lighting_visibility, V, N);
-    return vec4(indirect_lighting + data.emissive_color, 1.0f);
+    return vec4(indirect_lighting + data.emissive_color * u_pre_exposure_value, 1.0f);
 }
 #endif
 

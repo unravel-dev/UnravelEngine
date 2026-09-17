@@ -2,6 +2,7 @@ $input v_texcoord0
 
 #include "../common.sh"
 #include "../lighting.sh"
+#include "../pre_exposure.sh"
 
 SAMPLER2D(s_curr, 0);
 SAMPLER2D(s_history, 1);
@@ -273,7 +274,8 @@ void main()
 
     vec2 half_texel = texel * 0.5;
     vec2 hist_uv = clamp(prev_uv, half_texel, vec2(1.0, 1.0) - half_texel);
-    vec3 hist_rgb = TAA_SampleHistoryCatmullRom(hist_uv, texel);
+    // The history was written under last frame's pre-exposure (UE HistoryPreExposureCorrection).
+    vec3 hist_rgb = TAA_SampleHistoryCatmullRom(hist_uv, texel) * u_history_pre_exposure_correction;
     vec3 hist_yc = TAA_RGBToYCoCg(hist_rgb);
     vec3 clipped_yc = TAA_ClipToAABB(hist_yc, mu_yc, sigma_yc * k);
     vec3 clamped_hist = max(TAA_YCoCgToRGB(clipped_yc), vec3_splat(0.0));
@@ -302,7 +304,7 @@ void main()
     if(u_camera_parked)
     {
         float history_validity = blend / max(history_weight, 1e-4);
-        vec3 previous_history = texture2DLod(s_history, uv, 0.0).rgb;
+        vec3 previous_history = texture2DLod(s_history, uv, 0.0).rgb * u_history_pre_exposure_correction;
         resolved = mix(resolved, previous_history, TAA_PARKED_DISPLAY_HISTORY_SHARE * still * history_validity);
     }
 

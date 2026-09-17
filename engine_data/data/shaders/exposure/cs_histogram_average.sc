@@ -1,24 +1,34 @@
 /*
- * Histogram average compute shader for auto-exposure.
+ * Histogram average compute shader for auto exposure (UE 5.8 model).
  *
- * Reads the 256-bin luminance histogram, trims configurable low/high
- * percentiles (excluding sky, dark noise), computes the weighted average
- * log2 luminance, converts to an exposure value, and temporally adapts
- * toward the target using an exponential decay with separate bright/dark speeds.
+ * Reads and zeroes the 256-bin luminance histogram, trims it to the low..high percentile band
+ * of the non-black weight, takes the log-average L and adapts the exposure toward
+ *   exposure = 0.18 * 2^compensation / L          (S/PostProcessEyeAdaptation.usf:168-200)
+ * with EV100 = log2(L / 0.18) clamped to [min_ev, max_ev]. Below the neutral point
+ * (EV100 == compensation, exposure 1) only dark_adaptation of the deficit is adapted away.
  *
- * Runs as a single workgroup of 256 threads (one per bin).
+ * Adaptation follows UE's ComputeEyeAdaptation (S/PostProcessHistogramCommon.ush:222-249) in
+ * log2 space: farther than the transition distance from the target the exposure moves linearly
+ * at speed stops per second; closer it settles exponentially with a slope matched to the
+ * linear phase. A falling exposure (scene got brighter) uses speed_up.
  *
- * Reference: Frostbite Engine, Unreal Engine, Unity HDRP.
+ * Output AUTO_EXPOSURE: r = adapted exposure, g = target exposure, b = applied bias in stops
+ * (compensation plus the dark-adaptation shift), a = average local exposure (kept).
+ * Instruments: the exposure history ring and the normalized histogram.
  */
 
 #include "bgfx_compute.sh"
 
 BUFFER_RW(s_histogram, uint, 0);
-IMAGE2D_RW(s_exposure, r32f, 1);
+IMAGE2D_RW(s_exposure, rgba32f, 1);
+IMAGE2D_WO(s_exposure_history, rgba32f, 2);
+IMAGE2D_WO(s_histogram_display, r32f, 3);
 
 uniform vec4 u_average_params0;
 uniform vec4 u_average_params1;
 uniform vec4 u_average_params2;
+uniform vec4 u_average_params3;
+uniform vec4 u_average_params4;
 
 #define u_min_log_lum        u_average_params0.x
 #define u_log_lum_range      u_average_params0.y
@@ -33,130 +43,156 @@ uniform vec4 u_average_params2;
 #define u_delta_time         u_average_params2.x
 #define u_speed_up           u_average_params2.y
 #define u_speed_down         u_average_params2.z
+#define u_force_target       u_average_params2.w
 
-SHARED uint shared_histogram[256];
+#define u_slope_match_up     u_average_params3.x
+#define u_slope_match_down   u_average_params3.y
+#define u_transition_stops   u_average_params3.z
+#define u_history_texel      u_average_params3.w
 
-NUM_THREADS(256, 1, 1)
+// Local exposure's shape, for the AVERAGE local exposure below (the detail strength plays no
+// part in it - see the loop).
+#define u_local_highlight_contrast u_average_params4.x
+#define u_local_shadow_contrast    u_average_params4.y
+#define u_local_middle_grey_bias   u_average_params4.z
+
+#define HISTOGRAM_BINS 256u
+#define FIRST_LUMINANCE_BIN 1.0
+#define LUMINANCE_BIN_SPAN 254.0
+// log2(0.18): the metered average is anchored to 18% grey (EV100 = log2(L / 0.18)).
+#define LOG2_MIDDLE_GREY -2.4739311883
+// Exposure values at or above this are treated as garbage storage.
+#define MAX_EXPOSURE 1.0e10
+
+float bin_log_luminance(uint bin)
+{
+    return u_min_log_lum + (float(bin) - FIRST_LUMINANCE_BIN) / LUMINANCE_BIN_SPAN * u_log_lum_range;
+}
+
+NUM_THREADS(1, 1, 1)
 void main()
 {
-    uint local_idx = gl_LocalInvocationIndex;
-
-    uint bin_count = s_histogram[local_idx];
-    shared_histogram[local_idx] = bin_count;
-
-    s_histogram[local_idx] = 0u;
-
-    barrier();
-
-    // Parallel prefix sum (inclusive) for percentile computation
-    for (uint step = 1u; step < 256u; step <<= 1u)
+    // Bin 0 holds black samples, which do not meter.
+    float total = 0.0;
+    for (uint i = 1u; i < HISTOGRAM_BINS; ++i)
     {
-        uint val = 0u;
-        if (local_idx >= step)
+        total += float(s_histogram[i]);
+    }
+
+    float high_count = total * saturate(u_high_percentile);
+    float low_count = min(total * saturate(u_low_percentile), high_count);
+    float inv_total = (total > 0.0) ? 1.0 / total : 0.0;
+
+    float cumulative = 0.0;
+    float weighted_sum = 0.0;
+    float weight_sum = 0.0;
+    // The bins are consumed and zeroed in one pass, so the average local exposure - which needs
+    // them again, after the adapted exposure is known - keeps its own copy.
+    float bin_weights[HISTOGRAM_BINS];
+    for (uint bin = 0u; bin < HISTOGRAM_BINS; ++bin)
+    {
+        float bin_weight = float(s_histogram[bin]);
+        bin_weights[bin] = bin_weight;
+        s_histogram[bin] = 0u;
+
+        float display_share = 0.0;
+        if (bin > 0u)
         {
-            val = shared_histogram[local_idx - step];
-        }
-        barrier();
-        shared_histogram[local_idx] += val;
-        barrier();
-    }
-
-    if (local_idx != 0u)
-    {
-        return;
-    }
-
-    uint total_pixels = shared_histogram[255];
-
-    float avg_log_lum;
-    if (total_pixels == 0u)
-    {
-        // Empty histogram (e.g. failed dispatch): use mid-range luminance so we still
-        // write a finite exposure and avoid leaving NaN/garbage in the R32F target.
-        avg_log_lum = u_min_log_lum + u_log_lum_range * 0.5;
-    }
-    else
-    {
-        uint low_count  = uint(float(total_pixels) * u_low_percentile);
-        uint high_count = uint(float(total_pixels) * u_high_percentile);
-
-        float weighted_sum = 0.0;
-        float weight_total = 0.0;
-        uint prev_cumulative = 0u;
-
-        for (uint i = 0u; i < 256u; ++i)
-        {
-            uint cumulative = shared_histogram[i];
-            uint bin_val = cumulative - prev_cumulative;
-
-            if (bin_val > 0u)
+            float active_start = max(cumulative, low_count);
+            float active_end = min(cumulative + bin_weight, high_count);
+            if (active_end > active_start)
             {
-                uint active_start = max(prev_cumulative, low_count);
-                uint active_end   = min(cumulative, high_count);
-
-                if (active_start < active_end)
-                {
-                    uint active_count = active_end - active_start;
-                    // Exact inverse of the histogram binning (bin = uint(t * 254 + 1)):
-                    // t = (bin - 1) / 254. Bin 0 (pure black) maps to the bottom of the range.
-                    float t = clamp((float(i) - 1.0) / 254.0, 0.0, 1.0);
-                    float bin_center_log_lum = u_min_log_lum + t * u_log_lum_range;
-
-                    weighted_sum += bin_center_log_lum * float(active_count);
-                    weight_total += float(active_count);
-                }
+                float active_weight = active_end - active_start;
+                weighted_sum += bin_log_luminance(bin) * active_weight;
+                weight_sum += active_weight;
             }
-
-            prev_cumulative = cumulative;
+            cumulative += bin_weight;
+            display_share = bin_weight * inv_total;
         }
-
-        if (weight_total > 0.0)
-        {
-            avg_log_lum = weighted_sum / weight_total;
-        }
-        else
-        {
-            avg_log_lum = u_min_log_lum + u_log_lum_range * 0.5;
-        }
+        imageStore(s_histogram_display, ivec2(int(bin), 0), vec4(display_share, 0.0, 0.0, 0.0));
     }
 
-    // Convert raw log2(luminance) to EV100 using the photographic calibration
-    // constant K=12.5 at ISO 100: EV100 = log2(L * 100/12.5) = log2(L) + 3.
-    float avg_ev100 = avg_log_lum + 3.0;
+    vec4 previous = imageLoad(s_exposure, ivec2(0, 0));
+    bool previous_valid = (previous.x == previous.x) && previous.x > 0.0 && previous.x < MAX_EXPOSURE;
 
-    float clamped_ev = clamp(avg_ev100, u_min_ev, u_max_ev);
+    bool has_measurement = weight_sum > 0.0;
+    float metered_log_luminance = has_measurement ? weighted_sum / weight_sum : 0.0;
 
-    // PARTIAL dark adaptation (the single-slope version of UE's Exposure Compensation
-    // Curve / Unity HDRP's Curve Remapping): below the neutral point -- the metered EV
-    // at which exposure lands at exactly 1 -- only u_dark_adaptation of the deficit is
-    // adapted away, so a dark scene keeps (1 - slope) of its true relative darkness
-    // instead of being lifted to the mid-gray anchor. Min EV still hard-stops below.
-    float neutral_ev = u_compensation - 0.263034; // exposure == 1 at this metered EV
-    float dark_deficit = max(0.0, neutral_ev - clamped_ev);
-    clamped_ev += dark_deficit * (1.0 - clamp(u_dark_adaptation, 0.0, 1.0));
+    // UE takes min(min, max): a min above max pins the range to max.
+    float metered_ev = metered_log_luminance - LOG2_MIDDLE_GREY;
+    float clamped_ev = clamp(metered_ev, min(u_min_ev, u_max_ev), u_max_ev);
 
-    // Industry-standard exposure from EV100 (Frostbite/Unreal/Unity):
-    // exposure = exp2(-EV100) / 1.2. We adapt in log2 space, so work with the
-    // log of that target: log2(exposure) = -EV100 - log2(1.2), plus the EV bias.
-    float target_log_exposure = -clamped_ev + u_compensation - 0.263034; // log2(1.2)
+    float dark_deficit = max(0.0, u_compensation - clamped_ev);
+    float dark_shift = dark_deficit * (1.0 - saturate(u_dark_adaptation));
+    float applied_bias = u_compensation - dark_shift;
+    float target_log_exposure = applied_bias - clamped_ev;
 
-    float prev_exposure = imageLoad(s_exposure, ivec2(0, 0)).x;
-    // NaN fails (x == x); filter Inf and non-positive garbage from uninitialized storage.
-    bool prev_ok = (prev_exposure == prev_exposure) && (prev_exposure > 0.0) && (prev_exposure < 1.0e10);
-    float prev_log_exposure = prev_ok ? log2(prev_exposure) : target_log_exposure;
+    float previous_log_exposure = previous_valid ? log2(previous.x) : target_log_exposure;
+    if (!has_measurement)
+    {
+        // Nothing to meter (an all-black or empty frame): hold the current exposure.
+        target_log_exposure = previous_log_exposure;
+        applied_bias = previous_valid ? previous.z : u_compensation;
+    }
 
-    // Adapt in log2/EV space so the perceived adaptation rate is uniform across the
-    // brightness range (the eye responds logarithmically). Brightening the image
-    // (target > prev) uses the "up" time constant, darkening uses "down".
-    float speed = (target_log_exposure > prev_log_exposure) ? u_speed_up : u_speed_down;
-    float adaptation_factor = 1.0 - exp(-u_delta_time / max(speed, 0.001));
-    float adapted_log_exposure = prev_log_exposure + (target_log_exposure - prev_log_exposure) * adaptation_factor;
+    float difference = target_log_exposure - previous_log_exposure;
+    bool scene_brighter = difference < 0.0;
+    float speed = scene_brighter ? u_speed_up : u_speed_down;
+    float slope_match = scene_brighter ? u_slope_match_up : u_slope_match_down;
+
+    float linear_step = min(abs(difference), u_delta_time * speed);
+    float linear_log_exposure = previous_log_exposure + sign(difference) * linear_step;
+
+    float exponential_factor = min((1.0 - exp2(-u_delta_time * speed)) * slope_match, 1.0);
+    float exponential_log_exposure = previous_log_exposure + difference * exponential_factor;
+
+    float adapted_log_exposure = (abs(difference) > u_transition_stops) ? linear_log_exposure : exponential_log_exposure;
+    adapted_log_exposure = mix(adapted_log_exposure, target_log_exposure, saturate(u_force_target));
 
     float adapted_exposure = exp2(adapted_log_exposure);
-    if ((adapted_exposure != adapted_exposure) || adapted_exposure <= 0.0 || adapted_exposure >= 1.0e10)
+    if ((adapted_exposure != adapted_exposure) || adapted_exposure <= 0.0 || adapted_exposure >= MAX_EXPOSURE)
     {
-        adapted_exposure = exp2(target_log_exposure);
+        adapted_exposure = 1.0;
+        adapted_log_exposure = 0.0;
     }
 
-    imageStore(s_exposure, ivec2(0, 0), vec4(adapted_exposure, 0.0, 0.0, 0.0));
+    float target_exposure = exp2(target_log_exposure);
+    if ((target_exposure != target_exposure) || target_exposure <= 0.0 || target_exposure >= MAX_EXPOSURE)
+    {
+        target_exposure = adapted_exposure;
+        target_log_exposure = adapted_log_exposure;
+    }
+
+    // AVERAGE LOCAL EXPOSURE (UE ComputeAverageLocalExposure, PostProcessEyeAdaptation.usf:202-228).
+    // The pre-exposure multiplies by it, so the scene-color scale follows what the tonemapper
+    // will actually do on average instead of drifting from it. Each bin stands for pixels at
+    // that luminance; with no spatial term a bin's own level IS its neighbourhood base, so the
+    // detail term cancels and only the contrast scales move the result - which is why a setup
+    // that changes detail alone leaves this at 1.
+    float average_local_exposure = 1.0;
+    if (u_local_highlight_contrast != 1.0 || u_local_shadow_contrast != 1.0)
+    {
+        float pivot = LOG2_MIDDLE_GREY + applied_bias + u_local_middle_grey_bias;
+        float local_sum = 0.0;
+        float local_weight = 0.0;
+        for (uint local_bin = 1u; local_bin < HISTOGRAM_BINS; ++local_bin)
+        {
+            float bin_weight = bin_weights[local_bin];
+            if (bin_weight <= 0.0)
+            {
+                continue;
+            }
+            // The bin's luminance as the tonemapper will see it: after the adapted exposure.
+            float luminance_log = bin_log_luminance(local_bin) + adapted_log_exposure;
+            float contrast = luminance_log > pivot ? u_local_highlight_contrast : u_local_shadow_contrast;
+            float target_log = pivot + (luminance_log - pivot) * contrast;
+            local_sum += exp2(target_log - luminance_log) * bin_weight;
+            local_weight += bin_weight;
+        }
+        average_local_exposure = local_weight > 0.0 ? local_sum / local_weight : 1.0;
+    }
+
+    imageStore(s_exposure, ivec2(0, 0), vec4(adapted_exposure, target_exposure, applied_bias, average_local_exposure));
+    imageStore(s_exposure_history, ivec2(int(u_history_texel), 0),
+               vec4(adapted_log_exposure, target_log_exposure, metered_log_luminance, applied_bias));
 }

@@ -28,6 +28,9 @@
 #include "gi/gi_world_probes.sh"
 #include "gi/gi_noise.sh"
 #include "gi/gi_emissive_nee.sh"
+// The atlas stores CACHED lighting (absolute), but the coverage bound below is expressed on
+// pre-exposed values - Lumen's radiosity rule (MaxRayIntensity x View.OneOverPreExposure).
+#include "gi/gi_pre_exposure.sh"
 
 /// Solid angle of one radiance-atlas texel (the octahedral map is near equal-area).
 #define GI_WORLD_PROBE_TEXEL_SOLID_ANGLE (4.0 * 3.1415926535897932 / float(GI_WORLD_PROBE_OCT_RADIANCE * GI_WORLD_PROBE_OCT_RADIANCE))
@@ -471,8 +474,10 @@ void main()
 		vec3 radiance;
 		float hit_t;
 		// The stored distance is the CLAMPED depth the convolve consumes (misses store the clamp
-		// itself: a miss and a hit beyond GI_WORLD_PROBE_DEPTH_CLAMP are the same moments and
-		// the same sky share), always positive, so it can ride the running mean like the
+		// itself, hits at most GI_WORLD_PROBE_HIT_DEPTH_CAP of it: a miss and a hit beyond the
+		// clamp are the same moments within one percent but DISTINCT sky shares - before the
+		// cap every hit past 1.5 spacings counted as sky), always positive, so it can ride the
+		// running mean like the
 		// radiance - under the direction jitter a "latest sample" depth made the Chebyshev
 		// moments flicker per window and tripped the cage-visibility marches (measured: Light
 		// Voxels 2x). Zero stays the never-measured mark (fresh clear, buried or sleeping
@@ -503,7 +508,9 @@ void main()
 			// every live probe over a flat floor measured the floor ~1.4 voxels nearer than
 			// the floor's own biased query and the Chebyshev test rejected the whole cage
 			// with confidence: the courtyard floor read zero irradiance (2026-09-12).
-			hit_t = min(hit.t + hit.hit_field, depth_clamp);
+			// Capped UNDER the clamp: the clamp itself is the miss marker the convolve's sky
+			// share reads (GI_WORLD_PROBE_HIT_DEPTH_CAP).
+			hit_t = min(hit.t + hit.hit_field, depth_clamp * GI_WORLD_PROBE_HIT_DEPTH_CAP);
 			vec3 hit_position = origin + direction * hit.t;
 			vec3 hit_normal = hit.normal;
 			if(dot(hit_normal, direction) > 0.0)
@@ -522,6 +529,14 @@ void main()
 			// The cone bound only where the old absolute clamp would have acted (a hit brighter
 			// than GI_MAX_RAY_RADIANCE): the table walk per hit measured +0.08 ms on the world
 			// probe trace with movers when every hit paid it (gi_emissive_research 3.5).
+			//
+			// The threshold is ABSOLUTE, not the view-relative GiViewToCached form Lumen's
+			// radiosity rule would use. This atlas is a PERSISTENT store shared across views,
+			// and an exposure-relative gate makes its contents follow whatever the camera was
+			// metering when each probe last traced. Measured 2026-09-16 (GI_TestSuite): at the
+			// sealed cell's P = 367 the relative form is a threshold of 0.109 absolute, so the
+			// bound fired on ordinary emitter-lit texels it was never meant to touch and the
+			// cell lost display mean against the pre-pre-exposure baseline.
 			if(GiStatsLuminance(voxel_radiance) > GI_MAX_RAY_RADIANCE)
 			{
 				radiance *= GiWorldProbeEmitterCoverage(direction, origin);

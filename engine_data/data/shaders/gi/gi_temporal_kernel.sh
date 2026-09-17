@@ -52,6 +52,8 @@
  */
 
 #include "gi/gi_constants.sh"
+// The accumulated lanes are pre-exposed: the history carries last frame's scale.
+#include "gi/gi_pre_exposure.sh"
 
 /// Velocity buffer (full camera resolution): RG = total uv-delta (uv_curr - uv_prev,
 /// unjittered previous), BA = the OBJECT-ONLY component, split at write time inside the
@@ -470,6 +472,16 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 		    GiGatherHistoryTaps(s_gi_history_moments, history_base, tap_weights, history_size) /
 		    tap_weight_sum;
 	}
+	// PRE-EXPOSURE CORRECTION (UE P / Pprev): every accumulated lane was written under last
+	// frame's pre-exposure. The colour lanes scale by the ratio, the moments' first moment
+	// with them and the SECOND moment by its square, so the variance the change detector
+	// reads stays the variance of this frame's scale. The alpha lanes (resolve weight, cause
+	// code), the count and the moving amount are unitless and stay put.
+	float pre_exposure_correction = u_history_pre_exposure_correction;
+	history.xyz *= pre_exposure_correction;
+	fast_history.xyz *= pre_exposure_correction;
+	history_moments.x *= pre_exposure_correction;
+	history_moments.y *= pre_exposure_correction * pre_exposure_correction;
 #ifndef GI_TEMPORAL_FUSED
 	if(u_gi_clamp_sigma > 0.0)
 	{

@@ -203,6 +203,15 @@ constexpr std::array<visualization_swatch, 5> k_legend_gi_emitter_share = {{
     {{0.0f, 0.0f, 0.0f}, "No geometry under the probe, or no emitter in reach"},
 }};
 
+constexpr std::array<visualization_swatch, 6> k_legend_exposure = {{
+    {{0.20f, 0.95f, 0.35f}, "Trace: log2 adapted exposure over the last 256 frames (oldest left)"},
+    {{0.95f, 0.85f, 0.15f}, "Trace: log2 target exposure - a gap to green is adaptation in flight"},
+    {{0.35f, 0.45f, 0.60f}, "Histogram: the bin's share of the metered weight (full bar = 5%)"},
+    {{1.0f, 1.0f, 1.0f}, "The metered log2 luminance the percentile trim produced"},
+    {{0.15f, 0.80f, 0.90f}, "The neutral point: EV100 == compensation, where exposure is 1"},
+    {{0.85f, 0.15f, 0.10f}, "The min / max EV100 clamps; the metered marker resting on one = held"},
+}};
+
 // -----------------------------------------------------------------------------
 // Groups
 // -----------------------------------------------------------------------------
@@ -253,7 +262,7 @@ constexpr std::array<visualization_group_entry, 6> k_visualization_groups = {{
 // get_visualization_modes(group) relies on that contiguity.
 // -----------------------------------------------------------------------------
 
-constexpr std::array<visualization_mode_entry, 42> k_visualization_modes = {{
+constexpr std::array<visualization_mode_entry, 43> k_visualization_modes = {{
     {visualization_mode::full,
      visualization_group::none,
      "full",
@@ -381,6 +390,14 @@ constexpr std::array<visualization_mode_entry, 42> k_visualization_modes = {{
      "The reflection buffer alpha channel: how strongly it replaces the probe specular. "
      "White = fully reflection-driven, black = probe only.",
      {}},
+    {visualization_mode::exposure,
+     visualization_group::lighting,
+     "exposure",
+     "Exposure (Visualize HDR)",
+     "Auto exposure's own state, drawn as a panel over the lit image: the 256-frame trace of "
+     "adapted against target exposure, and this frame's metering histogram on a log2 luminance "
+     "axis with the metered value, the neutral point and the EV100 clamps marked.",
+     k_legend_exposure},
 
     // -- Motion ---------------------------------------------------------------
     {visualization_mode::velocity,
@@ -613,6 +630,8 @@ static_assert(static_cast<int>(visualization_mode::gi_temporal_cause) ==
 static_assert(static_cast<int>(visualization_mode::gi_emitter_share) ==
                   rendering::deferred::debug_pass_gi_emitter_share,
               "visualization_mode drifted from deferred::debug_pass_gi_emitter_share");
+static_assert(static_cast<int>(visualization_mode::exposure) == rendering::deferred::debug_pass_exposure,
+              "visualization_mode drifted from deferred::debug_pass_exposure");
 
 } // namespace
 

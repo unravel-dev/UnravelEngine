@@ -94,6 +94,8 @@ auto pipeline::init(rtti::context& ctx) -> bool
         return std::make_unique<gpu_program>(vs_shader, fs_shadfer);
     };
 
+    // Uniforms before programs (GL uniform order contract, gpu_program.h).
+    particle_pre_exposure_uniform_ = std::make_shared<gfx::uniform>("u_pre_exposure", gfx::uniform_type::Vec4);
     particle_program_instanced_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced");
     particle_program_instanced_mask_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced_mask");
     world_quad_program_ = load_program("rmlui_world/vs_world_quad", "rmlui_world/fs_world_quad");
@@ -610,7 +612,11 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
 }
 
 
-void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_view& rview, const gfx::frame_buffer::ptr& output)
+void pipeline::run_particle_pass(scene& scn,
+                                 const camera& camera,
+                                 gfx::render_view& rview,
+                                 const gfx::frame_buffer::ptr& output,
+                                 const pre_exposure_state& pre_exposure)
 {
     APP_SCOPE_PERF("Rendering/Particle Pass");
 
@@ -734,6 +740,7 @@ void pipeline::run_particle_pass(scene& scn, const camera& camera, gfx::render_v
                 const uint64_t blend_state = particle_blend_bgfx_state(batch_blend_mode);
                 // Additive / Multiply are order-independent; skip expensive per-particle depth sort.
                 const bool sort_by_depth = (batch_blend_mode == ps_soa::blend_mode::normal);
+                gfx::set_uniform(particle_pre_exposure_uniform_, pre_exposure.to_uniform().data());
                 stats_.drawn_particles += ps_soa::render_emitter_batch(current_batch.data(),
                     static_cast<uint32_t>(current_batch.size()),
                     pass.id,

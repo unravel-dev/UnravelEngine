@@ -6,6 +6,7 @@
 #include <graphics/texture.h>
 #include <graphics/render_pass.h>
 #include "trace_resolution.h"
+#include <engine/rendering/pipeline/pre_exposure.h>
 
 namespace unravel
 {
@@ -110,6 +111,9 @@ public:
         /// null on the first frame, in which case the fallback is disabled (misses = 0).
         gfx::texture::ptr irradiance_sh;
         const camera* cam{};
+        /// The view's scene-color pre-exposure. The direct lighting carries it; the emissive and
+        /// the SH are absolute; PREV_SSIL and the history carry last frame's.
+        pre_exposure_state pre_exposure{};
         ssil_settings settings;
     };
 
@@ -210,6 +214,7 @@ private:
         gfx::program::uniform_ptr s_albedo;
         gfx::program::uniform_ptr s_prev_ssil;
         gfx::program::uniform_ptr s_irradiance;
+        gfx::program::uniform_ptr u_pre_exposure;
 
         void cache_uniforms()
         {
@@ -224,6 +229,7 @@ private:
             cache_uniform(program.get(), s_albedo, "s_albedo", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_prev_ssil, "s_prev_ssil", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_irradiance, "s_irradiance", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
         }
 
         auto is_valid() const -> bool { return program && program->is_valid(); }
@@ -296,6 +302,8 @@ private:
         gfx::program::uniform_ptr s_normal;
         /// Velocity buffer (RG total uv-delta, BA object-only component).
         gfx::program::uniform_ptr s_velocity;
+        /// View pre-exposure (pre_exposure.sh): corrects the history from last frame's scale.
+        gfx::program::uniform_ptr u_pre_exposure;
 
         void cache_uniforms()
         {
@@ -310,10 +318,14 @@ private:
             cache_uniform(program.get(), s_ssil_moments_history, "s_ssil_moments_history", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
         }
 
         auto is_valid() const -> bool { return program && program->is_valid(); }
     } temporal_program_;
+
+    /// The view's pre-exposure for the current run; run() stores it for the internal passes.
+    pre_exposure_state pre_exposure_{};
 
     // Joint-bilateral upsample program (fullscreen fragment shader)
     struct upsample_program : uniforms_cache

@@ -11,6 +11,8 @@ SAMPLER2D(s_depth, 2);
 SAMPLER2D(s_hiz, 3);
 SAMPLER2D(s_color_blurred, 4);
 
+#include "../pre_exposure.sh"
+
 uniform vec4 u_ssr_params;
 #define u_max_steps         u_ssr_params.x
 #define u_depth_tolerance   u_ssr_params.y
@@ -535,7 +537,9 @@ void main()
 				sample_color = SampleScreenColor(ss_hit_pos.xy, ss_hit_pos.z, s_color, 0.0);
             }
 			
-            sample_color.rgb *= u_brightness;
+            // PREV_SCENE_HDR was written under last frame's pre-exposure (UE
+            // PrevSceneColorPreExposureCorrection).
+            sample_color.rgb *= u_brightness * u_history_pre_exposure_correction;
 
             float sample_confidence = max(confidence, 0.0);
             sample_color.a *= sample_confidence;

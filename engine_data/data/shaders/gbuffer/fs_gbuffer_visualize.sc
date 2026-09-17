@@ -2,6 +2,7 @@ $input v_texcoord0
 
 #include "../common.sh"
 #include "../lighting.sh"
+#include "../pre_exposure.sh"
 
 SAMPLER2D(s_tex0, 0);
 SAMPLER2D(s_tex1, 1);
@@ -55,7 +56,8 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     }
     else if(u_mode == RADIANCE)
     {
-        color = texture2D(s_tex5, texcoord0).xyz;
+        // RBUFFER carries the view's pre-exposure; the view shows absolute radiance.
+        color = texture2D(s_tex5, texcoord0).xyz * u_pre_exposure_inverse;
     }
     else if(u_mode == RADIANCE_ALPHA)
     {
@@ -96,7 +98,7 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     else if(u_mode == SSIL)
     {
         vec4 ssil = texture2D(s_tex7, texcoord0);
-		color = ssil.rgb * PI * ssil.a;
+		color = ssil.rgb * PI * ssil.a * u_pre_exposure_inverse;
         // Linear readback scale (the scene panel's debug-view scale, u_params.y; 0 = 1): the
         // target is the LDR frame, so a scale lets a capture read the gather's radiance at
         // any magnitude to 8-bit precision.

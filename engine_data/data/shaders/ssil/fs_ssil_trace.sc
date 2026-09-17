@@ -20,6 +20,7 @@ $input v_texcoord0
 #include "../lighting.sh"
 #include "../hiz_trace.sh"
 #include "../sampling.sh"
+#include "../pre_exposure.sh"
 
 SAMPLER2D(s_color, 0);
 SAMPLER2D(s_normal, 1);
@@ -120,7 +121,8 @@ vec3 SampleRadiance(vec2 hit_uv)
     // see the indirect-lighting pass for the eventual refactor target.
     direct *= (1.0 - nd.metalness);
 
-    vec3 radiance = direct + ed.emissive_color;
+    // s_color (LBUFFER) is pre-exposed; the G-buffer emissive and the SH are absolute.
+    vec3 radiance = direct + ed.emissive_color * u_pre_exposure_value;
 
     // Hit surface's own ambient bounce. s_color holds DIRECT lighting only (SSIL runs
     // before the indirect pass), so a shadowed occluder reads ~black there. Without this
@@ -132,7 +134,7 @@ vec3 SampleRadiance(vec2 hit_uv)
     BRANCH
     if(u_env_intensity > 0.0)
     {
-        vec3 hit_ambient = eval_irradiance_sh(s_irradiance, nd.world_normal) * RECIP_PI * u_env_intensity;
+        vec3 hit_ambient = eval_irradiance_sh(s_irradiance, nd.world_normal) * RECIP_PI * u_env_intensity * u_pre_exposure_value;
         radiance += hit_diffuse * hit_ambient * cd.ambient_occlusion;
     }
 
@@ -145,7 +147,8 @@ vec3 SampleRadiance(vec2 hit_uv)
         // contract), and prev.rgb IS E/pi, so hit_diffuse * prev.rgb * alpha is that value
         // - no pi anywhere, same as the composite itself.
         vec4 prev = texture2DLod(s_prev_ssil, hit_uv, 0.0);
-        vec3 prev_indirect = prev.rgb * prev.a;
+        // Last frame's SSIL was written under last frame's pre-exposure.
+        vec3 prev_indirect = prev.rgb * prev.a * u_history_pre_exposure_correction;
 
         radiance += hit_diffuse * prev_indirect * u_multi_bounce;
     }
@@ -225,7 +228,7 @@ void main()
     if(u_env_intensity > 0.0)
     {
         vec3 reference_irradiance = eval_irradiance_sh(s_irradiance, world_normal) *
-                                    RECIP_PI * u_env_intensity;
+                                    RECIP_PI * u_env_intensity * u_pre_exposure_value;
         firefly_cap_luma = max(SSIL_FIREFLY_FLOOR,
                                SSIL_FIREFLY_RATIO * Luminance(reference_irradiance));
     }
@@ -324,7 +327,7 @@ void main()
         if(u_env_intensity > 0.0 && hit_weight < 1.0)
         {
             vec3 ws_sample_dir = normalize(mul(u_invView, vec4(vs_sample_dir, 0.0)).xyz);
-            env_radiance = eval_radiance_sh(s_irradiance, ws_sample_dir) * u_env_intensity;
+            env_radiance = eval_radiance_sh(s_irradiance, ws_sample_dir) * u_env_intensity * u_pre_exposure_value;
         }
 
         // A confident near hit occludes the environment and replaces it with the bounce; a

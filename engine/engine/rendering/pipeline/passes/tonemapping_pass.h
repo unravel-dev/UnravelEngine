@@ -36,8 +36,9 @@ public:
         float exposure = 1.0f;
         /// AgX is the default: hue-robust under bright light (no red->orange /
         /// blue->cyan skew) and no per-channel clipping. Display-white / punch
-        /// comes from Auto Exposure Compensation (default +3 with this lighting
-        /// scale), not from remapping operators onto each other. AgX Punchy,
+        /// comes from Auto Exposure Compensation (default +1, UE 5.8's own, on
+        /// the UE metering model - measured 2026-09-16 to put a neutral room's
+        /// median at mid grey), not from remapping operators onto each other. AgX Punchy,
         /// ACES, or grading Contrast add more punch on top. aces/aces_lum give
         /// the UE-family S-curve at the cost of hue skews.
         tonemapping_method method = tonemapping_method::agx;
@@ -81,11 +82,47 @@ public:
         bool dithering = true;
     };
 
+    /**
+     * @brief Everything the per-pixel local exposure needs (auto_exposure_pass owns the two
+     *        lookups and the settings; this pass only applies them).
+     *
+     * Inactive - the default - when the exposure pass did not build a grid, which is exactly
+     * when the settings are neutral (settings::is_local_exposure_enabled).
+     */
+    struct local_exposure_params
+    {
+        /// Flattened bilateral grid: texel (tile_x * slices + slice, tile_y), rg = the slice's
+        /// sum of log2 luminance and of weight per tile cell.
+        gfx::texture::ptr grid;
+        /// Tile-grid Gaussian of the plain tile means, the edge-blind level.
+        gfx::texture::ptr blurred;
+        float tiles_x = 0.0f;
+        float tiles_y = 0.0f;
+        float slices = 0.0f;
+        /// The grid's luminance axis, matching the histogram's.
+        float min_log_lum = 0.0f;
+        float log_lum_range = 1.0f;
+        float highlight_contrast = 1.0f;
+        float shadow_contrast = 1.0f;
+        float detail_strength = 1.0f;
+        float blurred_blend = 0.6f;
+        float middle_grey_bias = 0.0f;
+
+        auto is_active() const -> bool
+        {
+            return grid && blurred && tiles_x > 0.0f && tiles_y > 0.0f && slices > 0.0f;
+        }
+    };
+
     struct run_params
     {
         gfx::frame_buffer::ptr input;
         gfx::frame_buffer::ptr output;
         gfx::texture::ptr exposure_texture;
+        local_exposure_params local_exposure{};
+        /// The view's scene-color pre-exposure (it already includes settings::exposure): the
+        /// input carries it and the exposure removes it.
+        float pre_exposure = 1.0f;
 
         settings config{};
         /// When FXAA runs after this pass, grain and TPDF dither are deferred to
@@ -115,6 +152,14 @@ private:
             cache_uniform(program.get(), u_gain, "u_gain", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_input, "s_input", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_exposure, "s_exposure", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_local_exposure, "u_local_exposure", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_local_exposure2, "u_local_exposure2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_local_exposure3, "u_local_exposure3", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_local_exposure_grid, "s_local_exposure_grid", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(),
+                          s_local_exposure_blurred,
+                          "s_local_exposure_blurred",
+                          gfx::uniform_type::Sampler);
         }
 
         gfx::program::uniform_ptr u_tonemapping;
@@ -126,6 +171,11 @@ private:
         gfx::program::uniform_ptr u_gain;
         gfx::program::uniform_ptr s_input;
         gfx::program::uniform_ptr s_exposure;
+        gfx::program::uniform_ptr u_local_exposure;
+        gfx::program::uniform_ptr u_local_exposure2;
+        gfx::program::uniform_ptr u_local_exposure3;
+        gfx::program::uniform_ptr s_local_exposure_grid;
+        gfx::program::uniform_ptr s_local_exposure_blurred;
 
         std::unique_ptr<gpu_program> program;
 

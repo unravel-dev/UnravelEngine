@@ -779,6 +779,31 @@ void deferred::set_debug_view_scale(float scale)
     debug_view_scale_ = scale > 0.0f ? scale : 1.0f;
 }
 
+void deferred::set_pre_exposure_override(float value)
+{
+    pre_exposure_override_ = value > 0.0f ? value : 0.0f;
+}
+
+auto deferred::get_pre_exposure(gfx::render_view& rview) const -> pre_exposure_state
+{
+    const auto* state = rview.data().try_get<pre_exposure_state>(pre_exposure_state::view_key);
+    return state ? *state : pre_exposure_state{};
+}
+
+auto deferred::get_exposure_readout() const -> exposure_readout
+{
+    exposure_readout readout;
+    readout.pre_exposure = pre_exposure_.value;
+    readout.previous_pre_exposure = pre_exposure_.previous;
+    // The stored value, never a poll: consuming the queries here would starve the per-frame
+    // channel (auto_exposure_pass::get_last_exposure_readback).
+    readout.adapted_exposure = auto_exposure_pass_.get_last_exposure_readback();
+    readout.manual_exposure = manual_exposure_;
+    readout.is_auto_exposure_active = auto_exposure_active_;
+    readout.is_override_active = pre_exposure_override_ > 0.0f;
+    return readout;
+}
+
 void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
                                  scene& scn,
                                  const camera& camera,
@@ -813,6 +838,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     {
         build_shadows(scn, camera, dt, visibility_query::not_specified, render_mask);
     }
+
+    // Before any pass writes or reads scene lighting (the nested probe captures above rendered
+    // with their own unit pre-exposure).
+    pre_exposure_ = update_pre_exposure(rview, params, is_camera_run);
 
     // GI world-state preparation: surface-cache residency, clipmap compose, voxel
     // lighting and world probes (details and gating rationale at the definition).
@@ -902,7 +931,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(stages & pipeline_steps::particles_pass)
     {
-        run_particle_pass(scn, camera, rview, target);
+        run_particle_pass(scn, camera, rview, target, pre_exposure_);
     }
 
     if(is_probe_capture)
@@ -932,7 +961,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         rview.tex_remove("PREV_SCENE_HDR");
     }
 
-    run_auto_exposure_pass(rview, target, params, dt);
+    run_auto_exposure_pass(rview, camera, target, params, dt);
 
     target = run_bloom_pass(rview, target, params);
 
@@ -947,6 +976,12 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         if(debug_pass_ == debug_pass_velocity)
         {
             run_velocity_debug_pass(camera, rview, output);
+        }
+        else if(debug_pass_ == debug_pass_exposure)
+        {
+            // An overlay over the finished image, so it runs after the UI pass like the others
+            // but keeps what is underneath.
+            run_exposure_debug_pass(rview, output, params);
         }
         else if(debug_pass_ == debug_pass_gtao || debug_pass_ == debug_pass_gtao_bent_normal)
         {
@@ -1602,6 +1637,69 @@ void deferred::run_velocity_debug_pass(const camera& camera,
     gfx::discard();
 }
 
+void deferred::run_exposure_debug_pass(gfx::render_view& rview,
+                                       const gfx::frame_buffer::ptr& output,
+                                       const run_params& rparams)
+{
+    if(!output || !exposure_debug_program_.program || !exposure_debug_program_.program->is_valid())
+    {
+        return;
+    }
+    // Auto exposure did not run for this camera (disabled, or an LDR / probe run): there is
+    // nothing to draw and the lit image stays exactly as the tonemapper left it.
+    auto exposure_tex = auto_exposure_pass_.get_exposure_texture(rview);
+    auto history_tex = auto_exposure_pass_.get_history_texture(rview);
+    auto histogram_tex = auto_exposure_pass_.get_histogram_texture(rview);
+    if(!exposure_tex || !history_tex || !histogram_tex)
+    {
+        return;
+    }
+    // The live settings, for the markers the average shader decided against.
+    auto_exposure_pass::settings config;
+    if(rparams.fill_auto_exposure_params)
+    {
+        auto_exposure_pass::run_params exposure_params;
+        rparams.fill_auto_exposure_params(exposure_params);
+        config = exposure_params.config;
+    }
+
+    // Panel geometry in uv, bottom left: wide enough that the 256-frame trace gets about one
+    // column per frame at 1080p, tall enough to separate the two bands.
+    constexpr float panel_margin = 0.02f;
+    constexpr float panel_width = 0.42f;
+    constexpr float panel_height = 0.30f;
+
+    gfx::render_pass pass("Debug/Exposure Pass");
+    pass.bind(output.get());
+
+    exposure_debug_program_.program->begin();
+    constexpr uint64_t point_clamp = BGFX_SAMPLER_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    gfx::set_texture(exposure_debug_program_.s_exposure, 0, exposure_tex, point_clamp);
+    gfx::set_texture(exposure_debug_program_.s_exposure_history, 1, history_tex, point_clamp);
+    gfx::set_texture(exposure_debug_program_.s_exposure_histogram, 2, histogram_tex, point_clamp);
+    const float rect[4] = {panel_margin, 1.0f - panel_margin - panel_height, panel_width, panel_height};
+    gfx::set_uniform(exposure_debug_program_.u_exposure_debug_rect, rect);
+    const float range[4] = {auto_exposure_pass::min_log_lum,
+                            auto_exposure_pass::max_log_lum,
+                            float(auto_exposure_pass::history_length),
+                            float(auto_exposure_pass_.get_history_index(rview))};
+    gfx::set_uniform(exposure_debug_program_.u_exposure_debug_range, range);
+    const float settings_data[4] = {config.compensation,
+                                    config.min_ev,
+                                    config.max_ev,
+                                    float(auto_exposure_pass::histogram_bins)};
+    gfx::set_uniform(exposure_debug_program_.u_exposure_debug_settings, settings_data);
+    // Blended, never opaque: the panel is an overlay on the finished frame, which this pass
+    // cannot sample (it is the render target).
+    auto topology = gfx::clip_quad(1.0f);
+    gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+    gfx::submit(pass.id, exposure_debug_program_.program->native_handle());
+    gfx::set_state(BGFX_STATE_DEFAULT);
+    exposure_debug_program_.program->end();
+
+    gfx::discard();
+}
+
 void deferred::run_assao_pass(const camera& camera,
                               gfx::render_view& rview,
                               delta_t dt,
@@ -2068,10 +2166,11 @@ auto deferred::run_direct_lighting_pass(scene& scn,
 
             // Light colors are picker (sRGB) values; shading needs linear.
             const auto light_color_linear = light.color.to_linear();
+            // Written with the view's pre-exposure (UE DeferredLightPixelShaders GetExposure).
             float light_color_intensity[4] = {light_color_linear.value.r,
                                               light_color_linear.value.g,
                                               light_color_linear.value.b,
-                                              light.intensity};
+                                              light.intensity * pre_exposure_.value};
 
             gfx::set_uniform(lprogram.u_light_color_intensity, light_color_intensity);
 
@@ -2179,6 +2278,10 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     gfx::set_texture(iprogram.s_ssil,
                      8,
                      indirect_diffuse_tex ? indirect_diffuse_tex : default_textures::get().transparent_texture());
+    // Whether that slot carries a real estimate: with it the shader takes the resolve outright;
+    // without it the environment SH answers (fs_pbr_lighting.sh, pbr_indirect).
+    const float indirect_params[4] = {indirect_diffuse_tex ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(iprogram.u_indirect_params, indirect_params);
     // GTAO: bent normal + visibility for the indirect terms only (never direct light). The
     // flag lane tells the shader whether the texture carries anything; the strengths come
     // from the settings the pass ran with this frame.
@@ -2189,6 +2292,7 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
                                   gtao_settings.intensity,
                                   gtao_settings.multi_bounce ? 1.0f : 0.0f};
     gfx::set_uniform(iprogram.u_gtao_params, gtao_params);
+    gfx::set_uniform(iprogram.u_pre_exposure, pre_exposure_.to_uniform().data());
     gfx::set_texture(iprogram.s_gtao, 9, gtao_tex ? gtao_tex : default_textures::get().white_texture());
     
 
@@ -2317,7 +2421,8 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
 
             const bool is_global_fallback = probe.method == reflect_method::environment;
             const float source_validity = 1.0f;
-            float data1[4] = {mips, probe.intensity, is_global_fallback ? 1.0f : 0.0f, source_validity};
+            // RBUFFER holds pre-exposed reflections; the captured cubemaps are absolute radiance.
+            float data1[4] = {mips, probe.intensity * pre_exposure_.value, is_global_fallback ? 1.0f : 0.0f, source_validity};
             float capture[4] = {probe_comp_ref.get_apply_prefilter() ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
 
             gfx::set_uniform(ref_probe_program->u_data0, data0);
@@ -2449,6 +2554,9 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
     {
         return input;
     }
+    params_perez.pre_exposure = pre_exposure_.value;
+    params_perez.history_pre_exposure_correction = pre_exposure_.get_history_correction();
+    params_skybox.sky_brightness *= pre_exposure_.value;
     const auto& viewport_size = camera.get_viewport_size();
 
     auto c = camera;
@@ -2510,6 +2618,7 @@ void deferred::run_ssr_pass(const camera& camera,
             uint64_t(math::max(ssr_params.settings.fidelityfx.temporal.max_accum_frames, 1));
 
     ssr_params.hiz_buffer = rview.tex_get("HIZBUFFER");
+    ssr_params.pre_exposure = pre_exposure_;
 
     // BUG Cone tracing is not working properly, so we disable it for now.
     ssr_params.settings.fidelityfx.enable_cone_tracing = false;
@@ -2571,6 +2680,7 @@ void deferred::run_ssil_pass(const camera& camera,
     rparams.fill_ssil_params(ssil_params);
 
     ssil_params.hiz_buffer = rview.tex_get("HIZBUFFER");
+    ssil_params.pre_exposure = pre_exposure_;
 
     auto result = ssil_pass_.run(rview, ssil_params);
     rview.tex_get_or_emplace("SSIL") = result;
@@ -2637,6 +2747,7 @@ auto deferred::run_taa_pass(const camera& camera,
     // velocity pass is off, which drops the resolve back to camera-only depth reprojection.
     p.velocity = rview.tex_safe_get("VELOCITY");
     rparams.fill_taa_params(p);
+    p.pre_exposure = pre_exposure_;
     return taa_pass_.run(rview, p);
 }
 
@@ -2670,7 +2781,37 @@ auto deferred::run_fxaa_pass(gfx::render_view& rview,
     return fxaa_pass_.run(rview, params);
 }
 
+auto deferred::update_pre_exposure(gfx::render_view& rview, const run_params& params, bool is_camera_run)
+    -> pre_exposure_state
+{
+    auto& state = rview.data().get_or_emplace<pre_exposure_state>(pre_exposure_state::view_key);
+    state.previous = state.value;
+
+    float value = 1.0f;
+    if(is_camera_run && params.fill_hdr_params)
+    {
+        // The manual exposure scale (UE's FixedExposure) times the adapted exposure the
+        // occlusion-query channel delivered a few frames ago.
+        tonemapping_pass::run_params hdr;
+        params.fill_hdr_params(hdr);
+        value = hdr.config.exposure;
+        manual_exposure_ = hdr.config.exposure;
+        auto_exposure_active_ = reflection_screen_stack_enabled(params) && params.fill_auto_exposure_params != nullptr;
+        if(auto_exposure_active_)
+        {
+            value *= auto_exposure_pass_.resolve_exposure_readback();
+        }
+        if(pre_exposure_override_ > 0.0f)
+        {
+            value = pre_exposure_override_;
+        }
+    }
+    state.value = std::clamp(value, pre_exposure_state::min_value, pre_exposure_state::max_value);
+    return state;
+}
+
 void deferred::run_auto_exposure_pass(gfx::render_view& rview,
+                                      const camera& camera,
                                       const gfx::frame_buffer::ptr& input,
                                       const run_params& rparams,
                                       delta_t dt)
@@ -2683,6 +2824,10 @@ void deferred::run_auto_exposure_pass(gfx::render_view& rview,
     auto_exposure_pass::run_params params;
     params.input = input;
     params.delta_time = dt.count();
+    // The camera recorded last frame's matrices before this frame's passes ran.
+    const math::vec3 previous_position = math::inverse(camera.get_prev_view()).get_position();
+    params.camera_cut = math::distance(camera.get_position(), previous_position) > auto_exposure_pass::camera_cut_distance;
+    params.pre_exposure = pre_exposure_.value;
     rparams.fill_auto_exposure_params(params);
     auto_exposure_pass_.run(rview, params);
 }
@@ -2699,6 +2844,7 @@ auto deferred::run_bloom_pass(gfx::render_view& rview,
     bloom_pass::run_params params;
     params.input = input;
     rparams.fill_bloom_params(params);
+    params.pre_exposure = pre_exposure_.value;
 
     if(rparams.fill_auto_exposure_params)
     {
@@ -2731,10 +2877,33 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     params.defer_output_noise = fxaa_follows;
 
     rparams.fill_hdr_params(params);
+    params.pre_exposure = pre_exposure_.value;
 
     if(rparams.fill_auto_exposure_params)
     {
         params.exposure_texture = auto_exposure_pass_.get_exposure_texture(rview);
+        // Local exposure: the pass built the two lookups this frame exactly when the settings
+        // are not neutral, so a null view IS the off switch.
+        const auto local_view = auto_exposure_pass_.get_local_exposure_view(rview);
+        if(local_view.grid && local_view.blurred)
+        {
+            auto_exposure_pass::run_params exposure_params;
+            rparams.fill_auto_exposure_params(exposure_params);
+            const auto& exposure_config = exposure_params.config;
+            params.local_exposure.grid = local_view.grid;
+            params.local_exposure.blurred = local_view.blurred;
+            params.local_exposure.tiles_x = local_view.tiles_x;
+            params.local_exposure.tiles_y = local_view.tiles_y;
+            params.local_exposure.slices = float(auto_exposure_pass::local_exposure_slices);
+            params.local_exposure.min_log_lum = auto_exposure_pass::min_log_lum;
+            params.local_exposure.log_lum_range =
+                auto_exposure_pass::max_log_lum - auto_exposure_pass::min_log_lum;
+            params.local_exposure.highlight_contrast = exposure_config.local_highlight_contrast;
+            params.local_exposure.shadow_contrast = exposure_config.local_shadow_contrast;
+            params.local_exposure.detail_strength = exposure_config.local_detail_strength;
+            params.local_exposure.blurred_blend = exposure_config.local_blurred_blend;
+            params.local_exposure.middle_grey_bias = exposure_config.local_middle_grey_bias;
+        }
     }
 
     return tonemapping_pass_.run(rview, params);
@@ -2958,6 +3127,8 @@ void deferred::run_gi_world_probe_pass(const camera& camera,
     probe_params.environment_hash = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_revision_key, 0ull);
     probe_params.jitter_directions = gi.resolve.world_probe_jitter;
     probe_params.census = gi_quiescence_gate_pass_.is_census_armed();
+    // Only for the emitter-coverage bound's threshold; the atlas stores cached lighting.
+    probe_params.pre_exposure = pre_exposure_;
     gi_world_probe_pass_.run(rview, probe_params);
 }
 
@@ -3004,6 +3175,9 @@ void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
         frame_now - velocity_movers_frame_ <= uint64_t(math::max(grp.temporal_frames, 1));
     grp.resolution = gi_reflection_settings.resolve.resolution;
     grp.cam = &camera;
+    // The traced radiance, the probe layer it composites over and last frame's resolve are all
+    // in this run's pre-exposed space (tasks/auto_exposure_plan.md phase 4).
+    grp.pre_exposure = pre_exposure_;
     grp.surface_cache = &engine::context().get_cached<surface_cache_system>();
     grp.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
     gi_reflection_pass_.run(rview, grp);
@@ -3051,6 +3225,8 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
         // (first frame, probe captures) degrades those hits to the sky SH.
         params.prev_color = rview.tex_safe_get("PREV_SCENE_HDR");
         params.cam = &camera;
+        // The gather, its history and the resolve run in this run's pre-exposed space.
+        params.pre_exposure = pre_exposure_;
         params.surface_cache = &ctx.get_cached<surface_cache_system>();
         params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
         result = gi_resolve_pass_.run(rview, params);
@@ -3230,6 +3406,7 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     float u_params[4] = {float(shader_mode), debug_view_scale_, 0.0f, 0.0f};
 
     gfx::set_uniform(debug_visualization_program_.u_params, u_params);
+    gfx::set_uniform(debug_visualization_program_.u_pre_exposure, pre_exposure_.to_uniform().data());
 
     size_t i = 0;
     for(; i < gbuffer->get_attachment_count(); ++i)
@@ -3362,6 +3539,9 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     velocity_debug_program_.cache_uniforms();
     velocity_debug_program_.program = load_program("vs_clip_quad", "velocity/fs_velocity_debug");
+
+    exposure_debug_program_.cache_uniforms();
+    exposure_debug_program_.program = load_program("vs_clip_quad", "exposure/fs_exposure_debug");
 
     sphere_ref_probe_program_.cache_uniforms();
     sphere_ref_probe_program_.program = load_program("vs_clip_quad_ex", "reflection_probe/fs_sphere_reflection_probe");

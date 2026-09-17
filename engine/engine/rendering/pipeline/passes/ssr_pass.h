@@ -7,6 +7,7 @@
 #include <graphics/render_pass.h>
 #include "tonemapping_pass.h"
 #include "trace_resolution.h"
+#include <engine/rendering/pipeline/pre_exposure.h>
 #include <array>
 
 namespace unravel
@@ -108,6 +109,9 @@ public:
         /// content agrees with its neighbourhood box and loses only the release's tail.
         bool velocity_movers_recent = false;
         const camera* cam{};
+        /// The view's scene-color pre-exposure. PREV_SCENE_HDR and the history carry last
+        /// frame's; the trace output and RBUFFER carry this frame's.
+        pre_exposure_state pre_exposure{};
         ssr_settings settings;
     };
 
@@ -207,6 +211,7 @@ private:
         gfx::program::uniform_ptr s_depth;           // Depth buffer
         gfx::program::uniform_ptr s_hiz;             // Hi-Z buffer
         gfx::program::uniform_ptr s_color_blurred;   // Pre-blurred color buffer with mip chain
+        gfx::program::uniform_ptr u_pre_exposure;    // View pre-exposure (pre_exposure.sh)
 
         void cache_uniforms()
         {
@@ -221,6 +226,7 @@ private:
             cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_color_blurred, "s_color_blurred", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
         }
         
         auto is_valid() const -> bool
@@ -244,6 +250,7 @@ private:
         gfx::program::uniform_ptr s_velocity;         // Velocity buffer (RG total, BA object-only)
         gfx::program::uniform_ptr s_ssr_curr_hit_t;   // Trace mean hit distance THIS frame
         gfx::program::uniform_ptr s_ssr_hist_hit_t;   // Accumulated hit-distance history
+        gfx::program::uniform_ptr u_pre_exposure;     // View pre-exposure (pre_exposure.sh)
 
         void cache_uniforms()
         {
@@ -258,6 +265,7 @@ private:
             cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_ssr_curr_hit_t, "s_ssr_curr_hit_t", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_ssr_hist_hit_t, "s_ssr_hist_hit_t", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
         }
         
         auto is_valid() const -> bool
@@ -265,6 +273,9 @@ private:
             return program && program->is_valid();
         }
     } temporal_resolve_program_;
+
+    /// The view's pre-exposure for the current run; run() stores it for the internal passes.
+    pre_exposure_state pre_exposure_{};
 
     // Composite program for blending SSR with reflection probes
     struct composite_program : uniforms_cache

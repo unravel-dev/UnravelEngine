@@ -4,6 +4,7 @@
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/pipeline/passes/gi_quiescence_gate_pass.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 
 #include <graphics/render_pass.h>
 #include <graphics/render_view.h>
@@ -50,6 +51,11 @@ public:
         /// trace classifies its probes and counts its texels and the allocation pass counts
         /// its evictions. Off, that instrument work does not run.
         bool census = false;
+        /// The view's scene-color pre-exposure. The atlas itself stores CACHED lighting at a
+        /// fixed scale and is not pre-exposed; the trace needs the value only for its
+        /// emitter-coverage bound, which is expressed on pre-exposed radiance
+        /// (GI_MAX_RAY_RADIANCE) exactly as Lumen's radiosity clamp is.
+        pre_exposure_state pre_exposure{};
         /// When valid, both dispatches take their group counts from this buffer instead of
         /// the CPU-side counts - the GPU quiescence gate wrote the real counts or zeros there
         /// earlier this frame (gi_quiescence_gate_pass). The pass's CPU half still runs; it
@@ -114,9 +120,12 @@ private:
         gfx::program::uniform_ptr u_gi_world_probe_seed_atlas;
         /// xy = the window's R2 offset for the sub-texel direction jitter (double on the CPU).
         gfx::program::uniform_ptr u_gi_world_probe_jitter;
+        /// View pre-exposure (pre_exposure.sh): the emitter-coverage bound's threshold.
+        gfx::program::uniform_ptr u_pre_exposure;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
             cache_uniform(program.get(),
                           u_gi_world_probe_jitter,
                           "u_gi_world_probe_jitter",

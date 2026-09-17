@@ -66,6 +66,9 @@ enum class visualization_mode : int
     gi_temporal_cause = 39,
     /// Explicit emitter sampling census per screen probe (aimed energy share, aimed rays, emitters).
     gi_emitter_share = 40,
+    /// Auto exposure's own state over the lit image: the adaptation trace and this frame's
+    /// metering histogram (UE's Visualize HDR).
+    exposure = 41,
 };
 
 /// Menu grouping. Ordering here is the order the groups appear in the viewport menu.

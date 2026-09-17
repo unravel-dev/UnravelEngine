@@ -49,6 +49,7 @@
 #define GI_WORLD_PROBE_TRACE_STEPS      128
 #define GI_WORLD_PROBE_OPEN_CLEARANCE_VOXELS 2.0
 #define GI_WORLD_PROBE_DEPTH_CLAMP      1.5
+#define GI_WORLD_PROBE_HIT_DEPTH_CAP    0.99
 #define GI_WORLD_PROBE_WINDOW           16
 // Floor for the Chebyshev visibility weight in the DDGI read chain. This is the
 // through-wall bleed knob: an exterior sunlit probe adjacent to a sealed room
@@ -77,6 +78,7 @@
 #define GI_ADAPTIVE_RADIANCE_TOLERANCE  0.35
 #define GI_ADAPTIVE_REVALIDATE_FRAMES   8
 #define GI_MAX_RAY_RADIANCE             40.0
+#define GI_CACHED_LIGHTING_PRE_EXPOSURE 1.0
 #define GI_SCREEN_TRACE_MAX_STEPS       64
 #define GI_SCREEN_TRACE_MIN_MIP         1
 #define GI_SCREEN_TRACE_DEPTH_TOLERANCE 0.15

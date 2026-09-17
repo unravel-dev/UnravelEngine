@@ -97,7 +97,9 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
     tonemapping_program_.program->begin();
 
     const bool apply_output_noise = !params.defer_output_noise;
-    float tonemap[4] = {params.config.exposure,
+    // UE FinalLinearColor: SceneColor * OneOverPreExposure * GlobalExposure. The shader
+    // multiplies this by the adapted exposure texture.
+    float tonemap[4] = {params.config.exposure / std::max(params.pre_exposure, 1e-12f),
                         static_cast<float>(params.config.method),
                         (apply_output_noise && params.config.dithering) ? 1.0f : 0.0f,
                         1.0f};
@@ -137,6 +139,37 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
 
     gfx::set_texture(tonemapping_program_.s_input, 0, input->get_texture());
     gfx::set_texture(tonemapping_program_.s_exposure, 1, params.exposure_texture ? params.exposure_texture : default_textures::get().white_texture());
+
+    // LOCAL EXPOSURE. The lookups are point-fetched (the shader does its own trilinear gather
+    // over the flattened grid), and a 1x1 stand-in keeps the bindings valid while the enable
+    // lane below holds the shader on its no-op path.
+    const auto& local = params.local_exposure;
+    const bool local_active = local.is_active();
+    constexpr uint64_t local_sampler_flags = BGFX_SAMPLER_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    const auto stand_in = default_textures::get().black_texture();
+    gfx::set_texture(tonemapping_program_.s_local_exposure_grid,
+                     2,
+                     local_active ? local.grid : stand_in,
+                     local_sampler_flags);
+    gfx::set_texture(tonemapping_program_.s_local_exposure_blurred,
+                     3,
+                     local_active ? local.blurred : stand_in,
+                     local_sampler_flags);
+    const float local_params[4] = {local.highlight_contrast,
+                                   local.shadow_contrast,
+                                   local.detail_strength,
+                                   local.blurred_blend};
+    gfx::set_uniform(tonemapping_program_.u_local_exposure, local_params);
+    const float local_params2[4] = {std::log2(std::max(params.pre_exposure, 1e-12f)),
+                                    local.middle_grey_bias,
+                                    local_active ? 1.0f : 0.0f,
+                                    local.min_log_lum};
+    gfx::set_uniform(tonemapping_program_.u_local_exposure2, local_params2);
+    const float local_params3[4] = {1.0f / std::max(local.log_lum_range, 1e-4f),
+                                    local.slices,
+                                    local.tiles_x,
+                                    local.tiles_y};
+    gfx::set_uniform(tonemapping_program_.u_local_exposure3, local_params3);
     
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
     gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());

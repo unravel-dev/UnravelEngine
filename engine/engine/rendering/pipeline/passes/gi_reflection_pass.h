@@ -5,6 +5,7 @@
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/pre_exposure.h>
 
 #include <graphics/render_pass.h>
 #include <graphics/render_view.h>
@@ -78,6 +79,10 @@ public:
         const camera* cam{};
         surface_cache_system* surface_cache{};
         surface_cache_view* view_cache{};
+        /// The view's scene-color pre-exposure. The traced radiance, the accumulated mean and
+        /// the composited output are in pre-exposed space (Lumen's reflections): the stores
+        /// convert on read, the history and last frame's resolve by P / Pprev.
+        pre_exposure_state pre_exposure{};
     };
 
     ~gi_reflection_pass();
@@ -104,9 +109,12 @@ private:
         gfx::program::uniform_ptr s_gi_diffuse;
         gfx::program::uniform_ptr s_light_voxels;
         gfx::program::uniform_ptr s_gi_env_sh;
+        /// View pre-exposure (pre_exposure.sh): the space the traced radiance is written in.
+        gfx::program::uniform_ptr u_pre_exposure;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
@@ -146,9 +154,12 @@ private:
         gfx::program::uniform_ptr s_gi_normal;
         gfx::program::uniform_ptr s_gi_diffuse;
         gfx::program::uniform_ptr s_gi_env_sh;
+        /// View pre-exposure (pre_exposure.sh): the rough tier answers here, in the same space.
+        gfx::program::uniform_ptr u_pre_exposure;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_texel, "u_gi_reflection_texel", gfx::uniform_type::Vec4);
@@ -209,9 +220,12 @@ private:
         gfx::program::uniform_ptr u_gi_refl_prev_view_proj;
         /// x = 0 no previous colour, 1 colour only, 2 colour with view depth in alpha.
         gfx::program::uniform_ptr u_gi_reflection_screen;
+        /// View pre-exposure (pre_exposure.sh): the space the traced radiance is written in.
+        gfx::program::uniform_ptr u_pre_exposure;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_texel, "u_gi_reflection_texel", gfx::uniform_type::Vec4);
@@ -262,9 +276,12 @@ private:
         gfx::program::uniform_ptr s_refl_depth;
         gfx::program::uniform_ptr s_refl_velocity;
         gfx::program::uniform_ptr s_refl_normal;
+        /// View pre-exposure (pre_exposure.sh): corrects the history from last frame's scale.
+        gfx::program::uniform_ptr u_pre_exposure;
 
         void cache_uniforms()
         {
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
             cache_uniform(program.get(),
                           u_gi_refl_prev_view_proj,
                           "u_gi_refl_prev_view_proj",

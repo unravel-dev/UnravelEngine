@@ -271,6 +271,17 @@
       "probe spacings", "published: [RTXGI] probeMaxRayDistance = 1.5 * spacing during distance"   \
       " blending - Chebyshev only ever asks about the cage around the query, so recording depth"   \
       " beyond it just inflates variance")                                                         \
+    X(GI_WORLD_PROBE_HIT_DEPTH_CAP, 0.99f,                                                         \
+      "fraction of GI_WORLD_PROBE_DEPTH_CLAMP", "derived: the most a REAL hit stores in the"       \
+      " radiance atlas's hitT, so the clamp itself marks a miss alone. The convolve's sky share"   \
+      " counts texels at w >= 0.999 x clamp; capping hits AT the clamp (min(t, clamp)) made"       \
+      " every hit beyond 1.5 spacings read as sky - the Sponza deep corridor's cage reported 44"   \
+      " percent sky, 0.4 percent with the cap (2026-09-16, gi_probe_sky at 1x). The clamp is"      \
+      " 1.5 x 2^k m, so 0.99 of it keeps the same RGBA16F mantissa at every level and sits ~14"    \
+      " half ULPs under the 0.999 test. Costs: an all-far depth lobe's mean moves 1 percent, so"   \
+      " GiWorldProbeRadiance's parallax branch (radius < 0.999 x clamp) fires for far hits where"  \
+      " the raw direction served before, and the Chebyshev edge for corners at exactly 1.5"        \
+      " spacings becomes a short ramp")                                                            \
     X(GI_WORLD_PROBE_WINDOW, 16,                                                                   \
       "frames", "derived: GI_WORLD_PROBE_OCT_RADIANCE^2 / GI_WORLD_PROBE_RAYS_PER_FRAME - one"     \
       " full refresh of every direction per window; also the far-field reaction latency (R4:"      \
@@ -420,7 +431,25 @@
       " cap and the governor bound the screen estimator; the emitter cone fraction bounds a"       \
       " world-probe texel); the value remains the base of GI_NEE_CONTRIBUTION_MAX and the"        \
       " reflection tier's clamp on its voxel-measured LIT estimate (the exact emission rides"     \
-      " unclamped on top)")                                                                        \
+      " unclamped on top). It stays an ABSOLUTE radiance even though the per-frame GI now runs"   \
+      " pre-exposed, which is where it parts company with Lumen's MaxRayIntensity. Measured"      \
+      " 2026-09-16 (GI_TestSuite, pre-exposure on, floor pinned to the baseline's min_ev): read"  \
+      " as a pre-exposed number it is 0.109 of absolute radiance at the sealed cell's P = 367,"   \
+      " and it then fired on ordinary emitter-lit texels - that cell lost 24% of its display"     \
+      " mean, half to the reflection clamp and half to the world-probe emitter gate. Absolute"    \
+      " at both sites restores it (0.166 -> 0.234 against a 0.220 baseline). The world-probe"     \
+      " atlas is the deciding case: it is a persistent store shared across views, so a"           \
+      " view-relative bound would make its contents depend on what the camera metered when"       \
+      " each probe last traced")                                                                  \
+    X(GI_CACHED_LIGHTING_PRE_EXPOSURE, 1.0f,                                                       \
+      "scale", "fixed: the scale the PERSISTENT stores (light voxels, world-probe radiance and"   \
+      " irradiance, attribute emissive) hold their lighting at - Lumen's"                         \
+      " r.EyeAdaptation.CachedLightingPreExposure, which is 4 EV there. It must be a CONSTANT:"    \
+      " the stores outlive any one frame's exposure, so a view-dependent scale would have to"     \
+      " invalidate them on every adaptation step (UE resets its caches when the value changes)."  \
+      " 1 (0 EV) because this engine's light units already sit about 16x under UE's physical"     \
+      " scale, so float16 holds the stored range without an offset; the per-frame side gets its"  \
+      " precision from the view pre-exposure instead (gi_pre_exposure.sh)")                       \
     /* --- screen-trace-first (Lumen: HZB traces resolve the near field at pixel precision      \
        [S21 s66-68]; the SDF answers only where the screen cannot) --- */                          \
     X(GI_SCREEN_TRACE_MAX_STEPS, 64,                                                               \

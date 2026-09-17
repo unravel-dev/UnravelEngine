@@ -25,6 +25,8 @@ uniform vec4 u_cloudFrame;
 uniform vec4 u_cloudHistory;
 uniform mat4 u_prevViewProj;
 
+#include "../pre_exposure.sh"
+
 #define u_exposition u_parameters.z
 
 // x = jitter frame index (wrapped on the CPU), y = history valid (0/1).
@@ -195,6 +197,9 @@ void main()
         vec2 hist_uv = all(lessThan(abs(delta_px), vec2_splat(CLOUD_VOL_REPROJECT_SNAP_PX))) ? uv : prev_uv;
         hist_uv = clamp(hist_uv, texel * 0.5, vec2_splat(1.0) - texel * 0.5);
         history = sample_history(hist_uv, texel);
+        // Last frame's radiance was written under last frame's pre-exposure (UE cloud
+        // reconstruction history correction); transmittance is unitless.
+        history.rgb *= u_history_pre_exposure_correction;
         history_count = texture2DLod(s_cloudHistoryAux, hist_uv, 0.0).r * CLOUD_VOL_MAX_ACCUM;
     }
 
