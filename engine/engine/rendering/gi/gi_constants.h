@@ -35,17 +35,24 @@
       "vec4s", "derived: u_sdf_grid_params - [0] grid origin + cell size, [1] cell counts + the"   \
       " instance base, [2] x = the runtime experiment flags every tracer reads (in-session cost"   \
       " A/Bs, zero in production; surface_cache_system::set_experiment_flags)")                    \
-    X(GI_MESH_SDF_TRACE_RANGE, 6.0f,                                                               \
-      "m", "measured: per-instance (mesh-exact) tracing over the first metres of the"              \
-      " screen-probe short range (GI_SCREEN_PROBE_SHORT_RANGE), the cascade WITHOUT the surface"   \
-      " expand beyond. Lumen caps detail tracing at 2 m [S22 p44] and so did this until"           \
-      " 2026-09-13, when the cascade's fattening between 2 and 8 m made a surface's lighting"      \
-      " follow the camera (the same courtyard floor read E/pi 0.52 / 0.37 / 0.20 through the"      \
-      " level-0 / 1 / 2 fields; audit section 18) and 8 m went mesh-exact. 2026-09-14: that"       \
-      " fattening was the expand, not the field - 6 m exact with no expand past it matches 8 m"    \
-      " within 1.6 percent of indirect at five poses, sealed cells unchanged, gather dolly"        \
-      " 1.55 -> 1.20 ms; 6 m WITH the ramped expand darkened indirect 8-16 percent; 4 m with no"   \
-      " expand -2.6..-3.9 percent")                                                                \
+    X(GI_MESH_SDF_TRACE_RANGE, 1.8f,                                                               \
+      "m", "measured: per-instance (mesh-exact) tracing over the first metres of a gather ray,"    \
+      " the cascade beyond through SdfTraceClipmapLumen - the way UE 5.8 Lumen traces its"         \
+      " global distance field (half-voxel expand ramped over one voxel, no cone, exhaustion"       \
+      " is a miss). 1.8 m is Lumen's own detail-trace range (r.Lumen.TraceMeshSDFs, Epic)."        \
+      " History: 2 m [S22 p44] until 2026-09-13, then 8 m and 6 m while the cascade tier was"      \
+      " SdfTraceClipmap, whose ramped expand and one-voxel cone over-occluded the 2-8 m band"      \
+      " (6 m with the expand darkened indirect 8-16 percent; 2 m with no expand -3 percent"        \
+      " and -10..-25 percent on walls lit from 2-6 m). 2026-09-18, Sponza, probe spacing 8:"       \
+      " the per-instance walk past 1.8 m was 34 percent of the gather (6.9 -> 4.5 ms; 2.07"        \
+      " -> 1.39 ms at spacing 16) and the Lumen march costs what SdfTraceClipmap did (4.51"        \
+      " vs 4.46 ms). Five-pose Indirect view against the 6 m walk (curtains rebaked at"            \
+      " 0.1 m): court -0.3, arcade +1.5, gallery +0.8, hall +0.7, niche +5.2 percent, one"         \
+      " hall cell -0.087; sealed cells no worse (thin cell 0.0322 vs 0.0392). The slight"          \
+      " brightening was judged by the user's eye and approved."                                    \
+      " NOT SHORTER: no mesh tier at all (Lumen High) is 3x faster but 12-29 percent darker"       \
+      " with regions going black - the cascade answers the first metres of every ray, which"       \
+      " Lumen affords only because its screen traces resolve that near field")                     \
     X(GI_SCREEN_PROBE_SHORT_RANGE, 8.0f,                                                           \
       "m", "measured: how far a screen-probe ray establishes its own visibility before it"        \
       " completes from the world-probe radiance cache - the same at every camera distance. It"    \

@@ -164,6 +164,79 @@ bool HizHierarchicalRaymarchEx(sampler2D hiz_sampler,
     return i < max_iterations;
 }
 
+/// The march above with a CODED result, for consumers that act on how a miss happened:
+///   1 = hit (the march descended below the detailed mip),
+///   2 = ran past t_limit while in front of everything on screen - the whole range is verified
+///       empty of rendered geometry,
+///   3 = left the viewport,
+///   0 = iteration budget exhausted.
+/// `ss_last_above` receives the last screen position at which the ray was verified ABOVE the
+/// depth surface (the boundary of the last tile it skipped, or the origin): everything between
+/// the origin and that point is in front of the depth buffer, so an SDF march may resume there
+/// instead of re-marching the segment (Lumen's HZB trace writes the same distance on a miss).
+int HizHierarchicalRaymarchCode(sampler2D hiz_sampler,
+                                vec3 ss_ray_origin,
+                                vec3 ss_ray_dir,
+                                vec2 screen_size,
+                                int most_detailed_mip,
+                                int max_iterations,
+                                float t_limit,
+                                bool stop_outside,
+                                inout vec3 ss_hit_pos,
+                                inout vec3 ss_last_above)
+{
+    ss_last_above = ss_ray_origin;
+    vec3 ss_ray_dir_inv;
+    ss_ray_dir_inv.x = (ss_ray_dir.x != 0.0) ? rcp(ss_ray_dir.x) : FFX_SSSR_FLOAT_MAX;
+    ss_ray_dir_inv.y = (ss_ray_dir.y != 0.0) ? rcp(ss_ray_dir.y) : FFX_SSSR_FLOAT_MAX;
+    ss_ray_dir_inv.z = (ss_ray_dir.z != 0.0) ? rcp(ss_ray_dir.z) : FFX_SSSR_FLOAT_MAX;
+    int curr_mip = most_detailed_mip;
+    vec2 curr_mip_resolution = HizGetDepthMipResolution(hiz_sampler, curr_mip);
+    vec2 curr_mip_resolution_inv = rcp(curr_mip_resolution);
+    vec2 uv_offset = 0.005 * exp2(most_detailed_mip) / screen_size;
+    uv_offset.x = ss_ray_dir.x < 0.0 ? -uv_offset.x : uv_offset.x;
+    uv_offset.y = ss_ray_dir.y < 0.0 ? -uv_offset.y : uv_offset.y;
+    vec2 floor_offset;
+    floor_offset.x = (ss_ray_dir.x < 0.0) ? 0.0 : 1.0;
+    floor_offset.y = (ss_ray_dir.y < 0.0) ? 0.0 : 1.0;
+    float curr_t;
+    HizInitialAdvanceRay(ss_ray_origin, ss_ray_dir, ss_ray_dir_inv,
+                         curr_mip_resolution, curr_mip_resolution_inv,
+                         floor_offset, uv_offset,
+                         ss_hit_pos, curr_t);
+    int i = 0;
+    LOOP while(i < max_iterations && curr_mip >= most_detailed_mip)
+    {
+        if(curr_t > t_limit)
+        {
+            return 2;
+        }
+        if(stop_outside)
+        {
+            if(any(lessThan(ss_hit_pos.xy, vec2_splat(0.0))) ||
+               any(greaterThan(ss_hit_pos.xy, vec2_splat(1.0))))
+            {
+                return 3;
+            }
+        }
+        vec2 curr_mip_pos = curr_mip_resolution * ss_hit_pos.xy;
+        float surface_z = HizFetchDepth(hiz_sampler, curr_mip_pos, curr_mip);
+        bool skipped_tile = HizAdvanceRay(ss_ray_origin, ss_ray_dir, ss_ray_dir_inv,
+                                          curr_mip_pos, curr_mip_resolution_inv,
+                                          floor_offset, uv_offset,
+                                          surface_z, ss_hit_pos, curr_t);
+        if(skipped_tile)
+        {
+            ss_last_above = ss_hit_pos;
+        }
+        curr_mip += skipped_tile ? 1 : -1;
+        curr_mip_resolution *= skipped_tile ? 0.5 : 2.0;
+        curr_mip_resolution_inv *= skipped_tile ? 2.0 : 0.5;
+        i++;
+    }
+    return i < max_iterations ? 1 : 0;
+}
+
 bool HizHierarchicalRaymarch(sampler2D hiz_sampler,
                              vec3 ss_ray_origin,
                              vec3 ss_ray_dir,

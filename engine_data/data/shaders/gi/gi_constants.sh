@@ -11,7 +11,7 @@
 
 #define GI_TRACE_MAX_STEPS              64
 #define GI_SDF_GRID_PARAMS_VEC4         3
-#define GI_MESH_SDF_TRACE_RANGE         6.0
+#define GI_MESH_SDF_TRACE_RANGE         1.8
 #define GI_SCREEN_PROBE_SHORT_RANGE     8.0
 #define GI_RELIGHT_SHADOW_NEAR_FIELD    0.5
 #define GI_WORLD_PROBE_MESH_RANGE       6.0

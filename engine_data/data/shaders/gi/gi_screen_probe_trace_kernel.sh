@@ -40,8 +40,9 @@
  * [S21 s37-39].
  *
  * Rays are SHORTENED [S21 s69]: each establishes its own visibility out to
- * GI_SCREEN_PROBE_SHORT_RANGE (the same 8 m at every camera distance, mesh-exact over its whole
- * length), reads the light voxels at a hit, and COMPLETES from the world probes'
+ * GI_SCREEN_PROBE_SHORT_RANGE (the same 8 m at every camera distance: mesh-exact over its first
+ * GI_MESH_SDF_TRACE_RANGE metres, the cascade beyond), reads the light voxels at a hit, and
+ * COMPLETES from the world probes'
  * radiance atlas on a miss (sphere-parallax corrected). Sky enters through the world probes or
  * directly past the outermost cascade. Every ray therefore measures something: the gather owes
  * nothing to a screen-space history or an environment fallback.
@@ -200,6 +201,15 @@ SHARED vec2 s_frame_r2;
 /// 46 (40 x the largest coarse omega), so twice the store clamp leaves headroom without
 /// letting a genuine firefly through - the store clamp and the governor below still see it.
 #define GI_NEE_CONTRIBUTION_MAX (2.0 * GI_MAX_RAY_RADIANCE)
+/// How far before its last screen-verified point a ray's SDF march resumes after a screen
+/// march that left the viewport, ran out of iterations or found a crossing the validation
+/// rejected (Lumen's HZB trace writes the last visible distance on a miss and its SDF trace
+/// starts there). The verified point is the boundary of the last Hi-Z tile the march
+/// skipped, so the margin only has to cover that tile's own depth spread. Measured
+/// 2026-09-18 (Sponza, probe spacing 8): 0.15 and 0.5 m cost the same, the sealed cells of
+/// the GI test suite read identical to a march from t = 0, and the resume takes 9-13 percent
+/// off the trace. Owned here like GI_NEE_FIXED: a single consumer. 1e6 turns the resume off.
+#define GI_SCREEN_TRACE_RESUME_MARGIN 0.15
 SHARED vec3 s_nee_axis[GI_TRACE_SLOT_COUNT * GI_NEE_K];
 SHARED float s_nee_cos[GI_TRACE_SLOT_COUNT * GI_NEE_K];
 SHARED uint s_nee_rays[GI_TRACE_SLOT_COUNT * GI_NEE_K];
@@ -486,6 +496,16 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 	{
 		vec3 radiance = vec3_splat(0.0);
 		bool committed = false;
+		// The screen march ran the WHOLE short range in front of the depth buffer: the segment
+		// is verified empty of rendered geometry, so the ray completes from the world probes
+		// without an SDF march (Lumen's bReachedRadianceCache).
+		bool screen_reached = false;
+		// Where the SDF march starts: 0, or the last screen-verified distance less a margin
+		// when the march left the screen, ran out of iterations or found a crossing the
+		// validation rejected (Lumen writes that distance on a miss and its SDF trace resumes
+		// there). Measured 2026-09-18 at probe spacing 8: 84 percent of rays fall through to
+		// the SDF after a march that verified their first ~1.5 m.
+		float sdf_t_min = 0.0;
 		// The hit landed on moving geometry (see s_moving_rays).
 		bool moving = false;
 		// 1 = screen commit, 2 = SDF hit, 3 = completion; 1 feeds the probe's screen share.
@@ -525,14 +545,17 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 					t_limit = 1.05 * dot(ss_delta, ss_dir) / max(dot(ss_dir, ss_dir), 1e-12);
 				}
 				vec3 ss_hit = vec3_splat(0.0);
+				vec3 ss_last_above = vec3_splat(0.0);
 				// Mip-1 floor (GI_SCREEN_TRACE_MIN_MIP): these rays are cone-amortized over a
 				// probe tile, so a mip-0 walk buys sub-pixel precision below the cone footprint
 				// at twice the traversal cost. Validation still reads mip-0 depth; a lost
 				// commit falls through to the SDF, which is the watertight answer anyway.
-				bool marched = HizHierarchicalRaymarchEx(s_hiz, s_ss_origin[slot], ss_dir,
-				                                         s_screen_size, GI_SCREEN_TRACE_MIN_MIP,
-				                                         GI_SCREEN_TRACE_MAX_STEPS, t_limit, true,
-				                                         ss_hit);
+				int march_code = HizHierarchicalRaymarchCode(s_hiz, s_ss_origin[slot], ss_dir,
+				                                             s_screen_size, GI_SCREEN_TRACE_MIN_MIP,
+				                                             GI_SCREEN_TRACE_MAX_STEPS, t_limit, true,
+				                                             ss_hit, ss_last_above);
+				bool marched = march_code == 1;
+				screen_reached = march_code == 2;
 				BRANCH
 				if(marched)
 				{
@@ -610,19 +633,29 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 						}
 					}
 				}
+				if(!committed && !screen_reached)
+				{
+					vec3 vs_last = HizComputeViewspacePosition(ss_last_above.xy, ss_last_above.z);
+					sdf_t_min = max(length(vs_last - s_vs_origin[slot]) - GI_SCREEN_TRACE_RESUME_MARGIN, 0.0);
+				}
 			}
 		}
 		BRANCH
 		if(!committed)
 		{
-			// Mesh-exact over GI_MESH_SDF_TRACE_RANGE, then the cascade WITHOUT the surface expand
-			// (expand start -1): the exact first metres are the thin-wall defence, and past them the
-			// ramped expand closed the arcades and columns a radiance ray should see through - the
-			// world-probe rays' finding again (GI_MESH_SDF_TRACE_RANGE, GI_WORLD_PROBE_MESH_RANGE).
-			SdfRayHit hit = SdfTraceRayEx(s_origin[slot], sample_dir, s_short_range[slot],
-			                              GI_MESH_SDF_TRACE_RANGE, GI_TRACE_MAX_STEPS,
-			                              GI_PROBE_TRACE_SURFACE_BIAS, GI_PROBE_TRACE_RELAXATION,
-			                              true, -1.0);
+			// Mesh-exact over GI_MESH_SDF_TRACE_RANGE from wherever the screen march stopped
+			// vouching, then the cascade the way Lumen traces its global distance field
+			// (SdfTraceRayGather, SdfTraceClipmapLumen): the exact first metres are the thin-wall
+			// defence and the contact detail, the per-instance walk past them was two thirds of
+			// this pass (GI_MESH_SDF_TRACE_RANGE).
+			SdfRayHit hit = SdfMakeMiss();
+			BRANCH
+			if(!screen_reached)
+			{
+				hit = SdfTraceRayGather(s_origin[slot], sample_dir, min(sdf_t_min, s_short_range[slot]),
+				                        s_short_range[slot], GI_MESH_SDF_TRACE_RANGE, GI_TRACE_MAX_STEPS,
+				                        GI_PROBE_TRACE_SURFACE_BIAS, GI_PROBE_TRACE_RELAXATION, true);
+			}
 			if(hit.hit)
 			{
 				answered_tier = 2;
@@ -640,6 +673,12 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 					moving = speed > GI_TEMPORAL_MOVING_SPEED * probe_depth;
 				}
 				vec3 hit_position = s_origin[slot] + sample_dir * hit.t;
+				// A CASCADE hit is pulled back by the march's surface expand; the light voxels are a
+				// SURFACE store, so the read steps onto the surface estimate (hit_field).
+				if(hit.instance_index == SDF_NO_INSTANCE)
+				{
+					hit_position += sample_dir * max(hit.hit_field, 0.0);
+				}
 				vec3 hit_normal = hit.normal;
 				if(dot(hit_normal, sample_dir) > 0.0)
 				{
