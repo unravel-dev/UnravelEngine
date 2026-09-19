@@ -9,6 +9,8 @@ namespace shortcuts
 {
 // Modifier keys
 inline constexpr ImGuiKey modifier_camera_speed_boost = ImGuiKey_LeftShift;
+// Held in the scene view: left drag tumbles around the pivot, right drag dollies towards it.
+inline constexpr ImGuiKey modifier_camera_orbit = ImGuiKey_LeftAlt;
 inline constexpr ImGuiKey modifier_snapping = ImGuiKey_LeftCtrl;
 // Held while dropping an asset into the viewport to align it to the surface normal.
 inline constexpr ImGuiKey modifier_drop_align_to_surface = ImGuiKey_LeftAlt;
@@ -29,6 +31,9 @@ inline constexpr ImGuiKey camera_forward = ImGuiKey_W;
 inline constexpr ImGuiKey camera_backward = ImGuiKey_S;
 inline constexpr ImGuiKey camera_left = ImGuiKey_A;
 inline constexpr ImGuiKey camera_right = ImGuiKey_D;
+// World-space up / down while flying (the transform tools only take these keys outside a fly drag).
+inline constexpr ImGuiKey camera_up = ImGuiKey_E;
+inline constexpr ImGuiKey camera_down = ImGuiKey_Q;
 
 // Content browser operations
 inline constexpr ImGuiKey rename_item = ImGuiKey_F2;

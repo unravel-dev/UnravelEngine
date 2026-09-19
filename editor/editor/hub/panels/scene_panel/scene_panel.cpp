@@ -39,9 +39,11 @@
 #include <seq/seq.h>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem/filesystem.h>
 #include <logging/logging.h>
 #include <numeric>
+#include <optional>
 
 namespace unravel
 {
@@ -61,7 +63,6 @@ void manipulation_gizmos(bool& gizmo_at_center,
                          entt::handle center,
                          entt::handle editor_camera,
                          editing_manager& em);
-void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& acceleration, bool& is_dragging);
 
 // Material preview state
 struct material_preview_state
@@ -246,79 +247,68 @@ void reset_preview_state()
 // Camera Movement Helper Functions
 // ============================================================================
 
-auto calculate_movement_speed(float base_speed, bool speed_boost_active, float multiplier) -> float
+// Navigation follows the UE level viewport. UE's reference point is camera speed 1: a 20 m/s
+// flight (200 m/s^2 against a drag of 10 1/s), a pan of 1 cm per pixel and a 96 cm dolly per wheel
+// notch. Pan and dolly keep those ratios to the fly speed here, so the one speed setting fits the
+// whole navigation to the scale of the scene.
+constexpr float CAMERA_REFERENCE_FLY_SPEED = 20.0f;
+constexpr float CAMERA_PAN_PER_PIXEL = 0.01f / CAMERA_REFERENCE_FLY_SPEED;
+constexpr float CAMERA_DOLLY_PER_NOTCH = 0.96f / CAMERA_REFERENCE_FLY_SPEED;
+// The wheel changes the fly speed by 10% per notch while flying.
+constexpr float CAMERA_FLY_SPEED_STEP = 1.1f;
+constexpr float CAMERA_FLY_SPEED_MIN = 0.1f;
+constexpr float CAMERA_FLY_SPEED_MAX = 640.0f;
+constexpr float CAMERA_FLY_SPEED_BOOST = 5.0f;
+// The viewport shows the fly speed for this long after the wheel changed it, at this share of its height.
+constexpr float CAMERA_FLY_SPEED_HINT_DURATION = 1.5f;
+constexpr float CAMERA_FLY_SPEED_HINT_HEIGHT = 0.85f;
+// Mouse look in degrees per pixel.
+constexpr float CAMERA_ROTATION_SPEED = 0.1f;
+// A hitch must not throw the camera past the point the user was heading for.
+constexpr float CAMERA_MAX_TIME_STEP = 1.0f / 30.0f;
+// The orbit pivot lies on the view axis, like UE's look-at point. UE carries its distance along
+// from the last focus; here it is the depth of the selection, which is the same point right after
+// a focus and needs no bookkeeping in between. Without a selection ahead it falls back to this.
+constexpr float CAMERA_ORBIT_DEFAULT_DISTANCE = 10.0f;
+constexpr float CAMERA_ORBIT_MIN_DISTANCE = 0.1f;
+
+auto get_camera_fly_speed_boost() -> float
 {
-    float movement_speed = base_speed;
-    if(speed_boost_active)
-    {
-        movement_speed *= multiplier;
-    }
-    return movement_speed;
+    return ImGui::IsKeyDown(shortcuts::modifier_camera_speed_boost) ? CAMERA_FLY_SPEED_BOOST : 1.0f;
 }
 
-void handle_middle_mouse_panning(entt::handle camera, float movement_speed, float dt)
+void handle_middle_mouse_panning(entt::handle camera, float fly_speed)
 {
     if(!ImGui::IsMouseDown(ImGuiMouseButton_Middle))
     {
         return;
     }
-
-    auto delta_move = ImGui::GetIO().MouseDelta;
+    // A drag is a direct manipulation: it maps pixels to distance, without the frame time and
+    // without momentum.
+    const ImVec2 delta_move = ImGui::GetIO().MouseDelta;
+    const float pan_per_pixel = fly_speed * CAMERA_PAN_PER_PIXEL;
     auto& transform = camera.get<transform_component>();
-
-    if(delta_move.x != 0)
-    {
-        transform.move_by_local({-1 * delta_move.x * movement_speed * dt, 0.0f, 0.0f});
-    }
-    if(delta_move.y != 0)
-    {
-        transform.move_by_local({0.0f, delta_move.y * movement_speed * dt, 0.0f});
-    }
+    transform.move_by_local({-delta_move.x * pan_per_pixel, delta_move.y * pan_per_pixel, 0.0f});
 }
 
-auto collect_movement_input(float& max_hold, bool& is_dragging) -> math::vec3
+auto get_key_axis(ImGuiKey positive_key, ImGuiKey negative_key) -> float
 {
-    math::vec3 movement_input{0.0f, 0.0f, 0.0f};
+    const float positive = ImGui::IsKeyDown(positive_key) ? 1.0f : 0.0f;
+    const float negative = ImGui::IsKeyDown(negative_key) ? 1.0f : 0.0f;
+    return positive - negative;
+}
 
-    auto is_key_down = [&](ImGuiKey k) -> bool
-    {
-        bool down = ImGui::IsKeyDown(k);
-        if(down)
-        {
-            auto data = ImGui::GetKeyData(ImGui::GetCurrentContext(), k);
-            max_hold = std::max(max_hold, data->DownDuration);
-        }
-        return down;
-    };
-
-    if(is_dragging)
-    {
-        float move_speed = 4.0f;
-        if(is_key_down(shortcuts::camera_forward))
-        {
-            movement_input.z += move_speed;
-        }
-        if(is_key_down(shortcuts::camera_backward))
-        {
-            movement_input.z -= move_speed;
-        }
-        if(is_key_down(shortcuts::camera_right))
-        {
-            movement_input.x += move_speed;
-        }
-        if(is_key_down(shortcuts::camera_left))
-        {
-            movement_input.x -= move_speed;
-        }
-    }
-
-    auto delta_wheel = ImGui::GetIO().MouseWheel;
-    if(delta_wheel != 0)
-    {
-        movement_input.z += 15.0f * delta_wheel;
-    }
-
-    return movement_input;
+auto collect_fly_direction(const transform_component& transform) -> math::vec3
+{
+    const float right = get_key_axis(shortcuts::camera_right, shortcuts::camera_left);
+    const float forward = get_key_axis(shortcuts::camera_forward, shortcuts::camera_backward);
+    const float up = get_key_axis(shortcuts::camera_up, shortcuts::camera_down);
+    // Up / down stay on the world axis whatever the pitch, the way UE flies.
+    const math::vec3 world_up{0.0f, 1.0f, 0.0f};
+    const math::vec3 direction =
+        transform.get_x_axis_global() * right + transform.get_z_axis_global() * forward + world_up * up;
+    const float length = math::length(direction);
+    return length > 1.0f ? direction / length : direction;
 }
 
 auto handle_mouse_rotation(entt::handle camera, float rotation_speed, bool is_dragging) -> bool
@@ -343,114 +333,80 @@ auto handle_mouse_rotation(entt::handle camera, float rotation_speed, bool is_dr
     return false;
 }
 
-void update_movement_acceleration(math::vec3& move_dir, float& acceleration, const math::vec3& input, bool any_input)
+void update_fly_drag_cursor()
 {
-    if(any_input)
+    ImGui::WrapMousePos();
+    if(ImGui::IsWindowHovered())
     {
-        if(acceleration < 0.1f)
-        {
-            acceleration = 0.1f;
-        }
-        acceleration *= 1.5f;
-        acceleration = std::min(1.0f, acceleration);
-        move_dir.x = input.x;
-        move_dir.z = input.z;
-    }
-    else if(acceleration > 0.0001f)
-    {
-        acceleration *= 0.85f;
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Cross);
     }
 }
 
-void apply_movement(entt::handle camera,
-                    const math::vec3& move_dir,
-                    float movement_speed,
-                    float acceleration,
-                    float max_hold,
-                    float hold_speed,
-                    float dt)
+void claim_camera_orbit_modifier()
 {
-    if(acceleration <= 0.0001f)
-    {
-        return;
-    }
+    // An Alt tap toggles ImGui's menu layer on release; an owned key does not count as a tap.
+    ImGui::SetKeyOwner(ImGuiMod_Alt, ImGui::GetID("scene_camera_orbit"));
+}
 
+auto calc_selection_center(const std::vector<entt::handle>& selections) -> std::optional<math::vec3>
+{
+    math::bbox bounds;
+    for(const auto& entity : selections)
+    {
+        if(!entity.valid() || !entity.all_of<transform_component>())
+        {
+            continue;
+        }
+        const math::bbox entity_bounds = defaults::calc_bounds_global(entity);
+        bounds.add_point(entity_bounds.min);
+        bounds.add_point(entity_bounds.max);
+    }
+    if(!bounds.is_populated())
+    {
+        return std::nullopt;
+    }
+    return bounds.get_center();
+}
+
+auto calc_orbit_distance(const transform_component& transform, const std::vector<entt::handle>& selections) -> float
+{
+    const std::optional<math::vec3> selection_center = calc_selection_center(selections);
+    if(!selection_center)
+    {
+        return CAMERA_ORBIT_DEFAULT_DISTANCE;
+    }
+    const math::vec3 to_selection = *selection_center - transform.get_position_global();
+    const float depth = math::dot(to_selection, transform.get_z_axis_global());
+    return depth > CAMERA_ORBIT_MIN_DISTANCE ? depth : CAMERA_ORBIT_DEFAULT_DISTANCE;
+}
+
+auto orbit_camera(entt::handle camera, const math::vec3& pivot) -> bool
+{
     auto& transform = camera.get<transform_component>();
-
-    if(!math::any(math::epsilonNotEqual(move_dir, math::vec3(0.0f, 0.0f, 0.0f), math::epsilon<float>())))
+    const float distance = math::length(transform.get_position_global() - pivot);
+    if(!handle_mouse_rotation(camera, CAMERA_ROTATION_SPEED, true))
     {
-        return;
+        return false;
     }
-
-    float adjusted_dt = dt;
-    if(math::epsilonNotEqual(move_dir.x, 0.0f, math::epsilon<float>()) ||
-       math::epsilonNotEqual(move_dir.z, 0.0f, math::epsilon<float>()))
-    {
-        adjusted_dt += max_hold * hold_speed;
-    }
-
-    auto length = math::length(move_dir);
-    transform.move_by_local(math::normalize(move_dir) * length * movement_speed * adjusted_dt * acceleration);
+    // The same turn as the mouse look, then back onto the sphere around the pivot: the view keeps
+    // pointing at it from the same distance.
+    const float orbit_distance = math::max(distance, CAMERA_ORBIT_MIN_DISTANCE);
+    transform.set_position_global(pivot - transform.get_z_axis_global() * orbit_distance);
+    return true;
 }
 
-void handle_camera_movement(entt::handle camera, math::vec3& move_dir, float& acceleration, bool& is_dragging)
+auto handle_mouse_dolly(entt::handle camera, float fly_speed) -> bool
 {
-    if(!ImGui::IsWindowFocused())
+    // UE's orbit zoom: right or down moves in, at the pan's distance per pixel.
+    const ImVec2 delta_move = ImGui::GetIO().MouseDelta;
+    const float dolly_pixels = delta_move.x + delta_move.y;
+    if(dolly_pixels == 0.0f)
     {
-        return;
+        return false;
     }
-
-    if(!ImGui::IsWindowHovered() && !is_dragging)
-    {
-        return;
-    }
-
-    // Movement parameters
-    constexpr float base_movement_speed = 2.0f;
-    constexpr float rotation_speed = 0.1f;
-    constexpr float speed_multiplier = 5.0f;
-    constexpr float hold_speed = 0.1f;
-    float fixed_dt = ImMin(0.0333f, ImGui::GetIO().DeltaTime); // Fixed delta time
-
-    bool speed_boost_active = ImGui::IsKeyDown(shortcuts::modifier_camera_speed_boost);
-    float movement_speed = calculate_movement_speed(base_movement_speed, speed_boost_active, speed_multiplier);
-
-    // Handle middle mouse panning
-    handle_middle_mouse_panning(camera, movement_speed, fixed_dt);
-
-    // Handle right mouse dragging
-    is_dragging = ImGui::IsMouseDown(ImGuiMouseButton_Right);
-
-    if(is_dragging)
-    {
-        ImGui::WrapMousePos();
-        if(ImGui::IsWindowHovered())
-        {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_Cross);
-        }
-    }
-
-    // Collect movement input (works for both dragging and non-dragging)
-    float max_hold = 0.0f;
-    math::vec3 movement_input = collect_movement_input(max_hold, is_dragging);
-    bool any_input = math::any(math::epsilonNotEqual(movement_input, math::vec3(0.0f), math::epsilon<float>()));
-
-    // Handle mouse rotation (only when dragging)
-    bool any_rotation = handle_mouse_rotation(camera, rotation_speed, is_dragging);
-
-    // Process camera input with acceleration
-    update_movement_acceleration(move_dir, acceleration, movement_input, any_input);
-
-    if(any_input || any_rotation)
-    {
-        seq::scope::stop_all("camera_focus");
-    }
-
-    if(acceleration > 0.0001f)
-    {
-        // Continue movement with deceleration when not actively inputting
-        apply_movement(camera, move_dir, movement_speed, acceleration, 0.0f, hold_speed, fixed_dt);
-    }
+    auto& transform = camera.get<transform_component>();
+    transform.move_by_local({0.0f, 0.0f, dolly_pixels * fly_speed * CAMERA_PAN_PER_PIXEL});
+    return true;
 }
 
 // ============================================================================
@@ -1332,7 +1288,9 @@ void scene_panel::deinit(rtti::context& ctx)
 
 void scene_panel::handle_drag_selection(rtti::context& ctx, const camera& camera, editing_manager& em)
 {
-    if(!ImGui::IsAnyItemHovered() && !ImGuizmo::IsOver() && ImGui::IsWindowHovered())
+    // The orbit modifier hands the left drag to the camera.
+    const bool is_camera_drag = is_orbiting_ || ImGui::IsKeyDown(shortcuts::modifier_camera_orbit);
+    if(!is_camera_drag && !ImGui::IsAnyItemHovered() && !ImGuizmo::IsOver() && ImGui::IsWindowHovered())
     {
         if(ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
@@ -1530,6 +1488,7 @@ void scene_panel::reset_camera(rtti::context& ctx)
         scene::destroy_entity(camera);
     }
     defaults::create_camera_entity(ctx, panel_scene_, "Scene Camera");
+    camera_controller_.stop();
 }
 
 auto scene_panel::get_center() -> entt::handle
@@ -1867,6 +1826,14 @@ void scene_panel::draw_camera_settings_menu(rtti::context& ctx)
 
         ImGui::SetItemTooltipEx("%s", "Reset the Scene camera.");
 
+        ImGui::SliderFloat("Fly Speed",
+                           &camera_fly_speed_,
+                           CAMERA_FLY_SPEED_MIN,
+                           CAMERA_FLY_SPEED_MAX,
+                           "%.2f m/s",
+                           ImGuiSliderFlags_Logarithmic);
+        ImGui::SetItemTooltipEx("%s", "Speed of the fly camera. The mouse wheel changes it while flying.");
+
         entt::meta_any cam = get_camera();
         inspect_var(ctx, cam, make_proxy(cam));
 
@@ -1903,10 +1870,17 @@ void scene_panel::handle_viewport_interaction(rtti::context& ctx, const camera& 
         if(!is_over_active_gizmo)
         {
             ImGui::SetWindowFocus();
-            auto& pick_manager = ctx.get_cached<picking_manager>();
-            auto pos = ImGui::GetMousePos();
+            if(ImGui::IsKeyDown(shortcuts::modifier_camera_orbit))
+            {
+                begin_camera_orbit(em);
+            }
+            else
+            {
+                auto& pick_manager = ctx.get_cached<picking_manager>();
+                auto pos = ImGui::GetMousePos();
 
-            pick_manager.request_pick(camera, em.get_select_mode(), {pos.x, pos.y});
+                pick_manager.request_pick(camera, em.get_select_mode(), {pos.x, pos.y});
+            }
         }
     }
 
@@ -1944,6 +1918,122 @@ void scene_panel::handle_keyboard_shortcuts(editing_manager& em)
     {
         duplicate_entities(selections);
     }
+}
+
+auto scene_panel::handle_camera_wheel(const math::vec3& view_direction, float fly_speed) -> bool
+{
+    const float wheel = ImGui::GetIO().MouseWheel;
+    if(wheel == 0.0f)
+    {
+        return false;
+    }
+    if(is_dragging_)
+    {
+        const float stepped_speed = camera_fly_speed_ * std::pow(CAMERA_FLY_SPEED_STEP, wheel);
+        camera_fly_speed_ = math::clamp(stepped_speed, CAMERA_FLY_SPEED_MIN, CAMERA_FLY_SPEED_MAX);
+        camera_fly_speed_hint_time_ = CAMERA_FLY_SPEED_HINT_DURATION;
+        return false;
+    }
+    // The dolly rides the same momentum as the flight instead of stepping the camera.
+    camera_controller_.add_travel(view_direction * (wheel * fly_speed * CAMERA_DOLLY_PER_NOTCH));
+    return true;
+}
+
+void scene_panel::begin_camera_orbit(const editing_manager& em)
+{
+    auto camera = get_camera();
+    if(!camera)
+    {
+        return;
+    }
+    const auto& transform = camera.get<transform_component>();
+    const auto selections = em.try_get_selections_as_copy<entt::handle>();
+    const float distance = calc_orbit_distance(transform, selections);
+    camera_orbit_pivot_ = transform.get_position_global() + transform.get_z_axis_global() * distance;
+    is_orbiting_ = true;
+    // A coast would pull the camera off the sphere around the pivot.
+    camera_controller_.stop();
+}
+
+auto scene_panel::handle_camera_mouse_drag(entt::handle camera, float fly_speed) -> bool
+{
+    if(is_orbiting_)
+    {
+        return orbit_camera(camera, camera_orbit_pivot_);
+    }
+    if(is_dragging_ && ImGui::IsKeyDown(shortcuts::modifier_camera_orbit))
+    {
+        return handle_mouse_dolly(camera, fly_speed);
+    }
+    return handle_mouse_rotation(camera, CAMERA_ROTATION_SPEED, is_dragging_);
+}
+
+auto scene_panel::process_camera_input(entt::handle camera, float fly_speed) -> math::vec3
+{
+    handle_middle_mouse_panning(camera, fly_speed);
+    is_dragging_ = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+    const bool is_orbit_modifier_down = ImGui::IsKeyDown(shortcuts::modifier_camera_orbit);
+    if(is_dragging_ || is_orbiting_)
+    {
+        update_fly_drag_cursor();
+    }
+    if(is_orbit_modifier_down && (is_dragging_ || is_orbiting_))
+    {
+        claim_camera_orbit_modifier();
+    }
+    const bool any_view_change = handle_camera_mouse_drag(camera, fly_speed);
+    const auto& transform = camera.get<transform_component>();
+    const math::vec3 no_direction{0.0f, 0.0f, 0.0f};
+    const bool is_flying = is_dragging_ && !is_orbiting_ && !is_orbit_modifier_down;
+    const math::vec3 fly_direction = is_flying ? collect_fly_direction(transform) : no_direction;
+    const bool any_flight = math::dot(fly_direction, fly_direction) > 0.0f;
+    const bool any_dolly = handle_camera_wheel(transform.get_z_axis_global(), fly_speed);
+    if(any_flight || any_dolly || any_view_change)
+    {
+        seq::scope::stop_all("camera_focus");
+    }
+    return fly_direction;
+}
+
+void scene_panel::handle_camera_movement(entt::handle camera)
+{
+    const float dt = ImMin(CAMERA_MAX_TIME_STEP, ImGui::GetIO().DeltaTime);
+    const float fly_speed = camera_fly_speed_ * get_camera_fly_speed_boost();
+    // The orbit ends with the button wherever the release happens, also while the panel is out of focus.
+    is_orbiting_ = is_orbiting_ && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool is_camera_drag = is_dragging_ || is_orbiting_;
+    const bool can_navigate = ImGui::IsWindowFocused() && (ImGui::IsWindowHovered() || is_camera_drag);
+    math::vec3 fly_direction{0.0f, 0.0f, 0.0f};
+    if(can_navigate)
+    {
+        fly_direction = process_camera_input(camera, fly_speed);
+    }
+    // The simulation also runs without the input: a momentum frozen while the panel is out of
+    // focus would fire the moment the focus returns.
+    const math::vec3 displacement = camera_controller_.update(fly_direction, fly_speed, dt);
+    if(math::dot(displacement, displacement) > 0.0f)
+    {
+        camera.get<transform_component>().move_by_global(displacement);
+    }
+}
+
+void scene_panel::draw_camera_fly_speed_hint(const ImVec2& size, const ImVec2& pos)
+{
+    if(camera_fly_speed_hint_time_ <= 0.0f)
+    {
+        return;
+    }
+    camera_fly_speed_hint_time_ -= ImGui::GetIO().DeltaTime;
+    const std::string text = fmt::format("Fly Speed {:.2f} m/s", camera_fly_speed_);
+    const ImVec2 text_size = ImGui::CalcTextSize(text.c_str());
+    const ImVec2 padding = ImGui::GetStyle().FramePadding;
+    const ImVec2 text_pos{pos.x + (size.x - text_size.x) * 0.5f, pos.y + size.y * CAMERA_FLY_SPEED_HINT_HEIGHT};
+    auto draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddRectFilled(text_pos - padding,
+                             text_pos + text_size + padding,
+                             ImGui::GetColorU32(ImGuiCol_PopupBg),
+                             ImGui::GetStyle().FrameRounding);
+    draw_list->AddText(text_pos, ImGui::GetColorU32(ImGuiCol_Text), text.c_str());
 }
 
 void scene_panel::setup_camera_viewport(camera_component& camera_comp, const ImVec2& size, const ImVec2& pos)
@@ -1993,7 +2083,8 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
     handle_keyboard_shortcuts(em);
 
     manipulation_gizmos(gizmo_at_center_, was_using_gizmo_, get_center(), camera_entity, em);
-    handle_camera_movement(camera_entity, move_dir_, acceleration_, is_dragging_);
+    handle_camera_movement(camera_entity);
+    draw_camera_fly_speed_hint(size, pos);
     draw_selected_camera(ctx, camera_entity, size);
 
     // {

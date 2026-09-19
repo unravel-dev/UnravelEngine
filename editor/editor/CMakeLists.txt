@@ -38,6 +38,11 @@ if(UNRAVEL_UNITY_BUILD AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
         UNITY_BUILD ON
         UNITY_BUILD_UNIQUE_ID "ANONYMOUS"
     )
+    # httplib.h rejects a translation unit whose Windows headers were already included below the
+    # Windows 10 API level, and the engine's platform config defaults _WIN32_WINNT to Windows 7.
+    # Inside a batch it compiled only while no engine header came first, which changed with every
+    # added source file. Its only includer builds on its own, as it does without unity builds.
+    set_source_files_properties(system/mcp_manager.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 endif()
 
 if (CMAKE_C_COMPILER_ID MATCHES GNU|Clang AND NOT WIN32)

@@ -3,6 +3,7 @@
 #include <editor/imgui/integration/imgui.h>
 #include <math/math.h>
 
+#include "camera_controller.h"
 #include "gizmos/gizmos_renderer.h"
 #include "../viewport_stats_overlay.h"
 #include "../visualization_menu.h"
@@ -84,6 +85,16 @@ private:
     // UI interaction functions
     void handle_viewport_interaction(rtti::context& ctx, const camera& camera, editing_manager& em);
     void handle_keyboard_shortcuts(editing_manager& em);
+    void handle_camera_movement(entt::handle camera);
+    /// Applies pan, mouse look and wheel; returns the world-space fly direction of the held keys.
+    auto process_camera_input(entt::handle camera, float fly_speed) -> math::vec3;
+    /// Wheel while flying changes the fly speed, otherwise it dollies. Returns true for a dolly.
+    auto handle_camera_wheel(const math::vec3& view_direction, float fly_speed) -> bool;
+    /// Orbit, dolly or mouse look, whichever drag is held. Returns true when the view changed.
+    auto handle_camera_mouse_drag(entt::handle camera, float fly_speed) -> bool;
+    /// Fixes the orbit pivot on the view axis, at the depth of the selection when there is one.
+    void begin_camera_orbit(const editing_manager& em);
+    void draw_camera_fly_speed_hint(const ImVec2& size, const ImVec2& pos);
     void setup_camera_viewport(camera_component& camera_comp, const ImVec2& size, const ImVec2& pos);
     void draw_scene_viewport(rtti::context& ctx, const ImVec2& size, const ImVec2& pos);
 
@@ -98,8 +109,14 @@ private:
 
     bool gizmo_at_center_{true};
 
-    float acceleration_{};
-    math::vec3 move_dir_{};
+    camera_controller camera_controller_{};
+    /// Speed the fly camera settles at, in metres per second. The wheel changes it while flying.
+    float camera_fly_speed_{8.0f};
+    /// Seconds the viewport keeps showing the fly speed after the wheel changed it.
+    float camera_fly_speed_hint_time_{};
+    /// True while the orbit drag holds the left button; the pivot stays fixed for the whole drag.
+    bool is_orbiting_{};
+    math::vec3 camera_orbit_pivot_{0.0f, 0.0f, 0.0f};
 
     dd_2d_raii dd_2d_{};
     gizmos_renderer gizmos_{};
