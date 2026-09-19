@@ -14,6 +14,7 @@ description: >-
 |---------|------|
 | Editor entry | `editor/editor/editor.h` |
 | Hub orchestrator | `editor/editor/hub/hub.cpp` |
+| Start page (no project open) | `editor/editor/hub/start_page/` |
 | Panel definitions | `editor/editor/hub/panels/panels_defs.h` |
 | Scene viewport | `editor/editor/hub/panels/scene_panel/` |
 | Game view | `editor/editor/hub/panels/game_panel/` |
@@ -66,6 +67,15 @@ Use `unravel-add-inspector` for custom type inspectors.
 - `ImGui::AlignedItem()` for horizontal alignment - include `FramePadding` in item width for buttons/menu items
 - `ImGui::SetItemTooltipEx()` for tooltips (project wrapper)
 - Menu bar items: account for `FramePadding` and `ItemSpacing` when right-aligning
+- Theme: the startup theme is `imgui_style::set_unity_theme()`
+  (`editor/editor/imgui/integration/imgui_style.cpp`). The accent of self-drawn widgets comes
+  from `imgui_style::get_accent_color()`, never from `ImGuiCol_TabSelected` (grey in that theme)
+- Icon glyphs are merged into the Regular, Bold and Black fonts only: a label with an icon drawn
+  in SemiBold / Medium shows `?`
+- A child with `ImGuiChildFlags_Borders` takes `WindowPadding` only while the theme's
+  `ChildBorderSize` is not 0. Never size its content from the parent's width: measure inside the
+  child (`GetContentRegionAvail`), or push the padding the layout assumes before `BeginChild`
+  (the profiler timeline rules it out). Sizes in font units, not pixels
 
 ## Panel toolbars
 
@@ -154,6 +164,13 @@ width exceeds `CalcTextSize` label.
 - Engine code in editor target only - keep editor logic in `editor/`
 - Forgetting `ImGui::SameLine()` spacing when aligning items
 - Using label text width only for `AlignedItem` on interactive widgets
+- Sizing the content of a bordered child from outside of it (breaks when a theme changes
+  `ChildBorderSize`, see ImGui conventions)
+- A fixed-height host made of stacked children (the header: menu bar + toolbar strip) must
+  either count `ItemSpacing.y` between them or pull the cursor back by it; otherwise the last
+  child is pushed down and cropped
+- `PushStyleVar` / `PushStyleColor` inside a `Begin` / `End` (or child) scope with the pop after
+  the `End`: ImGui's stack check reports it (red outline around the window + error tooltip)
 
 ## Deep reference
 

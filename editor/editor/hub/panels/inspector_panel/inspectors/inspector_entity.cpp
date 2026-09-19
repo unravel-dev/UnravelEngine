@@ -5,6 +5,7 @@
 #include "reflection/reflection.h"
 
 #include <editor/imgui/integration/imgui_context_menu_style.h>
+#include <editor/imgui/integration/imgui_style.h>
 #include <editor/editing/editing_manager.h>
 #include <editor/hub/panels/entity_panel.h>
 #include <editor/imgui/imgui_interface.h>
@@ -216,7 +217,7 @@ void draw_component_header_title(const ImRect& header_rect, const std::string& n
     // Where a framed header starts its label: past the fold arrow, a font size plus paddings.
     const float icon_x = header_rect.Min.x + style.FramePadding.x * 3.0f + font_size;
     const float text_y = header_rect.Min.y + style.FramePadding.y;
-    draw_list->AddText(ImVec2(icon_x, text_y), ImGui::GetColorU32(ImGuiCol_TabSelected), icon.c_str());
+    draw_list->AddText(ImVec2(icon_x, text_y), ImGui::GetColorU32(imgui_style::get_accent_color()), icon.c_str());
     const float name_x = icon_x + ImGui::CalcTextSize(icon.c_str()).x + font_size * COMPONENT_HEADER_ICON_GAP_EM;
     draw_list->AddText(ImGui::GetFont(ImGui::Font::SemiBold),
                        font_size,

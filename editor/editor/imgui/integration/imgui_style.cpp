@@ -3,6 +3,15 @@
 
 namespace imgui_style
 {
+namespace
+{
+ImVec4 g_accent_color{0.26f, 0.59f, 0.98f, 1.0f};
+} // namespace
+
+auto get_accent_color() -> ImVec4
+{
+    return g_accent_color;
+}
 
 void set_photoshop_theme()
 {
@@ -99,6 +108,8 @@ void set_photoshop_theme()
     style.Colors[ImGuiCol_NavWindowingHighlight] = ImVec4(1.0f, 0.3882353007793427f, 0.0f, 1.0f);
     style.Colors[ImGuiCol_NavWindowingDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.5860000252723694f);
     style.Colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.5860000252723694f);
+
+    g_accent_color = style.Colors[ImGuiCol_TabSelected];
 }
 
 void set_dark_theme()
@@ -199,6 +210,8 @@ void set_dark_theme()
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.15f, 0.15f, 0.15f, style.Colors[ImGuiCol_WindowBg].w);
+
+    g_accent_color = style.Colors[ImGuiCol_TabSelected];
 }
 
 void set_dark_theme_red()
@@ -278,6 +291,8 @@ void set_dark_theme_red()
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
+
+    g_accent_color = style.Colors[ImGuiCol_TabSelected];
 }
 
 void set_professional_dark_theme()
@@ -407,6 +422,8 @@ void set_professional_dark_theme()
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
+
+    g_accent_color = style.Colors[ImGuiCol_TabSelected];
 }
 
 void set_unity_inspired_theme()
@@ -416,6 +433,8 @@ void set_unity_inspired_theme()
 
     auto& style = ImGui::GetStyle();
     auto& colors = ImGui::GetStyle().Colors;
+
+    g_accent_color = colors[ImGuiCol_TabSelected];
 }
 
 void set_modern_purple_theme()
@@ -539,6 +558,8 @@ void set_modern_purple_theme()
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
+
+    g_accent_color = style.Colors[ImGuiCol_TabSelected];
 }
 
 void set_warm_amber_theme()
@@ -662,6 +683,8 @@ void set_warm_amber_theme()
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
+
+    g_accent_color = style.Colors[ImGuiCol_TabSelected];
 }
 
 void set_cool_blue_theme()
@@ -785,6 +808,8 @@ void set_cool_blue_theme()
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
+
+    g_accent_color = style.Colors[ImGuiCol_TabSelected];
 }
 
 void set_minimalist_green_theme()
@@ -908,6 +933,8 @@ void set_minimalist_green_theme()
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
+
+    g_accent_color = style.Colors[ImGuiCol_TabSelected];
 }
 
 void set_unity_theme()
@@ -918,61 +945,78 @@ void set_unity_theme()
     auto& style = ImGui::GetStyle();
     auto& colors = ImGui::GetStyle().Colors;
 
-    auto backgroundDarkest = ImColor(48, 48, 48, 255);
-    auto backgroundDark = ImColor(56, 56, 56, 255);
-    auto backgroundMedium = ImColor(62, 62, 62, 255);
-    auto backgroundLight = ImColor(72, 72, 72, 255);
-    auto backgroundPopup = ImColor(52, 52, 52, 255);
+    // The greys and the blue of Unity's dark (Pro) skin.
+    auto backgroundChrome = ImColor(40, 40, 40, 255);  // #282828 tab strips, menu bar, title bars
+    auto backgroundDark = ImColor(56, 56, 56, 255);    // #383838 window body
+    auto backgroundMedium = ImColor(62, 62, 62, 255);  // #3E3E3E panels inside a window, list headers
+    auto backgroundLight = ImColor(72, 72, 72, 255);   // foldout headers
+    auto backgroundPopup = ImColor(46, 46, 46, 255);   // menus and popups, a shade under the body
 
-    auto primaryAccent = ImColor(58, 121, 187, 255);
+    auto fieldNormal = ImColor(42, 42, 42, 255);  // #2A2A2A input fields
+    auto fieldHovered = ImColor(48, 48, 48, 255);
+    auto fieldActive = ImColor(54, 54, 54, 255);
+
+    auto buttonNormal = ImColor(88, 88, 88, 255);    // #585858
+    auto buttonHovered = ImColor(103, 103, 103, 255); // #676767
+    auto buttonPressed = ImColor(70, 96, 124, 255);  // #46607C
+
+    auto primaryAccent = ImColor(58, 121, 187, 255);  // #3A79BB
     auto primaryAccentHover = ImColor(78, 141, 207, 255);
-    auto primaryAccentActive = ImColor(48, 101, 167, 255);
     auto primaryAccentStrong = ImColor(58, 121, 187, 180);
     auto primaryAccentMuted = ImColor(58, 121, 187, 60);
 
-    auto textPrimary = ImColor(220, 220, 220, 255);
+    auto textPrimary = ImColor(210, 210, 210, 255);  // #D2D2D2
     auto textMuted = ImColor(128, 128, 128, 255);
 
-    auto borderDark = ImColor(35, 35, 35, 255);
+    auto borderDark = ImColor(35, 35, 35, 255);  // #232323
     auto borderMedium = ImColor(80, 80, 80, 255);
+
+    auto scrollbarGrab = ImColor(95, 95, 95, 255);  // #5F5F5F
+    auto scrollbarGrabHovered = ImColor(110, 110, 110, 255);
+    auto scrollbarGrabActive = ImColor(125, 125, 125, 255);
 
     colors[ImGuiCol_WindowBg] = backgroundDark;
     colors[ImGuiCol_ChildBg] = backgroundMedium;
     colors[ImGuiCol_PopupBg] = backgroundPopup;
     colors[ImGuiCol_Border] = borderDark;
     colors[ImGuiCol_BorderShadow] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-    colors[ImGuiCol_MenuBarBg] = backgroundDarkest;
+    colors[ImGuiCol_MenuBarBg] = backgroundChrome;
 
     colors[ImGuiCol_Text] = textPrimary;
     colors[ImGuiCol_TextDisabled] = textMuted;
     colors[ImGuiCol_TextSelectedBg] = primaryAccentStrong;
+    colors[ImGuiCol_TextLink] = primaryAccentHover;
 
-    colors[ImGuiCol_Button] = backgroundLight;
-    colors[ImGuiCol_ButtonHovered] = primaryAccentMuted;
-    colors[ImGuiCol_ButtonActive] = primaryAccentStrong;
+    colors[ImGuiCol_Button] = buttonNormal;
+    colors[ImGuiCol_ButtonHovered] = buttonHovered;
+    colors[ImGuiCol_ButtonActive] = buttonPressed;
 
     colors[ImGuiCol_Header] = backgroundLight;
     colors[ImGuiCol_HeaderHovered] = primaryAccentMuted;
     colors[ImGuiCol_HeaderActive] = primaryAccentStrong;
 
-    colors[ImGuiCol_FrameBg] = ImColor(35, 35, 35, 255);
-    colors[ImGuiCol_FrameBgHovered] = ImColor(45, 45, 45, 255);
-    colors[ImGuiCol_FrameBgActive] = ImColor(55, 55, 55, 255);
+    colors[ImGuiCol_FrameBg] = fieldNormal;
+    colors[ImGuiCol_FrameBgHovered] = fieldHovered;
+    colors[ImGuiCol_FrameBgActive] = fieldActive;
 
-    colors[ImGuiCol_TitleBg] = backgroundDarkest;
-    colors[ImGuiCol_TitleBgActive] = backgroundDark;
-    colors[ImGuiCol_TitleBgCollapsed] = backgroundDarkest;
+    colors[ImGuiCol_TitleBg] = backgroundChrome;
+    colors[ImGuiCol_TitleBgActive] = backgroundChrome;
+    colors[ImGuiCol_TitleBgCollapsed] = backgroundChrome;
 
-    colors[ImGuiCol_Tab] = backgroundDark;
-    colors[ImGuiCol_TabHovered] = primaryAccentMuted;
-    colors[ImGuiCol_TabSelected] = primaryAccentStrong;
-    colors[ImGuiCol_TabDimmed] = backgroundDarkest;
-    colors[ImGuiCol_TabDimmedSelected] = backgroundLight;
+    // Unity's tabs: the selected one takes the color of the window it belongs to, and the blue
+    // line on top tells which window has the focus. The others sink into the strip.
+    colors[ImGuiCol_Tab] = backgroundChrome;
+    colors[ImGuiCol_TabHovered] = fieldHovered;
+    colors[ImGuiCol_TabSelected] = backgroundDark;
+    colors[ImGuiCol_TabSelectedOverline] = primaryAccent;
+    colors[ImGuiCol_TabDimmed] = backgroundChrome;
+    colors[ImGuiCol_TabDimmedSelected] = backgroundDark;
+    colors[ImGuiCol_TabDimmedSelectedOverline] = borderMedium;
 
-    colors[ImGuiCol_ScrollbarBg] = backgroundDark;
-    colors[ImGuiCol_ScrollbarGrab] = backgroundLight;
-    colors[ImGuiCol_ScrollbarGrabHovered] = borderMedium;
-    colors[ImGuiCol_ScrollbarGrabActive] = primaryAccent;
+    colors[ImGuiCol_ScrollbarBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
+    colors[ImGuiCol_ScrollbarGrab] = scrollbarGrab;
+    colors[ImGuiCol_ScrollbarGrabHovered] = scrollbarGrabHovered;
+    colors[ImGuiCol_ScrollbarGrabActive] = scrollbarGrabActive;
 
     colors[ImGuiCol_CheckMark] = primaryAccent;
     colors[ImGuiCol_SliderGrab] = primaryAccent;
@@ -986,14 +1030,16 @@ void set_unity_theme()
     colors[ImGuiCol_ResizeGripHovered] = primaryAccentMuted;
     colors[ImGuiCol_ResizeGripActive] = primaryAccent;
 
-    colors[ImGuiCol_TableHeaderBg] = backgroundLight;
+    colors[ImGuiCol_TableHeaderBg] = backgroundMedium;
     colors[ImGuiCol_TableBorderStrong] = borderDark;
     colors[ImGuiCol_TableBorderLight] = borderMedium;
     colors[ImGuiCol_TableRowBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
-    colors[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.01f);
+    colors[ImGuiCol_TableRowBgAlt] = ImVec4(1.0f, 1.0f, 1.0f, 0.02f);
 
     colors[ImGuiCol_DockingPreview] = primaryAccentStrong;
-    colors[ImGuiCol_DockingEmptyBg] = backgroundDarkest;
+    colors[ImGuiCol_DockingEmptyBg] = backgroundChrome;
+    colors[ImGuiCol_DragDropTarget] = primaryAccentHover;
+    colors[ImGuiCol_NavCursor] = primaryAccentHover;
 
     colors[ImGuiCol_PlotLines] = primaryAccent;
     colors[ImGuiCol_PlotLinesHovered] = primaryAccentHover;
@@ -1002,26 +1048,32 @@ void set_unity_theme()
 
     colors[ImGuiCol_ModalWindowDimBg] = ImVec4(0.0f, 0.0f, 0.0f, 0.65f);
 
+    // Shapes and sizes follow the panel toolbars: soft corners, controls about 1.7 font sizes
+    // tall, room between them. Docked windows stay square; whatever floats is rounded.
     style.WindowRounding = 0.0f;
-    style.ChildRounding = 0.0f;
-    style.FrameRounding = 2.0f;
-    style.PopupRounding = 6.0f;
-    style.ScrollbarRounding = 0.0f;
-    style.GrabRounding = 0.0f;
-    style.TabRounding = 2.0f;
+    style.ChildRounding = 5.0f;
+    style.FrameRounding = 4.0f;
+    style.PopupRounding = 7.0f;
+    style.ScrollbarRounding = 6.0f;
+    style.GrabRounding = 4.0f;
+    style.TabRounding = 4.0f;
 
     style.WindowBorderSize = 1.0f;
-    style.ChildBorderSize = 0.0f;
+    style.ChildBorderSize = 1.0f;
     style.PopupBorderSize = 1.0f;
     style.FrameBorderSize = 0.0f;
+    style.TabBarBorderSize = 1.0f;
+    style.TabBarOverlineSize = 2.0f;
+    style.SeparatorTextBorderSize = 1.0f;
 
-    style.WindowPadding = ImVec2(6.0f, 6.0f);
-    style.FramePadding = ImVec2(8.0f, 3.0f);
-    style.CellPadding = ImVec2(4.0f, 2.0f);
-    style.ItemSpacing = ImVec2(4.0f, 3.0f);
-    style.ItemInnerSpacing = ImVec2(4.0f, 2.0f);
-    style.IndentSpacing = 15.0f;
-    style.ScrollbarSize = 16.0f;
+    style.WindowPadding = ImVec2(8.0f, 8.0f);
+    style.FramePadding = ImVec2(8.0f, 5.0f);
+    style.CellPadding = ImVec2(5.0f, 3.0f);
+    style.ItemSpacing = ImVec2(6.0f, 4.0f);
+    style.ItemInnerSpacing = ImVec2(5.0f, 4.0f);
+    style.SeparatorTextPadding = ImVec2(12.0f, 4.0f);
+    style.IndentSpacing = 16.0f;
+    style.ScrollbarSize = 12.0f;
     style.GrabMinSize = 10.0f;
 
     style.WindowMenuButtonPosition = ImGuiDir_None;
@@ -1031,6 +1083,10 @@ void set_unity_theme()
         style.WindowRounding = 0.0f;
         style.Colors[ImGuiCol_WindowBg].w = 1.0f;
     }
+
+    // The translucent blue the toolbars fill an active item with; over their dark cards it lands
+    // on Unity's selection blue (#2C5D87).
+    g_accent_color = primaryAccentStrong;
 }
 
 } // namespace imgui_style

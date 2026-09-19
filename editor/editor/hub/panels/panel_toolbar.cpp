@@ -1,5 +1,6 @@
 #include "panel_toolbar.h"
 
+#include <editor/imgui/integration/imgui_style.h>
 #include <imgui_widgets/tooltips.h>
 #include <imgui_widgets/utils.h>
 
@@ -127,7 +128,7 @@ auto get_bar_height() -> float
 
 auto get_accent_color() -> ImVec4
 {
-    return ImGui::GetStyleColorVec4(ImGuiCol_TabSelected);
+    return imgui_style::get_accent_color();
 }
 
 auto get_text_color_on(ImU32 fill_color) -> ImU32

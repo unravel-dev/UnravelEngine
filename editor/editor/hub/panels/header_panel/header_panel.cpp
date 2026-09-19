@@ -738,7 +738,9 @@ void header_panel::on_frame_ui_render(rtti::context& ctx, float header_size)
         // Draw a sep. child for the menu bar.
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
         draw_menubar_child(ctx);
-        // ImGui::NewLine();
+        // The play toolbar follows flush. calc_height() is the two rows and nothing between them,
+        // so the item spacing under the menu bar would push the toolbar down and crop its bottom.
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y);
         draw_play_toolbar(ctx);
         ImGui::PopStyleColor();
     }

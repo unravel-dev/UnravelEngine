@@ -5,6 +5,7 @@
 #include <ospp/event.h>
 
 #include "panels/panel.h"
+#include "start_page/start_page.h"
 
 namespace unravel
 {
@@ -37,43 +38,11 @@ private:
     void on_start_page_render(rtti::context& ctx);
     void on_opened_project_render(rtti::context& ctx);
 
-    void render_projects_list_view(rtti::context& ctx);
-    void render_new_project_creator_view(rtti::context& ctx);
-    void render_project_remover_view(rtti::context& ctx);
-    void render_project_samples_view(rtti::context& ctx);
-    // Draw a project card with consistent styling
-    auto draw_project_card(const std::string& id,
-                           const std::string& name,
-                           const std::string& directory,
-                           const std::chrono::system_clock::time_point& last_modified,
-                           const std::string& engine_version = {},
-                           bool is_selected = false,
-                           bool enable_interaction = true,
-                           float form_width = 0.0f) -> bool;
-
-    // Draw a sample card (name, description, opens url on click)
-    auto draw_sample_card(const std::string& id,
-                          const std::string& name,
-                          const std::string& description,
-                          const std::string& url,
-                          float form_width = 0.0f) -> bool;
-
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
     imgui_panels panels_{};
 
-    enum class view_state
-    {
-        projects_list,
-        new_project_creator,
-        project_remover,
-        project_samples
-    };
-
-    view_state current_view_{view_state::projects_list};
-    std::string project_name_{};
-    std::string project_directory_{};
-    std::string project_to_remove_{};
-    std::string selected_project_{};
+    /// Shown while no project is open.
+    start_page start_page_{};
 };
 } // namespace unravel

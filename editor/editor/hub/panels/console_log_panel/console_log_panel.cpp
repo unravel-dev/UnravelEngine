@@ -6,6 +6,7 @@
 #include <editor/imgui/integration/imgui_context_menu_style.h>
 #include <editor/system/project_manager.h>
 #include <editor/imgui/integration/imgui_notify.h>
+#include <editor/imgui/integration/imgui_style.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/engine.h>
 
@@ -125,7 +126,9 @@ void draw_log_row_background(const ImRect& rect, int row_index, bool is_selected
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     if(is_selected)
     {
-        draw_list->AddRectFilled(rect.Min, rect.Max, ImGui::GetColorU32(ImGuiCol_TabSelected, LOG_ROW_SELECTED_ALPHA));
+        ImVec4 selected_color = imgui_style::get_accent_color();
+        selected_color.w *= LOG_ROW_SELECTED_ALPHA;
+        draw_list->AddRectFilled(rect.Min, rect.Max, ImGui::GetColorU32(selected_color));
         return;
     }
     if(is_hovered)

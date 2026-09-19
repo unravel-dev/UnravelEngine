@@ -29,6 +29,8 @@ constexpr float row_height = 20.0f;
 /// Floor for the thread label column, which otherwise sizes itself to the widest
 /// label. Keeps short names from cramping the lanes against the ruler.
 constexpr float lane_header_min_width = 120.0f;
+/// Keeps the thread labels off the border of the timeline child, which itself has no padding.
+constexpr float lane_header_inset = 6.0f;
 /// Total vertical space reserved for the frame histogram row (background + bars).
 constexpr float frame_bar_height = 92.0f;
 /// Stacked rows for managed heap and GPU memory (aligned to frame index axis).
@@ -1705,8 +1707,13 @@ void profiler_timeline_panel::draw_timeline()
                                      std::max(total_height + 10.0f, 100.0f));
 
     // -- Begin scrollable child ------------------------------------------
+    // The ruler, the lanes and the height above are laid out against the child's own edges. A
+    // bordered child takes the window padding as soon as the theme gives children a border size,
+    // which would shift the ruler off the lanes, so the padding is ruled out here.
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::BeginChild("##timeline_scroll", ImVec2(0, timeline_height), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY,
                       ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleVar();
 
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     ImVec2 base_pos = ImGui::GetCursorScreenPos();
@@ -1716,6 +1723,8 @@ void profiler_timeline_panel::draw_timeline()
                     lane_content_width,
                     ImVec2(base_pos.x + header_width, base_pos.y));
     ImGui::Dummy(ImVec2(0, ruler_height));
+    // Only the labels move: the lanes are placed by an absolute offset.
+    ImGui::Indent(lane_header_inset);
 
     // -- Thread lanes ----------------------------------------------------
     size_t row_index = 0;
@@ -1771,7 +1780,7 @@ void profiler_timeline_panel::draw_timeline()
         
         const std::string header = fmt::format("{} {} ({})", expanded ? ICON_MDI_CHEVRON_DOWN : ICON_MDI_CHEVRON_RIGHT, group.name, group.members.size());
         if(ImGui::Selectable(header.c_str(), false, ImGuiSelectableFlags_None,
-                             ImVec2(header_width - 4.0f, 0.0f)))
+                             ImVec2(header_width - 4.0f - lane_header_inset, 0.0f)))
         {
             toggle_group_expanded(group.name);
         }
@@ -1862,6 +1871,7 @@ void profiler_timeline_panel::draw_timeline()
         }
     }
 
+    ImGui::Unindent(lane_header_inset);
     ImGui::EndChild();
 
     if(ImGui::IsItemHovered())
