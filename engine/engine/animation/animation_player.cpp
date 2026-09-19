@@ -271,10 +271,18 @@ void animation_player::stop()
 
 auto animation_player::update_time(seconds_t delta_time, bool force) -> bool
 {
+    const bool refresh = pose_refresh_requested_;
+    pose_refresh_requested_ = false;
     // `force` steps time even when stopped or paused (editor frame stepping).
+    // A requested refresh also gets through, but with zero delta: it re-samples
+    // poses at the current position without advancing it (editor seeking).
     if(!is_playing() && !force)
     {
-        return false;
+        if(!refresh)
+        {
+            return false;
+        }
+        delta_time = seconds_t(0);
     }
 
     bool any_valid = false;
@@ -774,6 +782,34 @@ auto animation_player::is_playing() const -> bool
 auto animation_player::is_paused() const -> bool
 {
     return paused_;
+}
+
+auto animation_player::get_layers() const -> const std::vector<animation_layer>&
+{
+    return layers_;
+}
+
+void animation_player::seek(size_t layer_idx, float progress, bool seek_target)
+{
+    // Deliberately no get_layer(): seeking must not create layers.
+    if(layer_idx >= layers_.size())
+    {
+        return;
+    }
+    auto& layer = layers_[layer_idx];
+    auto& state = seek_target ? layer.target_state.state : layer.current_state.state;
+    const auto duration = get_state_duration(state);
+    if(duration <= seconds_t(0))
+    {
+        return;
+    }
+    progress = math::clamp(progress, 0.0f, 1.0f);
+    state.elapsed = duration * progress;
+}
+
+void animation_player::request_pose_refresh()
+{
+    pose_refresh_requested_ = true;
 }
 
 } // namespace unravel

@@ -175,7 +175,10 @@ public:
      */
     auto is_paused() const -> bool;
 
-private:
+    /**
+     * @brief State of a single pose source feeding a layer (either the current
+     * state or the crossfade target).
+     */
     struct animation_layer_state
     {
         auto is_valid() const -> bool
@@ -210,6 +213,40 @@ private:
         blend_state blending_state{};
     };
 
+    /**
+     * @brief Read-only view over the player's layers for tooling and inspection.
+     */
+    auto get_layers() const -> const std::vector<animation_layer>&;
+
+    /**
+     * @brief Returns the normalized progress (0..1) of the layer's active
+     * crossfade, or 0 when no blend is in flight.
+     */
+    auto get_blend_progress(const animation_layer& layer) const -> float;
+
+    /**
+     * @brief Returns the playback duration of a state: the clip's duration, or
+     * the longest active blend-space clip (0 until the space is first sampled).
+     */
+    static auto get_state_duration(const animation_state& state) -> seconds_t;
+
+    /**
+     * @brief Seeks a layer state to a normalized progress (0..1) without
+     * changing playback status. Does nothing for out-of-range layers or states
+     * whose duration is not known yet. Pair with request_pose_refresh() to see
+     * the seeked pose while stopped or paused.
+     */
+    void seek(size_t layer_idx, float progress, bool seek_target = false);
+
+    /**
+     * @brief Requests a one-shot pose refresh: the next update_time behaves as
+     * if playing but advances by zero time, so poses are re-sampled and
+     * re-applied at the current playback position even while stopped or paused
+     * (editor seeking / stepping).
+     */
+    void request_pose_refresh();
+
+private:
     auto get_layer(size_t index) -> animation_layer&;
 
     void sample_animation(const animation_clip* anim_clip,
@@ -220,8 +257,6 @@ private:
                           animation_pose& pose) const;
     auto compute_blend_factor(const animation_layer& layer, float normalized_blend_time) -> float;
     void update_state(seconds_t delta_time, animation_state& state);
-    static auto get_state_duration(const animation_state& state) -> seconds_t;
-    auto get_blend_progress(const animation_layer& layer) const -> float;
     auto update_pose(animation_layer_state& layer, animation_retargeting_mode retargeting_mode, bool extract_root_motion)
         -> bool;
 
@@ -229,6 +264,8 @@ private:
 
     bool playing_{};
     bool paused_{};
+    /// One-shot flag consumed by update_time - see request_pose_refresh().
+    bool pose_refresh_requested_{};
 };
 
 } // namespace unravel
