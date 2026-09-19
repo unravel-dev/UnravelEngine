@@ -2,10 +2,10 @@
 #include <editor/imgui/integration/imgui.h>
 #include <engine/rendering/pipeline/pipeline.h>
 
-namespace unravel::viewport_toolbar
+namespace unravel::panel_toolbar
 {
 struct bar_placement;
-} // namespace unravel::viewport_toolbar
+} // namespace unravel::panel_toolbar
 
 namespace unravel::viewport_stats_overlay
 {
@@ -32,7 +32,7 @@ void draw(const rendering::pipeline_stats& pstats, state& overlay_state, const c
 //-----------------------------------------------------------------------------
 /// <summary>
 /// Draw the statistics toggle of a floating viewport toolbar, with the frame rate as its label;
-/// call between viewport_toolbar::begin_bar() and end_bar(). Toggles the overlay visibility on
+/// call between panel_toolbar::begin_bar() and end_bar(). Toggles the overlay visibility on
 /// click.
 /// The frame rate is what the button is read for, so it stays in a compact layout too.
 /// </summary>
@@ -42,11 +42,11 @@ void draw_toolbar_toggle(state& overlay_state);
 
 //-----------------------------------------------------------------------------
 /// <summary>
-/// Draw the frame rate alone, as a passive viewport_toolbar::draw_readout: for a host that takes
+/// Draw the frame rate alone, as a passive panel_toolbar::draw_readout: for a host that takes
 /// its toolbar away (the game panel while the game plays) but keeps the frame rate on screen. A
 /// right anchored placement shows it exactly where draw_toolbar_toggle does as the last item.
 /// </summary>
 //-----------------------------------------------------------------------------
-void draw_toolbar_readout(const viewport_toolbar::bar_placement& placement);
+void draw_toolbar_readout(const panel_toolbar::bar_placement& placement);
 
 } // namespace unravel::viewport_stats_overlay

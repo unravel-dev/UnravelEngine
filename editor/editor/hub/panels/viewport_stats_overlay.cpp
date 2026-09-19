@@ -1,5 +1,5 @@
 #include "viewport_stats_overlay.h"
-#include "viewport_toolbar.h"
+#include "panel_toolbar.h"
 #include "editor/format/format_bytes.h"
 #include "editor/imgui/integration/imgui.h"
 #include "imgui_widgets/utils.h"
@@ -494,8 +494,8 @@ auto make_fps_readout() -> fps_readout
     const float fps = ImGui::GetIO().Framerate;
     const char* widest_value = fps < fps_four_digits ? "000 FPS" : "0000 FPS";
     fps_readout readout{};
-    readout.text = viewport_toolbar::make_text(ICON_MDI_CHART_LINE, fmt::format("{:.0f} FPS", fps).c_str(), false);
-    readout.width_text = viewport_toolbar::make_text(ICON_MDI_CHART_LINE, widest_value, false);
+    readout.text = panel_toolbar::make_text(ICON_MDI_CHART_LINE, fmt::format("{:.0f} FPS", fps).c_str(), false);
+    readout.width_text = panel_toolbar::make_text(ICON_MDI_CHART_LINE, widest_value, false);
     return readout;
 }
 
@@ -579,7 +579,7 @@ void viewport_stats_overlay::draw_toolbar_toggle(state& overlay_state)
 {
     const fps_readout readout = make_fps_readout();
     const char* tooltip = overlay_state.is_visible ? "Hide Statistics" : "Show Statistics";
-    if(viewport_toolbar::toggle("##stats",
+    if(panel_toolbar::toggle("##stats",
                                 readout.text.c_str(),
                                 overlay_state.is_visible,
                                 tooltip,
@@ -589,9 +589,9 @@ void viewport_stats_overlay::draw_toolbar_toggle(state& overlay_state)
     }
 }
 
-void viewport_stats_overlay::draw_toolbar_readout(const viewport_toolbar::bar_placement& placement)
+void viewport_stats_overlay::draw_toolbar_readout(const panel_toolbar::bar_placement& placement)
 {
     const fps_readout readout = make_fps_readout();
-    viewport_toolbar::draw_readout(placement, readout.text.c_str(), readout.width_text.c_str());
+    panel_toolbar::draw_readout(placement, readout.text.c_str(), readout.width_text.c_str());
 }
 } // namespace unravel

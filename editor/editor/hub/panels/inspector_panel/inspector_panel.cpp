@@ -1,4 +1,5 @@
 #include "inspector_panel.h"
+#include "../panel_toolbar.h"
 #include "../panels_defs.h"
 #include "inspectors/inspectors.h"
 
@@ -95,75 +96,78 @@ void inspector_panel::deinit(rtti::context& ctx)
     ctx.remove<prefab_override_context>();
 }
 
+auto inspector_panel::get_window_flags() const -> ImGuiWindowFlags
+{
+    return ImGuiWindowFlags_None;
+}
+
 void inspector_panel::draw_ui(rtti::context& ctx)
 {
     auto& em = ctx.get_cached<editing_manager>();
     auto& selected = em.get_active_selection();
-
-    if(ImGui::BeginMenuBar())
-    {
-        ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
-
-        bool locked = !!locked_object_;
-
-        if(ImGui::MenuItem(locked ? ICON_MDI_LOCK : ICON_MDI_LOCK_OPEN_VARIANT, nullptr, locked))
-        {
-            locked = !locked;
-
-            if(locked)
-            {
-                locked_object_ = selected;
-            }
-            else
-            {
-                locked_object_ = {};
-            }
-        }
-
-        ImGui::SetItemTooltipEx("%s", "Lock/Unlock Inspector");
-
-        if(ImGui::MenuItem(ICON_MDI_COGS, nullptr, debug_))
-        {
-            debug_ = !debug_;
-        }
-
-        ImGui::SetItemTooltipEx("%s", "Debug View");
-
-        ImGui::PopStyleColor(3);
-
-        ImGui::EndMenuBar();
-    }
-
+    draw_toolbar(selected);
     if(debug_)
     {
         push_debug_view();
     }
-
     em.push_undo_stack_enabled(true);
-
-    auto selections_count = int(em.get_selections().size());
-
-    if(locked_object_)
-    {
-        inspect_object_with_prefab_check(ctx, locked_object_);
-    }
-    else if(em.get_selections().size() > 1)
-    {
-        ImGui::Text("%d Items Selected.", selections_count);
-    }
-    else if(selected)
-    {
-        inspect_object_with_prefab_check(ctx, selected);
-    }
-
+    draw_inspected_object(ctx, selected, em.get_selections().size());
+    em.pop_undo_stack_enabled();
     if(debug_)
     {
         pop_debug_view();
     }
+}
 
-    em.pop_undo_stack_enabled();
+void inspector_panel::draw_toolbar(const entt::meta_any& selected)
+{
+    if(panel_toolbar::begin_strip("##inspector_toolbar"))
+    {
+        draw_lock_toggle(selected);
+        panel_toolbar::align_right();
+        draw_debug_toggle();
+    }
+    panel_toolbar::end_strip();
+}
+
+void inspector_panel::draw_lock_toggle(const entt::meta_any& selected)
+{
+    const bool is_locked = !!locked_object_;
+    const char* text = is_locked ? ICON_MDI_LOCK " Locked" : ICON_MDI_LOCK_OPEN_VARIANT " Lock";
+    const char* tooltip = is_locked ? "Follow the selection again" : "Keep showing this object, whatever gets selected";
+    // The label changes with the state; the longer one keeps the button from resizing.
+    const char* width_text = ICON_MDI_LOCK " Locked";
+    if(!panel_toolbar::toggle("##lock", text, is_locked, tooltip, width_text))
+    {
+        return;
+    }
+    locked_object_ = is_locked ? entt::meta_any{} : selected;
+}
+
+void inspector_panel::draw_debug_toggle()
+{
+    if(panel_toolbar::toggle("##debug_view", ICON_MDI_COGS, debug_, "Debug View"))
+    {
+        debug_ = !debug_;
+    }
+}
+
+void inspector_panel::draw_inspected_object(rtti::context& ctx, entt::meta_any& selected, size_t selections_count)
+{
+    if(locked_object_)
+    {
+        inspect_object_with_prefab_check(ctx, locked_object_);
+        return;
+    }
+    if(selections_count > 1)
+    {
+        ImGui::Text("%d Items Selected.", static_cast<int>(selections_count));
+        return;
+    }
+    if(selected)
+    {
+        inspect_object_with_prefab_check(ctx, selected);
+    }
 }
 
 } // namespace unravel

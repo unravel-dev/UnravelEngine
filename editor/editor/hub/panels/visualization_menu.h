@@ -18,7 +18,7 @@ struct state
 /// submenu per visualization_group. Every entry carries a tooltip with its description and
 /// legend, and the button names the active view in a warning tint, so a left-on debug pass
 /// cannot be mistaken for a rendering bug. Shared between the Scene and Game panels; call
-/// between viewport_toolbar::begin_bar() and end_bar().
+/// between panel_toolbar::begin_bar() and end_bar().
 /// </summary>
 /// <param name="mode">Raw pipeline debug pass id, read and written in place</param>
 /// <param name="menu_state">Persistent per-viewport state</param>

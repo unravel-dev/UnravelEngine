@@ -2,7 +2,7 @@
 #include "../panel.h"
 #include "../panels_defs.h"
 #include "../viewport_resolution.h"
-#include "../viewport_toolbar.h"
+#include "../panel_toolbar.h"
 #include "../visualization_menu.h"
 #include "imgui_widgets/utils.h"
 #include <editor/editing/actions/entity_actions.h>
@@ -251,16 +251,16 @@ void reset_preview_state()
 // Toolbar Helper Functions
 // ============================================================================
 
-constexpr const char* TOOLBAR_TOOLS_BAR_ID = "##scene_toolbar_tools";
-constexpr const char* TOOLBAR_VIEW_BAR_ID = "##scene_toolbar_view";
-constexpr const char* TOOLBAR_PREFAB_BAR_ID = "##scene_toolbar_prefab";
-constexpr float TOOLBAR_POPUP_ITEM_WIDTH = 270.0f;
-constexpr float TOOLBAR_POPUP_KNOB_WIDTH = 100.0f;
-constexpr float TOOLBAR_CAMERA_POPUP_WIDTH = 420.0f;
-constexpr float TOOLBAR_CAMERA_POPUP_HEIGHT = 560.0f;
-constexpr float TOOLBAR_POPUP_MIN_HEIGHT = 120.0f;
+constexpr const char* SCENE_TOOLBAR_TOOLS_BAR_ID = "##scene_toolbar_tools";
+constexpr const char* SCENE_TOOLBAR_VIEW_BAR_ID = "##scene_toolbar_view";
+constexpr const char* SCENE_TOOLBAR_PREFAB_BAR_ID = "##scene_toolbar_prefab";
+constexpr float SCENE_TOOLBAR_POPUP_ITEM_WIDTH = 270.0f;
+constexpr float SCENE_TOOLBAR_POPUP_KNOB_WIDTH = 100.0f;
+constexpr float SCENE_TOOLBAR_CAMERA_POPUP_WIDTH = 420.0f;
+constexpr float SCENE_TOOLBAR_CAMERA_POPUP_HEIGHT = 560.0f;
+constexpr float SCENE_TOOLBAR_POPUP_MIN_HEIGHT = 120.0f;
 /// The tools and the view bar share the first row.
-constexpr int TOOLBAR_FIRST_ROW_BARS = 2;
+constexpr int SCENE_TOOLBAR_FIRST_ROW_BARS = 2;
 
 struct transform_tool
 {
@@ -1561,14 +1561,14 @@ auto scene_panel::get_auto_save_prefab() const -> bool
 void scene_panel::update_toolbar_layout(rtti::context& ctx, const ImRect& area)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    const float bars_width = viewport_toolbar::get_bar_width(TOOLBAR_TOOLS_BAR_ID) +
-                             viewport_toolbar::get_bar_width(TOOLBAR_VIEW_BAR_ID);
-    viewport_toolbar::update_layout(toolbar_layout_, bars_width, TOOLBAR_FIRST_ROW_BARS, area.GetWidth());
+    const float bars_width = panel_toolbar::get_bar_width(SCENE_TOOLBAR_TOOLS_BAR_ID) +
+                             panel_toolbar::get_bar_width(SCENE_TOOLBAR_VIEW_BAR_ID);
+    panel_toolbar::update_layout(toolbar_layout_, bars_width, SCENE_TOOLBAR_FIRST_ROW_BARS, area.GetWidth());
     const int bar_rows = toolbar_layout_.is_stacked ? 2 : 1;
     const int rows = em.is_prefab_mode() ? bar_rows + 1 : bar_rows;
-    toolbar_extent_ = viewport_toolbar::get_rows_extent(rows);
-    const float popup_room = area.GetHeight() - toolbar_extent_ - 2.0f * viewport_toolbar::get_bar_margin();
-    toolbar_popup_max_height_ = ImMax(popup_room, TOOLBAR_POPUP_MIN_HEIGHT);
+    toolbar_extent_ = panel_toolbar::get_rows_extent(rows);
+    const float popup_room = area.GetHeight() - toolbar_extent_ - 2.0f * panel_toolbar::get_bar_margin();
+    toolbar_popup_max_height_ = ImMax(popup_room, SCENE_TOOLBAR_POPUP_MIN_HEIGHT);
 }
 
 void scene_panel::draw_toolbar(rtti::context& ctx, const ImRect& area)
@@ -1581,41 +1581,41 @@ void scene_panel::draw_toolbar(rtti::context& ctx, const ImRect& area)
 
 void scene_panel::draw_tools_bar(editing_manager& em, const ImRect& area)
 {
-    viewport_toolbar::bar_placement placement{};
+    panel_toolbar::bar_placement placement{};
     placement.area = area;
-    placement.anchor = viewport_toolbar::bar_anchor::left;
-    if(viewport_toolbar::begin_bar(TOOLBAR_TOOLS_BAR_ID, placement))
+    placement.anchor = panel_toolbar::bar_anchor::left;
+    if(panel_toolbar::begin_bar(SCENE_TOOLBAR_TOOLS_BAR_ID, placement))
     {
         draw_transform_tools(em);
-        viewport_toolbar::separator();
+        panel_toolbar::separator();
         draw_pivot_mode_toggle();
         draw_coordinate_system_toggle(em);
-        viewport_toolbar::separator();
+        panel_toolbar::separator();
         draw_snapping_dropdown(em);
     }
-    viewport_toolbar::end_bar();
+    panel_toolbar::end_bar();
 }
 
 void scene_panel::draw_view_bar(rtti::context& ctx, editing_manager& em, const ImRect& area)
 {
-    viewport_toolbar::bar_placement placement{};
+    panel_toolbar::bar_placement placement{};
     placement.area = area;
-    placement.anchor = viewport_toolbar::bar_anchor::right;
+    placement.anchor = panel_toolbar::bar_anchor::right;
     placement.row = toolbar_layout_.is_stacked ? 1 : 0;
-    if(viewport_toolbar::begin_bar(TOOLBAR_VIEW_BAR_ID, placement))
+    if(panel_toolbar::begin_bar(SCENE_TOOLBAR_VIEW_BAR_ID, placement))
     {
         viewport_resolution::draw_toolbar_dropdown(ctx, current_resolution_index_, toolbar_layout_.is_compact);
-        viewport_toolbar::separator();
+        panel_toolbar::separator();
         draw_grid_controls(em);
         draw_gizmos_controls(em);
-        viewport_toolbar::separator();
+        panel_toolbar::separator();
         visualization_menu::draw_toolbar_dropdown(visualize_passes_, visualization_menu_state_);
         draw_inverse_kinematics_dropdown(em);
         draw_camera_dropdown(ctx);
-        viewport_toolbar::separator();
+        panel_toolbar::separator();
         viewport_stats_overlay::draw_toolbar_toggle(stats_overlay_state_);
     }
-    viewport_toolbar::end_bar();
+    panel_toolbar::end_bar();
 }
 
 void scene_panel::draw_prefab_bar(rtti::context& ctx, const ImRect& area)
@@ -1625,13 +1625,13 @@ void scene_panel::draw_prefab_bar(rtti::context& ctx, const ImRect& area)
     {
         return;
     }
-    viewport_toolbar::bar_placement placement{};
+    panel_toolbar::bar_placement placement{};
     placement.area = area;
-    placement.anchor = viewport_toolbar::bar_anchor::center;
+    placement.anchor = panel_toolbar::bar_anchor::center;
     placement.row = toolbar_layout_.is_stacked ? 2 : 1;
-    if(viewport_toolbar::begin_bar(TOOLBAR_PREFAB_BAR_ID, placement))
+    if(panel_toolbar::begin_bar(SCENE_TOOLBAR_PREFAB_BAR_ID, placement))
     {
-        if(viewport_toolbar::button("##back_to_scene", ICON_MDI_ARROW_LEFT " Back to Scene", "Leave the prefab", true))
+        if(panel_toolbar::button("##back_to_scene", ICON_MDI_ARROW_LEFT " Back to Scene", "Leave the prefab", true))
         {
             em.exit_prefab_mode(ctx,
                                 auto_save_prefab_ ? editing_manager::save_option::yes
@@ -1640,13 +1640,13 @@ void scene_panel::draw_prefab_bar(rtti::context& ctx, const ImRect& area)
         if(em.edited_prefab)
         {
             const std::string prefab_name = fs::path(em.edited_prefab.id()).filename().string();
-            viewport_toolbar::label(fmt::format("Editing Prefab: {}", prefab_name).c_str());
-            viewport_toolbar::separator();
-            if(viewport_toolbar::button("##save_prefab", ICON_MDI_CONTENT_SAVE_OUTLINE " Save", "Save the prefab"))
+            panel_toolbar::label(fmt::format("Editing Prefab: {}", prefab_name).c_str());
+            panel_toolbar::separator();
+            if(panel_toolbar::button("##save_prefab", ICON_MDI_CONTENT_SAVE_OUTLINE " Save", "Save the prefab"))
             {
                 em.save_prefab_changes(ctx);
             }
-            if(viewport_toolbar::toggle("##auto_save_prefab",
+            if(panel_toolbar::toggle("##auto_save_prefab",
                                         "Auto Save",
                                         auto_save_prefab_,
                                         "Automatically save changes when exiting prefab mode"))
@@ -1655,7 +1655,7 @@ void scene_panel::draw_prefab_bar(rtti::context& ctx, const ImRect& area)
             }
         }
     }
-    viewport_toolbar::end_bar();
+    panel_toolbar::end_bar();
 }
 
 void scene_panel::draw_transform_tools(editing_manager& em)
@@ -1663,7 +1663,7 @@ void scene_panel::draw_transform_tools(editing_manager& em)
     for(const auto& tool : TRANSFORM_TOOLS)
     {
         const std::string tooltip = fmt::format("{} ({})", tool.name, ImGui::GetKeyName(tool.shortcut));
-        if(!viewport_toolbar::toggle(tool.id, tool.icon, em.operation == tool.operation, tooltip.c_str()))
+        if(!panel_toolbar::toggle(tool.id, tool.icon, em.operation == tool.operation, tooltip.c_str()))
         {
             continue;
         }
@@ -1685,9 +1685,9 @@ void scene_panel::draw_pivot_mode_toggle()
                                            : "Tool Handle: Pivot\n"
                                              "The handle sits at the active object's pivot point.\n"
                                              "Click to place it at the center of the selection.";
-    const std::string text = viewport_toolbar::make_text(icon, name, toolbar_layout_.is_compact);
-    const std::string width_text = viewport_toolbar::make_text(icon, "Center", toolbar_layout_.is_compact);
-    if(viewport_toolbar::button("##pivot_mode", text.c_str(), tooltip, false, width_text.c_str()))
+    const std::string text = panel_toolbar::make_text(icon, name, toolbar_layout_.is_compact);
+    const std::string width_text = panel_toolbar::make_text(icon, "Center", toolbar_layout_.is_compact);
+    if(panel_toolbar::button("##pivot_mode", text.c_str(), tooltip, false, width_text.c_str()))
     {
         gizmo_at_center_ = !gizmo_at_center_;
     }
@@ -1702,9 +1702,9 @@ void scene_panel::draw_coordinate_system_toggle(editing_manager& em)
                                             name,
                                             ImGui::GetKeyName(shortcuts::toggle_local_global),
                                             is_local ? "Global" : "Local");
-    const std::string text = viewport_toolbar::make_text(icon, name, toolbar_layout_.is_compact);
-    const std::string width_text = viewport_toolbar::make_text(icon, "Global", toolbar_layout_.is_compact);
-    if(viewport_toolbar::button("##coordinate_system", text.c_str(), tooltip.c_str(), false, width_text.c_str()))
+    const std::string text = panel_toolbar::make_text(icon, name, toolbar_layout_.is_compact);
+    const std::string width_text = panel_toolbar::make_text(icon, "Global", toolbar_layout_.is_compact);
+    if(panel_toolbar::button("##coordinate_system", text.c_str(), tooltip.c_str(), false, width_text.c_str()))
     {
         em.mode = is_local ? ImGuizmo::MODE::WORLD : ImGuizmo::MODE::LOCAL;
     }
@@ -1714,12 +1714,12 @@ void scene_panel::draw_snapping_dropdown(editing_manager& em)
 {
     const std::string tooltip =
         fmt::format("Snapping (hold {} while dragging)", ImGui::GetKeyName(shortcuts::modifier_snapping));
-    if(!viewport_toolbar::begin_dropdown("##snapping", ICON_MDI_MAGNET, tooltip.c_str()))
+    if(!panel_toolbar::begin_dropdown("##snapping", ICON_MDI_MAGNET, tooltip.c_str()))
     {
         return;
     }
     ImGui::SeparatorText("Snapping");
-    ImGui::PushItemWidth(TOOLBAR_POPUP_ITEM_WIDTH);
+    ImGui::PushItemWidth(SCENE_TOOLBAR_POPUP_ITEM_WIDTH);
     ImGui::DragVecN("Translation",
                     ImGuiDataType_Float,
                     math::value_ptr(em.snap_data.translation_snap),
@@ -1731,47 +1731,47 @@ void scene_panel::draw_snapping_dropdown(editing_manager& em)
     ImGui::DragFloat("Rotation", &em.snap_data.rotation_degree_snap, 1.0f, 0.0f, 0.0f, "%.1f deg");
     ImGui::DragFloat("Scale", &em.snap_data.scale_snap, 1.0f, 0.0f, 0.0f, "%.2f");
     ImGui::PopItemWidth();
-    viewport_toolbar::end_dropdown();
+    panel_toolbar::end_dropdown();
 }
 
 void scene_panel::draw_grid_controls(editing_manager& em)
 {
-    if(viewport_toolbar::toggle("##grid", ICON_MDI_GRID, em.show_grid, "Show / Hide Grid"))
+    if(panel_toolbar::toggle("##grid", ICON_MDI_GRID, em.show_grid, "Show / Hide Grid"))
     {
         em.show_grid = !em.show_grid;
     }
-    if(!viewport_toolbar::begin_dropdown("##grid_settings", nullptr, "Grid Settings"))
+    if(!panel_toolbar::begin_dropdown("##grid_settings", nullptr, "Grid Settings"))
     {
         return;
     }
     ImGui::SeparatorText("Grid");
-    ImGui::PushItemWidth(TOOLBAR_POPUP_KNOB_WIDTH);
+    ImGui::PushItemWidth(SCENE_TOOLBAR_POPUP_KNOB_WIDTH);
     ImGui::LabelText("Plane", "%s", "X Z");
     ImGui::KnobSliderScalarT("Opacity", &em.grid_data.opacity, 0.0f, 1.0f);
     ImGui::Checkbox("Depth Aware", &em.grid_data.depth_aware);
     ImGui::SetItemTooltipEx("%s", "Grid is depth aware.");
     ImGui::PopItemWidth();
-    viewport_toolbar::end_dropdown();
+    panel_toolbar::end_dropdown();
 }
 
 void scene_panel::draw_gizmos_controls(editing_manager& em)
 {
-    if(viewport_toolbar::toggle("##gizmos", ICON_MDI_SELECTION_MARKER, em.show_icon_gizmos, "Show / Hide Gizmos"))
+    if(panel_toolbar::toggle("##gizmos", ICON_MDI_SELECTION_MARKER, em.show_icon_gizmos, "Show / Hide Gizmos"))
     {
         em.show_icon_gizmos = !em.show_icon_gizmos;
     }
     ImGui::SetNextWindowSizeConstraints({}, {FLT_MAX, toolbar_popup_max_height_});
-    if(!viewport_toolbar::begin_dropdown("##gizmos_settings", nullptr, "Gizmos Settings"))
+    if(!panel_toolbar::begin_dropdown("##gizmos_settings", nullptr, "Gizmos Settings"))
     {
         return;
     }
     draw_gizmos_settings(em);
-    viewport_toolbar::end_dropdown();
+    panel_toolbar::end_dropdown();
 }
 
 void scene_panel::draw_gizmos_settings(editing_manager& em)
 {
-    ImGui::PushItemWidth(TOOLBAR_POPUP_KNOB_WIDTH);
+    ImGui::PushItemWidth(SCENE_TOOLBAR_POPUP_KNOB_WIDTH);
     ImGui::SeparatorText("Billboards");
     ImGui::KnobSliderScalarT("Opacity", &em.billboard_data.opacity, 0.0f, 1.0f);
     ImGui::KnobSliderScalarT("Size", &em.billboard_data.size, 0.1f, 1.0f);
@@ -1839,27 +1839,27 @@ auto scene_panel::get_visualization_scale() const -> float
 
 void scene_panel::draw_inverse_kinematics_dropdown(editing_manager& em)
 {
-    if(!viewport_toolbar::begin_dropdown("##inverse_kinematics", ICON_MDI_CRANE, "Inverse Kinematics"))
+    if(!panel_toolbar::begin_dropdown("##inverse_kinematics", ICON_MDI_CRANE, "Inverse Kinematics"))
     {
         return;
     }
     ImGui::SeparatorText("Inverse Kinematics");
-    ImGui::PushItemWidth(TOOLBAR_POPUP_ITEM_WIDTH);
+    ImGui::PushItemWidth(SCENE_TOOLBAR_POPUP_ITEM_WIDTH);
     ImGui::InputInt("Nodes", &em.ik_data.num_nodes);
     ImGui::PopItemWidth();
     ImGui::SeparatorText("Shortcuts");
     ImGui::Text("CCD: %s", shortcuts::get_shortcut_name(shortcuts::ik_ccd).c_str());
     ImGui::Text("Fabrik: %s", shortcuts::get_shortcut_name(shortcuts::ik_fabrik).c_str());
     ImGui::Text("Two Bone: %s", shortcuts::get_shortcut_name(shortcuts::ik_two_bone).c_str());
-    viewport_toolbar::end_dropdown();
+    panel_toolbar::end_dropdown();
 }
 
 void scene_panel::draw_camera_dropdown(rtti::context& ctx)
 {
     // The entity inspector fills the height it is given, so an auto-sized popup would collapse it.
-    const float popup_height = ImMin(TOOLBAR_CAMERA_POPUP_HEIGHT, toolbar_popup_max_height_);
-    ImGui::SetNextWindowSize({TOOLBAR_CAMERA_POPUP_WIDTH, popup_height});
-    if(!viewport_toolbar::begin_dropdown("##camera", ICON_MDI_CAMERA, "Scene Camera"))
+    const float popup_height = ImMin(SCENE_TOOLBAR_CAMERA_POPUP_HEIGHT, toolbar_popup_max_height_);
+    ImGui::SetNextWindowSize({SCENE_TOOLBAR_CAMERA_POPUP_WIDTH, popup_height});
+    if(!panel_toolbar::begin_dropdown("##camera", ICON_MDI_CAMERA, "Scene Camera"))
     {
         return;
     }
@@ -1878,7 +1878,7 @@ void scene_panel::draw_camera_dropdown(rtti::context& ctx)
     ImGui::SetItemTooltipEx("%s", "Speed of the fly camera. The mouse wheel changes it while flying.");
     entt::meta_any cam = get_camera();
     inspect_var(ctx, cam, make_proxy(cam));
-    viewport_toolbar::end_dropdown();
+    panel_toolbar::end_dropdown();
 }
 
 void scene_panel::handle_viewport_interaction(rtti::context& ctx, const camera& camera, editing_manager& em)

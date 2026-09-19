@@ -9,6 +9,7 @@
 namespace unravel
 {
 class imgui_panels;
+class asset_manager;
 
 struct content_browser_item
 {
@@ -53,11 +54,34 @@ public:
 
 private:
     void draw(rtti::context& ctx);
-    void draw_details(rtti::context& ctx, const fs::path& root_path);
+    /// The folders under path as a tree; a click makes a folder the current one.
+    void draw_folder_tree(rtti::context& ctx, const fs::path& path);
 
-    void draw_as_explorer(rtti::context& ctx, const fs::path& root_path);
+    /// The current folder: toolbar, asset grid, status bar.
+    void draw_explorer(rtti::context& ctx, const fs::path& root_path);
+    void handle_navigate_back(const fs::path& root_path);
+    void draw_toolbar(rtti::context& ctx, const fs::path& root_path);
+    void draw_add_dropdown(rtti::context& ctx);
+    /// The way from the root to the current folder, every step a button and a drop target.
+    void draw_breadcrumb(const fs::path& root_path);
+    void draw_search_field();
+    /// Draws the grid and returns how many entries it shows.
+    auto draw_assets(rtti::context& ctx, const ImVec2& size) -> size_t;
+    /// Draws one entry of the grid; returns true while its context popup is open. A double
+    /// click on a folder writes it to current_path.
+    auto draw_cache_entry(rtti::context& ctx,
+                          const fs::directory_cache::cache_entry& cache_entry,
+                          float item_size,
+                          fs::path& current_path) -> bool;
+    void draw_status_bar(size_t shown_count);
+    /// Indices into the cache of the entries that pass the search, all of them without one.
+    auto collect_shown_entries(asset_manager& am) const -> std::vector<size_t>;
+    /// The search matches the name, the asset type and the uid.
+    auto passes_filter(asset_manager& am, const fs::directory_cache::cache_entry& cache_entry) const -> bool;
+
     void context_menu(rtti::context& ctx, bool use_context_item, const fs::path& target_path);
     void context_create_menu(rtti::context& ctx, const fs::path& target_path);
+    void draw_import_menu_item(rtti::context& ctx, const fs::path& target_path);
     void set_cache_path(const fs::path& path);
     void handle_external_drop(rtti::context& ctx);
     void import(rtti::context& ctx, const fs::path& target_path);

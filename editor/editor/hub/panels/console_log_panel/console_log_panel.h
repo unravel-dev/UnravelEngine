@@ -58,11 +58,12 @@ public:
 
     void draw_ui(rtti::context& ctx) override;
     auto get_window_flags() const -> ImGuiWindowFlags override;
-    void draw();
 
-    void draw_details();
-    auto draw_last_log() -> bool;
-
+    /**
+     * @brief The newest visible log as a one-line button, for the status bar. A click brings the
+     * console to the front. Also raises the error toast for the entries that arrived since the
+     * last call.
+     */
     void draw_last_log_button();
 
     void on_play();
@@ -76,17 +77,34 @@ public:
         -> std::vector<log_snapshot_entry>;
 
 private:
+    using level_counts_t = std::array<size_t, size_t(level::n_levels)>;
+
     void select_log(const log_entry& entry);
     void clear_log();
     void open_log(const log_entry& entry);
     auto has_new_entries() const -> bool;
     void set_has_new_entries(bool val);
 
-    auto draw_log(const log_entry& msg, int num_lines) -> bool;
-    void draw_range(const hpp::string_view& formatted, size_t start, size_t end);
-    void draw_filter_button(level::level_enum level);
+    /// True when the entry passes the level toggles and the search.
+    auto is_entry_visible(const log_entry& entry) const -> bool;
+    /// Copies the visible entries out from under the lock, and recounts every level on the way.
+    auto collect_visible_entries() -> display_entries_t;
+    auto find_last_visible_entry() const -> hpp::optional<log_entry>;
+    /// Raises a toast for the errors that arrived since the last call.
+    void notify_new_errors();
+
+    void draw_toolbar();
+    void draw_clear_controls();
+    void draw_search_field();
+    void draw_level_filters();
+    void draw_log_list(const display_entries_t& entries);
+    void draw_log_row(const log_entry& entry, int row_index);
+    void draw_list_context_menu();
+    void draw_details();
 
     std::array<bool, size_t(level::n_levels)> enabled_categories_{};
+    /// How many entries of each level the buffer holds, whatever the toggles and the search say.
+    level_counts_t level_counts_{};
 
     mutable std::recursive_mutex entries_mutex_;
     ///

@@ -1,5 +1,5 @@
 #include "visualization_menu.h"
-#include "viewport_toolbar.h"
+#include "panel_toolbar.h"
 
 #include <editor/imgui/integration/imgui.h>
 
@@ -105,11 +105,11 @@ void visualization_menu::draw_toolbar_dropdown(int& mode, state& menu_state)
 
     // The active view stays spelled out on the bar, whatever the layout. The id is fixed, so the
     // popup stays open while the label follows the pick.
-    const std::string text = is_debugging ? viewport_toolbar::make_text(ICON_MDI_DRAWING_BOX, active->label, false)
+    const std::string text = is_debugging ? panel_toolbar::make_text(ICON_MDI_DRAWING_BOX, active->label, false)
                                           : std::string(ICON_MDI_DRAWING_BOX);
     const ImU32 text_color = is_debugging ? ImGui::ColorConvertFloat4ToU32(active_mode_color) : 0;
     const char* tooltip = is_debugging ? "Debug View - a visualization is active" : "Debug View";
-    if(!viewport_toolbar::begin_dropdown("##debug_view", text.c_str(), tooltip, text_color))
+    if(!panel_toolbar::begin_dropdown("##debug_view", text.c_str(), tooltip, text_color))
     {
         return;
     }
@@ -134,7 +134,7 @@ void visualization_menu::draw_toolbar_dropdown(int& mode, state& menu_state)
     ImGui::SetItemTooltipEx("%s",
                             "Overlay the active view's color legend in the bottom-left "
                             "corner of the viewport.");
-    viewport_toolbar::end_dropdown();
+    panel_toolbar::end_dropdown();
 }
 
 void visualization_menu::draw_legend_overlay(int mode, state& menu_state, const char* id)

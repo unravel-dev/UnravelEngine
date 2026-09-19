@@ -59,7 +59,7 @@ auto get_resolution(rtti::context& ctx, int index)
 //-----------------------------------------------------------------------------
 /// <summary>
 /// Draw the resolution selection dropdown of a floating viewport toolbar; call between
-/// viewport_toolbar::begin_bar() and end_bar(). The selection is read and written through the
+/// panel_toolbar::begin_bar() and end_bar(). The selection is read and written through the
 /// supplied index parameter. Returns true if the user changed the selection - the caller is
 /// responsible for persisting the new index if desired (e.g. project settings vs. a transient
 /// panel-local value). Adds an "Edit ..." entry that opens the project settings panel scoped to

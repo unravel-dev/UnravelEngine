@@ -6,7 +6,7 @@
 #include "camera_controller.h"
 #include "gizmos/gizmos_renderer.h"
 #include "../viewport_stats_overlay.h"
-#include "../viewport_toolbar.h"
+#include "../panel_toolbar.h"
 #include "../visualization_menu.h"
 
 namespace unravel
@@ -65,7 +65,7 @@ private:
     void draw_selected_camera(rtti::context& ctx, entt::handle editor_camera, const ImVec2& size);
     auto begin_panel(const char* name, ImGuiWindowFlags flags) -> bool override;
 
-    // Floating toolbar (viewport_toolbar): the tools bar on the left, the view bar on the right,
+    // Floating toolbar (panel_toolbar): the tools bar on the left, the view bar on the right,
     // the prefab bar centered on a row of its own while a prefab is edited.
     /// Picks the full, compact or stacked layout for the width and sets toolbar_extent_.
     void update_toolbar_layout(rtti::context& ctx, const ImRect& area);
@@ -145,7 +145,7 @@ private:
     visualization_menu::state visualization_menu_state_{};
 
     /// Compact drops the text labels; stacked also moves the view bar to a second row.
-    viewport_toolbar::layout_state toolbar_layout_{};
+    panel_toolbar::layout_state toolbar_layout_{};
     /// Height the toolbar rows take off the top of the viewport area. The view cube and the
     /// statistics overlay start below it.
     float toolbar_extent_{};

@@ -67,11 +67,24 @@ Use `unravel-add-inspector` for custom type inspectors.
 - `ImGui::SetItemTooltipEx()` for tooltips (project wrapper)
 - Menu bar items: account for `FramePadding` and `ItemSpacing` when right-aligning
 
-## Viewport toolbars
+## Panel toolbars
 
-The scene and game panels have NO menu bar (`get_window_flags()` returns no `MenuBar`). Their
-controls float over the image as rounded bars built with `viewport_toolbar`
-(`editor/editor/hub/panels/viewport_toolbar.h`):
+One module gives every panel toolbar the same look: `panel_toolbar`
+(`editor/editor/hub/panels/panel_toolbar.h`). Two containers, one set of items:
+
+- **bar** (`begin_bar` / `end_bar`): floats over a viewport - scene, game
+- **strip** (`begin_strip` / `end_strip`): docked at the top of a panel - content, console,
+  inspector - or of the editor itself (header, `strip_style::flat`: no card, the host is the
+  band). `align_center()` / `align_right()` send the following items to the middle / the right
+  end; `begin_field(width)` / `end_field()` wrap one framed ImGui widget (search input,
+  slider); `calc_flexible_width(min, max)` lets a search field give way in a narrow dock;
+  `begin_group()` / `end_group()` make several items one ImGui item (one tooltip, one
+  `BeginDisabled`)
+
+The scene, game, content, console and inspector panels have NO menu bar (`get_window_flags()`
+returns no `MenuBar`).
+
+### Floating bars (scene, game)
 
 - `scene_panel.cpp` -> `draw_toolbar`: tools bar (left), view bar (right), prefab bar (centered,
   own row, prefab mode only)
@@ -79,23 +92,42 @@ controls float over the image as rounded bars built with `viewport_toolbar`
   and is NOT submitted (an invisible bar would eat the game's clicks); the pointer at the top
   edge or an open dropdown brings it back (`update_toolbar_visibility`). The frame rate stays:
   `viewport_stats_overlay::draw_toolbar_readout` draws it as a passive
-  `viewport_toolbar::draw_readout` (draw list only, clicks pass through) in the exact place the
+  `panel_toolbar::draw_readout` (draw list only, clicks pass through) in the exact place the
   statistics toggle shows it, so the two cross-fade
 - Every bar is a child window, so clicks never reach picking / drag selection / ImGuizmo below;
   `end_bar()` hands the keyboard focus back to the panel so viewport shortcuts keep working
-- Items: `button`, `toggle`, `begin_dropdown` / `end_dropdown` (null text = caret half of a
-  split button), `separator`, `label`; pass `width_text` for a label that changes (FPS, state
-  names) or an anchored bar jitters
+- Items: `button`, `toggle` (optional `active_color` for a state with its own color: playing,
+  paused), `filter_toggle` (own color, dimmed when off - for rows of filters),
+  `begin_dropdown` / `end_dropdown` (null text = caret half of a split button),
+  `separator`, `path_separator` (breadcrumb), `label`; pass `width_text` for a label that
+  changes (FPS, state names) or an anchored bar jitters
 - Layout falls back full -> compact (icons only) -> stacked (view bar on row 2) from the
-  measured bar widths (`viewport_toolbar::layout_state` + `update_layout`); overlays that share
+  measured bar widths (`panel_toolbar::layout_state` + `update_layout`); overlays that share
   the top edge (view cube, `viewport_stats_overlay::draw` `top_offset`) start below
-  `viewport_toolbar::get_rows_extent(rows)`
+  `panel_toolbar::get_rows_extent(rows)`
 - Items shared by both panels live in their own module: `viewport_resolution::draw_toolbar_dropdown`,
   `visualization_menu::draw_toolbar_dropdown`, `viewport_stats_overlay::draw_toolbar_toggle`
 - A popup whose content fills its height (entity inspector) needs an explicit size, not
   auto-resize; a `SetNextWindowSize*` right before `begin_dropdown` reaches the popup
 
-Other panels (console, inspector, ...) keep classic menu bars: horizontal `MenuItem` layout -
+### Docked strips (content, console)
+
+- `content_browser_panel.cpp` -> `draw_explorer` = `draw_toolbar` (Add dropdown reusing the
+  context menu's create / import entries, breadcrumb of buttons that are drop targets, search)
+  + `draw_assets` + `draw_status_bar` (item count, icon scale)
+- `console_log_panel.cpp` -> `draw_toolbar` (Clear + auto-clear options, search, level filters
+  with counts), `draw_log_list` (single-line rows through `draw_log_line`, which the status bar
+  reuses for the last log), `draw_details`
+- `header_panel.cpp` -> `draw_play_toolbar`: flat strip - deploy | play / pause / step (one
+  group, disabled by compile errors), script mode, splash | time scale, VSync, max FPS.
+  `header_panel::calc_height()` tells `panel.cpp` how tall the header is
+- `inspector_panel.cpp` -> `draw_toolbar` (lock, debug view); component headers come from
+  `draw_component_header` in `inspector_entity.cpp` (a `CollapsingHeader("##...")` for the
+  behaviour, title and flat settings button drawn over it - no space-padded labels)
+- Unity builds merge anonymous namespaces: prefix file-local constants and helpers by feature
+  (`CONSOLE_*`, `CONTENT_*`, `SCENE_TOOLBAR_*`), or a shifted batch boundary breaks the build
+
+Other panels (inspector, hierarchy, ...) keep classic menu bars: horizontal `MenuItem` layout -
 width exceeds `CalcTextSize` label.
 
 ## Play mode UI

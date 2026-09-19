@@ -48,6 +48,13 @@ constexpr float COMPONENT_MENU_SEARCH_PADDING_Y = 6.0f;
 constexpr float COMPONENT_MENU_MUTED_ALPHA = 0.6f;
 // Drop-target frame drawn around the component list and the "Add Component" button while a script file is dragged.
 constexpr float SCRIPT_DROP_FRAME_THICKNESS = 2.0f;
+
+constexpr float COMPONENT_HEADER_ROUNDING = 4.0f;
+/// Between the icon and the name, in font sizes.
+constexpr float COMPONENT_HEADER_ICON_GAP_EM = 0.4f;
+constexpr float COMPONENT_HEADER_SETTINGS_ALPHA = 0.7f;
+constexpr ImU32 COMPONENT_HEADER_SETTINGS_HOVERED_COLOR = IM_COL32(255, 255, 255, 28);
+constexpr ImU32 COMPONENT_HEADER_SETTINGS_ACTIVE_COLOR = IM_COL32(255, 255, 255, 46);
 constexpr ImVec4 DRAG_DROP_TARGET_COLOR{1.0f, 1.0f, 0.0f, 1.0f};
 
 template<typename T>
@@ -193,6 +200,71 @@ struct inspect_callbacks
     std::string icon;
 };
 
+struct component_header_state
+{
+    bool is_open{true};
+    /// The settings button or a right click on the header asked for the settings popup.
+    bool wants_settings{};
+};
+
+/// Icon in the accent and the name in semi bold, drawn over the header right of its fold arrow.
+void draw_component_header_title(const ImRect& header_rect, const std::string& name, const std::string& icon)
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float font_size = ImGui::GetFontSize();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    // Where a framed header starts its label: past the fold arrow, a font size plus paddings.
+    const float icon_x = header_rect.Min.x + style.FramePadding.x * 3.0f + font_size;
+    const float text_y = header_rect.Min.y + style.FramePadding.y;
+    draw_list->AddText(ImVec2(icon_x, text_y), ImGui::GetColorU32(ImGuiCol_TabSelected), icon.c_str());
+    const float name_x = icon_x + ImGui::CalcTextSize(icon.c_str()).x + font_size * COMPONENT_HEADER_ICON_GAP_EM;
+    draw_list->AddText(ImGui::GetFont(ImGui::Font::SemiBold),
+                       font_size,
+                       ImVec2(name_x, text_y),
+                       ImGui::GetColorU32(ImGuiCol_Text),
+                       name.c_str());
+}
+
+/// A flat button on the right end of the header's line. Being the last item of that line, it
+/// leaves the layout where the header left it.
+auto draw_component_header_settings_button(const ImRect& header_rect) -> bool
+{
+    const float button_size = header_rect.GetHeight();
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::GetCurrentWindow()->DC.CursorPos.x = header_rect.Max.x - button_size;
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, COMPONENT_HEADER_SETTINGS_HOVERED_COLOR);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, COMPONENT_HEADER_SETTINGS_ACTIVE_COLOR);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetColorU32(ImGuiCol_Text, COMPONENT_HEADER_SETTINGS_ALPHA));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, COMPONENT_HEADER_ROUNDING);
+    const bool is_pressed = ImGui::Button(ICON_MDI_COG, ImVec2(button_size, button_size));
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(4);
+    ImGui::SetItemTooltipEx("%s", "Component settings");
+    return is_pressed;
+}
+
+/// The bar on top of a component: fold arrow, icon, name, and the settings button.
+auto draw_component_header(const std::string& name, const std::string& icon) -> component_header_state
+{
+    component_header_state header{};
+    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
+    // The header takes the look of a frame: a collapsing header in the selection color would
+    // make every component read as selected.
+    ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetColorU32(ImGuiCol_FrameBg));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetColorU32(ImGuiCol_FrameBgHovered));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetColorU32(ImGuiCol_FrameBgActive));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, COMPONENT_HEADER_ROUNDING);
+    header.is_open = ImGui::CollapsingHeader("##component_header", nullptr, ImGuiTreeNodeFlags_AllowOverlap);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor(3);
+    header.wants_settings = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+    const ImRect header_rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    draw_component_header_title(header_rect, name, icon);
+    header.wants_settings |= draw_component_header_settings_button(header_rect);
+    return header;
+}
+
 auto inspect_component(const std::string& name, const inspect_callbacks& callbacks) -> inspect_result
 {
     inspect_result result{};
@@ -207,46 +279,9 @@ auto inspect_component(const std::string& name, const inspect_callbacks& callbac
     bool open = true;
     if(!callbacks.can_merge())
     {
-        ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
-
-        auto pos = ImGui::GetCursorPos();
-        auto col_header = ImGui::GetColorU32(ImGuiCol_Header);
-        auto col_header_hovered = ImGui::GetColorU32(ImGuiCol_HeaderHovered);
-        auto col_header_active = ImGui::GetColorU32(ImGuiCol_HeaderActive);
-
-        auto col_framebg = ImGui::GetColorU32(ImGuiCol_FrameBg);
-        auto col_framebg_hovered = ImGui::GetColorU32(ImGuiCol_FrameBgHovered);
-        auto col_framebg_active = ImGui::GetColorU32(ImGuiCol_FrameBgActive);
-
-        ImGui::PushStyleColor(ImGuiCol_Header, col_framebg);
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, col_framebg_hovered);
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, col_framebg_active);
-
-        ImGui::PushFont(ImGui::Font::SemiBold);
-        open = ImGui::CollapsingHeader(fmt::format("     {}", name).c_str(), nullptr, ImGuiTreeNodeFlags_AllowOverlap);
-        ImGui::PopFont();
-
-        ImGui::OpenPopupOnItemClick(popup_str);
-        ImGui::PopStyleColor(3);
-
-        ImGui::SetCursorPos(pos);
-        ImGui::AlignTextToFramePadding();
-        ImGui::Text("       %s", callbacks.icon.c_str());
-
-        ImGui::SameLine();
-        auto settings_size = ImGui::CalcTextSize(ICON_MDI_COG).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-
-        auto avail = ImGui::GetContentRegionAvail().x + ImGui::GetStyle().FramePadding.x;
-        ImGui::AlignedItem(1.0f,
-                           avail,
-                           settings_size,
-                           [&]()
-                           {
-                               if(ImGui::Button(ICON_MDI_COG))
-                               {
-                                   open_popup = true;
-                               }
-                           });
+        const component_header_state header = draw_component_header(name, callbacks.icon);
+        open = header.is_open;
+        open_popup = header.wants_settings;
     }
 
     if(open)
@@ -1315,7 +1350,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
         ImGui::Spacing();
         ImGui::Spacing();
-        static const auto label = "Add Component";
+        static const auto label = ICON_MDI_PLUS " Add Component";
         auto avail = ImGui::GetContentRegionAvail();
         ImVec2 size = ImGui::CalcItemSize(label);
         size.x *= 2.0f;

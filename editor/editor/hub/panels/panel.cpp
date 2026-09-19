@@ -92,7 +92,7 @@ void imgui_panels::on_frame_render(rtti::context& ctx, delta_t dt)
 void imgui_panels::on_frame_ui_render(rtti::context& ctx)
 {
     auto footer_size = ImGui::GetFrameHeightWithSpacing();
-    auto header_size = ImGui::GetFrameHeightWithSpacing() * 2;
+    auto header_size = header_panel::calc_height();
 
     if(ImGui::IsCombinationKeyPressed(shortcuts::scene_fullscreen_toggle))
     {

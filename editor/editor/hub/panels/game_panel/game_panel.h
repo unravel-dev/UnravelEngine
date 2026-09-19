@@ -5,7 +5,7 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 #include "../viewport_stats_overlay.h"
-#include "../viewport_toolbar.h"
+#include "../panel_toolbar.h"
 #include "../visualization_menu.h"
 
 namespace unravel
@@ -31,7 +31,7 @@ public:
     auto get_window_flags() const -> ImGuiWindowFlags override;
 
 private:
-    // Floating toolbar (viewport_toolbar), one bar on the right like the view bar of the scene.
+    // Floating toolbar (panel_toolbar), one bar on the right like the view bar of the scene.
     /// Fades the bar out while the game plays, unless the pointer is at the top edge or a
     /// dropdown is open: the image belongs to the game then, HUD corners included. Only a
     /// passive frame rate readout stays.
@@ -49,7 +49,7 @@ private:
     viewport_stats_overlay::state stats_overlay_state_{};
     visualization_menu::state visualization_menu_state_{};
 
-    viewport_toolbar::layout_state toolbar_layout_{};
+    panel_toolbar::layout_state toolbar_layout_{};
     /// Opacity of the toolbar, 0 while it stays out of the way of a running game.
     float toolbar_alpha_{1.0f};
 };

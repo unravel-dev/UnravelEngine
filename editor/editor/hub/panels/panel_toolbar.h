@@ -5,11 +5,13 @@
 
 #include <string>
 
-/// Floating toolbars for a viewport panel: rounded, translucent bars that sit over the rendered
-/// image instead of a menu bar above it. Every bar is its own child window, so a click on it never
-/// reaches the picking, the drag selection or the manipulation gizmo underneath, while the gaps
-/// between bars stay part of the viewport.
-namespace unravel::viewport_toolbar
+/// Toolbars of the editor panels, in one look. Two containers hold the same items:
+/// - a bar floats over a viewport (scene, game) instead of a menu bar above it. Every bar is its
+///   own child window, so a click on it never reaches the picking, the drag selection or the
+///   manipulation gizmo underneath, while the gaps between bars stay part of the viewport;
+/// - a strip is docked at the top of a panel (content, console, inspector) or of the editor
+///   itself (header), as wide as its host.
+namespace unravel::panel_toolbar
 {
 
 enum class bar_anchor
@@ -87,6 +89,64 @@ auto get_bar_width(const char* id) -> float;
 /// hosts the bars.
 auto is_dropdown_open() -> bool;
 
+enum class strip_style
+{
+    /// A rounded card a shade darker than the panel it sits in.
+    card,
+    /// No background of its own: for a host that already is a band of chrome (the header).
+    flat
+};
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Begin a strip: the toolbar docked at the cursor of the current window, across its width. Items
+/// follow on one line; always pair with end_strip(), whatever is returned.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto begin_strip(const char* id, strip_style style = strip_style::card) -> bool;
+void end_strip();
+
+/// Height a strip takes, for a host that has to reserve it.
+auto get_strip_height() -> float;
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Send the items that follow to the middle / to the right end of the strip. A group is placed
+/// by the width it measured the frame before, so keep that width steady (see width_text). Each
+/// once per strip, the center before the right.
+/// </summary>
+//-----------------------------------------------------------------------------
+void align_center();
+void align_right();
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Make the items until end_group() one item for ImGui, so that one tooltip or one
+/// ImGui::BeginDisabled() can cover them all.
+/// </summary>
+//-----------------------------------------------------------------------------
+void begin_group();
+void end_group();
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Make room on the line for one framed ImGui widget (input, slider) and give it the height and
+/// the rounding of the buttons. Submit the widget, then call end_field().
+/// </summary>
+//-----------------------------------------------------------------------------
+void begin_field(float width);
+void end_field();
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Width for a field that gives way when the strip gets narrow: max_width while there is room,
+/// never under min_width. Before align_right() the room is what the right aligned group (as
+/// measured the frame before) leaves; after it, what the left items leave - the field is taken
+/// to be the whole right group then.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto calc_flexible_width(float min_width, float max_width) -> float;
+
 //-----------------------------------------------------------------------------
 /// <summary>
 /// Draw a bar that only shows a text. It has no window and no item, so every click goes through
@@ -100,6 +160,9 @@ void draw_readout(const bar_placement& placement, const char* text, const char* 
 
 /// Thin vertical divider between groups of items.
 void separator();
+
+/// Dim chevron between the steps of a path, for a breadcrumb made of buttons.
+void path_separator();
 
 /// Plain text, vertically centered on the bar.
 void label(const char* text);
@@ -124,9 +187,28 @@ auto button(const char* id,
 /// </summary>
 /// <param name="width_text">Optional text the width is measured from instead. A readout that
 /// changes every frame would otherwise resize its bar, and an anchored bar would jitter.</param>
+/// <param name="active_color">Fill while on, 0 for the theme accent. For a state with a color
+/// of its own (playing, paused).</param>
 //-----------------------------------------------------------------------------
-auto toggle(const char* id, const char* text, bool is_active, const char* tooltip, const char* width_text = nullptr)
-    -> bool;
+auto toggle(const char* id,
+            const char* text,
+            bool is_active,
+            const char* tooltip,
+            const char* width_text = nullptr,
+            ImU32 active_color = 0) -> bool;
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Toggle of a filter: on shows the text in its own color on a soft fill, off dims it. For a row
+/// of filters, where the accent fill of toggle() on most of them would shout.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto filter_toggle(const char* id,
+                   const char* text,
+                   bool is_active,
+                   ImU32 color,
+                   const char* tooltip,
+                   const char* width_text = nullptr) -> bool;
 
 //-----------------------------------------------------------------------------
 /// <summary>
@@ -141,4 +223,4 @@ auto toggle(const char* id, const char* text, bool is_active, const char* toolti
 auto begin_dropdown(const char* id, const char* text, const char* tooltip, ImU32 text_color = 0) -> bool;
 void end_dropdown();
 
-} // namespace unravel::viewport_toolbar
+} // namespace unravel::panel_toolbar

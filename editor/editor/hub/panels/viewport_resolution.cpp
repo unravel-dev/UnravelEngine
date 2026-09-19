@@ -1,5 +1,5 @@
 #include "viewport_resolution.h"
-#include "viewport_toolbar.h"
+#include "panel_toolbar.h"
 #include "../hub.h"
 
 #include <engine/rendering/ecs/components/camera_component.h>
@@ -93,8 +93,8 @@ auto draw_toolbar_dropdown(rtti::context& ctx, int& current_index, bool is_compa
     current_index = clamp_index(current_index, static_cast<int>(resolutions.size()));
 
     const std::string text =
-        viewport_toolbar::make_text(ICON_MDI_ASPECT_RATIO, resolutions[current_index].name.c_str(), is_compact);
-    if(!viewport_toolbar::begin_dropdown("##resolution", text.c_str(), "Resolution Presets"))
+        panel_toolbar::make_text(ICON_MDI_ASPECT_RATIO, resolutions[current_index].name.c_str(), is_compact);
+    if(!panel_toolbar::begin_dropdown("##resolution", text.c_str(), "Resolution Presets"))
     {
         return false;
     }
@@ -113,7 +113,7 @@ auto draw_toolbar_dropdown(rtti::context& ctx, int& current_index, bool is_compa
     {
         ctx.get_cached<hub>().open_project_settings(ctx, "Resolution");
     }
-    viewport_toolbar::end_dropdown();
+    panel_toolbar::end_dropdown();
 
     return changed;
 }

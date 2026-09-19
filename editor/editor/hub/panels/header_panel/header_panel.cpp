@@ -1,5 +1,6 @@
 #include "header_panel.h"
 #include "../panel.h"
+#include "../panel_toolbar.h"
 #include "../panels_defs.h"
 #include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 
@@ -36,63 +37,56 @@ namespace unravel
 
 namespace
 {
-auto get_debug_mode_size() -> float
+constexpr ImU32 HEADER_PLAYING_COLOR = IM_COL32(46, 125, 50, 255);
+constexpr ImU32 HEADER_PAUSED_COLOR = IM_COL32(178, 106, 20, 255);
+constexpr ImU32 HEADER_DEBUGGER_ATTACHED_COLOR = IM_COL32(90, 220, 90, 255);
+constexpr float HEADER_SLIDER_WIDTH = 100.0f;
+constexpr float HEADER_TIME_SCALE_MAX = 3.0f;
+constexpr int HEADER_MAX_FPS_LIMIT = 240;
+
+/// Switching the mode recompiles and reloads every script, so only a real change goes through.
+void set_script_debug_mode(bool is_debug_mode)
 {
-    return 120.0f;
+    if(script_system::get_script_debug_mode() == is_debug_mode)
+    {
+        return;
+    }
+    script_system::set_script_debug_mode(is_debug_mode);
+    script_system::set_needs_recompile("app", true);
 }
-void draw_debug_mode()
+
+void draw_script_mode_dropdown()
 {
-    bool debugger_attached = script_system::is_debugger_attached();
-    bool debug_mode = script_system::get_script_debug_mode();
-    const char* modes[] = {ICON_MDI_BUG_CHECK " Debug", ICON_MDI_BUG " Release"};
-    const char* debug_mode_preview = modes[int(!debug_mode)];
-    ImGui::SetNextItemWidth(get_debug_mode_size());
-
-    if(debugger_attached)
+    const bool is_debugger_attached = script_system::is_debugger_attached();
+    const bool is_debug_mode = script_system::get_script_debug_mode();
+    const char* text = is_debug_mode ? ICON_MDI_BUG_CHECK " Debug" : ICON_MDI_BUG " Release";
+    const char* state = is_debug_mode ? "Debugger Enabled" : "Debugger Disabled";
+    const char* tooltip = is_debugger_attached ? "Debugger Attached" : state;
+    const ImU32 text_color = is_debugger_attached ? HEADER_DEBUGGER_ATTACHED_COLOR : 0;
+    if(!panel_toolbar::begin_dropdown("##script_mode", text, tooltip, text_color))
     {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
+        return;
     }
-    if(ImGui::BeginCombo("###DebugMode", debug_mode_preview))
+    ImGui::SeparatorText("Script Mode");
+    if(ImGui::MenuItem(ICON_MDI_BUG_CHECK " Debug", nullptr, is_debug_mode))
     {
-        if(ImGui::Selectable(modes[0]))
-        {
-            if(!debug_mode)
-            {
-                script_system::set_script_debug_mode(true);
-                script_system::set_needs_recompile("app", true);
-            }
-        }
-        ImGui::SetItemTooltipEx("%s",
-                                "Debug mode enales C# debugging\n"
-                                "but reduces C# performance.\n"
-                                "Switching to Debug mode will recompile\n"
-                                "and reload all scripts.");
-
-        if(ImGui::Selectable(modes[1]))
-        {
-            if(debug_mode)
-            {
-                script_system::set_script_debug_mode(false);
-                script_system::set_needs_recompile("app", true);
-            }
-        }
-        ImGui::SetItemTooltipEx("%s",
-                                "Release mode disables C# debugging\n"
-                                "but improves C# performance.\n"
-                                "Switching to Release mode will recompile\n"
-                                "and reload all scripts.");
-
-        ImGui::EndCombo();
+        set_script_debug_mode(true);
     }
-
-    const char* debug_mode_tooltip = debug_mode ? "Debugger Enabled" : "Debugger Disabled";
-
-    ImGui::SetItemTooltipEx("%s", debug_mode_tooltip);
-    if(debugger_attached)
+    ImGui::SetItemTooltipEx("%s",
+                            "Debug mode enables C# debugging\n"
+                            "but reduces C# performance.\n"
+                            "Switching to Debug mode will recompile\n"
+                            "and reload all scripts.");
+    if(ImGui::MenuItem(ICON_MDI_BUG " Release", nullptr, !is_debug_mode))
     {
-        ImGui::SetItemTooltipEx("%s", "Debugger Attached");
-        ImGui::PopStyleColor();
+        set_script_debug_mode(false);
     }
+    ImGui::SetItemTooltipEx("%s",
+                            "Release mode disables C# debugging\n"
+                            "but improves C# performance.\n"
+                            "Switching to Release mode will recompile\n"
+                            "and reload all scripts.");
+    panel_toolbar::end_dropdown();
 }
 } // namespace
 
@@ -544,20 +538,19 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
     ImGui::EndChild();
 }
 
-void header_panel::draw_project_badge(rtti::context& ctx, 
-                                      const ImVec2& window_pos,
-                                      const ImVec2& window_size,
-                                      float header_size,
-                                      const ImVec2& item_spacing)
+void header_panel::draw_project_badge(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
     auto& play = ctx.get_cached<play_mode>();
+    const ImVec2 window_pos = ImGui::GetWindowPos();
+    const ImVec2 window_size = ImGui::GetWindowSize();
     auto logo = fmt::format("{}", pm.get_name());
     auto logo_size = ImGui::CalcTextSize(logo.c_str());
     const float badge_h_pad = 30.0f;
     const float badge_taper = 12.0f;
     const float badge_width = logo_size.x + badge_h_pad * 2;
-    const float badge_height = header_size * 0.5f - item_spacing.y;
+    // The badge hangs from the top edge over the menu bar row.
+    const float badge_height = ImGui::GetFrameHeight();
     const ImVec2 badge_pos(window_pos.x + window_size.x * 0.5f - badge_width * 0.5f, window_pos.y);
     std::array<ImVec2, 5> points = {
         ImVec2(badge_pos.x, badge_pos.y),
@@ -580,176 +573,143 @@ void header_panel::draw_project_badge(rtti::context& ctx,
     ImGui::GetWindowDrawList()->AddText(text_pos, ImGui::GetColorU32(ImGuiCol_Text), logo.c_str());
 }
 
-void header_panel::draw_left_zone(rtti::context& ctx)
+void header_panel::draw_deploy_button(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    bool is_deploying = parent_->get_deploy_panel().is_deploying();
+    const bool is_deploying = parent_->get_deploy_panel().is_deploying();
     ImGui::BeginDisabled(is_deploying);
-    bool deploy_pressed = ImGui::Button(ICON_MDI_PACKAGE);
-    ImGui::SetItemTooltipEx("%s", "Deploy and Run. For more control visit Deploy/Deploy Project menu.");
+    const bool is_pressed =
+        panel_toolbar::button("##deploy",
+                              ICON_MDI_PACKAGE,
+                              "Deploy and Run. For more control visit Deploy/Deploy Project menu.");
     ImGui::EndDisabled();
-    if(deploy_pressed)
+    if(!is_pressed)
     {
-        auto deploy_settings = pm.get_deploy_settings();
-        deploy_settings.deploy_and_run = true;
-        deploy_settings.deploy_dependencies = true;
-        parent_->get_deploy_panel().deploy_and_run(ctx, deploy_settings);
+        return;
     }
-    ImGui::SameLine();
+    auto& pm = ctx.get_cached<project_manager>();
+    auto deploy_settings = pm.get_deploy_settings();
+    deploy_settings.deploy_and_run = true;
+    deploy_settings.deploy_dependencies = true;
+    parent_->get_deploy_panel().deploy_and_run(ctx, deploy_settings);
 }
 
-auto header_panel::calc_right_zone_width(const ImVec2& frame_padding, const ImVec2& item_spacing) -> float
-{
-    float speed_icon = ImGui::CalcTextSize(ICON_MDI_PLAY_SPEED).x;
-    float slider = 100.0f;
-    float reset_btn = ImGui::CalcTextSize(ICON_MDI_UNDO_VARIANT).x + frame_padding.x * 2;
-    float vsync_box = ImGui::CalcTextSize("Vsync").x + frame_padding.x * 2 + ImGui::GetFrameHeight() + item_spacing.x;
-    float max_fps_slider = 100.0f + item_spacing.x;
-    float separator = item_spacing.x * 2 + 2.0f;
-    return speed_icon + item_spacing.x + slider + item_spacing.x + reset_btn +
-           separator + vsync_box + max_fps_slider + item_spacing.x;
-}
-
-auto header_panel::calc_center_zone_width(const ImVec2& frame_padding, const ImVec2& item_spacing) -> float
-{
-    float play_btns = ImGui::CalcTextSize(ICON_MDI_PLAY ICON_MDI_PAUSE ICON_MDI_SKIP_NEXT).x +
-                      frame_padding.x * 6 + item_spacing.x * 2;
-    float splash_checkbox = ImGui::CalcTextSize("Splash").x + frame_padding.x * 2 + ImGui::GetFrameHeight();
-    float separator = item_spacing.x * 2 + 2.0f;
-    float debug_mode = get_debug_mode_size();
-    return play_btns + splash_checkbox + item_spacing.x + separator + debug_mode + item_spacing.x;
-}
-
-void header_panel::draw_center_zone(rtti::context& ctx)
+void header_panel::draw_transport_controls(rtti::context& ctx)
 {
     auto& play = ctx.get_cached<play_mode>();
-    ImGuiKeyChord key_chord = shortcuts::play_toggle;
-    bool play_pressed = ImGui::IsKeyChordPressed(key_chord);
+    const ImGuiKeyChord play_chord = shortcuts::play_toggle;
+    // Compile errors keep the editor out of play mode, but never inside it.
     const bool has_errors = !editor_actions::can_enter_play(ctx) && !play.is_active();
+    // The controls are one group, so the reason they are disabled has a whole area to show up on.
+    panel_toolbar::begin_group();
     ImGui::BeginDisabled(has_errors);
-    ImGui::BeginGroup();
-    if(play.is_active())
-    {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.47f, 0.18f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.25f, 0.58f, 0.25f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.35f, 0.12f, 1.0f));
-    }
-    play_pressed |= ImGui::Button(play.is_active() ? ICON_MDI_STOP : ICON_MDI_PLAY);
-    if(play.is_active())
-    {
-        ImGui::PopStyleColor(3);
-    }
-    if(has_errors && !play.is_active())
-    {
-        play_pressed = false;
-    }
-    ImGui::SetItemTooltipEx("%s", ImGui::GetKeyChordName(key_chord));
-    if(play_pressed)
-    {
-        editor_actions::toggle_play(ctx, play_splash_in_editor_);
-    }
-    ImGui::SameLine();
-
-    // use local variable since set_play_paused can change it.
-    bool is_paused = play.is_paused();
-    if(is_paused)
-    {
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.60f, 0.38f, 0.08f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.48f, 0.14f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.48f, 0.28f, 0.04f, 1.0f));
-    }
-    if(ImGui::Button(ICON_MDI_PAUSE))
+    const char* play_icon = play.is_active() ? ICON_MDI_STOP : ICON_MDI_PLAY;
+    const bool is_play_clicked = panel_toolbar::toggle("##play",
+                                                       play_icon,
+                                                       play.is_active(),
+                                                       ImGui::GetKeyChordName(play_chord),
+                                                       nullptr,
+                                                       HEADER_PLAYING_COLOR);
+    // A local: pausing changes the state the next toggle would read.
+    const bool is_paused = play.is_paused();
+    if(panel_toolbar::toggle("##pause", ICON_MDI_PAUSE, is_paused, "Pause", nullptr, HEADER_PAUSED_COLOR))
     {
         editor_actions::set_play_paused(ctx, !is_paused);
     }
-    if(is_paused)
-    {
-        ImGui::PopStyleColor(3);
-    }
-    ImGui::SameLine();
     ImGui::PushItemFlag(ImGuiItemFlags_ButtonRepeat, true);
-    if(ImGui::Button(ICON_MDI_SKIP_NEXT))
+    if(panel_toolbar::button("##step", ICON_MDI_SKIP_NEXT, "Step one frame"))
     {
         editor_actions::skip_play_frame(ctx);
     }
     ImGui::PopItemFlag();
-    ImGui::SameLine();
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(play.is_active());
-    draw_debug_mode();
     ImGui::EndDisabled();
-    ImGui::EndGroup();
-    ImGui::EndDisabled();
-    if(has_errors)
+    panel_toolbar::end_group();
+    if(has_errors && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
     {
-        ImGui::SetItemTooltipEx("%s", "All compiler errors must be fixed before you can enter Play Mode!");
+        ImGui::SetTooltip("%s", "All compiler errors must be fixed before you can enter Play Mode!");
     }
-    ImGui::SameLine();
+    const bool is_play_pressed = is_play_clicked || ImGui::IsKeyChordPressed(play_chord);
+    if(is_play_pressed && !has_errors)
+    {
+        editor_actions::toggle_play(ctx, play_splash_in_editor_);
+    }
+}
+
+void header_panel::draw_play_options(rtti::context& ctx)
+{
+    auto& play = ctx.get_cached<play_mode>();
+    // Both apply to the next play session, so they are locked during one.
     ImGui::BeginDisabled(play.is_active());
-    ImGui::Checkbox("Splash", &play_splash_in_editor_);
-    ImGui::SetItemTooltipEx("%s", "Allow splash on play; still requires splash enabled in project settings");
+    draw_script_mode_dropdown();
+    if(panel_toolbar::toggle("##splash",
+                             "Splash",
+                             play_splash_in_editor_,
+                             "Allow splash on play; still requires splash enabled in project settings"))
+    {
+        play_splash_in_editor_ = !play_splash_in_editor_;
+    }
     ImGui::EndDisabled();
 }
 
-void header_panel::draw_right_zone(rtti::context& ctx)
+void header_panel::draw_time_scale(rtti::context& ctx)
 {
-    ImGui::BeginGroup();
     auto& sim = ctx.get_cached<simulation>();
-    auto time_scale = sim.get_time_scale();
-    ImGui::Text(ICON_MDI_PLAY_SPEED);
+    float time_scale = sim.get_time_scale();
+    panel_toolbar::label(ICON_MDI_PLAY_SPEED);
     ImGui::SetItemTooltipEx("%s", "Time scale");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(100.0f);
-    if(ImGui::KnobSliderScalarT("###Time Scale", &time_scale, 0.0f, 3.0f))
+    panel_toolbar::begin_field(HEADER_SLIDER_WIDTH);
+    if(ImGui::KnobSliderScalarT("###Time Scale", &time_scale, 0.0f, HEADER_TIME_SCALE_MAX))
     {
         sim.set_time_scale(time_scale);
     }
     ImGui::SetItemTooltipEx("%s", "Time scale");
-    ImGui::SameLine();
-    if(ImGui::Button(ICON_MDI_UNDO_VARIANT))
+    panel_toolbar::end_field();
+    if(panel_toolbar::button("##reset_time_scale", ICON_MDI_UNDO_VARIANT, "Reset time scale to 1.0"))
     {
         sim.set_time_scale(1.0f);
     }
-    ImGui::SetItemTooltipEx("Reset time scale to 1.0");
-    ImGui::SameLine();
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine();
+}
+
+void header_panel::draw_frame_pacing(rtti::context& ctx)
+{
     auto& rend = ctx.get_cached<renderer>();
-    auto vsync = rend.get_vsync();
-    if(ImGui::Checkbox("Vsync", &vsync))
+    auto& sim = ctx.get_cached<simulation>();
+    const bool is_vsync_on = rend.get_vsync();
+    if(panel_toolbar::toggle("##vsync", "VSync", is_vsync_on, "Wait for the display before presenting a frame"))
     {
-        rend.set_vsync(vsync);
+        rend.set_vsync(!is_vsync_on);
     }
-    ImGui::SameLine();
     int max_fps = static_cast<int>(sim.get_max_fps());
-    ImGui::SetNextItemWidth(100.0f);
-    const char* max_fps_fmt = (max_fps <= 0) ? "Uncapped" : "%d FPS";
-    if(ImGui::KnobSliderScalarT("###Max FPS", &max_fps, 0, 240, max_fps_fmt, ImGuiSliderFlags_AlwaysClamp))
+    const char* max_fps_format = (max_fps <= 0) ? "Uncapped" : "%d FPS";
+    panel_toolbar::begin_field(HEADER_SLIDER_WIDTH);
+    if(ImGui::KnobSliderScalarT("###Max FPS", &max_fps, 0, HEADER_MAX_FPS_LIMIT, max_fps_format, ImGuiSliderFlags_AlwaysClamp))
     {
         sim.set_max_fps(static_cast<uint32_t>(max_fps < 0 ? 0 : max_fps));
     }
     ImGui::SetItemTooltipEx("%s", "Max FPS (0 = uncapped)");
-    ImGui::EndGroup();
+    panel_toolbar::end_field();
 }
 
-void header_panel::draw_play_toolbar(rtti::context& ctx, float header_size)
+void header_panel::draw_play_toolbar(rtti::context& ctx)
 {
-    auto window_pos = ImGui::GetWindowPos();
-    auto window_size = ImGui::GetWindowSize();
-    const auto& style = ImGui::GetStyle();
-    auto frame_padding = style.FramePadding;
-    auto item_spacing = style.ItemSpacing;
-    draw_project_badge(ctx, window_pos, window_size, header_size, item_spacing);
-    draw_left_zone(ctx);
-    float avail = ImGui::GetContentRegionAvail().x;
-    float right_zone_width = calc_right_zone_width(frame_padding, item_spacing);
-    float center_zone_width = calc_center_zone_width(frame_padding, item_spacing);
-    ImGui::AlignedItem(0.5f, avail, center_zone_width,
-                       [&]() -> void { draw_center_zone(ctx); });
-    ImGui::SameLine();
-    ImGui::AlignedItem(1.0f, ImGui::GetContentRegionAvail().x, right_zone_width,
-                       [&]() -> void { draw_right_zone(ctx); });
+    draw_project_badge(ctx);
+    if(panel_toolbar::begin_strip("##header_toolbar", panel_toolbar::strip_style::flat))
+    {
+        draw_deploy_button(ctx);
+        panel_toolbar::align_center();
+        draw_transport_controls(ctx);
+        panel_toolbar::separator();
+        draw_play_options(ctx);
+        panel_toolbar::align_right();
+        draw_time_scale(ctx);
+        panel_toolbar::separator();
+        draw_frame_pacing(ctx);
+    }
+    panel_toolbar::end_strip();
+}
+
+auto header_panel::calc_height() -> float
+{
+    return ImGui::GetFrameHeight() + panel_toolbar::get_strip_height();
 }
 
 void header_panel::on_frame_ui_render(rtti::context& ctx, float header_size)
@@ -779,7 +739,7 @@ void header_panel::on_frame_ui_render(rtti::context& ctx, float header_size)
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetColorU32(ImGuiCol_MenuBarBg));
         draw_menubar_child(ctx);
         // ImGui::NewLine();
-        draw_play_toolbar(ctx, header_size);
+        draw_play_toolbar(ctx);
         ImGui::PopStyleColor();
     }
 

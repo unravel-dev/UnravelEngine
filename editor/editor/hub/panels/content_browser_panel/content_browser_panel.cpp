@@ -2,6 +2,7 @@
 #include <editor/events.h>
 #include <editor/system/project_manager.h>
 #include "../panel.h"
+#include "../panel_toolbar.h"
 #include "../panels_defs.h"
 #include "filesystem/filesystem.h"
 #include "imgui_widgets/utils.h"
@@ -60,6 +61,11 @@ namespace unravel
 using namespace std::literals;
 namespace
 {
+constexpr float CONTENT_SEARCH_FIELD_WIDTH = 220.0f;
+constexpr float CONTENT_SEARCH_FIELD_MIN_WIDTH = 70.0f;
+constexpr float CONTENT_SCALE_SLIDER_WIDTH = 100.0f;
+/// Side of a grid item at scale 1, in frame heights.
+constexpr float CONTENT_ITEM_SIZE_IN_FRAMES = 6.0f;
 
 fs::path pending_rename;
 
@@ -1146,7 +1152,7 @@ void content_browser_panel::draw(rtti::context& ctx)
 
         if(fs::is_directory(root_path, err))
         {
-            draw_details(ctx, root_path);
+            draw_folder_tree(ctx, root_path);
         }
     }
     ImGui::EndChild();
@@ -1156,7 +1162,7 @@ void content_browser_panel::draw(rtti::context& ctx)
     if(ImGui::BeginChild("EXPLORER"))
     {
         // ImGui::WindowTimeBlock block(ImGui::GetFont(ImGui::Font::Mono));
-        draw_as_explorer(ctx, root_path);
+        draw_explorer(ctx, root_path);
     }
     ImGui::EndChild();
 
@@ -1260,310 +1266,297 @@ void content_browser_panel::draw_external_drop_overlay() const
     draw_list->PopClipRect();
 }
 
-void content_browser_panel::draw_details(rtti::context& ctx, const fs::path& path)
+void content_browser_panel::draw_folder_tree(rtti::context& ctx, const fs::path& path)
 {
+    ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanFullWidth;
+    const auto& selected_path = cache_.get_path();
+    if(selected_path == path)
     {
-        ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanFullWidth;
-
-        const auto& selected_path = cache_.get_path();
-        if(selected_path == path)
+        flags |= ImGuiTreeNodeFlags_Selected;
+    }
+    if(refresh_ > 0 && (path == selected_path || fs::is_any_parent_path(path, selected_path)))
+    {
+        ImGui::SetNextItemOpen(true);
+    }
+    // The id is the name alone, so the icon can follow the open state without changing it.
+    const std::string name = path.stem().generic_string();
+    const std::string node_id = fmt::format("###{}", name);
+    const bool was_open = ImGui::GetStateStorage()->GetInt(ImGui::GetID(node_id.c_str()), 0) != 0;
+    const char* icon = was_open ? ICON_MDI_FOLDER_OPEN : ICON_MDI_FOLDER;
+    const bool open = ImGui::TreeNodeEx(fmt::format("{} {}{}", icon, name, node_id).c_str(), flags);
+    process_drag_drop_target(path);
+    context_menu(ctx, true, path);
+    const bool clicked = !ImGui::IsItemToggledOpen() && ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    // Keyboard navigation through the tree browses the folders as it goes.
+    if(ImGui::IsItemFocused() && ImGui::IsItemFocusChanged())
+    {
+        set_cache_path(path);
+    }
+    if(open)
+    {
+        const fs::directory_iterator it(path);
+        for(const auto& p : it)
         {
-            flags |= ImGuiTreeNodeFlags_Selected;
-        }
-
-        if(refresh_ > 0 && (path == selected_path || fs::is_any_parent_path(path, selected_path)))
-        {
-            ImGui::SetNextItemOpen(true);
-        }
-
-        auto stem = path.stem();
-        bool open = ImGui::TreeNodeEx(fmt::format("{} {}", ICON_MDI_FOLDER, stem.generic_string()).c_str(), flags);
-        process_drag_drop_target(path);
-
-        // Add context menu for the folder item using the refactored function
-        context_menu(ctx, true, path);
-
-        const bool clicked = !ImGui::IsItemToggledOpen() && ImGui::IsItemClicked(ImGuiMouseButton_Left);
-        
-        // Use the new IsItemFocusChanged function to detect navigation focus changes
-        if (ImGui::IsItemFocused() && ImGui::IsItemFocusChanged())
-        {
-            // Item just received focus through keyboard navigation
-            set_cache_path(path);
-        }
-
-        if(open)
-        {
-            const fs::directory_iterator it(path);
-            for(const auto& p : it)
+            if(fs::is_directory(p.status()))
             {
-                if(fs::is_directory(p.status()))
-                {
-                    const auto& path = p.path();
-                    draw_details(ctx, path);
-                }
+                draw_folder_tree(ctx, p.path());
             }
-
-            ImGui::TreePop();
         }
-
-        if(clicked)
-        {
-            set_cache_path(path);
-        }
+        ImGui::TreePop();
+    }
+    if(clicked)
+    {
+        set_cache_path(path);
     }
 }
 
-void content_browser_panel::draw_as_explorer(rtti::context& ctx, const fs::path& root_path)
+void content_browser_panel::draw_explorer(rtti::context& ctx, const fs::path& root_path)
 {
-    auto& am = ctx.get_cached<asset_manager>();
-    auto& em = ctx.get_cached<editing_manager>();
-    auto& tm = ctx.get_cached<thumbnail_manager>();
+    handle_navigate_back(root_path);
+    draw_toolbar(ctx, root_path);
+    const float status_bar_height = ImGui::GetFrameHeightWithSpacing();
+    const ImVec2 assets_size(0.0f, ImMax(ImGui::GetContentRegionAvail().y - status_bar_height, 1.0f));
+    const size_t shown_count = draw_assets(ctx, assets_size);
+    draw_status_bar(shown_count);
+}
 
-    const float size = ImGui::GetFrameHeight() * 6.0f * scale_;
-    const auto hierarchy = fs::split_until(cache_.get_path(), root_path);
-
-    // Handle backspace key to navigate to parent directory
-    if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive() &&
-        ImGui::IsKeyPressed(shortcuts::navigate_back) && 
-        hierarchy.size() > 1)
+void content_browser_panel::handle_navigate_back(const fs::path& root_path)
+{
+    const bool is_listening = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && !ImGui::IsAnyItemActive();
+    if(!is_listening || !ImGui::IsKeyPressed(shortcuts::navigate_back))
     {
-        // Navigate to parent directory
-        fs::path parent_path = cache_.get_path().parent_path();
-        if (fs::exists(parent_path) && parent_path != cache_.get_path())
-        {
-            set_cache_path(parent_path);
-        }
+        return;
     }
+    const bool is_at_root = fs::split_until(cache_.get_path(), root_path).size() <= 1;
+    if(is_at_root)
+    {
+        return;
+    }
+    const fs::path parent_path = cache_.get_path().parent_path();
+    if(fs::exists(parent_path) && parent_path != cache_.get_path())
+    {
+        set_cache_path(parent_path);
+    }
+}
 
-    ImGui::DrawFilterWithHint(filter_, ICON_MDI_FILE_SEARCH " Search...", 200.0f);
-    ImGui::DrawItemActivityOutline();
-    ImGui::SameLine();
-    ImGui::Text("%s", ICON_MDI_HOME);
-    ImGui::SameLine(0.0f, 0.0f);
-    int id = 0;
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(0.0f, 0.0f));
+void content_browser_panel::draw_toolbar(rtti::context& ctx, const fs::path& root_path)
+{
+    if(panel_toolbar::begin_strip("##content_toolbar"))
+    {
+        draw_add_dropdown(ctx);
+        panel_toolbar::separator();
+        draw_breadcrumb(root_path);
+        panel_toolbar::align_right();
+        draw_search_field();
+    }
+    panel_toolbar::end_strip();
+}
 
+void content_browser_panel::draw_add_dropdown(rtti::context& ctx)
+{
+    if(!panel_toolbar::begin_dropdown("##add", ICON_MDI_PLUS " Add", "Create or import assets in this folder"))
+    {
+        return;
+    }
+    {
+        ImGui::ContextMenuStyleScope style_scope;
+        const fs::path target_path = cache_.get_path();
+        context_create_menu(ctx, target_path);
+        draw_import_menu_item(ctx, target_path);
+    }
+    panel_toolbar::end_dropdown();
+}
+
+void content_browser_panel::draw_breadcrumb(const fs::path& root_path)
+{
+    const auto hierarchy = fs::split_until(cache_.get_path(), root_path);
+    int step = 0;
     for(const auto& dir : hierarchy)
     {
-        const bool is_first = &dir == &hierarchy.front();
-        const bool is_last = &dir == &hierarchy.back();
-        ImGui::PushID(id++);
-
-        if(!is_first)
+        const bool is_root = step == 0;
+        if(!is_root)
         {
-            ImGui::SameLine(0.0f, 0.0f);
-            ImGui::AlignTextToFramePadding();
-            ImGui::TextUnformatted("/");
-            ImGui::SameLine(0.0f, 0.0f);
+            panel_toolbar::path_separator();
         }
-
-        if(is_last)
+        const std::string name = dir.filename().string();
+        const std::string text = is_root ? fmt::format("{} app:/{}", ICON_MDI_HOME, name) : name;
+        const std::string id = fmt::format("##step_{}", step++);
+        if(panel_toolbar::button(id.c_str(), text.c_str(), nullptr))
         {
-            ImGui::PushFont(ImGui::Font::Bold);
-        }
-
-        auto filename = dir.filename().string();
-        if(is_first)
-        {
-            filename = fmt::format("app:/{}", filename);
-        }
-        const bool clicked = ImGui::Button(filename.c_str());
-
-        if(is_last)
-        {
-            ImGui::PopFont();
-        }
-        ImGui::PopID();
-
-        if(clicked)
-        {
+            // The steps behind this one are gone with the click.
             set_cache_path(dir);
             break;
         }
         process_drag_drop_target(dir);
     }
-    ImGui::PopStyleVar(2);
+}
 
+void content_browser_panel::draw_search_field()
+{
+    const float width =
+        panel_toolbar::calc_flexible_width(CONTENT_SEARCH_FIELD_MIN_WIDTH, CONTENT_SEARCH_FIELD_WIDTH);
+    panel_toolbar::begin_field(width);
+    ImGui::DrawFilterWithHint(filter_, ICON_MDI_MAGNIFY " Search...", width);
+    ImGui::DrawItemActivityOutline();
+    panel_toolbar::end_field();
+}
 
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::AlignedItem(1.0f,
-                       ImGui::GetContentRegionAvail().x,
-                       80.0f,
-                       [&]()
-                       {
-                           ImGui::PushItemWidth(80.0f);
-                           ImGui::KnobSliderScalarT("##scale", &scale_, 0.5f, 1.0f);
-                           ImGui::SetItemTooltipEx("%s", "Icons scale");
-                           ImGui::PopItemWidth();
-                       });
-
-    ImGui::Separator();
-
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                             ImGuiWindowFlags_NoSavedSettings;
-
-    fs::path current_path = cache_.get_path();
-
-    if(ImGui::BeginChild("assets_content", ImGui::GetContentRegionAvail(), false, flags))
+auto content_browser_panel::passes_filter(asset_manager& am,
+                                          const fs::directory_cache::cache_entry& cache_entry) const -> bool
+{
+    if(filter_.PassFilter(cache_entry.stem.c_str()))
     {
+        return true;
+    }
+    const auto& type = ex::get_type(cache_entry.extension, cache_entry.entry.is_directory());
+    if(filter_.PassFilter(type.c_str()))
+    {
+        return true;
+    }
+    const auto& metadata = am.get_metadata_for_path(cache_entry.entry.path()).meta;
+    return filter_.PassFilter(metadata.uid.to_string().c_str());
+}
 
+auto content_browser_panel::collect_shown_entries(asset_manager& am) const -> std::vector<size_t>
+{
+    std::vector<size_t> shown_entries;
+    shown_entries.reserve(cache_.size());
+    for(size_t index = 0; index < cache_.size(); ++index)
+    {
+        if(!filter_.IsActive() || passes_filter(am, cache_[index]))
+        {
+            shown_entries.emplace_back(index);
+        }
+    }
+    return shown_entries;
+}
+
+auto content_browser_panel::draw_assets(rtti::context& ctx, const ImVec2& size) -> size_t
+{
+    size_t shown_count = 0;
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                                   ImGuiWindowFlags_NoSavedSettings;
+    if(ImGui::BeginChild("assets_content", size, false, flags))
+    {
+        auto& am = ctx.get_cached<asset_manager>();
+        const float item_size = ImGui::GetFrameHeight() * CONTENT_ITEM_SIZE_IN_FRAMES * scale_;
+        const std::vector<size_t> shown_entries = collect_shown_entries(am);
+        shown_count = shown_entries.size();
+        // A double click on a folder lands here and is applied once the grid is through.
+        fs::path current_path = cache_.get_path();
         bool is_popup_opened = false;
-        
-
-        auto process_cache_entry = [&, this](const auto& cache_entry)
-        {
-            const auto& absolute_path = cache_entry.entry.path();
-            const auto& name = cache_entry.stem;
-            const auto& filename = cache_entry.filename;
-            const auto& relative = cache_entry.protocol_path;
-            const auto& file_ext = cache_entry.extension;
-
-            content_browser_item item(cache_entry);
-            item.size = size;
-            
-            // Use reusable rename handler
-            setup_rename_handler(item, absolute_path, file_ext);
-
-            bool known = false;
-            hpp::for_each_type<gfx::texture,
-                               gfx::shader,
-                               scene_prefab,
-                               material,
-                               physics_material,
-                               ui_tree,
-                               style_sheet,
-                               audio_clip,
-                               mesh,
-                               prefab,
-                               animation_clip,
-                               font,
-                               script>(
-                [&](auto tag)
-                {
-                    if(known)
-                    {
-                        return;
-                    }
-
-                    using asset_t = typename std::decay_t<decltype(tag)>::type;
-
-                    if(ex::is_format<asset_t>(file_ext))
-                    {
-                        known = true;
-                        setup_asset_item<asset_t>(ctx, item, absolute_path, relative, file_ext);
-                        is_popup_opened |= draw_item(item);
-                    }
-                });
-
-            if(!known)
-            {
-                fs::error_code ec;
-                using entry_t = fs::path;
-                const entry_t& entry = absolute_path;
-                item.icon = tm.get_thumbnail(entry);
-                item.is_selected = em.is_selected(entry);
-                item.is_focused = em.is_focused(entry);
-
-                item.on_click = [&em, entry, &item]()
-                {
-                    bool is_directory = item.entry.entry.is_directory();
-                    const auto& file_ext = item.entry.extension;
-                    const auto& file_type = ex::get_type(file_ext, is_directory);
-                    const auto& name = item.entry.stem;
-                    em.select(entry, em.get_select_mode(), name + " (" + file_type + ")");
-                };
-
-                // Use reusable template delete handler for unknown assets
-                setup_delete_handler(item, relative, absolute_path, entry, ctx);
-
-                // Use reusable rename handler
-                setup_rename_handler(item, absolute_path, file_ext);
-
-                if(fs::is_directory(cache_entry.entry.status()))
-                {
-                    item.on_double_click = [&current_path, &em, entry]()
-                    {
-                        current_path = entry;
-                        em.try_unselect<entry_t>();
-                    };
-                }
-
-                is_popup_opened |= draw_item(item);
-            }
-        };
-
-        auto cache_size = cache_.size();
-
-        if(!filter_.IsActive())
-        {
-            ImGui::ItemBrowser(size,
-                               cache_size,
-                               [&](int index)
-                               {
-                                   auto& cache_entry = cache_[index];
-                                   process_cache_entry(cache_entry);
-                               });
-        }
-        else
-        {
-            std::vector<fs::directory_cache::cache_entry> filtered_entries;
-            for(size_t index = 0; index < cache_size; ++index)
-            {
-                const auto& cache_entry = cache_[index];
-
-                const auto& name = cache_entry.stem;
-                const auto& filename = cache_entry.filename;
-                const auto& extension = cache_entry.extension;
-                bool passed = false;
-
-                if(filter_.PassFilter(name.c_str()))
-                {
-                    passed = true;
-                    filtered_entries.emplace_back(cache_entry);
-                }
-
-                if(!passed)
-                {
-                    if(filter_.PassFilter(ex::get_type(extension, cache_entry.entry.is_directory()).c_str()))
-                    {
-                        passed = true;
-                        filtered_entries.emplace_back(cache_entry);
-                    }
-                }
-                
-                if(!passed)
-                {
-                    const auto& metadata = am.get_metadata_for_path(cache_entry.entry.path()).meta;
-                    if(filter_.PassFilter(metadata.uid.to_string().c_str()))
-                    {
-                        filtered_entries.emplace_back(cache_entry);
-                    }
-                }
-                
-                
-            }
-
-            ImGui::ItemBrowser(size,
-                               filtered_entries.size(),
-                               [&](int index)
-                               {
-                                   auto& cache_entry = filtered_entries[index];
-                                   process_cache_entry(cache_entry);
-                               });
-        }
-
+        ImGui::ItemBrowser(item_size,
+                           shown_entries.size(),
+                           [&](int index)
+                           {
+                               const auto& cache_entry = cache_[shown_entries[index]];
+                               is_popup_opened |= draw_cache_entry(ctx, cache_entry, item_size, current_path);
+                           });
         if(!is_popup_opened)
         {
             context_menu(ctx, false, cache_.get_path());
         }
         set_cache_path(current_path);
-
-
         handle_window_empty_click(ctx);
     }
     ImGui::EndChild();
+    return shown_count;
+}
+
+auto content_browser_panel::draw_cache_entry(rtti::context& ctx,
+                                             const fs::directory_cache::cache_entry& cache_entry,
+                                             float item_size,
+                                             fs::path& current_path) -> bool
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    auto& tm = ctx.get_cached<thumbnail_manager>();
+    const auto& absolute_path = cache_entry.entry.path();
+    const auto& relative = cache_entry.protocol_path;
+    const auto& file_ext = cache_entry.extension;
+
+    content_browser_item item(cache_entry);
+    item.size = item_size;
+    setup_rename_handler(item, absolute_path, file_ext);
+
+    bool is_known_asset = false;
+    bool is_popup_opened = false;
+    hpp::for_each_type<gfx::texture,
+                       gfx::shader,
+                       scene_prefab,
+                       material,
+                       physics_material,
+                       ui_tree,
+                       style_sheet,
+                       audio_clip,
+                       mesh,
+                       prefab,
+                       animation_clip,
+                       font,
+                       script>(
+        [&](auto tag)
+        {
+            if(is_known_asset)
+            {
+                return;
+            }
+
+            using asset_t = typename std::decay_t<decltype(tag)>::type;
+
+            if(ex::is_format<asset_t>(file_ext))
+            {
+                is_known_asset = true;
+                setup_asset_item<asset_t>(ctx, item, absolute_path, relative, file_ext);
+                is_popup_opened = draw_item(item);
+            }
+        });
+    if(is_known_asset)
+    {
+        return is_popup_opened;
+    }
+
+    // A folder, or a file of no asset type.
+    using entry_t = fs::path;
+    const entry_t& entry = absolute_path;
+    item.icon = tm.get_thumbnail(entry);
+    item.is_selected = em.is_selected(entry);
+    item.is_focused = em.is_focused(entry);
+    item.on_click = [&em, entry, &item]()
+    {
+        bool is_directory = item.entry.entry.is_directory();
+        const auto& file_ext = item.entry.extension;
+        const auto& file_type = ex::get_type(file_ext, is_directory);
+        const auto& name = item.entry.stem;
+        em.select(entry, em.get_select_mode(), name + " (" + file_type + ")");
+    };
+    setup_delete_handler(item, relative, absolute_path, entry, ctx);
+    if(fs::is_directory(cache_entry.entry.status()))
+    {
+        item.on_double_click = [&current_path, &em, entry]()
+        {
+            current_path = entry;
+            em.try_unselect<entry_t>();
+        };
+    }
+    return draw_item(item);
+}
+
+void content_browser_panel::draw_status_bar(size_t shown_count)
+{
+    const std::string summary = filter_.IsActive() ? fmt::format("{} of {} items", shown_count, cache_.size())
+                                                   : fmt::format("{} items", shown_count);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("%s", summary.c_str());
+    ImGui::SameLine();
+    ImGui::AlignedItem(1.0f,
+                       ImGui::GetContentRegionAvail().x,
+                       CONTENT_SCALE_SLIDER_WIDTH,
+                       [&]()
+                       {
+                           ImGui::PushItemWidth(CONTENT_SCALE_SLIDER_WIDTH);
+                           ImGui::KnobSliderScalarT("##scale", &scale_, 0.5f, 1.0f);
+                           ImGui::SetItemTooltipEx("%s", "Icons scale");
+                           ImGui::PopItemWidth();
+                       });
 }
 
 void content_browser_panel::handle_window_empty_click(rtti::context& ctx) const
@@ -1601,16 +1594,21 @@ void content_browser_panel::context_menu(rtti::context& ctx, bool use_context_it
         }
 
 
-        if(ImGui::MenuItemIcon(ICON_MDI_IMPORT, "Import..."))
-        {
-            import(ctx, target_path);
-        }
-        ImGui::SetItemTooltipEx("If import asset consists of multiple files,\n"
-                                "just copy paste all the files the data folder.\n"
-                                "Preferably in a new folder. The importer will\n"
-                                "automatically pick them up as dependencies.");
+        draw_import_menu_item(ctx, target_path);
     }
     ImGui::EndPopup();
+}
+
+void content_browser_panel::draw_import_menu_item(rtti::context& ctx, const fs::path& target_path)
+{
+    if(ImGui::MenuItemIcon(ICON_MDI_IMPORT, "Import..."))
+    {
+        import(ctx, target_path);
+    }
+    ImGui::SetItemTooltipEx("If import asset consists of multiple files,\n"
+                            "just copy paste all the files the data folder.\n"
+                            "Preferably in a new folder. The importer will\n"
+                            "automatically pick them up as dependencies.");
 }
 
 void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::path& target_path)
