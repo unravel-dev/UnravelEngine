@@ -248,7 +248,8 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Applies a force to the entity.
+        /// Applies a force to the entity. Only a Dynamic body responds: Static and Kinematic bodies
+        /// ignore forces, a Kinematic body is moved through its transform.
         /// </summary>
         /// <param name="force">The force to apply.</param>
         /// <param name="mode">The force mode to apply.</param>
@@ -258,7 +259,7 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Applies a torque to the entity.
+        /// Applies a torque to the entity. Only a Dynamic body responds, see ApplyForce.
         /// </summary>
         /// <param name="torque">The torque to apply.</param>
         /// <param name="mode">The force mode to apply.</param>

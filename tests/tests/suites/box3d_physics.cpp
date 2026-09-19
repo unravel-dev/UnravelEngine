@@ -549,6 +549,58 @@ void test_character_controller(rtti::context& ctx)
     check(cc.is_grounded(), "the character lands after the impulse");
 }
 
+/**
+ * Box3D recomputes the mass from the shape densities when the motion locks turn a fixed
+ * rotation on or off. A character-like body (light capsule, rotation frozen) then weighed
+ * two tons, and a dash impulse changed its velocity by millimeters per second.
+ */
+void test_frozen_rotation_keeps_the_authored_mass(rtti::context& ctx)
+{
+    std::printf("test_frozen_rotation_keeps_the_authored_mass\n");
+    sim_fixture fx(ctx);
+    fx.spawn_ground();
+    physics_capsule_shape capsule;
+    capsule.center = {0.0f, 1.5f, 0.0f};
+    capsule.radius = 0.5f;
+    capsule.length = 2.0f;
+    const float impulse = 8.0f;
+
+    // Frozen before play: the locks are applied while the body is made.
+    auto runner = fx.spawn("runner", {0.0f, 0.0f, 0.0f});
+    auto& runner_comp = fx.add_body(runner, rigidbody_type::dynamic, capsule, 1.0f);
+    runner_comp.set_freeze_rotation({true, true, true});
+    // Frozen during play: the locks change on a body that already has its mass.
+    auto late = fx.spawn("late", {5.0f, 0.0f, 0.0f});
+    auto& late_comp = fx.add_body(late, rigidbody_type::dynamic, capsule, 2.0f);
+
+    fx.begin();
+    fx.step(settle_steps);
+    const float runner_before = runner_comp.get_velocity().x;
+    fx.backend->apply_force(runner_comp, {impulse, 0.0f, 0.0f}, force_mode::impulse);
+    check_near(runner_comp.get_velocity().x - runner_before,
+               impulse / 1.0f,
+               0.01f,
+               "an impulse on a rotation-frozen body is divided by the authored mass");
+
+    late_comp.set_freeze_rotation({true, true, true});
+    fx.step(1);
+    const float late_before = late_comp.get_velocity().x;
+    fx.backend->apply_force(late_comp, {impulse, 0.0f, 0.0f}, force_mode::impulse);
+    check_near(late_comp.get_velocity().x - late_before,
+               impulse / 2.0f,
+               0.01f,
+               "freezing the rotation during play keeps the authored mass");
+
+    late_comp.set_freeze_rotation({false, false, false});
+    fx.step(1);
+    const float unfrozen_before = late_comp.get_velocity().x;
+    fx.backend->apply_force(late_comp, {impulse, 0.0f, 0.0f}, force_mode::impulse);
+    check_near(late_comp.get_velocity().x - unfrozen_before,
+               impulse / 2.0f,
+               0.01f,
+               "releasing the rotation during play keeps the authored mass");
+}
+
 } // namespace
 
 auto run_box3d_suite(rtti::context& ctx) -> int
@@ -559,6 +611,7 @@ auto run_box3d_suite(rtti::context& ctx) -> int
     test_sensors_have_no_response(ctx);
     test_queries(ctx);
     test_forces(ctx);
+    test_frozen_rotation_keeps_the_authored_mass(ctx);
     test_kinematic_pushes_dynamic(ctx);
     test_bodies_come_and_go_during_play(ctx);
     test_character_controller(ctx);

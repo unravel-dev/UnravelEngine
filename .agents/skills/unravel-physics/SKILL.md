@@ -36,6 +36,14 @@ description: >-
   `box3d_backend.cpp`), concave meshes only collide on static bodies, and the character controller
   is a capsule mover (`b3World_CastMover` / `b3World_CollideMover` / `b3SolvePlanes`)
   with a kinematic proxy body so sensors and dynamic bodies still see it
+- Box3D mass trap: `b3Body_SetType` and `b3Body_SetMotionLocks` (when a fixed rotation turns on
+  or off) call `b3UpdateBodyMassData`, which recomputes the mass from the shape densities and drops
+  the authored mass. Re-apply it after either (`update_rigidbody_mass_and_inertia`). Symptom: a
+  1 kg rotation-frozen capsule weighs ~2 tons, impulse / force modes do nothing while acceleration
+  / velocity-change modes still work
+- Forces and torques reach DYNAMIC bodies only, on both backends (`apply_force` returns early
+  otherwise). A kinematic body is moved through its ECS transform; velocity writes on it are
+  discarded by the next sync
 - `physics_system` owns simulation step in `on_frame_update`
 - Play mode lifecycle: `on_play_begin` / `on_play_end` / `on_pause` / `on_resume`
 - Components use `component_crtp` + `owned_component` pattern
@@ -92,6 +100,7 @@ Covered by the `physics contacts / destroy funnel` test suite.
 ## Verification checklist
 
 - [ ] `unravel-tests --suite physics` green (contacts / destroy funnel)
+- [ ] `unravel-tests --suite box3d` green (backend smoke: forces, mass, kinematic, character)
 - [ ] Collisions work in play mode (not edit mode unless explicitly supported)
 - [ ] Layer mask filtering correct
 - [ ] Character controller moves and collides correctly

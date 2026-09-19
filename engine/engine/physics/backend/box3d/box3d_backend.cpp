@@ -1917,6 +1917,10 @@ void update_rigidbody_constraints(box3d::rigidbody& body, physics_component& com
     locks.angularY = freeze_rotation.y;
     locks.angularZ = freeze_rotation.z;
     b3Body_SetMotionLocks(body.body, locks);
+    // Box3D recomputes the mass from the shape densities whenever the locks turn a fixed
+    // rotation on or off, which drops the authored mass: a 1 kg capsule with its rotation
+    // frozen would weigh two tons, and an impulse would barely move it.
+    update_rigidbody_mass_and_inertia(body, comp);
 
     // Adjust velocities to respect the locks.
     b3Vec3 linear = b3Body_GetLinearVelocity(body.body);
