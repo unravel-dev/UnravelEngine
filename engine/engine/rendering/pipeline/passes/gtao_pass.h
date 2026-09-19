@@ -53,7 +53,7 @@ public:
         /// consistent. 0.05 ~ the 32 px screen-probe spacing, the footprint the GI's probe
         /// interpolation cannot resolve (0.25 = XeGTAO-like contact scale, 0.4 = the old
         /// room-scale term, see radius).
-        float max_screen_radius = 0.05f;
+        float max_screen_radius = 0.25f;
         /// Blend between no occlusion (0) and the full visibility (1) at the consumer.
         float intensity = 1.0f;
         /// The bitmask's slab depth as a fraction of the radius.
