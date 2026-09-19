@@ -46,7 +46,7 @@ public:
         /// occluder crosses the boundary (XeGTAO's 0.615 is softer, 0.2 pops).
         float falloff_range = 0.3f;
         /// Power applied to the visibility (XeGTAO's final value power). 1 = ground truth
-        /// for the depth buffer; 1.6 paired with the old 4 m room-scale radius.
+        /// for the depth buffer.
         float final_power = 2.2f;
         /// Longest horizon search as a fraction of the AO target height. Bounds the cost and
         /// the sample spacing; the world radius shrinks with it so the falloff stays

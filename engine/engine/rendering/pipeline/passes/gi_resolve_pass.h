@@ -80,7 +80,7 @@ public:
         /// granularity in DIM octants only - white and one-frame-lived, so the resolve
         /// temporal integrates it (the removed temporal's blob pathology cannot occur
         /// without blending). Off = every texel traces its own ray, the quality ceiling.
-        bool adaptive_rays = false;
+        bool adaptive_rays = true;
         /// World-probe rays JITTER inside their octahedral texel per window and the atlas
         /// becomes a converging running mean (GI_WORLD_PROBE_EMA_WINDOWS): removes the
         /// per-probe bias of fixed texel-centre rays (a small emitter skewered or missed per
