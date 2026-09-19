@@ -89,7 +89,6 @@ struct bar_state
 
 struct dropdown_state
 {
-    ImGuiID open_id{};
     /// Window that hosts the bar of the open dropdown.
     ImGuiID open_host_id{};
     int open_frame{-1};
@@ -386,10 +385,31 @@ void set_item_tooltip(const char* tooltip)
     }
 }
 
-auto is_other_dropdown_open(ImGuiID item_id) -> bool
+/// An open dropdown keeps the hover from every window under it, so a press on the button of
+/// another dropdown never gets to that button: it would only close the open one, and take a
+/// second click to open its own. Such a press is handed to the button here. The pointer has to
+/// be over the bar itself: the open popup may well cover the button, and what lies under a popup
+/// gets no input.
+auto take_press_blocked_by_dropdown(ImGuiID item_id, const ImRect& item_bb) -> bool
 {
-    const bool is_recent = g_dropdown.open_frame >= ImGui::GetFrameCount() - 1;
-    return is_recent && g_dropdown.open_id != 0 && g_dropdown.open_id != item_id;
+    const ImGuiContext& context = *ImGui::GetCurrentContext();
+    const bool is_dropdown_open = g_dropdown.open_frame >= ImGui::GetFrameCount() - 1;
+    const bool is_usable = (context.CurrentItemFlags & ImGuiItemFlags_Disabled) == 0 && context.Style.Alpha > 0.0f;
+    const bool is_over_bar = context.HoveredWindow == ImGui::GetCurrentWindow();
+    if(!is_dropdown_open || !is_usable || !is_over_bar || !ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+        return false;
+    }
+    if(!ImGui::IsMouseHoveringRect(item_bb.Min, item_bb.Max))
+    {
+        return false;
+    }
+    // The hover is what the button would have claimed had it seen the press. Opening its popup
+    // closes the other one, which lifts the block for the rest of the frame: unclaimed, the
+    // press would also go to the click blocker of the bar and to the click on empty space that
+    // ends the frame, and either closes the popup that is about to open.
+    ImGui::SetHoveredID(item_id);
+    return true;
 }
 
 void set_next_popup_placement(const ImRect& item_bb)
@@ -766,10 +786,10 @@ auto begin_dropdown(const char* id, const char* text, const char* tooltip, ImU32
     const ImGuiID item_id = ImGui::GetID(id);
     ImGui::PushID(id);
     const char* popup_name = "##dropdown";
-    // The open popup blocks the hover of every other window, so the switch between dropdowns
-    // tests the rectangle itself.
-    const bool is_switch_hover = is_other_dropdown_open(item_id) && ImGui::IsMouseHoveringRect(item_bb.Min, item_bb.Max);
-    if(is_pressed || (is_switch_hover && !ImGui::IsPopupOpen(popup_name)))
+    // A dropdown opens on a press and on nothing else. The press on the button of the open one
+    // stays blocked: that click closes it.
+    const bool is_closed = !ImGui::IsPopupOpen(popup_name);
+    if(is_pressed || (is_closed && take_press_blocked_by_dropdown(item_id, item_bb)))
     {
         ImGui::OpenPopup(popup_name);
     }
@@ -783,7 +803,6 @@ auto begin_dropdown(const char* id, const char* text, const char* tooltip, ImU32
         ImGui::PopID();
         return false;
     }
-    g_dropdown.open_id = item_id;
     g_dropdown.open_host_id = g_bar.host->ID;
     g_dropdown.open_frame = ImGui::GetFrameCount();
     return true;

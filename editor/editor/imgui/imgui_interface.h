@@ -24,7 +24,7 @@ public:
     auto deinit(rtti::context& ctx) -> bool;
 
     /// Renders a single loading frame outside the normal event loop.
-    /// Pumps OS events, draws a loading overlay, and presents the frame.
+    /// Pumps OS events, draws the loading page, and presents the frame.
     void render_loading_frame(rtti::context& ctx,
                               const std::string& stage,
                               size_t completed,
@@ -32,10 +32,6 @@ public:
                               const std::string& current_job = {});
 
 private:
-    void draw_loading_overlay(const std::string& stage,
-                              size_t completed,
-                              size_t total,
-                              const std::string& current_job);
     void on_frame_ui_render(rtti::context& ctx, delta_t dt);
     void on_os_event(rtti::context& ctx, os::event& e);
 

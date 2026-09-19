@@ -4,6 +4,7 @@
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/imgui/integration/imgui_style.h>
+#include <editor/imgui/screen_card.h>
 #include <editor/system/project_manager.h>
 #include <filedialog/filedialog.h>
 #include <imgui/imgui.h>
@@ -22,19 +23,18 @@ namespace unravel
 {
 namespace
 {
-// Sizes are in units of the font size, like the panel toolbars, so the page follows the UI scale
-// and never depends on the paddings of a theme.
+using screen_card::to_pixels;
+
+// Sizes are in units of the font size, see screen_card.
 constexpr float START_PAGE_SHARE_X = 0.62f;
 constexpr float START_PAGE_SHARE_Y = 0.7f;
 constexpr float START_PAGE_MIN_WIDTH = 50.0f;
 constexpr float START_PAGE_MAX_WIDTH = 80.0f;
 constexpr float START_PAGE_MIN_HEIGHT = 30.0f;
 constexpr float START_PAGE_MAX_HEIGHT = 46.0f;
-constexpr float START_PAGE_VIEWPORT_MARGIN = 1.5f;
-constexpr float START_PAGE_PADDING_X = 2.0f;
-constexpr float START_PAGE_PADDING_Y = 1.6f;
-constexpr float START_PAGE_ROUNDING = 0.75f;
 constexpr float START_PAGE_SECTION_GAP = 1.1f;
+// Between the list and the actions beside it.
+constexpr float START_PAGE_COLUMN_GAP = 2.0f;
 constexpr float START_PAGE_SIDEBAR_WIDTH = 13.5f;
 constexpr float START_PAGE_SEARCH_WIDTH = 16.0f;
 constexpr float START_PAGE_FORM_WIDTH = 40.0f;
@@ -43,14 +43,11 @@ constexpr float START_PAGE_BUTTON_HEIGHT = 2.2f;
 constexpr float START_PAGE_PRIMARY_BUTTON_HEIGHT = 2.6f;
 constexpr float START_PAGE_BUTTON_PADDING_X = 0.9f;
 constexpr float START_PAGE_BUTTON_ROUNDING = 0.4f;
-constexpr ImVec4 START_PAGE_BACKDROP_COLOR{0.075f, 0.075f, 0.08f, 1.0f};
 // The theme's input fields are darker than a window; on the dark page they would vanish, so the
 // page washes them light, the way the panel toolbars do.
 constexpr ImU32 START_PAGE_FIELD_COLOR = IM_COL32(255, 255, 255, 14);
 constexpr ImU32 START_PAGE_FIELD_HOVERED_COLOR = IM_COL32(255, 255, 255, 24);
 constexpr ImU32 START_PAGE_FIELD_ACTIVE_COLOR = IM_COL32(255, 255, 255, 30);
-constexpr int START_PAGE_SHADOW_RINGS = 12;
-constexpr int START_PAGE_SHADOW_RING_ALPHA = 9;
 // The labels say how long ago a project was touched, so they age while the page stays open.
 constexpr double START_PAGE_REFRESH_SECONDS = 20.0;
 
@@ -121,11 +118,6 @@ struct card_content
     ImU32 note_color{};
 };
 
-auto to_pixels(float font_units) -> float
-{
-    return ImFloor(ImGui::GetFontSize() * font_units);
-}
-
 auto get_muted_text_color() -> ImU32
 {
     return ImGui::GetColorU32(ImGuiCol_Text, PROJECT_ROW_MUTED_ALPHA);
@@ -185,19 +177,6 @@ auto read_modified_label(const fs::path& project_path) -> std::string
     const auto modified = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
         file_time - fs::file_time_type::clock::now() + std::chrono::system_clock::now());
     return format_modified_label(modified);
-}
-
-void draw_soft_shadow(ImDrawList* draw_list, const ImRect& rect, float rounding)
-{
-    for(int ring = 1; ring <= START_PAGE_SHADOW_RINGS; ++ring)
-    {
-        const float grow = static_cast<float>(ring) * 2.0f;
-        const ImVec2 expand(grow, grow);
-        draw_list->AddRectFilled(rect.Min - expand,
-                                 rect.Max + expand,
-                                 IM_COL32(0, 0, 0, START_PAGE_SHADOW_RING_ALPHA),
-                                 rounding + grow);
-    }
 }
 
 void draw_card_background(const ImRect& rect, bool is_hovered, bool is_selected)
@@ -443,15 +422,13 @@ void draw_centered_hint(const char* icon, const char* headline, const char* text
 
 auto calc_page_size(const ImVec2& viewport_size) -> ImVec2
 {
-    const float margin = to_pixels(START_PAGE_VIEWPORT_MARGIN);
     const ImVec2 wanted(ImClamp(viewport_size.x * START_PAGE_SHARE_X,
                                 to_pixels(START_PAGE_MIN_WIDTH),
                                 to_pixels(START_PAGE_MAX_WIDTH)),
                         ImClamp(viewport_size.y * START_PAGE_SHARE_Y,
                                 to_pixels(START_PAGE_MIN_HEIGHT),
                                 to_pixels(START_PAGE_MAX_HEIGHT)));
-    // A window smaller than the page gets what fits.
-    return ImVec2(ImMin(wanted.x, viewport_size.x - 2.0f * margin), ImMin(wanted.y, viewport_size.y - 2.0f * margin));
+    return screen_card::fit_to_viewport(wanted);
 }
 } // namespace
 
@@ -459,35 +436,11 @@ void start_page::draw(rtti::context& ctx)
 {
     auto& pm = ctx.get_cached<project_manager>();
     refresh_projects_if_stale(pm);
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
-    ImGui::SetNextWindowViewport(viewport->ID);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, START_PAGE_BACKDROP_COLOR);
-    const ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
-                                          ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
-                                          ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                                          ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoScrollbar;
-    ImGui::Begin("START PAGE", nullptr, window_flags);
-    ImGui::PopStyleVar(2);
-    ImGui::PopStyleColor();
-    // The page is a child, not a modal: a modal here would own the popup stack and break every
-    // other modal opened while it shows (the engine version confirmation, for one). The window
-    // covers the viewport, so nothing behind the page can be reached anyway.
-    const ImVec2 page_size = calc_page_size(viewport->WorkSize);
-    const ImVec2 page_min(ImFloor(viewport->WorkPos.x + (viewport->WorkSize.x - page_size.x) * 0.5f),
-                          ImFloor(viewport->WorkPos.y + (viewport->WorkSize.y - page_size.y) * 0.5f));
-    const float rounding = to_pixels(START_PAGE_ROUNDING);
-    draw_soft_shadow(ImGui::GetWindowDrawList(), ImRect(page_min, page_min + page_size), rounding);
-    ImGui::SetCursorScreenPos(page_min);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(to_pixels(START_PAGE_PADDING_X), to_pixels(START_PAGE_PADDING_Y)));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, rounding);
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_PopupBg));
-    const ImGuiChildFlags page_flags = ImGuiChildFlags_Borders | ImGuiChildFlags_AlwaysUseWindowPadding;
-    if(ImGui::BeginChild("##start_page", page_size, page_flags, ImGuiWindowFlags_NoScrollbar))
+    // The page is a card, not a modal: a modal here would own the popup stack and break every
+    // other modal opened while it shows (the engine version confirmation, for one).
+    screen_card::card_layout layout{};
+    layout.size = calc_page_size(ImGui::GetMainViewport()->WorkSize);
+    if(screen_card::begin("START PAGE", layout))
     {
         switch(view_)
         {
@@ -505,10 +458,7 @@ void start_page::draw(rtti::context& ctx)
                 break;
         }
     }
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar(3);
-    ImGui::End();
+    screen_card::end();
     last_drawn_frame_ = ImGui::GetFrameCount();
 }
 
@@ -679,7 +629,7 @@ void start_page::draw_projects_view(rtti::context& ctx)
 {
     draw_page_header("Unravel Engine", "Open a recent project or create a new one.");
     const float sidebar_width = to_pixels(START_PAGE_SIDEBAR_WIDTH);
-    const float gap = to_pixels(START_PAGE_PADDING_X);
+    const float gap = to_pixels(START_PAGE_COLUMN_GAP);
     const float list_width = ImGui::GetContentRegionAvail().x - sidebar_width - gap;
     ImGui::BeginGroup();
     draw_projects_toolbar(list_width);

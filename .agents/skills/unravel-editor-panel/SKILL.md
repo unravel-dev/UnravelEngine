@@ -15,6 +15,8 @@ description: >-
 | Editor entry | `editor/editor/editor.h` |
 | Hub orchestrator | `editor/editor/hub/hub.cpp` |
 | Start page (no project open) | `editor/editor/hub/start_page/` |
+| Loading screen | `editor/editor/imgui/loading_page.h` |
+| Backdrop + card of both | `editor/editor/imgui/screen_card.h` |
 | Panel definitions | `editor/editor/hub/panels/panels_defs.h` |
 | Scene viewport | `editor/editor/hub/panels/scene_panel/` |
 | Game view | `editor/editor/hub/panels/game_panel/` |
@@ -90,6 +92,13 @@ One module gives every panel toolbar the same look: `panel_toolbar`
   slider); `calc_flexible_width(min, max)` lets a search field give way in a narrow dock;
   `begin_group()` / `end_group()` make several items one ImGui item (one tooltip, one
   `BeginDisabled`)
+
+Dropdowns (`begin_dropdown`) open on a press and on nothing else - never on hover. An open popup
+shields what lies under it. A press on ANOTHER dropdown while one is open switches in one click:
+the popup blocks that button's hover, so `take_press_blocked_by_dropdown` hands the press over and
+claims the hover with `SetHoveredID` (unclaimed, the bar's click blocker and the end-of-frame
+click on empty space take the same press and close the new popup). Never test a raw rectangle for
+input without checking `HoveredWindow`: it reaches through popups.
 
 The scene, game, content, console and inspector panels have NO menu bar (`get_window_flags()`
 returns no `MenuBar`).
@@ -171,6 +180,8 @@ width exceeds `CalcTextSize` label.
   child is pushed down and cropped
 - `PushStyleVar` / `PushStyleColor` inside a `Begin` / `End` (or child) scope with the pop after
   the `End`: ImGui's stack check reports it (red outline around the window + error tooltip)
+- Style pushed for a `Begin` / `BeginChild` and left on the stack while the content is drawn: every
+  tooltip, popup and child opened from that content inherits it. Pop right after the `Begin`
 
 ## Deep reference
 
