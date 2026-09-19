@@ -589,7 +589,8 @@ void main()
 		{
 			probe_color = vec3(0.6, 0.0, 0.0);
 		}
-		else if(meta.w > 1.5)
+		// Mode 2 only: a sticky-traced (3) or revalidating (4) probe WAS traced this frame.
+		else if(meta.w > 1.5 && meta.w < 2.5)
 		{
 			probe_color = vec3(0.1, 0.35, 1.0);
 		}

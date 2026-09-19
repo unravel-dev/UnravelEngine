@@ -6,10 +6,12 @@
  * sky dead, the sparse surviving tracers were paying an occupancy tax the skips could not
  * recover (measured: pass savings trailing the ray-count reduction).
  *
- * The gate chain, moved verbatim from the trace's first thread:
+ * The gate chain:
  *   dead anchor -> no list entry, no mode change (the interp pass clears the tile);
  *   even-lattice probes -> always traced (the coarse base everything else leans on);
- *   phased revalidation -> traced regardless (mode 4), because an interpolated probe's own
+ *   the geometric gate -> an odd probe whose parents do not share its tangent plane (and it
+ *     theirs) is traced, full stop; only a probe that passes is a CANDIDATE for the rest;
+ *   phased revalidation -> a candidate is traced (mode 4), because an interpolated probe's own
  *     history is derived from its parents and no test below can see what the substitution
  *     erased. The traced tile is NOT shown as such: the interp pass compares it with the
  *     parents' blend and either restores the blend (mode 2) or keeps the trace and marks the
@@ -17,7 +19,7 @@
  *     frame in eight was a periodic flash on every flat surface (measured 2026-09-17, Sponza
  *     cloister: the Indirect view's at-rest median change 0.12 -> 0.31 with adaptive probes);
  *   sticky-traced last frame -> traced again (mode 3) until the next revalidation;
- *   coplanarity of the parent anchors (cell plane / collinearity at parent scale).
+ *   every other candidate -> interpolated from its parents (mode 2).
  *
  * Importance-mip radiance agreement is not a live gate. It was written for a
  * history_cap encoding that never shipped (x was 0/1, the test was > 1.5).
@@ -67,62 +69,55 @@ void main()
 	float last_mode = b_gi_probes[last_record + uint(GI_PROBE_META)].w;
 	bool odd = ((probe.x | probe.y) & 1) != 0;
 	bool adaptive = u_gi_screen_trace.z > 0.0 && odd;
-	bool sticky = adaptive && !revalidate && last_mode > 2.5 && last_mode < 3.5;
+	// THE GEOMETRIC GATE, first and for every odd probe: may its even-lattice parents stand in
+	// for it at all? Each parent must lie within tolerance of THIS probe's tangent plane and this
+	// probe within tolerance of the parent's - the plane test the integrate pass applies per pixel
+	// (and Lumen's adaptive placement: plane distance to the scene plane over depth), so a skipped
+	// probe is one whose pixels would have blended those parents at near-full weight anyway.
+	// It used to fit a plane (or a line) THROUGH the parents and test the probe against that.
+	// At a depth edge the parents straddle the edge, their connecting line runs along the view
+	// ray, and the probe between them lies on it whichever surface it sits on: the test passed
+	// ~99 percent of odd probes at every pose and spacing (measured 2026-09-18, Sponza: a fixed
+	// checkerboard straight across curtain and column silhouettes), and silhouette probes took a
+	// blend of near- and far-surface lighting that slid with the lattice under a camera turn.
+	// The G-buffer normal carries normal maps; as a plane DISTANCE over one tile its tilt costs
+	// sin(tilt) x the tile's footprint, inside the 5 percent tolerance at spacings up to 32 px
+	// except at grazing incidence, where the probe is traced - the safe direction.
+	bool parents_stand_in = false;
 	BRANCH
-	if(adaptive && !revalidate && !sticky)
+	if(adaptive)
 	{
 		ivec2 parents[4];
 		GiProbeParents(probe, parents);
-		vec3 positions[4];
-		bool parents_valid = true;
+		float tolerance = GI_ADAPTIVE_PLANE_TOLERANCE * max(meta2.w, 0.1);
+		parents_stand_in = true;
 		LOOP for(int p = 0; p < 4; ++p)
 		{
 			uint parent_record =
 			    (GiProbeRecord(parents[p].x, parents[p].y, 0) + u_gi_probe_write_offset) *
 			    uint(GI_PROBE_STRIDE);
 			vec4 parent_meta = b_gi_probes[parent_record + uint(GI_PROBE_META)];
-			positions[p] = parent_meta.xyz;
-			if(parent_meta.w < 0.5)
+			vec3 parent_normal = b_gi_probes[parent_record + uint(GI_PROBE_META2)].xyz;
+			vec3 to_parent = parent_meta.xyz - world_position;
+			if(parent_meta.w < 0.5 || abs(dot(to_parent, meta2.xyz)) > tolerance ||
+			   abs(dot(to_parent, parent_normal)) > tolerance)
 			{
-				parents_valid = false;
-			}
-		}
-		if(parents_valid)
-		{
-			float tolerance = GI_ADAPTIVE_PLANE_TOLERANCE * max(meta2.w, 0.1);
-			// Duplicated parents (non-straddled axis, lattice edge) zero their edge.
-			vec3 edge_x = positions[1] - positions[0];
-			vec3 edge_y = positions[2] - positions[0];
-			vec3 cell_normal = cross(edge_x, edge_y);
-			float cell_len = length(cell_normal);
-			if(cell_len > 1e-6)
-			{
-				vec3 plane_normal = cell_normal / cell_len;
-				interpolated =
-				    abs(dot(world_position - positions[0], plane_normal)) <= tolerance &&
-				    abs(dot(positions[3] - positions[0], plane_normal)) <= tolerance;
-			}
-			else
-			{
-				// One distinct edge (or none): the collinearity test. The duplicate edge is
-				// zero, so the sum IS the live axis; both zero fails closed.
-				vec3 axis = edge_x + edge_y;
-				float axis_len2 = dot(axis, axis);
-				if(axis_len2 > 1e-8)
-				{
-					vec3 delta = world_position - positions[0];
-					vec3 off_axis = delta - axis * (dot(delta, axis) / axis_len2);
-					interpolated = dot(off_axis, off_axis) <= tolerance * tolerance;
-				}
+				parents_stand_in = false;
 			}
 		}
 	}
+	// Revalidation and the sticky mode are decisions about probes the geometry ALLOWS to be
+	// skipped. A probe that fails the gate above is simply traced (mode 1): routing it through
+	// mode 4 let the interp pass overwrite its trace with the parents' blend one frame in eight.
+	bool candidate = adaptive && parents_stand_in;
+	bool sticky = candidate && !revalidate && last_mode > 2.5 && last_mode < 3.5;
+	interpolated = candidate && !revalidate && !sticky;
 	if(interpolated)
 	{
 		b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 2.0);
 		return;
 	}
-	if(adaptive && revalidate)
+	if(candidate && revalidate)
 	{
 		b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 4.0);
 	}

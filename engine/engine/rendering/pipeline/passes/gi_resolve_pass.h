@@ -120,7 +120,7 @@ public:
         /// the tile form is what actually saves the pass at rest (measured 2026-09-09). The
         /// A/B switch for verifying no residual chroma structure is lost.
         bool denoise_converged_early_out = true;
-        int denoise_passes = 3;
+        int denoise_passes = 4;
         float denoise_normal_power = 32.0f;
         float denoise_luma_phi = 32.0f;
         /// Luminance-stop floor as a fraction of each pixel's own luminance. The

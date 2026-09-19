@@ -444,12 +444,24 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             // a 10-frame window; an aperiodic sequence never lets a pixel's running mean see the
             // same sample set twice, which reads as rest shimmer. The placement's Halton index
             // already wraps at 8 (GiHalton8).
+            // THE RAY DIRECTIONS CYCLE OVER 16 (zw): an 8-frame cycle makes every direction cell a
+            // fixed 8-point quadrature of its cone, a BIAS no filter removes - fixed to the screen
+            // lattice, it slid over the floor as waves in a camera turn. Measured 2026-09-18 (Sponza
+            // gallery, spacing 8, one filter pass, no denoise; view-dependent band residual under a
+            // 3 degree turn | Indirect rest std p95), with the probe-lattice cell noise
+            // (GiProbeCellNoise): 8 frames 4.2 | 0.73, 16 frames 1.8 | 0.98, 32 frames 1.4 | 1.18,
+            // aperiodic 0.8 | 1.65, against 8.8 | 1.05 before. 16 is the longest cycle that stays
+            // under the old rest noise; frame-to-frame change is 0.69 at every length (was 1.00).
+            // The integrate's bracket jitter (xy) keeps the 8-frame cycle it was measured with.
             constexpr uint32_t gather_jitter_period_frames = 8u;
+            constexpr uint32_t gather_direction_period_frames = 16u;
             const double frame_index = double(gfx::get_render_frame() % gather_jitter_period_frames);
+            const double direction_index =
+                double(gfx::get_render_frame() % gather_direction_period_frames);
             const float gi_jitter[4] = {float(std::fmod(0.754877666 * frame_index, 1.0)),
                                         float(std::fmod(0.569840291 * frame_index, 1.0)),
-                                        0.0f,
-                                        0.0f};
+                                        float(std::fmod(0.754877666 * direction_index, 1.0)),
+                                        float(std::fmod(0.569840291 * direction_index, 1.0))};
             const auto& view_clipmap = params.view_cache->get_clipmap();
             const float wp_base_spacing =
                 view_clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);

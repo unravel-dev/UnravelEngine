@@ -138,15 +138,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "World-space specular tier under SSR: rough lobes from the world "
                             "probes, sharp ones traced - off-screen reflections SSR cannot see."},
         })
-        .data<&settings::denoise_converged_early_out>("denoise_converged_early_out"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "denoise_converged_early_out"},
-            entt::attribute{"pretty_name", "Denoise Converged Early-Out"},
-            entt::attribute{"group", "Filtering"},
-            entt::attribute{"tooltip",
-                            "Skip the spatial denoise kernel on pixels whose temporal estimate "
-                            "has fully settled."},
-        })
+
         .data<&settings::enable_temporal>("enable_temporal"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_temporal"},
@@ -177,6 +169,15 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "amortization waves a small bright source excites. Costs no response "
                             "time - a detected lighting change snaps to the 8-frame fast lane."},
         })
+        .data<&settings::denoise_converged_early_out>("denoise_converged_early_out"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "denoise_converged_early_out"},
+            entt::attribute{"pretty_name", "Denoise Converged Early-Out"},
+            entt::attribute{"group", "Filtering"},
+            entt::attribute{"tooltip",
+                            "Skip the spatial denoise kernel on pixels whose temporal estimate "
+                            "has fully settled."},
+        })
         .data<&settings::reprojection_tolerance>("reprojection_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "reprojection_tolerance"},
@@ -190,14 +191,14 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_spatial_denoise"},
             entt::attribute{"pretty_name", "Spatial Denoise"},
-            entt::attribute{"group", "Filtering"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"tooltip", "Variance-guided a-trous over the accumulated result."},
         })
         .data<&settings::denoise_passes>("denoise_passes"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_passes"},
             entt::attribute{"pretty_name", "Denoise Passes"},
-            entt::attribute{"group", "Filtering"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 6.0f},
             entt::attribute{"tooltip",
@@ -208,7 +209,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_normal_power"},
             entt::attribute{"pretty_name", "Denoise Normal Power"},
-            entt::attribute{"group", "Filtering"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
             entt::attribute{"tooltip",
@@ -219,7 +220,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_luma_phi"},
             entt::attribute{"pretty_name", "Denoise Luma Phi"},
-            entt::attribute{"group", "Filtering"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
             entt::attribute{"tooltip",
@@ -231,7 +232,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_plane_tolerance"},
             entt::attribute{"pretty_name", "Denoise Plane Tolerance"},
-            entt::attribute{"group", "Filtering"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 0.001f},
             entt::attribute{"max", 0.2f},
             entt::attribute{"tooltip",
@@ -243,7 +244,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_low_count_boost"},
             entt::attribute{"pretty_name", "Denoise Low Count Boost"},
-            entt::attribute{"group", "Filtering"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 64.0f},
             entt::attribute{"tooltip",
@@ -266,14 +267,14 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_bilateral_upsample"},
             entt::attribute{"pretty_name", "Bilateral Upsample"},
-            entt::attribute{"group", "Filtering"},
+            entt::attribute{"group", "Upsample"},
             entt::attribute{"tooltip", "Surface-aware reconstruction to full resolution."},
         })
         .data<&settings::upsample_normal_power>("upsample_normal_power"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "upsample_normal_power"},
             entt::attribute{"pretty_name", "Upsample Normal Power"},
-            entt::attribute{"group", "Filtering"},
+            entt::attribute{"group", "Upsample"},
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
             entt::attribute{"tooltip",
@@ -285,7 +286,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "upsample_plane_tolerance"},
             entt::attribute{"pretty_name", "Upsample Plane Tolerance"},
-            entt::attribute{"group", "Filtering"},
+            entt::attribute{"group", "Upsample"},
             entt::attribute{"min", 0.001f},
             entt::attribute{"max", 0.2f},
             entt::attribute{"tooltip",

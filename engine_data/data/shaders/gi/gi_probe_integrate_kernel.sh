@@ -43,7 +43,7 @@ SAMPLER2D(s_gi_gtao, 3);
 /// xyz = camera position, w = frame index.
 uniform vec4 u_gi_camera;
 /// xy = this frame's R2 offset for the interpolation jitter, computed in double on the CPU
-/// (see the trace kernel's note on float(frame) precision). zw unused.
+/// (see the trace kernel's note on float(frame) precision). zw = the trace's direction cycle.
 uniform vec4 u_gi_jitter;
 
 /// x = settings.intensity, the artistic multiplier on the gathered bounce. Applied to the

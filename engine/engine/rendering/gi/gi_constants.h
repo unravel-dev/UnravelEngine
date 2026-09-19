@@ -385,7 +385,7 @@
       " share a 7x7 footprint, and the per-probe sampling bias that prints as probe-sized blobs"  \
       " sliding under a camera turn falls with the probes averaged (user-found 2026-09-17,"       \
       " GI_TestSuite cell 07). Passes past the first ping-pong two derived atlases")              \
-    X(GI_SCREEN_PROBE_SPACING, 32,                                                                 \
+    X(GI_SCREEN_PROBE_SPACING, 16,                                                                 \
       "full-resolution pixels", "measured: the gi_resolve_pass::settings::probe_spacing default"   \
       " - THE ray-budget knob now that the probe-space temporal is gone (cost scales with the"     \
       " inverse square; the removal's full-rate cost is recovered here as spatial density"         \
@@ -408,14 +408,17 @@
       " with its even-lattice parents' blend only where the integrate pass would have blended"     \
       " those parents at full weight anyway - so the classification reuses the SAME"               \
       " spatial-error rule the integrate bracket and the probe-space filter apply (their local"    \
-      " 0.05 plane tolerances). Applied to the COPLANARITY of the parent anchors themselves"       \
-      " (cell plane from three corners; the fourth corner and the probe's own anchor must sit"     \
-      " within tolerance of it; collinearity in the single-axis case) - never to any normal:"      \
-      " G-buffer normals carry normal maps, a pixel-scale depth derivative measures the cobble"    \
-      " rather than the street, and both rejected nearly every flat Bistro surface (measured,"     \
-      " twice). The parent positions ARE the surface sampled at exactly the scale being"           \
-      " interpolated across; an anchor further off their plane than integration tolerates is"      \
-      " genuine geometric detail and keeps its traced probe")                                      \
+      " 0.05 plane tolerances). Applied as a plane DISTANCE, both ways: every parent anchor must"  \
+      " sit within tolerance of the probe's tangent plane and the probe within tolerance of the"   \
+      " parent's (Lumen's adaptive placement test: distance to the scene plane over depth). It"    \
+      " used to test the probe against a plane or line fitted THROUGH the parent anchors; parents" \
+      " that straddle a depth edge span a line along the view ray, the probe between them lies"    \
+      " on it whichever surface it sits on, and ~99 percent of odd probes passed at every pose"    \
+      " and spacing (measured 2026-09-18, Sponza) - silhouettes were interpolated across. A"       \
+      " normal COMPARISON stays ruled out (G-buffer normals carry normal maps and rejected"        \
+      " nearly every flat Bistro surface, measured twice); as a distance over one tile the same"   \
+      " tilt costs sin(tilt) x the tile's footprint, inside this tolerance up to 32 px spacing"    \
+      " except at grazing incidence, where the probe is traced - the safe direction")              \
     X(GI_ADAPTIVE_RADIANCE_TOLERANCE, 1.0f,                                                        \
       "fraction of the parents' blend luminance", "derived: geometric sameness is necessary but"   \
       " NOT sufficient - a shadow edge, a lamp falloff, an occlusion gradient live on perfectly"   \

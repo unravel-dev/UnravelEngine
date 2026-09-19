@@ -117,9 +117,9 @@ SAMPLER2D(s_gi_velocity, 14);
 
 /// xyz = camera position (world-probe window centre), w = frame index.
 uniform vec4 u_gi_camera;
-/// xy = this frame's R2 offset for the sub-texel cone jitter, computed in DOUBLE on the CPU:
-/// fract(R2 x float(frame)) here had 1/128 precision after ~1e5 frames and the jitter
-/// collapsed to a few positions in long sessions. zw unused.
+/// zw = this frame's R2 offset for the sub-texel cone jitter (the direction cycle), computed in
+/// DOUBLE on the CPU: fract(R2 x float(frame)) here had 1/128 precision after ~1e5 frames and
+/// the jitter collapsed to a few positions in long sessions. xy = the integrate's offset.
 uniform vec4 u_gi_jitter;
 /// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs. y unused.
 /// z = the adaptive flag - consumed by the CLASSIFY pass, bound here only for layout parity.
@@ -484,10 +484,9 @@ float GiScreenProbeBlockRatio(int slot, int block)
  * writer-side fix). Jittering the sample within its cone per frame turns that bias into
  * per-frame variance the temporal chain integrates - each cone measures its whole solid
  * angle over the accumulation window. R2 low-discrepancy across frames; the pattern is
- * addressed by ATLAS texel so it decorrelates both the texels within a tile and the
- * same direction across neighbouring probes (two independent channels - see
- * gi_noise.sh). The multi-sample pattern is the first four points of a shifted
- * (0,2)-net: positions 0/1 are the exact antithetic pair, so counts one and two
+ * addressed by PROBE and cell (GiProbeCellNoise in gi_noise.sh - NOT by atlas texel, whose
+ * stride-8 IGN printed moving waves). The multi-sample pattern is the first four points of
+ * a shifted (0,2)-net: positions 0/1 are the exact antithetic pair, so counts one and two
  * reproduce the classic estimator.
  */
 vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
@@ -971,7 +970,7 @@ void GiFinalizeTexel(int slot, ivec2 atlas_base, ivec2 local)
 
 /// Traces one ray unit's samples - its jittered ones, then the aimed ones - through the
 /// single trace call site, splatting each into the cell it lands in.
-void GiTraceRayUnit(int slot, ivec2 atlas_base, GiRayUnit unit)
+void GiTraceRayUnit(int slot, ivec2 probe, GiRayUnit unit)
 {
 	int idx = GiCellIndex(slot, unit.base);
 	int jittered = int(s_cell_rays[idx]);
@@ -981,10 +980,11 @@ void GiTraceRayUnit(int slot, ivec2 atlas_base, GiRayUnit unit)
 	float nee_cos = nee >= 0 ? s_nee_cos[slot * GI_NEE_K + nee] : 1.0;
 	// The multi-sample pattern is the first four points of a shifted (0,2)-net: positions
 	// 0/1 are the exact antithetic pair, so counts one and two reproduce the classic
-	// estimator. Addressed by ATLAS texel so it decorrelates the texels within a tile and
-	// the same direction across neighbouring probes (gi_noise.sh).
+	// estimator. Addressed by PROBE and cell (GiProbeCellNoise): well spread across adjacent
+	// probes for the same cell, decorrelated across the cells of one tile.
 	vec2 sub_positions[GI_IMPORTANCE_SUPERSAMPLE_MAX];
-	sub_positions[0] = fract(s_frame_r2 + GiIgnNoise(atlas_base + unit.base));
+	int cell_index = unit.base.y * GI_PROBE_DIR_EDGE + unit.base.x;
+	sub_positions[0] = fract(s_frame_r2 + GiProbeCellNoise(probe, cell_index));
 	sub_positions[1] = fract(sub_positions[0] + vec2(0.5, 0.5));
 	sub_positions[2] = fract(sub_positions[0] + vec2(0.25, 0.75));
 	sub_positions[3] = fract(sub_positions[0] + vec2(0.75, 0.25));
@@ -1136,7 +1136,7 @@ void main()
 			// Dispatch-uniform hoists: the mip-0 resolution the screen tier reads per
 			// sample, and the frame's R2 offset the jitter derives per ray.
 			s_screen_size = HizGetDepthMipResolution(s_hiz, 0);
-			s_frame_r2 = u_gi_jitter.xy;
+			s_frame_r2 = u_gi_jitter.zw;
 		}
 		if(probe_active)
 		{
@@ -1346,7 +1346,7 @@ void main()
 		LOOP
 		for(int r = thread; r < total_rays; r += GI_TRACE_ADAPTIVE_LANES)
 		{
-			GiTraceRayUnit(slot, atlas_base, GiAdaptiveRayUnit(slot, r));
+			GiTraceRayUnit(slot, probe, GiAdaptiveRayUnit(slot, r));
 		}
 	}
 	barrier();
@@ -1367,7 +1367,7 @@ void main()
 	GiRayUnit unit = GiFullRayUnit(slot, local);
 	GiAllocateRayUnit(slot, unit);
 	barrier();
-	GiTraceRayUnit(slot, atlas_base, unit);
+	GiTraceRayUnit(slot, probe, unit);
 	barrier();
 	if(leader)
 	{
