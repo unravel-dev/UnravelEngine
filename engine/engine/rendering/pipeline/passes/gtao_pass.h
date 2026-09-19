@@ -47,7 +47,7 @@ public:
         float falloff_range = 0.3f;
         /// Power applied to the visibility (XeGTAO's final value power). 1 = ground truth
         /// for the depth buffer; 1.6 paired with the old 4 m room-scale radius.
-        float final_power = 1.0f;
+        float final_power = 2.2f;
         /// Longest horizon search as a fraction of the AO target height. Bounds the cost and
         /// the sample spacing; the world radius shrinks with it so the falloff stays
         /// consistent. 0.05 ~ the 32 px screen-probe spacing, the footprint the GI's probe

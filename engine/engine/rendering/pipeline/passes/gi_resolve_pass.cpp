@@ -702,7 +702,12 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                    gfx::texture_format::RGBA16F);
                     // ReadWrite: the final pass writes the importance mip into the record slots.
                     gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
-                    const float probe_filter[4] = {final_pass ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f};
+                    // y: the adaptive gather may have skipped probes this frame - the filter's
+                    // parent-lattice stride test runs only then (cs_gi_screen_probe_filter.sc).
+                    const float probe_filter[4] = {final_pass ? 0.0f : 1.0f,
+                                                   s.adaptive_probes ? 1.0f : 0.0f,
+                                                   0.0f,
+                                                   0.0f};
                     gfx::set_uniform(filter_program_.u_gi_probe_params, probe_params);
                     gfx::set_uniform(filter_program_.u_gi_probe_screen, probe_screen);
                     gfx::set_uniform(filter_program_.u_gi_probe_temporal, probe_temporal);

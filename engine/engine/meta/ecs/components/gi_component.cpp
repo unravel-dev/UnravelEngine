@@ -255,7 +255,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "denoise_luma_floor"},
             entt::attribute{"pretty_name", "Denoise Luma Floor"},
-            entt::attribute{"group", "Filtering"},
+            entt::attribute{"group", "Denoise"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 0.5f},
             entt::attribute{"tooltip",
