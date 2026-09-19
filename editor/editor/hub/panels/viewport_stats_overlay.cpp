@@ -1,4 +1,5 @@
 #include "viewport_stats_overlay.h"
+#include "viewport_toolbar.h"
 #include "editor/format/format_bytes.h"
 #include "editor/imgui/integration/imgui.h"
 #include "imgui_widgets/utils.h"
@@ -17,6 +18,7 @@
 #include <array>
 #include <cstdio>
 #include <numeric>
+#include <string>
 
 namespace unravel
 {
@@ -27,6 +29,8 @@ constexpr float overlay_padding = 8.0f;
 constexpr float overlay_rounding = 4.0f;
 constexpr float overlay_bg_alpha = 0.75f;
 constexpr ImVec4 overlay_bg_color{0.08f, 0.08f, 0.08f, overlay_bg_alpha};
+/// From here on the toolbar reserves a fourth digit for its frame rate readout.
+constexpr float fps_four_digits = 999.5f;
 
 constexpr ImVec4 color_good{0.2f, 0.8f, 0.2f, 1.0f};
 constexpr ImVec4 color_warning{1.0f, 0.7f, 0.0f, 1.0f};
@@ -478,9 +482,29 @@ void draw_pipeline_section(const rendering::pipeline_stats& pstats)
     draw_pipeline_stats(pstats);
 }
 
+struct fps_readout
+{
+    std::string text;
+    /// The text changes every frame; this template sizes it, or an anchored bar would jitter.
+    std::string width_text;
+};
+
+auto make_fps_readout() -> fps_readout
+{
+    const float fps = ImGui::GetIO().Framerate;
+    const char* widest_value = fps < fps_four_digits ? "000 FPS" : "0000 FPS";
+    fps_readout readout{};
+    readout.text = viewport_toolbar::make_text(ICON_MDI_CHART_LINE, fmt::format("{:.0f} FPS", fps).c_str(), false);
+    readout.width_text = viewport_toolbar::make_text(ICON_MDI_CHART_LINE, widest_value, false);
+    return readout;
+}
+
 } // namespace
 
-void viewport_stats_overlay::draw(const rendering::pipeline_stats& pstats, state& overlay_state, const char* id)
+void viewport_stats_overlay::draw(const rendering::pipeline_stats& pstats,
+                                  state& overlay_state,
+                                  const char* id,
+                                  float top_offset)
 {
     if(!overlay_state.is_visible)
     {
@@ -494,10 +518,10 @@ void viewport_stats_overlay::draw(const rendering::pipeline_stats& pstats, state
     }
 
     auto content_rect = window->ContentRegionRect;
-    float max_height = content_rect.GetHeight() - 2.0f * overlay_padding;
+    float max_height = content_rect.GetHeight() - 2.0f * overlay_padding - top_offset;
 
     float pos_x = content_rect.Max.x - overlay_width - overlay_padding;
-    float pos_y = content_rect.Min.y + overlay_padding;
+    float pos_y = content_rect.Min.y + overlay_padding + top_offset;
 
     ImGui::SetCursorScreenPos(ImVec2(pos_x, pos_y));
 
@@ -551,45 +575,23 @@ void viewport_stats_overlay::draw(const rendering::pipeline_stats& pstats, state
     ImGui::PopStyleColor(4);
 }
 
-void viewport_stats_overlay::draw_stats_toggle(state& overlay_state)
+void viewport_stats_overlay::draw_toolbar_toggle(state& overlay_state)
 {
-    const float fps = ImGui::GetIO().Framerate;
-    std::array<char, 96> fps_label_buf{};
-    const char* label = ICON_MDI_CHART_LINE " Stats";
-    if(!overlay_state.is_visible)
+    const fps_readout readout = make_fps_readout();
+    const char* tooltip = overlay_state.is_visible ? "Hide Statistics" : "Show Statistics";
+    if(viewport_toolbar::toggle("##stats",
+                                readout.text.c_str(),
+                                overlay_state.is_visible,
+                                tooltip,
+                                readout.width_text.c_str()))
     {
-        
-        std::snprintf(fps_label_buf.data(),
-                      fps_label_buf.size(),
-                      ICON_MDI_CHART_LINE_VARIANT " Stats (%.1f FPS)",
-                      static_cast<double>(fps));
-        label = fps_label_buf.data();
+        overlay_state.is_visible = !overlay_state.is_visible;
     }
+}
 
-    const auto& style = ImGui::GetStyle();
-    const float item_width = ImGui::CalcTextSize(label).x + style.ItemSpacing.x*2;
-
-    ImGui::SameLine();
-
-    ImGui::AlignedItem(1.0f,
-                       ImGui::GetContentRegionAvail().x,
-                       item_width,
-                       [&]() -> void
-                       {
-                           bool is_visible = overlay_state.is_visible;
-                           if(is_visible)
-                           {
-                               ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.2f, 0.8f, 0.2f, 1.0f));
-                           }
-                           if(ImGui::MenuItem(label, "", is_visible))
-                           {
-                               overlay_state.is_visible = !overlay_state.is_visible;
-                           }
-                           if(is_visible)
-                           {
-                               ImGui::PopStyleColor();
-                           }
-                       });
-    ImGui::SetItemTooltipEx("%s", overlay_state.is_visible ? "Hide Statistics" : "Show Statistics");
+void viewport_stats_overlay::draw_toolbar_readout(const viewport_toolbar::bar_placement& placement)
+{
+    const fps_readout readout = make_fps_readout();
+    viewport_toolbar::draw_readout(placement, readout.text.c_str(), readout.width_text.c_str());
 }
 } // namespace unravel

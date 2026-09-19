@@ -58,14 +58,15 @@ auto get_resolution(rtti::context& ctx, int index)
 
 //-----------------------------------------------------------------------------
 /// <summary>
-/// Draw the resolution selection drop-down for the current menu bar.
-/// The selection is read and written through the supplied index parameter.
-/// Returns true if the user changed the selection - the caller is
-/// responsible for persisting the new index if desired (e.g. project
-/// settings vs. a transient panel-local value). Adds an "Edit ..." entry
-/// that opens the project settings panel scoped to the Resolution section.
+/// Draw the resolution selection dropdown of a floating viewport toolbar; call between
+/// viewport_toolbar::begin_bar() and end_bar(). The selection is read and written through the
+/// supplied index parameter. Returns true if the user changed the selection - the caller is
+/// responsible for persisting the new index if desired (e.g. project settings vs. a transient
+/// panel-local value). Adds an "Edit ..." entry that opens the project settings panel scoped to
+/// the Resolution section.
 /// </summary>
+/// <param name="is_compact">Show the icon alone, without the name of the preset</param>
 //-----------------------------------------------------------------------------
-auto draw_menu(rtti::context& ctx, int& current_index) -> bool;
+auto draw_toolbar_dropdown(rtti::context& ctx, int& current_index, bool is_compact) -> bool;
 
 } // namespace unravel::viewport_resolution

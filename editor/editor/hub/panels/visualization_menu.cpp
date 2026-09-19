@@ -1,4 +1,5 @@
 #include "visualization_menu.h"
+#include "viewport_toolbar.h"
 
 #include <editor/imgui/integration/imgui.h>
 
@@ -7,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <string>
 
 namespace unravel
 {
@@ -18,7 +20,7 @@ constexpr float legend_overlay_padding = 8.0f;
 constexpr float legend_overlay_rounding = 4.0f;
 constexpr ImVec4 legend_overlay_bg_color{0.08f, 0.08f, 0.08f, 0.85f};
 constexpr ImVec4 legend_label_color{0.6f, 0.6f, 0.6f, 1.0f};
-/// Menu-bar tint while a debug view is active, so a left-on pass never reads as a bug.
+/// Tint of the picker while a debug view is active, so a left-on pass never reads as a bug.
 constexpr ImVec4 active_mode_color{1.0f, 0.75f, 0.2f, 1.0f};
 /// Outline drawn around every swatch: without it a black or near-black entry - which several
 /// views use as a meaningful category - is invisible against the panel background.
@@ -96,86 +98,43 @@ void draw_group_menu(const visualization_group_entry& group, int& mode)
 
 } // namespace
 
-void visualization_menu::draw_menu(int& mode, state& menu_state)
+void visualization_menu::draw_toolbar_dropdown(int& mode, state& menu_state)
 {
     const auto* active = find_visualization_mode(mode);
     const bool is_debugging = active != nullptr && active->mode != visualization_mode::full;
 
-    // "###" keeps the menu id stable while the visible label tracks the active view, so
-    // picking a mode does not close the popup out from under the cursor.
-    std::array<char, 192> menu_label{};
-    if(is_debugging)
+    // The active view stays spelled out on the bar, whatever the layout. The id is fixed, so the
+    // popup stays open while the label follows the pick.
+    const std::string text = is_debugging ? viewport_toolbar::make_text(ICON_MDI_DRAWING_BOX, active->label, false)
+                                          : std::string(ICON_MDI_DRAWING_BOX);
+    const ImU32 text_color = is_debugging ? ImGui::ColorConvertFloat4ToU32(active_mode_color) : 0;
+    const char* tooltip = is_debugging ? "Debug View - a visualization is active" : "Debug View";
+    if(!viewport_toolbar::begin_dropdown("##debug_view", text.c_str(), tooltip, text_color))
     {
-        std::snprintf(menu_label.data(),
-                      menu_label.size(),
-                      "%s %s %s###debug_view_menu",
-                      ICON_MDI_DRAWING_BOX,
-                      active->label,
-                      ICON_MDI_ARROW_DOWN_BOLD);
-    }
-    else
-    {
-        std::snprintf(menu_label.data(),
-                      menu_label.size(),
-                      "%s%s###debug_view_menu",
-                      ICON_MDI_DRAWING_BOX,
-                      ICON_MDI_ARROW_DOWN_BOLD);
+        return;
     }
 
-    // Captured before the push: PushStyleColor writes through to style.Colors, so the base
-    // color has to be read first to restore it inside the popup.
-    const ImVec4 base_text_color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-    if(is_debugging)
+    ImGui::SeparatorText("Debug View");
+    const auto* full = find_visualization_mode(static_cast<int>(visualization_mode::full));
+    if(full != nullptr)
     {
-        ImGui::PushStyleColor(ImGuiCol_Text, active_mode_color);
+        ImGui::RadioButton(full->label, &mode, static_cast<int>(full->mode));
+        draw_mode_tooltip(*full);
     }
 
-    ImGui::SetNextWindowViewportToCurrent();
-    if(ImGui::BeginMenu(menu_label.data()))
+    ImGui::Separator();
+
+    for(const auto& group : get_visualization_groups())
     {
-        // The popup body must not inherit the menu-bar tint. Restoring it with a push/pop
-        // pair INSIDE the popup keeps every pair on the window that opened it, which is what
-        // ImGui's stack check requires.
-        if(is_debugging)
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, base_text_color);
-        }
-
-        const auto* full = find_visualization_mode(static_cast<int>(visualization_mode::full));
-        if(full != nullptr)
-        {
-            ImGui::RadioButton(full->label, &mode, static_cast<int>(full->mode));
-            draw_mode_tooltip(*full);
-        }
-
-        ImGui::Separator();
-
-        for(const auto& group : get_visualization_groups())
-        {
-            draw_group_menu(group, mode);
-        }
-
-        ImGui::Separator();
-        ImGui::Checkbox("Show Legend In Viewport", &menu_state.show_legend);
-        ImGui::SetItemTooltipEx("%s",
-                                "Overlay the active view's color legend in the bottom-left "
-                                "corner of the viewport.");
-
-        if(is_debugging)
-        {
-            ImGui::PopStyleColor();
-        }
-        ImGui::EndMenu();
+        draw_group_menu(group, mode);
     }
 
-    if(is_debugging)
-    {
-        ImGui::PopStyleColor();
-    }
-
+    ImGui::Separator();
+    ImGui::Checkbox("Show Legend In Viewport", &menu_state.show_legend);
     ImGui::SetItemTooltipEx("%s",
-                            is_debugging ? "Debug View - a visualization is active"
-                                         : "Debug View");
+                            "Overlay the active view's color legend in the bottom-left "
+                            "corner of the viewport.");
+    viewport_toolbar::end_dropdown();
 }
 
 void visualization_menu::draw_legend_overlay(int mode, state& menu_state, const char* id)

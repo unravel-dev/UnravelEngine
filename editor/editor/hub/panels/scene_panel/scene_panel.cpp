@@ -2,6 +2,7 @@
 #include "../panel.h"
 #include "../panels_defs.h"
 #include "../viewport_resolution.h"
+#include "../viewport_toolbar.h"
 #include "../visualization_menu.h"
 #include "imgui_widgets/utils.h"
 #include <editor/editing/actions/entity_actions.h>
@@ -39,6 +40,8 @@
 #include <seq/seq.h>
 
 #include <algorithm>
+#include <array>
+#include <cfloat>
 #include <cmath>
 #include <filesystem/filesystem.h>
 #include <logging/logging.h>
@@ -62,7 +65,8 @@ void manipulation_gizmos(bool& gizmo_at_center,
                          bool& was_using_gizmo,
                          entt::handle center,
                          entt::handle editor_camera,
-                         editing_manager& em);
+                         editing_manager& em,
+                         float overlay_top);
 
 // Material preview state
 struct material_preview_state
@@ -242,6 +246,40 @@ void reset_preview_state()
         g_preview_state.current_drag_material.clear();
     }
 }
+
+// ============================================================================
+// Toolbar Helper Functions
+// ============================================================================
+
+constexpr const char* TOOLBAR_TOOLS_BAR_ID = "##scene_toolbar_tools";
+constexpr const char* TOOLBAR_VIEW_BAR_ID = "##scene_toolbar_view";
+constexpr const char* TOOLBAR_PREFAB_BAR_ID = "##scene_toolbar_prefab";
+constexpr float TOOLBAR_POPUP_ITEM_WIDTH = 270.0f;
+constexpr float TOOLBAR_POPUP_KNOB_WIDTH = 100.0f;
+constexpr float TOOLBAR_CAMERA_POPUP_WIDTH = 420.0f;
+constexpr float TOOLBAR_CAMERA_POPUP_HEIGHT = 560.0f;
+constexpr float TOOLBAR_POPUP_MIN_HEIGHT = 120.0f;
+/// The tools and the view bar share the first row.
+constexpr int TOOLBAR_FIRST_ROW_BARS = 2;
+
+struct transform_tool
+{
+    const char* id;
+    const char* icon;
+    const char* name;
+    ImGuizmo::OPERATION operation;
+    ImGuiKey shortcut;
+    /// A scale along world axes would shear a rotated object, so these tools switch to local space.
+    bool is_local_only;
+};
+
+const std::array<transform_tool, 5> TRANSFORM_TOOLS = {{
+    {"##tool_translate", ICON_MDI_CURSOR_MOVE, "Translate Tool", ImGuizmo::OPERATION::TRANSLATE, shortcuts::move_tool, false},
+    {"##tool_rotate", ICON_MDI_ROTATE_3D_VARIANT, "Rotate Tool", ImGuizmo::OPERATION::ROTATE, shortcuts::rotate_tool, false},
+    {"##tool_scale", ICON_MDI_RELATIVE_SCALE, "Scale Tool", ImGuizmo::OPERATION::SCALE, shortcuts::scale_tool, true},
+    {"##tool_universal", ICON_MDI_MOVE_RESIZE, "Transform Tool", ImGuizmo::OPERATION::UNIVERSAL, shortcuts::universal_tool, true},
+    {"##tool_bounds", ICON_MDI_VECTOR_SQUARE, "Bounds Tool", ImGuizmo::OPERATION::BOUNDS, shortcuts::bounds_tool, false},
+}};
 
 // ============================================================================
 // Camera Movement Helper Functions
@@ -424,10 +462,12 @@ void setup_gizmo_context(const camera_component& camera_comp)
     ImGuizmo::SetOrthographic(camera.get_projection_mode() == projection_mode::orthographic);
 }
 
-void handle_view_manipulator(entt::handle editor_camera, const camera_component& camera_comp)
+void handle_view_manipulator(entt::handle editor_camera, const camera_component& camera_comp, float overlay_top)
 {
     auto p = ImGui::GetItemRectMin();
     auto s = ImGui::GetItemRectSize();
+    // The floating toolbar owns the top edge of the panel; a letterboxed image may start below it.
+    p.y = ImMax(p.y, overlay_top);
     const auto& camera = camera_comp.get_camera();
     auto& camera_trans = editor_camera.get<transform_component>();
 
@@ -474,6 +514,10 @@ void handle_gizmo_shortcuts(editing_manager& em)
     if(ImGui::IsKeyPressed(shortcuts::bounds_tool))
     {
         em.operation = ImGuizmo::OPERATION::BOUNDS;
+    }
+    if(ImGui::IsKeyPressed(shortcuts::toggle_local_global))
+    {
+        em.mode = em.mode == ImGuizmo::MODE::LOCAL ? ImGuizmo::MODE::WORLD : ImGuizmo::MODE::LOCAL;
     }
 }
 
@@ -879,13 +923,14 @@ void manipulation_gizmos(bool& gizmo_at_center,
                          bool& was_using_gizmo,
                          entt::handle center,
                          entt::handle editor_camera,
-                         editing_manager& em)
+                         editing_manager& em,
+                         float overlay_top)
 {
     auto& camera_trans = editor_camera.get<transform_component>();
     auto& camera_comp = editor_camera.get<camera_component>();
 
     setup_gizmo_context(camera_comp);
-    handle_view_manipulator(editor_camera, camera_comp);
+    handle_view_manipulator(editor_camera, camera_comp, overlay_top);
     handle_gizmo_shortcuts(em);
 
     auto active_sel = em.try_get_active_selection_as<entt::handle>();
@@ -1460,7 +1505,7 @@ void scene_panel::on_project_opened()
 
 auto scene_panel::get_window_flags() const -> ImGuiWindowFlags
 {
-    ImGuiWindowFlags flags = ImGuiWindowFlags_MenuBar;
+    ImGuiWindowFlags flags = ImGuiWindowFlags_None;
     if(is_fullscreen())
     {
         flags |= ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
@@ -1510,242 +1555,266 @@ auto scene_panel::get_auto_save_prefab() const -> bool
 }
 
 // ============================================================================
-// UI Drawing Functions
+// Floating Toolbar
 // ============================================================================
 
-void scene_panel::draw_prefab_mode_header(rtti::context& ctx)
+void scene_panel::update_toolbar_layout(rtti::context& ctx, const ImRect& area)
 {
     auto& em = ctx.get_cached<editing_manager>();
+    const float bars_width = viewport_toolbar::get_bar_width(TOOLBAR_TOOLS_BAR_ID) +
+                             viewport_toolbar::get_bar_width(TOOLBAR_VIEW_BAR_ID);
+    viewport_toolbar::update_layout(toolbar_layout_, bars_width, TOOLBAR_FIRST_ROW_BARS, area.GetWidth());
+    const int bar_rows = toolbar_layout_.is_stacked ? 2 : 1;
+    const int rows = em.is_prefab_mode() ? bar_rows + 1 : bar_rows;
+    toolbar_extent_ = viewport_toolbar::get_rows_extent(rows);
+    const float popup_room = area.GetHeight() - toolbar_extent_ - 2.0f * viewport_toolbar::get_bar_margin();
+    toolbar_popup_max_height_ = ImMax(popup_room, TOOLBAR_POPUP_MIN_HEIGHT);
+}
 
+void scene_panel::draw_toolbar(rtti::context& ctx, const ImRect& area)
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    draw_tools_bar(em, area);
+    draw_view_bar(ctx, em, area);
+    draw_prefab_bar(ctx, area);
+}
+
+void scene_panel::draw_tools_bar(editing_manager& em, const ImRect& area)
+{
+    viewport_toolbar::bar_placement placement{};
+    placement.area = area;
+    placement.anchor = viewport_toolbar::bar_anchor::left;
+    if(viewport_toolbar::begin_bar(TOOLBAR_TOOLS_BAR_ID, placement))
+    {
+        draw_transform_tools(em);
+        viewport_toolbar::separator();
+        draw_pivot_mode_toggle();
+        draw_coordinate_system_toggle(em);
+        viewport_toolbar::separator();
+        draw_snapping_dropdown(em);
+    }
+    viewport_toolbar::end_bar();
+}
+
+void scene_panel::draw_view_bar(rtti::context& ctx, editing_manager& em, const ImRect& area)
+{
+    viewport_toolbar::bar_placement placement{};
+    placement.area = area;
+    placement.anchor = viewport_toolbar::bar_anchor::right;
+    placement.row = toolbar_layout_.is_stacked ? 1 : 0;
+    if(viewport_toolbar::begin_bar(TOOLBAR_VIEW_BAR_ID, placement))
+    {
+        viewport_resolution::draw_toolbar_dropdown(ctx, current_resolution_index_, toolbar_layout_.is_compact);
+        viewport_toolbar::separator();
+        draw_grid_controls(em);
+        draw_gizmos_controls(em);
+        viewport_toolbar::separator();
+        visualization_menu::draw_toolbar_dropdown(visualize_passes_, visualization_menu_state_);
+        draw_inverse_kinematics_dropdown(em);
+        draw_camera_dropdown(ctx);
+        viewport_toolbar::separator();
+        viewport_stats_overlay::draw_toolbar_toggle(stats_overlay_state_);
+    }
+    viewport_toolbar::end_bar();
+}
+
+void scene_panel::draw_prefab_bar(rtti::context& ctx, const ImRect& area)
+{
+    auto& em = ctx.get_cached<editing_manager>();
     if(!em.is_prefab_mode())
     {
         return;
     }
-
-    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetColorU32(ImGuiCol_ButtonActive));
-    if(ImGui::Button(ICON_MDI_KEYBOARD_RETURN " Back to Scene"))
+    viewport_toolbar::bar_placement placement{};
+    placement.area = area;
+    placement.anchor = viewport_toolbar::bar_anchor::center;
+    placement.row = toolbar_layout_.is_stacked ? 2 : 1;
+    if(viewport_toolbar::begin_bar(TOOLBAR_PREFAB_BAR_ID, placement))
     {
-        em.exit_prefab_mode(ctx,
-                            auto_save_prefab_ ? editing_manager::save_option::yes
-                                              : editing_manager::save_option::prompt);
-    }
-    ImGui::PopStyleColor();
-
-    if(em.edited_prefab)
-    {
-        ImGui::SameLine();
-        ImGui::Text("Editing Prefab: %s", fs::path(em.edited_prefab.id()).filename().string().c_str());
-
-        ImGui::SameLine();
-        if(ImGui::Button("Save"))
+        if(viewport_toolbar::button("##back_to_scene", ICON_MDI_ARROW_LEFT " Back to Scene", "Leave the prefab", true))
         {
-            em.save_prefab_changes(ctx);
+            em.exit_prefab_mode(ctx,
+                                auto_save_prefab_ ? editing_manager::save_option::yes
+                                                  : editing_manager::save_option::prompt);
         }
-
-        ImGui::SameLine();
-        ImGui::Checkbox("Auto Save", &auto_save_prefab_);
-        ImGui::SetItemTooltipEx("%s", "Automatically save changes when exiting prefab mode");
+        if(em.edited_prefab)
+        {
+            const std::string prefab_name = fs::path(em.edited_prefab.id()).filename().string();
+            viewport_toolbar::label(fmt::format("Editing Prefab: {}", prefab_name).c_str());
+            viewport_toolbar::separator();
+            if(viewport_toolbar::button("##save_prefab", ICON_MDI_CONTENT_SAVE_OUTLINE " Save", "Save the prefab"))
+            {
+                em.save_prefab_changes(ctx);
+            }
+            if(viewport_toolbar::toggle("##auto_save_prefab",
+                                        "Auto Save",
+                                        auto_save_prefab_,
+                                        "Automatically save changes when exiting prefab mode"))
+            {
+                auto_save_prefab_ = !auto_save_prefab_;
+            }
+        }
     }
-
-    ImGui::Separator();
+    viewport_toolbar::end_bar();
 }
 
 void scene_panel::draw_transform_tools(editing_manager& em)
 {
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::MenuItem(ICON_MDI_CURSOR_MOVE, nullptr, em.operation == ImGuizmo::OPERATION::TRANSLATE))
+    for(const auto& tool : TRANSFORM_TOOLS)
     {
-        em.operation = ImGuizmo::OPERATION::TRANSLATE;
-    }
-    ImGui::SetItemTooltipEx("%s", "Translate Tool");
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::MenuItem(ICON_MDI_ROTATE_3D_VARIANT, nullptr, em.operation == ImGuizmo::OPERATION::ROTATE))
-    {
-        em.operation = ImGuizmo::OPERATION::ROTATE;
-    }
-    ImGui::SetItemTooltipEx("%s", "Rotate Tool");
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::MenuItem(ICON_MDI_RELATIVE_SCALE, nullptr, em.operation == ImGuizmo::OPERATION::SCALE))
-    {
-        em.operation = ImGuizmo::OPERATION::SCALE;
-        em.mode = ImGuizmo::MODE::LOCAL;
-    }
-    ImGui::SetItemTooltipEx("%s", "Scale Tool");
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::MenuItem(ICON_MDI_MOVE_RESIZE, nullptr, em.operation == ImGuizmo::OPERATION::UNIVERSAL))
-    {
-        em.operation = ImGuizmo::OPERATION::UNIVERSAL;
-        em.mode = ImGuizmo::MODE::LOCAL;
-    }
-    ImGui::SetItemTooltipEx("%s", "Transform Tool");
-}
-
-void scene_panel::draw_gizmo_pivot_mode_menu(bool& gizmo_at_center)
-{
-    auto icon = gizmo_at_center ? ICON_MDI_SET_CENTER "Center" ICON_MDI_ARROW_DOWN_BOLD
-                                : ICON_MDI_ROTATE_3D "Pivot" ICON_MDI_ARROW_DOWN_BOLD;
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::BeginMenu(icon))
-    {
-        if(ImGui::MenuItem(ICON_MDI_SET_CENTER "Center", nullptr, gizmo_at_center))
+        const std::string tooltip = fmt::format("{} ({})", tool.name, ImGui::GetKeyName(tool.shortcut));
+        if(!viewport_toolbar::toggle(tool.id, tool.icon, em.operation == tool.operation, tooltip.c_str()))
         {
-            gizmo_at_center = true;
+            continue;
         }
-        ImGui::SetItemTooltipEx("%s",
-                                "The tool handle is placed at the center\n"
-                                "of the selections' pivots.");
-
-        if(ImGui::MenuItem(ICON_MDI_ROTATE_3D "Pivot", nullptr, !gizmo_at_center))
-        {
-            gizmo_at_center = false;
-        }
-        ImGui::SetItemTooltipEx("%s",
-                                "The tool handle is placed at the\n"
-                                "active object's pivot point.");
-
-        ImGui::EndMenu();
-    }
-    ImGui::SetItemTooltipEx("%s", "Tool's Handle Position");
-}
-
-void scene_panel::draw_coordinate_system_menu(editing_manager& em)
-{
-    auto icon = em.mode == ImGuizmo::MODE::LOCAL ? ICON_MDI_CUBE "Local" ICON_MDI_ARROW_DOWN_BOLD
-                                                 : ICON_MDI_WEB "Global" ICON_MDI_ARROW_DOWN_BOLD;
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::BeginMenu(icon))
-    {
-        if(ImGui::MenuItem(ICON_MDI_CUBE "Local",
-                           ImGui::GetKeyName(shortcuts::toggle_local_global),
-                           em.mode == ImGuizmo::MODE::LOCAL))
+        em.operation = tool.operation;
+        if(tool.is_local_only)
         {
             em.mode = ImGuizmo::MODE::LOCAL;
         }
-        ImGui::SetItemTooltipEx("%s", "Local Coordinate System");
-
-        if(ImGui::MenuItem(ICON_MDI_WEB "Global", nullptr, em.mode == ImGuizmo::MODE::WORLD))
-        {
-            em.mode = ImGuizmo::MODE::WORLD;
-        }
-        ImGui::SetItemTooltipEx("%s", "Global Coordinate System");
-
-        ImGui::EndMenu();
     }
-    ImGui::SetItemTooltipEx("%s", "Tool's Coordinate System");
 }
 
-void scene_panel::draw_grid_settings_menu(editing_manager& em)
+void scene_panel::draw_pivot_mode_toggle()
 {
-    ImGui::SetNextWindowViewportToCurrent();
+    const char* icon = gizmo_at_center_ ? ICON_MDI_SET_CENTER : ICON_MDI_ROTATE_3D;
+    const char* name = gizmo_at_center_ ? "Center" : "Pivot";
+    const char* tooltip = gizmo_at_center_ ? "Tool Handle: Center\n"
+                                             "The handle sits at the center of the selections' pivots.\n"
+                                             "Click to place it at the active object's pivot."
+                                           : "Tool Handle: Pivot\n"
+                                             "The handle sits at the active object's pivot point.\n"
+                                             "Click to place it at the center of the selection.";
+    const std::string text = viewport_toolbar::make_text(icon, name, toolbar_layout_.is_compact);
+    const std::string width_text = viewport_toolbar::make_text(icon, "Center", toolbar_layout_.is_compact);
+    if(viewport_toolbar::button("##pivot_mode", text.c_str(), tooltip, false, width_text.c_str()))
+    {
+        gizmo_at_center_ = !gizmo_at_center_;
+    }
+}
 
-    if(ImGui::MenuItem(ICON_MDI_GRID, nullptr, em.show_grid))
+void scene_panel::draw_coordinate_system_toggle(editing_manager& em)
+{
+    const bool is_local = em.mode == ImGuizmo::MODE::LOCAL;
+    const char* icon = is_local ? ICON_MDI_CUBE : ICON_MDI_WEB;
+    const char* name = is_local ? "Local" : "Global";
+    const std::string tooltip = fmt::format("Tool Coordinate System: {} ({})\nClick for {}.",
+                                            name,
+                                            ImGui::GetKeyName(shortcuts::toggle_local_global),
+                                            is_local ? "Global" : "Local");
+    const std::string text = viewport_toolbar::make_text(icon, name, toolbar_layout_.is_compact);
+    const std::string width_text = viewport_toolbar::make_text(icon, "Global", toolbar_layout_.is_compact);
+    if(viewport_toolbar::button("##coordinate_system", text.c_str(), tooltip.c_str(), false, width_text.c_str()))
+    {
+        em.mode = is_local ? ImGuizmo::MODE::WORLD : ImGuizmo::MODE::LOCAL;
+    }
+}
+
+void scene_panel::draw_snapping_dropdown(editing_manager& em)
+{
+    const std::string tooltip =
+        fmt::format("Snapping (hold {} while dragging)", ImGui::GetKeyName(shortcuts::modifier_snapping));
+    if(!viewport_toolbar::begin_dropdown("##snapping", ICON_MDI_MAGNET, tooltip.c_str()))
+    {
+        return;
+    }
+    ImGui::SeparatorText("Snapping");
+    ImGui::PushItemWidth(TOOLBAR_POPUP_ITEM_WIDTH);
+    ImGui::DragVecN("Translation",
+                    ImGuiDataType_Float,
+                    math::value_ptr(em.snap_data.translation_snap),
+                    em.snap_data.translation_snap.length(),
+                    0.5f,
+                    nullptr,
+                    nullptr,
+                    "%.2f");
+    ImGui::DragFloat("Rotation", &em.snap_data.rotation_degree_snap, 1.0f, 0.0f, 0.0f, "%.1f deg");
+    ImGui::DragFloat("Scale", &em.snap_data.scale_snap, 1.0f, 0.0f, 0.0f, "%.2f");
+    ImGui::PopItemWidth();
+    viewport_toolbar::end_dropdown();
+}
+
+void scene_panel::draw_grid_controls(editing_manager& em)
+{
+    if(viewport_toolbar::toggle("##grid", ICON_MDI_GRID, em.show_grid, "Show / Hide Grid"))
     {
         em.show_grid = !em.show_grid;
     }
-    ImGui::SetItemTooltipEx("%s", "Show/Hide Grid");
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::BeginMenu(ICON_MDI_ARROW_DOWN_BOLD, em.show_grid))
+    if(!viewport_toolbar::begin_dropdown("##grid_settings", nullptr, "Grid Settings"))
     {
-        ImGui::PushItemWidth(100.0f);
-
-        ImGui::TextUnformatted("Grid Visual");
-        ImGui::LabelText("Plane", "%s", "X Z");
-        ImGui::KnobSliderScalarT("Opacity", &em.grid_data.opacity, 0.0f, 1.0f);
-        ImGui::Checkbox("Depth Aware", &em.grid_data.depth_aware);
-        ImGui::SetItemTooltipEx("%s", "Grid is depth aware.");
-
-        ImGui::PopItemWidth();
-
-        ImGui::EndMenu();
+        return;
     }
-    ImGui::SetItemTooltipEx("%s", "Grid Properties");
+    ImGui::SeparatorText("Grid");
+    ImGui::PushItemWidth(TOOLBAR_POPUP_KNOB_WIDTH);
+    ImGui::LabelText("Plane", "%s", "X Z");
+    ImGui::KnobSliderScalarT("Opacity", &em.grid_data.opacity, 0.0f, 1.0f);
+    ImGui::Checkbox("Depth Aware", &em.grid_data.depth_aware);
+    ImGui::SetItemTooltipEx("%s", "Grid is depth aware.");
+    ImGui::PopItemWidth();
+    viewport_toolbar::end_dropdown();
 }
 
-void scene_panel::draw_gizmos_settings_menu(editing_manager& em)
+void scene_panel::draw_gizmos_controls(editing_manager& em)
 {
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::MenuItem(ICON_MDI_SELECTION_MARKER, nullptr, em.show_icon_gizmos))
+    if(viewport_toolbar::toggle("##gizmos", ICON_MDI_SELECTION_MARKER, em.show_icon_gizmos, "Show / Hide Gizmos"))
     {
         em.show_icon_gizmos = !em.show_icon_gizmos;
     }
-    ImGui::SetItemTooltipEx("%s", "Show/Hide Gizmos");
-    ImGui::PushID("Billboard Gizmos");
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::BeginMenu(ICON_MDI_ARROW_DOWN_BOLD, em.show_icon_gizmos))
+    ImGui::SetNextWindowSizeConstraints({}, {FLT_MAX, toolbar_popup_max_height_});
+    if(!viewport_toolbar::begin_dropdown("##gizmos_settings", nullptr, "Gizmos Settings"))
     {
-        ImGui::PushItemWidth(100.0f);
-
-        ImGui::TextUnformatted("Gizmos Visual");
-        ImGui::KnobSliderScalarT("Opacity", &em.billboard_data.opacity, 0.0f, 1.0f);
-        ImGui::KnobSliderScalarT("Size", &em.billboard_data.size, 0.1f, 1.0f);
-
-        ImGui::Checkbox("Depth Aware", &em.billboard_data.depth_aware);
-        ImGui::SetItemTooltipEx("%s", "Gizmos are depth aware.");
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Billboard Filters");
-        ImGui::Checkbox("Camera", &em.billboard_data.show_camera);
-        ImGui::Checkbox("Light", &em.billboard_data.show_light);
-        ImGui::Checkbox("Reflection Probe", &em.billboard_data.show_reflection_probe);
-        ImGui::Checkbox("Audio Source", &em.billboard_data.show_audio_source);
-        ImGui::Checkbox("Particle Emitter", &em.billboard_data.show_particle_emitter);
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Selection Gizmos");
-        ImGui::Checkbox("Selection Outline", &em.gizmos.show_selection_outline);
-        ImGui::Checkbox("Selection Wireframe", &em.gizmos.show_selection_wireframe);
-        ImGui::SetItemTooltipEx("%s", "Draw a vertex-pulling wireframe overlay on top of the selected entity's mesh.");
-        if(em.gizmos.show_selection_wireframe)
-        {
-            ImGui::ColorEdit4("Wireframe Color",
-                              math::value_ptr(em.gizmos.selection_wireframe_color),
-                              ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoInputs);
-            ImGui::KnobSliderScalarT("Wireframe Thickness",
-                               &em.gizmos.selection_wireframe_thickness,
-                               0.5f,
-                               5.0f,
-                               "%.2f px");
-        }
-        ImGui::Checkbox("Camera Gizmos", &em.gizmos.show_camera);
-        ImGui::Checkbox("Model Gizmos", &em.gizmos.show_model);
-        ImGui::Checkbox("Light Gizmos", &em.gizmos.show_light);
-        ImGui::Checkbox("Reflection Probe Gizmos", &em.gizmos.show_reflection_probe);
-        ImGui::Checkbox("Volume Gizmos", &em.gizmos.show_volume);
-        ImGui::Checkbox("Text Gizmos", &em.gizmos.show_text);
-        ImGui::Checkbox("Particle Emitter Gizmos", &em.gizmos.show_particle_emitter);
-        ImGui::Checkbox("Component Gizmos", &em.gizmos.show_component_gizmos);
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Model Details");
-        ImGui::Checkbox("World Bounds & LOD", &em.gizmos.show_model_bounds);
-        ImGui::Checkbox("World Submesh Bounds & LOD", &em.gizmos.show_model_submesh_bounds);
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Particle Emitter Details");
-        ImGui::Checkbox("Bounds", &em.gizmos.show_particle_emitter_bounds);
-        ImGui::Checkbox("Shape", &em.gizmos.show_particle_emitter_shape);
-        ImGui::Checkbox("Direction", &em.gizmos.show_particle_emitter_direction);
-
-        ImGui::PopItemWidth();
-
-        ImGui::EndMenu();
+        return;
     }
-    ImGui::SetItemTooltipEx("%s", "Gizmos Properties");
-    ImGui::PopID();
+    draw_gizmos_settings(em);
+    viewport_toolbar::end_dropdown();
 }
 
-void scene_panel::draw_visualization_menu()
+void scene_panel::draw_gizmos_settings(editing_manager& em)
 {
-    visualization_menu::draw_menu(visualize_passes_, visualization_menu_state_);
+    ImGui::PushItemWidth(TOOLBAR_POPUP_KNOB_WIDTH);
+    ImGui::SeparatorText("Billboards");
+    ImGui::KnobSliderScalarT("Opacity", &em.billboard_data.opacity, 0.0f, 1.0f);
+    ImGui::KnobSliderScalarT("Size", &em.billboard_data.size, 0.1f, 1.0f);
+    ImGui::Checkbox("Depth Aware", &em.billboard_data.depth_aware);
+    ImGui::SetItemTooltipEx("%s", "Gizmos are depth aware.");
+    ImGui::Checkbox("Camera", &em.billboard_data.show_camera);
+    ImGui::Checkbox("Light", &em.billboard_data.show_light);
+    ImGui::Checkbox("Reflection Probe", &em.billboard_data.show_reflection_probe);
+    ImGui::Checkbox("Audio Source", &em.billboard_data.show_audio_source);
+    ImGui::Checkbox("Particle Emitter", &em.billboard_data.show_particle_emitter);
+    ImGui::SeparatorText("Selection");
+    ImGui::Checkbox("Selection Outline", &em.gizmos.show_selection_outline);
+    ImGui::Checkbox("Selection Wireframe", &em.gizmos.show_selection_wireframe);
+    ImGui::SetItemTooltipEx("%s", "Draw a vertex-pulling wireframe overlay on top of the selected entity's mesh.");
+    if(em.gizmos.show_selection_wireframe)
+    {
+        ImGui::ColorEdit4("Wireframe Color",
+                          math::value_ptr(em.gizmos.selection_wireframe_color),
+                          ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf |
+                              ImGuiColorEditFlags_NoInputs);
+        ImGui::KnobSliderScalarT("Wireframe Thickness",
+                                 &em.gizmos.selection_wireframe_thickness,
+                                 0.5f,
+                                 5.0f,
+                                 "%.2f px");
+    }
+    ImGui::SeparatorText("Component Gizmos");
+    ImGui::Checkbox("Camera Gizmos", &em.gizmos.show_camera);
+    ImGui::Checkbox("Model Gizmos", &em.gizmos.show_model);
+    ImGui::Checkbox("Light Gizmos", &em.gizmos.show_light);
+    ImGui::Checkbox("Reflection Probe Gizmos", &em.gizmos.show_reflection_probe);
+    ImGui::Checkbox("Volume Gizmos", &em.gizmos.show_volume);
+    ImGui::Checkbox("Text Gizmos", &em.gizmos.show_text);
+    ImGui::Checkbox("Particle Emitter Gizmos", &em.gizmos.show_particle_emitter);
+    ImGui::Checkbox("Component Gizmos", &em.gizmos.show_component_gizmos);
+    ImGui::SeparatorText("Model Details");
+    ImGui::Checkbox("World Bounds & LOD", &em.gizmos.show_model_bounds);
+    ImGui::Checkbox("World Submesh Bounds & LOD", &em.gizmos.show_model_submesh_bounds);
+    ImGui::SeparatorText("Particle Emitter Details");
+    ImGui::Checkbox("Bounds", &em.gizmos.show_particle_emitter_bounds);
+    ImGui::Checkbox("Shape", &em.gizmos.show_particle_emitter_shape);
+    ImGui::Checkbox("Direction", &em.gizmos.show_particle_emitter_direction);
+    ImGui::PopItemWidth();
 }
 
 void scene_panel::set_visualization_mode(int mode)
@@ -1768,78 +1837,48 @@ auto scene_panel::get_visualization_scale() const -> float
     return visualize_scale_;
 }
 
-void scene_panel::draw_snapping_menu(editing_manager& em)
+void scene_panel::draw_inverse_kinematics_dropdown(editing_manager& em)
 {
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::BeginMenu(ICON_MDI_GRID_LARGE ICON_MDI_ARROW_DOWN_BOLD))
+    if(!viewport_toolbar::begin_dropdown("##inverse_kinematics", ICON_MDI_CRANE, "Inverse Kinematics"))
     {
-        ImGui::PushItemWidth(200.0f);
-        ImGui::DragVecN("Translation Snap",
-                        ImGuiDataType_Float,
-                        math::value_ptr(em.snap_data.translation_snap),
-                        em.snap_data.translation_snap.length(),
-                        0.5f,
-                        nullptr,
-                        nullptr,
-                        "%.2f");
-
-        ImGui::DragFloat("Rotation Degree Snap", &em.snap_data.rotation_degree_snap);
-        ImGui::DragFloat("Scale Snap", &em.snap_data.scale_snap);
-        ImGui::PopItemWidth();
-        ImGui::EndMenu();
+        return;
     }
-    ImGui::SetItemTooltipEx("%s", "Snapping Properties");
+    ImGui::SeparatorText("Inverse Kinematics");
+    ImGui::PushItemWidth(TOOLBAR_POPUP_ITEM_WIDTH);
+    ImGui::InputInt("Nodes", &em.ik_data.num_nodes);
+    ImGui::PopItemWidth();
+    ImGui::SeparatorText("Shortcuts");
+    ImGui::Text("CCD: %s", shortcuts::get_shortcut_name(shortcuts::ik_ccd).c_str());
+    ImGui::Text("Fabrik: %s", shortcuts::get_shortcut_name(shortcuts::ik_fabrik).c_str());
+    ImGui::Text("Two Bone: %s", shortcuts::get_shortcut_name(shortcuts::ik_two_bone).c_str());
+    viewport_toolbar::end_dropdown();
 }
 
-void scene_panel::draw_inverse_kinematics_menu(editing_manager& em)
+void scene_panel::draw_camera_dropdown(rtti::context& ctx)
 {
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::BeginMenu(ICON_MDI_CRANE ICON_MDI_ARROW_DOWN_BOLD))
+    // The entity inspector fills the height it is given, so an auto-sized popup would collapse it.
+    const float popup_height = ImMin(TOOLBAR_CAMERA_POPUP_HEIGHT, toolbar_popup_max_height_);
+    ImGui::SetNextWindowSize({TOOLBAR_CAMERA_POPUP_WIDTH, popup_height});
+    if(!viewport_toolbar::begin_dropdown("##camera", ICON_MDI_CAMERA, "Scene Camera"))
     {
-        ImGui::PushItemWidth(200.0f);
-        ImGui::InputInt("Inverse Kinematic Nodes", &em.ik_data.num_nodes);
-
-        ImGui::Separator();
-        ImGui::TextUnformatted("Inverse Kinematic Shortcuts");
-        ImGui::Text("CCD: %s", shortcuts::get_shortcut_name(shortcuts::ik_ccd).c_str());
-        ImGui::Text("Fabrik: %s", shortcuts::get_shortcut_name(shortcuts::ik_fabrik).c_str());
-        ImGui::Text("Two Bone: %s", shortcuts::get_shortcut_name(shortcuts::ik_two_bone).c_str());
-        ImGui::PopItemWidth();
-        ImGui::EndMenu();
+        return;
     }
-    ImGui::SetItemTooltipEx("%s", "Inverse Kinematic Properties");
-}
-
-void scene_panel::draw_camera_settings_menu(rtti::context& ctx)
-{
-    ImGui::SetNextWindowSizeConstraints({}, {400.0f, ImGui::GetContentRegionAvail().y});
-    ImGui::SetNextWindowViewportToCurrent();
-
-    if(ImGui::BeginMenu(ICON_MDI_CAMERA ICON_MDI_ARROW_DOWN_BOLD))
+    ImGui::SeparatorText("Scene Camera");
+    if(ImGui::Button("Reset Camera"))
     {
-        if(ImGui::Button("Reset Camera"))
-        {
-            reset_camera(ctx);
-        }
-
-        ImGui::SetItemTooltipEx("%s", "Reset the Scene camera.");
-
-        ImGui::SliderFloat("Fly Speed",
-                           &camera_fly_speed_,
-                           CAMERA_FLY_SPEED_MIN,
-                           CAMERA_FLY_SPEED_MAX,
-                           "%.2f m/s",
-                           ImGuiSliderFlags_Logarithmic);
-        ImGui::SetItemTooltipEx("%s", "Speed of the fly camera. The mouse wheel changes it while flying.");
-
-        entt::meta_any cam = get_camera();
-        inspect_var(ctx, cam, make_proxy(cam));
-
-        ImGui::EndMenu();
+        reset_camera(ctx);
     }
-    ImGui::SetItemTooltipEx("%s", "Settings for the Scene view camera.");
+    ImGui::SetItemTooltipEx("%s", "Reset the Scene camera.");
+    ImGui::SliderFloat("Fly Speed",
+                       &camera_fly_speed_,
+                       CAMERA_FLY_SPEED_MIN,
+                       CAMERA_FLY_SPEED_MAX,
+                       "%.2f m/s",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::SetItemTooltipEx("%s", "Speed of the fly camera. The mouse wheel changes it while flying.");
+    entt::meta_any cam = get_camera();
+    inspect_var(ctx, cam, make_proxy(cam));
+    viewport_toolbar::end_dropdown();
 }
 
 void scene_panel::handle_viewport_interaction(rtti::context& ctx, const camera& camera, editing_manager& em)
@@ -2082,7 +2121,8 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
     handle_viewport_interaction(ctx, camera, em);
     handle_keyboard_shortcuts(em);
 
-    manipulation_gizmos(gizmo_at_center_, was_using_gizmo_, get_center(), camera_entity, em);
+    const float overlay_top = ImGui::GetCurrentWindow()->ContentRegionRect.Min.y + toolbar_extent_;
+    manipulation_gizmos(gizmo_at_center_, was_using_gizmo_, get_center(), camera_entity, em, overlay_top);
     handle_camera_movement(camera_entity);
     draw_camera_fly_speed_hint(size, pos);
     draw_selected_camera(ctx, camera_entity, size);
@@ -2151,8 +2191,6 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
 
 void scene_panel::draw_ui(rtti::context& ctx)
 {
-    draw_menubar(ctx);
-
     if(m_skip_frames_ > 0)
     {
         auto spinner_size = ImGui::GetContentRegionAvail().y * 0.2f;
@@ -2206,48 +2244,24 @@ void scene_panel::draw_ui(rtti::context& ctx)
 
     auto& camera_comp = camera_entity.get<camera_component>();
 
+    // The toolbar floats over the whole panel area, not over the (possibly letterboxed) image.
+    const ImRect toolbar_area(avail_origin, avail_origin + avail);
+    update_toolbar_layout(ctx, toolbar_area);
+
     setup_camera_viewport(camera_comp, view_size, view_pos);
     draw_scene_viewport(ctx, view_size, view_pos);
     process_drag_drop_target(ctx, camera_comp);
+    // After the image: the shadows of the bars go into this window's draw list, on top of it.
+    draw_toolbar(ctx, toolbar_area);
 
     const auto& pstats = camera_comp.get_pipeline_data().get_pipeline()->get_stats();
-    viewport_stats_overlay::draw(pstats, stats_overlay_state_, "scene");
+    viewport_stats_overlay::draw(pstats, stats_overlay_state_, "scene", toolbar_extent_);
     visualization_menu::draw_legend_overlay(visualize_passes_, visualization_menu_state_, "scene");
 
     if(stats_overlay_state_.open_profiler_requested)
     {
         stats_overlay_state_.open_profiler_requested = false;
         parent_->get_profiler_timeline_panel().show(true);
-    }
-}
-
-void scene_panel::draw_menubar(rtti::context& ctx)
-{
-    auto& em = ctx.get_cached<editing_manager>();
-
-    if(ImGui::BeginMenuBar())
-    {
-        // Apply Unity-like styling - more prominent, tab-like appearance
-        ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
-
-        draw_prefab_mode_header(ctx);
-        viewport_resolution::draw_menu(ctx, current_resolution_index_);
-        draw_transform_tools(em);
-        draw_gizmo_pivot_mode_menu(gizmo_at_center_);
-        draw_coordinate_system_menu(em);
-        draw_grid_settings_menu(em);
-        draw_gizmos_settings_menu(em);
-        draw_visualization_menu();
-        draw_snapping_menu(em);
-        draw_inverse_kinematics_menu(em);
-        draw_camera_settings_menu(ctx);
-        viewport_stats_overlay::draw_stats_toggle(stats_overlay_state_);
-
-        ImGui::PopStyleColor(3);
-
-        ImGui::EndMenuBar();
     }
 }
 

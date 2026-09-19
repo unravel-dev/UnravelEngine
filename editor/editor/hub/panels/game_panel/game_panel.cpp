@@ -2,12 +2,14 @@
 #include "../panel.h"
 #include "../panels_defs.h"
 #include "../viewport_resolution.h"
+#include "../viewport_toolbar.h"
 #include "../visualization_menu.h"
 #include "imgui/imgui.h"
 #include "imgui_widgets/utils.h"
 #include <engine/engine.h>
 
 #include <algorithm>
+#include <string>
 #include <editor/system/project_manager.h>
 #include <engine/ecs/ecs.h>
 #include <engine/play_mode.h>
@@ -19,6 +21,15 @@
 
 namespace unravel
 {
+namespace
+{
+constexpr const char* TOOLBAR_BAR_ID = "##game_toolbar";
+constexpr int TOOLBAR_FIRST_ROW_BARS = 1;
+// While the game plays, the pointer reveals the toolbar within this many bar heights of the top
+// edge, and the fade takes this long.
+constexpr float TOOLBAR_REVEAL_ROWS = 2.0f;
+constexpr float TOOLBAR_FADE_SECONDS = 0.12f;
+} // namespace
 
 game_panel::game_panel(imgui_panels* parent, const char* name)
     : panel_base(name)
@@ -91,10 +102,13 @@ void game_panel::on_project_opened()
     // m_skip_frames_ = 100;
 }
 
+auto game_panel::get_window_flags() const -> ImGuiWindowFlags
+{
+    return ImGuiWindowFlags_None;
+}
+
 void game_panel::draw_ui(rtti::context& ctx)
 {
-    draw_menubar(ctx);
-
     if(m_skip_frames_ > 0)
     {
         auto spinner_size = ImGui::GetContentRegionAvail().y * 0.2f;
@@ -132,6 +146,10 @@ void game_panel::draw_ui(rtti::context& ctx)
     auto size = ImGui::GetContentRegionAvail();
     if(size.x > 0 && size.y > 0)
     {
+        const ImVec2 area_origin = ImGui::GetCursorScreenPos();
+        const ImRect toolbar_area(area_origin, area_origin + size);
+        update_toolbar_visibility(ctx, toolbar_area);
+
         bool rendered = false;
         rendering::pipeline_stats pstats;
         ec.get_scene().registry->view<camera_component>().each(
@@ -190,7 +208,10 @@ void game_panel::draw_ui(rtti::context& ctx)
         }
       
                             
-        viewport_stats_overlay::draw(pstats, stats_overlay_state_, "game");
+        // After the image: the shadow of the bar goes into this window's draw list, on top of it.
+        draw_toolbar(ctx, toolbar_area);
+
+        viewport_stats_overlay::draw(pstats, stats_overlay_state_, "game", viewport_toolbar::get_rows_extent(1));
         visualization_menu::draw_legend_overlay(visualize_passes_, visualization_menu_state_, "game");
 
         if(stats_overlay_state_.open_profiler_requested)
@@ -215,52 +236,78 @@ auto game_panel::begin_panel(const char* name, ImGuiWindowFlags flags) -> bool
     return open;
 }
 
-void game_panel::draw_menubar(rtti::context& ctx)
+void game_panel::update_toolbar_visibility(rtti::context& ctx, const ImRect& area)
 {
-    if(ImGui::BeginMenuBar())
+    auto& play = ctx.get_cached<play_mode>();
+    const float reveal_height = viewport_toolbar::get_rows_extent(1) * TOOLBAR_REVEAL_ROWS;
+    const ImVec2 reveal_max(area.Max.x, area.Min.y + reveal_height);
+    const bool is_pointer_at_top = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) &&
+                                   ImGui::IsMouseHoveringRect(area.Min, reveal_max, false);
+    const bool is_revealed = !play.is_active() || is_pointer_at_top || viewport_toolbar::is_dropdown_open();
+    const float fade_step = ImGui::GetIO().DeltaTime / TOOLBAR_FADE_SECONDS;
+    toolbar_alpha_ = ImClamp(toolbar_alpha_ + (is_revealed ? fade_step : -fade_step), 0.0f, 1.0f);
+}
+
+void game_panel::draw_toolbar(rtti::context& ctx, const ImRect& area)
+{
+    viewport_toolbar::bar_placement placement{};
+    placement.area = area;
+    placement.anchor = viewport_toolbar::bar_anchor::right;
+    // The frame rate stays on screen while the bar is out of the way of the game: a passive
+    // readout in the place the statistics toggle shows it, so the two fade into each other.
+    if(toolbar_alpha_ < 1.0f)
     {
-        ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImGui::GetStyleColorVec4(ImGuiCol_TabSelected));
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetStyleColorVec4(ImGuiCol_TabSelectedOverline));
+        placement.alpha = 1.0f - toolbar_alpha_;
+        viewport_stats_overlay::draw_toolbar_readout(placement);
+    }
+    // A faded-out bar is not submitted at all: an invisible one would still take the clicks
+    // meant for the game.
+    if(toolbar_alpha_ <= 0.0f)
+    {
+        return;
+    }
+    const float bar_width = viewport_toolbar::get_bar_width(TOOLBAR_BAR_ID);
+    viewport_toolbar::update_layout(toolbar_layout_, bar_width, TOOLBAR_FIRST_ROW_BARS, area.GetWidth());
+    placement.alpha = toolbar_alpha_;
+    if(viewport_toolbar::begin_bar(TOOLBAR_BAR_ID, placement))
+    {
+        draw_resolution_dropdown(ctx);
+        viewport_toolbar::separator();
+        visualization_menu::draw_toolbar_dropdown(visualize_passes_, visualization_menu_state_);
+        draw_ui_debugger_toggle(ctx);
+        viewport_toolbar::separator();
+        viewport_stats_overlay::draw_toolbar_toggle(stats_overlay_state_);
+    }
+    viewport_toolbar::end_bar();
+}
 
-        if(ctx.has<unravel::settings>())
-        {
-            auto& pm = ctx.get_cached<project_manager>();
-            auto& s = pm.get_settings();
-            int index = s.resolution.get_current_resolution_index();
-            if(viewport_resolution::draw_menu(ctx, index))
-            {
-                s.resolution.set_current_resolution_index(index);
-                pm.save_project_settings(ctx);
-            }
-        }
+void game_panel::draw_resolution_dropdown(rtti::context& ctx)
+{
+    if(!ctx.has<unravel::settings>())
+    {
+        return;
+    }
+    // The game view shows the resolution the project ships with, so the pick goes to its settings.
+    auto& pm = ctx.get_cached<project_manager>();
+    auto& project_settings = pm.get_settings();
+    int index = project_settings.resolution.get_current_resolution_index();
+    if(viewport_resolution::draw_toolbar_dropdown(ctx, index, toolbar_layout_.is_compact))
+    {
+        project_settings.resolution.set_current_resolution_index(index);
+        pm.save_project_settings(ctx);
+    }
+}
 
-        visualization_menu::draw_menu(visualize_passes_, visualization_menu_state_);
-
-        auto& ui    = ctx.get_cached<ui_system>();
-        bool debugger_enabled = ui.is_debugger_enabled();
-        const char* modes[] = {ICON_MDI_BUG_CHECK " UI Debugger", ICON_MDI_BUG " UI Debugger"};
-        const char* debugger_preview = modes[int(!debugger_enabled)];
-
-        if(debugger_enabled)
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
-        }
-        if(ImGui::MenuItem(debugger_preview, "", debugger_enabled))
-        {
-            ui.set_debugger_enabled(!debugger_enabled);
-        }
-        if(debugger_enabled)
-        {
-            ImGui::PopStyleColor();
-        }
-        ImGui::SetItemTooltipEx("%s", debugger_enabled ? "Hide UI Debugger" : "Show UI Debugger");
-
-        viewport_stats_overlay::draw_stats_toggle(stats_overlay_state_);
-
-        ImGui::PopStyleColor(3);
-
-        ImGui::EndMenuBar();
+void game_panel::draw_ui_debugger_toggle(rtti::context& ctx)
+{
+    auto& ui = ctx.get_cached<ui_system>();
+    const bool is_enabled = ui.is_debugger_enabled();
+    const char* icon = is_enabled ? ICON_MDI_BUG_CHECK : ICON_MDI_BUG;
+    const std::string text = viewport_toolbar::make_text(icon, "UI Debugger", toolbar_layout_.is_compact);
+    const char* tooltip = is_enabled ? "Hide UI Debugger" : "Show UI Debugger";
+    if(viewport_toolbar::toggle("##ui_debugger", text.c_str(), is_enabled, tooltip))
+    {
+        ui.set_debugger_enabled(!is_enabled);
     }
 }
 

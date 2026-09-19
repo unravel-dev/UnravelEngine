@@ -67,15 +67,36 @@ Use `unravel-add-inspector` for custom type inspectors.
 - `ImGui::SetItemTooltipEx()` for tooltips (project wrapper)
 - Menu bar items: account for `FramePadding` and `ItemSpacing` when right-aligning
 
-## Menu bars
+## Viewport toolbars
 
-Scene and game panels have `draw_menubar()`:
+The scene and game panels have NO menu bar (`get_window_flags()` returns no `MenuBar`). Their
+controls float over the image as rounded bars built with `viewport_toolbar`
+(`editor/editor/hub/panels/viewport_toolbar.h`):
 
-- `scene_panel.cpp` -> `draw_menubar`
-- `game_panel.cpp` -> `draw_menubar`
-- Stats toggle: `viewport_stats_overlay::draw_stats_toggle`
+- `scene_panel.cpp` -> `draw_toolbar`: tools bar (left), view bar (right), prefab bar (centered,
+  own row, prefab mode only)
+- `game_panel.cpp` -> `draw_toolbar`: one bar on the right. While the game plays it fades out
+  and is NOT submitted (an invisible bar would eat the game's clicks); the pointer at the top
+  edge or an open dropdown brings it back (`update_toolbar_visibility`). The frame rate stays:
+  `viewport_stats_overlay::draw_toolbar_readout` draws it as a passive
+  `viewport_toolbar::draw_readout` (draw list only, clicks pass through) in the exact place the
+  statistics toggle shows it, so the two cross-fade
+- Every bar is a child window, so clicks never reach picking / drag selection / ImGuizmo below;
+  `end_bar()` hands the keyboard focus back to the panel so viewport shortcuts keep working
+- Items: `button`, `toggle`, `begin_dropdown` / `end_dropdown` (null text = caret half of a
+  split button), `separator`, `label`; pass `width_text` for a label that changes (FPS, state
+  names) or an anchored bar jitters
+- Layout falls back full -> compact (icons only) -> stacked (view bar on row 2) from the
+  measured bar widths (`viewport_toolbar::layout_state` + `update_layout`); overlays that share
+  the top edge (view cube, `viewport_stats_overlay::draw` `top_offset`) start below
+  `viewport_toolbar::get_rows_extent(rows)`
+- Items shared by both panels live in their own module: `viewport_resolution::draw_toolbar_dropdown`,
+  `visualization_menu::draw_toolbar_dropdown`, `viewport_stats_overlay::draw_toolbar_toggle`
+- A popup whose content fills its height (entity inspector) needs an explicit size, not
+  auto-resize; a `SetNextWindowSize*` right before `begin_dropdown` reaches the popup
 
-Menu bar uses horizontal `MenuItem` layout - width exceeds `CalcTextSize` label.
+Other panels (console, inspector, ...) keep classic menu bars: horizontal `MenuItem` layout -
+width exceeds `CalcTextSize` label.
 
 ## Play mode UI
 

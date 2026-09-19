@@ -1,4 +1,5 @@
 #include "viewport_resolution.h"
+#include "viewport_toolbar.h"
 #include "../hub.h"
 
 #include <engine/rendering/ecs/components/camera_component.h>
@@ -76,7 +77,7 @@ auto get_resolution(rtti::context& ctx, int index) -> const settings::resolution
     return &resolutions[clamp_index(index, static_cast<int>(resolutions.size()))];
 }
 
-auto draw_menu(rtti::context& ctx, int& current_index) -> bool
+auto draw_toolbar_dropdown(rtti::context& ctx, int& current_index, bool is_compact) -> bool
 {
     if(!ctx.has<unravel::settings>())
     {
@@ -91,25 +92,28 @@ auto draw_menu(rtti::context& ctx, int& current_index) -> bool
 
     current_index = clamp_index(current_index, static_cast<int>(resolutions.size()));
 
-    bool changed = false;
-    const auto label = fmt::format("{} {}", resolutions[current_index].name, ICON_MDI_ARROW_DOWN_BOLD);
-    if(ImGui::BeginMenu(label.c_str()))
+    const std::string text =
+        viewport_toolbar::make_text(ICON_MDI_ASPECT_RATIO, resolutions[current_index].name.c_str(), is_compact);
+    if(!viewport_toolbar::begin_dropdown("##resolution", text.c_str(), "Resolution Presets"))
     {
-        for(int i = 0; i < static_cast<int>(resolutions.size()); ++i)
-        {
-            if(ImGui::RadioButton(resolutions[i].name.c_str(), &current_index, i))
-            {
-                changed = true;
-            }
-        }
-
-        if(ImGui::MenuItem("Edit ...", "", false))
-        {
-            ctx.get_cached<hub>().open_project_settings(ctx, "Resolution");
-        }
-        ImGui::EndMenu();
+        return false;
     }
-    ImGui::SetItemTooltipEx("%s", "Resolution Presets");
+
+    bool changed = false;
+    ImGui::SeparatorText("Resolution");
+    for(int i = 0; i < static_cast<int>(resolutions.size()); ++i)
+    {
+        if(ImGui::RadioButton(resolutions[i].name.c_str(), &current_index, i))
+        {
+            changed = true;
+        }
+    }
+
+    if(ImGui::MenuItem("Edit ...", "", false))
+    {
+        ctx.get_cached<hub>().open_project_settings(ctx, "Resolution");
+    }
+    viewport_toolbar::end_dropdown();
 
     return changed;
 }

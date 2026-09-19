@@ -14,15 +14,16 @@ struct state
 
 //-----------------------------------------------------------------------------
 /// <summary>
-/// Draw the menu-bar debug view picker: a single menu holding "Full" plus one submenu per
-/// visualization_group. Every entry carries a tooltip with its description and legend, and
-/// the menu-bar label names the active view so a left-on debug pass cannot be mistaken for
-/// a rendering bug. Shared between the Scene and Game panels.
+/// Draw the debug view picker of a floating viewport toolbar: a dropdown holding "Full" plus one
+/// submenu per visualization_group. Every entry carries a tooltip with its description and
+/// legend, and the button names the active view in a warning tint, so a left-on debug pass
+/// cannot be mistaken for a rendering bug. Shared between the Scene and Game panels; call
+/// between viewport_toolbar::begin_bar() and end_bar().
 /// </summary>
 /// <param name="mode">Raw pipeline debug pass id, read and written in place</param>
 /// <param name="menu_state">Persistent per-viewport state</param>
 //-----------------------------------------------------------------------------
-void draw_menu(int& mode, state& menu_state);
+void draw_toolbar_dropdown(int& mode, state& menu_state);
 
 //-----------------------------------------------------------------------------
 /// <summary>

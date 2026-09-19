@@ -6,6 +6,7 @@
 #include "camera_controller.h"
 #include "gizmos/gizmos_renderer.h"
 #include "../viewport_stats_overlay.h"
+#include "../viewport_toolbar.h"
 #include "../visualization_menu.h"
 
 namespace unravel
@@ -61,23 +62,28 @@ private:
     void draw_scene(rtti::context& ctx, delta_t dt);
 
     void draw_ui(rtti::context& ctx) override;
-    void draw_menubar(rtti::context& ctx);
     void draw_selected_camera(rtti::context& ctx, entt::handle editor_camera, const ImVec2& size);
     auto begin_panel(const char* name, ImGuiWindowFlags flags) -> bool override;
 
-    // Menu bar drawing functions
-    void draw_prefab_mode_header(rtti::context& ctx);
+    // Floating toolbar (viewport_toolbar): the tools bar on the left, the view bar on the right,
+    // the prefab bar centered on a row of its own while a prefab is edited.
+    /// Picks the full, compact or stacked layout for the width and sets toolbar_extent_.
+    void update_toolbar_layout(rtti::context& ctx, const ImRect& area);
+    void draw_toolbar(rtti::context& ctx, const ImRect& area);
+    void draw_tools_bar(editing_manager& em, const ImRect& area);
+    void draw_view_bar(rtti::context& ctx, editing_manager& em, const ImRect& area);
+    void draw_prefab_bar(rtti::context& ctx, const ImRect& area);
     void draw_transform_tools(editing_manager& em);
-    void draw_gizmo_pivot_mode_menu(bool& gizmo_at_center);
-    void draw_coordinate_system_menu(editing_manager& em);
-    void draw_grid_settings_menu(editing_manager& em);
-    void draw_gizmos_settings_menu(editing_manager& em);
-    void draw_visualization_menu();
-    void draw_snapping_menu(editing_manager& em);
-    void draw_inverse_kinematics_menu(editing_manager& em);
-    void draw_camera_settings_menu(rtti::context& ctx);
+    void draw_pivot_mode_toggle();
+    void draw_coordinate_system_toggle(editing_manager& em);
+    void draw_snapping_dropdown(editing_manager& em);
+    void draw_grid_controls(editing_manager& em);
+    void draw_gizmos_controls(editing_manager& em);
+    void draw_gizmos_settings(editing_manager& em);
+    void draw_inverse_kinematics_dropdown(editing_manager& em);
+    void draw_camera_dropdown(rtti::context& ctx);
 
-      
+
     // Drag selection helper functions
     void handle_drag_selection(rtti::context& ctx, const camera& camera, editing_manager& em);
     void draw_drag_selection_rect(const ImVec2& start_pos, const ImVec2& current_pos);
@@ -137,6 +143,14 @@ private:
 
     viewport_stats_overlay::state stats_overlay_state_{};
     visualization_menu::state visualization_menu_state_{};
+
+    /// Compact drops the text labels; stacked also moves the view bar to a second row.
+    viewport_toolbar::layout_state toolbar_layout_{};
+    /// Height the toolbar rows take off the top of the viewport area. The view cube and the
+    /// statistics overlay start below it.
+    float toolbar_extent_{};
+    /// Tallest a toolbar popup may get before it scrolls: it has to stay inside the panel.
+    float toolbar_popup_max_height_{};
 
     int m_skip_frames_{0};
 };
