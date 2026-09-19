@@ -1353,8 +1353,9 @@ auto make_debug_draw(gfx::dd_raii& dd) -> b3DebugDraw
     // adds what the solver knows: contact points and normals.
     draw.drawShapes = false;
     draw.drawJoints = false;
-    draw.drawContacts = true;
-    draw.drawContactNormals = true;
+    draw.drawContacts = false;
+    draw.drawContactNormals = false;
+    draw.drawSleep = false;
     draw.context = &dd;
     return draw;
 }
