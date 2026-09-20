@@ -438,29 +438,26 @@ auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::tex
     return tex;
 }
 
-auto should_rebuild_shadows(const shadow::shadow_map_models_t& visibility_set,
-                            const light& light,
-                            const math::bbox& light_bounds,
-                            const math::transform& light_transform) -> bool
+/// Copies into @p light_casters the casters whose world bounds reach into a local light's
+/// bounding sphere (world space). A caster wholly outside it is beyond the light's reach:
+/// every ray from the light to a lit receiver stays inside that volume, so such a caster has
+/// nothing to shadow. Both lists are pipeline-owned scratch whose clear() keeps the storage -
+/// once warmed up this allocates nothing, and it reads nothing but the contiguous list.
+void cull_shadow_casters(const shadow::shadow_map_models_t& scene_casters,
+                         const math::bsphere& light_sphere,
+                         shadow::shadow_map_models_t& light_casters)
 {
-    APP_SCOPE_PERF("Rendering/Shadow Rebuild Check Per Light");
-
-    auto light_world_bounds = math::bbox::mul(light_bounds, light_transform);
-    for(const auto& element : visibility_set)
+    APP_SCOPE_PERF("Rendering/Shadow Caster Cull Per Light");
+    light_casters.clear();
+    const float radius_squared = light_sphere.radius * light_sphere.radius;
+    for(const auto& caster : scene_casters)
     {
-        const auto& entity = element.entity;
-        const auto& lod_data = element.lod_data;
-        const auto& transform_comp_ref = entity.get<transform_component>();
-        const auto& model_comp_ref = entity.get<model_component>();
-        const auto& model_world_bounds = model_comp_ref.get_world_bounds();
-
-        bool result = light_world_bounds.intersect(model_world_bounds);
-
-        if(result)
-            return true;
+        const math::vec3 to_closest = caster.world_bounds.closest_point(light_sphere.position) - light_sphere.position;
+        if(math::dot(to_closest, to_closest) <= radius_squared)
+        {
+            light_casters.emplace_back(caster);
+        }
     }
-
-    return false;
 }
 
 auto reflection_screen_stack_enabled(const pipeline::run_params& params) -> bool
@@ -669,11 +666,7 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, visib
     query |= visibility_query::is_dirty | visibility_query::is_shadow_caster;
 
     bool queried = false;
-    shadow::shadow_map_models_t dirty_models;
-
-    const auto& view = camera.get_view();
-    const auto& proj = camera.get_projection();
-    const auto& camera_pos = camera.get_position();
+    shadow_scene_casters_.clear();
 
     scn.registry->view<transform_component, light_component>().each(
         [&](auto e, auto&& transform_comp, auto&& light_comp)
@@ -685,10 +678,13 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, visib
             bool camera_dependant = is_directional || has_render_mask;
             bool is_active = scn.registry->all_of<active_component>(e);
 
+            // A point / spot light's shadow maps are the same for every view of the frame, so
+            // the first view that resolves them wins and the rest skip the light (see
+            // shadowmap_generator::already_resolved). A directional light re-fits its cascades
+            // to the view being rendered, and a render mask makes even a local light's caster
+            // set view specific, so neither is ever skipped.
             auto& generator = light_comp.get_shadowmap_generator();
-            generator.enable_adaptive_shadows(true);
-            generator.set_altitude_scale_factor(0.4f);
-            if(!camera_dependant && generator.already_updated())
+            if(!camera_dependant && generator.already_resolved())
             {
                 return;
             }
@@ -697,22 +693,20 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, visib
 
             auto world_transform = transform_comp.get_transform_global();
             world_transform.reset_scale();
-            const auto& light_direction = world_transform.z_unit_axis();
 
             generator.update(camera, light, world_transform, is_active);
 
-            if(!is_active)
+            // Camera independent: no view of this frame wants shadow maps from this light.
+            if(!is_active || !light.casts_shadows)
             {
+                generator.mark_resolved();
                 return;
             }
 
-            const auto& bounds = light_comp.get_bounds_precise(light_direction);
-            if(!camera.test_obb(bounds, world_transform))
-            {
-                return;
-            }
-
-            if(!light.casts_shadows)
+            // Camera DEPENDENT, so not a resolution: a later view of this frame (the camera
+            // after a probe face capture) may still see this light and have to generate.
+            const auto light_sphere = light_comp.get_world_bounds_sphere(world_transform);
+            if(!camera.get_frustum().test_sphere(light_sphere))
             {
                 return;
             }
@@ -721,20 +715,31 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, visib
             {
                 gather_visible_models(scn, nullptr, query, render_mask, dt, [&](entt::handle entity, const lod_data& lod_data)
                 {
-                    dirty_models.emplace_back(shadow::shadow_visibility_data{entity, lod_data});
+                    const auto& world_bounds = entity.get<model_component>().get_world_bounds();
+                    shadow_scene_casters_.emplace_back(shadow::shadow_visibility_data{entity, lod_data, world_bounds});
                 }, &camera);
                 queried = true;
             }
 
-            bool should_rebuild = should_rebuild_shadows(dirty_models, light, bounds, world_transform);
+            // A directional light reaches every caster (its generator culls them against the
+            // view); a local light only gets the casters that reach into its range.
+            const shadow::shadow_map_models_t* light_casters = &shadow_scene_casters_;
+            if(!is_directional)
+            {
+                cull_shadow_casters(shadow_scene_casters_, light_sphere, shadow_light_casters_);
+                light_casters = &shadow_light_casters_;
+            }
 
-            // If shadows shouldn't be rebuilt - continue.
-            if(!should_rebuild)
+            // Nothing in reach: skip, unless the maps still show casters that have since left.
+            if(light_casters->empty() && !generator.needs_clear())
+            {
+                generator.mark_resolved();
                 return;
+            }
 
             APP_SCOPE_PERF("Rendering/Shadow Generation Pass Per Light After Cull");
 
-            generator.generate_shadowmaps(dirty_models, camera, &stats_);
+            generator.generate_shadowmaps(*light_casters, camera, &stats_);
         });
 }
 
@@ -2079,8 +2084,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
             const auto& light_position = world_transform.get_position();
             const auto& light_direction = world_transform.z_unit_axis();
 
-            const auto& bounds = light_comp_ref.get_bounds_precise(light_direction);
-            if(!camera.test_obb(bounds, world_transform))
+            if(!camera.get_frustum().test_sphere(light_comp_ref.get_world_bounds_sphere(world_transform)))
             {
                 return;
             }

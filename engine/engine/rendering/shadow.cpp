@@ -379,6 +379,30 @@ void calculateCascadeSplits(float* cascadeSplits, uint8_t numSplits, float nearC
 
 } // namespace
 
+auto make_light_projection(float fov_y_degrees,
+                           float aspect,
+                           float near_plane,
+                           float far_plane,
+                           bool homogeneous_depth,
+                           bool is_linear_depth) -> light_projection
+{
+    /// Row-major elements that map view z to clip z: the scale and the offset.
+    constexpr size_t PROJ_Z_SCALE_INDEX = 10;
+    constexpr size_t PROJ_Z_OFFSET_INDEX = 14;
+    light_projection result;
+    result.homogeneous_depth = homogeneous_depth;
+    bx::mtxProj(result.cull_proj, fov_y_degrees, aspect, near_plane, far_plane, homogeneous_depth);
+    bx::memCopy(result.render_proj, result.cull_proj, sizeof(result.render_proj));
+    // For linear depth, prevent depth division by variable w-component in shaders and divide
+    // here by far plane.
+    if(is_linear_depth)
+    {
+        result.render_proj[PROJ_Z_SCALE_INDEX] /= far_plane;
+        result.render_proj[PROJ_Z_OFFSET_INDEX] /= far_plane;
+    }
+    return result;
+}
+
 shadowmap_generator::shadowmap_generator()
 {
     init(engine::context());
@@ -1150,15 +1174,23 @@ auto shadowmap_generator::get_shadow_map_world_to_depth() const -> float
     return uniforms_.m_shadowBiasParams[1];
 }
 
-auto shadowmap_generator::already_updated() const -> bool
+auto shadowmap_generator::already_resolved() const -> bool
 {
-    return last_update_ == gfx::get_render_frame();
+    return last_resolve_frame_ == gfx::get_render_frame();
+}
+
+void shadowmap_generator::mark_resolved()
+{
+    last_resolve_frame_ = gfx::get_render_frame();
+}
+
+auto shadowmap_generator::needs_clear() const -> bool
+{
+    return needs_clear_;
 }
 
 void shadowmap_generator::update(const camera& cam, const light& l, const math::transform& ltrans, bool is_active)
 {
-    last_update_ = gfx::get_render_frame();
-
     if(!l.casts_shadows)
     {
         deinit_textures();
@@ -1287,6 +1319,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     if(recreateTextures)
     {
         current_shadow_map_size_ = shadowMapSize;
+        needs_clear_ = true;
 
         // Float depth (moments for VSM). The RGBA8 packing this replaced decoded with a
         // systematic error of up to 2e-3 of the depth range (the 1/255 steps of UNORM8 against
@@ -1404,23 +1437,18 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
 
     float mtxYpr[TetrahedronFaces::Count][16];
 
+    // Spot / point lights render with perspective[..].render_proj and cull with its cull_proj
+    // (see light_projection). Directional cascades cull with the projections they render with.
+    light_projection perspective[ProjType::Count];
+    const bool is_linear_depth = DepthImpl::Linear == settings_.m_depthImpl;
+
     if(LightType::SpotLight == settings_.m_lightType)
     {
         const float fovy = settings_.m_coverageSpotL;
         const float aspect = 1.0f;
-        bx::mtxProj(lightProj[ProjType::Horizontal],
-                    fovy,
-                    aspect,
-                    currentSmSettings->m_near,
-                    currentSmSettings->m_far,
-                    false);
-
-        // For linear depth, prevent depth division by variable w-component in shaders and divide here by far plane
-        if(DepthImpl::Linear == settings_.m_depthImpl)
-        {
-            lightProj[ProjType::Horizontal][10] /= currentSmSettings->m_far;
-            lightProj[ProjType::Horizontal][14] /= currentSmSettings->m_far;
-        }
+        perspective[ProjType::Horizontal] =
+            make_light_projection(fovy, aspect, currentSmSettings->m_near, currentSmSettings->m_far, false, is_linear_depth);
+        bx::memCopy(lightProj[ProjType::Horizontal], perspective[ProjType::Horizontal].render_proj, sizeof(lightProj[0]));
 
         const bx::Vec3 at = bx::add(bx::load<bx::Vec3>(point_light_.m_position.m_v),
                                     bx::load<bx::Vec3>(point_light_.m_spotDirectionInner.m_v));
@@ -1441,19 +1469,9 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             const float fovy = 125.26438968f + 9.85f + settings_.m_fovYAdjust;
             const float aspect = bx::tan(bx::toRad(fovx * 0.5f)) / bx::tan(bx::toRad(fovy * 0.5f));
 
-            bx::mtxProj(lightProj[ProjType::Vertical],
-                        fovx,
-                        aspect,
-                        currentSmSettings->m_near,
-                        currentSmSettings->m_far,
-                        false);
-
-            // For linear depth, prevent depth division by variable w-component in shaders and divide here by far plane
-            if(DepthImpl::Linear == settings_.m_depthImpl)
-            {
-                lightProj[ProjType::Vertical][10] /= currentSmSettings->m_far;
-                lightProj[ProjType::Vertical][14] /= currentSmSettings->m_far;
-            }
+            perspective[ProjType::Vertical] =
+                make_light_projection(fovx, aspect, currentSmSettings->m_near, currentSmSettings->m_far, false, is_linear_depth);
+            bx::memCopy(lightProj[ProjType::Vertical], perspective[ProjType::Vertical].render_proj, sizeof(lightProj[0]));
 
             ypr[TetrahedronFaces::Green][2] = bx::toRad(180.0f);
             ypr[TetrahedronFaces::Yellow][2] = bx::toRad(0.0f);
@@ -1465,19 +1483,9 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         const float fovy = 125.26438968f + 3.0f + settings_.m_fovYAdjust;
         const float aspect = bx::tan(bx::toRad(fovx * 0.5f)) / bx::tan(bx::toRad(fovy * 0.5f));
 
-        bx::mtxProj(lightProj[ProjType::Horizontal],
-                    fovy,
-                    aspect,
-                    currentSmSettings->m_near,
-                    currentSmSettings->m_far,
-                    homogeneousDepth);
-
-        // For linear depth, prevent depth division by variable w component in shaders and divide here by far plane
-        if(DepthImpl::Linear == settings_.m_depthImpl)
-        {
-            lightProj[ProjType::Horizontal][10] /= currentSmSettings->m_far;
-            lightProj[ProjType::Horizontal][14] /= currentSmSettings->m_far;
-        }
+        perspective[ProjType::Horizontal] =
+            make_light_projection(fovy, aspect, currentSmSettings->m_near, currentSmSettings->m_far, homogeneousDepth, is_linear_depth);
+        bx::memCopy(lightProj[ProjType::Horizontal], perspective[ProjType::Horizontal].render_proj, sizeof(lightProj[0]));
 
         for(uint8_t ii = 0; ii < TetrahedronFaces::Count; ++ii)
         {
@@ -1667,42 +1675,28 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         }
     }
 
+    // Culling frustums of the perspective lights: always from the projection AS BUILT and with
+    // the depth convention it was built with - never from lightProj, whose depth rows linear
+    // depth has rescaled, and never assuming the backend's convention (the spot and the
+    // stencil-packed vertical faces are built for [0, 1] depth on every backend).
+    const auto update_perspective_frustum = [&](uint8_t view, ProjType::Enum proj_type) -> void
+    {
+        const auto& projection = perspective[proj_type];
+        lightFrustums[view].update(math::make_mat4(lightView[view]),
+                                   math::make_mat4(projection.cull_proj),
+                                   projection.homogeneous_depth);
+    };
     if(LightType::SpotLight == settings_.m_lightType)
     {
-        lightFrustums[0].update(math::make_mat4(lightView[0]),
-                                math::make_mat4(lightProj[ProjType::Horizontal]),
-                                homogeneousDepth);
+        update_perspective_frustum(0, ProjType::Horizontal);
     }
     else if(LightType::PointLight == settings_.m_lightType)
     {
-        lightFrustums[TetrahedronFaces::Green].update(math::make_mat4(lightView[TetrahedronFaces::Green]),
-                                                      math::make_mat4(lightProj[ProjType::Horizontal]),
-                                                      homogeneousDepth);
-
-        lightFrustums[TetrahedronFaces::Yellow].update(math::make_mat4(lightView[TetrahedronFaces::Yellow]),
-                                                       math::make_mat4(lightProj[ProjType::Horizontal]),
-                                                       homogeneousDepth);
-
-        if(settings_.m_stencilPack)
-        {
-            lightFrustums[TetrahedronFaces::Blue].update(math::make_mat4(lightView[TetrahedronFaces::Blue]),
-                                                         math::make_mat4(lightProj[ProjType::Vertical]),
-                                                         homogeneousDepth);
-
-            lightFrustums[TetrahedronFaces::Red].update(math::make_mat4(lightView[TetrahedronFaces::Red]),
-                                                        math::make_mat4(lightProj[ProjType::Vertical]),
-                                                        homogeneousDepth);
-        }
-        else
-        {
-            lightFrustums[TetrahedronFaces::Blue].update(math::make_mat4(lightView[TetrahedronFaces::Blue]),
-                                                         math::make_mat4(lightProj[ProjType::Horizontal]),
-                                                         homogeneousDepth);
-
-            lightFrustums[TetrahedronFaces::Red].update(math::make_mat4(lightView[TetrahedronFaces::Red]),
-                                                        math::make_mat4(lightProj[ProjType::Horizontal]),
-                                                        homogeneousDepth);
-        }
+        const ProjType::Enum side_faces_proj = settings_.m_stencilPack ? ProjType::Vertical : ProjType::Horizontal;
+        update_perspective_frustum(TetrahedronFaces::Green, ProjType::Horizontal);
+        update_perspective_frustum(TetrahedronFaces::Yellow, ProjType::Horizontal);
+        update_perspective_frustum(TetrahedronFaces::Blue, side_faces_proj);
+        update_perspective_frustum(TetrahedronFaces::Red, side_faces_proj);
     }
     else // LightType::DirectionalLight == settings.m_lightType
     {
@@ -1922,6 +1916,8 @@ void shadowmap_generator::update_bias_uniforms(bool origin_bottom_left)
 
 void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models, const camera& cam, ::unravel::rendering::pipeline_stats* stats)
 {
+    mark_resolved();
+
     auto& lightView = light_view_;
     auto& lightProj = light_proj_;
     auto& lightFrustums = light_frustums_;
@@ -2211,6 +2207,7 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
 
         anythingDrawn =
             render_scene_into_shadowmap(RENDERVIEW_SHADOWMAP_1_ID, models, lightFrustums, currentSmSettings, &cam, stats);
+        needs_clear_ = anythingDrawn;
     }
 
     if(anythingDrawn)
@@ -2288,17 +2285,21 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
 
     bool static_batching_enabled = batch_collector::is_static_mesh_batching_enabled();
 
+    // For CSM (directional lights) a caster fully inside a nearer cascade's light frustum
+    // is not drawn into the farther (larger) cascades. This is exact ONLY because the
+    // lighting shader samples the smallest cascade whose crop contains the receiver
+    // (fs_pbr_lighting.sh, CalculateSurfaceShadow): a caster that shadows a receiver
+    // shares its light-space xy, so whatever shadows a receiver of crop j lies in column
+    // j and is drawn into map j. Selecting cascades by view distance instead would need
+    // every caster in every cascade it touches. For point/spot lights, faces cover
+    // different directions, so an object must be rendered to ALL faces where it is visible.
+    const bool nested_cascades = (LightType::DirectionalLight == settings_.m_lightType);
 
     for(const auto& element : models)
     {
-        const auto& entity = element.entity;
-        const auto& lod_data = element.lod_data;
-        const auto& transform_comp = entity.get<transform_component>();
-        auto& model_comp = entity.get<model_component>();
-
-
-        const auto& world_transform = transform_comp.get_transform_global();
-        const auto& world_bounds = model_comp.get_world_bounds();
+        // Culling runs on the bounds cached in the list, before any component is looked up:
+        // a rejected caster costs plane tests on contiguous memory and nothing else.
+        const auto& world_bounds = element.world_bounds;
 
         // For directional lights, perform additional swept AABB test using camera frustum
         bool should_render = true;
@@ -2326,6 +2327,24 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             continue;
         }
 
+        // Frustum culling against the pose-aware world AABB. Bind-pose local bounds are
+        // never used for culling - they don't track node/bone animation. This is the
+        // model-level reject in front of the per-submesh tests, which fall back to "visible"
+        // while a model's proxy bounds are stale (model_component::get_submit_extras); the
+        // world bounds are always valid. It also carries the nested-cascade rule: the mask
+        // ENDS at the first cascade that fully contains the model, so the loops below that
+        // walk its bits need no break of their own.
+        const uint8_t view_mask = compute_shadow_view_mask(lightFrustums, drawNum, world_bounds, nested_cascades);
+        if(view_mask == 0u)
+        {
+            continue;
+        }
+
+        const auto& entity = element.entity;
+        const auto& lod_data = element.lod_data;
+        const auto& transform_comp = entity.get<transform_component>();
+        auto& model_comp = entity.get<model_component>();
+        const auto& world_transform = transform_comp.get_transform_global();
         const auto& submesh_transforms = model_comp.get_submesh_transforms();
         const auto& bone_transforms = model_comp.get_bone_transforms();
         const auto& skinning_matrices = model_comp.get_skinning_transforms();
@@ -2343,16 +2362,6 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
 
         const auto extras = model_comp.get_submit_extras(true);
 
-        // For CSM (directional lights) a caster fully inside a nearer cascade's light frustum
-        // is not drawn into the farther (larger) cascades. This is exact ONLY because the
-        // lighting shader samples the smallest cascade whose crop contains the receiver
-        // (fs_pbr_lighting.sh, CalculateSurfaceShadow): a caster that shadows a receiver
-        // shares its light-space xy, so whatever shadows a receiver of crop j lies in column
-        // j and is drawn into map j. Selecting cascades by view distance instead would need
-        // every caster in every cascade it touches. For point/spot lights, faces cover
-        // different directions, so an object must be rendered to ALL faces where it is visible.
-        const bool nested_cascades = (LightType::DirectionalLight == settings_.m_lightType);
-
         if(can_batch)
         {
             // Collect into all cascades in one pass so the nested-cascade trick can be
@@ -2360,6 +2369,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             // not collected into farther cascades).
             const bool collected = model.submit_for_shadow_batching_cascaded(cascade_batch_collectors_,
                                                                       drawNum,
+                                                                      view_mask,
                                                                       world_transform,
                                                                       submesh_transforms,
                                                                       lod_data.current_lod_index,
@@ -2384,10 +2394,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
         bool counted_skinned_model_for_shadows = false;
         for(uint8_t ii = 0; ii < drawNum; ++ii)
         {
-            // Standard frustum culling against the pose-aware world AABB. Bind-pose local
-            // bounds are never used for culling - they don't track node/bone animation.
-            auto query = lightFrustums[ii].classify_aabb(world_bounds);
-            if(query == math::volume_query::outside)
+            if((view_mask & (1u << ii)) == 0u)
             {
                 continue;
             }
@@ -2491,11 +2498,6 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                          extras);
 
             any_rendered = true;
-
-            if(nested_cascades && query == math::volume_query::inside)
-            {
-                break;
-            }
         }
     }
     

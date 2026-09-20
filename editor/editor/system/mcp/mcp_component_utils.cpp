@@ -172,6 +172,75 @@ auto sm_resolution_from_string(std::string_view value, sm_resolution& out) -> bo
     return false;
 }
 
+auto sm_impl_to_string(sm_impl value) -> const char*
+{
+    switch(value)
+    {
+        case sm_impl::hard:
+            return "hard";
+        case sm_impl::pcf:
+            return "pcf";
+        case sm_impl::pcss:
+            return "pcss";
+        case sm_impl::vsm:
+            return "vsm";
+        case sm_impl::esm:
+            return "esm";
+        default:
+            return "pcf";
+    }
+}
+
+auto sm_impl_from_string(std::string_view value, sm_impl& out) -> bool
+{
+    if(value == "hard")
+    {
+        out = sm_impl::hard;
+        return true;
+    }
+    if(value == "pcf")
+    {
+        out = sm_impl::pcf;
+        return true;
+    }
+    if(value == "pcss")
+    {
+        out = sm_impl::pcss;
+        return true;
+    }
+    if(value == "vsm")
+    {
+        out = sm_impl::vsm;
+        return true;
+    }
+    if(value == "esm")
+    {
+        out = sm_impl::esm;
+        return true;
+    }
+    return false;
+}
+
+auto sm_depth_to_string(sm_depth value) -> const char*
+{
+    return value == sm_depth::linear ? "linear" : "invz";
+}
+
+auto sm_depth_from_string(std::string_view value, sm_depth& out) -> bool
+{
+    if(value == "invz")
+    {
+        out = sm_depth::invz;
+        return true;
+    }
+    if(value == "linear")
+    {
+        out = sm_depth::linear;
+        return true;
+    }
+    return false;
+}
+
 auto sky_mode_to_string(skylight_component::sky_mode mode) -> const char*
 {
     switch(mode)
@@ -374,6 +443,38 @@ auto light_to_json(const light_component& comp, const std::unordered_set<std::st
     {
         append_prop(json, first, "shadow_resolution", make_json_string(sm_resolution_to_string(l.shadow_params.resolution)));
     }
+    if(wants_key(filter, "shadow_type"))
+    {
+        append_prop(json, first, "shadow_type", make_json_string(sm_impl_to_string(l.shadow_params.type)));
+    }
+    if(wants_key(filter, "shadow_depth"))
+    {
+        append_prop(json, first, "shadow_depth", make_json_string(sm_depth_to_string(l.shadow_params.depth)));
+    }
+    if(wants_key(filter, "shadow_vsm_min_variance"))
+    {
+        append_prop(json, first, "shadow_vsm_min_variance", fmt::format("{:.6g}", l.shadow_params.vsm.min_variance));
+    }
+    if(wants_key(filter, "shadow_vsm_depth_multiplier"))
+    {
+        append_prop(json, first, "shadow_vsm_depth_multiplier", fmt::format("{:.6g}", l.shadow_params.vsm.depth_multiplier));
+    }
+    if(wants_key(filter, "shadow_vsm_blur"))
+    {
+        append_prop(json, first, "shadow_vsm_blur", l.shadow_params.vsm.do_blur ? "true" : "false");
+    }
+    if(wants_key(filter, "shadow_esm_hardness"))
+    {
+        append_prop(json, first, "shadow_esm_hardness", fmt::format("{:.6g}", l.shadow_params.esm.hardness));
+    }
+    if(wants_key(filter, "shadow_esm_depth_multiplier"))
+    {
+        append_prop(json, first, "shadow_esm_depth_multiplier", fmt::format("{:.6g}", l.shadow_params.esm.depth_multiplier));
+    }
+    if(wants_key(filter, "shadow_esm_blur"))
+    {
+        append_prop(json, first, "shadow_esm_blur", l.shadow_params.esm.do_blur ? "true" : "false");
+    }
     if(wants_key(filter, "contact_shadow_enabled"))
     {
         append_prop(json, first, "contact_shadow_enabled", l.contact_shadow.enabled ? "true" : "false");
@@ -564,6 +665,88 @@ auto apply_light_properties(light_component& comp, const simdjson::dom::object& 
             {
                 result.ok = false;
                 result.errors.push_back(key + ": expected low|medium|high|very_high");
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "shadow_type")
+        {
+            std::string s;
+            if(!parse_string(value, s, error) || !sm_impl_from_string(s, light.shadow_params.type))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": expected hard|pcf|pcss|vsm|esm");
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "shadow_depth")
+        {
+            std::string s;
+            if(!parse_string(value, s, error) || !sm_depth_from_string(s, light.shadow_params.depth))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": expected invz|linear");
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "shadow_vsm_min_variance")
+        {
+            if(!parse_number(value, light.shadow_params.vsm.min_variance, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "shadow_vsm_depth_multiplier")
+        {
+            if(!parse_number(value, light.shadow_params.vsm.depth_multiplier, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "shadow_vsm_blur")
+        {
+            if(!parse_bool(value, light.shadow_params.vsm.do_blur, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "shadow_esm_hardness")
+        {
+            if(!parse_number(value, light.shadow_params.esm.hardness, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "shadow_esm_depth_multiplier")
+        {
+            if(!parse_number(value, light.shadow_params.esm.depth_multiplier, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "shadow_esm_blur")
+        {
+            if(!parse_bool(value, light.shadow_params.esm.do_blur, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
                 continue;
             }
             result.applied.push_back(key);
@@ -3522,6 +3705,14 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Light", "shadow_near_plane", "number");
     add("Light", "shadow_far_plane", "number");
     add("Light", "shadow_resolution", "string", R"("enum":["low","medium","high","very_high"])");
+    add("Light", "shadow_type", "string", R"("enum":["hard","pcf","pcss","vsm","esm"])");
+    add("Light", "shadow_depth", "string", R"("enum":["invz","linear"])");
+    add("Light", "shadow_vsm_min_variance", "number");
+    add("Light", "shadow_vsm_depth_multiplier", "number");
+    add("Light", "shadow_vsm_blur", "boolean");
+    add("Light", "shadow_esm_hardness", "number");
+    add("Light", "shadow_esm_depth_multiplier", "number");
+    add("Light", "shadow_esm_blur", "boolean");
     add("Light", "contact_shadow_enabled", "boolean");
     add("Light", "contact_shadow_ray_length", "number");
     add("Light", "contact_shadow_thickness", "number");

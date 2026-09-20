@@ -273,6 +273,36 @@ struct model_submit_extras
     const submesh_pose_mat4* prev_submesh_transforms{nullptr};
     const std::vector<pose_mat4>* prev_skinning_transforms{nullptr};
 };
+/// Every shadow view is a candidate (compute_shadow_view_mask).
+constexpr uint8_t ALL_SHADOW_VIEWS = 0xFF;
+
+/**
+ * @brief Picks the shadow views a caster's bounds have to be drawn into, one bit per view
+ * (spot: 1 view, point: the 4 tetrahedron faces, directional: the cascades, nearest first).
+ *
+ * A view gets its bit when the bounds are not outside its light frustum. With
+ * @p nested_cascades the walk STOPS after the first view whose frustum fully contains the
+ * bounds: no farther cascade samples that caster, because the lighting shader reads the
+ * smallest cascade whose crop contains the receiver (fs_pbr_lighting.sh,
+ * CalculateSurfaceShadow). This is the single owner of that rule - the model level and the
+ * submesh level of the shadow submit both go through here.
+ *
+ * @param frustums The light frustums, @p view_count of them, nearest cascade first.
+ * @param world_bounds World AABB of the caster (a whole model, or one submesh instance).
+ * @param nested_cascades True for directional lights (see above), false for point / spot
+ *                        lights, whose views face different directions.
+ * @param candidate_mask Views to consider at all; the others stay cleared. For a submesh pass
+ *                       the mask of its model: bounds inside the model's cannot reach a view
+ *                       the model is outside of, nor a cascade behind the one that contains
+ *                       the whole model.
+ * @return Bit ii set = draw the caster into view ii. Zero = it reaches no view.
+ */
+auto compute_shadow_view_mask(const math::frustum* frustums,
+                              uint8_t view_count,
+                              const math::bbox& world_bounds,
+                              bool nested_cascades,
+                              uint8_t candidate_mask = ALL_SHADOW_VIEWS) -> uint8_t;
+
 /**
  * @class model
  * @brief Structure describing a LOD group (set of meshes), LOD transitions, and their materials.
@@ -696,9 +726,14 @@ public:
     /**
      * @brief Collects shadow-map geometry into per-cascade shadow batch collectors.
      * Batches by mesh/lod/submesh/cull and alpha-cutout state instead of material pointer.
+     * @param cascade_mask compute_shadow_view_mask of the model's world bounds. Every submesh
+     *                     instance refines it with its own cached bounds (same function, this
+     *                     mask as the candidates); one without cached bounds goes wherever
+     *                     the model as a whole can reach.
      */
     auto submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collector>& collectors,
                                              uint8_t cascade_count,
+                                             uint8_t cascade_mask,
                                              const math::mat4& world_transform,
                                              const submesh_pose_mat4& submesh_transforms,
                                              uint32_t lod_index,

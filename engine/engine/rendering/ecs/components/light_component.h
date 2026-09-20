@@ -35,10 +35,12 @@ public:
     auto get_bounds_sphere() const -> math::bsphere;
 
     /**
-     * @brief Gets the bounding box of the light object.
+     * @brief World-space bounding sphere of the volume the light reaches, for culling the
+     * light against a view and casters against the light (light::compute_world_bounds_sphere).
+     * @param[in] world_transform The light's world transform; only its position and z axis
+     *                            are read, so scale does not matter.
      */
-    auto get_bounds_precise(const math::vec3& light_direction) const -> math::bbox;
-    auto get_bounds_sphere_precise(const math::vec3& light_direction) const -> math::bsphere;
+    auto get_world_bounds_sphere(const math::transform& world_transform) const -> math::bsphere;
 
     /**
      * @brief Computes the projected sphere rectangle.
@@ -64,8 +66,6 @@ public:
     auto get_shadowmap_generator() -> shadow::shadowmap_generator&;
 
 private:
-    auto get_bounds_sphere_impl(const math::vec3* light_direction) const -> math::bsphere;
-
     /**
      * @brief The light object this component represents.
      */

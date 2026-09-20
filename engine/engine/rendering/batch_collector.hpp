@@ -19,6 +19,16 @@ void batch_group_t<Key>::add_instance(const batch_instance& instance)
 }
 
 template<typename Key>
+void batch_group_t<Key>::reset()
+{
+    key = Key{};
+    key_hash = 0;
+    instances.clear();
+    camera_distance = 0.0f;
+    is_split_batch = false;
+}
+
+template<typename Key>
 void batch_group_t<Key>::calculate_camera_distance(const math::vec3& camera_pos)
 {
     if(instances.empty())
@@ -65,15 +75,17 @@ void batch_collector_t<Key>::collect_renderable(const Key& key, const batch_inst
         return;
     }
 
+    if(!profiling_enabled_)
+    {
+        get_or_create_batch_group(key).add_instance(instance);
+        return;
+    }
+
     const auto start_time = std::chrono::high_resolution_clock::now();
     get_or_create_batch_group(key).add_instance(instance);
-
-    if(profiling_enabled_)
-    {
-        const auto end_time = std::chrono::high_resolution_clock::now();
-        const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
-        stats_.collection_time_ms += static_cast<float>(duration.count()) / 1000.0f;
-    }
+    const auto end_time = std::chrono::high_resolution_clock::now();
+    const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+    stats_.collection_time_ms += static_cast<float>(duration.count()) / 1000.0f;
 }
 
 template<typename Key>
@@ -85,24 +97,27 @@ void batch_collector_t<Key>::collect_renderable(const Key& key, const math::mat4
 template<typename Key>
 void batch_collector_t<Key>::prepare_batches(const submit_context& context)
 {
-    if(batch_groups_.empty())
+    if(group_count_ == 0)
     {
         return;
     }
 
-    const auto start_time = std::chrono::high_resolution_clock::now();
+    using clock = std::chrono::high_resolution_clock;
+    const bool is_profiling = profiling_enabled_ && context.enable_profiling;
+    const auto start_time = is_profiling ? clock::now() : clock::time_point{};
     prepared_batches_.clear();
-    prepared_batches_.reserve(batch_groups_.size());
+    prepared_batches_.reserve(group_count_);
 
-    for(auto& [key, group] : batch_groups_)
+    for(size_t index = 0; index < group_count_; ++index)
     {
+        auto& group = groups_[index];
         if(group.is_valid())
         {
             prepared_batches_.push_back(&group);
         }
     }
 
-    split_large_batches(context);
+    count_oversized_batches(context);
 
     if(context.enable_distance_sorting)
     {
@@ -112,10 +127,9 @@ void batch_collector_t<Key>::prepare_batches(const submit_context& context)
     sort_batches(context);
     update_statistics();
 
-    if(profiling_enabled_ && context.enable_profiling)
+    if(is_profiling)
     {
-        const auto end_time = std::chrono::high_resolution_clock::now();
-        const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time);
+        const auto duration = std::chrono::duration_cast<std::chrono::microseconds>(clock::now() - start_time);
         stats_.preparation_time_ms = static_cast<float>(duration.count()) / 1000.0f;
     }
 }
@@ -129,9 +143,18 @@ auto batch_collector_t<Key>::get_prepared_batches() const -> const batch_list_t&
 template<typename Key>
 void batch_collector_t<Key>::clear()
 {
-    batch_groups_.clear();
     prepared_batches_.clear();
     stats_.reset();
+    if(group_count_ == 0)
+    {
+        return;
+    }
+    for(size_t index = 0; index < group_count_; ++index)
+    {
+        groups_[index].reset();
+    }
+    group_count_ = 0;
+    std::fill(buckets_.begin(), buckets_.end(), EMPTY_BUCKET);
 }
 
 template<typename Key>
@@ -143,16 +166,16 @@ auto batch_collector_t<Key>::get_stats() const -> const batch_stats&
 template<typename Key>
 auto batch_collector_t<Key>::get_batch_count() const -> size_t
 {
-    return batch_groups_.size();
+    return group_count_;
 }
 
 template<typename Key>
 auto batch_collector_t<Key>::get_instance_count() const -> size_t
 {
     size_t total = 0;
-    for(const auto& [key, group] : batch_groups_)
+    for(size_t index = 0; index < group_count_; ++index)
     {
-        total += group.instances.size();
+        total += groups_[index].instances.size();
     }
     return total;
 }
@@ -160,7 +183,7 @@ auto batch_collector_t<Key>::get_instance_count() const -> size_t
 template<typename Key>
 auto batch_collector_t<Key>::has_batches() const -> bool
 {
-    return !batch_groups_.empty();
+    return group_count_ != 0;
 }
 
 template<typename Key>
@@ -227,26 +250,19 @@ void batch_collector_t<Key>::sort_batches(const submit_context& context)
 }
 
 template<typename Key>
-void batch_collector_t<Key>::split_large_batches(const submit_context& context)
+void batch_collector_t<Key>::count_oversized_batches(const submit_context& context)
 {
+    // The instanced submit chunks an oversized batch by itself; this only feeds the stat.
     if(context.max_instances_per_batch == 0)
     {
         return;
     }
-
-    batch_list_t new_batches;
-    for(auto* batch : prepared_batches_)
+    const auto is_oversized = [&context](const batch_group_t<Key>* batch) -> bool
     {
-        if(batch->instances.size() <= context.max_instances_per_batch)
-        {
-            new_batches.push_back(batch);
-            continue;
-        }
-
-        stats_.split_batches++;
-        new_batches.push_back(batch);
-    }
-    prepared_batches_ = std::move(new_batches);
+        return batch->instances.size() > context.max_instances_per_batch;
+    };
+    stats_.split_batches +=
+        static_cast<uint32_t>(std::count_if(prepared_batches_.begin(), prepared_batches_.end(), is_oversized));
 }
 
 template<typename Key>
@@ -275,13 +291,51 @@ void batch_collector_t<Key>::update_statistics()
 template<typename Key>
 auto batch_collector_t<Key>::get_or_create_batch_group(const Key& key) -> batch_group_t<Key>&
 {
-    auto it = batch_groups_.find(key);
-    if(it != batch_groups_.end())
+    if((group_count_ + 1) * BUCKETS_PER_GROUP > buckets_.size())
     {
-        return it->second;
+        grow_buckets();
     }
-    auto [inserted_it, success] = batch_groups_.emplace(key, batch_group_t<Key>(key));
-    return inserted_it->second;
+    const size_t key_hash = batch_collector_detail::mix_hash(key.hash());
+    const size_t mask = buckets_.size() - 1;
+    size_t bucket = key_hash & mask;
+    while(buckets_[bucket] != EMPTY_BUCKET)
+    {
+        auto& group = groups_[buckets_[bucket]];
+        if(group.key_hash == key_hash && group.key == key)
+        {
+            return group;
+        }
+        bucket = (bucket + 1) & mask;
+    }
+    // A new group: the slots may move now, and the prepared list would miss it anyway.
+    prepared_batches_.clear();
+    if(group_count_ == groups_.size())
+    {
+        groups_.emplace_back();
+    }
+    auto& group = groups_[group_count_];
+    group.key = key;
+    group.key_hash = key_hash;
+    buckets_[bucket] = static_cast<uint32_t>(group_count_);
+    ++group_count_;
+    return group;
+}
+
+template<typename Key>
+void batch_collector_t<Key>::grow_buckets()
+{
+    const size_t bucket_count = std::max(MIN_BUCKET_COUNT, buckets_.size() * 2);
+    buckets_.assign(bucket_count, EMPTY_BUCKET);
+    const size_t mask = bucket_count - 1;
+    for(size_t index = 0; index < group_count_; ++index)
+    {
+        size_t bucket = groups_[index].key_hash & mask;
+        while(buckets_[bucket] != EMPTY_BUCKET)
+        {
+            bucket = (bucket + 1) & mask;
+        }
+        buckets_[bucket] = static_cast<uint32_t>(index);
+    }
 }
 
 } // namespace unravel

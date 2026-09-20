@@ -105,6 +105,37 @@ struct ProjType
     };
 };
 
+/**
+ * @brief Perspective projection of a spot light or of one point light face, in the two forms
+ * the generator needs.
+ *
+ * @c render_proj is what the shadow pass renders with. For linear depth its z rows are divided
+ * by the far plane (the pack shaders then store view depth / far without a per-pixel divide),
+ * which stops it being a projection a frustum can be extracted from: the far plane test
+ * degenerates and the light's range no longer culls anything. @c cull_proj is the same
+ * projection as built, and @c homogeneous_depth the depth convention it was built with - the
+ * pair frustum::update needs, whatever the backend or the depth mode.
+ */
+struct light_projection
+{
+    float render_proj[16];
+    float cull_proj[16];
+    bool homogeneous_depth{};
+};
+
+/**
+ * @brief Builds a light_projection.
+ * @param fov_y_degrees Vertical field of view in degrees.
+ * @param homogeneous_depth Depth convention to build with ([-1, 1] when true, [0, 1] otherwise).
+ * @param is_linear_depth True for sm_depth::linear (rescales render_proj only).
+ */
+auto make_light_projection(float fov_y_degrees,
+                           float aspect,
+                           float near_plane,
+                           float far_plane,
+                           bool homogeneous_depth,
+                           bool is_linear_depth) -> light_projection;
+
 struct ShadowMapRenderTargets
 {
     enum Enum
@@ -665,6 +696,9 @@ struct shadow_visibility_data
 {
     entt::handle entity;
     unravel::lod_data lod_data;
+    /// The caster's world AABB, captured once at gather time so the per-light culling walks
+    /// this list alone instead of looking the model component up again for every light.
+    math::bbox world_bounds;
 };
 using shadow_map_models_t = hpp::small_vector<shadow_visibility_data>;
 
@@ -707,7 +741,30 @@ public:
     void deinit_uniforms();
 
     void update(const camera& cam, const light& l, const math::transform& ltrans, bool is_active);
-    auto already_updated() const -> bool;
+
+    /**
+     * @brief True when this light's shadow maps already hold their result for the current
+     * render frame.
+     *
+     * Set where the light is FINISHED - generate_shadowmaps, or a caller finding there is
+     * nothing to draw - and deliberately NOT by @ref update, which runs before the caller
+     * knows whether the light matters to the view being rendered. A frame renders several
+     * views (reflection probe faces, then the camera), and the shadow maps of a point / spot
+     * light are the same for all of them, so the first view to resolve one wins. Latching on
+     * @ref update instead let a probe face that could not see a light latch it out of the
+     * main view's shadow generation, leaving that view sampling a stale map.
+     */
+    auto already_resolved() const -> bool;
+
+    /// Marks the shadow maps as holding this frame's result without generating: the light is
+    /// off, casts no shadows, or nothing is in range and the maps are already clear.
+    void mark_resolved();
+
+    /// True while the shadow maps hold anything but a cleared surface: casters rendered by the
+    /// last generate_shadowmaps, or fresh render targets that were never cleared. A light whose
+    /// caster list came back empty still has to generate once in that state, or the lighting
+    /// pass keeps sampling whatever the maps held last.
+    auto needs_clear() const -> bool;
 
     void generate_shadowmaps(const shadow_map_models_t& model, const camera& cam, ::unravel::rendering::pipeline_stats* stats = nullptr);
 
@@ -838,8 +895,11 @@ private:
     bgfx::FrameBufferHandle rt_blur_{bgfx::kInvalidHandle};
 
     bool valid_{};
+    /// See needs_clear.
+    bool needs_clear_{true};
 
-    uint64_t last_update_ = -1;
+    /// Render frame this light was last resolved in; see already_resolved.
+    uint64_t last_resolve_frame_ = -1;
     
     // Static mesh batching system for shadow maps - one collector per cascade/view
     std::vector<shadow_batch_collector> cascade_batch_collectors_;

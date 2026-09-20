@@ -1413,8 +1413,38 @@ void model::submit_for_batching(batch_collector& collector,
     }
 }
 
+auto compute_shadow_view_mask(const math::frustum* frustums,
+                              uint8_t view_count,
+                              const math::bbox& world_bounds,
+                              bool nested_cascades,
+                              uint8_t candidate_mask) -> uint8_t
+{
+    uint8_t view_mask = 0u;
+    for(uint8_t ii = 0; ii < view_count; ++ii)
+    {
+        const uint8_t view_bit = uint8_t(1u << ii);
+        if((candidate_mask & view_bit) == 0u)
+        {
+            continue;
+        }
+        const auto query = frustums[ii].classify_aabb(world_bounds);
+        if(query == math::volume_query::outside)
+        {
+            continue;
+        }
+        view_mask |= view_bit;
+        // Fully inside this cascade: the farther (larger) ones never sample this caster.
+        if(nested_cascades && query == math::volume_query::inside)
+        {
+            break;
+        }
+    }
+    return view_mask;
+}
+
 auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collector>& collectors,
                                                 uint8_t cascade_count,
+                                                uint8_t cascade_mask,
                                                 const math::mat4& world_transform,
                                                 const submesh_pose_mat4& submesh_transforms,
                                                 uint32_t lod_index,
@@ -1438,10 +1468,16 @@ auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collect
     auto collect_into_cascades =
         [&](const shadow_batch_key& key, uint32_t submesh_index, const math::mat4& transform, size_t instance_idx) -> void
     {
+        // Submesh granularity of the nested-cascade rule: a submesh fully inside a nearer
+        // cascade skips the farther ones even while its model straddles them. No cached
+        // bounds (stale proxies) - the submesh goes wherever the model can reach.
+        const auto* bounds = get_cached_submesh_bounds(extras, submesh_index, instance_idx, false);
+        const uint8_t submesh_mask =
+            bounds != nullptr ? compute_shadow_view_mask(frustums, cascade_count, *bounds, nested_cascades, cascade_mask)
+                              : cascade_mask;
         for(uint8_t ii = 0; ii < cascade_count; ++ii)
         {
-            const auto query = classify_submesh_cached(frustums[ii], extras, submesh_index, instance_idx, false);
-            if(query == math::volume_query::outside)
+            if((submesh_mask & (1u << ii)) == 0u)
             {
                 continue;
             }
@@ -1450,11 +1486,6 @@ auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collect
             instance.lod_params.x = lod_param;
             collectors[ii].collect_renderable(key, instance);
             collected_any = true;
-
-            if(nested_cascades && query == math::volume_query::inside)
-            {
-                break;
-            }
         }
     };
 

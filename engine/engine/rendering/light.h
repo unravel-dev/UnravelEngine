@@ -213,6 +213,19 @@ struct light
     bool casts_shadows{true};
 
     /**
+     * @brief World-space bounding sphere of the volume the light reaches.
+     * A point light reaches its range around @p position, a spot light gets the sphere that
+     * encloses its cone (apex at @p position, axis along @p direction), a directional light
+     * reaches everything.
+     * @param[in] position World position of the light.
+     * @param[in] direction World direction of the light (unit length).
+     * @return The sphere in WORLD space. Test it as is, never through the light's transform:
+     *         @p direction already carries the rotation, applying it again moves a spot
+     *         light's sphere off its cone.
+     */
+    auto compute_world_bounds_sphere(const math::vec3& position, const math::vec3& direction) const -> math::bsphere;
+
+    /**
      * @brief Struct representing common shadow map parameters.
      */
     struct shadowmap_params

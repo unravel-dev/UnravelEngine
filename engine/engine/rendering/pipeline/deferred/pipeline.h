@@ -6,6 +6,7 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/light.h>
+#include <engine/rendering/shadow.h>
 #include <engine/rendering/batch_collector.h>
 
 #include <graphics/utils/font/font_manager.h>
@@ -581,6 +582,12 @@ private:
 
     // Static mesh batching system
     batch_collector batch_collector_;
+
+    /// build_shadows scratch, reused across calls so the caster lists allocate nothing once
+    /// warmed up: every shadow caster of the scene (gathered at most once per call) ...
+    shadow::shadow_map_models_t shadow_scene_casters_;
+    /// ... and the subset reaching into the range of the local light being generated.
+    shadow::shadow_map_models_t shadow_light_casters_;
 
 public:
 

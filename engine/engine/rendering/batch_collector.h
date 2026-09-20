@@ -3,6 +3,8 @@
 #include "batch_key.h"
 #include "batch_instance.h"
 
+#include <cstdint>
+#include <limits>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -44,11 +46,18 @@ struct batch_group_t
     batch_instance_collection instances;
     float camera_distance = 0.0f;
     bool is_split_batch = false;
+    /// Mixed hash of @ref key, cached by the owning collector: probing compares it before the
+    /// key itself, and growing the index never hashes a key again.
+    size_t key_hash = 0;
 
     batch_group_t() = default;
     explicit batch_group_t(const Key& key);
 
     void add_instance(const batch_instance& instance);
+    /// Back to an unused slot. The key is dropped - it owns mesh / material / texture
+    /// references that must not outlive the frame - while the instance storage keeps its
+    /// capacity for the next frame.
+    void reset();
     void calculate_camera_distance(const math::vec3& camera_pos);
     auto is_valid() const -> bool;
     auto get_gpu_memory_size() const -> size_t;
@@ -63,13 +72,39 @@ inline auto static_mesh_batching_enabled() -> bool&
     static bool enabled = true;
     return enabled;
 }
+
+/// Final avalanche over a key hash (the splitmix64 finalizer). The group index masks the LOW
+/// bits of the hash, which hash_combine over aligned pointers and small indices spreads poorly.
+inline auto mix_hash(size_t hash) -> size_t
+{
+    constexpr uint64_t FIRST_MULTIPLIER = 0xbf58476d1ce4e5b9ULL;
+    constexpr uint64_t SECOND_MULTIPLIER = 0x94d049bb133111ebULL;
+    uint64_t mixed = static_cast<uint64_t>(hash);
+    mixed = (mixed ^ (mixed >> 30)) * FIRST_MULTIPLIER;
+    mixed = (mixed ^ (mixed >> 27)) * SECOND_MULTIPLIER;
+    mixed ^= mixed >> 31;
+    return static_cast<size_t>(mixed);
+}
 } // namespace batch_collector_detail
 
+/**
+ * @brief Groups renderables by batch key for instanced submission.
+ *
+ * Frame protocol: clear() -> collect_renderable() ... -> prepare_batches() -> any number of
+ * passes over get_prepared_batches() -> clear(). Collecting a NEW key after prepare_batches()
+ * drops the prepared list: its pointers address the group slots, which may move when a slot
+ * is added.
+ *
+ * Steady state allocates nothing. Groups live in slots that are recycled together with their
+ * instance storage, and the key lookup is an index table a clear() merely refills - the
+ * node-based map this replaced freed and rebuilt every node and every instance vector each
+ * frame, once per shadow face per light on the shadow path. Storage grows to the largest frame
+ * seen and is released with the collector; a cleared collector holds no asset references.
+ */
 template<typename Key>
 class batch_collector_t
 {
 public:
-    using batch_map_t = std::unordered_map<Key, batch_group_t<Key>>;
     using batch_list_t = std::vector<batch_group_t<Key>*>;
 
     batch_collector_t();
@@ -104,17 +139,36 @@ public:
     void set_profiling_enabled(bool enabled);
 
 private:
-    batch_map_t batch_groups_;
+    static constexpr uint32_t EMPTY_BUCKET = std::numeric_limits<uint32_t>::max();
+    /// Power of two: the index masks hashes instead of dividing them.
+    static constexpr size_t MIN_BUCKET_COUNT = 64;
+    /// The index keeps at least this many buckets per group (load factor 0.5), which keeps
+    /// the linear probe sequences short.
+    static constexpr size_t BUCKETS_PER_GROUP = 2;
+
+    /// Group slots. [0, group_count_) are this frame's batches in first-collected order, the
+    /// slots behind them are unused ones kept for their instance storage. Collection order is
+    /// stable from frame to frame, so a slot mostly meets the same key again and its capacity
+    /// already fits.
+    std::vector<batch_group_t<Key>> groups_;
+    size_t group_count_ = 0;
+    /// Open-addressing (linear probing) index over the active slots: a group index or
+    /// EMPTY_BUCKET. It holds no keys, so emptying it is a fill.
+    std::vector<uint32_t> buckets_;
     batch_list_t prepared_batches_;
     batch_stats stats_;
     uint32_t max_instances_per_batch_ = 1024;
-    bool profiling_enabled_ = true;
+    /// Opt-in: the collection timer reads the clock twice per collected instance, which at
+    /// tens of thousands of instances per frame costs more than the work it measures. The
+    /// pass-level cost is covered by the APP_SCOPE_PERF scopes of the callers.
+    bool profiling_enabled_ = false;
 
     void sort_batches(const submit_context& context);
-    void split_large_batches(const submit_context& context);
+    void count_oversized_batches(const submit_context& context);
     void calculate_camera_distances(const math::vec3& camera_pos);
     void update_statistics();
     auto get_or_create_batch_group(const Key& key) -> batch_group_t<Key>&;
+    void grow_buckets();
 };
 
 using batch_collector = batch_collector_t<batch_key>;
