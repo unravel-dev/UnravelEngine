@@ -1413,12 +1413,30 @@ void model::submit_for_batching(batch_collector& collector,
     }
 }
 
+auto shadow_reach::can_reach_view(const math::bbox& world_bounds) const -> bool
+{
+    if(view_frustum == nullptr)
+    {
+        return true;
+    }
+    // The sweep already covers the caster's extent; the radius is the margin the model-level
+    // test has always carried, kept so a caster just outside the range still counts.
+    const float sweep_distance = max_distance + math::length(world_bounds.get_extents());
+    return view_frustum->test_swept_aabb(world_bounds, light_direction, sweep_distance);
+}
+
 auto compute_shadow_view_mask(const math::frustum* frustums,
                               uint8_t view_count,
                               const math::bbox& world_bounds,
                               bool nested_cascades,
+                              const shadow_reach& reach,
                               uint8_t candidate_mask) -> uint8_t
 {
+    if(!reach.can_reach_view(world_bounds))
+    {
+        return 0u;
+    }
+
     uint8_t view_mask = 0u;
     for(uint8_t ii = 0; ii < view_count; ++ii)
     {
@@ -1445,6 +1463,7 @@ auto compute_shadow_view_mask(const math::frustum* frustums,
 auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collector>& collectors,
                                                 uint8_t cascade_count,
                                                 uint8_t cascade_mask,
+                                                const shadow_reach& reach,
                                                 const math::mat4& world_transform,
                                                 const submesh_pose_mat4& submesh_transforms,
                                                 uint32_t lod_index,
@@ -1473,8 +1492,9 @@ auto model::submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collect
         // bounds (stale proxies) - the submesh goes wherever the model can reach.
         const auto* bounds = get_cached_submesh_bounds(extras, submesh_index, instance_idx, false);
         const uint8_t submesh_mask =
-            bounds != nullptr ? compute_shadow_view_mask(frustums, cascade_count, *bounds, nested_cascades, cascade_mask)
-                              : cascade_mask;
+            bounds != nullptr
+                ? compute_shadow_view_mask(frustums, cascade_count, *bounds, nested_cascades, reach, cascade_mask)
+                : cascade_mask;
         for(uint8_t ii = 0; ii < cascade_count; ++ii)
         {
             if((submesh_mask & (1u << ii)) == 0u)

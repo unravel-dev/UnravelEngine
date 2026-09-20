@@ -2295,37 +2295,24 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
     // different directions, so an object must be rendered to ALL faces where it is visible.
     const bool nested_cascades = (LightType::DirectionalLight == settings_.m_lightType);
 
+    // Directional lights only (see shadow_reach): a caster whose shadow cannot reach the view
+    // is dropped from every cascade. Resolved once per generate - get_frustum() resolves
+    // lazily and the loop below must not be the one to trigger it.
+    shadow_reach reach;
+    if(nested_cascades && cam != nullptr)
+    {
+        reach.view_frustum = &cam->get_frustum();
+        reach.light_direction = math::vec3(directional_light_.m_position.m_x,
+                                           directional_light_.m_position.m_y,
+                                           directional_light_.m_position.m_z);
+        reach.max_distance = currentSmSettings->m_far;
+    }
+
     for(const auto& element : models)
     {
         // Culling runs on the bounds cached in the list, before any component is looked up:
         // a rejected caster costs plane tests on contiguous memory and nothing else.
         const auto& world_bounds = element.world_bounds;
-
-        // For directional lights, perform additional swept AABB test using camera frustum
-        bool should_render = true;
-        if(LightType::DirectionalLight == settings_.m_lightType && cam != nullptr)
-        {
-            const auto& camera_frustum = cam->get_frustum();
-
-            const auto& bounds_extents = world_bounds.get_extents();
-            const float bounds_radius = math::length(bounds_extents);
-
-            const math::vec3 light_direction(
-                directional_light_.m_position.m_x,
-                directional_light_.m_position.m_y,
-                directional_light_.m_position.m_z
-            );
-            // Conservative sweep distance: allow the caster to project into the camera frustum
-            // across the full shadow range, including its bounding radius.
-            const float max_distance = currentSmSettings->m_far + bounds_radius;
-
-            should_render = camera_frustum.test_swept_aabb(world_bounds, light_direction, max_distance);
-        }
-        
-        if(!should_render)
-        {
-            continue;
-        }
 
         // Frustum culling against the pose-aware world AABB. Bind-pose local bounds are
         // never used for culling - they don't track node/bone animation. This is the
@@ -2334,14 +2321,14 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
         // world bounds are always valid. It also carries the nested-cascade rule: the mask
         // ENDS at the first cascade that fully contains the model, so the loops below that
         // walk its bits need no break of their own.
-        const uint8_t view_mask = compute_shadow_view_mask(lightFrustums, drawNum, world_bounds, nested_cascades);
+        const uint8_t view_mask =
+            compute_shadow_view_mask(lightFrustums, drawNum, world_bounds, nested_cascades, reach);
         if(view_mask == 0u)
         {
             continue;
         }
 
         const auto& entity = element.entity;
-        const auto& lod_data = element.lod_data;
         const auto& transform_comp = entity.get<transform_component>();
         auto& model_comp = entity.get<model_component>();
         const auto& world_transform = transform_comp.get_transform_global();
@@ -2356,6 +2343,12 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
         if(!model.is_valid())
             continue;
 
+        // LOD is resolved HERE, for the casters that are actually drawn, rather than carried
+        // in the caster list: the list is cached across frames (deferred::refresh_shadow_casters)
+        // while the LOD follows the camera, and a caster the light rejected never needs one.
+        const uint32_t lod_index =
+            cam != nullptr ? model.compute_lod_index(world_bounds, *cam, ::unravel::rendering::pipeline::get_shadow_lod_bias()) : 0;
+
 
         // Check if this model can be batched (static mesh, no skinning)
         const bool can_batch = static_batching_enabled && !is_skinned;
@@ -2367,12 +2360,16 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             // Collect into all cascades in one pass so the nested-cascade trick can be
             // applied at submesh granularity (a submesh fully inside a nearer cascade is
             // not collected into farther cascades).
+            // The reach test repeats per submesh inside: a scene authored as ONE model with
+            // many submeshes passes the model-level test trivially (its bounds contain the
+            // camera), so that is the only granularity at which it can reject anything.
             const bool collected = model.submit_for_shadow_batching_cascaded(cascade_batch_collectors_,
                                                                       drawNum,
                                                                       view_mask,
+                                                                      reach,
                                                                       world_transform,
                                                                       submesh_transforms,
-                                                                      lod_data.current_lod_index,
+                                                                      lod_index,
                                                                       0.0f,
                                                                       lightFrustums,
                                                                       nested_cascades,
@@ -2390,6 +2387,9 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
             continue;
         }
 
+        // The individual path (skinned casters) keeps the MODEL-level reach test only: a
+        // skinned model is one character's worth of submeshes around one skeleton, so its
+        // bounds are already the granularity the sweep can work at.
         bool counted_static_model_for_shadows = false;
         bool counted_skinned_model_for_shadows = false;
         for(uint8_t ii = 0; ii < drawNum; ++ii)
@@ -2491,7 +2491,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                          submesh_transforms,
                          bone_transforms,
                          skinning_matrices,
-                         lod_data.current_lod_index,
+                         lod_index,
                          callbacks,
                          &lightFrustums[ii],
                          nullptr,

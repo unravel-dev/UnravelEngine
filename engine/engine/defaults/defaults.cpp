@@ -951,7 +951,7 @@ auto defaults::create_reflection_probe_entity(rtti::context& ctx, scene& scn, pr
 {
     auto& am = ctx.get_cached<asset_manager>();
 
-    auto object = scn.create_entity("Reflection Probe" + name);
+    auto object = scn.create_entity("Reflection Probe " + name);
 
     auto& transf_comp = object.get_or_emplace<transform_component>();
     transf_comp.set_position_local({0.0f, 0.1f, 0.0f});

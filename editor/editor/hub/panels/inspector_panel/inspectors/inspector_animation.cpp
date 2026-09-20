@@ -635,7 +635,7 @@ void inspector_animation_component::draw_player_section(rtti::context& ctx, anim
     auto& player = data.get_player();
     update_traces(player);
     ImGui::Spacing();
-    ImGui::PushFont(ImGui::Font::SemiBold);
+    ImGui::PushFont(ImGui::Font::Bold);
     ImGui::SeparatorText(ICON_MDI_ANIMATION_PLAY " Player");
     ImGui::PopFont();
     draw_transport_controls(ctx, data);

@@ -8,6 +8,51 @@ namespace unravel
 {
 
 /**
+ * @brief Consumer slots for the indexed dirty flags a component carries
+ * (is_dirty(id) / set_dirty(id, ...)).
+ *
+ * ONE numbering, shared by every component that has them, so a slot means the same thing
+ * wherever it is read: a consumer that watches an entity's transform AND its model asks both
+ * for the same id. A component only ever sets the slots that apply to it, and the rest stay
+ * clean. Register new consumers here rather than per component, so slots cannot collide - the
+ * bitset has 32 of them.
+ */
+struct dirty_ids
+{
+    enum : uint8_t
+    {
+        /// Physics backend transform sync (see the physics backends). On transform_component.
+        physics = 1,
+        /// Model pose refresh: submesh/bone poses and cached render-proxy bounds
+        /// (see model_component::update_armature). On transform_component.
+        model_pose = 2,
+        /// The same refresh, consumed on the MODEL'S OWN entity for submeshes the owner
+        /// places directly (meshes without an armature node for them). A separate slot
+        /// from model_pose: an entity can be an armature node of one model and the owner
+        /// of another, and the two refreshes run in parallel. On transform_component.
+        model_owner_pose = 3,
+        /// Velocity (motion vector) mover detection: consumed once per render frame by
+        /// model_system's before-render promotion (model_component::record_velocity_state).
+        /// A set bit means the world transform changed since the last consumption, so the
+        /// entity is drawn into the velocity buffer with per-object motion this frame.
+        /// On transform_component.
+        velocity = 4,
+        /// Shadow caster cache invalidation: consumed once per render frame by
+        /// model_system::on_frame_before_render, from BOTH components - the transform says
+        /// where a caster is, the model what it renders as (membership flags and world
+        /// bounds), and no transform change reports the latter. A set bit on a STATIC caster
+        /// retires the cached caster lists (see shadow_caster_revision).
+        shadow_caster = 5,
+    };
+};
+
+/// Initial value of those flags: a component nothing has consumed from yet must never look
+/// clean. The entt create hook re-arms them anyway; this also covers paths that assign over
+/// an existing component (deserialization, cloning), which would otherwise copy the source's
+/// already-consumed flags.
+static constexpr unsigned long long ALL_CONSUMERS_DIRTY = ~0ULL;
+
+/**
  * @struct basic_component
  * @brief Basic component structure that other components can inherit from.
  */

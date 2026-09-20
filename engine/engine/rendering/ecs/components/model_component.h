@@ -4,10 +4,29 @@
 #include <engine/rendering/model.h>
 #include <engine/rendering/render_proxy.h>
 #include <atomic>
+#include <bitset>
 #include <unordered_map>
 namespace unravel
 {
 class material;
+
+/**
+ * @brief Counts changes to the SET of shadow casters that the per-frame model walk cannot
+ * observe: a model or an activation appearing or disappearing, or a model that stopped being
+ * a caster (the walk cannot tell one that LEFT the set from one that was never in it).
+ *
+ * Lives in the registry context, so it dies with the scene - no global table, nothing to
+ * prune. Consumers cache the value they last built from and rebuild when it differs.
+ */
+struct shadow_caster_revision
+{
+    uint64_t value{};
+};
+
+/// Bumps the scene's shadow_caster_revision. Shaped for an entt on_construct / on_destroy
+/// sink (which is why the entity is unused); also called directly when a model's caster flags
+/// change. Deliberately NOT overloaded: an overload set cannot be named in a sink connect<>.
+void bump_shadow_caster_revision(entt::registry& registry, entt::entity entity);
 
 /**
  * @class model_component
@@ -16,6 +35,23 @@ class material;
 class model_component : public component_crtp<model_component, owned_component>
 {
 public:
+    /// Indexed dirty flags for this model's render state. The slots are unravel::dirty_ids,
+    /// the same ones transform_component uses: the transform's copy says where a model IS,
+    /// this one what it renders as.
+
+    /**
+     * @brief Marks every consumer of this model's render state dirty, and bumps the scene's
+     * shadow_caster_revision because the caster SET may have changed.
+     *
+     * Hides basic_component::touch(), which is an empty function, so the flag setters that
+     * already call it gain the signal. Name hiding is enough here: every caller is a member
+     * of this class or holds a model_component.
+     */
+    void touch();
+
+    /// @see transform_component::is_dirty(uint8_t)
+    auto is_dirty(uint8_t id) const noexcept -> bool;
+    void set_dirty(uint8_t id, bool dirty) noexcept;
 
     /**
      * @brief Called when the component is created.
@@ -152,7 +188,7 @@ public:
      *    used and un-gates the full refresh on the next frame - a wrong skip self-heals in
      *    one frame and can never permanently hide a model.
      *  - Change-driven: visible models early-out when no armature entity transform changed
-     *    since the last refresh (transform_component::dirty_ids::model_pose bit-scan).
+     *    since the last refresh (dirty_ids::model_pose bit-scan).
      *
      * @return True when a refresh actually ran, false when skipped or no mesh is loaded.
      */
@@ -297,6 +333,9 @@ private:
      * @brief The model object.
      */
     model model_;
+
+    /// See the is_dirty / set_dirty pair above, unravel::dirty_ids and ALL_CONSUMERS_DIRTY.
+    std::bitset<32> render_dirty_{ALL_CONSUMERS_DIRTY};
 
     /**
      * @brief Vector of handles to the armature entities.

@@ -57,34 +57,10 @@ class transform_component : public component_crtp<transform_component, owned_com
 public:
     using flags_t = std::bitset<8>;
 
-    /**
-     * @brief Reserved consumer slots for the indexed dirty flags (see is_dirty(id)/set_dirty(id, ...)).
-     *
-     * Every transform (or hierarchy flags) change sets all consumer bits; each consumer
-     * clears only its own bit after consuming the new value. Register new consumers here
-     * to avoid slot collisions.
-     */
-    struct dirty_ids
-    {
-        enum : uint8_t
-        {
-            /// Physics backend transform sync (see bullet_backend.cpp).
-            physics = 1,
-            /// Model pose refresh: submesh/bone poses and cached render-proxy bounds
-            /// (see model_component::update_armature).
-            model_pose = 2,
-            /// The same refresh, consumed on the MODEL'S OWN entity for submeshes the owner
-            /// places directly (meshes without an armature node for them). A separate slot
-            /// from model_pose: an entity can be an armature node of one model and the owner
-            /// of another, and the two refreshes run in parallel.
-            model_owner_pose = 3,
-            /// Velocity (motion vector) mover detection: consumed once per render frame by
-            /// model_system's before-render promotion (model_component::record_velocity_state).
-            /// A set bit means the world transform changed since the last consumption, so the
-            /// entity is drawn into the velocity buffer with per-object motion this frame.
-            velocity = 4,
-        };
-    };
+    /// Indexed dirty flags: every transform (or hierarchy flags) change sets ALL consumer
+    /// bits, and each consumer clears only its own after reading the new value. The slots are
+    /// unravel::dirty_ids, shared with the other components that carry such flags.
+
     /**
      * @brief Called when the component is created.
      * @param r The registry containing the component.
@@ -714,8 +690,8 @@ private:
     property_transform transform_{};
 
     property_flags flags_{};
-    ///< Bitset for transform dirty flags.
-    std::bitset<32> transform_dirty_{};
+    ///< Bitset for transform dirty flags. See ALL_CONSUMERS_DIRTY.
+    std::bitset<32> transform_dirty_{ALL_CONSUMERS_DIRTY};
 };
 
 } // namespace unravel

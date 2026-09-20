@@ -114,7 +114,6 @@ public:
     enum visibility_query : uint32_t
     {
         not_specified = 1 << 0,        ///< No specific visibility query.
-        is_dirty = 1 << 1,             ///< Query for dirty entities.
         is_static = 1 << 2,            ///< Query for static entities.
         is_shadow_caster = 1 << 3,     ///< Query for shadow casting entities.
     };

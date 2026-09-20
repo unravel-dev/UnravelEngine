@@ -111,7 +111,7 @@ private:
     ImGuiTextFilter filter_;
     fs::path root_;
     int refresh_{};
-    float scale_ = 0.65f;
+    float scale_ = 0.6f;
 
     int focus_frames_{};
 

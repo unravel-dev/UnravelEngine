@@ -251,7 +251,7 @@ public:
 
     void build_reflections(scene& scn, const camera& camera, delta_t dt);
 
-    void build_shadows(scene& scn, const camera& camera, delta_t dt, visibility_flags query = visibility_query::not_specified, layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
+    void build_shadows(scene& scn, const camera& camera, delta_t dt, layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
 
     /// Builds or drops Hi-Z + related depth history. @c true if SSIL/SSR may use HiZ this frame.
     auto run_hiz_pass(const camera& camera,
@@ -583,11 +583,29 @@ private:
     // Static mesh batching system
     batch_collector batch_collector_;
 
-    /// build_shadows scratch, reused across calls so the caster lists allocate nothing once
-    /// warmed up: every shadow caster of the scene (gathered at most once per call) ...
-    shadow::shadow_map_models_t shadow_scene_casters_;
-    /// ... and the subset reaching into the range of the local light being generated.
+    /// Every shadow caster of the scene, split by how often it has to be refreshed. Both are
+    /// rebuilt WHOLESALE (clear + refill) by refresh_shadow_casters, so a destroyed entity
+    /// can never survive in them and there is nothing to prune.
+    /// Static casters: membership AND bounds only change on a shadow_caster_revision bump.
+    shadow::shadow_map_models_t shadow_static_casters_;
+    /// Movers: membership only changes on a revision bump, but their bounds and LOD are
+    /// re-read every frame from the cached handles - which is a walk over a handful of
+    /// entries instead of over every model in the scene.
+    shadow::shadow_map_models_t shadow_dynamic_casters_;
+    /// The scene's shadow_caster_revision both lists were built from, and the layer mask they
+    /// were filtered with; either changing retires them.
+    uint64_t shadow_casters_revision_{~0ULL};
+    layer_mask shadow_casters_mask_{};
+    /// Render frame the mover bounds / LOD were last refreshed in: build_shadows can run
+    /// several times per frame (probe faces, then the camera) and one refresh serves them all.
+    uint64_t shadow_casters_frame_{~0ULL};
+    /// The subset of the two lists reaching into the range of the local light being generated.
     shadow::shadow_map_models_t shadow_light_casters_;
+
+    /// Brings the cached caster lists up to date for this frame: a wholesale rebuild when the
+    /// revision or the layer mask changed, then a per-frame refresh of the movers' bounds and
+    /// LOD. @return the lists, static first.
+    void refresh_shadow_casters(scene& scn, const camera& camera, delta_t dt, layer_mask render_mask);
 
 public:
 

@@ -695,9 +695,8 @@ struct adaptive_shadow_params
 struct shadow_visibility_data
 {
     entt::handle entity;
-    unravel::lod_data lod_data;
-    /// The caster's world AABB, captured once at gather time so the per-light culling walks
-    /// this list alone instead of looking the model component up again for every light.
+    /// The caster's world AABB, captured when the list was built so the per-light culling
+    /// walks this list alone instead of looking the model component up again for every light.
     math::bbox world_bounds;
 };
 using shadow_map_models_t = hpp::small_vector<shadow_visibility_data>;

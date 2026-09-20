@@ -1372,7 +1372,7 @@ namespace
 {
 using namespace unravel;
 
-const uint8_t system_id = transform_component::dirty_ids::physics;
+const uint8_t system_id = dirty_ids::physics;
 
 auto find_box3d_world() -> box3d::world*
 {

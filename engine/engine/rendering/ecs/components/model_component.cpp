@@ -4,6 +4,8 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/rendering/mesh.h>
 
+#include <hpp/finally.hpp>
+
 #include <algorithm>
 
 
@@ -219,9 +221,9 @@ auto process_armature(const mesh& render_mesh,
 
 /// Consumer slot in transform_component's indexed dirty flags owned by the model pose
 /// refresh. Set on any transform/flags change, cleared per node when the pose consumes it.
-constexpr uint8_t pose_dirty_id = transform_component::dirty_ids::model_pose;
+constexpr uint8_t pose_dirty_id = dirty_ids::model_pose;
 /// The owner's slot for the same refresh (submeshes the owner places directly).
-constexpr uint8_t owner_pose_dirty_id = transform_component::dirty_ids::model_owner_pose;
+constexpr uint8_t owner_pose_dirty_id = dirty_ids::model_owner_pose;
 
 /**
  * Refreshes the pose outputs from the armature entities in a single change-driven walk.
@@ -567,6 +569,20 @@ void model_component::update_world_bounds(const math::transform& world_transform
         return;
     }
 
+    // Any real move of the box is a caster change, whatever produced it: node / bone
+    // animation, the conservative fallback taking over from the tight pose box, or a mesh
+    // asset finishing its load. None of those touch the owner's transform, so this is the
+    // only signal a bounds consumer gets. Checked on every return path below.
+    const auto previous_world_bounds = world_bounds_;
+    auto signal_bounds_change = hpp::finally(
+        [this, previous_world_bounds]()
+        {
+            if(world_bounds_ != previous_world_bounds)
+            {
+                render_dirty_.set(dirty_ids::shadow_caster);
+            }
+        });
+
     world_bounds_transform_ = world_transform;
 
     // Anchor transform for the conservative culling bounds. Root motion baked into bone
@@ -797,6 +813,41 @@ void model_component::on_create_component(entt::registry& r, entt::entity e)
 
 void model_component::on_destroy_component(entt::registry& r, entt::entity e)
 {
+    // A caster left the scene. The per-frame walk cannot see this - the entity is already out
+    // of its view - so the cached caster lists have to be retired here. Covers entity
+    // destruction too: destroying an entity destroys its components.
+    bump_shadow_caster_revision(r, e);
+}
+
+void bump_shadow_caster_revision(entt::registry& registry, entt::entity /*entity*/)
+{
+    if(auto* revision = registry.ctx().find<shadow_caster_revision>())
+    {
+        ++revision->value;
+    }
+}
+
+void model_component::touch()
+{
+    render_dirty_.set();
+    // Membership of the caster set can change here (enabled / static / casts_shadow / a
+    // different model), and the walk cannot tell a model that LEFT the set from one that was
+    // never in it.
+    auto owner = get_owner();
+    if(owner)
+    {
+        bump_shadow_caster_revision(*owner.registry(), owner.entity());
+    }
+}
+
+auto model_component::is_dirty(uint8_t id) const noexcept -> bool
+{
+    return render_dirty_[id];
+}
+
+void model_component::set_dirty(uint8_t id, bool dirty) noexcept
+{
+    render_dirty_.set(id, dirty);
 }
 
 void model_component::set_enabled(bool enabled)

@@ -255,6 +255,15 @@ scene::scene(const std::string& tag_name)
     on_construct<model_component>(*registry).connect<&model_component::on_create_component>();
     on_destroy<model_component>(*registry).connect<&model_component::on_destroy_component>();
 
+    // Shadow caster cache invalidation. Membership changes the per-frame model walk cannot
+    // observe, because they take the entity OUT of the view that walk iterates (or put it
+    // back in): deactivation removes active_component AFTER the transform flags were marked,
+    // so the walk never gets to consume those bits. Model removal is handled in
+    // model_component::on_destroy_component, which is already wired above.
+    registry->ctx().emplace<shadow_caster_revision>();
+    on_construct<active_component>(*registry).connect<&bump_shadow_caster_revision>();
+    on_destroy<active_component>(*registry).connect<&bump_shadow_caster_revision>();
+
     on_construct<animation_component>(*registry).connect<&animation_system::on_create_component>();
     on_destroy<animation_component>(*registry).connect<&animation_system::on_destroy_component>();
 

@@ -10,6 +10,9 @@
  *     old bounds were offset along the world direction and then rotated by the light transform
  *     a second time, which moved a rotated spot light's culling volume off its cone);
  *   - spot angles are FULL cone angles, so the bounding sphere is built from half of them;
+ *   - shadow_reach drops a caster whose shadow cannot reach the view, at the granularity the
+ *     geometry has: the cascades cannot do this themselves because their light-space depth
+ *     range spans the whole shadow distance in both directions;
  *   - compute_shadow_view_mask keeps the nested-cascade rule of the loops it replaced (a caster
  *     fully inside a cascade is not drawn into the farther ones), at model AND submesh
  *     granularity - checked case by case and against a verbatim copy of the old loop over
@@ -206,7 +209,7 @@ void test_view_mask_nested_cascade_cases()
     check(compute_nested(make_box(math::vec3(0.0f), 500.0f)) == 0b1111, "contained by no cascade -> every cascade");
     const uint8_t actual_unnested = compute_shadow_view_mask(frustums.data(), CASCADE_COUNT, make_box(math::vec3(0.0f), 1.0f), false);
     check(actual_unnested == 0b1111, "point / spot views are not nested: every touched view is drawn");
-    const uint8_t actual_candidates = compute_shadow_view_mask(frustums.data(), CASCADE_COUNT, make_box(math::vec3(0.0f), 1.0f), true, 0b1110);
+    const uint8_t actual_candidates = compute_shadow_view_mask(frustums.data(), CASCADE_COUNT, make_box(math::vec3(0.0f), 1.0f), true, shadow_reach{}, 0b1110);
     check(actual_candidates == 0b0010, "views outside the candidate mask are never drawn, the rule restarts at the first candidate");
 }
 
@@ -219,7 +222,7 @@ void test_view_mask_submesh_granularity()
     check(model_mask == 0b0011, "the model straddles cascade 0 and is contained by cascade 1");
     const auto compute_submesh = [&](const math::bbox& bounds) -> uint8_t
     {
-        return compute_shadow_view_mask(frustums.data(), CASCADE_COUNT, bounds, true, model_mask);
+        return compute_shadow_view_mask(frustums.data(), CASCADE_COUNT, bounds, true, shadow_reach{}, model_mask);
     };
     check(compute_submesh(make_box(math::vec3(0.0f), 1.0f)) == 0b0001, "a submesh fully inside cascade 0 skips cascade 1 although its model is drawn there");
     check(compute_submesh(make_box(math::vec3(10.0f, 0.0f, 0.0f), 1.0f)) == 0b0010, "a submesh beyond cascade 0 is drawn into cascade 1 only");
@@ -257,7 +260,7 @@ void test_view_mask_matches_old_cascade_loop()
                 const math::bbox submesh_bounds(math::min(first, second), math::max(first, second));
                 // Old: the submesh loop ran ungated. New: gated by the model's mask.
                 const uint8_t expected_views = run_old_cascade_loop(frustums, submesh_bounds, nested_cascades);
-                const uint8_t actual_views = model_mask == 0u ? uint8_t(0u) : compute_shadow_view_mask(frustums.data(), CASCADE_COUNT, submesh_bounds, nested_cascades, model_mask);
+                const uint8_t actual_views = model_mask == 0u ? uint8_t(0u) : compute_shadow_view_mask(frustums.data(), CASCADE_COUNT, submesh_bounds, nested_cascades, shadow_reach{}, model_mask);
                 mismatches += actual_views != expected_views ? 1 : 0;
                 nested_breaks += nested_cascades && expected_views != run_old_cascade_loop(frustums, submesh_bounds, false) ? 1 : 0;
             }
@@ -267,6 +270,75 @@ void test_view_mask_matches_old_cascade_loop()
     check(mismatches == 0, "model gate + submesh mask draw exactly the views the old ungated loops drew (" + std::to_string(mismatches) + " mismatches)");
     check(nested_breaks > MODEL_COUNT / 10, "the sweep exercises the nested-cascade break (" + std::to_string(nested_breaks) + " cases)");
     check(model_rejects > 0, "the sweep exercises the model-level reject (" + std::to_string(model_rejects) + " cases)");
+}
+
+// ---------------------------------------------------------------------------------
+// Shadow reach (directional sweep)
+// ---------------------------------------------------------------------------------
+
+/// A view frustum looking straight up, the way a camera aimed at the sky sits in a street.
+auto make_sky_view_frustum() -> math::frustum
+{
+    const math::mat4 view = math::lookAtLH(math::vec3(0.0f, 2.0f, 0.0f), math::vec3(0.0f, 60.0f, 0.0f), math::vec3(0.0f, 0.0f, 1.0f));
+    const math::mat4 proj = math::perspectiveLH_ZO(math::radians(60.0f), 1.0f, 0.1f, 200.0f);
+    math::frustum result;
+    result.update(view, proj, false);
+    return result;
+}
+
+void test_shadow_reach_rejects_casters_that_cannot_shadow_the_view()
+{
+    const auto frustum = make_sky_view_frustum();
+    const math::vec3 sun_direction(0.0f, -1.0f, 0.0f); // straight down
+    shadow_reach reach;
+    reach.view_frustum = &frustum;
+    reach.light_direction = sun_direction;
+    reach.max_distance = 200.0f;
+
+    // Ground geometry off to the side: sweeping it DOWN only takes it further from a frustum
+    // that points up, so nothing it shadows can be on screen.
+    const math::bbox ground_caster = make_box(math::vec3(40.0f, 0.5f, 40.0f), 1.0f);
+    check(!reach.can_reach_view(ground_caster), "a caster whose shadow sweeps away from the view is rejected");
+
+    // Directly above the camera: its shadow falls straight through the frustum.
+    const math::bbox overhead_caster = make_box(math::vec3(0.0f, 30.0f, 0.0f), 1.0f);
+    check(reach.can_reach_view(overhead_caster), "a caster sweeping through the view is kept");
+
+    // Inside the frustum outright - the early-out in test_swept_aabb.
+    const math::bbox caster_in_view = make_box(math::vec3(0.0f, 20.0f, 0.0f), 2.0f);
+    check(reach.can_reach_view(caster_in_view), "a caster already inside the view is kept");
+
+    // Beyond the shadow range up-sun: too far for its shadow to land within the cascades.
+    const math::bbox distant_caster = make_box(math::vec3(0.0f, 900.0f, 0.0f), 1.0f);
+    check(!reach.can_reach_view(distant_caster), "a caster beyond the shadow range is rejected");
+
+    // A default reach (point / spot lights, or no view) must never reject anything.
+    const shadow_reach no_reach;
+    check(no_reach.can_reach_view(ground_caster), "a reach with no view frustum keeps every caster");
+}
+
+void test_shadow_reach_clears_the_whole_view_mask()
+{
+    const auto cascades = make_nested_cascades();
+    const auto frustum = make_sky_view_frustum();
+    shadow_reach reach;
+    reach.view_frustum = &frustum;
+    reach.light_direction = math::vec3(0.0f, -1.0f, 0.0f);
+    reach.max_distance = 200.0f;
+
+    // A box every cascade accepts (the cascade slab spans the shadow distance along the light,
+    // which is exactly why the cascades cannot reject it) but whose shadow misses the view.
+    const math::bbox unreachable = make_box(math::vec3(40.0f, 0.5f, 40.0f), 1.0f);
+    const uint8_t without_reach = compute_shadow_view_mask(cascades.data(), CASCADE_COUNT, unreachable, true);
+    const uint8_t with_reach = compute_shadow_view_mask(cascades.data(), CASCADE_COUNT, unreachable, true, reach);
+    check(without_reach != 0u, "the cascades alone accept this caster");
+    check(with_reach == 0u, "the reach test clears the whole mask");
+
+    // ... and a caster it keeps still gets the cascade mask it would have had.
+    const math::bbox reachable = make_box(math::vec3(0.0f, 4.0f, 0.0f), 1.0f);
+    check(compute_shadow_view_mask(cascades.data(), CASCADE_COUNT, reachable, true, reach)
+              == compute_shadow_view_mask(cascades.data(), CASCADE_COUNT, reachable, true),
+          "a caster the reach keeps is unaffected by it");
 }
 
 // ---------------------------------------------------------------------------------
@@ -479,6 +551,8 @@ auto run_render_culling_suite(rtti::context& /*ctx*/) -> int
     test_view_mask_submesh_granularity();
     test_view_mask_matches_old_cascade_loop();
     test_light_projection_culling_frustum();
+    test_shadow_reach_rejects_casters_that_cannot_shadow_the_view();
+    test_shadow_reach_clears_the_whole_view_mask();
     test_collector_groups_by_key();
     test_collector_clear_releases_references_and_instances();
     test_collector_reuses_instance_storage();

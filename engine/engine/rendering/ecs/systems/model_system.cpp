@@ -73,6 +73,11 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
     auto view = scn.registry->view<transform_component, model_component, active_component>();
 
     auto frame = gfx::get_render_frame();
+
+    // Retires the cached shadow caster lists when a STATIC caster changed. Only written on a
+    // change, so the common frame never touches it; relaxed because the single bump below is
+    // what publishes the result, after the pool has joined.
+    std::atomic<bool> static_casters_changed{false};
     // this code should be thread safe as each task works with a whole hierarchy and
     // there is no interleaving between tasks.
     // Over the view's leading pool, not its iterator: an entt view iterator is forward-only and
@@ -103,8 +108,8 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                       // is frame-stamped internally and no-ops entirely while no pipeline
                       // requests velocity recording.
                       const bool transform_moved =
-                          transform_comp.is_dirty(transform_component::dirty_ids::velocity);
-                      transform_comp.set_dirty(transform_component::dirty_ids::velocity, false);
+                          transform_comp.is_dirty(dirty_ids::velocity);
+                      transform_comp.set_dirty(dirty_ids::velocity, false);
                       model_comp.record_velocity_state(frame,
                                                        transform_comp.get_transform_global().get_matrix(),
                                                        transform_moved);
@@ -123,8 +128,29 @@ void model_system::on_frame_before_render(scene& scn, delta_t dt)
                       model_comp.mark_motion(pose_refreshed);
 
                       model_comp.update_world_bounds(transform_comp.get_transform_global());
+
+                      // AFTER update_world_bounds: a bounds change it just published has to be
+                      // seen this frame, not next. The transform slot covers where the model
+                      // is (including a moved parent), the model slot what it renders as.
+                      const bool caster_dirty =
+                          transform_comp.is_dirty(dirty_ids::shadow_caster) ||
+                          model_comp.is_dirty(dirty_ids::shadow_caster);
+                      transform_comp.set_dirty(dirty_ids::shadow_caster, false);
+                      model_comp.set_dirty(dirty_ids::shadow_caster, false);
+
+                      // Dynamic casters are re-read every frame by the shadow pass, so only a
+                      // static one can invalidate the cache. A model that STOPPED being a
+                      // static caster bumped the revision through model_component::touch().
+                      if(caster_dirty && model_comp.is_static() && model_comp.casts_shadow())
+                      {
+                          static_casters_changed.store(true, std::memory_order_relaxed);
+                      }
                   });
 
+    if(static_casters_changed.load(std::memory_order_relaxed))
+    {
+        bump_shadow_caster_revision(*scn.registry, entt::null);
+    }
 }
 
 void model_system::on_play_begin(hpp::span<const entt::handle> entities, delta_t dt)

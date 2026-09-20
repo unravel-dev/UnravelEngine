@@ -277,6 +277,34 @@ struct model_submit_extras
 constexpr uint8_t ALL_SHADOW_VIEWS = 0xFF;
 
 /**
+ * @brief Whether a caster's shadow can land anywhere the view can see.
+ *
+ * A directional light's rays are parallel, so the volume a caster's shadow can ever occupy is
+ * its bounds swept along the light direction. If that volume misses the view frustum, nothing
+ * the caster shadows is on screen and it can be dropped from every cascade.
+ *
+ * The cascades cannot make this call themselves: their light-space depth range spans the whole
+ * shadow distance in BOTH directions (shadow.cpp builds the base ortho as -far .. +far) so that
+ * a caster between the sun and a receiver is still in the map. That depth range accepts
+ * everything within the shadow distance along the light axis, which is why a scene looked away
+ * from still rasterises all of its geometry without this gate.
+ *
+ * Default-constructed (no frustum) it accepts everything, which is what point and spot lights
+ * get: their rays diverge, so there is no single sweep direction.
+ */
+struct shadow_reach
+{
+    /// The view to cull against; null accepts every caster.
+    const math::frustum* view_frustum{nullptr};
+    /// Unit direction the light TRAVELS (test_swept_aabb needs it normalized).
+    math::vec3 light_direction{};
+    /// How far along the light a shadow is still within the shadow range.
+    float max_distance{};
+
+    auto can_reach_view(const math::bbox& world_bounds) const -> bool;
+};
+
+/**
  * @brief Picks the shadow views a caster's bounds have to be drawn into, one bit per view
  * (spot: 1 view, point: the 4 tetrahedron faces, directional: the cascades, nearest first).
  *
@@ -291,6 +319,8 @@ constexpr uint8_t ALL_SHADOW_VIEWS = 0xFF;
  * @param world_bounds World AABB of the caster (a whole model, or one submesh instance).
  * @param nested_cascades True for directional lights (see above), false for point / spot
  *                        lights, whose views face different directions.
+ * @param reach Rejects the caster outright when its shadow cannot reach the view. Applied
+ *              first, because it can clear the whole mask.
  * @param candidate_mask Views to consider at all; the others stay cleared. For a submesh pass
  *                       the mask of its model: bounds inside the model's cannot reach a view
  *                       the model is outside of, nor a cascade behind the one that contains
@@ -301,6 +331,7 @@ auto compute_shadow_view_mask(const math::frustum* frustums,
                               uint8_t view_count,
                               const math::bbox& world_bounds,
                               bool nested_cascades,
+                              const shadow_reach& reach = {},
                               uint8_t candidate_mask = ALL_SHADOW_VIEWS) -> uint8_t;
 
 /**
@@ -730,10 +761,15 @@ public:
      *                     instance refines it with its own cached bounds (same function, this
      *                     mask as the candidates); one without cached bounds goes wherever
      *                     the model as a whole can reach.
+     * @param reach Re-tested per submesh instance. The model-level test is useless on a scene
+     *              authored as ONE model with many submeshes - its bounds contain the camera,
+     *              so every submesh passes; the shadow reach only means anything at the
+     *              granularity the geometry actually has.
      */
     auto submit_for_shadow_batching_cascaded(std::vector<shadow_batch_collector>& collectors,
                                              uint8_t cascade_count,
                                              uint8_t cascade_mask,
+                                             const shadow_reach& reach,
                                              const math::mat4& world_transform,
                                              const submesh_pose_mat4& submesh_transforms,
                                              uint32_t lod_index,

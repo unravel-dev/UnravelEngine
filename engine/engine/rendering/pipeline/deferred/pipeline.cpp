@@ -443,21 +443,28 @@ auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::tex
 /// every ray from the light to a lit receiver stays inside that volume, so such a caster has
 /// nothing to shadow. Both lists are pipeline-owned scratch whose clear() keeps the storage -
 /// once warmed up this allocates nothing, and it reads nothing but the contiguous list.
-void cull_shadow_casters(const shadow::shadow_map_models_t& scene_casters,
+void cull_shadow_casters(const shadow::shadow_map_models_t& static_casters,
+                         const shadow::shadow_map_models_t& dynamic_casters,
                          const math::bsphere& light_sphere,
                          shadow::shadow_map_models_t& light_casters)
 {
     APP_SCOPE_PERF("Rendering/Shadow Caster Cull Per Light");
     light_casters.clear();
     const float radius_squared = light_sphere.radius * light_sphere.radius;
-    for(const auto& caster : scene_casters)
+    const auto keep_casters_in_range = [&](const shadow::shadow_map_models_t& casters)
     {
-        const math::vec3 to_closest = caster.world_bounds.closest_point(light_sphere.position) - light_sphere.position;
-        if(math::dot(to_closest, to_closest) <= radius_squared)
+        for(const auto& caster : casters)
         {
-            light_casters.emplace_back(caster);
+            const math::vec3 to_closest =
+                caster.world_bounds.closest_point(light_sphere.position) - light_sphere.position;
+            if(math::dot(to_closest, to_closest) <= radius_squared)
+            {
+                light_casters.emplace_back(caster);
+            }
         }
-    }
+    };
+    keep_casters_in_range(static_casters);
+    keep_casters_in_range(dynamic_casters);
 }
 
 auto reflection_screen_stack_enabled(const pipeline::run_params& params) -> bool
@@ -659,14 +666,58 @@ void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
         });
 }
 
-void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, visibility_flags query, layer_mask render_mask)
+void deferred::refresh_shadow_casters(scene& scn, const camera& camera, delta_t dt, layer_mask render_mask)
+{
+    const auto* revision = scn.registry->ctx().find<shadow_caster_revision>();
+    const uint64_t current_revision = revision != nullptr ? revision->value : 0ULL;
+    const bool lists_retired =
+        current_revision != shadow_casters_revision_ || render_mask.mask != shadow_casters_mask_.mask;
+
+    if(lists_retired)
+    {
+        APP_SCOPE_PERF("Rendering/Shadow Casters Rebuild");
+        // The ONE walk over every model in the scene. Everything the split depends on -
+        // membership, static-ness, a static caster's bounds - is behind the revision, so in a
+        // steady scene this does not run again.
+        shadow_static_casters_.clear();
+        shadow_dynamic_casters_.clear();
+        const auto query = visibility_flags{visibility_query::is_shadow_caster};
+        // No LOD reference camera: the shadow submit resolves LOD itself, per caster it draws.
+        gather_visible_models(scn, nullptr, query, render_mask, dt,
+            [&](entt::handle entity, const lod_data& /*lod_data*/)
+            {
+                const auto& model_comp = entity.get<model_component>();
+                auto& casters = model_comp.is_static() ? shadow_static_casters_ : shadow_dynamic_casters_;
+                casters.emplace_back(shadow::shadow_visibility_data{entity, model_comp.get_world_bounds()});
+            }, nullptr);
+        shadow_casters_revision_ = current_revision;
+        shadow_casters_mask_ = render_mask;
+        shadow_casters_frame_ = gfx::get_render_frame();
+        return;
+    }
+
+    const uint64_t frame = gfx::get_render_frame();
+    if(shadow_casters_frame_ == frame)
+    {
+        return;
+    }
+    shadow_casters_frame_ = frame;
+
+    APP_SCOPE_PERF("Rendering/Shadow Casters Refresh Movers");
+    // Movers only: their bounds changed because they moved, which is not a membership change.
+    // Static casters keep the bounds captured at the rebuild - a change there bumped the
+    // revision and took the branch above.
+    for(auto& caster : shadow_dynamic_casters_)
+    {
+        caster.world_bounds = caster.entity.get<model_component>().get_world_bounds();
+    }
+}
+
+void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, layer_mask render_mask)
 {
     APP_SCOPE_PERF("Rendering/Shadow Generation Pass");
 
-    query |= visibility_query::is_dirty | visibility_query::is_shadow_caster;
-
     bool queried = false;
-    shadow_scene_casters_.clear();
 
     scn.registry->view<transform_component, light_component>().each(
         [&](auto e, auto&& transform_comp, auto&& light_comp)
@@ -713,20 +764,26 @@ void deferred::build_shadows(scene& scn, const camera& camera, delta_t dt, visib
 
             if(!queried)
             {
-                gather_visible_models(scn, nullptr, query, render_mask, dt, [&](entt::handle entity, const lod_data& lod_data)
-                {
-                    const auto& world_bounds = entity.get<model_component>().get_world_bounds();
-                    shadow_scene_casters_.emplace_back(shadow::shadow_visibility_data{entity, lod_data, world_bounds});
-                }, &camera);
+                refresh_shadow_casters(scn, camera, dt, render_mask);
                 queried = true;
             }
 
             // A directional light reaches every caster (its generator culls them against the
             // view); a local light only gets the casters that reach into its range.
-            const shadow::shadow_map_models_t* light_casters = &shadow_scene_casters_;
-            if(!is_directional)
+            const shadow::shadow_map_models_t* light_casters = nullptr;
+            if(is_directional)
             {
-                cull_shadow_casters(shadow_scene_casters_, light_sphere, shadow_light_casters_);
+                // One list for the generator: the movers appended to the static ones. Only
+                // the tail is rewritten per light, so the static part is not copied again.
+                shadow_light_casters_.assign(shadow_static_casters_.begin(), shadow_static_casters_.end());
+                shadow_light_casters_.insert(shadow_light_casters_.end(),
+                                             shadow_dynamic_casters_.begin(),
+                                             shadow_dynamic_casters_.end());
+                light_casters = &shadow_light_casters_;
+            }
+            else
+            {
+                cull_shadow_casters(shadow_static_casters_, shadow_dynamic_casters_, light_sphere, shadow_light_casters_);
                 light_casters = &shadow_light_casters_;
             }
 
@@ -822,7 +879,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     if(build_shadowmaps)
     {
-        build_shadows(scn, camera, dt, visibility_query::not_specified, render_mask);
+        build_shadows(scn, camera, dt, render_mask);
     }
 
     // Before any pass writes or reads scene lighting (the nested probe captures above rendered
