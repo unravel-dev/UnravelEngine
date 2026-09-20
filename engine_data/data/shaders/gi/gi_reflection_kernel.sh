@@ -63,6 +63,8 @@
 #include "gi/gi_light_voxels.sh"
 #include "gi/gi_emissive_nee.sh"
 #include "gi/gi_noise.sh"
+// Lobe sampling shared with the temporal resolve, which must reproduce this pass's ray.
+#include "gi/gi_reflection_sampling.sh"
 #include "gi/gi_env_sh.sh"
 // The trace runs in the VIEW's pre-exposed space (Lumen's reflections): store reads convert,
 // history reads correct from last frame's scale.
@@ -323,31 +325,6 @@ bool GiReflectionScreenColorAtHit(vec3 hit_position, vec3 hit_normal, vec2 frag_
 }
 #endif // GI_REFLECTION_SCREEN_COLOR
 
-/// Heitz 2018 visible-normal GGX sampling; view and result in tangent space (z = normal).
-vec3 SampleGGXVNDF(vec3 view_ts, float alpha, float u1, float u2)
-{
-	vec3 vh = normalize(vec3(alpha * view_ts.x, alpha * view_ts.y, view_ts.z));
-	float lensq = vh.x * vh.x + vh.y * vh.y;
-	vec3 t1;
-	if(lensq > 1e-8)
-	{
-		t1 = vec3(-vh.y, vh.x, 0.0) / sqrt(lensq);
-	}
-	else
-	{
-		t1 = vec3(1.0, 0.0, 0.0);
-	}
-	vec3 t2 = cross(vh, t1);
-	float r = sqrt(u1);
-	float phi = 6.283185307 * u2;
-	float p1 = r * cos(phi);
-	float p2 = r * sin(phi);
-	float s = 0.5 * (1.0 + vh.z);
-	p2 = (1.0 - s) * sqrt(max(0.0, 1.0 - p1 * p1)) + s * p2;
-	vec3 nh = p1 * t1 + p2 * t2 + sqrt(max(0.0, 1.0 - p1 * p1 - p2 * p2)) * vh;
-	return normalize(vec3(alpha * nh.x, alpha * nh.y, max(1e-6, nh.z)));
-}
-
 /// Sky answer for rays our own geometry data calls OPEN: the authored probe layer at this
 /// pixel, already multi-probe blended and parallax projected - frequency content an L2 SH
 /// cannot hold (clouds, sun disk, horizon). Probe alpha is the layer's own coverage, so
@@ -467,45 +444,24 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	// this fade's only remaining job is C0 continuity into the rough tier at the cutoff -
 	// it covers just the residual band (a wide fade read as content dissolving, not blurring).
 	float gloss_blend = smoothstep(GI_REFLECTION_GATHER_FADE_START, GI_REFLECTION_ROUGH_CUTOFF, roughness);
-	float alpha_ggx = roughness * roughness;
-	// STOCHASTIC direction: jitter the ray inside the GGX lobe (VNDF), decorrelated per pixel
-	// by IGN and advanced per frame by R2; the temporal pass integrates. A sample below the
-	// horizon (VNDF guarantees a valid half-vector, not a valid reflection at grazing) keeps
-	// the mirror direction.
+	// STOCHASTIC direction: jitter the ray inside the GGX lobe (bounded-cap VNDF), decorrelated
+	// per pixel by IGN and advanced per frame by R2; the temporal pass integrates. The whole
+	// sampler lives in gi_reflection_sampling.sh because the temporal RESOLVE has to reproduce
+	// this exact ray, and its density, for every neighbouring texel it reuses.
 	//
-	// The determinism gate is on DECODED roughness against the encoder floor, never on alpha
-	// against a small epsilon: the G-buffer write clamps roughness to >= 0.05, so an authored
-	// mirror decodes at the floor and its alpha (2.5e-3) sailed over the old 1e-4 gate -
-	// every mirror pixel jittered, and rays near-missing a small emissive hit it on the
-	// VNDF tail as full-radiance fireflies (the recorded decoded-roughness-floor lesson).
-	BRANCH
-	if(roughness > GI_REFLECTION_MIRROR_ROUGHNESS)
-	{
-		// TWO independent noise channels for a true 2D point: deriving the second
-		// coordinate from the first put every sample on a 1D curve through the unit square,
-		// so the azimuthal half of the lobe was never properly covered and high-contrast
-		// regions could not converge (measured, round 13; the shared pattern in gi_noise.sh).
-		vec2 xi = fract(GiIgnNoise(ivec2(frag_coord)) + u_gi_reflection_jitter.xy);
-		vec3 axis;
-		if(abs(normal.z) < 0.999)
-		{
-			axis = vec3(0.0, 0.0, 1.0);
-		}
-		else
-		{
-			axis = vec3(1.0, 0.0, 0.0);
-		}
-		vec3 tangent = normalize(cross(axis, normal));
-		vec3 bitangent = cross(normal, tangent);
-		vec3 view_ts = vec3(dot(view, tangent), dot(view, bitangent), dot(view, normal));
-		vec3 half_ts = SampleGGXVNDF(view_ts, alpha_ggx, xi.x, xi.y);
-		vec3 half_ws = normalize(tangent * half_ts.x + bitangent * half_ts.y + normal * half_ts.z);
-		vec3 jittered = reflect(-view, half_ws);
-		if(dot(jittered, normal) > 1e-3)
-		{
-			reflected = normalize(jittered);
-		}
-	}
+	// The determinism gate (inside GiReflectionMakeRay) is on DECODED roughness against the
+	// encoder floor, never on alpha against a small epsilon: the G-buffer write clamps
+	// roughness to >= 0.05, so an authored mirror decodes at the floor and its alpha (2.5e-3)
+	// sailed over the old 1e-4 gate - every mirror pixel jittered, and rays near-missing a
+	// small emissive hit it on the VNDF tail as full-radiance fireflies (the recorded
+	// decoded-roughness-floor lesson).
+	//
+	// TWO independent noise channels for a true 2D point: deriving the second coordinate from
+	// the first put every sample on a 1D curve through the unit square, so the azimuthal half
+	// of the lobe was never properly covered and high-contrast regions could not converge
+	// (measured, round 13; the shared pattern in gi_noise.sh).
+	vec2 xi = fract(GiIgnNoise(ivec2(frag_coord)) + u_gi_reflection_jitter.xy);
+	reflected = GiReflectionMakeRay(normal, view, roughness, xi).direction;
 	// WORLD tier: launch clear of the composed surface, exactly as the gather lifts.
 	// (No screen tier - SSR owns screen space and composites over this pass; see header.)
 	float voxel;

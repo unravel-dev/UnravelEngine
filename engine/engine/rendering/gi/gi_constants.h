@@ -730,15 +730,61 @@
       " mean takes to catch up behind a reflected mover, which the receiver's stillness"            \
       " cannot see")                                                                                \
     X(GI_REFLECTION_CONFIDENCE_EXTENT_FLOOR, 0.1f,                                                  \
-      "tonemapped radiance", "derived: the clamp distance is measured in units of the"              \
+      "denoiser-space radiance", "derived: the clamp distance is measured in units of the"          \
       " neighbourhood's extent, so a flat neighbourhood (extent near zero) would turn"              \
       " quantisation-level disagreement into a full collapse; the extent is floored at a"           \
-      " tenth of the tonemapped unit")                                                              \
-    X(GI_REFLECTION_CONFIDENCE_TONEMAP_RANGE, 10.0f,                                                \
-      "radiance", "derived: the confidence distance is measured in the bounded space L / (1"        \
-      " + Lum / range) so one bright spike in the 3x3 box cannot stretch the extent and hide"       \
-      " every real disagreement behind it; 10 keeps the space near-linear up to"                    \
-      " scene-referred whites and compresses only fireflies")                                       \
+      " tenth of the denoiser-space unit")                                                          \
+    X(GI_REFLECTION_DENOISER_RANGE, 10.0f,                                                          \
+      "radiance", "ported from Lumen (r.Lumen.Reflections.DenoiserTonemapRange, UE 5.8"             \
+      " LumenReflectionDenoiserCommon.ush:12-39): the whole reflection denoiser - the"              \
+      " pre-temporal resolve's average, the neighbourhood statistics and the history clamp -"       \
+      " runs in the bounded space L / (1 + Lum / range) and is expanded back only at the"           \
+      " store. Averaging raw HDR lets one bright tap carry the mean and one bright neighbour"       \
+      " stretch the clamp box until it rejects nothing, which is exactly where fireflies"           \
+      " live; 10 keeps the space near-linear up to scene-referred whites and compresses only"       \
+      " the spikes. Was GI_REFLECTION_CONFIDENCE_TONEMAP_RANGE, when only the confidence"           \
+      " measure used it")                                                                           \
+    X(GI_REFLECTION_CLAMP_SIGMA, 1.0f,                                                              \
+      "standard deviations", "ported from Lumen"                                                    \
+      " (r.Lumen.Reflections.Temporal.NeighborhoodClampScale, UE 5.8"                               \
+      " LumenReflectionDenoiserTemporal.usf:109): the history clamp box is the neighbourhood"       \
+      " MEAN plus/minus this many standard deviations in YCoCg, not the min/max AABB it used"       \
+      " to be. A min/max box is set by its single brightest member, so one firefly widened it"      \
+      " until it stopped rejecting anything - the failure the SSR guard work recorded as 'a"        \
+      " colour-space clamp flushes only as well as its box is tight'. 1.0 is the variance-"         \
+      " clipping default for a 3x3 neighbourhood and matches Lumen's scale")                        \
+    X(GI_REFLECTION_MIN_LOBE_ALPHA, 0.0001f,                                                        \
+      "GGX alpha", "derived: floor on alpha = roughness^2 wherever a lobe DENSITY is"               \
+      " evaluated. The VNDF pdf goes as 1 / (pi alpha^2) at the peak, so an authored mirror"        \
+      " (roughness 0) divides by zero; the floor pins the peak density at a large but finite"       \
+      " value, which is the correct answer for the resolve - a mirror neighbour's sample is a"      \
+      " delta and must contribute nothing to a glossy centre's lobe")                               \
+    X(GI_REFLECTION_RESOLVE_WEIGHT_MAX, 4.0f,                                                       \
+      "x the centre tap's weight", "derived: cap on one neighbour's BRDF/pdf weight in the"         \
+      " pre-temporal resolve. The ratio is O(1) between texels of the same material, but a"         \
+      " neighbour that is much ROUGHER has a much smaller pdf and would otherwise dominate the"     \
+      " average; the depth and normal edge stops do not see a roughness discontinuity. Lumen"       \
+      " has no such cap because its tile classification and full-res tracing make the case"         \
+      " rare (LumenReflectionResolve.usf:542)")                                                     \
+    X(GI_REFLECTION_FILTER_NOISE_RATIO, 0.5f,                                                       \
+      "std-dev / luminance", "ported from Lumen (UE 5.8"                                            \
+      " LumenReflectionDenoiserSpatial.usf:104): the composite's cross-bilateral kernel is"         \
+      " GATED on local contrast instead of running on every pixel of the traced band forever."      \
+      " Lumen measures temporal variance; we have no second moment, so the gate uses the"           \
+      " local spatial deviation of the same 3x3 the kernel already fetches. Above this ratio"       \
+      " the pixel is noisy and gets the full kernel, below it the accumulated value is served"      \
+      " unfiltered and keeps its sharpness")                                                        \
+    X(GI_REFLECTION_FILTER_LUMA_FLOOR, 0.1f,                                                        \
+      "pre-exposed radiance", "ported from Lumen (UE 5.8"                                           \
+      " LumenReflectionDenoiserSpatial.usf:104): floor on the luminance the deviation above"        \
+      " is measured against, so a nearly black neighbourhood does not read as infinitely"           \
+      " noisy and pull the kernel back on over every dark surface in the band")                     \
+    X(GI_REFLECTION_FILTER_DISOCCLUSION_FRAMES, 2.0f,                                               \
+      "frames", "ported from Lumen (r.Lumen.Reflections.BilateralFilter.MaxDisocclusionFrames,"     \
+      " new in UE 5.8, LumenReflectionDenoiserSpatial.usf:83-87): the second half of the gate"      \
+      " above - a pixel with fewer accumulated frames than this has no temporal history to"         \
+      " rely on and gets the full kernel whatever its local contrast reads. Ramped, not"            \
+      " binary: 5.7 snapped the boost off after a single frame")                                    \
     X(GI_REFLECTION_GATHER_FADE_START, 0.45f,                                                       \
       "GGX roughness", "derived: 0.75 x GI_REFLECTION_ROUGH_CUTOFF. The traced tier now"           \
       " SPREADS with roughness on its own (one VNDF-sampled ray per frame, integrated by the"      \

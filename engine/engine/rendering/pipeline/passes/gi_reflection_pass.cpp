@@ -440,6 +440,10 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::set_uniform(temporal_program_.u_gi_refl_velocity, velocity_params);
         gfx::set_uniform(temporal_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
         gfx::set_uniform(temporal_program_.u_gi_reflection_camera, reflection_camera);
+        // The trace's own R2 offset: the pre-temporal resolve re-derives each neighbouring
+        // texel's ray from its pixel coordinate and this value, so the two must agree exactly
+        // (bgfx clears uniform state at every submit - the trace's set does not carry here).
+        gfx::set_uniform(temporal_program_.u_gi_reflection_jitter, jitter);
         // The topology helpers stage a transient vertex buffer consumed by ONE submit - every
         // draw needs its own call (reusing the trace's left this submit with no vertices).
         auto ttopology = gfx::clip_fullscreen_triangle(1.0f);

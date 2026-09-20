@@ -271,6 +271,9 @@ private:
         gfx::program::uniform_ptr u_gi_refl_temporal;
         gfx::program::uniform_ptr u_gi_refl_velocity;
         gfx::program::uniform_ptr u_gi_reflection_camera;
+        /// This frame's R2 offset - the SAME value the trace programs get, so the resolve can
+        /// re-derive the ray each neighbouring texel fired (gi_reflection_sampling.sh).
+        gfx::program::uniform_ptr u_gi_reflection_jitter;
         gfx::program::uniform_ptr s_refl_raw;
         gfx::program::uniform_ptr s_refl_history;
         gfx::program::uniform_ptr s_refl_depth;
@@ -289,6 +292,7 @@ private:
             cache_uniform(program.get(), u_gi_refl_temporal, "u_gi_refl_temporal", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_refl_velocity, "u_gi_refl_velocity", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), s_refl_raw, "s_refl_raw", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_refl_history, "s_refl_history", gfx::uniform_type::Sampler);
             cache_uniform(program.get(), s_refl_depth, "s_refl_depth", gfx::uniform_type::Sampler);

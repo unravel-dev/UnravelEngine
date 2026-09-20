@@ -33,6 +33,12 @@ $input v_texcoord0
 // DecodeGBufferNormalMetalRoughnessLod, for the mirror-direction hit rebuild below.
 #include "../lighting.sh"
 #include "gi/gi_constants.sh"
+// The trace's jitter pattern, reproduced per neighbouring texel by the resolve below.
+#include "gi/gi_noise.sh"
+// The trace's own lobe sampler and density - the resolve re-derives each neighbour's ray.
+#include "gi/gi_reflection_sampling.sh"
+// Bounded-range YCoCg: the space every average and clamp in this pass runs in.
+#include "gi/gi_reflection_denoise.sh"
 // The accumulated mean is pre-exposed; the history carries last frame's scale.
 #include "../pre_exposure.sh"
 
@@ -65,18 +71,27 @@ uniform vec4 u_gi_refl_velocity;
 /// xyz = camera position (shared with the trace programs - bgfx uniforms are name-global).
 uniform vec4 u_gi_reflection_camera;
 
-/// Rec.709 luminance (common.sh carries no Luminance helper).
-float GiReflLuma(vec3 color)
-{
-	return dot(color, vec3(0.2126, 0.7152, 0.0722));
-}
+/// xy = this frame's R2 low-discrepancy offset for the GGX sample - the SAME uniform the
+/// trace programs read (bgfx uniforms are name-global), so the resolve below reproduces the
+/// exact ray each neighbouring texel fired this frame.
+uniform vec4 u_gi_reflection_jitter;
 
-/// The confidence test's colour space: a bounded (tonemapped) range, so one bright spike in
-/// the neighbourhood box does not read as a huge extent that hides every real disagreement
-/// (GI_REFLECTION_CONFIDENCE_TONEMAP_RANGE).
-vec3 GiReflTonemap(vec3 color)
+/*
+ * The trace kernel's raw-alpha contract, decoded once: coverage below 1, exactly 1 for the
+ * rough tier, 1 + t / GI_SHADOW_DISTANCE for a covered geometric hit, 2 for a sky miss.
+ * Returns 0 when the sample carries no hit distance at all (rough tier / shape fade), which
+ * every caller here treats as "no parallax information".
+ *
+ * The sky push is deliberate and shared with the reprojection: far enough that translation
+ * parallax cancels and rotation alone remains.
+ */
+float GiReflHitDistance(float raw_alpha)
 {
-	return color / (1.0 + GiReflLuma(color) / GI_REFLECTION_CONFIDENCE_TONEMAP_RANGE);
+	if(raw_alpha <= 1.001)
+	{
+		return 0.0;
+	}
+	return raw_alpha >= 1.999 ? GI_SHADOW_DISTANCE * 8.0 : (raw_alpha - 1.0) * GI_SHADOW_DISTANCE;
 }
 
 void main()
@@ -138,16 +153,15 @@ void main()
 	vec4 recv_clip = mul(u_gi_refl_prev_view_proj, vec4(world_position, 1.0));
 	vec3 recv_ndc = clipTransform(recv_clip.xyz / max(recv_clip.w, 1e-6));
 	vec2 recv_prev_uv = recv_ndc.xy * 0.5 + 0.5;
+	float center_hit_t = GiReflHitDistance(curr.w);
 	vec3 reproject_point = world_position;
 	BRANCH
-	if(curr.w > 1.001)
+	if(center_hit_t > 0.0)
 	{
 		vec3 view_ray = world_position - u_gi_reflection_camera.xyz;
 		float view_dist = max(length(view_ray), 1e-4);
-		float hit_t = curr.w >= 1.999 ? GI_SHADOW_DISTANCE * 8.0
-		                              : (curr.w - 1.0) * GI_SHADOW_DISTANCE;
 		reproject_point =
-		    u_gi_reflection_camera.xyz + view_ray * ((view_dist + hit_t) / view_dist);
+		    u_gi_reflection_camera.xyz + view_ray * ((view_dist + center_hit_t) / view_dist);
 	}
 	vec4 prev_clip = mul(u_gi_refl_prev_view_proj, vec4(reproject_point, 1.0));
 	vec3 prev_ndc = clipTransform(prev_clip.xyz / max(prev_clip.w, 1e-6));
@@ -281,8 +295,8 @@ void main()
 			vec3 normal = normalize(nd.world_normal);
 			vec3 view = normalize(u_gi_reflection_camera.xyz - world_position);
 			vec3 mirror_dir = normalize(reflect(-view, normal));
-			float hit_t = (curr.w - 1.0) * GI_SHADOW_DISTANCE;
-			vec4 hit_clip = mul(u_viewProj, vec4(world_position + mirror_dir * hit_t, 1.0));
+			vec4 hit_clip =
+			    mul(u_viewProj, vec4(world_position + mirror_dir * center_hit_t, 1.0));
 			if(hit_clip.w > 1e-6)
 			{
 				vec3 hit_ndc = clipTransform(hit_clip.xyz / hit_clip.w);
@@ -298,26 +312,72 @@ void main()
 			}
 		}
 	}
-	// Neighbourhood bounds, the firefly reference and the pre-temporal resolve share one 3x3
-	// walk over this frame's GEOMETRIC samples (a coverage-0 neighbour cannot shrink the AABB
-	// of a refined hit, drag the reference toward sky, or enter the resolve). The samples are
-	// kept so the resolve below can apply the governor's ceiling to each of them.
-	vec4 lo = curr;
-	vec4 hi = curr;
+	// PRE-TEMPORAL RESOLVE (GI_REFLECTION_RESOLVE_START): one GGX ray per pixel per frame is
+	// not enough to resolve a wide lobe, but the neighbouring texels sampled the SAME lobe
+	// from almost the same point - so their rays can be reused here, for free, before the
+	// temporal ever sees this frame's sample. This is Lumen's spatial reconstruction
+	// (LumenReflectionResolve.usf:370-613) rather than a blur: each neighbour's own ray is
+	// re-derived, its hit point rebuilt, the direction RE-AIMED from this pixel, and the
+	// sample weighted by this pixel's own lobe density over the density it was drawn from.
+	// Averaging radiance with edge stops alone (what this used to do) has no parallax
+	// correction and no BRDF weight, so it over-blurred the sharp end of the band and gave
+	// mismatched taps full weight. Fades in with roughness; never on mirrors.
+	float resolve_scale =
+	    smoothstep(GI_REFLECTION_RESOLVE_START, GI_REFLECTION_GATHER_FADE_START, nd.roughness);
+	// A degenerate G-buffer normal has no lobe to reuse under, and normalize() of it is a NaN.
+	if(dot(nd.world_normal, nd.world_normal) < 0.5)
+	{
+		resolve_scale = 0.0;
+	}
+	// THE CENTRE LOBE. The centre tap is weighted by its own BRDF-over-pdf ratio, exactly as
+	// the neighbours are, so the two are on one scale - a fixed 1.0 for the centre against
+	// physically scaled neighbours is an arbitrary mix. The ratio is O(1) for a VNDF sample
+	// (the NDF cancels), so the floor only guards a degenerate frame.
+	vec3 center_normal = vec3(0.0, 0.0, 1.0);
+	vec3 center_view = vec3(0.0, 0.0, 1.0);
+	float center_alpha = GI_REFLECTION_MIN_LOBE_ALPHA;
+	float center_weight = 1.0;
+	// The texel index the trace seeded its IGN with, derived from the UV rather than from
+	// gl_FragCoord: the trace wrote `uv = (pixel + 0.5) * texel`, so uv / texel recovers
+	// `pixel + 0.5` and truncates to `pixel` on every backend. gl_FragCoord would be a trap -
+	// its origin is top-left on D3D and bottom-left on GL, and a flipped seed would silently
+	// re-derive the WRONG ray for every neighbour while still compiling and running.
+	ivec2 center_pixel = ivec2(uv / texel);
+	BRANCH
+	if(resolve_scale > 0.0)
+	{
+		center_normal = normalize(nd.world_normal);
+		center_view = normalize(u_gi_reflection_camera.xyz - world_position);
+		center_alpha = max(nd.roughness * nd.roughness, GI_REFLECTION_MIN_LOBE_ALPHA);
+		vec2 center_xi = fract(GiIgnNoise(center_pixel) + u_gi_reflection_jitter.xy);
+		GiReflectionRay center_ray =
+		    GiReflectionMakeRay(center_normal, center_view, nd.roughness, center_xi);
+		center_weight = max(GiReflectionSampleWeight(center_normal,
+		                                             center_view,
+		                                             center_alpha,
+		                                             center_ray.direction,
+		                                             center_ray.pdf),
+		                    1e-3);
+	}
+	// One 3x3 walk over this frame's GEOMETRIC samples feeds three consumers: the
+	// neighbourhood statistics, the firefly reference and the resolve (a coverage-0
+	// neighbour is not an image - it cannot widen the clamp box of a refined hit, drag the
+	// reference toward sky, or enter the resolve). The samples are kept so the resolve can
+	// apply the governor's ceiling to each of them.
+	//
+	// STATISTICS SPACE: mean and variance in bounded-range YCoCg (gi_reflection_denoise.sh),
+	// never the linear-RGB min/max AABB this used to build. A min/max box is set by its
+	// single brightest member, so one firefly widened it until it rejected nothing - the
+	// recorded "a colour-space clamp flushes only as well as its box is tight" lesson - and
+	// it was exactly where the box was widest that ghosts survived.
+	vec3 box_sum = vec3_splat(0.0);
+	vec3 box_sq_sum = vec3_splat(0.0);
+	float box_count = 0.0;
 	vec3 neighbor_sum = vec3_splat(0.0);
 	float neighbor_count = 0.0;
 	float neighbor_luma_max = 0.0;
 	vec3 neighbor_rgb[8];
 	float neighbor_weight[8];
-	// PRE-TEMPORAL RESOLVE (GI_REFLECTION_RESOLVE_START): stochastic SSR's resolve stage on
-	// the 3x3 the bounds already fetch - the rough band's raw sample is one GGX ray of a lobe
-	// whose neighbours sample the SAME lobe, so an edge-stopped average of them is nine
-	// samples per frame for free. Fades in with roughness (a tight lobe's neighbours see
-	// different content), never on mirrors, never on non-image samples. Blend-free: the
-	// history's neighbourhood bounds stay the raw ones.
-	float resolve_scale =
-	    smoothstep(GI_REFLECTION_RESOLVE_START, GI_REFLECTION_GATHER_FADE_START, nd.roughness);
-	vec3 resolve_normal = normalize(nd.world_normal);
 	int neighbor_index = 0;
 	LOOP
 	for(int y = -1; y <= 1; ++y)
@@ -335,8 +395,10 @@ void main()
 			float sample_weight = 0.0;
 			if(s.w >= 0.5)
 			{
-				lo = min(lo, s);
-				hi = max(hi, s);
+				vec3 sample_denoise = GiReflToDenoiser(s.xyz);
+				box_sum += sample_denoise;
+				box_sq_sum += sample_denoise * sample_denoise;
+				box_count += 1.0;
 				neighbor_sum += s.xyz;
 				neighbor_count += 1.0;
 				neighbor_luma_max = max(neighbor_luma_max, GiReflLuma(s.xyz));
@@ -344,19 +406,72 @@ void main()
 				BRANCH
 				if(resolve_scale > 0.0)
 				{
-					// The composite's edge stops: depth agreement within a small band and a
-					// tight normal cone, so the resolve never bleeds across silhouettes.
 					float sample_depth = texture2DLod(s_refl_depth, sample_uv, 0.0).x;
+					GBufferDataNormalMetalRoughness snd =
+					    DecodeGBufferNormalMetalRoughnessLod(sample_uv, s_refl_normal, 0.0);
+					// The composite's edge stops: depth agreement within a small band and a
+					// tight normal cone, so the resolve never bleeds across silhouettes. Kept
+					// alongside the BRDF weight - the weight describes the lobe, the stops
+					// describe the surface, and neither sees what the other does.
 					float depth_weight = saturate(1.0 - abs(sample_depth - depth) /
 					                                        (GI_TEMPORAL_DEPTH_TOLERANCE * 0.01));
-					vec3 sample_normal =
-					    DecodeGBufferNormalMetalRoughnessLod(sample_uv, s_refl_normal, 0.0).world_normal;
-					float nw = saturate(dot(normalize(sample_normal), resolve_normal));
+					float nw = saturate(dot(normalize(snd.world_normal), center_normal));
 					nw = nw * nw;
 					nw = nw * nw;
 					nw = nw * nw;
 					nw = nw * nw;
-					sample_weight = resolve_scale * depth_weight * nw * nw;
+					float edge_weight = resolve_scale * depth_weight * nw * nw;
+					// A past-cutoff neighbour never traced a ray: its value is the reused
+					// diffuse gather, not a sample of any lobe, so it must not be re-weighted
+					// as one (it still counts toward the statistics and the reference).
+					BRANCH
+					if(edge_weight > 0.0 && sample_depth < 1.0 &&
+					   snd.roughness < GI_REFLECTION_ROUGH_CUTOFF &&
+					   dot(snd.world_normal, snd.world_normal) >= 0.5)
+					{
+						vec3 sample_clip = clipTransform(
+						    vec3(sample_uv * 2.0 - 1.0, toClipSpaceDepth(sample_depth)));
+						vec3 sample_position = clipToWorld(u_invViewProj, sample_clip);
+						vec3 sample_normal = normalize(snd.world_normal);
+						vec3 sample_view =
+						    normalize(u_gi_reflection_camera.xyz - sample_position);
+						vec2 sample_xi = fract(GiIgnNoise(center_pixel + ivec2(x, y)) +
+						                       u_gi_reflection_jitter.xy);
+						GiReflectionRay sample_ray = GiReflectionMakeRay(sample_normal,
+						                                                sample_view,
+						                                                snd.roughness,
+						                                                sample_xi);
+						// RE-AIM: the neighbour's radiance arrived from its OWN hit point, so
+						// from this pixel it lies along a different direction. Clamping the
+						// distance to the centre's preserves contacts and keeps a neighbour
+						// that sailed into the background from biasing the average (Lumen's
+						// own note, LumenReflectionResolve.usf:530).
+						vec3 reaimed = sample_ray.direction;
+						float sample_hit_t = GiReflHitDistance(s.w);
+						if(sample_hit_t > 0.0)
+						{
+							float traced_t = center_hit_t > 0.0 ? min(sample_hit_t, center_hit_t)
+							                                    : sample_hit_t;
+							vec3 to_hit =
+							    sample_position + sample_ray.direction * traced_t - world_position;
+							float to_hit_length = length(to_hit);
+							if(to_hit_length > 1e-4)
+							{
+								reaimed = to_hit / to_hit_length;
+							}
+						}
+						float brdf_weight = GiReflectionSampleWeight(center_normal,
+						                                            center_view,
+						                                            center_alpha,
+						                                            reaimed,
+						                                            sample_ray.pdf);
+						// A much ROUGHER neighbour has a much smaller density and would
+						// otherwise dominate the average; the edge stops cannot see a
+						// roughness discontinuity.
+						brdf_weight =
+						    min(brdf_weight, center_weight * GI_REFLECTION_RESOLVE_WEIGHT_MAX);
+						sample_weight = edge_weight * brdf_weight;
+					}
 				}
 			}
 			neighbor_rgb[neighbor_index] = sample_rgb;
@@ -371,6 +486,10 @@ void main()
 	// height, and once the resolve existed it spread that hit into a 3x3 of unclamped dots
 	// that the 3-frame motion window showed dancing (measured regression on brushed metal).
 	// With one neighbour there is nothing to trim: the history alone is the reference.
+	//
+	// The bounded-range resolve below now suppresses the same spikes by construction, so
+	// this governor and its trimmed mean are candidates for removal - but only against the
+	// brushed-metal case that put them here, not on principle.
 	float reference = history_texel.w >= 0.5 ? GiReflLuma(history_texel.xyz) : 0.0;
 	if(neighbor_count > 1.0)
 	{
@@ -391,9 +510,10 @@ void main()
 	// The resolve runs only with an ESTABLISHED reference and applies the same ceiling to
 	// every neighbour it averages: without a reference the neighbourhood is sparse spikes
 	// on dark, and averaging those can only spread the dots (the no-reference store stays
-	// unclamped exactly as before, one pixel per hit).
+	// unclamped exactly as before, one pixel per hit). The average itself runs in the
+	// bounded range, so a tap that survives the ceiling still cannot carry the mean.
 	BRANCH
-	if(has_reference && curr.w >= 0.5 && resolve_scale > 0.0)
+	if(has_reference && resolve_scale > 0.0)
 	{
 		vec3 resolve_sum = vec3_splat(0.0);
 		float resolve_weight = 0.0;
@@ -411,14 +531,27 @@ void main()
 			{
 				sample_rgb *= ceiling / sample_luma;
 			}
-			resolve_sum += sample_rgb * sample_weight;
+			resolve_sum += GiReflToBounded(sample_rgb) * sample_weight;
 			resolve_weight += sample_weight;
 		}
 		if(resolve_weight > 0.0)
 		{
-			curr.xyz = (curr.xyz + resolve_sum) / (1.0 + resolve_weight);
+			curr.xyz = GiReflFromBounded((GiReflToBounded(curr.xyz) * center_weight + resolve_sum) /
+			                             (center_weight + resolve_weight));
 		}
 	}
+	// The clamp box closes over the RESOLVED centre - the value that is about to be blended
+	// is the one the history has to agree with.
+	vec3 center_denoise = GiReflToDenoiser(curr.xyz);
+	box_sum += center_denoise;
+	box_sq_sum += center_denoise * center_denoise;
+	box_count += 1.0;
+	vec3 box_mean = box_sum / box_count;
+	vec3 box_variance = max(box_sq_sum / box_count - box_mean * box_mean, vec3_splat(0.0));
+	// Mean +- GI_REFLECTION_CLAMP_SIGMA standard deviations, floored so a flat neighbourhood
+	// cannot turn quantisation-level disagreement into a full confidence collapse.
+	vec3 box_extent = max(GI_REFLECTION_CLAMP_SIGMA * sqrt(box_variance),
+	                      vec3_splat(GI_REFLECTION_CONFIDENCE_EXTENT_FLOOR));
 	// RUNNING MEAN, not a fixed EMA: alpha carries the accumulated frame count (the SSR
 	// temporal-resolve convention). A fixed-weight EMA has a permanent variance floor -
 	// about a quarter of the sample spread at weight 1/8 - which read as reflections that
@@ -429,7 +562,10 @@ void main()
 	BRANCH
 	if(history_texel.w >= 0.5)
 	{
-		vec3 clamped = clamp(history_texel.xyz, lo.xyz, hi.xyz);
+		vec3 history_denoise = GiReflToDenoiser(history_texel.xyz);
+		vec3 clamped_denoise =
+		    clamp(history_denoise, box_mean - box_extent, box_mean + box_extent);
+		vec3 clamped = GiReflFromDenoiser(clamped_denoise);
 		history_rgb = mix(clamped, history_texel.xyz, still);
 		prev_count = history_texel.w;
 		// CONFIDENCE COLLAPSE: the clamp bounds what a stale
@@ -444,11 +580,9 @@ void main()
 		// noisy pixel; the release (stillness) lifts the collapse in step with the clamp, so
 		// sparse-bright content under a parked camera converges exactly as before - the
 		// mover cap keeps the collapse engaged while anything moves.
-		vec3 t_history = GiReflTonemap(history_texel.xyz);
-		vec3 t_clamped = GiReflTonemap(clamped);
-		vec3 t_extent = max(GiReflTonemap(hi.xyz) - GiReflTonemap(lo.xyz),
-		                    vec3_splat(GI_REFLECTION_CONFIDENCE_EXTENT_FLOOR));
-		float confidence = saturate(1.0 - length((t_history - t_clamped) / t_extent));
+		// Measured directly in the statistics space, so there is no second tonemap here.
+		float confidence =
+		    saturate(1.0 - length((history_denoise - clamped_denoise) / box_extent));
 		confidence = GI_REFLECTION_CONFIDENCE_FLOOR +
 		             (1.0 - GI_REFLECTION_CONFIDENCE_FLOOR) * confidence;
 		prev_count *= mix(confidence, 1.0, still);
