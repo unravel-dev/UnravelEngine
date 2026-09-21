@@ -3204,6 +3204,7 @@ void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
     // read): the compute trace upgrades on-screen world hits to the lit pixel with it.
     grp.prev_color = rview.tex_safe_get("PREV_SCENE_HDR");
     grp.temporal_frames = gi_reflection_settings.resolve.reflection_temporal_frames;
+    grp.finder_resumes = gi_reflection_settings.resolve.reflection_finder_resumes;
     // This frame's velocity buffer, handed to the pass explicitly (a valid texture IS the enable).
     grp.velocity = rview.tex_safe_get("VELOCITY");
     // Mover signal for the temporal's stillness-release cap, held one temporal window past

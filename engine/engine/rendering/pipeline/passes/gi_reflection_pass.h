@@ -60,6 +60,10 @@ public:
         /// Temporal window in frames for the stochastic ray; <= 1 bypasses the accumulation
         /// (raw passthrough) - the A/B knob for verifying the temporal is alive.
         int temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
+        /// Times a far-field ray caught in an object's fattened clipmap shell resumes past it
+        /// before it is shaded as that surface (the GI setting reflection_finder_resumes;
+        /// clamped to [GI_REFLECTION_FINDER_RESUMES_MIN, GI_REFLECTION_FINDER_RESUMES_MAX]).
+        int finder_resumes = gi::GI_REFLECTION_FINDER_RESUMES;
         /// This frame's velocity buffer, passed explicitly by the pipeline. A valid texture
         /// IS the enable; null = legacy matrix reprojection of the receiver.
         gfx::texture::ptr velocity;
@@ -96,6 +100,8 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_gi_reflection_camera;
         gfx::program::uniform_ptr u_gi_reflection_jitter;
+        /// x = far-field finder resumes (run_params::finder_resumes); yzw unused.
+        gfx::program::uniform_ptr u_gi_reflection_trace;
         gfx::program::uniform_ptr u_gi_light_voxel_params;
         gfx::program::uniform_ptr u_sdf_params;
         gfx::program::uniform_ptr u_sdf_grid_params;
@@ -117,6 +123,7 @@ private:
             cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_trace, "u_gi_reflection_trace", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
@@ -200,6 +207,8 @@ private:
         gfx::program::uniform_ptr u_gi_reflection_camera;
         gfx::program::uniform_ptr u_gi_reflection_jitter;
         gfx::program::uniform_ptr u_gi_reflection_texel;
+        /// x = far-field finder resumes (run_params::finder_resumes); yzw unused.
+        gfx::program::uniform_ptr u_gi_reflection_trace;
         gfx::program::uniform_ptr u_gi_light_voxel_params;
         gfx::program::uniform_ptr u_sdf_params;
         gfx::program::uniform_ptr u_sdf_grid_params;
@@ -234,6 +243,7 @@ private:
                           "u_gi_refl_prev_view_proj",
                           gfx::uniform_type::Mat4);
             cache_uniform(program.get(), u_gi_reflection_screen, "u_gi_reflection_screen", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_trace, "u_gi_reflection_trace", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
             cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);

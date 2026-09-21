@@ -20,11 +20,12 @@
  * reuse LAST frame's resolved GI - the temporally filtered, denoised per-pixel gather - and
  * pay no ray (the Lumen recipe: rough specular comes from your own gather, never from a raw
  * world lattice, whose 2 m granularity reads as mottling). Sharper lobes trace the SDF world
- * tier: mesh-exact out to a roughness-adaptive range, clipmap as a far-field FINDER with a
- * short mesh-SDF refine at the hit, light voxels at mesh-snapped hits. An unrefined clipmap
- * hit is not an image on sharp pixels - coverage goes to zero so the authored probe layer
- * shows through. A true miss answers with the authored probe layer itself - the multi-probe
- * blended, parallax-projected sky capture at this pixel - and with the sky SH only where no
+ * tier: mesh-exact out to a roughness-adaptive range, clipmap as a far-field FINDER whose every
+ * find the mesh tier settles (GiReflectionTraceFarField), light voxels at mesh-snapped hits. An
+ * unrefined clipmap hit - geometry no mesh field holds - is not an image on sharp pixels:
+ * coverage goes to zero so the authored probe layer shows through. A true miss answers with
+ * the authored probe layer itself - the multi-probe blended, parallax-projected sky capture at
+ * this pixel - and with the sky SH only where no
  * probe reaches (an L2 SH cannot hold clouds or a sun disk; the probes can).
  *
  * ALBEDO REMODULATION (compute form only, GI_LIGHT_VOXEL_READ_ALBEDO): a measured light-voxel
@@ -227,6 +228,9 @@ SAMPLER2D(s_gi_env_sh, 14);
 uniform vec4 u_gi_reflection_camera;
 /// xy = this frame's R2 low-discrepancy offset for the GGX sample; zw unused.
 uniform vec4 u_gi_reflection_jitter;
+/// x = far-field finder resumes (the GI setting reflection_finder_resumes, default
+/// GI_REFLECTION_FINDER_RESUMES; see GiReflectionTraceFarField); yzw unused.
+uniform vec4 u_gi_reflection_trace;
 
 /// The environment radiance along @p direction: from the list's SH block in the compute
 /// form, from the IRRADIANCE_SH texture in the fragment fallback. Ringing is clamped.
@@ -354,12 +358,11 @@ float GiReflectionMeshRange(float roughness)
 	           GI_SHADOW_DISTANCE);
 }
 
-/// Snap a clipmap hit back onto a mesh SDF in a short window around the fattened t.
-/// The window is sized to the COARSER of the covering pair so a cascade-border hit,
-/// whose isosurface can sit a coarse voxel off the mesh, still contains the surface.
-SdfRayHit GiReflectionRefine(vec3 origin, vec3 direction, SdfRayHit clipmap_hit)
+/// Half-width of the refine window around a clipmap hit at @p hit_position, sized to the
+/// COARSER of the covering pair so a cascade-border hit, whose isosurface can sit a coarse
+/// voxel off the mesh, still contains the surface.
+float GiReflectionRefineWindow(vec3 hit_position)
 {
-	vec3 hit_position = origin + direction * clipmap_hit.t;
 	float field_blend;
 	float voxel;
 	int level = SdfFindClipmapLevel(hit_position, field_blend, voxel);
@@ -377,22 +380,146 @@ SdfRayHit GiReflectionRefine(vec3 origin, vec3 direction, SdfRayHit clipmap_hit)
 			}
 		}
 	}
-	voxel = max(voxel, 0.01);
-	float window = GI_REFLECTION_REFINE_VOXELS * voxel;
-	float t_min = max(clipmap_hit.t - window, 0.0);
-	float t_max = min(clipmap_hit.t + window, GI_SHADOW_DISTANCE);
-	if(t_min >= t_max)
+	return GI_REFLECTION_REFINE_VOXELS * max(voxel, 0.01);
+}
+
+/// Where the ray leaves the outermost clipmap level's addressable box (GI_SHADOW_DISTANCE when
+/// it never does within range): past it the finder sees nothing, whatever is there.
+float GiReflectionClipmapExit(vec3 origin, vec3 direction)
+{
+	float exit_t = GI_SHADOW_DISTANCE;
+	LOOP
+	for(int i = SDF_CLIPMAP_LEVEL_COUNT - 1; i >= 0; --i)
 	{
-		return clipmap_hit;
+		vec4 level = u_sdf_clipmap_levels[i];
+		if(level.w > 0.0)
+		{
+			vec3 inv_dir = 1.0 / max(abs(direction), vec3_splat(1e-8)) * sign(direction + vec3_splat(1e-20));
+			vec3 box_min = level.xyz + vec3_splat(0.5 * level.w);
+			vec3 box_max = level.xyz + vec3_splat((u_sdf_clipmap_resolution - 0.5) * level.w);
+			float t_near;
+			float t_far;
+			if(SdfIntersectBounds(origin, inv_dir, box_min, box_max, GI_SHADOW_DISTANCE, t_near, t_far))
+			{
+				exit_t = t_far;
+			}
+			break;
+		}
 	}
-	SdfRayHit refined = SdfTraceInstances(origin, direction, t_min, t_max, GI_REFLECTION_REFINE_STEPS,
-	                                      GI_REFLECTION_TRACE_SURFACE_BIAS,
-	                                      GI_REFLECTION_TRACE_RELAXATION, true);
-	if(refined.hit)
+	return exit_t;
+}
+
+/// A far-field answer: the hit, and whether the ray ended inside a mesh's fattened clipmap
+/// shell (see GiReflectionTraceFarField) - shaded as the surface it grazes, never as a hole.
+struct GiReflectionFarField
+{
+	SdfRayHit hit;
+	bool shell;
+};
+
+GiReflectionFarField GiReflectionFarFieldMake(SdfRayHit hit, bool shell)
+{
+	GiReflectionFarField result;
+	result.hit = hit;
+	result.shell = shell;
+	return result;
+}
+
+/**
+ * FAR FIELD past the mesh-exact range: the clipmap as a FINDER, every find settled by the mesh tier.
+ *
+ * The clipmap is composed conservatively, so its isosurface is FATTER than the meshes it holds. A
+ * ray passing BESIDE an object within that margin reports a hit on the fat shell - or, grazing it,
+ * burns its step budget there - and the old answers for such hits drew a bright achromatic outline
+ * around every far reflected silhouette: unrefined, the authored probe layer on a mirror; given up,
+ * the receiver's own irradiance (measured 2026-09-21 on the Bistro mirror slab: those two paths
+ * carried 79% of the outline's excess luminance, all of it past the mesh-exact range - far
+ * reflections showed it, close ones did not). So every find is refined in its window, given-up
+ * ones included:
+ *   - a mesh hit there is the answer;
+ *   - a miss with no mesh inside the window (clearance) is geometry only the clipmap holds, and
+ *     keeps the unrefined answer as before;
+ *   - a miss that PASSED a mesh inside the window was the fat shell: the finder resumes past the
+ *     window up to u_gi_reflection_trace.x times (the setting; clamped here too), and a ray still
+ *     in a shell after that is answered as the surface it grazes (shell) - an object-coloured
+ *     fringe, not a white one.
+ * A ray that runs off the outermost level saw nothing past it - blind, not open - so the mesh tier
+ * walks the rest of the range: its clean miss is the sky, its hit the surface the finder could not
+ * see. The refine and that walk share one call site: an inlined grid walk is this shader's largest
+ * body, and fxc's compile time grows superlinearly with their count.
+ */
+GiReflectionFarField GiReflectionTraceFarField(vec3 origin, vec3 direction, float t_start,
+                                               int finder_steps)
+{
+	SdfRayHit found = SdfMakeMiss();
+	float finder_start = t_start;
+	int resumes = int(clamp(u_gi_reflection_trace.x, float(GI_REFLECTION_FINDER_RESUMES_MIN),
+	                         float(GI_REFLECTION_FINDER_RESUMES_MAX)));
+	LOOP
+	for(int attempt = 0; attempt <= resumes; ++attempt)
 	{
-		return refined;
+		// The last flag declines the exhaustion-path normal: a given-up ray is refined, resumed,
+		// answered as a shell with the ray-facing normal, or answered with rough_value.
+		found = SdfTraceClipmap(origin, direction, finder_start, GI_SHADOW_DISTANCE, finder_steps,
+		                        GI_REFLECTION_TRACE_SURFACE_BIAS, GI_REFLECTION_TRACE_RELAXATION, true,
+		                        -1.0, false, false);
+		// The mesh walk: the refine window around a find, or the rest of the range past the
+		// clipmap's outermost level.
+		float mesh_min = finder_start;
+		float mesh_max = GI_SHADOW_DISTANCE;
+		int mesh_steps = GI_TRACE_MAX_STEPS;
+		float window = 0.0;
+		if(found.hit)
+		{
+			window = GiReflectionRefineWindow(origin + direction * found.t);
+			mesh_min = max(found.t - window, t_start);
+			mesh_max = min(found.t + window, GI_SHADOW_DISTANCE);
+			mesh_steps = GI_REFLECTION_REFINE_STEPS;
+		}
+		else
+		{
+			mesh_min = max(GiReflectionClipmapExit(origin, direction), finder_start);
+			if(mesh_min >= GI_SHADOW_DISTANCE)
+			{
+				// Open inside the clipmap all the way to the range: a true miss.
+				return GiReflectionFarFieldMake(found, false);
+			}
+		}
+		SdfRayHit mesh = SdfTraceInstances(origin, direction, mesh_min, mesh_max, mesh_steps,
+		                                   GI_REFLECTION_TRACE_SURFACE_BIAS,
+		                                   GI_REFLECTION_TRACE_RELAXATION, true);
+		if(mesh.hit)
+		{
+			return GiReflectionFarFieldMake(mesh, false);
+		}
+		if(!found.hit)
+		{
+			// Past the clipmap: the mesh walk's clean miss is open sky; if it gave up as well,
+			// the finder's miss stands. (A branch: HLSL has no ?: over structs.)
+			if(mesh.exhausted)
+			{
+				return GiReflectionFarFieldMake(found, false);
+			}
+			return GiReflectionFarFieldMake(mesh, false);
+		}
+		if(!(mesh.clearance < window))
+		{
+			return GiReflectionFarFieldMake(found, false);
+		}
+		if(attempt == resumes)
+		{
+			// Still in a shell: answer as the surface grazed. A given-up march has no normal; the
+			// ray-facing one reads the faces the ray sees.
+			if(found.exhausted)
+			{
+				found.exhausted = false;
+				found.normal = -direction;
+			}
+			return GiReflectionFarFieldMake(found, true);
+		}
+		finder_start = found.t + window;
 	}
-	return clipmap_hit;
+	return GiReflectionFarFieldMake(found, false);
 }
 
 /// The whole reflection answer for one texel of the trace target: rgb = incoming radiance
@@ -470,14 +597,16 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	float lift = max(0.0, -field) + GI_PROBE_TRACE_SURFACE_BIAS * voxel;
 	vec3 origin = world_position + normal * lift;
 	// Adaptive mesh-exact range, then clipmap as a FINDER (expand never: image vs estimate,
-	// round 3). A clipmap hit is refined in a short instance-grid window so distant
-	// silhouettes snap back to the mesh; an unrefined clipmap hit is not drawn on sharp
-	// pixels (coverage 0, authored probes show through). Acceptance is contact-only -
+	// round 3) whose every find the mesh tier settles - see GiReflectionTraceFarField; an
+	// unrefined clipmap hit is not drawn on sharp pixels (coverage 0, authored probes show
+	// through). Acceptance is contact-only -
 	// the gather cone is what fattened the 16 m handover into boxes.
 	float mesh_range = GiReflectionMeshRange(roughness);
 	SdfRayHit hit = SdfTraceInstances(origin, reflected, 0.0, mesh_range, GI_TRACE_MAX_STEPS,
 	                                  GI_REFLECTION_TRACE_SURFACE_BIAS,
 	                                  GI_REFLECTION_TRACE_RELAXATION, true);
+	// A far-field ray that ended inside a mesh's fattened clipmap shell (GiReflectionFarField).
+	bool shell = false;
 	if(!hit.hit)
 	{
 		// Roughness-adaptive step budget, mirroring the range: a gloss-band ray is spread by
@@ -486,16 +615,10 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		// toward rough_value by design. The sharp band keeps the full budget.
 		int finder_steps = int(mix(float(GI_TRACE_MAX_STEPS), 24.0,
 		                           saturate(roughness / max(GI_REFLECTION_GATHER_FADE_START, 1e-4))));
-		// The last flag declines the exhaustion-path normal: an exhausted reflection ray
-		// answers with rough_value and never reads hit.normal, so the four-sample tetrahedral
-		// gradient the trace would compute for it is provably dead here.
-		hit = SdfTraceClipmap(origin, reflected, mesh_range, GI_SHADOW_DISTANCE, finder_steps,
-		                      GI_REFLECTION_TRACE_SURFACE_BIAS, GI_REFLECTION_TRACE_RELAXATION, true,
-		                      -1.0, false, false);
-		if(hit.hit && !hit.exhausted)
-		{
-			hit = GiReflectionRefine(origin, reflected, hit);
-		}
+		GiReflectionFarField far_field =
+		    GiReflectionTraceFarField(origin, reflected, mesh_range, finder_steps);
+		hit = far_field.hit;
+		shell = far_field.shell;
 	}
 	vec3 radiance;
 	float coverage = 1.0;
@@ -509,14 +632,24 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		}
 		// Shape classification FIRST, so the light-voxel read below can be skipped on the
 		// sharpest pixels, whose result it fully replaces with the probe layer anyway.
-		bool clipmap_shape = hit.instance_index == SDF_NO_INSTANCE && !hit.exhausted;
+		// GAVE UP = a clipmap march that stopped on its step budget and reports a position the
+		// ray never reached. A mesh-tier hit can carry the exhausted flag too - it is set whenever
+		// ANY instance march along the ray ran out of steps in its cell segment, the 16-step
+		// refine walk included - but its hit is a real accepted surface; serving it the stand-in
+		// painted the receiver's own irradiance onto refined far hits (measured 2026-09-21: most
+		// exhausted outline pixels on the Bistro mirror slab carried an instance).
+		bool gave_up = hit.exhausted && hit.instance_index == SDF_NO_INSTANCE;
+		bool clipmap_shape = hit.instance_index == SDF_NO_INSTANCE && !gave_up;
 		float shape_ok = 1.0;
 		if(clipmap_shape)
 		{
 			// Unrefined clipmap isosurface: legitimate lighting for satin, a wrong silhouette
-			// on a mirror. Fade coverage out so the probe layer replaces the blob.
-			shape_ok = smoothstep(GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF * 0.5,
-			                      GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF, roughness);
+			// on a mirror. Fade coverage out so the probe layer replaces the blob - except in a
+			// grazed mesh's shell, where the probe layer drew the white outline: that answer is
+			// the surface itself, a fringe in its own colour.
+			shape_ok = shell ? 1.0
+			                 : smoothstep(GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF * 0.5,
+			                              GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF, roughness);
 			coverage = shape_ok;
 		}
 		// A gave-up march ("hits" mid-air when a grazing far ray exhausts its budget) or
@@ -536,7 +669,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		// metal blend and the tint of the stand-in below. Emission is already scaled by its
 		// intensity; the albedo is the base-colour factor times the texture mean the args
 		// pass staged; metalness rides lane 9's w (surface_cache_system packs it).
-		bool hit_has_material = hit.instance_index != SDF_NO_INSTANCE && !hit.exhausted;
+		bool hit_has_material = hit.instance_index != SDF_NO_INSTANCE;
 		vec3 hit_albedo = vec3_splat(0.0);
 		vec3 hit_emissive = vec3_splat(0.0);
 		float hit_metalness = 0.0;
@@ -563,7 +696,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		// The on-screen hit upgrade first (GiReflectionScreenColorAtHit): a hit the depth
 		// buffer shows is the exact lit pixel; the voxel walk answers only what it rejects.
 		BRANCH
-		if(!hit.exhausted && shape_ok > 0.0 && u_gi_reflection_screen.x > 1.5)
+		if(!gave_up && shape_ok > 0.0 && u_gi_reflection_screen.x > 1.5)
 		{
 			vec3 screen_radiance;
 			screen_lit = GiReflectionScreenColorAtHit(hit_position, hit_normal, frag_coord, screen_radiance);
@@ -575,7 +708,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		}
 #endif // GI_REFLECTION_SCREEN_COLOR
 		BRANCH
-		if(!screen_lit && !hit.exhausted && shape_ok > 0.0)
+		if(!screen_lit && !gave_up && shape_ok > 0.0)
 		{
 			vec3 measured;
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)

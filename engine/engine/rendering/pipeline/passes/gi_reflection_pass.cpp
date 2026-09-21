@@ -184,6 +184,10 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                                  float(surface_cache.get_instances().size()),
                                  float(surface_cache.get_emitters().size())};
     const float light_voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 1.0f};
+    const float trace_params[4] = {
+        float(std::clamp(params.finder_resumes,
+                         int(gi::GI_REFLECTION_FINDER_RESUMES_MIN),
+                         int(gi::GI_REFLECTION_FINDER_RESUMES_MAX))), 0.0f, 0.0f, 0.0f};
     const float refl_texel[4] = {1.0f / float(trace_size.width),
                                  1.0f / float(trace_size.height),
                                  float(trace_size.width),
@@ -334,6 +338,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             gfx::set_uniform(trace_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
             gfx::set_uniform(trace_program_.u_gi_reflection_camera, reflection_camera);
             gfx::set_uniform(trace_program_.u_gi_reflection_jitter, jitter);
+            gfx::set_uniform(trace_program_.u_gi_reflection_trace, trace_params);
             gfx::set_uniform(trace_program_.u_gi_reflection_texel, refl_texel);
             gfx::set_uniform(trace_program_.u_sdf_params, sdf_params);
             gfx::set_uniform(trace_program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
@@ -368,6 +373,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         gfx::set_uniform(program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
         gfx::set_uniform(program_.u_gi_reflection_camera, reflection_camera);
         gfx::set_uniform(program_.u_gi_reflection_jitter, jitter);
+        gfx::set_uniform(program_.u_gi_reflection_trace, trace_params);
         gfx::set_uniform(program_.u_sdf_params, sdf_params);
         gfx::set_uniform(program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
         gfx::set_uniform(program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());

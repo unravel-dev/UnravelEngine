@@ -627,6 +627,24 @@
       "steps", "derived: the refine window is a few metres (2 x coarsest-in-range voxel);"        \
       " 16 sphere-trace steps cover it with margin and leave the 64-step budget on the"           \
       " long clipmap finder")                                                                     \
+    X(GI_REFLECTION_FINDER_RESUMES, 1,                                                             \
+      "resumes", "measured: the DEFAULT of the GI setting reflection_finder_resumes. A far ray"   \
+      " passing BESIDE an object hits the clipmap's fattened shell; when the refine window's"     \
+      " mesh walk passes a mesh inside the window the finder resumes past it this many times,"    \
+      " then answers as the surface grazed. Bistro mirror slab, 2026-09-21, same-session"         \
+      " --novsync A/B: 1 cost +0.11 ms on a 0.76 ms half-res trace and cut the false outline's"   \
+      " excess 84%; 3 cost +0.32 ms for 90% (a wave waits on its slowest grazing lane, so every"  \
+      " resume is paid wave-wide)")                                                                \
+    X(GI_REFLECTION_FINDER_RESUMES_MIN, 1,                                                         \
+      "resumes", "measured: the setting's lower bound. At 0 a ray whose march gave up grazing a"  \
+      " facade is shaded as a shell right at its stopping point, which is not on a surface: black" \
+      " and white banded streaks down the Bistro far street, worse than before the fix"           \
+      " (2026-09-21). One resume carries those rays off the facade first")                         \
+    X(GI_REFLECTION_FINDER_RESUMES_MAX, 4,                                                         \
+      "resumes", "measured: the setting's upper bound, clamped on the CPU and in the kernel."     \
+      " From 1 to 3 resumes the false-outline excess fell only 84% -> 90% for three times the"    \
+      " cost; the rays still in a shell by then are long facade grazes, so more buys little and"  \
+      " the bound keeps a stray value from turning the trace into a crawl")                        \
     X(GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF, 0.15f,                                                   \
       "GGX roughness", "derived: below this the lobe is tight enough that a clipmap voxel"        \
       " (25 cm at the 16 m handover) is a visible wrong silhouette. Unrefined clipmap hits"       \

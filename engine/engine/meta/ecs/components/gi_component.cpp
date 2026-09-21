@@ -1,5 +1,7 @@
 #include "gi_component.hpp"
 
+#include <engine/rendering/gi/gi_constants.h>
+
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 
@@ -137,6 +139,19 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"tooltip",
                             "World-space specular tier under SSR: rough lobes from the world "
                             "probes, sharp ones traced - off-screen reflections SSR cannot see."},
+        })
+        .data<&settings::reflection_finder_resumes>("reflection_finder_resumes"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reflection_finder_resumes"},
+            entt::attribute{"pretty_name", "Reflection Finder Resumes"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"min", float(gi::GI_REFLECTION_FINDER_RESUMES_MIN)},
+            entt::attribute{"max", float(gi::GI_REFLECTION_FINDER_RESUMES_MAX)},
+            entt::attribute{"tooltip",
+                            "Far reflection rays caught by an object's coarse distance-field "
+                            "margin resume past it this many times before being shaded as that "
+                            "object. More removes more of the thin outline along far grazing "
+                            "surfaces, at a trace cost."},
         })
 
         .data<&settings::enable_temporal>("enable_temporal"_hs)
@@ -433,6 +448,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("world_probe_jitter", obj.world_probe_jitter));
     try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
+    try_save(ar, ser20::make_nvp("reflection_finder_resumes", obj.reflection_finder_resumes));
     try_save(ar, ser20::make_nvp("denoise_converged_early_out", obj.denoise_converged_early_out));
     try_save(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
     try_save(ar, ser20::make_nvp("temporal_slow_frames", obj.temporal_slow_frames));
@@ -464,6 +480,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("world_probe_jitter", obj.world_probe_jitter));
     try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
+    try_load(ar, ser20::make_nvp("reflection_finder_resumes", obj.reflection_finder_resumes));
     try_load(ar, ser20::make_nvp("denoise_converged_early_out", obj.denoise_converged_early_out));
     try_load(ar, ser20::make_nvp("enable_temporal", obj.enable_temporal));
     try_load(ar, ser20::make_nvp("temporal_slow_frames", obj.temporal_slow_frames));

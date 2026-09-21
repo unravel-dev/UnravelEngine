@@ -97,6 +97,12 @@ public:
         /// weight is one over this. 0 or 1 disables the reflection temporal entirely, the
         /// A/B knob for verifying the accumulation is alive.
         int reflection_temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
+        /// Far-field reflection rays that the clipmap finder sent into an object's fattened
+        /// shell resume past it this many times before they are shaded as the surface they
+        /// graze (gi_reflection_kernel.sh, GiReflectionTraceFarField). More cleans more of the
+        /// thin outline left along far grazing facades, at wave-wide cost. Clamped to
+        /// [GI_REFLECTION_FINDER_RESUMES_MIN, GI_REFLECTION_FINDER_RESUMES_MAX].
+        int reflection_finder_resumes = gi::GI_REFLECTION_FINDER_RESUMES;
         // A screen-space contact AO stage was tried in this pass and REMOVED: it duplicated
         // ASSAO's role at best. The under-overhang darkness it chased is a RADIANCE property
         // - the bounce term's cavity occlusion (GiBounceCavityVisibility in

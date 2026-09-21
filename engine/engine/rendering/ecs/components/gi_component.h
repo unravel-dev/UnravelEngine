@@ -60,6 +60,7 @@ public:
         r.enable_reflections = dominant ? f.enable_reflections : r.enable_reflections;
         r.reflection_temporal_frames =
             dominant ? f.reflection_temporal_frames : r.reflection_temporal_frames;
+        r.reflection_finder_resumes = dominant ? f.reflection_finder_resumes : r.reflection_finder_resumes;
         r.denoise_converged_early_out =
             dominant ? f.denoise_converged_early_out : r.denoise_converged_early_out;
         r.enable_temporal = dominant ? f.enable_temporal : r.enable_temporal;
