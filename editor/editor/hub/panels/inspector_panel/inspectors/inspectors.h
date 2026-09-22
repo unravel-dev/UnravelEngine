@@ -391,6 +391,10 @@ auto inspect_array(rtti::context& ctx,
                        const var_info& info = {},
                        const entt::meta_custom& custom = {}) -> inspect_result;
 
+/// Custom attribute of an associative container: a std::vector<entt::meta_any> of keys a new entry
+/// may take, tried in order. For a key type that cannot list its own values, like a C# enum.
+inline constexpr const char* ASSOCIATIVE_KEY_CANDIDATES_ATTRIBUTE = "key_candidates";
+
 /**
  * @brief Inspects associative containers like maps and sets
  * @param ctx Runtime type information context

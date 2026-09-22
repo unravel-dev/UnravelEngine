@@ -713,8 +713,10 @@ struct mono_inspector
                     else
                     {
                         auto mono_value = dotnet_converter<T>::to_managed(value.cast<T>());
+                        // Boxing makes a new object: hand that one on, the pinned one still holds the old value.
                         mono_obj.box_value(mono_value, type);
-                        obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, pinned_ptr};
+                        auto new_pinned = dotnet::make_object_pinned(mono_obj);
+                        obj_var = entt::meta_any{std::in_place_type<dotnet::object_pinned_ptr>, new_pinned};
                         return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
 
                     }
@@ -1606,6 +1608,34 @@ struct mono_inspector<asset_handle<T>>
     }
 };
 
+/// The text of the member's Tooltip attribute, empty when it has none.
+template<typename Invoker>
+auto get_member_tooltip(const Invoker& member) -> std::string
+{
+    auto tooltip_attrib = find_attribute("TooltipAttribute", member.get_attributes());
+    if(!tooltip_attrib.valid())
+    {
+        return {};
+    }
+    auto invoker = dotnet::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
+    return invoker.get_value(tooltip_attrib);
+}
+
+/// The attributes a script member hands to the inspector of its value: its name and tooltip.
+template<typename Invoker>
+auto make_member_attributes(const Invoker& member) -> entt::attributes
+{
+    entt::attributes attributes;
+    attributes["name"] = member.get_name();
+    attributes["pretty_name"] = member.get_name();
+    auto tooltip = get_member_tooltip(member);
+    if(!tooltip.empty())
+    {
+        attributes["tooltip"] = tooltip;
+    }
+    return attributes;
+}
+
 /**
  * @brief Inspector for collections (arrays and List<T>) with add/remove support
  */
@@ -1756,20 +1786,8 @@ struct mono_inspector_collection
         };
 
 
-        auto attribs = mutable_field.get_attributes();
-        auto tooltip_attrib = find_attribute("TooltipAttribute", attribs);
-
-        entt::attributes meta_attribs;
-        meta_attribs["name"] = mutable_field.get_name();
-        meta_attribs["pretty_name"] = mutable_field.get_name();
+        auto meta_attribs = make_member_attributes(mutable_field);
         meta_attribs["is_fixed_size_array"] = is_array;
-        std::string tooltip;
-        if(tooltip_attrib.valid())
-        {
-            auto invoker = dotnet::make_field_invoker<std::string>(tooltip_attrib.get_type(), "tooltip");
-            tooltip = invoker.get_value(tooltip_attrib);
-            meta_attribs["tooltip"] = tooltip;
-        }
         auto custom = entt::make_custom<entt::attributes>(meta_attribs);
         {
             ImGui::PushID(mutable_field.get_name().c_str());
@@ -1832,6 +1850,337 @@ struct mono_inspector_collection
         field_info.read_only = ImGui::IsReadonly() || info.read_only || property.is_readonly();
         
         return inspect_collection(ctx, obj, obj_proxy, invoker, prop_type, field_info);
+    }
+};
+
+/// Calls the visitor with a value of the C++ type that matches the underlying type of the enum.
+template<typename Visitor>
+auto visit_enum_underlying_type(const dotnet::type& enum_type, Visitor&& visitor)
+{
+    const auto underlying_name = enum_type.get_enum_base_type().get_name();
+    if(underlying_name == "SByte")
+    {
+        return visitor(std::int8_t{});
+    }
+    if(underlying_name == "Byte")
+    {
+        return visitor(std::uint8_t{});
+    }
+    if(underlying_name == "Int16")
+    {
+        return visitor(std::int16_t{});
+    }
+    if(underlying_name == "UInt16")
+    {
+        return visitor(std::uint16_t{});
+    }
+    if(underlying_name == "UInt32")
+    {
+        return visitor(std::uint32_t{});
+    }
+    if(underlying_name == "Int64")
+    {
+        return visitor(std::int64_t{});
+    }
+    if(underlying_name == "UInt64")
+    {
+        return visitor(std::uint64_t{});
+    }
+    return visitor(std::int32_t{});
+}
+
+/// Turns the keys of a C# dictionary into the keys of its editor copy, and back.
+template<typename Key>
+struct mono_dictionary_key
+{
+    static auto to_native(const dotnet::object& key) -> Key
+    {
+        return dotnet::unbox_value<Key>(key);
+    }
+
+    static auto to_managed(const Key& key, const dotnet::type& key_type) -> dotnet::object
+    {
+        return dotnet::box_value(key, key_type);
+    }
+};
+
+template<>
+struct mono_dictionary_key<std::string>
+{
+    static auto to_native(const dotnet::object& key) -> std::string
+    {
+        return dotnet_converter<std::string>::from_managed(dotnet::get_managed_ptr(key));
+    }
+
+    static auto to_managed(const std::string& key, const dotnet::type& key_type) -> dotnet::object
+    {
+        return dotnet::object(dotnet_converter<std::string>::to_managed(key));
+    }
+};
+
+template<>
+struct mono_dictionary_key<mono_enum_key>
+{
+    static auto to_native(const dotnet::object& key) -> mono_enum_key
+    {
+        const auto read_value = [&](auto underlying)
+        {
+            using underlying_type = decltype(underlying);
+            return static_cast<std::int64_t>(dotnet::unbox_value<underlying_type>(key));
+        };
+        return {visit_enum_underlying_type(key.get_type(), read_value), key.get_type()};
+    }
+
+    static auto to_managed(const mono_enum_key& key, const dotnet::type& key_type) -> dotnet::object
+    {
+        const auto box_value = [&](auto underlying)
+        {
+            using underlying_type = decltype(underlying);
+            return dotnet::box_value(static_cast<underlying_type>(key.value), key_type);
+        };
+        return visit_enum_underlying_type(key_type, box_value);
+    }
+};
+
+/// The keys a new entry of a dictionary with enum keys may take: the values the enum names.
+auto make_enum_key_candidates(const dotnet::type& enum_type) -> std::vector<entt::meta_any>
+{
+    std::vector<entt::meta_any> candidates;
+    for(const auto& [value, name] : enum_type.get_enum_values<std::int64_t>())
+    {
+        candidates.emplace_back(mono_enum_key{value, enum_type});
+    }
+    return candidates;
+}
+
+/// The value of an entry just added. A type without a parameterless constructor cannot make one,
+/// so its entry starts out null.
+auto make_new_dictionary_value(const dotnet::type& value_type) -> dotnet::object
+{
+    try
+    {
+        return value_type.new_instance();
+    }
+    catch(const dotnet::exception&)
+    {
+        return {};
+    }
+}
+
+/**
+ * @brief Inspector for C# dictionaries. The map inspector shows an editor copy of the dictionary,
+ * a std::map with the keys as C++ values and the values as objects; an edit writes the copy back.
+ */
+template<typename Key>
+struct mono_inspector_dictionary
+{
+    using editor_map = std::map<Key, dotnet::object_pinned_ptr>;
+
+    static auto to_editor_map(const dotnet::dictionary& dictionary) -> editor_map
+    {
+        editor_map map;
+        for(const auto& entry : dictionary.to_vector())
+        {
+            map.emplace(mono_dictionary_key<Key>::to_native(entry.first), dotnet::make_object_pinned(entry.second));
+        }
+        return map;
+    }
+
+    /// Writes the editor copy into the dictionary the member holds, or into a new one when it
+    /// holds none.
+    template<typename Invoker>
+    static void write_editor_map(const editor_map& map, dotnet::object& obj, const Invoker& member)
+    {
+        auto dictionary_obj = member.get_value(obj);
+        const bool is_new = !dictionary_obj.valid();
+        auto dictionary = is_new ? dotnet::dictionary::create(member.get_type()) : dotnet::dictionary(dictionary_obj);
+        const auto key_type = dictionary.get_key_type();
+        const auto value_type = dictionary.get_value_type();
+        std::vector<dotnet::dictionary::entry> entries;
+        entries.reserve(map.size());
+        for(const auto& [key, value] : map)
+        {
+            // An entry the map inspector just added has no value object yet.
+            auto value_obj = value ? value->get_object() : make_new_dictionary_value(value_type);
+            entries.emplace_back(mono_dictionary_key<Key>::to_managed(key, key_type), std::move(value_obj));
+        }
+        dictionary.assign(entries);
+        if(is_new)
+        {
+            member.set_value(obj, dictionary);
+        }
+    }
+
+    template<typename Invoker>
+    static auto make_dictionary_proxy(const meta_any_proxy& obj_proxy, const Invoker& member) -> meta_any_proxy
+    {
+        meta_any_proxy dictionary_proxy;
+        dictionary_proxy.impl->parent = obj_proxy.impl;
+        dictionary_proxy.impl->type_name = member.get_type().get_fullname();
+        const auto& parent_name = obj_proxy.impl->name;
+        dictionary_proxy.impl->name =
+            parent_name.empty() ? member.get_name() : fmt::format("{}/{}", parent_name, member.get_name());
+        dictionary_proxy.impl->getter = [obj_proxy, member](entt::meta_any& result) mutable
+        {
+            entt::meta_any obj_var;
+            if(!obj_proxy.impl->getter(obj_var) || !obj_var)
+            {
+                return false;
+            }
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
+            auto dictionary_obj = member.get_value(pinned_ptr->get_object());
+            if(!dictionary_obj.valid())
+            {
+                return false;
+            }
+            result = to_editor_map(dotnet::dictionary(dictionary_obj));
+            return true;
+        };
+        dictionary_proxy.impl->setter =
+            [parent_proxy = obj_proxy, member](meta_any_proxy& proxy, const entt::meta_any& value, uint64_t execution_count) mutable
+        {
+            const auto* map = value.try_cast<editor_map>();
+            entt::meta_any obj_var;
+            if(map == nullptr || !parent_proxy.impl->getter(obj_var) || !obj_var)
+            {
+                return false;
+            }
+            auto pinned_ptr = obj_var.cast<dotnet::object_pinned_ptr>();
+            if(!pinned_ptr)
+            {
+                return false;
+            }
+            auto mono_obj = pinned_ptr->get_object();
+            write_editor_map(*map, mono_obj, member);
+            return parent_proxy.impl->setter(parent_proxy, obj_var, execution_count);
+        };
+        return dictionary_proxy;
+    }
+
+    template<typename Invoker>
+    static auto inspect(rtti::context& ctx,
+                        dotnet::object& obj,
+                        const meta_any_proxy& obj_proxy,
+                        const Invoker& member,
+                        const var_info& info) -> inspect_result
+    {
+        auto dictionary_obj = member.get_value(obj);
+        if(!dictionary_obj.valid())
+        {
+            return {};
+        }
+        dotnet::dictionary dictionary(dictionary_obj);
+        auto attributes = make_member_attributes(member);
+        if constexpr(std::is_same_v<Key, mono_enum_key>)
+        {
+            attributes[ASSOCIATIVE_KEY_CANDIDATES_ATTRIBUTE] = make_enum_key_candidates(dictionary.get_key_type());
+        }
+        auto custom = entt::make_custom<entt::attributes>(attributes);
+        auto map = to_editor_map(dictionary);
+        entt::meta_any map_var = entt::forward_as_meta(map);
+
+        inspect_result result{};
+        ImGui::PushID(member.get_name().c_str());
+        // A null value takes its type from here.
+        push_mono_type(dictionary.get_value_type());
+        result |= unravel::inspect_var(ctx, map_var, make_dictionary_proxy(obj_proxy, member), info, custom);
+        pop_mono_type();
+        ImGui::PopID();
+        return result;
+    }
+};
+
+/**
+ * @brief Inspector for C# dictionaries of any key type: picks the editor copy that fits the key
+ * type. A dictionary whose keys have no C++ counterpart only shows how many entries it has.
+ */
+struct mono_inspector_dictionary_member
+{
+    static auto inspect_field(rtti::context& ctx,
+                              dotnet::object& obj,
+                              const meta_any_proxy& obj_proxy,
+                              dotnet::field& field,
+                              const var_info& info) -> inspect_result
+    {
+        var_info field_info;
+        field_info.is_property = true;
+        field_info.read_only = ImGui::IsReadonly() || info.read_only || field.is_readonly() || field.is_const();
+        return inspect(ctx, obj, obj_proxy, dotnet::make_field_invoker<dotnet::object>(field), field_info);
+    }
+
+    static auto inspect_property(rtti::context& ctx,
+                                 dotnet::object& obj,
+                                 const meta_any_proxy& obj_proxy,
+                                 dotnet::property& property,
+                                 const var_info& info) -> inspect_result
+    {
+        var_info property_info;
+        property_info.is_property = true;
+        property_info.read_only = ImGui::IsReadonly() || info.read_only || property.is_readonly();
+        return inspect(ctx, obj, obj_proxy, dotnet::make_property_invoker<dotnet::object>(property), property_info);
+    }
+
+private:
+    template<typename Invoker>
+    static auto inspect(rtti::context& ctx,
+                        dotnet::object& obj,
+                        const meta_any_proxy& obj_proxy,
+                        const Invoker& member,
+                        const var_info& info) -> inspect_result
+    {
+        using inspect_function =
+            inspect_result (*)(rtti::context&, dotnet::object&, const meta_any_proxy&, const Invoker&, const var_info&);
+
+        // clang-format off
+        static const std::map<std::string, inspect_function> reg = {
+            {"SByte",   &mono_inspector_dictionary<std::int8_t>::template inspect<Invoker>},
+            {"Byte",    &mono_inspector_dictionary<std::uint8_t>::template inspect<Invoker>},
+            {"Int16",   &mono_inspector_dictionary<std::int16_t>::template inspect<Invoker>},
+            {"UInt16",  &mono_inspector_dictionary<std::uint16_t>::template inspect<Invoker>},
+            {"Int32",   &mono_inspector_dictionary<std::int32_t>::template inspect<Invoker>},
+            {"UInt32",  &mono_inspector_dictionary<std::uint32_t>::template inspect<Invoker>},
+            {"Int64",   &mono_inspector_dictionary<std::int64_t>::template inspect<Invoker>},
+            {"UInt64",  &mono_inspector_dictionary<std::uint64_t>::template inspect<Invoker>},
+            {"Boolean", &mono_inspector_dictionary<bool>::template inspect<Invoker>},
+            {"Single",  &mono_inspector_dictionary<float>::template inspect<Invoker>},
+            {"Double",  &mono_inspector_dictionary<double>::template inspect<Invoker>},
+            {"String",  &mono_inspector_dictionary<std::string>::template inspect<Invoker>},
+        };
+        // clang-format on
+
+        const auto arguments = member.get_type().get_generic_arguments();
+        const dotnet::type key_type = arguments.empty() ? dotnet::type{} : arguments.front();
+        if(key_type.is_enum())
+        {
+            return mono_inspector_dictionary<mono_enum_key>::inspect(ctx, obj, obj_proxy, member, info);
+        }
+        auto it = reg.find(key_type.get_name());
+        if(it != reg.end())
+        {
+            return it->second(ctx, obj, obj_proxy, member, info);
+        }
+        return inspect_unsupported(obj, member, key_type);
+    }
+
+    template<typename Invoker>
+    static auto inspect_unsupported(dotnet::object& obj, const Invoker& member, const dotnet::type& key_type)
+        -> inspect_result
+    {
+        auto dictionary_obj = member.get_value(obj);
+        if(!dictionary_obj.valid())
+        {
+            return {};
+        }
+        property_layout layout(member.get_name(), get_member_tooltip(member));
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%zu entries - %s keys are not supported",
+                            dotnet::dictionary(dictionary_obj).size(),
+                            key_type.get_name().c_str());
+        return {};
     }
 };
 
@@ -2156,6 +2505,11 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                     auto mono_obj = pinned_ptr->get_object();
                     result |= mono_inspector_collection::inspect_field(ctx, mono_obj, obj_proxy, field, info);
                 }
+                else if(field_type.is_dictionary())
+                {
+                    auto mono_obj = pinned_ptr->get_object();
+                    result |= mono_inspector_dictionary_member::inspect_field(ctx, mono_obj, obj_proxy, field, info);
+                }
                 else if(field_type.is_serializable())
                 {
                     // Recursively inspect serializable nested objects
@@ -2366,6 +2720,11 @@ auto inspector_mono_object::inspect(rtti::context& ctx,
                     auto mono_obj = pinned_ptr->get_object();
                     result |= mono_inspector_collection::inspect_property(ctx, mono_obj, obj_proxy, prop, info);
                 }
+                else if(prop_type.is_dictionary())
+                {
+                    auto mono_obj = pinned_ptr->get_object();
+                    result |= mono_inspector_dictionary_member::inspect_property(ctx, mono_obj, obj_proxy, prop, info);
+                }
                 else if(prop_type.is_serializable())
                 {
                     // Recursively inspect serializable nested objects
@@ -2534,7 +2893,51 @@ auto inspect_serializable_object(rtti::context& ctx,
         ImGui::PopStyleVar();
         ImGui::TreePop();
     }
-    
+
+    return result;
+}
+
+auto inspector_mono_enum_key::inspect(rtti::context& ctx,
+                                      entt::meta_any& var,
+                                      const meta_any_proxy& var_proxy,
+                                      const var_info& info,
+                                      const entt::meta_custom& custom) -> inspect_result
+{
+    auto& key = var.cast<mono_enum_key&>();
+    const auto names = key.type.get_enum_values<std::int64_t>();
+    const auto current = std::find_if(names.begin(),
+                                      names.end(),
+                                      [&](const auto& name)
+                                      {
+                                          return name.first == key.value;
+                                      });
+    const std::string preview = current != names.end() ? current->second : std::to_string(key.value);
+
+    inspect_result result{};
+    if(info.read_only)
+    {
+        ImGui::LabelText("##enum_key", "%s", preview.c_str());
+        return result;
+    }
+    if(ImGui::BeginCombo("##enum_key", preview.c_str()))
+    {
+        for(const auto& [value, name] : names)
+        {
+            const bool is_selected = value == key.value;
+            if(ImGui::Selectable(name.c_str(), is_selected))
+            {
+                key.value = value;
+                result.changed = true;
+                result.edit_finished = true;
+            }
+            if(is_selected)
+            {
+                ImGui::SetItemDefaultFocus();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::DrawItemActivityOutline();
     return result;
 }
 

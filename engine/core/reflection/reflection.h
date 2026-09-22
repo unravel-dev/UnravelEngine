@@ -10,6 +10,7 @@
 #include <vector>
 #include <functional>
 #include <map>
+#include <memory>
 
 using namespace entt::literals;
 
@@ -93,10 +94,32 @@ auto property_predicate(property_predicate_t<T> predicate)
 
 }
     
-template<typename Value, typename... Args>
-auto make_custom(Args &&...args) -> entt::meta_custom
+/// A meta_custom with a node of its own. A meta_custom only points at its node, so the node of one
+/// made on the fly has to live as long as the meta_custom; copies share it.
+class owned_meta_custom
 {
-    return {entt::internal::meta_custom_node{type_id<Value>().hash(), std::make_shared<Value>(std::forward<Args>(args)...)}};
+public:
+    explicit owned_meta_custom(internal::meta_custom_node node)
+        : node_(std::make_shared<internal::meta_custom_node>(std::move(node)))
+        , custom_(*node_)
+    {
+    }
+
+    operator const meta_custom&() const noexcept
+    {
+        return custom_;
+    }
+
+private:
+    std::shared_ptr<internal::meta_custom_node> node_;
+    meta_custom custom_;
+};
+
+template<typename Value, typename... Args>
+auto make_custom(Args &&...args) -> owned_meta_custom
+{
+    return owned_meta_custom{
+        internal::meta_custom_node{type_id<Value>().hash(), std::make_shared<Value>(std::forward<Args>(args)...)}};
 }
 
 

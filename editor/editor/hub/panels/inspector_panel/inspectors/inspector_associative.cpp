@@ -10,9 +10,11 @@
 #include "imgui/imgui_internal.h"
 #include "reflection/reflection.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // The inspector of associative containers: maps, and sets, which have keys only. A key cannot
 // change in place: a new key moves the entry (it is erased and inserted under the new key), and
@@ -83,16 +85,39 @@ auto is_free_key(entt::meta_associative_container& view, const entt::meta_any& k
     return view.find(key) == view.end();
 }
 
+/// The first free key of those the container names, if it names any.
+auto find_free_candidate_key(entt::meta_associative_container& view, const entt::meta_custom& custom) -> entt::meta_any
+{
+    const auto* candidates =
+        entt::get_attribute(custom, ASSOCIATIVE_KEY_CANDIDATES_ATTRIBUTE).try_cast<std::vector<entt::meta_any>>();
+    if(candidates == nullptr)
+    {
+        return {};
+    }
+    const auto it = std::find_if(candidates->begin(),
+                                 candidates->end(),
+                                 [&](const entt::meta_any& candidate)
+                                 {
+                                     return is_free_key(view, candidate);
+                                 });
+    return it != candidates->end() ? *it : entt::meta_any{};
+}
+
 //-----------------------------------------------------------------------------
 /// <summary>
-/// A key no entry has yet, for a new entry: the default key when it is free, or else the first
-/// free number for a numeric key, the first free "Key N" for a text key, the first free value of
-/// an enum key.
+/// A key no entry has yet, for a new entry. When the container names the keys it may take, the
+/// first free one of them. Otherwise the default key when it is free, or else the first free
+/// number for a numeric key, the first free "Key N" for a text key, the first free value of an
+/// enum key.
 /// </summary>
 /// <returns>The key, empty when none is found</returns>
 //-----------------------------------------------------------------------------
-auto make_free_key(entt::meta_associative_container& view) -> entt::meta_any
+auto make_free_key(entt::meta_associative_container& view, const entt::meta_custom& custom) -> entt::meta_any
 {
+    if(entt::get_attribute(custom, ASSOCIATIVE_KEY_CANDIDATES_ATTRIBUTE))
+    {
+        return find_free_candidate_key(view, custom);
+    }
     const entt::meta_type key_type = view.key_type();
     entt::meta_any key = key_type.construct();
     if(!key || is_free_key(view, key))
@@ -172,13 +197,16 @@ auto rename_map_key(entt::meta_associative_container& view,
     return view.insert(converted_key, value);
 }
 
-auto apply_map_edit(entt::meta_associative_container& view, const map_state& state, const map_edit& edit) -> bool
+auto apply_map_edit(entt::meta_associative_container& view,
+                    const map_state& state,
+                    const map_edit& edit,
+                    const entt::meta_custom& custom) -> bool
 {
     switch(edit.type)
     {
         case map_edit::kind::add:
         {
-            const entt::meta_any key = make_free_key(view);
+            const entt::meta_any key = make_free_key(view, custom);
             if(!key)
             {
                 return false;
@@ -454,7 +482,7 @@ auto inspect_associative_container(rtti::context& ctx,
             }
         }
 
-        if(apply_map_edit(view, state, edit))
+        if(apply_map_edit(view, state, edit, custom))
         {
             result.changed = true;
             result.edit_finished = true;

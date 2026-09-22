@@ -600,13 +600,40 @@ inline auto try_load_mono_type(Archive& ar, const char* name, dotnet::type& t) -
     return false;
 }
 
+/// Saves a list as the name of its element type, its size and its elements.
+template<typename Archive, typename VectorLike>
+void save_mono_elements(Archive& ar, const dotnet::type& type, const VectorLike& container)
+{
+    try_save_mono_type(ar, "type", type);
+
+    try_save(ar, ser20::make_nvp("size", container.size()));
+    try_save(ar, ser20::make_nvp("container", container));
+}
+
+/// Loads the size and the elements of a saved list into new objects of the given type.
+template<typename Archive, typename VectorLike>
+void load_mono_elements(Archive& ar, const dotnet::type& type, VectorLike& container)
+{
+    ser20::size_type size{};
+    try_load(ar, ser20::make_nvp("size", size));
+    container.resize(static_cast<std::size_t>(size));
+    std::vector<dotnet::object_pinned_ptr> element_pins;
+    element_pins.reserve(container.size());
+    for(auto& v : container)
+    {
+        v = type.new_instance();
+        element_pins.push_back(dotnet::make_object_pinned(v));
+    }
+    {
+        serialization::path_skip_segment_guard guard(true);
+        try_load(ar, ser20::make_nvp("container", container));
+    }
+}
+
 template<typename Archive, typename T>
 inline void SAVE_FUNCTION_NAME(Archive& ar, const dotnet::vector_like_wrapper<T>& obj)
 {
-    try_save_mono_type(ar, "type", obj.type);
-
-    try_save(ar, ser20::make_nvp("size", obj.container.size()));
-    try_save(ar, ser20::make_nvp("container", obj.container));
+    save_mono_elements(ar, obj.type, obj.container);
 }
 
 template<typename Archive, typename T>
@@ -618,20 +645,112 @@ inline void LOAD_FUNCTION_NAME(Archive& ar, dotnet::vector_like_wrapper<T>& obj)
     {
         return;
     }
-    
-    ser20::size_type size{};
-    try_load(ar, ser20::make_nvp("size", size));
-    obj.container.resize(static_cast<std::size_t>(size));
-    std::vector<dotnet::object_pinned_ptr> element_pins;
-    element_pins.reserve(obj.container.size());
-    for(auto& v : obj.container)
+    load_mono_elements(ar, obj.type, obj.container);
+}
+
+/// One of the two lists of a saved dictionary. It is saved like any list, type name included, but
+/// loaded as the type the dictionary declares: a saved name can lead to another type of that name
+/// (Vector3, which has no namespace, finds System.Numerics.Vector3).
+struct mono_dictionary_list
+{
+    dotnet::type type;
+    std::vector<dotnet::object> container;
+};
+
+template<typename Archive>
+inline void SAVE_FUNCTION_NAME(Archive& ar, const mono_dictionary_list& obj)
+{
+    save_mono_elements(ar, obj.type, obj.container);
+}
+
+template<typename Archive>
+inline void LOAD_FUNCTION_NAME(Archive& ar, mono_dictionary_list& obj)
+{
+    load_mono_elements(ar, obj.type, obj.container);
+}
+
+/// The entries of a C# Dictionary as two lists of the same length, keys and values: the form Unity
+/// suggests for serializing a dictionary, and the one lists have here already.
+struct mono_dictionary_entries
+{
+    mono_dictionary_list keys;
+    mono_dictionary_list values;
+};
+
+template<typename Archive>
+inline void SAVE_FUNCTION_NAME(Archive& ar, const mono_dictionary_entries& obj)
+{
+    try_save(ar, ser20::make_nvp("keys", obj.keys));
+    try_save(ar, ser20::make_nvp("values", obj.values));
+}
+
+template<typename Archive>
+inline void LOAD_FUNCTION_NAME(Archive& ar, mono_dictionary_entries& obj)
+{
+    try_load(ar, ser20::make_nvp("keys", obj.keys));
+    try_load(ar, ser20::make_nvp("values", obj.values));
+}
+
+template<typename Archive, typename Invoker>
+void try_save_mono_dictionary(Archive& ar, const dotnet::object& obj, const Invoker& invoker)
+{
+    auto dictionary_obj = invoker.get_value(obj);
+    if(!dictionary_obj.valid())
     {
-        v = obj.type.new_instance();
-        element_pins.push_back(dotnet::make_object_pinned(v));
+        return;
     }
+    dotnet::dictionary dictionary(dictionary_obj);
+    auto pinned_dictionary = dotnet::make_object_pinned(dictionary);
+    mono_dictionary_entries entries{{dictionary.get_key_type(), {}}, {dictionary.get_value_type(), {}}};
+    for(const auto& entry : dictionary.to_vector())
     {
-        serialization::path_skip_segment_guard guard(true);
-        try_load(ar, ser20::make_nvp("container", obj.container));
+        entries.keys.container.push_back(entry.first);
+        entries.values.container.push_back(entry.second);
+    }
+    auto key_pins = dotnet::pin_vector_elements(entries.keys.container);
+    auto value_pins = dotnet::pin_vector_elements(entries.values.container);
+    serialization::path_segment_guard guard(invoker.get_name());
+    try_save(ar, ser20::make_nvp(invoker.get_name(), entries));
+}
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Loads the entries into the dictionary the member holds, so a get-only member works too, or into
+/// a new one when it holds none.
+/// </summary>
+//-----------------------------------------------------------------------------
+template<typename Archive, typename Invoker>
+void try_load_mono_dictionary(Archive& ar, dotnet::object& obj, const Invoker& invoker)
+{
+    // TKey and TValue.
+    const auto arguments = invoker.get_type().get_generic_arguments();
+    if(arguments.size() != 2)
+    {
+        return;
+    }
+    mono_dictionary_entries entries{{arguments[0], {}}, {arguments[1], {}}};
+    if(!try_load(ar, ser20::make_nvp(invoker.get_name(), entries)))
+    {
+        return;
+    }
+    auto key_pins = dotnet::pin_vector_elements(entries.keys.container);
+    auto value_pins = dotnet::pin_vector_elements(entries.values.container);
+    const auto count = std::min(entries.keys.container.size(), entries.values.container.size());
+    std::vector<dotnet::dictionary::entry> items;
+    items.reserve(count);
+    for(std::size_t i = 0; i < count; ++i)
+    {
+        items.emplace_back(entries.keys.container[i], entries.values.container[i]);
+    }
+
+    auto dictionary_obj = invoker.get_value(obj);
+    const bool is_new = !dictionary_obj.valid();
+    auto dictionary = is_new ? dotnet::dictionary::create(invoker.get_type()) : dotnet::dictionary(dictionary_obj);
+    auto pinned_dictionary = dotnet::make_object_pinned(dictionary);
+    dictionary.assign(items);
+    if(is_new)
+    {
+        invoker.set_value(obj, dictionary);
     }
 }
 
@@ -865,6 +984,10 @@ SAVE(dotnet::object)
                     }
                 }
             }
+            else if(field_type.is_dictionary())
+            {
+                try_save_mono_dictionary(ar, obj, dotnet::make_field_invoker<dotnet::object>(field));
+            }
             else if(field_type.is_serializable())
             {
                 // Recursively handle serializable nested objects
@@ -929,6 +1052,10 @@ SAVE(dotnet::object)
                         try_save(ar, ser20::make_nvp(prop.get_name(), vec));
                     }
                 }
+            }
+            else if(prop_type.is_dictionary())
+            {
+                try_save_mono_dictionary(ar, obj, dotnet::make_property_invoker<dotnet::object>(prop));
             }
             else if(prop_type.is_serializable())
             {
@@ -1164,6 +1291,10 @@ LOAD(dotnet::object)
                     }
                 }
             }
+            else if(field_type.is_dictionary())
+            {
+                try_load_mono_dictionary(ar, obj, dotnet::make_field_invoker<dotnet::object>(field));
+            }
             else if(field_type.is_serializable())
             {
                 // Recursively handle serializable nested objects
@@ -1217,6 +1348,10 @@ LOAD(dotnet::object)
                         invoker.set_value(obj, list);
                     }
                 }
+            }
+            else if(prop_type.is_dictionary())
+            {
+                try_load_mono_dictionary(ar, obj, dotnet::make_property_invoker<dotnet::object>(prop));
             }
             else if(prop_type.is_serializable())
             {
