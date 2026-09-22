@@ -48,7 +48,7 @@ constexpr const char* ABOUT_PRODUCT_NAME = "Unravel Engine";
 constexpr const char* ABOUT_TAGLINE = "Game engine and editor";
 constexpr const char* ABOUT_LICENSE = "MIT License";
 // Matches LICENSE.txt. "\xC2\xA9" is the copyright sign in UTF-8.
-constexpr const char* ABOUT_COPYRIGHT = "Copyright \xC2\xA9 2025 unravel-dev";
+constexpr const char* ABOUT_COPYRIGHT = "Copyright \xC2\xA9 2026 unravel-dev";
 
 #ifdef NDEBUG
 constexpr const char* ABOUT_CONFIGURATION = "Release";
