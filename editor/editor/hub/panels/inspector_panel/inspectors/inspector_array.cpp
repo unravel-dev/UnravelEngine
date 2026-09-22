@@ -1,5 +1,6 @@
 #include "inspectors.h"
 #include "inspector.h"
+#include "inspector_container_widgets.h"
 
 #include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 #include "editor/imgui/integration/imgui.h"
@@ -21,19 +22,11 @@ namespace unravel
 namespace
 {
 // Sizes are in units of the font size, so the list follows the UI scale of the editor.
-constexpr float ARRAY_COUNT_FIELD_WIDTH = 4.0f;
 constexpr float ARRAY_GRIP_WIDTH = 1.1f;
-constexpr float ARRAY_BUTTON_ROUNDING = 0.25f;
 constexpr float ARRAY_DROP_LINE_THICKNESS = 2.0f;
 // The grip stays faint until its label is pointed at.
 constexpr float ARRAY_GRIP_ALPHA = 0.3f;
 constexpr float ARRAY_GRIP_HOVERED_ALPHA = 0.8f;
-constexpr float ARRAY_ICON_ALPHA = 0.6f;
-constexpr ImU32 ARRAY_BUTTON_HOVERED_COLOR = IM_COL32(255, 255, 255, 26);
-constexpr ImU32 ARRAY_BUTTON_HELD_COLOR = IM_COL32(255, 255, 255, 46);
-// Remove stays as quiet as the other buttons until it is pointed at.
-constexpr ImU32 ARRAY_REMOVE_COLOR = IM_COL32(255, 95, 95, 255);
-constexpr ImU32 ARRAY_REMOVE_FILL_COLOR = IM_COL32(255, 95, 95, 40);
 constexpr const char* ARRAY_ELEMENT_PAYLOAD = "inspector_array_element";
 
 /// What a dragged element carries: the array it comes from and where it is in it.
@@ -88,105 +81,24 @@ struct array_element_row
     float text_x{};
 };
 
-auto calc_array_pixels(float font_units) -> float
-{
-    return ImFloor(ImGui::GetFontSize() * font_units);
-}
-
-/// A flat icon button laid over the rectangle. It takes no room of its own.
-auto draw_array_icon_button(const char* id, const ImRect& bb, const char* icon, const char* tooltip, bool is_destructive)
-    -> bool
-{
-    const ImGuiID item_id = ImGui::GetID(id);
-    if(!ImGui::ItemAdd(bb, item_id))
-    {
-        return false;
-    }
-    bool is_hovered = false;
-    bool is_held = false;
-    const bool is_pressed = ImGui::ButtonBehavior(bb, item_id, &is_hovered, &is_held);
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    if(is_hovered || is_held)
-    {
-        const ImU32 plain_fill_color = is_held ? ARRAY_BUTTON_HELD_COLOR : ARRAY_BUTTON_HOVERED_COLOR;
-        draw_list->AddRectFilled(bb.Min,
-                                 bb.Max,
-                                 is_destructive ? ARRAY_REMOVE_FILL_COLOR : plain_fill_color,
-                                 calc_array_pixels(ARRAY_BUTTON_ROUNDING));
-    }
-    const ImU32 plain_icon_color = ImGui::GetColorU32(ImGuiCol_Text, is_hovered ? 1.0f : ARRAY_ICON_ALPHA);
-    const ImU32 icon_color = is_destructive && is_hovered ? ARRAY_REMOVE_COLOR : plain_icon_color;
-    const ImVec2 icon_size = ImGui::CalcTextSize(icon);
-    draw_list->AddText(ImFloor(bb.GetCenter() - icon_size * 0.5f), icon_color, icon);
-    ImGui::SetItemTooltipEx("%s", tooltip);
-    return is_pressed;
-}
-
-//-----------------------------------------------------------------------------
-/// <summary>
-/// The number of elements, right aligned in the header row, and a button that adds one. A typed
-/// count applies when the field is left or Enter is pressed, not on every key: typing 20 over 25
-/// would otherwise cut the array down to 2 on the way.
-/// </summary>
-//-----------------------------------------------------------------------------
-auto draw_array_size_controls(entt::meta_sequence_container& view, std::size_t& size, const array_state& state)
-    -> inspect_result
+/// Applies what the header asked for: one more element, or the typed count.
+auto resize_array(entt::meta_sequence_container& view, std::size_t& size, const array_state& state,
+                  const container_widgets::header_request& request) -> inspect_result
 {
     inspect_result result{};
-    const float button_width = ImGui::GetFrameHeight();
-    const float field_width = calc_array_pixels(ARRAY_COUNT_FIELD_WIDTH);
-    const bool has_add_button = !state.is_readonly;
-    const float controls_width = field_width + (has_add_button ? ImGui::GetStyle().ItemSpacing.x + button_width : 0.0f);
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImMax(0.0f, ImGui::GetContentRegionAvail().x - controls_width));
-
-    // The count being typed lives across frames: the field writes it while it is active, and the
-    // frame it is left on, it is no longer written.
-    ImGuiStorage* storage = ImGui::GetStateStorage();
-    const ImGuiID pending_key = ImGui::GetID("##array_pending_size");
-    int pending_size = storage->GetInt(pending_key, static_cast<int>(size));
-    ImGui::PushReadonly(state.is_readonly);
-    ImGui::SetNextItemWidth(field_width);
-    ImGui::InputInt("##array", &pending_size, 0, 0, state.is_readonly ? ImGuiInputTextFlags_ReadOnly : 0);
-    ImGui::SetItemTooltipEx("%s", "Number of elements");
-    const bool is_count_entered = ImGui::IsItemDeactivatedAfterEdit();
-    storage->SetInt(pending_key, ImGui::IsItemActive() ? pending_size : static_cast<int>(size));
-    ImGui::DrawItemActivityOutline();
-    ImGui::PopReadonly();
-
-    bool is_resize_requested = is_count_entered && !state.is_readonly;
-    if(has_add_button)
+    if(!request.is_add_pressed && !request.is_count_entered)
     {
-        ImGui::SameLine();
-        const ImVec2 button_min = ImGui::GetCursorScreenPos();
-        const ImRect button_rect(button_min, button_min + ImVec2(button_width, button_width));
-        ImGui::ItemSize(button_rect);
-        if(draw_array_icon_button("##add", button_rect, ICON_MDI_PLUS, "Add an element", false))
-        {
-            pending_size = static_cast<int>(size) + 1;
-            is_resize_requested = true;
-        }
+        return result;
     }
-
-    if(is_resize_requested)
+    const int requested_size = request.is_add_pressed ? static_cast<int>(size) + 1 : request.entered_count;
+    const int new_size = std::max(state.readonly_count, requested_size);
+    if(view.resize(static_cast<std::size_t>(new_size)))
     {
-        pending_size = std::max(state.readonly_count, pending_size);
-        if(view.resize(static_cast<std::size_t>(pending_size)))
-        {
-            size = static_cast<std::size_t>(pending_size);
-            result.changed = true;
-        }
-        result.edit_finished = true;
+        size = static_cast<std::size_t>(new_size);
+        result.changed = true;
     }
+    result.edit_finished = true;
     return result;
-}
-
-void draw_empty_array_hint()
-{
-    ImGui::Separator();
-    ImGui::Indent();
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextDisabled("%s", "Empty");
-    ImGui::Unindent();
 }
 
 /// An element with an inspector of its own is one widget: it shares the row with its label.
@@ -298,7 +210,7 @@ void draw_array_element_label(array_element_row& row)
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const float height = ImGui::GetFrameHeight();
     row.label_rect = ImRect(min, ImVec2(min.x + ImGui::GetContentRegionAvail().x, min.y + height));
-    const ImRect grip_rect(min, ImVec2(min.x + calc_array_pixels(ARRAY_GRIP_WIDTH), min.y + height));
+    const ImRect grip_rect(min, ImVec2(min.x + container_widgets::to_pixels(ARRAY_GRIP_WIDTH), min.y + height));
     if(row.is_foldout)
     {
         if(row.is_movable)
@@ -322,7 +234,7 @@ void draw_array_element_label(array_element_row& row)
         ImGui::SetNextItemAllowOverlap();
         ImGui::InvisibleButton("##element", row.label_rect.GetSize());
         begin_array_element_drag(row);
-        const float text_max_x = row.label_rect.Max.x - (row.is_movable ? height : 0.0f);
+        const float text_max_x = row.label_rect.Max.x - (row.is_movable ? container_widgets::get_row_button_width() : 0.0f);
         const ImVec2 text_pos(grip_rect.Max.x, ImFloor(min.y + (height - ImGui::GetFontSize()) * 0.5f));
         row.text_x = text_pos.x;
         ImGui::RenderTextEllipsis(ImGui::GetWindowDrawList(),
@@ -500,18 +412,10 @@ auto inspect_array_element(rtti::context& ctx,
 
     if(is_structure_editable)
     {
-        const bool is_row_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
-                                    ImGui::IsMouseHoveringRect(element_rect.Min, element_rect.Max) &&
-                                    !ImGui::IsDragDropActive();
-        if(is_row_hovered)
+        if(container_widgets::draw_row_remove_button(row.label_rect, element_rect, "Remove the element"))
         {
-            const float side = row.label_rect.GetHeight();
-            const ImRect remove_rect(ImVec2(row.label_rect.Max.x - side, row.label_rect.Min.y), row.label_rect.Max);
-            if(draw_array_icon_button("##remove", remove_rect, ICON_MDI_DELETE_OUTLINE, "Remove the element", true))
-            {
-                edit.type = array_edit::kind::remove;
-                edit.index = element_index;
-            }
+            edit.type = array_edit::kind::remove;
+            edit.index = element_index;
         }
         handle_array_element_drop(state, element_index, element_rect, edit);
     }
@@ -549,7 +453,13 @@ auto inspect_array(rtti::context& ctx,
         state.is_resizeable = !is_fixed_size_array && view.resize(size);
         state.is_readonly = info.read_only || !state.is_resizeable;
 
-        result |= draw_array_size_controls(view, size, state);
+        container_widgets::header_controls controls{};
+        controls.size = size;
+        controls.is_count_editable = !state.is_readonly;
+        controls.can_add = !state.is_readonly;
+        controls.count_tooltip = "Number of elements";
+        controls.add_tooltip = "Add an element";
+        result |= resize_array(view, size, state, container_widgets::draw_header_controls(controls));
 
         if(open)
         {
@@ -557,7 +467,7 @@ auto inspect_array(rtti::context& ctx,
 
             if(size == 0)
             {
-                draw_empty_array_hint();
+                container_widgets::draw_empty_hint();
             }
 
             array_edit edit{};

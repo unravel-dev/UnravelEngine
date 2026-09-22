@@ -1159,105 +1159,6 @@ auto inspect_property(rtti::context& ctx, entt::meta_any& object, const meta_any
     return result;
 }
 
-auto inspect_associative_container(rtti::context& ctx,
-                                   entt::meta_any& var,
-                                   const meta_any_proxy& var_proxy,
-                                   const entt::meta_data& prop,
-                                   const var_info& info,
-                                   const entt::meta_custom& custom) -> inspect_result
-{
-    auto view = var.as_associative_container();
-    auto size = view.size();
-    auto int_size = static_cast<int>(size);
-
-    inspect_result result{};
-
-    // property_layout layout;
-    // layout.set_data(prop);
-
-    // bool open = true;
-    // {
-    //     open = layout.push_tree_layout();
-    //     {
-    //         ImGuiInputTextFlags flags = 0;
-
-    //         if(info.read_only)
-    //         {
-    //             flags |= ImGuiInputTextFlags_ReadOnly;
-    //         }
-
-    //         if(ImGui::InputInt("##assoc", &int_size, 1, 100, flags))
-    //         {
-    //             if(int_size < 0)
-    //                 int_size = 0;
-    //             size = static_cast<std::size_t>(int_size);
-    //             result.changed |= view.insert(view.get_key_type().create()).second;
-    //             result.edit_finished = true;
-    //         }
-
-    //         ImGui::DrawItemActivityOutline();
-    //     }
-    // }
-
-    // if(open)
-    // {
-    //     layout.pop_layout();
-
-    //     int i = 0;
-    //     int index_to_remove = -1;
-    //     rttr::argument key_to_remove{};
-    //     for(const auto& item : view)
-    //     {
-    //         auto key = item.first.extract_wrapped_value();
-    //         auto value = item.second.extract_wrapped_value();
-
-    //         ImGui::Separator();
-
-    //         // ImGui::SameLine();
-    //         auto pos_before = ImGui::GetCursorPos();
-    //         {
-    //             property_layout layout;
-    //             layout.set_data(key.to_string(), {}, true);
-    //             layout.push_tree_layout(ImGuiTreeNodeFlags_Leaf);
-
-    //             result |= inspect_var(ctx, value, info, get_metadata);
-    //         }
-    //         auto pos_after = ImGui::GetCursorPos();
-
-    //         // if(result.changed)
-    //         //     view.set_value(i, value);
-
-    //         if(!info.read_only)
-    //         {
-    //             ImGui::SetCursorPos(pos_before);
-
-    //             ImGui::PushID(i);
-    //             ImGui::AlignTextToFramePadding();
-    //             if(ImGui::Button(ICON_MDI_DELETE, ImVec2(0.0f, ImGui::GetFrameHeightWithSpacing())))
-    //             {
-    //                 key_to_remove = key;
-    //                 index_to_remove = i;
-    //             }
-    //             ImGui::SetItemTooltipCurrentViewport("Remove element.");
-    //             ImGui::PopID();
-    //             ImGui::SetCursorPos(pos_after);
-    //             ImGui::Dummy({});
-
-    //         }
-
-    //         i++;
-    //     }
-
-    //     if(index_to_remove != -1)
-    //     {
-    //         view.erase(key_to_remove);
-    //         result.changed = true;
-    //         result.edit_finished = true;
-    //     }
-    // }
-    return result;
-}
-
 auto inspect_enum(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info) -> inspect_result
 {
     auto edited = var;
@@ -1454,6 +1355,13 @@ auto inspect_var_properties_impl(rtti::context& ctx,
             auto name = entt::get_pretty_name(custom);
             auto tooltip = entt::get_attribute_as<std::string>(custom, "tooltip");
             result |= inspect_array(ctx, var, var_proxy, name, tooltip, info, custom);
+        }
+
+        if(type.is_associative_container())
+        {
+            auto name = entt::get_pretty_name(custom);
+            auto tooltip = entt::get_attribute_as<std::string>(custom, "tooltip");
+            result |= inspect_associative_container(ctx, var, var_proxy, name, tooltip, info, custom);
         }
     }
     else

@@ -409,6 +409,25 @@ auto inspect_associative_container(rtti::context& ctx,
                                    const entt::meta_custom& custom = {}) -> inspect_result;
 
 /**
+ * @brief Inspects associative containers with a custom name and tooltip
+ * @param ctx Runtime type information context
+ * @param var Associative container to inspect
+ * @param var_proxy Proxy for accessing the container
+ * @param name Display name for the container
+ * @param tooltip Help text for the container
+ * @param info Metadata about the container
+ * @param custom Custom attributes for specialized behavior
+ * @return Result indicating what changes occurred during inspection
+ */
+auto inspect_associative_container(rtti::context& ctx,
+                                   entt::meta_any& var,
+                                   const meta_any_proxy& var_proxy,
+                                   const std::string& name,
+                                   const std::string& tooltip,
+                                   const var_info& info = {},
+                                   const entt::meta_custom& custom = {}) -> inspect_result;
+
+/**
  * @brief Inspects enumeration types with dropdown selection
  * @param ctx Runtime type information context
  * @param var Enum variable to inspect
