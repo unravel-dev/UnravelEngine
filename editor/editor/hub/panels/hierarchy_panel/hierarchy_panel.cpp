@@ -683,11 +683,12 @@ void draw_common_menu_items(rtti::context& ctx, entt::handle parent_entity)
     }
 }
 
-/// Opens the prefab of the instance the entity belongs to.
+/// Opens the prefab of the instance the entity belongs to. Not a scene edit: the action runs to
+/// the end in prefab mode, so counting it as one would mark the prefab unsaved as it opens.
 void open_prefab_of(rtti::context& ctx, entt::handle entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Open Prefab",
+    em.queue_action<untracked_editor_state_action_t>("Open Prefab",
     [&ctx, entity]() mutable
     {
         auto prefab_root = prefab_override_context::find_prefab_root_entity(entity);
@@ -729,7 +730,7 @@ void draw_entity_context_menu(rtti::context& ctx, imgui_panels* panels, entt::ha
             if(ImGui::MenuItemIcon(ICON_MDI_PENCIL, "Rename", ImGui::GetKeyName(shortcuts::rename_item)))
             {
                 auto& em = ctx.get_cached<editing_manager>();
-                em.queue_action("Rename Entity",
+                em.queue_action<untracked_editor_state_action_t>("Rename Entity",
                     [ctx, entity]() mutable
                     {
                         start_editing_label(ctx, entity);
@@ -913,7 +914,7 @@ void handle_entity_selection(rtti::context& ctx, entt::handle entity)
 {
     auto& em = ctx.get_cached<editing_manager>();
     auto mode = em.get_select_mode();
-    em.queue_action("Select Entity",
+    em.queue_action<untracked_editor_state_action_t>("Select Entity",
         [&ctx, entity, mode]() mutable
         {
             stop_editing_label(ctx, entity);
@@ -927,7 +928,7 @@ void handle_entity_keyboard_shortcuts(rtti::context& ctx, imgui_panels* panels, 
     if(ImGui::IsItemKeyPressed(shortcuts::rename_item))
     {
         auto& em = ctx.get_cached<editing_manager>();
-        em.queue_action("Rename Entity",
+        em.queue_action<untracked_editor_state_action_t>("Rename Entity",
             [&ctx, entity]() mutable
             {
                 start_editing_label(ctx, entity);

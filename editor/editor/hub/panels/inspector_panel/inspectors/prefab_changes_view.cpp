@@ -983,14 +983,15 @@ auto draw_prefab_changes(rtti::context& ctx, entt::handle root) -> inspect_resul
         em.push_undo_stack_enabled(true);
         em.queue_action("Delete Entities", std::make_shared<delete_entities_action_t>(ops.delete_added));
         // An authoring root that is not prefab mode's - the content browser's prefab inspector -
-        // writes its file on every edit. The delete is deferred, so its save is queued behind it.
+        // writes its file on every edit. The delete is deferred, so its save is queued behind it;
+        // the delete is the edit, the save is not.
         if(auto authoring = authoring_root_above(root);
            authoring && !(em.is_prefab_mode() && authoring == em.prefab_entity))
         {
             if(const auto* authoring_prefab = authoring.try_get<prefab_component>();
                authoring_prefab != nullptr && authoring_prefab->source)
             {
-                em.queue_action("Save Prefab",
+                em.queue_action<untracked_editor_state_action_t>("Save Prefab",
                                 [handle = entt::make_uhandle(authoring), key = authoring_prefab->source.id()]()
                                 {
                                     if(auto entity = handle.resolve())

@@ -550,7 +550,7 @@ void start_page::open_project(rtti::context& ctx, const std::string& path)
     const fs::path project_path = fs::path(path).make_preferred();
     const auto queue_open = [&ctx, &pm, &em, project_path]()
     {
-        em.queue_action("Open Project",
+        em.queue_action<untracked_editor_state_action_t>("Open Project",
                         [&ctx, &pm, project_path]()
                         {
                             pm.open_project(ctx, project_path);
@@ -907,7 +907,7 @@ void start_page::draw_create_project_view(rtti::context& ctx)
         auto& pm = ctx.get_cached<project_manager>();
         auto& em = ctx.get_cached<editing_manager>();
         const fs::path created_path = fs::path(project_path).make_preferred();
-        em.queue_action("Create Project",
+        em.queue_action<untracked_editor_state_action_t>("Create Project",
                         [&ctx, &pm, created_path]()
                         {
                             pm.create_project(ctx, created_path);

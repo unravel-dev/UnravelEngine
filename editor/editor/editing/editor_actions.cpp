@@ -1722,7 +1722,7 @@ auto editor_actions::reload_project(rtti::context& ctx) -> bool
     pm.close_project(ctx);
 
     auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Reload Project", [&ctx, &pm, project_path]() 
+    em.queue_action<untracked_editor_state_action_t>("Reload Project", [&ctx, &pm, project_path]()
     {
         pm.open_project(ctx, project_path);
     });

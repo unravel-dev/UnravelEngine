@@ -19,6 +19,17 @@ struct untracked_action_t : crtp_meta_type<untracked_action_t, editing_action_t>
     auto is_undoable() const -> bool override;
 };
 
+// Non-undoable lambda action that is not a scene edit: it changes editor state - opens a project
+// or a prefab, reloads scripts, selects, starts a rename, moves the editor camera - or writes a
+// file, and leaves the content being edited alone. Running it marks neither the scene nor the
+// prefab being edited as unsaved and does not rebuild reflection probes.
+struct untracked_editor_state_action_t : untracked_action_t
+{
+    using untracked_action_t::untracked_action_t;
+
+    auto modifies_scene_content() const -> bool override { return false; }
+};
+
 // Undoable lambda action with separate do/undo functions
 struct tracked_lambda_action_t : crtp_meta_type<tracked_lambda_action_t, editing_action_t>
 {

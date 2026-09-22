@@ -59,7 +59,7 @@ void entity_panel::focus_entities(entt::handle camera, const std::vector<entt::h
 {
     auto& ctx = engine::context();
     auto& em = ctx.get_cached<editing_manager>();
-    em.queue_action("Focus Entities",
+    em.queue_action<untracked_editor_state_action_t>("Focus Entities",
         [camera, entities]() mutable
         {
             defaults::focus_camera_on_entities(camera, entities, 0.4f);

@@ -290,7 +290,9 @@ void editing_manager::on_play_after_end(rtti::context& ctx)
 
 void editing_manager::on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version)
 {
-    queue_action("Script Recompile", [&]() {
+    // The scenes come back from their checkpoints as they were, unsaved flag included (clear(false)):
+    // a recompile is not an edit.
+    queue_action<untracked_editor_state_action_t>("Script Recompile", [&]() {
         if(waiting_for_compilation_before_play_)
         {
             return;
