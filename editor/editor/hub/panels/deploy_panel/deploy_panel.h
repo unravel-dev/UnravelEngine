@@ -10,6 +10,10 @@ namespace unravel
 
 class imgui_panels;
 
+/**
+ * @brief The Deploy Project window: what the game is and where it goes, what still keeps it from
+ * deploying, and the steps of the deploy while it runs.
+ */
 class deploy_panel
 {
 public:
@@ -24,6 +28,9 @@ public:
 
 private:
     void draw_ui(rtti::context& ctx);
+    void draw_settings(rtti::context& ctx);
+    void draw_status(rtti::context& ctx);
+    void draw_actions(rtti::context& ctx);
     auto get_progress() const -> float;
 
     imgui_panels* parent_{};

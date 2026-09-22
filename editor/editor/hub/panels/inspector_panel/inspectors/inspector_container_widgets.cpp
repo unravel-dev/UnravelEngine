@@ -82,8 +82,7 @@ auto draw_icon_button(const icon_button& button, const ImRect& bb) -> bool
                                  button.is_destructive ? CONTAINER_REMOVE_FILL_COLOR : plain_fill_color,
                                  to_pixels(CONTAINER_BUTTON_ROUNDING));
     }
-    const ImVec2 icon_size = ImGui::CalcTextSize(button.icon);
-    draw_list->AddText(ImFloor(bb.GetCenter() - icon_size * 0.5f), get_icon_color(button, is_hovered), button.icon);
+    ImGui::RenderIconCentered(draw_list, bb.GetCenter(), button.icon, get_icon_color(button, is_hovered));
     if(button.tooltip != nullptr)
     {
         ImGui::SetItemTooltipEx("%s", button.tooltip);

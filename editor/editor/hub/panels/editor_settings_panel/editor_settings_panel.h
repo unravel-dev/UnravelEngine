@@ -4,6 +4,7 @@
 #include <context/context.hpp>
 
 #include <editor/editing/editor_actions.h>
+#include <editor/hub/panels/settings_view.h>
 
 namespace unravel
 {
@@ -20,20 +21,8 @@ public:
     void show(bool s);
 
 private:
-    void draw_ui(rtti::context& ctx);
-
     imgui_panels* parent_{};
     bool show_request_{};
-
-    using callback_t = std::function<void(rtti::context&)>;
-
-    struct setting_entry
-    {
-        std::string id;
-        callback_t callback;
-    };
-
-    setting_entry selected_entry_{};
-
+    settings_view view_;
 };
 } // namespace unravel

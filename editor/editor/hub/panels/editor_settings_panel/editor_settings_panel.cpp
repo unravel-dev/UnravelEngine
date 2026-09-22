@@ -13,55 +13,72 @@ namespace unravel
 {
 namespace
 {
+constexpr ImU32 EDITOR_SETTINGS_NOTE_COLOR = IM_COL32(255, 190, 60, 255);
+
+/// Inspects one group of the editor settings and saves them once an edit is done.
+template<typename Settings>
+auto inspect_and_save(rtti::context& ctx, Settings& settings) -> bool
+{
+    if(!inspect(ctx, settings).edit_finished)
+    {
+        return false;
+    }
+    ctx.get_cached<project_manager>().save_editor_settings();
+    return true;
+}
+
 void draw_external_tools_settings(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& settings = pm.get_editor_settings();
-
-    ImGui::PushItemWidth(150.0f);
-
-    if(inspect(ctx, settings.external_tools).edit_finished)
-    {
-        pm.save_project_settings(ctx);
-    }
-
-    ImGui::PopItemWidth();
+    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_editor_settings().external_tools);
 }
 
 void draw_debugger_settings(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& settings = pm.get_editor_settings();
+    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_editor_settings().debugger);
 
-    ImGui::PushItemWidth(150.0f);
-
-    if(inspect(ctx, settings.debugger).edit_finished)
-    {
-        pm.save_project_settings(ctx);
-    }
-
-    ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "%s", "Requires an editor restart to apply changes.");
-
-    ImGui::PopItemWidth();
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Text, EDITOR_SETTINGS_NOTE_COLOR);
+    ImGui::TextWrapped("%s", ICON_MDI_ALERT_OUTLINE " Changes apply after the editor restarts.");
+    ImGui::PopStyleColor();
 }
 
 void draw_scripting_settings(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& settings = pm.get_editor_settings();
-
-    ImGui::PushItemWidth(150.0f);
-
+    auto& settings = ctx.get_cached<project_manager>().get_editor_settings();
     if(inspect(ctx, settings.scripting).edit_finished)
     {
         settings.scripting.reload_app_domain = true;
-        pm.save_editor_settings();
+        ctx.get_cached<project_manager>().save_editor_settings();
     }
+}
 
-    ImGui::PopItemWidth();
+auto make_editor_settings_categories() -> std::vector<settings_category>
+{
+    return {
+        {"External Tools",
+         ICON_MDI_WRENCH_OUTLINE,
+         "The code editor scripts open in.",
+         "vscode visual studio code editor ide executable path",
+         &draw_external_tools_settings},
+        {"Scripting",
+         ICON_MDI_CODE_BRACES,
+         "What reloads when scripts compile and play mode changes.",
+         "reload domain app engine compile play mode",
+         &draw_scripting_settings},
+#if DOTNETPP_BACKEND_MONO
+        {"Debugger",
+         ICON_MDI_BUG_OUTLINE,
+         "Where a script debugger connects.",
+         "debug ip port log level attach",
+         &draw_debugger_settings},
+#endif
+    };
 }
 } // namespace
-editor_settings_panel::editor_settings_panel(imgui_panels* parent) : parent_(parent)
+
+editor_settings_panel::editor_settings_panel(imgui_panels* parent)
+    : parent_(parent)
+    , view_(make_editor_settings_categories())
 {
 }
 
@@ -82,57 +99,9 @@ void editor_settings_panel::on_frame_ui_render(rtti::context& ctx, const char* n
     bool show = true;
     if(ImGui::BeginPopupModal(name, &show))
     {
-        // ImGui::WindowTimeBlock block(ImGui::GetFont(ImGui::Font::Mono));
-
-        draw_ui(ctx);
-
+        view_.draw(ctx);
         ImGui::EndPopup();
     }
-}
-
-void editor_settings_panel::draw_ui(rtti::context& ctx)
-{
-    auto avail = ImGui::GetContentRegionAvail();
-    if(avail.x < 1.0f || avail.y < 1.0f)
-    {
-        return;
-    }
-
-    static std::vector<setting_entry> categories{
-        {"External Tools", &draw_external_tools_settings},
-        {"Scripting", &draw_scripting_settings},
-#if DOTNETPP_BACKEND_MONO
-        {"Debugger", &draw_debugger_settings},
-#endif
-    };
-    // Child A: the categories list
-    // We fix the width of this child, so the right child uses the remaining space.
-    ImGui::BeginChild("##LeftSidebar", avail * ImVec2(0.15f, 1.0f), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX);
-    {
-        // Display categories
-        for(const auto& category : categories)
-        {
-            // 'Selectable' returns true if clicked
-            if(ImGui::Selectable(category.id.c_str(), (selected_entry_.id == category.id)))
-            {
-                selected_entry_ = category;
-            }
-        }
-    }
-    ImGui::EndChild();
-
-    // On the same line:
-    ImGui::SameLine();
-
-    // Child B: show settings for the selected category
-    ImGui::BeginChild("##RightContent");
-    {
-        if(selected_entry_.callback)
-        {
-            selected_entry_.callback(ctx);
-        }
-    }
-    ImGui::EndChild();
 }
 
 } // namespace unravel

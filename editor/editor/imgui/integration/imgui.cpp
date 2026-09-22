@@ -675,6 +675,22 @@ bool IsReadonly()
     return (ctx->CurrentItemFlags & ImGuiItemFlags_ReadOnly) != 0;
 }
 
+void RenderIconCentered(ImDrawList* draw_list, const ImVec2& center, const char* icon, ImU32 color)
+{
+    ImFont* font = GetFont();
+    const float font_size = GetFontSize();
+    unsigned int codepoint = 0;
+    ImTextCharFromUtf8(&codepoint, icon, nullptr);
+    const ImFontGlyph* glyph = font->GetFontBaked(font_size)->FindGlyph(static_cast<ImWchar>(codepoint));
+    if(glyph == nullptr)
+    {
+        return;
+    }
+    // The glyph box is relative to where the text starts.
+    const ImVec2 ink_center((glyph->X0 + glyph->X1) * 0.5f, (glyph->Y0 + glyph->Y1) * 0.5f);
+    draw_list->AddText(font, font_size, ImFloor(center - ink_center), color, icon);
+}
+
 void PushReadonly(bool _enabled)
 {
     _enabled |= IsReadonly();

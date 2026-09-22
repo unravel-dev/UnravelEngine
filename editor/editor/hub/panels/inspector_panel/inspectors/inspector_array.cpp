@@ -47,6 +47,8 @@ struct array_state
     bool is_resizeable{};
     /// The count cannot be changed.
     bool is_readonly{};
+    /// What an element is called before its position, "Element" unless the array says otherwise.
+    std::string element_label;
 };
 
 /// A change to the number or the order of the elements. Found while the elements are drawn, it
@@ -110,9 +112,10 @@ auto is_inline_array_element(rtti::context& ctx, const entt::meta_type& type) ->
 
 /// An element folding out is named after its first property when that is a string with text in
 /// it, as Unity names them. Any other element is named after its position.
-auto make_array_element_label(entt::meta_any& value, std::size_t index, bool is_foldout) -> std::string
+auto make_array_element_label(entt::meta_any& value, std::size_t index, bool is_foldout, const std::string& element_label)
+    -> std::string
 {
-    std::string label = "Element " + std::to_string(index);
+    std::string label = element_label + " " + std::to_string(index);
     if(!is_foldout)
     {
         return label;
@@ -378,7 +381,7 @@ auto inspect_array_element(rtti::context& ctx,
     row.index = element_index;
     row.is_movable = is_structure_editable;
     row.is_foldout = !is_inline_array_element(ctx, value.type());
-    row.label = make_array_element_label(value, index, row.is_foldout);
+    row.label = make_array_element_label(value, index, row.is_foldout, state.element_label);
     const std::string element_name = "Element " + std::to_string(index);
     const float element_x = ImGui::GetCursorScreenPos().x;
 
@@ -449,6 +452,11 @@ auto inspect_array(rtti::context& ctx,
         array_state state{};
         state.id = ImGui::GetID("##array_elements");
         state.readonly_count = entt::get_attribute_as<int>(custom, "readonly_count");
+        state.element_label = entt::get_attribute_as<std::string>(custom, "element_label");
+        if(state.element_label.empty())
+        {
+            state.element_label = "Element";
+        }
         const bool is_fixed_size_array = entt::get_attribute_as<bool>(custom, "is_fixed_size_array");
         state.is_resizeable = !is_fixed_size_array && view.resize(size);
         state.is_readonly = info.read_only || !state.is_resizeable;

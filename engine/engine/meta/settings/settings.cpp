@@ -539,6 +539,7 @@ REFLECT_INLINE(settings::layer_settings)
             entt::attribute{"name", "layers"},
             entt::attribute{"pretty_name", "Layers"},
             entt::attribute{"readonly_count", get_reserved_layers().size()},
+            entt::attribute{"element_label", "Layer"},
             entt::attribute{"tooltip", ""},
         });
 }

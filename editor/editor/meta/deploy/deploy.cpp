@@ -20,19 +20,13 @@ REFLECT(deploy_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "deploy_location"},
             entt::attribute{"pretty_name", "Deploy Location"},
-            entt::attribute{"tooltip", "Choose the deploy location."},
+            entt::attribute{"tooltip", "The folder the game is built into."},
         })
         .data<&deploy_settings::deploy_dependencies>("deploy_dependencies"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "deploy_dependencies"},
             entt::attribute{"pretty_name", "Deploy Dependencies"},
-            entt::attribute{"tooltip", "This takes some time and if already done should't be necessary."},
-        })
-        .data<&deploy_settings::deploy_and_run>("deploy_and_run"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "deploy_and_run"},
-            entt::attribute{"pretty_name", "Deploy & Run"},
-            entt::attribute{"tooltip", "Run the application after the deploy."},
+            entt::attribute{"tooltip", "Copy the engine's runtime files as well. Slow, and only needed when they changed."},
         })
         .data<&deploy_settings::deploy_cooked_assets>("deploy_cooked_assets"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -45,6 +39,12 @@ REFLECT(deploy_settings)
                             "always what this build produced.\n\n"
                             "Off: the marker is cleared and the game refreshes nested instances\n"
                             "as it loads them - slower, but it cannot serve stale content."},
+        })
+        .data<&deploy_settings::deploy_and_run>("deploy_and_run"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "deploy_and_run"},
+            entt::attribute{"pretty_name", "Run After Deploy"},
+            entt::attribute{"tooltip", "Start the game once the deploy is done."},
         });
 }
 

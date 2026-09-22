@@ -181,6 +181,8 @@ struct editor_actions
     static auto deploy_project(rtti::context& ctx, const deploy_settings& params)
         -> std::map<std::string, tpp::shared_future<void>>;
     static auto can_deploy_project(rtti::context& ctx, const deploy_settings& params) -> bool;
+    /// What keeps the project from deploying, one sentence each; empty when it can deploy.
+    static auto get_deploy_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>;
 
 
     static void recompile_shaders(const std::string& group = "");

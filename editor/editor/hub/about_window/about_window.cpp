@@ -101,17 +101,21 @@ void draw_section_gap()
 }
 
 /// An icon without a frame until the pointer is over it.
-auto draw_flat_icon_button(const char* label, const ImVec4& icon_color) -> bool
+auto draw_flat_icon_button(const char* id, const char* icon, const ImVec4& icon_color) -> bool
 {
     const float side = ImGui::GetFrameHeight();
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ABOUT_FLAT_HOVERED_COLOR);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ABOUT_FLAT_ACTIVE_COLOR);
-    ImGui::PushStyleColor(ImGuiCol_Text, icon_color);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, to_pixels(ABOUT_BUTTON_ROUNDING));
-    const bool is_pressed = ImGui::Button(label, ImVec2(side, side));
+    const bool is_pressed = ImGui::Button(id, ImVec2(side, side));
     ImGui::PopStyleVar();
-    ImGui::PopStyleColor(4);
+    ImGui::PopStyleColor(3);
+    const ImRect button_rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    ImGui::RenderIconCentered(ImGui::GetWindowDrawList(),
+                              button_rect.GetCenter(),
+                              icon,
+                              ImGui::ColorConvertFloat4ToU32(icon_color));
     return is_pressed;
 }
 
@@ -122,7 +126,7 @@ auto draw_close_button() -> bool
     const ImVec2 window_min = ImGui::GetWindowPos();
     const float side = ImGui::GetFrameHeight();
     ImGui::SetCursorScreenPos(ImVec2(window_min.x + ImGui::GetWindowWidth() - inset - side, window_min.y + inset));
-    const bool is_pressed = draw_flat_icon_button(ICON_MDI_CLOSE "##about_close", get_muted_text_color());
+    const bool is_pressed = draw_flat_icon_button("##about_close", ICON_MDI_CLOSE, get_muted_text_color());
     ImGui::SetItemTooltipEx("%s", "Close");
     return is_pressed;
 }
@@ -260,9 +264,9 @@ void about_window::draw_details()
                 copied_time_ >= 0.0 && ImGui::GetTime() - copied_time_ < ABOUT_COPIED_SECONDS;
             ImGui::SameLine();
             ImGui::SetCursorScreenPos(ImVec2(right_x - ImGui::GetFrameHeight(), ImGui::GetCursorScreenPos().y));
-            const char* copy_icon = is_copied ? ICON_MDI_CHECK "##about_copy" : ICON_MDI_CONTENT_COPY "##about_copy";
+            const char* copy_icon = is_copied ? ICON_MDI_CHECK : ICON_MDI_CONTENT_COPY;
             const ImVec4 copy_color = is_copied ? imgui_style::get_accent_color() : get_muted_text_color();
-            if(draw_flat_icon_button(copy_icon, copy_color))
+            if(draw_flat_icon_button("##about_copy", copy_icon, copy_color))
             {
                 copy_version();
             }

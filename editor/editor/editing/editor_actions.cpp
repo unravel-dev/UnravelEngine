@@ -1743,11 +1743,27 @@ void editor_actions::run_project(const fs::path& executable_path)
 
 auto editor_actions::can_deploy_project(rtti::context& ctx, const deploy_settings& params) -> bool
 {
-    auto& pm = ctx.get_cached<project_manager>();
-    auto& settings = pm.get_settings();
-    bool valid_location = fs::is_directory(params.deploy_location);
-    bool valid_startup_scene = settings.standalone.startup_scene.is_valid();
-    return valid_location && valid_startup_scene;
+    return get_deploy_problems(ctx, params).empty();
+}
+
+auto editor_actions::get_deploy_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>
+{
+    std::vector<std::string> problems;
+    fs::error_code ec;
+    if(params.deploy_location.empty())
+    {
+        problems.emplace_back("Choose a folder to deploy to.");
+    }
+    else if(!fs::is_directory(params.deploy_location, ec))
+    {
+        problems.emplace_back("The deploy folder does not exist.");
+    }
+    auto& settings = ctx.get_cached<project_manager>().get_settings();
+    if(!settings.standalone.startup_scene.is_valid())
+    {
+        problems.emplace_back("Choose the scene the game starts with.");
+    }
+    return problems;
 }
 
 

@@ -4,6 +4,7 @@
 #include <context/context.hpp>
 
 #include <editor/editing/editor_actions.h>
+#include <editor/hub/panels/settings_view.h>
 
 namespace unravel
 {
@@ -17,23 +18,12 @@ public:
 
     void on_frame_ui_render(rtti::context& ctx, const char* name);
 
+    /// Shows or hides the window. A hint that names a category opens it on that category.
     void show(bool s, const std::string& hint);
 
 private:
-    void draw_ui(rtti::context& ctx);
-
     imgui_panels* parent_{};
     bool visible_{};
-    std::string hint_{};
-
-    using callback_t = std::function<void(rtti::context&)>;
-
-    struct setting_entry
-    {
-        std::string id;
-        callback_t callback;
-    };
-
-    setting_entry selected_entry_{};
+    settings_view view_;
 };
 } // namespace unravel

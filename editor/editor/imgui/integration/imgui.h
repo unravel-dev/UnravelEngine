@@ -229,6 +229,10 @@ inline bool MouseOverArea()
 }
 
 bool IsReadonly();
+
+/// Draws an icon so that its drawn shape, not its text box, is centered on the point. The icon
+/// font sits lower in the line than the text fonts, so a centered text box leaves icons off center.
+void RenderIconCentered(ImDrawList* draw_list, const ImVec2& center, const char* icon, ImU32 color);
 ///
 void PushReadonly(bool _enabled);
 
