@@ -242,7 +242,12 @@ IMGUI_API bool KnobSliderScalarT(const char* label,
     return KnobSliderScalar(label, GetDataType<T>(), p_data, &p_min, &p_max, format, flags);
 }
 
-IMGUI_API void ItemBrowser(float item_width, size_t items_count, const std::function<void(int index)>& callback);
+/// Lays out items_count items of item_width in wrapping lines and draws only the visible lines.
+/// reveal_index names an item to scroll into view: its line is drawn even when out of view.
+IMGUI_API void ItemBrowser(float item_width,
+                           size_t items_count,
+                           const std::function<void(int index)>& callback,
+                           int reveal_index = -1);
 
 struct IMGUI_API WindowTimeBlock
 {

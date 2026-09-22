@@ -42,6 +42,7 @@
 
 #include <filedialog/filedialog.h>
 #include <filesystem/watcher.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -968,12 +969,6 @@ auto draw_item(const content_browser_item& item)
     if(item.is_focused)
     {
         ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 0.0f, 1.0f)));
-
-        if(!ImGui::IsItemVisible())
-        {
-            ImGui::SetScrollHereY();
-        }
-
     }
 
     if(item.is_loading)
@@ -1134,7 +1129,8 @@ void content_browser_panel::draw(rtti::context& ctx)
 
     if(!em.focused_data.focus_path.empty())
     {
-        set_cache_path(em.focused_data.focus_path);
+        reveal_path_ = em.focused_data.focus_path;
+        set_cache_path(reveal_path_.parent_path());
         em.focused_data.focus_path.clear();
     }
 
@@ -1431,6 +1427,21 @@ auto content_browser_panel::collect_shown_entries(asset_manager& am) const -> st
     return shown_entries;
 }
 
+auto content_browser_panel::find_shown_index(const std::vector<size_t>& shown_entries, const fs::path& path) const -> int
+{
+    if(path.empty())
+    {
+        return -1;
+    }
+    const auto found = std::find_if(shown_entries.begin(),
+                                    shown_entries.end(),
+                                    [&](size_t index)
+                                    {
+                                        return cache_[index].entry.path() == path;
+                                    });
+    return found == shown_entries.end() ? -1 : int(std::distance(shown_entries.begin(), found));
+}
+
 auto content_browser_panel::draw_assets(rtti::context& ctx, const ImVec2& size) -> size_t
 {
     size_t shown_count = 0;
@@ -1442,16 +1453,20 @@ auto content_browser_panel::draw_assets(rtti::context& ctx, const ImVec2& size) 
         const float item_size = ImGui::GetFrameHeight() * CONTENT_ITEM_SIZE_IN_FRAMES * scale_;
         const std::vector<size_t> shown_entries = collect_shown_entries(am);
         shown_count = shown_entries.size();
+        const int reveal_index = find_shown_index(shown_entries, reveal_path_);
+        reveal_path_.clear();
         // A double click on a folder lands here and is applied once the grid is through.
         fs::path current_path = cache_.get_path();
         bool is_popup_opened = false;
-        ImGui::ItemBrowser(item_size,
-                           shown_entries.size(),
-                           [&](int index)
-                           {
-                               const auto& cache_entry = cache_[shown_entries[index]];
-                               is_popup_opened |= draw_cache_entry(ctx, cache_entry, item_size, current_path);
-                           });
+        ImGui::ItemBrowser(
+            item_size,
+            shown_entries.size(),
+            [&](int index)
+            {
+                const auto& cache_entry = cache_[shown_entries[index]];
+                is_popup_opened |= draw_cache_entry(ctx, cache_entry, item_size, current_path);
+            },
+            reveal_index);
         if(!is_popup_opened)
         {
             context_menu(ctx, false, cache_.get_path());

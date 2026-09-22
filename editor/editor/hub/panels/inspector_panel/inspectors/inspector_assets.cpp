@@ -1,4 +1,5 @@
 #include "inspector_assets.h"
+#include "inspector_asset_picker.h"
 #include <editor/editing/authoring_root.h>
 #include "inspectors.h"
 
@@ -35,6 +36,8 @@
 #include <engine/assets/impl/asset_writer.h>
 
 #include <filesystem/filesystem.h>
+#include <algorithm>
+#include <type_traits>
 #include <graphics/texture.h>
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -48,14 +51,13 @@ namespace
 template<typename T>
 auto process_drag_drop_target(asset_manager& am, asset_handle<T>& entry) -> bool
 {
-    for(const auto& type : ex::get_suported_formats<T>())
-    {
-        if(ImGui::IsDragDropPossibleTargetForType(type.c_str()))
-        {
-            ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 0.0f, 1.0f)));
-            break;
-        }
-    }
+    const auto& formats = ex::get_suported_formats<T>();
+    asset_picker::draw_drop_highlight(std::any_of(formats.begin(),
+                                                  formats.end(),
+                                                  [](const std::string& type)
+                                                  {
+                                                      return ImGui::IsDragDropPossibleTargetForType(type.c_str());
+                                                  }));
 
     bool result = false;
     if(ImGui::BeginDragDropTarget())
@@ -95,6 +97,99 @@ auto process_drag_drop_target(asset_manager& am, asset_handle<T>& entry) -> bool
     return result;
 }
 
+/// The icon of an asset type, for a field or a picker tile without a thumbnail.
+template<typename T>
+auto get_asset_icon() -> const char*
+{
+    if constexpr(std::is_same_v<T, gfx::texture>)
+    {
+        return ICON_MDI_IMAGE_OUTLINE;
+    }
+    else if constexpr(std::is_same_v<T, material>)
+    {
+        return ICON_MDI_CIRCLE_HALF_FULL;
+    }
+    else if constexpr(std::is_same_v<T, mesh>)
+    {
+        return ICON_MDI_CUBE_OUTLINE;
+    }
+    else if constexpr(std::is_same_v<T, animation_clip>)
+    {
+        return ICON_MDI_ANIMATION_OUTLINE;
+    }
+    else if constexpr(std::is_same_v<T, prefab>)
+    {
+        return ICON_MDI_PACKAGE_VARIANT_CLOSED;
+    }
+    else if constexpr(std::is_same_v<T, scene_prefab>)
+    {
+        return ICON_MDI_MAP_OUTLINE;
+    }
+    else if constexpr(std::is_same_v<T, physics_material>)
+    {
+        return ICON_MDI_ATOM;
+    }
+    else if constexpr(std::is_same_v<T, audio_clip>)
+    {
+        return ICON_MDI_MUSIC_NOTE;
+    }
+    else if constexpr(std::is_same_v<T, font>)
+    {
+        return ICON_MDI_FORMAT_FONT;
+    }
+    else if constexpr(std::is_same_v<T, style_sheet>)
+    {
+        return ICON_MDI_LANGUAGE_CSS3;
+    }
+    else
+    {
+        return ICON_MDI_FILE_DOCUMENT_OUTLINE;
+    }
+}
+
+/// The thumbnail of an asset, the icon of its type when it has none, a clock while it loads.
+template<typename T>
+auto make_preview(thumbnail_manager& tm, const asset_handle<T>& asset) -> asset_picker::preview
+{
+    asset_picker::preview result{};
+    result.icon = get_asset_icon<T>();
+    if(!asset)
+    {
+        return result;
+    }
+    // Asking for the thumbnail is also what starts loading an asset nobody uses yet.
+    const auto& thumbnail = tm.get_thumbnail(asset);
+    if(!asset.is_ready())
+    {
+        result.is_loading = true;
+        return result;
+    }
+    result.texture = ImGui::ToId(thumbnail);
+    result.texture_size = ImGui::GetSize(thumbnail);
+    return result;
+}
+
+/// What the picker offers: the empty handle first (get_assets_with_predicate always puts it
+/// there), then the assets of the project that pass the search.
+template<typename T>
+auto find_pickable_assets(asset_manager& am, const ImGuiTextFilter& filter) -> std::vector<asset_handle<T>>
+{
+    return am.get_assets_with_predicate<T>(
+        [&](const auto& asset)
+        {
+            const auto& id = asset.id();
+            hpp::string_view id_view(id);
+            return !id_view.starts_with("editor:/") && filter.PassFilter(asset.name().c_str());
+        });
+}
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// The field of an asset property: thumbnail, name and the buttons under it, a drop target for
+/// assets of the type, and the picker window it opens. The first tile of the picker, the empty
+/// handle, clears the property.
+/// </summary>
+//-----------------------------------------------------------------------------
 template<typename T>
 auto pick_asset(ImGuiTextFilter& filter,
                 editing_manager& em,
@@ -105,175 +200,78 @@ auto pick_asset(ImGuiTextFilter& filter,
 {
     inspect_result result{};
 
-    auto fh = ImGui::GetFrameHeight();
-    ImVec2 item_size = ImVec2(fh, fh) * 2.0f;
-    ImGui::BeginGroup();
+    asset_picker::field_content content{};
+    content.thumbnail = make_preview(tm, data);
+    content.type = type;
     if(data)
     {
-        const auto& thumbnail = tm.get_thumbnail(data);
-
-        if(!data.is_ready())
-        {
-            auto spinner_size = item_size.x;
-            ImSpinner::Spinner<ImSpinner::SpinnerTypeT::e_st_eclipse>("spinner",
-                                                                      ImSpinner::Radius{spinner_size * 0.5f},
-                                                                      ImSpinner::Thickness{6.0f},
-                                                                      ImSpinner::Color{ImSpinner::white},
-                                                                      ImSpinner::Speed{6.0f});
-        }
-        else
-        {
-            ImVec2 texture_size = ImGui::GetSize(thumbnail, item_size);
-
-            ImGui::ContentItem citem{};
-            citem.texId = ImGui::ToId(thumbnail);
-            citem.texture_size = texture_size;
-            citem.image_size = item_size;
-
-            if(ImGui::ContentButtonItem(citem))
-            {
-                em.foucs_asset(data);
-            }
-            ImGui::SetItemTooltipEx("Locate the asset in the content browser.\n%s", data.id().c_str());
-
-            ImGui::DrawItemActivityOutline();
-        }
+        content.name = data.name();
+        content.path = data.id();
     }
-    else
-    {
-        ImGui::Button("##None", item_size);
+    const asset_picker::field_request request = asset_picker::draw_field(content);
 
-        ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImGuiCol_TextDisabled), 1.0f);
-    }
+    const bool is_dropped = process_drag_drop_target(am, data);
+    result.changed |= is_dropped;
+    result.edit_finished |= is_dropped;
 
-    bool drag_dropped = process_drag_drop_target(am, data);
-    result.changed |= drag_dropped;
-    result.edit_finished |= drag_dropped;
-
-    ImGui::SameLine();
-
-    std::string item = data ? data.name() : fmt::format("None ({})", type);
-    ImGui::BeginGroup();
-    ImGui::AlignTextToFramePadding();
-
-    auto popup_name = fmt::format("Pick {}", type);
-    bool clicked = ImGui::Button(item.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, ImGui::GetFrameHeight()));
-    ImGui::DrawItemActivityOutline();
-
-    ImGui::SetItemTooltipEx("%s\n\nPick an Asset", item.c_str());
-    if(clicked)
-    {
-        filter.Clear();
-        ImGui::SetNextWindowSize(ImGui::GetMainViewport()->Size * 0.4f);
-        ImGui::OpenPopup(popup_name.c_str());
-    }
-
-    if(ImGui::Button(ICON_MDI_FILE_FIND))
+    if(request.is_locate_pressed)
     {
         em.foucs_asset(data);
     }
-    ImGui::DrawItemActivityOutline();
-
-    ImGui::SetItemTooltipEx("Locate the asset in the content browser.\n%s", data.id().c_str());
-
-    ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
-
-    if(ImGui::Button(ICON_MDI_UNDO_VARIANT))
+    if(request.is_clear_pressed && data)
     {
-        if(data)
-        {
-            data = asset_handle<T>::get_empty();
-            result.changed = true;
-            result.edit_finished = true;
-        }
+        data = asset_handle<T>::get_empty();
+        result.changed = true;
+        result.edit_finished = true;
     }
-    ImGui::DrawItemActivityOutline();
 
-    ImGui::SetItemTooltipEx("Reset to default.");
-
-    ImGui::EndGroup();
-
-    bool open = true;
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowTitleAlign, ImVec2(0.5f, 0.5f));
-    if(ImGui::BeginPopupModal(popup_name.c_str(), &open))
+    const std::string popup_id = fmt::format("Pick {}", type);
+    if(request.is_pick_pressed)
     {
-        if(!open)
-        {
-            ImGui::CloseCurrentPopup();
-        }
-
-        if(ImGui::IsWindowAppearing())
-        {
-            ImGui::SetKeyboardFocusHere();
-        }
-
-        ImGui::DrawFilterWithHint(filter, "Search...", ImGui::GetContentRegionAvail().x);
-        ImGui::DrawItemActivityOutline();
-
-        auto assets = am.get_assets_with_predicate<T>(
-            [&](const auto& asset)
-            {
-                const auto& id = asset.id();
-                hpp::string_view id_view(id);
-                return !id_view.starts_with("editor:/") && filter.PassFilter(asset.name().c_str());
-            });
-
-        const float size = 100.0f;
-
-        ImGui::BeginChild("##items", {-1.0f, -1.0f});
-        ImGui::ItemBrowser(size,
-                           assets.size(),
-                           [&](int index)
-                           {
-                               auto& asset = assets[index];
-                               const auto& thumbnail = tm.get_thumbnail(asset);
-
-                               
-                               if(asset && !asset.is_ready())
-                               {
-                                   auto spinner_size = size;
-                                   ImSpinner::Spinner<ImSpinner::SpinnerTypeT::e_st_eclipse>(
-                                       "spinner",
-                                       ImSpinner::Radius{spinner_size * 0.5f},
-                                       ImSpinner::Thickness{6.0f},
-                                       ImSpinner::Color{ImSpinner::white},
-                                       ImSpinner::Speed{6.0f});
-                               }
-                               else
-                               {
-                                   ImVec2 texture_size = ImGui::GetSize(thumbnail, item_size);
-                                   ImVec2 item_size = {size, size};
-
-                                   // copy so that we can pass c_str
-                                   auto name = asset.name();
-                                   auto description = asset.uid().to_string();
-                                   ImGui::ContentItem citem{};
-                                   citem.texId = ImGui::ToId(thumbnail);
-                                   citem.name = name.c_str();
-                                   citem.description = description.c_str();
-                                   citem.texture_size = texture_size;
-                                   citem.image_size = item_size;
-
-                                   if(ImGui::ContentButtonItem(citem))
-                                   {
-                                       data = asset;
-                                       result.changed = true;
-                                       result.edit_finished = true;
-                                       ImGui::CloseCurrentPopup();
-                                   }
-
-                                   ImGui::SetItemTooltipEx("%s", asset.name().c_str());
-                               }
-                           });
-
-        ImGui::EndChild();
-
-        ImGui::EndPopup();
+        filter.Clear();
+        ImGui::OpenPopup(popup_id.c_str());
     }
-    ImGui::PopStyleVar();
+    if(!asset_picker::begin_window(popup_id.c_str(), get_asset_icon<T>(), fmt::format("Select {}", type), filter))
+    {
+        return result;
+    }
 
-    ImGui::EndGroup();
+    const auto assets = find_pickable_assets<T>(am, filter);
+    const auto get_tile = [&](std::size_t index) -> asset_picker::tile_content
+    {
+        const auto& asset = assets[index];
+        asset_picker::tile_content tile{};
+        if(!asset)
+        {
+            tile.thumbnail.icon = ICON_MDI_CANCEL;
+            tile.name = "None";
+            tile.is_selected = !data;
+            return tile;
+        }
+        tile.thumbnail = make_preview(tm, asset);
+        tile.name = asset.name();
+        tile.is_selected = data && asset.uid() == data.uid();
+        return tile;
+    };
+    const asset_picker::grid_result grid = asset_picker::draw_grid(assets.size(), get_tile);
+    if(grid.picked >= 0)
+    {
+        data = assets[static_cast<std::size_t>(grid.picked)];
+        result.changed = true;
+        result.edit_finished = true;
+        ImGui::CloseCurrentPopup();
+    }
 
+    // Not counting the empty handle.
+    const std::size_t asset_count = assets.empty() ? 0 : assets.size() - 1;
+    std::string footer = fmt::format("{} {}", asset_count, asset_count == 1 ? "asset" : "assets");
+    if(grid.hovered >= 0)
+    {
+        const auto& hovered = assets[static_cast<std::size_t>(grid.hovered)];
+        footer = hovered ? hovered.id() : fmt::format("Clears the {}", type);
+    }
+    asset_picker::draw_footer(footer);
+    asset_picker::end_window();
     return result;
 }
 

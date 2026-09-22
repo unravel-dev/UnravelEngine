@@ -787,7 +787,7 @@ ImVec2 CalcItemSize(const char* label, ImVec2 size_arg)
     return size;
 }
 
-void ItemBrowser(float item_width, size_t items_count, const std::function<void(int)>& callback)
+void ItemBrowser(float item_width, size_t items_count, const std::function<void(int)>& callback, int reveal_index)
 {
     const auto& style = GetStyle();
 
@@ -809,6 +809,12 @@ void ItemBrowser(float item_width, size_t items_count, const std::function<void(
     auto lines = items_per_line > 0 ? int(ImCeil(float(items_count) / float(items_per_line))) : 0;
     ImGuiListClipper clipper;
     clipper.Begin(lines);
+    const bool has_reveal = reveal_index >= 0 && size_t(reveal_index) < items_count;
+    if(has_reveal)
+    {
+        // The clipper never submits a line out of view, so there would be no item to scroll to.
+        clipper.IncludeItemByIndex(int(size_t(reveal_index) / items_per_line));
+    }
 
     while(clipper.Step())
     {
@@ -820,7 +826,21 @@ void ItemBrowser(float item_width, size_t items_count, const std::function<void(
             {
                 PushID(int(j));
 
+                const bool is_revealed = has_reveal && j == size_t(reveal_index);
+                if(is_revealed)
+                {
+                    BeginGroup();
+                }
+
                 callback(j);
+
+                if(is_revealed)
+                {
+                    EndGroup();
+                    ScrollToRect(GetCurrentWindow(),
+                                 ImRect(GetItemRectMin(), GetItemRectMax()),
+                                 ImGuiScrollFlags_KeepVisibleCenterY);
+                }
 
                 PopID();
 

@@ -34,6 +34,8 @@ struct editing_manager
         entt::meta_any object;
         delta_t remaining_time{};
 
+        /// A file or folder for the content browser to show: it opens the folder holding it and
+        /// scrolls to it. Cleared once the content browser takes it.
         fs::path focus_path{};
     };
 
@@ -149,7 +151,7 @@ struct editing_manager
     void foucs_asset(const asset_handle<T>& entry)
     {
         focus(entry);
-        focus_path(fs::resolve_protocol(fs::path(entry.id()).parent_path()));
+        focus_path(fs::resolve_protocol(entry.id()));
     }
 
     //-----------------------------------------------------------------------------

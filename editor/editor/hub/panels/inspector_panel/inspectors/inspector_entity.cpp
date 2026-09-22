@@ -1233,7 +1233,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                                 auto& em = ctx.get_cached<editing_manager>();
 
                                 em.focus(source_loc);
-                                em.focus_path(source_loc.parent_path());
+                                em.focus_path(source_loc);
                             }
 
                             if(ImGui::IsItemDoubleClicked(ImGuiMouseButton_Left))

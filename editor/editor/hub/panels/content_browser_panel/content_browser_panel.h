@@ -76,6 +76,8 @@ private:
     void draw_status_bar(size_t shown_count);
     /// Indices into the cache of the entries that pass the search, all of them without one.
     auto collect_shown_entries(asset_manager& am) const -> std::vector<size_t>;
+    /// Position of the entry at path among the shown entries, -1 when it is not shown.
+    auto find_shown_index(const std::vector<size_t>& shown_entries, const fs::path& path) const -> int;
     /// The search matches the name, the asset type and the uid.
     auto passes_filter(asset_manager& am, const fs::directory_cache::cache_entry& cache_entry) const -> bool;
 
@@ -113,7 +115,8 @@ private:
     int refresh_{};
     float scale_ = 0.6f;
 
-    int focus_frames_{};
+    /// The entry a focus request asked to show, scrolled to the next time its folder is drawn.
+    fs::path reveal_path_;
 
     imgui_panels* parent_{};
 
