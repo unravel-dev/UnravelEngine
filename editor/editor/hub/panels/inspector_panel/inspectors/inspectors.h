@@ -318,6 +318,14 @@ void pop_debug_view();
 auto is_debug_view() -> bool;
 
 /**
+ * @brief Finds the inspector registered for a type
+ * @param ctx Runtime type information context
+ * @param type Type to look up
+ * @return The inspector, or null when the type has none and is inspected through its properties
+ */
+auto get_inspector(rtti::context& ctx, const entt::meta_type& type) -> std::shared_ptr<inspector>;
+
+/**
  * @brief Main entry point for inspecting any variable with automatic type resolution
  * @param ctx Runtime type information context
  * @param var Variable to inspect (will be modified if changed)

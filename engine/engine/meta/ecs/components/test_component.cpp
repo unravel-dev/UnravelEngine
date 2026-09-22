@@ -1,9 +1,15 @@
 #include "test_component.hpp"
 #include "entt/meta/policy.hpp"
 #include <engine/meta/assets/asset_handle.hpp>
+#include <engine/meta/core/common/basetypes.hpp>
+#include <engine/meta/core/math/vector.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
+#include <serialization/types/chrono.hpp>
+#include <serialization/types/map.hpp>
+#include <serialization/types/string.hpp>
+#include <serialization/types/vector.hpp>
 
 namespace unravel
 {
@@ -132,14 +138,73 @@ REFLECT(test_component)
         });
 }
 
+SAVE(named_anim)
+{
+    try_save(ar, ser20::make_nvp("name", obj.name));
+    try_save(ar, ser20::make_nvp("clip", obj.clip));
+}
+
+LOAD(named_anim)
+{
+    try_load(ar, ser20::make_nvp("name", obj.name));
+    try_load(ar, ser20::make_nvp("clip", obj.clip));
+}
+
+// Every field under the name its property is reflected with: prefab overrides point at them by it.
 SAVE(test_component)
 {
+    try_save(ar, ser20::make_nvp("str", obj.str));
+    try_save(ar, ser20::make_nvp("u8", obj.u8));
+    try_save(ar, ser20::make_nvp("u16", obj.u16));
+    try_save(ar, ser20::make_nvp("u32", obj.u32));
+    try_save(ar, ser20::make_nvp("u64", obj.u64));
+    try_save(ar, ser20::make_nvp("i8", obj.i8));
+    try_save(ar, ser20::make_nvp("i16", obj.i16));
+    try_save(ar, ser20::make_nvp("i32", obj.i32));
+    try_save(ar, ser20::make_nvp("i64", obj.i64));
+    try_save(ar, ser20::make_nvp("f", obj.f));
+    try_save(ar, ser20::make_nvp("d", obj.d));
+    try_save(ar, ser20::make_nvp("irange", obj.irange));
+    try_save(ar, ser20::make_nvp("isize", obj.isize));
+    try_save(ar, ser20::make_nvp("ipoint", obj.ipoint));
+    try_save(ar, ser20::make_nvp("irect", obj.irect));
+    try_save(ar, ser20::make_nvp("delta", obj.delta));
+    try_save(ar, ser20::make_nvp("color", obj.color));
+    try_save(ar, ser20::make_nvp("texture", obj.texture));
+    try_save(ar, ser20::make_nvp("mat", obj.mat));
+    try_save(ar, ser20::make_nvp("anim", obj.anim));
+    try_save(ar, ser20::make_nvp("sequential", obj.sequential));
+    try_save(ar, ser20::make_nvp("associative", obj.associative));
+    try_save(ar, ser20::make_nvp("associative_mock", obj.associative_mock));
 }
 SAVE_INSTANTIATE(test_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(test_component, ser20::oarchive_binary_t);
 
 LOAD(test_component)
 {
+    try_load(ar, ser20::make_nvp("str", obj.str));
+    try_load(ar, ser20::make_nvp("u8", obj.u8));
+    try_load(ar, ser20::make_nvp("u16", obj.u16));
+    try_load(ar, ser20::make_nvp("u32", obj.u32));
+    try_load(ar, ser20::make_nvp("u64", obj.u64));
+    try_load(ar, ser20::make_nvp("i8", obj.i8));
+    try_load(ar, ser20::make_nvp("i16", obj.i16));
+    try_load(ar, ser20::make_nvp("i32", obj.i32));
+    try_load(ar, ser20::make_nvp("i64", obj.i64));
+    try_load(ar, ser20::make_nvp("f", obj.f));
+    try_load(ar, ser20::make_nvp("d", obj.d));
+    try_load(ar, ser20::make_nvp("irange", obj.irange));
+    try_load(ar, ser20::make_nvp("isize", obj.isize));
+    try_load(ar, ser20::make_nvp("ipoint", obj.ipoint));
+    try_load(ar, ser20::make_nvp("irect", obj.irect));
+    try_load(ar, ser20::make_nvp("delta", obj.delta));
+    try_load(ar, ser20::make_nvp("color", obj.color));
+    try_load(ar, ser20::make_nvp("texture", obj.texture));
+    try_load(ar, ser20::make_nvp("mat", obj.mat));
+    try_load(ar, ser20::make_nvp("anim", obj.anim));
+    try_load(ar, ser20::make_nvp("sequential", obj.sequential));
+    try_load(ar, ser20::make_nvp("associative", obj.associative));
+    try_load(ar, ser20::make_nvp("associative_mock", obj.associative_mock));
 }
 LOAD_INSTANTIATE(test_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(test_component, ser20::iarchive_binary_t);
