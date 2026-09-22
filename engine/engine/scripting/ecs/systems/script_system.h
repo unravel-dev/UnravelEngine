@@ -13,6 +13,8 @@
 
 #include <dotnetpp/dotnetpp.h>
 
+#include <map>
+
 namespace unravel
 {
 
@@ -25,7 +27,12 @@ struct script_system
     static auto get_lib_data_key(const std::string& protocol) -> std::string;
     static auto get_lib_temp_compiled_key(const std::string& protocol) -> std::string;
     static auto get_lib_compiled_key(const std::string& protocol) -> std::string;
+    /// Moves a compiled library dll with its pdb/mdb/xml. A companion the source lacks is removed
+    /// at the destination, so the dll never sits beside another build's symbols. Does nothing
+    /// when the dll cannot be copied.
     static void copy_compiled_lib(const fs::path& from, const fs::path& to);
+    /// Removes a compiled library dll with its pdb/mdb/xml.
+    static void remove_compiled_lib(const fs::path& lib);
     static auto is_debugger_attached() -> bool;
     static void log_exception(const dotnet::exception& e,
                               const hpp::source_location& loc = hpp::source_location::current());
@@ -205,6 +212,10 @@ private:
 
     auto create_compilation_job(rtti::context& ctx, const std::string& protocol, bool debug) -> tpp::job_future<bool>;
 
+    /// True until the last build scheduled for the protocol's library has finished.
+    auto is_compiling(const std::string& protocol) const -> bool;
+    void wait_for_compilation_jobs();
+
     ///< Sentinel value to manage shared resources.
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
@@ -232,7 +243,8 @@ private:
 
     call_progress create_call_{call_progress::not_called};
     bool is_updating_{};
-    std::vector<tpp::future<void>> compilation_jobs_;
+    ///< Last scheduled library build per protocol.
+    std::map<std::string, tpp::future<void>> compilation_jobs_;
 
     bool has_compilation_errors_{};
 

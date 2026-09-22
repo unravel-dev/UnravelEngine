@@ -22,6 +22,8 @@
 #include <seq/seq.h>
 #include <simulation/simulation.h>
 
+#include <array>
+
 namespace unravel
 {
 namespace
@@ -41,6 +43,27 @@ std::atomic<recompile_command> needs_recompile{};
 std::mutex container_mutex;
 std::vector<std::string> needs_to_recompile;
 std::atomic<uint64_t> compilation_version{};
+
+// Guards the files every build of a script library writes: the compiler output at a fixed
+// temp path (the pdb stays there, so the dll's debug entry keeps pointing at it) and the temp
+// compiled key it is copied to, which domain loads copy into place. A build holds it for its
+// whole run and reads the sources only once it has it, so the last build to run compiles the
+// latest change and nothing older overwrites it. One lock for every protocol: app builds also
+// read the engine library that engine domain loads copy into place.
+std::mutex library_files_mutex;
+
+/// Files that belong to one build of a script library dll: its debug symbols (portable pdb
+/// from csc and newer mcs, mdb from older mcs) and its XML docs.
+auto get_lib_companion_files(const fs::path& lib) -> std::array<fs::path, 3>
+{
+    auto pdb = lib;
+    pdb.replace_extension(".pdb");
+    auto mdb = lib;
+    mdb.concat(".mdb");
+    auto xml = lib;
+    xml.replace_extension(".xml");
+    return {pdb, mdb, xml};
+}
 
 std::atomic_bool debug_mode{true};
 
@@ -121,24 +144,35 @@ void script_system::log_exception(const dotnet::exception& e, const hpp::source_
 
 void script_system::copy_compiled_lib(const fs::path& from, const fs::path& to)
 {
-    auto from_debug_info = from;
-    from_debug_info.concat(".mdb");
-    auto from_comments_xml = from;
-    from_comments_xml.replace_extension(".xml");
-
-    auto to_debug_info = to;
-    to_debug_info.concat(".mdb");
-    auto to_comments_xml = to;
-    to_comments_xml.replace_extension(".xml");
-
     fs::error_code er;
-    fs::copy_file(from, to, fs::copy_options::overwrite_existing, er);
-    fs::copy_file(from_debug_info, to_debug_info, fs::copy_options::overwrite_existing, er);
-    fs::copy_file(from_comments_xml, to_comments_xml, fs::copy_options::overwrite_existing, er);
-
+    if(!fs::copy_file(from, to, fs::copy_options::overwrite_existing, er))
+    {
+        return;
+    }
     fs::remove(from, er);
-    fs::remove(from_debug_info, er);
-    fs::remove(from_comments_xml, er);
+
+    const auto from_companions = get_lib_companion_files(from);
+    const auto to_companions = get_lib_companion_files(to);
+    for(size_t i = 0; i < from_companions.size(); ++i)
+    {
+        // A companion this build did not produce (a release build writes no symbols) must not
+        // survive from an older build: the loaders pair the dll with any symbols beside it.
+        if(!fs::copy_file(from_companions[i], to_companions[i], fs::copy_options::overwrite_existing, er))
+        {
+            fs::remove(to_companions[i], er);
+        }
+        fs::remove(from_companions[i], er);
+    }
+}
+
+void script_system::remove_compiled_lib(const fs::path& lib)
+{
+    fs::error_code er;
+    fs::remove(lib, er);
+    for(const auto& companion : get_lib_companion_files(lib))
+    {
+        fs::remove(companion, er);
+    }
 }
 
 auto script_system::find_dotnet_paths(const rtti::context& ctx) -> dotnet::compiler_paths
@@ -394,7 +428,10 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
     auto engine_script_lib = fs::resolve_protocol(get_lib_compiled_key("engine"));
     auto engine_script_lib_temp = fs::resolve_protocol(get_lib_temp_compiled_key("engine"));
 
-    copy_compiled_lib(engine_script_lib_temp, engine_script_lib);
+    {
+        std::lock_guard<std::mutex> lock(library_files_mutex);
+        copy_compiled_lib(engine_script_lib_temp, engine_script_lib);
+    }
 
     auto assembly = domain_->get_assembly(engine_script_lib.string());
     // print_assembly_info(assembly);
@@ -474,7 +511,10 @@ auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
     auto app_script_lib = fs::resolve_protocol(get_lib_compiled_key("app"));
     auto app_script_lib_temp = fs::resolve_protocol(get_lib_temp_compiled_key("app"));
 
-    copy_compiled_lib(app_script_lib_temp, app_script_lib);
+    {
+        std::lock_guard<std::mutex> lock(library_files_mutex);
+        copy_compiled_lib(app_script_lib_temp, app_script_lib);
+    }
 
     if(!is_deploy_mode)
     {
@@ -973,13 +1013,20 @@ void script_system::check_for_recompile(rtti::context& ctx, delta_t dt, bool emi
                 return result;
             }();
 
-            compilation_jobs_.clear();
-
             compilation_version++;
 
             auto current_version = compilation_version.load();
             for(const auto& protocol : container)
             {
+                if(is_compiling(protocol))
+                {
+                    // The running build may have read the sources before this change: build
+                    // once more after it ends instead of queueing builds behind it. The version
+                    // bump above already drops its now outdated reload.
+                    set_needs_recompile(protocol);
+                    continue;
+                }
+
                 auto job = create_compilation_job(ctx, protocol, get_script_debug_mode())
                                .then(tpp::this_thread::get_id(),
                                      [this, &ctx, protocol, emit_callback, current_version](auto f)
@@ -1007,7 +1054,7 @@ void script_system::check_for_recompile(rtti::context& ctx, delta_t dt, bool emi
                                          }
                                      });
 
-                compilation_jobs_.emplace_back(std::move(job));
+                compilation_jobs_[protocol] = std::move(job);
             }
         }
     }
@@ -1017,11 +1064,26 @@ void script_system::wait_for_jobs_to_finish(rtti::context& ctx)
 {
     APPLOG_TRACE("Waiting for script compilation...");
 
+    // Changes that arrived during a build stay pending until it ends, so finish the running
+    // builds before flushing the pending ones.
+    wait_for_compilation_jobs();
+
     check_for_recompile(ctx, 100s, false);
 
-    auto jobs = std::move(compilation_jobs_);
+    wait_for_compilation_jobs();
+}
 
-    for(auto& job : jobs)
+auto script_system::is_compiling(const std::string& protocol) const -> bool
+{
+    auto it = compilation_jobs_.find(protocol);
+    return it != compilation_jobs_.end() && it->second.valid() && !it->second.is_ready();
+}
+
+void script_system::wait_for_compilation_jobs()
+{
+    auto jobs = std::exchange(compilation_jobs_, {});
+
+    for(auto& [protocol, job] : jobs)
     {
         job.wait();
     }
@@ -1047,6 +1109,7 @@ auto script_system::create_compilation_job(rtti::context& ctx,
             auto key = get_lib_data_key(protocol);
             auto output = get_lib_temp_compiled_key(protocol);
 
+            std::lock_guard<std::mutex> lock(library_files_mutex);
             return asset_compiler::compile<script_library>(am, key, fs::resolve_protocol(output), flags);
         });
 }

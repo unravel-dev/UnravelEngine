@@ -2167,13 +2167,6 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
 
     auto temp_xml = temp;
     temp_xml.replace_extension(".xml");
-    auto output_xml = output;
-    output_xml.replace_extension(".xml");
-
-    auto temp_mdb = temp;
-    temp_mdb.concat(".mdb");
-    auto output_mdb = output;
-    output_mdb.concat(".mdb");
 
     std::string str_output = temp.string();
 
@@ -2186,8 +2179,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
     params.suppress_unassigned_field_warnings = is_app_scripts;
     if(params.files.empty())
     {
-        fs::remove(output, err);
-        fs::remove(output_mdb, err);
+        script_system::remove_compiled_lib(output);
 
         if(protocol == "engine")
         {
@@ -2206,9 +2198,8 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
 
     // APPLOG_TRACE("Script Compile : \n {0} {1}", cmd.cmd, cmd.args);
 
-    fs::remove(temp, err);
-    fs::remove(temp_mdb, err);
-    fs::remove(temp_xml, err);
+    // A release build writes no symbols: an older build's pdb left here would travel with it.
+    script_system::remove_compiled_lib(temp);
 
     if(!run_process(cmd.cmd, cmd.args, true, error))
     {
@@ -2229,11 +2220,6 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
     }
     else
     {
-        if(!params.debug)
-        {
-            fs::remove(output_mdb, err);
-        }
-
         fs::create_directories(output.parent_path(), err);
 
         if(protocol != "engine")
