@@ -6,6 +6,7 @@
 #include <engine/ecs/scene.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/components/tag_component.h>
+#include <engine/ecs/components/layer_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/material.h>
@@ -729,6 +730,112 @@ auto entity_set_tag_action_t::is_valid() const -> bool
 void entity_set_tag_action_t::draw_in_inspector(rtti::context& ctx)
 {
     draw_in_inspector_impl(ctx, old_tag, new_tag, {});
+}
+
+entity_set_layers_action_t::entity_set_layers_action_t(entt::handle ent, int old_mask, int new_mask)
+    : entity(entt::make_uhandle(ent)), old_mask(old_mask), new_mask(new_mask)
+{
+    name = "Set Layers";
+}
+
+void entity_set_layers_action_t::do_action()
+{
+    if(auto ent = entity.resolve())
+    {
+        if(auto layer = ent.try_get<layer_component>())
+        {
+            layer->layers.mask = new_mask;
+            prefab_override_context::mark_property_as_changed(ent, entt::resolve<layer_component>(), "layers");
+        }
+    }
+}
+
+void entity_set_layers_action_t::undo_action()
+{
+    if(auto ent = entity.resolve())
+    {
+        if(auto layer = ent.try_get<layer_component>())
+        {
+            layer->layers.mask = old_mask;
+            prefab_override_context::mark_property_as_changed(ent, entt::resolve<layer_component>(), "layers");
+        }
+    }
+}
+
+auto entity_set_layers_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    const auto& prev = static_cast<const entity_set_layers_action_t&>(previous);
+    return entity == prev.entity;
+}
+
+void entity_set_layers_action_t::merge_with(const editing_action_t& previous)
+{
+    const auto& prev = static_cast<const entity_set_layers_action_t&>(previous);
+    old_mask = prev.old_mask;
+}
+
+auto entity_set_layers_action_t::is_valid() const -> bool
+{
+    auto ent = entity.resolve();
+    return ent.valid() && ent.try_get<layer_component>();
+}
+
+void entity_set_layers_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    draw_in_inspector_impl(ctx, layer_mask{old_mask}, layer_mask{new_mask}, {});
+}
+
+entity_set_static_action_t::entity_set_static_action_t(entt::handle ent, bool old_static, bool new_static)
+    : entity(entt::make_uhandle(ent)), old_static(old_static), new_static(new_static)
+{
+    name = "Set Static";
+}
+
+void entity_set_static_action_t::do_action()
+{
+    if(auto ent = entity.resolve())
+    {
+        if(auto model = ent.try_get<model_component>())
+        {
+            model->set_static(new_static);
+            prefab_override_context::mark_property_as_changed(ent, entt::resolve<model_component>(), "static");
+        }
+    }
+}
+
+void entity_set_static_action_t::undo_action()
+{
+    if(auto ent = entity.resolve())
+    {
+        if(auto model = ent.try_get<model_component>())
+        {
+            model->set_static(old_static);
+            prefab_override_context::mark_property_as_changed(ent, entt::resolve<model_component>(), "static");
+        }
+    }
+}
+
+auto entity_set_static_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    const auto& prev = static_cast<const entity_set_static_action_t&>(previous);
+    return entity == prev.entity;
+}
+
+void entity_set_static_action_t::merge_with(const editing_action_t& previous)
+{
+    const auto& prev = static_cast<const entity_set_static_action_t&>(previous);
+    old_static = prev.old_static;
+}
+
+auto entity_set_static_action_t::is_valid() const -> bool
+{
+    auto ent = entity.resolve();
+    return ent.valid() && ent.try_get<model_component>();
+}
+
+void entity_set_static_action_t::draw_in_inspector(rtti::context& ctx)
+{
+    draw_in_inspector_impl(ctx, old_static, new_static, {});
 }
 
 entity_set_materials_action_t::entity_set_materials_action_t(entt::handle ent, const std::vector<asset_handle<material>>& old_materials, const asset_handle<material>& new_material)

@@ -21,4 +21,8 @@ private:
 
 REFLECT_INSPECTOR_INLINE(inspector_entity, entt::handle)
 
+/// Icon of a component type, the one its header in the inspector shows. Empty for a type the
+/// inspector does not list.
+auto get_component_icon(const entt::meta_type& type) -> std::string;
+
 } // namespace unravel

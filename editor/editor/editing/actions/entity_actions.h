@@ -165,6 +165,39 @@ struct entity_set_tag_action_t : crtp_meta_type<entity_set_tag_action_t, editing
     void draw_in_inspector(rtti::context& ctx) override;
 };
 
+struct entity_set_layers_action_t : crtp_meta_type<entity_set_layers_action_t, editing_action_t>
+{
+    entt::uhandle entity{};
+    int old_mask{};
+    int new_mask{};
+
+    entity_set_layers_action_t(entt::handle ent, int old_mask, int new_mask);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
+
+/// The static flag of the entity's model: a static model's shadow is cached.
+struct entity_set_static_action_t : crtp_meta_type<entity_set_static_action_t, editing_action_t>
+{
+    entt::uhandle entity{};
+    bool old_static{};
+    bool new_static{};
+
+    entity_set_static_action_t(entt::handle ent, bool old_static, bool new_static);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    void merge_with(const editing_action_t& previous) override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
+
 struct entity_set_materials_action_t : crtp_meta_type<entity_set_materials_action_t, editing_action_t>
 {
     entt::uhandle entity{};

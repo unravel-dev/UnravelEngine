@@ -935,6 +935,21 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override
 
 } // namespace
 
+auto get_component_icon(const entt::meta_type& type) -> std::string
+{
+    std::string icon;
+    hpp::for_each_tuple_type<all_inspectable_components>(
+        [&](auto index)
+        {
+            using ctype = std::tuple_element_t<decltype(index)::value, all_inspectable_components>;
+            if(icon.empty() && entt::resolve<ctype>() == type)
+            {
+                icon = get_component_icon<ctype>();
+            }
+        });
+    return icon;
+}
+
 auto inspector_entity::inspect_as_property(rtti::context& ctx, entt::handle& data) -> inspect_result
 {
     auto name = get_entity_pretty_name(data);
