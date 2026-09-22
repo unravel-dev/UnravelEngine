@@ -297,6 +297,14 @@ REFLECT_INLINE(settings::graphics_settings)
             entt::attribute{"tooltip",
                             "Per-platform preferred graphics backend. Applied at process start; requires restart."},
         })
+        .data<&settings::graphics_settings::static_mesh_batching>("static_mesh_batching"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "static_mesh_batching"},
+            entt::attribute{"pretty_name", "Static Mesh Batching"},
+            entt::attribute{"tooltip",
+                            "Draw the meshes that share a mesh and a material with one instanced draw call. "
+                            "Skinned meshes are always drawn one by one."},
+        })
         .data<&settings::graphics_settings::eviction>("eviction"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "eviction"},
@@ -308,12 +316,14 @@ REFLECT_INLINE(settings::graphics_settings)
 SAVE_INLINE(settings::graphics_settings)
 {
     try_save(ar, ser20::make_nvp("renderer", obj.renderer));
+    try_save(ar, ser20::make_nvp("static_mesh_batching", obj.static_mesh_batching));
     try_save(ar, ser20::make_nvp("eviction", obj.eviction));
 }
 
 LOAD_INLINE(settings::graphics_settings)
 {
     try_load(ar, ser20::make_nvp("renderer", obj.renderer));
+    try_load(ar, ser20::make_nvp("static_mesh_batching", obj.static_mesh_batching));
     try_load(ar, ser20::make_nvp("eviction", obj.eviction));
 }
 

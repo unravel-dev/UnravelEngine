@@ -33,6 +33,7 @@ constexpr float POPUP_PADDING_Y = 0.6f;
 constexpr float POPUP_ROUNDING = 0.45f;
 constexpr float POPUP_ITEM_SPACING_X = 0.5f;
 constexpr float POPUP_ITEM_SPACING_Y = 0.4f;
+constexpr float OVERLAY_PADDING = 0.75f;
 
 // The bar is the window background pulled towards black: dark enough to carry white icons over
 // a bright sky, translucent enough to stay part of the image.
@@ -63,6 +64,8 @@ constexpr const char* RIGHT_GROUP_WIDTH_ID = "##right_group_width";
 
 constexpr int BAR_STYLE_VARS = 4;
 constexpr int BAR_STYLE_COLORS = 2;
+constexpr int OVERLAY_STYLE_VARS = 3;
+constexpr int OVERLAY_STYLE_COLORS = 2;
 constexpr int STRIP_STYLE_VARS = 3;
 constexpr int STRIP_STYLE_COLORS = 2;
 constexpr int FIELD_STYLE_VARS = 2;
@@ -553,6 +556,33 @@ void draw_readout(const bar_placement& placement, const char* text, const char* 
     const ImVec2 text_pos(ImFloor(bar_rect.Min.x + (bar_size.x - text_size.x) * 0.5f),
                           ImFloor(bar_rect.Min.y + (bar_size.y - text_size.y) * 0.5f));
     host->DrawList->AddText(text_pos, ImGui::GetColorU32(ImGuiCol_Text, ITEM_TEXT_ALPHA * alpha), text, text_end);
+}
+
+auto begin_overlay(const char* id, const ImVec2& top_right, float width, float max_height) -> bool
+{
+    const float padding = to_pixels(OVERLAY_PADDING);
+    ImGui::SetCursorScreenPos(ImVec2(top_right.x - width, top_right.y));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, to_pixels(BAR_ROUNDING));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padding, padding));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, get_bar_bg_color());
+    ImGui::PushStyleColor(ImGuiCol_Border, BAR_BORDER_COLOR);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, max_height));
+    const ImGuiChildFlags child_flags = ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_AutoResizeY |
+                                        ImGuiChildFlags_AlwaysAutoResize | ImGuiChildFlags_Borders;
+    const ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav;
+    const bool is_open = ImGui::BeginChild(id, ImVec2(width, 0.0f), child_flags, window_flags);
+    // Only the card itself: its content and its tooltips keep the theme.
+    ImGui::PopStyleColor(OVERLAY_STYLE_COLORS);
+    ImGui::PopStyleVar(OVERLAY_STYLE_VARS);
+    return is_open;
+}
+
+void end_overlay()
+{
+    ImGui::EndChild();
+    // The host draws before its children, so the shadow still lies under the card.
+    draw_bar_shadow(ImGui::GetWindowDrawList(), ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax()), 1.0f);
 }
 
 auto get_bar_width(const char* id) -> float

@@ -75,9 +75,17 @@ struct pipeline_stats
 
     uint32_t drawn_lights = 0;
     uint32_t drawn_lights_casting_shadows = 0;
+    /// Particle emitters: enabled in the scene, simulated this frame (the others are frozen by
+    /// renderer-based culling), and drawn by this camera.
+    uint32_t active_particle_emitters = 0;
+    uint32_t simulated_particle_emitters = 0;
+    uint32_t drawn_particle_emitters = 0;
+    /// Live particles of those emitters; drawn_particles counts the instances submitted.
+    uint32_t active_particles = 0;
+    uint32_t simulated_particles = 0;
     uint32_t drawn_particles = 0;
     uint32_t drawn_particles_batches = 0;
-    
+
     // Static mesh batching statistics
     batch_stats batching_stats;
 

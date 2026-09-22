@@ -211,7 +211,7 @@ void game_panel::draw_ui(rtti::context& ctx)
         // After the image: the shadow of the bar goes into this window's draw list, on top of it.
         draw_toolbar(ctx, toolbar_area);
 
-        viewport_stats_overlay::draw(pstats, stats_overlay_state_, "game", panel_toolbar::get_rows_extent(1));
+        viewport_stats_overlay::draw(ctx, pstats, stats_overlay_state_, "game", panel_toolbar::get_rows_extent(1));
         visualization_menu::draw_legend_overlay(visualize_passes_, visualization_menu_state_, "game");
 
         if(stats_overlay_state_.open_profiler_requested)

@@ -770,8 +770,9 @@ auto make_project_settings_categories() -> std::vector<settings_category>
          &draw_asset_settings},
         {"Graphics",
          ICON_MDI_CHIP,
-         "The renderer backend of each platform, and how GPU memory is paged.",
-         "renderer backend directx vulkan opengl metal gpu memory eviction paging budget",
+         "The renderer backend of each platform, static mesh batching, and how GPU memory is paged.",
+         "renderer backend directx vulkan opengl metal static mesh batching instancing draw calls gpu memory eviction "
+         "paging budget",
          &draw_graphics_settings},
         {"Splash Screen",
          ICON_MDI_IMAGE_OUTLINE,

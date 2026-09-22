@@ -81,6 +81,9 @@ struct settings
     {
         /// Per-platform preferred renderer. Applied at process start (cold); changing it requires restart.
         platform_renderer_settings renderer;
+        /// Draws the meshes that share a mesh and a material with one instanced draw call; skinned
+        /// meshes are always drawn one by one. The renderer applies it every frame.
+        bool static_mesh_batching{true};
         /// GPU resource eviction/paging policy. Persisted with the project so paging behaves the same
         /// in standalone builds; the renderer drives it every frame from this configuration.
         eviction_settings eviction;

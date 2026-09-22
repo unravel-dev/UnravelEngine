@@ -181,6 +181,10 @@ public:
 
     void update_emitter(const math::transform& world_transform, delta_t dt);
 
+    /// True when the last update advanced the simulation; false when it was frozen by the
+    /// renderer-based culling, or the emitter is disabled.
+    auto is_simulated() const noexcept -> bool;
+
     auto get_desc() const -> const ps_soa::emitter_desc&;
 
     void recreate_emitter();
@@ -190,10 +194,11 @@ private:
     bool enabled_ = true;
     culling_mode culling_mode_ = culling_mode::renderer_based;
     uint64_t last_render_frame_ = 0;
+    bool is_simulated_ = false;
     ps_soa::emitter_shape shape_ = ps_soa::emitter_shape::sphere;
     ps_soa::emitter_direction direction_ = ps_soa::emitter_direction::up;
     uint32_t max_particles_ = 1024;
-    ps_soa::particle_sim_backend simulation_backend_ = ps_soa::particle_sim_backend::cpu;
+    ps_soa::particle_sim_backend simulation_backend_ = ps_soa::particle_sim_backend::gpu;
     ps_soa::emitter_handle emitter_handle_{};
     ps_soa::emitter_desc desc_{};
     ps_soa::emitter_transform_state transform_state_{};

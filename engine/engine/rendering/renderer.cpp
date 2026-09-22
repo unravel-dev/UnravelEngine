@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "batch_collector.h"
 #include "eviction_settings.h"
 #include "../events.h"
 #include "spdlog/common.h"
@@ -492,7 +493,9 @@ void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
     // the project's graphics settings (a no-op until a settings instance exists).
     if(ctx.has<settings>())
     {
-        update_eviction(ctx.get<settings>().graphics.eviction);
+        const settings::graphics_settings& graphics = ctx.get<settings>().graphics;
+        update_eviction(graphics.eviction);
+        batch_collector::set_static_mesh_batching_enabled(graphics.static_mesh_batching);
     }
 
     auto window = get_main_window();

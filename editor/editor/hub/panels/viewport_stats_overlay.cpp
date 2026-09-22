@@ -1,485 +1,817 @@
 #include "viewport_stats_overlay.h"
 #include "panel_toolbar.h"
 #include "editor/format/format_bytes.h"
+#include "editor/hub/panels/inspector_panel/inspectors/inspector_container_widgets.h"
+#include "editor/imgui/integration/fonts/icons/icons_material_design_icons.h"
 #include "editor/imgui/integration/imgui.h"
+#include "editor/imgui/integration/imgui_style.h"
+#include "editor/system/project_manager.h"
+#include "imgui_widgets/tooltips.h"
 #include "imgui_widgets/utils.h"
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
 
-#include <engine/ecs/scene.h>
-#include <engine/rendering/ecs/components/camera_component.h>
-#include <engine/rendering/pipeline/pipeline.h>
+#include <engine/settings/settings.h>
 #include <graphics/eviction.h>
 #include <graphics/graphics.h>
 
-#include <bx/string.h>
-
 #include <algorithm>
 #include <array>
-#include <cstdio>
+#include <cstdint>
 #include <numeric>
 #include <string>
 
-namespace unravel
+namespace unravel::viewport_stats_overlay
 {
 namespace
 {
-constexpr float overlay_width = 460.0f;
-constexpr float overlay_padding = 8.0f;
-constexpr float overlay_rounding = 4.0f;
-constexpr float overlay_bg_alpha = 0.75f;
-constexpr ImVec4 overlay_bg_color{0.08f, 0.08f, 0.08f, overlay_bg_alpha};
+using container_widgets::to_pixels;
+
+// Sizes are in units of the font size, so the overlay follows the UI scale of the editor.
+constexpr float OVERLAY_WIDTH = 21.0f;
+constexpr float OVERLAY_MIN_HEIGHT = 6.0f;
+constexpr float HEADER_HEIGHT = 1.6f;
+constexpr float TITLE_ICON_GAP = 0.4f;
+constexpr float FRAME_RATE_SCALE = 2.0f;
+constexpr float UNIT_GAP = 0.3f;
+constexpr float GRAPH_HEIGHT = 2.6f;
+constexpr float GRAPH_LINE_THICKNESS = 0.09f;
+constexpr float CARD_ROUNDING = 0.3f;
+constexpr float CARD_PADDING = 0.45f;
+constexpr float ITEM_GAP = 0.4f;
+constexpr float ROW_SPACING = 0.22f;
+constexpr float CAPTION_SCALE = 0.85f;
+constexpr float SECTION_GAP = 0.35f;
+constexpr float CHEVRON_WIDTH = 1.0f;
+constexpr float SECTION_ICON_WIDTH = 1.3f;
+constexpr float PAIR_COLUMN_WIDTH = 4.5f;
+constexpr float METER_HEIGHT = 0.3f;
+constexpr float SWITCH_WIDTH = 1.9f;
+constexpr float SWITCH_HEIGHT = 1.05f;
+constexpr float SWITCH_KNOB_INSET = 0.14f;
+
+constexpr float MUTED_TEXT_ALPHA = 0.55f;
+constexpr ImU32 WASH_COLOR = IM_COL32(255, 255, 255, 14);
+constexpr ImU32 METER_TRACK_COLOR = IM_COL32(255, 255, 255, 24);
+constexpr ImU32 HOVERED_COLOR = IM_COL32(255, 255, 255, 18);
+constexpr ImU32 DIVIDER_COLOR = IM_COL32(255, 255, 255, 22);
+constexpr ImU32 GUIDE_COLOR = IM_COL32(255, 255, 255, 48);
+constexpr ImU32 SWITCH_OFF_COLOR = IM_COL32(255, 255, 255, 46);
+constexpr ImU32 SWITCH_OFF_HOVERED_COLOR = IM_COL32(255, 255, 255, 70);
+constexpr ImU32 SWITCH_KNOB_COLOR = IM_COL32(255, 255, 255, 240);
+constexpr float SWITCH_ON_ALPHA = 0.85f;
+constexpr float GRAPH_FILL_ALPHA = 0.18f;
+
+// Status colors of the readouts, and the softer fills of the meters.
+constexpr ImVec4 COLOR_GOOD{0.45f, 0.80f, 0.45f, 1.0f};
+constexpr ImVec4 COLOR_WARNING{0.95f, 0.70f, 0.25f, 1.0f};
+constexpr ImVec4 COLOR_BAD{0.95f, 0.40f, 0.40f, 1.0f};
+constexpr ImVec4 METER_GOOD{0.30f, 0.49f, 0.32f, 1.0f};
+constexpr ImVec4 METER_WARNING{0.58f, 0.45f, 0.20f, 1.0f};
+constexpr ImVec4 METER_BAD{0.55f, 0.28f, 0.28f, 1.0f};
+
+constexpr float FPS_SMOOTH = 55.0f;
+constexpr float FPS_PLAYABLE = 30.0f;
+constexpr float MEMORY_WARNING_PERCENT = 60.0f;
+constexpr float MEMORY_BAD_PERCENT = 80.0f;
+constexpr float HEADROOM_WARNING_FRACTION = 0.2f;
+constexpr float PERCENT = 100.0f;
+constexpr float MILLISECONDS_PER_SECOND = 1000.0f;
+/// The graph marks the frame time of 60 FPS, and grows its range for anything slower.
+constexpr float TARGET_FRAME_MS = MILLISECONDS_PER_SECOND / 60.0f;
+constexpr float GRAPH_MIN_RANGE_MS = TARGET_FRAME_MS * 1.5f;
+constexpr float GRAPH_HEADROOM = 1.1f;
 /// From here on the toolbar reserves a fourth digit for its frame rate readout.
-constexpr float fps_four_digits = 999.5f;
+constexpr float FPS_FOUR_DIGITS = 999.5f;
+constexpr std::uint32_t THOUSAND = 1000;
+constexpr std::uint32_t MILLION = 1000000;
 
-constexpr ImVec4 color_good{0.2f, 0.8f, 0.2f, 1.0f};
-constexpr ImVec4 color_warning{1.0f, 0.7f, 0.0f, 1.0f};
-constexpr ImVec4 color_bad{1.0f, 0.3f, 0.3f, 1.0f};
-constexpr ImVec4 color_label{0.6f, 0.6f, 0.6f, 1.0f};
+auto get_muted_color() -> ImU32
+{
+    return ImGui::GetColorU32(ImGuiCol_Text, MUTED_TEXT_ALPHA);
+}
 
-// Muted fills for progress bars (the saturated status colors above are too harsh as a solid block).
-constexpr ImVec4 bar_good{0.30f, 0.49f, 0.32f, 1.0f};
-constexpr ImVec4 bar_warning{0.58f, 0.45f, 0.20f, 1.0f};
-constexpr ImVec4 bar_bad{0.55f, 0.28f, 0.28f, 1.0f};
+auto get_accent_color(float alpha = 1.0f) -> ImU32
+{
+    ImVec4 accent = imgui_style::get_accent_color();
+    accent.w *= alpha;
+    return ImGui::GetColorU32(accent);
+}
 
 auto get_fps_color(float fps) -> ImVec4
 {
-    if(fps < 30.0f)
+    if(fps < FPS_PLAYABLE)
     {
-        return color_bad;
+        return COLOR_BAD;
     }
-    if(fps < 55.0f)
+    if(fps < FPS_SMOOTH)
     {
-        return color_warning;
+        return COLOR_WARNING;
     }
-    return color_good;
+    return COLOR_GOOD;
 }
 
-auto get_memory_color(float percentage) -> ImVec4
+auto get_memory_color(float percent) -> ImVec4
 {
-    if(percentage > 80.0f)
+    if(percent > MEMORY_BAD_PERCENT)
     {
-        return color_bad;
+        return COLOR_BAD;
     }
-    if(percentage > 60.0f)
+    if(percent > MEMORY_WARNING_PERCENT)
     {
-        return color_warning;
+        return COLOR_WARNING;
     }
-    return color_good;
+    return COLOR_GOOD;
 }
 
-void draw_label(const char* label)
+auto get_memory_meter_color(float percent) -> ImVec4
 {
-    ImGui::TextColored(color_label, "%s", label);
-    ImGui::SameLine(200.0f);
+    if(percent > MEMORY_BAD_PERCENT)
+    {
+        return METER_BAD;
+    }
+    if(percent > MEMORY_WARNING_PERCENT)
+    {
+        return METER_WARNING;
+    }
+    return METER_GOOD;
 }
 
-void draw_eviction_overlay_stats()
+auto format_count(std::uint32_t count) -> std::string
+{
+    if(count >= MILLION)
+    {
+        return fmt::format("{:.1f}M", static_cast<double>(count) / static_cast<double>(MILLION));
+    }
+    if(count >= THOUSAND)
+    {
+        return fmt::format("{:.1f}k", static_cast<double>(count) / static_cast<double>(THOUSAND));
+    }
+    return fmt::format("{}", count);
+}
+
+/// Text drawn with its baseline on the given one, so a small unit sits on a large number.
+void draw_text_on_baseline(ImDrawList* draw_list, float x, float baseline, ImU32 color, const char* text)
+{
+    draw_list->AddText(ImVec2(x, baseline - ImGui::GetFontBaked()->Ascent), color, text);
+}
+
+struct header_request
+{
+    bool is_profiler_pressed{};
+    bool is_close_pressed{};
+};
+
+/// The title, with the buttons that open the profiler and hide the overlay at its right end.
+auto draw_header() -> header_request
+{
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = to_pixels(HEADER_HEIGHT);
+    ImGui::Dummy(ImVec2(width, height));
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const float center_y = min.y + height * 0.5f;
+    ImGui::PushFont(ImGui::Font::Bold);
+    const float icon_width = ImGui::GetFontSize();
+    ImGui::RenderIconCentered(draw_list, ImVec2(min.x + icon_width * 0.5f, center_y), ICON_MDI_CHART_LINE, get_accent_color());
+    draw_list->AddText(ImVec2(min.x + icon_width + to_pixels(TITLE_ICON_GAP), center_y - ImGui::GetTextLineHeight() * 0.5f),
+                       ImGui::GetColorU32(ImGuiCol_Text),
+                       "Statistics");
+    ImGui::PopFont();
+
+    header_request request{};
+    const ImVec2 button_size(height, height);
+    const ImVec2 close_min(min.x + width - height, min.y);
+    request.is_close_pressed =
+        container_widgets::draw_icon_button({"##close", ICON_MDI_CLOSE, "Hide the statistics"},
+                                            ImRect(close_min, close_min + button_size));
+    const ImVec2 profiler_min(close_min.x - height, min.y);
+    request.is_profiler_pressed =
+        container_widgets::draw_icon_button({"##profiler", ICON_MDI_CHART_GANTT, "Open the profiler"},
+                                            ImRect(profiler_min, profiler_min + button_size));
+    return request;
+}
+
+void record_frame_time(state& overlay_state)
+{
+    const int frame = ImGui::GetFrameCount();
+    if(overlay_state.last_sample_frame == frame)
+    {
+        return;
+    }
+    if(overlay_state.last_sample_frame != frame - 1)
+    {
+        overlay_state.frame_cursor = 0;
+        overlay_state.frame_count = 0;
+    }
+    overlay_state.last_sample_frame = frame;
+    overlay_state.frame_times_ms[overlay_state.frame_cursor] = ImGui::GetIO().DeltaTime * MILLISECONDS_PER_SECOND;
+    overlay_state.frame_cursor = (overlay_state.frame_cursor + 1) % FRAME_HISTORY_SIZE;
+    overlay_state.frame_count = std::min(overlay_state.frame_count + 1, FRAME_HISTORY_SIZE);
+}
+
+/// The frame rate as a large number in its status color, with the frame time at the right end.
+void draw_frame_rate()
+{
+    const float fps = ImGui::GetIO().Framerate;
+    const float frame_ms = fps > 0.0f ? MILLISECONDS_PER_SECOND / fps : 0.0f;
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    const std::string value = fmt::format("{:.0f}", fps);
+    ImGui::PushFont(ImGui::Font::Bold);
+    ImGui::PushWindowFontScale(FRAME_RATE_SCALE);
+    const ImVec2 value_size = ImGui::CalcTextSize(value.c_str());
+    const float baseline = min.y + ImGui::GetFontBaked()->Ascent;
+    draw_list->AddText(min, ImGui::GetColorU32(get_fps_color(fps)), value.c_str());
+    ImGui::PopWindowFontScale();
+    ImGui::PopFont();
+    draw_text_on_baseline(draw_list, min.x + value_size.x + to_pixels(UNIT_GAP), baseline, get_muted_color(), "FPS");
+
+    const std::string frame_text = fmt::format("{:.2f} ms", frame_ms);
+    ImGui::PushFont(ImGui::Font::Mono);
+    const float frame_text_width = ImGui::CalcTextSize(frame_text.c_str()).x;
+    draw_text_on_baseline(draw_list, min.x + width - frame_text_width, baseline, get_muted_color(), frame_text.c_str());
+    ImGui::PopFont();
+
+    ImGui::Dummy(ImVec2(width, value_size.y));
+    ImGui::SetItemTooltipEx("%s",
+                            "Frames per second, averaged over the last 60 frames, and the time of one frame.\n"
+                            "Green above 55 FPS, yellow from 30, red below 30.");
+}
+
+/// The frame times of the last frames as a line over a filled area, newest at the right, with a
+/// guide at the frame time of 60 FPS.
+void draw_frame_graph(const state& overlay_state)
+{
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = to_pixels(GRAPH_HEIGHT);
+    ImGui::Dummy(ImVec2(width, height));
+    ImGui::SetItemTooltipEx("Frame time of the last %d frames. The line marks 60 FPS (%.1f ms).",
+                            static_cast<int>(FRAME_HISTORY_SIZE),
+                            static_cast<double>(TARGET_FRAME_MS));
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const float rounding = to_pixels(CARD_ROUNDING);
+    draw_list->AddRectFilled(min, min + ImVec2(width, height), WASH_COLOR, rounding);
+    // Kept clear of the rounded corners of the background.
+    const ImRect plot(ImVec2(min.x + rounding, min.y), ImVec2(min.x + width - rounding, min.y + height));
+
+    const std::size_t count = overlay_state.frame_count;
+    const auto get_sample = [&](std::size_t age) -> float
+    {
+        const std::size_t size = FRAME_HISTORY_SIZE;
+        return overlay_state.frame_times_ms[(overlay_state.frame_cursor + size - 1 - age) % size];
+    };
+    float range_ms = GRAPH_MIN_RANGE_MS;
+    for(std::size_t age = 0; age < count; ++age)
+    {
+        range_ms = std::max(range_ms, get_sample(age) * GRAPH_HEADROOM);
+    }
+    const auto to_y = [&](float ms) -> float
+    {
+        return plot.Max.y - std::min(ms / range_ms, 1.0f) * plot.GetHeight();
+    };
+    const float guide_y = ImFloor(to_y(TARGET_FRAME_MS)) + 0.5f;
+    draw_list->AddLine(ImVec2(plot.Min.x, guide_y), ImVec2(plot.Max.x, guide_y), GUIDE_COLOR);
+    if(count < 2)
+    {
+        return;
+    }
+
+    // The samples, then the two corners that close the area under them.
+    std::array<ImVec2, FRAME_HISTORY_SIZE + 2> points{};
+    const float step = plot.GetWidth() / static_cast<float>(FRAME_HISTORY_SIZE - 1);
+    for(std::size_t index = 0; index < count; ++index)
+    {
+        const std::size_t age = count - 1 - index;
+        points[index] = ImVec2(plot.Max.x - static_cast<float>(age) * step, to_y(get_sample(age)));
+    }
+    points[count] = ImVec2(points[count - 1].x, plot.Max.y);
+    points[count + 1] = ImVec2(points[0].x, plot.Max.y);
+    draw_list->AddConcavePolyFilled(points.data(), static_cast<int>(count + 2), get_accent_color(GRAPH_FILL_ALPHA));
+    draw_list->AddPolyline(points.data(),
+                           static_cast<int>(count),
+                           get_accent_color(),
+                           ImDrawFlags_None,
+                           ImGui::GetFontSize() * GRAPH_LINE_THICKNESS);
+}
+
+struct timing_tile
+{
+    const char* caption{};
+    std::string value;
+    const char* tooltip{};
+};
+
+/// Tiles side by side: a muted caption over the value.
+void draw_tiles(const std::array<timing_tile, 3>& tiles)
+{
+    const float gap = to_pixels(ITEM_GAP);
+    const float count = static_cast<float>(tiles.size());
+    const float width = ImFloor((ImGui::GetContentRegionAvail().x - gap * (count - 1.0f)) / count);
+    const float padding = to_pixels(CARD_PADDING);
+    ImGui::PushWindowFontScale(CAPTION_SCALE);
+    const float caption_height = ImGui::GetTextLineHeight();
+    ImGui::PopWindowFontScale();
+    const float height = padding * 2.0f + caption_height + ImGui::GetTextLineHeight();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    for(std::size_t index = 0; index < tiles.size(); ++index)
+    {
+        if(index > 0)
+        {
+            ImGui::SameLine(0.0f, gap);
+        }
+        ImGui::Dummy(ImVec2(width, height));
+        ImGui::SetItemTooltipEx("%s", tiles[index].tooltip);
+        const ImVec2 min = ImGui::GetItemRectMin();
+        draw_list->AddRectFilled(min, ImGui::GetItemRectMax(), WASH_COLOR, to_pixels(CARD_ROUNDING));
+        ImGui::PushWindowFontScale(CAPTION_SCALE);
+        draw_list->AddText(min + ImVec2(padding, padding), get_muted_color(), tiles[index].caption);
+        ImGui::PopWindowFontScale();
+        ImGui::PushFont(ImGui::Font::Mono);
+        draw_list->AddText(ImVec2(min.x + padding, min.y + padding + caption_height),
+                           ImGui::GetColorU32(ImGuiCol_Text),
+                           tiles[index].value.c_str());
+        ImGui::PopFont();
+    }
+}
+
+void draw_timing_tiles()
+{
+    const auto* stats = gfx::get_stats();
+    const double to_cpu_ms = static_cast<double>(MILLISECONDS_PER_SECOND) / static_cast<double>(stats->cpuTimerFreq);
+    const double to_gpu_ms = static_cast<double>(MILLISECONDS_PER_SECOND) / static_cast<double>(stats->gpuTimerFreq);
+    const double cpu_ms = static_cast<double>(stats->cpuTimeEnd - stats->cpuTimeBegin) * to_cpu_ms;
+    const double gpu_ms = static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) * to_gpu_ms;
+    const int latency = static_cast<int>(stats->maxGpuLatency);
+    draw_tiles({{
+        {"CPU", fmt::format("{:.2f} ms", cpu_ms), "Time the CPU spent submitting render commands to the driver.\n"
+                                                  "High values point to a CPU bound frame."},
+        {"GPU", fmt::format("{:.2f} ms", gpu_ms), "Time the GPU spent executing the frame.\n"
+                                                  "High values point to a GPU bound frame: shaders or fill rate."},
+        {"Latency", fmt::format("{} {}", latency, latency == 1 ? "frame" : "frames"),
+         "How many frames the GPU runs behind the CPU, typically 1 to 3.\n"
+         "More latency means more input lag, but can raise throughput."},
+    }});
+}
+
+struct section_header
+{
+    bool is_open{};
+    /// The row of the header, for a control at its right end.
+    ImRect row{};
+};
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// A divider, then a row that folds the section: chevron, accent icon and title. The open state
+/// is kept in the window, per id. The last trailing_width of the row is left free of the fold
+/// button, for a control the caller draws there.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto draw_section_header(const char* id, const char* icon, const char* title, bool is_default_open, float trailing_width = 0.0f)
+    -> section_header
+{
+    ImGui::Dummy(ImVec2(0.0f, to_pixels(SECTION_GAP)));
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = ImGui::GetFrameHeight();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddLine(min, ImVec2(min.x + width, min.y), DIVIDER_COLOR);
+    ImGui::Dummy(ImVec2(width, height));
+
+    section_header header{};
+    header.row = ImRect(min, min + ImVec2(width, height));
+    const ImGuiID item_id = ImGui::GetID(id);
+    ImGuiStorage* storage = ImGui::GetStateStorage();
+    header.is_open = storage->GetBool(item_id, is_default_open);
+    const ImRect press_rect(header.row.Min, ImVec2(header.row.Max.x - trailing_width, header.row.Max.y));
+    bool is_hovered = false;
+    if(ImGui::ItemAdd(press_rect, item_id))
+    {
+        bool is_held = false;
+        if(ImGui::ButtonBehavior(press_rect, item_id, &is_hovered, &is_held))
+        {
+            header.is_open = !header.is_open;
+            storage->SetBool(item_id, header.is_open);
+        }
+    }
+    if(is_hovered)
+    {
+        draw_list->AddRectFilled(press_rect.Min, press_rect.Max, HOVERED_COLOR, to_pixels(CARD_ROUNDING));
+    }
+
+    const float center_y = header.row.GetCenter().y;
+    const float chevron_width = to_pixels(CHEVRON_WIDTH);
+    const float icon_width = to_pixels(SECTION_ICON_WIDTH);
+    ImGui::RenderIconCentered(draw_list,
+                              ImVec2(min.x + chevron_width * 0.5f, center_y),
+                              header.is_open ? ICON_MDI_CHEVRON_DOWN : ICON_MDI_CHEVRON_RIGHT,
+                              get_muted_color());
+    ImGui::RenderIconCentered(draw_list, ImVec2(min.x + chevron_width + icon_width * 0.5f, center_y), icon, get_accent_color());
+    ImGui::PushFont(ImGui::Font::SemiBold);
+    draw_list->AddText(ImVec2(min.x + chevron_width + icon_width, center_y - ImGui::GetTextLineHeight() * 0.5f),
+                       ImGui::GetColorU32(ImGuiCol_Text),
+                       title);
+    ImGui::PopFont();
+    return header;
+}
+
+/// Where the rows start: under the icon of their section header.
+auto get_row_indent() -> float
+{
+    return to_pixels(CHEVRON_WIDTH);
+}
+
+struct stat_row
+{
+    const char* label{};
+    std::string value;
+    const char* tooltip{};
+    /// 0 for the text color.
+    ImU32 value_color{};
+};
+
+/// A muted label, and the value right aligned in the mono font so the digits line up.
+void draw_row(const stat_row& row)
+{
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = ImGui::GetTextLineHeight();
+    ImGui::Dummy(ImVec2(width, height));
+    if(row.tooltip != nullptr)
+    {
+        ImGui::SetItemTooltipEx("%s", row.tooltip);
+    }
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddText(ImVec2(min.x + get_row_indent(), min.y), get_muted_color(), row.label);
+    ImGui::PushFont(ImGui::Font::Mono);
+    const ImVec2 value_size = ImGui::CalcTextSize(row.value.c_str());
+    const ImU32 value_color = row.value_color != 0 ? row.value_color : ImGui::GetColorU32(ImGuiCol_Text);
+    draw_list->AddText(ImVec2(min.x + width - value_size.x, min.y + (height - value_size.y) * 0.5f),
+                       value_color,
+                       row.value.c_str());
+    ImGui::PopFont();
+}
+
+struct pair_row
+{
+    const char* label{};
+    std::uint32_t first{};
+    std::uint32_t second{};
+    const char* tooltip{};
+};
+
+/// A row with two right aligned columns, under captions drawn by draw_pair_captions().
+void draw_pair_row(const pair_row& row)
+{
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = ImGui::GetTextLineHeight();
+    ImGui::Dummy(ImVec2(width, height));
+    if(row.tooltip != nullptr)
+    {
+        ImGui::SetItemTooltipEx("%s", row.tooltip);
+    }
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddText(ImVec2(min.x + get_row_indent(), min.y), get_muted_color(), row.label);
+    ImGui::PushFont(ImGui::Font::Mono);
+    const std::string first = fmt::format("{}", row.first);
+    const std::string second = fmt::format("{}", row.second);
+    const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
+    const float first_right = min.x + width - to_pixels(PAIR_COLUMN_WIDTH);
+    draw_list->AddText(ImVec2(first_right - ImGui::CalcTextSize(first.c_str()).x, min.y), color, first.c_str());
+    draw_list->AddText(ImVec2(min.x + width - ImGui::CalcTextSize(second.c_str()).x, min.y), color, second.c_str());
+    ImGui::PopFont();
+}
+
+void draw_pair_captions(const char* first, const char* second)
+{
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    ImGui::PushWindowFontScale(CAPTION_SCALE);
+    ImGui::Dummy(ImVec2(width, ImGui::GetTextLineHeight()));
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const float first_right = min.x + width - to_pixels(PAIR_COLUMN_WIDTH);
+    draw_list->AddText(ImVec2(first_right - ImGui::CalcTextSize(first).x, min.y), get_muted_color(), first);
+    draw_list->AddText(ImVec2(min.x + width - ImGui::CalcTextSize(second).x, min.y), get_muted_color(), second);
+    ImGui::PopWindowFontScale();
+}
+
+/// A small caption over a group of rows inside a section.
+void draw_subheading(const char* text)
+{
+    ImGui::Dummy(ImVec2(0.0f, to_pixels(ROW_SPACING)));
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + get_row_indent());
+    ImGui::PushFont(ImGui::Font::SemiBold);
+    ImGui::PushWindowFontScale(CAPTION_SCALE);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(get_muted_color()), "%s", text);
+    ImGui::PopWindowFontScale();
+    ImGui::PopFont();
+}
+
+/// A thin bar under a row, filled to fraction.
+void draw_meter(float fraction, const ImVec4& color)
+{
+    const ImVec2 min = ImGui::GetCursorScreenPos();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float height = to_pixels(METER_HEIGHT);
+    ImGui::Dummy(ImVec2(width, height));
+    const float indent = get_row_indent();
+    const ImVec2 track_min(min.x + indent, min.y);
+    const float track_width = width - indent;
+    const float rounding = height * 0.5f;
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddRectFilled(track_min, track_min + ImVec2(track_width, height), METER_TRACK_COLOR, rounding);
+    if(fraction <= 0.0f)
+    {
+        return;
+    }
+    const float fill_width = std::max(track_width * std::min(fraction, 1.0f), height);
+    draw_list->AddRectFilled(track_min, track_min + ImVec2(fill_width, height), ImGui::GetColorU32(color), rounding);
+}
+
+/// An on / off switch over the rectangle; it takes no room of its own. Returns true when clicked.
+auto draw_switch(const char* id, const ImRect& bb, bool is_on, const char* tooltip) -> bool
+{
+    const ImGuiID item_id = ImGui::GetID(id);
+    if(!ImGui::ItemAdd(bb, item_id))
+    {
+        return false;
+    }
+    bool is_hovered = false;
+    bool is_held = false;
+    const bool is_pressed = ImGui::ButtonBehavior(bb, item_id, &is_hovered, &is_held);
+    const float radius = bb.GetHeight() * 0.5f;
+    ImU32 track_color = is_hovered ? SWITCH_OFF_HOVERED_COLOR : SWITCH_OFF_COLOR;
+    if(is_on)
+    {
+        track_color = get_accent_color(is_hovered ? 1.0f : SWITCH_ON_ALPHA);
+    }
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddRectFilled(bb.Min, bb.Max, track_color, radius);
+    const float knob_x = is_on ? bb.Max.x - radius : bb.Min.x + radius;
+    draw_list->AddCircleFilled(ImVec2(knob_x, bb.GetCenter().y), radius - to_pixels(SWITCH_KNOB_INSET), SWITCH_KNOB_COLOR);
+    ImGui::SetItemTooltipEx("%s", tooltip);
+    return is_pressed;
+}
+
+void draw_scene_section()
+{
+    if(!draw_section_header("##scene", ICON_MDI_CUBE_OUTLINE, "Scene", true).is_open)
+    {
+        return;
+    }
+    const auto* stats = gfx::get_stats();
+    const ImGuiIO& io = ImGui::GetIO();
+    const std::uint32_t total_primitives = std::accumulate(std::begin(stats->numPrims), std::end(stats->numPrims), 0u);
+    const std::uint32_t ui_primitives = std::min(static_cast<std::uint32_t>(io.MetricsRenderIndices / 3), total_primitives);
+    const std::uint32_t total_calls = stats->numDraw;
+    const std::uint32_t editor_calls = std::min(static_cast<std::uint32_t>(ImGui::GetDrawCalls()), total_calls);
+
+    draw_row({"Triangles",
+              format_count(total_primitives - ui_primitives),
+              "Triangles rendered for the scene, without the editor UI.\nLODs and culling bring it down."});
+    draw_row({"Draw Calls",
+              fmt::format("{}", total_calls - editor_calls),
+              "Draw commands sent to the GPU for the scene, without the editor UI.\n"
+              "Fewer draw calls cost the CPU less."});
+    draw_row({"Render Passes",
+              fmt::format("{}", gfx::render_pass::get_last_frame_max_pass_id()),
+              "Passes of this frame: geometry, lighting, shadows and post processing."});
+    draw_row({"Compute Dispatches", fmt::format("{}", stats->numCompute), "Compute shader dispatches of this frame."});
+    draw_row({"Blits", fmt::format("{}", stats->numBlit), "Texture copies of this frame: resolves and render target transfers."});
+}
+
+void draw_paging_rows()
 {
     const auto evict_stats = gfx::eviction::get_stats();
     if(evict_stats.registered_count == 0)
     {
         return;
     }
-
-    // Group the paging stats under their own labeled sub-header so they read distinctly from the
-    // raw memory counters above.
-    ImGui::Separator();
-    ImGui::TextColored(color_label, "  " ICON_MDI_SWAP_HORIZONTAL " Paging");
-    ImGui::SetItemTooltipEx("GPU resource eviction / paging. Idle CPU-backed resources are released\n"
-                            "from GPU memory under pressure and restored automatically on next use.");
-
-    // Budget that drives eviction (GPU memory used vs. the configured budget).
+    draw_subheading(ICON_MDI_SWAP_HORIZONTAL " Paging");
+    ImGui::SetItemTooltipEx("%s",
+                            "GPU resource eviction. Idle CPU backed resources leave GPU memory under pressure\n"
+                            "and come back on their next use.");
     if(evict_stats.budget_bytes > 0)
     {
-        const bool over_budget = evict_stats.budget_used_bytes > evict_stats.budget_bytes;
-        const auto used_str = format_bytes(static_cast<int64_t>(evict_stats.budget_used_bytes));
-        const auto budget_str = format_bytes(static_cast<int64_t>(evict_stats.budget_bytes));
-
-        ImGui::BeginGroup();
-        draw_label("    Budget");
-        if(over_budget)
-        {
-            ImGui::TextColored(color_bad, "%s / %s " ICON_MDI_ALERT " OVER", used_str.c_str(), budget_str.c_str());
-        }
-        else
-        {
-            ImGui::TextColored(color_good, "%s / %s", used_str.c_str(), budget_str.c_str());
-        }
-        ImGui::EndGroup();
-        ImGui::SetItemTooltipEx("GPU memory used vs. the eviction budget. When usage exceeds the\n"
-                                "budget, resources are evicted down to the target watermark.\n"
-                                "Marked red when over budget.");
-
-        ImGui::BeginGroup();
-        draw_label("    Target");
-        ImGui::TextUnformatted(format_bytes(static_cast<int64_t>(evict_stats.target_bytes)).c_str());
-        ImGui::EndGroup();
-        ImGui::SetItemTooltipEx("Watermark the pager evicts down to once over budget\n"
-                                "(hysteresis below the budget to avoid thrashing).");
+        const bool is_over_budget = evict_stats.budget_used_bytes > evict_stats.budget_bytes;
+        draw_row({"Budget",
+                  fmt::format("{} / {}{}",
+                              format_bytes(static_cast<std::uint64_t>(evict_stats.budget_used_bytes)),
+                              format_bytes(static_cast<std::uint64_t>(evict_stats.budget_bytes)),
+                              is_over_budget ? " over" : ""),
+                  "GPU memory used against the eviction budget. Past the budget, resources are\n"
+                  "evicted down to the target. Red while over budget.",
+                  ImGui::GetColorU32(is_over_budget ? COLOR_BAD : COLOR_GOOD)});
+        draw_row({"Target",
+                  format_bytes(static_cast<std::uint64_t>(evict_stats.target_bytes)),
+                  "What the pager evicts down to once over budget, below the budget to avoid thrashing."});
     }
+    draw_row({"Resident",
+              fmt::format("{} ({})", format_bytes(static_cast<std::uint64_t>(evict_stats.resident_bytes)), evict_stats.resident_count),
+              "Resources on the GPU that can still be paged out, and how many there are."});
+    draw_row({"Evicted",
+              fmt::format("{} ({})", format_bytes(static_cast<std::uint64_t>(evict_stats.evicted_bytes)), evict_stats.evicted_count),
+              "Resources paged out. They come back on their next use.",
+              evict_stats.evicted_count > 0 ? ImGui::GetColorU32(COLOR_WARNING) : 0u});
 
-    // Current residency: how much is resident (still available to evict) vs. already evicted.
-    const auto resident_str = fmt::format("{} ({})",
-                                          evict_stats.resident_count,
-                                          format_bytes(static_cast<int64_t>(evict_stats.resident_bytes)));
-    ImGui::BeginGroup();
-    draw_label("    Resident");
-    ImGui::TextUnformatted(resident_str.c_str());
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Resources currently resident on the GPU that can still be paged out,\n"
-                            "and their total GPU memory.");
-
-    const auto evicted_str = fmt::format("{} ({})",
-                                         evict_stats.evicted_count,
-                                         format_bytes(static_cast<int64_t>(evict_stats.evicted_bytes)));
-    ImGui::BeginGroup();
-    draw_label("    Evicted");
-    if(evict_stats.evicted_count > 0)
-    {
-        ImGui::TextColored(color_warning, "%s", evicted_str.c_str());
-    }
-    else
-    {
-        ImGui::TextUnformatted(evicted_str.c_str());
-    }
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Resources currently evicted (their GPU memory reclaimed).\n"
-                            "They restore automatically the next time they are used.");
-
-    // Headroom bar: share of the managed pool still resident, i.e. how much can still be freed. The
-    // overlay text is kept short so it always fits the bar.
     const double pool_bytes = static_cast<double>(evict_stats.resident_bytes + evict_stats.evicted_bytes);
     const float resident_fraction =
         pool_bytes > 0.0 ? static_cast<float>(static_cast<double>(evict_stats.resident_bytes) / pool_bytes) : 0.0f;
-    ImVec4 headroom_color = bar_good;
+    ImVec4 headroom_color = METER_GOOD;
     if(evict_stats.resident_bytes == 0)
     {
-        headroom_color = bar_bad;
+        headroom_color = METER_BAD;
     }
-    else if(resident_fraction < 0.2f)
+    else if(resident_fraction < HEADROOM_WARNING_FRACTION)
     {
-        headroom_color = bar_warning;
+        headroom_color = METER_WARNING;
     }
-    const auto headroom_overlay = fmt::format("{} free", format_bytes(static_cast<int64_t>(evict_stats.resident_bytes)));
-    ImGui::BeginGroup();
-    draw_label("    Headroom");
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, headroom_color);
-    // Fill the remaining content width so the bar (and its overlay text) never runs under the scrollbar.
-    ImGui::ProgressBar(resident_fraction, ImVec2(ImGui::GetContentRegionAvail().x, 0.0f), headroom_overlay.c_str());
-    ImGui::PopStyleColor();
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Share of the managed pool still resident on the GPU - how much can\n"
-                            "still be paged out under further memory pressure. Red when nothing\n"
-                            "is left to evict.");
-
-    // Lifetime activity: an eviction count that keeps climbing every frame means paging is constant.
-    ImGui::BeginGroup();
-    draw_label("    Lifetime");
-    ImGui::TextUnformatted(fmt::format("{} evicted", evict_stats.total_evictions).c_str());
-    if(evict_stats.total_restores > 0)
-    {
-        ImGui::SameLine();
-        ImGui::TextColored(color_label, "%s", fmt::format("/ {} restored", evict_stats.total_restores).c_str());
-    }
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Lifetime evictions (and restores). If the eviction count keeps\n"
-                            "climbing every frame, paging is happening constantly - consider\n"
-                            "raising the budget or the min-age window.");
-
+    draw_row({"Headroom",
+              fmt::format("{} free", format_bytes(static_cast<std::uint64_t>(evict_stats.resident_bytes))),
+              "Share of the managed pool still on the GPU: how much further pressure can free.\n"
+              "Red when nothing is left to evict."});
+    draw_meter(resident_fraction, headroom_color);
+    draw_row({"Lifetime",
+              fmt::format("{} evicted / {} restored", evict_stats.total_evictions, evict_stats.total_restores),
+              "Evictions and restores since start. An eviction count that climbs every frame means\n"
+              "constant paging: raise the budget or the minimum age."});
     if(evict_stats.thrash_events > 0)
     {
-        ImGui::BeginGroup();
-        draw_label("    Thrash");
-        ImGui::TextColored(color_warning, "%s", fmt::format("{}", evict_stats.thrash_events).c_str());
-        ImGui::EndGroup();
-        ImGui::SetItemTooltipEx("Resources restored shortly after being evicted. High values\n"
-                                "indicate the budget is too tight; raise it or the min-age window.");
-    }
-}
-
-void draw_performance_section()
-{
-    if(!ImGui::CollapsingSection(ICON_MDI_SPEEDOMETER "\tPerformance", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        return;
-    }
-
-    auto& io = ImGui::GetIO();
-    auto* stats = gfx::get_stats();
-    const double to_cpu_ms = 1000.0 / static_cast<double>(stats->cpuTimerFreq);
-    const double to_gpu_ms = 1000.0 / static_cast<double>(stats->gpuTimerFreq);
-
-    const float fps = io.Framerate;
-    const float frame_ms = 1000.0f / fps;
-
-    ImGui::BeginGroup();
-    ImGui::TextColored(get_fps_color(fps), "  FPS: %.1f", static_cast<double>(fps));
-    ImGui::SameLine();
-    ImGui::TextColored(color_label, "(%.2f ms)", static_cast<double>(frame_ms));
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Frames per second (higher is better)\n"
-                            "Green: >55 FPS (smooth)\n"
-                            "Yellow: 30-55 FPS (acceptable)\n"
-                            "Red: <30 FPS (poor performance)");
-
-    const double cpu_submit_ms = static_cast<double>(stats->cpuTimeEnd - stats->cpuTimeBegin) * to_cpu_ms;
-    const double gpu_submit_ms = static_cast<double>(stats->gpuTimeEnd - stats->gpuTimeBegin) * to_gpu_ms;
-
-    ImGui::BeginGroup();
-    draw_label("  CPU Submit");
-    ImGui::Text("%.3f ms", cpu_submit_ms);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Time the CPU spent submitting render commands\n"
-                            "to the graphics driver. High values indicate\n"
-                            "a CPU-bound rendering bottleneck.");
-
-    ImGui::BeginGroup();
-    draw_label("  GPU Submit");
-    ImGui::Text("%.3f ms", gpu_submit_ms);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Time the GPU spent executing render commands.\n"
-                            "High values indicate a GPU-bound bottleneck\n"
-                            "such as complex shaders or high fill rate.");
-
-    ImGui::BeginGroup();
-    draw_label("  GPU Latency");
-    ImGui::Text("%d frames", stats->maxGpuLatency);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Number of frames the GPU is behind the CPU.\n"
-                            "Higher latency means more input lag but can\n"
-                            "improve throughput. Typically 1-3 frames.");
-}
-
-void draw_scene_section()
-{
-    if(!ImGui::CollapsingSection(ICON_MDI_CUBE_OUTLINE "\tScene", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        return;
-    }
-
-    auto* stats = gfx::get_stats();
-    const auto& io = ImGui::GetIO();
-
-    const std::uint32_t total_primitives = std::accumulate(
-        std::begin(stats->numPrims), std::end(stats->numPrims), 0u);
-    std::uint32_t ui_primitives = io.MetricsRenderIndices / 3;
-    ui_primitives = std::min(ui_primitives, total_primitives);
-    const auto scene_primitives = total_primitives - ui_primitives;
-
-    std::uint32_t total_calls = stats->numDraw;
-    std::uint32_t editor_calls = ImGui::GetDrawCalls();
-    editor_calls = std::min(editor_calls, total_calls);
-    std::uint32_t scene_calls = total_calls - editor_calls;
-
-    auto format_count = [](std::uint32_t count) -> std::string
-    {
-        if(count >= 1000000)
-        {
-            return fmt::format("{:.1f}M", static_cast<double>(count) / 1000000.0);
-        }
-        if(count >= 1000)
-        {
-            return fmt::format("{:.1f}k", static_cast<double>(count) / 1000.0);
-        }
-        return fmt::format("{}", count);
-    };
-
-    ImGui::BeginGroup();
-    draw_label("  Triangles");
-    ImGui::TextUnformatted(format_count(scene_primitives).c_str());
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Total triangle count rendered for the scene\n"
-                            "(excludes editor UI). Reducing triangle count\n"
-                            "via LODs or culling improves GPU performance.");
-
-    ImGui::BeginGroup();
-    draw_label("  Draw Calls");
-    ImGui::Text("%u", scene_calls);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Number of draw commands sent to the GPU for\n"
-                            "scene rendering (excludes editor UI draws).\n"
-                            "Fewer draw calls generally means better performance.");
-
-    ImGui::BeginGroup();
-    draw_label("  Render Passes");
-    ImGui::Text("%u", gfx::render_pass::get_last_frame_max_pass_id());
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Number of rendering passes executed this frame.\n"
-                            "Includes geometry, lighting, shadow, and\n"
-                            "post-processing passes.");
-
-    {
-        ImGui::BeginGroup();
-        draw_label("  Compute Calls");
-        ImGui::Text("%u", stats->numCompute);
-        ImGui::EndGroup();
-        ImGui::SetItemTooltipEx("Number of GPU compute shader dispatches.\n"
-                                "Used for GPGPU tasks.");
-    }
-    {
-        ImGui::BeginGroup();
-        draw_label("  Blit Calls");
-        ImGui::Text("%u", stats->numBlit);
-        ImGui::EndGroup();
-        ImGui::SetItemTooltipEx("Number of GPU blit (copy/transfer) operations.\n"
-                                "Used for copying textures, resolving MSAA,\n"
-                                "or transferring between render targets.");
+        draw_row({"Thrash",
+                  fmt::format("{}", evict_stats.thrash_events),
+                  "Resources restored soon after their eviction: the budget is too tight.",
+                  ImGui::GetColorU32(COLOR_WARNING)});
     }
 }
 
 void draw_memory_section()
 {
-    if(!ImGui::CollapsingSection(ICON_MDI_MEMORY "\tMemory"))
+    if(!draw_section_header("##memory", ICON_MDI_MEMORY, "Memory", false).is_open)
     {
         return;
     }
-
-    auto* stats = gfx::get_stats();
-
+    const auto* stats = gfx::get_stats();
     if(stats->gpuMemoryUsed > 0)
     {
-        auto used_str = format_bytes(stats->gpuMemoryUsed);
-        ImGui::BeginGroup();
+        const std::string used = format_bytes(stats->gpuMemoryUsed);
         if(stats->gpuMemoryMax > 0)
         {
-            auto max_str = format_bytes(stats->gpuMemoryMax);
-            float pct = (static_cast<float>(stats->gpuMemoryUsed) /
-                         static_cast<float>(stats->gpuMemoryMax)) * 100.0f;
-            ImGui::TextColored(color_label, "  GPU Memory");
-            ImGui::SameLine(200.0f);
-            ImGui::TextColored(get_memory_color(pct), "%s / %s (%.0f%%)",
-                               used_str.c_str(), max_str.c_str(), static_cast<double>(pct));
+            const float percent =
+                static_cast<float>(stats->gpuMemoryUsed) / static_cast<float>(stats->gpuMemoryMax) * PERCENT;
+            draw_row({"GPU Memory",
+                      fmt::format("{} / {}", used, format_bytes(stats->gpuMemoryMax)),
+                      "GPU memory allocated against what the device has. Green below 60%,\n"
+                      "yellow to 80%, red above: past that, expect stalls or out of memory errors.",
+                      ImGui::GetColorU32(get_memory_color(percent))});
+            draw_meter(percent / PERCENT, get_memory_meter_color(percent));
         }
         else
         {
-            draw_label("  GPU Memory");
-            ImGui::TextUnformatted(used_str.c_str());
+            draw_row({"GPU Memory", used, "GPU memory allocated."});
         }
-        ImGui::EndGroup();
-        ImGui::SetItemTooltipEx("Total GPU video memory allocated vs available.\n"
-                                "Color-coded by usage percentage:\n"
-                                "Green: <60%%, Yellow: 60-80%%, Red: >80%%.\n"
-                                "High usage may cause performance degradation\n"
-                                "or out-of-memory errors.");
     }
-
     if(stats->textureMemoryUsed > 0)
     {
-        ImGui::BeginGroup();
-        draw_label("  Texture Mem");
-        ImGui::TextUnformatted(format_bytes(stats->textureMemoryUsed).c_str());
-        ImGui::EndGroup();
-        ImGui::SetItemTooltipEx("GPU memory consumed by texture resources.\n"
-                                "Reduce with smaller textures or compressed formats.");
+        draw_row({"Textures",
+                  format_bytes(stats->textureMemoryUsed),
+                  "GPU memory of the textures. Smaller or compressed textures bring it down."});
     }
-
     if(stats->rtMemoryUsed > 0)
     {
-        ImGui::BeginGroup();
-        draw_label("  RT Memory");
-        ImGui::TextUnformatted(format_bytes(stats->rtMemoryUsed).c_str());
-        ImGui::EndGroup();
-        ImGui::SetItemTooltipEx("GPU memory consumed by render targets\n"
-                                "(framebuffers). Scales with resolution.");
+        draw_row({"Render Targets",
+                  format_bytes(stats->rtMemoryUsed),
+                  "GPU memory of the render targets. It scales with the resolution."});
     }
-
-    draw_eviction_overlay_stats();
-}
-
-void draw_pipeline_stats(const rendering::pipeline_stats& pstats)
-{
-    ImGui::BeginGroup();
-    draw_label("  Static Models");
-    ImGui::Text("%u (%u Meshes)", pstats.drawn_models, pstats.drawn_static_submeshes);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Visible static models and submeshes drawn this frame.\n"
-                            "The value in parentheses counts individual submeshes\n"
-                            "after per-submesh frustum culling.");
-
-    ImGui::BeginGroup();
-    draw_label("  Skinned Models");
-    ImGui::Text("%u (%u Meshes)", pstats.drawn_skinned_models, pstats.drawn_skinned_submeshes);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Visible skinned models and submeshes drawn this frame.\n"
-                            "The value in parentheses counts individual submeshes\n"
-                            "submitted for GPU skinning.");
-
-    ImGui::BeginGroup();
-    draw_label("  Lights");
-    ImGui::Text("%u", pstats.drawn_lights);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Number of active lights evaluated for the\n"
-                            "scene. Each additional light increases shading\n"
-                            "cost in deferred and forward rendering.");
-
-    ImGui::BeginGroup();
-    draw_label("  Shadow Lights");
-    ImGui::Text("%u", pstats.drawn_lights_casting_shadows);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Number of lights with shadow casting enabled.\n"
-                            "Each shadow light requires one or more extra\n"
-                            "render passes to generate shadow maps.");
-
-    const uint32_t shadow_models = pstats.drawn_models_for_shadows + pstats.drawn_skinned_models_for_shadows;
-    const uint32_t shadow_submeshes = pstats.drawn_submeshes_for_shadows + pstats.drawn_skinned_submeshes_for_shadows;
-    ImGui::BeginGroup();
-    draw_label("  Shadow Models");
-    ImGui::Text("%u (%u meshes)", shadow_models, shadow_submeshes);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Models and submeshes rendered into shadow maps.\n"
-                            "The mesh count includes cascade and face redraws,\n"
-                            "so it can exceed the main-pass submesh count.");
-
-    ImGui::BeginGroup();
-    draw_label("  Particles");
-    ImGui::Text("%u (%u Batches)", pstats.drawn_particles, pstats.drawn_particles_batches);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Active particle emitters and their GPU draw\n"
-                            "batches. Particles with different materials\n"
-                            "or blend modes produce separate batches.");
-
-    const auto& batch = pstats.batching_stats;
-    ImGui::Separator();
-    ImGui::TextColored(color_label, "  Batching");
-    ImGui::SetItemTooltipEx("Static mesh batching combines multiple meshes\n"
-                            "sharing the same material into fewer draw calls,\n"
-                            "reducing CPU overhead.");
-
-    ImGui::BeginGroup();
-    draw_label("    Batches");
-    ImGui::Text("%u (%u Inst)", batch.total_batches, batch.total_instances);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Total batches created and total mesh instances\n"
-                            "across all batches. A lower batch count relative\n"
-                            "to instance count indicates effective batching.");
-
-    ImGui::BeginGroup();
-    draw_label("    Efficiency");
-    ImGui::Text("%.0f%%", static_cast<double>(batch.batching_efficiency * 100.0f));
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Percentage of eligible meshes successfully\n"
-                            "combined into batches. 100%% means all eligible\n"
-                            "meshes are batched. Low values may indicate\n"
-                            "too many unique materials or shader variants.");
-
-    ImGui::BeginGroup();
-    draw_label("    Saved");
-    ImGui::Text("%u calls", batch.draw_calls_saved);
-    ImGui::EndGroup();
-    ImGui::SetItemTooltipEx("Number of draw calls eliminated by batching.\n"
-                            "Higher values mean more CPU time saved from\n"
-                            "reduced driver overhead.");
+    draw_paging_rows();
 }
 
 void draw_pipeline_section(const rendering::pipeline_stats& pstats)
 {
-    if(!ImGui::CollapsingSection(ICON_MDI_PIPE "\tPipeline"))
+    if(!draw_section_header("##pipeline", ICON_MDI_PIPE, "Pipeline", false).is_open)
     {
         return;
     }
+    draw_pair_captions("Models", "Meshes");
+    draw_pair_row({"Static",
+                   pstats.drawn_models,
+                   pstats.drawn_static_submeshes,
+                   "Visible static models, and their submeshes left after per submesh culling."});
+    draw_pair_row({"Skinned",
+                   pstats.drawn_skinned_models,
+                   pstats.drawn_skinned_submeshes,
+                   "Visible skinned models, and their submeshes submitted for GPU skinning."});
+    draw_pair_row({"Shadow Casters",
+                   pstats.drawn_models_for_shadows + pstats.drawn_skinned_models_for_shadows,
+                   pstats.drawn_submeshes_for_shadows + pstats.drawn_skinned_submeshes_for_shadows,
+                   "Models and submeshes drawn into shadow maps. Cascades and cube faces draw a\n"
+                   "mesh again, so this can exceed the meshes of the main pass."});
+    draw_row({"Lights",
+              fmt::format("{}", pstats.drawn_lights),
+              "Lights evaluated for the scene. Each one adds shading cost."});
+    draw_row({"Shadow Lights",
+              fmt::format("{}", pstats.drawn_lights_casting_shadows),
+              "Lights that cast shadows. Each one renders one or more shadow maps."});
+}
 
-    draw_pipeline_stats(pstats);
+void draw_particles_section(const rendering::pipeline_stats& pstats)
+{
+    if(!draw_section_header("##particles", ICON_MDI_CREATION, "Particles", false).is_open)
+    {
+        return;
+    }
+    draw_pair_captions("Emitters", "Particles");
+    draw_pair_row({"Active",
+                   pstats.active_particle_emitters,
+                   pstats.active_particles,
+                   "Enabled emitters in the scene, and the particles alive in them."});
+    draw_pair_row({"Simulated",
+                   pstats.simulated_particle_emitters,
+                   pstats.simulated_particles,
+                   "Emitters simulated this frame, and their particles. Renderer-based culling freezes\n"
+                   "the emitters no camera drew in the frame before."});
+    draw_pair_row({"Drawn",
+                   pstats.drawn_particle_emitters,
+                   pstats.drawn_particles,
+                   "Emitters this camera drew, and the particles it submitted."});
+    draw_row({"Batches",
+              fmt::format("{}", pstats.drawn_particles_batches),
+              "Draw batches of the particles. Different textures or blend modes split them."});
+}
+
+/// Batching statistics, under a header whose switch turns the project's static mesh batching on
+/// and off: the numbers above show what it saves.
+void draw_batching_section(rtti::context& ctx, const batch_stats& batch)
+{
+    auto& pm = ctx.get_cached<project_manager>();
+    settings::graphics_settings& graphics = pm.get_settings().graphics;
+    const float switch_width = to_pixels(SWITCH_WIDTH);
+    const section_header header = draw_section_header("##batching",
+                                                      ICON_MDI_LAYERS_TRIPLE_OUTLINE,
+                                                      "Batching",
+                                                      true,
+                                                      switch_width + to_pixels(ITEM_GAP));
+    const ImVec2 switch_size(switch_width, to_pixels(SWITCH_HEIGHT));
+    const ImVec2 switch_min(header.row.Max.x - switch_size.x, header.row.GetCenter().y - switch_size.y * 0.5f);
+    if(draw_switch("##static_mesh_batching",
+                   ImRect(switch_min, switch_min + switch_size),
+                   graphics.static_mesh_batching,
+                   "Static mesh batching: meshes that share a mesh and a material are drawn with\n"
+                   "one instanced draw call. A project setting, also under Project Settings > Graphics."))
+    {
+        graphics.static_mesh_batching = !graphics.static_mesh_batching;
+        pm.save_project_settings(ctx);
+    }
+    if(!header.is_open)
+    {
+        return;
+    }
+    if(!graphics.static_mesh_batching)
+    {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + get_row_indent());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(get_muted_color()), "%s", "Off: every mesh is a draw call of its own.");
+        ImGui::PopTextWrapPos();
+        return;
+    }
+    draw_row({"Batches",
+              fmt::format("{}", batch.total_batches),
+              "Instanced draw calls that the batched meshes were drawn with."});
+    draw_row({"Instances", fmt::format("{}", batch.total_instances), "Meshes drawn through the batches."});
+    draw_row({"Per Batch",
+              fmt::format("{:.1f}", static_cast<double>(batch.average_batch_size)),
+              "Meshes per batch on average. Many unique materials keep it low."});
+    draw_row({"Draw Calls Saved",
+              fmt::format("{}", batch.draw_calls_saved),
+              "Draw calls the batches replace: instances minus batches."});
+}
+
+void draw_content(rtti::context& ctx, const rendering::pipeline_stats& pstats, state& overlay_state)
+{
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(to_pixels(ITEM_GAP), to_pixels(ROW_SPACING)));
+    const header_request request = draw_header();
+    if(request.is_close_pressed)
+    {
+        overlay_state.is_visible = false;
+    }
+    if(request.is_profiler_pressed)
+    {
+        overlay_state.open_profiler_requested = true;
+    }
+    draw_frame_rate();
+    draw_frame_graph(overlay_state);
+    draw_timing_tiles();
+    draw_scene_section();
+    draw_memory_section();
+    draw_pipeline_section(pstats);
+    draw_particles_section(pstats);
+    draw_batching_section(ctx, pstats.batching_stats);
+    ImGui::PopStyleVar();
 }
 
 struct fps_readout
@@ -492,7 +824,7 @@ struct fps_readout
 auto make_fps_readout() -> fps_readout
 {
     const float fps = ImGui::GetIO().Framerate;
-    const char* widest_value = fps < fps_four_digits ? "000 FPS" : "0000 FPS";
+    const char* widest_value = fps < FPS_FOUR_DIGITS ? "000 FPS" : "0000 FPS";
     fps_readout readout{};
     readout.text = panel_toolbar::make_text(ICON_MDI_CHART_LINE, fmt::format("{:.0f} FPS", fps).c_str(), false);
     readout.width_text = panel_toolbar::make_text(ICON_MDI_CHART_LINE, widest_value, false);
@@ -501,97 +833,44 @@ auto make_fps_readout() -> fps_readout
 
 } // namespace
 
-void viewport_stats_overlay::draw(const rendering::pipeline_stats& pstats,
-                                  state& overlay_state,
-                                  const char* id,
-                                  float top_offset)
+void draw(rtti::context& ctx, const rendering::pipeline_stats& pstats, state& overlay_state, const char* id, float top_offset)
 {
     if(!overlay_state.is_visible)
     {
         return;
     }
-
-    auto* window = ImGui::GetCurrentWindow();
-    if(!window || window->SkipItems)
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    if(window == nullptr || window->SkipItems)
     {
         return;
     }
+    record_frame_time(overlay_state);
 
-    auto content_rect = window->ContentRegionRect;
-    float max_height = content_rect.GetHeight() - 2.0f * overlay_padding - top_offset;
-
-    float pos_x = content_rect.Max.x - overlay_width - overlay_padding;
-    float pos_y = content_rect.Min.y + overlay_padding + top_offset;
-
-    ImGui::SetCursorScreenPos(ImVec2(pos_x, pos_y));
-
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, overlay_bg_color);
-    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.15f, 0.15f, 0.15f, 0.9f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.22f, 0.22f, 0.22f, 0.9f));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.18f, 0.18f, 0.18f, 0.9f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, overlay_rounding);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 6.0f));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.0f, 3.0f));
-
-    ImGuiChildFlags child_flags = ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysAutoResize;
-    ImGuiWindowFlags window_flags = 0;
-
-    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(overlay_width, max_height));
-    auto child_name = fmt::format("##viewport_stats_{}", id);
-    if(ImGui::BeginChild(child_name.c_str(), ImVec2(overlay_width, 0), child_flags, window_flags))
+    const ImRect content_rect = window->ContentRegionRect;
+    const float margin = panel_toolbar::get_bar_margin();
+    const ImVec2 top_right(content_rect.Max.x - margin, content_rect.Min.y + top_offset + margin);
+    const float max_height = std::max(content_rect.Max.y - margin - top_right.y, to_pixels(OVERLAY_MIN_HEIGHT));
+    const std::string child_id = fmt::format("##viewport_stats_{}", id);
+    if(panel_toolbar::begin_overlay(child_id.c_str(), top_right, to_pixels(OVERLAY_WIDTH), max_height))
     {
-        // ImGui::PushFont(ImGui::Font::SemiBold);
-        ImGui::PushWindowFontScale(1.25f);
-        auto header_text = ICON_MDI_CHART_LINE " Statistics";
-        auto header_text_width = ImGui::CalcTextSize(header_text).x;
-        ImGui::AlignedItem(0.5f, overlay_width, header_text_width, [&]() -> void {
-            ImGui::TextUnformatted(header_text);
-        });
-        ImGui::PopWindowFontScale();
-
-        ImGui::PushFont(ImGui::Font::Mono);
-        draw_performance_section();
-        draw_scene_section();
-        draw_memory_section();
-        draw_pipeline_section(pstats);
-        ImGui::PopFont();
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::Spacing();
-
-        float btn_width = ImGui::CalcTextSize(ICON_MDI_CHART_BAR " Open Profiler").x
-            + ImGui::GetStyle().FramePadding.x * 2.0f;
-        ImGui::SetCursorPosX((overlay_width - btn_width) * 0.5f);
-        if(ImGui::Button(ICON_MDI_CHART_BAR " Open Profiler"))
-        {
-            overlay_state.open_profiler_requested = true;
-        }
-        ImGui::Spacing();
+        draw_content(ctx, pstats, overlay_state);
     }
-    ImGui::EndChild();
-
-    ImGui::PopStyleVar(3);
-    ImGui::PopStyleColor(4);
+    panel_toolbar::end_overlay();
 }
 
-void viewport_stats_overlay::draw_toolbar_toggle(state& overlay_state)
+void draw_toolbar_toggle(state& overlay_state)
 {
     const fps_readout readout = make_fps_readout();
     const char* tooltip = overlay_state.is_visible ? "Hide Statistics" : "Show Statistics";
-    if(panel_toolbar::toggle("##stats",
-                                readout.text.c_str(),
-                                overlay_state.is_visible,
-                                tooltip,
-                                readout.width_text.c_str()))
+    if(panel_toolbar::toggle("##stats", readout.text.c_str(), overlay_state.is_visible, tooltip, readout.width_text.c_str()))
     {
         overlay_state.is_visible = !overlay_state.is_visible;
     }
 }
 
-void viewport_stats_overlay::draw_toolbar_readout(const panel_toolbar::bar_placement& placement)
+void draw_toolbar_readout(const panel_toolbar::bar_placement& placement)
 {
     const fps_readout readout = make_fps_readout();
     panel_toolbar::draw_readout(placement, readout.text.c_str(), readout.width_text.c_str());
 }
-} // namespace unravel
+} // namespace unravel::viewport_stats_overlay

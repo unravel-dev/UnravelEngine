@@ -137,6 +137,7 @@ void emitter_sim_state::reset()
     temporal_positions.fill(math::vec3(0.0f));
     temporal_dts.fill(0.0f);
     world_bounds = math::bbox(math::vec3(-1.0f), math::vec3(1.0f));
+    particle_bounds.reset();
 }
 
 void emitter_sim_state::push_temporal_sample(const math::vec3& position, float dt)

@@ -801,7 +801,7 @@ LOAD(particle_emitter_component)
         obj.set_simulation_space(simulation_space);
     }
 
-    ps_soa::particle_sim_backend simulation_backend{ps_soa::particle_sim_backend::cpu};
+    ps_soa::particle_sim_backend simulation_backend{ps_soa::particle_sim_backend::gpu};
     if(try_load(ar, ser20::make_nvp("simulation_backend", simulation_backend)))
     {
         obj.set_simulation_backend(simulation_backend);

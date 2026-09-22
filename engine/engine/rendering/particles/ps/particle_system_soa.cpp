@@ -823,15 +823,52 @@ struct emitter
         return max_extent + pivot_pad_factor * max_extent;
     }
 
-    void accumulate_conservative_gpu_bounds(math::bbox& aabb,
-                                            const emitter_desc& desc,
-                                            const emitter_sim_constants& constants,
-                                            const math::vec3& emitter_pos)
+    //-----------------------------------------------------------------------------
+    /// <summary>
+    /// Unions the region new particles can appear in: the emission shape box carried into world
+    /// space by the emitter transform, the way spawn() places them, padded by the largest
+    /// particle. Sized as a box and not as a sphere of its diagonal: a wide and flat emitter - a
+    /// dust volume - would otherwise inflate into a cube as tall as it is wide and pass the cull
+    /// of every camera, wherever it looks.
+    /// </summary>
+    //-----------------------------------------------------------------------------
+    /// The unit region spawn() samples for a shape, before shape_position and shape_scale: a
+    /// circle and a rectangle are flat, and a hemisphere only covers the half above its origin.
+    static auto get_unit_spawn_region(emitter_shape shape) -> math::bbox
     {
+        switch(shape)
+        {
+            case emitter_shape::hemisphere:
+                return {math::vec3(-1.0f, 0.0f, -1.0f), math::vec3(1.0f, 1.0f, 1.0f)};
+            case emitter_shape::circle:
+            case emitter_shape::rect:
+                return {math::vec3(-1.0f, 0.0f, -1.0f), math::vec3(1.0f, 0.0f, 1.0f)};
+            default:
+                return {math::vec3(-1.0f), math::vec3(1.0f)};
+        }
+    }
+
+    void accumulate_spawn_region_bounds(math::bbox& aabb,
+                                        const emitter_desc& desc,
+                                        const emitter_sim_constants& constants)
+    {
+        // spawn() samples the unit region of the shape, offsets it by shape_position and scales
+        // both by shape_scale. Taking the two scaled corners per axis keeps a negative scale,
+        // which mirrors the shape, on the side it actually spawns.
+        const math::bbox unit = get_unit_spawn_region(shape_);
+        const math::vec3 corner_a = (desc.emission.shape_position + unit.min) * desc.emission.shape_scale;
+        const math::vec3 corner_b = (desc.emission.shape_position + unit.max) * desc.emission.shape_scale;
+        const math::vec3 local_min = math::min(corner_a, corner_b);
+        const math::vec3 local_max = math::max(corner_a, corner_b);
         const float particle_radius = compute_gpu_particle_radius(desc, constants);
-        const math::vec3 shape_pad = math::abs(desc.emission.shape_scale) + math::abs(desc.emission.shape_position);
-        const float shape_radius = math::length(shape_pad);
-        expand_aabb_sphere(aabb, emitter_pos, shape_radius + particle_radius);
+        for(int corner = 0; corner < 8; ++corner)
+        {
+            const math::vec3 local((corner & 1) != 0 ? local_max.x : local_min.x,
+                                   (corner & 2) != 0 ? local_max.y : local_min.y,
+                                   (corner & 4) != 0 ? local_max.z : local_min.z);
+            const math::vec4 world = constants.local_to_world * math::vec4(local, 1.0f);
+            expand_aabb_sphere(aabb, math::vec3(world), particle_radius);
+        }
     }
 
     void accumulate_gpu_live_bounds(math::bbox& aabb, const emitter_sim_constants& constants)
@@ -1062,24 +1099,19 @@ struct emitter
     void prepare_gpu_resident(const emitter_desc& desc,
                               const emitter_sim_constants& constants,
                               math::bbox& aabb,
-                              const math::vec3& emitter_pos,
                               float sim_dt)
     {
         APP_SCOPE_PERF("Particles/SOA Prepare GPU Resident");
         gpu_.constants = constants;
         gpu_.sim_dt = sim_dt;
         ensure_gpu_luts(desc, constants);
-        if(particles_.count == 0)
-        {
-            // Empty: keep a conservative emitter pad so new spawns can re-enter cameras.
-            accumulate_conservative_gpu_bounds(aabb, desc, constants, emitter_pos);
-        }
-        else
-        {
-            // Live particles: tight current pose (same math as pack), no path-hull pad.
-            aabb.reset();
-            accumulate_gpu_live_bounds(aabb, constants);
-        }
+        // The particles in their current pose (same math as pack, no path-hull pad), then the
+        // region new ones appear in. update_bounds_only() unions the same two while frozen, so an
+        // emitter cannot flip in and out of a camera as it freezes and wakes.
+        aabb.reset();
+        accumulate_gpu_live_bounds(aabb, constants);
+        sim.particle_bounds = aabb;
+        accumulate_spawn_region_bounds(aabb, desc, constants);
         gpu_.pending_pack = particles_.count > 0;
         if(!gpu_.pending_pack)
         {
@@ -1162,18 +1194,16 @@ struct emitter
         {
             // Shadow life matches the upcoming GPU compact-pack advance; frees slots for next frame.
             reclaim_gpu_slots(sim_dt);
-            prepare_gpu_resident(desc, constants, aabb, current_pos, sim_dt);
-        }
-        else if(particles_.count == 0)
-        {
-            // Empty: small emitter pad so the system can re-enter camera culls.
-            aabb.add_point(current_pos - math::vec3(0.5f));
-            aabb.add_point(current_pos + math::vec3(0.5f));
+            prepare_gpu_resident(desc, constants, aabb, sim_dt);
         }
         else
         {
-            // Live particles only — do not seed emitter±0.5 (that pulled the AABB below the spawn disk).
+            // The live particles, then the region new ones appear in - never an emitter +-0.5 pad,
+            // which pulled the AABB below the spawn disk.
+            aabb.reset();
             accumulate_world_bounds(aabb, constants);
+            sim.particle_bounds = aabb;
+            accumulate_spawn_region_bounds(aabb, desc, constants);
         }
         if(sim.first_update)
         {
@@ -1185,19 +1215,13 @@ struct emitter
 
     void update_bounds_only(const emitter_desc& desc, emitter_transform_state& transform)
     {
-        // Frozen: keep last particle AABB and union a cheap emitter region so the
-        // emitter can re-enter any drawing camera without advancing life/emission.
-        const math::vec3 current_pos = transform.current.get_position();
-        math::bbox aabb = sim.world_bounds;
-        if(!aabb.is_populated())
-        {
-            aabb.reset();
-            aabb.add_point(current_pos - math::vec3(0.5f));
-            aabb.add_point(current_pos + math::vec3(0.5f));
-        }
+        // Frozen: the particles hold their pose, so their last bounds still stand. Union the
+        // region new particles would appear in, exactly as the simulated path does, so the
+        // emitter wakes when a camera looks at it and never flips between the two.
+        math::bbox aabb = sim.particle_bounds;
         emitter_sim_constants constants{};
         bake_constants(desc, transform, constants);
-        accumulate_conservative_gpu_bounds(aabb, desc, constants, current_pos);
+        accumulate_spawn_region_bounds(aabb, desc, constants);
         gpu_.pending_pack = false;
         gpu_.spawn_particles.clear();
         gpu_.spawn_slots.clear();

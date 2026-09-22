@@ -44,6 +44,9 @@ struct emitter_sim_state
     uint32_t temporal_count = 0;
 
     math::bbox world_bounds{math::vec3(-1.0f), math::vec3(1.0f)};
+    /// World-space bounds of the particles alive at the last simulation, without the spawn region.
+    /// The frozen refresh unions it with that region instead of growing world_bounds every frame.
+    math::bbox particle_bounds{};
 
     void reset();
     void push_temporal_sample(const math::vec3& position, float dt);

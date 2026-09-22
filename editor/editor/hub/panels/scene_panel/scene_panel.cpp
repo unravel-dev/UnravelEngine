@@ -2255,7 +2255,7 @@ void scene_panel::draw_ui(rtti::context& ctx)
     draw_toolbar(ctx, toolbar_area);
 
     const auto& pstats = camera_comp.get_pipeline_data().get_pipeline()->get_stats();
-    viewport_stats_overlay::draw(pstats, stats_overlay_state_, "scene", toolbar_extent_);
+    viewport_stats_overlay::draw(ctx, pstats, stats_overlay_state_, "scene", toolbar_extent_);
     visualization_menu::draw_legend_overlay(visualize_passes_, visualization_menu_state_, "scene");
 
     if(stats_overlay_state_.open_profiler_requested)

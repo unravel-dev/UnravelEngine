@@ -630,6 +630,11 @@ void pipeline::run_particle_pass(scene& scn,
     const auto& proj = camera.get_projection();
     pass.set_view_proj(view, proj);
 
+    stats_.active_particle_emitters = 0;
+    stats_.simulated_particle_emitters = 0;
+    stats_.drawn_particle_emitters = 0;
+    stats_.active_particles = 0;
+    stats_.simulated_particles = 0;
     stats_.drawn_particles = 0;
     stats_.drawn_particles_batches = 0;
 
@@ -672,8 +677,20 @@ void pipeline::run_particle_pass(scene& scn,
             scn.registry->view<transform_component, particle_emitter_component, active_component>().each(
                 [&](auto e, auto&& transform_comp, auto&& particle_emitter_comp, auto&& active)
                 {
+                    if(!particle_emitter_comp.is_enabled())
+                    {
+                        return;
+                    }
+                    const uint32_t particle_count = particle_emitter_comp.get_num_particles();
+                    stats_.active_particle_emitters++;
+                    stats_.active_particles += particle_count;
+                    if(particle_emitter_comp.is_simulated())
+                    {
+                        stats_.simulated_particle_emitters++;
+                        stats_.simulated_particles += particle_count;
+                    }
                     const auto& bounds = particle_emitter_comp.get_world_bounds();
-                    if(!particle_emitter_comp.is_enabled() || !camera.test_aabb(bounds))
+                    if(!camera.test_aabb(bounds))
                     {
                         return;
                     }
@@ -751,6 +768,7 @@ void pipeline::run_particle_pass(scene& scn,
                     blend_state,
                     sort_by_depth);
                 stats_.drawn_particles_batches++;
+                stats_.drawn_particle_emitters += static_cast<uint32_t>(current_batch.size());
                 current_batch.clear();
                 batch_open = false;
             };
@@ -816,6 +834,12 @@ void pipeline_stats::add_stats(const pipeline_stats& stats)
     drawn_skinned_submeshes_for_shadows += stats.drawn_skinned_submeshes_for_shadows;
     drawn_lights += stats.drawn_lights;
     drawn_lights_casting_shadows += stats.drawn_lights_casting_shadows;
+    // Every camera of a scene counts the same emitters as active and simulated: kept, not summed.
+    active_particle_emitters = (std::max)(active_particle_emitters, stats.active_particle_emitters);
+    simulated_particle_emitters = (std::max)(simulated_particle_emitters, stats.simulated_particle_emitters);
+    active_particles = (std::max)(active_particles, stats.active_particles);
+    simulated_particles = (std::max)(simulated_particles, stats.simulated_particles);
+    drawn_particle_emitters += stats.drawn_particle_emitters;
     drawn_particles += stats.drawn_particles;
     drawn_particles_batches += stats.drawn_particles_batches;
 

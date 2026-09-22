@@ -620,6 +620,7 @@ auto particle_emitter_component::was_used_last_frame() const noexcept -> bool
 
 void particle_emitter_component::update_emitter(const math::transform& world_transform, delta_t dt)
 {
+    is_simulated_ = false;
     if(!ps_soa::is_valid(emitter_handle_) || !enabled_)
     {
         return;
@@ -630,6 +631,7 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
     {
         should_simulate = false;
     }
+    is_simulated_ = should_simulate;
     if(should_simulate)
     {
         ps_soa::update_emitter(emitter_handle_, dt.count(), desc_, transform_state_, desc_.playback);
@@ -638,6 +640,11 @@ void particle_emitter_component::update_emitter(const math::transform& world_tra
     {
         ps_soa::update_emitter_bounds_only(emitter_handle_, desc_, transform_state_);
     }
+}
+
+auto particle_emitter_component::is_simulated() const noexcept -> bool
+{
+    return is_simulated_;
 }
 
 auto particle_emitter_component::get_desc() const -> const ps_soa::emitter_desc&

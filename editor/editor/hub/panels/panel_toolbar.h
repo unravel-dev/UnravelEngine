@@ -158,6 +158,16 @@ auto calc_flexible_width(float min_width, float max_width) -> float;
 //-----------------------------------------------------------------------------
 void draw_readout(const bar_placement& placement, const char* text, const char* width_text = nullptr);
 
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Begin a card in the look of the bars that floats over a viewport, for an overlay such as the
+/// statistics: width wide with its top right corner at top_right, as tall as its content up to
+/// max_height, past which it scrolls. Always pair with end_overlay(), whatever is returned.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto begin_overlay(const char* id, const ImVec2& top_right, float width, float max_height) -> bool;
+void end_overlay();
+
 /// Thin vertical divider between groups of items.
 void separator();
 
