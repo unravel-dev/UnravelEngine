@@ -1,6 +1,7 @@
 #include "start_page.h"
 
 #include <editor/editing/editing_manager.h>
+#include <editor/hub/engine_links.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <editor/imgui/integration/imgui_messagebox.h>
 #include <editor/imgui/integration/imgui_style.h>
@@ -95,13 +96,13 @@ constexpr std::array<sample_link, 4> START_PAGE_SAMPLES{{
      "https://github.com/unravel-dev/DemoProject"},
     {"UnravelEngine Repository",
      "Source code and documentation for the UnravelEngine.",
-     "https://github.com/unravel-dev/UnravelEngine"},
+     engine_links::REPOSITORY},
     {"Engine API Docs",
      "C++ engine API documentation.",
-     "https://unravel-dev.github.io/UnravelEngine/engine-api/html/"},
+     engine_links::ENGINE_API_DOCS},
     {"Scripting API Docs",
      "C# scripting API documentation.",
-     "https://unravel-dev.github.io/UnravelEngine/script-api/html/"},
+     engine_links::SCRIPTING_API_DOCS},
 }};
 
 /// What a card shows: a title over a dimmed line, and optionally a badge over a dimmed line at

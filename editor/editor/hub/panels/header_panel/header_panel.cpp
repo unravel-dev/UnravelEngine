@@ -478,7 +478,7 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             ImGui::Separator();
             if(ImGui::MenuItem("About"))
             {
-                show_about_window_ = true;
+                about_window_.open();
             }
 
             ImGui::EndMenu();
@@ -747,92 +747,8 @@ void header_panel::on_frame_ui_render(rtti::context& ctx, float header_size)
 
     ImGui::End();
 
-    // Draw the about window (will only be visible if show_about_window_ is true)
-    draw_about_window(ctx);
+    about_window_.draw(ctx);
 
-}
-
-void header_panel::draw_about_window(rtti::context& ctx)
-{
-    if(!show_about_window_)
-        return;
-
-    if(!ImGui::IsPopupOpen("About Unravel Engine"))
-    {
-        ImGui::OpenPopup("About Unravel Engine");
-    }
-
-    auto viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize * 0.30f), ImGuiCond_Always);
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkSize.x * 0.5f, viewport->WorkSize.y * 0.5f),
-                            ImGuiCond_Always,
-                            ImVec2(0.5f, 0.5f));
-    if(ImGui::BeginPopupModal("About Unravel Engine",
-                              &show_about_window_,
-                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove))
-    {
-        // Logo and title
-        const float title_scale = 1.5f;
-        ImGui::PushFont(GetFont(ImGui::Font::Bold),
-                        GetFont(ImGui::Font::Bold)->LegacySize * title_scale); // Use default font
-        ImGui::TextColored(ImVec4(0.4f, 0.6f, 1.0f, 1.0f), "Unravel Engine");
-        ImGui::PopFont();
-
-        // Version information
-        ImGui::Text("Version %s", version::get_full().c_str());
-        ImGui::Separator();
-
-        // Engine description
-        ImGui::TextWrapped("Unravel Engine is a modern, high-performance game engine designed for creating "
-                           "interactive 3D and 2D applications. It features a component-based architecture, "
-                           "powerful rendering capabilities, and an intuitive editor interface.");
-
-        ImGui::Spacing();
-        ImGui::Spacing();
-
-        // Features
-        const float section_scale = 1.2f;
-        ImGui::PushFont(ImGui::GetFont(), ImGui::GetFont()->LegacySize * section_scale);
-        ImGui::Text("Key Features");
-        ImGui::PopFont();
-
-        ImGui::Columns(2);
-        ImGui::BulletText("Entity-Component-System");
-        ImGui::BulletText("PBR Rendering");
-        ImGui::BulletText("C# Scripting");
-        ImGui::BulletText("Physics Integration");
-        ImGui::NextColumn();
-        ImGui::BulletText("Real-time Editor");
-        ImGui::BulletText("Asset Management");
-        ImGui::BulletText("Cross-platform Support");
-        ImGui::BulletText("Extensible Architecture");
-        ImGui::Columns(1);
-
-        ImGui::Spacing();
-        ImGui::Spacing();
-
-        // Build information
-        ImGui::PushFont(ImGui::GetFont(), ImGui::GetFont()->LegacySize * section_scale);
-        ImGui::Text("Build Information");
-        ImGui::PopFont();
-
-        ImGui::Text("Build Date: %s", __DATE__);
-        ImGui::Text("Build Time: %s", __TIME__);
-#ifdef _DEBUG
-        ImGui::Text("Configuration: Debug");
-#else
-        ImGui::Text("Configuration: Release");
-#endif
-
-        ImGui::Spacing();
-        ImGui::Spacing();
-
-        // Copyright notice
-        ImGui::Separator();
-        ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "Copyright © %d. All rights reserved.", 2025);
-
-        ImGui::EndPopup();
-    }
 }
 
 } // namespace unravel

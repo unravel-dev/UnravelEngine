@@ -3,6 +3,7 @@
 #include <base/basetypes.hpp>
 #include <context/context.hpp>
 
+#include <editor/hub/about_window/about_window.h>
 #include <editor/imgui/integration/imgui.h>
 #include <editor/shortcuts.h>
 
@@ -24,7 +25,6 @@ public:
 private:
     void draw_menubar_child(rtti::context& ctx);
     void draw_play_toolbar(rtti::context& ctx);
-    void draw_about_window(rtti::context& ctx);
 
     void draw_project_badge(rtti::context& ctx);
     // The play toolbar, a panel_toolbar strip: deploy on the left, the play controls in the
@@ -36,7 +36,7 @@ private:
     void draw_frame_pacing(rtti::context& ctx);
 
     imgui_panels* parent_{};
-    bool show_about_window_ = false;
+    about_window about_window_;
     bool play_splash_in_editor_ = false;
 };
 } // namespace unravel
