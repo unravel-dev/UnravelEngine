@@ -1001,6 +1001,28 @@ void test_absent_components_do_not_throw()
     check_eq(size_t(thrown), 0, "none of those misses cost a throw");
 }
 
+void test_failed_load_leaves_siblings_readable()
+{
+    begin_test("a load that fails inside a node leaves its siblings readable");
+
+    // "a" fails on its second element, after the archive entered the array. Unless the
+    // archive is put back, "b" is then looked up inside "a" and cannot be found - which is
+    // how one bad script field used to make every field after it keep its default.
+    const std::string document = R"({"a": [1, "two", 3], "b": 7, "c": [4, "five"]})";
+    std::stringstream in(document);
+    ser20::iarchive_associative_t ar(in);
+
+    std::vector<int> a;
+    check(!try_load(ar, ser20::make_nvp("a", a)), "try_load reports the failed array");
+    int b = 0;
+    check(try_load(ar, ser20::make_nvp("b", b)) && b == 7, "the value after the failed array still loads");
+
+    std::vector<int> c;
+    check(!try_load(ar, ser20::make_nvp("c", c)), "try_load reports a second failed array");
+    int b_again = 0;
+    check(try_load(ar, ser20::make_nvp("b", b_again)) && b_again == 7, "the archive is back at the root after both");
+}
+
 void test_auto_exposure_settings_start_fresh_without_version()
 {
     begin_test("auto exposure settings saved before settings version 2 load as defaults");
@@ -5541,6 +5563,7 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_instantiate_sets_prefab_source();
         test_output_format_scope();
         test_absent_components_do_not_throw();
+        test_failed_load_leaves_siblings_readable();
         test_auto_exposure_settings_start_fresh_without_version();
         test_prefab_asset_does_not_store_prefab_component();
 

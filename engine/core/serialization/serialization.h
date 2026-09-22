@@ -269,6 +269,22 @@ concept can_probe_names = requires(const Archive& ar, const char* name) {
     } -> std::same_as<bool>;
 };
 
+/**
+ * @brief Input archives that can return to a node after a load inside it threw.
+ *
+ * A throw between entering a node and finishing it leaves the archive inside that node, so
+ * whoever catches it and carries on reads its next names from the wrong level, where every
+ * one of them looks absent. Archives that report their depth are put back where the failed
+ * load started instead.
+ */
+template<typename Archive>
+concept can_restore_nodes = requires(Archive& ar, std::size_t depth) {
+    {
+        ar.getNodeDepth()
+    } -> std::same_as<std::size_t>;
+    ar.restoreNodeDepth(depth);
+};
+
 template<typename Archive, typename T>
 inline auto try_serialize_direct(Archive& ar,
                           ser20::NameValuePair<T>&& t,
@@ -285,12 +301,24 @@ inline auto try_serialize_direct(Archive& ar,
         }
     }
 
+    [[maybe_unused]] std::size_t depth{};
+    if constexpr(is_loading_archive<Archive>() && can_restore_nodes<Archive>)
+    {
+        depth = ar.getNodeDepth();
+    }
+
     try
     {
         ar(std::forward<ser20::NameValuePair<T>>(t));
     }
     catch(const std::exception& e)
     {
+        if constexpr(is_loading_archive<Archive>() && can_restore_nodes<Archive>)
+        {
+            // The caller carries on with its next name, which must be looked up at the
+            // node this load started in, not inside the child it failed in.
+            ar.restoreNodeDepth(depth);
+        }
         serialization::note_failed_lookup();
         serialization::note_thrown_lookup();
         if constexpr(is_binary_archive<Archive>())

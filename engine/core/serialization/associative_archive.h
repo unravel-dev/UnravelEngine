@@ -191,3 +191,13 @@ static_assert(is_loading_archive<ser20::iarchive_associative_t>(),
 static_assert(can_probe_names<ser20::iarchive_associative_t>,
               "The selected associative input archive has no non-throwing hasNextName(). "
               "See the comment above this assertion.");
+
+// The input archive must also be able to leave the nodes a failed load entered.
+//
+// try_load catches a failed load and carries on, which is only correct if the archive is back
+// at the node the failed load started in: otherwise every following name is looked up inside
+// the failed child, reads as absent and silently keeps its default. Give a newly selected
+// archive getNodeDepth() and restoreNodeDepth(); see simd::JSONInputArchive.
+static_assert(can_restore_nodes<ser20::iarchive_associative_t>,
+              "The selected associative input archive cannot restore its node depth after a failed load. "
+              "See the comment above this assertion.");

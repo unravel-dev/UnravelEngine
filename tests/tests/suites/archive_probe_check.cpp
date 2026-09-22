@@ -1,6 +1,6 @@
 /*
  * Compile-time check that every associative input archive can answer "is this name here"
- * without throwing.
+ * without throwing, and can leave the nodes a failed load entered.
  *
  * associative_archive.h selects exactly one archive (simdjson today) and only that branch
  * is ever compiled, so the other three rot silently: they are perfectly good code that
@@ -48,5 +48,17 @@ static_assert(can_probe_names<ser20::YAMLInputArchive>,
 /// save path would start consulting a function that cannot answer.
 static_assert(!can_probe_names<ser20::simd::JSONOutputArchive>,
               "output archives must not satisfy can_probe_names");
+
+// try_load carries on after a failed load, which is only correct if the archive leaves the
+// nodes the failure entered. Without it every later name is looked up inside the failed
+// child and silently reads as absent.
+static_assert(can_restore_nodes<ser20::simd::JSONInputArchive>,
+              "simdjson input archive lost getNodeDepth/restoreNodeDepth");
+static_assert(can_restore_nodes<ser20::JSONInputArchive>,
+              "rapidjson input archive lost getNodeDepth/restoreNodeDepth");
+static_assert(can_restore_nodes<ser20::XMLInputArchive>,
+              "xml input archive lost getNodeDepth/restoreNodeDepth");
+static_assert(can_restore_nodes<ser20::YAMLInputArchive>,
+              "yaml input archive lost getNodeDepth/restoreNodeDepth");
 
 } // namespace

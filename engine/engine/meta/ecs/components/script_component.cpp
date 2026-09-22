@@ -636,45 +636,61 @@ inline void SAVE_FUNCTION_NAME(Archive& ar, const dotnet::vector_like_wrapper<T>
     save_mono_elements(ar, obj.type, obj.container);
 }
 
-template<typename Archive, typename T>
-inline void LOAD_FUNCTION_NAME(Archive& ar, dotnet::vector_like_wrapper<T>& obj)
-{
-    try_load_mono_type(ar, "type", obj.type);
-
-    if(!obj.type.valid())
-    {
-        return;
-    }
-    load_mono_elements(ar, obj.type, obj.container);
-}
-
-/// One of the two lists of a saved dictionary. It is saved like any list, type name included, but
-/// loaded as the type the dictionary declares: a saved name can lead to another type of that name
-/// (Vector3, which has no namespace, finds System.Numerics.Vector3).
-struct mono_dictionary_list
+/// The elements of an array, a List or one side of a Dictionary. They are saved with the name of
+/// their type but loaded as the type the member declares: a saved name can lead to another type of
+/// that name (Vector3, which has no namespace, found System.Numerics.Vector3), and a collection of
+/// the wrong type throws on assignment, which drops every script of the entity.
+struct mono_element_list
 {
     dotnet::type type;
     std::vector<dotnet::object> container;
 };
 
 template<typename Archive>
-inline void SAVE_FUNCTION_NAME(Archive& ar, const mono_dictionary_list& obj)
+inline void SAVE_FUNCTION_NAME(Archive& ar, const mono_element_list& obj)
 {
     save_mono_elements(ar, obj.type, obj.container);
 }
 
 template<typename Archive>
-inline void LOAD_FUNCTION_NAME(Archive& ar, mono_dictionary_list& obj)
+inline void LOAD_FUNCTION_NAME(Archive& ar, mono_element_list& obj)
 {
     load_mono_elements(ar, obj.type, obj.container);
+}
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Loads an array or a List member as a new collection of the element type the member declares.
+/// </summary>
+//-----------------------------------------------------------------------------
+template<typename Archive, typename Invoker>
+void try_load_mono_collection(Archive& ar, dotnet::object& obj, const Invoker& invoker)
+{
+    const auto collection_type = invoker.get_type();
+    mono_element_list elements{collection_type.get_element_type(), {}};
+    if(!elements.type.valid() || !try_load(ar, ser20::make_nvp(invoker.get_name(), elements)))
+    {
+        return;
+    }
+    auto element_pins = dotnet::pin_vector_elements(elements.container);
+    if(collection_type.is_array())
+    {
+        dotnet::array<dotnet::object> array(elements.container, elements.type);
+        invoker.set_value(obj, array);
+    }
+    else
+    {
+        dotnet::list<dotnet::object> list(elements.container, elements.type);
+        invoker.set_value(obj, list);
+    }
 }
 
 /// The entries of a C# Dictionary as two lists of the same length, keys and values: the form Unity
 /// suggests for serializing a dictionary, and the one lists have here already.
 struct mono_dictionary_entries
 {
-    mono_dictionary_list keys;
-    mono_dictionary_list values;
+    mono_element_list keys;
+    mono_element_list values;
 };
 
 template<typename Archive>
@@ -751,6 +767,30 @@ void try_load_mono_dictionary(Archive& ar, dotnet::object& obj, const Invoker& i
     if(is_new)
     {
         invoker.set_value(obj, dictionary);
+    }
+}
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Runs the load of one public member of a script object. try_load already skips a member that
+/// is missing or does not read; this catches what fails around it, such as assigning the loaded
+/// value to the member, so that member keeps its current value and is reported while the rest
+/// of the object and the other scripts of the entity still load.
+/// </summary>
+//-----------------------------------------------------------------------------
+template<typename Load>
+void load_mono_member(const dotnet::type& owner, const std::string& member, Load&& load)
+{
+    try
+    {
+        load();
+    }
+    catch(const std::exception& e)
+    {
+        APPLOG_WARNING("Script member {}.{} did not load and keeps its current value: {}",
+                       owner.get_fullname(),
+                       member,
+                       e.what());
     }
 }
 
@@ -1254,7 +1294,11 @@ LOAD(dotnet::object)
     
     for(auto& field : fields)
     {
-        if(field.get_visibility() == dotnet::visibility::vis_public)
+        if(field.get_visibility() != dotnet::visibility::vis_public)
+        {
+            continue;
+        }
+        load_mono_member(type, field.get_name(), [&]()
         {
             const auto& field_type = field.get_type();
             auto field_serilizer = get_field_serilizer(field_type.get_name());
@@ -1273,23 +1317,7 @@ LOAD(dotnet::object)
             }
             else if(field_type.is_array() || field_type.is_list())
             {
-                // Handle arrays and lists - load vector and convert back
-                auto invoker = dotnet::make_field_invoker<dotnet::object>(field);
-                dotnet::vector_like_wrapper<std::vector<dotnet::object>> vec;
-                if(try_load(ar, ser20::make_nvp(field.get_name(), vec)))
-                {
-                    auto element_pins = dotnet::pin_vector_elements(vec.container);
-                    if(field_type.is_array())
-                    {
-                        dotnet::array<dotnet::object> array(vec.container, vec.type);
-                        invoker.set_value(obj, array);
-                    }
-                    else if(field_type.is_list())
-                    {
-                        dotnet::list<dotnet::object> list(vec.container, vec.type);
-                        invoker.set_value(obj, list);
-                    }
-                }
+                try_load_mono_collection(ar, obj, dotnet::make_field_invoker<dotnet::object>(field));
             }
             else if(field_type.is_dictionary())
             {
@@ -1307,12 +1335,16 @@ LOAD(dotnet::object)
                     invoker.set_value(obj, nested_obj);
                 }
             }
-        }
+        });
     }
     
     for(auto& prop : properties)
     {
-        if(prop.get_visibility() == dotnet::visibility::vis_public)
+        if(prop.get_visibility() != dotnet::visibility::vis_public)
+        {
+            continue;
+        }
+        load_mono_member(type, prop.get_name(), [&]()
         {
             const auto& prop_type = prop.get_type();
             auto prop_serilizer = get_property_serilizer(prop_type.get_name());
@@ -1331,23 +1363,7 @@ LOAD(dotnet::object)
             }
             else if(prop_type.is_array() || prop_type.is_list())
             {
-                // Handle arrays and lists - load vector and convert back
-                auto invoker = dotnet::make_property_invoker<dotnet::object>(prop);
-                dotnet::vector_like_wrapper<std::vector<dotnet::object>> vec;
-                if(try_load(ar, ser20::make_nvp(prop.get_name(), vec)))
-                {
-                    auto element_pins = dotnet::pin_vector_elements(vec.container);
-                    if(prop_type.is_array())
-                    {
-                        dotnet::array<dotnet::object> array(vec.container, vec.type);
-                        invoker.set_value(obj, array);
-                    }
-                    else if(prop_type.is_list())
-                    {
-                        dotnet::list<dotnet::object> list(vec.container, vec.type);
-                        invoker.set_value(obj, list);
-                    }
-                }
+                try_load_mono_collection(ar, obj, dotnet::make_property_invoker<dotnet::object>(prop));
             }
             else if(prop_type.is_dictionary())
             {
@@ -1365,7 +1381,7 @@ LOAD(dotnet::object)
                     invoker.set_value(obj, nested_obj);
                 }
             }
-        }
+        });
     }
     
 }
