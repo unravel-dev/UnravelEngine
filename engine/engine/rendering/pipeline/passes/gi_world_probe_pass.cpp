@@ -264,10 +264,16 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
     // the composed epoch itself: that one also moves on every window scroll that brings new
     // instances into a level, and keyed on it camera motion held the whole atlas at four
     // strata per frame (1.5-2.2 ms of a 6 ms frame, gi_perf_investigation_2026-09-13.md).
+    // A PLACEMENT-LOCAL edit (surface_cache_system::is_placement_local_edit) does not arm it:
+    // continuous movers re-landed a recompose every few frames and kept the whole atlas at
+    // four strata for as long as anything moved.
     if(clipmap.get_edited_content_epoch() != last_content_epoch_)
     {
         last_content_epoch_ = clipmap.get_edited_content_epoch();
-        fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
+        if(!surface_cache.is_placement_local_edit())
+        {
+            fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
+        }
     }
     // CAMERA JUMP (fast_window_jump_cells): the scroll composes no longer arm the window, so
     // a teleport into a new region re-measured its probes over a whole window while the gate's

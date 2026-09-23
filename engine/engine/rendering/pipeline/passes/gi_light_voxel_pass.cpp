@@ -425,8 +425,10 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                                   (want_debug && debug_available));
     const uint64_t light_revision = light_buffer.is_valid() ? light_buffer.get_global_revision() : 0u;
     const uint64_t edited_epoch = view_clipmap.get_edited_content_epoch();
-    if(!ema_history_valid_ || light_revision != ema_light_revision_ || edited_epoch != ema_edited_epoch_ ||
-       !radiance_write)
+    // A placement-local edit (surface_cache_system::is_placement_local_edit) is written through per
+    // voxel inside its dirty regions (history_trusted in the kernel), not scene-wide.
+    const bool edited = edited_epoch != ema_edited_epoch_ && !surface_cache.is_placement_local_edit();
+    if(!ema_history_valid_ || light_revision != ema_light_revision_ || edited || !radiance_write)
     {
         ema_snap_frames_ = uint32_t(gi::GI_LIGHT_VOXEL_UPDATE_DENOM);
     }

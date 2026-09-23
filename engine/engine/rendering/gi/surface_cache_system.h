@@ -334,6 +334,29 @@ public:
         return experiment_flags_;
     }
 
+    /**
+     * @brief True while the held dirty regions describe the content changes: at least one region,
+     *        none cut by the shader budget.
+     *
+     * The edited-epoch consumers then keep their SCENE-WIDE response off - the world-probe fast
+     * window (every probe at four strata per frame) and the relight EMA snap (every face written
+     * through) - because inside the regions the relight already writes through per voxel and the
+     * gather temporal flushes locally, which is where a moving placement's light changes. The
+     * regions come from the placement hash (pose, albedo, emissive), so a change outside it - a
+     * residency level swap, a texture mean landing - takes the scene-wide path only while no
+     * region is held; beside a held region it is left to the regular probe and relight schedules,
+     * as Lumen leaves a mesh-SDF mip swap to its caches. Lumen responds to a moving object the
+     * same way: through its budgeted, priority-ordered caches, never with a global flush.
+     * Measured 2026-09-23 on the GI test suite in play mode (cell-06 movers, --novsync): GI total
+     * 3.67 -> 1.96 ms (world-probe trace 1.51 -> 0.24, convolve 0.49 -> 0.10); static-surface
+     * noise, cell-07 stability, sealed cells and the 60 Hz blinker decay unchanged
+     * (tasks/lumen58_gi_comparison_2026-09-22.md).
+     */
+    auto is_placement_local_edit() const -> bool
+    {
+        return !dirty_regions_.empty() && dirty_region_total_ <= dirty_regions_.size();
+    }
+
     auto get_instances() const -> const std::vector<instance>&
     {
         return instances_;
