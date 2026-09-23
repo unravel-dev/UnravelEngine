@@ -148,7 +148,11 @@ void play_mode::end_play(rtti::context& ctx)
     {
         set_paused(ctx, false);
     }
-    ev.on_play_end(ctx);
+
+    if(current_phase_ == phase::running)
+    {
+        ev.on_play_end(ctx);
+    }
     current_phase_ = phase::inactive;
     is_paused_ = false;
     frames_running_ = 0;

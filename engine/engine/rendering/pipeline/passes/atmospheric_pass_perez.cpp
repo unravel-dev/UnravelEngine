@@ -648,6 +648,7 @@ void atmospheric_pass_perez::run_cloud_composite(gfx::frame_buffer* surface,
 }
 
 void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
+                                 gfx::frame_buffer::ptr composite_target,
                                  const camera& camera,
                                  gfx::render_view& rview,
                                  delta_t dt,
@@ -730,7 +731,7 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
     // === Pass 3: volumetric composite over the whole frame (sky and geometry) ===
     if(volumetric)
     {
-        run_cloud_composite(surface, camera, output_size, depth, prepass);
+        run_cloud_composite(composite_target.get(), camera, output_size, depth, prepass);
     }
 
     gfx::discard();

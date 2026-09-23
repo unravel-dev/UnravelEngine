@@ -119,6 +119,11 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
     create_or_resize_mip_chain(rview, viewport_size, mip_count);
 
+    // Every downsample draw binds it: only the first pass reads it, but the program declares
+    // the sampler, and D3D11 flags an empty slot on each draw of the pyramid.
+    const gfx::texture::ptr exposure_texture =
+        params.exposure_texture ? params.exposure_texture : default_textures::get().white_texture();
+
     // First downsample: full-res input -> half-res MIP_0.
     // Uses Karis-weighted 13-tap to suppress sub-pixel specular flicker,
     // combined with threshold/soft-knee prefilter.
@@ -146,8 +151,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         gfx::set_uniform(downsample_program_.u_params, params_data);
 
         gfx::set_texture(downsample_program_.s_tex, 0, input->get_texture());
-        gfx::set_texture(downsample_program_.s_exposure, 1,
-                         params.exposure_texture ? params.exposure_texture : default_textures::get().white_texture());
+        gfx::set_texture(downsample_program_.s_exposure, 1, exposure_texture);
 
         irect32_t rect(0, 0, mip0_size.width, mip0_size.height);
         gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
@@ -190,6 +194,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         gfx::set_uniform(downsample_program_.u_params, params_data);
 
         gfx::set_texture(downsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(i)));
+        gfx::set_texture(downsample_program_.s_exposure, 1, exposure_texture);
 
         irect32_t rect(0, 0, out_w, out_h);
         gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());

@@ -114,8 +114,6 @@ struct emitter_gpu_resources
     emitter_feature cached_features = emitter_feature::none;
     bx::EaseFn cached_ease_pos = nullptr;
     uint32_t gpu_capacity = 0;
-    /// Exclusive end of slot range that may contain live sim data (for compact dispatch).
-    uint32_t high_water = 0;
     float sim_dt = 0.0f;
     bgfx::DynamicVertexBufferHandle sim_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle instance_vb = BGFX_INVALID_HANDLE;
@@ -125,7 +123,10 @@ struct emitter_gpu_resources
     bgfx::DynamicIndexBufferHandle sort_indices_ib = BGFX_INVALID_HANDLE;
     // Bitonic pads to next pow2; key/index/sorted buffers use this size.
     uint32_t instance_sort_capacity = 0;
-    bgfx::DynamicIndexBufferHandle counter_ib = BGFX_INVALID_HANDLE;
+    // active_slots, uploaded before each pack: the pack advances exactly these slots and
+    // writes instance row i for entry i. Compute-read only, so the CPU may update it -
+    // bgfx forbids CPU updates of the compute-written sim/instance buffers.
+    bgfx::DynamicIndexBufferHandle live_slots_ib = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle color_lut_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle color_speed_lut_vb = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle ease_lut_vb = BGFX_INVALID_HANDLE;
@@ -169,10 +170,10 @@ struct emitter_gpu_resources
             sort_indices_ib = BGFX_INVALID_HANDLE;
         }
         instance_sort_capacity = 0;
-        if(bgfx::isValid(counter_ib))
+        if(bgfx::isValid(live_slots_ib))
         {
-            bgfx::destroy(counter_ib);
-            counter_ib = BGFX_INVALID_HANDLE;
+            bgfx::destroy(live_slots_ib);
+            live_slots_ib = BGFX_INVALID_HANDLE;
         }
         if(bgfx::isValid(color_lut_vb))
         {
@@ -200,7 +201,6 @@ struct emitter_gpu_resources
             spawn_slots_ib = BGFX_INVALID_HANDLE;
         }
         gpu_capacity = 0;
-        high_water = 0;
         spawn_upload_capacity = 0;
         pending_pack = false;
         luts_gpu_dirty = true;
@@ -250,11 +250,11 @@ struct emitter_gpu_resources
         }
     }
 
-    /// @return true when buffers were (re)created and CPU→GPU resync is required.
+    /// @return true when buffers were (re)created and the live slots must be restaged from the CPU.
     auto ensure_capacity(uint32_t max_particles) -> bool
     {
         ensure_gpu_layouts();
-        if(gpu_capacity >= max_particles && bgfx::isValid(sim_vb) && bgfx::isValid(counter_ib))
+        if(gpu_capacity >= max_particles && bgfx::isValid(sim_vb) && bgfx::isValid(live_slots_ib))
         {
             return false;
         }
@@ -276,8 +276,8 @@ struct emitter_gpu_resources
         const uint16_t index_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
                                      BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_FORMAT_32X1 |
                                      BGFX_BUFFER_COMPUTE_TYPE_UINT;
-        const uint16_t counter_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32 |
-                                       BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_UINT;
+        const uint16_t live_slot_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32 |
+                                         BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_UINT;
         const uint16_t lut_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE |
                                    BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
         sim_vb = bgfx::createDynamicVertexBuffer(max_particles * k_gpu_sim_vec4s_per_particle,
@@ -288,16 +288,13 @@ struct emitter_gpu_resources
             bgfx::createDynamicVertexBuffer(instance_sort_capacity, g_gpu_instance_layout, sorted_flags);
         sort_keys_vb = bgfx::createDynamicVertexBuffer(instance_sort_capacity, g_gpu_float_layout, key_flags);
         sort_indices_ib = bgfx::createDynamicIndexBuffer(instance_sort_capacity, index_flags);
-        counter_ib = bgfx::createDynamicIndexBuffer(1, counter_flags);
+        live_slots_ib = bgfx::createDynamicIndexBuffer(max_particles, live_slot_flags);
         color_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
         color_speed_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
         ease_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);
+        // sim_vb needs no clear: the pack reads only listed slots, and a slot is listed only
+        // after the spawn scatter has written it.
         reset_freelist(max_particles);
-        std::vector<gpu_sim_particle> zeros(max_particles);
-        std::memset(zeros.data(), 0, sizeof(gpu_sim_particle) * max_particles);
-        bgfx::update(sim_vb, 0, bgfx::copy(zeros.data(), uint32_t(sizeof(gpu_sim_particle) * max_particles)));
-        uint32_t zero_count = 0;
-        bgfx::update(counter_ib, 0, bgfx::copy(&zero_count, sizeof(uint32_t)));
         return true;
     }
 };
@@ -718,20 +715,12 @@ struct emitter
         gpu_.pending_pack = false;
         gpu_.luts_valid = false;
         gpu_.active_slots.clear();
-        gpu_.high_water = 0;
         gpu_.spawn_particles.clear();
         gpu_.spawn_slots.clear();
+        // The old particles stay in sim_vb; with none listed, the pack never reads them again.
         if(gpu_.gpu_capacity > 0)
         {
             gpu_.reset_freelist(gpu_.gpu_capacity);
-            if(bgfx::isValid(gpu_.sim_vb))
-            {
-                std::vector<gpu_sim_particle> zeros(gpu_.gpu_capacity);
-                std::memset(zeros.data(), 0, sizeof(gpu_sim_particle) * gpu_.gpu_capacity);
-                bgfx::update(gpu_.sim_vb,
-                             0,
-                             bgfx::copy(zeros.data(), uint32_t(sizeof(gpu_sim_particle) * gpu_.gpu_capacity)));
-            }
         }
     }
 
@@ -922,7 +911,6 @@ struct emitter
     {
         gpu_.free_list.clear();
         gpu_.active_slots.clear();
-        uint32_t high = 0;
         for(uint32_t i = 0; i < particles_.capacity; ++i)
         {
             if(particles_.lifespan[i] <= 0.0f)
@@ -933,10 +921,8 @@ struct emitter
                 continue;
             }
             gpu_.active_slots.push_back(i);
-            high = math::max(high, i + 1u);
         }
         particles_.count = uint32_t(gpu_.active_slots.size());
-        gpu_.high_water = high;
     }
 
     void reclaim_gpu_slots(float sim_dt)
@@ -944,12 +930,10 @@ struct emitter
         if(gpu_.active_slots.empty())
         {
             particles_.count = 0;
-            gpu_.high_water = 0;
             return;
         }
         APP_SCOPE_PERF("Particles/SOA GPU Reclaim");
         uint32_t write = 0;
-        uint32_t high = 0;
         for(uint32_t i = 0; i < gpu_.active_slots.size(); ++i)
         {
             const uint32_t slot = gpu_.active_slots[i];
@@ -962,11 +946,9 @@ struct emitter
                 continue;
             }
             gpu_.active_slots[write++] = slot;
-            high = math::max(high, slot + 1u);
         }
         gpu_.active_slots.resize(write);
         particles_.count = write;
-        gpu_.high_water = high;
         if(gpu_.free_list.empty() && write < particles_.capacity)
         {
             rebuild_gpu_slot_lists();
@@ -998,87 +980,20 @@ struct emitter
         dst.rot_w = rot.w;
     }
 
-    void stage_gpu_spawn(uint32_t slot)
+    /// Queues the slot's CPU state for the spawn scatter - the only path from the CPU into
+    /// sim_vb, which the pack writes on the GPU and bgfx therefore forbids updating directly.
+    void stage_gpu_upload(uint32_t slot)
     {
         gpu_sim_particle dst{};
         fill_gpu_sim_particle(slot, dst);
         gpu_.spawn_particles.push_back(dst);
         gpu_.spawn_slots.push_back(slot);
+    }
+
+    void stage_gpu_spawn(uint32_t slot)
+    {
+        stage_gpu_upload(slot);
         gpu_.active_slots.push_back(slot);
-        gpu_.high_water = math::max(gpu_.high_water, slot + 1u);
-    }
-
-    void upload_gpu_sim_slot(uint32_t slot)
-    {
-        if(!bgfx::isValid(gpu_.sim_vb) || slot >= gpu_.gpu_capacity)
-        {
-            return;
-        }
-        gpu_sim_particle dst{};
-        fill_gpu_sim_particle(slot, dst);
-        bgfx::update(gpu_.sim_vb,
-                     slot * k_gpu_sim_vec4s_per_particle,
-                     bgfx::copy(&dst, sizeof(gpu_sim_particle)));
-    }
-
-    /// Fallback: coalesce staged slots into contiguous bgfx::update runs.
-    void flush_gpu_spawn_uploads_cpu()
-    {
-        const uint32_t spawn_count = uint32_t(gpu_.spawn_slots.size());
-        if(spawn_count == 0 || !bgfx::isValid(gpu_.sim_vb))
-        {
-            gpu_.spawn_particles.clear();
-            gpu_.spawn_slots.clear();
-            return;
-        }
-        std::vector<uint32_t> order(spawn_count);
-        for(uint32_t i = 0; i < spawn_count; ++i)
-        {
-            order[i] = i;
-        }
-        std::sort(order.begin(),
-                  order.end(),
-                  [&](uint32_t a, uint32_t b)
-                  {
-                      return gpu_.spawn_slots[a] < gpu_.spawn_slots[b];
-                  });
-        std::vector<gpu_sim_particle> run;
-        run.reserve(64);
-        uint32_t run_start_slot = 0;
-        auto flush_run = [&]()
-        {
-            if(run.empty())
-            {
-                return;
-            }
-            bgfx::update(gpu_.sim_vb,
-                         run_start_slot * k_gpu_sim_vec4s_per_particle,
-                         bgfx::copy(run.data(), uint32_t(sizeof(gpu_sim_particle) * run.size())));
-            run.clear();
-        };
-        for(uint32_t oi = 0; oi < spawn_count; ++oi)
-        {
-            const uint32_t src = order[oi];
-            const uint32_t slot = gpu_.spawn_slots[src];
-            if(run.empty())
-            {
-                run_start_slot = slot;
-                run.push_back(gpu_.spawn_particles[src]);
-                continue;
-            }
-            const uint32_t expected = run_start_slot + uint32_t(run.size());
-            if(slot == expected)
-            {
-                run.push_back(gpu_.spawn_particles[src]);
-                continue;
-            }
-            flush_run();
-            run_start_slot = slot;
-            run.push_back(gpu_.spawn_particles[src]);
-        }
-        flush_run();
-        gpu_.spawn_particles.clear();
-        gpu_.spawn_slots.clear();
     }
 
     void resync_gpu_slots_from_cpu()
@@ -1092,7 +1007,7 @@ struct emitter
         rebuild_gpu_slot_lists();
         for(uint32_t slot : gpu_.active_slots)
         {
-            upload_gpu_sim_slot(slot);
+            stage_gpu_upload(slot);
         }
     }
 
@@ -1715,14 +1630,18 @@ struct particle_system_soa
             g_gpu_sim_available = false;
             return;
         }
+        // The scatter is the only way spawns reach the compute-written sim buffer (bgfx forbids
+        // CPU updates of it), so the GPU backend cannot run without it.
         if(cs_spawn)
         {
             g_spawn_scatter_program = std::make_shared<gpu_program>(cs_spawn);
-            if(!g_spawn_scatter_program || !g_spawn_scatter_program->is_valid())
-            {
-                APPLOG_WARNING("Particles: GPU spawn scatter program invalid; using CPU coalesce uploads");
-                g_spawn_scatter_program.reset();
-            }
+        }
+        if(!g_spawn_scatter_program || !g_spawn_scatter_program->is_valid())
+        {
+            APPLOG_WARNING("Particles: GPU spawn scatter program missing or invalid; CPU backend only");
+            g_spawn_scatter_program.reset();
+            g_gpu_sim_available = false;
+            return;
         }
         const auto try_load_sort_cs = [](const asset_handle<gfx::shader>& shader,
                                          std::shared_ptr<gpu_program>& out_program,
@@ -1754,58 +1673,65 @@ struct particle_system_soa
         APPLOG_INFO("Particles: GPU resident sim available (per-emitter Simulation Backend)");
     }
 
-    void flush_emitter_gpu_spawns(emitter& em, bgfx::ViewId view)
+    /// @return false when the staged slots could not be scattered. The pack must then wait:
+    /// it would read listed slots that do not hold their data yet.
+    auto flush_emitter_gpu_spawns(emitter& em, bgfx::ViewId view) -> bool
     {
         const uint32_t spawn_count = uint32_t(em.gpu_.spawn_slots.size());
         if(spawn_count == 0)
         {
-            return;
+            return true;
         }
         APP_SCOPE_PERF("Particles/SOA GPU Spawn Upload");
         // Scatter CS: two contiguous uploads + one dispatch beats sorting/coalescing many
         // sparse bgfx::update calls when freelist slots are fragmented.
-        if(g_spawn_scatter_program && g_spawn_scatter_program->begin() && bgfx::isValid(em.gpu_.sim_vb))
+        if(!g_spawn_scatter_program || !g_spawn_scatter_program->begin())
         {
-            em.gpu_.ensure_spawn_upload_capacity(spawn_count);
-            if(bgfx::isValid(em.gpu_.spawn_vb) && bgfx::isValid(em.gpu_.spawn_slots_ib))
-            {
-                bgfx::update(em.gpu_.spawn_vb,
-                             0,
-                             bgfx::copy(em.gpu_.spawn_particles.data(),
-                                        uint32_t(sizeof(gpu_sim_particle) * spawn_count)));
-                bgfx::update(em.gpu_.spawn_slots_ib,
-                             0,
-                             bgfx::copy(em.gpu_.spawn_slots.data(), uint32_t(sizeof(uint32_t) * spawn_count)));
-                float spawn0[4] = {float(spawn_count), 0.0f, 0.0f, 0.0f};
-                bgfx::setBuffer(0, em.gpu_.spawn_vb, bgfx::Access::Read);
-                bgfx::setBuffer(1, em.gpu_.spawn_slots_ib, bgfx::Access::Read);
-                bgfx::setBuffer(2, em.gpu_.sim_vb, bgfx::Access::ReadWrite);
-                bgfx::setUniform(g_u_spawn0, spawn0);
-                const uint32_t groups = (spawn_count + k_gpu_cs_threads - 1) / k_gpu_cs_threads;
-                bgfx::dispatch(view, g_spawn_scatter_program->native_handle(), groups, 1, 1);
-                g_spawn_scatter_program->end();
-                em.gpu_.spawn_particles.clear();
-                em.gpu_.spawn_slots.clear();
-                return;
-            }
-            g_spawn_scatter_program->end();
+            return false;
         }
-        em.flush_gpu_spawn_uploads_cpu();
+        em.gpu_.ensure_spawn_upload_capacity(spawn_count);
+        if(!bgfx::isValid(em.gpu_.spawn_vb) || !bgfx::isValid(em.gpu_.spawn_slots_ib))
+        {
+            g_spawn_scatter_program->end();
+            return false;
+        }
+        bgfx::update(em.gpu_.spawn_vb,
+                     0,
+                     bgfx::copy(em.gpu_.spawn_particles.data(), uint32_t(sizeof(gpu_sim_particle) * spawn_count)));
+        bgfx::update(em.gpu_.spawn_slots_ib,
+                     0,
+                     bgfx::copy(em.gpu_.spawn_slots.data(), uint32_t(sizeof(uint32_t) * spawn_count)));
+        float spawn0[4] = {float(spawn_count), 0.0f, 0.0f, 0.0f};
+        bgfx::setBuffer(0, em.gpu_.spawn_vb, bgfx::Access::Read);
+        bgfx::setBuffer(1, em.gpu_.spawn_slots_ib, bgfx::Access::Read);
+        bgfx::setBuffer(2, em.gpu_.sim_vb, bgfx::Access::ReadWrite);
+        bgfx::setUniform(g_u_spawn0, spawn0);
+        const uint32_t groups = (spawn_count + k_gpu_cs_threads - 1) / k_gpu_cs_threads;
+        bgfx::dispatch(view, g_spawn_scatter_program->native_handle(), groups, 1, 1);
+        g_spawn_scatter_program->end();
+        em.gpu_.spawn_particles.clear();
+        em.gpu_.spawn_slots.clear();
+        return true;
     }
 
     auto dispatch_gpu_resident(emitter& em, bool sort_by_depth, const math::vec3& eye, bgfx::ViewId pack_view) -> bool
     {
-        if(!em.gpu_.pending_pack || em.particles_.count == 0 || !g_compact_pack_program)
+        if(!em.gpu_.pending_pack || !g_compact_pack_program)
         {
             return false;
         }
         APP_SCOPE_PERF("Particles/SOA GPU Resident Dispatch");
         em.gpu_.ensure_capacity(em.particles_.capacity);
-        if(!bgfx::isValid(em.gpu_.sim_vb) || !bgfx::isValid(em.gpu_.instance_vb) || !bgfx::isValid(em.gpu_.counter_ib))
+        // Checked after ensure_capacity: recreated buffers start with no slots listed.
+        if(em.gpu_.active_slots.empty() || !bgfx::isValid(em.gpu_.sim_vb) ||
+           !bgfx::isValid(em.gpu_.instance_vb) || !bgfx::isValid(em.gpu_.live_slots_ib))
         {
             return false;
         }
-        flush_emitter_gpu_spawns(em, pack_view);
+        if(!flush_emitter_gpu_spawns(em, pack_view))
+        {
+            return false;
+        }
         if(em.gpu_.luts_gpu_dirty)
         {
             bgfx::update(em.gpu_.color_lut_vb,
@@ -1819,15 +1745,19 @@ struct particle_system_soa
                          bgfx::copy(em.gpu_.ease_lut.data(), uint32_t(sizeof(math::vec4) * k_gpu_lut_size)));
             em.gpu_.luts_gpu_dirty = false;
         }
-        uint32_t zero_count = 0;
-        bgfx::update(em.gpu_.counter_ib, 0, bgfx::copy(&zero_count, sizeof(uint32_t)));
+        // The pack writes instance row i for live_slots[i], so the rows match particles_.count
+        // (the draw count) exactly and keep a stable order from frame to frame.
+        const std::vector<uint32_t>& live_slots = em.gpu_.active_slots;
+        const uint32_t live_count = uint32_t(live_slots.size());
+        bgfx::update(em.gpu_.live_slots_ib,
+                     0,
+                     bgfx::copy(live_slots.data(), uint32_t(sizeof(uint32_t) * live_count)));
         const auto& c = em.gpu_.constants;
-        const uint32_t dispatch_count = math::max(em.gpu_.high_water, 1u);
         float pack0[4] = {c.opacity,
                           c.color_intensity,
                           c.avg_system_scale,
                           float(static_cast<int>(c.render_mode))};
-        float pack1[4] = {c.pivot.x, c.pivot.y, float(dispatch_count), float(gpu_feature_mask(c.features))};
+        float pack1[4] = {c.pivot.x, c.pivot.y, float(live_count), float(gpu_feature_mask(c.features))};
         float pack2[4] = {c.particle_scale_3d.x, c.particle_scale_3d.y, c.particle_scale_3d.z, c.tex_sheet_cycles};
         float pack3[4] = {c.tex_sheet_tiles.x,
                           c.tex_sheet_tiles.y,
@@ -1847,7 +1777,7 @@ struct particle_system_soa
         }
         bgfx::setBuffer(0, em.gpu_.sim_vb, bgfx::Access::ReadWrite);
         bgfx::setBuffer(1, em.gpu_.instance_vb, bgfx::Access::Write);
-        bgfx::setBuffer(2, em.gpu_.counter_ib, bgfx::Access::ReadWrite);
+        bgfx::setBuffer(2, em.gpu_.live_slots_ib, bgfx::Access::Read);
         bgfx::setBuffer(3, em.gpu_.color_lut_vb, bgfx::Access::Read);
         bgfx::setBuffer(4, em.gpu_.color_speed_lut_vb, bgfx::Access::Read);
         bgfx::setBuffer(5, em.gpu_.ease_lut_vb, bgfx::Access::Read);
@@ -1864,7 +1794,7 @@ struct particle_system_soa
                                        c.emitter_rotation.z,
                                        c.emitter_rotation.w};
         bgfx::setUniform(g_u_emitter_quat, emitter_quat);
-        const uint32_t groups = (dispatch_count + k_gpu_cs_threads - 1) / k_gpu_cs_threads;
+        const uint32_t groups = (live_count + k_gpu_cs_threads - 1) / k_gpu_cs_threads;
         bgfx::dispatch(pack_view, g_compact_pack_program->native_handle(), groups, 1, 1);
         g_compact_pack_program->end();
         // Consume the pack request. Leaving this set lets a later

@@ -220,7 +220,19 @@ public:
     };
 
     auto init(rtti::context& ctx) -> bool;
-    void run(gfx::frame_buffer::ptr input, const camera& camera, gfx::render_view& rview, delta_t dt, const run_params& params);
+    /**
+     * @param input Scene color with the scene depth as its second attachment; the sky fills the
+     * background through an equal-depth test against it.
+     * @param composite_target The same scene color without the depth attachment. The cloud
+     * composite samples the scene depth, and D3D11 unbinds a texture that is also the draw's
+     * depth target, so every depth read would return 0.
+     */
+    void run(gfx::frame_buffer::ptr input,
+             gfx::frame_buffer::ptr composite_target,
+             const camera& camera,
+             gfx::render_view& rview,
+             delta_t dt,
+             const run_params& params);
 
     /// Renders the cloud shadow map for this frame (before the lighting passes).
     auto run_cloud_shadow_pass(const camera& camera, gfx::render_view& rview, const run_params& params)

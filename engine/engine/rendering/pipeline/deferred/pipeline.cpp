@@ -1952,6 +1952,9 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         float exp_vec[4] = {exp_val, 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(irradiance_compute_program_.u_exposition, exp_vec);
 
+        // Only the cubemap modes read s_env, but the program declares it and D3D11 flags an empty
+        // sampler slot on every dispatch, so the other modes bind a black cube.
+        gfx::texture::ptr env_texture = default_textures::get().black_cube_texture();
         if(dominant.intensity > 0.0f && dominant.use_perez)
         {
             // mode 1 = full directional SH, mode 5 = flat (the SAME Perez integration
@@ -1965,7 +1968,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         {
             // mode 2 = full directional SH, mode 3 = flat (cubemap averaged into L0 only).
             mode = dominant.directional ? 2 : 3;
-            gfx::set_texture(irradiance_compute_program_.s_env, 1, cubemap_tex);
+            env_texture = cubemap_tex;
         }
         else if(!dominant.use_sky && dominant.directional)
         {
@@ -1973,6 +1976,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
             // (full tint up -> darkened tint down). Flat tint-only stays at mode 0.
             mode = 4;
         }
+        gfx::set_texture(irradiance_compute_program_.s_env, 1, env_texture);
 
         // Cloud coverage coupling: the Perez sky is blended toward an overcast grey by the mean
         // cloud transmittance (lowest mip of the cloud shadow map).
@@ -2613,7 +2617,9 @@ auto deferred::run_atmospherics_pass(gfx::frame_buffer::ptr input,
             atmospheric_pass_skybox_.run(lbuffer_depth, c, rview, dt, params_skybox);
             break;
         default:
-            atmospheric_pass_perez_.run(lbuffer_depth, c, rview, dt, params_perez);
+            // input is the color-only LBUFFER over the same texture: the cloud composite
+            // renders into it because it samples the depth that LBUFFER_DEPTH attaches.
+            atmospheric_pass_perez_.run(lbuffer_depth, input, c, rview, dt, params_perez);
             break;
     }
 

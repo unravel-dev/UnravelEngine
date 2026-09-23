@@ -295,7 +295,10 @@ texture::texture(std::uint16_t _size,
                  const memory_view* _mem /*= nullptr */)
     : flags(_flags)
 {
-    calc_texture_size(info, _size, _size, _size, false, _hasMips, _numLayers, _format);
+    // Six size x size faces at depth 1. Describing a size^3 volume instead inflated the eviction
+    // estimate (a mipped 256 RGBA16F probe cube: ~153 MB instead of ~4 MB) and left
+    // info.cubeMap false for every cube created here.
+    calc_texture_size(info, _size, _size, 1, true, _hasMips, _numLayers, _format);
     const std::uint64_t estimated_size = estimate_texture_gpu_size(info, _flags);
     const eviction::reclaim_kind kind = texture_reclaim_kind(_flags);
     const bool can_allocate = try_make_room_for(estimated_size, "cube texture", kind);

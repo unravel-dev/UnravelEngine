@@ -1,13 +1,15 @@
 /*
- * Advance life, atomically compact alive particles into dense instance rows.
- * Sim buffer stays sparse (CPU freelist / spawn slots); only instances are dense.
+ * Advance life of the live slots the CPU lists and pack them into dense instance rows:
+ * row i belongs to s_live_slots[i]. Sim buffer stays sparse (CPU freelist / spawn slots);
+ * only instances are dense. Unlisted slots are never read, so dead or never-written slots
+ * need no clearing.
  */
 
 #include <bgfx_compute.sh>
 
 BUFFER_RW(s_sim, vec4, 0);
 BUFFER_WO(s_instances, vec4, 1);
-BUFFER_RW(s_counter, uint, 2);
+BUFFER_RO(s_live_slots, uint, 2);
 BUFFER_RO(s_color_lut, vec4, 3);
 BUFFER_RO(s_color_speed_lut, vec4, 4);
 BUFFER_RO(s_ease_lut, vec4, 5);
@@ -28,7 +30,7 @@ uniform vec4 u_emitterQuat;
 #define u_render_mode       u_pack0.w
 #define u_pivot_x           u_pack1.x
 #define u_pivot_y           u_pack1.y
-#define u_capacity          uint(u_pack1.z)
+#define u_live_count        uint(u_pack1.z)
 #define u_features          uint(u_pack1.w)
 #define u_scale3d           u_pack2.xyz
 #define u_tex_cycles        u_pack2.w
@@ -130,38 +132,26 @@ NUM_THREADS(64, 1, 1)
 void main()
 {
     uint i = gl_GlobalInvocationID.x;
-    if(i >= u_capacity)
+    if(i >= u_live_count)
     {
         return;
     }
 
-    uint base = i * 5u;
+    uint base = s_live_slots[i] * 5u;
     vec4 s0 = s_sim[base + 0u];
     vec4 s1 = s_sim[base + 1u];
     vec4 s2 = s_sim[base + 2u];
     vec4 s3 = s_sim[base + 3u];
     vec4 s4 = s_sim[base + 4u];
 
-    float life = s0.w;
     float lifespan = s1.w;
-    if(lifespan <= 0.0)
-    {
-        return;
-    }
-    life += u_dt / max(lifespan, 1e-4);
-    if(life > 1.0)
-    {
-        s0.w = 0.0;
-        s1.w = 0.0;
-        s_sim[base + 0u] = s0;
-        s_sim[base + 1u] = s1;
-        return;
-    }
+    // The CPU advances the same life shadow and lists only the survivors, so a listed slot
+    // is alive: an advance that rounds just past 1 here is clamped, never a death.
+    float life = min(s0.w + u_dt / max(lifespan, 1e-4), 1.0);
     s0.w = life;
     s_sim[base + 0u] = s0;
 
-    uint dst;
-    atomicFetchAndAdd(s_counter[0], 1u, dst);
+    uint dst = i;
 
     vec3 start = s0.xyz;
     vec3 end0 = s1.xyz;
