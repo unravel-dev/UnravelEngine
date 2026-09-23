@@ -1,4 +1,5 @@
 #include "viewport_stats_overlay.h"
+#include "panel_section.h"
 #include "panel_toolbar.h"
 #include "editor/format/format_bytes.h"
 #include "editor/hub/panels/inspector_panel/inspectors/inspector_container_widgets.h"
@@ -41,20 +42,16 @@ constexpr float CARD_PADDING = 0.45f;
 constexpr float ITEM_GAP = 0.4f;
 constexpr float ROW_SPACING = 0.22f;
 constexpr float CAPTION_SCALE = 0.85f;
-constexpr float SECTION_GAP = 0.35f;
-constexpr float CHEVRON_WIDTH = 1.0f;
-constexpr float SECTION_ICON_WIDTH = 1.3f;
 constexpr float PAIR_COLUMN_WIDTH = 4.5f;
 constexpr float METER_HEIGHT = 0.3f;
 constexpr float SWITCH_WIDTH = 1.9f;
 constexpr float SWITCH_HEIGHT = 1.05f;
 constexpr float SWITCH_KNOB_INSET = 0.14f;
 
-constexpr float MUTED_TEXT_ALPHA = 0.55f;
 constexpr ImU32 WASH_COLOR = IM_COL32(255, 255, 255, 14);
 constexpr ImU32 METER_TRACK_COLOR = IM_COL32(255, 255, 255, 24);
-constexpr ImU32 HOVERED_COLOR = IM_COL32(255, 255, 255, 18);
-constexpr ImU32 DIVIDER_COLOR = IM_COL32(255, 255, 255, 22);
+/// The tick of a second level on a meter: the watermark paging evicts down to.
+constexpr ImU32 METER_MARKER_COLOR = IM_COL32(255, 255, 255, 130);
 constexpr ImU32 GUIDE_COLOR = IM_COL32(255, 255, 255, 48);
 constexpr ImU32 SWITCH_OFF_COLOR = IM_COL32(255, 255, 255, 46);
 constexpr ImU32 SWITCH_OFF_HOVERED_COLOR = IM_COL32(255, 255, 255, 70);
@@ -74,7 +71,6 @@ constexpr float FPS_SMOOTH = 55.0f;
 constexpr float FPS_PLAYABLE = 30.0f;
 constexpr float MEMORY_WARNING_PERCENT = 60.0f;
 constexpr float MEMORY_BAD_PERCENT = 80.0f;
-constexpr float HEADROOM_WARNING_FRACTION = 0.2f;
 constexpr float PERCENT = 100.0f;
 constexpr float MILLISECONDS_PER_SECOND = 1000.0f;
 /// The graph marks the frame time of 60 FPS, and grows its range for anything slower.
@@ -85,11 +81,6 @@ constexpr float GRAPH_HEADROOM = 1.1f;
 constexpr float FPS_FOUR_DIGITS = 999.5f;
 constexpr std::uint32_t THOUSAND = 1000;
 constexpr std::uint32_t MILLION = 1000000;
-
-auto get_muted_color() -> ImU32
-{
-    return ImGui::GetColorU32(ImGuiCol_Text, MUTED_TEXT_ALPHA);
-}
 
 auto get_accent_color(float alpha = 1.0f) -> ImU32
 {
@@ -227,12 +218,12 @@ void draw_frame_rate()
     draw_list->AddText(min, ImGui::GetColorU32(get_fps_color(fps)), value.c_str());
     ImGui::PopWindowFontScale();
     ImGui::PopFont();
-    draw_text_on_baseline(draw_list, min.x + value_size.x + to_pixels(UNIT_GAP), baseline, get_muted_color(), "FPS");
+    draw_text_on_baseline(draw_list, min.x + value_size.x + to_pixels(UNIT_GAP), baseline, imgui_style::get_muted_text_color_u32(), "FPS");
 
     const std::string frame_text = fmt::format("{:.2f} ms", frame_ms);
     ImGui::PushFont(ImGui::Font::Mono);
     const float frame_text_width = ImGui::CalcTextSize(frame_text.c_str()).x;
-    draw_text_on_baseline(draw_list, min.x + width - frame_text_width, baseline, get_muted_color(), frame_text.c_str());
+    draw_text_on_baseline(draw_list, min.x + width - frame_text_width, baseline, imgui_style::get_muted_text_color_u32(), frame_text.c_str());
     ImGui::PopFont();
 
     ImGui::Dummy(ImVec2(width, value_size.y));
@@ -329,7 +320,7 @@ void draw_tiles(const std::array<timing_tile, 3>& tiles)
         const ImVec2 min = ImGui::GetItemRectMin();
         draw_list->AddRectFilled(min, ImGui::GetItemRectMax(), WASH_COLOR, to_pixels(CARD_ROUNDING));
         ImGui::PushWindowFontScale(CAPTION_SCALE);
-        draw_list->AddText(min + ImVec2(padding, padding), get_muted_color(), tiles[index].caption);
+        draw_list->AddText(min + ImVec2(padding, padding), imgui_style::get_muted_text_color_u32(), tiles[index].caption);
         ImGui::PopWindowFontScale();
         ImGui::PushFont(ImGui::Font::Mono);
         draw_list->AddText(ImVec2(min.x + padding, min.y + padding + caption_height),
@@ -358,74 +349,6 @@ void draw_timing_tiles()
     }});
 }
 
-struct section_header
-{
-    bool is_open{};
-    /// The row of the header, for a control at its right end.
-    ImRect row{};
-};
-
-//-----------------------------------------------------------------------------
-/// <summary>
-/// A divider, then a row that folds the section: chevron, accent icon and title. The open state
-/// is kept in the window, per id. The last trailing_width of the row is left free of the fold
-/// button, for a control the caller draws there.
-/// </summary>
-//-----------------------------------------------------------------------------
-auto draw_section_header(const char* id, const char* icon, const char* title, bool is_default_open, float trailing_width = 0.0f)
-    -> section_header
-{
-    ImGui::Dummy(ImVec2(0.0f, to_pixels(SECTION_GAP)));
-    const ImVec2 min = ImGui::GetCursorScreenPos();
-    const float width = ImGui::GetContentRegionAvail().x;
-    const float height = ImGui::GetFrameHeight();
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    draw_list->AddLine(min, ImVec2(min.x + width, min.y), DIVIDER_COLOR);
-    ImGui::Dummy(ImVec2(width, height));
-
-    section_header header{};
-    header.row = ImRect(min, min + ImVec2(width, height));
-    const ImGuiID item_id = ImGui::GetID(id);
-    ImGuiStorage* storage = ImGui::GetStateStorage();
-    header.is_open = storage->GetBool(item_id, is_default_open);
-    const ImRect press_rect(header.row.Min, ImVec2(header.row.Max.x - trailing_width, header.row.Max.y));
-    bool is_hovered = false;
-    if(ImGui::ItemAdd(press_rect, item_id))
-    {
-        bool is_held = false;
-        if(ImGui::ButtonBehavior(press_rect, item_id, &is_hovered, &is_held))
-        {
-            header.is_open = !header.is_open;
-            storage->SetBool(item_id, header.is_open);
-        }
-    }
-    if(is_hovered)
-    {
-        draw_list->AddRectFilled(press_rect.Min, press_rect.Max, HOVERED_COLOR, to_pixels(CARD_ROUNDING));
-    }
-
-    const float center_y = header.row.GetCenter().y;
-    const float chevron_width = to_pixels(CHEVRON_WIDTH);
-    const float icon_width = to_pixels(SECTION_ICON_WIDTH);
-    ImGui::RenderIconCentered(draw_list,
-                              ImVec2(min.x + chevron_width * 0.5f, center_y),
-                              header.is_open ? ICON_MDI_CHEVRON_DOWN : ICON_MDI_CHEVRON_RIGHT,
-                              get_muted_color());
-    ImGui::RenderIconCentered(draw_list, ImVec2(min.x + chevron_width + icon_width * 0.5f, center_y), icon, get_accent_color());
-    ImGui::PushFont(ImGui::Font::SemiBold);
-    draw_list->AddText(ImVec2(min.x + chevron_width + icon_width, center_y - ImGui::GetTextLineHeight() * 0.5f),
-                       ImGui::GetColorU32(ImGuiCol_Text),
-                       title);
-    ImGui::PopFont();
-    return header;
-}
-
-/// Where the rows start: under the icon of their section header.
-auto get_row_indent() -> float
-{
-    return to_pixels(CHEVRON_WIDTH);
-}
-
 struct stat_row
 {
     const char* label{};
@@ -447,7 +370,7 @@ void draw_row(const stat_row& row)
         ImGui::SetItemTooltipEx("%s", row.tooltip);
     }
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    draw_list->AddText(ImVec2(min.x + get_row_indent(), min.y), get_muted_color(), row.label);
+    draw_list->AddText(ImVec2(min.x + panel_section::get_row_indent(), min.y), imgui_style::get_muted_text_color_u32(), row.label);
     ImGui::PushFont(ImGui::Font::Mono);
     const ImVec2 value_size = ImGui::CalcTextSize(row.value.c_str());
     const ImU32 value_color = row.value_color != 0 ? row.value_color : ImGui::GetColorU32(ImGuiCol_Text);
@@ -477,7 +400,7 @@ void draw_pair_row(const pair_row& row)
         ImGui::SetItemTooltipEx("%s", row.tooltip);
     }
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
-    draw_list->AddText(ImVec2(min.x + get_row_indent(), min.y), get_muted_color(), row.label);
+    draw_list->AddText(ImVec2(min.x + panel_section::get_row_indent(), min.y), imgui_style::get_muted_text_color_u32(), row.label);
     ImGui::PushFont(ImGui::Font::Mono);
     const std::string first = fmt::format("{}", row.first);
     const std::string second = fmt::format("{}", row.second);
@@ -496,8 +419,8 @@ void draw_pair_captions(const char* first, const char* second)
     ImGui::Dummy(ImVec2(width, ImGui::GetTextLineHeight()));
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     const float first_right = min.x + width - to_pixels(PAIR_COLUMN_WIDTH);
-    draw_list->AddText(ImVec2(first_right - ImGui::CalcTextSize(first).x, min.y), get_muted_color(), first);
-    draw_list->AddText(ImVec2(min.x + width - ImGui::CalcTextSize(second).x, min.y), get_muted_color(), second);
+    draw_list->AddText(ImVec2(first_right - ImGui::CalcTextSize(first).x, min.y), imgui_style::get_muted_text_color_u32(), first);
+    draw_list->AddText(ImVec2(min.x + width - ImGui::CalcTextSize(second).x, min.y), imgui_style::get_muted_text_color_u32(), second);
     ImGui::PopWindowFontScale();
 }
 
@@ -505,33 +428,42 @@ void draw_pair_captions(const char* first, const char* second)
 void draw_subheading(const char* text)
 {
     ImGui::Dummy(ImVec2(0.0f, to_pixels(ROW_SPACING)));
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + get_row_indent());
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + panel_section::get_row_indent());
     ImGui::PushFont(ImGui::Font::SemiBold);
     ImGui::PushWindowFontScale(CAPTION_SCALE);
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(get_muted_color()), "%s", text);
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(imgui_style::get_muted_text_color_u32()), "%s", text);
     ImGui::PopWindowFontScale();
     ImGui::PopFont();
 }
 
 /// A thin bar under a row, filled to fraction.
-void draw_meter(float fraction, const ImVec4& color)
+/// A thin bar under a row, filled to fraction. marker_fraction >= 0 puts a tick on the track, for
+/// a second level worth seeing beside the fill - the watermark paging evicts down to.
+void draw_meter(float fraction, const ImVec4& color, float marker_fraction = -1.0f)
 {
     const ImVec2 min = ImGui::GetCursorScreenPos();
     const float width = ImGui::GetContentRegionAvail().x;
     const float height = to_pixels(METER_HEIGHT);
     ImGui::Dummy(ImVec2(width, height));
-    const float indent = get_row_indent();
+    const float indent = panel_section::get_row_indent();
     const ImVec2 track_min(min.x + indent, min.y);
     const float track_width = width - indent;
     const float rounding = height * 0.5f;
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
     draw_list->AddRectFilled(track_min, track_min + ImVec2(track_width, height), METER_TRACK_COLOR, rounding);
-    if(fraction <= 0.0f)
+    if(fraction > 0.0f)
+    {
+        const float fill_width = std::max(track_width * std::min(fraction, 1.0f), height);
+        draw_list->AddRectFilled(track_min, track_min + ImVec2(fill_width, height), ImGui::GetColorU32(color), rounding);
+    }
+    if(marker_fraction < 0.0f)
     {
         return;
     }
-    const float fill_width = std::max(track_width * std::min(fraction, 1.0f), height);
-    draw_list->AddRectFilled(track_min, track_min + ImVec2(fill_width, height), ImGui::GetColorU32(color), rounding);
+    const float marker_x = ImFloor(track_min.x + track_width * std::min(marker_fraction, 1.0f)) + 0.5f;
+    draw_list->AddLine(ImVec2(marker_x, track_min.y - 1.0f),
+                       ImVec2(marker_x, track_min.y + height + 1.0f),
+                       METER_MARKER_COLOR);
 }
 
 /// An on / off switch over the rectangle; it takes no room of its own. Returns true when clicked.
@@ -561,7 +493,7 @@ auto draw_switch(const char* id, const ImRect& bb, bool is_on, const char* toolt
 
 void draw_scene_section()
 {
-    if(!draw_section_header("##scene", ICON_MDI_CUBE_OUTLINE, "Scene", true).is_open)
+    if(!panel_section::draw_header("##scene", ICON_MDI_CUBE_OUTLINE, "Scene", true).is_open)
     {
         return;
     }
@@ -597,46 +529,34 @@ void draw_paging_rows()
     ImGui::SetItemTooltipEx("%s",
                             "GPU resource eviction. Idle CPU backed resources leave GPU memory under pressure\n"
                             "and come back on their next use.");
+    // The bar carries the pressure that drives paging: GPU memory against the budget, with the
+    // target marked on it. The rows under it are the pool paging owns, which is a different and
+    // much smaller quantity - keeping both as bars read as if one repeated the other.
     if(evict_stats.budget_bytes > 0)
     {
         const bool is_over_budget = evict_stats.budget_used_bytes > evict_stats.budget_bytes;
+        const float percent = static_cast<float>(static_cast<double>(evict_stats.budget_used_bytes) /
+                                                 static_cast<double>(evict_stats.budget_bytes)) *
+                              PERCENT;
         draw_row({"Budget",
                   fmt::format("{} / {}{}",
                               format_bytes(static_cast<std::uint64_t>(evict_stats.budget_used_bytes)),
                               format_bytes(static_cast<std::uint64_t>(evict_stats.budget_bytes)),
                               is_over_budget ? " over" : ""),
                   "GPU memory used against the eviction budget. Past the budget, resources are\n"
-                  "evicted down to the target. Red while over budget.",
-                  ImGui::GetColorU32(is_over_budget ? COLOR_BAD : COLOR_GOOD)});
-        draw_row({"Target",
-                  format_bytes(static_cast<std::uint64_t>(evict_stats.target_bytes)),
-                  "What the pager evicts down to once over budget, below the budget to avoid thrashing."});
+                  "evicted down to the target, the mark on the bar. Red while over budget.",
+                  ImGui::GetColorU32(is_over_budget ? COLOR_BAD : get_memory_color(percent))});
+        const float target_fraction = static_cast<float>(static_cast<double>(evict_stats.target_bytes) /
+                                                         static_cast<double>(evict_stats.budget_bytes));
+        draw_meter(percent / PERCENT, get_memory_meter_color(percent), target_fraction);
     }
     draw_row({"Resident",
               fmt::format("{} ({})", format_bytes(static_cast<std::uint64_t>(evict_stats.resident_bytes)), evict_stats.resident_count),
-              "Resources on the GPU that can still be paged out, and how many there are."});
+              "Tracked resources still on the GPU, and how many: what a pass can free."});
     draw_row({"Evicted",
               fmt::format("{} ({})", format_bytes(static_cast<std::uint64_t>(evict_stats.evicted_bytes)), evict_stats.evicted_count),
-              "Resources paged out. They come back on their next use.",
+              "Tracked resources paged out. They come back on their next use.",
               evict_stats.evicted_count > 0 ? ImGui::GetColorU32(COLOR_WARNING) : 0u});
-
-    const double pool_bytes = static_cast<double>(evict_stats.resident_bytes + evict_stats.evicted_bytes);
-    const float resident_fraction =
-        pool_bytes > 0.0 ? static_cast<float>(static_cast<double>(evict_stats.resident_bytes) / pool_bytes) : 0.0f;
-    ImVec4 headroom_color = METER_GOOD;
-    if(evict_stats.resident_bytes == 0)
-    {
-        headroom_color = METER_BAD;
-    }
-    else if(resident_fraction < HEADROOM_WARNING_FRACTION)
-    {
-        headroom_color = METER_WARNING;
-    }
-    draw_row({"Headroom",
-              fmt::format("{} free", format_bytes(static_cast<std::uint64_t>(evict_stats.resident_bytes))),
-              "Share of the managed pool still on the GPU: how much further pressure can free.\n"
-              "Red when nothing is left to evict."});
-    draw_meter(resident_fraction, headroom_color);
     draw_row({"Lifetime",
               fmt::format("{} evicted / {} restored", evict_stats.total_evictions, evict_stats.total_restores),
               "Evictions and restores since start. An eviction count that climbs every frame means\n"
@@ -652,7 +572,7 @@ void draw_paging_rows()
 
 void draw_memory_section()
 {
-    if(!draw_section_header("##memory", ICON_MDI_MEMORY, "Memory", false).is_open)
+    if(!panel_section::draw_header("##memory", ICON_MDI_MEMORY, "Memory", false).is_open)
     {
         return;
     }
@@ -693,7 +613,7 @@ void draw_memory_section()
 
 void draw_pipeline_section(const rendering::pipeline_stats& pstats)
 {
-    if(!draw_section_header("##pipeline", ICON_MDI_PIPE, "Pipeline", false).is_open)
+    if(!panel_section::draw_header("##pipeline", ICON_MDI_PIPE, "Pipeline", false).is_open)
     {
         return;
     }
@@ -721,7 +641,7 @@ void draw_pipeline_section(const rendering::pipeline_stats& pstats)
 
 void draw_particles_section(const rendering::pipeline_stats& pstats)
 {
-    if(!draw_section_header("##particles", ICON_MDI_CREATION, "Particles", false).is_open)
+    if(!panel_section::draw_header("##particles", ICON_MDI_CREATION, "Particles", false).is_open)
     {
         return;
     }
@@ -751,7 +671,7 @@ void draw_batching_section(rtti::context& ctx, const batch_stats& batch)
     auto& pm = ctx.get_cached<project_manager>();
     settings::graphics_settings& graphics = pm.get_settings().graphics;
     const float switch_width = to_pixels(SWITCH_WIDTH);
-    const section_header header = draw_section_header("##batching",
+    const panel_section::header header = panel_section::draw_header("##batching",
                                                       ICON_MDI_LAYERS_TRIPLE_OUTLINE,
                                                       "Batching",
                                                       true,
@@ -773,9 +693,9 @@ void draw_batching_section(rtti::context& ctx, const batch_stats& batch)
     }
     if(!graphics.static_mesh_batching)
     {
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + get_row_indent());
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + panel_section::get_row_indent());
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(get_muted_color()), "%s", "Off: every mesh is a draw call of its own.");
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(imgui_style::get_muted_text_color_u32()), "%s", "Off: every mesh is a draw call of its own.");
         ImGui::PopTextWrapPos();
         return;
     }

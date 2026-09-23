@@ -14,6 +14,15 @@ namespace imgui_style
 //-----------------------------------------------------------------------------
 auto get_accent_color() -> ImVec4;
 
+//-----------------------------------------------------------------------------
+/// <summary>
+/// The text color at the alpha the panels mute their secondary text with: labels beside a value,
+/// paths, hints. One definition, so every panel mutes by the same amount.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto get_muted_text_color() -> ImVec4;
+auto get_muted_text_color_u32() -> ImU32;
+
 void set_unity_theme();
 void set_unity_inspired_theme();
 void set_modern_purple_theme();

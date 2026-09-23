@@ -13,6 +13,24 @@ auto get_accent_color() -> ImVec4
     return g_accent_color;
 }
 
+namespace
+{
+/// How far the panels mute their secondary text.
+constexpr float MUTED_TEXT_ALPHA = 0.55f;
+} // namespace
+
+auto get_muted_text_color() -> ImVec4
+{
+    ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    color.w *= MUTED_TEXT_ALPHA;
+    return color;
+}
+
+auto get_muted_text_color_u32() -> ImU32
+{
+    return ImGui::GetColorU32(ImGuiCol_Text, MUTED_TEXT_ALPHA);
+}
+
 void set_photoshop_theme()
 {
     // Photoshop style by Derydoca from ImThemes

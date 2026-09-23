@@ -35,7 +35,6 @@ constexpr float ABOUT_LABEL_WIDTH = 6.0f;
 constexpr float ABOUT_BUTTON_HEIGHT = 2.2f;
 constexpr float ABOUT_BUTTON_ROUNDING = 0.4f;
 constexpr float ABOUT_CLOSE_INSET = 0.6f;
-constexpr float ABOUT_MUTED_ALPHA = 0.55f;
 constexpr double ABOUT_COPIED_SECONDS = 1.5;
 constexpr ImU32 ABOUT_BOX_COLOR = IM_COL32(255, 255, 255, 10);
 constexpr ImU32 ABOUT_BOX_BORDER_COLOR = IM_COL32(255, 255, 255, 14);
@@ -67,13 +66,6 @@ constexpr std::array<about_link, 2> ABOUT_LINKS{{
     {ICON_MDI_BOOK_OPEN_VARIANT " Documentation", engine_links::SCRIPTING_API_DOCS},
 }};
 
-auto get_muted_text_color() -> ImVec4
-{
-    ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-    color.w *= ABOUT_MUTED_ALPHA;
-    return color;
-}
-
 /// The release the build belongs to, without the commits made since: the part that stays the same
 /// from build to build.
 auto get_release_version() -> std::string
@@ -90,7 +82,7 @@ auto get_build_description() -> std::string
 
 void draw_muted_text(const char* text)
 {
-    ImGui::PushStyleColor(ImGuiCol_Text, get_muted_text_color());
+    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color());
     ImGui::TextUnformatted(text);
     ImGui::PopStyleColor();
 }
@@ -126,7 +118,7 @@ auto draw_close_button() -> bool
     const ImVec2 window_min = ImGui::GetWindowPos();
     const float side = ImGui::GetFrameHeight();
     ImGui::SetCursorScreenPos(ImVec2(window_min.x + ImGui::GetWindowWidth() - inset - side, window_min.y + inset));
-    const bool is_pressed = draw_flat_icon_button("##about_close", ICON_MDI_CLOSE, get_muted_text_color());
+    const bool is_pressed = draw_flat_icon_button("##about_close", ICON_MDI_CLOSE, imgui_style::get_muted_text_color());
     ImGui::SetItemTooltipEx("%s", "Close");
     return is_pressed;
 }
@@ -265,7 +257,7 @@ void about_window::draw_details()
             ImGui::SameLine();
             ImGui::SetCursorScreenPos(ImVec2(right_x - ImGui::GetFrameHeight(), ImGui::GetCursorScreenPos().y));
             const char* copy_icon = is_copied ? ICON_MDI_CHECK : ICON_MDI_CONTENT_COPY;
-            const ImVec4 copy_color = is_copied ? imgui_style::get_accent_color() : get_muted_text_color();
+            const ImVec4 copy_color = is_copied ? imgui_style::get_accent_color() : imgui_style::get_muted_text_color();
             if(draw_flat_icon_button("##about_copy", copy_icon, copy_color))
             {
                 copy_version();

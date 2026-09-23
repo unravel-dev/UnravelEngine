@@ -1,5 +1,7 @@
 #include "profiler_gpu_resources_section.h"
 
+#include "../panel_section.h"
+
 #include <editor/format/format_bytes.h>
 #include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
 #include <graphics/graphics.h>
@@ -161,7 +163,7 @@ void draw_resource_row(const char* name,
 
 void profiler_draw_gpu_resources_section()
 {
-    if(!ImGui::CollapsingHeader(ICON_MDI_PUZZLE "\tGPU Resources"))
+    if(!panel_section::draw_header("##gpu_resources_section", ICON_MDI_PUZZLE, "GPU Resources", false).is_open)
     {
         return;
     }
@@ -172,9 +174,8 @@ void profiler_draw_gpu_resources_section()
         return;
     }
 
-    constexpr ImGuiTableFlags table_flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-                                            ImGuiTableFlags_BordersOuter | ImGuiTableFlags_PadOuterX |
-                                            ImGuiTableFlags_NoBordersInBodyUntilResize;
+    constexpr ImGuiTableFlags table_flags =
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_PadOuterX | ImGuiTableFlags_NoBordersInBody;
     if(!ImGui::BeginTable("##gpu_resources", 4, table_flags))
     {
         return;

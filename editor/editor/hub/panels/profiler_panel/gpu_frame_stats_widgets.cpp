@@ -1,7 +1,11 @@
 #include "gpu_frame_stats_widgets.h"
 
+#include "../panel_section.h"
+#include "../panel_toolbar.h"
 #include "profiler_statistics_utils.h"
 #include <bx/bx.h>
+#include <editor/imgui/integration/fonts/icons/icons_material_design_icons.h>
+#include <editor/imgui/integration/imgui.h>
 #include <imgui/imgui.h>
 
 #include <bgfx/bgfx.h>
@@ -23,9 +27,11 @@ constexpr float profiler_scale = 3.0f;
 constexpr float profiler_max_width = 30.0f;
 constexpr float render_pass_table_max_height = 520.0f;
 constexpr float render_pass_table_min_height = 180.0f;
-constexpr ImVec4 cpu_color{0.2f, 0.8f, 0.2f, 1.0f};
-constexpr ImVec4 gpu_color{0.2f, 0.6f, 1.0f, 1.0f};
-constexpr ImVec4 warning_color{1.0f, 0.7f, 0.0f, 1.0f};
+constexpr ImVec4 cpu_color{0.45f, 0.80f, 0.45f, 1.0f};
+constexpr ImVec4 gpu_color{0.38f, 0.62f, 0.95f, 1.0f};
+constexpr ImVec4 warning_color{0.95f, 0.70f, 0.25f, 1.0f};
+/// Width of the filter field of the render pass controls, in units of the font size.
+constexpr float pass_filter_width_units = 12.0f;
 
 struct render_pass_entry
 {
@@ -348,16 +354,52 @@ auto make_filtered_render_pass_groups(const std::vector<render_pass_entry>& entr
     return groups;
 }
 
+auto pass_filter_width() -> float
+{
+    return ImFloor(ImGui::GetFontSize() * pass_filter_width_units);
+}
+
+/// A number, right aligned in its cell and in the mono font so the digits line up down the column.
+void draw_number_cell(const std::string& text, const ImVec4& color)
+{
+    ImGui::PushFont(ImGui::Font::Mono);
+    const float text_width = ImGui::CalcTextSize(text.c_str()).x;
+    const float avail = ImGui::GetContentRegionAvail().x;
+    if(avail > text_width)
+    {
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - text_width));
+    }
+    ImGui::TextColored(color, "%s", text.c_str());
+    ImGui::PopFont();
+}
+
+constexpr float timing_bar_height_units = 0.35f;
+constexpr ImU32 timing_bar_track_color = IM_COL32(255, 255, 255, 20);
+
+/// A thin rounded track, filled to the share of the slowest pass in view.
 void draw_timing_bar(float value_ms, float max_ms, const ImVec4& color, const char* tooltip)
 {
-    const float bar_fraction = max_ms > 0.0f ? std::clamp(value_ms / max_ms, 0.0f, 1.0f) : 0.0f;
-    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, color);
-    ImGui::ProgressBar(bar_fraction, ImVec2(-1.0f, ImGui::GetFrameHeight() * 0.72f), "");
-    ImGui::PopStyleColor();
-    if(ImGui::IsItemHovered())
+    const float fraction = max_ms > 0.0f ? std::clamp(value_ms / max_ms, 0.0f, 1.0f) : 0.0f;
+    const float height = ImFloor(ImGui::GetFontSize() * timing_bar_height_units);
+    const float width = ImGui::GetContentRegionAvail().x;
+    const ImVec2 min = ImGui::GetCursorScreenPos() + ImVec2(0.0f, (ImGui::GetFrameHeight() - height) * 0.5f);
+    ImGui::Dummy(ImVec2(width, ImGui::GetFrameHeight()));
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    const float rounding = height * 0.5f;
+    draw_list->AddRectFilled(min, min + ImVec2(width, height), timing_bar_track_color, rounding);
+    if(fraction > 0.0f)
     {
-        ImGui::SetItemTooltipEx("%s: %.3f ms", tooltip, value_ms);
+        const float fill_width = std::max(width * fraction, height);
+        draw_list->AddRectFilled(min, min + ImVec2(fill_width, height), ImGui::GetColorU32(color), rounding);
     }
+    ImGui::SetItemTooltipEx("%s: %.3f ms", tooltip, value_ms);
+}
+
+auto muted_number_color() -> ImVec4
+{
+    ImVec4 color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    color.w *= 0.55f;
+    return color;
 }
 
 auto percent_of(float value, float total) -> float
@@ -386,15 +428,15 @@ void draw_pass_row(const render_pass_entry& entry, const render_pass_totals& tot
         ImGui::SetItemTooltipEx("View %u\n%s", entry.view, entry.name.c_str());
     }
     ImGui::TableNextColumn();
-    ImGui::Text("%.3f ms", entry.cpu_ms);
+    draw_number_cell(fmt::format("{:.3f} ms", entry.cpu_ms), cpu_color);
     ImGui::TableNextColumn();
-    ImGui::Text("%.1f%%", percent_of(entry.cpu_ms, totals.cpu_ms));
+    draw_number_cell(fmt::format("{:.1f}%", percent_of(entry.cpu_ms, totals.cpu_ms)), muted_number_color());
     ImGui::TableNextColumn();
     draw_timing_bar(entry.cpu_ms, max_bar_ms, cpu_color, "CPU submit");
     ImGui::TableNextColumn();
-    ImGui::Text("%.3f ms", entry.gpu_ms);
+    draw_number_cell(fmt::format("{:.3f} ms", entry.gpu_ms), gpu_color);
     ImGui::TableNextColumn();
-    ImGui::Text("%.1f%%", percent_of(entry.gpu_ms, totals.gpu_ms));
+    draw_number_cell(fmt::format("{:.1f}%", percent_of(entry.gpu_ms, totals.gpu_ms)), muted_number_color());
     ImGui::TableNextColumn();
     draw_timing_bar(entry.gpu_ms, max_bar_ms, gpu_color, "GPU execute");
     ImGui::PopID();
@@ -408,15 +450,15 @@ void draw_render_pass_node(const render_pass_node& node, const render_pass_total
     ImGui::TableNextColumn();
     const bool is_open = ImGui::TreeNodeEx("node", flags, "%s  (%zu passes)", node.name.c_str(), node.pass_count);
     ImGui::TableNextColumn();
-    ImGui::Text("%.3f ms", node.cpu_ms);
+    draw_number_cell(fmt::format("{:.3f} ms", node.cpu_ms), cpu_color);
     ImGui::TableNextColumn();
-    ImGui::Text("%.1f%%", percent_of(node.cpu_ms, totals.cpu_ms));
+    draw_number_cell(fmt::format("{:.1f}%", percent_of(node.cpu_ms, totals.cpu_ms)), muted_number_color());
     ImGui::TableNextColumn();
     draw_timing_bar(node.cpu_ms, max_bar_ms, cpu_color, "Group CPU submit");
     ImGui::TableNextColumn();
-    ImGui::Text("%.3f ms", node.gpu_ms);
+    draw_number_cell(fmt::format("{:.3f} ms", node.gpu_ms), gpu_color);
     ImGui::TableNextColumn();
-    ImGui::Text("%.1f%%", percent_of(node.gpu_ms, totals.gpu_ms));
+    draw_number_cell(fmt::format("{:.1f}%", percent_of(node.gpu_ms, totals.gpu_ms)), muted_number_color());
     ImGui::TableNextColumn();
     draw_timing_bar(node.gpu_ms, max_bar_ms, gpu_color, "Group GPU execute");
     if(!is_open)
@@ -484,30 +526,43 @@ void draw_view_stats(const gfx::stats* stats, const widget_layout& layout, const
     static std::array<char, 128> filter = {};
     static bool group_by_prefix = true;
     static bool average_frames = true;
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Render Passes");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(220.0f);
-    ImGui::InputTextWithHint("##render_pass_filter", "Filter pass or group", filter.data(), filter.size());
-    ImGui::SameLine();
-    ImGui::Checkbox("Group by prefix", &group_by_prefix);
-    ImGui::SameLine();
-    // On by default, because a single frame's GPU time cannot answer whether a change helped: the
-    // frame-to-frame spread here is larger than the differences worth chasing.
-    ImGui::Checkbox("Average", &average_frames);
-    ImGui::SetItemTooltipEx("%s",
-                            "Mean over the last 120 frames per pass.\n"
-                            "A single frame's GPU time is far too noisy to compare builds with -- "
-                            "consecutive readings of one pass have differed by 0.5 ms here with "
-                            "nothing changed.\nHold the camera still and let the sample count fill "
-                            "before trusting a number.");
-    ImGui::SameLine();
-    if(ImGui::Button("Reset##pass_history"))
+    if(panel_toolbar::begin_strip("##render_pass_controls", panel_toolbar::strip_style::flat))
     {
-        get_smoothing_state().passes.clear();
+        panel_toolbar::begin_field(pass_filter_width());
+        ImGui::InputTextWithHint("##render_pass_filter",
+                                 ICON_MDI_MAGNIFY " Filter pass or group",
+                                 filter.data(),
+                                 filter.size());
+        panel_toolbar::end_field();
+        if(panel_toolbar::toggle("##group_by_prefix",
+                                 "Group",
+                                 group_by_prefix,
+                                 "Fold the passes into groups by their name prefix"))
+        {
+            group_by_prefix = !group_by_prefix;
+        }
+        // On by default, because a single frame's GPU time cannot answer whether a change helped: the
+        // frame-to-frame spread here is larger than the differences worth chasing.
+        if(panel_toolbar::toggle("##average",
+                                 "Average",
+                                 average_frames,
+                                 "Mean over the last 120 frames per pass.\n"
+                                 "A single frame's GPU time is far too noisy to compare builds with: "
+                                 "consecutive readings of one pass have differed by 0.5 ms here with "
+                                 "nothing changed.\nHold the camera still and let the sample count fill "
+                                 "before trusting a number."))
+        {
+            average_frames = !average_frames;
+        }
+        if(panel_toolbar::button("##reset_pass_history",
+                                 ICON_MDI_REFRESH " Reset",
+                                 "Clear the history. Do this after moving the camera or changing settings, "
+                                 "or the mean still holds the old configuration."))
+        {
+            get_smoothing_state().passes.clear();
+        }
     }
-    ImGui::SetItemTooltipEx("%s", "Clear the history. Do this after changing camera position or "
-                                  "settings, or the mean still contains the old configuration.");
+    panel_toolbar::end_strip();
     std::vector<render_pass_entry> entries = make_render_pass_entries(stats, scale, group_by_prefix);
     if(average_frames)
     {
@@ -529,11 +584,15 @@ void draw_view_stats(const gfx::stats* stats, const widget_layout& layout, const
         max_bar_ms = std::max(max_bar_ms, std::max(group.cpu_ms, group.gpu_ms));
         visible_pass_count += group.pass_count;
     }
-    ImGui::TextDisabled("Visible cost: CPU %8.3f ms | GPU %8.3f ms | %3zu passes in %3zu groups",
-                        totals.cpu_ms,
-                        totals.gpu_ms,
-                        visible_pass_count,
-                        groups.size());
+    ImGui::TextDisabled("Visible cost");
+    ImGui::SameLine();
+    ImGui::TextColored(cpu_color, "%.3f ms", totals.cpu_ms);
+    ImGui::SameLine();
+    ImGui::TextDisabled("submit");
+    ImGui::SameLine();
+    ImGui::TextColored(gpu_color, "%.3f ms", totals.gpu_ms);
+    ImGui::SameLine();
+    ImGui::TextDisabled("execute, %zu passes in %zu groups", visible_pass_count, groups.size());
     if(average_frames)
     {
         ImGui::SameLine();
@@ -549,12 +608,6 @@ void draw_view_stats(const gfx::stats* stats, const widget_layout& layout, const
             ImGui::TextDisabled("| mean of %zu frames", rolling_pass_history::capacity);
         }
     }
-    ImGui::SameLine();
-    ImGui::TextColored(cpu_color, "CPU submit");
-    ImGui::SameLine();
-    ImGui::TextUnformatted("/");
-    ImGui::SameLine();
-    ImGui::TextColored(gpu_color, "GPU execute");
     if(groups.empty())
     {
         ImGui::TextColored(warning_color, "No render passes match the current filter.");
@@ -563,9 +616,9 @@ void draw_view_stats(const gfx::stats* stats, const widget_layout& layout, const
     const float avail_h = ImGui::GetContentRegionAvail().y;
     const float table_h = std::max(render_pass_table_min_height,
                                    std::min(render_pass_table_max_height, std::max(240.0f, avail_h)));
-    constexpr ImGuiTableFlags table_flags = ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersInnerH |
-                                            ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
-                                            ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable;
+    constexpr ImGuiTableFlags table_flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+                                            ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+                                            ImGuiTableFlags_NoBordersInBody | ImGuiTableFlags_PadOuterX;
     if(ImGui::BeginTable("##render_pass_groups", 7, table_flags, ImVec2(-1.0f, table_h)))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
@@ -592,20 +645,25 @@ void draw_view_stats(const gfx::stats* stats, const widget_layout& layout, const
 
 void draw_gpu_submit_profiler_ui(const gfx::stats* stats, bool* enable_profiler)
 {
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("View/encoder timing:");
-    ImGui::SameLine();
     if(enable_profiler == nullptr)
     {
         return;
     }
-    if(ImGui::Checkbox("Enable##GpuProfiler", enable_profiler))
+    if(panel_toolbar::begin_strip("##gpu_timing", panel_toolbar::strip_style::flat))
     {
-        gfx::set_debug(*enable_profiler ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
+        if(panel_toolbar::toggle("##enable_gpu_timing",
+                                 ICON_MDI_TIMER_OUTLINE " View / Encoder Timing",
+                                 *enable_profiler,
+                                 "Record the CPU submit and GPU execute time of every view."))
+        {
+            *enable_profiler = !*enable_profiler;
+            gfx::set_debug(*enable_profiler ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
+        }
     }
+    panel_toolbar::end_strip();
     if(!*enable_profiler)
     {
-        ImGui::TextColored(warning_color, "Enable to record per-view CPU submit and GPU execute times.");
+        ImGui::TextColored(warning_color, "Turn it on to record per-view CPU submit and GPU execute times.");
         return;
     }
 
@@ -625,11 +683,14 @@ void draw_gpu_submit_profiler_ui(const gfx::stats* stats, bool* enable_profiler)
     const timer_scale scale{1000.0 / static_cast<double>(stats->cpuTimerFreq),
                             1000.0 / static_cast<double>(stats->gpuTimerFreq)};
 
-    draw_encoder_stats(stats, layout, scale);
-
-    ImGui::Separator();
-
     draw_view_stats(stats, layout, scale);
+
+    // Last, and folded away: the per-encoder submit times answer a narrower question than the
+    // passes above, and a single-threaded submit shows one lonely row.
+    if(panel_section::draw_header("##encoders", ICON_MDI_ARROW_DECISION_OUTLINE, "Encoders", false).is_open)
+    {
+        draw_encoder_stats(stats, layout, scale);
+    }
 }
 
 } // namespace unravel

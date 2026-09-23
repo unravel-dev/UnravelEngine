@@ -66,7 +66,6 @@ constexpr ImU32 PROJECT_ROW_HOVERED_COLOR = IM_COL32(255, 255, 255, 16);
 constexpr ImU32 PROJECT_ROW_HOVERED_BORDER_COLOR = IM_COL32(255, 255, 255, 40);
 constexpr ImU32 PROJECT_ROW_BADGE_COLOR = IM_COL32(255, 255, 255, 14);
 constexpr float PROJECT_ROW_SELECTED_FILL_ALPHA = 0.35f;
-constexpr float PROJECT_ROW_MUTED_ALPHA = 0.55f;
 constexpr ImU32 START_PAGE_WARNING_COLOR = IM_COL32(255, 190, 60, 255);
 constexpr ImU32 START_PAGE_MISSING_COLOR = IM_COL32(255, 110, 110, 255);
 constexpr ImVec4 START_PAGE_DANGER_COLOR{0.70f, 0.24f, 0.24f, 1.0f};
@@ -118,11 +117,6 @@ struct card_content
     const char* note{};
     ImU32 note_color{};
 };
-
-auto get_muted_text_color() -> ImU32
-{
-    return ImGui::GetColorU32(ImGuiCol_Text, PROJECT_ROW_MUTED_ALPHA);
-}
 
 auto get_avatar_color(const std::string& name) -> ImU32
 {
@@ -268,7 +262,7 @@ void draw_card_content(const ImRect& rect, const card_content& content)
                               nullptr,
                               nullptr);
     ImGui::PopFont();
-    ImGui::PushStyleColor(ImGuiCol_Text, get_muted_text_color());
+    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
     ImGui::RenderTextEllipsis(draw_list,
                               ImVec2(text_min_x, top + font_size + line_gap),
                               ImVec2(text_max_x, rect.Max.y),
@@ -369,7 +363,7 @@ void draw_page_title(const char* title)
 /// Dimmed, wrapped text. wrap_width 0 wraps at the edge of the window.
 void draw_muted_text(const char* text, float wrap_width = 0.0f)
 {
-    ImGui::PushStyleColor(ImGuiCol_Text, get_muted_text_color());
+    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
     ImGui::PushTextWrapPos(wrap_width > 0.0f ? ImGui::GetCursorPosX() + wrap_width : 0.0f);
     ImGui::TextUnformatted(text);
     ImGui::PopTextWrapPos();
@@ -391,7 +385,7 @@ void draw_page_header(const char* title, const char* subtitle)
     ImGui::SameLine();
     ImGui::SetCursorPosX(right_x);
     ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(get_muted_text_color()), "%s", version_text.c_str());
+    ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(imgui_style::get_muted_text_color_u32()), "%s", version_text.c_str());
     draw_muted_text(subtitle);
     draw_section_gap();
 }
@@ -417,7 +411,7 @@ void draw_centered_hint(const char* icon, const char* headline, const char* text
     {
         const float line_width = ImGui::CalcTextSize(line).x;
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImMax(0.0f, (avail.x - line_width) * 0.5f));
-        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(get_muted_text_color()), "%s", line);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(imgui_style::get_muted_text_color_u32()), "%s", line);
     }
 }
 
@@ -725,9 +719,9 @@ auto start_page::draw_project_row(const project_entry& entry, const project_row_
     content.title = entry.name.c_str();
     content.subtitle = entry.directory.c_str();
     content.badge = badge.c_str();
-    content.badge_text_color = entry.is_engine_older ? START_PAGE_WARNING_COLOR : get_muted_text_color();
+    content.badge_text_color = entry.is_engine_older ? START_PAGE_WARNING_COLOR : imgui_style::get_muted_text_color_u32();
     content.note = entry.modified_label.c_str();
-    content.note_color = entry.is_missing ? START_PAGE_MISSING_COLOR : get_muted_text_color();
+    content.note_color = entry.is_missing ? START_PAGE_MISSING_COLOR : imgui_style::get_muted_text_color_u32();
     draw_card_content(row_rect, content);
     return is_hovered;
 }
@@ -998,7 +992,7 @@ void start_page::draw_samples_view()
             content.title = sample.name;
             content.subtitle = sample.description;
             content.note = ICON_MDI_OPEN_IN_NEW;
-            content.note_color = get_muted_text_color();
+            content.note_color = imgui_style::get_muted_text_color_u32();
             draw_card_content(ImRect(row_min, row_min + row_size), content);
             ImGui::SetItemTooltipEx("%s", sample.url);
             if(is_pressed)

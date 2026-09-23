@@ -34,6 +34,7 @@ public:
 private:
     void draw_ui(rtti::context& ctx);
     void draw_recording_toolbar();
+    void draw_history_dropdown(performance_profiler* profiler);
     void draw_frame_selector_bar();
     void draw_profiler_bottom_sections(rtti::context& ctx);
     void draw_timeline();

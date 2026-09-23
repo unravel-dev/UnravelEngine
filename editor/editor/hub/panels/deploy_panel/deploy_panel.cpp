@@ -35,7 +35,6 @@ constexpr float DEPLOY_BUTTON_HEIGHT = 2.2f;
 constexpr float DEPLOY_BUTTON_PADDING_X = 1.0f;
 constexpr float DEPLOY_BUTTON_ROUNDING = 0.4f;
 constexpr float DEPLOY_CLOSE_INSET = 0.6f;
-constexpr float DEPLOY_MUTED_ALPHA = 0.55f;
 constexpr float DEPLOY_ACCENT_ACTIVE_SHADE = 0.85f;
 constexpr ImU32 DEPLOY_WARNING_COLOR = IM_COL32(255, 190, 60, 255);
 // The theme's fields are darker than a window and all but vanish on the lighter popup, so they
@@ -46,14 +45,9 @@ constexpr ImU32 DEPLOY_FIELD_ACTIVE_COLOR = IM_COL32(255, 255, 255, 30);
 // Jobs are named "Deploying X"; the steps show X.
 constexpr std::string_view DEPLOY_JOB_PREFIX = "Deploying ";
 
-auto get_muted_text_color() -> ImU32
-{
-    return ImGui::GetColorU32(ImGuiCol_Text, DEPLOY_MUTED_ALPHA);
-}
-
 void draw_muted_text(const char* text)
 {
-    ImGui::PushStyleColor(ImGuiCol_Text, get_muted_text_color());
+    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
     ImGui::TextWrapped("%s", text);
     ImGui::PopStyleColor();
 }
@@ -315,7 +309,7 @@ void deploy_panel::draw_status(rtti::context& ctx)
         draw_icon_line(ICON_MDI_CHECK_CIRCLE_OUTLINE,
                        ImGui::ColorConvertFloat4ToU32(imgui_style::get_accent_color()),
                        fmt::format("Ready to deploy to {}", location).c_str(),
-                       get_muted_text_color());
+                       imgui_style::get_muted_text_color_u32());
         return;
     }
 
@@ -323,7 +317,7 @@ void deploy_panel::draw_status(rtti::context& ctx)
     const auto done_count = static_cast<std::size_t>(get_progress() * static_cast<float>(step_count) + 0.5f);
     const std::string summary = is_in_progress ? fmt::format("Deploying to {}", location)
                                                : fmt::format("Deployed to {}", location);
-    ImGui::PushStyleColor(ImGuiCol_Text, get_muted_text_color());
+    ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
     ImGui::TextWrapped("%s", summary.c_str());
     ImGui::PopStyleColor();
     draw_gap(DEPLOY_LINE_GAP);
@@ -337,9 +331,9 @@ void deploy_panel::draw_status(rtti::context& ctx)
     {
         const bool is_done = job.is_ready();
         draw_icon_line(is_done ? ICON_MDI_CHECK_CIRCLE : ICON_MDI_PROGRESS_CLOCK,
-                       is_done ? done_color : get_muted_text_color(),
+                       is_done ? done_color : imgui_style::get_muted_text_color_u32(),
                        get_step_name(name).c_str(),
-                       is_done ? ImGui::GetColorU32(ImGuiCol_Text) : get_muted_text_color());
+                       is_done ? ImGui::GetColorU32(ImGuiCol_Text) : imgui_style::get_muted_text_color_u32());
     }
 }
 

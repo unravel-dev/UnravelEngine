@@ -4,6 +4,8 @@
 #include "profiler_gpu_resources_section.h"
 #include "profiler_eviction_section.h"
 #include "../panel.h"
+#include "../panel_section.h"
+#include "../panel_toolbar.h"
 
 #include <imgui/imgui.h>
 #include <imgui/imgui_internal.h>
@@ -37,9 +39,9 @@ constexpr float frame_bar_height = 92.0f;
 constexpr float memory_hist_row_height = 72.0f;
 constexpr float memory_hist_top_pad = 10.0f;
 constexpr float megabyte_divisor = 1024.0f * 1024.0f;
-constexpr ImU32 cpu_heap_hist_color = IM_COL32(200, 140, 70, 220);
-constexpr ImU32 gpu_mem_hist_color = IM_COL32(70, 130, 210, 220);
-constexpr ImU32 process_rss_hist_color = IM_COL32(140, 200, 120, 220);
+constexpr ImU32 cpu_heap_hist_color = IM_COL32(217, 156, 84, 220);
+constexpr ImU32 gpu_mem_hist_color = IM_COL32(97, 158, 242, 220);
+constexpr ImU32 process_rss_hist_color = IM_COL32(146, 204, 133, 220);
 
 enum class memory_histogram_metric : uint8_t
 {
@@ -79,6 +81,26 @@ constexpr float ruler_height = 22.0f;
 constexpr float min_visible_width_px = 1.0f;
 
 constexpr float target_60fps_ms = 16.667f;
+constexpr float target_30fps_ms = 33.333f;
+/// How far over a budget a frame goes before it is colored as missed.
+constexpr float frame_budget_tolerance = 1.05f;
+
+/// Fill of the record toggle while it captures.
+constexpr ImU32 recording_color = IM_COL32(200, 60, 60, 255);
+/// One frame at 60 FPS: what Fit returns the timeline to.
+constexpr double default_view_duration_ns = 20'000'000.0;
+constexpr float section_gap_units = 0.35f;
+constexpr float muted_text_alpha = 0.55f;
+
+auto section_gap() -> float
+{
+    return ImFloor(ImGui::GetFontSize() * section_gap_units);
+}
+
+auto muted_color() -> ImU32
+{
+    return ImGui::GetColorU32(ImGuiCol_Text, muted_text_alpha);
+}
 
 constexpr double min_view_duration_ns = 100'000.0;
 constexpr double max_view_duration_ns = 2'000'000'000.0;
@@ -282,15 +304,17 @@ auto compute_cpu_ratio(const profile_event& ev) -> float
 
 auto histogram_bar_color(float ms) -> ImU32
 {
-    if(ms > 33.333f)
+    // A tolerance over the target: at 60 FPS the frames land either side of 16.667 ms, and an
+    // exact threshold made the histogram flicker green / amber frame by frame.
+    if(ms > target_30fps_ms * frame_budget_tolerance)
     {
-        return IM_COL32(200, 50, 50, 200);
+        return IM_COL32(242, 102, 102, 210);
     }
-    if(ms > 16.667f)
+    if(ms > target_60fps_ms * frame_budget_tolerance)
     {
-        return IM_COL32(200, 160, 50, 200);
+        return IM_COL32(242, 179, 64, 210);
     }
-    return IM_COL32(60, 150, 60, 200);
+    return IM_COL32(115, 204, 115, 210);
 }
 
 /// Draw one histogram column (optionally with CPU/wait split and outline).
@@ -416,29 +440,33 @@ void render_histogram_bars(ImDrawList* draw_list,
     draw_list->PopClipRect();
 }
 
+/// The name of a guide line, at its right end so the bars stay clear of it.
+void draw_guide_label(ImDrawList* draw_list, float right_x, float line_y, ImU32 color, const char* text)
+{
+    const ImVec2 text_size = ImGui::CalcTextSize(text);
+    const ImVec2 pos(right_x - text_size.x - 4.0f, line_y - text_size.y - 1.0f);
+    draw_list->AddText(pos, color, text);
+}
+
 void render_histogram_guides(ImDrawList* draw_list,
                               ImVec2 canvas_pos,
                               float bar_width,
                               float bottom_y,
                               float scale_max)
 {
-    constexpr float target_30fps_ms = 33.333f;
-
     float line_60_y = bottom_y - histogram_inner_height * (target_60fps_ms / scale_max);
     draw_list->AddLine(ImVec2(canvas_pos.x, line_60_y),
                        ImVec2(canvas_pos.x + bar_width, line_60_y),
-                       IM_COL32(0, 200, 0, 100));
-    draw_list->AddText(ImVec2(canvas_pos.x + 2.0f, line_60_y - 13.0f),
-                       IM_COL32(0, 200, 0, 180), "16ms (60 FPS)");
+                       IM_COL32(115, 204, 115, 90));
+    draw_guide_label(draw_list, canvas_pos.x + bar_width, line_60_y, IM_COL32(115, 204, 115, 200), "60 FPS");
 
     if(target_30fps_ms < scale_max)
     {
         float line_30_y = bottom_y - histogram_inner_height * (target_30fps_ms / scale_max);
         draw_list->AddLine(ImVec2(canvas_pos.x, line_30_y),
                            ImVec2(canvas_pos.x + bar_width, line_30_y),
-                           IM_COL32(200, 100, 0, 100));
-        draw_list->AddText(ImVec2(canvas_pos.x + 2.0f, line_30_y - 13.0f),
-                           IM_COL32(200, 100, 0, 180), "33ms (30 FPS)");
+                           IM_COL32(242, 179, 64, 90));
+        draw_guide_label(draw_list, canvas_pos.x + bar_width, line_30_y, IM_COL32(242, 179, 64, 200), "30 FPS");
     }
 }
 
@@ -898,22 +926,19 @@ void profiler_timeline_panel::draw_ui(rtti::context& ctx)
 {
     draw_recording_toolbar();
 
-    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0.0f, section_gap()));
 
     draw_frame_selector_bar();
 
-    ImGui::Separator();
-
     if(has_timeline_scope_selection_ && !selected_scope_label_.empty())
     {
-        ImGui::TextDisabled("Selected:");
+        ImGui::Dummy(ImVec2(0.0f, section_gap()));
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(muted_color()), "%s", "Selected");
         ImGui::SameLine();
         ImGui::TextUnformatted(selected_scope_label_.c_str());
     }
 
     draw_timeline();
-
-    ImGui::Separator();
 
     draw_profiler_bottom_sections(ctx);
 }
@@ -926,21 +951,29 @@ void profiler_timeline_panel::draw_recording_toolbar()
 {
     auto* profiler = get_app_profiler();
     const bool is_recording = profiler->get_recording_state() == recording_state::recording;
+    const uint32_t frame_count = profiler->get_frame_count();
 
-    if(is_recording)
+    if(!panel_toolbar::begin_strip("##profiler_toolbar"))
     {
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.2f, 0.2f, 1.0f));
+        panel_toolbar::end_strip();
+        return;
     }
-    if(ImGui::Button(ICON_MDI_RECORD " Record"))
+
+    const char* record_text = is_recording ? ICON_MDI_PAUSE " Recording" : ICON_MDI_RECORD " Record";
+    if(panel_toolbar::toggle("##record",
+                             record_text,
+                             is_recording,
+                             is_recording ? "Pause the capture" : "Capture frames",
+                             ICON_MDI_PAUSE " Recording",
+                             recording_color))
     {
         if(is_recording)
         {
             profiler->set_recording_state(recording_state::paused);
             auto_follow_ = false;
-            const uint32_t count = profiler->get_frame_count();
-            if(count > 0)
+            if(frame_count > 0)
             {
-                selected_frame_ = static_cast<int32_t>(count - 1);
+                selected_frame_ = static_cast<int32_t>(frame_count - 1);
                 last_centered_frame_ = -2;
             }
         }
@@ -951,16 +984,8 @@ void profiler_timeline_panel::draw_recording_toolbar()
             last_centered_frame_ = -2;
         }
     }
-    if(is_recording)
-    {
-        ImGui::PopStyleColor();
-    }
 
-    ImGui::SameLine();
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine();
-
-    if(ImGui::Button(ICON_MDI_DELETE " Clear"))
+    if(panel_toolbar::button("##clear", ICON_MDI_DELETE " Clear", "Drop the captured frames"))
     {
         profiler->clear_history();
         selected_frame_ = -1;
@@ -969,92 +994,96 @@ void profiler_timeline_panel::draw_recording_toolbar()
         selected_scope_label_.clear();
     }
 
-    uint32_t frame_count = profiler->get_frame_count();
+    panel_toolbar::separator();
 
-    ImGui::SameLine();
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine();
-
-    if(frame_count > 0)
-    {
-        int32_t display_idx = auto_follow_ ? static_cast<int32_t>(frame_count - 1) : selected_frame_;
-        if(display_idx >= 0)
-        {
-            ImGui::Text("Frame %d / %u", display_idx + 1, frame_count);
-        }
-        else
-        {
-            ImGui::Text("%u frames", frame_count);
-        }
-    }
-    else
-    {
-        ImGui::TextDisabled("No frames captured");
-    }
-
-    ImGui::SameLine();
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine();
-
-    if(ImGui::Button(ICON_MDI_FIT_TO_PAGE " Fit"))
+    if(panel_toolbar::button("##fit", ICON_MDI_FIT_TO_PAGE " Fit", "Show one frame of the timeline again"))
     {
         last_centered_frame_ = -2;
-        view_duration_ns_ = 20'000'000.0;
+        view_duration_ns_ = default_view_duration_ns;
         hist_start_ = 0.0f;
         hist_range_ = 0.0f;
     }
 
-    ImGui::SameLine();
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine();
+    draw_history_dropdown(profiler);
 
+    panel_toolbar::separator();
+
+    const std::string frames_text = frame_count > 0 ? fmt::format("{} frames", frame_count) : "No frames";
+    panel_toolbar::label(frames_text.c_str());
+    if(frame_count > 0)
     {
-        static constexpr uint32_t history_presets[] = {64, 128, 256, 512, 1024, 2000};
-        static constexpr const char* history_labels[] = {"64", "128", "256", "512", "1024", "2000"};
-        const uint32_t current_cap = profiler->get_max_frame_history();
-        int current_idx = 2; // default 256
-        for(int i = 0; i < static_cast<int>(IM_ARRAYSIZE(history_presets)); ++i)
+        const int32_t display_idx = auto_follow_ ? static_cast<int32_t>(frame_count - 1) : selected_frame_;
+        if(display_idx >= 0)
         {
-            if(history_presets[i] == current_cap)
-            {
-                current_idx = i;
-                break;
-            }
+            panel_toolbar::separator();
+            panel_toolbar::label(fmt::format("Frame {}", display_idx + 1).c_str());
         }
-        ImGui::SetNextItemWidth(80.0f);
-        if(ImGui::Combo("History", &current_idx, history_labels, IM_ARRAYSIZE(history_labels)))
+    }
+
+    panel_toolbar::separator();
+    const double visible_ms = view_duration_ns_ / 1'000'000.0;
+    const std::string visible_text = visible_ms >= 1.0 ? fmt::format("{:.1f} ms visible", visible_ms)
+                                                       : fmt::format("{:.0f} us visible", visible_ms * 1000.0);
+    panel_toolbar::label(visible_text.c_str());
+
+    // The metric rows of the histogram, as filters: their own color when on, dimmed when off.
+    panel_toolbar::align_right();
+    if(panel_toolbar::filter_toggle("##managed_heap",
+                                    "Managed Heap",
+                                    show_histogram_managed_heap_,
+                                    cpu_heap_hist_color,
+                                    "Row with the managed heap of the frames"))
+    {
+        show_histogram_managed_heap_ = !show_histogram_managed_heap_;
+    }
+    if(panel_toolbar::filter_toggle("##gpu_memory",
+                                    "GPU Memory",
+                                    show_histogram_gpu_memory_,
+                                    gpu_mem_hist_color,
+                                    "Row with the GPU memory of the frames"))
+    {
+        show_histogram_gpu_memory_ = !show_histogram_gpu_memory_;
+    }
+    if(panel_toolbar::filter_toggle("##process_rss",
+                                    "Process RSS",
+                                    show_histogram_process_rss_,
+                                    process_rss_hist_color,
+                                    "Row with the resident memory of the process"))
+    {
+        show_histogram_process_rss_ = !show_histogram_process_rss_;
+    }
+
+    panel_toolbar::end_strip();
+}
+
+/// The cap on captured frames, as a dropdown of the presets.
+void profiler_timeline_panel::draw_history_dropdown(performance_profiler* profiler)
+{
+    static constexpr std::array<uint32_t, 6> history_presets{64, 128, 256, 512, 1024, 2000};
+    const uint32_t current_cap = profiler->get_max_frame_history();
+    const std::string text = fmt::format(ICON_MDI_HISTORY " {}", current_cap);
+    if(!panel_toolbar::begin_dropdown("##history",
+                                      text.c_str(),
+                                      "Frames kept in the history. Fewer frames cost the histogram less."))
+    {
+        return;
+    }
+    ImGui::SeparatorText("History");
+    for(const uint32_t preset : history_presets)
+    {
+        const std::string label = fmt::format("{} frames", preset);
+        if(ImGui::Selectable(label.c_str(), preset == current_cap))
         {
-            profiler->set_max_frame_history(history_presets[current_idx]);
+            profiler->set_max_frame_history(preset);
             if(selected_frame_ >= 0)
             {
                 const uint32_t count = profiler->get_frame_count();
-                if(count == 0)
-                {
-                    selected_frame_ = -1;
-                }
-                else
-                {
-                    selected_frame_ = std::min(selected_frame_, static_cast<int32_t>(count) - 1);
-                }
+                selected_frame_ = count == 0 ? -1 : std::min(selected_frame_, static_cast<int32_t>(count) - 1);
             }
             last_centered_frame_ = -2;
         }
-        ImGui::SetItemTooltipEx("Max captured frames. Lower values reduce histogram cost.");
     }
-
-    ImGui::SameLine();
-    ImGui::SeparatorEx(ImGuiSeparatorFlags_Vertical);
-    ImGui::SameLine();
-
-    double visible_ms = view_duration_ns_ / 1'000'000.0;
-    if(visible_ms >= 1.0)
-    {
-        ImGui::Text("%.1f ms visible", visible_ms);
-    }
-    else
-    {
-        ImGui::Text("%.0f us visible", visible_ms * 1000.0);
-    }
+    panel_toolbar::end_dropdown();
 }
 
 // ============================================================================
@@ -1086,11 +1115,9 @@ void profiler_timeline_panel::draw_profiler_bottom_sections(rtti::context& ctx)
         return;
     }
     ImGui::PushID("profiler_bottom");
-    if(ImGui::CollapsingHeader(ICON_MDI_CHIP "\tRender Passes"))
+    if(panel_section::draw_header("##render_passes", ICON_MDI_CHIP, "Render Passes", false).is_open)
     {
-        ImGui::PushFont(ImGui::Font::Mono);
         draw_gpu_submit_profiler_ui(gfx::get_stats(), &parent_->gpu_profiler_enabled());
-        ImGui::PopFont();
     }
     profiler_draw_gpu_resources_section();
     if(ctx.has<settings>())
@@ -1114,7 +1141,7 @@ void profiler_timeline_panel::draw_live_histogram_stack(float bar_width)
     render_histogram_guides(dl, pos, bar_width, frame_bottom, max_ms);
     dl->AddText(ImVec2(pos.x + 4, pos.y + 2),
                 IM_COL32(180, 180, 200, 200),
-                "Frame wall (ms) — color: busy, gray: wait");
+                "Frame wall (ms): color busy, gray wait");
 
     float row_y = frame_bottom;
     if(show_histogram_managed_heap_)
@@ -1168,12 +1195,6 @@ void profiler_timeline_panel::draw_frame_selector_bar()
         }
     }
     frame_busy_ms_history_.push_sample(frame_busy_ms);
-
-    ImGui::Checkbox("Managed heap", &show_histogram_managed_heap_);
-    ImGui::SameLine();
-    ImGui::Checkbox("GPU memory", &show_histogram_gpu_memory_);
-    ImGui::SameLine();
-    ImGui::Checkbox("Process RSS", &show_histogram_process_rss_);
 
     // Use captured snapshots whenever available (recording and paused) so bar count
     // matches History capacity. Live rolling samples are only for the empty pre-record state.
@@ -1274,7 +1295,7 @@ void profiler_timeline_panel::draw_frame_histogram(performance_profiler* profile
 
     draw_list->AddText(ImVec2(canvas_pos.x + 4, canvas_pos.y + 2),
                        IM_COL32(180, 180, 200, 200),
-                       "Frame wall (ms) — color: busy, gray: wait");
+                       "Frame wall (ms): color busy, gray wait");
 
     render_histogram_bars(draw_list, profiler, first_vis, last_vis,
                           canvas_pos, frame_bottom_y, bar_width, eff_start, entry_w, scale_max);
