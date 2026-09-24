@@ -5,6 +5,7 @@
 
 #include "bgfx_compute.sh" 
 #include "uniforms.sh"
+#include "shaderlib.sh"
 
 SAMPLER2D(s_depthSource, 0);
 IMAGE2D_WO(s_target0, r16f, 1);
@@ -21,7 +22,8 @@ float ScreenSpaceToViewSpaceDepth( float screenDepth )
     // depthLinearizeMul = ( cameraClipFar * cameraClipNear) / ( cameraClipFar - cameraClipNear );
     // depthLinearizeAdd = cameraClipFar / ( cameraClipFar - cameraClipNear );
 
-    return depthLinearizeMul / ( depthLinearizeAdd - screenDepth );
+    // The constants map clip-space depth, which toClipSpaceDepth recovers from the depth buffer.
+    return depthLinearizeMul / ( depthLinearizeAdd - toClipSpaceDepth(screenDepth) );
 }
 
 NUM_THREADS(8, 8, 1)

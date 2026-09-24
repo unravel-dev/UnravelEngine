@@ -549,7 +549,8 @@ float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_
     float ray_len = min(ray_length, light_distance);
     if(vs_light_dir.z < 0.0)
     {
-        float z_near = screenSpaceToViewSpaceDepth(0.0);
+        // Our projections put the near plane at clip depth 0 on every backend.
+        float z_near = screenSpaceToViewSpaceDepth(toDepthTextureZ(0.0));
         ray_len = min(ray_len, (z0 - z_near) * 0.9 / -vs_light_dir.z);
     }
     if(ray_len <= 0.0) return 1.0;

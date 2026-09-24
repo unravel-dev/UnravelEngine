@@ -651,7 +651,9 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
     float tanHalfFOVY = 1.0f / proj[1 * 4 + 1]; // = tanf( drawContext.Camera.GetYFOV( ) * 0.5f );
     float tanHalfFOVX = 1.0F / proj[0];         // = tanHalfFOVY * drawContext.Camera.GetAspect( );
 
-    if(bgfx::getRendererType() == bgfx::RendererType::OpenGL)
+    // Texel rows run bottom-up where render targets keep their origin at the bottom left
+    // (OpenGL and OpenGL ES), so view-space y grows with the texel row there.
+    if(bgfx::getCaps()->originBottomLeft)
     {
         vec2Set(m_uniforms.m_ndcToViewMul, tanHalfFOVX * 2.0f, tanHalfFOVY * 2.0f);
         vec2Set(m_uniforms.m_ndcToViewAdd, tanHalfFOVX * -1.0f, tanHalfFOVY * -1.0f);

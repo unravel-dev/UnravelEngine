@@ -494,11 +494,12 @@ vec3 clipTransform(vec3 clip)
 	return clip;
 }
 
+// Uv of a render-target texel from a y-up [0, 1] screen position (clip * 0.5 + 0.5). The y flip
+// is the clip-space one mirrored about the texture centre: where render targets keep their
+// origin at the top left, uv.y runs opposite to clip y.
 vec2 clipToUv(vec2 clip)
 {
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
-	clip.y = 1.0 - clip.y;
-#endif
+	clip.y = toClipSpaceY(clip.y - 0.5) + 0.5;
 	return clip;
 }
 
@@ -573,23 +574,21 @@ vec3 computeViewSpacePosition(vec2 uv, float z)
     return projected.xyz;
 }
 
-// Convert screen space depth to view space depth
+// Convert screen space depth to view space depth. A perspective projection gives
+// Z_ndc = Mul + Add / Z_view (W_clip = Z_view), and toClipSpaceDepth turns the depth-buffer value
+// back into Z_ndc for the backend's depth range, so no depth convention is assumed here.
 float screenSpaceToViewSpaceDepth(float screenDepth)
 {
 #if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
-    // For DirectX: Z_clip = (f/(f-n)) * Z_view + (-n*f/(f-n))
-    float depthLinearizeMul = u_proj[2][2];    // f/(f-n)
-    float depthLinearizeAdd = u_proj[2][3];    // -n*f/(f-n)
-    return -depthLinearizeAdd / (depthLinearizeMul - screenDepth);
+    float depthLinearizeMul = u_proj[2][2];
+    float depthLinearizeAdd = u_proj[2][3];
 #else
-    // OpenGL: homogeneous NDC, window depth in [0, 1]. GLSL indexes column-major (m[column][row])
-    // and bgfx uploads the same memory untransposed, so the elements the HLSL branch reads as
-    // [2][2] / [2][3] are [2][2] / [3][2] here:
-    // Z_clip = u_proj[2][2] * Z_view + u_proj[3][2], W_clip = Z_view, NDC = 2 * depth - 1.
-    float depthLinearizeMul = u_proj[2][2];    // (f+n)/(f-n)
-    float depthLinearizeAdd = u_proj[3][2];    // -2*f*n/(f-n)
-    return -depthLinearizeAdd / (depthLinearizeMul + 1.0 - 2.0 * screenDepth);
+    // GLSL indexes column-major (m[column][row]) and bgfx uploads the same memory untransposed,
+    // so the elements the HLSL branch reads as [2][2] / [2][3] are [2][2] / [3][2] here.
+    float depthLinearizeMul = u_proj[2][2];
+    float depthLinearizeAdd = u_proj[3][2];
 #endif
+    return -depthLinearizeAdd / (depthLinearizeMul - toClipSpaceDepth(screenDepth));
 }
 
 #endif // __SHADERLIB_SH__

@@ -13,6 +13,7 @@
  */
 
 #include "../bgfx_compute.sh"
+#include "../shaderlib.sh"
 
 SAMPLER2D(s_color, 0);
 SAMPLER2D(s_velocity, 1);
@@ -38,17 +39,6 @@ uniform vec4 u_probe_params2;
 /// sub-pixel offset of a reprojection under camera motion stops reading textured detail as change (a static Base
 /// Color view read 1.7 levels of raw change at 3 degrees per frame) while patch-scale flicker stays.
 #define PROBE_LOWPASS_RADIUS 2
-
-/// View-space depth from device depth: shaderlib.sh screenSpaceToViewSpaceDepth, repeated here
-/// so the probe stays free of the lighting includes.
-float ProbeViewDepth(float device_depth)
-{
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
-	return -u_proj[2][3] / (u_proj[2][2] - device_depth);
-#else
-	return -u_proj[3][2] / (u_proj[2][2] + 1.0 - 2.0 * device_depth);
-#endif
-}
 
 bool ProbeSameSurface(float depth, float other)
 {
@@ -106,16 +96,16 @@ void main()
 			prev_uv = uv - velocity.rg;
 		}
 		valid = valid && prev_uv.x >= 0.0 && prev_uv.y >= 0.0 && prev_uv.x <= 1.0 && prev_uv.y <= 1.0;
-		float depth = ProbeViewDepth(texture2DLod(s_depth, uv, 0.0).x);
-		float depth_left = ProbeViewDepth(texture2DLod(s_depth, uv - vec2(texel.x, 0.0), 0.0).x);
-		float depth_right = ProbeViewDepth(texture2DLod(s_depth, uv + vec2(texel.x, 0.0), 0.0).x);
-		float depth_up = ProbeViewDepth(texture2DLod(s_depth, uv - vec2(0.0, texel.y), 0.0).x);
-		float depth_down = ProbeViewDepth(texture2DLod(s_depth, uv + vec2(0.0, texel.y), 0.0).x);
+		float depth = screenSpaceToViewSpaceDepth(texture2DLod(s_depth, uv, 0.0).x);
+		float depth_left = screenSpaceToViewSpaceDepth(texture2DLod(s_depth, uv - vec2(texel.x, 0.0), 0.0).x);
+		float depth_right = screenSpaceToViewSpaceDepth(texture2DLod(s_depth, uv + vec2(texel.x, 0.0), 0.0).x);
+		float depth_up = screenSpaceToViewSpaceDepth(texture2DLod(s_depth, uv - vec2(0.0, texel.y), 0.0).x);
+		float depth_down = screenSpaceToViewSpaceDepth(texture2DLod(s_depth, uv + vec2(0.0, texel.y), 0.0).x);
 		valid = valid && ProbeSameSurface(depth, depth_left) && ProbeSameSurface(depth, depth_right) &&
 		        ProbeSameSurface(depth, depth_up) && ProbeSameSurface(depth, depth_down);
 		if(u_probe_params2.y > 0.5)
 		{
-			float prev_depth = ProbeViewDepth(texture2DLod(s_prev_depth, prev_uv, 0.0).x);
+			float prev_depth = screenSpaceToViewSpaceDepth(texture2DLod(s_prev_depth, prev_uv, 0.0).x);
 			valid = valid && ProbeSameSurface(depth, prev_depth);
 		}
 		if(valid)
