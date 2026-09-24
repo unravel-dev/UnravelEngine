@@ -1350,9 +1350,9 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                                       BGFX_TEXTURE_RT),
             };
             bgfx::Attachment attachments[2];
-            attachments[0].init(fbtextures[0], bgfx::Access::Write, 0, 1, 0, BGFX_RESOLVE_AUTO_GEN_MIPS);
-            attachments[1].init(fbtextures[1], bgfx::Access::Write, 0, 1, 0, BGFX_RESOLVE_NONE);
-            
+            attachments[0].init(fbtextures[0], bgfx::Access::Write, 0, 1, 0, BGFX_ATTACHMENT_AUTO_GEN_MIPS);
+            attachments[1].init(fbtextures[1], bgfx::Access::Write, 0, 1, 0, BGFX_ATTACHMENT_NONE);
+
             rt_shadow_map_[0] = bgfx::createFrameBuffer(BX_COUNTOF(attachments), attachments, true);
         }
 
@@ -1384,8 +1384,8 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                     };
 
                     bgfx::Attachment attachments[2];
-                    attachments[0].init(fbtextures[0], bgfx::Access::Write, 0, 1, 0, BGFX_RESOLVE_AUTO_GEN_MIPS);
-                    attachments[1].init(fbtextures[1], bgfx::Access::Write, 0, 1, 0, BGFX_RESOLVE_NONE);
+                    attachments[0].init(fbtextures[0], bgfx::Access::Write, 0, 1, 0, BGFX_ATTACHMENT_AUTO_GEN_MIPS);
+                    attachments[1].init(fbtextures[1], bgfx::Access::Write, 0, 1, 0, BGFX_ATTACHMENT_NONE);
                     
                     rt_shadow_map_[ii] = bgfx::createFrameBuffer(BX_COUNTOF(attachments), attachments, true);
                 }

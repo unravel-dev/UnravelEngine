@@ -100,8 +100,11 @@ void gi_quiescence_gate_pass::service_stats_snapshot(const gfx::texture::ptr& vi
     bgfx::dispatch(copy_pass.id, stats_program_->native_handle(), 1, 1, 1);
     stats_program_->end();
     gfx::render_pass readback_pass("GI/Stats Snapshot Readback");
-    bgfx::blit(readback_pass.id, snapshot_readback_->native_handle(), 0, 0, snapshot_texture_->native_handle(), 0, 0, width, height);
-    snapshot_ready_frame_ = bgfx::readTexture(snapshot_readback_->native_handle(), snapshot_data_.data());
+    bgfx::blit(readback_pass.id,
+               bgfx::TextureRegion{.handle = snapshot_readback_->native_handle(), .width = width, .height = height},
+               bgfx::TextureRegion{.handle = snapshot_texture_->native_handle(), .width = width, .height = height});
+    snapshot_ready_frame_ = bgfx::read(bgfx::TextureRegion{.handle = snapshot_readback_->native_handle()},
+                                       snapshot_data_.data());
     stats_snapshot_.frame = gfx::get_render_frame();
     snapshot_pending_ = true;
 }

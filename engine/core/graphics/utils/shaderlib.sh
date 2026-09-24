@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2023 Branimir Karadzic. All rights reserved.
+ * Copyright 2011-2026 Branimir Karadzic. All rights reserved.
  * License: https://github.com/bkaradzic/bgfx/blob/master/LICENSE
  */
 
@@ -336,8 +336,11 @@ vec3 adjustHue(vec3 _rgb, float _hue)
 
 vec4 packFloatToRgba(float _value)
 {
-	const vec4 shift = vec4(256 * 256 * 256, 256 * 256, 256, 1.0);
-	const vec4 mask = vec4(0, 1.0 / 256.0, 1.0 / 256.0, 1.0 / 256.0);
+	// Reference(s):
+	// - Encoding floats to RGBA - the final?
+	//   https://web.archive.org/web/20250914131649/https://aras-p.info/blog/2009/07/30/encoding-floats-to-rgba-the-final/
+	const vec4 shift = vec4(255 * 255 * 255, 255 * 255, 255, 1.0);
+	const vec4 mask = vec4(0, 1.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0);
 	vec4 comp = fract(_value * shift);
 	comp -= comp.xxyz * mask;
 	return comp;
@@ -345,14 +348,14 @@ vec4 packFloatToRgba(float _value)
 
 float unpackRgbaToFloat(vec4 _rgba)
 {
-	const vec4 shift = vec4(1.0 / (256.0 * 256.0 * 256.0), 1.0 / (256.0 * 256.0), 1.0 / 256.0, 1.0);
+	const vec4 shift = vec4(1.0 / (255.0 * 255.0 * 255.0), 1.0 / (255.0 * 255.0), 1.0 / 255.0, 1.0);
 	return dot(_rgba, shift);
 }
 
 vec2 packHalfFloat(float _value)
 {
-	const vec2 shift = vec2(256, 1.0);
-	const vec2 mask = vec2(0, 1.0 / 256.0);
+	const vec2 shift = vec2(255, 1.0);
+	const vec2 mask = vec2(0, 1.0 / 255.0);
 	vec2 comp = fract(_value * shift);
 	comp -= comp.xx * mask;
 	return comp;
@@ -360,7 +363,7 @@ vec2 packHalfFloat(float _value)
 
 float unpackHalfFloat(vec2 _rg)
 {
-	const vec2 shift = vec2(1.0 / 256.0, 1.0);
+	const vec2 shift = vec2(1.0 / 255.0, 1.0);
 	return dot(_rg, shift);
 }
 
@@ -416,15 +419,33 @@ mat3 cofactor(mat4 _m)
 float toClipSpaceDepth(float _depthTextureZ)
 {
 #if BGFX_SHADER_LANGUAGE_GLSL
-	return _depthTextureZ * 2.0 - 1.0;
+	return _depthTextureZ * bgfx_ndc.x - bgfx_ndc.y;
 #else
 	return _depthTextureZ;
 #endif // BGFX_SHADER_LANGUAGE_GLSL
 }
 
+float toDepthTextureZ(float _clipSpaceZ)
+{
+#if BGFX_SHADER_LANGUAGE_GLSL
+	return (_clipSpaceZ + bgfx_ndc.y) * bgfx_ndc.w;
+#else
+	return _clipSpaceZ;
+#endif // BGFX_SHADER_LANGUAGE_GLSL
+}
+
+float toClipSpaceY(float _y)
+{
+#if BGFX_SHADER_LANGUAGE_GLSL
+	return _y * bgfx_ndc.z;
+#else
+	return -_y;
+#endif // BGFX_SHADER_LANGUAGE_GLSL
+}
+
 vec3 clipToWorld(mat4 _invViewProj, vec3 _clipPos)
 {
-	vec4 wpos = mul(_invViewProj, vec4(_clipPos, 1.0));
+	vec4 wpos = mul(_invViewProj, vec4(_clipPos, 1.0) );
 	return wpos.xyz / wpos.w;
 }
 

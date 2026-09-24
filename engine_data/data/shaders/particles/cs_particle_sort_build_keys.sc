@@ -6,7 +6,8 @@
 #include <bgfx_compute.sh>
 
 BUFFER_RO(s_instances, vec4, 0);
-BUFFER_WO(s_keys, float, 1);
+// Raw: the keys live in a one-float-per-vertex buffer (see cs_particle_sort_bitonic.sc).
+BUFFER_RAW_WO(s_keys, 1);
 BUFFER_WO(s_indices, uint, 2);
 
 uniform vec4 u_sort0;
@@ -27,10 +28,10 @@ void main()
     s_indices[i] = i;
     if(i >= u_alive)
     {
-        s_keys[i] = 1.0e30;
+        rawStoreFloat(s_keys, i, 1.0e30);
         return;
     }
     vec3 pos = s_instances[i * 6u].xyz;
     vec3 d = u_eye - pos;
-    s_keys[i] = -dot(d, d);
+    rawStoreFloat(s_keys, i, -dot(d, d));
 }

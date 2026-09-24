@@ -160,6 +160,13 @@ auto append_texture_max_size_args(std::vector<std::string>& args, texture_import
     }
 }
 
+/// The format texturec is asked to write. bimg reads BC6H_UF16 inputs as BC6HU, which
+/// texturec cannot encode; signed BC6H holds every value the unsigned variant can.
+auto get_texturec_output_format(bgfx::TextureFormat::Enum format) -> bgfx::TextureFormat::Enum
+{
+    return format == bgfx::TextureFormat::BC6HU ? bgfx::TextureFormat::BC6H : format;
+}
+
 auto fill_input_texture_info_from_container(const bimg::ImageContainer& info, input_texture_info& out) -> void
 {
     out.format = static_cast<bgfx::TextureFormat::Enum>(info.m_format);
@@ -575,12 +582,13 @@ auto compile_texture_to_file(const fs::path& input_path,
 
         if(try_compress)
         {
+            const auto output_format = get_texturec_output_format(format);
             args_array.emplace_back("-t");
-            args_array.emplace_back(gfx::to_string(format));
+            args_array.emplace_back(gfx::to_string(output_format));
 
-            if(format == bgfx::TextureFormat::BC7 || format == bgfx::TextureFormat::BC6H)
+            if(output_format == bgfx::TextureFormat::BC7 || output_format == bgfx::TextureFormat::BC6H)
             {
-                APPLOG_INFO("Compressing to {0}. May take a while.", gfx::to_string(format));
+                APPLOG_INFO("Compressing to {0}. May take a while.", gfx::to_string(output_format));
 
                 args_array.emplace_back("-q");
                 args_array.emplace_back("fastest");
@@ -695,66 +703,6 @@ auto compile_shader_to_file(const fs::path& input_path,
     bool fs = hpp::string_view(file).starts_with("fs_");
     bool cs = hpp::string_view(file).starts_with("cs_");
 
-    // Vertex/fragment shaders that reference compute-style read/write buffers
-    // (BUFFER_RO / BUFFER_RW / BUFFER_WO) need SSBO support, which requires a
-    // higher GLSL profile. Detect that up-front so the correct OpenGL profile is
-    // selected below.
-    //
-    // The scan follows #include directives: a shader that declares its buffers in a shared
-    // .sh header (as the GI shaders do) would otherwise look buffer-free, compile at the
-    // lower profile, and fail in the driver on OpenGL only -- a backend-specific break that
-    // no other platform reproduces.
-    bool needs_compute_buffers = false;
-    if(vs || fs)
-    {
-        std::set<fs::path> visited;
-        std::vector<fs::path> pending{input_path};
-        while(!pending.empty() && !needs_compute_buffers)
-        {
-            const fs::path current = pending.back();
-            pending.pop_back();
-            if(!visited.insert(current).second)
-            {
-                continue;
-            }
-            std::ifstream shader_file(current.string());
-            if(!shader_file.is_open())
-            {
-                continue;
-            }
-            std::stringstream buffer;
-            buffer << shader_file.rdbuf();
-            const std::string source = buffer.str();
-            if(source.find("BUFFER_RO(") != std::string::npos ||
-               source.find("BUFFER_RW(") != std::string::npos ||
-               source.find("BUFFER_WO(") != std::string::npos)
-            {
-                needs_compute_buffers = true;
-                break;
-            }
-            // Queue every #include "..." resolved against the including file's directory and
-            // against the shared shader include root, which is how shaderc resolves them.
-            size_t search_pos = 0;
-            while((search_pos = source.find("#include", search_pos)) != std::string::npos)
-            {
-                const size_t quote_open = source.find('"', search_pos);
-                if(quote_open == std::string::npos)
-                {
-                    break;
-                }
-                const size_t quote_close = source.find('"', quote_open + 1);
-                if(quote_close == std::string::npos)
-                {
-                    break;
-                }
-                const std::string relative = source.substr(quote_open + 1, quote_close - quote_open - 1);
-                pending.emplace_back(current.parent_path() / relative);
-                pending.emplace_back(include / relative);
-                search_pos = quote_close + 1;
-            }
-        }
-    }
-
     if(renderer == bgfx::RendererType::Vulkan)
     {
         str_platform = "windows";
@@ -785,23 +733,16 @@ auto compile_shader_to_file(const fs::path& input_path,
     }
     else if(renderer == bgfx::RendererType::OpenGLES)
     {
+        // OpenGL ES 3.0 is the bgfx baseline and compute needs ES 3.1. shaderc raises a
+        // vertex/fragment shader to ES 3.1 itself when it uses storage buffers or images.
         str_platform = "android";
-        str_profile = "100_es";
+        str_profile = cs ? "310_es" : "300_es";
     }
     else if(renderer == bgfx::RendererType::OpenGL)
     {
+        // OpenGL 4.3 is the bgfx baseline: the backend runs every shader as GLSL 4.30.
         str_platform = "linux";
-
-        if(vs || fs)
-        {
-            // GLSL 4.30 is needed to expose SSBOs (compute-style buffers) in
-            // vertex/fragment stages. Otherwise stick with the more portable 1.40.
-            str_profile = needs_compute_buffers ? "430" : "140";
-        }
-        else if(cs)
-        {
-            str_profile = "430";
-        }
+        str_profile = "430";
     }
     else if(renderer == bgfx::RendererType::Metal)
     {

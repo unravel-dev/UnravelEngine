@@ -37,6 +37,9 @@ constexpr uint16_t k_instance_stride = 96;
 // inflates both wall time and summed "Update Emitter" thread time.
 constexpr uint32_t k_parallel_particle_threshold = 512;
 constexpr uint32_t k_min_rows_per_job = 256;
+// The sort keys are read raw, but D3D also builds a vec4 typed view of every compute vertex
+// buffer, and a view needs at least one element: never allocate fewer keys than one vec4.
+constexpr uint32_t k_min_sort_key_count = 4;
 
 particle_sim_backend g_default_sim_backend = particle_sim_backend::cpu;
 bool g_gpu_sim_available = false;
@@ -231,10 +234,8 @@ struct emitter_gpu_resources
             spawn_slots_ib = BGFX_INVALID_HANDLE;
         }
         spawn_upload_capacity = math::max(spawn_count, 64u);
-        const uint16_t spawn_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE |
-                                     BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
-        const uint16_t slot_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE | BGFX_BUFFER_INDEX32 |
-                                    BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_UINT;
+        const uint16_t spawn_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE;
+        const uint16_t slot_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE | BGFX_BUFFER_INDEX32;
         spawn_vb = bgfx::createDynamicVertexBuffer(spawn_upload_capacity * k_gpu_sim_vec4s_per_particle,
                                                    g_gpu_vec4_layout,
                                                    spawn_flags);
@@ -265,28 +266,25 @@ struct emitter_gpu_resources
         gpu_capacity = max_particles;
         // Extra padded slots so bitonic depth-sort never writes past the UAV.
         instance_sort_capacity = next_pow2_u32(max_particles);
-        const uint16_t sim_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
-                                   BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
-        const uint16_t instance_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
-                                        BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
-        const uint16_t sorted_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
-                                      BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
-        const uint16_t key_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
-                                   BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
-        const uint16_t index_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE |
-                                     BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_FORMAT_32X1 |
-                                     BGFX_BUFFER_COMPUTE_TYPE_UINT;
-        const uint16_t live_slot_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32 |
-                                         BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_UINT;
-        const uint16_t lut_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE |
-                                   BGFX_BUFFER_COMPUTE_FORMAT_32X4 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
+        // bgfx views a typed vertex buffer as vec4 and a 32-bit index buffer as uint, which is
+        // what every buffer below is declared as - except the sort keys, one float per vertex,
+        // which the sort shaders therefore read raw.
+        const uint16_t sim_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE;
+        const uint16_t instance_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE;
+        const uint16_t sorted_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE;
+        const uint16_t key_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE;
+        const uint16_t index_flags = BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_ALLOW_RESIZE | BGFX_BUFFER_INDEX32;
+        const uint16_t live_slot_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32;
+        const uint16_t lut_flags = BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE;
         sim_vb = bgfx::createDynamicVertexBuffer(max_particles * k_gpu_sim_vec4s_per_particle,
                                                  g_gpu_vec4_layout,
                                                  sim_flags);
         instance_vb = bgfx::createDynamicVertexBuffer(instance_sort_capacity, g_gpu_instance_layout, instance_flags);
         instance_sorted_vb =
             bgfx::createDynamicVertexBuffer(instance_sort_capacity, g_gpu_instance_layout, sorted_flags);
-        sort_keys_vb = bgfx::createDynamicVertexBuffer(instance_sort_capacity, g_gpu_float_layout, key_flags);
+        sort_keys_vb = bgfx::createDynamicVertexBuffer(math::max(instance_sort_capacity, k_min_sort_key_count),
+                                                       g_gpu_float_layout,
+                                                       key_flags);
         sort_indices_ib = bgfx::createDynamicIndexBuffer(instance_sort_capacity, index_flags);
         live_slots_ib = bgfx::createDynamicIndexBuffer(max_particles, live_slot_flags);
         color_lut_vb = bgfx::createDynamicVertexBuffer(k_gpu_lut_size, g_gpu_vec4_layout, lut_flags);

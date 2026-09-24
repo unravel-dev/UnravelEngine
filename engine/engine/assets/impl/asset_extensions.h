@@ -280,11 +280,25 @@ inline auto get_format_version<gfx::texture>() -> uint64_t
     return 1;
 }
 
+template<>
+inline auto get_format_version<gfx::shader>() -> uint64_t
+{
+    // 1: bgfx shader binary version 12 (raw buffer bindings, reflected texture dimensions).
+    //    bgfx refuses to load older binaries, and a shader whose sources did not change keeps
+    //    its old binary unless this bumps.
+    return 1;
+}
+
 inline auto get_format_version(const std::string& extension) -> uint64_t
 {
     if(is_format<gfx::texture>(extension))
     {
         return get_format_version<gfx::texture>();
+    }
+
+    if(is_format<gfx::shader>(extension))
+    {
+        return get_format_version<gfx::shader>();
     }
 
     if(is_format<unravel::mesh>(extension))

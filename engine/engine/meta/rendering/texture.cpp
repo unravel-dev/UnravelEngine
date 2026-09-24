@@ -35,15 +35,30 @@ REFLECT(bgfx::TextureInfo)
             entt::attribute{"name", "BC4"},
             entt::attribute{"pretty_name", "BC4 (LATC1/ATI1 R8)"},
         })
+        .data<bgfx::TextureFormat::BC4S>("BC4S"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "BC4S"},
+            entt::attribute{"pretty_name", "BC4S (BC4 R8 SNORM)"},
+        })
         .data<bgfx::TextureFormat::BC5>("BC5"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "BC5"},
             entt::attribute{"pretty_name", "BC5 (LATC2/ATI2 RG8)"},
         })
+        .data<bgfx::TextureFormat::BC5S>("BC5S"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "BC5S"},
+            entt::attribute{"pretty_name", "BC5S (BC5 RG8 SNORM)"},
+        })
         .data<bgfx::TextureFormat::BC6H>("BC6H"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "BC6H"},
             entt::attribute{"pretty_name", "BC6H (BC6H RGB16F)"},
+        })
+        .data<bgfx::TextureFormat::BC6HU>("BC6HU"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "BC6HU"},
+            entt::attribute{"pretty_name", "BC6HU (BC6H RGB16F UNSIGNED)"},
         })
         .data<bgfx::TextureFormat::BC7>("BC7"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -465,6 +480,11 @@ REFLECT(bgfx::TextureInfo)
             entt::attribute{"name", "RGB10A2"},
             entt::attribute{"pretty_name", "RGB10A2"},
         })
+        .data<bgfx::TextureFormat::RGB10A2U>("RGB10A2U"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "RGB10A2U"},
+            entt::attribute{"pretty_name", "RGB10A2U"},
+        })
         .data<bgfx::TextureFormat::RG11B10F>("RG11B10F"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "RG11B10F"},
@@ -509,6 +529,11 @@ REFLECT(bgfx::TextureInfo)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "D32F"},
             entt::attribute{"pretty_name", "D32F"},
+        })
+        .data<bgfx::TextureFormat::D32FS8>("D32FS8"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "D32FS8"},
+            entt::attribute{"pretty_name", "D32FS8"},
         })
         .data<bgfx::TextureFormat::D0S8>("D0S8"_hs)
         .custom<entt::attributes>(entt::attributes{

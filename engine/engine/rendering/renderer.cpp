@@ -285,17 +285,18 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
 
     bgfx::Init init_data;
     init_data.type = get_renderer_type(parser);
-    init_data.resolution.width = sz.w;
-    init_data.resolution.height = sz.h;
-    init_data.resolution.reset = get_reset_flags(parser);
-    init_data.platformData.ndt = init_window_->get_native_display();
-    init_data.platformData.nwh = init_window_->get_native_handle();
+    init_data.reset = get_reset_flags(parser);
+    init_data.swapChain.width = sz.w;
+    init_data.swapChain.height = sz.h;
+    init_data.swapChain.flags = render_window::get_swap_chain_flags();
+    init_data.swapChain.ndt = init_window_->get_native_display();
+    init_data.swapChain.nwh = init_window_->get_native_handle();
     std::string video_driver = os::window::get_current_video_driver();
     if(video_driver == "wayland")
     {
         init_data.platformData.type = bgfx::NativeWindowHandleType::Wayland;
     }
-    reset_flags_ = init_data.resolution.reset;
+    reset_flags_ = init_data.reset;
 
     init_data.limits.numDrawCalls = 65536;
     init_data.limits.numDrawCallPeakFrames = 0;
@@ -411,7 +412,7 @@ auto renderer::get_reset_flags(const cmd_line::parser& parser) const -> uint32_t
 
 auto renderer::get_reset_flags(bool vsync) const -> uint32_t
 {
-    uint32_t flags = BGFX_RESET_MAXANISOTROPY | BGFX_RESET_HIDPI | BGFX_RESET_HDR10;
+    uint32_t flags = BGFX_RESET_MAXANISOTROPY;
 
     if(vsync)
     {
@@ -480,9 +481,8 @@ void renderer::set_vsync(bool vsync)
         reset_flags_ &= ~BGFX_RESET_VSYNC;
     }
 
-    const auto sz = init_window_->get_size();
-
-    bgfx::reset(sz.w, sz.h, reset_flags_);
+    // No swap chain: the init window keeps its surface, only the device-wide flags change.
+    bgfx::reset(reset_flags_);
 }
 
 void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)

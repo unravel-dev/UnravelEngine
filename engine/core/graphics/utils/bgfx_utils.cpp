@@ -31,6 +31,11 @@ namespace stl = tinystl;
 #include <bx/sort.h>
 
 #include <time.h>
+
+#include <algorithm>
+#include <memory>
+#include <string>
+#include <vector>
 namespace entry
 {
 namespace
@@ -179,7 +184,10 @@ static bgfx::ShaderHandle loadShader(bx::FileReaderI* _reader, const bx::StringV
 	filePath.join(fileName);
 
 	bgfx::ShaderHandle handle = bgfx::createShader(loadMem(_reader, filePath.getCPtr() ) );
-	bgfx::setName(handle, _name.getPtr(), _name.getLength() );
+	if (bgfx::isValid(handle) )
+	{
+		bgfx::setName(handle, _name.getPtr(), _name.getLength() );
+	}
 
 	return handle;
 }
@@ -194,7 +202,12 @@ bgfx::ShaderHandle loadShader(const bx::FilePath& _filePath)
 {
     entry::FileReader reader;
     bgfx::ShaderHandle handle = bgfx::createShader(loadMem(&reader, _filePath.getCPtr() ) );
-	bgfx::setName(handle, _filePath.getFileName().getPtr(), int32_t(_filePath.getFileName().getLength() ) );
+    // createShader rejects binaries from an older shaderc; naming the invalid handle would
+    // index past the shader table.
+    if(bgfx::isValid(handle))
+    {
+        bgfx::setName(handle, _filePath.getFileName().getPtr(), int32_t(_filePath.getFileName().getLength() ) );
+    }
     return handle;
 }
 
@@ -251,7 +264,7 @@ static uint64_t applyContainerSrgbFlag(const bimg::ImageContainer* imageContaine
     {
         srgbCap = BGFX_CAPS_FORMAT_TEXTURE_CUBE_SRGB;
     }
-    else if(1 < imageContainer->m_depth)
+    else if(bimg::isVolume(*imageContainer))
     {
         srgbCap = BGFX_CAPS_FORMAT_TEXTURE_3D_SRGB;
     }
@@ -328,7 +341,7 @@ static bgfx::TextureHandle loadTextureFromContainer(bimg::ImageContainer* imageC
             mem);
     }
 
-    if(1 < imageContainer->m_depth)
+    if(bimg::isVolume(*imageContainer))
     {
         return bgfx::createTexture3D(
             uint16_t(imageContainer->m_width),
@@ -782,64 +795,116 @@ void calcTangents(void* _vertices,
     delete[] tangents;
 }
 
+namespace
+{
+/// A saveToFile copy whose readback has not landed yet. The render thread writes the pixels when it
+/// executes the frame the read was issued in, so the readback texture and the pixel buffer must both
+/// outlive that copy.
+struct PendingFileSave
+{
+    bx::FilePath filePath;
+    bgfx::TextureHandle readback = BGFX_INVALID_HANDLE;
+    std::vector<uint8_t> pixels;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    uint32_t readyFrame = 0;
+    /// Rows arrive bottom-up: OpenGL render targets keep their origin at the bottom left.
+    bool isBottomUp = false;
+};
+
+/// Each save lives on the heap, so its pixel buffer never moves while bgfx holds a pointer into it.
+std::vector<std::unique_ptr<PendingFileSave>>& getPendingFileSaves()
+{
+    static std::vector<std::unique_ptr<PendingFileSave>> saves;
+    return saves;
+}
+
+void writePendingFileSave(const PendingFileSave& _save)
+{
+    bx::FileWriter writer;
+    if(!bx::makeAll(_save.filePath.getPath()) || !bx::open(&writer, _save.filePath))
+    {
+        gfx::log("error", std::string("saveToFile: cannot open ") + _save.filePath.getCPtr(), __FILE__, __LINE__);
+        return;
+    }
+    bx::Error err;
+    bimg::imageWritePng(&writer,
+                        _save.width,
+                        _save.height,
+                        _save.width * 4,
+                        _save.pixels.data(),
+                        bimg::TextureFormat::RGBA8,
+                        _save.isBottomUp,
+                        &err);
+    bx::close(&writer);
+    if(!err.isOk())
+    {
+        gfx::log("error", std::string("saveToFile: cannot write ") + _save.filePath.getCPtr(), __FILE__, __LINE__);
+    }
+}
+} // namespace
+
 bool saveToFile(bgfx::ViewId viewId, const bx::FilePath& _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height)
 {
-
-    auto input_tex = bgfx::getTexture(fbo);
-    // formats have one to one mapping
-    auto format = bgfx::TextureFormat::RGBA8;
-    auto bimg_format = static_cast<bimg::TextureFormat::Enum>(format);
-
-    bool result = false;
-
-    uint64_t flags = 0 | BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK | BGFX_SAMPLER_U_CLAMP |
-                     BGFX_SAMPLER_V_CLAMP;
-    auto blit_tex = bgfx::createTexture2D(width, height, false, 1, format, flags, nullptr);
-
+    const bgfx::TextureHandle input = bgfx::getTexture(fbo);
+    if(!bgfx::isValid(input) || 0 == width || 0 == height)
+    {
+        return false;
+    }
+    // A blit copies texels without converting them, so the readback has the attachment's format.
+    constexpr bgfx::TextureFormat::Enum format = bgfx::TextureFormat::RGBA8;
+    constexpr uint64_t flags = BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK | BGFX_SAMPLER_U_CLAMP |
+                               BGFX_SAMPLER_V_CLAMP;
+    auto save = std::make_unique<PendingFileSave>();
+    save->readback = bgfx::createTexture2D(uint16_t(width), uint16_t(height), false, 1, format, flags);
+    if(!bgfx::isValid(save->readback))
+    {
+        return false;
+    }
     bgfx::TextureInfo info;
-    bgfx::calcTextureSize(info, width, height, 1, false, false, 1, format);
-
-    // Blit and read
+    bgfx::calcTextureSize(info, uint16_t(width), uint16_t(height), 1, false, false, 1, format);
+    save->pixels.resize(info.storageSize);
+    save->filePath = _filePath;
+    save->width = width;
+    save->height = height;
+    save->isBottomUp = bgfx::getCaps()->originBottomLeft;
     bgfx::touch(viewId);
-    bgfx::blit(viewId, blit_tex, 0, 0, input_tex);
+    bgfx::blit(viewId, bgfx::TextureRegion{.handle = save->readback}, bgfx::TextureRegion{.handle = input});
+    save->readyFrame = bgfx::read(bgfx::TextureRegion{.handle = save->readback}, save->pixels.data());
+    getPendingFileSaves().push_back(std::move(save));
+    return true;
+}
 
-    // Allocate memory for the texture data
-
-    tinystl::vector<uint8_t> input(info.storageSize);
-
-    // Read the frame buffer data
-    uint32_t frameNumber = bgfx::readTexture(blit_tex, input.data());
-
-
-    // Wait until the data is available (frameNumber indicates when)
-    while(bgfx::frame() != frameNumber)
+void writeLandedFileSaves(uint32_t _renderFrame)
+{
+    auto& saves = getPendingFileSaves();
+    if(saves.empty())
     {
-      // You can perform other tasks here if needed
-        break;
+        return;
     }
+    const auto landed = std::stable_partition(saves.begin(),
+                                              saves.end(),
+                                              [_renderFrame](const std::unique_ptr<PendingFileSave>& _save)
+                                              {
+                                                  return _save->readyFrame > _renderFrame;
+                                              });
+    std::for_each(landed,
+                  saves.end(),
+                  [](const std::unique_ptr<PendingFileSave>& _save)
+                  {
+                      writePendingFileSave(*_save);
+                      bgfx::destroy(_save->readback);
+                  });
+    saves.erase(landed, saves.end());
+}
 
-    bx::FilePath filePath(_filePath);
-
-    if(bx::makeAll(filePath.getPath()))
+void finishFileSaves()
+{
+    // bgfx::read lands within two frames, so this loop ends after at most a couple of iterations.
+    while(!getPendingFileSaves().empty())
     {
-        bx::FileWriter writer;
-        if(bx::open(&writer, filePath))
-        {
-            bx::Error err;
-            bimg::imageWritePng(&writer,
-                                info.width,
-                                info.height,
-                                info.width * (info.bitsPerPixel / 8),
-                                input.data(),
-                                bimg_format,
-                                false,
-                                &err);
-            result = true;
-            bx::close(&writer);
-        }
+        writeLandedFileSaves(bgfx::frame());
     }
-
-    return result;
 }
 
 bool imageSave(const char* saveAs, bimg::ImageContainer* image, const char* format_hint)

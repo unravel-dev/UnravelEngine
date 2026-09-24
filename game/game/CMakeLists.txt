@@ -16,6 +16,7 @@ add_dependencies(${target_name} engine)
 target_link_libraries(${target_name} PUBLIC engine)
 
 set_target_properties(${target_name} PROPERTIES OUTPUT_NAME "unravel-player")
+unravel_set_default_thread_stack(${target_name})
 add_definitions(-DPLAYER_NAME="unravel-player")
 
 

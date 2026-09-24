@@ -11,13 +11,14 @@ uniform vec4 u_wf_params[3];
 #define u_wfPosOffset     u_wf_params[1].z
 #define u_wfIndexOffset   u_wf_params[1].w
 
-// Raw read-only views of the mesh vertex/index buffers.
-// The vertex buffer is exposed as an array of floats; per-vertex data is
-// reconstructed manually using u_wfStride and u_wfPosOffset (both expressed
-// in float-sized elements) since arbitrary vertex layouts are supported.
-// The index buffer is 32-bit, so each element is exactly one vertex index.
-BUFFER_RO(u_positions, float, 0);
-BUFFER_RO(u_indices,   uint,  1);
+// Raw read-only views of the mesh vertex/index buffers. Raw, because bgfx fixes a
+// typed buffer view by buffer kind (a vertex buffer is always viewed as vec4).
+// The vertex buffer is read as 32-bit words; per-vertex data is reconstructed
+// manually using u_wfStride and u_wfPosOffset (both expressed in 32-bit words)
+// since arbitrary vertex layouts are supported.
+// The index buffer is 32-bit, so each word is exactly one vertex index.
+BUFFER_RAW_RO(u_positions, 0);
+BUFFER_RAW_RO(u_indices,   1);
 
 #define NEAR_EPSILON   0.001
 #define LENGTH_EPSILON 0.0001
@@ -27,7 +28,9 @@ vec3 get_position(uint index)
     uint stride = uint(u_wfStride);
     uint offset = uint(u_wfPosOffset);
     uint base   = index * stride + offset;
-    return vec3(u_positions[base + 0u], u_positions[base + 1u], u_positions[base + 2u]);
+    return vec3(rawLoadFloat(u_positions, base + 0u),
+                rawLoadFloat(u_positions, base + 1u),
+                rawLoadFloat(u_positions, base + 2u));
 }
 
 // Non-skinned world transform. u_world[0] is filled by gfx::set_world_transform().
@@ -47,8 +50,8 @@ void main()
 
     uint ib_base = uint(u_wfIndexOffset) + tri_first_index;
 
-    uint i0 = u_indices[ib_base + edge_index];
-    uint i1 = u_indices[ib_base + ((edge_index + 1u) % 3u)];
+    uint i0 = rawLoadUint(u_indices, ib_base + edge_index);
+    uint i1 = rawLoadUint(u_indices, ib_base + ((edge_index + 1u) % 3u));
 
     vec3 p0 = get_position(i0);
     vec3 p1 = get_position(i1);

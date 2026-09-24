@@ -119,7 +119,11 @@ void ImGui_ImplGFX_UpdateTexture(ImTextureData* tex)
             texture.id = tex->TexID;
             auto data = tex->GetPixelsAt(r.x, r.y);
             auto bpp = tex->BytesPerPixel;
-            bgfx::updateTexture2D(texture.s.handle, 0, 0, r.x, r.y, r.w, r.h, bgfx::makeRef(data, r.w * r.h * bpp), tex->GetPitch());
+            // The rows keep the whole texture's pitch, so the source spans that pitch for every
+            // row but the last. bgfx drops an update whose memory is smaller than that span.
+            const int pitch = tex->GetPitch();
+            const uint32_t size = uint32_t((r.h - 1) * pitch + r.w * bpp);
+            bgfx::updateTexture2D(texture.s.handle, 0, 0, r.x, r.y, r.w, r.h, bgfx::makeRef(data, size), pitch);
         }
 
 

@@ -2494,15 +2494,11 @@ void RmlUi_RenderInterface::blit_layer_to_postprocess_primary(Rml::LayerHandle l
     if(source_texture && source_texture->is_valid() && destination_texture && destination_texture->is_valid())
     {
         auto size = source_layer.get_size();
+        const auto width = static_cast<uint16_t>(size.width);
+        const auto height = static_cast<uint16_t>(size.height);
         bgfx::blit(blit_pass.id,
-                   destination_texture->native_handle(),
-                   0,
-                   0,
-                   source_texture->native_handle(),
-                   0,
-                   0,
-                   static_cast<uint16_t>(size.width),
-                   static_cast<uint16_t>(size.height));
+                   bgfx::TextureRegion{.handle = destination_texture->native_handle(), .width = width, .height = height},
+                   bgfx::TextureRegion{.handle = source_texture->native_handle(), .width = width, .height = height});
     }
     else
     {

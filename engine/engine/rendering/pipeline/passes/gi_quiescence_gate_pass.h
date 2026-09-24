@@ -19,9 +19,9 @@ namespace unravel
  *
  * WHY THIS EXISTS. The convergence half of the gate (surface_cache_view::update_quiescence)
  * needs a statistic only the GPU can produce: the mean relative change per relit face. That
- * statistic used to reach the CPU through a staging blit plus bgfx::readTexture, which moved
+ * statistic used to reach the CPU through a staging blit plus bgfx::read, which moved
  * 32 bytes and cost about a GPU frame of render-thread time per frame the gate was open -
- * bgfx::readTexture advertises frameNum + 2 latency but every desktop backend implements it
+ * bgfx::read advertises frameNum + 2 latency but every desktop backend implements it
  * as a blocking sync (D3D11 Map without DO_NOT_WAIT, D3D12 CopyTextureRegion + finish,
  * Vulkan kick(true), GL glGetTextureSubImage), run in the post-command buffer AFTER the
  * frame's submit. So the render thread waited for GPU idle at the tail of every moving
@@ -101,7 +101,7 @@ public:
      *        census - relit faces against relit faces that changed, probes by state, traced
      *        probe texels against texels that changed.
      *
-     * ON DEMAND ONLY. The copy ends in bgfx::readTexture, which is a full CPU-GPU sync on
+     * ON DEMAND ONLY. The copy ends in bgfx::read, which is a full CPU-GPU sync on
      * every desktop backend (the reason the per-frame gate moved onto the GPU), so this is
      * an instrument for a tool to ask for, never something a frame path calls. Rows 0-2
      * are the gate's own sums for the frame before the snapshot; the census rows hold the

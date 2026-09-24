@@ -52,11 +52,6 @@
  * the diagnostic contrast that found this bug.
  */
 SAMPLER2DARRAY(s_gi_sun_shadowmap, 14);
-/// bgfx_shader.sh maps the array samplers for HLSL and ESSL but leaves texture2DArrayLod
-/// undefined on desktop GLSL, where the native call is textureLod on a sampler2DArray.
-#if BGFX_SHADER_LANGUAGE_GLSL && !defined(texture2DArrayLod)
-#	define texture2DArrayLod(_sampler, _coord, _lod) textureLod(_sampler, _coord, _lod)
-#endif
 /// World -> shadow texcoord of every cascade (the raster's u_shadowMapMtx0..3), layer = split.
 uniform mat4 u_gi_sun_shadowmap_mtx[4];
 /// x = light-buffer index of the sun the bound maps belong to (< 0 disables the tier),

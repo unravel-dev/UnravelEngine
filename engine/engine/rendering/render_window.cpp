@@ -59,10 +59,18 @@ void render_window::prepare_surface()
     if(needs_recreate)
     {
         destroy_surface(0);
-        surface_ = std::make_shared<gfx::frame_buffer>(window_.get_native_handle(),
-                                                       static_cast<std::uint16_t>(size.w),
-                                                       static_cast<std::uint16_t>(size.h));
+        bgfx::SwapChain desc;
+        desc.nwh = window_.get_native_handle();
+        desc.width = size.w;
+        desc.height = size.h;
+        desc.flags = get_swap_chain_flags();
+        surface_ = std::make_shared<gfx::frame_buffer>(desc);
     }
+}
+
+auto render_window::get_swap_chain_flags() -> uint32_t
+{
+    return BGFX_SWAP_CHAIN_HIDPI | BGFX_SWAP_CHAIN_HDR10;
 }
 
 auto render_window::get_window() -> os::window&

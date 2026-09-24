@@ -34,6 +34,8 @@ struct fbo_capture_state
     uint32_t ready_frame{0};
     uint16_t width{0};
     uint16_t height{0};
+    /// Rows arrive bottom-up: OpenGL render targets keep their origin at the bottom left.
+    bool is_bottom_up{false};
     bgfx::TextureHandle blit_tex = BGFX_INVALID_HANDLE;
     std::string error;
 };
@@ -92,8 +94,9 @@ auto scale_rgba8_bimg(const std::vector<uint8_t>& src,
     }
 
     auto* allocator = bimg_allocator();
+    // Depth 0: bimg reserves a non-zero depth for volume textures.
     bimg::ImageContainer* src_rgba8 =
-        bimg::imageAlloc(allocator, bimg::TextureFormat::RGBA8, src_w, src_h, 1, 1, false, false, src.data());
+        bimg::imageAlloc(allocator, bimg::TextureFormat::RGBA8, src_w, src_h, 0, 1, false, false, src.data());
     if(!src_rgba8)
     {
         error = "bimg::imageAlloc failed for source RGBA8";
@@ -109,7 +112,7 @@ auto scale_rgba8_bimg(const std::vector<uint8_t>& src,
     }
 
     bimg::ImageContainer* dst_f32 =
-        bimg::imageAlloc(allocator, bimg::TextureFormat::RGBA32F, out_w, out_h, 1, 1, false, false);
+        bimg::imageAlloc(allocator, bimg::TextureFormat::RGBA32F, out_w, out_h, 0, 1, false, false);
     if(!dst_f32)
     {
         bimg::imageFree(src_f32);
@@ -149,10 +152,12 @@ auto scale_rgba8_bimg(const std::vector<uint8_t>& src,
     return true;
 }
 
+/// Writes RGBA8 @p pixels as a PNG, top row first; @p is_bottom_up reverses rows stored bottom-up.
 auto write_rgba_png(const std::filesystem::path& path,
                     uint16_t width,
                     uint16_t height,
                     const std::vector<uint8_t>& pixels,
+                    bool is_bottom_up,
                     std::string& error) -> bool
 {
     bx::FileWriter writer;
@@ -170,7 +175,7 @@ auto write_rgba_png(const std::filesystem::path& path,
                         pitch,
                         pixels.data(),
                         bimg::TextureFormat::RGBA8,
-                        false,
+                        is_bottom_up,
                         &err);
     bx::close(&writer);
     if(!err.isOk())
@@ -274,6 +279,7 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
 
             state->width = src_tex->info.width;
             state->height = src_tex->info.height;
+            state->is_bottom_up = bgfx::getCaps()->originBottomLeft;
             if(state->width == 0 || state->height == 0)
             {
                 state->error = "Viewport framebuffer has zero size";
@@ -296,8 +302,10 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
 
             gfx::render_pass pass("mcp_fbo_capture");
             pass.touch();
-            bgfx::blit(pass.id, state->blit_tex, 0, 0, src_tex->native_handle());
-            state->ready_frame = bgfx::readTexture(state->blit_tex, state->pixels.data());
+            bgfx::blit(pass.id,
+                       bgfx::TextureRegion{.handle = state->blit_tex},
+                       bgfx::TextureRegion{.handle = src_tex->native_handle()});
+            state->ready_frame = bgfx::read(bgfx::TextureRegion{.handle = state->blit_tex}, state->pixels.data());
             return true;
         },
         std::chrono::milliseconds(10000));
@@ -364,7 +372,7 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
     const auto stem = make_temp_screenshot_stem(tag);
     const auto png_path = std::filesystem::path(stem.generic_string() + ".png");
     std::string encode_error;
-    if(!write_rgba_png(png_path, out_w, out_h, pixels, encode_error))
+    if(!write_rgba_png(png_path, out_w, out_h, pixels, state->is_bottom_up, encode_error))
     {
         return {.text = encode_error, .is_error = true};
     }

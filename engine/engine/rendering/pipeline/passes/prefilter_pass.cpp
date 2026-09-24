@@ -45,7 +45,14 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
             for(uint8_t mip = 0; mip < max_mips; ++mip)
             {
                 uint16_t dim = ti.width >> mip;
-                bgfx::blit(pass.id, output_cube->native_handle(), mip, 0, 0, face, src, mip, 0, 0, 0, dim, dim, 1);
+                bgfx::blit(pass.id,
+                           bgfx::TextureRegion{.handle = output_cube->native_handle(),
+                                               .mip = mip,
+                                               .z = face,
+                                               .width = dim,
+                                               .height = dim,
+                                               .depth = 1},
+                           bgfx::TextureRegion{.handle = src, .mip = mip, .width = dim, .height = dim, .depth = 1});
             }
         }
 

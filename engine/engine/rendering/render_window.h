@@ -42,6 +42,13 @@ public:
     void destroy_surface(int frames);
 
     /**
+     * @brief Per-surface swap chain flags (BGFX_SWAP_CHAIN_*) every window surface is
+     *        created with, the window bgfx is initialized on included. bgfx no longer
+     *        carries these over from the main window to other swap chains.
+     */
+    static auto get_swap_chain_flags() -> uint32_t;
+
+    /**
      * @brief Resizes the render window to the specified width and height.
      * @param w The new width of the window.
      * @param h The new height of the window.

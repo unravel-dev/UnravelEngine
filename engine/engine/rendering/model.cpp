@@ -1035,7 +1035,7 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
         return;
     }
 
-    // Vertex/index buffers are exposed to shaders as Buffer<float> / Buffer<uint>
+    // Vertex/index buffers are exposed to shaders as raw buffers read in 32-bit words,
     // so all byte offsets are converted to float-sized elements. Layouts used by
     // this engine always keep attributes float-aligned, so integer division is safe.
     constexpr uint32_t float_size = static_cast<uint32_t>(sizeof(float));

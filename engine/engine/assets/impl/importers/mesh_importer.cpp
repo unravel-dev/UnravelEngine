@@ -168,11 +168,12 @@ auto resize_rgba8_image_to(const bimg::ImageContainer* src, uint32_t target_w, u
         return nullptr;
     }
 
+    // Depth 0: bimg reserves a non-zero depth for volume textures.
     bimg::ImageContainer* dst32f = bimg::imageAlloc(get_bimg_allocator(),
                                                     bimg::TextureFormat::RGBA32F,
                                                     static_cast<uint16_t>(target_w),
                                                     static_cast<uint16_t>(target_h),
-                                                    1,
+                                                    0,
                                                     1,
                                                     false,
                                                     false);
@@ -1920,7 +1921,7 @@ void process_raw_texture_data(const aiTexture* assimp_tex, const fs::path& outpu
         image.m_data = data.data();
         image.m_width = width;
         image.m_height = height;
-        image.m_depth = 1;
+        image.m_depth = 0; // Not a volume: bimg reserves a non-zero depth for 3D textures.
         image.m_format = bimg::TextureFormat::RGBA8;
         image.m_numMips = 1;
         image.m_hasAlpha = true;

@@ -458,20 +458,39 @@ return limit;
 }
 
 
+// bgfx_ndc (declared by bgfx_shader.sh for GLSL, baked into a constant by the GL backend)
+// carries the backend's depth range and y origin, so these follow the OpenGL NDC
+// convention bgfx is configured with instead of assuming it.
 float toClipSpaceDepth(float _depthTextureZ)
 {
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
-	return _depthTextureZ;
+#if BGFX_SHADER_LANGUAGE_GLSL
+	return _depthTextureZ * bgfx_ndc.x - bgfx_ndc.y;
 #else
-	return _depthTextureZ * 2.0 - 1.0;
-#endif // BGFX_SHADER_LANGUAGE_HLSL
+	return _depthTextureZ;
+#endif // BGFX_SHADER_LANGUAGE_GLSL
+}
+
+float toDepthTextureZ(float _clipSpaceZ)
+{
+#if BGFX_SHADER_LANGUAGE_GLSL
+	return (_clipSpaceZ + bgfx_ndc.y) * bgfx_ndc.w;
+#else
+	return _clipSpaceZ;
+#endif // BGFX_SHADER_LANGUAGE_GLSL
+}
+
+float toClipSpaceY(float _y)
+{
+#if BGFX_SHADER_LANGUAGE_GLSL
+	return _y * bgfx_ndc.z;
+#else
+	return -_y;
+#endif // BGFX_SHADER_LANGUAGE_GLSL
 }
 
 vec3 clipTransform(vec3 clip)
 {
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
-	clip.y = -clip.y;
-#endif
+	clip.y = toClipSpaceY(clip.y);
 	return clip;
 }
 

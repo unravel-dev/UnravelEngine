@@ -537,9 +537,7 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 				{
 					vec3 end_pj = clipTransform(end_pj4.xyz / end_pj4.w);
 					end_pj.xy = end_pj.xy * 0.5 + 0.5;
-#if BGFX_SHADER_LANGUAGE_GLSL
-					end_pj.z = end_pj.z * 0.5 + 0.5;
-#endif
+					end_pj.z = toDepthTextureZ(end_pj.z);
 					vec3 ss_delta = end_pj - s_ss_origin[slot];
 					t_limit = 1.05 * dot(ss_delta, ss_dir) / max(dot(ss_dir, ss_dir), 1e-12);
 				}

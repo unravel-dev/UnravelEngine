@@ -25,15 +25,11 @@ frame_buffer::frame_buffer(const std::vector<fbo_attachment>& textures)
     populate(textures);
 }
 
-frame_buffer::frame_buffer(void* _nwh,
-                           uint16_t _width,
-                           uint16_t _height,
-                           bgfx::TextureFormat::Enum _format,
-                           bgfx::TextureFormat::Enum _depth_format)
+frame_buffer::frame_buffer(const bgfx::SwapChain& _desc)
 {
-    handle_ = bgfx::createFrameBuffer(_nwh, _width, _height, _format, _depth_format);
+    handle_ = bgfx::createFrameBuffer(_desc);
 
-    cached_size_ = {_width, _height};
+    cached_size_ = {_desc.width, _desc.height};
 }
 
 void frame_buffer::populate(const std::vector<texture::ptr>& textures)
@@ -63,7 +59,7 @@ void frame_buffer::populate(const std::vector<fbo_attachment>& textures)
 
         buffer.emplace_back();
         auto& att = buffer.back();
-        att.init(tex.texture->native_handle(), bgfx::Access::Write, tex.layer, 1, tex.mip, (tex.generate_mips ? BGFX_RESOLVE_AUTO_GEN_MIPS : BGFX_RESOLVE_NONE));
+        att.init(tex.texture->native_handle(), bgfx::Access::Write, tex.layer, 1, tex.mip, (tex.generate_mips ? BGFX_ATTACHMENT_AUTO_GEN_MIPS : BGFX_ATTACHMENT_NONE));
     }
     textures_ = textures;
 

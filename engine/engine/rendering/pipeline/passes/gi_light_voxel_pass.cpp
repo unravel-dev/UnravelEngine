@@ -221,19 +221,15 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
             for(uint8_t split = 0; split < splits; ++split)
             {
                 bgfx::blit(pass.id,
-                           sun_cascades_->native_handle(),
-                           0,
-                           0,
-                           0,
-                           split,
-                           shadows.get_rt_texture(split),
-                           0,
-                           0,
-                           0,
-                           0,
-                           size,
-                           size,
-                           1);
+                           bgfx::TextureRegion{.handle = sun_cascades_->native_handle(),
+                                               .z = split,
+                                               .width = size,
+                                               .height = size,
+                                               .depth = 1},
+                           bgfx::TextureRegion{.handle = shadows.get_rt_texture(split),
+                                               .width = size,
+                                               .height = size,
+                                               .depth = 1});
                 std::memcpy(matrices + split * 16, shadows.get_shadow_map_matrix(split), sizeof(float) * 16);
                 slice_params[split] = shadows.get_cascade_far_distance(split);
                 bias_params[split] = bias0 * shadows.get_cascade_texel_world(split) / texel0;
@@ -588,8 +584,10 @@ void gi_light_voxel_pass::collect_relight_stats(const gfx::texture::ptr& vis_mem
     }
     stats_slot_cursor_ = (stats_slot_cursor_ + 1) % uint32_t(stats_slots_.size());
     gfx::render_pass readback_pass("GI/Light Voxel Stats Readback");
-    bgfx::blit(readback_pass.id, slot.texture->native_handle(), 0, 0, stats_texture_->native_handle(), 0, 0, width, height);
-    slot.ready_frame = bgfx::readTexture(slot.texture->native_handle(), slot.data.data());
+    bgfx::blit(readback_pass.id,
+               bgfx::TextureRegion{.handle = slot.texture->native_handle(), .width = width, .height = height},
+               bgfx::TextureRegion{.handle = stats_texture_->native_handle(), .width = width, .height = height});
+    slot.ready_frame = bgfx::read(bgfx::TextureRegion{.handle = slot.texture->native_handle()}, slot.data.data());
     slot.pending = true;
 }
 

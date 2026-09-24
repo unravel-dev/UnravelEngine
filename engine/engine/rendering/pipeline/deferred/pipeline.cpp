@@ -1111,8 +1111,8 @@ void deferred::snapshot_prev_depth(gfx::render_view& rview, const usize32_t& vie
     }
     gfx::render_pass blit_pass("History/Prev Depth Blit Pass");
     bgfx::blit(blit_pass.id,
-               prev_depth->native_handle(), 0, 0,
-               depth_src->native_handle(), 0, 0);
+               bgfx::TextureRegion{.handle = prev_depth->native_handle()},
+               bgfx::TextureRegion{.handle = depth_src->native_handle()});
 }
 
 void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
@@ -2764,8 +2764,8 @@ void deferred::run_ssil_pass(const camera& camera,
         }
         gfx::render_pass blit_pass("SSIL/Prev SSIL Blit Pass");
         bgfx::blit(blit_pass.id,
-                   prev_ssil->native_handle(), 0, 0,
-                   result->native_handle(), 0, 0);
+                   bgfx::TextureRegion{.handle = prev_ssil->native_handle()},
+                   bgfx::TextureRegion{.handle = result->native_handle()});
     }
     else
     {

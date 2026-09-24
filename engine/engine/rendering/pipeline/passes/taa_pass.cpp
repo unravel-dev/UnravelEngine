@@ -114,12 +114,8 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     {
         gfx::render_pass init_pass("TAA/History Init");
         bgfx::blit(init_pass.id,
-                   history_tex->native_handle(),
-                   0,
-                   0,
-                   input->get_texture(0)->native_handle(),
-                   0,
-                   0);
+                   bgfx::TextureRegion{.handle = history_tex->native_handle()},
+                   bgfx::TextureRegion{.handle = input->get_texture(0)->native_handle()});
         return input;
     }
 
@@ -174,23 +170,15 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
 
     gfx::render_pass hist_pass("TAA/History Blit");
     bgfx::blit(hist_pass.id,
-               history_tex->native_handle(),
-               0,
-               0,
-               temp_fbo->get_texture(1)->native_handle(),
-               0,
-               0);
+               bgfx::TextureRegion{.handle = history_tex->native_handle()},
+               bgfx::TextureRegion{.handle = temp_fbo->get_texture(1)->native_handle()});
 
     if(params.output)
     {
         gfx::render_pass out_pass("TAA/Output Blit");
         bgfx::blit(out_pass.id,
-                   params.output->get_texture(0)->native_handle(),
-                   0,
-                   0,
-                   temp_fbo->get_texture(0)->native_handle(),
-                   0,
-                   0);
+                   bgfx::TextureRegion{.handle = params.output->get_texture(0)->native_handle()},
+                   bgfx::TextureRegion{.handle = temp_fbo->get_texture(0)->native_handle()});
         return params.output;
     }
 

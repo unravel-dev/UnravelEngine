@@ -496,9 +496,7 @@ vec3 contactProjectToScreen(vec3 vs_pos)
     vec4 clip = mul(u_proj, vec4(vs_pos, 1.0));
     vec3 ss = clipTransform(clip.xyz / clip.w);
     ss.xy = ss.xy * 0.5 + 0.5;
-#if BGFX_SHADER_LANGUAGE_GLSL
-    ss.z = ss.z * 0.5 + 0.5;
-#endif
+    ss.z = toDepthTextureZ(ss.z);
     return ss;
 }
 
@@ -575,11 +573,7 @@ float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_
     // projection's diagonal (safe to index on every backend); the y sign follows clipTransform.
     vec3 d0 = vs_origin / z0;
     float dd_dx = 2.0 / u_proj[0][0] * texel_uv.x;
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
-    float dd_dy = -2.0 / u_proj[1][1] * texel_uv.y;
-#else
-    float dd_dy = 2.0 / u_proj[1][1] * texel_uv.y;
-#endif
+    float dd_dy = toClipSpaceY(2.0 / u_proj[1][1] * texel_uv.y);
     vec3 d_left = d0 - vec3(dd_dx, 0.0, 0.0);
     vec3 d_right = d0 + vec3(dd_dx, 0.0, 0.0);
     vec3 d_down = d0 - vec3(0.0, dd_dy, 0.0);

@@ -17,14 +17,6 @@
 #include "../bgfx_compute.sh"
 #include "gi_constants.sh"
 
-// The stock bgfx shader library maps texture2DLod to textureLod for modern GLSL but never
-// added the 3D variant, and GLSL removed the legacy entry point after version 140 - every
-// clipmap sampler below would fail the OpenGL backend without this. Lives HERE rather than in
-// bgfx_shader.sh because that file is re-copied from bgfx on every build.
-#if BGFX_SHADER_LANGUAGE_GLSL >= 130 && !defined(texture3DLod)
-#	define texture3DLod(_sampler, _coord, _lod) textureLod(_sampler, _coord, _lod)
-#endif // BGFX_SHADER_LANGUAGE_GLSL >= 130
-
 #define SDF_BRICK_SIZE   8.0
 #define SDF_BRICK_BORDER 1.0
 #define SDF_BRICK_STRIDE 10.0

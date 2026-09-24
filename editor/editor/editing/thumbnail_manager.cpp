@@ -87,14 +87,8 @@ auto capture_thumbnail_snapshot(const gfx::frame_buffer::ptr& source) -> gfx::te
 
     gfx::render_pass pass("Thumbnail/Capture Blit");
     bgfx::blit(pass.id,
-               snapshot->native_handle(),
-               0,
-               0,
-               src_tex->native_handle(),
-               0,
-               0,
-               blit_width,
-               blit_height);
+               bgfx::TextureRegion{.handle = snapshot->native_handle(), .width = blit_width, .height = blit_height},
+               bgfx::TextureRegion{.handle = src_tex->native_handle(), .width = blit_width, .height = blit_height});
     return snapshot;
 }
 

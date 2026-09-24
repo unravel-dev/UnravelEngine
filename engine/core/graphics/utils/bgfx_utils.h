@@ -27,7 +27,21 @@ namespace stl = tinystl;
 /// header) and right before the GPU texture is created. Return false to skip the GPU allocation.
 using TexturePreCreateFn = std::function<bool(const bgfx::TextureInfo& _info)>;
 
+/// Saves the first color attachment of @p fbo (non-MSAA RGBA8, @p width x @p height) as a PNG at
+/// @p _filePath. The pixels come back through a GPU readback that lands a couple of frames later,
+/// so this only issues the copy in @p viewId (which must run after the attachment is final);
+/// gfx::frame() writes the file once the readback has landed. Returns false when the copy could
+/// not be issued. Window framebuffers have no attachment; use bgfx::requestScreenShot for those.
 bool saveToFile(bgfx::ViewId viewId, const bx::FilePath& _filePath, bgfx::FrameBufferHandle fbo, uint32_t width, uint32_t height);
+
+/// Writes the saveToFile images whose readback has landed by @p _renderFrame and releases their
+/// readback textures. Called by gfx::frame() after every bgfx::frame().
+void writeLandedFileSaves(uint32_t _renderFrame);
+
+/// Advances bgfx frames until every pending saveToFile readback has landed, then writes them.
+/// Called by gfx::shutdown() before bgfx shuts down, so no copy is left targeting freed memory.
+void finishFileSaves();
+
 ///
 void* load(const bx::FilePath& _filePath, uint32_t* _size = NULL);
 

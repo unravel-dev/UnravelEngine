@@ -1306,10 +1306,9 @@ void mesh::build_vb(bool hardware_copy)
         // Calculate the required size of the vertex buffer
         auto buffer_size = vertex_count_ * vertex_format_.getStride();
 
-        // Compute-read flags so the vertex buffer can be bound as a raw read-only
-        // Buffer<float> inside shaders (e.g. vertex pulling for wireframe overlay).
-        const uint16_t vb_flags =
-            BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
+        // Compute-read flag so the vertex buffer can be bound as a raw read-only
+        // buffer (BUFFER_RAW_RO) inside shaders (e.g. vertex pulling).
+        const uint16_t vb_flags = BGFX_BUFFER_COMPUTE_READ;
 
         const bgfx::Memory* mem = bgfx::makeRef(system_vb_, buffer_size);
         hardware_vb_ = std::make_shared<gfx::vertex_buffer>(mem, vertex_format_, vb_flags);
@@ -1325,12 +1324,9 @@ void mesh::build_ib(bool hardware_copy)
         // Calculate the required size of the index buffer
         auto buffer_size = static_cast<uint32_t>(size_t(face_count_ * 3) * sizeof(uint32_t));
 
-        // Compute-read flags so the (32-bit) index buffer can be bound as a raw
-        // read-only Buffer<uint> inside shaders (e.g. vertex pulling for wireframe overlay).
-        const uint16_t ib_flags = BGFX_BUFFER_INDEX32
-            | BGFX_BUFFER_COMPUTE_READ
-            | BGFX_BUFFER_COMPUTE_FORMAT_32X1
-            | BGFX_BUFFER_COMPUTE_TYPE_UINT;
+        // Compute-read flag so the (32-bit) index buffer can be bound as a raw
+        // read-only buffer (BUFFER_RAW_RO) inside shaders (e.g. vertex pulling).
+        const uint16_t ib_flags = BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_READ;
 
         // Allocate hardware buffer if required (i.e. it does not already exist).
         if(!hardware_ib_)
@@ -2736,12 +2732,9 @@ auto mesh::restore_lods_from_load_data(const load_data& data) -> bool
         {
             auto buffer_size = static_cast<uint32_t>(lod.face_count_ * 3 * sizeof(uint32_t));
             const bgfx::Memory* mem = bgfx::makeRef(lod.system_ib_, buffer_size);
-            // Same compute-read flags as base LOD so any LOD can be used as a
-            // read-only buffer inside shaders (e.g. vertex pulling for wireframe overlay).
-            const uint16_t ib_flags = BGFX_BUFFER_INDEX32
-                | BGFX_BUFFER_COMPUTE_READ
-                | BGFX_BUFFER_COMPUTE_FORMAT_32X1
-                | BGFX_BUFFER_COMPUTE_TYPE_UINT;
+            // Same compute-read flag as base LOD so any LOD can be used as a
+            // read-only buffer inside shaders (e.g. vertex pulling).
+            const uint16_t ib_flags = BGFX_BUFFER_INDEX32 | BGFX_BUFFER_COMPUTE_READ;
             lod.hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, ib_flags);
         }
 

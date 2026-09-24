@@ -16,8 +16,8 @@ uniform vec4 u_wf_params[3];
 // Raw read-only views of the mesh vertex/index buffers, exposed identically
 // to the non-skinned variant. u_wfIndicesOffset / u_wfWeightOffset locate the
 // bone index/weight attributes within each vertex (both stored as Float4).
-BUFFER_RO(u_positions, float, 0);
-BUFFER_RO(u_indices,   uint,  1);
+BUFFER_RAW_RO(u_positions, 0);
+BUFFER_RAW_RO(u_indices,   1);
 
 #define NEAR_EPSILON   0.001
 #define LENGTH_EPSILON 0.0001
@@ -27,7 +27,9 @@ vec3 get_position(uint index)
     uint stride = uint(u_wfStride);
     uint offset = uint(u_wfPosOffset);
     uint base   = index * stride + offset;
-    return vec3(u_positions[base + 0u], u_positions[base + 1u], u_positions[base + 2u]);
+    return vec3(rawLoadFloat(u_positions, base + 0u),
+                rawLoadFloat(u_positions, base + 1u),
+                rawLoadFloat(u_positions, base + 2u));
 }
 
 vec4 get_weight(uint index)
@@ -35,10 +37,10 @@ vec4 get_weight(uint index)
     uint stride = uint(u_wfStride);
     uint offset = uint(u_wfWeightOffset);
     uint base   = index * stride + offset;
-    return vec4(u_positions[base + 0u],
-                u_positions[base + 1u],
-                u_positions[base + 2u],
-                u_positions[base + 3u]);
+    return vec4(rawLoadFloat(u_positions, base + 0u),
+                rawLoadFloat(u_positions, base + 1u),
+                rawLoadFloat(u_positions, base + 2u),
+                rawLoadFloat(u_positions, base + 3u));
 }
 
 vec4 get_bone_indices(uint index)
@@ -46,10 +48,10 @@ vec4 get_bone_indices(uint index)
     uint stride = uint(u_wfStride);
     uint offset = uint(u_wfIndicesOffset);
     uint base   = index * stride + offset;
-    return vec4(u_positions[base + 0u],
-                u_positions[base + 1u],
-                u_positions[base + 2u],
-                u_positions[base + 3u]);
+    return vec4(rawLoadFloat(u_positions, base + 0u),
+                rawLoadFloat(u_positions, base + 1u),
+                rawLoadFloat(u_positions, base + 2u),
+                rawLoadFloat(u_positions, base + 3u));
 }
 
 // Skinned world transform. u_world[i] is filled by gfx::set_world_transform(bones)
@@ -75,8 +77,8 @@ void main()
 
     uint ib_base = uint(u_wfIndexOffset) + tri_first_index;
 
-    uint i0 = u_indices[ib_base + edge_index];
-    uint i1 = u_indices[ib_base + ((edge_index + 1u) % 3u)];
+    uint i0 = rawLoadUint(u_indices, ib_base + edge_index);
+    uint i1 = rawLoadUint(u_indices, ib_base + ((edge_index + 1u) % 3u));
 
     vec3 p0 = get_position(i0);
     vec3 p1 = get_position(i1);

@@ -125,6 +125,22 @@ function(add_flag_if_supported flag)
   endif()
 endfunction()
 
+# Default thread stack reserve for executables that run bgfx. bgfx creates its render thread with
+# the default stack size, which on Windows is the executable's reserve (1 MB unless set). The
+# OpenGL backend copies each shader's GLSL source onto that stack twice while patching it, and the
+# SPIRV-Cross output of the largest shaders is ~850 KB, so 1 MB overflows while creating them.
+set(UNRAVEL_DEFAULT_THREAD_STACK_SIZE 8388608)
+function(unravel_set_default_thread_stack target)
+  if(NOT WIN32)
+    return()
+  endif()
+  if(MINGW)
+    target_link_options(${target} PRIVATE "LINKER:--stack,${UNRAVEL_DEFAULT_THREAD_STACK_SIZE}")
+  else()
+    target_link_options(${target} PRIVATE "LINKER:/STACK:${UNRAVEL_DEFAULT_THREAD_STACK_SIZE}")
+  endif()
+endfunction()
+
 # Set compiler flags based on the compiler and platform
 if (MSVC)
   # For Microsoft Visual C++, use /bigobj

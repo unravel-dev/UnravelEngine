@@ -166,7 +166,7 @@ public:
      * @brief The newest exposure value the occlusion-query channel has delivered:
      * adapted exposure x average local exposure, a few frames old. Never blocks. Returns the
      * previous value while a submission is still resolving, and 1 before the first one or
-     * when the device has no occlusion queries.
+     * when the occlusion query pool is exhausted.
      */
     auto resolve_exposure_readback(gfx::render_view& rview) -> float;
 

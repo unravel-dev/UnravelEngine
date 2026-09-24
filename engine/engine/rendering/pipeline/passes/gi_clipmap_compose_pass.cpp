@@ -406,11 +406,9 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
     // SCROLL-ONLY (level::scroll_only): the overlap of the old and new windows holds exactly
     // the bytes a recompose would write, so it is moved - out to the scratch slab and back
     // in at its new position, two blits, since a blit cannot shift voxels within one
-    // texture - and only the exposed slabs are composed. A backend without texture blits,
-    // or a scratch that failed to allocate, composes in full as before.
-    const auto* caps = bgfx::getCaps();
-    const bool can_blit = caps != nullptr && (caps->supported & BGFX_CAPS_TEXTURE_BLIT) != 0u;
-    if(lvl.scroll_only && can_blit)
+    // texture - and only the exposed slabs are composed. A scratch that failed to allocate
+    // composes in full as before.
+    if(lvl.scroll_only)
     {
         exposed_count = global_sdf_clipmap::compute_scroll_boxes(lvl.scroll_shift, resolution, overlap, exposed);
     }
@@ -442,38 +440,40 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
             // each take a view of their own, ahead of the compose dispatches.
             gfx::render_pass& copy_pass = scroll_copy_pass;
             bgfx::blit(copy_pass.id,
-                       scroll_scratch->native_handle(),
-                       0,
-                       0,
-                       0,
-                       0,
-                       clipmap_gpu.get_texture()->native_handle(),
-                       0,
-                       0,
-                       0,
-                       slab_z,
-                       res16,
-                       res16,
-                       res16);
+                       bgfx::TextureRegion{.handle = scroll_scratch->native_handle(),
+                                           .width = res16,
+                                           .height = res16,
+                                           .depth = res16},
+                       bgfx::TextureRegion{.handle = clipmap_gpu.get_texture()->native_handle(),
+                                           .z = slab_z,
+                                           .width = res16,
+                                           .height = res16,
+                                           .depth = res16});
         }
         {
-            // New-window voxel v came from old-window voxel v + shift.
+            // New-window voxel v came from old-window voxel v + shift. Every overlap extent
+            // is at least one voxel (compute_scroll_boxes reports no scroll otherwise), which
+            // matters because a zero blit extent means "the rest of the mip".
             const math::ivec3 source = overlap.min + lvl.scroll_shift;
+            const auto size_x = static_cast<uint16_t>(overlap.size.x);
+            const auto size_y = static_cast<uint16_t>(overlap.size.y);
+            const auto size_z = static_cast<uint16_t>(overlap.size.z);
             gfx::render_pass& place_pass = scroll_place_pass;
             bgfx::blit(place_pass.id,
-                       clipmap_gpu.get_texture()->native_handle(),
-                       0,
-                       static_cast<uint16_t>(overlap.min.x),
-                       static_cast<uint16_t>(overlap.min.y),
-                       static_cast<uint16_t>(slab_z + overlap.min.z),
-                       scroll_scratch->native_handle(),
-                       0,
-                       static_cast<uint16_t>(source.x),
-                       static_cast<uint16_t>(source.y),
-                       static_cast<uint16_t>(source.z),
-                       static_cast<uint16_t>(overlap.size.x),
-                       static_cast<uint16_t>(overlap.size.y),
-                       static_cast<uint16_t>(overlap.size.z));
+                       bgfx::TextureRegion{.handle = clipmap_gpu.get_texture()->native_handle(),
+                                           .x = static_cast<uint16_t>(overlap.min.x),
+                                           .y = static_cast<uint16_t>(overlap.min.y),
+                                           .z = static_cast<uint16_t>(slab_z + overlap.min.z),
+                                           .width = size_x,
+                                           .height = size_y,
+                                           .depth = size_z},
+                       bgfx::TextureRegion{.handle = scroll_scratch->native_handle(),
+                                           .x = static_cast<uint16_t>(source.x),
+                                           .y = static_cast<uint16_t>(source.y),
+                                           .z = static_cast<uint16_t>(source.z),
+                                           .width = size_x,
+                                           .height = size_y,
+                                           .depth = size_z});
         }
         for(uint32_t box = 0; box < exposed_count; ++box)
         {

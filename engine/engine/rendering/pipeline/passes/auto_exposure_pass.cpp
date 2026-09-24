@@ -466,11 +466,6 @@ auto auto_exposure_pass::ensure_readback_queries(readback_state& state) -> bool
     {
         return true;
     }
-    const auto* caps = bgfx::getCaps();
-    if(!caps || (caps->supported & BGFX_CAPS_OCCLUSION_QUERY) == 0)
-    {
-        return false;
-    }
     for(auto& query : state.queries)
     {
         query = bgfx::createOcclusionQuery();

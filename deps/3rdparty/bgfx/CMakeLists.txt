@@ -4,7 +4,10 @@ set(BGFX_INSTALL OFF CACHE BOOL "Create installation target." FORCE)
 
 set(BGFX_CONFIG_MULTITHREADED ON CACHE BOOL "Build bgfx with multithreaded configuration." FORCE)
 
-set(BX_AMALGAMATED ON CACHE BOOL "Amalgamated bx build for faster compilation" FORCE)
+# bx is built per source file: bx 2531549 declares IsDebuggerPresent() returning bool in
+# debug.cpp, which conflicts with the <windows.h> declaration other sources pull into the
+# single amalgamated translation unit ("conflicting types for 'IsDebuggerPresent'").
+set(BX_AMALGAMATED OFF CACHE BOOL "Amalgamated bx build for faster compilation" FORCE)
 set(BGFX_AMALGAMATED ON CACHE BOOL "Amalgamated bgfx build for faster compilation" FORCE)
 
 if(BUILD_SHARED_LIBS)
@@ -54,9 +57,6 @@ add_definitions(-DBGFX_CONFIG_MAX_BONES=128)
 add_definitions(-DBGFX_CONFIG_MAX_TRANSIENT_VERTEX_BUFFER_SIZE=6<<24)
 add_definitions(-DBGFX_CONFIG_MAX_TRANSIENT_INDEX_BUFFER_SIZE=2<<24)
 add_definitions(-DBGFX_CONFIG_DEBUG_UNIFORM=0)
-if(NOT APPLE)
-    add_definitions(-DBGFX_CONFIG_RENDERER_OPENGL_MIN_VERSION=31)
-endif()
 
 add_subdirectory(bgfx)
 

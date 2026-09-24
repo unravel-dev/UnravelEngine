@@ -599,8 +599,12 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     if(history_tex != old_history)
     {
         gfx::render_pass blit_pass("History Init Blit Pass");
-        bgfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, ssr_curr->get_texture()->native_handle(), 0, 0);
-        bgfx::blit(blit_pass.id, history_t_tex->native_handle(), 0, 0, curr_hit_t->native_handle(), 0, 0);
+        bgfx::blit(blit_pass.id,
+                   bgfx::TextureRegion{.handle = history_tex->native_handle()},
+                   bgfx::TextureRegion{.handle = ssr_curr->get_texture()->native_handle()});
+        bgfx::blit(blit_pass.id,
+                   bgfx::TextureRegion{.handle = history_t_tex->native_handle()},
+                   bgfx::TextureRegion{.handle = curr_hit_t->native_handle()});
         return nullptr;
     }
 
@@ -686,8 +690,12 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     // Blit temp_fbo texture into persistent history_tex for next frame
     // ============================================================================
     gfx::render_pass blit_pass("History Blit Pass");
-    bgfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, temp_fbo->get_texture()->native_handle(), 0, 0);
-    bgfx::blit(blit_pass.id, history_t_tex->native_handle(), 0, 0, temp_fbo->get_texture(1)->native_handle(), 0, 0);
+    bgfx::blit(blit_pass.id,
+               bgfx::TextureRegion{.handle = history_tex->native_handle()},
+               bgfx::TextureRegion{.handle = temp_fbo->get_texture()->native_handle()});
+    bgfx::blit(blit_pass.id,
+               bgfx::TextureRegion{.handle = history_t_tex->native_handle()},
+               bgfx::TextureRegion{.handle = temp_fbo->get_texture(1)->native_handle()});
 
     return temp_fbo;
 }

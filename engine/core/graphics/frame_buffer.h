@@ -66,16 +66,11 @@ struct frame_buffer : public handle_impl<frame_buffer, bgfx::FrameBufferHandle>
     //-----------------------------------------------------------------------------
     //  Name : frame_buffer ()
     /// <summary>
-    ///
-    ///
-    ///
+    /// Creates the swap chain frame buffer of a native window. Formats left at
+    /// bgfx::TextureFormat::Count inherit the swap chain bgfx was initialized with.
     /// </summary>
     //-----------------------------------------------------------------------------
-    frame_buffer(void* _nwh,
-                 std::uint16_t _width,
-                 std::uint16_t _height,
-                 bgfx::TextureFormat::Enum _format = bgfx::TextureFormat::Count,
-                 bgfx::TextureFormat::Enum _depth_format = bgfx::TextureFormat::Count);
+    frame_buffer(const bgfx::SwapChain& _desc);
 
     //-----------------------------------------------------------------------------
     //  Name : populate ()

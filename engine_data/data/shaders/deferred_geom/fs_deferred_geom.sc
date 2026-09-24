@@ -95,18 +95,19 @@ void main()
 		discard;
 	}
 
-	GBufferData buffer;
-	buffer.base_color = albedo_color.rgb;
-	buffer.ambient_occlusion = ambient_occlusion;
-	buffer.world_normal = wnormal;
-	buffer.roughness = roughness;
-	buffer.emissive_color = emissive * u_emissive_color.rgb;
-	buffer.metalness = metalness;
-	buffer.subsurface_color = u_subsurface_color.rgb;
-	buffer.subsurface_opacity = u_subsurface_color.w;
+	// Not named "buffer": that is a reserved word in GLSL 4.30, the OpenGL shader baseline.
+	GBufferData gbuffer;
+	gbuffer.base_color = albedo_color.rgb;
+	gbuffer.ambient_occlusion = ambient_occlusion;
+	gbuffer.world_normal = wnormal;
+	gbuffer.roughness = roughness;
+	gbuffer.emissive_color = emissive * u_emissive_color.rgb;
+	gbuffer.metalness = metalness;
+	gbuffer.subsurface_color = u_subsurface_color.rgb;
+	gbuffer.subsurface_opacity = u_subsurface_color.w;
 
 	vec4 result[4];
-    EncodeGBuffer(buffer, result);
+    EncodeGBuffer(gbuffer, result);
 
 	gl_FragData[0] = result[0];
 	gl_FragData[1] = result[1];

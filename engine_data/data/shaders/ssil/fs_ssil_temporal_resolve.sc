@@ -121,20 +121,9 @@ vec3 SSIL_ComputeViewspacePosition(vec2 uv, float z)
     return computeViewSpacePosition(uv, z);
 }
 
-/// Inverse of toClipSpaceDepth: map a clip-space depth back to the [0,1] device
-/// depth stored in the depth buffer so the reprojected and sampled depths can be
-/// compared in the same domain.
-float SSIL_ClipDepthToDevice(float clip_z)
-{
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
-    return clip_z;
-#else
-    return clip_z * 0.5 + 0.5;
-#endif
-}
-
 /// Reproject the current world point into the previous frame. Returns the previous
-/// UV in xy and the EXPECTED previous-frame device depth of that world point in z.
+/// UV in xy and the EXPECTED previous-frame device depth of that world point in z,
+/// mapped back to the [0,1] depth-buffer domain so it compares against sampled depths.
 vec3 SSIL_ComputePreviousFrameSample(vec2 uv, float z)
 {
     vec3 vs_pos = SSIL_ComputeViewspacePosition(uv, z);
@@ -143,7 +132,7 @@ vec3 SSIL_ComputePreviousFrameSample(vec2 uv, float z)
     vec3 prev_clip = prev_clip4.xyz / prev_clip4.w;
     prev_clip = clipTransform(prev_clip);
     vec2 prev_uv = prev_clip.xy * 0.5 + 0.5;
-    return vec3(prev_uv, SSIL_ClipDepthToDevice(prev_clip.z));
+    return vec3(prev_uv, toDepthTextureZ(prev_clip.z));
 }
 
 void main()

@@ -90,16 +90,6 @@ vec3 TAA_SampleHistoryCatmullRom(vec2 uv, vec2 texel_size)
     return max(result / weight, vec3_splat(0.0));
 }
 
-// Inverse of toClipSpaceDepth: NDC z back to depth-texture range.
-float TAA_FromClipSpaceDepth(float clip_z)
-{
-#if BGFX_SHADER_LANGUAGE_HLSL || BGFX_SHADER_LANGUAGE_METAL || BGFX_SHADER_LANGUAGE_SPIRV
-    return clip_z;
-#else
-    return clip_z * 0.5 + 0.5;
-#endif
-}
-
 // Reprojects the current pixel into the previous frame. Returns the history UV in
 // xy and the EXPECTED previous depth01 of this surface in z, so disocclusion can
 // compare it against what the previous depth buffer actually stored there.
@@ -110,7 +100,7 @@ vec3 TAA_PreviousScreenPos(vec2 uv, float depth01)
     vec4 prev_clip4 = mul(u_prev_view_proj, vec4(ws_pos.xyz, 1.0));
     vec3 prev_clip = prev_clip4.xyz / prev_clip4.w;
     prev_clip = clipTransform(prev_clip);
-    return vec3(prev_clip.xy * 0.5 + 0.5, TAA_FromClipSpaceDepth(prev_clip.z));
+    return vec3(prev_clip.xy * 0.5 + 0.5, toDepthTextureZ(prev_clip.z));
 }
 
 float TAA_LinearViewDepthFrom01(float depth01)

@@ -53,12 +53,6 @@ vec3 GiClampRayRadiance(vec3 radiance, float ceiling)
 }
 #endif // GI_CLAMP_RAY_RADIANCE_DEFINED
 
-// See sdf_common.sh: modern GLSL removed the legacy entry point and bgfx never mapped the 3D
-// variant; guarded here too so this header stands alone.
-#if BGFX_SHADER_LANGUAGE_GLSL >= 130 && !defined(texture3DLod)
-#	define texture3DLod(_sampler, _coord, _lod) textureLod(_sampler, _coord, _lod)
-#endif // BGFX_SHADER_LANGUAGE_GLSL >= 130
-
 /// x = attribute resolution (voxels per axis), y = telemetry mirror of the sun-tier debug
 /// state (the kernel does NOT read it - the debug write is a compiled program variant, see
 /// gi_light_voxels_kernel.sh; the lane exists so a GPU debugger can inspect whether uniforms

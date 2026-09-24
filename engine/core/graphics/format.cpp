@@ -308,12 +308,15 @@ auto get_format_info(bgfx::TextureFormat::Enum fmt) -> format_details
             // Interpolated alpha
             return {true, false, 4};
         case bgfx::TextureFormat::BC4: // LATC1 / ATI1
+        case bgfx::TextureFormat::BC4S:
             // Single channel
             return {false, false, 1};
         case bgfx::TextureFormat::BC5: // LATC2 / ATI2
+        case bgfx::TextureFormat::BC5S:
             // Two-channel, often used for XY in normal maps
             return {false, false, 2};
         case bgfx::TextureFormat::BC6H:
+        case bgfx::TextureFormat::BC6HU:
             // HDR (RGB only), no alpha
             return {false, true, 3};
         case bgfx::TextureFormat::BC7:
@@ -409,8 +412,11 @@ auto to_string(bgfx::TextureFormat::Enum fmt) -> std::string
         case bgfx::TextureFormat::BC2:       return "BC2";
         case bgfx::TextureFormat::BC3:       return "BC3";
         case bgfx::TextureFormat::BC4:       return "BC4";
+        case bgfx::TextureFormat::BC4S:      return "BC4S";
         case bgfx::TextureFormat::BC5:       return "BC5";
+        case bgfx::TextureFormat::BC5S:      return "BC5S";
         case bgfx::TextureFormat::BC6H:      return "BC6H";
+        case bgfx::TextureFormat::BC6HU:     return "BC6HU";
         case bgfx::TextureFormat::BC7:       return "BC7";
         case bgfx::TextureFormat::ETC1:      return "ETC1";
         case bgfx::TextureFormat::ETC2:      return "ETC2";
@@ -493,6 +499,7 @@ auto to_string(bgfx::TextureFormat::Enum fmt) -> std::string
         case bgfx::TextureFormat::BGR5A1:    return "BGR5A1";
         case bgfx::TextureFormat::RGB5A1:    return "RGB5A1";
         case bgfx::TextureFormat::RGB10A2:   return "RGB10A2";
+        case bgfx::TextureFormat::RGB10A2U:  return "RGB10A2U";
         case bgfx::TextureFormat::RG11B10F:  return "RG11B10F";
 
         case bgfx::TextureFormat::UnknownDepth: return "UnknownDepth";
@@ -504,6 +511,7 @@ auto to_string(bgfx::TextureFormat::Enum fmt) -> std::string
         case bgfx::TextureFormat::D16F:   return "D16F";
         case bgfx::TextureFormat::D24F:   return "D24F";
         case bgfx::TextureFormat::D32F:   return "D32F";
+        case bgfx::TextureFormat::D32FS8: return "D32FS8";
         case bgfx::TextureFormat::D0S8:   return "D0S8";
 
         case bgfx::TextureFormat::Count:  return "Count";

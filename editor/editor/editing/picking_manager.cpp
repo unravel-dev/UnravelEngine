@@ -756,20 +756,13 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
     // Whatever mesh has the most pixels in the ID buffer is the one the user clicked on.
     if((reading_ == 0u) && start_readback_)
     {
-        bool blit_support = gfx::is_supported(BGFX_CAPS_TEXTURE_BLIT);
-
-        if(blit_support == false)
-        {
-            APPLOG_WARNING("Texture blitting is not supported. Picking will not work");
-            start_readback_ = false;
-            return;
-        }
-
         gfx::render_pass pass("Picking/Buffer Blit Pass");
         pass.touch();
         // Blit and read
-        bgfx::blit(pass.id, blit_tex_->native_handle(), 0, 0, surface_->get_texture()->native_handle());
-        reading_ = bgfx::readTexture(blit_tex_->native_handle(), blit_data_.data());
+        bgfx::blit(pass.id,
+                   bgfx::TextureRegion{.handle = blit_tex_->native_handle()},
+                   bgfx::TextureRegion{.handle = surface_->get_texture()->native_handle()});
+        reading_ = bgfx::read(bgfx::TextureRegion{.handle = blit_tex_->native_handle()}, blit_data_.data());
         start_readback_ = false;
     }
 

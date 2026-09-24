@@ -35,7 +35,8 @@ auto get_allocation_failure_policy() -> allocation_failure_policy;
 /// from @ref texture::native_handle when the resource has no live GPU handle.
 auto fallback_texture() -> bgfx::TextureHandle;
 
-/**/
+/// Submits the frame (bgfx::frame) and returns its number, then does the graphics layer's per-frame
+/// work: eviction bookkeeping and writing the saveToFile images whose readback has landed.
 uint32_t frame(uint8_t _flags = BGFX_FRAME_NONE);
 
 /**

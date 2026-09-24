@@ -2,10 +2,12 @@
 #include "bgfx/bgfx.h"
 #include "eviction.h"
 #include "uniform.h"
+#include "utils/bgfx_utils.h"
 #include <bimg/bimg.h>
 #include <bx/file.h>
 #include <algorithm>
 #include <array>
+#include <cstdarg>
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -125,27 +127,38 @@ struct gfx_callback final : public bgfx::CallbackI
 {
     ~gfx_callback() = default;
 
+    /// bgfx starts every trace with "BGFX " and a BX_WARN with "BGFX WARN " (bgfx_p.h), and ends
+    /// each one with a newline.
+    static constexpr const char* warning_prefix = "BGFX WARN ";
+
     void traceVargs(const char* _filePath, uint16_t _line, const char* _format, va_list _argList) final
     {
         char temp[8192];
-        char* out = temp;
-        int32_t len = vsnprintf(out, sizeof(temp), _format, _argList);
-        if((int32_t)sizeof(temp) < len)
+        const char* out = temp;
+        std::string large;
+        va_list args_copy;
+        va_copy(args_copy, _argList);
+        int32_t len = vsnprintf(temp, sizeof(temp), _format, _argList);
+        if(len >= int32_t(sizeof(temp)))
         {
-            out = (char*)alloca(len + 1);
-            len = vsnprintf(out, len, _format, _argList);
+            large.resize(size_t(len));
+            len = vsnprintf(large.data(), size_t(len) + 1, _format, args_copy);
+            out = large.data();
         }
-        out[len] = '\0';
-
-        bx::StringView out_view(out, len);
-        // Determine log type based on prefix
-        if (bx::strCmp(out_view, "WARN ") == 0)
+        va_end(args_copy);
+        if(len < 0)
         {
-            log("warning", out_view.getPtr() + 5, _filePath, _line);
+            return;
+        }
+        const bx::StringView message = bx::strRTrimSpace(bx::StringView(out, len));
+        if(bx::hasPrefix(message, warning_prefix))
+        {
+            const bx::StringView text = bx::strTrimPrefix(message, warning_prefix);
+            log("warning", "BGFX " + std::string(text.getPtr(), text.getLength()), _filePath, _line);
         }
         else
         {
-            log("debug", out, _filePath, _line);
+            log("debug", std::string(message.getPtr(), message.getLength()), _filePath, _line);
         }
     }
 
@@ -340,6 +353,7 @@ void shutdown()
     clear_profiler_hooks();
     if(s_context.initted)
     {
+        finishFileSaves();
         eviction::shutdown();
         if(bgfx::isValid(s_context.fallback_texture))
         {
@@ -433,6 +447,7 @@ uint32_t frame(uint8_t _flags)
     s_context.frame = bgfx::frame(_flags);
     eviction::set_frame(s_context.frame);
     eviction::clear_queued_allocations();
+    writeLandedFileSaves(s_context.frame);
     return s_context.frame;
 }
 

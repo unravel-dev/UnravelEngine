@@ -197,8 +197,10 @@ void temporal_probe_pass::dispatch_frame(const run_params& params)
 void temporal_probe_pass::issue_readback()
 {
     gfx::render_pass pass("Instruments/Temporal Probe Readback");
-    bgfx::blit(pass.id, readback_->native_handle(), 0, 0, sums_->native_handle(), 0, 0, width_, height_);
-    readback_ready_frame_ = bgfx::readTexture(readback_->native_handle(), readback_data_.data());
+    bgfx::blit(pass.id,
+               bgfx::TextureRegion{.handle = readback_->native_handle(), .width = width_, .height = height_},
+               bgfx::TextureRegion{.handle = sums_->native_handle(), .width = width_, .height = height_});
+    readback_ready_frame_ = bgfx::read(bgfx::TextureRegion{.handle = readback_->native_handle()}, readback_data_.data());
     readback_frames_ = frames_done_;
     readback_lowpass_ = is_lowpass_;
     readback_pending_ = true;
@@ -219,9 +221,13 @@ void temporal_probe_pass::reduce_readback()
     std::vector<uint32_t> std_counts(size_t(grid_size) * grid_size, 0u);
     std::vector<uint32_t> change_counts(size_t(grid_size) * grid_size, 0u);
     double change_sum = 0.0;
+    // The grid is reported from the top of the image, but OpenGL render targets keep their origin
+    // at the bottom left, so there the readback's first row is the bottom one.
+    const bool is_bottom_up = bgfx::getCaps()->originBottomLeft;
     for(uint32_t y = 0; y < height; ++y)
     {
-        const uint32_t cell_y = std::min(y * grid_size / height, grid_size - 1u);
+        const uint32_t image_y = is_bottom_up ? height - 1u - y : y;
+        const uint32_t cell_y = std::min(image_y * grid_size / height, grid_size - 1u);
         for(uint32_t x = 0; x < width; ++x)
         {
             const uint32_t cell = cell_y * grid_size + std::min(x * grid_size / width, grid_size - 1u);
