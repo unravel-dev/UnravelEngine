@@ -20,12 +20,14 @@
 
 SAMPLER2D(s_hdr_input, 0);
 BUFFER_RW(s_histogram, uint, 1);
+// Images take i_ names, never a sampler's: the OpenGL backend uploads every registered uniform
+// a program declares, so an image named like a sampler is rebound to that sampler's stage.
 /// Per metering cell, its log2 SCENE luminance (pre-exposure removed) - the input the local
 /// exposure chain bins into its bilateral grid (cs_local_exposure_grid.sc). Written for EVERY
 /// cell, including the ones the metering weight drops: local exposure covers the whole frame,
 /// while the histogram only meters where the mode says. One texel per cell against a gate
 /// uniform and a branch is the cheaper trade.
-IMAGE2D_WO(s_exposure_log_lum, r16f, 2);
+IMAGE2D_WO(i_exposure_log_lum, r16f, 2);
 
 uniform vec4 u_histogram_params;
 uniform vec4 u_metering_params;
@@ -110,7 +112,7 @@ void main()
         lum = (lum > 0.0) ? lum : 0.0;
         // Scene luminance: the input may carry the view's pre-exposure.
         float log_lum = log2(max(lum, 1e-30)) - u_log2_pre_exposure;
-        imageStore(s_exposure_log_lum, ivec2(gid), vec4(log_lum, 0.0, 0.0, 0.0));
+        imageStore(i_exposure_log_lum, ivec2(gid), vec4(log_lum, 0.0, 0.0, 0.0));
 
         if (spatial_weight > 0.0)
         {

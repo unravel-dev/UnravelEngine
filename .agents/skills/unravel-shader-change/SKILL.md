@@ -91,8 +91,8 @@ When adding new uniforms:
   manual shaderc run) does, so errors hide until runtime
 - Mismatched varying names between VS and FS
 - Modifying `deps/3rdparty/bgfx` instead of engine shaders
-- On OpenGL: creating bgfx uniforms after programs - see GPU contracts in
-  `unravel-rendering`
+- On OpenGL: creating bgfx uniforms after programs, or naming an image like a sampler -
+  see GPU contracts in `unravel-rendering`
 
 ## Rollback
 

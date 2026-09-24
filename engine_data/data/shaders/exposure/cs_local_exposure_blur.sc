@@ -14,7 +14,9 @@
 #include "bgfx_compute.sh"
 
 SAMPLER2D(s_local_exposure_mean, 0);
-IMAGE2D_WO(s_local_exposure_blurred, r32f, 1);
+// Images take i_ names, never a sampler's: the OpenGL backend uploads every registered uniform
+// a program declares, so an image named like a sampler is rebound to that sampler's stage.
+IMAGE2D_WO(i_local_exposure_blurred, r32f, 1);
 
 /// x = tiles x, y = tiles y, z = blur radius in tiles, w unused.
 uniform vec4 u_local_blur_params;
@@ -68,5 +70,5 @@ void main()
 		}
 	}
 
-	imageStore(s_local_exposure_blurred, tile, vec4(weight_sum > 0.0 ? sum / weight_sum : 0.0, 0.0, 0.0, 0.0));
+	imageStore(i_local_exposure_blurred, tile, vec4(weight_sum > 0.0 ? sum / weight_sum : 0.0, 0.0, 0.0, 0.0));
 }

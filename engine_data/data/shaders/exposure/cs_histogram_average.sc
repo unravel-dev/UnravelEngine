@@ -20,9 +20,11 @@
 #include "bgfx_compute.sh"
 
 BUFFER_RW(s_histogram, uint, 0);
-IMAGE2D_RW(s_exposure, rgba32f, 1);
-IMAGE2D_WO(s_exposure_history, rgba32f, 2);
-IMAGE2D_WO(s_histogram_display, r32f, 3);
+// Images take i_ names, never a sampler's: the OpenGL backend uploads every registered uniform
+// a program declares, so an image named like a sampler is rebound to that sampler's stage.
+IMAGE2D_RW(i_exposure, rgba32f, 1);
+IMAGE2D_WO(i_exposure_history, rgba32f, 2);
+IMAGE2D_WO(i_histogram_display, r32f, 3);
 
 uniform vec4 u_average_params0;
 uniform vec4 u_average_params1;
@@ -109,10 +111,10 @@ void main()
             cumulative += bin_weight;
             display_share = bin_weight * inv_total;
         }
-        imageStore(s_histogram_display, ivec2(int(bin), 0), vec4(display_share, 0.0, 0.0, 0.0));
+        imageStore(i_histogram_display, ivec2(int(bin), 0), vec4(display_share, 0.0, 0.0, 0.0));
     }
 
-    vec4 previous = imageLoad(s_exposure, ivec2(0, 0));
+    vec4 previous = imageLoad(i_exposure, ivec2(0, 0));
     bool previous_valid = (previous.x == previous.x) && previous.x > 0.0 && previous.x < MAX_EXPOSURE;
 
     bool has_measurement = weight_sum > 0.0;
@@ -192,7 +194,7 @@ void main()
         average_local_exposure = local_weight > 0.0 ? local_sum / local_weight : 1.0;
     }
 
-    imageStore(s_exposure, ivec2(0, 0), vec4(adapted_exposure, target_exposure, applied_bias, average_local_exposure));
-    imageStore(s_exposure_history, ivec2(int(u_history_texel), 0),
+    imageStore(i_exposure, ivec2(0, 0), vec4(adapted_exposure, target_exposure, applied_bias, average_local_exposure));
+    imageStore(i_exposure_history, ivec2(int(u_history_texel), 0),
                vec4(adapted_log_exposure, target_log_exposure, metered_log_luminance, applied_bias));
 }

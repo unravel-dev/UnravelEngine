@@ -21,7 +21,7 @@
  * Input is the metering grid's log2 SCENE luminance (cs_luminance_histogram.sc; pre-exposure
  * already removed), so the axis is the same one the histogram bins on.
  *
- * The tile's plain mean log luminance is written out at the same time (s_local_exposure_mean):
+ * The tile's plain mean log luminance is written out at the same time (i_local_exposure_mean):
  * every slice is already in registers here, so the reduction the blurred-luminance stage would
  * otherwise repeat costs nothing.
  */
@@ -29,8 +29,10 @@
 #include "bgfx_compute.sh"
 
 SAMPLER2D(s_exposure_log_lum, 0);
-IMAGE2D_WO(s_local_exposure_grid, rgba32f, 1);
-IMAGE2D_WO(s_local_exposure_mean, r32f, 2);
+// Images take i_ names, never a sampler's: the OpenGL backend uploads every registered uniform
+// a program declares, so an image named like a sampler is rebound to that sampler's stage.
+IMAGE2D_WO(i_local_exposure_grid, rgba32f, 1);
+IMAGE2D_WO(i_local_exposure_mean, r32f, 2);
 
 /// x = metering grid width, y = metering grid height, z = cells per tile edge, w = slice count.
 uniform vec4 u_local_grid_params;
@@ -108,13 +110,13 @@ void main()
 	int row_base = tile.x * LOCAL_EXPOSURE_SLICES;
 	for (int slice = 0; slice < LOCAL_EXPOSURE_SLICES; ++slice)
 	{
-		imageStore(s_local_exposure_grid,
+		imageStore(i_local_exposure_grid,
 		           ivec2(row_base + slice, tile.y),
 		           vec4(log_sum[slice] * inv_cells, weight_sum[slice] * inv_cells, 0.0, 0.0));
 	}
 	// An empty tile (off the metering grid entirely) reports the bottom of the axis; the
 	// blurred stage's own weighting never reaches it, and the tonemapper clamps regardless.
-	imageStore(s_local_exposure_mean,
+	imageStore(i_local_exposure_mean,
 	           tile,
 	           vec4(cell_count > 0.0 ? tile_log_sum * inv_cells : u_min_log_lum, 0.0, 0.0, 0.0));
 }

@@ -61,6 +61,11 @@ Use `unravel-shader-change` for step-by-step shader edits.
 - **GL 3D image binds:** plain `setImage` binds 3D textures non-layered on GL (Mesa
   drops image3D stores, NVIDIA hides it). Always use `gfx::set_image_3d`
   (`engine/core/graphics/graphics.h`).
+- **GL image names:** never name an image (`IMAGE*`) like any sampler uniform - use `i_`
+  names. The GL backend uploads every registered uniform a program declares, so the image
+  is rebound to that sampler's last stage (unit 0 if never set) and reads / writes another
+  texture. Symptom: the auto exposure history ring wrote into the irradiance SH through
+  unit 0 (GL-only blue SSIL flash every 256 frames).
 - **D3D12:** allocates per texture update - batch updates into boxes. PSOs compile at
   first use - the disk cache is wired via `gfx::set_cache_directory`.
 - **Vulkan:** scratch buffer is 32MB/frame - large per-frame uploads can exhaust it.
