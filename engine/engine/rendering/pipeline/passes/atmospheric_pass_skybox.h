@@ -30,8 +30,8 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_texCube, "s_texCube", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_sky_brightness, "u_sky_brightness", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_texCube, "s_texCube", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_sky_brightness, "u_sky_brightness", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr u_texCube;

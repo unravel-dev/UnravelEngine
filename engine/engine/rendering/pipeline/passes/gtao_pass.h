@@ -125,7 +125,7 @@ private:
     auto create_or_update_texture(gfx::render_view& rview,
                                   const std::string& name,
                                   const usize32_t& size,
-                                  gfx::texture_format format,
+                                  bgfx::TextureFormat::Enum format,
                                   bool has_mips,
                                   uint64_t flags) -> gfx::texture::ptr;
     /// denoise_axis selects the separable denoise pass's axis (0 = x, 1 = y); the other
@@ -161,7 +161,7 @@ private:
         gfx::program::uniform_ptr s_gtao_depth;
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_gtao_depth, "s_gtao_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gtao_depth, "s_gtao_depth", bgfx::UniformType::Sampler);
         }
         auto is_valid() const -> bool { return program && program->is_valid(); }
     } prefilter_program_;
@@ -173,8 +173,8 @@ private:
         gfx::program::uniform_ptr s_gtao_normal;
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_gtao_depth_mips, "s_gtao_depth_mips", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao_normal, "s_gtao_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gtao_depth_mips, "s_gtao_depth_mips", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao_normal, "s_gtao_normal", bgfx::UniformType::Sampler);
         }
         auto is_valid() const -> bool { return program && program->is_valid(); }
     } main_program_;
@@ -187,9 +187,9 @@ private:
         gfx::program::uniform_ptr s_gtao_normal;
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_gtao_input, "s_gtao_input", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao_depth_mips, "s_gtao_depth_mips", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao_normal, "s_gtao_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gtao_input, "s_gtao_input", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao_depth_mips, "s_gtao_depth_mips", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao_normal, "s_gtao_normal", bgfx::UniformType::Sampler);
         }
         auto is_valid() const -> bool { return program && program->is_valid(); }
     } denoise_program_;
@@ -206,13 +206,13 @@ private:
         gfx::program::uniform_ptr u_gtao_temporal;
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_gtao_current, "s_gtao_current", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao_history, "s_gtao_history", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao_velocity, "s_gtao_velocity", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao_depth_mips, "s_gtao_depth_mips", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao_prev_depth, "s_gtao_prev_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_gtao_prev_view_proj, "u_gtao_prev_view_proj", gfx::uniform_type::Mat4);
-            cache_uniform(program.get(), u_gtao_temporal, "u_gtao_temporal", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_gtao_current, "s_gtao_current", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao_history, "s_gtao_history", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao_velocity, "s_gtao_velocity", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao_depth_mips, "s_gtao_depth_mips", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao_prev_depth, "s_gtao_prev_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_gtao_prev_view_proj, "u_gtao_prev_view_proj", bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), u_gtao_temporal, "u_gtao_temporal", bgfx::UniformType::Vec4);
         }
         auto is_valid() const -> bool { return program && program->is_valid(); }
     } temporal_program_;
@@ -226,10 +226,10 @@ private:
         gfx::program::uniform_ptr s_gtao_normal;
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_gtao_input, "s_gtao_input", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao_depth_mips, "s_gtao_depth_mips", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao_depth, "s_gtao_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao_normal, "s_gtao_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gtao_input, "s_gtao_input", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao_depth_mips, "s_gtao_depth_mips", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao_depth, "s_gtao_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao_normal, "s_gtao_normal", bgfx::UniformType::Sampler);
         }
         auto is_valid() const -> bool { return program && program->is_valid(); }
     } upsample_program_;

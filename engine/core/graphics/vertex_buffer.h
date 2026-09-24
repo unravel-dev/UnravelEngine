@@ -4,7 +4,7 @@
 
 namespace gfx
 {
-struct vertex_buffer : public handle_impl<vertex_buffer, vertex_buffer_handle>
+struct vertex_buffer : public handle_impl<vertex_buffer, bgfx::VertexBufferHandle>
 {
     vertex_buffer() = default;
     //-----------------------------------------------------------------------------
@@ -15,6 +15,6 @@ struct vertex_buffer : public handle_impl<vertex_buffer, vertex_buffer_handle>
     ///
     /// </summary>
     //-----------------------------------------------------------------------------
-    vertex_buffer(const memory_view* _mem, const vertex_layout& _decl, std::uint16_t _flags = BGFX_BUFFER_NONE);
+    vertex_buffer(const bgfx::Memory* _mem, const bgfx::VertexLayout& _decl, std::uint16_t _flags = BGFX_BUFFER_NONE);
 };
 } // namespace gfx

@@ -237,7 +237,7 @@ void apply_pass_smoothing(std::vector<render_pass_entry>& entries)
     }
 }
 
-auto make_render_pass_entries(const gfx::stats* stats, const timer_scale& scale, bool group_by_prefix)
+auto make_render_pass_entries(const bgfx::Stats* stats, const timer_scale& scale, bool group_by_prefix)
     -> std::vector<render_pass_entry>
 {
     std::vector<render_pass_entry> entries;
@@ -481,7 +481,7 @@ void draw_render_pass_node(const render_pass_node& node, const render_pass_total
     ImGui::TreePop();
 }
 
-void draw_encoder_stats(const gfx::stats* stats, const widget_layout& layout, const timer_scale& scale)
+void draw_encoder_stats(const bgfx::Stats* stats, const widget_layout& layout, const timer_scale& scale)
 {
     if(ImGui::BeginListBox("Encoders##GpuProfiler",
                            ImVec2(ImGui::GetWindowWidth(),
@@ -520,7 +520,7 @@ void draw_encoder_stats(const gfx::stats* stats, const widget_layout& layout, co
     }
 }
 
-void draw_view_stats(const gfx::stats* stats, const widget_layout& layout, const timer_scale& scale)
+void draw_view_stats(const bgfx::Stats* stats, const widget_layout& layout, const timer_scale& scale)
 {
     (void)layout;
     static std::array<char, 128> filter = {};
@@ -643,7 +643,7 @@ void draw_view_stats(const gfx::stats* stats, const widget_layout& layout, const
 
 } // namespace
 
-void draw_gpu_submit_profiler_ui(const gfx::stats* stats, bool* enable_profiler)
+void draw_gpu_submit_profiler_ui(const bgfx::Stats* stats, bool* enable_profiler)
 {
     if(enable_profiler == nullptr)
     {
@@ -657,7 +657,7 @@ void draw_gpu_submit_profiler_ui(const gfx::stats* stats, bool* enable_profiler)
                                  "Record the CPU submit and GPU execute time of every view."))
         {
             *enable_profiler = !*enable_profiler;
-            gfx::set_debug(*enable_profiler ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
+            bgfx::setDebug(*enable_profiler ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
         }
     }
     panel_toolbar::end_strip();

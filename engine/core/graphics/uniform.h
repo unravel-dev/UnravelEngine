@@ -15,7 +15,7 @@ namespace gfx
 
 void deinit_uniform_cache();
 
-struct uniform : public handle_impl<uniform, uniform_handle>
+struct uniform : public handle_impl<uniform, bgfx::UniformHandle>
 {
     uniform() = default;
     ~uniform();
@@ -27,7 +27,7 @@ struct uniform : public handle_impl<uniform, uniform_handle>
     ///
     /// </summary>
     //-----------------------------------------------------------------------------
-    uniform(const std::string& _name, uniform_type _type, std::uint16_t _num = 1);
+    uniform(const std::string& _name, bgfx::UniformType::Enum _type, std::uint16_t _num = 1);
 
     //-----------------------------------------------------------------------------
     //  Name : populate ()
@@ -75,7 +75,7 @@ struct uniform : public handle_impl<uniform, uniform_handle>
     void set_uniform(const void* _value, uint16_t _num = 1);
 
     /// Uniform info
-    uniform_info info;
+    bgfx::UniformInfo info;
 };
 
 } // namespace gfx

@@ -216,17 +216,17 @@ private:
         void cache_uniforms()
         {
             // Manual uniform creation for FidelityFX SSR using std::make_shared
-            cache_uniform(program.get(), u_ssr_params, "u_ssr_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_hiz_params, "u_hiz_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_fade_params, "u_fade_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cone_params, "u_cone_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
-            cache_uniform(program.get(), s_color, "s_color", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_color_blurred, "s_color_blurred", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_ssr_params, "u_ssr_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_hiz_params, "u_hiz_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_fade_params, "u_fade_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cone_params, "u_cone_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), s_color, "s_color", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_normal, "s_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_hiz, "s_hiz", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_color_blurred, "s_color_blurred", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
         }
         
         auto is_valid() const -> bool
@@ -254,18 +254,18 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_temporal_params, "u_temporal_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_motion_params, "u_motion_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_fade_params, "u_fade_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
-            cache_uniform(program.get(), s_ssr_curr, "s_ssr_curr", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_ssr_history, "s_ssr_history", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_ssr_curr_hit_t, "s_ssr_curr_hit_t", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_ssr_hist_hit_t, "s_ssr_hist_hit_t", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_temporal_params, "u_temporal_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_motion_params, "u_motion_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_fade_params, "u_fade_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), s_ssr_curr, "s_ssr_curr", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_ssr_history, "s_ssr_history", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_normal, "s_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_velocity, "s_velocity", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_ssr_curr_hit_t, "s_ssr_curr_hit_t", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_ssr_hist_hit_t, "s_ssr_hist_hit_t", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
         }
         
         auto is_valid() const -> bool
@@ -288,10 +288,10 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_ssr_history, "s_ssr_history", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_ssr_curr, "s_ssr_curr", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_ssr_history, "s_ssr_history", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_ssr_curr, "s_ssr_curr", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_normal, "s_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
         }
         
         auto is_valid() const -> bool
@@ -309,8 +309,8 @@ private:
         
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_blur_params, "u_blur_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_blur_params, "u_blur_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_normal, "s_normal", bgfx::UniformType::Sampler);
         }
         
         auto is_valid() const -> bool
@@ -331,10 +331,10 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_denoise_params, "u_denoise_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_ssr_input, "s_ssr_input", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_normal, "s_normal", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_denoise_params, "u_denoise_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_ssr_input, "s_ssr_input", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_normal, "s_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool

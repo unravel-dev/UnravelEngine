@@ -337,12 +337,12 @@ void cloud_noise_textures::generate_3d()
     std::vector<uint8_t> data;
     pack(samples, data);
 
-    auto* mem = gfx::copy(data.data(), static_cast<uint32_t>(data.size()));
+    auto* mem = bgfx::copy(data.data(), static_cast<uint32_t>(data.size()));
     base_noise = std::make_unique<gfx::texture>(res,
                                                 res,
                                                 res,
                                                 false,
-                                                gfx::texture_format::RGBA8,
+                                                bgfx::TextureFormat::RGBA8,
                                                 BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
                                                 mem);
 
@@ -376,12 +376,12 @@ void cloud_noise_textures::generate_flat()
     std::vector<uint8_t> data;
     pack(samples, data);
 
-    auto* mem = gfx::copy(data.data(), static_cast<uint32_t>(data.size()));
+    auto* mem = bgfx::copy(data.data(), static_cast<uint32_t>(data.size()));
     flat_noise = std::make_unique<gfx::texture>(res,
                                                 res,
                                                 false,
                                                 1,
-                                                gfx::texture_format::RGBA8,
+                                                bgfx::TextureFormat::RGBA8,
                                                 BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
                                                 mem);
 

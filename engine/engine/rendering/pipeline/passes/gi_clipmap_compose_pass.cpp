@@ -102,18 +102,18 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     if(clipmap_gpu.needs_buffer_seed() && fill_program_.is_valid())
     {
         gfx::render_pass seed_pass("GI/Buffer Seed");
-        const auto fill = [&](gfx::dynamic_index_buffer_handle target, uint32_t count, uint32_t value)
+        const auto fill = [&](bgfx::DynamicIndexBufferHandle target, uint32_t count, uint32_t value)
         {
             if(!bgfx::isValid(target) || count == 0)
             {
                 return;
             }
             fill_program_.program->begin();
-            gfx::set_buffer(0, target, gfx::access::Write);
+            bgfx::setBuffer(0, target, bgfx::Access::Write);
             float fill_params[4] = {float(count), 0.0f, 0.0f, 0.0f};
             std::memcpy(&fill_params[1], &value, sizeof(value));
             gfx::set_uniform(fill_program_.u_gi_buffer_fill_params, fill_params);
-            gfx::dispatch(seed_pass.id, fill_program_.program->native_handle(), (count + 63u) / 64u, 1, 1);
+            bgfx::dispatch(seed_pass.id, fill_program_.program->native_handle(), (count + 63u) / 64u, 1, 1);
             fill_program_.program->end();
         };
         const uint32_t attr_resolution_seed = clipmap_gpu.get_attr_resolution();
@@ -151,18 +151,18 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             gfx::set_image_3d(0,
                               light_volume->native_handle(),
                               0,
-                              gfx::access::Write,
-                              gfx::texture_format::RGBA16F);
+                              bgfx::Access::Write,
+                              bgfx::TextureFormat::RGBA16F);
             const float volume_params[4] = {float(light_volume->info.width),
                                             float(light_volume->info.height),
                                             float(light_volume->info.depth),
                                             0.0f};
             gfx::set_uniform(volume_clear_program_.u_gi_volume_clear_params, volume_params);
-            gfx::dispatch(clear_pass.id,
-                          volume_clear_program_.program->native_handle(),
-                          (light_volume->info.width + 3u) / 4u,
-                          (light_volume->info.height + 3u) / 4u,
-                          (light_volume->info.depth + 3u) / 4u);
+            bgfx::dispatch(clear_pass.id,
+                           volume_clear_program_.program->native_handle(),
+                           (light_volume->info.width + 3u) / 4u,
+                           (light_volume->info.height + 3u) / 4u,
+                           (light_volume->info.depth + 3u) / 4u);
             volume_clear_program_.program->end();
         }
         if(clipmap_gpu.has_world_probes())
@@ -171,9 +171,9 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             const auto& irradiance = clipmap_gpu.get_world_probe_irradiance();
             const auto& depth = clipmap_gpu.get_world_probe_depth();
             atlas_clear_program_.program->begin();
-            gfx::set_image(0, radiance->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
-            gfx::set_image(1, irradiance->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
-            gfx::set_image(2, depth->native_handle(), 0, gfx::access::Write, gfx::texture_format::RG16F);
+            bgfx::setImage(0, radiance->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
+            bgfx::setImage(1, irradiance->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
+            bgfx::setImage(2, depth->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RG16F);
             const float atlas_params[4] = {float(radiance->info.width),
                                            float(radiance->info.height),
                                            float(irradiance->info.width),
@@ -181,11 +181,11 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             gfx::set_uniform(atlas_clear_program_.u_gi_atlas_clear_params, atlas_params);
             const uint32_t clear_w = std::max(radiance->info.width, irradiance->info.width);
             const uint32_t clear_h = std::max(radiance->info.height, irradiance->info.height);
-            gfx::dispatch(clear_pass.id,
-                          atlas_clear_program_.program->native_handle(),
-                          (clear_w + 7u) / 8u,
-                          (clear_h + 7u) / 8u,
-                          1);
+            bgfx::dispatch(clear_pass.id,
+                           atlas_clear_program_.program->native_handle(),
+                           (clear_w + 7u) / 8u,
+                           (clear_h + 7u) / 8u,
+                           1);
             atlas_clear_program_.program->end();
         }
         clipmap_gpu.mark_texture_clear_done();
@@ -199,17 +199,17 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         const auto& memo = clipmap_gpu.get_bounce_vis_memo();
         gfx::render_pass memo_pass("GI/Vis Memo Clear");
         vis_memo_clear_program_.program->begin();
-        gfx::set_image_3d(0, memo->native_handle(), 0, gfx::access::Write, gfx::texture_format::R32U);
+        gfx::set_image_3d(0, memo->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R32U);
         const float memo_params[4] = {float(memo->info.width),
                                       float(memo->info.height),
                                       float(memo->info.depth),
                                       0.0f};
         gfx::set_uniform(vis_memo_clear_program_.u_gi_vis_memo_clear_params, memo_params);
-        gfx::dispatch(memo_pass.id,
-                      vis_memo_clear_program_.program->native_handle(),
-                      (memo->info.width + 3u) / 4u,
-                      (memo->info.height + 3u) / 4u,
-                      (memo->info.depth + 3u) / 4u);
+        bgfx::dispatch(memo_pass.id,
+                       vis_memo_clear_program_.program->native_handle(),
+                       (memo->info.width + 3u) / 4u,
+                       (memo->info.height + 3u) / 4u,
+                       (memo->info.depth + 3u) / 4u);
         vis_memo_clear_program_.program->end();
         clipmap_gpu.mark_bounce_vis_memo_seeded();
     }
@@ -237,7 +237,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
                 }
                 texture_mean_program_.program->begin();
                 gfx::set_texture(texture_mean_program_.s_mean_source, 0, capture.texture);
-                gfx::set_buffer(1, surface_cache.get_texture_mean_buffer(), gfx::access::ReadWrite);
+                bgfx::setBuffer(1, surface_cache.get_texture_mean_buffer(), bgfx::Access::ReadWrite);
                 const uint32_t max_dim = math::max(uint32_t(capture.texture->info.width),
                                                    uint32_t(capture.texture->info.height));
                 // The lod whose mip is about the shader's 8x8 sampling grid: log2(max dim) - 3,
@@ -245,7 +245,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
                 const float lod = math::max(std::log2(float(math::max(max_dim, 1u))) - 3.0f, 0.0f);
                 const float mean_params[4] = {float(capture.slot), lod, 0.0f, 0.0f};
                 gfx::set_uniform(texture_mean_program_.u_gi_texture_mean_params, mean_params);
-                gfx::dispatch(mean_pass.id, texture_mean_program_.program->native_handle(), 1, 1, 1);
+                bgfx::dispatch(mean_pass.id, texture_mean_program_.program->native_handle(), 1, 1, 1);
                 texture_mean_program_.program->end();
             }
         }
@@ -313,26 +313,26 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             // that orders that reset ahead of the appends on every backend.
             attributes_program_.program->begin();
             gfx::set_texture(attributes_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-            gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-            gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-            gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+            bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
+            bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
+            bgfx::setBuffer(3, surface_cache.get_instance_buffer(), bgfx::Access::Read);
             gfx::set_texture(attributes_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
             gfx::set_image_3d(5,
                               clipmap_gpu.get_attr_albedo_texture()->native_handle(),
                               0,
-                              gfx::access::Write,
-                              gfx::texture_format::RGBA8);
+                              bgfx::Access::Write,
+                              bgfx::TextureFormat::RGBA8);
             gfx::set_image_3d(6,
                               clipmap_gpu.get_attr_emissive_texture()->native_handle(),
                               0,
-                              gfx::access::Write,
-                              gfx::texture_format::RGBA16F);
+                              bgfx::Access::Write,
+                              bgfx::TextureFormat::RGBA16F);
             // The surface list (header cursors + entries in one buffer) sits at stage 9 so the
             // light-volume IMAGE can take stage 7: OpenGL guarantees only eight image units
             // (bindings 0-7).
-            gfx::set_buffer(9, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
-            gfx::set_buffer(11, clipmap_gpu.get_attr_cells(), gfx::access::ReadWrite);
-            gfx::set_buffer(10, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
+            bgfx::setBuffer(9, clipmap_gpu.get_surface_list_buffer(), bgfx::Access::ReadWrite);
+            bgfx::setBuffer(11, clipmap_gpu.get_attr_cells(), bgfx::Access::ReadWrite);
+            bgfx::setBuffer(10, surface_cache.get_texture_mean_buffer(), bgfx::Access::Read);
             const float light_voxel_params[4] = {float(attr_resolution), 0.0f, 0.0f, 1.0f};
             gfx::set_uniform(attributes_program_.u_gi_light_voxel_params, light_voxel_params);
             // ReadWrite: a claimed slot seeds its faces from the PARENT level's texels
@@ -340,9 +340,9 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             gfx::set_image_3d(7,
                               clipmap_gpu.get_light_voxel_texture()->native_handle(),
                               0,
-                              gfx::access::ReadWrite,
-                              gfx::texture_format::RGBA16F);
-            gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+                              bgfx::Access::ReadWrite,
+                              bgfx::TextureFormat::RGBA16F);
+            bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
             const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                          float(atlas.get_atlas_voxel_dim()),
                                          float(instances.size()),
@@ -375,11 +375,11 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
             gfx::set_uniform(attributes_program_.u_clipmap_attr_scroll, attr_scroll);
             const float compose_origin[4] = {lvl.origin.x, lvl.origin.y, lvl.origin.z, 0.0f};
             gfx::set_uniform(attributes_program_.u_clipmap_compose_origin, compose_origin);
-            gfx::dispatch(pass.id,
-                          attributes_program_.program->native_handle(),
-                          attr_groups,
-                          attr_groups,
-                          attr_groups);
+            bgfx::dispatch(pass.id,
+                           attributes_program_.program->native_handle(),
+                           attr_groups,
+                           attr_groups,
+                           attr_groups);
             attributes_program_.program->end();
         }
     }
@@ -425,7 +425,7 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
                                                              static_cast<uint16_t>(resolution),
                                                              static_cast<uint16_t>(resolution),
                                                              false,
-                                                             gfx::texture_format::R8,
+                                                             bgfx::TextureFormat::R8,
                                                              BGFX_TEXTURE_BLIT_DST);
         }
         if(!scroll_scratch || !scroll_scratch->is_valid())
@@ -441,39 +441,39 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
             // Blits run at the start of their view, so the copy out and the placement back
             // each take a view of their own, ahead of the compose dispatches.
             gfx::render_pass& copy_pass = scroll_copy_pass;
-            gfx::blit(copy_pass.id,
-                      scroll_scratch->native_handle(),
-                      0,
-                      0,
-                      0,
-                      0,
-                      clipmap_gpu.get_texture()->native_handle(),
-                      0,
-                      0,
-                      0,
-                      slab_z,
-                      res16,
-                      res16,
-                      res16);
+            bgfx::blit(copy_pass.id,
+                       scroll_scratch->native_handle(),
+                       0,
+                       0,
+                       0,
+                       0,
+                       clipmap_gpu.get_texture()->native_handle(),
+                       0,
+                       0,
+                       0,
+                       slab_z,
+                       res16,
+                       res16,
+                       res16);
         }
         {
             // New-window voxel v came from old-window voxel v + shift.
             const math::ivec3 source = overlap.min + lvl.scroll_shift;
             gfx::render_pass& place_pass = scroll_place_pass;
-            gfx::blit(place_pass.id,
-                      clipmap_gpu.get_texture()->native_handle(),
-                      0,
-                      static_cast<uint16_t>(overlap.min.x),
-                      static_cast<uint16_t>(overlap.min.y),
-                      static_cast<uint16_t>(slab_z + overlap.min.z),
-                      scroll_scratch->native_handle(),
-                      0,
-                      static_cast<uint16_t>(source.x),
-                      static_cast<uint16_t>(source.y),
-                      static_cast<uint16_t>(source.z),
-                      static_cast<uint16_t>(overlap.size.x),
-                      static_cast<uint16_t>(overlap.size.y),
-                      static_cast<uint16_t>(overlap.size.z));
+            bgfx::blit(place_pass.id,
+                       clipmap_gpu.get_texture()->native_handle(),
+                       0,
+                       static_cast<uint16_t>(overlap.min.x),
+                       static_cast<uint16_t>(overlap.min.y),
+                       static_cast<uint16_t>(slab_z + overlap.min.z),
+                       scroll_scratch->native_handle(),
+                       0,
+                       static_cast<uint16_t>(source.x),
+                       static_cast<uint16_t>(source.y),
+                       static_cast<uint16_t>(source.z),
+                       static_cast<uint16_t>(overlap.size.x),
+                       static_cast<uint16_t>(overlap.size.y),
+                       static_cast<uint16_t>(overlap.size.z));
         }
         for(uint32_t box = 0; box < exposed_count; ++box)
         {
@@ -502,19 +502,19 @@ void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
     auto& atlas = surface_cache.get_atlas();
     compose_program_.program->begin();
     gfx::set_texture(compose_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-    gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-    gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-    gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
-    gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+    bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
+    bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
+    bgfx::setBuffer(3, surface_cache.get_instance_buffer(), bgfx::Access::Read);
+    bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
     // Stage 5 is the clipmap as an IMAGE here, where the tracing passes bind it as a sampler at
     // stage 4. Writing the level in place is what avoids a staging copy and the per-level
     // update_texture_3d the CPU path pays.
-    gfx::set_image_3d(5, clipmap_gpu.get_texture()->native_handle(), 0, gfx::access::Write, gfx::texture_format::R8);
+    gfx::set_image_3d(5, clipmap_gpu.get_texture()->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
     // The level's surface-list cursor resets in this dispatch (thread 0); the attribute
     // pass's sampled read of the distance volume is the transition that orders it - the
     // old standalone 1-thread reset relied on submission order, which D3D12 does not
     // guarantee for same-state UAV access.
-    gfx::set_buffer(9, clipmap_gpu.get_surface_list_buffer(), gfx::access::ReadWrite);
+    bgfx::setBuffer(9, clipmap_gpu.get_surface_list_buffer(), bgfx::Access::ReadWrite);
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                  float(atlas.get_atlas_voxel_dim()),
                                  float(instances.size()),
@@ -538,11 +538,11 @@ void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
     {
         return (uint32_t(math::max(extent, 0)) + compose_group_size - 1u) / compose_group_size;
     };
-    gfx::dispatch(pass.id,
-                  compose_program_.program->native_handle(),
-                  groups(box.size.x),
-                  groups(box.size.y),
-                  groups(box.size.z));
+    bgfx::dispatch(pass.id,
+                   compose_program_.program->native_handle(),
+                   groups(box.size.x),
+                   groups(box.size.y),
+                   groups(box.size.z));
     compose_program_.program->end();
 }
 

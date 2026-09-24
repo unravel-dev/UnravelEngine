@@ -71,7 +71,7 @@ public:
      */
     void update(scene& scn);
 
-    auto get_buffer() const -> gfx::dynamic_vertex_buffer_handle
+    auto get_buffer() const -> bgfx::DynamicVertexBufferHandle
     {
         return buffer_;
     }
@@ -109,7 +109,7 @@ private:
     /// global_revision_ and local_changes_.
     void classify_changes();
 
-    gfx::dynamic_vertex_buffer_handle buffer_{bgfx::kInvalidHandle};
+    bgfx::DynamicVertexBufferHandle buffer_{bgfx::kInvalidHandle};
     uint32_t capacity_vec4_ = 0;
     uint32_t light_count_ = 0;
     std::vector<float> data_;

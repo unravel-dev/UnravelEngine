@@ -99,7 +99,7 @@ auto calc_fraction(int64_t part, int64_t whole) -> float
 auto read_gpu_meter() -> memory_meter
 {
     memory_meter meter{};
-    const auto* stats = gfx::get_stats();
+    const auto* stats = bgfx::getStats();
     if(stats == nullptr || stats->gpuMemoryUsed <= 0)
     {
         return meter;

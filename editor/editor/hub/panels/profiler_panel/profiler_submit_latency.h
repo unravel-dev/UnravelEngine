@@ -5,6 +5,6 @@
 namespace unravel
 {
 
-void profiler_draw_submit_latency_row(const gfx::stats* stats);
+void profiler_draw_submit_latency_row(const bgfx::Stats* stats);
 
 } // namespace unravel

@@ -175,12 +175,12 @@ public:
      */
     auto grow() -> bool;
 
-    auto get_header_buffer() const -> gfx::dynamic_vertex_buffer_handle
+    auto get_header_buffer() const -> bgfx::DynamicVertexBufferHandle
     {
         return header_buffer_;
     }
 
-    auto get_indirection_buffer() const -> gfx::dynamic_index_buffer_handle
+    auto get_indirection_buffer() const -> bgfx::DynamicIndexBufferHandle
     {
         return indirection_buffer_;
     }
@@ -236,9 +236,9 @@ private:
     uint32_t brick_dim_ = 0;
     gfx::texture::ptr atlas_texture_;
     /// vec4 elements; @ref header_vec4_count per field.
-    gfx::dynamic_vertex_buffer_handle header_buffer_{bgfx::kInvalidHandle};
+    bgfx::DynamicVertexBufferHandle header_buffer_{bgfx::kInvalidHandle};
     /// uint32 elements.
-    gfx::dynamic_index_buffer_handle indirection_buffer_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle indirection_buffer_{bgfx::kInvalidHandle};
 
     /// Master copies. Both buffers are small (kilobytes per field), so they are re-uploaded
     /// whole when dirty rather than tracked at sub-range granularity.

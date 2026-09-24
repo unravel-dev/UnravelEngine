@@ -4,7 +4,7 @@
 
 namespace gfx
 {
-struct index_buffer : public handle_impl<index_buffer, index_buffer_handle>
+struct index_buffer : public handle_impl<index_buffer, bgfx::IndexBufferHandle>
 {
     index_buffer() = default;
     //-----------------------------------------------------------------------------
@@ -15,6 +15,6 @@ struct index_buffer : public handle_impl<index_buffer, index_buffer_handle>
     ///
     /// </summary>
     //-----------------------------------------------------------------------------
-    index_buffer(const memory_view* _mem, std::uint16_t _flags = BGFX_BUFFER_NONE);
+    index_buffer(const bgfx::Memory* _mem, std::uint16_t _flags = BGFX_BUFFER_NONE);
 };
 } // namespace gfx

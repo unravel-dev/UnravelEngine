@@ -207,7 +207,7 @@ auto editor::init(const cmd_line::parser& parser) -> bool
 
 auto editor::init_window(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
-    auto title = fmt::format("Unravel Editor <{}> {}", gfx::get_renderer_name(gfx::get_renderer_type()), version::get_full());
+    auto title = fmt::format("Unravel Editor <{}> {}", bgfx::getRendererName(bgfx::getRendererType()), version::get_full());
     auto& rend = ctx.get_cached<renderer>();
     std::string window_geometry;
     int32_t x = 0;

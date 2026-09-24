@@ -71,7 +71,7 @@ auto tonemapping_pass::create_or_update_output_fb(gfx::render_view& rview,
                                                     input_sz.height,
                                                     false,
                                                     1,
-                                                    gfx::texture_format::RGBA8,
+                                                    bgfx::TextureFormat::RGBA8,
                                                     BGFX_TEXTURE_RT);
     }
     auto& output_fbo = rview.fbo_get_or_emplace("TONEMAPPING_OUTPUT");
@@ -172,14 +172,14 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
     gfx::set_uniform(tonemapping_program_.u_local_exposure3, local_params3);
     
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
-    gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+    bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, tonemapping_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, tonemapping_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
     tonemapping_program_.program->end();
 
-    gfx::discard();
+    bgfx::discard();
 
     return output;
 }

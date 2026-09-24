@@ -6,7 +6,7 @@
 
 namespace gfx
 {
-struct texture : public handle_impl<texture, texture_handle>
+struct texture : public handle_impl<texture, bgfx::TextureHandle>
 {
     //-----------------------------------------------------------------------------
     //  Name : Texture ()
@@ -21,13 +21,13 @@ struct texture : public handle_impl<texture, texture_handle>
     texture(const char* _path,
             std::uint64_t _flags = BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
             std::uint8_t _skip = 0,
-            texture_info* _info = nullptr);
+            bgfx::TextureInfo* _info = nullptr);
 
     texture(const void* _data,
             std::uint32_t _size,
             std::uint64_t _flags = BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
             std::uint8_t _skip = 0,
-            texture_info* _info = nullptr,
+            bgfx::TextureInfo* _info = nullptr,
             const char* _name = nullptr);
 
     //-----------------------------------------------------------------------------
@@ -42,9 +42,9 @@ struct texture : public handle_impl<texture, texture_handle>
             std::uint16_t _height,
             bool _hasMips,
             std::uint16_t _numLayers,
-            texture_format _format,
+            bgfx::TextureFormat::Enum _format,
             std::uint64_t _flags = BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
-            const memory_view* _mem = nullptr);
+            const bgfx::Memory* _mem = nullptr);
 
 
     //-----------------------------------------------------------------------------
@@ -59,9 +59,9 @@ struct texture : public handle_impl<texture, texture_handle>
             std::uint16_t _height,
             std::uint16_t _depth,
             bool _hasMips,
-            texture_format _format,
+            bgfx::TextureFormat::Enum _format,
             std::uint64_t _flags = BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
-            const memory_view* _mem = nullptr);
+            const bgfx::Memory* _mem = nullptr);
 
     //-----------------------------------------------------------------------------
     //  Name : Texture ()
@@ -74,9 +74,9 @@ struct texture : public handle_impl<texture, texture_handle>
     texture(std::uint16_t _size,
             bool _hasMips,
             std::uint16_t _numLayers,
-            texture_format _format,
+            bgfx::TextureFormat::Enum _format,
             std::uint64_t _flags = BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
-            const memory_view* _mem = nullptr);
+            const bgfx::Memory* _mem = nullptr);
 
     //-----------------------------------------------------------------------------
     //  Name : get_size ()
@@ -116,13 +116,13 @@ struct texture : public handle_impl<texture, texture_handle>
     ///
     /// </summary>
     //-----------------------------------------------------------------------------
-    auto fallback_handle() const -> texture_handle;
+    auto fallback_handle() const -> bgfx::TextureHandle;
 
 
     auto get_estimated_gpu_size() const -> std::uint64_t;
 
     /// Texture detail info.
-    texture_info info{};
+    bgfx::TextureInfo info{};
     /// Creation flags.
     std::uint64_t flags = BGFX_TEXTURE_NONE;
 
@@ -140,7 +140,9 @@ inline auto needs_recreate(const gfx::texture::ptr& tex, const usize32_t& size) 
     return !tex || (tex && tex->get_size() != size);
 }
 
-inline auto needs_recreate(const gfx::texture::ptr& tex, const usize32_t& size, const texture_format& format) -> bool
+inline auto needs_recreate(const gfx::texture::ptr& tex,
+                           const usize32_t& size,
+                           const bgfx::TextureFormat::Enum& format) -> bool
 {
     return !tex || (tex && tex->get_size() != size) || (tex && tex->info.format != format);
 }

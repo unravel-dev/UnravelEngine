@@ -120,24 +120,24 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_trace, "u_gi_reflection_trace", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
-            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_trace, "u_gi_reflection_trace", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", bgfx::UniformType::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", bgfx::UniformType::Vec4,
                           global_sdf_clipmap::level_count);
-            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_probe_layer, "s_gi_probe_layer", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_probe_layer, "s_gi_probe_layer", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_hiz, "s_hiz", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_light_voxels, "s_light_voxels", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -166,14 +166,14 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_texel, "u_gi_reflection_texel", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_texel, "u_gi_reflection_texel", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_hiz, "s_hiz", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -192,7 +192,7 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -234,31 +234,31 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_texel, "u_gi_reflection_texel", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_texel, "u_gi_reflection_texel", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_gi_refl_prev_view_proj,
                           "u_gi_refl_prev_view_proj",
-                          gfx::uniform_type::Mat4);
-            cache_uniform(program.get(), u_gi_reflection_screen, "u_gi_reflection_screen", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_trace, "u_gi_reflection_trace", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
-            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", gfx::uniform_type::Vec4,
+                          bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), u_gi_reflection_screen, "u_gi_reflection_screen", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_trace, "u_gi_reflection_trace", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", bgfx::UniformType::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", bgfx::UniformType::Vec4,
                           global_sdf_clipmap::level_count);
-            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_probe_layer, "s_gi_probe_layer", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_prev_color, "s_gi_prev_color", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_attr_albedo, "s_gi_attr_albedo", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_probe_layer, "s_gi_probe_layer", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_hiz, "s_hiz", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_light_voxels, "s_light_voxels", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_prev_color, "s_gi_prev_color", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_attr_albedo, "s_gi_attr_albedo", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -269,10 +269,10 @@ private:
 
     /// Compacted tracing-texel list: [0] append cursor (reset by args for the next frame),
     /// [1] staged trace count, [2+] packed coords. Raw uint indices - no typed-UAV floats.
-    gfx::dynamic_index_buffer_handle refl_list_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle refl_list_{bgfx::kInvalidHandle};
     uint32_t refl_list_capacity_{0};
     /// One entry: the trace launch, ceil(count / 64) groups folded into Y past the X limit.
-    gfx::indirect_buffer_handle refl_args_{bgfx::kInvalidHandle};
+    bgfx::IndirectBufferHandle refl_args_{bgfx::kInvalidHandle};
 
     struct temporal_program : uniforms_cache
     {
@@ -294,20 +294,20 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_gi_refl_prev_view_proj,
                           "u_gi_refl_prev_view_proj",
-                          gfx::uniform_type::Mat4);
-            cache_uniform(program.get(), u_gi_refl_temporal, "u_gi_refl_temporal", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_refl_velocity, "u_gi_refl_velocity", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_refl_raw, "s_refl_raw", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_refl_history, "s_refl_history", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_refl_depth, "s_refl_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_refl_velocity, "s_refl_velocity", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_refl_normal, "s_refl_normal", gfx::uniform_type::Sampler);
+                          bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), u_gi_refl_temporal, "u_gi_refl_temporal", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_refl_velocity, "u_gi_refl_velocity", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_reflection_jitter, "u_gi_reflection_jitter", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_refl_raw, "s_refl_raw", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_refl_history, "s_refl_history", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_refl_depth, "s_refl_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_refl_velocity, "s_refl_velocity", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_refl_normal, "s_refl_normal", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -326,10 +326,10 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_refl_composite, "u_gi_refl_composite", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_refl_acc, "s_refl_acc", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_hiz, "s_hiz", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_gi_refl_composite, "u_gi_refl_composite", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_refl_acc, "s_refl_acc", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_hiz, "s_hiz", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool

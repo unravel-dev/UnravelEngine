@@ -1041,7 +1041,7 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
     constexpr uint32_t float_size = static_cast<uint32_t>(sizeof(float));
     const auto& vertex_format = mesh->get_vertex_format();
     const uint32_t stride_bytes = vertex_format.getStride();
-    const uint32_t pos_offset_bytes = vertex_format.getOffset(gfx::attribute::Position);
+    const uint32_t pos_offset_bytes = vertex_format.getOffset(bgfx::Attrib::Position);
 
     submit_vertex_pulling_callbacks::params params;
     params.vertex_stride_floats = stride_bytes / float_size;
@@ -1083,8 +1083,8 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
         params.index_start = static_cast<uint32_t>(sub->face_start) * 3u;
         params.index_count = sub->face_count * 3u;
 
-        gfx::set_buffer(0, vb->native_handle(), gfx::access::Read);
-        gfx::set_buffer(1, effective_ib->native_handle(), gfx::access::Read);
+        bgfx::setBuffer(0, vb->native_handle(), bgfx::Access::Read);
+        bgfx::setBuffer(1, effective_ib->native_handle(), bgfx::Access::Read);
 
         if(callbacks.setup_params_per_submesh)
         {
@@ -1182,11 +1182,11 @@ void model::submit_for_vertex_pulling(const math::mat4& world_transform,
     // Skinned rendering additionally needs the bone weight/indices attribute
     // offsets so the shader can blend u_world[bone_i] per vertex.
     if(skinned_count > 0 && !skinning_transforms.empty()
-       && vertex_format.has(gfx::attribute::Weight) && vertex_format.has(gfx::attribute::Indices))
+       && vertex_format.has(bgfx::Attrib::Weight) && vertex_format.has(bgfx::Attrib::Indices))
     {
         params.skinned = true;
-        params.weight_offset_floats = vertex_format.getOffset(gfx::attribute::Weight) / float_size;
-        params.indices_offset_floats = vertex_format.getOffset(gfx::attribute::Indices) / float_size;
+        params.weight_offset_floats = vertex_format.getOffset(bgfx::Attrib::Weight) / float_size;
+        params.indices_offset_floats = vertex_format.getOffset(bgfx::Attrib::Indices) / float_size;
 
         if(callbacks.setup_begin)
         {

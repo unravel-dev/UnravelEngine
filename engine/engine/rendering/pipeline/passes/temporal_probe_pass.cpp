@@ -137,7 +137,7 @@ void temporal_probe_pass::allocate(uint16_t width, uint16_t height)
                                            height,
                                            false,
                                            1,
-                                           gfx::texture_format::RGBA32F,
+                                           bgfx::TextureFormat::RGBA32F,
                                            BGFX_TEXTURE_COMPUTE_WRITE);
     for(auto& luma : luma_)
     {
@@ -145,14 +145,14 @@ void temporal_probe_pass::allocate(uint16_t width, uint16_t height)
                                               height,
                                               false,
                                               1,
-                                              gfx::texture_format::R32F,
+                                              bgfx::TextureFormat::R32F,
                                               BGFX_TEXTURE_COMPUTE_WRITE);
     }
     readback_ = std::make_shared<gfx::texture>(width,
                                                height,
                                                false,
                                                1,
-                                               gfx::texture_format::RGBA32F,
+                                               bgfx::TextureFormat::RGBA32F,
                                                BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
     readback_data_.assign(size_t(width) * size_t(height) * 4u, 0.0f);
 }
@@ -172,8 +172,8 @@ void temporal_probe_pass::dispatch_frame(const run_params& params)
     gfx::set_texture(program_.s_depth, 2, params.depth, point_clamp);
     gfx::set_texture(program_.s_prev_depth, 3, params.prev_depth ? params.prev_depth : params.depth, point_clamp);
     gfx::set_texture(program_.s_prev_luma, 4, luma_[luma_read], linear_clamp);
-    gfx::set_image(5, sums_->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::RGBA32F);
-    gfx::set_image(6, luma_[luma_write_]->native_handle(), 0, gfx::access::Write, gfx::texture_format::R32F);
+    bgfx::setImage(5, sums_->native_handle(), 0, bgfx::Access::ReadWrite, bgfx::TextureFormat::RGBA32F);
+    bgfx::setImage(6, luma_[luma_write_]->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R32F);
     const float probe_params[4] = {float(width_),
                                    float(height_),
                                    params.velocity ? 1.0f : 0.0f,
@@ -184,11 +184,11 @@ void temporal_probe_pass::dispatch_frame(const run_params& params)
                                     is_lowpass_ ? 1.0f : 0.0f,
                                     0.0f};
     gfx::set_uniform(program_.u_probe_params2, probe_params2);
-    gfx::dispatch(pass.id,
-                  program_.program->native_handle(),
-                  (uint32_t(width_) + compute_group - 1u) / compute_group,
-                  (uint32_t(height_) + compute_group - 1u) / compute_group,
-                  1);
+    bgfx::dispatch(pass.id,
+                   program_.program->native_handle(),
+                   (uint32_t(width_) + compute_group - 1u) / compute_group,
+                   (uint32_t(height_) + compute_group - 1u) / compute_group,
+                   1);
     program_.program->end();
     luma_write_ = luma_read;
     ++frames_done_;
@@ -197,8 +197,8 @@ void temporal_probe_pass::dispatch_frame(const run_params& params)
 void temporal_probe_pass::issue_readback()
 {
     gfx::render_pass pass("Instruments/Temporal Probe Readback");
-    gfx::blit(pass.id, readback_->native_handle(), 0, 0, sums_->native_handle(), 0, 0, width_, height_);
-    readback_ready_frame_ = gfx::read_texture(readback_->native_handle(), readback_data_.data());
+    bgfx::blit(pass.id, readback_->native_handle(), 0, 0, sums_->native_handle(), 0, 0, width_, height_);
+    readback_ready_frame_ = bgfx::readTexture(readback_->native_handle(), readback_data_.data());
     readback_frames_ = frames_done_;
     readback_lowpass_ = is_lowpass_;
     readback_pending_ = true;

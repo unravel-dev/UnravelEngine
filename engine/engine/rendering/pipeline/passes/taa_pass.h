@@ -74,15 +74,15 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_curr, "s_curr", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_history, "s_history", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_prev_depth, "s_prev_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
-            cache_uniform(program.get(), u_taa_params, "u_taa_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_taa_params2, "u_taa_params2", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_curr, "s_curr", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_history, "s_history", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_prev_depth, "s_prev_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_velocity, "s_velocity", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), u_taa_params, "u_taa_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_taa_params2, "u_taa_params2", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr s_curr;

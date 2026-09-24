@@ -223,7 +223,7 @@ public:
                                  surface_cache_system& surface_cache,
                                  surface_cache_view& view_cache,
                                  const gi_settings& gi,
-                                 gfx::indirect_buffer_handle indirect,
+                                 bgfx::IndirectBufferHandle indirect,
                                  bool collect_stats);
 
     /// Traces world probes against the freshly lit voxels (GI v2 plan 3.3).
@@ -233,7 +233,7 @@ public:
                                  surface_cache_system& surface_cache,
                                  surface_cache_view& view_cache,
                                  const gi_settings& gi,
-                                 gfx::indirect_buffer_handle indirect);
+                                 bgfx::IndirectBufferHandle indirect);
 
     /// World-space specular tier into RBUFFER, layered UNDER SSR. No-op unless a
     /// camera run with GI reflections enabled.
@@ -265,15 +265,15 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_data0, "u_data0", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_data1, "u_data1", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_capture, "u_capture", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_tex[0], "s_tex0", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[1], "s_tex1", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[2], "s_tex2", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[3], "s_tex3", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[4], "s_tex4", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex_cube, "s_tex_cube", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_data0, "u_data0", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_data1, "u_data1", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_capture, "u_capture", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_tex[0], "s_tex0", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[1], "s_tex1", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[2], "s_tex2", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[3], "s_tex3", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[4], "s_tex4", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex_cube, "s_tex_cube", bgfx::UniformType::Sampler);
         }
 
         gfx::program::uniform_ptr u_data0;
@@ -292,8 +292,8 @@ private:
         {
             ref_probe_program::cache_uniforms();
 
-            cache_uniform(program.get(), u_data2, "u_data2", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_inv_world, "u_inv_world", gfx::uniform_type::Mat4);
+            cache_uniform(program.get(), u_data2, "u_data2", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_inv_world, "u_inv_world", bgfx::UniformType::Mat4);
         }
         gfx::program::uniform_ptr u_inv_world;
         gfx::program::uniform_ptr u_data2;
@@ -308,24 +308,24 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_tex_color, "s_tex_color", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex_normal, "s_tex_normal", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex_roughness, "s_tex_roughness", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex_metalness, "s_tex_metalness", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex_ao, "s_tex_ao", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex_emissive, "s_tex_emissive", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex_color, "s_tex_color", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex_normal, "s_tex_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex_roughness, "s_tex_roughness", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex_metalness, "s_tex_metalness", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex_ao, "s_tex_ao", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex_emissive, "s_tex_emissive", bgfx::UniformType::Sampler);
 
-            cache_uniform(program.get(), u_base_color, "u_base_color", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_subsurface_color, "u_subsurface_color", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_emissive_color, "u_emissive_color", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_surface_data, "u_surface_data", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_tiling, "u_tiling", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_dither_threshold, "u_dither_threshold", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_surface_data2, "u_surface_data2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_base_color, "u_base_color", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_subsurface_color, "u_subsurface_color", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_emissive_color, "u_emissive_color", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_surface_data, "u_surface_data", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_tiling, "u_tiling", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_dither_threshold, "u_dither_threshold", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_surface_data2, "u_surface_data2", bgfx::UniformType::Vec4);
 
-            cache_uniform(program.get(), u_camera_wpos, "u_camera_wpos", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_camera_clip_planes, "u_camera_clip_planes", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_lod_params, "u_lod_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_camera_wpos, "u_camera_wpos", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_camera_clip_planes, "u_camera_clip_planes", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_lod_params, "u_lod_params", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr s_tex_color;
@@ -358,7 +358,7 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
+            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", bgfx::UniformType::Mat4);
         }
 
         gfx::program::uniform_ptr u_prev_view_proj;
@@ -374,8 +374,8 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", gfx::uniform_type::Mat4);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_prev_view_proj, "u_prev_view_proj", bgfx::UniformType::Mat4);
         }
 
         gfx::program::uniform_ptr s_depth;
@@ -388,8 +388,8 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_params, "u_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_velocity, "s_velocity", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_params, "u_params", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr s_velocity;
@@ -404,15 +404,15 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_exposure, "s_exposure", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_exposure_history, "s_exposure_history", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_exposure_histogram, "s_exposure_histogram", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_exposure_debug_rect, "u_exposure_debug_rect", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_exposure_debug_range, "u_exposure_debug_range", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_exposure, "s_exposure", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_exposure_history, "s_exposure_history", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_exposure_histogram, "s_exposure_histogram", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_exposure_debug_rect, "u_exposure_debug_rect", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_exposure_debug_range, "u_exposure_debug_range", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_exposure_debug_settings,
                           "u_exposure_debug_settings",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr s_exposure;
@@ -429,23 +429,23 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_light_position, "u_light_position", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_light_direction, "u_light_direction", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_light_data, "u_light_data", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_contact_shadow, "u_contact_shadow", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_light_color_intensity, "u_light_color_intensity", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_camera_position, "u_camera_position", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudShadow, "u_cloudShadow", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudShadow2, "u_cloudShadow2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_light_position, "u_light_position", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_light_direction, "u_light_direction", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_light_data, "u_light_data", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_contact_shadow, "u_contact_shadow", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_light_color_intensity, "u_light_color_intensity", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_camera_position, "u_camera_position", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudShadow, "u_cloudShadow", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudShadow2, "u_cloudShadow2", bgfx::UniformType::Vec4);
 
-            cache_uniform(program.get(), s_tex[0], "s_tex0", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[1], "s_tex1", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[2], "s_tex2", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[3], "s_tex3", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[4], "s_tex4", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[5], "s_tex5", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_cloudShadow, "s_cloudShadow", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_tex[0], "s_tex0", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[1], "s_tex1", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[2], "s_tex2", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[3], "s_tex3", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[4], "s_tex4", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[5], "s_tex5", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[6], "s_tex6", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_cloudShadow, "s_cloudShadow", bgfx::UniformType::Sampler);
         }
         gfx::program::uniform_ptr u_light_position;
         gfx::program::uniform_ptr u_light_direction;
@@ -465,14 +465,14 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_mode, "u_mode", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_irradiance_tint_intensity, "u_irradiance_tint_intensity", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sun_direction, "u_sun_direction", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sky_luminance_xyz, "u_sky_luminance_xyz", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_exposition, "u_exposition", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_perez_coeff, "u_perez_coeff", gfx::uniform_type::Vec4, 5);
-            cache_uniform(program.get(), s_env, "s_env", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_cloudShadow, "s_cloudShadow", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_mode, "u_mode", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_irradiance_tint_intensity, "u_irradiance_tint_intensity", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sun_direction, "u_sun_direction", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sky_luminance_xyz, "u_sky_luminance_xyz", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_exposition, "u_exposition", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_perez_coeff, "u_perez_coeff", bgfx::UniformType::Vec4, 5);
+            cache_uniform(program.get(), s_env, "s_env", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_cloudShadow, "s_cloudShadow", bgfx::UniformType::Sampler);
         }
         gfx::program::uniform_ptr u_mode;
         gfx::program::uniform_ptr u_irradiance_tint_intensity;
@@ -494,22 +494,22 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_light_data, "u_light_data", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_camera_position, "u_camera_position", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_light_data, "u_light_data", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_camera_position, "u_camera_position", bgfx::UniformType::Vec4);
 
-            cache_uniform(program.get(), s_tex[0], "s_tex0", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[1], "s_tex1", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[2], "s_tex2", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[3], "s_tex3", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[4], "s_tex4", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[5], "s_tex5", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_irradiance, "s_irradiance", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_ssil, "s_ssil", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gtao, "s_gtao", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_gtao_params, "u_gtao_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_indirect_params, "u_indirect_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_tex[0], "s_tex0", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[1], "s_tex1", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[2], "s_tex2", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[3], "s_tex3", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[4], "s_tex4", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[5], "s_tex5", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[6], "s_tex6", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_irradiance, "s_irradiance", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_ssil, "s_ssil", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gtao, "s_gtao", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_gtao_params, "u_gtao_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_indirect_params, "u_indirect_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
         }
         gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_light_data;
@@ -532,17 +532,17 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_params, "u_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_tex[0], "s_tex0", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[1], "s_tex1", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[2], "s_tex2", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[3], "s_tex3", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[4], "s_tex4", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[5], "s_tex5", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[6], "s_tex6", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[7], "s_tex7", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_tex[8], "s_tex8", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_params, "u_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_tex[0], "s_tex0", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[1], "s_tex1", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[2], "s_tex2", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[3], "s_tex3", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[4], "s_tex4", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[5], "s_tex5", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[6], "s_tex6", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[7], "s_tex7", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[8], "s_tex8", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr u_pre_exposure;

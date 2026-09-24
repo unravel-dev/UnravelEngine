@@ -200,7 +200,7 @@ public:
 
     /// Per-frame instance list packed for the tracer. Owned here rather than by a pass, since
     /// every pass that traces needs the same one and packing it twice would be wasted work.
-    auto get_instance_buffer() const -> gfx::dynamic_vertex_buffer_handle
+    auto get_instance_buffer() const -> bgfx::DynamicVertexBufferHandle
     {
         return instance_buffer_;
     }
@@ -257,7 +257,7 @@ public:
     static constexpr uint32_t mean_slot_radix = 2048;
 
     /// The per-texture mean buffer the attribute composer reads (slot 0 = white).
-    auto get_texture_mean_buffer() const -> gfx::dynamic_vertex_buffer_handle
+    auto get_texture_mean_buffer() const -> bgfx::DynamicVertexBufferHandle
     {
         return texture_mean_buffer_;
     }
@@ -292,7 +292,7 @@ public:
     /// The instance cull grid as the tracers bind it (sdf_common.sh stage 12): the CSR offsets
     /// (one per cell plus a terminator) followed by the instance indices the cells refer to;
     /// the instance base rides get_grid_params()[7].
-    auto get_grid_buffer() const -> gfx::dynamic_index_buffer_handle
+    auto get_grid_buffer() const -> bgfx::DynamicIndexBufferHandle
     {
         return grid_buffer_;
     }
@@ -690,7 +690,7 @@ private:
     std::unordered_map<hpp::uuid, texture_mean_entry> texture_mean_slots_;
     std::vector<texture_mean_capture> pending_texture_means_;
     /// vec4 per slot, seeded white; written only by cs_gi_texture_mean dispatches.
-    gfx::dynamic_vertex_buffer_handle texture_mean_buffer_{bgfx::kInvalidHandle};
+    bgfx::DynamicVertexBufferHandle texture_mean_buffer_{bgfx::kInvalidHandle};
     uint32_t next_texture_mean_slot_ = 1;
     bool texture_mean_overflow_warned_ = false;
     std::vector<instance> instances_;
@@ -732,7 +732,7 @@ private:
     /// Packed instance data and its GPU mirror, rebuilt each frame. Uploaded only when the
     /// fingerprint over the packed bytes changes: a static scene keeps it byte-identical, and
     /// re-staging megabytes per frame anyway kept the Vulkan backend allocating continuously.
-    gfx::dynamic_vertex_buffer_handle instance_buffer_{bgfx::kInvalidHandle};
+    bgfx::DynamicVertexBufferHandle instance_buffer_{bgfx::kInvalidHandle};
     uint32_t instance_buffer_capacity_ = 0;
     std::vector<float> instance_data_;
     /// FNV-1a over @ref instance_data_ as last packed (the light buffer's convention).
@@ -745,7 +745,7 @@ private:
     /// them. Rebuilt whenever the instance fingerprint changes.
     sdf_instance_grid grid_;
     std::vector<math::bbox> grid_bounds_;
-    gfx::dynamic_index_buffer_handle grid_buffer_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle grid_buffer_{bgfx::kInvalidHandle};
     uint32_t grid_capacity_ = 0;
     /// The offsets and instance indices concatenated for the one-buffer upload.
     std::vector<uint32_t> grid_upload_;

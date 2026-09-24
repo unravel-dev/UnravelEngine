@@ -66,10 +66,10 @@ bool atmospheric_pass_skybox::init(rtti::context& ctx)
     };
     // clang-format on
 
-    vb_ = std::make_unique<gfx::vertex_buffer>(gfx::copy(s_cubeVertices, sizeof(s_cubeVertices)),
+    vb_ = std::make_unique<gfx::vertex_buffer>(bgfx::copy(s_cubeVertices, sizeof(s_cubeVertices)),
                                                gfx::pos_vertex::get_layout());
 
-    ib_ = std::make_unique<gfx::index_buffer>(gfx::copy(s_cubeIndices, sizeof(s_cubeIndices)));
+    ib_ = std::make_unique<gfx::index_buffer>(bgfx::copy(s_cubeIndices, sizeof(s_cubeIndices)));
 
     return true;
 }
@@ -108,17 +108,17 @@ void atmospheric_pass_skybox::run(gfx::frame_buffer::ptr target,
         BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
         BGFX_STATE_DEPTH_TEST_LEQUAL; // or CULL_NONE, depending on vertex winding
 
-    gfx::set_state(state);
+    bgfx::setState(state);
 
     // 5) Submit the draw
-    gfx::set_vertex_buffer(0, vb_->native_handle());
-    gfx::set_index_buffer(ib_->native_handle());
+    bgfx::setVertexBuffer(0, vb_->native_handle());
+    bgfx::setIndexBuffer(ib_->native_handle());
 
-    gfx::submit(pass.id, program_.program->native_handle());
+    bgfx::submit(pass.id, program_.program->native_handle());
 
     // 6) Done
     program_.program->end();
-    gfx::discard();
+    bgfx::discard();
 }
 
 } // namespace unravel

@@ -167,8 +167,8 @@ void profiler_draw_gpu_resources_section()
     {
         return;
     }
-    const auto* caps = gfx::get_caps();
-    const auto* stats = gfx::get_stats();
+    const auto* caps = bgfx::getCaps();
+    const auto* stats = bgfx::getStats();
     if(caps == nullptr || stats == nullptr)
     {
         return;

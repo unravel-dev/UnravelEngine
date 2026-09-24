@@ -332,7 +332,7 @@ void draw_tiles(const std::array<timing_tile, 3>& tiles)
 
 void draw_timing_tiles()
 {
-    const auto* stats = gfx::get_stats();
+    const auto* stats = bgfx::getStats();
     const double to_cpu_ms = static_cast<double>(MILLISECONDS_PER_SECOND) / static_cast<double>(stats->cpuTimerFreq);
     const double to_gpu_ms = static_cast<double>(MILLISECONDS_PER_SECOND) / static_cast<double>(stats->gpuTimerFreq);
     const double cpu_ms = static_cast<double>(stats->cpuTimeEnd - stats->cpuTimeBegin) * to_cpu_ms;
@@ -497,7 +497,7 @@ void draw_scene_section()
     {
         return;
     }
-    const auto* stats = gfx::get_stats();
+    const auto* stats = bgfx::getStats();
     const ImGuiIO& io = ImGui::GetIO();
     const std::uint32_t total_primitives = std::accumulate(std::begin(stats->numPrims), std::end(stats->numPrims), 0u);
     const std::uint32_t ui_primitives = std::min(static_cast<std::uint32_t>(io.MetricsRenderIndices / 3), total_primitives);
@@ -576,7 +576,7 @@ void draw_memory_section()
     {
         return;
     }
-    const auto* stats = gfx::get_stats();
+    const auto* stats = bgfx::getStats();
     if(stats->gpuMemoryUsed > 0)
     {
         const std::string used = format_bytes(stats->gpuMemoryUsed);

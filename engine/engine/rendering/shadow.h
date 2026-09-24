@@ -523,7 +523,7 @@ struct PosColorTexCoord0Vertex : gfx::vertex<PosColorTexCoord0Vertex>
     float m_u;
     float m_v;
 
-    static void init(gfx::vertex_layout& decl)
+    static void init(bgfx::VertexLayout& decl)
     {
         decl.begin()
             .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
@@ -538,7 +538,7 @@ struct PosVertex : gfx::vertex<PosVertex>
     float m_x;
     float m_y;
     float m_z;
-    static void init(gfx::vertex_layout& decl)
+    static void init(bgfx::VertexLayout& decl)
     {
         decl.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).end();
     }

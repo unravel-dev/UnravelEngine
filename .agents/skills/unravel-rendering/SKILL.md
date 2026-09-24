@@ -65,6 +65,22 @@ Use `unravel-shader-change` for step-by-step shader edits.
   first use - the disk cache is wired via `gfx::set_cache_directory`.
 - **Vulkan:** scratch buffer is 32MB/frame - large per-frame uploads can exhaust it.
 
+## bgfx calls vs gfx:: functions
+
+- Call bgfx directly (`bgfx::setState`, `bgfx::setTexture`, `bgfx::dispatch`, ...). Do not add
+  pass-through wrappers to `engine/core/graphics/graphics.h`.
+- Use bgfx types directly too (`bgfx::TextureHandle`, `bgfx::ViewId`, `bgfx::Memory`,
+  `bgfx::Access::Write`, ...); do not add `using` aliases for bgfx types to `gfx::`.
+- `gfx::` free functions are engine code only: they add behavior or change the API, e.g.
+  `gfx::init` / `gfx::frame` / `gfx::shutdown` (eviction bookkeeping), `gfx::set_image_3d`,
+  `gfx::clip_quad`. The prefix tells whether a call is ours or bgfx's.
+- Advance frames through `gfx::frame()` / `gfx::frames()` so eviction sees every frame.
+- The last argument of `bgfx::submit` / `bgfx::dispatch` is a `BGFX_DISCARD_*` mask, not a
+  bool: `true` compiles as `BGFX_DISCARD_BINDINGS` and `false` as `BGFX_DISCARD_NONE`. Model
+  submesh callbacks map `preserve_state` to `BGFX_DISCARD_NONE`, otherwise `BGFX_DISCARD_ALL`.
+- The `gfx::set_uniform` / `gfx::set_texture` overloads taking `gfx::program::uniform_ptr` live
+  in `engine/engine/rendering/gpu_program.h`; raw bgfx handles go straight to bgfx.
+
 ## GI subsystem
 
 `engine/engine/rendering/gi/` - voxel/probe GI with SDF tracing, surface cache, and
@@ -104,7 +120,7 @@ When fixing visual bugs, identify whether the issue is pipeline output, editor o
 
 ## GPU memory / eviction
 
-- Stats via `gfx::get_stats()` and `gfx::eviction::get_stats()`
+- Stats via `bgfx::getStats()` and `gfx::eviction::get_stats()`
 - Profiler panel: `editor/editor/hub/panels/profiler_panel/`
 - Use `unravel-profiler-debug` for GPU timeline investigation
 

@@ -295,10 +295,10 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_hdr_input, "s_hdr_input", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_histogram_params, "u_histogram_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_metering_params, "u_metering_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_metering_cell, "u_metering_cell", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_hdr_input, "s_hdr_input", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_histogram_params, "u_histogram_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_metering_params, "u_metering_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_metering_cell, "u_metering_cell", bgfx::UniformType::Vec4);
         }
     } histogram_program_;
 
@@ -314,11 +314,11 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_average_params0, "u_average_params0", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_average_params1, "u_average_params1", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_average_params2, "u_average_params2", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_average_params3, "u_average_params3", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_average_params4, "u_average_params4", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_average_params0, "u_average_params0", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_average_params1, "u_average_params1", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_average_params2, "u_average_params2", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_average_params3, "u_average_params3", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_average_params4, "u_average_params4", bgfx::UniformType::Vec4);
         }
     } average_program_;
 
@@ -331,9 +331,9 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_exposure_log_lum, "s_exposure_log_lum", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_local_grid_params, "u_local_grid_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_local_grid_range, "u_local_grid_range", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_exposure_log_lum, "s_exposure_log_lum", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_local_grid_params, "u_local_grid_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_local_grid_range, "u_local_grid_range", bgfx::UniformType::Vec4);
         }
     } local_grid_program_;
 
@@ -345,8 +345,8 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_local_exposure_mean, "s_local_exposure_mean", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_local_blur_params, "u_local_blur_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_local_exposure_mean, "s_local_exposure_mean", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_local_blur_params, "u_local_blur_params", bgfx::UniformType::Vec4);
         }
     } local_blur_program_;
 
@@ -359,9 +359,9 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_exposure, "s_exposure", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_readback_bit, "u_readback_bit", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_readback_range, "u_readback_range", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_exposure, "s_exposure", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_readback_bit, "u_readback_bit", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_readback_range, "u_readback_range", bgfx::UniformType::Vec4);
         }
     } readback_program_;
 

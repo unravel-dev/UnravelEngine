@@ -86,7 +86,7 @@ public:
         /// pass's CPU half still runs: it is idempotent in the regime the gate can close
         /// (nothing the light hash or the vis-memo generation tracks has moved), so the
         /// bindings and uniforms it publishes describe a dispatch that may do nothing.
-        gfx::indirect_buffer_handle indirect{bgfx::kInvalidHandle};
+        bgfx::IndirectBufferHandle indirect{bgfx::kInvalidHandle};
         uint16_t indirect_entry = gi_quiescence_gate_pass::entry_light_voxels;
         /// Stage and read back the convergence statistic for the CPU gate. False whenever
         /// the GPU gate owns the decision - it drains the same statistics slice itself - and
@@ -237,64 +237,64 @@ private:
             cache_uniform(program.get(),
                           u_gi_sun_shadowmap_mtx,
                           "u_gi_sun_shadowmap_mtx",
-                          gfx::uniform_type::Mat4,
+                          bgfx::UniformType::Mat4,
                           sun_cascade_count);
             cache_uniform(program.get(),
                           u_gi_sun_shadowmap_bias,
                           "u_gi_sun_shadowmap_bias",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_gi_sun_shadowmap_camera_vp,
                           "u_gi_sun_shadowmap_camera_vp",
-                          gfx::uniform_type::Mat4);
+                          bgfx::UniformType::Mat4);
             cache_uniform(program.get(),
                           u_gi_sun_shadowmap_slice,
                           "u_gi_sun_shadowmap_slice",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_gi_sun_shadowmap_params,
                           "u_gi_sun_shadowmap_params",
-                          gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_gi_sun_shadowmap, "s_gi_sun_shadowmap", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_gi_light_voxel_camera, "u_gi_light_voxel_camera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_vis_memo_params, "u_gi_vis_memo_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_temporal_dirty, "u_gi_temporal_dirty", gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_gi_sun_shadowmap, "s_gi_sun_shadowmap", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_gi_light_voxel_camera, "u_gi_light_voxel_camera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_vis_memo_params, "u_gi_vis_memo_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_temporal_dirty, "u_gi_temporal_dirty", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_gi_temporal_bounds,
                           "u_gi_temporal_bounds",
-                          gfx::uniform_type::Vec4,
+                          bgfx::UniformType::Vec4,
                           2u * uint16_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS));
             cache_uniform(program.get(),
                           u_gi_vis_memo_bounds,
                           "u_gi_vis_memo_bounds",
-                          gfx::uniform_type::Vec4,
+                          bgfx::UniformType::Vec4,
                           2u * uint16_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS));
             cache_uniform(program.get(),
                           s_world_probe_irradiance,
                           "s_world_probe_irradiance",
-                          gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_world_probe_depth, "s_world_probe_depth", gfx::uniform_type::Sampler);
+                          bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_world_probe_depth, "s_world_probe_depth", bgfx::UniformType::Sampler);
             cache_uniform(program.get(),
                           u_gi_light_voxel_params,
                           "u_gi_light_voxel_params",
-                          gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
-            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", bgfx::UniformType::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_sdf_clipmap_levels,
                           "u_sdf_clipmap_levels",
-                          gfx::uniform_type::Vec4,
+                          bgfx::UniformType::Vec4,
                           global_sdf_clipmap::level_count);
-            cache_uniform(program.get(), u_gpu_light_params, "u_gpu_light_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_shadow_params, "u_gi_shadow_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_shadow_params2, "u_gi_shadow_params2", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_attr_albedo, "s_attr_albedo", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_attr_emissive, "s_attr_emissive", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_gpu_light_params, "u_gpu_light_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_shadow_params, "u_gi_shadow_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_shadow_params2, "u_gi_shadow_params2", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_attr_albedo, "s_attr_albedo", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_attr_emissive, "s_attr_emissive", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool

@@ -3,43 +3,43 @@
 namespace gfx
 {
 
-void screen_pos_vertex::init(gfx::vertex_layout& decl)
+void screen_pos_vertex::init(bgfx::VertexLayout& decl)
 {
-    decl.begin().add(attribute::Position, 2, attribute_type::Float).end();
+    decl.begin().add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float).end();
 }
 
-void pos_vertex::init(gfx::vertex_layout& decl)
+void pos_vertex::init(bgfx::VertexLayout& decl)
 {
-    decl.begin().add(attribute::Position, 3, attribute_type::Float).end();
+    decl.begin().add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).end();
 }
 
-void pos_texcoord0_vertex::init(gfx::vertex_layout& decl)
+void pos_texcoord0_vertex::init(bgfx::VertexLayout& decl)
 {
     decl.begin()
-        .add(attribute::Position, 3, attribute_type::Float)
-        .add(attribute::TexCoord0, 2, attribute_type::Float)
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .end();
 }
 
-void mesh_vertex::init(vertex_layout& decl)
+void mesh_vertex::init(bgfx::VertexLayout& decl)
 {
     decl.begin()
-        .add(attribute::Position, 3, attribute_type::Float)
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         // this is for barycentric coords eventually
         //.add(attribute::Color1, 4, attribute_type::Uint8, true)
-        .add(attribute::Normal, 3, attribute_type::Uint8, true, true)
-        .add(attribute::Tangent, 3, attribute_type::Uint8, true, true)
-        .add(attribute::Bitangent, 3, attribute_type::Uint8, true, true)
-        .add(attribute::TexCoord0, 2, attribute_type::Float)
+        .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Uint8, true, true)
+        .add(bgfx::Attrib::Tangent, 3, bgfx::AttribType::Uint8, true, true)
+        .add(bgfx::Attrib::Bitangent, 3, bgfx::AttribType::Uint8, true, true)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .end();
 }
 
-void pos_texcoord0_color0_vertex::init(vertex_layout& decl)
+void pos_texcoord0_color0_vertex::init(bgfx::VertexLayout& decl)
 {
     decl.begin()
-        .add(attribute::Position, 2, attribute_type::Float)
-        .add(attribute::TexCoord0, 2, attribute_type::Float)
-        .add(attribute::Color0, 4, attribute_type::Uint8, true)
+        .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
         .end();
 }
 } // namespace gfx

@@ -314,8 +314,8 @@ private:
     struct CompiledGeometry
     {
         // Static buffer handles (used when buffer_type == Static)
-        gfx::vertex_buffer_handle static_vertex_buffer = BGFX_INVALID_HANDLE;
-        gfx::index_buffer_handle static_index_buffer = BGFX_INVALID_HANDLE;
+        bgfx::VertexBufferHandle static_vertex_buffer = BGFX_INVALID_HANDLE;
+        bgfx::IndexBufferHandle static_index_buffer = BGFX_INVALID_HANDLE;
         
         // Transient buffer data (used when buffer_type == Transient)
         Rml::Span<const Rml::Vertex> vertices;
@@ -326,7 +326,7 @@ private:
         GeometryBufferType buffer_type = GeometryBufferType::Static;
         
         // Helper functions
-        void bind_buffers(const gfx::vertex_layout& vertex_layout) const;
+        void bind_buffers(const bgfx::VertexLayout& vertex_layout) const;
         void destroy_buffers();
         auto is_valid() const -> bool;
         auto is_transient() const -> bool { return buffer_type == GeometryBufferType::Transient; }
@@ -385,10 +385,10 @@ private:
 
     // Shader management
     void use_program(RmlUi_ProgramId program_id);
-    auto get_uniform_handle(RmlUi_UniformId uniform_id) const -> gfx::uniform_handle;
+    auto get_uniform_handle(RmlUi_UniformId uniform_id) const -> bgfx::UniformHandle;
     void submit_transform_uniform(Rml::Vector2f translation);
     void set_scissor();
-    void set_view_scissor(gfx::view_id pass_id, const Rml::Rectanglei& region);
+    void set_view_scissor(bgfx::ViewId pass_id, const Rml::Rectanglei& region);
     auto get_viewport_size() const -> Rml::Vector2i;
 
     // Layer management - pointer to stack from frame state (set in begin_frame)
@@ -404,8 +404,8 @@ private:
     auto classify_geometry(uint32_t num_vertices, uint32_t num_indices) const -> GeometryBufferType;
         
     // Transient buffer management
-    static auto allocate_transient_buffers(uint32_t num_vertices, uint32_t num_indices, const gfx::vertex_layout& vertex_layout,
-                                   gfx::transient_vertex_buffer& tvb, gfx::transient_index_buffer& tib) -> bool;
+    static auto allocate_transient_buffers(uint32_t num_vertices, uint32_t num_indices, const bgfx::VertexLayout& vertex_layout,
+                                   bgfx::TransientVertexBuffer& tvb, bgfx::TransientIndexBuffer& tib) -> bool;
 
     // Filter rendering
     void render_filters(Rml::Span<const Rml::CompiledFilterHandle> filter_handles);
@@ -419,7 +419,7 @@ private:
     void composite_to_destination_layer(Rml::LayerHandle destination, Rml::BlendMode blend_mode);
     
     // Layer binding management
-    auto get_layer_pass_id() -> gfx::view_id;
+    auto get_layer_pass_id() -> bgfx::ViewId;
     auto get_layer_id_from_handle(Rml::LayerHandle handle) const -> uint64_t;
 
     // State
@@ -435,8 +435,8 @@ private:
 
     // Shaders and programs
     std::array<gpu_program, static_cast<size_t>(RmlUi_ProgramId::Count)> programs_;
-    std::array<gfx::uniform_handle, static_cast<size_t>(RmlUi_UniformId::Count)> uniforms_ = {BGFX_INVALID_HANDLE};
-    gfx::vertex_layout vertex_layout_;
+    std::array<bgfx::UniformHandle, static_cast<size_t>(RmlUi_UniformId::Count)> uniforms_ = {BGFX_INVALID_HANDLE};
+    bgfx::VertexLayout vertex_layout_;
 
     // Active state
     RmlUi_ProgramId active_program_ = RmlUi_ProgramId::Color;

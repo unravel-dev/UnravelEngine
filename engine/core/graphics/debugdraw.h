@@ -13,7 +13,7 @@ struct dd_raii
     ~dd_raii();
 
     DebugDrawEncoder encoder;
-    view_id view{};
+    bgfx::ViewId view{};
 };
 
 // Draws a billboard icon.

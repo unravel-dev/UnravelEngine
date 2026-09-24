@@ -32,12 +32,12 @@ constexpr uint32_t adaptive_rays_min_probes = 4096;
 constexpr uint32_t probe_layers = 1;
 
 /// Layout of the probe buffer: a flat array of vec4, matching BUFFER_RW(_, vec4, _).
-auto get_probe_vec4_layout() -> const gfx::vertex_layout&
+auto get_probe_vec4_layout() -> const bgfx::VertexLayout&
 {
-    static const gfx::vertex_layout layout = []()
+    static const bgfx::VertexLayout layout = []()
     {
-        gfx::vertex_layout decl;
-        decl.begin().add(gfx::attribute::TexCoord0, 4, gfx::attribute_type::Float).end();
+        bgfx::VertexLayout decl;
+        decl.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
         return decl;
     }();
     return layout;
@@ -58,7 +58,7 @@ auto gi_resolve_pass::create_or_update_target(gfx::render_view& rview,
                                              size.height,
                                              false,
                                              1,
-                                             gfx::texture_format::RGBA16F,
+                                             bgfx::TextureFormat::RGBA16F,
                                              BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
                                                  (compute_write ? BGFX_TEXTURE_COMPUTE_WRITE : 0ull));
     }
@@ -86,21 +86,21 @@ auto gi_resolve_pass::create_or_update_target_mrt(gfx::render_view& rview,
     {
         color.reset();
         color = std::make_shared<gfx::texture>(size.width, size.height, false, 1,
-                                               gfx::texture_format::RGBA16F, flags);
+                                               bgfx::TextureFormat::RGBA16F, flags);
     }
     auto& moments = rview.tex_get_or_emplace(name + "_MOMENTS");
     if(gfx::needs_recreate(moments, size))
     {
         moments.reset();
         moments = std::make_shared<gfx::texture>(size.width, size.height, false, 1,
-                                                 gfx::texture_format::RGBA16F, flags);
+                                                 bgfx::TextureFormat::RGBA16F, flags);
     }
     auto& fast = rview.tex_get_or_emplace(name + "_FAST");
     if(gfx::needs_recreate(fast, size))
     {
         fast.reset();
         fast = std::make_shared<gfx::texture>(size.width, size.height, false, 1,
-                                              gfx::texture_format::RGBA16F, flags);
+                                              bgfx::TextureFormat::RGBA16F, flags);
     }
     auto& fbo = rview.fbo_get_or_emplace(name);
     if(gfx::needs_recreate(fbo, size))
@@ -119,17 +119,17 @@ gi_resolve_pass::~gi_resolve_pass()
 {
     if(bgfx::isValid(probe_buffer_))
     {
-        gfx::destroy(probe_buffer_);
+        bgfx::destroy(probe_buffer_);
         probe_buffer_ = {bgfx::kInvalidHandle};
     }
     if(bgfx::isValid(probe_traced_))
     {
-        gfx::destroy(probe_traced_);
+        bgfx::destroy(probe_traced_);
         probe_traced_ = {bgfx::kInvalidHandle};
     }
     if(bgfx::isValid(probe_args_))
     {
-        gfx::destroy(probe_args_);
+        bgfx::destroy(probe_args_);
         probe_args_ = {bgfx::kInvalidHandle};
     }
 }
@@ -312,7 +312,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                                      atlas_size.height,
                                                      false,
                                                      1,
-                                                     gfx::texture_format::RGBA16F,
+                                                     bgfx::TextureFormat::RGBA16F,
                                                      BGFX_TEXTURE_COMPUTE_WRITE |
                                                          BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
                                                          BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT);
@@ -345,12 +345,12 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         {
             if(bgfx::isValid(probe_buffer_))
             {
-                gfx::destroy(probe_buffer_);
+                bgfx::destroy(probe_buffer_);
             }
             probe_buffer_capacity_ = required_probe_vec4 + required_probe_vec4 / 2u;
-            probe_buffer_ = gfx::create_dynamic_vertex_buffer(probe_buffer_capacity_,
-                                                              get_probe_vec4_layout(),
-                                                              BGFX_BUFFER_COMPUTE_READ_WRITE);
+            probe_buffer_ = bgfx::createDynamicVertexBuffer(probe_buffer_capacity_,
+                                                            get_probe_vec4_layout(),
+                                                            BGFX_BUFFER_COMPUTE_READ_WRITE);
             // Fresh record memory is garbage; the trace skips importance reprojection until a
             // full frame has written both halves.
             records_trusted_ = false;
@@ -368,15 +368,15 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
         if(!bgfx::isValid(probe_traced_))
         {
             probe_traced_capacity_ = 4u;
-            probe_traced_ = gfx::create_dynamic_index_buffer(probe_traced_capacity_,
-                                                             BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                                 BGFX_BUFFER_INDEX32);
+            probe_traced_ = bgfx::createDynamicIndexBuffer(probe_traced_capacity_,
+                                                           BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                               BGFX_BUFFER_INDEX32);
         }
         if(!bgfx::isValid(probe_args_))
         {
             // Entry 0: one 8x8 group per traced probe (the full program). Entry 1:
             // four probes per group (the adaptive program). The args shader writes both.
-            probe_args_ = gfx::create_indirect_buffer(2);
+            probe_args_ = bgfx::createIndirectBuffer(2);
         }
         const uint32_t write_probe_offset = even_probe_frame ? 0u : records_per_half;
         const uint32_t read_probe_offset = even_probe_frame ? records_per_half : 0u;
@@ -425,7 +425,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             gfx::render_pass pass("GI/Probe Trace");
             pass.bind(trace_fbo.get());
             pass.clear(BGFX_CLEAR_COLOR, 0x00000000u, 1.0f, 0);
-            gfx::discard();
+            bgfx::discard();
             return trace_tex;
         }
         {
@@ -517,8 +517,8 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 pass.set_view_proj(params.cam->get_view(), gather_projection);
                 place_program_.program->begin();
                 gfx::set_texture(place_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
-                gfx::set_buffer(6, probe_traced_, gfx::access::Write);
-                gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
+                bgfx::setBuffer(6, probe_traced_, bgfx::Access::Write);
+                bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
                 gfx::set_texture(place_program_.s_hiz, 8, hiz_or_depth);
                 gfx::set_texture(place_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
                 gfx::set_uniform(place_program_.u_sdf_clipmap_levels,
@@ -530,11 +530,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(place_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(place_program_.u_gi_camera, gi_camera);
                 gfx::set_uniform(place_program_.u_gi_world_probe_params, wp_params);
-                gfx::dispatch(pass.id,
-                              place_program_.program->native_handle(),
-                              (probes_x + 7u) / 8u,
-                              (probes_y + 7u) / 8u,
-                              1);
+                bgfx::dispatch(pass.id,
+                               place_program_.program->native_handle(),
+                               (probes_x + 7u) / 8u,
+                               (probes_y + 7u) / 8u,
+                               1);
                 place_program_.program->end();
             }
             {
@@ -542,16 +542,16 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 // appended densely. The trace launches exactly that count via the args pass.
                 gfx::render_pass pass("GI/Probe Classify");
                 classify_program_.program->begin();
-                gfx::set_buffer(6, probe_traced_, gfx::access::ReadWrite);
-                gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
+                bgfx::setBuffer(6, probe_traced_, bgfx::Access::ReadWrite);
+                bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
                 gfx::set_uniform(classify_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(classify_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(classify_program_.u_gi_screen_trace, screen_trace_params);
-                gfx::dispatch(pass.id,
-                              classify_program_.program->native_handle(),
-                              (probes_x + 7u) / 8u,
-                              (probes_y + 7u) / 8u,
-                              1);
+                bgfx::dispatch(pass.id,
+                               classify_program_.program->native_handle(),
+                               (probes_x + 7u) / 8u,
+                               (probes_y + 7u) / 8u,
+                               1);
                 classify_program_.program->end();
             }
             {
@@ -560,11 +560,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::render_pass pass("GI/Probe Args");
                 args_program_.program->begin();
                 gfx::set_texture(args_program_.s_gi_env_sh, 0, env_sh_tex);
-                gfx::set_buffer(5, probe_args_, gfx::access::Write);
-                gfx::set_buffer(6, probe_traced_, gfx::access::Read);
-                gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
+                bgfx::setBuffer(5, probe_args_, bgfx::Access::Write);
+                bgfx::setBuffer(6, probe_traced_, bgfx::Access::Read);
+                bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
                 gfx::set_uniform(args_program_.u_gi_probe_params, probe_params);
-                gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
+                bgfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
                 args_program_.program->end();
             }
             {
@@ -575,7 +575,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 if(trace_cs == nullptr || !trace_cs->is_valid())
                 {
                     ensure_trace_target();
-                    gfx::discard();
+                    bgfx::discard();
                     return trace_tex;
                 }
                 // The adaptive program packs four probes per group and launches from args
@@ -583,19 +583,19 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 const bool adaptive_selected = trace_cs == trace_program_.adaptive_program.get();
                 trace_cs->begin();
                 gfx::set_texture(trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-                gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-                gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-                gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+                bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
+                bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
+                bgfx::setBuffer(3, surface_cache.get_instance_buffer(), bgfx::Access::Read);
                 gfx::set_texture(trace_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
-                gfx::set_image(5,
+                bgfx::setImage(5,
                                  probe_atlas->native_handle(),
                                  0,
-                                 gfx::access::ReadWrite,
-                                 gfx::texture_format::RGBA16F);
+                                 bgfx::Access::ReadWrite,
+                                 bgfx::TextureFormat::RGBA16F);
                 gfx::set_texture(trace_program_.s_world_probe_radiance_read,
                                  6,
                                  clipmap_gpu.get_world_probe_radiance());
-                gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
+                bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
                 // Hi-Z when present (mip 0 is the device depth, so the anchor reads it the
                 // same); raw depth otherwise, with the screen tier switched off below.
                 gfx::set_texture(trace_program_.s_hiz, 8, hiz_or_depth);
@@ -609,10 +609,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                                  11,
                                  has_prev_color ? params.prev_color
                                                 : default_textures::get().black_texture());
-                gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+                bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
                 // Stage 13: the sparse world-probe index, read-write - every completion
                 // requests the level-0 cage it reads (gi_world_probes.sh).
-                gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
+                bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::ReadWrite);
                 // Stage 14: this frame's velocity buffer (the sky SH rides the probe buffer's
                 // SH block now). A screen hit on an OBJECT-motion pixel reprojects through it
                 // to the mover's own last-frame pixel; black stands in when absent and the
@@ -643,11 +643,11 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_uniform(trace_program_.u_gi_world_probe_atlas,
                                  clipmap_gpu.get_world_probe_atlas_params());
                 gfx::set_uniform(trace_program_.u_gi_world_probe_radiance_atlas, wp_radiance_atlas);
-                gfx::dispatch_indirect(pass.id,
-                                       trace_cs->native_handle(),
-                                       probe_args_,
-                                       adaptive_selected ? 1 : 0,
-                                       1);
+                bgfx::dispatch(pass.id,
+                               trace_cs->native_handle(),
+                               probe_args_,
+                               adaptive_selected ? 1 : 0,
+                               1);
                 trace_cs->end();
                 records_trusted_ = true;
             }
@@ -658,17 +658,17 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 // interpolate), so one read-write image binding carries no intra-pass hazard.
                 gfx::render_pass pass("GI/Probe Interp");
                 interp_program_.program->begin();
-                gfx::set_image(5,
+                bgfx::setImage(5,
                                probe_atlas->native_handle(),
                                0,
-                               gfx::access::ReadWrite,
-                               gfx::texture_format::RGBA16F);
+                               bgfx::Access::ReadWrite,
+                               bgfx::TextureFormat::RGBA16F);
                 // Read-write: the interp pass mirrors its parents' screen share into the
                 // interpolated probe's record (GI_PROBE_SCREEN_SHARE).
-                gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
+                bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
                 gfx::set_uniform(interp_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(interp_program_.u_gi_probe_temporal, probe_temporal);
-                gfx::dispatch(pass.id, interp_program_.program->native_handle(), probes_x, probes_y, 1);
+                bgfx::dispatch(pass.id, interp_program_.program->native_handle(), probes_x, probes_y, 1);
                 interp_program_.program->end();
             }
             {
@@ -690,18 +690,18 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     // write one simply never stores to it.
                     auto filter_target =
                         ensure_atlas((filter_pass & 1) == 0 ? "GI_PROBE_FILTERED_A" : "GI_PROBE_FILTERED_B");
-                    gfx::set_image(2,
+                    bgfx::setImage(2,
                                    irradiance_atlas->native_handle(),
                                    0,
-                                   gfx::access::Write,
-                                   gfx::texture_format::RGBA16F);
-                    gfx::set_image(3,
+                                   bgfx::Access::Write,
+                                   bgfx::TextureFormat::RGBA16F);
+                    bgfx::setImage(3,
                                    filter_target->native_handle(),
                                    0,
-                                   gfx::access::Write,
-                                   gfx::texture_format::RGBA16F);
+                                   bgfx::Access::Write,
+                                   bgfx::TextureFormat::RGBA16F);
                     // ReadWrite: the final pass writes the importance mip into the record slots.
-                    gfx::set_buffer(7, probe_buffer_, gfx::access::ReadWrite);
+                    bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
                     // y: the adaptive gather may have skipped probes this frame - the filter's
                     // parent-lattice stride test runs only then (cs_gi_screen_probe_filter.sc).
                     const float probe_filter[4] = {final_pass ? 0.0f : 1.0f,
@@ -712,7 +712,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     gfx::set_uniform(filter_program_.u_gi_probe_screen, probe_screen);
                     gfx::set_uniform(filter_program_.u_gi_probe_temporal, probe_temporal);
                     gfx::set_uniform(filter_program_.u_gi_probe_filter, probe_filter);
-                    gfx::dispatch(pass.id, filter_program_.program->native_handle(), probes_x, probes_y, 1);
+                    bgfx::dispatch(pass.id, filter_program_.program->native_handle(), probes_x, probes_y, 1);
                     filter_program_.program->end();
                     if(!final_pass)
                     {
@@ -743,7 +743,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 gfx::set_texture(integrate_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
                 gfx::set_texture(integrate_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
                 gfx::set_texture(integrate_program_.s_probe_irradiance, 2, irradiance_atlas);
-                gfx::set_buffer(7, probe_buffer_, gfx::access::Read);
+                bgfx::setBuffer(7, probe_buffer_, bgfx::Access::Read);
                 gfx::set_texture(integrate_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
                 gfx::set_texture(integrate_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
                 // GTAO bent normal for the lookup direction (the kernel's u_gi_intensity note);
@@ -764,7 +764,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 // lookup takes for pool slot 0: every pixel without screen-probe coverage - the
                 // silhouette edges - then read one arbitrary probe's tile and rendered as a
                 // white halo that the temporal could not settle (measured 2026-09-13).
-                gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::Read);
+                bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::Read);
                 gfx::set_uniform(integrate_program_.u_sdf_clipmap_levels,
                                  clipmap_gpu.get_level_params(),
                                  global_sdf_clipmap::level_count);
@@ -863,10 +863,10 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     gfx::set_uniform(temporal_program_.u_gi_temporal_camera, temporal_camera);
                 }
                 auto topology = gfx::clip_quad(1.0f);
-                gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB |
+                bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB |
                                BGFX_STATE_WRITE_A);
-                gfx::submit(pass.id, integrate->native_handle());
-                gfx::set_state(BGFX_STATE_DEFAULT);
+                bgfx::submit(pass.id, integrate->native_handle());
+                bgfx::setState(BGFX_STATE_DEFAULT);
                 integrate->end();
                 if(fuse_temporal)
                 {
@@ -880,7 +880,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     rview.tex_get_or_emplace("GI_FAST") = history.write_fast;
                 }
             }
-            gfx::discard();
+            bgfx::discard();
         }
     }
 
@@ -941,11 +941,11 @@ auto gi_resolve_pass::run_upsample(gfx::render_view& rview,
     const float camera[4] = {camera_position.x, camera_position.y, camera_position.z, 0.0f};
     gfx::set_uniform(upsample_program_.u_gi_upsample_camera, camera);
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, upsample_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, upsample_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
     upsample_program_.program->end();
-    gfx::discard();
+    bgfx::discard();
     return result;
 }
 
@@ -1003,16 +1003,16 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
             gfx::set_texture(denoise_program_.s_gi_depth, 1, params.g_buffer->get_texture(4));
             gfx::set_texture(denoise_program_.s_gi_normal, 2, params.g_buffer->get_texture(1));
             gfx::set_texture(denoise_program_.s_gi_moments, 3, moments ? moments : input);
-            gfx::set_image(4, result->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
+            bgfx::setImage(4, result->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
             gfx::set_uniform(denoise_program_.u_gi_denoise_params, denoise_params);
             gfx::set_uniform(denoise_program_.u_gi_denoise_texel, texel);
             gfx::set_uniform(denoise_program_.u_gi_denoise_params2, denoise_params2);
             gfx::set_uniform(denoise_program_.u_gi_denoise_camera, denoise_camera);
-            gfx::dispatch(pass.id,
-                          denoise_program_.compute_program->native_handle(),
-                          (target_size.width + 7u) / 8u,
-                          (target_size.height + 7u) / 8u,
-                          1);
+            bgfx::dispatch(pass.id,
+                           denoise_program_.compute_program->native_handle(),
+                           (target_size.width + 7u) / 8u,
+                           (target_size.height + 7u) / 8u,
+                           1);
             denoise_program_.compute_program->end();
             source = result;
             continue;
@@ -1032,11 +1032,11 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
         gfx::set_uniform(denoise_program_.u_gi_denoise_params2, denoise_params2);
         gfx::set_uniform(denoise_program_.u_gi_denoise_camera, denoise_camera);
         auto topology = gfx::clip_quad(1.0f);
-        gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        gfx::submit(pass.id, denoise_program_.program->native_handle());
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(pass.id, denoise_program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_DEFAULT);
         denoise_program_.program->end();
-        gfx::discard();
+        bgfx::discard();
         source = result;
     }
     // REVEAL PASS (the ReBLUR history-fix idea): pixels whose accumulation count is still
@@ -1070,11 +1070,11 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
         gfx::set_uniform(denoise_program_.u_gi_denoise_params2, denoise_params2);
         gfx::set_uniform(denoise_program_.u_gi_denoise_camera, denoise_camera);
         auto topology = gfx::clip_quad(1.0f);
-        gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        gfx::submit(pass.id, denoise_program_.program->native_handle());
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(pass.id, denoise_program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_DEFAULT);
         denoise_program_.program->end();
-        gfx::discard();
+        bgfx::discard();
         source = result;
     }
     return source;
@@ -1324,12 +1324,12 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
                                       use_velocity ? 1.0f : 0.0f};
     gfx::set_uniform(temporal_program_.u_gi_temporal_camera, temporal_camera);
     auto temporal_topology = gfx::clip_quad(1.0f);
-    gfx::set_state(temporal_topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB |
+    bgfx::setState(temporal_topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB |
                    BGFX_STATE_WRITE_A);
-    gfx::submit(temporal_pass.id, temporal_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::submit(temporal_pass.id, temporal_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
     temporal_program_.program->end();
-    gfx::discard();
+    bgfx::discard();
     return write_tex;
 }
 

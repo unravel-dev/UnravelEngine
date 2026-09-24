@@ -7,21 +7,21 @@ namespace gfx
 {
 namespace
 {
-auto get_last_frame_counter() -> gfx::view_id&
+auto get_last_frame_counter() -> bgfx::ViewId&
 {
-    static gfx::view_id id = 0;
+    static bgfx::ViewId id = 0;
     return id;
 }
 
-auto get_counter() -> gfx::view_id&
+auto get_counter() -> bgfx::ViewId&
 {
-    static gfx::view_id id = 0;
+    static bgfx::ViewId id = 0;
     return id;
 }
 
-auto generate_id() -> gfx::view_id
+auto generate_id() -> bgfx::ViewId
 {
-    const auto& limits = gfx::get_caps()->limits;
+    const auto& limits = bgfx::getCaps()->limits;
     auto& counter = get_counter();
     if(counter >= limits.maxViews - 1)
     {
@@ -29,7 +29,7 @@ auto generate_id() -> gfx::view_id
         frame();
         counter = 0;
     }
-    gfx::view_id idx = counter++;
+    bgfx::ViewId idx = counter++;
 
     return idx;
 }
@@ -54,14 +54,14 @@ render_pass::render_pass(const char* name) : render_pass(generate_id(), name)
 {
 }
 
-render_pass::render_pass(view_id i, const char* name) : id(i)
+render_pass::render_pass(bgfx::ViewId i, const char* name) : id(i)
 {
-    reset_view(id);
+    bgfx::resetView(id);
 
     const auto& scopes = get_scopes();
     if(scopes.empty())
     {
-        set_view_name(id, name);
+        bgfx::setViewName(id, name);
     }
     else
     {
@@ -73,34 +73,34 @@ render_pass::render_pass(view_id i, const char* name) : id(i)
 
         scoped_name.append(name);
 
-        set_view_name(id, scoped_name.c_str());
+        bgfx::setViewName(id, scoped_name.c_str());
 
     }
 }
 
 void render_pass::bind(const frame_buffer* fb) const
 {
-    set_view_mode(id, gfx::view_mode::Sequential);
+    bgfx::setViewMode(id, bgfx::ViewMode::Sequential);
     if(fb != nullptr)
     {
         const auto size = fb->get_size();
         const auto width = size.width;
         const auto height = size.height;
-        set_view_frame_buffer(id, fb->native_handle());
-        gfx::set_view_rect(id, 0, 0, width, height);
-        gfx::set_view_scissor(id, uint16_t(0), uint16_t(0), uint16_t(width), uint16_t(height));
+        bgfx::setViewFrameBuffer(id, fb->native_handle());
+        bgfx::setViewRect(id, 0, 0, width, height);
+        bgfx::setViewScissor(id, uint16_t(0), uint16_t(0), uint16_t(width), uint16_t(height));
     }
     else
     {
-        set_view_frame_buffer(id, frame_buffer::invalid_handle());
-        gfx::set_view_rect(id, uint16_t(0), uint16_t(0), backbuffer_ratio::Equal);
+        bgfx::setViewFrameBuffer(id, frame_buffer::invalid_handle());
+        bgfx::setViewRect(id, uint16_t(0), uint16_t(0), bgfx::BackbufferRatio::Equal);
     }
     touch();
 }
 
 void render_pass::touch() const
 {
-    gfx::touch(id);
+    bgfx::touch(id);
 }
 
 void render_pass::clear(uint16_t _flags,
@@ -108,7 +108,7 @@ void render_pass::clear(uint16_t _flags,
                         float _depth /*= 1.0f */,
                         uint8_t _stencil /*= 0*/) const
 {
-    set_view_clear(id, _flags, _rgba, _depth, _stencil);
+    bgfx::setViewClear(id, _flags, _rgba, _depth, _stencil);
     touch();
 }
 
@@ -119,17 +119,17 @@ void render_pass::clear() const
 
 void render_pass::set_view_proj(const float* v, const float* p)
 {
-    set_view_transform(id, v, p);
+    bgfx::setViewTransform(id, v, p);
 }
 
 void render_pass::set_view_scissor(uint16_t _x, uint16_t _y, uint16_t _width, uint16_t _height)
 {
-    gfx::set_view_scissor(id, _x, _y, _width, _height);
+    bgfx::setViewScissor(id, _x, _y, _width, _height);
 }
 
 void render_pass::set_view_rect(uint16_t _x, uint16_t _y, uint16_t _width, uint16_t _height)
 {
-    gfx::set_view_rect(id, _x, _y, _width, _height);
+    bgfx::setViewRect(id, _x, _y, _width, _height);
 }
 
 void render_pass::reset()
@@ -139,13 +139,13 @@ void render_pass::reset()
     count = 0;
 }
 
-auto render_pass::get_max_pass_id() -> gfx::view_id
+auto render_pass::get_max_pass_id() -> bgfx::ViewId
 {
-    const auto& limits = gfx::get_caps()->limits;
+    const auto& limits = bgfx::getCaps()->limits;
     return limits.maxViews - 1;
 }
 
-auto render_pass::get_last_frame_max_pass_id() -> gfx::view_id
+auto render_pass::get_last_frame_max_pass_id() -> bgfx::ViewId
 {
     return get_last_frame_counter();
 }

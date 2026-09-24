@@ -7,8 +7,6 @@
 namespace gfx
 {
 
-using texture_format = bgfx::TextureFormat::Enum;
-
 namespace format_search_flags
 {
 enum e
@@ -29,9 +27,9 @@ enum e
 };
 } // namespace format_search_flags
 
-auto is_format_supported(std::uint16_t flags, texture_format format) -> bool;
+auto is_format_supported(std::uint16_t flags, bgfx::TextureFormat::Enum format) -> bool;
 
-auto get_best_format(std::uint16_t type, std::uint32_t search_flags) -> texture_format;
+auto get_best_format(std::uint16_t type, std::uint32_t search_flags) -> bgfx::TextureFormat::Enum;
 
 auto get_default_rt_sampler_flags() -> std::uint64_t;
 
@@ -44,9 +42,9 @@ struct format_details
     int  num_channels{};
 };
 
-auto get_format_info(texture_format fmt) -> format_details;
-auto is_compressed_format(texture_format fmt) -> bool;
-auto normal_map_needs_z_reconstruction(texture_format fmt) -> bool;
-auto to_string(texture_format fmt) -> std::string;
+auto get_format_info(bgfx::TextureFormat::Enum fmt) -> format_details;
+auto is_compressed_format(bgfx::TextureFormat::Enum fmt) -> bool;
+auto normal_map_needs_z_reconstruction(bgfx::TextureFormat::Enum fmt) -> bool;
+auto to_string(bgfx::TextureFormat::Enum fmt) -> std::string;
 
 } // namespace gfx

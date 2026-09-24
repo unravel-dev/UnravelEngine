@@ -51,9 +51,9 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
     debug_program_.program->begin();
 
     gfx::set_texture(debug_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-    gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-    gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-    gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+    bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
+    bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
+    bgfx::setBuffer(3, surface_cache.get_instance_buffer(), bgfx::Access::Read);
 
     // Global cascade. Bound even when unavailable so the sampler always has a valid texture;
     // u_sdf_clipmap_params.w tells the shader whether to consult it.
@@ -80,16 +80,16 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
     {
         // The claimed CELL, not the window count: the count is forced to zero unless
         // world_probe_jitter is on (off by default), so it carries no state to show.
-        gfx::set_buffer(6, clipmap_gpu.get_world_probe_cells(), gfx::access::Read);
+        bgfx::setBuffer(6, clipmap_gpu.get_world_probe_cells(), bgfx::Access::Read);
         // The sparse level-0 index (stage 13, read-only here): the lattice view's residency.
-        gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::Read);
+        bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::Read);
     }
     // Screen-probe records and the temporal moments, for the two SCREEN-SPACE views. The
     // probe buffer rides stage 14 (the trace uses 7, which the world-probe bookkeeping takes
     // here); both are bound unconditionally for the same OpenGL reason as the samplers above.
     if(bgfx::isValid(params.probes.buffer))
     {
-        gfx::set_buffer(14, params.probes.buffer, gfx::access::Read);
+        bgfx::setBuffer(14, params.probes.buffer, bgfx::Access::Read);
     }
     {
         const float probe_params[4] = {float(params.probes.count_x),
@@ -180,7 +180,7 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
     const auto& light_buffer = surface_cache.get_light_buffer();
     if(light_buffer.is_valid())
     {
-        gfx::set_buffer(5, light_buffer.get_buffer(), gfx::access::Read);
+        bgfx::setBuffer(5, light_buffer.get_buffer(), bgfx::Access::Read);
     }
     const float light_params[4] = {light_buffer.is_valid() ? float(light_buffer.get_light_count()) : 0.0f,
                                    0.0f,
@@ -206,7 +206,7 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
                                  float(instances.size()),
                                  float(surface_cache.get_emitters().size())};
     gfx::set_uniform(debug_program_.u_sdf_params, sdf_params);
-    gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+    bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
     gfx::set_uniform(debug_program_.u_sdf_grid_params, surface_cache.get_grid_params(), gi::GI_SDF_GRID_PARAMS_VEC4);
 
     const float debug_params[4] = {float(params.settings.max_steps),
@@ -224,12 +224,12 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
     // Alpha blended so the visualisation composites over the shaded scene: rays that hit
     // nothing write alpha 0 and leave the frame untouched.
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB |
+    bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB |
                    BGFX_STATE_BLEND_ALPHA);
-    gfx::submit(pass.id, debug_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::submit(pass.id, debug_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
     debug_program_.program->end();
-    gfx::discard();
+    bgfx::discard();
     return true;
 }
 

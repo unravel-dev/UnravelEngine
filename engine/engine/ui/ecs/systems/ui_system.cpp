@@ -702,7 +702,7 @@ void ui_system::ensure_document_framebuffer(ui_document_component& comp)
                                                             static_cast<uint16_t>(comp.size.height),
                                                             false,
                                                             1,
-                                                            gfx::texture_format::RGBA8,
+                                                            bgfx::TextureFormat::RGBA8,
                                                             texture_flags);
 
         if(!color_texture->is_valid())

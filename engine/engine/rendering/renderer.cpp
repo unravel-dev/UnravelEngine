@@ -283,7 +283,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
         std::make_unique<os::window>("INIT", os::window::centered, os::window::centered, 64, 64, os::window::hidden);
     const auto sz = init_window_->get_size();
 
-    gfx::init_type init_data;
+    bgfx::Init init_data;
     init_data.type = get_renderer_type(parser);
     init_data.resolution.width = sz.w;
     init_data.resolution.height = sz.h;
@@ -305,7 +305,7 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
         APPLOG_ERROR("Could not initialize rendering backend!");
         return false;
     }
-    APPLOG_TRACE("Using {0} rendering backend.", gfx::get_renderer_name(gfx::get_renderer_type()));
+    APPLOG_TRACE("Using {0} rendering backend.", bgfx::getRendererName(bgfx::getRendererType()));
 
     // Driver-compiled pipeline binaries persist here across runs. Without them, D3D12
     // recompiles every pipeline at first use each launch - the GI compute chain alone was a
@@ -316,28 +316,28 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     // invalidation after a driver update a matter of deleting one folder. Set AFTER init, so
     // the auto-detected backend names the folder; no backend touches the cache before its
     // first pipeline/program creation, which happens well after this point.
-    const auto renderer_slug = [](gfx::renderer_type type) -> const char*
+    const auto renderer_slug = [](bgfx::RendererType::Enum type) -> const char*
     {
         switch(type)
         {
-            case gfx::renderer_type::Direct3D11:
+            case bgfx::RendererType::Direct3D11:
                 return "d3d11";
-            case gfx::renderer_type::Direct3D12:
+            case bgfx::RendererType::Direct3D12:
                 return "d3d12";
-            case gfx::renderer_type::Vulkan:
+            case bgfx::RendererType::Vulkan:
                 return "vulkan";
-            case gfx::renderer_type::OpenGL:
+            case bgfx::RendererType::OpenGL:
                 return "opengl";
-            case gfx::renderer_type::OpenGLES:
+            case bgfx::RendererType::OpenGLES:
                 return "opengles";
-            case gfx::renderer_type::Metal:
+            case bgfx::RendererType::Metal:
                 return "metal";
             default:
                 return "other";
         }
     };
     const auto cache_dir =
-        fs::resolve_protocol("binary:/.cache/gfx") / renderer_slug(gfx::get_renderer_type());
+        fs::resolve_protocol("binary:/.cache/gfx") / renderer_slug(bgfx::getRendererType());
     gfx::set_cache_directory(cache_dir.string());
 
     APPLOG_TRACE("DebugDraw Init.");
@@ -387,7 +387,7 @@ void renderer::on_os_event(rtti::context& ctx, os::event& e)
     }
 }
 
-auto renderer::get_renderer_type(const cmd_line::parser& parser) const -> gfx::renderer_type
+auto renderer::get_renderer_type(const cmd_line::parser& parser) const -> bgfx::RendererType::Enum
 {
     auto& ctx = engine::context();
     if(ctx.has<boot_config>())
@@ -399,7 +399,7 @@ auto renderer::get_renderer_type(const cmd_line::parser& parser) const -> gfx::r
     {
         return preferred_renderer_to_gfx_type(preferred_renderer_from_string(preferred_renderer_arg));
     }
-    return gfx::renderer_type::Count;
+    return bgfx::RendererType::Count;
 }
 
 auto renderer::get_reset_flags(const cmd_line::parser& parser) const -> uint32_t
@@ -482,7 +482,7 @@ void renderer::set_vsync(bool vsync)
 
     const auto sz = init_window_->get_size();
 
-    gfx::reset(sz.w, sz.h, reset_flags_);
+    bgfx::reset(sz.w, sz.h, reset_flags_);
 }
 
 void renderer::frame_begin(rtti::context& ctx, delta_t /*dt*/)
@@ -517,7 +517,7 @@ void renderer::frame_end(rtti::context& /*ctx*/, delta_t /*dt*/)
 
     if(!request_screenshot_.empty())
     {
-        gfx::request_screen_shot(get_main_window()->get_surface()->native_handle(), request_screenshot_.c_str());
+        bgfx::requestScreenShot(get_main_window()->get_surface()->native_handle(), request_screenshot_.c_str());
         request_screenshot_ = {};
     }
 

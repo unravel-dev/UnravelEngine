@@ -10,7 +10,7 @@ program::program(const shader& compute_shader)
 {
     if(compute_shader.is_valid())
     {
-        handle_ = create_program(compute_shader.native_handle());
+        handle_ = bgfx::createProgram(compute_shader.native_handle());
 
         for(auto& uniform : compute_shader.uniforms)
         {
@@ -26,7 +26,7 @@ program::program(const shader& vertex_shader, const shader& fragment_shader)
 {
     if(vertex_shader.is_valid() && fragment_shader.is_valid())
     {
-        handle_ = create_program(vertex_shader.native_handle(), fragment_shader.native_handle());
+        handle_ = bgfx::createProgram(vertex_shader.native_handle(), fragment_shader.native_handle());
 
         for(auto& uniform : vertex_shader.uniforms)
         {
@@ -61,7 +61,7 @@ void program::set_texture(uint8_t _stage,
         return;
     }
 
-    gfx::set_texture(_stage, uniform->native_handle(), frameBuffer->get_texture(_attachment)->native_handle(), _flags);
+    bgfx::setTexture(_stage, uniform->native_handle(), frameBuffer->get_texture(_attachment)->native_handle(), _flags);
 }
 
 void program::set_texture(uint8_t _stage,
@@ -81,7 +81,7 @@ void program::set_texture(uint8_t _stage,
         return;
     }
 
-    gfx::set_texture(_stage, uniform->native_handle(), _texture->native_handle(), _flags);
+    bgfx::setTexture(_stage, uniform->native_handle(), _texture->native_handle(), _flags);
 }
 
 void program::set_uniform(const hpp::string_view& _name, const void* _value, uint16_t _num)
@@ -90,7 +90,7 @@ void program::set_uniform(const hpp::string_view& _name, const void* _value, uin
 
     if(uniform)
     {
-        gfx::set_uniform(uniform->native_handle(), _value, _num);
+        bgfx::setUniform(uniform->native_handle(), _value, _num);
     }
 }
 

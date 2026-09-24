@@ -117,23 +117,23 @@ auto preferred_renderer_from_string(hpp::string_view value) -> preferred_rendere
     return preferred_renderer::auto_detect;
 }
 
-auto preferred_renderer_to_gfx_type(preferred_renderer value) -> gfx::renderer_type
+auto preferred_renderer_to_gfx_type(preferred_renderer value) -> bgfx::RendererType::Enum
 {
     switch(value)
     {
         case preferred_renderer::opengl:
-            return gfx::renderer_type::OpenGL;
+            return bgfx::RendererType::OpenGL;
         case preferred_renderer::vulkan:
-            return gfx::renderer_type::Vulkan;
+            return bgfx::RendererType::Vulkan;
         case preferred_renderer::direct3d11:
-            return gfx::renderer_type::Direct3D11;
+            return bgfx::RendererType::Direct3D11;
         case preferred_renderer::direct3d12:
-            return gfx::renderer_type::Direct3D12;
+            return bgfx::RendererType::Direct3D12;
         case preferred_renderer::metal:
-            return gfx::renderer_type::Metal;
+            return bgfx::RendererType::Metal;
         case preferred_renderer::auto_detect:
         default:
-            return gfx::renderer_type::Count;
+            return bgfx::RendererType::Count;
     }
 }
 

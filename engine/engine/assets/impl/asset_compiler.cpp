@@ -110,7 +110,7 @@ auto run_process(const std::string& process,
 
 struct input_texture_info
 {
-    gfx::texture_format format{gfx::texture_format::RGBA8};
+    bgfx::TextureFormat::Enum format{bgfx::TextureFormat::RGBA8};
     uint32_t width{};
     uint32_t height{};
     bool fits_max_size{true};
@@ -162,7 +162,7 @@ auto append_texture_max_size_args(std::vector<std::string>& args, texture_import
 
 auto fill_input_texture_info_from_container(const bimg::ImageContainer& info, input_texture_info& out) -> void
 {
-    out.format = static_cast<gfx::texture_format>(info.m_format);
+    out.format = static_cast<bgfx::TextureFormat::Enum>(info.m_format);
     out.width = info.m_width;
     out.height = info.m_height;
 }
@@ -314,18 +314,18 @@ bool copy_compiled_file(const fs::path& from, const fs::path& to)
     return !err;
 }
 
-auto select_compressed_format(gfx::texture_format input_format,
+auto select_compressed_format(bgfx::TextureFormat::Enum input_format,
                               const fs::path& extension,
-                              texture_importer_meta::compression_quality quality) -> gfx::texture_format
+                              texture_importer_meta::compression_quality quality) -> bgfx::TextureFormat::Enum
 {
     if(quality == texture_importer_meta::compression_quality::none)
     {
         return input_format;
     }
 
-    if(input_format == gfx::texture_format::BC1)
+    if(input_format == bgfx::TextureFormat::BC1)
     {
-        return gfx::texture_format::BC3;
+        return bgfx::TextureFormat::BC3;
     }
 
     if(gfx::is_compressed_format(input_format))
@@ -345,21 +345,21 @@ auto select_compressed_format(gfx::texture_format input_format,
     {
         // BC6H: color (RGB) 16F
         // No standard BC format for HDR alpha in the block-compression range.
-        return gfx::texture_format::BC6H;
+        return bgfx::TextureFormat::BC6H;
     }
 
     // 2) Single channel => BC4
     //    e.g., for grayscale height map or single-channel mask
     if(info.num_channels == 1)
     {
-        return gfx::texture_format::BC4;
+        return bgfx::TextureFormat::BC4;
     }
 
     // 3) Two channel => BC5
     //    e.g., typical for 2D vector data, normal map XY
     if(info.num_channels == 2)
     {
-        return gfx::texture_format::BC5;
+        return bgfx::TextureFormat::BC5;
     }
 
     // 4) If we reach here, we have 3 or 4 channels in LDR.
@@ -371,19 +371,19 @@ auto select_compressed_format(gfx::texture_format input_format,
         {
             case texture_importer_meta::compression_quality::low_quality:
                 // BC1 is cheap and has no alpha
-                return gfx::texture_format::BC1;
+                return bgfx::TextureFormat::BC1;
             case texture_importer_meta::compression_quality::normal_quality:
                 // BC1 is standard for color w/out alpha
-                return gfx::texture_format::BC1;
+                return bgfx::TextureFormat::BC1;
             case texture_importer_meta::compression_quality::high_quality:
                 // BC7 is higher quality for color, also supports alpha but not needed here.
                 // It is also really slow for encoding so don't use it for now.
-                return gfx::texture_format::BC1;
+                return bgfx::TextureFormat::BC1;
             default:
                 break;
         }
         // fallback
-        return gfx::texture_format::BC1;
+        return bgfx::TextureFormat::BC1;
     }
     else
     {
@@ -394,18 +394,18 @@ auto select_compressed_format(gfx::texture_format input_format,
         switch(quality)
         {
             case texture_importer_meta::compression_quality::low_quality:
-                return gfx::texture_format::BC3;
+                return bgfx::TextureFormat::BC3;
             case texture_importer_meta::compression_quality::normal_quality:
-                return gfx::texture_format::BC3; // DXT5
+                return bgfx::TextureFormat::BC3; // DXT5
             case texture_importer_meta::compression_quality::high_quality:
                 //  BC7 is best BC for RGBA
                 // It is also really slow for encoding so don't use it for now.
-                return gfx::texture_format::BC3;
+                return bgfx::TextureFormat::BC3;
             default:
                 break;
         }
         // fallback
-        return gfx::texture_format::BC3;
+        return bgfx::TextureFormat::BC3;
     }
 
     return input_format;
@@ -578,7 +578,7 @@ auto compile_texture_to_file(const fs::path& input_path,
             args_array.emplace_back("-t");
             args_array.emplace_back(gfx::to_string(format));
 
-            if(format == gfx::texture_format::BC7 || format == gfx::texture_format::BC6H)
+            if(format == bgfx::TextureFormat::BC7 || format == bgfx::TextureFormat::BC6H)
             {
                 APPLOG_INFO("Compressing to {0}. May take a while.", gfx::to_string(format));
 
@@ -654,7 +654,7 @@ auto compile_texture_to_file(const fs::path& input_path,
 
 auto compile_shader_to_file(const fs::path& input_path, 
                            const fs::path& output_path,
-                           gfx::renderer_type renderer) -> bool
+                           bgfx::RendererType::Enum renderer) -> bool
 {
 
     std::string str_input = input_path.string();
@@ -755,20 +755,20 @@ auto compile_shader_to_file(const fs::path& input_path,
         }
     }
 
-    if(renderer == gfx::renderer_type::Vulkan)
+    if(renderer == bgfx::RendererType::Vulkan)
     {
         str_platform = "windows";
         str_profile = "spirv";
     }
 
-    if(renderer == gfx::renderer_type::Direct3D11 || renderer == gfx::renderer_type::Direct3D12)
+    if(renderer == bgfx::RendererType::Direct3D11 || renderer == bgfx::RendererType::Direct3D12)
     {
         str_platform = "windows";
 
         if(vs || fs)
         {
             str_profile = "s_5_0";
-            if(renderer == gfx::renderer_type::Direct3D12)
+            if(renderer == bgfx::RendererType::Direct3D12)
             {
                 str_profile = "s_6_0";
             }
@@ -776,19 +776,19 @@ auto compile_shader_to_file(const fs::path& input_path,
         else if(cs)
         {
             str_profile = "s_5_0";
-            if(renderer == gfx::renderer_type::Direct3D12)
+            if(renderer == bgfx::RendererType::Direct3D12)
             {
                 str_profile = "s_6_0";
             }
             str_opt = optimize ? "1" : "0";
         }
     }
-    else if(renderer == gfx::renderer_type::OpenGLES)
+    else if(renderer == bgfx::RendererType::OpenGLES)
     {
         str_platform = "android";
         str_profile = "100_es";
     }
-    else if(renderer == gfx::renderer_type::OpenGL)
+    else if(renderer == bgfx::RendererType::OpenGL)
     {
         str_platform = "linux";
 
@@ -803,7 +803,7 @@ auto compile_shader_to_file(const fs::path& input_path,
             str_profile = "430";
         }
     }
-    else if(renderer == gfx::renderer_type::Metal)
+    else if(renderer == bgfx::RendererType::Metal)
     {
         str_platform = "osx";
         str_profile = "metal";

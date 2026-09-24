@@ -32,7 +32,7 @@ struct render_pass
     /// </summary>
     //-----------------------------------------------------------------------------
     render_pass(const char* name);
-    render_pass(view_id id, const char* name);
+    render_pass(bgfx::ViewId id, const char* name);
 
 
     //-----------------------------------------------------------------------------
@@ -103,10 +103,10 @@ struct render_pass
     ///
     /// </summary>
     //-----------------------------------------------------------------------------
-    static auto get_max_pass_id() -> gfx::view_id;
+    static auto get_max_pass_id() -> bgfx::ViewId;
 
-    static auto get_last_frame_max_pass_id() -> gfx::view_id;
+    static auto get_last_frame_max_pass_id() -> bgfx::ViewId;
     ///
-    gfx::view_id id;
+    bgfx::ViewId id;
 };
 } // namespace gfx

@@ -53,7 +53,7 @@ auto bloom_pass::create_or_resize_mip_chain(gfx::render_view& rview,
         if(gfx::needs_recreate(tex, {w, h}))
         {
             tex.reset();
-            tex = std::make_shared<gfx::texture>(w, h, false, 1, gfx::texture_format::RGBA16F, flags);
+            tex = std::make_shared<gfx::texture>(w, h, false, 1, bgfx::TextureFormat::RGBA16F, flags);
             tex_changed = true;
         }
 
@@ -92,7 +92,7 @@ auto bloom_pass::create_or_update_output_fb(gfx::render_view& rview,
                                                     input_sz.height,
                                                     false,
                                                     1,
-                                                    gfx::texture_format::RGBA16F,
+                                                    bgfx::TextureFormat::RGBA16F,
                                                     BGFX_TEXTURE_RT);
     }
     auto& output_fbo = rview.fbo_get_or_emplace("BLOOM_OUTPUT");
@@ -154,11 +154,11 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         gfx::set_texture(downsample_program_.s_exposure, 1, exposure_texture);
 
         irect32_t rect(0, 0, mip0_size.width, mip0_size.height);
-        gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+        bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
         auto topology = gfx::clip_quad(1.0f);
-        gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        gfx::submit(pass.id, downsample_program_.program->native_handle());
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(pass.id, downsample_program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_DEFAULT);
         downsample_program_.program->end();
     }
 
@@ -197,11 +197,11 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         gfx::set_texture(downsample_program_.s_exposure, 1, exposure_texture);
 
         irect32_t rect(0, 0, out_w, out_h);
-        gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+        bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
         auto topology = gfx::clip_quad(1.0f);
-        gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        gfx::submit(pass.id, downsample_program_.program->native_handle());
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(pass.id, downsample_program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_DEFAULT);
         downsample_program_.program->end();
     }
 
@@ -265,15 +265,15 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         gfx::set_texture(upsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(src_idx)));
 
         irect32_t rect(0, 0, out_w, out_h);
-        gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+        bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
         auto topology = gfx::clip_quad(1.0f);
         const uint64_t blend_state =
             scatter_mode
                 ? BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA)
                 : BGFX_STATE_BLEND_ADD;
-        gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | blend_state);
-        gfx::submit(pass.id, upsample_program_.program->native_handle());
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | blend_state);
+        bgfx::submit(pass.id, upsample_program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_DEFAULT);
         upsample_program_.program->end();
     }
 
@@ -313,14 +313,14 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
     const auto output_size = output->get_size();
     irect32_t rect(0, 0, output_size.width, output_size.height);
-    gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+    bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, combine_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, combine_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
     combine_program_.program->end();
 
-    gfx::discard();
+    bgfx::discard();
 
     return output;
 }

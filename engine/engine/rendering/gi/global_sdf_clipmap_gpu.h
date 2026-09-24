@@ -36,7 +36,7 @@ public:
      * @param compose_on_gpu The EFFECTIVE composer for this mirror's lifetime. It decides the
      * surface list/count buffer flags: the GPU composer writes them from compute, so they must
      * be BGFX_BUFFER_COMPUTE_WRITE - which bgfx forbids updating from the CPU; the CPU composer
-     * uploads them with gfx::update, which requires that flag absent. One set of flags cannot
+     * uploads them with bgfx::update, which requires that flag absent. One set of flags cannot
      * serve both, so a composer change re-creates the mirror (see surface_cache_view::update).
      */
     auto init(uint32_t resolution, bool compose_on_gpu) -> bool;
@@ -225,7 +225,7 @@ public:
     }
 
     /// One packed world-cell id per probe slot (scroll detection).
-    auto get_world_probe_cells() const -> gfx::dynamic_index_buffer_handle
+    auto get_world_probe_cells() const -> bgfx::DynamicIndexBufferHandle
     {
         return world_probe_cells_;
     }
@@ -239,7 +239,7 @@ public:
     /// One uint per probe slot: complete windows accumulated by the trace's running mean
     /// (GI_WORLD_PROBE_EMA_WINDOWS); zero-seeded by the compose pass's buffer seed. A sparse
     /// level-0 slot the allocation pass just claimed holds the FRESH sentinel instead.
-    auto get_world_probe_counts() const -> gfx::dynamic_index_buffer_handle
+    auto get_world_probe_counts() const -> bgfx::DynamicIndexBufferHandle
     {
         return world_probe_counts_;
     }
@@ -247,7 +247,7 @@ public:
     /// The sparse level-0 index (gi_world_probes.sh GI_WORLD_PROBE_INDEX_*): bound at stage 13
     /// by every cage reader, read-write by the ones that request probes and by the allocation
     /// pass.
-    auto get_world_probe_index() const -> gfx::dynamic_index_buffer_handle
+    auto get_world_probe_index() const -> bgfx::DynamicIndexBufferHandle
     {
         return world_probe_index_;
     }
@@ -257,13 +257,13 @@ public:
     static constexpr uint32_t world_probe_select_size = 20u;
 
     /// The trace scheduler's state (cs_gi_world_probe_select.sc, plan item 2.1).
-    auto get_world_probe_select() const -> gfx::dynamic_index_buffer_handle
+    auto get_world_probe_select() const -> bgfx::DynamicIndexBufferHandle
     {
         return world_probe_select_;
     }
 
     /// The scheduler's per-frame probe list: one slot index per entry, capacity every slot.
-    auto get_world_probe_list() const -> gfx::dynamic_index_buffer_handle
+    auto get_world_probe_list() const -> bgfx::DynamicIndexBufferHandle
     {
         return world_probe_list_;
     }
@@ -318,7 +318,7 @@ public:
     /// One packed world-cell id per ATTRIBUTE slot per level: the light-radiance survival
     /// detector (a slot whose cell changed resets its light texels; see
     /// cs_gi_clipmap_attributes.sc).
-    auto get_attr_cells() const -> gfx::dynamic_index_buffer_handle
+    auto get_attr_cells() const -> bgfx::DynamicIndexBufferHandle
     {
         return attr_cells_;
     }
@@ -333,7 +333,7 @@ public:
     /// (index = level), then one attr_resolution^3 segment of packed entries per level
     /// (global_sdf_clipmap::pack_surface_voxel layout). One buffer on purpose - the split
     /// count buffer cost cs_gi_light_voxels its last free bgfx stage.
-    auto get_surface_list_buffer() const -> gfx::dynamic_index_buffer_handle
+    auto get_surface_list_buffer() const -> bgfx::DynamicIndexBufferHandle
     {
         return surface_list_;
     }
@@ -372,13 +372,13 @@ private:
     uint32_t bounce_vis_generation_ = 0;
     uint64_t bounce_vis_content_epoch_ = 0;
     std::array<std::array<int32_t, 3>, global_sdf_clipmap::level_count> bounce_vis_window_cells_{};
-    gfx::dynamic_index_buffer_handle surface_list_{bgfx::kInvalidHandle};
-    gfx::dynamic_index_buffer_handle attr_cells_{bgfx::kInvalidHandle};
-    gfx::dynamic_index_buffer_handle world_probe_cells_{bgfx::kInvalidHandle};
-    gfx::dynamic_index_buffer_handle world_probe_counts_{bgfx::kInvalidHandle};
-    gfx::dynamic_index_buffer_handle world_probe_index_{bgfx::kInvalidHandle};
-    gfx::dynamic_index_buffer_handle world_probe_select_{bgfx::kInvalidHandle};
-    gfx::dynamic_index_buffer_handle world_probe_list_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle surface_list_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle attr_cells_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle world_probe_cells_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle world_probe_counts_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle world_probe_index_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle world_probe_select_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle world_probe_list_{bgfx::kInvalidHandle};
     uint32_t world_probe_cell_count_ = 0;
     bool needs_world_probe_index_seed_ = false;
     bool needs_buffer_seed_ = false;

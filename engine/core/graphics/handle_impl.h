@@ -39,7 +39,7 @@ public:
     {
         if(is_valid())
         {
-            gfx::destroy(handle_);
+            bgfx::destroy(handle_);
         }
 
         handle_ = invalid_handle();
@@ -73,7 +73,7 @@ public:
 
     void set_name(const hpp::string_view& _name)
     {
-        gfx::set_name(handle_, _name.data(), static_cast<int32_t>(_name.size()));
+        bgfx::setName(handle_, _name.data(), static_cast<int32_t>(_name.size()));
     }
 
     auto on_evict() -> std::uint64_t override
@@ -85,7 +85,7 @@ public:
         const std::uint64_t freed = gpu_size_;
         if(is_valid())
         {
-            gfx::destroy(handle_);
+            bgfx::destroy(handle_);
         }
         handle_ = invalid_handle();
         evict_state_ = evict_state::evicted;

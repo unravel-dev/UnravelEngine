@@ -103,10 +103,10 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_pixel_size, "u_pixelSize", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_params, "u_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_tex, "s_tex", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_exposure, "s_exposure", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_pixel_size, "u_pixelSize", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_params, "u_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_tex, "s_tex", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_exposure, "s_exposure", bgfx::UniformType::Sampler);
         }
         gfx::program::uniform_ptr u_pixel_size;
         gfx::program::uniform_ptr u_params;
@@ -119,10 +119,10 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_pixel_size, "u_pixelSize", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_tint, "u_tint", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_upsample_params, "u_upsampleParams", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_tex, "s_tex", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_pixel_size, "u_pixelSize", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_tint, "u_tint", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_upsample_params, "u_upsampleParams", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_tex, "s_tex", bgfx::UniformType::Sampler);
         }
         gfx::program::uniform_ptr u_pixel_size;
         gfx::program::uniform_ptr u_tint;
@@ -135,11 +135,11 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_combine_params, "u_combineParams", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_combine_tint0, "u_combineTint0", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_scene, "s_scene", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_bloom, "s_bloom", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_dirt, "s_dirt", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_combine_params, "u_combineParams", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_combine_tint0, "u_combineTint0", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_scene, "s_scene", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_bloom, "s_bloom", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_dirt, "s_dirt", bgfx::UniformType::Sampler);
         }
         gfx::program::uniform_ptr u_combine_params;
         gfx::program::uniform_ptr u_combine_tint0;

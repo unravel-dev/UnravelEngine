@@ -81,13 +81,13 @@ auto gtao_pass::init(rtti::context& ctx) -> bool
     auto cs_temporal = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_temporal.sc");
     auto cs_upsample = am.get_asset<gfx::shader>("engine:/data/shaders/gtao/cs_gtao_upsample.sc");
     // Uniforms before programs (the GL contract in gpu_program.h).
-    common_cache_.cache_uniform(nullptr, common_.u_gtao_size, "u_gtao_size", gfx::uniform_type::Vec4);
-    common_cache_.cache_uniform(nullptr, common_.u_gtao_full_size, "u_gtao_full_size", gfx::uniform_type::Vec4);
-    common_cache_.cache_uniform(nullptr, common_.u_gtao_params0, "u_gtao_params0", gfx::uniform_type::Vec4);
-    common_cache_.cache_uniform(nullptr, common_.u_gtao_params1, "u_gtao_params1", gfx::uniform_type::Vec4);
-    common_cache_.cache_uniform(nullptr, common_.u_gtao_params2, "u_gtao_params2", gfx::uniform_type::Vec4);
-    common_cache_.cache_uniform(nullptr, common_.u_gtao_params3, "u_gtao_params3", gfx::uniform_type::Vec4);
-    common_cache_.cache_uniform(nullptr, common_.u_gtao_params4, "u_gtao_params4", gfx::uniform_type::Vec4);
+    common_cache_.cache_uniform(nullptr, common_.u_gtao_size, "u_gtao_size", bgfx::UniformType::Vec4);
+    common_cache_.cache_uniform(nullptr, common_.u_gtao_full_size, "u_gtao_full_size", bgfx::UniformType::Vec4);
+    common_cache_.cache_uniform(nullptr, common_.u_gtao_params0, "u_gtao_params0", bgfx::UniformType::Vec4);
+    common_cache_.cache_uniform(nullptr, common_.u_gtao_params1, "u_gtao_params1", bgfx::UniformType::Vec4);
+    common_cache_.cache_uniform(nullptr, common_.u_gtao_params2, "u_gtao_params2", bgfx::UniformType::Vec4);
+    common_cache_.cache_uniform(nullptr, common_.u_gtao_params3, "u_gtao_params3", bgfx::UniformType::Vec4);
+    common_cache_.cache_uniform(nullptr, common_.u_gtao_params4, "u_gtao_params4", bgfx::UniformType::Vec4);
     prefilter_program_.cache_uniforms();
     prefilter_program_.program = std::make_unique<gpu_program>(cs_prefilter);
     main_program_.cache_uniforms();
@@ -104,7 +104,7 @@ auto gtao_pass::init(rtti::context& ctx) -> bool
 auto gtao_pass::create_or_update_texture(gfx::render_view& rview,
                                          const std::string& name,
                                          const usize32_t& size,
-                                         gfx::texture_format format,
+                                         bgfx::TextureFormat::Enum format,
                                          bool has_mips,
                                          uint64_t flags) -> gfx::texture::ptr
 {
@@ -176,13 +176,13 @@ void gtao_pass::run_prefilter(gfx::render_view& rview,
     gfx::set_texture(prefilter_program_.s_gtao_depth, 0, params.g_buffer->get_texture(4));
     for(uint8_t mip = 0; mip < depth_mip_levels; ++mip)
     {
-        gfx::set_image(uint8_t(1 + mip), depth_mips->native_handle(), mip, bgfx::Access::Write);
+        bgfx::setImage(uint8_t(1 + mip), depth_mips->native_handle(), mip, bgfx::Access::Write);
     }
-    gfx::dispatch(pass.id,
-                  prefilter_program_.program->native_handle(),
-                  group_count(ctx.ao_size.width, prefilter_tile),
-                  group_count(ctx.ao_size.height, prefilter_tile),
-                  1);
+    bgfx::dispatch(pass.id,
+                   prefilter_program_.program->native_handle(),
+                   group_count(ctx.ao_size.width, prefilter_tile),
+                   group_count(ctx.ao_size.height, prefilter_tile),
+                   1);
 }
 
 auto gtao_pass::run_main(gfx::render_view& rview,
@@ -190,18 +190,18 @@ auto gtao_pass::run_main(gfx::render_view& rview,
                          const run_params& params,
                          const gfx::texture::ptr& depth_mips) -> gfx::texture::ptr
 {
-    auto raw = create_or_update_texture(rview, TEX_RAW, ctx.ao_size, gfx::texture_format::RGBA8, false, clamp_flags);
+    auto raw = create_or_update_texture(rview, TEX_RAW, ctx.ao_size, bgfx::TextureFormat::RGBA8, false, clamp_flags);
     gfx::render_pass pass("GTAO/Main");
     pass.set_view_proj(ctx.cam->get_view(), ctx.cam->get_projection());
     set_common_uniforms(ctx);
     gfx::set_texture(main_program_.s_gtao_depth_mips, 0, depth_mips);
     gfx::set_texture(main_program_.s_gtao_normal, 1, params.g_buffer->get_texture(1));
-    gfx::set_image(2, raw->native_handle(), 0, bgfx::Access::Write);
-    gfx::dispatch(pass.id,
-                  main_program_.program->native_handle(),
-                  group_count(ctx.ao_size.width, group_size),
-                  group_count(ctx.ao_size.height, group_size),
-                  1);
+    bgfx::setImage(2, raw->native_handle(), 0, bgfx::Access::Write);
+    bgfx::dispatch(pass.id,
+                   main_program_.program->native_handle(),
+                   group_count(ctx.ao_size.width, group_size),
+                   group_count(ctx.ao_size.height, group_size),
+                   1);
     return raw;
 }
 
@@ -218,8 +218,8 @@ auto gtao_pass::run_denoise(gfx::render_view& rview,
         rview.tex_remove(TEX_DENOISE_B);
         return input;
     }
-    auto tex_a = create_or_update_texture(rview, TEX_DENOISE_A, ctx.ao_size, gfx::texture_format::RGBA8, false, clamp_flags);
-    auto tex_b = create_or_update_texture(rview, TEX_DENOISE_B, ctx.ao_size, gfx::texture_format::RGBA8, false, clamp_flags);
+    auto tex_a = create_or_update_texture(rview, TEX_DENOISE_A, ctx.ao_size, bgfx::TextureFormat::RGBA8, false, clamp_flags);
+    auto tex_b = create_or_update_texture(rview, TEX_DENOISE_B, ctx.ao_size, bgfx::TextureFormat::RGBA8, false, clamp_flags);
     for(int32_t i = 0; i < passes; ++i)
     {
         auto output = (i % 2 == 0) ? tex_a : tex_b;
@@ -230,12 +230,12 @@ auto gtao_pass::run_denoise(gfx::render_view& rview,
         gfx::set_texture(denoise_program_.s_gtao_input, 0, input);
         gfx::set_texture(denoise_program_.s_gtao_depth_mips, 1, depth_mips);
         gfx::set_texture(denoise_program_.s_gtao_normal, 2, params.g_buffer->get_texture(1));
-        gfx::set_image(3, output->native_handle(), 0, bgfx::Access::Write);
-        gfx::dispatch(pass.id,
-                      denoise_program_.program->native_handle(),
-                      group_count(ctx.ao_size.width, group_size),
-                      group_count(ctx.ao_size.height, group_size),
-                      1);
+        bgfx::setImage(3, output->native_handle(), 0, bgfx::Access::Write);
+        bgfx::dispatch(pass.id,
+                       denoise_program_.program->native_handle(),
+                       group_count(ctx.ao_size.width, group_size),
+                       group_count(ctx.ao_size.height, group_size),
+                       1);
         input = output;
     }
     return input;
@@ -261,8 +261,8 @@ auto gtao_pass::run_temporal(gfx::render_view& rview,
     }
     const char* read_name = (state.parity % 2 == 0) ? TEX_HISTORY_0 : TEX_HISTORY_1;
     const char* write_name = (state.parity % 2 == 0) ? TEX_HISTORY_1 : TEX_HISTORY_0;
-    auto history = create_or_update_texture(rview, read_name, ctx.ao_size, gfx::texture_format::RGBA8, false, clamp_flags);
-    auto output = create_or_update_texture(rview, write_name, ctx.ao_size, gfx::texture_format::RGBA8, false, clamp_flags);
+    auto history = create_or_update_texture(rview, read_name, ctx.ao_size, bgfx::TextureFormat::RGBA8, false, clamp_flags);
+    auto output = create_or_update_texture(rview, write_name, ctx.ao_size, bgfx::TextureFormat::RGBA8, false, clamp_flags);
     const bool history_valid = state.history_valid && params.prev_depth != nullptr;
     gfx::render_pass pass("GTAO/Temporal");
     pass.set_view_proj(ctx.cam->get_view(), ctx.cam->get_projection());
@@ -281,12 +281,12 @@ auto gtao_pass::run_temporal(gfx::render_view& rview,
     gfx::set_texture(temporal_program_.s_gtao_velocity, 2, params.velocity ? params.velocity : default_textures::get().black_texture());
     gfx::set_texture(temporal_program_.s_gtao_depth_mips, 3, depth_mips);
     gfx::set_texture(temporal_program_.s_gtao_prev_depth, 4, params.prev_depth ? params.prev_depth : default_textures::get().white_texture());
-    gfx::set_image(5, output->native_handle(), 0, bgfx::Access::Write);
-    gfx::dispatch(pass.id,
-                  temporal_program_.program->native_handle(),
-                  group_count(ctx.ao_size.width, group_size),
-                  group_count(ctx.ao_size.height, group_size),
-                  1);
+    bgfx::setImage(5, output->native_handle(), 0, bgfx::Access::Write);
+    bgfx::dispatch(pass.id,
+                   temporal_program_.program->native_handle(),
+                   group_count(ctx.ao_size.width, group_size),
+                   group_count(ctx.ao_size.height, group_size),
+                   1);
     state.parity ^= 1u;
     state.history_valid = true;
     return output;
@@ -298,20 +298,20 @@ auto gtao_pass::run_upsample(gfx::render_view& rview,
                              const gfx::texture::ptr& depth_mips,
                              const gfx::texture::ptr& input) -> gfx::texture::ptr
 {
-    auto output = create_or_update_texture(rview, TEX_OUTPUT, ctx.full_size, gfx::texture_format::RGBA8, false, clamp_flags);
+    auto output = create_or_update_texture(rview, TEX_OUTPUT, ctx.full_size, bgfx::TextureFormat::RGBA8, false, clamp_flags);
     gfx::render_pass pass("GTAO/Upsample");
     pass.set_view_proj(ctx.cam->get_view(), ctx.cam->get_projection());
     set_common_uniforms(ctx);
     gfx::set_texture(upsample_program_.s_gtao_input, 0, input);
     gfx::set_texture(upsample_program_.s_gtao_depth_mips, 1, depth_mips);
     gfx::set_texture(upsample_program_.s_gtao_depth, 2, params.g_buffer->get_texture(4));
-    gfx::set_image(3, output->native_handle(), 0, bgfx::Access::Write);
+    bgfx::setImage(3, output->native_handle(), 0, bgfx::Access::Write);
     gfx::set_texture(upsample_program_.s_gtao_normal, 4, params.g_buffer->get_texture(1));
-    gfx::dispatch(pass.id,
-                  upsample_program_.program->native_handle(),
-                  group_count(ctx.full_size.width, group_size),
-                  group_count(ctx.full_size.height, group_size),
-                  1);
+    bgfx::dispatch(pass.id,
+                   upsample_program_.program->native_handle(),
+                   group_count(ctx.full_size.width, group_size),
+                   group_count(ctx.full_size.height, group_size),
+                   1);
     return output;
 }
 
@@ -329,7 +329,7 @@ auto gtao_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::t
     ctx.cam = params.cam;
     ctx.config = params.config;
     gfx::render_pass::push_scope("GTAO");
-    auto depth_mips = create_or_update_texture(rview, TEX_DEPTH_MIPS, ctx.ao_size, gfx::texture_format::R32F, true, clamp_flags | point_flags);
+    auto depth_mips = create_or_update_texture(rview, TEX_DEPTH_MIPS, ctx.ao_size, bgfx::TextureFormat::R32F, true, clamp_flags | point_flags);
     run_prefilter(rview, ctx, params, depth_mips);
     auto result = run_main(rview, ctx, params, depth_mips);
     result = run_denoise(rview, ctx, params, depth_mips, result);

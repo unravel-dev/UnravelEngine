@@ -566,8 +566,11 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                 {
                     auto& prog = submit_params.skinned ? program_skinned_ : program_;
 
-                    gfx::set_state(mat.get_render_states());
-                    gfx::submit(pass.id, prog->native_handle(), 0, submit_params.preserve_state);
+                    bgfx::setState(mat.get_render_states());
+                    bgfx::submit(pass.id,
+                                 prog->native_handle(),
+                                 0,
+                                 submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
                 };
                 callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
                 {
@@ -579,7 +582,7 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
                 model.submit(world_transform, submesh_transforms, bone_transforms, skinning_transforms, current_lod_data.current_lod_index, callbacks);
             });
 
-        gfx::discard();
+        bgfx::discard();
 
         if(program_gizmos_)
         {
@@ -765,8 +768,8 @@ void picking_manager::on_frame_pick(rtti::context& ctx, delta_t dt)
         gfx::render_pass pass("Picking/Buffer Blit Pass");
         pass.touch();
         // Blit and read
-        gfx::blit(pass.id, blit_tex_->native_handle(), 0, 0, surface_->get_texture()->native_handle());
-        reading_ = gfx::read_texture(blit_tex_->native_handle(), blit_data_.data());
+        bgfx::blit(pass.id, blit_tex_->native_handle(), 0, 0, surface_->get_texture()->native_handle());
+        reading_ = bgfx::readTexture(blit_tex_->native_handle(), blit_data_.data());
         start_readback_ = false;
     }
 
@@ -901,7 +904,7 @@ auto picking_manager::init(rtti::context& ctx) -> bool
                                        tex_id_dim,
                                        false,
                                        1,
-                                       gfx::texture_format::RGBA8,
+                                       bgfx::TextureFormat::RGBA8,
                                        0 | BGFX_TEXTURE_RT | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
                                            BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 
@@ -910,7 +913,7 @@ auto picking_manager::init(rtti::context& ctx) -> bool
                                        tex_id_dim,
                                        false,
                                        1,
-                                       gfx::texture_format::D24S8,
+                                       bgfx::TextureFormat::D24S8,
                                        0 | BGFX_TEXTURE_RT | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
                                            BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 
@@ -926,7 +929,7 @@ auto picking_manager::init(rtti::context& ctx) -> bool
         tex_id_dim,
         false,
         1,
-        gfx::texture_format::RGBA8,
+        bgfx::TextureFormat::RGBA8,
         0 | BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
             BGFX_SAMPLER_MIP_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 

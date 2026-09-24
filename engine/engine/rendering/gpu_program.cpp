@@ -228,7 +228,7 @@ void set_transform(const std::vector<math::transform::mat4_t>& matrices)
         return;
     }
 
-    gfx::set_transform(matrices.data(), static_cast<std::uint16_t>(matrices.size()));
+    bgfx::setTransform(matrices.data(), static_cast<std::uint16_t>(matrices.size()));
 }
 
 void set_transform(const std::vector<math::transform>& matrices)
@@ -252,7 +252,7 @@ void set_transform(const std::vector<math::transform>& matrices)
 void set_transform(const math::transform::mat4_t& matrix)
 {
     auto mat4 = (const void*)math::value_ptr(matrix);
-    gfx::set_transform(mat4);
+    bgfx::setTransform(mat4);
 }
 
 void set_transform(const math::transform& matrix)

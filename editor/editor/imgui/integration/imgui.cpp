@@ -42,7 +42,7 @@
 #include <engine/assets/asset_manager.h>
 #include <graphics/shader.h>
 
-static const gfx::embedded_shader s_embeddedShaders[] = {BGFX_EMBEDDED_SHADER(vs_ocornut_imgui),
+static const bgfx::EmbeddedShader s_embeddedShaders[] = {BGFX_EMBEDDED_SHADER(vs_ocornut_imgui),
                                                          BGFX_EMBEDDED_SHADER(fs_ocornut_imgui),
                                                          BGFX_EMBEDDED_SHADER(vs_imgui_image),
                                                          BGFX_EMBEDDED_SHADER(fs_imgui_image),
@@ -68,9 +68,9 @@ static void memFree(void* _ptr, void* _userData);
 static void ImGui_ImplGFX_DestroyTexture(ImTextureData* tex)
 {
     auto tex_data = ImGui::FromId(tex->TexID);
-    if (tex_data.s.handle.idx == gfx::invalid_handle)
+    if (tex_data.s.handle.idx == bgfx::kInvalidHandle)
         return;
-    gfx::destroy(tex_data.s.handle);
+    bgfx::destroy(tex_data.s.handle);
 
     // Clear identifiers and mark as destroyed (in order to allow e.g. calling InvalidateDeviceObjects while running)
     tex->SetTexID(ImTextureID_Invalid);
@@ -92,17 +92,17 @@ void ImGui_ImplGFX_UpdateTexture(ImTextureData* tex)
 
         // Create texture
         // !Important. Do not provide a memory view, so the texture is not immutable.
-        auto backend_texture = gfx::create_texture_2d((uint16_t)tex->Width,
+        auto backend_texture = bgfx::createTexture2D((uint16_t)tex->Width,
                                            (uint16_t)tex->Height,
                                            false,
                                            1,
-                                           gfx::texture_format::BGRA8,
+                                           bgfx::TextureFormat::BGRA8,
                                            0,
                                            nullptr);
 
-        ImGui::ImTexture texture = ImGui::ToTex(backend_texture, 0, {gfx::invalid_handle}, 0, IMGUI_FLAGS_ALPHA_BLEND);
+        ImGui::ImTexture texture = ImGui::ToTex(backend_texture, 0, {bgfx::kInvalidHandle}, 0, IMGUI_FLAGS_ALPHA_BLEND);
 
-        gfx::update_texture_2d(backend_texture, 0, 0, 0, 0, tex->Width, tex->Height, gfx::make_ref(tex->GetPixels(), tex->Width * tex->Height * bpp), tex->GetPitch());
+        bgfx::updateTexture2D(backend_texture, 0, 0, 0, 0, tex->Width, tex->Height, bgfx::makeRef(tex->GetPixels(), tex->Width * tex->Height * bpp), tex->GetPitch());
 
         // Store identifiers
         tex->SetTexID(texture.id);
@@ -119,7 +119,7 @@ void ImGui_ImplGFX_UpdateTexture(ImTextureData* tex)
             texture.id = tex->TexID;
             auto data = tex->GetPixelsAt(r.x, r.y);
             auto bpp = tex->BytesPerPixel;
-            gfx::update_texture_2d(texture.s.handle, 0, 0, r.x, r.y, r.w, r.h, gfx::make_ref(data, r.w * r.h * bpp), tex->GetPitch());
+            bgfx::updateTexture2D(texture.s.handle, 0, 0, r.x, r.y, r.w, r.h, bgfx::makeRef(data, r.w * r.h * bpp), tex->GetPitch());
         }
 
 
@@ -133,7 +133,7 @@ void ImGui_ImplGFX_UpdateTexture(ImTextureData* tex)
 
 struct OcornutImguiContext
 {
-    void renderData(gfx::view_id id, ImDrawData* _drawData)
+    void renderData(bgfx::ViewId id, ImDrawData* _drawData)
     {
             // Catch up with texture updates. Most of the times, the list will have 1 element with an OK status, aka nothing to do.
         // (This almost always points to ImGui::GetPlatformIO().Textures[] but is part of ImDrawData to allow overriding or disabling texture updates).
@@ -152,9 +152,9 @@ struct OcornutImguiContext
         if(fb_width <= 0 || fb_height <= 0)
             return;
 
-        gfx::set_view_mode(id, gfx::view_mode::Sequential);
+        bgfx::setViewMode(id, bgfx::ViewMode::Sequential);
 
-        const gfx::caps* caps = gfx::get_caps();
+        const bgfx::Caps* caps = bgfx::getCaps();
         {
             float ortho[16];
             float x = _drawData->DisplayPos.x;
@@ -163,8 +163,8 @@ struct OcornutImguiContext
             float height = _drawData->DisplaySize.y;
 
             bx::mtxOrtho(ortho, x, x + width, y + height, y, 0.0f, 1000.0f, 0.0f, gfx::is_homogeneous_depth());
-            gfx::set_view_transform(id, nullptr, ortho);
-            gfx::set_view_rect(id, 0, 0, uint16_t(fb_width), uint16_t(fb_height));
+            bgfx::setViewTransform(id, nullptr, ortho);
+            bgfx::setViewRect(id, 0, 0, uint16_t(fb_width), uint16_t(fb_height));
         }
 
         // (0,0) unless using multi-viewports
@@ -176,8 +176,8 @@ struct OcornutImguiContext
         // Render command lists
         for(int32_t ii = 0, num = _drawData->CmdListsCount; ii < num; ++ii)
         {
-            gfx::transient_vertex_buffer tvb;
-            gfx::transient_index_buffer tib;
+            bgfx::TransientVertexBuffer tvb;
+            bgfx::TransientIndexBuffer tib;
 
             const ImDrawList* drawList = _drawData->CmdLists[ii];
             uint32_t numVertices = (uint32_t)drawList->VtxBuffer.size();
@@ -189,8 +189,8 @@ struct OcornutImguiContext
                 break;
             }
 
-            gfx::alloc_transient_vertex_buffer(&tvb, numVertices, m_layout);
-            gfx::alloc_transient_index_buffer(&tib, numIndices, sizeof(ImDrawIdx) == 4);
+            bgfx::allocTransientVertexBuffer(&tvb, numVertices, m_layout);
+            bgfx::allocTransientIndexBuffer(&tib, numIndices, sizeof(ImDrawIdx) == 4);
 
             ImDrawVert* verts = (ImDrawVert*)tvb.data;
             bx::memCopy(verts, drawList->VtxBuffer.begin(), numVertices * sizeof(ImDrawVert));
@@ -198,7 +198,7 @@ struct OcornutImguiContext
             ImDrawIdx* indices = (ImDrawIdx*)tib.data;
             bx::memCopy(indices, drawList->IdxBuffer.begin(), numIndices * sizeof(ImDrawIdx));
 
-            gfx::encoder* encoder = gfx::begin();
+            bgfx::Encoder* encoder = bgfx::begin();
 
             std::set<uint32_t> converted{};
 
@@ -215,8 +215,8 @@ struct OcornutImguiContext
                     uint64_t state = 0 | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_MSAA;
 
                     uint8_t tex_index = 0;
-                    // gfx::texture_handle th = m_texture;
-                    gfx::program_handle program = m_program;
+                    // bgfx::TextureHandle th = m_texture;
+                    bgfx::ProgramHandle program = m_program;
 
 
                     ImGui::ImTexture texture;
@@ -247,7 +247,7 @@ struct OcornutImguiContext
                         if(0 != texture.s.mip)
                         {
                             const float lodEnabled[4] = {float(texture.s.mip), 1.0f, 0.0f, 0.0f};
-                            gfx::set_uniform(u_imageLodEnabled, lodEnabled);
+                            bgfx::setUniform(u_imageLodEnabled, lodEnabled);
 
                             program = m_imageProgram;
                         }
@@ -255,13 +255,13 @@ struct OcornutImguiContext
                         if(0 != (IMGUI_FLAGS_CUBEMAP & texture.s.flags))
                         {
                             const float lodEnabled[4] = {float(texture.s.mip), 1.0f, 0.0f, 0.0f};
-                            gfx::set_uniform(u_imageLodEnabled, lodEnabled);
-                            program = (m_cubemapImageProgram.idx != gfx::invalid_handle)
+                            bgfx::setUniform(u_imageLodEnabled, lodEnabled);
+                            program = (m_cubemapImageProgram.idx != bgfx::kInvalidHandle)
                                           ? m_cubemapImageProgram
                                           : m_imageProgram;
                         }
 
-                        if(texture.s.phandle.idx != gfx::invalid_handle)
+                        if(texture.s.phandle.idx != bgfx::kInvalidHandle)
                         {
                             program = texture.s.phandle;
                         }
@@ -298,7 +298,7 @@ struct OcornutImguiContext
                 }
             }
 
-            gfx::end(encoder);
+            bgfx::end(encoder);
         }
     }
 
@@ -351,7 +351,7 @@ struct OcornutImguiContext
         io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         
-        const gfx::caps* caps = gfx::get_caps();
+        const bgfx::Caps* caps = bgfx::getCaps();
         ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
         platform_io.Renderer_TextureMaxWidth = platform_io.Renderer_TextureMaxHeight = (int)caps->limits.maxTextureSize;
     
@@ -364,24 +364,24 @@ struct OcornutImguiContext
         io.ConfigDpiScaleFonts = true;
         io.ConfigDpiScaleViewports = false;
         
-        auto type = gfx::get_renderer_type();
-        m_program = gfx::create_program(gfx::create_embedded_shader(s_embeddedShaders, type, "vs_ocornut_imgui"),
-                                        gfx::create_embedded_shader(s_embeddedShaders, type, "fs_ocornut_imgui"),
+        auto type = bgfx::getRendererType();
+        m_program = bgfx::createProgram(bgfx::createEmbeddedShader(s_embeddedShaders, type, "vs_ocornut_imgui"),
+                                        bgfx::createEmbeddedShader(s_embeddedShaders, type, "fs_ocornut_imgui"),
                                         true);
 
-        u_imageLodEnabled = gfx::create_uniform("u_imageLodEnabled", gfx::uniform_type::Vec4);
-        m_imageProgram = gfx::create_program(gfx::create_embedded_shader(s_embeddedShaders, type, "vs_imgui_image"),
-                                             gfx::create_embedded_shader(s_embeddedShaders, type, "fs_imgui_image"),
+        u_imageLodEnabled = bgfx::createUniform("u_imageLodEnabled", bgfx::UniformType::Vec4);
+        m_imageProgram = bgfx::createProgram(bgfx::createEmbeddedShader(s_embeddedShaders, type, "vs_imgui_image"),
+                                             bgfx::createEmbeddedShader(s_embeddedShaders, type, "fs_imgui_image"),
                                              true);
-        m_cubemapImageProgram = {gfx::invalid_handle};
+        m_cubemapImageProgram = {bgfx::kInvalidHandle};
 
         m_layout.begin()
-            .add(gfx::attribute::Position, 2, gfx::attribute_type::Float)
-            .add(gfx::attribute::TexCoord0, 2, gfx::attribute_type::Float)
-            .add(gfx::attribute::Color0, 4, gfx::attribute_type::Uint8, true)
+            .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true)
             .end();
 
-        s_tex = gfx::create_uniform("s_tex", gfx::uniform_type::Sampler);
+        s_tex = bgfx::createUniform("s_tex", bgfx::UniformType::Sampler);
 
         uint8_t* data{};
         int32_t width{};
@@ -543,7 +543,7 @@ struct OcornutImguiContext
         auto& am = ctx.get_cached<unravel::asset_manager>();
         auto vs_imgui_cubemap_image = am.get_asset<gfx::shader>("editor:/data/shaders/imgui/vs_imgui_cubemap_image.sc");
         auto fs_imgui_cubemap_image = am.get_asset<gfx::shader>("editor:/data/shaders/imgui/fs_imgui_cubemap_image.sc");
-        m_cubemapImageProgram = gfx::create_program(vs_imgui_cubemap_image.get()->native_handle(),
+        m_cubemapImageProgram = bgfx::createProgram(vs_imgui_cubemap_image.get()->native_handle(),
                                                     fs_imgui_cubemap_image.get()->native_handle(),
                                                     false);
     }
@@ -560,15 +560,15 @@ struct OcornutImguiContext
         ImGui::DestroyContext(m_imgui);
         ImGui::SetCurrentContext(nullptr);
 
-        gfx::destroy(s_tex);
+        bgfx::destroy(s_tex);
 
-        gfx::destroy(u_imageLodEnabled);
-        gfx::destroy(m_imageProgram);
-        if(m_cubemapImageProgram.idx != gfx::invalid_handle)
+        bgfx::destroy(u_imageLodEnabled);
+        bgfx::destroy(m_imageProgram);
+        if(m_cubemapImageProgram.idx != bgfx::kInvalidHandle)
         {
-            gfx::destroy(m_cubemapImageProgram);
+            bgfx::destroy(m_cubemapImageProgram);
         }
-        gfx::destroy(m_program);
+        bgfx::destroy(m_program);
 
         m_allocator = nullptr;
     }
@@ -584,7 +584,7 @@ struct OcornutImguiContext
         ImGuizmo::BeginFrame();
     }
 
-    void endFrame(gfx::view_id id)
+    void endFrame(bgfx::ViewId id)
     {
         m_drawCalls = 0;
         ImGui::Render();
@@ -594,13 +594,13 @@ struct OcornutImguiContext
 
     ImGuiContext* m_imgui{};
     bx::AllocatorI* m_allocator{};
-    gfx::vertex_layout m_layout;
-    gfx::program_handle m_program;
-    gfx::program_handle m_imageProgram;
-    gfx::program_handle m_cubemapImageProgram;
-    // gfx::texture_handle m_texture;
-    gfx::uniform_handle s_tex;
-    gfx::uniform_handle u_imageLodEnabled;
+    bgfx::VertexLayout m_layout;
+    bgfx::ProgramHandle m_program;
+    bgfx::ProgramHandle m_imageProgram;
+    bgfx::ProgramHandle m_cubemapImageProgram;
+    // bgfx::TextureHandle m_texture;
+    bgfx::UniformHandle s_tex;
+    bgfx::UniformHandle u_imageLodEnabled;
     std::vector<gfx::texture::ptr> m_keepAlive;
     ImFont* m_font[ImGui::Font::Count];
     std::vector<float> m_fontScale{};
@@ -647,7 +647,7 @@ void imguiBeginFrame(float dt)
     ImGui::PushFont(ImGui::Font::Regular);
 }
 
-void imguiEndFrame(gfx::view_id id)
+void imguiEndFrame(bgfx::ViewId id)
 {
     ImGui::PopFont();
     s_ctx.endFrame(id);

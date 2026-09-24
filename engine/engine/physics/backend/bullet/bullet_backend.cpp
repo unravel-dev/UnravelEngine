@@ -1622,9 +1622,9 @@ auto create_bullet_mesh_shapes(const physics_mesh_shape& shape)
             float v0[4];
             float v1[4];
             float v2[4];
-            gfx::vertex_unpack(v0, gfx::attribute::Position, vertex_format, vertex_data, i0);
-            gfx::vertex_unpack(v1, gfx::attribute::Position, vertex_format, vertex_data, i1);
-            gfx::vertex_unpack(v2, gfx::attribute::Position, vertex_format, vertex_data, i2);
+            bgfx::vertexUnpack(v0, bgfx::Attrib::Position, vertex_format, vertex_data, i0);
+            bgfx::vertexUnpack(v1, bgfx::Attrib::Position, vertex_format, vertex_data, i1);
+            bgfx::vertexUnpack(v2, bgfx::Attrib::Position, vertex_format, vertex_data, i2);
 
             btVector3 vertex0(v0[0], v0[1], v0[2]);
             btVector3 vertex1(v1[0], v1[1], v1[2]);

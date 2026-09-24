@@ -33,7 +33,7 @@ void imguiDestroy();
 void imguiProcessEvent(os::event& e);
 
 void imguiBeginFrame(float dt);
-void imguiEndFrame(gfx::view_id id);
+void imguiEndFrame(bgfx::ViewId id);
 
 namespace ImGui
 {
@@ -76,8 +76,8 @@ union ImTexture
 {
     struct
     {
-        gfx::texture_handle handle;
-        gfx::program_handle phandle;
+        bgfx::TextureHandle handle;
+        bgfx::ProgramHandle phandle;
         uint8_t flags;
         uint8_t mip;
         uint8_t index;
@@ -85,9 +85,9 @@ union ImTexture
     ImTextureID id;
 };
 
-inline ImTexture ToTex(gfx::texture_handle _handle,
+inline ImTexture ToTex(bgfx::TextureHandle _handle,
                        uint8_t _index,
-                       gfx::program_handle _phandle,
+                       bgfx::ProgramHandle _phandle,
                        uint8_t _mip = 0,
                        uint8_t _flags = IMGUI_FLAGS_ALPHA_BLEND)
 {
@@ -100,9 +100,9 @@ inline ImTexture ToTex(gfx::texture_handle _handle,
     return tex;
 }
 ///
-inline ImTextureID ToId(gfx::texture_handle _handle, uint8_t _mip = 0, uint8_t _flags = IMGUI_FLAGS_ALPHA_BLEND)
+inline ImTextureID ToId(bgfx::TextureHandle _handle, uint8_t _mip = 0, uint8_t _flags = IMGUI_FLAGS_ALPHA_BLEND)
 {
-    ImTexture tex = ToTex(_handle, 0, {gfx::invalid_handle}, _mip, _flags);
+    ImTexture tex = ToTex(_handle, 0, {bgfx::kInvalidHandle}, _mip, _flags);
     return tex.id;
 }
 
@@ -171,8 +171,8 @@ inline ImVec2 GetSize(const asset_handle<gfx::texture>& _handle, const ImVec2& f
     return fallback;
 }
 
-// Helper function for passing gfx::texture_handle to ImGui::Image.
-inline void Image(gfx::texture_handle _handle,
+// Helper function for passing bgfx::TextureHandle to ImGui::Image.
+inline void Image(bgfx::TextureHandle _handle,
                   uint8_t _mip,
                   uint8_t _flags,
                   const ImVec2& _size,
@@ -182,8 +182,8 @@ inline void Image(gfx::texture_handle _handle,
     Image(ToId(_handle, _mip, _flags), _size, _uv0, _uv1);
 }
 
-// Helper function for passing gfx::texture_handle to ImGui::Image.
-inline void Image(gfx::texture_handle _handle,
+// Helper function for passing bgfx::TextureHandle to ImGui::Image.
+inline void Image(bgfx::TextureHandle _handle,
                   const ImVec2& _size,
                   const ImVec2& _uv0 = ImVec2(0.0f, 0.0f),
                   const ImVec2& _uv1 = ImVec2(1.0f, 1.0f))
@@ -191,8 +191,8 @@ inline void Image(gfx::texture_handle _handle,
     Image(_handle, 0, IMGUI_FLAGS_ALPHA_BLEND, _size, _uv0, _uv1);
 }
 
-// Helper function for passing gfx::texture_handle to ImGui::ImageButton.
-inline bool ImageButton(gfx::texture_handle _handle,
+// Helper function for passing bgfx::TextureHandle to ImGui::ImageButton.
+inline bool ImageButton(bgfx::TextureHandle _handle,
                         uint8_t _mip,
                         uint8_t _flags,
                         const ImVec2& _size,
@@ -204,8 +204,8 @@ inline bool ImageButton(gfx::texture_handle _handle,
     return ImageButton("image", ToId(_handle, _mip, _flags), _size, _uv0, _uv1, _bgCol, _tintCol);
 }
 
-// Helper function for passing gfx::texture_handle to ImGui::ImageButton.
-inline bool ImageButton(gfx::texture_handle _handle,
+// Helper function for passing bgfx::TextureHandle to ImGui::ImageButton.
+inline bool ImageButton(bgfx::TextureHandle _handle,
                         const ImVec2& _size,
                         const ImVec2& _uv0 = ImVec2(0.0f, 0.0f),
                         const ImVec2& _uv1 = ImVec2(1.0f, 1.0f),

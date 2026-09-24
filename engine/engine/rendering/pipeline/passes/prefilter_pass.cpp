@@ -81,7 +81,7 @@ auto prefilter_pass::run_compute(gfx::render_view& rview, const run_params& para
             gfx::set_texture(cs_.s_env, 0, input_cube);
 
             // Bind output cubemap as 2D array image (all faces at once)
-            gfx::set_image(1, output_cube->native_handle(), mip, bgfx::Access::Write);
+            bgfx::setImage(1, output_cube->native_handle(), mip, bgfx::Access::Write);
 
             // Set uniforms for this mip level (no face index needed)
             float data[4] = {float(mip), 0.0f, float(cube_size), float(max_mips)};

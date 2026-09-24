@@ -23,12 +23,12 @@ auto compute_atlas_voxel_dim(uint32_t atlas_brick_dim) -> uint32_t
 }
 /// Layout of the header buffer: a flat array of vec4, which is what BUFFER_RO(_, vec4, _)
 /// expects on every backend (a typed Buffer<float4> on D3D, a StructuredBuffer elsewhere).
-auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
+auto get_vec4_buffer_layout() -> const bgfx::VertexLayout&
 {
-    static const gfx::vertex_layout layout = []()
+    static const bgfx::VertexLayout layout = []()
     {
-        gfx::vertex_layout decl;
-        decl.begin().add(gfx::attribute::TexCoord0, 4, gfx::attribute_type::Float).end();
+        bgfx::VertexLayout decl;
+        decl.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
         return decl;
     }();
     return layout;
@@ -66,7 +66,7 @@ auto sdf_atlas::init(const settings& settings) -> bool
                                                     static_cast<uint16_t>(voxel_dim),
                                                     static_cast<uint16_t>(voxel_dim),
                                                     false,
-                                                    gfx::texture_format::R8,
+                                                    bgfx::TextureFormat::R8,
                                                     flags);
     if(!atlas_texture_ || !atlas_texture_->is_valid())
     {
@@ -94,12 +94,12 @@ void sdf_atlas::shutdown()
 {
     if(bgfx::isValid(header_buffer_))
     {
-        gfx::destroy(header_buffer_);
+        bgfx::destroy(header_buffer_);
         header_buffer_ = {bgfx::kInvalidHandle};
     }
     if(bgfx::isValid(indirection_buffer_))
     {
-        gfx::destroy(indirection_buffer_);
+        bgfx::destroy(indirection_buffer_);
         indirection_buffer_ = {bgfx::kInvalidHandle};
     }
     atlas_texture_.reset();
@@ -143,7 +143,7 @@ auto sdf_atlas::grow() -> bool
                                                 static_cast<uint16_t>(new_voxel_dim),
                                                 static_cast<uint16_t>(new_voxel_dim),
                                                 false,
-                                                gfx::texture_format::R8,
+                                                bgfx::TextureFormat::R8,
                                                 flags);
     if(!grown || !grown->is_valid())
     {
@@ -281,7 +281,7 @@ void sdf_atlas::flush_pending_bricks()
             const uint32_t width_v = box_w * stride;
             const uint32_t height_v = box_h * stride;
             const uint32_t depth_v = box_d * stride;
-            const auto* mem = gfx::alloc(box_bricks * mesh_sdf::brick_voxel_count);
+            const auto* mem = bgfx::alloc(box_bricks * mesh_sdf::brick_voxel_count);
             for(uint32_t z = 0; z < depth_v; ++z)
             {
                 const uint32_t bz = z / stride;
@@ -302,15 +302,15 @@ void sdf_atlas::flush_pending_bricks()
                     }
                 }
             }
-            gfx::update_texture_3d(atlas_texture_->native_handle(),
-                                   0,
-                                   static_cast<uint16_t>(sx * stride),
-                                   static_cast<uint16_t>(sy * stride),
-                                   static_cast<uint16_t>(sz * stride),
-                                   static_cast<uint16_t>(width_v),
-                                   static_cast<uint16_t>(height_v),
-                                   static_cast<uint16_t>(depth_v),
-                                   mem);
+            bgfx::updateTexture3D(atlas_texture_->native_handle(),
+                                  0,
+                                  static_cast<uint16_t>(sx * stride),
+                                  static_cast<uint16_t>(sy * stride),
+                                  static_cast<uint16_t>(sz * stride),
+                                  static_cast<uint16_t>(width_v),
+                                  static_cast<uint16_t>(height_v),
+                                  static_cast<uint16_t>(depth_v),
+                                  mem);
             emitted += box_bricks;
         }
         begin += run;
@@ -548,14 +548,14 @@ void sdf_atlas::ensure_buffer_capacity()
     {
         if(bgfx::isValid(header_buffer_))
         {
-            gfx::destroy(header_buffer_);
+            bgfx::destroy(header_buffer_);
         }
         // Grow with slack so a scene loading many distinct meshes does not recreate the
         // buffer once per mesh.
         header_capacity_vec4_ = required_headers + required_headers / 2u + 64u;
-        header_buffer_ = gfx::create_dynamic_vertex_buffer(header_capacity_vec4_,
-                                                           ANONYMOUS::get_vec4_buffer_layout(),
-                                                           BGFX_BUFFER_COMPUTE_READ);
+        header_buffer_ = bgfx::createDynamicVertexBuffer(header_capacity_vec4_,
+                                                         ANONYMOUS::get_vec4_buffer_layout(),
+                                                         BGFX_BUFFER_COMPUTE_READ);
         headers_dirty_ = true;
     }
     const uint32_t required_indirection = uint32_t(indirection_data_.size());
@@ -563,12 +563,12 @@ void sdf_atlas::ensure_buffer_capacity()
     {
         if(bgfx::isValid(indirection_buffer_))
         {
-            gfx::destroy(indirection_buffer_);
+            bgfx::destroy(indirection_buffer_);
         }
         indirection_capacity_ = required_indirection + required_indirection / 2u + 4096u;
-        indirection_buffer_ = gfx::create_dynamic_index_buffer(indirection_capacity_,
-                                                               BGFX_BUFFER_COMPUTE_READ |
-                                                                   BGFX_BUFFER_INDEX32);
+        indirection_buffer_ = bgfx::createDynamicIndexBuffer(indirection_capacity_,
+                                                             BGFX_BUFFER_COMPUTE_READ |
+                                                                 BGFX_BUFFER_INDEX32);
         // A fresh buffer holds nothing: the whole master copy must go up, not just this
         // frame's span.
         indirection_dirty_min_ = 0;
@@ -591,9 +591,9 @@ void sdf_atlas::flush()
     ensure_buffer_capacity();
     if(headers_dirty_ && !header_data_.empty())
     {
-        gfx::update(header_buffer_,
-                    0,
-                    gfx::copy(header_data_.data(), uint32_t(header_data_.size() * sizeof(float))));
+        bgfx::update(header_buffer_,
+                     0,
+                     bgfx::copy(header_data_.data(), uint32_t(header_data_.size() * sizeof(float))));
         headers_dirty_ = false;
     }
     if(indirection_dirty_min_ < indirection_dirty_max_ && !indirection_data_.empty())
@@ -603,9 +603,9 @@ void sdf_atlas::flush()
         // bricks themselves.
         const uint32_t begin = indirection_dirty_min_;
         const uint32_t count = indirection_dirty_max_ - begin;
-        gfx::update(indirection_buffer_,
-                    begin,
-                    gfx::copy(indirection_data_.data() + begin, count * uint32_t(sizeof(uint32_t))));
+        bgfx::update(indirection_buffer_,
+                     begin,
+                     bgfx::copy(indirection_data_.data() + begin, count * uint32_t(sizeof(uint32_t))));
         indirection_dirty_min_ = 0;
         indirection_dirty_max_ = 0;
     }

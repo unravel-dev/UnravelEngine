@@ -98,10 +98,10 @@ static uint64_t blit_quad(const Rml::Rectanglei& src_rect,
 {
     bool origin_bottom_left = gfx::is_origin_bottom_left();
 
-    if(4 == gfx::get_avail_transient_vertex_buffer(4, gfx::pos_texcoord0_vertex::get_layout()))
+    if(4 == bgfx::getAvailTransientVertexBuffer(4, gfx::pos_texcoord0_vertex::get_layout()))
     {
-        gfx::transient_vertex_buffer vb;
-        gfx::alloc_transient_vertex_buffer(&vb, 4, gfx::pos_texcoord0_vertex::get_layout());
+        bgfx::TransientVertexBuffer vb;
+        bgfx::allocTransientVertexBuffer(&vb, 4, gfx::pos_texcoord0_vertex::get_layout());
         auto vertex = reinterpret_cast<gfx::pos_texcoord0_vertex*>(vb.data);
 
         // Convert source rectangle to UV coordinates (0.0 to 1.0)
@@ -189,7 +189,7 @@ static uint64_t blit_quad(const Rml::Rectanglei& src_rect,
         vertex[3].u = max_u;
         vertex[3].v = max_v;
 
-        gfx::set_vertex_buffer(0, &vb);
+        bgfx::setVertexBuffer(0, &vb);
     }
 
     return BGFX_STATE_PT_TRISTRIP;
@@ -344,15 +344,15 @@ void RmlUi_RenderInterface::end_frame()
     if(render_program.begin())
     {
         auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
-        gfx::set_texture(0, tex_uniform, source_texture->native_handle());
+        bgfx::setTexture(0, tex_uniform, source_texture->native_handle());
 
         uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);
         auto topology = gfx::clip_quad_ex({});
-        gfx::set_state(topology | state);
+        bgfx::setState(topology | state);
 
-        gfx::submit(main_pass.id, render_program.native_handle());
+        bgfx::submit(main_pass.id, render_program.native_handle());
         render_program.end();
-        gfx::discard();
+        bgfx::discard();
     }
 
     layers->end_frame();
@@ -415,18 +415,18 @@ auto RmlUi_RenderInterface::CompileGeometry(Rml::Span<const Rml::Vertex> vertice
     // RmlUi vertices have: position(2 floats), colour(4 bytes), tex_coord(2 floats)
     {
         auto vertices_size = vertex_layout_.getSize(vertices.size());
-        // Use gfx::copy() to ensure data lifetime - bgfx will manage the memory
-        const gfx::memory_view* mem = gfx::copy(vertices.data(), vertices_size);
+        // Use bgfx::copy() to ensure data lifetime - bgfx will manage the memory
+        const bgfx::Memory* mem = bgfx::copy(vertices.data(), vertices_size);
 
-        geometry.static_vertex_buffer = gfx::create_vertex_buffer(mem, vertex_layout_);
+        geometry.static_vertex_buffer = bgfx::createVertexBuffer(mem, vertex_layout_);
     }
 
     // Create index buffer
     {
         auto indices_size = static_cast<uint32_t>(indices.size() * sizeof(int));
-        // Use gfx::copy() to ensure data lifetime - bgfx will manage the memory
-        const gfx::memory_view* mem = gfx::copy(indices.data(), indices_size);
-        geometry.static_index_buffer = gfx::create_index_buffer(mem, BGFX_BUFFER_INDEX32);
+        // Use bgfx::copy() to ensure data lifetime - bgfx will manage the memory
+        const bgfx::Memory* mem = bgfx::copy(indices.data(), indices_size);
+        geometry.static_index_buffer = bgfx::createIndexBuffer(mem, BGFX_BUFFER_INDEX32);
     }
     // Verify buffers are valid
     if(!geometry.is_valid())
@@ -532,16 +532,16 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
                 {
                     const std::array<float, 4> requires_premultiplication_data = {
                         tex.requires_premultiplication ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
-                    gfx::set_uniform(requires_premultiplication_uniform, requires_premultiplication_data.data());
+                    bgfx::setUniform(requires_premultiplication_uniform, requires_premultiplication_data.data());
                 }
 
                 if(tex.asset.is_valid())
                 {
-                    gfx::set_texture(0, texture_uniform, tex.asset.get()->native_handle());
+                    bgfx::setTexture(0, texture_uniform, tex.asset.get()->native_handle());
                 }
                 else if(tex.generated_texture_ptr && tex.generated_texture_ptr->is_valid())
                 {
-                    gfx::set_texture(0, texture_uniform, tex.generated_texture_ptr->native_handle());
+                    bgfx::setTexture(0, texture_uniform, tex.generated_texture_ptr->native_handle());
                 }
                 else
                 {
@@ -560,17 +560,17 @@ void RmlUi_RenderInterface::RenderGeometry(Rml::CompiledGeometryHandle handle,
             uint32_t stencil_state = BGFX_STENCIL_TEST_EQUAL | BGFX_STENCIL_FUNC_REF(stencil_test_ref_) |
                                      BGFX_STENCIL_FUNC_RMASK(0xff) | BGFX_STENCIL_OP_FAIL_S_KEEP | 
                                      BGFX_STENCIL_OP_FAIL_Z_KEEP | BGFX_STENCIL_OP_PASS_Z_KEEP;
-            gfx::set_stencil(stencil_state, BGFX_STENCIL_NONE);
+            bgfx::setStencil(stencil_state, BGFX_STENCIL_NONE);
         }
 
         // Set up bgfx state for UI rendering
         // Enable alpha blending for UI elements
         uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);;
-        gfx::set_state(state);
+        bgfx::setState(state);
 
         // Submit draw call
-        gfx::submit(pass_id, render_program.native_handle());
-        gfx::discard();
+        bgfx::submit(pass_id, render_program.native_handle());
+        bgfx::discard();
         render_program.end();
     }
 }
@@ -674,9 +674,9 @@ auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_da
         return 0;
     }
 
-    // Use gfx::copy() instead of make_ref() because RmlUi's texture data has limited lifetime
+    // Use bgfx::copy() instead of make_ref() because RmlUi's texture data has limited lifetime
     // bgfx::copy() creates an internal copy that bgfx owns and automatically releases
-    const gfx::memory_view* mem = gfx::copy(source_data.data(), source_data.size());
+    const bgfx::Memory* mem = bgfx::copy(source_data.data(), source_data.size());
 
     // Create bgfx texture shared pointer directly from raw RGBA data
     // RmlUi provides RGBA8 data with premultiplied alpha
@@ -686,7 +686,7 @@ auto RmlUi_RenderInterface::GenerateTexture(Rml::Span<const Rml::byte> source_da
         static_cast<uint16_t>(source_dimensions.y),
         false, // no mips
         1,     // num layers
-        gfx::texture_format::RGBA8,
+        bgfx::TextureFormat::RGBA8,
         BGFX_TEXTURE_NONE, // Use default linear filtering for smooth text
         mem);
 
@@ -853,14 +853,14 @@ void RmlUi_RenderInterface::RenderToClipMask(Rml::ClipMaskOperation mask_operati
         set_scissor();
 
         // Set stencil state using BGfx's dedicated stencil function
-        gfx::set_stencil(stencil_state, BGFX_STENCIL_NONE);
+        bgfx::setStencil(stencil_state, BGFX_STENCIL_NONE);
 
         // Set render state for stencil writing (disable color writes, enable depth test)
         uint64_t render_state = BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS;
-        gfx::set_state(render_state);
+        bgfx::setState(render_state);
 
         // Submit the draw call
-        gfx::submit(pass_id, render_program.native_handle());
+        bgfx::submit(pass_id, render_program.native_handle());
         render_program.end();
     }
 
@@ -943,7 +943,7 @@ auto RmlUi_RenderInterface::SaveLayerAsTexture() -> Rml::TextureHandle
         static_cast<uint16_t>(height),
         false, // no mips
         1,     // num layers
-        gfx::texture_format::RGBA8,
+        bgfx::TextureFormat::RGBA8,
         BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST
     );
 
@@ -1005,7 +1005,7 @@ auto RmlUi_RenderInterface::SaveLayerAsTexture() -> Rml::TextureHandle
 
         // Bind source texture
         auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
-        gfx::set_texture(0, tex_uniform, source_texture->native_handle());
+        bgfx::setTexture(0, tex_uniform, source_texture->native_handle());
 
         // Use the existing positioned blit quad function to handle UV calculations
         auto source_size = source_fb.get_size();
@@ -1021,9 +1021,9 @@ auto RmlUi_RenderInterface::SaveLayerAsTexture() -> Rml::TextureHandle
         // auto quad_def = create_positioned_blit_quad(src_rect, dst_rect, src_texture_size, dst_framebuffer_size);
         // auto topology = gfx::clip_quad_ex(quad_def);
         auto topology = blit_quad(src_rect, dst_rect, src_texture_size, dst_framebuffer_size);
-        gfx::set_state(topology | state);
+        bgfx::setState(topology | state);
 
-        gfx::submit(copy_pass.id, render_program.native_handle());
+        bgfx::submit(copy_pass.id, render_program.native_handle());
         render_program.end();
     }
 
@@ -1082,14 +1082,14 @@ auto RmlUi_RenderInterface::SaveLayerAsMaskImage() -> Rml::CompiledFilterHandle
 
         // Bind source texture
         auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
-        gfx::set_texture(0, tex_uniform, source_texture->native_handle());
+        bgfx::setTexture(0, tex_uniform, source_texture->native_handle());
 
         // Set render state - disable blending for mask copy (replace mode)
         uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);
         auto topology = gfx::clip_quad_ex({});
-        gfx::set_state(topology | state);
+        bgfx::setState(topology | state);
 
-        gfx::submit(mask_pass.id, render_program.native_handle());
+        bgfx::submit(mask_pass.id, render_program.native_handle());
         render_program.end();
 
         // Mark the top layer as needing rebind since we've changed render state
@@ -1419,25 +1419,25 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
                 if(bgfx::isValid(func_uniform))
                 {
                     std::array<float, 4> func_data = {static_cast<float>(shader.gradient_function), 0.0f, 0.0f, 0.0f};
-                    gfx::set_uniform(func_uniform, func_data.data());
+                    bgfx::setUniform(func_uniform, func_data.data());
                 }
 
                 if(bgfx::isValid(p_uniform))
                 {
                     std::array<float, 4> p_data = {shader.p.x, shader.p.y, 0.0f, 0.0f};
-                    gfx::set_uniform(p_uniform, p_data.data());
+                    bgfx::setUniform(p_uniform, p_data.data());
                 }
 
                 if(bgfx::isValid(v_uniform))
                 {
                     std::array<float, 4> v_data = {shader.v.x, shader.v.y, 0.0f, 0.0f};
-                    gfx::set_uniform(v_uniform, v_data.data());
+                    bgfx::setUniform(v_uniform, v_data.data());
                 }
 
                 if(bgfx::isValid(num_stops_uniform))
                 {
                     std::array<float, 4> num_stops_data = {static_cast<float>(num_stops), 0.0f, 0.0f, 0.0f};
-                    gfx::set_uniform(num_stops_uniform, num_stops_data.data());
+                    bgfx::setUniform(num_stops_uniform, num_stops_data.data());
                 }
 
                 if(bgfx::isValid(stop_positions_uniform) && !shader.stop_positions.empty())
@@ -1448,7 +1448,7 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
                     {
                         stop_positions_data[i] = shader.stop_positions[i];
                     }
-                    gfx::set_uniform(stop_positions_uniform, stop_positions_data.data(), max_uniform_gradient_stop_positions);
+                    bgfx::setUniform(stop_positions_uniform, stop_positions_data.data(), max_uniform_gradient_stop_positions);
                 }
 
                 if(bgfx::isValid(stop_colors_uniform) && !shader.stop_colors.empty())
@@ -1462,15 +1462,15 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
                         stop_colors_data[i][2] = shader.stop_colors[i].blue;
                         stop_colors_data[i][3] = shader.stop_colors[i].alpha;
                     }
-                    gfx::set_uniform(stop_colors_uniform, stop_colors_data.data(), max_uniform_gradient_stop_colors);
+                    bgfx::setUniform(stop_colors_uniform, stop_colors_data.data(), max_uniform_gradient_stop_colors);
                 }
 
                 submit_transform_uniform(translation);
 
                 uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);
-                gfx::set_state(state);
+                bgfx::setState(state);
 
-                gfx::submit(pass_id, render_program.native_handle());
+                bgfx::submit(pass_id, render_program.native_handle());
                 render_program.end();
             }
         }
@@ -1504,21 +1504,21 @@ void RmlUi_RenderInterface::RenderShader(Rml::CompiledShaderHandle shader_handle
                 if(bgfx::isValid(value_uniform))
                 {
                     std::array<float, 4> value_data = {static_cast<float>(time), 0.0f, 0.0f, 0.0f};
-                    gfx::set_uniform(value_uniform, value_data.data());
+                    bgfx::setUniform(value_uniform, value_data.data());
                 }
 
                 if(bgfx::isValid(dimensions_uniform))
                 {
                     std::array<float, 4> dimensions_data = {shader.dimensions.x, shader.dimensions.y, 0.0f, 0.0f};
-                    gfx::set_uniform(dimensions_uniform, dimensions_data.data());
+                    bgfx::setUniform(dimensions_uniform, dimensions_data.data());
                 }
 
                 submit_transform_uniform(translation);
 
                 uint64_t state = convert_blend_mode(Rml::BlendMode::Blend);;
-                gfx::set_state(state);
+                bgfx::setState(state);
 
-                gfx::submit(pass_id, render_program.native_handle());
+                bgfx::submit(pass_id, render_program.native_handle());
                 render_program.end();
             }
         }
@@ -1566,9 +1566,9 @@ auto RmlUi_RenderInterface::init_vertex_layout() -> bool
     // Define vertex layout for RmlUi vertices
     // RmlUi::Vertex has: position(2 floats), color(4 bytes), texcoord(2 floats)
     vertex_layout_.begin()
-        .add(gfx::attribute::Position, 2, gfx::attribute_type::Float)
-        .add(gfx::attribute::Color0, 4, gfx::attribute_type::Uint8, true) // normalized
-        .add(gfx::attribute::TexCoord0, 2, gfx::attribute_type::Float)
+        .add(bgfx::Attrib::Position, 2, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true) // normalized
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .end();
 
     return true;
@@ -1644,44 +1644,44 @@ auto RmlUi_RenderInterface::init_shaders() -> bool
 
     // Create uniform handles
     uniforms_[static_cast<size_t>(RmlUi_UniformId::Transform)] =
-        gfx::create_uniform("u_transform", gfx::uniform_type::Mat4);
+        bgfx::createUniform("u_transform", bgfx::UniformType::Mat4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::Translate)] =
-        gfx::create_uniform("u_translate", gfx::uniform_type::Vec4);
-    uniforms_[static_cast<size_t>(RmlUi_UniformId::Tex)] = gfx::create_uniform("s_tex", gfx::uniform_type::Sampler);
+        bgfx::createUniform("u_translate", bgfx::UniformType::Vec4);
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::Tex)] = bgfx::createUniform("s_tex", bgfx::UniformType::Sampler);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::TexMask)] =
-        gfx::create_uniform("s_texMask", gfx::uniform_type::Sampler);
-    uniforms_[static_cast<size_t>(RmlUi_UniformId::Color)] = gfx::create_uniform("u_color", gfx::uniform_type::Vec4);
+        bgfx::createUniform("s_texMask", bgfx::UniformType::Sampler);
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::Color)] = bgfx::createUniform("u_color", bgfx::UniformType::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::ColorMatrix)] =
-        gfx::create_uniform("u_color_matrix", gfx::uniform_type::Mat4);
+        bgfx::createUniform("u_color_matrix", bgfx::UniformType::Mat4);
 
     // Gradient uniforms
     uniforms_[static_cast<size_t>(RmlUi_UniformId::Func)] =
-        gfx::create_uniform("u_gradient_func", gfx::uniform_type::Vec4);
-    uniforms_[static_cast<size_t>(RmlUi_UniformId::P)] = gfx::create_uniform("u_gradient_p", gfx::uniform_type::Vec4);
-    uniforms_[static_cast<size_t>(RmlUi_UniformId::V)] = gfx::create_uniform("u_gradient_v", gfx::uniform_type::Vec4);
+        bgfx::createUniform("u_gradient_func", bgfx::UniformType::Vec4);
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::P)] = bgfx::createUniform("u_gradient_p", bgfx::UniformType::Vec4);
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::V)] = bgfx::createUniform("u_gradient_v", bgfx::UniformType::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::StopColors)] =
-        gfx::create_uniform("u_gradient_stops", gfx::uniform_type::Vec4, max_uniform_gradient_stop_colors);
+        bgfx::createUniform("u_gradient_stops", bgfx::UniformType::Vec4, max_uniform_gradient_stop_colors);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::StopPositions)] =
-        gfx::create_uniform("u_gradient_positions", gfx::uniform_type::Vec4, max_uniform_gradient_stop_positions);
+        bgfx::createUniform("u_gradient_positions", bgfx::UniformType::Vec4, max_uniform_gradient_stop_positions);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::NumStops)] =
-        gfx::create_uniform("u_gradient_num_stops", gfx::uniform_type::Vec4);
+        bgfx::createUniform("u_gradient_num_stops", bgfx::UniformType::Vec4);
 
     // Blur uniforms
     uniforms_[static_cast<size_t>(RmlUi_UniformId::TexelOffset)] =
-        gfx::create_uniform("u_texelOffset", gfx::uniform_type::Vec4);
+        bgfx::createUniform("u_texelOffset", bgfx::UniformType::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::TexCoordMin)] =
-        gfx::create_uniform("u_texCoordMin", gfx::uniform_type::Vec4);
+        bgfx::createUniform("u_texCoordMin", bgfx::UniformType::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::TexCoordMax)] =
-        gfx::create_uniform("u_texCoordMax", gfx::uniform_type::Vec4);
+        bgfx::createUniform("u_texCoordMax", bgfx::UniformType::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::Weights)] =
-        gfx::create_uniform("u_weights", gfx::uniform_type::Vec4, max_uniform_weights);
+        bgfx::createUniform("u_weights", bgfx::UniformType::Vec4, max_uniform_weights);
 
     // Creation shader uniforms
-    uniforms_[static_cast<size_t>(RmlUi_UniformId::Value)] = gfx::create_uniform("u_value", gfx::uniform_type::Vec4);
+    uniforms_[static_cast<size_t>(RmlUi_UniformId::Value)] = bgfx::createUniform("u_value", bgfx::UniformType::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::TexRequiresPremultiplication)] =
-        gfx::create_uniform("u_tex_requires_premultiplication", gfx::uniform_type::Vec4);
+        bgfx::createUniform("u_tex_requires_premultiplication", bgfx::UniformType::Vec4);
     uniforms_[static_cast<size_t>(RmlUi_UniformId::Dimensions)] =
-        gfx::create_uniform("u_dimensions", gfx::uniform_type::Vec4);
+        bgfx::createUniform("u_dimensions", bgfx::UniformType::Vec4);
 
     // Verify uniforms are valid
     for(size_t i = 0; i < static_cast<size_t>(RmlUi_UniformId::Count); ++i)
@@ -1725,8 +1725,8 @@ void RmlUi_RenderInterface::cleanup_resources()
     {
         if(bgfx::isValid(uniform))
         {
-            gfx::destroy(uniform);
-            uniform = gfx::uniform_handle{gfx::invalid_handle};
+            bgfx::destroy(uniform);
+            uniform = bgfx::UniformHandle{bgfx::kInvalidHandle};
         }
     }
     // Layer cleanup is handled by the RenderLayerStack destructor
@@ -1741,14 +1741,14 @@ void RmlUi_RenderInterface::use_program(RmlUi_ProgramId program_id)
     }
 }
 
-auto RmlUi_RenderInterface::get_uniform_handle(RmlUi_UniformId uniform_id) const -> gfx::uniform_handle
+auto RmlUi_RenderInterface::get_uniform_handle(RmlUi_UniformId uniform_id) const -> bgfx::UniformHandle
 {
     size_t index = static_cast<size_t>(uniform_id);
     if(index < uniforms_.size())
     {
         return uniforms_[index];
     }
-    return gfx::uniform_handle{gfx::invalid_handle};
+    return bgfx::UniformHandle{bgfx::kInvalidHandle};
 }
 
 auto RmlUi_RenderInterface::get_viewport_size() const -> Rml::Vector2i
@@ -1771,14 +1771,14 @@ void RmlUi_RenderInterface::set_scissor()
         const int width = Rml::Math::Clamp(region.Width(), 0, vp.x - x);
         const int height = Rml::Math::Clamp(region.Height(), 0, vp.y - y);
 
-        gfx::set_scissor(static_cast<uint16_t>(x),
+        bgfx::setScissor(static_cast<uint16_t>(x),
                         static_cast<uint16_t>(y),
                         static_cast<uint16_t>(width),
                         static_cast<uint16_t>(height));
     }
 }
 
-void RmlUi_RenderInterface::set_view_scissor(gfx::view_id pass_id, const Rml::Rectanglei& region)
+void RmlUi_RenderInterface::set_view_scissor(bgfx::ViewId pass_id, const Rml::Rectanglei& region)
 {
     const auto vp = get_viewport_size();
     const int x = Rml::Math::Clamp(region.Left(), 0, vp.x);
@@ -1799,7 +1799,7 @@ void RmlUi_RenderInterface::submit_transform_uniform(Rml::Vector2f translation)
     auto transform_uniform = get_uniform_handle(RmlUi_UniformId::Transform);
     if(bgfx::isValid(transform_uniform))
     {
-        gfx::set_uniform(transform_uniform, transform_.Transpose().data());
+        bgfx::setUniform(transform_uniform, transform_.Transpose().data());
     }
 
     // Set translation uniform (for shader convenience)
@@ -1807,7 +1807,7 @@ void RmlUi_RenderInterface::submit_transform_uniform(Rml::Vector2f translation)
     if(bgfx::isValid(translate_uniform))
     {
         std::array<float, 4> translate_data = {translation.x, translation.y, 0.0f, 0.0f};
-        gfx::set_uniform(translate_uniform, translate_data.data());
+        bgfx::setUniform(translate_uniform, translate_data.data());
     }
 
     // Mark program as updated
@@ -1837,8 +1837,8 @@ void RmlUi_RenderInterface::clear_stencil_buffer(uint32_t clear_value)
 {
     // Use BGfx's built-in stencil clear functionality
     auto pass_id = get_layer_pass_id();
-    gfx::set_view_clear(pass_id, BGFX_CLEAR_STENCIL, 1.0f, static_cast<uint8_t>(clear_value));
-    gfx::touch(pass_id);
+    bgfx::setViewClear(pass_id, BGFX_CLEAR_STENCIL, 1.0f, static_cast<uint8_t>(clear_value));
+    bgfx::touch(pass_id);
 }
 
 
@@ -1894,12 +1894,12 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
 
                     // Bind source texture and render to destination
                     auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
-                    gfx::set_texture(0, tex_uniform, source_texture->native_handle());
+                    bgfx::setTexture(0, tex_uniform, source_texture->native_handle());
 
                     auto topology = gfx::clip_quad_ex({});
-                    gfx::set_state(topology | state);
+                    bgfx::setState(topology | state);
 
-                    gfx::submit(pass.id, render_program.native_handle());
+                    bgfx::submit(pass.id, render_program.native_handle());
                     render_program.end();
 
                     auto& layer = render_layers_->get_top_layer();
@@ -1948,7 +1948,7 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                             color[i] = (1.f / 255.f) * float(filter.color[i]);
 
                         std::array<float, 4> color_data = {color.red, color.green, color.blue, color.alpha};
-                        gfx::set_uniform(color_uniform, color_data.data());
+                        bgfx::setUniform(color_uniform, color_data.data());
                     }
 
                     // Set texture coordinate limits
@@ -1957,13 +1957,13 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     // Bind texture and render
                     auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
                     auto color_texture = source.get_color_texture();
-                    gfx::set_texture(0, tex_uniform, color_texture->native_handle());
+                    bgfx::setTexture(0, tex_uniform, color_texture->native_handle());
 
                     uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
                     auto topology = gfx::clip_quad_ex({});
-                    gfx::set_state(topology | state);
+                    bgfx::setState(topology | state);
 
-                    gfx::submit(pass.id, render_program.native_handle());
+                    bgfx::submit(pass.id, render_program.native_handle());
 
                     render_program.end();
 
@@ -1995,14 +1995,14 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
 
                     auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
-                    gfx::set_texture(0, tex_uniform, source.get_color_texture()->native_handle());
+                    bgfx::setTexture(0, tex_uniform, source.get_color_texture()->native_handle());
 
             
                     // Set render state - disable blending for upscale
                     uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
                     auto topology = gfx::clip_quad_ex({});
-                    gfx::set_state(topology | state);
-                    gfx::submit(pass.id, passthrough_program.native_handle());
+                    bgfx::setState(topology | state);
+                    bgfx::submit(pass.id, passthrough_program.native_handle());
                 
                     passthrough_program.end();
                 }
@@ -2030,18 +2030,18 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
                     // Set color matrix
                     auto matrix_uniform = get_uniform_handle(RmlUi_UniformId::ColorMatrix);
-                    gfx::set_uniform(matrix_uniform, filter.color_matrix.Transpose().data());
+                    bgfx::setUniform(matrix_uniform, filter.color_matrix.Transpose().data());
 
                     // Bind texture and render
                     auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
                     auto color_texture = source.get_color_texture();
-                    gfx::set_texture(0, tex_uniform, color_texture->native_handle());
+                    bgfx::setTexture(0, tex_uniform, color_texture->native_handle());
 
                     uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
                     auto topology = gfx::clip_quad_ex({});
-                    gfx::set_state(topology | state);
+                    bgfx::setState(topology | state);
 
-                    gfx::submit(pass.id, render_program.native_handle());
+                    bgfx::submit(pass.id, render_program.native_handle());
                     render_program.end();
 
                     auto& layer = render_layers_->get_top_layer();
@@ -2075,16 +2075,16 @@ void RmlUi_RenderInterface::render_filters(Rml::Span<const Rml::CompiledFilterHa
                     auto mask_uniform = get_uniform_handle(RmlUi_UniformId::TexMask);
 
                     auto color_texture = source.get_color_texture();
-                    gfx::set_texture(0, tex_uniform, color_texture->native_handle());
+                    bgfx::setTexture(0, tex_uniform, color_texture->native_handle());
 
                     auto mask_texture = render_layers_->get_blend_mask().get_color_texture();
-                    gfx::set_texture(1, mask_uniform, mask_texture->native_handle());
+                    bgfx::setTexture(1, mask_uniform, mask_texture->native_handle());
 
                     uint64_t state = convert_blend_mode(Rml::BlendMode::Replace);;
                     auto topology = gfx::clip_quad_ex({});
-                    gfx::set_state(topology | state);
+                    bgfx::setState(topology | state);
 
-                    gfx::submit(pass.id, render_program.native_handle());
+                    bgfx::submit(pass.id, render_program.native_handle());
 
                     render_program.end();
 
@@ -2176,7 +2176,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             const RmlUi_LayerFramebuffer& source_fb = from_source ? source_destination : temp;
             auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
             auto source_texture = source_fb.get_color_texture();
-            gfx::set_texture(0, tex_uniform, source_texture->native_handle());
+            bgfx::setTexture(0, tex_uniform, source_texture->native_handle());
 
             set_view_scissor(downscale_pass.id, scissor);
 
@@ -2185,9 +2185,9 @@ void RmlUi_RenderInterface::render_blur(float sigma,
 
             auto def = gfx::clip_quad_def{0.0f, 1.0f, 1.0f, 0.0f, 0.0f, uv_scaling.x, uv_scaling.y};
             auto topology = gfx::clip_quad_ex(def);
-            gfx::set_state(topology | state);
+            bgfx::setState(topology | state);
 
-            gfx::submit(downscale_pass.id, passthrough_program.native_handle());
+            bgfx::submit(downscale_pass.id, passthrough_program.native_handle());
         }
         passthrough_program.end();
     }
@@ -2208,14 +2208,14 @@ void RmlUi_RenderInterface::render_blur(float sigma,
 
         auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
         auto source_texture = source_destination.get_color_texture();
-        gfx::set_texture(0, tex_uniform, source_texture->native_handle());
+        bgfx::setTexture(0, tex_uniform, source_texture->native_handle());
 
         // Set render state - disable blending for transfer
         uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
 
         auto topology = gfx::clip_quad_ex({});
-        gfx::set_state(topology | state);
-        gfx::submit(transfer_pass.id, passthrough_program.native_handle());
+        bgfx::setState(topology | state);
+        bgfx::submit(transfer_pass.id, passthrough_program.native_handle());
         passthrough_program.end();
     }
 
@@ -2246,16 +2246,16 @@ void RmlUi_RenderInterface::render_blur(float sigma,
 
 
             auto temp_texture = temp.get_color_texture();
-            gfx::set_texture(0, tex_uniform, temp_texture->native_handle());
+            bgfx::setTexture(0, tex_uniform, temp_texture->native_handle());
 
             std::array<float, 4> vertical_offset = {0.0f, 1.0f / float(temp.get_size().height), 0.0f, 0.0f};
-            gfx::set_uniform(texel_offset_uniform, vertical_offset.data());
+            bgfx::setUniform(texel_offset_uniform, vertical_offset.data());
 
             // Set render state - disable blending for blur
             uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
             auto topology = gfx::clip_quad_ex({});
-            gfx::set_state(topology | state);
-            gfx::submit(vertical_blur_pass.id, blur_program.native_handle());
+            bgfx::setState(topology | state);
+            bgfx::submit(vertical_blur_pass.id, blur_program.native_handle());
         }
 
         // Blur render pass - horizontal
@@ -2273,19 +2273,19 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             horizontal_blur_pass.clear(BGFX_CLEAR_COLOR, 0x00000000, 1.0f, 0);
 
             auto source_texture = source_destination.get_color_texture();
-            gfx::set_texture(0, tex_uniform, source_texture->native_handle());
+            bgfx::setTexture(0, tex_uniform, source_texture->native_handle());
 
             std::array<float, 4> horizontal_offset = {1.0f / float(source_destination.get_size().width),
                                                       0.0f,
                                                       0.0f,
                                                       0.0f};
-            gfx::set_uniform(texel_offset_uniform, horizontal_offset.data());
+            bgfx::setUniform(texel_offset_uniform, horizontal_offset.data());
 
             // Set render state - disable blending for blur
             uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | convert_blend_mode(Rml::BlendMode::Replace);;
             auto topology = gfx::clip_quad_ex({});
-            gfx::set_state(topology | state);
-            gfx::submit(horizontal_blur_pass.id, blur_program.native_handle());
+            bgfx::setState(topology | state);
+            bgfx::submit(horizontal_blur_pass.id, blur_program.native_handle());
         }
 
         blur_program.end();
@@ -2310,7 +2310,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             upscale_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
 
             auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
-            gfx::set_texture(0, tex_uniform, temp_texture->native_handle());
+            bgfx::setTexture(0, tex_uniform, temp_texture->native_handle());
 
             // Define source and destination rectangles (matching GL3 glBlitFramebuffer parameters)
             const Rml::Rectanglei src_rect = scissor;       // Source region in temp texture
@@ -2326,8 +2326,8 @@ void RmlUi_RenderInterface::render_blur(float sigma,
             // Use positioned blit quad (no scissor needed - geometry is positioned correctly)
             auto blit_quad = create_positioned_blit_quad(src_rect, dst_rect, src_texture_size, dst_framebuffer_size);
             auto topology = gfx::clip_quad_ex(blit_quad);
-            gfx::set_state(topology | state);
-            gfx::submit(upscale_pass.id, passthrough_program.native_handle());
+            bgfx::setState(topology | state);
+            bgfx::submit(upscale_pass.id, passthrough_program.native_handle());
         }
 
     //     // Second blit: exact power-of-two upscaling for stability (if needed)
@@ -2351,7 +2351,7 @@ void RmlUi_RenderInterface::render_blur(float sigma,
     //         power_of_two_pass.set_view_proj(view.Transpose().data(), proj.Transpose().data());
 
     //         auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
-    //         gfx::set_texture(0, tex_uniform, temp_texture->native_handle());
+    //         bgfx::setTexture(0, tex_uniform, temp_texture->native_handle());
 
     //         // Define source and destination rectangles for power-of-two upscaling
     //         const Rml::Rectanglei src_rect = scissor; // Same source region
@@ -2367,8 +2367,8 @@ void RmlUi_RenderInterface::render_blur(float sigma,
 
     //         uint64_t state = BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
     //         auto topology = gfx::clip_quad_ex(blit_quad);
-    //         gfx::set_state(topology | state);
-    //         gfx::submit(power_of_two_pass.id, passthrough_program.native_handle());
+    //         bgfx::setState(topology | state);
+    //         bgfx::submit(power_of_two_pass.id, passthrough_program.native_handle());
     //     }
 
         passthrough_program.end();
@@ -2425,7 +2425,7 @@ void RmlUi_RenderInterface::set_blur_weights(float sigma)
     auto weights_uniform = get_uniform_handle(RmlUi_UniformId::Weights);
     if(bgfx::isValid(weights_uniform))
     {
-        gfx::set_uniform(weights_uniform, weights.data(), max_uniform_weights);
+        bgfx::setUniform(weights_uniform, weights.data(), max_uniform_weights);
     }
 }
 
@@ -2448,13 +2448,13 @@ void RmlUi_RenderInterface::set_tex_coord_limits(Rml::Rectanglei region, Rml::Ve
     if(bgfx::isValid(min_uniform))
     {
         std::array<float, 4> min_data = {min.x, min.y, 0.0f, 0.0f};
-        gfx::set_uniform(min_uniform, min_data.data());
+        bgfx::setUniform(min_uniform, min_data.data());
     }
 
     if(bgfx::isValid(max_uniform))
     {
         std::array<float, 4> max_data = {max.x, max.y, 0.0f, 0.0f};
-        gfx::set_uniform(max_uniform, max_data.data());
+        bgfx::setUniform(max_uniform, max_data.data());
     }
 }
 
@@ -2494,15 +2494,15 @@ void RmlUi_RenderInterface::blit_layer_to_postprocess_primary(Rml::LayerHandle l
     if(source_texture && source_texture->is_valid() && destination_texture && destination_texture->is_valid())
     {
         auto size = source_layer.get_size();
-        gfx::blit(blit_pass.id,
-                  destination_texture->native_handle(),
-                  0,
-                  0,
-                  source_texture->native_handle(),
-                  0,
-                  0,
-                  static_cast<uint16_t>(size.width),
-                  static_cast<uint16_t>(size.height));
+        bgfx::blit(blit_pass.id,
+                   destination_texture->native_handle(),
+                   0,
+                   0,
+                   source_texture->native_handle(),
+                   0,
+                   0,
+                   static_cast<uint16_t>(size.width),
+                   static_cast<uint16_t>(size.height));
     }
     else
     {
@@ -2545,20 +2545,20 @@ void RmlUi_RenderInterface::composite_to_destination_layer(Rml::LayerHandle dest
         // Bind the postprocessed texture
         auto tex_uniform = get_uniform_handle(RmlUi_UniformId::Tex);
         auto source_texture = source_fb.get_color_texture();
-        gfx::set_texture(0, tex_uniform, source_texture->native_handle());
+        bgfx::setTexture(0, tex_uniform, source_texture->native_handle());
 
         // Set up render state based on blend mode
         uint64_t state = convert_blend_mode(blend_mode);
         auto topology = gfx::clip_quad_ex({});
-        gfx::set_state(topology | state);
+        bgfx::setState(topology | state);
 
-        gfx::submit(pass.id, render_program.native_handle());
+        bgfx::submit(pass.id, render_program.native_handle());
 
         render_program.end();
     }
 }
 
-auto RmlUi_RenderInterface::get_layer_pass_id() -> gfx::view_id
+auto RmlUi_RenderInterface::get_layer_pass_id() -> bgfx::ViewId
 {
     auto& target_layer = render_layers_->get_top_layer();
 
@@ -2579,15 +2579,15 @@ auto RmlUi_RenderInterface::get_layer_pass_id() -> gfx::view_id
 }
 
 
-void RmlUi_RenderInterface::CompiledGeometry::bind_buffers(const gfx::vertex_layout& vertex_layout) const
+void RmlUi_RenderInterface::CompiledGeometry::bind_buffers(const bgfx::VertexLayout& vertex_layout) const
 {
     switch(buffer_type)
     {
         case GeometryBufferType::Transient:
             // Bind transient buffers
 
-            gfx::transient_vertex_buffer transient_vertex_buffer;
-            gfx::transient_index_buffer transient_index_buffer;
+            bgfx::TransientVertexBuffer transient_vertex_buffer;
+            bgfx::TransientIndexBuffer transient_index_buffer;
             if(allocate_transient_buffers(num_vertices,
                                           num_indices,
                                           vertex_layout,
@@ -2606,16 +2606,16 @@ void RmlUi_RenderInterface::CompiledGeometry::bind_buffers(const gfx::vertex_lay
                     bx::memCopy(transient_index_buffer.data, indices.data(), indices.size() * sizeof(int));
                 }
 
-                gfx::set_vertex_buffer(0, &transient_vertex_buffer);
-                gfx::set_index_buffer(&transient_index_buffer);
+                bgfx::setVertexBuffer(0, &transient_vertex_buffer);
+                bgfx::setIndexBuffer(&transient_index_buffer);
             }
             break;
 
         case GeometryBufferType::Static:
         default:
             // Bind static buffers
-            gfx::set_vertex_buffer(0, static_vertex_buffer);
-            gfx::set_index_buffer(static_index_buffer);
+            bgfx::setVertexBuffer(0, static_vertex_buffer);
+            bgfx::setIndexBuffer(static_index_buffer);
             break;
     }
 }
@@ -2635,12 +2635,12 @@ void RmlUi_RenderInterface::CompiledGeometry::destroy_buffers()
             // Destroy static buffers
             if(bgfx::isValid(static_vertex_buffer))
             {
-                gfx::destroy(static_vertex_buffer);
+                bgfx::destroy(static_vertex_buffer);
                 static_vertex_buffer = BGFX_INVALID_HANDLE;
             }
             if(bgfx::isValid(static_index_buffer))
             {
-                gfx::destroy(static_index_buffer);
+                bgfx::destroy(static_index_buffer);
                 static_index_buffer = BGFX_INVALID_HANDLE;
             }
             break;
@@ -2674,20 +2674,20 @@ auto RmlUi_RenderInterface::classify_geometry(uint32_t num_vertices, uint32_t nu
 
 auto RmlUi_RenderInterface::allocate_transient_buffers(uint32_t num_vertices,
                                                        uint32_t num_indices,
-                                                       const gfx::vertex_layout& vertex_layout,
-                                                       gfx::transient_vertex_buffer& tvb,
-                                                       gfx::transient_index_buffer& tib) -> bool
+                                                       const bgfx::VertexLayout& vertex_layout,
+                                                       bgfx::TransientVertexBuffer& tvb,
+                                                       bgfx::TransientIndexBuffer& tib) -> bool
 {
     // Check if transient buffers are available
-    if(gfx::get_avail_transient_vertex_buffer(num_vertices, vertex_layout) < num_vertices ||
-       gfx::get_avail_transient_index_buffer(num_indices, true) < num_indices) // true for 32-bit indices
+    if(bgfx::getAvailTransientVertexBuffer(num_vertices, vertex_layout) < num_vertices ||
+       bgfx::getAvailTransientIndexBuffer(num_indices, true) < num_indices) // true for 32-bit indices
     {
         return false;
     }
 
     // Allocate transient buffers
-    gfx::alloc_transient_vertex_buffer(&tvb, num_vertices, vertex_layout);
-    gfx::alloc_transient_index_buffer(&tib, num_indices, true); // true for 32-bit indices
+    bgfx::allocTransientVertexBuffer(&tvb, num_vertices, vertex_layout);
+    bgfx::allocTransientIndexBuffer(&tib, num_indices, true); // true for 32-bit indices
 
     return tvb.data != nullptr && tib.data != nullptr;
 }

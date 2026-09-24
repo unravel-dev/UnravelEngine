@@ -87,18 +87,18 @@ auto blit_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
     {
         state |= BGFX_STATE_BLEND_ALPHA;
     }
-    gfx::set_state(state);
+    bgfx::setState(state);
 
     // 7) Submit to the current view (render_pass::bind will have set the view ID)
-    gfx::submit(pass.id, blit_program_.program->native_handle());
+    bgfx::submit(pass.id, blit_program_.program->native_handle());
 
     // 8) Reset to default state (optional but good practice)
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(BGFX_STATE_DEFAULT);
 
     blit_program_.program->end();
 
     // 9) Unbind/discard any transient state (optional).
-    gfx::discard();
+    bgfx::discard();
 
     return actual_output;
 }

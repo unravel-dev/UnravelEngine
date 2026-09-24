@@ -42,8 +42,8 @@ private:
         // For FXAA we really only need to set up the sampler uniform (s_input).
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_input, "s_input", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_output_noise, "u_output_noise", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_input, "s_input", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_output_noise, "u_output_noise", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr s_input;

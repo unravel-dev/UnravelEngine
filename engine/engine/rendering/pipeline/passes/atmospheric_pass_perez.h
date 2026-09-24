@@ -244,19 +244,19 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_sunLuminance, "u_sunLuminance", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_skyLuminanceXYZ, "u_skyLuminanceXYZ", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_skyLuminance, "u_skyLuminance", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sunDirection, "u_sunDirection", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_parameters, "u_parameters", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_perezCoeff, "u_perezCoeff", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams, "u_cloudParams", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams3, "u_cloudParams3", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_sunLuminance, "u_sunLuminance", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_skyLuminanceXYZ, "u_skyLuminanceXYZ", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_skyLuminance, "u_skyLuminance", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sunDirection, "u_sunDirection", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_parameters, "u_parameters", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_perezCoeff, "u_perezCoeff", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams, "u_cloudParams", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams3, "u_cloudParams3", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr u_pre_exposure;
@@ -282,26 +282,26 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_skyLuminanceXYZ, "u_skyLuminanceXYZ", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_skyLuminance, "u_skyLuminance", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sunLuminance, "u_sunLuminance", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sunDirection, "u_sunDirection", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_parameters, "u_parameters", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_perezCoeff, "u_perezCoeff", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams, "u_cloudParams", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams3, "u_cloudParams3", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_cloudNoise, "s_cloudNoise", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_cloudHistory, "s_cloudHistory", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_cloudHistoryAux, "s_cloudHistoryAux", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_cloudFrame, "u_cloudFrame", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudHistory, "u_cloudHistory", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_prevViewProj, "u_prevViewProj", gfx::uniform_type::Mat4);
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_skyLuminanceXYZ, "u_skyLuminanceXYZ", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_skyLuminance, "u_skyLuminance", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sunLuminance, "u_sunLuminance", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sunDirection, "u_sunDirection", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_parameters, "u_parameters", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_perezCoeff, "u_perezCoeff", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams, "u_cloudParams", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams3, "u_cloudParams3", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_cloudNoise, "s_cloudNoise", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_cloudHistory, "s_cloudHistory", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_cloudHistoryAux, "s_cloudHistoryAux", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_cloudFrame, "u_cloudFrame", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudHistory, "u_cloudHistory", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_prevViewProj, "u_prevViewProj", bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr u_skyLuminanceXYZ;
@@ -333,10 +333,10 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_cloudComposite, "u_cloudComposite", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_cloudTex, "s_cloudTex", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_cloudAux, "s_cloudAux", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_cloudComposite, "u_cloudComposite", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_cloudTex, "s_cloudTex", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_cloudAux, "s_cloudAux", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
         }
 
         gfx::program::uniform_ptr u_cloudComposite;
@@ -352,15 +352,15 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_sunDirection, "u_sunDirection", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams, "u_cloudParams", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams3, "u_cloudParams3", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_cloudShadowMap, "u_cloudShadowMap", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_cloudNoise, "s_cloudNoise", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_sunDirection, "u_sunDirection", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams, "u_cloudParams", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams2, "u_cloudParams2", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams3, "u_cloudParams3", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudParams4, "u_cloudParams4", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudCamera, "u_cloudCamera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_cloudShadowMap, "u_cloudShadowMap", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_cloudNoise, "s_cloudNoise", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_cloudNoise2D, "s_cloudNoise2D", bgfx::UniformType::Sampler);
         }
 
         gfx::program::uniform_ptr u_sunDirection;

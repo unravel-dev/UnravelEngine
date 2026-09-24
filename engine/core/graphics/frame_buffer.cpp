@@ -7,7 +7,7 @@ namespace
 }
 frame_buffer::frame_buffer(std::uint16_t _width,
                            std::uint16_t _height,
-                           texture_format _format,
+                           bgfx::TextureFormat::Enum _format,
                            std::uint32_t _textureFlags)
     : frame_buffer(std::vector<texture::ptr>{
           std::make_shared<texture>(_width, _height, false, 1, _format, _textureFlags),
@@ -28,10 +28,10 @@ frame_buffer::frame_buffer(const std::vector<fbo_attachment>& textures)
 frame_buffer::frame_buffer(void* _nwh,
                            uint16_t _width,
                            uint16_t _height,
-                           texture_format _format,
-                           texture_format _depth_format)
+                           bgfx::TextureFormat::Enum _format,
+                           bgfx::TextureFormat::Enum _depth_format)
 {
-    handle_ = create_frame_buffer(_nwh, _width, _height, _format, _depth_format);
+    handle_ = bgfx::createFrameBuffer(_nwh, _width, _height, _format, _depth_format);
 
     cached_size_ = {_width, _height};
 }
@@ -45,7 +45,7 @@ void frame_buffer::populate(const std::vector<texture::ptr>& textures)
         attachments.emplace_back();
         auto& back = attachments.back();
         back.texture = tex;
-        back.generate_mips = tex->info.format < texture_format::UnknownDepth;
+        back.generate_mips = tex->info.format < bgfx::TextureFormat::UnknownDepth;
     }
 
     populate(attachments);
@@ -53,7 +53,7 @@ void frame_buffer::populate(const std::vector<texture::ptr>& textures)
 
 void frame_buffer::populate(const std::vector<fbo_attachment>& textures)
 {
-    std::vector<attachment> buffer;
+    std::vector<bgfx::Attachment> buffer;
     buffer.reserve(textures.size());
 
     usize32_t size = {0, 0};
@@ -63,12 +63,12 @@ void frame_buffer::populate(const std::vector<fbo_attachment>& textures)
 
         buffer.emplace_back();
         auto& att = buffer.back();
-        att.init(tex.texture->native_handle(), access::Write, tex.layer, 1, tex.mip, (tex.generate_mips ? BGFX_RESOLVE_AUTO_GEN_MIPS : BGFX_RESOLVE_NONE));
+        att.init(tex.texture->native_handle(), bgfx::Access::Write, tex.layer, 1, tex.mip, (tex.generate_mips ? BGFX_RESOLVE_AUTO_GEN_MIPS : BGFX_RESOLVE_NONE));
     }
     textures_ = textures;
 
     dispose();
-    handle_ = create_frame_buffer(static_cast<std::uint8_t>(buffer.size()), buffer.data(), false);
+    handle_ = bgfx::createFrameBuffer(static_cast<std::uint8_t>(buffer.size()), buffer.data(), false);
     cached_size_ = size;
 }
 

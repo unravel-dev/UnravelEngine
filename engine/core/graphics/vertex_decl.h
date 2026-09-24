@@ -5,18 +5,14 @@
 namespace gfx
 {
 
-using vertex_layout = bgfx::VertexLayout;
-using attribute = bgfx::Attrib::Enum;
-using attribute_type = bgfx::AttribType::Enum;
-
 template<typename T>
 struct vertex
 {
-    static auto get_layout() -> const vertex_layout&
+    static auto get_layout() -> const bgfx::VertexLayout&
     {
-        static vertex_layout s_decl = []()
+        static bgfx::VertexLayout s_decl = []()
         {
-            vertex_layout decl;
+            bgfx::VertexLayout decl;
             T::init(decl);
             return decl;
         }();
@@ -29,7 +25,7 @@ struct screen_pos_vertex : vertex<screen_pos_vertex>
     float x = 0.0f;
     float y = 0.0f;
 
-    static void init(vertex_layout& decl);
+    static void init(bgfx::VertexLayout& decl);
 };
 
 struct pos_vertex : vertex<pos_vertex>
@@ -38,7 +34,7 @@ struct pos_vertex : vertex<pos_vertex>
     float y = 0.0f;
     float z = 0.0f;
 
-    static void init(vertex_layout& decl);
+    static void init(bgfx::VertexLayout& decl);
 };
 
 struct pos_texcoord0_vertex : vertex<pos_texcoord0_vertex>
@@ -50,16 +46,16 @@ struct pos_texcoord0_vertex : vertex<pos_texcoord0_vertex>
     float u = 0.0f;
     float v = 0.0f;
 
-    static void init(vertex_layout& decl);
+    static void init(bgfx::VertexLayout& decl);
 };
 
 struct mesh_vertex : vertex<mesh_vertex>
 {
-    static void init(vertex_layout& decl);
+    static void init(bgfx::VertexLayout& decl);
 };
 
 struct pos_texcoord0_color0_vertex : vertex<pos_texcoord0_color0_vertex>
 {
-    static void init(vertex_layout& decl);
+    static void init(bgfx::VertexLayout& decl);
 };
 } // namespace gfx

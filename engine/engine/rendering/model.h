@@ -668,8 +668,8 @@ public:
      *   - Bound the mesh's hardware vertex buffer on compute stage @c 0 and its
      *     hardware index buffer on compute stage @c 1 (both read-only).
      * The callback is expected to set the shader program, any additional uniforms,
-     * render state, call @c gfx::set_vertex_count(...) with the effect-specific
-     * vertex multiplier, and finally @c gfx::submit(...) on the desired view.
+     * render state, call @c bgfx::setVertexCount(...) with the effect-specific
+     * vertex multiplier, and finally @c bgfx::submit(...) on the desired view.
      */
     struct submit_vertex_pulling_callbacks
     {

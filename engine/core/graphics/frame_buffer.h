@@ -19,7 +19,7 @@ struct fbo_attachment
     bool generate_mips{true};
 };
 
-struct frame_buffer : public handle_impl<frame_buffer, frame_buffer_handle>
+struct frame_buffer : public handle_impl<frame_buffer, bgfx::FrameBufferHandle>
 {
     //-----------------------------------------------------------------------------
     //  Name : frame_buffer ()
@@ -40,7 +40,7 @@ struct frame_buffer : public handle_impl<frame_buffer, frame_buffer_handle>
     //-----------------------------------------------------------------------------
     frame_buffer(std::uint16_t _width,
                  std::uint16_t _height,
-                 texture_format _format,
+                 bgfx::TextureFormat::Enum _format,
                  std::uint32_t _texture_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 
     //-----------------------------------------------------------------------------
@@ -74,8 +74,8 @@ struct frame_buffer : public handle_impl<frame_buffer, frame_buffer_handle>
     frame_buffer(void* _nwh,
                  std::uint16_t _width,
                  std::uint16_t _height,
-                 texture_format _format = texture_format::Count,
-                 texture_format _depth_format = texture_format::Count);
+                 bgfx::TextureFormat::Enum _format = bgfx::TextureFormat::Count,
+                 bgfx::TextureFormat::Enum _depth_format = bgfx::TextureFormat::Count);
 
     //-----------------------------------------------------------------------------
     //  Name : populate ()

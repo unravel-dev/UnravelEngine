@@ -56,7 +56,7 @@ auto ssil_pass::create_or_update_ssil_fb(gfx::render_view& rview,
     {
         tex.reset();
         tex = std::make_shared<gfx::texture>(target_size.width, target_size.height, false, 1,
-                                             gfx::texture_format::RGBA16F,
+                                             bgfx::TextureFormat::RGBA16F,
                                              BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
                                                  BGFX_SAMPLER_V_CLAMP | extra_flags);
     }
@@ -85,7 +85,7 @@ auto ssil_pass::create_or_update_ssil_tex(gfx::render_view& rview,
     {
         tex.reset();
         tex = std::make_shared<gfx::texture>(target_size.width, target_size.height, false, 1,
-                                             gfx::texture_format::RGBA16F,
+                                             bgfx::TextureFormat::RGBA16F,
                                              BGFX_TEXTURE_RT | BGFX_TEXTURE_BLIT_DST |
                                                  BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | extra_flags);
     }
@@ -271,12 +271,12 @@ auto ssil_pass::run_trace(gfx::render_view& rview, const run_params& params) -> 
     {
         topology = gfx::clip_quad(1.0f);
     }
-    gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, trace_program_.program->native_handle());
+    bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, trace_program_.program->native_handle());
 
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(BGFX_STATE_DEFAULT);
     trace_program_.program->end();
-    gfx::discard();
+    bgfx::discard();
 
     return ssil_curr_fb;
 }
@@ -338,7 +338,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         if(gfx::needs_recreate(tex, size))
         {
             tex.reset();
-            tex = std::make_shared<gfx::texture>(size.width, size.height, false, 1, gfx::texture_format::R16F,
+            tex = std::make_shared<gfx::texture>(size.width, size.height, false, 1, bgfx::TextureFormat::R16F,
                                                  BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP |
                                                      BGFX_SAMPLER_V_CLAMP);
         }
@@ -370,12 +370,12 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         denoise_program_.program->begin();
 
         gfx::set_texture(denoise_program_.s_ssil_input, 0, in_tex);
-        gfx::set_image(1, out_fb->get_texture()->native_handle(), 0, bgfx::Access::Write);
+        bgfx::setImage(1, out_fb->get_texture()->native_handle(), 0, bgfx::Access::Write);
         gfx::set_texture(denoise_program_.s_normal, 2, g_buffer->get_texture(1));
         gfx::set_texture(denoise_program_.s_depth, 3, g_buffer->get_texture(4));
         gfx::set_texture(denoise_program_.s_ssil_moments, 4, moments_tex);
         gfx::set_texture(denoise_program_.s_ssil_variance, 5, v_src);
-        gfx::set_image(6, v_dst->native_handle(), 0, bgfx::Access::Write);
+        bgfx::setImage(6, v_dst->native_handle(), 0, bgfx::Access::Write);
 
         float denoise_params[4] = {float(step), depth_sigma, normal_power, luma_sigma};
         gfx::set_uniform(denoise_program_.u_denoise_params, denoise_params);
@@ -385,7 +385,7 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
                                     float(kernel_radius)};
         gfx::set_uniform(denoise_program_.u_denoise_params2, denoise_params2);
 
-        gfx::dispatch(pass.id, denoise_program_.program->native_handle(), dgx, dgy, 1);
+        bgfx::dispatch(pass.id, denoise_program_.program->native_handle(), dgx, dgy, 1);
 
         denoise_program_.program->end();
     };
@@ -448,16 +448,16 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
 
         downsample_program_.program->begin();
         gfx::set_texture(downsample_program_.s_ssil_input, 0, src_tex);
-        gfx::set_image(1, half_a->get_texture()->native_handle(), 0, bgfx::Access::Write);
+        bgfx::setImage(1, half_a->get_texture()->native_handle(), 0, bgfx::Access::Write);
         gfx::set_texture(downsample_program_.s_normal, 2, g_buffer->get_texture(1));
         gfx::set_texture(downsample_program_.s_depth, 3, g_buffer->get_texture(4));
         gfx::set_texture(downsample_program_.s_ssil_variance, 4, var_src);
-        gfx::set_image(5, var_ha->native_handle(), 0, bgfx::Access::Write);
+        bgfx::setImage(5, var_ha->native_handle(), 0, bgfx::Access::Write);
 
         float ds_params[4] = {depth_sigma, normal_power, has_downsampled_variance ? 1.0f : 0.0f, 0.0f};
         gfx::set_uniform(downsample_program_.u_downsample_params, ds_params);
 
-        gfx::dispatch(ds_pass.id, downsample_program_.program->native_handle(), hgx, hgy, 1);
+        bgfx::dispatch(ds_pass.id, downsample_program_.program->native_handle(), hgx, hgy, 1);
         downsample_program_.program->end();
     }
 
@@ -532,12 +532,12 @@ auto ssil_pass::run_spatial_denoise(gfx::render_view& rview,
         gfx::set_uniform(upsample_program_.u_upsample_params, upsample_params);
 
         auto topology = gfx::clip_quad(1.0f);
-        gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        gfx::submit(up_pass.id, upsample_program_.program->native_handle());
+        bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(up_pass.id, upsample_program_.program->native_handle());
 
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(BGFX_STATE_DEFAULT);
         upsample_program_.program->end();
-        gfx::discard();
+        bgfx::discard();
     }
 
     return out_fb;
@@ -663,12 +663,12 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
         bind_common(0.0f, g_buffer->get_texture(4));
 
         auto topology = gfx::clip_quad(1.0f);
-        gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        gfx::submit(init_pass.id, temporal_program_.program->native_handle());
+        bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(init_pass.id, temporal_program_.program->native_handle());
 
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(BGFX_STATE_DEFAULT);
         temporal_program_.program->end();
-        gfx::discard();
+        bgfx::discard();
         return false;
     }
 
@@ -680,12 +680,12 @@ auto ssil_pass::run_temporal_resolve(gfx::render_view& rview,
     bind_common(settings.enable_temporal_accumulation ? 1.0f : 0.0f, prev_depth);
 
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, temporal_program_.program->native_handle());
+    bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, temporal_program_.program->native_handle());
 
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(BGFX_STATE_DEFAULT);
     temporal_program_.program->end();
-    gfx::discard();
+    bgfx::discard();
 
     return true;
 }
@@ -725,12 +725,12 @@ auto ssil_pass::run_upsample(gfx::render_view& rview,
     gfx::set_uniform(upsample_program_.u_upsample_params, upsample_params);
 
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, upsample_program_.program->native_handle());
+    bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, upsample_program_.program->native_handle());
 
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(BGFX_STATE_DEFAULT);
     upsample_program_.program->end();
-    gfx::discard();
+    bgfx::discard();
 
     return out_fb;
 }

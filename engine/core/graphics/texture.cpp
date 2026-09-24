@@ -124,7 +124,7 @@ void texture::adopt_loaded_eviction(eviction::backing_buffer backing,
 texture::texture(const char* _path,
                  std::uint64_t _flags,
                  std::uint8_t _skip /*= 0 */,
-                 texture_info* _info /*= nullptr*/)
+                 bgfx::TextureInfo* _info /*= nullptr*/)
 {
     bx::Error err;
     std::uint32_t size = 0;
@@ -160,7 +160,7 @@ texture::texture(const void* _data,
                  std::uint32_t _size,
                  std::uint64_t _flags,
                  std::uint8_t _skip,
-                 texture_info* _info,
+                 bgfx::TextureInfo* _info,
                  const char* _name)
 {
     bx::Error err;
@@ -188,19 +188,19 @@ texture::texture(std::uint16_t _width,
                  std::uint16_t _height,
                  bool _hasMips,
                  std::uint16_t _numLayers,
-                 texture_format _format,
+                 bgfx::TextureFormat::Enum _format,
                  std::uint64_t _flags /*= BGFX_TEXTURE_NONE */,
-                 const memory_view* _mem /*= nullptr */)
+                 const bgfx::Memory* _mem /*= nullptr */)
     : flags(_flags)
 {
-    calc_texture_size(info, _width, _height, 1, false, _hasMips, _numLayers, _format);
+    bgfx::calcTextureSize(info, _width, _height, 1, false, _hasMips, _numLayers, _format);
     const std::uint64_t estimated_size = estimate_texture_gpu_size(info, _flags);
     const eviction::reclaim_kind kind = texture_reclaim_kind(_flags);
     const bool can_allocate = try_make_room_for(estimated_size, "2D texture", kind);
 
     if(can_allocate)
     {
-        handle_ = create_texture_2d(_width, _height, _hasMips, _numLayers, _format, _flags, _mem);
+        handle_ = bgfx::createTexture2D(_width, _height, _hasMips, _numLayers, _format, _flags, _mem);
     }
     const bool valid = is_valid();
     if(valid && is_gpu_generated())
@@ -220,8 +220,8 @@ texture::texture(std::uint16_t _width,
                         flags = _flags,
                         estimated_size](texture& self) -> bool
         {
-            const memory_view* mem = eviction::make_backing_ref(backing);
-            self.handle_ = create_texture_2d(width, height, has_mips, layers, format, flags, mem);
+            const bgfx::Memory* mem = eviction::make_backing_ref(backing);
+            self.handle_ = bgfx::createTexture2D(width, height, has_mips, layers, format, flags, mem);
             return self.is_valid();
         };
         if(valid)
@@ -239,19 +239,19 @@ texture::texture(std::uint16_t _width,
                  std::uint16_t _height,
                  std::uint16_t _depth,
                  bool _hasMips,
-                 texture_format _format,
+                 bgfx::TextureFormat::Enum _format,
                  std::uint64_t _flags /*= BGFX_TEXTURE_NONE */,
-                 const memory_view* _mem /*= nullptr */)
+                 const bgfx::Memory* _mem /*= nullptr */)
     : flags(_flags)
 {
-    calc_texture_size(info, _width, _height, _depth, false, _hasMips, 1, _format);
+    bgfx::calcTextureSize(info, _width, _height, _depth, false, _hasMips, 1, _format);
     const std::uint64_t estimated_size = estimate_texture_gpu_size(info, _flags);
     const eviction::reclaim_kind kind = texture_reclaim_kind(_flags);
     const bool can_allocate = try_make_room_for(estimated_size, "3D texture", kind);
 
     if(can_allocate)
     {
-        handle_ = create_texture_3d(_width, _height, _depth, _hasMips, _format, _flags, _mem);
+        handle_ = bgfx::createTexture3D(_width, _height, _depth, _hasMips, _format, _flags, _mem);
     }
 
     const bool valid = is_valid();
@@ -272,8 +272,8 @@ texture::texture(std::uint16_t _width,
                         flags = _flags,
                         estimated_size](texture& self) -> bool
         {
-            const memory_view* mem = eviction::make_backing_ref(backing);
-            self.handle_ = create_texture_3d(width, height, depth, has_mips, format, flags, mem);
+            const bgfx::Memory* mem = eviction::make_backing_ref(backing);
+            self.handle_ = bgfx::createTexture3D(width, height, depth, has_mips, format, flags, mem);
             return self.is_valid();
         };
         if(valid)
@@ -290,22 +290,22 @@ texture::texture(std::uint16_t _width,
 texture::texture(std::uint16_t _size,
                  bool _hasMips,
                  std::uint16_t _numLayers,
-                 texture_format _format,
+                 bgfx::TextureFormat::Enum _format,
                  std::uint64_t _flags /*= BGFX_TEXTURE_NONE */,
-                 const memory_view* _mem /*= nullptr */)
+                 const bgfx::Memory* _mem /*= nullptr */)
     : flags(_flags)
 {
     // Six size x size faces at depth 1. Describing a size^3 volume instead inflated the eviction
     // estimate (a mipped 256 RGBA16F probe cube: ~153 MB instead of ~4 MB) and left
     // info.cubeMap false for every cube created here.
-    calc_texture_size(info, _size, _size, 1, true, _hasMips, _numLayers, _format);
+    bgfx::calcTextureSize(info, _size, _size, 1, true, _hasMips, _numLayers, _format);
     const std::uint64_t estimated_size = estimate_texture_gpu_size(info, _flags);
     const eviction::reclaim_kind kind = texture_reclaim_kind(_flags);
     const bool can_allocate = try_make_room_for(estimated_size, "cube texture", kind);
 
     if(can_allocate)
     {
-        handle_ = create_texture_cube(_size, _hasMips, _numLayers, _format, _flags, _mem);
+        handle_ = bgfx::createTextureCube(_size, _hasMips, _numLayers, _format, _flags, _mem);
     }
     const bool valid = is_valid();
     if(valid && is_gpu_generated())
@@ -324,8 +324,8 @@ texture::texture(std::uint16_t _size,
                         flags = _flags,
                         estimated_size](texture& self) -> bool
         {
-            const memory_view* mem = eviction::make_backing_ref(backing);
-            self.handle_ = create_texture_cube(size, has_mips, layers, format, flags, mem);
+            const bgfx::Memory* mem = eviction::make_backing_ref(backing);
+            self.handle_ = bgfx::createTextureCube(size, has_mips, layers, format, flags, mem);
             return self.is_valid();
         };
         if(valid)
@@ -354,7 +354,7 @@ auto texture::is_gpu_generated() const -> bool
     return 0 != (flags & (BGFX_TEXTURE_RT_MASK | BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_BLIT_DST));
 }
 
-auto texture::fallback_handle() const -> texture_handle
+auto texture::fallback_handle() const -> bgfx::TextureHandle
 {
     return gfx::fallback_texture();
 }

@@ -70,23 +70,23 @@ private:
             cache_uniform(program.get(),
                           u_clipmap_compose_params,
                           "u_clipmap_compose_params",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_clipmap_compose_origin,
                           "u_clipmap_compose_origin",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_clipmap_compose_range,
                           "u_clipmap_compose_range",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_clipmap_compose_range_size,
                           "u_clipmap_compose_range_size",
-                          gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
-            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
+                          bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", bgfx::UniformType::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -115,23 +115,23 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_clipmap_attr_params, "u_clipmap_attr_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_clipmap_attr_scroll, "u_clipmap_attr_scroll", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_clipmap_attr_params, "u_clipmap_attr_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_clipmap_attr_scroll, "u_clipmap_attr_scroll", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_clipmap_compose_origin,
                           "u_clipmap_compose_origin",
-                          gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
-            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", bgfx::UniformType::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_sdf_clipmap_levels,
                           "u_sdf_clipmap_levels",
-                          gfx::uniform_type::Vec4,
+                          bgfx::UniformType::Vec4,
                           global_sdf_clipmap::level_count);
-            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -154,8 +154,8 @@ private:
             cache_uniform(program.get(),
                           u_gi_texture_mean_params,
                           "u_gi_texture_mean_params",
-                          gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_mean_source, "s_mean_source", gfx::uniform_type::Sampler);
+                          bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_mean_source, "s_mean_source", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -176,7 +176,7 @@ private:
             cache_uniform(program.get(),
                           u_gi_buffer_fill_params,
                           "u_gi_buffer_fill_params",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
         }
 
         auto is_valid() const -> bool
@@ -198,7 +198,7 @@ private:
             cache_uniform(program.get(),
                           u_gi_volume_clear_params,
                           "u_gi_volume_clear_params",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
         }
 
         auto is_valid() const -> bool
@@ -218,7 +218,7 @@ private:
             cache_uniform(program.get(),
                           u_gi_atlas_clear_params,
                           "u_gi_atlas_clear_params",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
         }
 
         auto is_valid() const -> bool
@@ -240,7 +240,7 @@ private:
             cache_uniform(program.get(),
                           u_gi_vis_memo_clear_params,
                           "u_gi_vis_memo_clear_params",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
         }
 
         auto is_valid() const -> bool

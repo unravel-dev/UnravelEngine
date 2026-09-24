@@ -1430,7 +1430,7 @@ struct submesh_geometry
  * geometric normal of a sampled triangle is compared against the authored vertex
  * normals; a mirroring node transform flips the answer.
  */
-auto detect_clockwise_winding(const gfx::vertex_layout& layout,
+auto detect_clockwise_winding(const bgfx::VertexLayout& layout,
                               const uint8_t* vertex_data,
                               const uint32_t* index_data,
                               uint32_t face_begin,
@@ -1455,16 +1455,16 @@ auto detect_clockwise_winding(const gfx::vertex_layout& layout,
         float p0[4];
         float p1[4];
         float p2[4];
-        gfx::vertex_unpack(p0, gfx::attribute::Position, layout, vertex_data, i0);
-        gfx::vertex_unpack(p1, gfx::attribute::Position, layout, vertex_data, i1);
-        gfx::vertex_unpack(p2, gfx::attribute::Position, layout, vertex_data, i2);
+        bgfx::vertexUnpack(p0, bgfx::Attrib::Position, layout, vertex_data, i0);
+        bgfx::vertexUnpack(p1, bgfx::Attrib::Position, layout, vertex_data, i1);
+        bgfx::vertexUnpack(p2, bgfx::Attrib::Position, layout, vertex_data, i2);
 
         float n0[4];
         float n1[4];
         float n2[4];
-        gfx::vertex_unpack(n0, gfx::attribute::Normal, layout, vertex_data, i0);
-        gfx::vertex_unpack(n1, gfx::attribute::Normal, layout, vertex_data, i1);
-        gfx::vertex_unpack(n2, gfx::attribute::Normal, layout, vertex_data, i2);
+        bgfx::vertexUnpack(n0, bgfx::Attrib::Normal, layout, vertex_data, i0);
+        bgfx::vertexUnpack(n1, bgfx::Attrib::Normal, layout, vertex_data, i1);
+        bgfx::vertexUnpack(n2, bgfx::Attrib::Normal, layout, vertex_data, i2);
 
         const math::vec3 v0{p0[0], p0[1], p0[2]};
         const math::vec3 v1{p1[0], p1[1], p1[2]};
@@ -1563,7 +1563,7 @@ void for_each_submesh_geometry(const physics_mesh_shape& shape, Visitor&& visito
                 if(local_index < 0)
                 {
                     float position[4];
-                    gfx::vertex_unpack(position, gfx::attribute::Position, layout, vertex_data, global_index);
+                    bgfx::vertexUnpack(position, bgfx::Attrib::Position, layout, vertex_data, global_index);
                     const math::vec3 local{position[0], position[1], position[2]};
                     const math::vec3 baked = node.transform_coord(local) + shape.center;
                     local_index = static_cast<int32_t>(geometry.points.size());

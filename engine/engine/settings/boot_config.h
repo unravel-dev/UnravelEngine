@@ -100,7 +100,7 @@ struct boot_config
 [[nodiscard]] ENGINE_EXPORT auto preferred_renderer_to_string(preferred_renderer value) -> hpp::string_view;
 [[nodiscard]] ENGINE_EXPORT auto preferred_renderer_pretty_name(preferred_renderer value) -> hpp::string_view;
 [[nodiscard]] ENGINE_EXPORT auto preferred_renderer_from_string(hpp::string_view value) -> preferred_renderer;
-[[nodiscard]] ENGINE_EXPORT auto preferred_renderer_to_gfx_type(preferred_renderer value) -> gfx::renderer_type;
+[[nodiscard]] ENGINE_EXPORT auto preferred_renderer_to_gfx_type(preferred_renderer value) -> bgfx::RendererType::Enum;
 
 [[nodiscard]] ENGINE_EXPORT auto preferred_renderers_for_platform(renderer_platform platform)
     -> hpp::span<const preferred_renderer>;

@@ -412,7 +412,7 @@ public:
      * @param world The world transform matrix
      * @param state The rendering state flags
      */
-    void submit(gfx::view_id id, const math::transform& world, uint64_t state);
+    void submit(bgfx::ViewId id, const math::transform& world, uint64_t state);
 
 private:
     auto get_builder() const -> text_buffer_builder&;

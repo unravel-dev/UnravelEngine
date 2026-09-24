@@ -202,7 +202,7 @@ void profiler_draw_eviction_section(eviction_settings& state)
         ImGui::Checkbox("##auto_budget", &state.auto_budget);
     }
 
-    const auto* bx = gfx::get_stats();
+    const auto* bx = bgfx::getStats();
     const std::uint64_t gpu_max = (bx != nullptr) ? clamp_u64(bx->gpuMemoryMax) : 0;
     const std::uint64_t gpu_used = (bx != nullptr) ? clamp_u64(bx->gpuMemoryUsed) : 0;
 

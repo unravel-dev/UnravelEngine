@@ -198,7 +198,7 @@ struct uniforms_cache
      * (GL_INVALID_OPERATION "program texture usage"). The bgfx warning "User defined
      * uniform '...' is not found" in the log means this contract was broken.
      */
-    void cache_uniform(gpu_program* program, gfx::program::uniform_ptr& uniform, const hpp::string_view& name, gfx::uniform_type type, uint16_t num = 1)
+    void cache_uniform(gpu_program* program, gfx::program::uniform_ptr& uniform, const hpp::string_view& name, bgfx::UniformType::Enum type, uint16_t num = 1)
     {
         (void)program;
         uniform = std::make_shared<gfx::uniform>(std::string(name), type, num);

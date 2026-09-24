@@ -121,18 +121,18 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     gfx::render_pass pass("GI/Light Voxels");
     active_program.begin();
     gfx::set_texture(program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-    gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-    gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-    gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+    bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
+    bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
+    bgfx::setBuffer(3, surface_cache.get_instance_buffer(), bgfx::Access::Read);
     gfx::set_texture(program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
     if(light_buffer.is_valid())
     {
-        gfx::set_buffer(5, light_buffer.get_buffer(), gfx::access::Read);
+        bgfx::setBuffer(5, light_buffer.get_buffer(), bgfx::Access::Read);
     }
     // The surface list (header cursors + entries in one buffer) sits at stage 10 - a buffer
     // tolerates the high stages, which keeps stage 6 free as an IMAGE unit: OpenGL guarantees
     // only eight image units (bindings 0-7) and this pass binds two 3D images.
-    gfx::set_buffer(10, clipmap_gpu.get_surface_list_buffer(), gfx::access::Read);
+    bgfx::setBuffer(10, clipmap_gpu.get_surface_list_buffer(), bgfx::Access::Read);
     gfx::set_texture(program_.s_attr_albedo, 8, clipmap_gpu.get_attr_albedo_texture());
     gfx::set_texture(program_.s_attr_emissive, 9, clipmap_gpu.get_attr_emissive_texture());
     // ReadWrite: the radiance store folds each relight into a per-voxel EMA, reading the
@@ -140,15 +140,15 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     gfx::set_image_3d(7,
                       clipmap_gpu.get_light_voxel_texture()->native_handle(),
                       0,
-                      gfx::access::ReadWrite,
-                      gfx::texture_format::RGBA16F);
-    gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+                      bgfx::Access::ReadWrite,
+                      bgfx::TextureFormat::RGBA16F);
+    bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
     // Stage 13: the sparse world-probe index, read-write - the bounce requests the level-0
     // cages it reads (gi_world_probes.sh). Bound whenever it exists; the ready flag in
     // u_gi_world_probe_params gates the reads.
     if(clipmap_gpu.has_world_probes())
     {
-        gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
+        bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::ReadWrite);
     }
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                  float(atlas.get_atlas_voxel_dim()),
@@ -207,7 +207,7 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                                                                size,
                                                                false,
                                                                uint16_t(shadow::ShadowMapRenderTargets::Count),
-                                                               gfx::texture_format::R32F,
+                                                               bgfx::TextureFormat::R32F,
                                                                BGFX_TEXTURE_BLIT_DST);
                 sun_cascades_size_ = size;
             }
@@ -220,20 +220,20 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
             const float texel0 = std::max(shadows.get_cascade_texel_world(0), 1e-6f);
             for(uint8_t split = 0; split < splits; ++split)
             {
-                gfx::blit(pass.id,
-                          sun_cascades_->native_handle(),
-                          0,
-                          0,
-                          0,
-                          split,
-                          shadows.get_rt_texture(split),
-                          0,
-                          0,
-                          0,
-                          0,
-                          size,
-                          size,
-                          1);
+                bgfx::blit(pass.id,
+                           sun_cascades_->native_handle(),
+                           0,
+                           0,
+                           0,
+                           split,
+                           shadows.get_rt_texture(split),
+                           0,
+                           0,
+                           0,
+                           0,
+                           size,
+                           size,
+                           1);
                 std::memcpy(matrices + split * 16, shadows.get_shadow_map_matrix(split), sizeof(float) * 16);
                 slice_params[split] = shadows.get_cascade_far_distance(split);
                 bias_params[split] = bias0 * shadows.get_cascade_texel_world(split) / texel0;
@@ -258,7 +258,7 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
             // World -> stored depth, so the kernel can cover its slope allowance in depth.
             sun_params[3] = shadows.get_shadow_map_world_to_depth();
             // Raw float depth: point sampled and clamped, as the lighting pass binds it.
-            gfx::set_texture(14,
+            bgfx::setTexture(14,
                              program_.s_gi_sun_shadowmap->native_handle(),
                              sun_cascades_->native_handle(),
                              BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
@@ -275,11 +275,11 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                                                            1,
                                                            false,
                                                            uint16_t(shadow::ShadowMapRenderTargets::Count),
-                                                           gfx::texture_format::R32F,
+                                                           bgfx::TextureFormat::R32F,
                                                            BGFX_TEXTURE_BLIT_DST);
             sun_cascades_size_ = 1;
         }
-        gfx::set_texture(14, program_.s_gi_sun_shadowmap->native_handle(), sun_cascades_->native_handle());
+        bgfx::setTexture(14, program_.s_gi_sun_shadowmap->native_handle(), sun_cascades_->native_handle());
     }
     gfx::set_uniform(program_.u_gi_sun_shadowmap_params, sun_params);
     const uint32_t attr_resolution = clipmap_gpu.get_attr_resolution();
@@ -337,7 +337,7 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         vis_memo_generation =
             view_cache.get_clipmap_gpu_mutable().refresh_bounce_vis_generation(
                 view_clipmap.get_composed_content_epoch(), params.camera_position, base_spacing);
-        gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
+        gfx::set_image_3d(6, vis_memo->native_handle(), 0, bgfx::Access::ReadWrite, bgfx::TextureFormat::R32U);
     }
     // SEGMENT-LOCAL KEEP AGE (u_gi_vis_memo_params.z; the kernel's GiSegmentTouchesBox note).
     // A stale word keeps the corners no changed region touched only while every field
@@ -490,12 +490,12 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
         // The GPU gate already decided: this entry holds either the counts
         // get_dispatch_groups derived or zeros. A zero-group dispatch is a no-op on every
         // backend, which is the whole point - the skip costs no CPU-GPU sync to discover.
-        gfx::dispatch_indirect(pass.id, active_program.native_handle(), params.indirect, params.indirect_entry, 1);
+        bgfx::dispatch(pass.id, active_program.native_handle(), params.indirect, params.indirect_entry, 1);
     }
     else
     {
         const auto groups = get_dispatch_groups(view_cache);
-        gfx::dispatch(pass.id, active_program.native_handle(), groups.x, groups.y, groups.z);
+        bgfx::dispatch(pass.id, active_program.native_handle(), groups.x, groups.y, groups.z);
     }
     active_program.end();
     if(params.collect_stats)
@@ -519,7 +519,7 @@ void gi_light_voxel_pass::collect_relight_stats(const gfx::texture::ptr& vis_mem
                                                         height,
                                                         false,
                                                         1,
-                                                        gfx::texture_format::R32U,
+                                                        bgfx::TextureFormat::R32U,
                                                         BGFX_TEXTURE_COMPUTE_WRITE);
         for(auto& slot : stats_slots_)
         {
@@ -527,7 +527,7 @@ void gi_light_voxel_pass::collect_relight_stats(const gfx::texture::ptr& vis_mem
                                                           height,
                                                           false,
                                                           1,
-                                                          gfx::texture_format::R32U,
+                                                          bgfx::TextureFormat::R32U,
                                                           BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
             slot.pending = false;
         }
@@ -573,12 +573,12 @@ void gi_light_voxel_pass::collect_relight_stats(const gfx::texture::ptr& vis_mem
     // dispatches of its view, so the staging copy needs the next one).
     gfx::render_pass copy_pass("GI/Light Voxel Stats");
     stats_program_->begin();
-    gfx::set_image_3d(0, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
-    gfx::set_image(1, stats_texture_->native_handle(), 0, gfx::access::Write, gfx::texture_format::R32U);
+    gfx::set_image_3d(0, vis_memo->native_handle(), 0, bgfx::Access::ReadWrite, bgfx::TextureFormat::R32U);
+    bgfx::setImage(1, stats_texture_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R32U);
     // y = 1: on this path the copy is the drain (no GPU gate zeroes the slice).
     const float voxel_params[4] = {float(attr_resolution), 1.0f, 0.0f, 0.0f};
     gfx::set_uniform(program_.u_gi_light_voxel_params, voxel_params);
-    gfx::dispatch(copy_pass.id, stats_program_->native_handle(), 1, 1, 1);
+    bgfx::dispatch(copy_pass.id, stats_program_->native_handle(), 1, 1, 1);
     stats_program_->end();
     auto& slot = stats_slots_[stats_slot_cursor_];
     if(slot.pending)
@@ -588,8 +588,8 @@ void gi_light_voxel_pass::collect_relight_stats(const gfx::texture::ptr& vis_mem
     }
     stats_slot_cursor_ = (stats_slot_cursor_ + 1) % uint32_t(stats_slots_.size());
     gfx::render_pass readback_pass("GI/Light Voxel Stats Readback");
-    gfx::blit(readback_pass.id, slot.texture->native_handle(), 0, 0, stats_texture_->native_handle(), 0, 0, width, height);
-    slot.ready_frame = gfx::read_texture(slot.texture->native_handle(), slot.data.data());
+    bgfx::blit(readback_pass.id, slot.texture->native_handle(), 0, 0, stats_texture_->native_handle(), 0, 0, width, height);
+    slot.ready_frame = bgfx::readTexture(slot.texture->native_handle(), slot.data.data());
     slot.pending = true;
 }
 

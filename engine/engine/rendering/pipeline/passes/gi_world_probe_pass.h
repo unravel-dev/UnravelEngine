@@ -61,7 +61,7 @@ public:
         /// earlier this frame (gi_quiescence_gate_pass). The pass's CPU half still runs; it
         /// is idempotent in the regime the gate can close, because every input that arms
         /// @ref fast_frames_ also forces the gate open.
-        gfx::indirect_buffer_handle indirect{bgfx::kInvalidHandle};
+        bgfx::IndirectBufferHandle indirect{bgfx::kInvalidHandle};
         uint16_t indirect_entry_trace = gi_quiescence_gate_pass::entry_probe_trace;
         uint16_t indirect_entry_convolve = gi_quiescence_gate_pass::entry_probe_convolve;
     };
@@ -125,38 +125,38 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_gi_world_probe_jitter,
                           "u_gi_world_probe_jitter",
-                          gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           s_world_probe_irradiance_seed,
                           "s_world_probe_irradiance_seed",
-                          gfx::uniform_type::Sampler);
+                          bgfx::UniformType::Sampler);
             cache_uniform(program.get(),
                           u_gi_world_probe_seed_atlas,
                           "u_gi_world_probe_seed_atlas",
-                          gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_gi_world_probe_window,
                           "u_gi_world_probe_window",
-                          gfx::uniform_type::Vec4,
+                          bgfx::UniformType::Vec4,
                           global_sdf_clipmap::level_count);
-            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
-            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", bgfx::UniformType::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_sdf_clipmap_levels,
                           "u_sdf_clipmap_levels",
-                          gfx::uniform_type::Vec4,
+                          bgfx::UniformType::Vec4,
                           global_sdf_clipmap::level_count);
-            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_light_voxels, "s_light_voxels", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_light_voxels, "s_light_voxels", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_env_sh, "s_gi_env_sh", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -173,8 +173,8 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_world_probe_radiance, "s_world_probe_radiance", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_world_probe_radiance, "s_world_probe_radiance", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -191,8 +191,8 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_world_probe_alloc, "u_gi_world_probe_alloc", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_alloc, "u_gi_world_probe_alloc", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", bgfx::UniformType::Vec4);
         }
 
         auto is_valid() const -> bool
@@ -210,11 +210,11 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_world_probe_select, "u_gi_world_probe_select", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_select, "u_gi_world_probe_select", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_gi_world_probe_window,
                           "u_gi_world_probe_window",
-                          gfx::uniform_type::Vec4,
+                          bgfx::UniformType::Vec4,
                           global_sdf_clipmap::level_count);
         }
 
@@ -237,11 +237,11 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", gfx::uniform_type::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
-            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_params, "u_sdf_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", bgfx::UniformType::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
+            cache_uniform(program.get(), s_sdf_atlas, "s_sdf_atlas", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool

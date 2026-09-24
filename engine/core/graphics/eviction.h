@@ -28,10 +28,10 @@ inline void release_backing_ref(void* /*data*/, void* user_data)
     delete static_cast<backing_buffer*>(user_data);
 }
 
-inline auto make_backing_ref(const backing_buffer& backing) -> const memory_view*
+inline auto make_backing_ref(const backing_buffer& backing) -> const bgfx::Memory*
 {
     auto* bgfx_ref = new backing_buffer(backing);
-    return gfx::make_ref((*bgfx_ref)->data(),
+    return bgfx::makeRef((*bgfx_ref)->data(),
                          static_cast<std::uint32_t>((*bgfx_ref)->size()),
                          release_backing_ref,
                          bgfx_ref);

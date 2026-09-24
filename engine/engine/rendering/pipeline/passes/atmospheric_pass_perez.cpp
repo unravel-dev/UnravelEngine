@@ -264,9 +264,9 @@ auto atmospheric_pass_perez::init(rtti::context& ctx) -> bool
     }
 
     vb_ = std::make_unique<gfx::vertex_buffer>(
-        gfx::copy(vertices.data(), sizeof(gfx::screen_pos_vertex) * vertical_count * horizontal_count),
+        bgfx::copy(vertices.data(), sizeof(gfx::screen_pos_vertex) * vertical_count * horizontal_count),
         gfx::screen_pos_vertex::get_layout());
-    ib_ = std::make_unique<gfx::index_buffer>(gfx::copy(indices.data(), sizeof(uint16_t) * k));
+    ib_ = std::make_unique<gfx::index_buffer>(bgfx::copy(indices.data(), sizeof(uint16_t) * k));
 
     sun_.update(0);
 
@@ -373,7 +373,7 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
     if(gfx::needs_recreate(tex, size))
     {
         // Mips: the lowest level is the mean transmittance the irradiance bake reads.
-        tex = std::make_shared<gfx::texture>(cloud_shadow_resolution, cloud_shadow_resolution, true, 1, gfx::texture_format::R8, flags);
+        tex = std::make_shared<gfx::texture>(cloud_shadow_resolution, cloud_shadow_resolution, true, 1, bgfx::TextureFormat::R8, flags);
         fbo = std::make_shared<gfx::frame_buffer>();
         fbo->populate({tex});
     }
@@ -413,12 +413,12 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
         gfx::set_texture(cloud_shadow_program_.s_cloudNoise2D, 1, cloud_noise.flat_noise.get());
     }
 
-    gfx::set_scissor(0, 0, cloud_shadow_resolution, cloud_shadow_resolution);
-    gfx::set_state(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::set_index_buffer(ib_->native_handle());
-    gfx::set_vertex_buffer(0, vb_->native_handle());
-    gfx::submit(pass.id, cloud_shadow_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setScissor(0, 0, cloud_shadow_resolution, cloud_shadow_resolution);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::setIndexBuffer(ib_->native_handle());
+    bgfx::setVertexBuffer(0, vb_->native_handle());
+    bgfx::submit(pass.id, cloud_shadow_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
     cloud_shadow_program_.program->end();
 
     result.map = tex;
@@ -493,14 +493,14 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
         auto& tex = rview.tex_get_or_emplace(cloud_tex_keys[i]);
         if(gfx::needs_recreate(tex, half_size))
         {
-            tex = std::make_shared<gfx::texture>(half_w, half_h, false, 1, gfx::texture_format::RGBA16F, cloud_tex_flags);
+            tex = std::make_shared<gfx::texture>(half_w, half_h, false, 1, bgfx::TextureFormat::RGBA16F, cloud_tex_flags);
             recreated = true;
         }
         // R = history sample count / max, G = scene distance (km) for the depth-aware composite.
         auto& aux = rview.tex_get_or_emplace(cloud_aux_keys[i]);
         if(gfx::needs_recreate(aux, half_size))
         {
-            aux = std::make_shared<gfx::texture>(half_w, half_h, false, 1, gfx::texture_format::RG16F, cloud_tex_flags);
+            aux = std::make_shared<gfx::texture>(half_w, half_h, false, 1, bgfx::TextureFormat::RG16F, cloud_tex_flags);
             recreated = true;
         }
         cloud_tex[i] = tex;
@@ -591,14 +591,14 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
     }
 
     irect32_t cloud_rect(0, 0, half_w, half_h);
-    gfx::set_scissor(cloud_rect.left, cloud_rect.top, cloud_rect.width(), cloud_rect.height());
+    bgfx::setScissor(cloud_rect.left, cloud_rect.top, cloud_rect.width(), cloud_rect.height());
 
-    gfx::set_state(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::set_index_buffer(ib_->native_handle());
-    gfx::set_vertex_buffer(0, vb_->native_handle());
-    gfx::submit(cloud_pass.id, cloud_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::setIndexBuffer(ib_->native_handle());
+    bgfx::setVertexBuffer(0, vb_->native_handle());
+    bgfx::submit(cloud_pass.id, cloud_program_.program->native_handle());
 
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(BGFX_STATE_DEFAULT);
     cloud_program_.program->end();
 
     cloud_frame_count++;
@@ -637,13 +637,13 @@ void atmospheric_pass_perez::run_cloud_composite(gfx::frame_buffer* surface,
     }
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
-    gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+    bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
     // Premultiplied: frame = cloud.rgb + frame * cloud.transmittance.
-    gfx::set_state(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_SRC_ALPHA));
-    gfx::set_index_buffer(ib_->native_handle());
-    gfx::set_vertex_buffer(0, vb_->native_handle());
-    gfx::submit(pass.id, cloud_composite_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_SRC_ALPHA));
+    bgfx::setIndexBuffer(ib_->native_handle());
+    bgfx::setVertexBuffer(0, vb_->native_handle());
+    bgfx::submit(pass.id, cloud_composite_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
     cloud_composite_program_.program->end();
 }
 
@@ -717,14 +717,14 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         }
 
         irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
-        gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+        bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
 
-        gfx::set_state(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL);
-        gfx::set_index_buffer(ib_->native_handle());
-        gfx::set_vertex_buffer(0, vb_->native_handle());
-        gfx::submit(pass.id, atmospheric_program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL);
+        bgfx::setIndexBuffer(ib_->native_handle());
+        bgfx::setVertexBuffer(0, vb_->native_handle());
+        bgfx::submit(pass.id, atmospheric_program_.program->native_handle());
 
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(BGFX_STATE_DEFAULT);
         atmospheric_program_.program->end();
     }
 
@@ -734,7 +734,7 @@ void atmospheric_pass_perez::run(gfx::frame_buffer::ptr input,
         run_cloud_composite(composite_target.get(), camera, output_size, depth, prepass);
     }
 
-    gfx::discard();
+    bgfx::discard();
 }
 
 auto compute_perez_exposition(float sun_altitude) -> float

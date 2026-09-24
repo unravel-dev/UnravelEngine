@@ -32,12 +32,12 @@ namespace ANONYMOUS
 constexpr uint32_t instance_grid_resolution = 16u;
 
 /// Layout of the instance buffer: a flat array of vec4, matching BUFFER_RO(_, vec4, _).
-auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
+auto get_vec4_buffer_layout() -> const bgfx::VertexLayout&
 {
-    static const gfx::vertex_layout layout = []()
+    static const bgfx::VertexLayout layout = []()
     {
-        gfx::vertex_layout decl;
-        decl.begin().add(gfx::attribute::TexCoord0, 4, gfx::attribute_type::Float).end();
+        bgfx::VertexLayout decl;
+        decl.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
         return decl;
     }();
     return layout;
@@ -92,9 +92,9 @@ auto surface_cache_system::init(rtti::context& ctx) -> bool
     // buffers): an instance carries slot 0 until its texture's capture has WRITTEN its slot,
     // and the attribute composer skips the multiply for slot 0 - so an unwritten slot is
     // never read at all.
-    texture_mean_buffer_ = gfx::create_dynamic_vertex_buffer(texture_mean_capacity,
-                                                             ANONYMOUS::get_vec4_buffer_layout(),
-                                                             BGFX_BUFFER_COMPUTE_READ_WRITE);
+    texture_mean_buffer_ = bgfx::createDynamicVertexBuffer(texture_mean_capacity,
+                                                           ANONYMOUS::get_vec4_buffer_layout(),
+                                                           BGFX_BUFFER_COMPUTE_READ_WRITE);
     if(!bgfx::isValid(texture_mean_buffer_))
     {
         APPLOG_WARNING("[SurfaceCache] Texture mean buffer allocation failed. Bounce albedo "
@@ -111,12 +111,12 @@ auto surface_cache_system::deinit(rtti::context& ctx) -> bool
     residency_.clear();
     if(bgfx::isValid(instance_buffer_))
     {
-        gfx::destroy(instance_buffer_);
+        bgfx::destroy(instance_buffer_);
         instance_buffer_ = {bgfx::kInvalidHandle};
     }
     if(bgfx::isValid(texture_mean_buffer_))
     {
-        gfx::destroy(texture_mean_buffer_);
+        bgfx::destroy(texture_mean_buffer_);
         texture_mean_buffer_ = {bgfx::kInvalidHandle};
     }
     texture_mean_slots_.clear();
@@ -127,7 +127,7 @@ auto surface_cache_system::deinit(rtti::context& ctx) -> bool
     instance_data_.clear();
     if(bgfx::isValid(grid_buffer_))
     {
-        gfx::destroy(grid_buffer_);
+        bgfx::destroy(grid_buffer_);
         grid_buffer_ = {bgfx::kInvalidHandle};
     }
     grid_capacity_ = 0;
@@ -979,7 +979,7 @@ void surface_cache_system::upload_instance_grid()
     }
     const auto& offsets = grid_.get_cell_offsets();
     const auto& cell_instances = grid_.get_cell_instances();
-    const auto ensure_capacity = [](gfx::dynamic_index_buffer_handle& buffer,
+    const auto ensure_capacity = [](bgfx::DynamicIndexBufferHandle& buffer,
                                     uint32_t& capacity,
                                     uint32_t required) -> void
     {
@@ -989,12 +989,12 @@ void surface_cache_system::upload_instance_grid()
         }
         if(bgfx::isValid(buffer))
         {
-            gfx::destroy(buffer);
+            bgfx::destroy(buffer);
         }
         // Grow with slack, so a scene gaining a few instances per frame does not recreate the
         // buffer every frame.
         capacity = required + required / 2u + 64u;
-        buffer = gfx::create_dynamic_index_buffer(capacity, BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
+        buffer = bgfx::createDynamicIndexBuffer(capacity, BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
     };
     // One buffer, one upload: the offsets then the instance list (sdf_common.sh b_sdf_grid).
     grid_upload_.clear();
@@ -1006,7 +1006,7 @@ void surface_cache_system::upload_instance_grid()
     {
         return;
     }
-    gfx::update(grid_buffer_, 0, gfx::copy(grid_upload_.data(), uint32_t(grid_upload_.size() * sizeof(uint32_t))));
+    bgfx::update(grid_buffer_, 0, bgfx::copy(grid_upload_.data(), uint32_t(grid_upload_.size() * sizeof(uint32_t))));
     const auto& origin = grid_.get_origin();
     const auto& dim = grid_.get_dim();
     grid_params_[0] = origin.x;
@@ -1211,23 +1211,23 @@ void surface_cache_system::upload_instances()
     {
         if(bgfx::isValid(instance_buffer_))
         {
-            gfx::destroy(instance_buffer_);
+            bgfx::destroy(instance_buffer_);
         }
         // Grow with slack so a scene gaining a few instances per frame does not recreate the
         // buffer every frame.
         instance_buffer_capacity_ = required_vec4 + required_vec4 / 2u + 64u;
-        instance_buffer_ = gfx::create_dynamic_vertex_buffer(instance_buffer_capacity_,
-                                                             ANONYMOUS::get_vec4_buffer_layout(),
-                                                             BGFX_BUFFER_COMPUTE_READ);
+        instance_buffer_ = bgfx::createDynamicVertexBuffer(instance_buffer_capacity_,
+                                                           ANONYMOUS::get_vec4_buffer_layout(),
+                                                           BGFX_BUFFER_COMPUTE_READ);
         recreated = true;
     }
     // Re-upload only what changed: a static scene keeps its instance set byte-identical frame
     // to frame, and re-staging it anyway is pure allocator pressure (see upload_instance_grid).
     if(!instance_data_.empty() && (recreated || fingerprint != instance_fingerprint_))
     {
-        gfx::update(instance_buffer_,
-                    0,
-                    gfx::copy(instance_data_.data(), uint32_t(instance_data_.size() * sizeof(float))));
+        bgfx::update(instance_buffer_,
+                     0,
+                     bgfx::copy(instance_data_.data(), uint32_t(instance_data_.size() * sizeof(float))));
     }
     if(fingerprint != instance_fingerprint_)
     {

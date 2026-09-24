@@ -86,7 +86,7 @@ void draw(DebugDrawEncoder& dde, const physics_mesh_shape& sh)
     for(uint32_t i = 0; i < vertex_count; ++i)
     {
         std::array<float, 4> pos;
-        gfx::vertex_unpack(pos.data(), gfx::attribute::Position, vertex_format, vertex_data, i);
+        bgfx::vertexUnpack(pos.data(), bgfx::Attrib::Position, vertex_format, vertex_data, i);
         
         DdVertex v;
         v.x = pos[0];

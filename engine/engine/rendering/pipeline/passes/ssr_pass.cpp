@@ -71,7 +71,7 @@ auto ssr_pass::create_or_update_output_fb(gfx::render_view& rview,
 
     // Otherwise, use the render_view to get or create the SSR output framebuffer
     auto ref_sz = reference->get_size();
-    auto ref_format = gfx::texture_format::RGBA16F;
+    auto ref_format = bgfx::TextureFormat::RGBA16F;
 
     auto& ssr_output_tex = rview.tex_get_or_emplace("SSR_OUTPUT");
     if(gfx::needs_recreate(ssr_output_tex, ref_sz, ref_format))
@@ -102,7 +102,7 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
                                             trace_resolution res) -> gfx::frame_buffer::ptr
 {
     const auto target_size = compute_trace_size(reference->get_size(), res);
-    const auto ref_format = gfx::texture_format::RGBA16F;
+    const auto ref_format = bgfx::TextureFormat::RGBA16F;
 
     auto& ssr_curr_tex = rview.tex_get_or_emplace("SSR_CURR");
     if(gfx::needs_recreate(ssr_curr_tex, target_size, ref_format))
@@ -122,14 +122,14 @@ auto ssr_pass::create_or_update_ssr_curr_fb(gfx::render_view& rview,
     // history compare - lives on this lane; R16F covers the trace range at ~0.1%
     // relative, plenty for a compare threshold.
     auto& ssr_curr_t_tex = rview.tex_get_or_emplace("SSR_CURR_T");
-    if(gfx::needs_recreate(ssr_curr_t_tex, target_size, gfx::texture_format::R16F))
+    if(gfx::needs_recreate(ssr_curr_t_tex, target_size, bgfx::TextureFormat::R16F))
     {
         ssr_curr_t_tex.reset();
         ssr_curr_t_tex = std::make_shared<gfx::texture>(target_size.width,
                                                         target_size.height,
                                                         false,
                                                         1,
-                                                        gfx::texture_format::R16F,
+                                                        bgfx::TextureFormat::R16F,
                                                         BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
                                                             BGFX_SAMPLER_V_CLAMP);
     }
@@ -150,7 +150,7 @@ auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
                                                 trace_resolution res) -> gfx::texture::ptr
 {
     const auto target_size = compute_trace_size(reference->get_size(), res);
-    const auto ref_format = gfx::texture_format::RGBA16F;
+    const auto ref_format = bgfx::TextureFormat::RGBA16F;
 
     auto& history_tex = rview.tex_get_or_emplace("SSR_HISTORY");
     if(gfx::needs_recreate(history_tex, target_size, ref_format))
@@ -167,14 +167,14 @@ auto ssr_pass::create_or_update_ssr_history_tex(gfx::render_view& rview,
 
     // Hit-distance history rides alongside the colour history (same size, same blits).
     auto& history_t_tex = rview.tex_get_or_emplace("SSR_HISTORY_T");
-    if(gfx::needs_recreate(history_t_tex, target_size, gfx::texture_format::R16F))
+    if(gfx::needs_recreate(history_t_tex, target_size, bgfx::TextureFormat::R16F))
     {
         history_t_tex.reset();
         history_t_tex = std::make_shared<gfx::texture>(target_size.width,
                                                        target_size.height,
                                                        false,
                                                        1,
-                                                       gfx::texture_format::R16F,
+                                                       bgfx::TextureFormat::R16F,
                                                        BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
                                                            BGFX_SAMPLER_V_CLAMP);
     }
@@ -187,7 +187,7 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
                                                     trace_resolution res) -> gfx::frame_buffer::ptr
 {
     const auto target_size = compute_trace_size(reference->get_size(), res);
-    const auto ref_format = gfx::texture_format::RGBA16F;
+    const auto ref_format = bgfx::TextureFormat::RGBA16F;
 
     auto& temp_tex = rview.tex_get_or_emplace("SSR_HISTORY_TEMP");
     if(gfx::needs_recreate(temp_tex, target_size, ref_format))
@@ -204,14 +204,14 @@ auto ssr_pass::create_or_update_ssr_history_temp_fb(gfx::render_view& rview,
 
     // MRT lane for the resolved hit-distance history (blitted into SSR_HISTORY_T).
     auto& temp_t_tex = rview.tex_get_or_emplace("SSR_HISTORY_T_TEMP");
-    if(gfx::needs_recreate(temp_t_tex, target_size, gfx::texture_format::R16F))
+    if(gfx::needs_recreate(temp_t_tex, target_size, bgfx::TextureFormat::R16F))
     {
         temp_t_tex.reset();
         temp_t_tex = std::make_shared<gfx::texture>(target_size.width,
                                                     target_size.height,
                                                     false,
                                                     1,
-                                                    gfx::texture_format::R16F,
+                                                    bgfx::TextureFormat::R16F,
                                                     BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP |
                                                         BGFX_SAMPLER_V_CLAMP);
     }
@@ -276,7 +276,7 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
                                                      input_size.height,
                                                      true,                       // has mips
                                                      1,                          // num layers
-                                                     gfx::texture_format::RGBA16F,
+                                                     bgfx::TextureFormat::RGBA16F,
                                                      BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
                                                          BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT);
     }
@@ -301,26 +301,26 @@ auto ssr_pass::generate_blurred_color_buffer(gfx::render_view& rview,
         if(mip == 0)
         {
             // Bind input color texture as read-only image
-            gfx::set_image(1, input_color->native_handle(), 0, bgfx::Access::Read);
+            bgfx::setImage(1, input_color->native_handle(), 0, bgfx::Access::Read);
         }
         else
         {
             // Bind previous mip level as input read-only image
-            gfx::set_image(1, blurred_tex->native_handle(), mip - 1, bgfx::Access::Read);
+            bgfx::setImage(1, blurred_tex->native_handle(), mip - 1, bgfx::Access::Read);
         }
 
         float blur_params[4] = {float(mip), sigma, 0.0f, 0.0f};
         gfx::set_uniform(blur_compute_program_.u_blur_params, blur_params);
 
         // Bind output image (current mip level of blurred texture)
-        gfx::set_image(0, blurred_tex->native_handle(), mip, bgfx::Access::Write);
+        bgfx::setImage(0, blurred_tex->native_handle(), mip, bgfx::Access::Write);
 
         gfx::set_texture(blur_compute_program_.s_normal, 2, g_buffer->get_texture(1));
 
         // Dispatch compute shader
         uint32_t num_groups_x = (mip_width + 7) / 8;
         uint32_t num_groups_y = (mip_height + 7) / 8;
-        gfx::dispatch(pass.id, blur_compute_program_.program->native_handle(), num_groups_x, num_groups_y, 1);
+        bgfx::dispatch(pass.id, blur_compute_program_.program->native_handle(), num_groups_x, num_groups_y, 1);
 
         blur_compute_program_.program->end();
     }
@@ -343,7 +343,7 @@ auto ssr_pass::create_or_update_ssr_denoise_fb(gfx::render_view& rview,
                                                       target_size.height,
                                                       false,
                                                       1,
-                                                      gfx::texture_format::RGBA16F,
+                                                      bgfx::TextureFormat::RGBA16F,
                                                       BGFX_TEXTURE_COMPUTE_WRITE | BGFX_TEXTURE_RT |
                                                           BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     }
@@ -392,7 +392,7 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
         spatial_denoise_compute_program_.program->begin();
 
         gfx::set_texture(spatial_denoise_compute_program_.s_ssr_input, 0, src_tex);
-        gfx::set_image(1, dst_fb->get_texture()->native_handle(), 0, bgfx::Access::Write);
+        bgfx::setImage(1, dst_fb->get_texture()->native_handle(), 0, bgfx::Access::Write);
         gfx::set_texture(spatial_denoise_compute_program_.s_normal, 2, g_buffer->get_texture(1));
         gfx::set_texture(spatial_denoise_compute_program_.s_depth, 3, g_buffer->get_texture(4));
 
@@ -403,7 +403,7 @@ auto ssr_pass::run_spatial_denoise(gfx::render_view& rview,
             settings.spatial_denoise.luma_sigma};
         gfx::set_uniform(spatial_denoise_compute_program_.u_denoise_params, denoise_params);
 
-        gfx::dispatch(pass.id, spatial_denoise_compute_program_.program->native_handle(), gx, gy, 1);
+        bgfx::dispatch(pass.id, spatial_denoise_compute_program_.program->native_handle(), gx, gy, 1);
 
         spatial_denoise_compute_program_.program->end();
 
@@ -562,13 +562,13 @@ auto ssr_pass::run_ssr_trace(gfx::render_view& rview, const run_params& params) 
     {
         topology = gfx::clip_quad(1.0f);
     }
-    gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, fidelityfx_pixel_program_.program->native_handle());
+    bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, fidelityfx_pixel_program_.program->native_handle());
 
     // Reset state
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(BGFX_STATE_DEFAULT);
     fidelityfx_pixel_program_.program->end();
-    gfx::discard();
+    bgfx::discard();
 
     return ssr_curr_fbo;
 }
@@ -599,8 +599,8 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
     if(history_tex != old_history)
     {
         gfx::render_pass blit_pass("History Init Blit Pass");
-        gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, ssr_curr->get_texture()->native_handle(), 0, 0);
-        gfx::blit(blit_pass.id, history_t_tex->native_handle(), 0, 0, curr_hit_t->native_handle(), 0, 0);
+        bgfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, ssr_curr->get_texture()->native_handle(), 0, 0);
+        bgfx::blit(blit_pass.id, history_t_tex->native_handle(), 0, 0, curr_hit_t->native_handle(), 0, 0);
         return nullptr;
     }
 
@@ -674,20 +674,20 @@ auto ssr_pass::run_temporal_resolve(gfx::render_view& rview,
 
     // Draw fullscreen quad
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, temporal_resolve_program_.program->native_handle());
+    bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, temporal_resolve_program_.program->native_handle());
 
     // Reset state
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(BGFX_STATE_DEFAULT);
     temporal_resolve_program_.program->end();
-    gfx::discard();
+    bgfx::discard();
 
     // ============================================================================
     // Blit temp_fbo texture into persistent history_tex for next frame
     // ============================================================================
     gfx::render_pass blit_pass("History Blit Pass");
-    gfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, temp_fbo->get_texture()->native_handle(), 0, 0);
-    gfx::blit(blit_pass.id, history_t_tex->native_handle(), 0, 0, temp_fbo->get_texture(1)->native_handle(), 0, 0);
+    bgfx::blit(blit_pass.id, history_tex->native_handle(), 0, 0, temp_fbo->get_texture()->native_handle(), 0, 0);
+    bgfx::blit(blit_pass.id, history_t_tex->native_handle(), 0, 0, temp_fbo->get_texture(1)->native_handle(), 0, 0);
 
     return temp_fbo;
 }
@@ -726,14 +726,14 @@ auto ssr_pass::run_composite(gfx::render_view& rview,
 
     // Draw fullscreen quad with alpha blending
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+    bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                    BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
-    gfx::submit(pass.id, composite_program_.program->native_handle());
+    bgfx::submit(pass.id, composite_program_.program->native_handle());
 
     // Reset state
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(BGFX_STATE_DEFAULT);
     composite_program_.program->end();
-    gfx::discard();
+    bgfx::discard();
 
     return actual_output;
 }

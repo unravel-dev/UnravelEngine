@@ -1929,7 +1929,7 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
     float screenView[16];
     bx::mtxIdentity(screenView);
 
-    bx::mtxOrtho(screenProj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, gfx::get_caps()->homogeneousDepth);
+    bx::mtxOrtho(screenProj, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 100.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
 
     
     /// begin generating
@@ -2477,10 +2477,13 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                 }
 
                 const uint64_t draw_state = apply_shadow_cull(_renderState.m_state, mat.get_cull_type());
-                gfx::set_stencil(_renderState.m_fstencil, _renderState.m_bstencil);
-                gfx::set_state(draw_state, _renderState.m_blendFactorRgba);
+                bgfx::setStencil(_renderState.m_fstencil, _renderState.m_bstencil);
+                bgfx::setState(draw_state, _renderState.m_blendFactorRgba);
 
-                gfx::submit(viewId, prog->native_handle(), 0, submit_params.preserve_state);
+                bgfx::submit(viewId,
+                             prog->native_handle(),
+                             0,
+                             submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
                 prog->end();
             };
             callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
@@ -2609,10 +2612,10 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(shadow_batch_co
         }
 
         const uint64_t draw_state = apply_shadow_cull(renderState.m_state, batch->key.cull);
-        gfx::set_stencil(renderState.m_fstencil, renderState.m_bstencil);
-        gfx::set_state(draw_state, renderState.m_blendFactorRgba);
+        bgfx::setStencil(renderState.m_fstencil, renderState.m_bstencil);
+        bgfx::setState(draw_state, renderState.m_blendFactorRgba);
 
-        gfx::submit(viewId, prog->native_handle(), 0, false);
+        bgfx::submit(viewId, prog->native_handle(), 0, BGFX_DISCARD_ALL);
         prog->end();
     }
 

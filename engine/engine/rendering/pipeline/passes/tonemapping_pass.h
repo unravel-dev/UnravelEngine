@@ -143,23 +143,23 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_tonemapping, "u_tonemapping", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_grading, "u_grading", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_wb_lms, "u_wb_lms", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_vignette, "u_vignette", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_lift, "u_lift", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gamma_inv, "u_gamma_inv", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gain, "u_gain", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_input, "s_input", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_exposure, "s_exposure", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_local_exposure, "u_local_exposure", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_local_exposure2, "u_local_exposure2", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_local_exposure3, "u_local_exposure3", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), s_local_exposure_grid, "s_local_exposure_grid", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), u_tonemapping, "u_tonemapping", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_grading, "u_grading", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_wb_lms, "u_wb_lms", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_vignette, "u_vignette", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_lift, "u_lift", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gamma_inv, "u_gamma_inv", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gain, "u_gain", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_input, "s_input", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_exposure, "s_exposure", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_local_exposure, "u_local_exposure", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_local_exposure2, "u_local_exposure2", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_local_exposure3, "u_local_exposure3", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_local_exposure_grid, "s_local_exposure_grid", bgfx::UniformType::Sampler);
             cache_uniform(program.get(),
                           s_local_exposure_blurred,
                           "s_local_exposure_blurred",
-                          gfx::uniform_type::Sampler);
+                          bgfx::UniformType::Sampler);
         }
 
         gfx::program::uniform_ptr u_tonemapping;

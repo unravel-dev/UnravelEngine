@@ -133,21 +133,21 @@ auto gi_world_probe_pass::run_alloc(gfx::render_view& rview, const run_params& p
     const auto dispatch_phase = [&](float phase, uint32_t threads)
     {
         alloc_program_.program->begin();
-        gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
-        gfx::set_buffer(8, clipmap_gpu.get_world_probe_cells(), gfx::access::ReadWrite);
-        gfx::set_buffer(7, clipmap_gpu.get_world_probe_counts(), gfx::access::ReadWrite);
-        gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
+        bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::ReadWrite);
+        bgfx::setBuffer(8, clipmap_gpu.get_world_probe_cells(), bgfx::Access::ReadWrite);
+        bgfx::setBuffer(7, clipmap_gpu.get_world_probe_counts(), bgfx::Access::ReadWrite);
+        gfx::set_image_3d(6, vis_memo->native_handle(), 0, bgfx::Access::ReadWrite, bgfx::TextureFormat::R32U);
         const float alloc_params[4] = {phase, center[0], center[1], center[2]};
         gfx::set_uniform(alloc_program_.u_gi_world_probe_alloc, alloc_params);
         // x = the resolution GiLightVoxelStatsTexel needs to address the slice; y = the editor
         // census (the eviction count is instrument work).
         const float voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), params.census ? 1.0f : 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(alloc_program_.u_gi_light_voxel_params, voxel_params);
-        gfx::dispatch(pass.id,
-                      alloc_program_.program->native_handle(),
-                      (threads + alloc_threads_per_group - 1u) / alloc_threads_per_group,
-                      1,
-                      1);
+        bgfx::dispatch(pass.id,
+                       alloc_program_.program->native_handle(),
+                       (threads + alloc_threads_per_group - 1u) / alloc_threads_per_group,
+                       1,
+                       1);
         alloc_program_.program->end();
     };
     const uint32_t index_cells = global_sdf_clipmap_gpu::get_world_probe_index_cell_count();
@@ -166,16 +166,16 @@ auto gi_world_probe_pass::run_alloc(gfx::render_view& rview, const run_params& p
     // bindings; a buried claim is pushed back onto the free stack here.
     {
         relocate_program_.program->begin();
-        gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
-        gfx::set_buffer(8, clipmap_gpu.get_world_probe_cells(), gfx::access::ReadWrite);
-        gfx::set_buffer(7, clipmap_gpu.get_world_probe_counts(), gfx::access::ReadWrite);
-        gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
+        bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::ReadWrite);
+        bgfx::setBuffer(8, clipmap_gpu.get_world_probe_cells(), bgfx::Access::ReadWrite);
+        bgfx::setBuffer(7, clipmap_gpu.get_world_probe_counts(), bgfx::Access::ReadWrite);
+        gfx::set_image_3d(6, vis_memo->native_handle(), 0, bgfx::Access::ReadWrite, bgfx::TextureFormat::R32U);
         auto& atlas = surface_cache.get_atlas();
         gfx::set_texture(relocate_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-        gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-        gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-        gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
-        gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+        bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
+        bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
+        bgfx::setBuffer(3, surface_cache.get_instance_buffer(), bgfx::Access::Read);
+        bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
         const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                      float(atlas.get_atlas_voxel_dim()),
                                      float(surface_cache.get_instances().size()),
@@ -187,11 +187,11 @@ auto gi_world_probe_pass::run_alloc(gfx::render_view& rview, const run_params& p
         gfx::set_uniform(relocate_program_.u_gi_world_probe_params, probe_params);
         const float voxel_params[4] = {float(clipmap_gpu.get_attr_resolution()), 0.0f, 0.0f, 0.0f};
         gfx::set_uniform(relocate_program_.u_gi_light_voxel_params, voxel_params);
-        gfx::dispatch(pass.id,
-                      relocate_program_.program->native_handle(),
-                      (pool + alloc_threads_per_group - 1u) / alloc_threads_per_group,
-                      1,
-                      1);
+        bgfx::dispatch(pass.id,
+                       relocate_program_.program->native_handle(),
+                       (pool + alloc_threads_per_group - 1u) / alloc_threads_per_group,
+                       1,
+                       1);
         relocate_program_.program->end();
     }
     return true;
@@ -321,22 +321,22 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         const auto dispatch_select = [&](float phase, uint16_t entry)
         {
             select_program_.program->begin();
-            gfx::set_buffer(7, clipmap_gpu.get_world_probe_counts(), gfx::access::Read);
-            gfx::set_buffer(8, clipmap_gpu.get_world_probe_cells(), gfx::access::Read);
-            gfx::set_buffer(9, clipmap_gpu.get_world_probe_select(), gfx::access::ReadWrite);
-            gfx::set_buffer(10, clipmap_gpu.get_world_probe_list(), gfx::access::ReadWrite);
-            gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
+            bgfx::setBuffer(7, clipmap_gpu.get_world_probe_counts(), bgfx::Access::Read);
+            bgfx::setBuffer(8, clipmap_gpu.get_world_probe_cells(), bgfx::Access::Read);
+            bgfx::setBuffer(9, clipmap_gpu.get_world_probe_select(), bgfx::Access::ReadWrite);
+            bgfx::setBuffer(10, clipmap_gpu.get_world_probe_list(), bgfx::Access::ReadWrite);
+            bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::ReadWrite);
             const float select_params[4] = {phase, float(budget), float(params.frame & schedule_frame_mask), 0.0f};
             gfx::set_uniform(select_program_.u_gi_world_probe_select, select_params);
             gfx::set_uniform(select_program_.u_gi_world_probe_window, window, global_sdf_clipmap::level_count);
             if(bgfx::isValid(params.indirect))
             {
-                gfx::dispatch_indirect(pass.id, select_program_.program->native_handle(), params.indirect, entry, 1);
+                bgfx::dispatch(pass.id, select_program_.program->native_handle(), params.indirect, entry, 1);
             }
             else
             {
                 const auto groups = get_select_dispatch_groups(entry);
-                gfx::dispatch(pass.id, select_program_.program->native_handle(), groups.x, groups.y, groups.z);
+                bgfx::dispatch(pass.id, select_program_.program->native_handle(), groups.x, groups.y, groups.z);
             }
             select_program_.program->end();
         };
@@ -348,26 +348,26 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::render_pass pass("GI/World Probe Trace");
         trace_program_.program->begin();
         gfx::set_texture(trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-        gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-        gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-        gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+        bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
+        bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
+        bgfx::setBuffer(3, surface_cache.get_instance_buffer(), bgfx::Access::Read);
         gfx::set_texture(trace_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
         // ReadWrite: the trace folds each window's sample into the texel's running mean.
-        gfx::set_image(5,
+        bgfx::setImage(5,
                        clipmap_gpu.get_world_probe_radiance()->native_handle(),
                        0,
-                       gfx::access::ReadWrite,
-                       gfx::texture_format::RGBA16F);
+                       bgfx::Access::ReadWrite,
+                       bgfx::TextureFormat::RGBA16F);
         // Stage 8 for the cells buffer and 6 for the vis-memo image: OpenGL has eight image
         // units (0-7), buffers may bind past them (cs_gi_world_probe_trace.sc).
-        gfx::set_buffer(8, clipmap_gpu.get_world_probe_cells(), gfx::access::ReadWrite);
-        gfx::set_buffer(7, clipmap_gpu.get_world_probe_counts(), gfx::access::ReadWrite);
+        bgfx::setBuffer(8, clipmap_gpu.get_world_probe_cells(), bgfx::Access::ReadWrite);
+        bgfx::setBuffer(7, clipmap_gpu.get_world_probe_counts(), bgfx::Access::ReadWrite);
         // The bounce vis-memo for its statistics slice alone: the probe census the waste
         // ledger reads back on demand (GI_STATS_PROBES_*). Stage 8 is free in this kernel.
         const auto& vis_memo = clipmap_gpu.get_bounce_vis_memo();
         if(vis_memo && vis_memo->is_valid())
         {
-            gfx::set_image_3d(6, vis_memo->native_handle(), 0, gfx::access::ReadWrite, gfx::texture_format::R32U);
+            gfx::set_image_3d(6, vis_memo->native_handle(), 0, bgfx::Access::ReadWrite, bgfx::TextureFormat::R32U);
         }
         // The window index's R2 offset in double (a float(frame) product loses the jitter
         // over a long session); the fast window advances windows four times faster.
@@ -389,12 +389,12 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         std::memcpy(seed_atlas, clipmap_gpu.get_world_probe_atlas_params(), sizeof(seed_atlas));
         seed_atlas[2] = float(strata_per_frame);
         gfx::set_uniform(trace_program_.u_gi_world_probe_seed_atlas, seed_atlas);
-        gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+        bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
         // The sparse index: the trace refreshes the relocation lane once per probe window.
-        gfx::set_buffer(13, clipmap_gpu.get_world_probe_index(), gfx::access::ReadWrite);
+        bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::ReadWrite);
         // The scheduler's list and state (plan item 2.1).
-        gfx::set_buffer(9, clipmap_gpu.get_world_probe_list(), gfx::access::Read);
-        gfx::set_buffer(15, clipmap_gpu.get_world_probe_select(), gfx::access::Read);
+        bgfx::setBuffer(9, clipmap_gpu.get_world_probe_list(), bgfx::Access::Read);
+        bgfx::setBuffer(15, clipmap_gpu.get_world_probe_select(), bgfx::Access::Read);
         gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh);
         const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),
                                      float(atlas.get_atlas_voxel_dim()),
@@ -412,16 +412,16 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_uniform(trace_program_.u_gi_world_probe_window, window, global_sdf_clipmap::level_count);
         if(bgfx::isValid(params.indirect))
         {
-            gfx::dispatch_indirect(pass.id,
-                                   trace_program_.program->native_handle(),
-                                   params.indirect,
-                                   params.indirect_entry_trace,
-                                   1);
+            bgfx::dispatch(pass.id,
+                           trace_program_.program->native_handle(),
+                           params.indirect,
+                           params.indirect_entry_trace,
+                           1);
         }
         else
         {
             const auto groups = get_trace_dispatch_groups();
-            gfx::dispatch(pass.id, trace_program_.program->native_handle(), groups.x, groups.y, groups.z);
+            bgfx::dispatch(pass.id, trace_program_.program->native_handle(), groups.x, groups.y, groups.z);
         }
         trace_program_.program->end();
     }
@@ -432,33 +432,33 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
                          11,
                          clipmap_gpu.get_world_probe_radiance());
         // The cell ids, for the free-slot skip (most of the sparse pool is free).
-        gfx::set_buffer(7, clipmap_gpu.get_world_probe_cells(), gfx::access::Read);
+        bgfx::setBuffer(7, clipmap_gpu.get_world_probe_cells(), bgfx::Access::Read);
         // The scheduler's list and state: exactly the probes the trace refreshed (plan item 2.1).
-        gfx::set_buffer(9, clipmap_gpu.get_world_probe_list(), gfx::access::Read);
-        gfx::set_buffer(10, clipmap_gpu.get_world_probe_select(), gfx::access::Read);
-        gfx::set_image(5,
+        bgfx::setBuffer(9, clipmap_gpu.get_world_probe_list(), bgfx::Access::Read);
+        bgfx::setBuffer(10, clipmap_gpu.get_world_probe_select(), bgfx::Access::Read);
+        bgfx::setImage(5,
                        clipmap_gpu.get_world_probe_irradiance()->native_handle(),
                        0,
-                       gfx::access::Write,
-                       gfx::texture_format::RGBA16F);
-        gfx::set_image(6,
+                       bgfx::Access::Write,
+                       bgfx::TextureFormat::RGBA16F);
+        bgfx::setImage(6,
                        clipmap_gpu.get_world_probe_depth()->native_handle(),
                        0,
-                       gfx::access::Write,
-                       gfx::texture_format::RG16F);
+                       bgfx::Access::Write,
+                       bgfx::TextureFormat::RG16F);
         gfx::set_uniform(convolve_program_.u_gi_world_probe_params, probe_params);
         if(bgfx::isValid(params.indirect))
         {
-            gfx::dispatch_indirect(pass.id,
-                                   convolve_program_.program->native_handle(),
-                                   params.indirect,
-                                   params.indirect_entry_convolve,
-                                   1);
+            bgfx::dispatch(pass.id,
+                           convolve_program_.program->native_handle(),
+                           params.indirect,
+                           params.indirect_entry_convolve,
+                           1);
         }
         else
         {
             const auto groups = get_convolve_dispatch_groups();
-            gfx::dispatch(pass.id, convolve_program_.program->native_handle(), groups.x, groups.y, groups.z);
+            bgfx::dispatch(pass.id, convolve_program_.program->native_handle(), groups.x, groups.y, groups.z);
         }
         convolve_program_.program->end();
     }

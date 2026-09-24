@@ -99,19 +99,19 @@ namespace
 {
 
 
-auto get_default_format() -> gfx::texture_format
+auto get_default_format() -> bgfx::TextureFormat::Enum
 {
-    return gfx::texture_format::RGBA8;
+    return bgfx::TextureFormat::RGBA8;
 }
 
-auto get_default_hdr_format() -> gfx::texture_format
+auto get_default_hdr_format() -> bgfx::TextureFormat::Enum
 {
-    return gfx::texture_format::RGBA16F;
+    return bgfx::TextureFormat::RGBA16F;
 }
 
-auto get_default_depth_format() -> gfx::texture_format
+auto get_default_depth_format() -> bgfx::TextureFormat::Enum
 {
-    return gfx::texture_format::D32F;
+    return bgfx::TextureFormat::D32F;
 }
 
 // Returns whether the intermediate G/L/R buffers should be RGBA16F. Tonemapping
@@ -183,7 +183,7 @@ auto create_or_resize_d_buffer(gfx::render_view& rview,
                                                viewport_size.height,
                                                false,
                                                1,
-                                               gfx::texture_format::D32F,
+                                               bgfx::TextureFormat::D32F,
                                                BGFX_TEXTURE_RT);
     }
 
@@ -201,7 +201,7 @@ auto create_or_resize_hiz_buffer(gfx::render_view& rview, const usize32_t& viewp
                                              viewport_size.height,
                                              true,                            // generate mips
                                              1,                               // one layer
-                                             gfx::texture_format::R32F,       // R32F for better precision
+                                             bgfx::TextureFormat::R32F,       // R32F for better precision
                                              BGFX_TEXTURE_RT |                // Render target
                                                  BGFX_TEXTURE_COMPUTE_WRITE | // Allow compute writes
                                                  BGFX_SAMPLER_MIN_POINT |     // Point sampling for min filter
@@ -381,14 +381,14 @@ auto create_or_resize_v_buffer(gfx::render_view& rview, const usize32_t& viewpor
     auto& depth = rview.tex_get_or_emplace("DEPTH");
 
     auto& tex = rview.tex_get_or_emplace("VELOCITY");
-    if(gfx::needs_recreate(tex, viewport_size, gfx::texture_format::RGBA16F))
+    if(gfx::needs_recreate(tex, viewport_size, bgfx::TextureFormat::RGBA16F))
     {
         tex.reset();
         tex = std::make_shared<gfx::texture>(viewport_size.width,
                                              viewport_size.height,
                                              false,
                                              1,
-                                             gfx::texture_format::RGBA16F,
+                                             bgfx::TextureFormat::RGBA16F,
                                              BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
     }
 
@@ -426,14 +426,14 @@ auto create_or_get_irradiance_texture(gfx::render_view& rview) -> const gfx::tex
                                              1,
                                              false,
                                              1,
-                                             gfx::texture_format::RGBA32F,
+                                             bgfx::TextureFormat::RGBA32F,
                                              BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE |
                                                  BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT |
                                                  BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 
         float initial_coeffs[9 * 4] = {};
-        const gfx::memory_view* initial_pixels = gfx::copy(initial_coeffs, sizeof(initial_coeffs));
-        gfx::update_texture_2d(tex->native_handle(), 0, 0, 0, 0, 9, 1, initial_pixels);
+        const bgfx::Memory* initial_pixels = bgfx::copy(initial_coeffs, sizeof(initial_coeffs));
+        bgfx::updateTexture2D(tex->native_handle(), 0, 0, 0, 0, 9, 1, initial_pixels);
     }
     return tex;
 }
@@ -548,7 +548,7 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
 
     auto state = mat.get_render_states(true, true, true);
 
-    gfx::set_state(state);
+    bgfx::setState(state);
 }
 
 void deferred::build_reflections(scene& scn, const camera& camera, delta_t dt)
@@ -1106,13 +1106,13 @@ void deferred::snapshot_prev_depth(gfx::render_view& rview, const usize32_t& vie
                                                     viewport_size.height,
                                                     false,
                                                     1,
-                                                    gfx::texture_format::D32F,
+                                                    bgfx::TextureFormat::D32F,
                                                     BGFX_TEXTURE_BLIT_DST);
     }
     gfx::render_pass blit_pass("History/Prev Depth Blit Pass");
-    gfx::blit(blit_pass.id,
-              prev_depth->native_handle(), 0, 0,
-              depth_src->native_handle(), 0, 0);
+    bgfx::blit(blit_pass.id,
+               prev_depth->native_handle(), 0, 0,
+               depth_src->native_handle(), 0, 0);
 }
 
 void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
@@ -1220,7 +1220,10 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                 }
             }
 
-            gfx::submit(pass.id, prog.program->native_handle(), 0, submit_params.preserve_state);
+            bgfx::submit(pass.id,
+                         prog.program->native_handle(),
+                         0,
+                         submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
         };
         callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
         {
@@ -1300,7 +1303,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
     {
         submit_batched_geometry(pass, camera);
     }
-    gfx::discard();
+    bgfx::discard();
 }
 
 namespace
@@ -1432,7 +1435,7 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
             const auto lod_params = math::vec3{0.0f, -1.0f, 1.0f}; // Default LOD params
             gfx::set_uniform(geom_program_instanced_.u_lod_params, lod_params);
 
-            gfx::submit(pass.id, geom_program_instanced_.program->native_handle(), 0, false);
+            bgfx::submit(pass.id, geom_program_instanced_.program->native_handle(), 0, BGFX_DISCARD_ALL);
         });
 
     geom_program_instanced_.program->end();
@@ -1498,9 +1501,9 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
             gfx::set_uniform(velocity_camera_program_.u_prev_view_proj, prev_vp.get_matrix());
 
             const auto topology = gfx::clip_quad(1.0f);
-            gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_ALWAYS);
-            gfx::submit(pass.id, velocity_camera_program_.program->native_handle());
-            gfx::set_state(BGFX_STATE_DEFAULT);
+            bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_ALWAYS);
+            bgfx::submit(pass.id, velocity_camera_program_.program->native_handle());
+            bgfx::setState(BGFX_STATE_DEFAULT);
             velocity_camera_program_.program->end();
         }
     }
@@ -1572,8 +1575,11 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
                 // Match the material's cull so two-sided surfaces keep velocity coverage, but
                 // own the depth/write bits: EQUAL test, no depth write, color only.
                 const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
-                gfx::set_state(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
-                gfx::submit(pass.id, prog.program->native_handle(), 0, submit_params.preserve_state);
+                bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
+                bgfx::submit(pass.id,
+                             prog.program->native_handle(),
+                             0,
+                             submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
             };
             callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
             {
@@ -1602,7 +1608,7 @@ void deferred::run_velocity_pass(const visibility_set_models_t& visibility_set,
         {
             submit_batched_velocity(pass, prev_vp);
         }
-        gfx::discard();
+        bgfx::discard();
     }
 }
 
@@ -1635,8 +1641,8 @@ void deferred::submit_batched_velocity(gfx::render_pass& pass, const math::trans
             // Match the material's cull (two-sided coverage), own the depth/write bits:
             // EQUAL test against the G-buffer depth, no depth write, color only.
             const uint64_t cull_state = mat.get_render_states(true, false, false) & BGFX_STATE_CULL_MASK;
-            gfx::set_state(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
-            gfx::submit(pass.id, velocity_program_instanced_.program->native_handle(), 0, false);
+            bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_DEPTH_TEST_EQUAL | cull_state);
+            bgfx::submit(pass.id, velocity_program_instanced_.program->native_handle(), 0, BGFX_DISCARD_ALL);
         });
 
     velocity_program_instanced_.program->end();
@@ -1670,14 +1676,14 @@ void deferred::run_velocity_debug_pass(const camera& camera,
     gfx::set_texture(velocity_debug_program_.s_velocity, 0, velocity_tex);
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
-    gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+    bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, velocity_debug_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, velocity_debug_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
     velocity_debug_program_.program->end();
 
-    gfx::discard();
+    bgfx::discard();
 }
 
 void deferred::run_exposure_debug_pass(gfx::render_view& rview,
@@ -1735,12 +1741,12 @@ void deferred::run_exposure_debug_pass(gfx::render_view& rview,
     // Blended, never opaque: the panel is an overlay on the finished frame, which this pass
     // cannot sample (it is the render target).
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
-    gfx::submit(pass.id, exposure_debug_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
+    bgfx::submit(pass.id, exposure_debug_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
     exposure_debug_program_.program->end();
 
-    gfx::discard();
+    bgfx::discard();
 }
 
 void deferred::run_assao_pass(const camera& camera,
@@ -1910,7 +1916,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
 
         gfx::render_pass irr_pass("Irradiance/Compute Pass");
         irradiance_compute_program_.program->begin();
-        gfx::set_image(0, irradiance_tex->native_handle(), 0, bgfx::Access::Write);
+        bgfx::setImage(0, irradiance_tex->native_handle(), 0, bgfx::Access::Write);
 
         int mode = 0;
         float ambient_vec[4];
@@ -2255,16 +2261,16 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                                  11,
                                  use_cloud_shadow ? cloud_shadow_.map : default_textures::get().white_texture());
             }
-            gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+            bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
             auto topology = gfx::clip_quad(1.0f);
-            gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
-            gfx::submit(pass.id, lprogram.program->native_handle());
-            gfx::set_state(BGFX_STATE_DEFAULT);
+            bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
+            bgfx::submit(pass.id, lprogram.program->native_handle());
+            bgfx::setState(BGFX_STATE_DEFAULT);
 
             lprogram.program->end();
         });
 
-    gfx::discard();
+    bgfx::discard();
 
     return lbuffer;
 }
@@ -2343,13 +2349,13 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     
 
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
-    gfx::submit(pass.id, iprogram.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ADD);
+    bgfx::submit(pass.id, iprogram.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
 
     iprogram.program->end();
 
-    gfx::discard();
+    bgfx::discard();
 
     return lbuffer;
 }
@@ -2482,18 +2488,18 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
 
             gfx::set_texture(ref_probe_program->s_tex_cube, 5, cubemap);
 
-            gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+            bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
             auto topology = gfx::clip_quad(1.0f);
-            gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
+            bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
 
             ref_probe_program->program->begin();
-            gfx::submit(pass.id, ref_probe_program->program->native_handle());
-            gfx::set_state(BGFX_STATE_DEFAULT);
+            bgfx::submit(pass.id, ref_probe_program->program->native_handle());
+            bgfx::setState(BGFX_STATE_DEFAULT);
             ref_probe_program->program->end();
         }
     }
 
-    gfx::discard();
+    bgfx::discard();
 }
 
 namespace
@@ -2751,15 +2757,15 @@ void deferred::run_ssil_pass(const camera& camera,
                                                        static_cast<std::uint16_t>(prev_sz.height),
                                                        false,
                                                        1,
-                                                       gfx::texture_format::RGBA16F,
+                                                       bgfx::TextureFormat::RGBA16F,
                                                        BGFX_TEXTURE_BLIT_DST |
                                                            BGFX_SAMPLER_U_CLAMP |
                                                            BGFX_SAMPLER_V_CLAMP);
         }
         gfx::render_pass blit_pass("SSIL/Prev SSIL Blit Pass");
-        gfx::blit(blit_pass.id,
-                  prev_ssil->native_handle(), 0, 0,
-                  result->native_handle(), 0, 0);
+        bgfx::blit(blit_pass.id,
+                   prev_ssil->native_handle(), 0, 0,
+                   result->native_handle(), 0, 0);
     }
     else
     {
@@ -3104,7 +3110,7 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
             gi_world_probe_pass_.get_convolve_dispatch_groups();
         const bool gpu_gated = gi_quiescence_gate_pass_.run(rview, gate_params);
         const auto indirect = gpu_gated ? gi_quiescence_gate_pass_.get_indirect_buffer()
-                                        : gfx::indirect_buffer_handle{bgfx::kInvalidHandle};
+                                        : bgfx::IndirectBufferHandle{bgfx::kInvalidHandle};
         if(gpu_gated || !verdict.quiescent)
         {
             // On the readback path the sample is only worth its stall while the CPU-side
@@ -3126,7 +3132,7 @@ void deferred::run_gi_light_voxel_pass(scene& scn,
                                        surface_cache_system& surface_cache,
                                        surface_cache_view& view_cache,
                                        const gi_settings& gi,
-                                       gfx::indirect_buffer_handle indirect,
+                                       bgfx::IndirectBufferHandle indirect,
                                        bool collect_stats)
 {
     gi_light_voxel_pass::run_params light_params;
@@ -3155,7 +3161,7 @@ void deferred::run_gi_world_probe_pass(const camera& camera,
                                        surface_cache_system& surface_cache,
                                        surface_cache_view& view_cache,
                                        const gi_settings& gi,
-                                       gfx::indirect_buffer_handle indirect)
+                                       bgfx::IndirectBufferHandle indirect)
 {
     // World probes trace against the freshly lit voxels (GI v2 plan 3.3).
     gi_world_probe_pass::run_params probe_params;
@@ -3482,14 +3488,14 @@ void deferred::run_debug_visualization_pass(const camera& camera,
                      gtao_tex ? gtao_tex : default_textures::get().white_texture());
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
-    gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+    bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
     auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, debug_visualization_program_.program->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, debug_visualization_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
     debug_visualization_program_.program->end();
 
-    gfx::discard();
+    bgfx::discard();
 }
 
 auto deferred::run_hiz_pass(const camera& camera,

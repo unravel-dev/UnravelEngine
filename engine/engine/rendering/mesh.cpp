@@ -74,17 +74,17 @@ auto hf_dh_dt1(hpp::span<const float> heights, uint32_t vx, int32_t sx, int32_t 
            (hf_height_at(heights, vx, sx, sz, ix, iz + 1) - hf_height_at(heights, vx, sx, sz, ix, iz - 1));
 }
 
-void create_mesh(const gfx::vertex_layout& format,
+void create_mesh(const bgfx::VertexLayout& format,
                  const generator::any_mesh& mesh,
                  mesh::preparation_data& data,
                  math::bbox& bbox)
 {
     // Determine the correct offset to any relevant elements in the vertex
-    bool has_position = format.has(gfx::attribute::Position);
-    bool has_texcoord0 = format.has(gfx::attribute::TexCoord0);
-    bool has_normals = format.has(gfx::attribute::Normal);
-    bool has_tangents = format.has(gfx::attribute::Tangent);
-    bool has_bitangents = format.has(gfx::attribute::Bitangent);
+    bool has_position = format.has(bgfx::Attrib::Position);
+    bool has_texcoord0 = format.has(bgfx::Attrib::TexCoord0);
+    bool has_normals = format.has(bgfx::Attrib::Normal);
+    bool has_tangents = format.has(bgfx::Attrib::Tangent);
+    bool has_bitangents = format.has(bgfx::Attrib::Bitangent);
     uint16_t vertex_stride = format.getStride();
 
     auto triangle_count = generator::count(mesh.triangles());
@@ -112,23 +112,23 @@ void create_mesh(const gfx::vertex_layout& format,
         math::vec2 texcoords0 = v.tex_coord;
         // Store vertex components
         if(has_position)
-            gfx::vertex_pack(math::value_ptr(position),
+            bgfx::vertexPack(math::value_ptr(position),
                              false,
-                             gfx::attribute::Position,
+                             bgfx::Attrib::Position,
                              format,
                              current_vertex_ptr,
                              uint32_t(i));
         if(has_normals)
-            gfx::vertex_pack(math::value_ptr(normal),
+            bgfx::vertexPack(math::value_ptr(normal),
                              true,
-                             gfx::attribute::Normal,
+                             bgfx::Attrib::Normal,
                              format,
                              current_vertex_ptr,
                              uint32_t(i));
         if(has_texcoord0)
-            gfx::vertex_pack(math::value_ptr(texcoords0),
+            bgfx::vertexPack(math::value_ptr(texcoords0),
                              true,
-                             gfx::attribute::TexCoord0,
+                             bgfx::Attrib::TexCoord0,
                              format,
                              current_vertex_ptr,
                              uint32_t(i));
@@ -270,7 +270,7 @@ auto mesh::get_info() const -> info
 
     return result;
 }
-auto mesh::prepare_mesh(const gfx::vertex_layout& format) -> bool
+auto mesh::prepare_mesh(const bgfx::VertexLayout& format) -> bool
 {
     // APPLOG_TRACE_PERF(std::chrono::milliseconds);
 
@@ -296,7 +296,7 @@ auto mesh::prepare_mesh(const gfx::vertex_layout& format) -> bool
 
 // #define SET_VERTICES_WHEN_SETTING_PRIMITIVES 1
 
-auto mesh::set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const gfx::vertex_layout& source_format)
+auto mesh::set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const bgfx::VertexLayout& source_format)
     -> bool
 {
     // APPLOG_TRACE_PERF(std::chrono::milliseconds);
@@ -339,7 +339,7 @@ auto mesh::set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const
     {
         preparation_data_.vertex_source = new uint8_t[vertex_count * vertex_format_.getStride()];
         preparation_data_.owns_source = true;
-        gfx::vertex_convert(vertex_format_,
+        bgfx::vertexConvert(vertex_format_,
                             preparation_data_.vertex_source,
                             source_format,
                             reinterpret_cast<uint8_t*>(source.data()),
@@ -349,15 +349,15 @@ auto mesh::set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const
     // Some data needs computing? These variables are essentially 'toggles'
     // that are set largely so that we can early out if it was NEVER necessary
     // to generate these components (i.e. not one single vertex needed it).
-    if(!source_format.has(gfx::attribute::Normal) && vertex_format_.has(gfx::attribute::Normal))
+    if(!source_format.has(bgfx::Attrib::Normal) && vertex_format_.has(bgfx::Attrib::Normal))
     {
         preparation_data_.compute_normals = true;
     }
-    if(!source_format.has(gfx::attribute::Bitangent) && vertex_format_.has(gfx::attribute::Bitangent))
+    if(!source_format.has(bgfx::Attrib::Bitangent) && vertex_format_.has(bgfx::Attrib::Bitangent))
     {
         preparation_data_.compute_binormals = true;
     }
-    if(!source_format.has(gfx::attribute::Tangent) && vertex_format_.has(gfx::attribute::Tangent))
+    if(!source_format.has(bgfx::Attrib::Tangent) && vertex_format_.has(bgfx::Attrib::Tangent))
     {
         preparation_data_.compute_tangents = true;
     }
@@ -365,9 +365,9 @@ auto mesh::set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const
     math::vec4 normal{};
     math::vec4 tangent{};
     math::vec4 bitangent{};
-    gfx::vertex_unpack(math::value_ptr(normal), gfx::attribute::Normal, vertex_format_, preparation_data_.vertex_source, 0);
-    gfx::vertex_unpack(math::value_ptr(tangent), gfx::attribute::Tangent, vertex_format_, preparation_data_.vertex_source, 0);
-    gfx::vertex_unpack(math::value_ptr(bitangent), gfx::attribute::Bitangent, vertex_format_, preparation_data_.vertex_source, 0);
+    bgfx::vertexUnpack(math::value_ptr(normal), bgfx::Attrib::Normal, vertex_format_, preparation_data_.vertex_source, 0);
+    bgfx::vertexUnpack(math::value_ptr(tangent), bgfx::Attrib::Tangent, vertex_format_, preparation_data_.vertex_source, 0);
+    bgfx::vertexUnpack(math::value_ptr(bitangent), bgfx::Attrib::Bitangent, vertex_format_, preparation_data_.vertex_source, 0);
     if(math::epsilonEqual(math::length(normal), 0.0f, math::epsilon<float>()))
     {
         preparation_data_.compute_normals = true;
@@ -443,16 +443,16 @@ auto mesh::set_primitives(triangle_array_t&& triangles) -> bool
     preparation_data_.triangle_data.clear();
 
     // Determine the correct offset to any relevant elements in the vertex
-    bool has_position = vertex_format_.has(gfx::attribute::Position);
-    bool has_normal = vertex_format_.has(gfx::attribute::Normal);
+    bool has_position = vertex_format_.has(bgfx::Attrib::Position);
+    bool has_normal = vertex_format_.has(bgfx::Attrib::Normal);
     uint16_t vertex_stride = vertex_format_.getStride();
 
     // During the construction process we test to see if any specified
     // vertex normal contains invalid data. If the original source vertex
     // data did not contain a normal, we can optimize and skip this step.
-    bool source_has_normals = preparation_data_.source_format.has(gfx::attribute::Normal);
-    bool source_has_binormal = preparation_data_.source_format.has(gfx::attribute::Bitangent);
-    bool source_has_tangent = preparation_data_.source_format.has(gfx::attribute::Tangent);
+    bool source_has_normals = preparation_data_.source_format.has(bgfx::Attrib::Normal);
+    bool source_has_binormal = preparation_data_.source_format.has(bgfx::Attrib::Bitangent);
+    bool source_has_tangent = preparation_data_.source_format.has(bgfx::Attrib::Tangent);
 
     // In addition, we also record which of the required components each
     // vertex actually contained based on the following information.
@@ -483,13 +483,13 @@ auto mesh::set_primitives(triangle_array_t&& triangles) -> bool
             {
                 math::vec3 v1;
                 float vf1[4];
-                gfx::vertex_unpack(vf1, gfx::attribute::Position, vertex_format_, src_vertices_ptr, src_tri.indices[0]);
+                bgfx::vertexUnpack(vf1, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, src_tri.indices[0]);
                 math::vec3 v2;
                 float vf2[4];
-                gfx::vertex_unpack(vf2, gfx::attribute::Position, vertex_format_, src_vertices_ptr, src_tri.indices[1]);
+                bgfx::vertexUnpack(vf2, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, src_tri.indices[1]);
                 math::vec3 v3;
                 float vf3[4];
-                gfx::vertex_unpack(vf3, gfx::attribute::Position, vertex_format_, src_vertices_ptr, src_tri.indices[2]);
+                bgfx::vertexUnpack(vf3, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, src_tri.indices[2]);
                 std::memcpy(&v1[0], vf1, 3 * sizeof(float));
                 std::memcpy(&v2[0], vf2, 3 * sizeof(float));
                 std::memcpy(&v3[0], vf3, 3 * sizeof(float));
@@ -545,10 +545,10 @@ auto mesh::set_primitives(triangle_array_t&& triangles) -> bool
                 // if(has_normal && source_has_normals)
                 // {
                 //     float fnorm[4];
-                //     gfx::vertex_unpack(fnorm, gfx::attribute::Normal, vertex_format_, dst_ptr);
+                //     bgfx::vertexUnpack(fnorm, bgfx::Attrib::Normal, vertex_format_, dst_ptr);
                 //     if(std::isnan(fnorm[0]) || std::isnan(fnorm[1]) || std::isnan(fnorm[2]))
                 //     {
-                //         gfx::vertex_pack(fnorm, true, gfx::attribute::Normal, vertex_format_, dst_ptr);
+                //         bgfx::vertexPack(fnorm, true, bgfx::Attrib::Normal, vertex_format_, dst_ptr);
                 //     }
                 // } // End if have normal
 
@@ -556,7 +556,7 @@ auto mesh::set_primitives(triangle_array_t&& triangles) -> bool
                 if(has_position)
                 {
                     float fpos[4];
-                    gfx::vertex_unpack(fpos, gfx::attribute::Position, vertex_format_, dst_ptr);
+                    bgfx::vertexUnpack(fpos, bgfx::Attrib::Position, vertex_format_, dst_ptr);
                     bbox_.add_point(math::vec3(fpos[0], fpos[1], fpos[2]));
                 }
 
@@ -699,20 +699,20 @@ auto mesh::bind_skin(const skin_bind_data& bind_data) -> bool
     }
 
     // Adjust vertex format to include blend weights and indices if necessary.
-    gfx::vertex_layout new_format(vertex_format_);
-    gfx::vertex_layout original_format = vertex_format_;
-    bool has_weights = new_format.has(gfx::attribute::Weight);
-    bool has_indices = new_format.has(gfx::attribute::Indices);
+    bgfx::VertexLayout new_format(vertex_format_);
+    bgfx::VertexLayout original_format = vertex_format_;
+    bool has_weights = new_format.has(bgfx::Attrib::Weight);
+    bool has_indices = new_format.has(bgfx::Attrib::Indices);
     if(!has_weights || !has_indices)
     {
         new_format.m_hash = 0;
         if(!has_weights)
         {
-            new_format.add(gfx::attribute::Weight, 4, gfx::attribute_type::Float);
+            new_format.add(bgfx::Attrib::Weight, 4, bgfx::AttribType::Float);
         }
         if(!has_indices)
         {
-            new_format.add(gfx::attribute::Indices, 4, gfx::attribute_type::Float, false, true);
+            new_format.add(bgfx::Attrib::Indices, 4, bgfx::AttribType::Float, false, true);
         }
 
         new_format.end();
@@ -733,7 +733,7 @@ auto mesh::bind_skin(const skin_bind_data& bind_data) -> bool
         preparation_data_.vertex_data.resize(vertex_table.size() * vertex_stride);
         preparation_data_.vertex_flags.resize(vertex_table.size());
 
-        gfx::vertex_convert(vertex_format_,
+        bgfx::vertexConvert(vertex_format_,
                             preparation_data_.vertex_data.data(),
                             original_format,
                             original_buffer.data(),
@@ -793,16 +793,16 @@ auto mesh::bind_skin(const skin_bind_data& bind_data) -> bool
                 blend_weights[static_cast<math::vec4::length_type>(j)] = data.weights[j];
             }
 
-            gfx::vertex_pack(math::value_ptr(blend_weights),
+            bgfx::vertexPack(math::value_ptr(blend_weights),
                              false,
-                             gfx::attribute::Weight,
+                             bgfx::Attrib::Weight,
                              vertex_format_,
                              src_vertices_ptr,
                              uint32_t(i));
 
-            gfx::vertex_pack(math::value_ptr(blend_indices),
+            bgfx::vertexPack(math::value_ptr(blend_indices),
                              false,
-                             gfx::attribute::Indices,
+                             bgfx::Attrib::Indices,
                              vertex_format_,
                              src_vertices_ptr,
                              uint32_t(i));
@@ -886,7 +886,7 @@ auto mesh::load_mesh(load_data&& data) -> bool
     return result;
 }
 
-auto mesh::create_plane(const gfx::vertex_layout& format,
+auto mesh::create_plane(const bgfx::VertexLayout& format,
                         float width,
                         float height,
                         uint32_t width_segments,
@@ -911,7 +911,7 @@ auto mesh::create_plane(const gfx::vertex_layout& format,
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_heightfield(const gfx::vertex_layout& format,
+auto mesh::create_heightfield(const bgfx::VertexLayout& format,
                               hpp::span<const float> heights,
                               uint32_t segments_x,
                               uint32_t segments_z,
@@ -973,7 +973,7 @@ auto mesh::create_heightfield(const gfx::vertex_layout& format,
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_cube(const gfx::vertex_layout& format,
+auto mesh::create_cube(const bgfx::VertexLayout& format,
                        float width,
                        float height,
                        float depth,
@@ -997,7 +997,7 @@ auto mesh::create_cube(const gfx::vertex_layout& format,
 }
 
 
-auto mesh::create_rounded_cube(const gfx::vertex_layout& format,
+auto mesh::create_rounded_cube(const bgfx::VertexLayout& format,
     float width,
     float height,
     float depth,
@@ -1020,7 +1020,7 @@ auto mesh::create_rounded_cube(const gfx::vertex_layout& format,
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_sphere(const gfx::vertex_layout& format,
+auto mesh::create_sphere(const bgfx::VertexLayout& format,
                          float radius,
                          uint32_t stacks,
                          uint32_t slices,
@@ -1040,7 +1040,7 @@ auto mesh::create_sphere(const gfx::vertex_layout& format,
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_cylinder(const gfx::vertex_layout& format,
+auto mesh::create_cylinder(const bgfx::VertexLayout& format,
                            float radius,
                            float height,
                            uint32_t stacks,
@@ -1065,7 +1065,7 @@ auto mesh::create_cylinder(const gfx::vertex_layout& format,
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_capsule(const gfx::vertex_layout& format,
+auto mesh::create_capsule(const bgfx::VertexLayout& format,
                           float radius,
                           float height,
                           uint32_t stacks,
@@ -1086,7 +1086,7 @@ auto mesh::create_capsule(const gfx::vertex_layout& format,
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_cone(const gfx::vertex_layout& format,
+auto mesh::create_cone(const bgfx::VertexLayout& format,
                        float radius,
                        float radius_tip,
                        float height,
@@ -1108,7 +1108,7 @@ auto mesh::create_cone(const gfx::vertex_layout& format,
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_torus(const gfx::vertex_layout& format,
+auto mesh::create_torus(const bgfx::VertexLayout& format,
                         float outer_radius,
                         float inner_radius,
                         uint32_t bands,
@@ -1129,7 +1129,7 @@ auto mesh::create_torus(const gfx::vertex_layout& format,
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_teapot(const gfx::vertex_layout& format, bool hardware_copy /*= true*/) -> bool
+auto mesh::create_teapot(const bgfx::VertexLayout& format, bool hardware_copy /*= true*/) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -1144,7 +1144,7 @@ auto mesh::create_teapot(const gfx::vertex_layout& format, bool hardware_copy /*
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_icosahedron(const gfx::vertex_layout& format, bool hardware_copy /*= true*/) -> bool
+auto mesh::create_icosahedron(const bgfx::VertexLayout& format, bool hardware_copy /*= true*/) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -1159,7 +1159,7 @@ auto mesh::create_icosahedron(const gfx::vertex_layout& format, bool hardware_co
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_dodecahedron(const gfx::vertex_layout& format, bool hardware_copy /*= true*/) -> bool
+auto mesh::create_dodecahedron(const bgfx::VertexLayout& format, bool hardware_copy /*= true*/) -> bool
 {
     // We are in the process of preparing.
     prepare_mesh(format);
@@ -1174,7 +1174,7 @@ auto mesh::create_dodecahedron(const gfx::vertex_layout& format, bool hardware_c
     return end_prepare_primitive(hardware_copy);
 }
 
-auto mesh::create_icosphere(const gfx::vertex_layout& format, int tesselation_level, bool hardware_copy /*= true*/)
+auto mesh::create_icosphere(const bgfx::VertexLayout& format, int tesselation_level, bool hardware_copy /*= true*/)
     -> bool
 {
     // We are in the process of preparing.
@@ -1193,7 +1193,7 @@ auto mesh::create_icosphere(const gfx::vertex_layout& format, int tesselation_le
 void mesh::check_for_degenerates()
 {
     // Scan the preparation data for degenerate triangles.
-    uint16_t position_offset = vertex_format_.getOffset(gfx::attribute::Position);
+    uint16_t position_offset = vertex_format_.getOffset(bgfx::Attrib::Position);
     // uint16_t vertex_stride = _vertex_format.getStride();
     uint8_t* src_vertices_ptr = preparation_data_.vertex_data.data() + position_offset;
 
@@ -1204,13 +1204,13 @@ void mesh::check_for_degenerates()
             triangle& tri = preparation_data_.triangle_data[i];
             math::vec3 v1;
             float vf1[4];
-            gfx::vertex_unpack(vf1, gfx::attribute::Position, vertex_format_, src_vertices_ptr, tri.indices[0]);
+            bgfx::vertexUnpack(vf1, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, tri.indices[0]);
             math::vec3 v2;
             float vf2[4];
-            gfx::vertex_unpack(vf2, gfx::attribute::Position, vertex_format_, src_vertices_ptr, tri.indices[1]);
+            bgfx::vertexUnpack(vf2, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, tri.indices[1]);
             math::vec3 v3;
             float vf3[4];
-            gfx::vertex_unpack(vf3, gfx::attribute::Position, vertex_format_, src_vertices_ptr, tri.indices[2]);
+            bgfx::vertexUnpack(vf3, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, tri.indices[2]);
             std::memcpy(&v1[0], vf1, 3 * sizeof(float));
             std::memcpy(&v2[0], vf2, 3 * sizeof(float));
             std::memcpy(&v3[0], vf3, 3 * sizeof(float));
@@ -1311,7 +1311,7 @@ void mesh::build_vb(bool hardware_copy)
         const uint16_t vb_flags =
             BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_COMPUTE_FORMAT_32X1 | BGFX_BUFFER_COMPUTE_TYPE_FLOAT;
 
-        const gfx::memory_view* mem = gfx::make_ref(system_vb_, buffer_size);
+        const bgfx::Memory* mem = bgfx::makeRef(system_vb_, buffer_size);
         hardware_vb_ = std::make_shared<gfx::vertex_buffer>(mem, vertex_format_, vb_flags);
 
     } // End if video memory vertex buffer required
@@ -1335,7 +1335,7 @@ void mesh::build_ib(bool hardware_copy)
         // Allocate hardware buffer if required (i.e. it does not already exist).
         if(!hardware_ib_)
         {
-            const gfx::memory_view* mem = gfx::make_ref(system_ib_, buffer_size);
+            const bgfx::Memory* mem = bgfx::makeRef(system_ib_, buffer_size);
             hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, ib_flags);
         } // End if not allocated
         else
@@ -1343,7 +1343,7 @@ void mesh::build_ib(bool hardware_copy)
             auto ib = std::static_pointer_cast<gfx::index_buffer>(hardware_ib_);
             if(!ib->is_valid())
             {
-                const gfx::memory_view* mem = gfx::make_ref(system_ib_, buffer_size);
+                const bgfx::Memory* mem = bgfx::makeRef(system_ib_, buffer_size);
                 hardware_ib_ = std::make_shared<gfx::index_buffer>(mem, ib_flags);
             }
         }
@@ -1366,7 +1366,7 @@ auto mesh::generate_adjacency(std::vector<uint32_t>& adjacency) -> bool
         }
 
         // Retrieve useful data offset information.
-        uint16_t position_offset = vertex_format_.getOffset(gfx::attribute::Position);
+        uint16_t position_offset = vertex_format_.getOffset(bgfx::Attrib::Position);
         uint16_t vertex_stride = vertex_format_.getStride();
 
         // Insert all edges into the edge tree
@@ -1478,7 +1478,7 @@ auto mesh::generate_adjacency(std::vector<uint32_t>& adjacency) -> bool
         }
 
         // Retrieve useful data offset information.
-        uint16_t position_offset = vertex_format_.getOffset(gfx::attribute::Position);
+        uint16_t position_offset = vertex_format_.getOffset(bgfx::Attrib::Position);
         uint16_t vertex_stride = vertex_format_.getStride();
 
         // Insert all edges into the edge tree
@@ -1715,7 +1715,7 @@ auto mesh::get_system_ib() -> uint32_t*
     return system_ib_;
 }
 
-auto mesh::get_vertex_format() const -> const gfx::vertex_layout&
+auto mesh::get_vertex_format() const -> const bgfx::VertexLayout&
 {
     return vertex_format_;
 }
@@ -2234,21 +2234,21 @@ auto mesh::apply_skin_to_load_data(load_data& data) -> bool
     }
 
     // Adjust vertex format to include blend weights and indices
-    gfx::vertex_layout new_format(data.vertex_format);
-    gfx::vertex_layout original_format = data.vertex_format;
-    bool has_weights = new_format.has(gfx::attribute::Weight);
-    bool has_indices = new_format.has(gfx::attribute::Indices);
+    bgfx::VertexLayout new_format(data.vertex_format);
+    bgfx::VertexLayout original_format = data.vertex_format;
+    bool has_weights = new_format.has(bgfx::Attrib::Weight);
+    bool has_indices = new_format.has(bgfx::Attrib::Indices);
     
     if(!has_weights || !has_indices)
     {
         new_format.m_hash = 0;
         if(!has_weights)
         {
-            new_format.add(gfx::attribute::Weight, 4, gfx::attribute_type::Float);
+            new_format.add(bgfx::Attrib::Weight, 4, bgfx::AttribType::Float);
         }
         if(!has_indices)
         {
-            new_format.add(gfx::attribute::Indices, 4, gfx::attribute_type::Float, false, true);
+            new_format.add(bgfx::Attrib::Indices, 4, bgfx::AttribType::Float, false, true);
         }
         new_format.end();
         data.vertex_format = new_format;
@@ -2265,7 +2265,7 @@ auto mesh::apply_skin_to_load_data(load_data& data) -> bool
         data.vertex_data.clear();
         data.vertex_data.resize(vertex_table.size() * vertex_stride);
 
-        gfx::vertex_convert(data.vertex_format,
+        bgfx::vertexConvert(data.vertex_format,
                             data.vertex_data.data(),
                             original_format,
                             original_buffer.data(),
@@ -2314,16 +2314,16 @@ auto mesh::apply_skin_to_load_data(load_data& data) -> bool
                 blend_weights[static_cast<math::vec4::length_type>(j)] = vdata.weights[j];
             }
 
-            gfx::vertex_pack(math::value_ptr(blend_weights),
+            bgfx::vertexPack(math::value_ptr(blend_weights),
                              false,
-                             gfx::attribute::Weight,
+                             bgfx::Attrib::Weight,
                              data.vertex_format,
                              src_vertices_ptr,
                              uint32_t(i));
 
-            gfx::vertex_pack(math::value_ptr(blend_indices),
+            bgfx::vertexPack(math::value_ptr(blend_indices),
                              false,
-                             gfx::attribute::Indices,
+                             bgfx::Attrib::Indices,
                              data.vertex_format,
                              src_vertices_ptr,
                              uint32_t(i));
@@ -2352,7 +2352,7 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
         return false;
     }
 
-    if(!data.vertex_format.has(gfx::attribute::Position))
+    if(!data.vertex_format.has(bgfx::Attrib::Position))
     {
         APPLOG_ERROR("Mesh must have position data to generate LODs\n");
         return false;
@@ -2365,7 +2365,7 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
     }
 
     // Get position offset and stride for meshoptimizer
-    uint16_t position_offset = data.vertex_format.getOffset(gfx::attribute::Position);
+    uint16_t position_offset = data.vertex_format.getOffset(bgfx::Attrib::Position);
     uint16_t vertex_stride = data.vertex_format.getStride();
     const uint8_t* vertex_data_ptr = data.vertex_data.data();
     
@@ -2398,9 +2398,9 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
     uint32_t total_components = 0;
     
     // Check for available attributes and pack them into a single interleaved buffer
-    bool has_normal = data.vertex_format.has(gfx::attribute::Normal);
-    bool has_texcoord = data.vertex_format.has(gfx::attribute::TexCoord0);
-    bool has_tangent = data.vertex_format.has(gfx::attribute::Tangent);
+    bool has_normal = data.vertex_format.has(bgfx::Attrib::Normal);
+    bool has_texcoord = data.vertex_format.has(bgfx::Attrib::TexCoord0);
+    bool has_tangent = data.vertex_format.has(bgfx::Attrib::Tangent);
     
     if(has_normal || has_texcoord || has_tangent)
     {
@@ -2445,7 +2445,7 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
             if(has_normal)
             {
                 float attr[4];
-                gfx::vertex_unpack(attr, gfx::attribute::Normal, data.vertex_format, vertex_data_ptr, i);
+                bgfx::vertexUnpack(attr, bgfx::Attrib::Normal, data.vertex_format, vertex_data_ptr, i);
                 dst[component_offset + 0] = attr[0];
                 dst[component_offset + 1] = attr[1];
                 dst[component_offset + 2] = attr[2];
@@ -2455,7 +2455,7 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
             if(has_texcoord)
             {
                 float attr[4];
-                gfx::vertex_unpack(attr, gfx::attribute::TexCoord0, data.vertex_format, vertex_data_ptr, i);
+                bgfx::vertexUnpack(attr, bgfx::Attrib::TexCoord0, data.vertex_format, vertex_data_ptr, i);
                 dst[component_offset + 0] = attr[0];
                 dst[component_offset + 1] = attr[1];
                 component_offset += 2;
@@ -2464,7 +2464,7 @@ auto mesh::generate_lods_for_load_data(load_data& data, const std::vector<std::p
             if(has_tangent)
             {
                 float attr[4];
-                gfx::vertex_unpack(attr, gfx::attribute::Tangent, data.vertex_format, vertex_data_ptr, i);
+                bgfx::vertexUnpack(attr, bgfx::Attrib::Tangent, data.vertex_format, vertex_data_ptr, i);
                 dst[component_offset + 0] = attr[0];
                 dst[component_offset + 1] = attr[1];
                 dst[component_offset + 2] = attr[2];
@@ -2735,7 +2735,7 @@ auto mesh::restore_lods_from_load_data(const load_data& data) -> bool
         if(hardware_mesh_ && lod.system_ib_ && lod.face_count_ > 0)
         {
             auto buffer_size = static_cast<uint32_t>(lod.face_count_ * 3 * sizeof(uint32_t));
-            const gfx::memory_view* mem = gfx::make_ref(lod.system_ib_, buffer_size);
+            const bgfx::Memory* mem = bgfx::makeRef(lod.system_ib_, buffer_size);
             // Same compute-read flags as base LOD so any LOD can be used as a
             // read-only buffer inside shaders (e.g. vertex pulling for wireframe overlay).
             const uint16_t ib_flags = BGFX_BUFFER_INDEX32
@@ -2928,20 +2928,20 @@ auto operator<(const mesh::mesh_submesh_key& key1, const mesh::mesh_submesh_key&
 auto operator<(const mesh::weld_key& key1, const mesh::weld_key& key2) -> bool
 {
     auto vertex_compare =
-        [](const uint8_t* pVtx1, const uint8_t* pVtx2, const gfx::vertex_layout& layout, float tolerance) -> int
+        [](const uint8_t* pVtx1, const uint8_t* pVtx2, const bgfx::VertexLayout& layout, float tolerance) -> int
     {
         float diff{};
         int ndifference{};
 
-        for(uint16_t i = 0; i < gfx::attribute::Count; ++i)
+        for(uint16_t i = 0; i < bgfx::Attrib::Count; ++i)
         {
-            if(!layout.has(static_cast<gfx::attribute>(i)))
+            if(!layout.has(static_cast<bgfx::Attrib::Enum>(i)))
             {
                 continue; // Skip attributes not present in this layout.
             }
 
             // Get the offset for this attribute in the vertex data
-            uint16_t offset = layout.getOffset(static_cast<gfx::attribute>(i));
+            uint16_t offset = layout.getOffset(static_cast<bgfx::Attrib::Enum>(i));
 
             // Retrieve the vertex data pointers
             const uint8_t* p1 = pVtx1 + offset;
@@ -2951,7 +2951,7 @@ auto operator<(const mesh::weld_key& key1, const mesh::weld_key& key2) -> bool
             uint8_t num_components{};
             bgfx::AttribType::Enum type{};
             bool normalized{}, as_int{};
-            layout.decode(static_cast<gfx::attribute>(i), num_components, type, normalized, as_int);
+            layout.decode(static_cast<bgfx::Attrib::Enum>(i), num_components, type, normalized, as_int);
 
             // Compare the attributes based on the type
             switch(type)
@@ -3112,7 +3112,7 @@ auto mesh::generate_vertex_components(bool weld) -> bool
     if(force_tangent_generation_ || preparation_data_.compute_binormals || preparation_data_.compute_tangents)
     {
         // Requires normals
-        if(vertex_format_.has(gfx::attribute::Normal))
+        if(vertex_format_.has(bgfx::Attrib::Normal))
         {
             // Generate any vertex tangents that have not been provided
             if(!generate_vertex_tangents())
@@ -3140,8 +3140,8 @@ auto mesh::generate_vertex_normals(uint32_t* adjacency_ptr, std::vector<uint32_t
     uint32_t i, j, k, index;
 
     // Get access to useful data offset information.
-    uint16_t position_offset = vertex_format_.getOffset(gfx::attribute::Position);
-    bool has_normals = vertex_format_.has(gfx::attribute::Normal);
+    uint16_t position_offset = vertex_format_.getOffset(bgfx::Attrib::Position);
+    bool has_normals = vertex_format_.has(bgfx::Attrib::Normal);
     uint16_t vertex_stride = vertex_format_.getStride();
 
     // Final format requests vertex normals?
@@ -3342,14 +3342,14 @@ auto mesh::generate_vertex_normals(uint32_t* adjacency_ptr, std::vector<uint32_t
             // we need
             // to split the vertex into two.
             float fn[4];
-            gfx::vertex_unpack(fn, gfx::attribute::Normal, vertex_format_, src_vertices_ptr, index);
+            bgfx::vertexUnpack(fn, bgfx::Attrib::Normal, vertex_format_, src_vertices_ptr, index);
             math::vec3 ref_normal;
             ref_normal[0] = fn[0];
             ref_normal[1] = fn[1];
             ref_normal[2] = fn[2];
             if(ref_normal.x == 0.0f && ref_normal.y == 0.0f && ref_normal.z == 0.0f)
             {
-                gfx::vertex_pack(fn, true, gfx::attribute::Normal, vertex_format_, src_vertices_ptr, index);
+                bgfx::vertexPack(fn, true, bgfx::Attrib::Normal, vertex_format_, src_vertices_ptr, index);
             } // End if no normal stored here yet
             else
             {
@@ -3385,9 +3385,9 @@ auto mesh::generate_vertex_normals(uint32_t* adjacency_ptr, std::vector<uint32_t
                     // added a new vertex.
                     index = preparation_data_.vertex_count++;
                     math::vec4 norm(vec_normal, 0.0f);
-                    gfx::vertex_pack(math::value_ptr(norm),
+                    bgfx::vertexPack(math::value_ptr(norm),
                                      true,
-                                     gfx::attribute::Normal,
+                                     bgfx::Attrib::Normal,
                                      vertex_format_,
                                      src_vertices_ptr,
                                      index);
@@ -3432,7 +3432,7 @@ auto mesh::generate_vertex_tangents() -> bool
     // Get access to useful data offset information.
     uint16_t vertex_stride = vertex_format_.getStride();
 
-    bool has_normals = vertex_format_.has(gfx::attribute::Normal);
+    bool has_normals = vertex_format_.has(bgfx::Attrib::Normal);
     // This will fail if we don't already have normals however.
     if(!has_normals)
     {
@@ -3440,8 +3440,8 @@ auto mesh::generate_vertex_tangents() -> bool
     }
 
     // Final format requests tangents?
-    bool requires_tangents = vertex_format_.has(gfx::attribute::Tangent);
-    bool requires_bitangents = vertex_format_.has(gfx::attribute::Bitangent);
+    bool requires_tangents = vertex_format_.has(bgfx::Attrib::Tangent);
+    bool requires_bitangents = vertex_format_.has(bgfx::Attrib::Bitangent);
     if(!force_tangent_generation_ && !requires_bitangents && !requires_tangents)
     {
         return true;
@@ -3471,13 +3471,13 @@ auto mesh::generate_vertex_tangents() -> bool
         // triangle.
         math::vec3 E;
         float fE[4];
-        gfx::vertex_unpack(fE, gfx::attribute::Position, vertex_format_, src_vertices_ptr, i1);
+        bgfx::vertexUnpack(fE, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, i1);
         math::vec3 F;
         float fF[4];
-        gfx::vertex_unpack(fF, gfx::attribute::Position, vertex_format_, src_vertices_ptr, i2);
+        bgfx::vertexUnpack(fF, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, i2);
         math::vec3 G;
         float fG[4];
-        gfx::vertex_unpack(fG, gfx::attribute::Position, vertex_format_, src_vertices_ptr, i3);
+        bgfx::vertexUnpack(fG, bgfx::Attrib::Position, vertex_format_, src_vertices_ptr, i3);
         std::memcpy(&E[0], fE, 3 * sizeof(float));
         std::memcpy(&F[0], fF, 3 * sizeof(float));
         std::memcpy(&G[0], fG, 3 * sizeof(float));
@@ -3487,13 +3487,13 @@ auto mesh::generate_vertex_tangents() -> bool
         // TODO: Allow customization of which tex coordinates to generate from.
         math::vec2 Et;
         float fEt[4];
-        gfx::vertex_unpack(&fEt[0], gfx::attribute::TexCoord0, vertex_format_, src_vertices_ptr, i1);
+        bgfx::vertexUnpack(&fEt[0], bgfx::Attrib::TexCoord0, vertex_format_, src_vertices_ptr, i1);
         math::vec2 Ft;
         float fFt[4];
-        gfx::vertex_unpack(&fFt[0], gfx::attribute::TexCoord0, vertex_format_, src_vertices_ptr, i2);
+        bgfx::vertexUnpack(&fFt[0], bgfx::Attrib::TexCoord0, vertex_format_, src_vertices_ptr, i2);
         math::vec2 Gt;
         float fGt[4];
-        gfx::vertex_unpack(&fGt[0], gfx::attribute::TexCoord0, vertex_format_, src_vertices_ptr, i3);
+        bgfx::vertexUnpack(&fGt[0], bgfx::Attrib::TexCoord0, vertex_format_, src_vertices_ptr, i3);
         std::memcpy(&Et[0], fEt, 2 * sizeof(float));
         std::memcpy(&Ft[0], fFt, 2 * sizeof(float));
         std::memcpy(&Gt[0], fGt, 2 * sizeof(float));
@@ -3565,7 +3565,7 @@ auto mesh::generate_vertex_tangents() -> bool
         // Retrieve the normal vector from the vertex and the computed
         // tangent vector.
         float normal[4];
-        gfx::vertex_unpack(normal, gfx::attribute::Normal, vertex_format_, src_vertices_ptr);
+        bgfx::vertexUnpack(normal, bgfx::Attrib::Normal, vertex_format_, src_vertices_ptr);
         std::memcpy(&normal_vec[0], normal, 3 * sizeof(float));
 
         T = tangents[i];
@@ -3601,7 +3601,7 @@ auto mesh::generate_vertex_tangents() -> bool
         if(force_tangent_generation_ || (!has_tangent && requires_tangents))
         {
             math::vec4 t(T, 1.0f);
-            gfx::vertex_pack(math::value_ptr(t), true, gfx::attribute::Tangent, vertex_format_, src_vertices_ptr);
+            bgfx::vertexPack(math::value_ptr(t), true, bgfx::Attrib::Tangent, vertex_format_, src_vertices_ptr);
         }
 
         // Compute and store bitangent if required
@@ -3624,7 +3624,7 @@ auto mesh::generate_vertex_tangents() -> bool
 
             // Store.
             math::vec4 b(B, 1.0f);
-            gfx::vertex_pack(math::value_ptr(b), true, gfx::attribute::Bitangent, vertex_format_, src_vertices_ptr);
+            bgfx::vertexPack(math::value_ptr(b), true, bgfx::Attrib::Bitangent, vertex_format_, src_vertices_ptr);
 
         } // End if requires bitangent
 
@@ -4258,30 +4258,30 @@ void mesh::bind_render_buffers_for_submesh(const submesh* submesh, uint32_t lod_
         auto vb = std::static_pointer_cast<gfx::vertex_buffer>(hardware_vb_);
         auto ib = std::static_pointer_cast<gfx::index_buffer>(ib_hardware);
 
-        gfx::set_vertex_buffer(0, vb->native_handle()); // submesh->vertex_start, submesh->vertex_count);
-        gfx::set_index_buffer(ib->native_handle(), index_start, index_count);
+        bgfx::setVertexBuffer(0, vb->native_handle()); // submesh->vertex_start, submesh->vertex_count);
+        bgfx::setIndexBuffer(ib->native_handle(), index_start, index_count);
 
     } // End if has hardware copy
     else
     {
-        if(submesh->vertex_count == gfx::get_avail_transient_vertex_buffer(submesh->vertex_count, vertex_format_))
+        if(submesh->vertex_count == bgfx::getAvailTransientVertexBuffer(submesh->vertex_count, vertex_format_))
         {
-            gfx::transient_vertex_buffer vb;
-            gfx::alloc_transient_vertex_buffer(&vb, submesh->vertex_count, vertex_format_);
+            bgfx::TransientVertexBuffer vb;
+            bgfx::allocTransientVertexBuffer(&vb, submesh->vertex_count, vertex_format_);
             std::memcpy(vb.data,
                         system_vb_ + submesh->vertex_start * vertex_format_.getStride(),
                         vb.size); // Adjust the pointer to start at the correct vertex
-            gfx::set_vertex_buffer(0, &vb, 0, submesh->vertex_count);
+            bgfx::setVertexBuffer(0, &vb, 0, submesh->vertex_count);
         }
 
-        if(index_count == gfx::get_avail_transient_index_buffer(index_count, true))
+        if(index_count == bgfx::getAvailTransientIndexBuffer(index_count, true))
         {
-            gfx::transient_index_buffer ib;
-            gfx::alloc_transient_index_buffer(&ib, index_count, true);
+            bgfx::TransientIndexBuffer ib;
+            bgfx::allocTransientIndexBuffer(&ib, index_count, true);
             std::memcpy(ib.data,
                         ib_data + index_start,
                         index_count * sizeof(uint32_t)); // Adjust the pointer to start at the correct index
-            gfx::set_index_buffer(&ib, 0, index_count);
+            bgfx::setIndexBuffer(&ib, 0, index_count);
         }
 
     } // End if software only copy

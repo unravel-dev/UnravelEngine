@@ -28,7 +28,7 @@ namespace unravel
  */
 auto extract_sdf_source_geometry(const uint8_t* vertex_data,
                                  uint32_t vertex_count,
-                                 const gfx::vertex_layout& format,
+                                 const bgfx::VertexLayout& format,
                                  const uint32_t* indices,
                                  uint32_t triangle_count,
                                  sdf_source_geometry& out) -> bool;

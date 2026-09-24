@@ -38,8 +38,8 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_env,  "s_env", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_data, "u_data", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_env,  "s_env", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_data, "u_data", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr s_env;  ///< samplerCube for environment

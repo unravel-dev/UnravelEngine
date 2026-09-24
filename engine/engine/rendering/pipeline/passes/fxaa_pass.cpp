@@ -92,7 +92,7 @@ auto fxaa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
 
         // Set scissor to the entire output area
         irect32_t rect(0, 0, output_size.width, output_size.height);
-        gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+        bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
 
         // Draw a full-screen quad
         // Typically, your engine might provide `clip_quad()` or something similar.
@@ -101,20 +101,20 @@ auto fxaa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::f
 
         // State: write RGBA. Depth test is optional;
         // for a post pass, we usually don't need depth testing at all.
-        gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
 
         // Submit the draw call using the pass ID
-        gfx::submit(pass.id, fxaa_program_.program->native_handle());
+        bgfx::submit(pass.id, fxaa_program_.program->native_handle());
 
         // Reset state (optional cleanup)
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(BGFX_STATE_DEFAULT);
 
         // End usage of our GPU program
         fxaa_program_.program->end();
     }
 
     // Discard is typically called at the end of the pass if your engine requires it.
-    gfx::discard();
+    bgfx::discard();
 
     return output;
 }

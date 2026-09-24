@@ -67,7 +67,7 @@ auto carries_no_surface(const math::vec3& a, const math::vec3& b, const math::ve
 
 auto extract_sdf_source_geometry(const uint8_t* vertex_data,
                                  uint32_t vertex_count,
-                                 const gfx::vertex_layout& format,
+                                 const bgfx::VertexLayout& format,
                                  const uint32_t* indices,
                                  uint32_t triangle_count,
                                  sdf_source_geometry& out) -> bool
@@ -78,7 +78,7 @@ auto extract_sdf_source_geometry(const uint8_t* vertex_data,
     {
         return false;
     }
-    if(!format.has(gfx::attribute::Position))
+    if(!format.has(bgfx::Attrib::Position))
     {
         return false;
     }
@@ -86,7 +86,7 @@ auto extract_sdf_source_geometry(const uint8_t* vertex_data,
     for(uint32_t i = 0; i < vertex_count; ++i)
     {
         float unpacked[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-        gfx::vertex_unpack(unpacked, gfx::attribute::Position, format, vertex_data, i);
+        bgfx::vertexUnpack(unpacked, bgfx::Attrib::Position, format, vertex_data, i);
         out.positions[i] = math::vec3(unpacked[0], unpacked[1], unpacked[2]);
     }
     // Same surface test as the submesh path, and for the same reason -- but the bounds are
@@ -173,8 +173,8 @@ auto compact_submesh_geometry(const mesh::load_data& data,
             }
             source[corner] = source_index;
             float unpacked[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            gfx::vertex_unpack(unpacked,
-                               gfx::attribute::Position,
+            bgfx::vertexUnpack(unpacked,
+                               bgfx::Attrib::Position,
                                data.vertex_format,
                                data.vertex_data.data(),
                                source_index);
@@ -203,7 +203,7 @@ auto compact_submesh_geometry(const mesh::load_data& data,
 auto has_usable_vertex_data(const mesh::load_data& data) -> bool
 {
     return !data.vertex_data.empty() && data.vertex_count != 0 &&
-           data.vertex_format.has(gfx::attribute::Position);
+           data.vertex_format.has(bgfx::Attrib::Position);
 }
 
 } // namespace

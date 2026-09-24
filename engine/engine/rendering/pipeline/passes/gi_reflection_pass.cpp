@@ -35,7 +35,7 @@ auto create_or_update_target(gfx::render_view& rview,
                                              size.height,
                                              false,
                                              1,
-                                             gfx::texture_format::RGBA16F,
+                                             bgfx::TextureFormat::RGBA16F,
                                              BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
                                                  (compute_write ? BGFX_TEXTURE_COMPUTE_WRITE : 0));
         out_created = true;
@@ -56,12 +56,12 @@ gi_reflection_pass::~gi_reflection_pass()
 {
     if(bgfx::isValid(refl_list_))
     {
-        gfx::destroy(refl_list_);
+        bgfx::destroy(refl_list_);
         refl_list_ = {bgfx::kInvalidHandle};
     }
     if(bgfx::isValid(refl_args_))
     {
-        gfx::destroy(refl_args_);
+        bgfx::destroy(refl_args_);
         refl_args_ = {bgfx::kInvalidHandle};
     }
 }
@@ -227,17 +227,17 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         {
             if(bgfx::isValid(refl_list_))
             {
-                gfx::destroy(refl_list_);
+                bgfx::destroy(refl_list_);
             }
             refl_list_capacity_ = required_indices;
-            refl_list_ = gfx::create_dynamic_index_buffer(refl_list_capacity_,
-                                                          BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                              BGFX_BUFFER_INDEX32);
+            refl_list_ = bgfx::createDynamicIndexBuffer(refl_list_capacity_,
+                                                        BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                            BGFX_BUFFER_INDEX32);
             list_created = true;
         }
         if(!bgfx::isValid(refl_args_))
         {
-            refl_args_ = gfx::create_indirect_buffer(1);
+            refl_args_ = bgfx::createIndirectBuffer(1);
         }
         if(list_created)
         {
@@ -249,11 +249,11 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             // compute-writable dynamic buffers.)
             gfx::render_pass pass("GI/Reflections List Init");
             args_program_.program->begin();
-            gfx::set_buffer(0, refl_args_, gfx::access::Write);
-            gfx::set_buffer(1, refl_list_, gfx::access::ReadWrite);
-            gfx::set_buffer(2, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
+            bgfx::setBuffer(0, refl_args_, bgfx::Access::Write);
+            bgfx::setBuffer(1, refl_list_, bgfx::Access::ReadWrite);
+            bgfx::setBuffer(2, surface_cache.get_texture_mean_buffer(), bgfx::Access::Read);
             gfx::set_texture(args_program_.s_gi_env_sh, 3, env_sh_tex);
-            gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
+            bgfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
             args_program_.program->end();
         }
         {
@@ -265,27 +265,27 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             gfx::set_texture(classify_program_.s_gi_normal, 1, params.g_buffer->get_texture(1));
             gfx::set_texture(classify_program_.s_gi_diffuse, 2, gi_diffuse_tex);
             gfx::set_texture(classify_program_.s_gi_env_sh, 3, env_sh_tex);
-            gfx::set_image(4, raw_tex->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
-            gfx::set_buffer(5, refl_list_, gfx::access::ReadWrite);
+            bgfx::setImage(4, raw_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
+            bgfx::setBuffer(5, refl_list_, bgfx::Access::ReadWrite);
             gfx::set_uniform(classify_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
             gfx::set_uniform(classify_program_.u_gi_reflection_camera, reflection_camera);
             gfx::set_uniform(classify_program_.u_gi_reflection_jitter, jitter);
             gfx::set_uniform(classify_program_.u_gi_reflection_texel, refl_texel);
-            gfx::dispatch(pass.id,
-                          classify_program_.program->native_handle(),
-                          (trace_size.width + 7u) / 8u,
-                          (trace_size.height + 7u) / 8u,
-                          1);
+            bgfx::dispatch(pass.id,
+                           classify_program_.program->native_handle(),
+                           (trace_size.width + 7u) / 8u,
+                           (trace_size.height + 7u) / 8u,
+                           1);
             classify_program_.program->end();
         }
         {
             gfx::render_pass pass("GI/Reflections Args");
             args_program_.program->begin();
-            gfx::set_buffer(0, refl_args_, gfx::access::Write);
-            gfx::set_buffer(1, refl_list_, gfx::access::ReadWrite);
-            gfx::set_buffer(2, surface_cache.get_texture_mean_buffer(), gfx::access::Read);
+            bgfx::setBuffer(0, refl_args_, bgfx::Access::Write);
+            bgfx::setBuffer(1, refl_list_, bgfx::Access::ReadWrite);
+            bgfx::setBuffer(2, surface_cache.get_texture_mean_buffer(), bgfx::Access::Read);
             gfx::set_texture(args_program_.s_gi_env_sh, 3, env_sh_tex);
-            gfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
+            bgfx::dispatch(pass.id, args_program_.program->native_handle(), 1, 1, 1);
             args_program_.program->end();
         }
         {
@@ -295,14 +295,14 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             pass.set_view_proj(params.cam->get_view(), reflection_projection);
             trace_program_.program->begin();
             gfx::set_texture(trace_program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-            gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-            gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-            gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+            bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
+            bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
+            bgfx::setBuffer(3, surface_cache.get_instance_buffer(), bgfx::Access::Read);
             gfx::set_texture(trace_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
             gfx::set_texture(trace_program_.s_gi_normal, 5, params.g_buffer->get_texture(1));
             gfx::set_texture(trace_program_.s_gi_probe_layer, 6, probe_layer_tex);
             // Stage 7 is the output image (OpenGL has eight image units); the list sits at 15.
-            gfx::set_image(7, raw_tex->native_handle(), 0, gfx::access::Write, gfx::texture_format::RGBA16F);
+            bgfx::setImage(7, raw_tex->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
             gfx::set_texture(trace_program_.s_hiz, 8, params.hiz);
             gfx::set_texture(trace_program_.s_gi_diffuse, 9, gi_diffuse_tex);
             gfx::set_texture(trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
@@ -314,7 +314,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                              11,
                              clipmap_gpu.get_attr_albedo_texture(),
                              BGFX_SAMPLER_W_CLAMP);
-            gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+            bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
             // Stage 14: last frame's composited colour for the on-screen hit upgrade (the sky
             // SH now rides the list buffer's SH block). Black stands in when absent; the
             // flag lane keeps it unread then.
@@ -325,7 +325,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                              14,
                              has_prev_color ? params.prev_color : default_textures::get().black_texture(),
                              BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
-            gfx::set_buffer(15, refl_list_, gfx::access::Read);
+            bgfx::setBuffer(15, refl_list_, bgfx::Access::Read);
             // The TAA-unjittered previous pair, the same convention as the temporal pass:
             // a still camera must reproject a hit onto itself.
             const auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
@@ -347,7 +347,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                              clipmap_gpu.get_level_params(),
                              global_sdf_clipmap::level_count);
             gfx::set_uniform(trace_program_.u_gi_light_voxel_params, light_voxel_params);
-            gfx::dispatch_indirect(pass.id, trace_program_.program->native_handle(), refl_args_, 0, 1);
+            bgfx::dispatch(pass.id, trace_program_.program->native_handle(), refl_args_, 0, 1);
             trace_program_.program->end();
         }
     }
@@ -359,16 +359,16 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         pass.set_view_proj(params.cam->get_view(), reflection_projection);
         program_.program->begin();
         gfx::set_texture(program_.s_sdf_atlas, 0, atlas.get_atlas_texture());
-        gfx::set_buffer(1, atlas.get_header_buffer(), gfx::access::Read);
-        gfx::set_buffer(2, atlas.get_indirection_buffer(), gfx::access::Read);
-        gfx::set_buffer(3, surface_cache.get_instance_buffer(), gfx::access::Read);
+        bgfx::setBuffer(1, atlas.get_header_buffer(), bgfx::Access::Read);
+        bgfx::setBuffer(2, atlas.get_indirection_buffer(), bgfx::Access::Read);
+        bgfx::setBuffer(3, surface_cache.get_instance_buffer(), bgfx::Access::Read);
         gfx::set_texture(program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
         gfx::set_texture(program_.s_gi_normal, 5, params.g_buffer->get_texture(1));
         gfx::set_texture(program_.s_gi_probe_layer, 6, probe_layer_tex);
         gfx::set_texture(program_.s_hiz, 8, params.hiz);
         gfx::set_texture(program_.s_gi_diffuse, 9, gi_diffuse_tex);
         gfx::set_texture(program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
-        gfx::set_buffer(12, surface_cache.get_grid_buffer(), gfx::access::Read);
+        bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
         gfx::set_texture(program_.s_gi_env_sh, 14, env_sh_tex);
         gfx::set_uniform(program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
         gfx::set_uniform(program_.u_gi_reflection_camera, reflection_camera);
@@ -388,12 +388,12 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         {
             topology = gfx::clip_quad(1.0f);
         }
-        gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        gfx::submit(pass.id, program_.program->native_handle());
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(pass.id, program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_DEFAULT);
         program_.program->end();
     }
-    gfx::discard();
+    bgfx::discard();
     // TEMPORAL: integrate this frame's stochastic sample into the reprojected running mean.
     {
         gfx::render_pass tpass("GI/Reflections Temporal");
@@ -457,9 +457,9 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         {
             ttopology = gfx::clip_quad(1.0f);
         }
-        gfx::set_state(ttopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        gfx::submit(tpass.id, temporal_program_.program->native_handle());
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(ttopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(tpass.id, temporal_program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_DEFAULT);
         temporal_program_.program->end();
     }
     // COMPOSITE: src-alpha OVER the authored probe layer. Coverage is 1 for mesh-exact
@@ -485,13 +485,13 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         {
             ctopology = gfx::clip_quad(1.0f);
         }
-        gfx::set_state(ctopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+        bgfx::setState(ctopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                        BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
-        gfx::submit(cpass.id, composite_program_.program->native_handle());
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::submit(cpass.id, composite_program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_DEFAULT);
         composite_program_.program->end();
     }
-    gfx::discard();
+    bgfx::discard();
     // A FULL-RESOLUTION mirror tier lived here briefly (capped compacted list re-traced at
     // output res over the composite) and was REMOVED on the user's verdict: +0.6 ms at FHD
     // for fidelity that did not read, plus artifacts - the sharp trace ran after the

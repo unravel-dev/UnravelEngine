@@ -15,7 +15,7 @@ constexpr std::size_t cube_face_count = 6;
 
 /// Copies pixel_count RGBA8 pixels of one color into bgfx-owned memory.
 template<std::size_t pixel_count>
-auto copy_solid_rgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> const gfx::memory_view*
+auto copy_solid_rgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> const bgfx::Memory*
 {
     std::array<uint8_t, pixel_count * 4> pixels{};
     for(size_t i = 0; i < pixel_count; ++i)
@@ -25,7 +25,7 @@ auto copy_solid_rgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> const gfx::
         pixels[i * 4 + 2] = b;
         pixels[i * 4 + 3] = a;
     }
-    return gfx::copy(pixels.data(), static_cast<uint32_t>(pixels.size()));
+    return bgfx::copy(pixels.data(), static_cast<uint32_t>(pixels.size()));
 }
 
 auto create_4x4_rgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> gfx::texture::ptr
@@ -35,7 +35,7 @@ auto create_4x4_rgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> gfx::textur
         default_texture_size, default_texture_size,
         false,
         default_texture_layers,
-        gfx::texture_format::RGBA8,
+        bgfx::TextureFormat::RGBA8,
         BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
         copy_solid_rgba8<pixel_count>(r, g, b, a));
 }
@@ -47,7 +47,7 @@ auto create_4x4_cube_rgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> gfx::t
         default_texture_size,
         false,
         default_texture_layers,
-        gfx::texture_format::RGBA8,
+        bgfx::TextureFormat::RGBA8,
         BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
         copy_solid_rgba8<pixel_count>(r, g, b, a));
 }

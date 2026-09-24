@@ -113,7 +113,7 @@ void raycast_mesh_submesh(mesh& msh,
         return;
     }
     const auto& vertex_format = msh.get_vertex_format();
-    if(!vertex_format.has(gfx::attribute::Position))
+    if(!vertex_format.has(bgfx::Attrib::Position))
     {
         return;
     }
@@ -143,9 +143,9 @@ void raycast_mesh_submesh(mesh& msh,
         std::array<float, 4> p0{};
         std::array<float, 4> p1{};
         std::array<float, 4> p2{};
-        gfx::vertex_unpack(p0.data(), gfx::attribute::Position, vertex_format, vertex_data, i0);
-        gfx::vertex_unpack(p1.data(), gfx::attribute::Position, vertex_format, vertex_data, i1);
-        gfx::vertex_unpack(p2.data(), gfx::attribute::Position, vertex_format, vertex_data, i2);
+        bgfx::vertexUnpack(p0.data(), bgfx::Attrib::Position, vertex_format, vertex_data, i0);
+        bgfx::vertexUnpack(p1.data(), bgfx::Attrib::Position, vertex_format, vertex_data, i1);
+        bgfx::vertexUnpack(p2.data(), bgfx::Attrib::Position, vertex_format, vertex_data, i2);
 
         const math::vec3 v0{p0[0], p0[1], p0[2]};
         const math::vec3 v1{p1[0], p1[1], p1[2]};

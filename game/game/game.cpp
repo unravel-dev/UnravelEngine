@@ -183,7 +183,7 @@ auto game::init_window(rtti::context& ctx, const cmd_line::parser& parser) -> bo
 {
     auto& s = ctx.get<settings>();
 
-    auto title = fmt::format("Unravel Game <{}>", gfx::get_renderer_name(gfx::get_renderer_type()));
+    auto title = fmt::format("Unravel Game <{}>", bgfx::getRendererName(bgfx::getRendererType()));
 
     if(!s.app.product.empty())
     {

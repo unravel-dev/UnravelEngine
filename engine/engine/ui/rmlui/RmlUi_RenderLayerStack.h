@@ -22,7 +22,7 @@ struct RmlUi_LayerFramebuffer
     gfx::frame_buffer::ptr framebuffer;
     int samples = 1;
     bool needs_rebind = true;
-    gfx::view_id pass_id = 0;
+    bgfx::ViewId pass_id = 0;
 
     auto is_valid() const -> bool { return framebuffer && framebuffer->is_valid(); }
 

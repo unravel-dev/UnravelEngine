@@ -31,7 +31,7 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_wf_params, "u_wf_params", gfx::uniform_type::Vec4, 3);
+            cache_uniform(program.get(), u_wf_params, "u_wf_params", bgfx::UniformType::Vec4, 3);
         }
 
         gfx::program::uniform_ptr u_wf_params;
@@ -54,9 +54,9 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_tex, "s_tex", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_data, "u_data", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_outline_color, "u_outline_color", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_tex, "s_tex", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_data, "u_data", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_outline_color, "u_outline_color", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr s_tex;

@@ -401,9 +401,9 @@ void register_editor_tools(mcp_tool_registry& registry)
                  bool enable = false;
                  if(!args["enable"].get(enable))
                  {
-                     gfx::set_debug(enable ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
+                     bgfx::setDebug(enable ? BGFX_DEBUG_PROFILER : BGFX_DEBUG_NONE);
                  }
-                 const auto* stats = gfx::get_stats();
+                 const auto* stats = bgfx::getStats();
                  if(!stats)
                  {
                      return {.text = "No stats available", .is_error = true};

@@ -95,7 +95,7 @@ auto pipeline::init(rtti::context& ctx) -> bool
     };
 
     // Uniforms before programs (GL uniform order contract, gpu_program.h).
-    particle_pre_exposure_uniform_ = std::make_shared<gfx::uniform>("u_pre_exposure", gfx::uniform_type::Vec4);
+    particle_pre_exposure_uniform_ = std::make_shared<gfx::uniform>("u_pre_exposure", bgfx::UniformType::Vec4);
     particle_program_instanced_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced");
     particle_program_instanced_mask_ = load_program("particles/instanced/vs_particle_instanced", "particles/instanced/fs_particle_instanced_mask");
     world_quad_program_ = load_program("rmlui_world/vs_world_quad", "rmlui_world/fs_world_quad");
@@ -550,10 +550,10 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
             const auto scale = ui_comp.get_world_space_scale();
             const auto model = world_transform * math::transform::scaling(scale);
             auto topology = gfx::clip_quad(0.0f, 0.5f, 0.5f);
-            gfx::set_state(topology | world_ui_state);
+            bgfx::setState(topology | world_ui_state);
             world_quad_program_->set_texture(0, "s_tex", ui_comp.framebuffer.get(), 0);
             gfx::set_world_transform(model);
-            gfx::submit(pass.id, world_quad_program_->native_handle());        }
+            bgfx::submit(pass.id, world_quad_program_->native_handle());        }
 
         ui_cache.entries.clear();
 
@@ -608,7 +608,7 @@ void pipeline::run_ui_pass(scene& scn, const camera& camera, gfx::render_view& r
 
     text_cache.entries.clear();
 
-    gfx::discard();
+    bgfx::discard();
 }
 
 

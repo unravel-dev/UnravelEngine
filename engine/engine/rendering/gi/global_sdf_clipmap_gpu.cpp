@@ -43,7 +43,7 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
                                               static_cast<uint16_t>(resolution),
                                               static_cast<uint16_t>(depth),
                                               false,
-                                              gfx::texture_format::R8,
+                                              bgfx::TextureFormat::R8,
                                               flags | BGFX_TEXTURE_BLIT_DST);
     if(!texture_ || !texture_->is_valid())
     {
@@ -64,13 +64,13 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
                                                           static_cast<uint16_t>(attr_resolution),
                                                           static_cast<uint16_t>(attr_depth),
                                                           false,
-                                                          gfx::texture_format::RGBA8,
+                                                          bgfx::TextureFormat::RGBA8,
                                                           flags);
     attr_emissive_texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
                                                             static_cast<uint16_t>(attr_resolution),
                                                             static_cast<uint16_t>(attr_depth),
                                                             false,
-                                                            gfx::texture_format::RGBA16F,
+                                                            bgfx::TextureFormat::RGBA16F,
                                                             flags);
     // Six face slabs per level (gi_light_voxels.sh layout). At the runtime default this is
     // 64 * 4 * 6 = 1536 deep - inside the 2048 texture limit the distance volume already guards.
@@ -91,7 +91,7 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
                                                           static_cast<uint16_t>(attr_resolution),
                                                           static_cast<uint16_t>(light_depth),
                                                           false,
-                                                          gfx::texture_format::RGBA16F,
+                                                          bgfx::TextureFormat::RGBA16F,
                                                           light_flags);
     // The bounce's cage-visibility memo mirrors the light volume texel for texel (mask +
     // generation + probe level in the low 16 bits; see gi_light_voxels_kernel.sh). Image
@@ -108,14 +108,14 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
                                                       static_cast<uint16_t>(attr_resolution),
                                                       static_cast<uint16_t>(light_depth + 1u),
                                                       false,
-                                                      gfx::texture_format::R32U,
+                                                      bgfx::TextureFormat::R32U,
                                                       BGFX_TEXTURE_COMPUTE_WRITE);
     bounce_vis_memo_seeded_ = false;
     bounce_vis_generation_ = 0;
     const uint32_t segment = attr_resolution * attr_resolution * attr_resolution;
     // The surface list flags follow the COMPOSER: the GPU compose pass writes it from
     // compute (needs COMPUTE_WRITE, and bgfx forbids CPU updates on such buffers), while the
-    // CPU composer uploads it with gfx::update (which requires COMPUTE_WRITE absent). The
+    // CPU composer uploads it with bgfx::update (which requires COMPUTE_WRITE absent). The
     // consumers only ever read it from compute, which both flag sets allow.
     //
     // ONE buffer holds counts AND entries: a level_count-entry HEADER of append cursors
@@ -125,11 +125,11 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
     const uint64_t surface_flags =
         (compose_on_gpu_ ? BGFX_BUFFER_COMPUTE_READ_WRITE : BGFX_BUFFER_COMPUTE_READ) |
         BGFX_BUFFER_INDEX32;
-    surface_list_ = gfx::create_dynamic_index_buffer(
+    surface_list_ = bgfx::createDynamicIndexBuffer(
         global_sdf_clipmap::level_count + segment * global_sdf_clipmap::level_count,
         surface_flags);
-    attr_cells_ = gfx::create_dynamic_index_buffer(segment * global_sdf_clipmap::level_count,
-                                                   BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
+    attr_cells_ = bgfx::createDynamicIndexBuffer(segment * global_sdf_clipmap::level_count,
+                                                 BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
     // Sentinel cell ids (no real cell packs to ~0u, so every slot claims and zeroes its light
     // texels on first use) and the zeroed cursors are seeded ON THE GPU by the compose pass:
     // these buffers are compute-writable, and bgfx forbids - in debug - CPU updates on those.
@@ -143,7 +143,7 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
     if(!compose_on_gpu_ && bgfx::isValid(surface_list_))
     {
         const std::array<uint32_t, global_sdf_clipmap::level_count> zero_counts{};
-        gfx::update(surface_list_, 0, gfx::copy(zero_counts.data(), sizeof(zero_counts)));
+        bgfx::update(surface_list_, 0, bgfx::copy(zero_counts.data(), sizeof(zero_counts)));
     }
     if(!attr_albedo_texture_ || !attr_albedo_texture_->is_valid() || !attr_emissive_texture_ ||
        !attr_emissive_texture_->is_valid() || !light_voxel_texture_ || !light_voxel_texture_->is_valid() ||
@@ -172,38 +172,38 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
                                                                static_cast<uint16_t>(radiance_h),
                                                                false,
                                                                1,
-                                                               gfx::texture_format::RGBA16F,
+                                                               bgfx::TextureFormat::RGBA16F,
                                                                flags);
         world_probe_irradiance_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(gutter_w),
                                                                  static_cast<uint16_t>(gutter_h),
                                                                  false,
                                                                  1,
-                                                                 gfx::texture_format::RGBA16F,
+                                                                 bgfx::TextureFormat::RGBA16F,
                                                                  flags);
         world_probe_depth_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(gutter_w),
                                                             static_cast<uint16_t>(gutter_h),
                                                             false,
                                                             1,
-                                                            gfx::texture_format::RG16F,
+                                                            bgfx::TextureFormat::RG16F,
                                                             flags);
-        world_probe_cells_ = gfx::create_dynamic_index_buffer(probe_count,
-                                                              BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                                  BGFX_BUFFER_INDEX32);
-        world_probe_counts_ = gfx::create_dynamic_index_buffer(probe_count,
-                                                               BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                                   BGFX_BUFFER_INDEX32);
-        // The sparse level-0 index; its sentinels and free stack are written by the allocation
-        // pass's init phase (needs_world_probe_index_seed), as CPU updates are forbidden.
-        world_probe_index_ = gfx::create_dynamic_index_buffer(get_world_probe_index_count(),
-                                                              BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                                  BGFX_BUFFER_INDEX32);
-        // The trace scheduler's state (seeded by the compose pass's GPU fill) and its list.
-        world_probe_select_ = gfx::create_dynamic_index_buffer(world_probe_select_size,
-                                                               BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                                   BGFX_BUFFER_INDEX32);
-        world_probe_list_ = gfx::create_dynamic_index_buffer(probe_count,
+        world_probe_cells_ = bgfx::createDynamicIndexBuffer(probe_count,
+                                                            BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                                BGFX_BUFFER_INDEX32);
+        world_probe_counts_ = bgfx::createDynamicIndexBuffer(probe_count,
                                                              BGFX_BUFFER_COMPUTE_READ_WRITE |
                                                                  BGFX_BUFFER_INDEX32);
+        // The sparse level-0 index; its sentinels and free stack are written by the allocation
+        // pass's init phase (needs_world_probe_index_seed), as CPU updates are forbidden.
+        world_probe_index_ = bgfx::createDynamicIndexBuffer(get_world_probe_index_count(),
+                                                            BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                                BGFX_BUFFER_INDEX32);
+        // The trace scheduler's state (seeded by the compose pass's GPU fill) and its list.
+        world_probe_select_ = bgfx::createDynamicIndexBuffer(world_probe_select_size,
+                                                             BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                                 BGFX_BUFFER_INDEX32);
+        world_probe_list_ = bgfx::createDynamicIndexBuffer(probe_count,
+                                                           BGFX_BUFFER_COMPUTE_READ_WRITE |
+                                                               BGFX_BUFFER_INDEX32);
         needs_world_probe_index_seed_ = true;
         world_probe_atlas_params_[0] = 1.0f / float(gutter_w);
         world_probe_atlas_params_[1] = 1.0f / float(gutter_h);
@@ -247,42 +247,42 @@ void global_sdf_clipmap_gpu::shutdown()
     world_probe_depth_.reset();
     if(bgfx::isValid(world_probe_cells_))
     {
-        gfx::destroy(world_probe_cells_);
-        world_probe_cells_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+        bgfx::destroy(world_probe_cells_);
+        world_probe_cells_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
     }
     if(bgfx::isValid(world_probe_counts_))
     {
-        gfx::destroy(world_probe_counts_);
-        world_probe_counts_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+        bgfx::destroy(world_probe_counts_);
+        world_probe_counts_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
     }
     if(bgfx::isValid(world_probe_index_))
     {
-        gfx::destroy(world_probe_index_);
-        world_probe_index_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+        bgfx::destroy(world_probe_index_);
+        world_probe_index_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
     }
     if(bgfx::isValid(world_probe_select_))
     {
-        gfx::destroy(world_probe_select_);
-        world_probe_select_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+        bgfx::destroy(world_probe_select_);
+        world_probe_select_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
     }
     if(bgfx::isValid(world_probe_list_))
     {
-        gfx::destroy(world_probe_list_);
-        world_probe_list_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+        bgfx::destroy(world_probe_list_);
+        world_probe_list_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
     }
     needs_world_probe_index_seed_ = false;
     world_probe_cell_count_ = 0;
     needs_buffer_seed_ = false;
     if(bgfx::isValid(attr_cells_))
     {
-        gfx::destroy(attr_cells_);
-        attr_cells_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+        bgfx::destroy(attr_cells_);
+        attr_cells_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
     }
     world_probe_atlas_params_.fill(0.0f);
     if(bgfx::isValid(surface_list_))
     {
-        gfx::destroy(surface_list_);
-        surface_list_ = gfx::dynamic_index_buffer_handle{bgfx::kInvalidHandle};
+        bgfx::destroy(surface_list_);
+        surface_list_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
     }
     resolution_ = 0;
     level_params_.fill(0.0f);
@@ -345,15 +345,15 @@ void global_sdf_clipmap_gpu::upload(global_sdf_clipmap& clipmap)
         {
             continue;
         }
-        gfx::update_texture_3d(texture_->native_handle(),
-                               0,
-                               0,
-                               0,
-                               static_cast<uint16_t>(i * resolution_),
-                               static_cast<uint16_t>(resolution_),
-                               static_cast<uint16_t>(resolution_),
-                               static_cast<uint16_t>(resolution_),
-                               gfx::copy(lvl.voxels.data(), uint32_t(lvl.voxels.size())));
+        bgfx::updateTexture3D(texture_->native_handle(),
+                              0,
+                              0,
+                              0,
+                              static_cast<uint16_t>(i * resolution_),
+                              static_cast<uint16_t>(resolution_),
+                              static_cast<uint16_t>(resolution_),
+                              static_cast<uint16_t>(resolution_),
+                              bgfx::copy(lvl.voxels.data(), uint32_t(lvl.voxels.size())));
         // Attributes ride along: the CPU composer produced them with the distance voxels, and a
         // consumer cannot tell which composer wrote what it samples, so the two paths must ship
         // the same set of resources.
@@ -361,15 +361,15 @@ void global_sdf_clipmap_gpu::upload(global_sdf_clipmap& clipmap)
         const size_t attr_count = size_t(attr_resolution) * attr_resolution * attr_resolution;
         if(lvl.attr_albedo.size() == attr_count && lvl.attr_emissive.size() == attr_count)
         {
-            gfx::update_texture_3d(attr_albedo_texture_->native_handle(),
-                                   0,
-                                   0,
-                                   0,
-                                   static_cast<uint16_t>(i * attr_resolution),
-                                   static_cast<uint16_t>(attr_resolution),
-                                   static_cast<uint16_t>(attr_resolution),
-                                   static_cast<uint16_t>(attr_resolution),
-                                   gfx::copy(lvl.attr_albedo.data(), uint32_t(attr_count * sizeof(uint32_t))));
+            bgfx::updateTexture3D(attr_albedo_texture_->native_handle(),
+                                  0,
+                                  0,
+                                  0,
+                                  static_cast<uint16_t>(i * attr_resolution),
+                                  static_cast<uint16_t>(attr_resolution),
+                                  static_cast<uint16_t>(attr_resolution),
+                                  static_cast<uint16_t>(attr_resolution),
+                                  bgfx::copy(lvl.attr_albedo.data(), uint32_t(attr_count * sizeof(uint32_t))));
             std::vector<uint16_t> half_emissive(attr_count * 4u, 0u);
             for(size_t v = 0; v < attr_count; ++v)
             {
@@ -377,22 +377,22 @@ void global_sdf_clipmap_gpu::upload(global_sdf_clipmap& clipmap)
                 half_emissive[v * 4u + 1u] = bx::halfFromFloat(lvl.attr_emissive[v].y);
                 half_emissive[v * 4u + 2u] = bx::halfFromFloat(lvl.attr_emissive[v].z);
             }
-            gfx::update_texture_3d(attr_emissive_texture_->native_handle(),
-                                   0,
-                                   0,
-                                   0,
-                                   static_cast<uint16_t>(i * attr_resolution),
-                                   static_cast<uint16_t>(attr_resolution),
-                                   static_cast<uint16_t>(attr_resolution),
-                                   static_cast<uint16_t>(attr_resolution),
-                                   gfx::copy(half_emissive.data(), uint32_t(half_emissive.size() * sizeof(uint16_t))));
+            bgfx::updateTexture3D(attr_emissive_texture_->native_handle(),
+                                  0,
+                                  0,
+                                  0,
+                                  static_cast<uint16_t>(i * attr_resolution),
+                                  static_cast<uint16_t>(attr_resolution),
+                                  static_cast<uint16_t>(attr_resolution),
+                                  static_cast<uint16_t>(attr_resolution),
+                                  bgfx::copy(half_emissive.data(), uint32_t(half_emissive.size() * sizeof(uint16_t))));
             const uint32_t count = uint32_t(lvl.attr_surface_list.size());
-            gfx::update(surface_list_, i, gfx::copy(&count, sizeof(count)));
+            bgfx::update(surface_list_, i, bgfx::copy(&count, sizeof(count)));
             if(count > 0u)
             {
-                gfx::update(surface_list_,
-                            global_sdf_clipmap::level_count + i * uint32_t(attr_count),
-                            gfx::copy(lvl.attr_surface_list.data(), count * uint32_t(sizeof(uint32_t))));
+                bgfx::update(surface_list_,
+                             global_sdf_clipmap::level_count + i * uint32_t(attr_count),
+                             bgfx::copy(lvl.attr_surface_list.data(), count * uint32_t(sizeof(uint32_t))));
             }
         }
     }

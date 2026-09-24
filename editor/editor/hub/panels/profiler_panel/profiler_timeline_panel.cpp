@@ -1117,7 +1117,7 @@ void profiler_timeline_panel::draw_profiler_bottom_sections(rtti::context& ctx)
     ImGui::PushID("profiler_bottom");
     if(panel_section::draw_header("##render_passes", ICON_MDI_CHIP, "Render Passes", false).is_open)
     {
-        draw_gpu_submit_profiler_ui(gfx::get_stats(), &parent_->gpu_profiler_enabled());
+        draw_gpu_submit_profiler_ui(bgfx::getStats(), &parent_->gpu_profiler_enabled());
     }
     profiler_draw_gpu_resources_section();
     if(ctx.has<settings>())
@@ -1203,7 +1203,7 @@ void profiler_timeline_panel::draw_frame_selector_bar()
         const float cpu_mb = static_cast<float>(dotnet::gc_get_used_size()) / megabyte_divisor;
         cpu_heap_mb_history_.push_sample(cpu_mb);
         float gpu_mb = 0.0f;
-        auto* stats = gfx::get_stats();
+        auto* stats = bgfx::getStats();
         if(stats)
         {
             gpu_mb = static_cast<float>(stats->gpuMemoryUsed) / megabyte_divisor;

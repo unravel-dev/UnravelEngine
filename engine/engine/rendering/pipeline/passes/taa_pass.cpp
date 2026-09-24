@@ -113,13 +113,13 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     if(history_tex != old_history)
     {
         gfx::render_pass init_pass("TAA/History Init");
-        gfx::blit(init_pass.id,
-                  history_tex->native_handle(),
-                  0,
-                  0,
-                  input->get_texture(0)->native_handle(),
-                  0,
-                  0);
+        bgfx::blit(init_pass.id,
+                   history_tex->native_handle(),
+                   0,
+                   0,
+                   input->get_texture(0)->native_handle(),
+                   0,
+                   0);
         return input;
     }
 
@@ -165,32 +165,32 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
     gfx::set_uniform(program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
 
     const auto topology = gfx::clip_quad(1.0f);
-    gfx::set_state(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-    gfx::submit(pass.id, program_.program->native_handle());
+    bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, program_.program->native_handle());
 
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(BGFX_STATE_DEFAULT);
     program_.program->end();
-    gfx::discard();
+    bgfx::discard();
 
     gfx::render_pass hist_pass("TAA/History Blit");
-    gfx::blit(hist_pass.id,
-              history_tex->native_handle(),
-              0,
-              0,
-              temp_fbo->get_texture(1)->native_handle(),
-              0,
-              0);
+    bgfx::blit(hist_pass.id,
+               history_tex->native_handle(),
+               0,
+               0,
+               temp_fbo->get_texture(1)->native_handle(),
+               0,
+               0);
 
     if(params.output)
     {
         gfx::render_pass out_pass("TAA/Output Blit");
-        gfx::blit(out_pass.id,
-                  params.output->get_texture(0)->native_handle(),
-                  0,
-                  0,
-                  temp_fbo->get_texture(0)->native_handle(),
-                  0,
-                  0);
+        bgfx::blit(out_pass.id,
+                   params.output->get_texture(0)->native_handle(),
+                   0,
+                   0,
+                   temp_fbo->get_texture(0)->native_handle(),
+                   0,
+                   0);
         return params.output;
     }
 

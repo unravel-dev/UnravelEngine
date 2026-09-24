@@ -23,7 +23,7 @@ struct base_font
     auto get_line_height() const -> float;
     auto is_valid() const -> bool;
 
-    gfx::font_handle handle{gfx::invalid_handle};
+    gfx::font_handle handle{bgfx::kInvalidHandle};
 };
 
 struct scaled_font : base_font
@@ -53,13 +53,13 @@ struct font : base_font
     static auto default_heavy() -> asset_handle<font>&;
     static auto default_black() -> asset_handle<font>&;
 
-    gfx::true_type_handle ttf_handle{gfx::invalid_handle};
+    gfx::true_type_handle ttf_handle{bgfx::kInvalidHandle};
 };
 
 
 struct text_buffer
 {
-    gfx::text_buffer_handle handle{gfx::invalid_handle};
+    gfx::text_buffer_handle handle{bgfx::kInvalidHandle};
 };
 
 struct text_buffer_builder

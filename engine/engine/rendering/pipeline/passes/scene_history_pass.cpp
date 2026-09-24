@@ -36,7 +36,7 @@ auto scene_history_pass::run(gfx::render_view& rview,
     }
     // Match the source format: RGBA16F (HDR pipeline, alpha carries the depth) or RGBA8 (LDR
     // fallback, alpha saturates and the readers treat the history as depth-less).
-    const auto format = static_cast<gfx::texture_format>(src_tex->info.format);
+    const auto format = static_cast<bgfx::TextureFormat::Enum>(src_tex->info.format);
     const auto size = src_tex->get_size();
     auto& prev = rview.tex_get_or_emplace("PREV_SCENE_HDR");
     if(gfx::needs_recreate(prev, size, format))
@@ -68,14 +68,14 @@ auto scene_history_pass::run(gfx::render_view& rview,
         gfx::set_texture(program_.s_scene, 0, src_tex);
         gfx::set_texture(program_.s_depth, 1, depth);
         irect32_t rect(0, 0, int(size.width), int(size.height));
-        gfx::set_scissor(rect.left, rect.top, rect.width(), rect.height());
+        bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
         auto topology = gfx::clip_quad(1.0f);
-        gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-        gfx::submit(pass.id, program_.program->native_handle());
-        gfx::set_state(BGFX_STATE_DEFAULT);
+        bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+        bgfx::submit(pass.id, program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_DEFAULT);
         program_.program->end();
     }
-    gfx::discard();
+    bgfx::discard();
     return prev;
 }
 

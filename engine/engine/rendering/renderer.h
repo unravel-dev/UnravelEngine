@@ -76,7 +76,7 @@ protected:
     void frame_begin(rtti::context& ctx, delta_t dt);
     void frame_end(rtti::context& ctx, delta_t dt);
 
-    auto get_renderer_type(const cmd_line::parser& parser) const -> gfx::renderer_type;
+    auto get_renderer_type(const cmd_line::parser& parser) const -> bgfx::RendererType::Enum;
     auto get_reset_flags(const cmd_line::parser& parser) const -> uint32_t;
     auto get_reset_flags(bool vsync) const -> uint32_t;
 

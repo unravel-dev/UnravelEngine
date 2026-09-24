@@ -194,7 +194,7 @@ auto RmlUi_RenderLayerStack::create_layer_framebuffer(int width,
                                                        static_cast<uint16_t>(height),
                                                        false,
                                                        1,
-                                                       gfx::texture_format::RGBA8,
+                                                       bgfx::TextureFormat::RGBA8,
                                                        texture_flags);
 
     if(!color_texture->is_valid())
@@ -214,7 +214,7 @@ auto RmlUi_RenderLayerStack::create_layer_framebuffer(int width,
                                                           static_cast<uint16_t>(height),
                                                           false,
                                                           1,
-                                                          gfx::texture_format::D24S8,
+                                                          bgfx::TextureFormat::D24S8,
                                                           depth_texture_flags);
 
             if(!depth_texture->is_valid())

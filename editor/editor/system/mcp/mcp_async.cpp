@@ -34,7 +34,7 @@ struct fbo_capture_state
     uint32_t ready_frame{0};
     uint16_t width{0};
     uint16_t height{0};
-    gfx::texture_handle blit_tex = BGFX_INVALID_HANDLE;
+    bgfx::TextureHandle blit_tex = BGFX_INVALID_HANDLE;
     std::string error;
 };
 
@@ -280,24 +280,24 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
                 return false;
             }
 
-            constexpr auto format = gfx::texture_format::RGBA8;
+            constexpr auto format = bgfx::TextureFormat::RGBA8;
             const uint64_t flags = BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK | BGFX_SAMPLER_U_CLAMP |
                                    BGFX_SAMPLER_V_CLAMP;
-            state->blit_tex = gfx::create_texture_2d(state->width, state->height, false, 1, format, flags);
+            state->blit_tex = bgfx::createTexture2D(state->width, state->height, false, 1, format, flags);
             if(!bgfx::isValid(state->blit_tex))
             {
                 state->error = "Failed to create readback texture";
                 return false;
             }
 
-            gfx::texture_info info{};
-            gfx::calc_texture_size(info, state->width, state->height, 1, false, false, 1, format);
+            bgfx::TextureInfo info{};
+            bgfx::calcTextureSize(info, state->width, state->height, 1, false, false, 1, format);
             state->pixels.resize(info.storageSize);
 
             gfx::render_pass pass("mcp_fbo_capture");
             pass.touch();
-            gfx::blit(pass.id, state->blit_tex, 0, 0, src_tex->native_handle());
-            state->ready_frame = gfx::read_texture(state->blit_tex, state->pixels.data());
+            bgfx::blit(pass.id, state->blit_tex, 0, 0, src_tex->native_handle());
+            state->ready_frame = bgfx::readTexture(state->blit_tex, state->pixels.data());
             return true;
         },
         std::chrono::milliseconds(10000));
@@ -345,7 +345,7 @@ auto capture_fbo_screenshot(mcp_manager& mcp,
         {
             if(bgfx::isValid(state->blit_tex))
             {
-                gfx::destroy(state->blit_tex);
+                bgfx::destroy(state->blit_tex);
                 state->blit_tex = BGFX_INVALID_HANDLE;
             }
             return true;

@@ -452,7 +452,7 @@ public:
     struct load_data
     {
         ///< The format of the vertex data.
-        gfx::vertex_layout vertex_format;
+        bgfx::VertexLayout vertex_format;
         ///< Vertex data buffer.
         std::vector<uint8_t> vertex_data;
         ///< Total number of vertices.
@@ -540,7 +540,7 @@ public:
      * @return true If the mesh was successfully prepared.
      * @return false If the mesh preparation failed.
      */
-    auto prepare_mesh(const gfx::vertex_layout& vertex_format) -> bool;
+    auto prepare_mesh(const bgfx::VertexLayout& vertex_format) -> bool;
 
     /**
      * @brief Sets the source of the vertex buffer to pull data from while preparing the mesh.
@@ -551,8 +551,8 @@ public:
      * @return true If the vertex source was successfully set.
      * @return false If setting the vertex source failed.
      */
-    auto set_vertex_source(void* source, uint32_t vertex_count, const gfx::vertex_layout& source_format) -> bool;
-    auto set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const gfx::vertex_layout& source_format)
+    auto set_vertex_source(void* source, uint32_t vertex_count, const bgfx::VertexLayout& source_format) -> bool;
+    auto set_vertex_source(byte_array_t&& source, uint32_t vertex_count, const bgfx::VertexLayout& source_format)
         -> bool;
 
     auto set_bounding_box(const math::bbox& box) -> bool;
@@ -601,7 +601,7 @@ public:
      * @return true If the plane was successfully created.
      * @return false If creating the plane failed.
      */
-    auto create_plane(const gfx::vertex_layout& format,
+    auto create_plane(const bgfx::VertexLayout& format,
                       float width,
                       float height,
                       uint32_t width_segments,
@@ -616,7 +616,7 @@ public:
      * @param half_extent_z Half world size along Z.
      * @param height_scale Multiplier applied to each height sample before placing along Y.
      */
-    auto create_heightfield(const gfx::vertex_layout& format,
+    auto create_heightfield(const bgfx::VertexLayout& format,
                           hpp::span<const float> heights,
                           uint32_t segments_x,
                           uint32_t segments_z,
@@ -641,7 +641,7 @@ public:
      * @return true If the cube was successfully created.
      * @return false If creating the cube failed.
      */
-    auto create_cube(const gfx::vertex_layout& format,
+    auto create_cube(const bgfx::VertexLayout& format,
                      float width,
                      float height,
                      float depth,
@@ -651,7 +651,7 @@ public:
                      mesh_create_origin origin,
                      bool hardware_copy = true) -> bool;
 
-    auto create_rounded_cube(const gfx::vertex_layout& format,
+    auto create_rounded_cube(const bgfx::VertexLayout& format,
                     float width,
                     float height,
                     float depth,
@@ -673,7 +673,7 @@ public:
      * @return true If the sphere was successfully created.
      * @return false If creating the sphere failed.
      */
-    auto create_sphere(const gfx::vertex_layout& format,
+    auto create_sphere(const bgfx::VertexLayout& format,
                        float radius,
                        uint32_t stacks,
                        uint32_t slices,
@@ -693,7 +693,7 @@ public:
      * @return true If the cylinder was successfully created.
      * @return false If creating the cylinder failed.
      */
-    auto create_cylinder(const gfx::vertex_layout& format,
+    auto create_cylinder(const bgfx::VertexLayout& format,
                          float radius,
                          float height,
                          uint32_t stacks,
@@ -714,7 +714,7 @@ public:
      * @return true If the capsule was successfully created.
      * @return false If creating the capsule failed.
      */
-    auto create_capsule(const gfx::vertex_layout& format,
+    auto create_capsule(const bgfx::VertexLayout& format,
                         float radius,
                         float height,
                         uint32_t stacks,
@@ -736,7 +736,7 @@ public:
      * @return true If the cone was successfully created.
      * @return false If creating the cone failed.
      */
-    auto create_cone(const gfx::vertex_layout& format,
+    auto create_cone(const bgfx::VertexLayout& format,
                      float radius,
                      float radius_tip,
                      float height,
@@ -758,7 +758,7 @@ public:
      * @return true If the torus was successfully created.
      * @return false If creating the torus failed.
      */
-    auto create_torus(const gfx::vertex_layout& format,
+    auto create_torus(const bgfx::VertexLayout& format,
                       float outer_radius,
                       float inner_radius,
                       uint32_t bands,
@@ -774,7 +774,7 @@ public:
      * @return true If the teapot was successfully created.
      * @return false If creating the teapot failed.
      */
-    auto create_teapot(const gfx::vertex_layout& format, bool hardware_copy = true) -> bool;
+    auto create_teapot(const bgfx::VertexLayout& format, bool hardware_copy = true) -> bool;
 
     /**
      * @brief Creates an icosahedron geometry.
@@ -784,7 +784,7 @@ public:
      * @return true If the icosahedron was successfully created.
      * @return false If creating the icosahedron failed.
      */
-    auto create_icosahedron(const gfx::vertex_layout& format, bool hardware_copy = true) -> bool;
+    auto create_icosahedron(const bgfx::VertexLayout& format, bool hardware_copy = true) -> bool;
 
     /**
      * @brief Creates a dodecahedron geometry.
@@ -794,7 +794,7 @@ public:
      * @return true If the dodecahedron was successfully created.
      * @return false If creating the dodecahedron failed.
      */
-    auto create_dodecahedron(const gfx::vertex_layout& format, bool hardware_copy = true) -> bool;
+    auto create_dodecahedron(const bgfx::VertexLayout& format, bool hardware_copy = true) -> bool;
 
     /**
      * @brief Creates an icosphere geometry.
@@ -805,7 +805,7 @@ public:
      * @return true If the icosphere was successfully created.
      * @return false If creating the icosphere failed.
      */
-    auto create_icosphere(const gfx::vertex_layout& format, int tesselation_level, bool hardware_copy = true) -> bool;
+    auto create_icosphere(const bgfx::VertexLayout& format, int tesselation_level, bool hardware_copy = true) -> bool;
 
     /**
      * @brief Ends the preparation of the mesh and builds the render data.
@@ -927,9 +927,9 @@ public:
     /**
      * @brief Retrieves the format of the underlying mesh vertex data.
      *
-     * @return const gfx::vertex_layout& The vertex format.
+     * @return const bgfx::VertexLayout& The vertex format.
      */
-    auto get_vertex_format() const -> const gfx::vertex_layout&;
+    auto get_vertex_format() const -> const bgfx::VertexLayout&;
 
     /**
      * @brief Retrieves the hardware vertex buffer for the mesh (shared across all LODs).
@@ -1185,7 +1185,7 @@ public:
         ///< Whether the source data is owned by this object.
         bool owns_source{false};
         ///< The format of the vertex data currently being used to prepare the mesh.
-        gfx::vertex_layout source_format;
+        bgfx::VertexLayout source_format;
         ///< Records the location in the vertex buffer that each vertex has been placed during data insertion.
         std::vector<uint32_t> vertex_records;
         ///< Final vertex buffer currently being prepared.
@@ -1257,7 +1257,7 @@ protected:
         ///< Pointer to the vertex.
         uint8_t* vertex{nullptr};
         ///< Format of the vertex.
-        gfx::vertex_layout format;
+        bgfx::VertexLayout format;
         ///< Tolerance for welding vertices.
         float tolerance{};
     };
@@ -1353,7 +1353,7 @@ protected:
     ///< The vertex data during data insertion and system memory copy.
     uint8_t* system_vb_ = nullptr;
     ///< The vertex format used for the mesh internal vertex data.
-    gfx::vertex_layout vertex_format_;
+    bgfx::VertexLayout vertex_format_;
     ///< The final system memory copy of the index buffer (LOD 0 - base mesh).
     uint32_t* system_ib_ = nullptr;
     ///< Material and data group information for each triangle.

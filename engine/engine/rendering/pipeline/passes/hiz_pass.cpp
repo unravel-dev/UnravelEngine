@@ -57,7 +57,7 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_texture(hiz_generate_.s_depth, 0, depth_buffer);
 
         // Set output Hi-Z mip 0 as image
-        gfx::set_image(1, output_hiz->native_handle(), 0, bgfx::Access::Write);
+        bgfx::setImage(1, output_hiz->native_handle(), 0, bgfx::Access::Write);
 
         // Set parameters for the compute shader
         math::vec4 hiz_params(float(hiz_width), float(hiz_height), 0.0f, 0.0f);
@@ -91,10 +91,10 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
             }
 
             // Set input (previous mip level) as read-only image
-            gfx::set_image(0, output_hiz->native_handle(), mip - 1, bgfx::Access::Read);
+            bgfx::setImage(0, output_hiz->native_handle(), mip - 1, bgfx::Access::Read);
 
             // Set output (current mip level) as write-only image
-            gfx::set_image(1, output_hiz->native_handle(), mip, bgfx::Access::Write);
+            bgfx::setImage(1, output_hiz->native_handle(), mip, bgfx::Access::Write);
 
             // Set parameters for the downsampling compute shader
             math::vec4 hiz_params(float(current_mip_width), float(current_mip_height), 2.0f, float(mip));

@@ -3317,14 +3317,14 @@ void test_raw_buffer_extraction_matches_direct_geometry()
     const auto direct = make_box(math::vec3(0.5f, 0.35f, 0.6f));
     // Pack the same geometry the way a prepared mesh holds it: an interleaved vertex buffer
     // described by a layout, plus a flat index array.
-    gfx::vertex_layout layout;
-    layout.begin(bgfx::RendererType::Noop).add(gfx::attribute::Position, 3, gfx::attribute_type::Float).end();
+    bgfx::VertexLayout layout;
+    layout.begin(bgfx::RendererType::Noop).add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).end();
     const uint32_t stride = layout.getStride();
     std::vector<uint8_t> vertex_data(size_t(direct.positions.size()) * stride, 0u);
     for(size_t i = 0; i < direct.positions.size(); ++i)
     {
         const float packed[4] = {direct.positions[i].x, direct.positions[i].y, direct.positions[i].z, 0.0f};
-        gfx::vertex_pack(packed, false, gfx::attribute::Position, layout, vertex_data.data(), uint32_t(i));
+        bgfx::vertexPack(packed, false, bgfx::Attrib::Position, layout, vertex_data.data(), uint32_t(i));
     }
     sdf_source_geometry extracted;
     check(extract_sdf_source_geometry(vertex_data.data(),
@@ -3429,7 +3429,7 @@ auto make_multi_submesh_load_data(uint32_t submesh_count, uint32_t material_coun
 {
     mesh::load_data data;
     data.vertex_format.begin(bgfx::RendererType::Noop)
-        .add(gfx::attribute::Position, 3, gfx::attribute_type::Float)
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
         .end();
     const auto box = make_box(math::vec3(0.5f));
     const uint32_t box_vertices = uint32_t(box.positions.size());
@@ -3449,9 +3449,9 @@ auto make_multi_submesh_load_data(uint32_t submesh_count, uint32_t material_coun
         {
             const math::vec3 p = box.positions[v] + offset;
             const float packed[4] = {p.x, p.y, p.z, 0.0f};
-            gfx::vertex_pack(packed,
+            bgfx::vertexPack(packed,
                              false,
-                             gfx::attribute::Position,
+                             bgfx::Attrib::Position,
                              data.vertex_format,
                              data.vertex_data.data(),
                              vertex_offset + v);
@@ -4041,8 +4041,8 @@ void test_lod_extraction_clamps_rather_than_failing()
 void test_surface_test_keeps_ordinary_tessellation()
 {
     std::printf("test_surface_test_keeps_ordinary_tessellation\n");
-    gfx::vertex_layout format;
-    format.begin(bgfx::RendererType::Noop).add(gfx::attribute::Position, 3, gfx::attribute_type::Float).end();
+    bgfx::VertexLayout format;
+    format.begin(bgfx::RendererType::Noop).add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).end();
     const auto measure = [&](const char* label, const sdf_source_geometry& geometry) -> uint32_t
     {
         std::vector<uint8_t> vertex_data(geometry.positions.size() * format.getStride(), 0u);
@@ -4052,7 +4052,7 @@ void test_surface_test_keeps_ordinary_tessellation()
                                      geometry.positions[v].y,
                                      geometry.positions[v].z,
                                      0.0f};
-            gfx::vertex_pack(packed, false, gfx::attribute::Position, format, vertex_data.data(), uint32_t(v));
+            bgfx::vertexPack(packed, false, bgfx::Attrib::Position, format, vertex_data.data(), uint32_t(v));
         }
         sdf_source_geometry extracted;
         const bool ok = extract_sdf_source_geometry(vertex_data.data(),
@@ -4238,13 +4238,13 @@ void test_degenerate_triangles_do_not_size_the_field()
     geometry.positions.emplace_back(1.0f, 1.0f, nan_value);
     geometry.indices.insert(geometry.indices.end(), {nan_base, nan_base + 1u, nan_base + 2u});
     // Round-trip through the raw-buffer extractor, which is the path a runtime primitive takes.
-    gfx::vertex_layout format;
-    format.begin(bgfx::RendererType::Noop).add(gfx::attribute::Position, 3, gfx::attribute_type::Float).end();
+    bgfx::VertexLayout format;
+    format.begin(bgfx::RendererType::Noop).add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float).end();
     std::vector<uint8_t> vertex_data(geometry.positions.size() * format.getStride(), 0u);
     for(size_t v = 0; v < geometry.positions.size(); ++v)
     {
         const float packed[4] = {geometry.positions[v].x, geometry.positions[v].y, geometry.positions[v].z, 0.0f};
-        gfx::vertex_pack(packed, false, gfx::attribute::Position, format, vertex_data.data(), uint32_t(v));
+        bgfx::vertexPack(packed, false, bgfx::Attrib::Position, format, vertex_data.data(), uint32_t(v));
     }
     sdf_source_geometry extracted;
     check(extract_sdf_source_geometry(vertex_data.data(),
@@ -4290,9 +4290,9 @@ auto make_spread_submesh_load_data(uint32_t submesh_count) -> mesh::load_data
 {
     mesh::load_data data;
     data.vertex_format.begin(bgfx::RendererType::Noop)
-        .add(gfx::attribute::Position, 3, gfx::attribute_type::Float)
-        .add(gfx::attribute::Normal, 3, gfx::attribute_type::Float)
-        .add(gfx::attribute::TexCoord0, 2, gfx::attribute_type::Float)
+        .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
+        .add(bgfx::Attrib::TexCoord0, 2, bgfx::AttribType::Float)
         .end();
     const auto sphere = make_sphere(0.5f, 12, 16);
     const uint32_t sphere_vertices = uint32_t(sphere.positions.size());
@@ -4311,9 +4311,9 @@ auto make_spread_submesh_load_data(uint32_t submesh_count) -> mesh::load_data
             const math::vec3 local = sphere.positions[v];
             const math::vec3 p = local + offset;
             const float packed_position[4] = {p.x, p.y, p.z, 0.0f};
-            gfx::vertex_pack(packed_position,
+            bgfx::vertexPack(packed_position,
                              false,
-                             gfx::attribute::Position,
+                             bgfx::Attrib::Position,
                              data.vertex_format,
                              data.vertex_data.data(),
                              vertex_offset + v);
@@ -4321,16 +4321,16 @@ auto make_spread_submesh_load_data(uint32_t submesh_count) -> mesh::load_data
             // simplifier only needs a real gradient to weigh collapses against.
             const math::vec3 n = math::normalize(local);
             const float packed_normal[4] = {n.x, n.y, n.z, 0.0f};
-            gfx::vertex_pack(packed_normal,
+            bgfx::vertexPack(packed_normal,
                              false,
-                             gfx::attribute::Normal,
+                             bgfx::Attrib::Normal,
                              data.vertex_format,
                              data.vertex_data.data(),
                              vertex_offset + v);
             const float packed_uv[4] = {local.x, local.y, 0.0f, 0.0f};
-            gfx::vertex_pack(packed_uv,
+            bgfx::vertexPack(packed_uv,
                              false,
-                             gfx::attribute::TexCoord0,
+                             bgfx::Attrib::TexCoord0,
                              data.vertex_format,
                              data.vertex_data.data(),
                              vertex_offset + v);

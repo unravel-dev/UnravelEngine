@@ -42,8 +42,8 @@ private:
     {
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_scene, "s_scene", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_scene, "s_scene", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
         }
 
         gfx::program::uniform_ptr s_scene;

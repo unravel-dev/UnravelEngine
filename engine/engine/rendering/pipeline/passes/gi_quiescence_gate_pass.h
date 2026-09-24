@@ -19,7 +19,7 @@ namespace unravel
  *
  * WHY THIS EXISTS. The convergence half of the gate (surface_cache_view::update_quiescence)
  * needs a statistic only the GPU can produce: the mean relative change per relit face. That
- * statistic used to reach the CPU through a staging blit plus gfx::read_texture, which moved
+ * statistic used to reach the CPU through a staging blit plus bgfx::readTexture, which moved
  * 32 bytes and cost about a GPU frame of render-thread time per frame the gate was open -
  * bgfx::readTexture advertises frameNum + 2 latency but every desktop backend implements it
  * as a blocking sync (D3D11 Map without DO_NOT_WAIT, D3D12 CopyTextureRegion + finish,
@@ -91,7 +91,7 @@ public:
     auto run(gfx::render_view& rview, const run_params& params) -> bool;
 
     /// The buffer the gated passes dispatch from; only valid after a run() that returned true.
-    auto get_indirect_buffer() const -> gfx::indirect_buffer_handle
+    auto get_indirect_buffer() const -> bgfx::IndirectBufferHandle
     {
         return indirect_;
     }
@@ -101,7 +101,7 @@ public:
      *        census - relit faces against relit faces that changed, probes by state, traced
      *        probe texels against texels that changed.
      *
-     * ON DEMAND ONLY. The copy ends in gfx::read_texture, which is a full CPU-GPU sync on
+     * ON DEMAND ONLY. The copy ends in bgfx::readTexture, which is a full CPU-GPU sync on
      * every desktop backend (the reason the per-frame gate moved onto the GPU), so this is
      * an instrument for a tool to ask for, never something a frame path calls. Rows 0-2
      * are the gate's own sums for the frame before the snapshot; the census rows hold the
@@ -163,12 +163,12 @@ private:
             cache_uniform(program.get(),
                           u_gi_light_voxel_params,
                           "u_gi_light_voxel_params",
-                          gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_gi_gate_params, "u_gi_gate_params", gfx::uniform_type::Vec4);
+                          bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_gate_params, "u_gi_gate_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_gi_gate_groups,
                           "u_gi_gate_groups",
-                          gfx::uniform_type::Vec4,
+                          bgfx::UniformType::Vec4,
                           entry_count);
         }
 
@@ -179,11 +179,11 @@ private:
     };
 
     gate_program program_;
-    gfx::indirect_buffer_handle indirect_{bgfx::kInvalidHandle};
+    bgfx::IndirectBufferHandle indirect_{bgfx::kInvalidHandle};
     /// The sample ring: three header slots (count, head, the sparse-probe hold) then the
     /// samples as float bits. Never written by the CPU - bgfx forbids updating a
     /// compute-writable buffer - so the kernel clears it from the reset lane instead.
-    gfx::dynamic_index_buffer_handle ring_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle ring_{bgfx::kInvalidHandle};
     /// Slots the ring buffer holds: the header plus both compared windows, twice - the
     /// absolute change ring and the signed drift ring (GI_QUIESCENCE_DRIFT_FRACTION).
     static constexpr uint32_t ring_header_slots = 3u;

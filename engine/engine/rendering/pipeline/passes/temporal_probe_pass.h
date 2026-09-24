@@ -118,13 +118,13 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_color, "s_color", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_velocity, "s_velocity", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_prev_depth, "s_prev_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), s_prev_luma, "s_prev_luma", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_probe_params, "u_probe_params", gfx::uniform_type::Vec4);
-            cache_uniform(program.get(), u_probe_params2, "u_probe_params2", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_color, "s_color", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_velocity, "s_velocity", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_prev_depth, "s_prev_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_prev_luma, "s_prev_luma", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_probe_params, "u_probe_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_probe_params2, "u_probe_params2", bgfx::UniformType::Vec4);
         }
 
         auto is_valid() const -> bool

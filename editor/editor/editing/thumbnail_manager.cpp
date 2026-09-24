@@ -77,7 +77,7 @@ auto capture_thumbnail_snapshot(const gfx::frame_buffer::ptr& source) -> gfx::te
                                                  blit_height,
                                                  false,
                                                  1,
-                                                 gfx::texture_format::RGBA8,
+                                                 bgfx::TextureFormat::RGBA8,
                                                  BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_RT| BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
 
     if(!snapshot->is_valid())
@@ -86,15 +86,15 @@ auto capture_thumbnail_snapshot(const gfx::frame_buffer::ptr& source) -> gfx::te
     }
 
     gfx::render_pass pass("Thumbnail/Capture Blit");
-    gfx::blit(pass.id,
-              snapshot->native_handle(),
-              0,
-              0,
-              src_tex->native_handle(),
-              0,
-              0,
-              blit_width,
-              blit_height);
+    bgfx::blit(pass.id,
+               snapshot->native_handle(),
+               0,
+               0,
+               src_tex->native_handle(),
+               0,
+               0,
+               blit_width,
+               blit_height);
     return snapshot;
 }
 

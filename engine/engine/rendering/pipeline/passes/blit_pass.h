@@ -41,7 +41,7 @@ private:
         /// Cache the “s_input” sampler uniform from the GPU program
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_input, "s_input", gfx::uniform_type::Sampler);
+            cache_uniform(program.get(), s_input, "s_input", bgfx::UniformType::Sampler);
         }
 
         gfx::program::uniform_ptr s_input;            ///< sampler2D uniform name = "s_input"

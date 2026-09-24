@@ -78,7 +78,7 @@ auto reflection_probe_component::get_cubemap() -> const  gfx::texture::ptr&
     // probe is frustum-culled, and already_generated() would not know to rebuild it.
     auto& tex = rview_.tex_get_or_emplace("CUBEMAP", false);
     const uint16_t size = probe_resolution_to_size(resolution_);
-    constexpr gfx::texture_format format = gfx::texture_format::RGBA16F;
+    constexpr bgfx::TextureFormat::Enum format = bgfx::TextureFormat::RGBA16F;
     if(gfx::needs_recreate(tex, {size, size}, format))
     {
         tex.reset();
@@ -97,7 +97,7 @@ auto reflection_probe_component::get_cubemap_prefiltered() -> const  gfx::textur
     // Product of the bake, not auto-collected (see get_cubemap).
     auto& tex = rview_.tex_get_or_emplace("CUBEMAP_PREFILTERED", false);
     const uint16_t size = probe_resolution_to_size(resolution_);
-    constexpr gfx::texture_format format = gfx::texture_format::RGBA16F;
+    constexpr bgfx::TextureFormat::Enum format = bgfx::TextureFormat::RGBA16F;
     if(gfx::needs_recreate(tex, {size, size}, format))
     {
         tex.reset();
@@ -120,7 +120,7 @@ auto reflection_probe_component::get_cubemap_fbo(size_t face) -> const gfx::fram
     auto& fbo = face_rviews_[face].fbo_get_or_emplace("CUBEMAP");
     auto& tex = face_rviews_[face].tex_get_or_emplace("CUBEMAP_FACE");
     const uint16_t size = probe_resolution_to_size(resolution_);
-    constexpr gfx::texture_format format = gfx::texture_format::RGBA16F;
+    constexpr bgfx::TextureFormat::Enum format = bgfx::TextureFormat::RGBA16F;
     const bool recreate_texture = gfx::needs_recreate(tex, {size, size}, format);
     if(recreate_texture)
     {

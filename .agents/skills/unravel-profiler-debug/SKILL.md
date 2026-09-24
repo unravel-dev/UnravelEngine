@@ -16,7 +16,7 @@ description: >-
 | GPU frame widgets | `profiler_panel/gpu_frame_stats_widgets.cpp` |
 | Viewport stats overlay | `editor/editor/hub/panels/viewport_stats_overlay.cpp` |
 | Pipeline stats | `engine/engine/rendering/pipeline/pipeline.h` |
-| bgfx stats | `gfx::get_stats()` via `engine/core/graphics/` |
+| bgfx stats | `bgfx::getStats()` |
 | GPU eviction | `engine/core/graphics/eviction.h` (`gfx::eviction::get_stats()`) |
 | Renderer | `engine/engine/rendering/renderer.cpp` |
 

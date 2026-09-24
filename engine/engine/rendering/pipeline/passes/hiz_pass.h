@@ -37,8 +37,8 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), s_depth, "s_depth", gfx::uniform_type::Sampler);
-            cache_uniform(program.get(), u_hiz_params, "u_hiz_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_hiz_params, "u_hiz_params", bgfx::UniformType::Vec4);
         }
     };
 
@@ -50,7 +50,7 @@ private:
 
         void cache_uniforms()
         {
-            cache_uniform(program.get(), u_hiz_params, "u_hiz_params", gfx::uniform_type::Vec4);
+            cache_uniform(program.get(), u_hiz_params, "u_hiz_params", bgfx::UniformType::Vec4);
         }
     };
 

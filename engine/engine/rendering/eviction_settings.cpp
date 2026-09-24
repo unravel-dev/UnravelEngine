@@ -80,7 +80,7 @@ void update_eviction(const eviction_settings& settings)
         return;
     }
 
-    const auto* bx = gfx::get_stats();
+    const auto* bx = bgfx::getStats();
     const std::uint64_t gpu_max = (bx != nullptr) ? clamp_u64(bx->gpuMemoryMax) : 0;
     const std::uint64_t gpu_used = (bx != nullptr) ? clamp_u64(bx->gpuMemoryUsed) : 0;
 

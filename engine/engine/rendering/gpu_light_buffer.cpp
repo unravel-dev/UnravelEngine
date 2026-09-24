@@ -12,12 +12,12 @@ namespace
 namespace ANONYMOUS
 {
 /// Layout of the light buffer: a flat array of vec4, matching BUFFER_RO(_, vec4, _).
-auto get_vec4_buffer_layout() -> const gfx::vertex_layout&
+auto get_vec4_buffer_layout() -> const bgfx::VertexLayout&
 {
-    static const gfx::vertex_layout layout = []()
+    static const bgfx::VertexLayout layout = []()
     {
-        gfx::vertex_layout decl;
-        decl.begin().add(gfx::attribute::TexCoord0, 4, gfx::attribute_type::Float).end();
+        bgfx::VertexLayout decl;
+        decl.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
         return decl;
     }();
     return layout;
@@ -52,7 +52,7 @@ void gpu_light_buffer::shutdown()
 {
     if(bgfx::isValid(buffer_))
     {
-        gfx::destroy(buffer_);
+        bgfx::destroy(buffer_);
         buffer_ = {bgfx::kInvalidHandle};
     }
     capacity_vec4_ = 0;
@@ -181,14 +181,14 @@ void gpu_light_buffer::ensure_capacity(uint32_t required_vec4)
     }
     if(bgfx::isValid(buffer_))
     {
-        gfx::destroy(buffer_);
+        bgfx::destroy(buffer_);
     }
     // Dynamic buffers cannot grow through update() -- a write past the allocated size is
     // silently dropped and the shader reads zeros -- so capacity is tracked and the buffer
     // recreated, with slack so a scene gaining lights does not recreate it every frame.
     capacity_vec4_ = required_vec4 + required_vec4 / 2u + light_vec4_stride * 16u;
-    buffer_ = gfx::create_dynamic_vertex_buffer(capacity_vec4_, ANONYMOUS::get_vec4_buffer_layout(),
-                                                BGFX_BUFFER_COMPUTE_READ);
+    buffer_ = bgfx::createDynamicVertexBuffer(capacity_vec4_, ANONYMOUS::get_vec4_buffer_layout(),
+                                              BGFX_BUFFER_COMPUTE_READ);
     // A fresh buffer holds nothing yet, whatever the content hash says.
     buffer_uploaded_ = false;
 }
@@ -283,7 +283,7 @@ void gpu_light_buffer::update(scene& scn)
     }
     content_hash_ = hash;
     buffer_uploaded_ = true;
-    gfx::update(buffer_, 0, gfx::copy(data_.data(), uint32_t(data_.size() * sizeof(float))));
+    bgfx::update(buffer_, 0, bgfx::copy(data_.data(), uint32_t(data_.size() * sizeof(float))));
 }
 
 } // namespace unravel

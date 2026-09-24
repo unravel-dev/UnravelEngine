@@ -22,6 +22,11 @@ namespace
 {
 using clock = std::chrono::steady_clock;
 
+/// Frames pumped so queued destroys have executed before the caller reads usage back. With the
+/// multithreaded renderer one bgfx::frame only hands the command buffer to the render thread; the
+/// next frame waits until the render thread has executed it, destroys included.
+constexpr int k_frames_to_service_destroys = 2;
+
 auto to_ms(clock::duration d) -> double
 {
     return std::chrono::duration<double, std::milli>(d).count();
@@ -50,7 +55,7 @@ public:
     {
         std::lock_guard<std::mutex> lk(mutex_);
         default_config_ = cfg;
-        const auto* gpu_stats = gfx::get_stats();
+        const auto* gpu_stats = bgfx::getStats();
         if(gpu_stats == nullptr)
         {
             set_init_status(eviction::init_status::failed);
@@ -61,8 +66,8 @@ public:
         // D3D11 and OpenGL drivers do their own resource paging behind the API, so a second
         // layer of eviction on top would just thrash. Vulkan/Metal/D3D12 surface explicit memory
         // budgets through bgfx and need the help.
-        if(gfx::get_renderer_type() == gfx::renderer_type::Direct3D11 ||
-           gfx::get_renderer_type() == gfx::renderer_type::OpenGL)
+        if(bgfx::getRendererType() == bgfx::RendererType::Direct3D11 ||
+           bgfx::getRendererType() == bgfx::RendererType::OpenGL)
         {
             status = eviction::init_status::unnecessary;
         }
@@ -379,7 +384,7 @@ private:
         return std::max(k_floor, hard_limit_bytes / 50);
     }
 
-    void seed_startup_budget_locked(const gfx::stats* gpu_stats)
+    void seed_startup_budget_locked(const bgfx::Stats* gpu_stats)
     {
         if(gpu_stats == nullptr || gpu_stats->gpuMemoryMax <= 0)
         {
@@ -686,7 +691,7 @@ namespace
 {
 auto live_gpu_used() -> std::uint64_t
 {
-    const auto* gpu_stats = gfx::get_stats();
+    const auto* gpu_stats = bgfx::getStats();
     if(gpu_stats == nullptr)
     {
         return 0;
@@ -773,7 +778,7 @@ auto reclaim_for(std::uint64_t bytes, reclaim_kind kind) -> reclaim_result
     // immediate: evicted destroys must land on the GPU before the imminent allocation.
     if(bytes > 0 && freed > 0)
     {
-        gfx::frames(1, BGFX_FRAME_FLUSH);
+        gfx::frames(k_frames_to_service_destroys, BGFX_FRAME_FLUSH);
         occupancy = after_evict();
         return occupancy > budget.hard_limit_bytes ? reclaim_result::insufficient : reclaim_result::reclaimed;
     }
@@ -783,7 +788,7 @@ auto reclaim_for(std::uint64_t bytes, reclaim_kind kind) -> reclaim_result
         return reclaim_result::reclaimed;
     }
 
-    gfx::frames(1, BGFX_FRAME_FLUSH);
+    gfx::frames(k_frames_to_service_destroys, BGFX_FRAME_FLUSH);
     occupancy = after_evict();
     return occupancy > budget.hard_limit_bytes ? reclaim_result::insufficient : reclaim_result::reclaimed;
 }
@@ -819,7 +824,7 @@ namespace
 /// outside the registry so the eviction system treats them as immovable "real" usage. API-thread only.
 struct debug_reserve
 {
-    std::vector<gfx::texture_handle> chunks;
+    std::vector<bgfx::TextureHandle> chunks;
     std::uint64_t bytes = 0;
 };
 
@@ -836,8 +841,8 @@ constexpr std::uint64_t k_reserve_chunk = std::uint64_t(k_reserve_dim) * k_reser
 /// size, or 0 if the allocation failed (e.g. genuinely out of memory).
 auto alloc_reserve_chunk(std::uint16_t dim) -> std::uint64_t
 {
-    const gfx::texture_handle handle =
-        gfx::create_texture_2d(dim, dim, false, 1, gfx::texture_format::RGBA8, BGFX_TEXTURE_NONE, nullptr);
+    const bgfx::TextureHandle handle =
+        bgfx::createTexture2D(dim, dim, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_NONE, nullptr);
     if(!bgfx::isValid(handle))
     {
         return 0;
@@ -874,7 +879,7 @@ auto debug_consume_memory(std::uint64_t bytes) -> std::uint64_t
 
 auto debug_simulate_budget(std::uint64_t target_free_bytes) -> std::uint64_t
 {
-    const auto* gpu_stats = gfx::get_stats();
+    const auto* gpu_stats = bgfx::getStats();
     if(gpu_stats == nullptr || gpu_stats->gpuMemoryMax <= 0)
     {
         return debug_consumed_bytes();
@@ -885,7 +890,7 @@ auto debug_simulate_budget(std::uint64_t target_free_bytes) -> std::uint64_t
     {
         debug_release_memory();
     }
-    gpu_stats = gfx::get_stats();
+    gpu_stats = bgfx::getStats();
     const auto budget = static_cast<std::uint64_t>(gpu_stats->gpuMemoryMax);
     const auto used = static_cast<std::uint64_t>(std::max<std::int64_t>(0, gpu_stats->gpuMemoryUsed));
     if(target_free_bytes >= budget)
@@ -906,13 +911,13 @@ void debug_release_memory()
     {
         if(bgfx::isValid(handle))
         {
-            gfx::destroy(handle);
+            bgfx::destroy(handle);
         }
     }
     reserved().chunks.clear();
     reserved().bytes = 0;
     // Pump the command buffer so the destroys are serviced and their VRAM is reclaimed before return.
-    gfx::frames(1, BGFX_FRAME_FLUSH);
+    gfx::frames(k_frames_to_service_destroys, BGFX_FRAME_FLUSH);
 }
 
 auto debug_consumed_bytes() -> std::uint64_t

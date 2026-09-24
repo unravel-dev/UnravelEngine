@@ -486,7 +486,7 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
         bgfx::dispatch(pass.id, m_updateGBufferProgram, (dims.size[0] + 7) / 8, (dims.size[1] + 7) / 8);
     }
 
-    gfx::discard();
+    bgfx::discard();
 }
 
 auto assao_pass::shutdown() -> int32_t
@@ -535,7 +535,7 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                  uint16_t(dims.halfSize[1]),
                                                  true,
                                                  1,
-                                                 gfx::texture_format::R16F,
+                                                 bgfx::TextureFormat::R16F,
                                                  halfDepthFlags);
         }
     }
@@ -548,7 +548,7 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                uint16_t(dims.halfSize[1]),
                                                false,
                                                2,
-                                               gfx::texture_format::RG8,
+                                               bgfx::TextureFormat::RG8,
                                                BGFX_TEXTURE_COMPUTE_WRITE);
     }
     auto& pingB = rview.tex_get_or_emplace("ASSAO_PING_PONG_B");
@@ -559,7 +559,7 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                uint16_t(dims.halfSize[1]),
                                                false,
                                                2,
-                                               gfx::texture_format::RG8,
+                                               bgfx::TextureFormat::RG8,
                                                BGFX_TEXTURE_COMPUTE_WRITE);
     }
 
@@ -571,7 +571,7 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                   uint16_t(dims.halfSize[1]),
                                                   false,
                                                   4,
-                                                  gfx::texture_format::RG8,
+                                                  bgfx::TextureFormat::RG8,
                                                   BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
     }
 
@@ -583,7 +583,7 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                  uint16_t(dims.size[1]),
                                                  false,
                                                  1,
-                                                 gfx::texture_format::RGBA8,
+                                                 bgfx::TextureFormat::RGBA8,
                                                  BGFX_TEXTURE_COMPUTE_WRITE);
     }
 
@@ -595,7 +595,7 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                        uint16_t(dims.quarterSize[1]),
                                                        false,
                                                        1,
-                                                       gfx::texture_format::R8,
+                                                       bgfx::TextureFormat::R8,
                                                        BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
     }
     auto& importanceMapPong = rview.tex_get_or_emplace("ASSAO_IMPORTANCE_MAP_PONG");
@@ -606,7 +606,7 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                           uint16_t(dims.quarterSize[1]),
                                                            false,
                                                            1,
-                                                           gfx::texture_format::R8,
+                                                           bgfx::TextureFormat::R8,
                                                            BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
     }
 
@@ -618,7 +618,7 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                uint16_t(dims.size[1]),
                                                false,
                                                1,
-                                               gfx::texture_format::R8,
+                                               bgfx::TextureFormat::R8,
                                                BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_POINT_CLAMP);
     }
 }

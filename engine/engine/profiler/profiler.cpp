@@ -237,7 +237,7 @@ void performance_profiler::capture_frame_snapshot()
 
     snapshot.cpu_heap_used_bytes = dotnet::gc_get_used_size();
     snapshot.process_resident_bytes = platform::get_process_resident_set_bytes();
-    if(const auto* st = gfx::get_stats())
+    if(const auto* st = bgfx::getStats())
     {
         snapshot.gpu_memory_used_bytes = st->gpuMemoryUsed;
     }

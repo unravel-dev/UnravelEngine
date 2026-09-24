@@ -1358,7 +1358,7 @@ void text_component::recreate_scaled_font() const
     scaled_font_ = font->get_scaled_font(get_font_size());
 }
 
-void text_component::submit(gfx::view_id id, const math::transform& world, uint64_t state)
+void text_component::submit(bgfx::ViewId id, const math::transform& world, uint64_t state)
 {
     if(!can_be_rendered())
     {
@@ -1380,13 +1380,13 @@ void text_component::submit(gfx::view_id id, const math::transform& world, uint6
 
     for(auto& sb : builder.buffers)
     {
-        gfx::set_transform((const float*)text_transform);
+        bgfx::setTransform((const float*)text_transform);
         builder.manager.submit_text_buffer(sb.handle, font.handle, id, state);
     }
 
     for(auto& sb : debug_builder_->buffers)
     {
-        gfx::set_transform((const float*)text_transform);
+        bgfx::setTransform((const float*)text_transform);
         debug_builder_->manager.submit_text_buffer(sb.handle, font.handle, id, state);
     }
 }

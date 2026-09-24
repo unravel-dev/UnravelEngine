@@ -45,9 +45,9 @@ void gizmos_renderer::draw_grid(uint32_t pass_id, const camera& cam, const editi
         state |= BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_WRITE_Z;
     }
 
-    gfx::set_state(state);
-    gfx::submit(pass_id, grid_program_->native_handle());
-    gfx::set_state(BGFX_STATE_DEFAULT);
+    bgfx::setState(state);
+    bgfx::submit(pass_id, grid_program_->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
 
     grid_program_->end();
 }
@@ -179,11 +179,11 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
     pass.bind(selection_mask.get());
     pass.set_view_proj(view, proj);
 
-    gfx::set_view_clear(pass.id,
-                        BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
-                        0x00000000, // clear R8 to zero
-                        1.0f,
-                        0);
+    bgfx::setViewClear(pass.id,
+                       BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
+                       0x00000000, // clear R8 to zero
+                       1.0f,
+                       0);
 
     bool any_drawn = false;
     for(auto& obj : em.get_selections())
@@ -247,7 +247,10 @@ auto gizmos_renderer::draw_selection_mask_pass(rtti::context& ctx,
                 {
                     auto& prog =
                         submit_params.skinned ? outline_mask_program_skinned_.program : outline_mask_program_.program;
-                    gfx::submit(pass.id, prog->native_handle(), 0, submit_params.preserve_state);
+                    bgfx::submit(pass.id,
+                                 prog->native_handle(),
+                                 0,
+                                 submit_params.preserve_state ? BGFX_DISCARD_NONE : BGFX_DISCARD_ALL);
                 };
                 callbacks.setup_end = [&](const model::submit_callbacks::params& submit_params)
                 {
@@ -387,9 +390,9 @@ void gizmos_renderer::draw_selection_wireframe_pass(rtti::context& ctx,
             gfx::set_uniform(wf_prog.u_wf_params, params.data(), 3);
 
             // Six vertices per triangle edge; three edges per triangle.
-            gfx::set_vertex_count(info.index_count * 6u);
-            gfx::set_state(state);
-            gfx::submit(pass.id, wf_prog.program->native_handle());
+            bgfx::setVertexCount(info.index_count * 6u);
+            bgfx::setState(state);
+            bgfx::submit(pass.id, wf_prog.program->native_handle());
         };
 
         callbacks.setup_end = [&](const model::submit_vertex_pulling_callbacks::params& info)
@@ -433,9 +436,9 @@ void gizmos_renderer::draw_outline_pass(const gfx::frame_buffer::ptr& selection_
     auto topology = gfx::clip_quad(0.0f);
 
     // Alpha-blend the outline over existing scene
-    gfx::set_state(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
+    bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
 
-    gfx::submit(dd.view, outline_program_.program->native_handle());
+    bgfx::submit(dd.view, outline_program_.program->native_handle());
 
     outline_program_.program->end();
 }

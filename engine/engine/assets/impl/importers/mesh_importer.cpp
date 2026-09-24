@@ -605,11 +605,11 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
     auto& submesh = load_data.submeshes.back();
 
     // Determine the correct offset to any relevant elements in the vertex
-    bool has_position = load_data.vertex_format.has(gfx::attribute::Position);
-    bool has_normal = load_data.vertex_format.has(gfx::attribute::Normal);
-    bool has_bitangent = load_data.vertex_format.has(gfx::attribute::Bitangent);
-    bool has_tangent = load_data.vertex_format.has(gfx::attribute::Tangent);
-    bool has_texcoord0 = load_data.vertex_format.has(gfx::attribute::TexCoord0);
+    bool has_position = load_data.vertex_format.has(bgfx::Attrib::Position);
+    bool has_normal = load_data.vertex_format.has(bgfx::Attrib::Normal);
+    bool has_bitangent = load_data.vertex_format.has(bgfx::Attrib::Bitangent);
+    bool has_tangent = load_data.vertex_format.has(bgfx::Attrib::Tangent);
+    bool has_texcoord0 = load_data.vertex_format.has(bgfx::Attrib::TexCoord0);
     auto vertex_stride = load_data.vertex_format.getStride();
 
     std::uint32_t current_vertex = load_data.vertex_count;
@@ -626,7 +626,7 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
             float position[4];
             std::memcpy(position, &mesh->mVertices[i], sizeof(aiVector3D));
 
-            gfx::vertex_pack(position, false, gfx::attribute::Position, load_data.vertex_format, current_vertex_ptr);
+            bgfx::vertexPack(position, false, bgfx::Attrib::Position, load_data.vertex_format, current_vertex_ptr);
 
             submesh.bbox.add_point(math::vec3(position[0], position[1], position[2]));
         }
@@ -640,17 +640,17 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
             {
                 std::memcpy(textureCoords, &mesh->mTextureCoords[0][i], sizeof(aiVector2D));
 
-                gfx::vertex_pack(textureCoords,
+                bgfx::vertexPack(textureCoords,
                                  true,
-                                 gfx::attribute::TexCoord0,
+                                 bgfx::Attrib::TexCoord0,
                                  load_data.vertex_format,
                                  current_vertex_ptr);
             }
             else
             {
-                gfx::vertex_pack(textureCoords,
+                bgfx::vertexPack(textureCoords,
                                  true,
-                                 gfx::attribute::TexCoord0,
+                                 bgfx::Attrib::TexCoord0,
                                  load_data.vertex_format,
                                  current_vertex_ptr);
             }
@@ -663,9 +663,9 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
         {
             std::memcpy(math::value_ptr(normal), &mesh->mNormals[i], sizeof(aiVector3D));
 
-            gfx::vertex_pack(math::value_ptr(normal),
+            bgfx::vertexPack(math::value_ptr(normal),
                              true,
-                             gfx::attribute::Normal,
+                             bgfx::Attrib::Normal,
                              load_data.vertex_format,
                              current_vertex_ptr);
         }
@@ -685,9 +685,9 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
                 tangent = math::vec4(0.0f, 0.0f, 0.0f, 0.0f);
             }
                 
-            gfx::vertex_pack(math::value_ptr(tangent),
+            bgfx::vertexPack(math::value_ptr(tangent),
             true,
-            gfx::attribute::Tangent,
+            bgfx::Attrib::Tangent,
             load_data.vertex_format,
             current_vertex_ptr);
         }
@@ -710,9 +710,9 @@ void process_vertices(aiMesh* mesh, mesh::load_data& load_data)
             //     math::dot(math::vec3(bitangent), math::normalize(math::cross(math::vec3(normal), math::vec3(tangent))));
             // tangent.w = handedness;
 
-            gfx::vertex_pack(math::value_ptr(bitangent),
+            bgfx::vertexPack(math::value_ptr(bitangent),
                              true,
-                             gfx::attribute::Bitangent,
+                             bgfx::Attrib::Bitangent,
                              load_data.vertex_format,
                              current_vertex_ptr);
         }
