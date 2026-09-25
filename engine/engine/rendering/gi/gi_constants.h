@@ -701,16 +701,24 @@
       " disocclusion ghosts (need the clamp) and sparse-bright samples (the clamp destroys"        \
       " them) without a velocity buffer; a moving emitter under a still camera can still trail"    \
       " - accepted and documented")                                                                \
-    X(GI_REFLECTION_MOTION_WINDOW, 3.0f,                                                           \
-      "frames of running-mean depth under camera motion", "derived: trail length on a blurred"     \
-      " high-contrast boundary (a bright building over sky on a gloss floor) is the 1/count"       \
-      " catch-up time, and the base window's 8 frames read as a visible smear band that the"       \
-      " neighbourhood clamp cannot reject (a blurred edge's AABB legitimately spans both sides)."  \
-      " While MEASURED reprojection motion exceeds the clamp threshold the count cap collapses"    \
-      " to this instead - the composite's roughness-ramped spatial kernel and the motion itself"   \
-      " hide the extra variance. Keys on measured motion, never on the release gates: the mirror"  \
-      " determinism gate forces the release to 0 permanently, and a PARKED mirror must keep its"   \
-      " full base window for relight-phase integration")                                           \
+    X(GI_REFLECTION_MOTION_WINDOW, 12.0f,                                                          \
+      "frames of running-mean depth under camera motion", "ported from Lumen"                      \
+      " (r.Lumen.Reflections.Temporal.MaxFramesAccumulated, UE 5.8 LumenReflections.cpp:154): the" \
+      " count cap of a STOCHASTIC lobe while measured reprojection motion exceeds the clamp"       \
+      " threshold. Lumen keeps accumulating through camera motion and lets the neighbourhood"      \
+      " clamp and the confidence collapse reject stale history; one ray per trace texel over a"    \
+      " shorter window is the noise that shows while the camera moves. Lobes between the mirror"  \
+      " gate and GI_REFLECTION_RESOLVE_FULL ramp to it from GI_REFLECTION_MIRROR_MOTION_WINDOW."   \
+      " Keys on measured motion, never on the release gates: the mirror determinism gate forces"   \
+      " the release to 0 permanently, and a PARKED mirror must keep its full base window for"     \
+      " relight-phase integration")                                                                \
+    X(GI_REFLECTION_MIRROR_MOTION_WINDOW, 3.0f,                                                    \
+      "frames of running-mean depth under camera motion", "derived: the count cap of a"           \
+      " DETERMINISTIC lobe (at or below GI_REFLECTION_MIRROR_ROUGHNESS) under camera motion. A"    \
+      " mirror fires the same ray every frame, so a deeper history adds lag and no noise"          \
+      " reduction, and the virtual-image reprojection is exact only for planar mirrors - a"        \
+      " curved one trails for as long as the history lasts. Lumen drops mirrors to 2 frames and"  \
+      " leaves the rest to TSR (LumenReflectionDenoiserTemporal.usf, the mirror speed-up)")        \
     X(GI_REFLECTION_STILL_WINDOW_SCALE, 4.0f,                                                      \
       "x the temporal window", "derived: while the clamp is released (still camera) the"           \
       " running-mean count may grow to this multiple of the settings window, so a sparse spike"    \
@@ -1156,14 +1164,17 @@
       " scales from the settings value at mirror roughness to this multiple at"                   \
       " GI_REFLECTION_ROUGH_CUTOFF, where the lobe is widest and one VNDF ray per frame"          \
       " integrates slowest. Sharp reflections keep the short window and its responsiveness")      \
-    X(GI_REFLECTION_RESOLVE_START, 0.1f,                                                           \
-      "GGX roughness", "derived: the pre-temporal spatial resolve of the 3x3 raw neighbourhood"   \
-      " (stochastic-SSR's resolve stage, edge-stopped, blend-free) fades in from here to"          \
-      " GI_REFLECTION_GATHER_FADE_START. Below it the lobe is tight enough that neighbours"        \
-      " sample different content and the resolve would only blur; above it one ray per pixel"     \
-      " cannot resolve a small emitter under the lobe (measured: speckle on brushed metal at"     \
-      " roughness 0.35), and nine samples per frame is the cheapest variance reduction the pass"  \
-      " already fetches")                                                                          \
+    X(GI_REFLECTION_RESOLVE_FULL, 0.125f,                                                          \
+      "GGX roughness", "ported from Lumen (UE 5.8 LumenReflectionResolve.usf, kernel radius"      \
+      " KernelRadius x saturate(roughness x 8), skipped on mirrors): the pre-temporal resolve of"  \
+      " the 3x3 raw neighbourhood ramps in from the mirror gate (GI_REFLECTION_MIRROR_ROUGHNESS,"  \
+      " where every neighbour's ray is the deterministic mirror ray and reusing it would only"    \
+      " blur) to full weight here. The resolve is a ratio estimator - each neighbour's ray is"    \
+      " re-aimed from this pixel and weighted by this pixel's lobe density over the density it"   \
+      " was drawn from - so a neighbour whose ray falls outside a tight lobe weighs nothing by"     \
+      " itself, and the half-resolution ring (two full-resolution pixels) sits inside Lumen's"    \
+      " kernel at every roughness past this point. The same ramp sets how far the temporal"       \
+      " window may stay deep under camera motion (GI_REFLECTION_MOTION_WINDOW)")                   \
     X(GI_WORLD_PROBE_SLEEP_SPACINGS, 1.75f,                                                       \
       "probe spacings of clearance", "instrument: a LEVEL-0 probe with no geometry within this"   \
       " many spacings is COUNTED as unoccupied (census row GI_STATS_PROBES_ASLEEP, blue in the"   \

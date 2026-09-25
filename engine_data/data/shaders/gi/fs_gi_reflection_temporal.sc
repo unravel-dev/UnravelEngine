@@ -94,6 +94,18 @@ float GiReflHitDistance(float raw_alpha)
 	return raw_alpha >= 1.999 ? GI_SHADOW_DISTANCE * 8.0 : (raw_alpha - 1.0) * GI_SHADOW_DISTANCE;
 }
 
+/*
+ * How stochastic the pixel's lobe is: 0 at the mirror gate, where the trace fires the same
+ * deterministic ray every frame, 1 from GI_REFLECTION_RESOLVE_FULL on (Lumen's
+ * saturate(roughness x 8) kernel ramp). It sets both the weight of the neighbour rays the
+ * resolve reuses and how deep the temporal window stays under camera motion - a lobe wide
+ * enough to need its neighbours' rays is wide enough to need its history.
+ */
+float GiReflLobeSpread(float roughness)
+{
+	return smoothstep(GI_REFLECTION_MIRROR_ROUGHNESS, GI_REFLECTION_RESOLVE_FULL, roughness);
+}
+
 void main()
 {
 	vec2 uv = v_texcoord0;
@@ -236,14 +248,16 @@ void main()
 	float rough_window_scale =
 	    mix(1.0, GI_REFLECTION_ROUGH_WINDOW_SCALE, saturate(nd.roughness / GI_REFLECTION_ROUGH_CUTOFF));
 	float window = max(u_gi_refl_temporal.w * rough_window_scale - 1.0, 1.0);
-	// MOTION WINDOW: trail length on a blurred high-contrast boundary is the 1/count
-	// catch-up time, and the base window's depth reads as a smear band the clamp cannot
-	// reject there (a blurred edge's AABB legitimately spans both sides). While measured
-	// motion exceeds the clamp threshold, the effective window collapses to
-	// GI_REFLECTION_MOTION_WINDOW - the composite's roughness-ramped kernel and the motion
-	// itself hide the extra variance, and the full depth returns the frame the camera
-	// parks.
-	float window_eff = mix(min(GI_REFLECTION_MOTION_WINDOW, window), window, still_motion);
+	// MOTION WINDOW: while measured motion exceeds the clamp threshold the count is capped at
+	// Lumen's window for a stochastic lobe (GI_REFLECTION_MOTION_WINDOW) - its single ray per
+	// trace texel needs that depth, and the clamp and the confidence collapse below reject
+	// history that disagrees with the current neighbourhood - and at a short window for a
+	// deterministic mirror, where history adds lag and no noise reduction. The full depth
+	// returns the frame the camera parks.
+	float lobe_spread = GiReflLobeSpread(nd.roughness);
+	float motion_window =
+	    mix(GI_REFLECTION_MIRROR_MOTION_WINDOW, GI_REFLECTION_MOTION_WINDOW, lobe_spread);
+	float window_eff = mix(min(motion_window, window), window, still_motion);
 	BRANCH
 	if(curr.w < 0.5)
 	{
@@ -314,18 +328,16 @@ void main()
 			}
 		}
 	}
-	// PRE-TEMPORAL RESOLVE (GI_REFLECTION_RESOLVE_START): one GGX ray per pixel per frame is
-	// not enough to resolve a wide lobe, but the neighbouring texels sampled the SAME lobe
-	// from almost the same point - so their rays can be reused here, for free, before the
-	// temporal ever sees this frame's sample. This is Lumen's spatial reconstruction
-	// (LumenReflectionResolve.usf:370-613) rather than a blur: each neighbour's own ray is
-	// re-derived, its hit point rebuilt, the direction RE-AIMED from this pixel, and the
-	// sample weighted by this pixel's own lobe density over the density it was drawn from.
-	// Averaging radiance with edge stops alone (what this used to do) has no parallax
-	// correction and no BRDF weight, so it over-blurred the sharp end of the band and gave
-	// mismatched taps full weight. Fades in with roughness; never on mirrors.
-	float resolve_scale =
-	    smoothstep(GI_REFLECTION_RESOLVE_START, GI_REFLECTION_GATHER_FADE_START, nd.roughness);
+	// PRE-TEMPORAL RESOLVE: one GGX ray per pixel per frame is not enough to resolve a lobe,
+	// but the neighbouring texels sampled the SAME lobe from almost the same point - so their
+	// rays can be reused here, for free, before the temporal ever sees this frame's sample.
+	// This is Lumen's spatial reconstruction (LumenReflectionResolve.usf:370-613), a ratio
+	// estimator rather than a blur: each neighbour's own ray is re-derived, its hit point
+	// rebuilt, the direction RE-AIMED from this pixel, and the sample weighted by this pixel's
+	// own lobe density over the density it was drawn from, so a neighbour whose ray falls
+	// outside this lobe weighs nothing by itself. Full weight from GI_REFLECTION_RESOLVE_FULL,
+	// ramping in from the mirror gate; never on mirrors.
+	float resolve_scale = lobe_spread;
 	// A degenerate G-buffer normal has no lobe to reuse under, and normalize() of it is a NaN.
 	if(dot(nd.world_normal, nd.world_normal) < 0.5)
 	{
@@ -483,10 +495,9 @@ void main()
 	}
 	// FIREFLY GOVERNOR (see the header): cap the new sample at the clamp's multiple of the
 	// pixel's own accumulated luminance, floored by this frame's neighbourhood mean - the
-	// TRIMMED mean, brightest neighbour excluded. With the plain mean a single unclamped
-	// emissive hit (up to GI_MAX_RAY_RADIANCE) set every neighbour's ceiling to its own
-	// height, and once the resolve existed it spread that hit into a 3x3 of unclamped dots
-	// that the 3-frame motion window showed dancing (measured regression on brushed metal).
+	// TRIMMED mean, brightest neighbour excluded: with the plain mean a single unclamped
+	// emissive hit (up to GI_MAX_RAY_RADIANCE) sets every neighbour's ceiling to its own
+	// height, and the resolve then spreads that hit into a 3x3 of unclamped dots.
 	// With one neighbour there is nothing to trim: the history alone is the reference.
 	//
 	// The bounded-range resolve below now suppresses the same spikes by construction, so
