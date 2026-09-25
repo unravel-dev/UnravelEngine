@@ -222,7 +222,8 @@ IMGUI_API bool SliderScalarT(const char* label,
     return SliderScalar(label, GetDataType<T>(), p_data, &p_min, &p_max, format, flags);
 }
 
-// Thin-track slider with a round knob. Same behavior as SliderScalar (ctrl+click for input, etc.).
+// Slider drawn as a frame filled with the slider grab color up to the value, with an edge marker at
+// the value and the value text on top. Same behavior as SliderScalar (ctrl+click for input, etc.).
 IMGUI_API bool KnobSliderScalar(const char* label,
                                 ImGuiDataType data_type,
                                 void* p_data,

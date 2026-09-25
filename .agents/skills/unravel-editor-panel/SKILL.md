@@ -69,9 +69,10 @@ Use `unravel-add-inspector` for custom type inspectors.
 - `ImGui::AlignedItem()` for horizontal alignment - include `FramePadding` in item width for buttons/menu items
 - `ImGui::SetItemTooltipEx()` for tooltips (project wrapper)
 - Menu bar items: account for `FramePadding` and `ItemSpacing` when right-aligning
-- Theme: the startup theme is `imgui_style::set_unity_theme()`
-  (`editor/editor/imgui/integration/imgui_style.cpp`). The accent of self-drawn widgets comes
-  from `imgui_style::get_accent_color()`, never from `ImGuiCol_TabSelected` (grey in that theme)
+- Theme: the startup theme is `imgui_style::set_theme(imgui_style::theme::unravel_dark)`
+  (`editor/editor/imgui/integration/imgui_style.cpp`, where each theme is a name, a palette and
+  the sizes it changes from Unravel Dark's). The accent of self-drawn widgets comes from
+  `imgui_style::get_accent_color()`, never from `ImGuiCol_TabSelected` (grey in that theme)
 - Icon glyphs are merged into the Regular, Bold and Black fonts only: a label with an icon drawn
   in SemiBold / Medium shows `?`
 - A child with `ImGuiChildFlags_Borders` takes `WindowPadding` only while the theme's

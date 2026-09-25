@@ -1421,6 +1421,45 @@ bool ReorderableList(
     return changed;
 }
 
+namespace
+{
+// The fill is the slider grab color, see-through so the value text over it stays legible.
+constexpr float KNOB_SLIDER_FILL_ALPHA = 0.38f;
+constexpr float KNOB_SLIDER_FILL_ACTIVE_ALPHA = 0.55f;
+// The edge marker at the value follows the frame height, but never gets thinner than the minimum.
+constexpr float KNOB_SLIDER_EDGE_WIDTH_RATIO = 0.08f;
+constexpr float KNOB_SLIDER_EDGE_MIN_WIDTH = 2.0f;
+// While dragging, the edge marker moves this far from the grab color towards white.
+constexpr float KNOB_SLIDER_EDGE_ACTIVE_LIGHTEN = 0.4f;
+// Room the edge marker leaves on each side of the value text when it crosses it.
+constexpr float KNOB_SLIDER_EDGE_TEXT_GAP = 2.0f;
+// The padding SliderBehavior() keeps at both ends of the frame (hardcoded inside ImGui).
+constexpr float SLIDER_GRAB_PADDING = 2.0f;
+
+/// Draws the KnobSliderScalar edge marker over [edge_x, edge_x + edge_w] inside fill_bb. Where it
+/// crosses the value text it breaks around it, so it never strikes a digit.
+void render_knob_slider_edge(ImDrawList* draw_list,
+                             const ImRect& fill_bb,
+                             const ImRect& value_bb,
+                             float edge_x,
+                             float edge_w,
+                             ImU32 col,
+                             float rounding)
+{
+    const bool is_under_value = edge_x + edge_w > value_bb.Min.x - KNOB_SLIDER_EDGE_TEXT_GAP &&
+                                edge_x < value_bb.Max.x + KNOB_SLIDER_EDGE_TEXT_GAP;
+    const bool is_on_straight_side =
+        edge_x >= fill_bb.Min.x + rounding && edge_x + edge_w <= fill_bb.Max.x - rounding;
+    if(!is_under_value || !is_on_straight_side)
+    {
+        RenderRectFilledInRangeH(draw_list, fill_bb, col, edge_x, edge_x + edge_w, rounding);
+        return;
+    }
+    draw_list->AddRectFilled(ImVec2(edge_x, fill_bb.Min.y), ImVec2(edge_x + edge_w, value_bb.Min.y), col);
+    draw_list->AddRectFilled(ImVec2(edge_x, value_bb.Max.y), ImVec2(edge_x + edge_w, fill_bb.Max.y), col);
+}
+} // namespace
+
 bool KnobSliderScalar(const char* label,
                       ImGuiDataType data_type,
                       void* p_data,
@@ -1483,56 +1522,54 @@ bool KnobSliderScalar(const char* label,
                                clamp_enabled ? p_min : NULL, clamp_enabled ? p_max : NULL);
     }
 
-    // Slider behavior (computes grab_bb in frame_bb space)
+    // Slider behavior (computes grab_bb in frame_bb space). Without a grab size the range spans
+    // the whole frame, so the edge of the fill stays under the mouse while dragging.
     ImRect grab_bb;
+    PushStyleVar(ImGuiStyleVar_GrabMinSize, 0.0f);
     const bool value_changed =
         SliderBehavior(frame_bb, id, data_type, p_data, p_min, p_max, format, flags, &grab_bb);
+    PopStyleVar();
     if(value_changed)
         MarkItemEdited(id);
 
-    // -- Custom visuals: thin track + round knob --
-    const float knob_radius = frame_h * 0.35f;
-    const float track_h = ImMax(2.0f, frame_h * 0.14f);
-    const float track_y = frame_bb.GetCenter().y;
-    const float track_rounding = track_h * 0.5f;
-    const float knob_x_min = frame_bb.Min.x + knob_radius;
-    const float knob_x_max = frame_bb.Max.x - knob_radius;
+    // -- Custom visuals: frame filled with the grab color up to the value + edge marker --
+    const bool is_active = g.ActiveId == id;
+    if(hovered || is_active)
+        SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    const float grab_sz = grab_bb.GetWidth();
+    const float usable_min = frame_bb.Min.x + SLIDER_GRAB_PADDING + grab_sz * 0.5f;
+    const float usable_max = frame_bb.Max.x - SLIDER_GRAB_PADDING - grab_sz * 0.5f;
     float t = 0.0f;
-    if(grab_bb.Max.x > grab_bb.Min.x)
+    if(usable_max > usable_min)
+        t = ImSaturate((grab_bb.GetCenter().x - usable_min) / (usable_max - usable_min));
+    const ImU32 frame_col = GetColorU32(is_active ? ImGuiCol_FrameBgActive
+                                        : hovered ? ImGuiCol_FrameBgHovered
+                                                  : ImGuiCol_FrameBg);
+    RenderFrame(frame_bb.Min, frame_bb.Max, frame_col, true, style.FrameRounding);
+    ImRect fill_bb = frame_bb;
+    fill_bb.Expand(ImVec2(-style.FrameBorderSize, -style.FrameBorderSize));
+    const float fill_x = ImFloor(ImLerp(fill_bb.Min.x, fill_bb.Max.x, t) + 0.5f);
+    const float fill_alpha = is_active ? KNOB_SLIDER_FILL_ACTIVE_ALPHA : KNOB_SLIDER_FILL_ALPHA;
+    if(fill_x > fill_bb.Min.x)
     {
-        const float grab_padding = 2.0f;
-        const float grab_sz = grab_bb.GetWidth();
-        const float usable_min = frame_bb.Min.x + grab_padding + grab_sz * 0.5f;
-        const float usable_max = frame_bb.Max.x - grab_padding - grab_sz * 0.5f;
-        if(usable_max > usable_min)
-            t = ImClamp((grab_bb.GetCenter().x - usable_min) / (usable_max - usable_min), 0.0f, 1.0f);
+        RenderRectFilledInRangeH(window->DrawList, fill_bb, GetColorU32(ImGuiCol_SliderGrab, fill_alpha),
+                                 fill_bb.Min.x, fill_x, style.FrameRounding);
     }
-    const float knob_x = ImLerp(knob_x_min, knob_x_max, t);
-    const ImU32 track_bg_col = GetColorU32(g.ActiveId == id ? ImGuiCol_FrameBgActive
-                                          : hovered          ? ImGuiCol_FrameBgHovered
-                                                             : ImGuiCol_FrameBg);
-    const ImU32 track_fill_col = GetColorU32(g.ActiveId == id  ? ImGuiCol_SliderGrabActive
-                                             : hovered         ? ImGuiCol_SliderGrabActive
-                                                               : ImGuiCol_SliderGrab);
-    const ImU32 knob_col = GetColorU32(g.ActiveId == id  ? ImGuiCol_SliderGrabActive
-                                       : hovered         ? ImGuiCol_SliderGrabActive
-                                                         : ImGuiCol_SliderGrab);
-    window->DrawList->AddRectFilled(ImVec2(frame_bb.Min.x, track_y - track_h * 0.5f),
-                                    ImVec2(frame_bb.Max.x, track_y + track_h * 0.5f),
-                                    track_bg_col, track_rounding);
-    if(knob_x > frame_bb.Min.x + track_rounding)
-    {
-        window->DrawList->AddRectFilled(ImVec2(frame_bb.Min.x, track_y - track_h * 0.5f),
-                                        ImVec2(knob_x, track_y + track_h * 0.5f),
-                                        track_fill_col, track_rounding);
-    }
-    window->DrawList->AddCircleFilled(ImVec2(knob_x, track_y), knob_radius, knob_col);
-
-    // Value text (centered over the track)
     char value_buf[64];
     const char* value_buf_end =
         value_buf + DataTypeFormatString(value_buf, IM_COUNTOF(value_buf), data_type, p_data, format);
-    RenderTextClipped(frame_bb.Min, frame_bb.Max, value_buf, value_buf_end, NULL, ImVec2(0.5f, 0.5f));
+    const ImVec2 value_size = CalcTextSize(value_buf, value_buf_end);
+    const ImVec2 value_min = frame_bb.GetCenter() - value_size * 0.5f;
+    ImVec4 edge_col = GetStyleColorVec4(ImGuiCol_SliderGrabActive);
+    if(is_active)
+        edge_col = ImLerp(edge_col, ImVec4(1.0f, 1.0f, 1.0f, edge_col.w), KNOB_SLIDER_EDGE_ACTIVE_LIGHTEN);
+    const float edge_w = ImMax(KNOB_SLIDER_EDGE_MIN_WIDTH, ImTrunc(frame_h * KNOB_SLIDER_EDGE_WIDTH_RATIO));
+    const float edge_x = ImClamp(fill_x - ImTrunc(edge_w * 0.5f), fill_bb.Min.x, fill_bb.Max.x - edge_w);
+    render_knob_slider_edge(window->DrawList, fill_bb, ImRect(value_min, value_min + value_size), edge_x, edge_w,
+                            GetColorU32(edge_col), style.FrameRounding);
+
+    // Value text (centered in the frame)
+    RenderTextClipped(frame_bb.Min, frame_bb.Max, value_buf, value_buf_end, &value_size, ImVec2(0.5f, 0.5f));
 
     // Label
     if(label_size.x > 0.0f)

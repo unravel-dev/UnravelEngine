@@ -23,15 +23,39 @@ auto get_accent_color() -> ImVec4;
 auto get_muted_text_color() -> ImVec4;
 auto get_muted_text_color_u32() -> ImU32;
 
-void set_unity_theme();
-void set_unity_inspired_theme();
-void set_modern_purple_theme();
-void set_warm_amber_theme();
-void set_cool_blue_theme();
-void set_minimalist_green_theme();
-void set_professional_dark_theme();
-void set_dark_theme();
-void set_dark_theme_red();
-void set_photoshop_theme();
+//-----------------------------------------------------------------------------
+/// <summary>
+/// The themes of the editor, in the order the Style window lists them: the neutral ones, the
+/// cool ones, the warm ones.
+/// </summary>
+//-----------------------------------------------------------------------------
+enum class theme
+{
+    unravel_dark,
+    graphite,
+    charcoal,
+    slate,
+    midnight,
+    amethyst,
+    sage,
+    amber,
+    crimson,
+    count
+};
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// The name the Style window shows for a theme.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto get_theme_name(theme value) -> const char*;
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Replaces every ImGui color and size a theme defines, and takes the accent from it. The
+/// result does not depend on the theme that was set before.
+/// </summary>
+//-----------------------------------------------------------------------------
+void set_theme(theme value);
 
 } // namespace imgui_style

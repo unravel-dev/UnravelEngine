@@ -40,7 +40,7 @@ auto imgui_interface::init_basic(rtti::context& ctx) -> bool
     const auto& main_window = rend.get_main_window();
     imguiCreate(main_window, 14.0f);
 
-    imgui_style::set_unity_theme();
+    imgui_style::set_theme(imgui_style::theme::unravel_dark);
 
     inited_ = true;
     return true;

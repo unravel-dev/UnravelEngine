@@ -25,45 +25,13 @@ void style_panel::on_frame_ui_render()
     ImGui::Begin("Style", &visible_, ImGuiWindowFlags_AlwaysAutoResize);
     ImGui::Text("Select a theme:");
     ImGui::Separator();
-    if(ImGui::Button("Unity"))
+    for(int index = 0; index < static_cast<int>(imgui_style::theme::count); ++index)
     {
-        imgui_style::set_unity_theme();
-    }
-    if(ImGui::Button("Unity Inspired"))
-    {
-        imgui_style::set_unity_inspired_theme();
-    }
-    if(ImGui::Button("Modern Purple"))
-    {
-        imgui_style::set_modern_purple_theme();
-    }
-    if(ImGui::Button("Warm Amber"))
-    {
-        imgui_style::set_warm_amber_theme();
-    }
-    if(ImGui::Button("Cool Blue"))
-    {
-        imgui_style::set_cool_blue_theme();
-    }
-    if(ImGui::Button("Minimalist Green"))
-    {
-        imgui_style::set_minimalist_green_theme();
-    }
-    if(ImGui::Button("Professional Dark"))
-    {
-        imgui_style::set_professional_dark_theme();
-    }
-    if(ImGui::Button("Dark Theme"))
-    {
-        imgui_style::set_dark_theme();
-    }
-    if(ImGui::Button("Dark Red Theme"))
-    {
-        imgui_style::set_dark_theme_red();
-    }
-    if(ImGui::Button("Photoshop Theme"))
-    {
-        imgui_style::set_photoshop_theme();
+        const auto value = static_cast<imgui_style::theme>(index);
+        if(ImGui::Button(imgui_style::get_theme_name(value)))
+        {
+            imgui_style::set_theme(value);
+        }
     }
     ImGui::End();
 }
