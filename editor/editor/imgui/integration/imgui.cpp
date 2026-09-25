@@ -96,7 +96,7 @@ void ImGui_ImplGFX_UpdateTexture(ImTextureData* tex)
                                            (uint16_t)tex->Height,
                                            false,
                                            1,
-                                           bgfx::TextureFormat::BGRA8,
+                                           bgfx::TextureFormat::RGBA8,
                                            0,
                                            nullptr);
 
