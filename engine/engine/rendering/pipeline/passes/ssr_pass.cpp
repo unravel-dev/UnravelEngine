@@ -732,10 +732,15 @@ auto ssr_pass::run_composite(gfx::render_view& rview,
     gfx::set_texture(composite_program_.s_normal, 2, g_buffer->get_texture(1));
     gfx::set_texture(composite_program_.s_depth, 3, g_buffer->get_texture(4));
 
-    // Draw fullscreen quad with alpha blending
+    // Draw fullscreen quad with alpha blending over the traced layers in RBUFFER. Alpha is
+    // multiplied by 1 - confidence, so it keeps the share the traced layers leave to the probe
+    // layer (ComposeIndirectSpecular in lighting.sh).
     auto topology = gfx::clip_quad(1.0f);
     bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                   BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
+                   BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA,
+                                                  BGFX_STATE_BLEND_INV_SRC_ALPHA,
+                                                  BGFX_STATE_BLEND_ZERO,
+                                                  BGFX_STATE_BLEND_INV_SRC_ALPHA));
     bgfx::submit(pass.id, composite_program_.program->native_handle());
 
     // Reset state

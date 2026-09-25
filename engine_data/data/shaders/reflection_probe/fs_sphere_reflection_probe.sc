@@ -9,14 +9,10 @@ SAMPLER2D(s_tex2, 2);
 SAMPLER2D(s_tex3, 3);
 SAMPLER2D(s_tex4, 4);
 SAMPLERCUBE(s_tex_cube, 5);
-// Screen-space AO (GTAO, or ASSAO when GTAO is off): a = visibility; white when neither runs.
-SAMPLER2D(s_screen_ao, 6);
 
 uniform vec4 u_data0;
 uniform vec4 u_data1;
 uniform vec4 u_capture;
-/// x = screen-space AO intensity; yzw unused here.
-uniform vec4 u_screen_ao;
 
 #define u_probe_position_and_radius u_data0
 #define u_cube_mips u_data1.x
@@ -91,10 +87,7 @@ void main()
 	
 	color.a = DistanceAlpha * u_source_validity;
 
-	// The capture is unoccluded, so the specular occlusion scales it here. The GI reflections
-	// and SSR composite their traced results over this layer afterwards, unoccluded.
-	float ambient_occlusion = data.ambient_occlusion * ScreenSpaceAO(texture2D(s_screen_ao, v_texcoord0).a, u_screen_ao.x);
-	color.xyz *= ComputeSpecularOcclusion(N, V, GeometricSpecularAA(N, data.roughness), ambient_occlusion);
-
+	// Unoccluded: this is the probe layer (PBUFFER), which the GI reflection trace reads as the
+	// open sky and the indirect pass occludes (ComposeIndirectSpecular).
 	gl_FragColor = color;
 }

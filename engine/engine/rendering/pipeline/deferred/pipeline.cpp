@@ -43,6 +43,9 @@ namespace ANONYMOUS
 constexpr float cloud_shadow_border_fade = 0.08f;
 /// Period of the contact-shadow dither's temporal offset (frames); TAA integrates it.
 constexpr int contact_shadow_dither_frames = 16;
+/// RBUFFER's clear, packed RGBA8 (bgfx converts it for float targets): black with alpha 1 - no
+/// traced reflection yet, and the whole pixel left to the probe layer.
+constexpr uint32_t reflection_traced_clear_rgba = 0x000000ff;
 
 /// Where the environment revision is published on a render view, for the GI world side to read
 /// next to the IRRADIANCE_SH texture it belongs to (see run_irradiance_pass).
@@ -299,11 +302,14 @@ auto create_or_resize_l_buffer(gfx::render_view& rview,
     return fbo;
 }
 
-auto create_or_resize_r_buffer(gfx::render_view& rview,
-                               const usize32_t& viewport_size,
-                               const pipeline::run_params& params) -> const gfx::frame_buffer::ptr&
+/// A viewport-sized reflection target, recreated on resize.
+auto create_or_resize_reflection_buffer(gfx::render_view& rview,
+                                        const std::string& name,
+                                        const usize32_t& viewport_size,
+                                        const pipeline::run_params& params,
+                                        uint64_t texture_flags) -> const gfx::frame_buffer::ptr&
 {
-    auto& fbo = rview.fbo_get_or_emplace("RBUFFER");
+    auto& fbo = rview.fbo_get_or_emplace(name);
     if(gfx::needs_recreate(fbo, viewport_size))
     {
         auto format = wants_hdr_buffers(params) ? get_default_hdr_format() : get_default_format();
@@ -313,7 +319,7 @@ auto create_or_resize_r_buffer(gfx::render_view& rview,
                                                   false,
                                                   1,
                                                   format,
-                                                  BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
+                                                  texture_flags);
 
         fbo.reset();
         fbo = std::make_shared<gfx::frame_buffer>();
@@ -321,6 +327,18 @@ auto create_or_resize_r_buffer(gfx::render_view& rview,
     }
 
     return fbo;
+}
+
+/// The reflection buffers. RBUFFER holds the traced layers (GI reflections, then SSR),
+/// premultiplied in rgb, with the share they leave uncovered in alpha; PBUFFER holds the
+/// untraced layer (reflection probes, sky, the GI rough tier). The indirect pass occludes the
+/// two differently (ComposeIndirectSpecular in lighting.sh).
+void create_or_resize_reflection_buffers(gfx::render_view& rview,
+                                         const usize32_t& viewport_size,
+                                         const pipeline::run_params& params)
+{
+    create_or_resize_reflection_buffer(rview, "RBUFFER", viewport_size, params, BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
+    create_or_resize_reflection_buffer(rview, "PBUFFER", viewport_size, params, BGFX_TEXTURE_RT);
 }
 auto create_or_resize_o_buffer(gfx::render_view& rview,
                                const usize32_t& viewport_size,
@@ -894,7 +912,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     create_or_resize_d_buffer(rview, viewport_size, params);
     create_or_resize_g_buffer(rview, viewport_size, params);
     create_or_resize_l_buffer(rview, viewport_size, params);
-    create_or_resize_r_buffer(rview, viewport_size, params);
+    create_or_resize_reflection_buffers(rview, viewport_size, params);
 
     apply_pipeline_taa_jitter_to_camera(camera, viewport_size, params);
 
@@ -2286,6 +2304,7 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
 
     const auto& gbuffer = rview.fbo_get("GBUFFER");
     const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
+    const auto& pbuffer = rview.fbo_safe_get("PBUFFER");
     const auto& lbuffer = rview.fbo_get("LBUFFER");
 
     const auto irradiance_result = run_irradiance_pass(scn, rview);
@@ -2306,7 +2325,7 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     {
         gfx::set_texture(iprogram.s_tex[i], i, gbuffer->get_texture(i));
     }
-    gfx::set_texture(iprogram.s_tex[i], i, apply_reflection ? rbuffer->get_texture(0) : default_textures::get().black_texture());
+    gfx::set_texture(iprogram.s_tex[i], i, apply_reflection && rbuffer ? rbuffer->get_texture(0) : default_textures::get().black_texture());
     i++;
     gfx::set_texture(iprogram.s_tex[i], i, ibl_brdf_lut_.get());
     i++;
@@ -2328,14 +2347,25 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
                      8,
                      indirect_diffuse_tex ? indirect_diffuse_tex : default_textures::get().transparent_texture());
     // Whether that slot carries a real estimate: with it the shader takes the resolve outright;
-    // without it the environment SH answers (fs_pbr_lighting.sh, pbr_indirect).
-    const float indirect_params[4] = {indirect_diffuse_tex ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    // without it the environment SH answers (fs_pbr_lighting.sh, pbr_indirect). And whether the
+    // estimate is SSIL's, whose rays resolved the screen-space visibility per pixel: it takes
+    // no screen-space AO, where the GI resolve takes it below its probe lattice.
+    const bool indirect_diffuse_is_ssil = indirect_diffuse_tex && !rview.tex_safe_get("GI_RESOLVE");
+    const float indirect_params[4] = {indirect_diffuse_tex ? 1.0f : 0.0f,
+                                      indirect_diffuse_is_ssil ? 1.0f : 0.0f,
+                                      0.0f,
+                                      0.0f};
     gfx::set_uniform(iprogram.u_indirect_params, indirect_params);
-    // Screen-space AO for the indirect diffuse (the probe pass already applied it to the
-    // reflection captures).
+    // The occlusion of both indirect terms: the screen-space AO, and the GTSO table for the
+    // specular. The untraced reflection layer (PBUFFER) takes the full occlusion, the traced
+    // layers in RBUFFER only the material AO's.
     const auto screen_ao = get_screen_ao_inputs(rview);
     gfx::set_texture(iprogram.s_screen_ao, 9, screen_ao.texture);
     gfx::set_uniform(iprogram.u_screen_ao, screen_ao.params.data());
+    gfx::set_texture(iprogram.s_probe_layer,
+                     10,
+                     apply_reflection && pbuffer ? pbuffer->get_texture(0) : default_textures::get().black_texture());
+    gfx::set_texture(iprogram.s_specular_occlusion, 12, default_textures::get().specular_occlusion().texture.get());
     gfx::set_uniform(iprogram.u_pre_exposure, get_pre_exposure(rview).to_uniform().data());
     
 
@@ -2367,11 +2397,18 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
     const auto& viewport_size = camera.get_viewport_size();
     const auto& gbuffer = rview.fbo_get("GBUFFER");
     const auto& rbuffer = rview.fbo_get("RBUFFER");
+    const auto& pbuffer = rview.fbo_get("PBUFFER");
 
-    const auto buffer_size = rbuffer->get_size();
+    const auto buffer_size = pbuffer->get_size();
+
+    // The traced layers composite into RBUFFER from (0, 0, 0, 1): no traced radiance yet, and
+    // the whole pixel left to the probe layer.
+    gfx::render_pass traced_clear_pass("Reflections/Traced Clear");
+    traced_clear_pass.bind(rbuffer.get());
+    traced_clear_pass.clear(BGFX_CLEAR_COLOR, ANONYMOUS::reflection_traced_clear_rgba, 0.0f, 0);
 
     gfx::render_pass pass("Reflections/Buffer Pass");
-    pass.bind(rbuffer.get());
+    pass.bind(pbuffer.get());
     pass.set_view_proj(view, proj);
     pass.clear(BGFX_CLEAR_COLOR, 0, 0.0f, 0);
 
@@ -2406,12 +2443,8 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
                   return lhs_probe.get_max_range() > rhs_probe.get_max_range(); // Smaller ranges first
               });
 
-    // The captures are unoccluded: each probe applies the specular occlusion of the pixel's
-    // ambient occlusion (material AO times screen-space AO) before the traced reflections
-    // composite over them.
-    const auto screen_ao = get_screen_ao_inputs(rview);
-
-    // Render or process the sorted probes
+    // Render or process the sorted probes, unoccluded: the GI reflection trace reads this layer
+    // as the open sky, and the indirect pass occludes it (ComposeIndirectSpecular).
     for(const auto& e : sorted_probes)
     {
         auto& transform_comp_ref = scn.registry->get<transform_component>(e);
@@ -2469,7 +2502,7 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
 
             const bool is_global_fallback = probe.method == reflect_method::environment;
             const float source_validity = 1.0f;
-            // RBUFFER holds pre-exposed reflections; the captured cubemaps are absolute radiance.
+            // PBUFFER holds pre-exposed reflections; the captured cubemaps are absolute radiance.
             float data1[4] = {mips, probe.intensity * get_pre_exposure(rview).value, is_global_fallback ? 1.0f : 0.0f, source_validity};
             float capture[4] = {probe_comp_ref.get_apply_prefilter() ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
 
@@ -2483,12 +2516,18 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
             }
 
             gfx::set_texture(ref_probe_program->s_tex_cube, 5, cubemap);
-            gfx::set_texture(ref_probe_program->s_screen_ao, 6, screen_ao.texture);
-            gfx::set_uniform(ref_probe_program->u_screen_ao, screen_ao.params.data());
 
             bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
             auto topology = gfx::clip_quad(1.0f);
-            bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
+            // Over-blend, rgb premultiplied by the probe's weight and alpha the union of the
+            // coverages (1 - (1 - a)(1 - b)): the indirect pass and the GI reflection sky
+            // fallback read that alpha as how much of the pixel the probes answer, and fill the
+            // rest with the environment. BGFX_STATE_BLEND_ALPHA on alpha squared it instead.
+            bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                           BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA,
+                                                          BGFX_STATE_BLEND_INV_SRC_ALPHA,
+                                                          BGFX_STATE_BLEND_ONE,
+                                                          BGFX_STATE_BLEND_INV_SRC_ALPHA));
 
             ref_probe_program->program->begin();
             bgfx::submit(pass.id, ref_probe_program->program->native_handle());
@@ -3231,14 +3270,18 @@ void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
     grp.output = rview.fbo_safe_get("RBUFFER");
     grp.hiz = rview.tex_safe_get("HIZBUFFER");
     grp.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
-    // Sky-miss fallback: RBUFFER holds exactly the freshly drawn authored probe layer at
-    // this point (cleared and rebuilt by run_reflection_probe_pass earlier this frame; the
-    // GI composite and SSR write into it later). Without the probe stack this frame the
-    // buffer is stale with last frame's composite + SSR - reading it would feed the pass
-    // its own output - so the pass falls back to the sky SH instead.
-    if(reflection_screen_stack_enabled(params) && grp.output)
+    // Sky-miss fallback: PBUFFER holds exactly the freshly drawn, unoccluded authored probe
+    // layer at this point (cleared and rebuilt by run_reflection_probe_pass earlier this frame;
+    // the pass's rough tier writes into it later). Without the probe stack this frame the
+    // buffer is stale with last frame's probes and rough tier - reading it would feed the pass
+    // its own output - so the pass falls back to the sky SH and leaves the rough tier out.
+    if(reflection_screen_stack_enabled(params))
     {
-        grp.probe_layer = grp.output->get_texture(0);
+        grp.probe_output = rview.fbo_safe_get("PBUFFER");
+        if(grp.probe_output)
+        {
+            grp.probe_layer = grp.probe_output->get_texture(0);
+        }
     }
     // This pass runs before the frame's GI resolve, so the stored texture still holds
     // LAST frame's denoised result - the rough-specular source (one frame of lag, the
@@ -3465,6 +3508,7 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     const auto& proj = camera.get_projection();
     const auto& gbuffer = rview.fbo_get("GBUFFER");
     const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
+    const auto& pbuffer = rview.fbo_safe_get("PBUFFER");
     const auto& irradiance_tex = create_or_get_irradiance_texture(rview);
 
     gfx::render_pass pass("Debug/Visualization Pass");
@@ -3513,6 +3557,9 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     const auto screen_ao = get_screen_ao_inputs(rview);
     gfx::set_texture(debug_visualization_program_.s_tex[8], 8, screen_ao.texture);
     gfx::set_uniform(debug_visualization_program_.u_screen_ao, screen_ao.params.data());
+    // The reflection views compose the two reflection buffers the way the indirect pass does.
+    gfx::set_texture(debug_visualization_program_.s_tex[9], 9, pbuffer);
+    gfx::set_texture(debug_visualization_program_.s_tex[10], 10, default_textures::get().specular_occlusion().texture.get());
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
     bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());

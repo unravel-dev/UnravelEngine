@@ -44,11 +44,13 @@
  * gather's proven jitter recipe - and the temporal pass integrates the lobe over
  * GI_REFLECTION_TEMPORAL_FRAMES of reprojected history. Roughness therefore SPREADS the
  * reflection the way SSR's stochastic trace does, instead of any fixed fade. At mirror
- * roughness alpha collapses the distribution and the ray is deterministic. The
- * GATHER_FADE_START..ROUGH_CUTOFF band still fades into the rough tier for continuity at the
- * cutoff. Per-pixel world-probe cage reads remain deliberately ABSENT: the 2 m lattice's
+ * roughness alpha collapses the distribution and the ray is deterministic. Per-pixel
+ * world-probe cage reads remain deliberately ABSENT: the 2 m lattice's
  * interpolation pattern stamps into the image as blotches, not blur (measured twice, rounds
- * 2 and 8). Output = incoming radiance along the sampled ray at FULL weight - energy is
+ * 2 and 8). The GATHER_FADE_START..ROUGH_CUTOFF band hands over to the rough tier in the two
+ * composites (gi_reflection_tiers.sh), not here: the rough tier is untraced and goes into the
+ * probe layer, which the indirect pass occludes, so this pass returns the traced value alone.
+ * Output = incoming radiance along the sampled ray at FULL weight - energy is
  * constant across roughness (fading the sharp end read as brightness rising with roughness,
  * round 10). Alpha is coverage below 1 (mesh-exact and refined hits cover the probe layer,
  * an unrefined clipmap hit on a sharp pixel does not) and encodes the HIT DISTANCE above 1
@@ -198,10 +200,10 @@ float GiReflectionNearFieldFactor(vec3 hit_position, vec3 hit_normal, vec3 lit_p
 }
 
 SAMPLER2D(s_gi_normal, 5);
-/// The authored probe layer (RBUFFER right after the probe pass): at trace time it holds
-/// exactly the freshly drawn reflection probes - the GI composite and SSR write into it
-/// later in the frame. Bound as transparent black when the probe stack did not run this
-/// frame, so the read never sees this pass's own previous output.
+/// The authored probe layer (PBUFFER right after the probe pass, unoccluded): at trace time
+/// it holds exactly the freshly drawn reflection probes - the rough tier blends into it later
+/// in the frame. Bound as transparent black when the probe stack did not run this frame, so
+/// the read never sees this pass's own previous output.
 SAMPLER2D(s_gi_probe_layer, 6);
 SAMPLER2D(s_hiz, 8);
 /// LAST frame's resolved GI (E/pi per pixel, temporally filtered and denoised): the rough
@@ -331,23 +333,23 @@ bool GiReflectionScreenColorAtHit(vec3 hit_position, vec3 hit_normal, vec2 frag_
 
 /// Sky answer for rays our own geometry data calls OPEN: the authored probe layer at this
 /// pixel, already multi-probe blended and parallax projected - frequency content an L2 SH
-/// cannot hold (clouds, sun disk, horizon). Probe alpha is the layer's own coverage, so
-/// unprobed pixels keep the SH answer instead of going black (RBUFFER.rgb is consumed flat
-/// by the indirect pass - a hole here IS the final specular).
+/// cannot hold (clouds, sun disk, horizon). The layer's rgb is premultiplied by the probes'
+/// weights and its alpha is their union coverage, so the SH answers exactly the uncovered rest
+/// and unprobed pixels keep it instead of going black (the indirect pass consumes the
+/// reflection buffers flat - a hole here IS the final specular).
 vec3 GiReflectionSkyFallback(vec2 uv, vec3 direction)
 {
 	vec4 probe_layer = texture2DLod(s_gi_probe_layer, uv, 0.0);
 	float probe_alpha = saturate(probe_layer.w);
 	// Full probe coverage is the normal state, and the SH is 9 texelFetches evaluated only
-	// to be mixed out. Skip it whenever its weight is below half a quantum of the RGBA16F
+	// to be weighted out. Skip it whenever its weight is below half a quantum of the RGBA16F
 	// target. A branch, not a ternary: HLSL ?: is a select that may evaluate both arms.
 	BRANCH
 	if(probe_alpha >= 0.999)
 	{
 		return probe_layer.xyz;
 	}
-	vec3 sky_sh = GiReflectionEnvRadiance(direction);
-	return mix(sky_sh, probe_layer.xyz, probe_alpha);
+	return probe_layer.xyz + GiReflectionEnvRadiance(direction) * (1.0 - probe_alpha);
 }
 
 /// Mesh-exact walk length: mirrors pay the long range, gloss pays less than the old flat 16 m.
@@ -567,10 +569,11 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	{
 		return vec4(rough_value, 1.0);
 	}
-	// GLOSS CONTINUITY FADE: the traced tiers below spread with roughness on their own, so
-	// this fade's only remaining job is C0 continuity into the rough tier at the cutoff -
-	// it covers just the residual band (a wide fade read as content dissolving, not blurring).
-	float gloss_blend = smoothstep(GI_REFLECTION_GATHER_FADE_START, GI_REFLECTION_ROUGH_CUTOFF, roughness);
+	// GLOSS CONTINUITY FADE into the rough tier over the residual band below the cutoff is NOT
+	// mixed in here any more: the rough tier is untraced (it carries the probe lattice's
+	// visibility, not the pixel's), so fs_gi_reflection_rough.sc composites it into the probe
+	// layer, which the indirect pass occludes, while this pass returns the traced value alone
+	// and the composite takes the complementary share (GiReflectionRoughShare).
 	// STOCHASTIC direction: jitter the ray inside the GGX lobe (bounded-cap VNDF), decorrelated
 	// per pixel by IGN and advanced per frame by R2; the temporal pass integrates. The whole
 	// sampler lives in gi_reflection_sampling.sh because the temporal RESOLVE has to reproduce
@@ -912,7 +915,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	{
 		alpha = 2.0;
 	}
-	return vec4(mix(radiance, rough_value, gloss_blend), alpha);
+	return vec4(radiance, alpha);
 }
 
 #endif // __GI_REFLECTION_KERNEL_SH__

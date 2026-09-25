@@ -86,6 +86,33 @@ Use `unravel-shader-change` for step-by-step shader edits.
 - The `gfx::set_uniform` / `gfx::set_texture` overloads taking `gfx::program::uniform_ptr` live
   in `engine/engine/rendering/gpu_program.h`; raw bgfx handles go straight to bgfx.
 
+## Indirect occlusion contract
+
+Each indirect term takes only the occlusion it has not resolved itself
+(`pbr_indirect` in `fs_pbr_lighting.sh`, helpers in `lighting.sh`):
+
+- **Reflection buffers.** `PBUFFER` = the untraced layer (probes, then the GI rough tier),
+  drawn unoccluded, rgb premultiplied and alpha the UNION coverage (alpha blend
+  `(ONE, INV_SRC_ALPHA)`) - the GI reflection trace reads it as the open sky, and the uncovered
+  rest is the environment SH (`CompleteProbeLayer`, UE's sky-light fill). `RBUFFER` = the traced
+  layers (GI reflection hits, then SSR), cleared to (0,0,0,1) and blended with alpha
+  `(ZERO, INV_SRC_ALPHA)`, so alpha is the share left to the probe layer. The indirect pass
+  composes `SO.traced * RBUFFER.rgb + RBUFFER.a * SO.untraced * completed PBUFFER`
+  (`ComposeIndirectSpecular`). A new traced layer blends into `RBUFFER` the same way; a new
+  untraced source goes into `PBUFFER` with the same union alpha. Never bake occlusion into
+  either buffer.
+- **Specular occlusion** is GTSO: `SpecularOcclusionGTSO` reads the 32^3 table from
+  `specular_occlusion_lut` (owned by `default_textures`; suite `specular occlusion`), with the
+  multi-bounce fit on F0 (`ComputeIndirectSpecularOcclusion`; UE, HDRP and Filament do the same).
+- **Diffuse:** the SH takes material x screen AO over the visibility cone
+  (`eval_irradiance_sh_cone`); the GI resolve takes both (it resolves visibility only at its
+  probe lattice); SSIL takes the material AO only (`u_indirect_params.y`). Multi-bounce applies
+  once, to the combined visibility, on the uncapped diffuse albedo (`MultiBounceAOGain`).
+  Direct light takes no AO.
+- **The screen AO's range is the artist's** (GTAO / ASSAO radius and screen radius): never
+  derive or clamp it from another system's settings (e.g. the GI probe spacing, as Lumen's
+  short-range AO does) - document the trade-off on the setting instead.
+
 ## GI subsystem
 
 `engine/engine/rendering/gi/` - voxel/probe GI with SDF tracing, surface cache, and

@@ -71,6 +71,7 @@ void default_textures::generate()
     black_cube_  = create_4x4_cube_rgba8(0, 0, 0, 255);
 
     cloud_noise_.generate();
+    specular_occlusion_.generate();
 }
 
 void default_textures::clear()
@@ -82,6 +83,7 @@ void default_textures::clear()
     black_cube_.reset();
 
     cloud_noise_.clear();
+    specular_occlusion_.clear();
 }
 
 } // namespace unravel

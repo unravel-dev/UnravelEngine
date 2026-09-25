@@ -236,8 +236,8 @@ public:
                                  const gi_settings& gi,
                                  bgfx::IndirectBufferHandle indirect);
 
-    /// World-space specular tier into RBUFFER, layered UNDER SSR. No-op unless a
-    /// camera run with GI reflections enabled.
+    /// World-space specular tier into RBUFFER, layered UNDER SSR, and its rough tier into
+    /// PBUFFER, the probe layer. No-op unless a camera run with GI reflections enabled.
     void run_gi_reflection_pass(const camera& camera, gfx::render_view& rview, const run_params& params);
 
     /// Gathers the world structures into a screen-space indirect diffuse buffer.
@@ -275,8 +275,6 @@ private:
             cache_uniform(program.get(), s_tex[3], "s_tex3", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[4], "s_tex4", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex_cube, "s_tex_cube", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_screen_ao, "s_screen_ao", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), u_screen_ao, "u_screen_ao", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr u_data0;
@@ -285,9 +283,6 @@ private:
 
         std::array<gfx::program::uniform_ptr, 5> s_tex;
         gfx::program::uniform_ptr s_tex_cube;
-        /// Screen-space AO for the specular occlusion of the capture (get_screen_ao_inputs).
-        gfx::program::uniform_ptr s_screen_ao;
-        gfx::program::uniform_ptr u_screen_ao;
 
         std::unique_ptr<gpu_program> program;
     };
@@ -513,6 +508,8 @@ private:
             cache_uniform(program.get(), s_irradiance, "s_irradiance", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_ssil, "s_ssil", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_screen_ao, "s_screen_ao", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_probe_layer, "s_probe_layer", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_specular_occlusion, "s_specular_occlusion", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_screen_ao, "u_screen_ao", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_indirect_params, "u_indirect_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
@@ -526,9 +523,14 @@ private:
         /// Screen-space AO texture and parameters (get_screen_ao_inputs).
         gfx::program::uniform_ptr s_screen_ao;
         gfx::program::uniform_ptr u_screen_ao;
+        /// PBUFFER, the untraced reflection layer; s_tex[5] is RBUFFER, the traced layers.
+        gfx::program::uniform_ptr s_probe_layer;
+        /// The GTSO table (default_textures::specular_occlusion).
+        gfx::program::uniform_ptr s_specular_occlusion;
         /// x = 1 when a real GI resolve / SSIL texture feeds s_ssil, 0 when the transparent
         /// fallback does; the shader then takes the resolve outright instead of mixing the
-        /// environment SH back in (fs_pbr_lighting.sh, pbr_indirect).
+        /// environment SH back in (fs_pbr_lighting.sh, pbr_indirect). y = 1 when that source is
+        /// SSIL, which resolved the screen-space visibility per pixel and takes no screen AO.
         gfx::program::uniform_ptr u_indirect_params;
 
         std::unique_ptr<gpu_program> program;
@@ -549,6 +551,8 @@ private:
             cache_uniform(program.get(), s_tex[6], "s_tex6", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[7], "s_tex7", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[8], "s_tex8", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[9], "s_tex9", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_tex[10], "s_tex10", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_screen_ao, "u_screen_ao", bgfx::UniformType::Vec4);
         }
@@ -557,7 +561,9 @@ private:
         gfx::program::uniform_ptr u_params;
         /// Screen-space AO parameters for the occlusion views (get_screen_ao_inputs).
         gfx::program::uniform_ptr u_screen_ao;
-        std::array<gfx::program::uniform_ptr, 9> s_tex;
+        /// 0-4 G-buffer, 5 RBUFFER, 6 environment SH, 7 GI / SSIL, 8 screen-space AO,
+        /// 9 PBUFFER, 10 the GTSO table.
+        std::array<gfx::program::uniform_ptr, 11> s_tex;
 
         std::unique_ptr<gpu_program> program;
 

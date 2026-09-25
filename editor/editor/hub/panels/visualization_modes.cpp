@@ -335,9 +335,10 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      visualization_group::occlusion,
      "ambient_occlusion",
      "Ambient Occlusion",
-     "The occlusion the indirect lighting applies: the material AO from the G-Buffer times the "
-     "screen-space AO (GTAO, or ASSAO when GTAO is off), before the diffuse multi-bounce. "
-     "White = unoccluded.",
+     "The occlusion of the untraced indirect lighting (environment SH, reflection probes): the "
+     "material AO from the G-Buffer times the screen-space AO (GTAO, or ASSAO when GTAO is off), "
+     "before the diffuse multi-bounce. The GI takes the same; SSIL and traced reflections take "
+     "only the material AO. White = unoccluded.",
      {}},
     {visualization_mode::ao_bent_normals,
      visualization_group::occlusion,
@@ -351,9 +352,10 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      visualization_group::occlusion,
      "specular_occlusion",
      "Specular Occlusion",
-     "The specular occlusion the reflection probes apply, from the ambient occlusion, "
-     "roughness and view angle. SSR and GI reflection hits are not occluded. "
-     "White = reflections arrive unoccluded.",
+     "The specular occlusion of the untraced reflections (probes, sky, the GI rough tier): the "
+     "share of the GGX lobe inside the visibility cone of the ambient occlusion, around the GTAO "
+     "bent normal, with the multi-bounce of F0 (tinted on metals). SSR and GI reflection hits "
+     "take only the material AO's. White = reflections arrive unoccluded.",
      {}},
 
     // -- Lighting -------------------------------------------------------------
@@ -374,16 +376,18 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
     {visualization_mode::reflections,
      visualization_group::lighting,
      "reflections",
-     "Reflections (RBUFFER)",
-     "The specular reflection buffer: screen-space reflections composited over the GI "
-     "reflection tier. This is what the indirect pass mixes in as specular.",
+     "Reflections",
+     "The indirect specular radiance, ahead of the environment BRDF: the traced layers (SSR over "
+     "the GI reflection tier) plus the share they leave of the probe layer - completed with the "
+     "environment SH where no probe reaches - each under its specular occlusion. This is what "
+     "the indirect pass mixes in as specular.",
      {}},
     {visualization_mode::reflection_coverage,
      visualization_group::lighting,
      "reflection_coverage",
      "Reflection Coverage",
-     "The reflection buffer alpha channel: how strongly it replaces the probe specular. "
-     "White = fully reflection-driven, black = probe only.",
+     "The share of the specular the traced reflections (SSR, GI reflections) cover; the rest "
+     "comes from the probe layer. White = fully traced, black = probe layer only.",
      {}},
     {visualization_mode::exposure,
      visualization_group::lighting,

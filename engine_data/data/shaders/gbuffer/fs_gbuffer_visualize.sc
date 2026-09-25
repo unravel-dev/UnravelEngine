@@ -15,9 +15,14 @@ SAMPLER2D(s_tex7, 7);
 // Screen-space AO (GTAO, or ASSAO when GTAO is off): a = visibility; rgb = GTAO bent
 // normal * 0.5 + 0.5.
 SAMPLER2D(s_tex8, 8);
+// PBUFFER, the untraced reflection layer; s_tex5 is RBUFFER, the traced layers.
+SAMPLER2D(s_tex9, 9);
+// The GTSO specular occlusion table (specular_occlusion_lut).
+SAMPLER3D(s_tex10, 10);
 
 uniform vec4 u_params;
-/// x = screen-space AO intensity, w = 1 when the texture is GTAO's (bent normal); yz unused.
+/// x = screen-space AO intensity, z = multi-bounce of the screen term (0/1), w = 1 when the
+/// texture is GTAO's (bent normal); y unused here.
 uniform vec4 u_screen_ao;
 
 #define u_mode int(u_params.x)
@@ -39,6 +44,29 @@ uniform vec4 u_screen_ao;
 #define SPECULAR_OCCLUSION 14
 #define AO_BENT_NORMALS 15
 
+/// The indirect specular of pbr_indirect, ahead of the environment BRDF: the two reflection
+/// buffers under their occlusion, the probe layer completed with the environment. Returns the
+/// untraced layer's occlusion through @p untraced_occlusion.
+vec3 indirect_specular_radiance(GBufferData data, vec2 texcoord0, out vec3 untraced_occlusion)
+{
+    vec3 clip = clipTransform(vec3(texcoord0 * 2.0 - 1.0, data.depth));
+    vec3 world_position = clipToWorld(u_invViewProj, clip);
+    vec3 N = normalize(data.world_normal);
+    vec3 V = normalize(mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz - world_position);
+    vec4 screen_ao_sample = texture2D(s_tex8, texcoord0);
+    float screen_ao = ScreenSpaceAO(screen_ao_sample.a, u_screen_ao.x);
+    vec3 axis = ScreenSpaceOcclusionAxis(screen_ao_sample, u_screen_ao.w, screen_ao, N);
+    float roughness = GeometricSpecularAA(N, data.roughness);
+    vec3 dominant_dir = normalize(GetSpecularDominantDir(N, reflect(-V, N), roughness));
+    IndirectSpecularOcclusion occlusion =
+        ComputeIndirectSpecularOcclusion(s_tex10, N, dominant_dir, roughness, data.specular_color,
+                                         data.ambient_occlusion, data.ambient_occlusion * screen_ao, axis, u_screen_ao.z);
+    untraced_occlusion = occlusion.untraced;
+    vec3 environment = eval_radiance_sh_lobe(s_tex6, dominant_dir, roughness) * u_pre_exposure_value;
+    vec3 probe_layer = CompleteProbeLayer(texture2D(s_tex9, texcoord0), environment);
+    return ComposeIndirectSpecular(texture2D(s_tex5, texcoord0), probe_layer, occlusion);
+}
+
 vec4 gbuffer_visualize(vec2 texcoord0)
 {
     GBufferData data = DecodeGBuffer(texcoord0, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
@@ -58,12 +86,15 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     }
     else if(u_mode == RADIANCE)
     {
-        // RBUFFER carries the view's pre-exposure; the view shows absolute radiance.
-        color = texture2D(s_tex5, texcoord0).xyz * u_pre_exposure_inverse;
+        // The indirect specular radiance the lighting uses, ahead of the environment BRDF. The
+        // reflection buffers carry the view's pre-exposure; the view shows absolute radiance.
+        vec3 untraced_occlusion;
+        color = indirect_specular_radiance(data, texcoord0, untraced_occlusion) * u_pre_exposure_inverse;
     }
     else if(u_mode == RADIANCE_ALPHA)
     {
-        color = vec3_splat(texture2D(s_tex5, texcoord0).a);
+        // RBUFFER alpha is the share the traced layers leave to the probe layer.
+        color = vec3_splat(1.0 - texture2D(s_tex5, texcoord0).a);
     }
     else if(u_mode == AMBIENT_OCCLUSION)
     {
@@ -108,13 +139,11 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     }
     else if(u_mode == SPECULAR_OCCLUSION)
     {
-        vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
-        clip = clipTransform(clip);
-        vec3 world_position = clipToWorld(u_invViewProj, clip);
-        vec3 N = normalize(data.world_normal);
-        vec3 V = normalize(mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz - world_position);
-        float ambient_occlusion = data.ambient_occlusion * ScreenSpaceAO(texture2D(s_tex8, texcoord0).a, u_screen_ao.x);
-        color = vec3_splat(ComputeSpecularOcclusion(N, V, GeometricSpecularAA(N, data.roughness), ambient_occlusion));
+        // The probe layer's occlusion, with the specular multi-bounce (tinted by F0 on metals);
+        // the traced layers take only the material AO's.
+        vec3 untraced_occlusion;
+        indirect_specular_radiance(data, texcoord0, untraced_occlusion);
+        color = untraced_occlusion;
     }
     else if(u_mode == AO_BENT_NORMALS)
     {

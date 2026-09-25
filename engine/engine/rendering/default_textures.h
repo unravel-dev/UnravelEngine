@@ -1,6 +1,7 @@
 #pragma once
 
 #include "cloud_noise.h"
+#include "specular_occlusion_lut.h"
 #include <graphics/texture.h>
 #include <memory>
 
@@ -28,6 +29,9 @@ public:
     auto cloud_noise() -> cloud_noise_textures& { return cloud_noise_; }
     auto cloud_noise() const -> const cloud_noise_textures& { return cloud_noise_; }
 
+    /// The GTSO specular occlusion table (SpecularOcclusionGTSO in lighting.sh).
+    auto specular_occlusion() const -> const specular_occlusion_lut& { return specular_occlusion_; }
+
 private:
     default_textures();
 
@@ -38,6 +42,7 @@ private:
     gfx::texture::ptr black_cube_;
 
     cloud_noise_textures cloud_noise_;
+    specular_occlusion_lut specular_occlusion_;
 };
 
 } // namespace unravel

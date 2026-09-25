@@ -94,6 +94,9 @@ auto gi_reflection_pass::init(rtti::context& ctx) -> bool
     auto fs_composite = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_reflection_composite.sc");
     composite_program_.cache_uniforms();
     composite_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_composite);
+    auto fs_rough = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_reflection_rough.sc");
+    rough_program_.cache_uniforms();
+    rough_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_rough);
     return true;
 }
 
@@ -462,10 +465,12 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         bgfx::setState(BGFX_STATE_DEFAULT);
         temporal_program_.program->end();
     }
-    // COMPOSITE: src-alpha OVER the authored probe layer. Coverage is 1 for mesh-exact
-    // / refined hits and 0 for an unrefined clipmap on a sharp pixel, so probes remain
-    // the far-field image where the clipmap isosurface would be a wrong silhouette.
-    // SSR composites the sharp on-screen result on top afterwards.
+    // COMPOSITE: the traced tier, src-alpha into RBUFFER. Coverage is 1 for mesh-exact /
+    // refined hits and 0 for an unrefined clipmap on a sharp pixel, so probes remain the
+    // far-field image where the clipmap isosurface would be a wrong silhouette; the rough tier's
+    // share is left out (it goes into the probe layer below). Alpha is multiplied by
+    // 1 - coverage, so RBUFFER keeps the share the traced layers leave to the probe layer.
+    // SSR composites the sharp on-screen result on top afterwards, the same way.
     {
         gfx::render_pass cpass("GI/Reflections Composite");
         cpass.bind(params.output.get());
@@ -486,10 +491,45 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
             ctopology = gfx::clip_quad(1.0f);
         }
         bgfx::setState(ctopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_INV_SRC_ALPHA));
+                       BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA,
+                                                      BGFX_STATE_BLEND_INV_SRC_ALPHA,
+                                                      BGFX_STATE_BLEND_ZERO,
+                                                      BGFX_STATE_BLEND_INV_SRC_ALPHA));
         bgfx::submit(cpass.id, composite_program_.program->native_handle());
         bgfx::setState(BGFX_STATE_DEFAULT);
         composite_program_.program->end();
+    }
+    // ROUGH TIER: last frame's resolved gather, src-alpha into the probe layer at the weight
+    // that completes the traced composite's split (gi_reflection_tiers.sh). It is untraced, so
+    // it takes the probe layer's occlusion in the indirect pass. The trace read the probe layer
+    // as its sky before this draw. Without a resolve yet the probes answer the rough lobes.
+    // begin() is the gate, not is_valid(): it relinks a program whose shader finished importing
+    // after init, which is_valid() alone would report invalid for good.
+    if(params.probe_output && has_gi_diffuse && rough_program_.program && rough_program_.program->begin())
+    {
+        gfx::render_pass rpass("GI/Reflections Rough Tier");
+        rpass.bind(params.probe_output.get());
+        gfx::set_texture(rough_program_.s_refl_acc, 0, write_tex);
+        gfx::set_texture(rough_program_.s_gi_normal, 1, params.g_buffer->get_texture(1));
+        gfx::set_texture(rough_program_.s_hiz, 2, params.hiz);
+        gfx::set_texture(rough_program_.s_gi_diffuse, 3, params.gi_diffuse);
+        gfx::set_uniform(rough_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
+        auto rtopology = gfx::clip_fullscreen_triangle(1.0f);
+        if(rtopology == 0)
+        {
+            rtopology = gfx::clip_quad(1.0f);
+        }
+        // Over-blend like the probes: rgb premultiplied, alpha the union coverage, so the
+        // indirect pass fills only what neither the probes nor the rough tier answer with the
+        // environment (CompleteProbeLayer). The trace has already read the probes' own coverage.
+        bgfx::setState(rtopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                       BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA,
+                                                      BGFX_STATE_BLEND_INV_SRC_ALPHA,
+                                                      BGFX_STATE_BLEND_ONE,
+                                                      BGFX_STATE_BLEND_INV_SRC_ALPHA));
+        bgfx::submit(rpass.id, rough_program_.program->native_handle());
+        bgfx::setState(BGFX_STATE_DEFAULT);
+        rough_program_.program->end();
     }
     bgfx::discard();
     // A FULL-RESOLUTION mirror tier lived here briefly (capped compacted list re-traced at
@@ -497,8 +537,9 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     // for fidelity that did not read, plus artifacts - the sharp trace ran after the
     // composite and bound RBUFFER both as its sky-fallback sampler and as its RW output
     // image in one dispatch, a read-write alias that is undefined on every backend. If it
-    // returns, the sky fallback needs a pre-composite copy of the probe layer, and the
-    // half-res classify should exclude the pixels the tier will overwrite.
+    // returns, its sky fallback must read the probe layer (PBUFFER) before the rough tier
+    // blends into it, and the half-res classify should exclude the pixels the tier will
+    // overwrite.
     return true;
 }
 

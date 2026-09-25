@@ -774,11 +774,12 @@ void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
 #define DEGREES_PER_RADIAN 57.2957795
 
 // Evaluate irradiance from SH coefficients (9 coeffs per channel) stored in 2D texture.
-// Layout: texel (k, 0) = coeff k, rgb = channels R,G,B. Cosine lobe (Lambert) with A0=PI, A1=2*PI/3, A2=PI*0.25.
-vec3 eval_irradiance_sh(sampler2D coeff_tex, vec3 N)
+// Layout: texel (k, 0) = coeff k, rgb = channels R,G,B. Cosine lobe (Lambert) with A0=PI, A1=2*PI/3,
+// A2=PI*0.25, each band's constant scaled by band_scale (x = band 0, y = band 1, z = band 2).
+vec3 eval_irradiance_sh_scaled(sampler2D coeff_tex, vec3 N, vec3 band_scale)
 {
     float x = N.x, y = N.y, z = N.z;
-    float A0 = PI, A1 = (2.0 * PI) / 3.0, A2 = PI * 0.25;
+    float A0 = PI * band_scale.x, A1 = (2.0 * PI) / 3.0 * band_scale.y, A2 = PI * 0.25 * band_scale.z;
     float lobe[9];
     lobe[0] = A0 * 0.282095;
     lobe[1] = A1 * 0.488603 * y;
@@ -793,6 +794,28 @@ vec3 eval_irradiance_sh(sampler2D coeff_tex, vec3 N)
     for(int k = 0; k < 9; k++)
         irradiance += texelFetch(coeff_tex, ivec2(k, 0), 0).rgb * lobe[k];
     return irradiance;
+}
+
+// Irradiance of the full cosine lobe around N.
+vec3 eval_irradiance_sh(sampler2D coeff_tex, vec3 N)
+{
+    return eval_irradiance_sh_scaled(coeff_tex, N, vec3_splat(1.0));
+}
+
+/// Irradiance over a visibility cone (Jimenez et al. 2016; UE's EvaluateSHIrradiance): the
+/// cosine lobe around @p axis restricted to the cone whose cosine-weighted solid angle is
+/// @p visibility, i.e. AO = sin^2(aperture). Relative to the full lobe the zonal factors are
+/// Z0 = sin^2 a, Z1 = 1 - cos^3 a and Z2 = sin^2 a (1 + 3 cos^2 a): band 0 carries exactly the
+/// visibility, so a uniform environment returns AO * E, and the higher bands keep more of the
+/// light arriving along the axis than a plain AO multiply does.
+vec3 eval_irradiance_sh_cone(sampler2D coeff_tex, vec3 axis, float visibility)
+{
+    float cos_aperture = sqrt(saturate(1.0 - visibility));
+    float sin2_aperture = 1.0 - cos_aperture * cos_aperture;
+    vec3 band_scale = vec3(sin2_aperture,
+                           1.0 - cos_aperture * cos_aperture * cos_aperture,
+                           sin2_aperture * (1.0 + 3.0 * cos_aperture * cos_aperture));
+    return max(eval_irradiance_sh_scaled(coeff_tex, axis, band_scale), vec3_splat(0.0));
 }
 
 // Evaluate environment RADIANCE L(dir) from the same SH coefficients used by
@@ -818,6 +841,24 @@ vec3 eval_radiance_sh(sampler2D coeff_tex, vec3 dir)
     for(int k = 0; k < 9; k++)
         radiance += texelFetch(coeff_tex, ivec2(k, 0), 0).rgb * basis[k];
     return max(radiance, vec3_splat(0.0));
+}
+
+/// Environment radiance prefiltered by the GGX lobe of perceptual @p roughness around @p dir -
+/// what a reflection sees of the environment where no probe covers it (UE fills that weight
+/// with the sky light). The lobe's zonal factors are those of the GGX reflected-direction
+/// distribution at normal incidence (the split-sum assumption the prefiltered probes make),
+/// measured by importance sampling it (the specular_occlusion_lut lobe) and fitted as rational
+/// functions of alpha: max error 0.004 in band 1, 0.01 in band 2. A mirror reads the SH
+/// radiance itself; alpha 1 gives 0.63 / 0.19 (a cosine lobe: 0.67 / 0.25).
+vec3 eval_radiance_sh_lobe(sampler2D coeff_tex, vec3 dir, float roughness)
+{
+    float alpha = roughness * roughness;
+    float alpha_squared = alpha * alpha;
+    float band1 = (1.0 + 0.32098 * alpha + 4.57985 * alpha_squared) / (1.0 + 0.69684 * alpha + 7.67135 * alpha_squared);
+    float band2 = (1.0 - 0.19861 * alpha + 1.21497 * alpha_squared) / (1.0 + 0.81477 * alpha + 9.02891 * alpha_squared);
+    // eval_irradiance_sh_scaled weights band l by its cosine constant A_l; divide it out.
+    vec3 band_scale = vec3(1.0, band1, band2) / vec3(PI, (2.0 * PI) / 3.0, PI * 0.25);
+    return max(eval_irradiance_sh_scaled(coeff_tex, dir, band_scale), vec3_splat(0.0));
 }
 
 /*=============================================================================
@@ -1500,19 +1541,43 @@ float ScreenSpaceAO(float Visibility, float Intensity)
     return mix(1.0, Visibility, Intensity);
 }
 
-/// Occlusion of the reflection captures from the pixel's ambient occlusion (material AO times
-/// screen-space AO), as UE applies it to reflection captures and sky specular. Traced
-/// reflections (SSR, GI reflection hits) see their occluders and do not take it.
-float ComputeSpecularOcclusion(vec3 N, vec3 V, float Roughness, float AO)
+/// The axis of the visibility cone: the screen-space AO's bent normal (rgb * 2 - 1, GTAO only),
+/// pulled toward N as far as the pixel is open - an unoccluded pixel's bent normal carries no
+/// information - or N when the texture has no bent normal.
+vec3 ScreenSpaceOcclusionAxis(vec4 ScreenAOSample, float HasBentNormal, float ScreenAO, vec3 N)
 {
-    float NoV = max(saturate(dot(N, V)), 1e-5f);
-    float SafeRoughness = MakeRoughnessSafe(Roughness);
-    return GetSpecularOcclusion(NoV, SafeRoughness * SafeRoughness, AO);
+    if(HasBentNormal < 0.5)
+    {
+        return N;
+    }
+    vec3 BentNormal = normalize(ScreenAOSample.xyz * 2.0 - 1.0);
+    return normalize(mix(BentNormal, N, ScreenAO));
+}
+
+/// The dominant (off-specular peak) direction of the GGX lobe, from the mirror direction R
+/// toward N as the lobe widens (UE's GetOffSpecularPeakReflectionDir; perceptual roughness).
+vec3 GetSpecularDominantDir(vec3 N, vec3 R, float Roughness)
+{
+    float a = Roughness * Roughness;
+    return mix(N, R, (1.0 - a) * (sqrt(1.0 - a) + a));
+}
+
+/// Specular occlusion (GTSO, Jimenez et al. 2016): the share of the GGX lobe around
+/// @p DominantDir (GetSpecularDominantDir) inside the visibility cone of @p Visibility around
+/// @p ConeAxis, read from the table built by specular_occlusion_lut (x = cos(cone axis, dominant
+/// direction) from [-1, 1], y = perceptual roughness, z = visibility, at texel centres).
+float SpecularOcclusionGTSO(sampler3D Table, vec3 ConeAxis, float Visibility, vec3 DominantDir, float Roughness)
+{
+    vec3 Coord = saturate(vec3(dot(ConeAxis, DominantDir) * 0.5 + 0.5, Roughness, Visibility));
+    vec3 TableSize = vec3(textureSize(Table, 0));
+    Coord = Coord * ((TableSize - 1.0) / TableSize) + 0.5 / TableSize;
+    return texture3DLod(Table, Coord, 0.0).x;
 }
 
 /// Indirect lighting - the environment BRDF over the indirect specular plus the indirect
 /// diffuse, evaluated once per pixel. Both inputs arrive occluded: the diffuse occlusion is
-/// folded into IndirectDiffuse and the specular occlusion into the reflection captures.
+/// folded into IndirectDiffuse and the specular occlusion into IndirectSpecular
+/// (ComposeIndirectSpecular).
 vec3 StandardShadingIndirect(
  vec3 DiffuseColor,
  vec3 IndirectDiffuse,
@@ -1542,16 +1607,62 @@ vec3 StandardShadingIndirect(
          + (IndirectSpecular * EnvBRDFValue);
 }
 
-/// Multi-bounce ambient occlusion (Jimenez et al. 2016, eq. 9): the fit of a path-traced
-/// interreflection ground truth that brightens the occlusion on light albedos - the light a
-/// crevice loses to occlusion partly comes back from its own walls, and white walls give
-/// more of it back than dark ones. Per channel, never below the single-bounce visibility.
-vec3 MultiBounceAO(float visibility, vec3 albedo)
+/// Multi-bounce ambient occlusion (Jimenez et al. 2016, eq. 9) as a gain over the single-bounce
+/// visibility: the fit of a path-traced interreflection ground truth that brightens the
+/// occlusion on light albedos - the light a crevice loses to occlusion partly comes back from
+/// its own walls, and white walls give more of it back than dark ones. Per channel, never
+/// below 1. The fit maps a point's whole visibility, so it applies once, to the combined term.
+vec3 MultiBounceAOGain(float visibility, vec3 albedo)
 {
     vec3 a = 2.0404 * albedo - vec3_splat(0.3324);
     vec3 b = -4.7951 * albedo + vec3_splat(0.6417);
     vec3 c = 2.7552 * albedo + vec3_splat(0.6903);
-    return max(vec3_splat(visibility), ((visibility * a + b) * visibility + c) * visibility);
+    return max(vec3_splat(1.0), (visibility * a + b) * visibility + c);
+}
+
+/// The specular occlusion of the two reflection layers (ComposeIndirectSpecular). A trace saw
+/// its occluders, so the traced layers take only the material AO's cavities, which no tracer's
+/// geometry holds (axis N); the untraced layer takes the material AO times the screen-space AO
+/// around the cone axis. Each carries the multi-bounce fit with F0 as the albedo, as UE (the
+/// G-buffer AO), HDRP and Filament apply it: a cavity's walls reflect part of what they occlude
+/// back into the lobe - little for dielectrics, most of it for bright metals. The screen term's
+/// multi-bounce follows GTAO's toggle; the material AO always takes it (the gain then comes from
+/// the material term alone, as on the diffuse).
+struct IndirectSpecularOcclusion
+{
+    vec3 traced;
+    vec3 untraced;
+};
+
+IndirectSpecularOcclusion ComputeIndirectSpecularOcclusion(sampler3D Table, vec3 N, vec3 DominantDir, float Roughness,
+                                                           vec3 SpecularColor, float MaterialAO, float Visibility,
+                                                           vec3 ConeAxis, float ScreenMultiBounce)
+{
+    float MaterialOcclusion = SpecularOcclusionGTSO(Table, N, MaterialAO, DominantDir, Roughness);
+    float Occlusion = SpecularOcclusionGTSO(Table, ConeAxis, Visibility, DominantDir, Roughness);
+    float BounceOcclusion = ScreenMultiBounce > 0.5 ? Occlusion : MaterialOcclusion;
+    IndirectSpecularOcclusion Result;
+    Result.traced = MaterialOcclusion * MultiBounceAOGain(MaterialOcclusion, SpecularColor);
+    Result.untraced = Occlusion * MultiBounceAOGain(BounceOcclusion, SpecularColor);
+    return Result;
+}
+
+/// The untraced reflection layer, completed where it does not cover the pixel: PBUFFER holds the
+/// probes and the GI rough tier premultiplied, their union coverage in alpha, and the rest of
+/// the lobe sees the environment - UE fills its capture weight with the sky light the same way
+/// (ReflectionEnvironmentComposite.ush). @p EnvironmentRadiance: eval_radiance_sh_lobe, in the
+/// buffers' pre-exposed space.
+vec3 CompleteProbeLayer(vec4 ProbeLayer, vec3 EnvironmentRadiance)
+{
+    return ProbeLayer.xyz + EnvironmentRadiance * (1.0 - saturate(ProbeLayer.w));
+}
+
+/// The indirect specular radiance ahead of the environment BRDF. RBUFFER (Traced) holds the
+/// traced layers - GI reflections, then SSR - premultiplied in rgb, with the share they leave
+/// uncovered in alpha; ProbeLayer is the completed untraced layer (CompleteProbeLayer).
+vec3 ComposeIndirectSpecular(vec4 Traced, vec3 ProbeLayer, IndirectSpecularOcclusion Occlusion)
+{
+    return Traced.xyz * Occlusion.traced + ProbeLayer * (Traced.w * Occlusion.untraced);
 }
 
 

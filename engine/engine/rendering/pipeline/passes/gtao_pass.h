@@ -77,9 +77,9 @@ public:
         /// normal, weighted by the occlusion (an open pixel keeps its normal). 0 = off.
         float bent_normal_strength = 0.0f;
         /// Multi-bounce approximation (Jimenez 2016) on the GTAO term: brightens the diffuse
-        /// occlusion on light albedos by the interreflection a crevice gets back from its own
-        /// walls; the albedo is clamped to 0.5 so near-white surfaces keep some occlusion. The
-        /// material AO always takes it.
+        /// occlusion by the interreflection a crevice gets back from its own walls (per channel
+        /// of the diffuse albedo) and the specular occlusion by what they reflect (per channel of
+        /// F0). The material AO always takes it.
         bool multi_bounce = true;
         /// Generate the receiver normal from the depth buffer (the geometric normal, edge-aware)
         /// instead of reading the G-buffer.

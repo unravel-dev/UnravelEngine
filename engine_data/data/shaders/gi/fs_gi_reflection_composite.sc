@@ -1,9 +1,11 @@
 $input v_texcoord0
 
 /*
- * GI reflection composite: draws the temporally integrated reflection over the authored
- * probe layer in RBUFFER (src-alpha blend). SSR composites the sharp on-screen result on top
- * of both afterwards.
+ * GI reflection composite: blends the temporally integrated TRACED reflection into RBUFFER,
+ * the traced layers (src-alpha on rgb; alpha keeps the share left to the probe layer, see
+ * ComposeIndirectSpecular). Its coverage is the traced tier's share only - the rough tier
+ * composites into the probe layer instead (fs_gi_reflection_rough.sc, gi_reflection_tiers.sh).
+ * SSR composites the sharp on-screen result on top afterwards.
  *
  * SPATIAL FINISH: one roughness-scaled 3x3 cross-bilateral over the ACCUMULATED result - the
  * temporal EMA alone leaves visible sample shimmer once the GGX lobe widens (~0.35 measured),
@@ -30,6 +32,7 @@ $input v_texcoord0
 #include "gi/gi_constants.sh"
 // GiReflLuma - the same luminance the temporal's statistics use.
 #include "gi/gi_reflection_denoise.sh"
+#include "gi/gi_reflection_tiers.sh"
 
 SAMPLER2D(s_refl_acc, 0);
 SAMPLER2D(s_gi_normal, 1);
@@ -52,6 +55,8 @@ void main()
 		return;
 	}
 	GBufferDataNormalMetalRoughness nd = DecodeGBufferNormalMetalRoughnessLod(uv, s_gi_normal, 0.0);
+	// The rough tier takes the rest of the history's coverage in the probe layer.
+	float traced_coverage = GiReflectionTracedCoverage(saturate(center.w), GiReflectionRoughShare(nd.roughness));
 	// Neighbour weight ramps over the traced band: sharp lobes have no shimmer to hide and
 	// keep full sharpness, lobes near the cutoff average the whole neighbourhood.
 	float blur_scale = smoothstep(0.0, GI_REFLECTION_ROUGH_CUTOFF, nd.roughness);
@@ -64,7 +69,7 @@ void main()
 	BRANCH
 	if(blur_scale < 0.05 || nd.roughness >= GI_REFLECTION_ROUGH_CUTOFF)
 	{
-		gl_FragColor = vec4(center.xyz, saturate(center.w));
+		gl_FragColor = vec4(center.xyz, traced_coverage);
 		return;
 	}
 	vec3 center_normal = normalize(nd.world_normal);
@@ -117,7 +122,7 @@ void main()
 	{
 		// Converged and flat: serve the accumulated value untouched and skip the kernel's
 		// depth and normal fetches entirely.
-		gl_FragColor = vec4(center.xyz, saturate(center.w));
+		gl_FragColor = vec4(center.xyz, traced_coverage);
 		return;
 	}
 	blur_scale *= gate;
@@ -156,5 +161,5 @@ void main()
 			weight_sum += weight;
 		}
 	}
-	gl_FragColor = vec4(color_sum / weight_sum, saturate(center.w));
+	gl_FragColor = vec4(color_sum / weight_sum, traced_coverage);
 }

@@ -114,8 +114,9 @@ void main()
 		// No history: alpha is the accumulation count. A geometric sample starts the running
 		// mean at 1; a coverage-0 sample's rgb is already the trace's fallback answer (the
 		// shape fade mixes to GiReflectionSkyFallback as coverage drops), stored at count 1
-		// so the composite covers with it - revealing RBUFFER instead is a black hole
-		// wherever no probe reaches (see the hold branch below).
+		// so the composite covers with it - revealing the probe layer instead drops the trace's
+		// own answer for the environment fill alone wherever no probe reaches (see the hold
+		// branch below).
 		gl_FragColor = vec4(curr.xyz, 1.0);
 		return;
 	}
@@ -259,8 +260,9 @@ void main()
 		// a coverage-0 frame is already the trace's own fallback answer (shape_ok 0 mixes
 		// to pure GiReflectionSkyFallback): the steady state of a persistently-non-image
 		// pixel is the LIVE sky/probe answer at count 1 - never a bare low alpha that
-		// uncovers RBUFFER, because where no probe reaches that "reveal" is a black hole,
-		// not the SH (measured: black bands rimmed with the last held colour at every
+		// uncovers the probe layer, because where no probe reaches that "reveal" was a black
+		// hole before the indirect pass filled it with the SH (measured: black bands rimmed with
+		// the last held colour at every
 		// persistent-non-image silhouette once the count decayed). The count floors at 1:
 		// the fallback IS an image, and the next geometric sample restarts a fresh mean
 		// on top of it instead of resurrecting anything.

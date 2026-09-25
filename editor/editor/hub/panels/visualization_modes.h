@@ -23,7 +23,8 @@ enum class visualization_mode : int
     base_color = 0,
     diffuse_color = 1,
     specular_color = 2,
-    /// RBUFFER rgb: SSR composited over the GI reflection tier.
+    /// The indirect specular radiance: the traced layers in RBUFFER (SSR over the GI reflection
+    /// tier) plus their uncovered share of the probe layer in PBUFFER, each occluded.
     reflections = 3,
     irradiance = 4,
     ambient_occlusion = 5,
@@ -35,7 +36,7 @@ enum class visualization_mode : int
     depth = 11,
     /// GI_RESOLVE when the surface cache runs, SSIL otherwise.
     indirect_diffuse = 12,
-    /// RBUFFER alpha: how strongly the reflection buffer replaces probe specular.
+    /// 1 - RBUFFER alpha: the share of the specular the traced reflections cover.
     reflection_coverage = 13,
     specular_occlusion = 14,
     sdf_normals = 15,

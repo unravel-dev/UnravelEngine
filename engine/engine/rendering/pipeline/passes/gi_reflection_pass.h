@@ -26,6 +26,9 @@ namespace unravel
  * wide lobes reuse last frame's resolved gather, sharper ones trace the SDF world tier
  * (roughness-adaptive mesh-exact range, clipmap finder + mesh refine, light voxels
  * at snapped hits; unrefined clipmap hits on sharp pixels leave the authored probes).
+ * The traced tier goes into RBUFFER with the traced layers; the rough tier is untraced (it
+ * carries the probe lattice's visibility, not the pixel's) and goes into the probe layer,
+ * PBUFFER, whose occlusion the indirect pass applies.
  * Everything is owned by gi_constants; the pass has no tuning surface beyond its enable.
  */
 class gi_reflection_pass
@@ -34,19 +37,24 @@ public:
     struct run_params
     {
         gfx::frame_buffer::ptr g_buffer;
-        /// The reflection accumulation target the probes rendered into (RBUFFER).
+        /// RBUFFER, the traced layers: the composite blends the traced tier in, its alpha keeping
+        /// the share left to the probe layer (ComposeIndirectSpecular in lighting.sh).
         gfx::frame_buffer::ptr output;
         /// The frame's Hi-Z pyramid; the pass is skipped without it (depth reconstructs
         /// from mip 0).
         gfx::texture::ptr hiz;
         /// Last frame's environment SH, the past-everything fallback.
         gfx::texture::ptr irradiance_sh;
-        /// The authored probe layer - RBUFFER's texture right after the probe pass drew into
-        /// it - the sky answer for trace misses (multi-probe blended, holds cloud/sun detail
-        /// an SH cannot). Must be null when the probe stack did not run this frame: RBUFFER
-        /// is then stale with last frame's composite + SSR, and reading it would feed the
-        /// pass its own output. Null binds transparent black, degrading misses to the SH.
+        /// The authored probe layer - PBUFFER's texture right after the probe pass drew into it,
+        /// unoccluded - the sky answer for trace misses (multi-probe blended, holds cloud/sun
+        /// detail an SH cannot). Must be null when the probe stack did not run this frame:
+        /// PBUFFER is then stale with last frame's probes and rough tier, and reading it would
+        /// feed the pass its own output. Null binds transparent black, degrading misses to the SH.
         gfx::texture::ptr probe_layer;
+        /// PBUFFER itself: the rough tier blends into the probe layer after the trace has read
+        /// it, because it is untraced and takes the probe layer's occlusion. Null (with
+        /// probe_layer) leaves the rough lobes to the probes.
+        gfx::frame_buffer::ptr probe_output;
         /// Last frame's resolved GI (temporally filtered, denoised E/pi per pixel) - the rough
         /// specular source: a wide lobe converges to the diffuse irradiance, and this is the
         /// smoothest per-pixel estimate the engine owns (the Lumen recipe - reuse the gather,
@@ -337,6 +345,27 @@ private:
             return program && program->is_valid();
         }
     } composite_program_;
+
+    /// The rough tier into the probe layer (fs_gi_reflection_rough.sc), after the composite.
+    struct rough_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr s_refl_acc;
+        gfx::program::uniform_ptr s_gi_normal;
+        gfx::program::uniform_ptr s_hiz;
+        gfx::program::uniform_ptr s_gi_diffuse;
+        /// View pre-exposure (pre_exposure.sh): corrects last frame's resolve into this frame's.
+        gfx::program::uniform_ptr u_pre_exposure;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), s_refl_acc, "s_refl_acc", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_hiz, "s_hiz", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
+        }
+    } rough_program_;
 
     /// Composed-content epoch of the view's clipmap at the last run, and the frame it last
     /// advanced: the STRUCTURAL half of the temporal's stillness-release cap. The mover
