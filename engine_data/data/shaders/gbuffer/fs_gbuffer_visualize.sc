@@ -12,10 +12,13 @@ SAMPLER2D(s_tex4, 4);
 SAMPLER2D(s_tex5, 5);
 SAMPLER2D(s_tex6, 6);
 SAMPLER2D(s_tex7, 7);
-// GTAO output: rgb = world bent normal * 0.5 + 0.5, a = visibility.
+// Screen-space AO (GTAO, or ASSAO when GTAO is off): a = visibility; rgb = GTAO bent
+// normal * 0.5 + 0.5.
 SAMPLER2D(s_tex8, 8);
 
 uniform vec4 u_params;
+/// x = screen-space AO intensity, w = 1 when the texture is GTAO's (bent normal); yz unused.
+uniform vec4 u_screen_ao;
 
 #define u_mode int(u_params.x)
 
@@ -34,8 +37,7 @@ uniform vec4 u_params;
 #define SSIL 12
 #define RADIANCE_ALPHA 13
 #define SPECULAR_OCCLUSION 14
-#define GTAO 15
-#define GTAO_BENT_NORMAL 16
+#define AO_BENT_NORMALS 15
 
 vec4 gbuffer_visualize(vec2 texcoord0)
 {
@@ -65,7 +67,7 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     }
     else if(u_mode == AMBIENT_OCCLUSION)
     {
-        color = vec3_splat(data.ambient_occlusion);
+        color = vec3_splat(data.ambient_occlusion * ScreenSpaceAO(texture2D(s_tex8, texcoord0).a, u_screen_ao.x));
     }
     else if(u_mode == WORLD_NORMAL)
     {
@@ -109,29 +111,15 @@ vec4 gbuffer_visualize(vec2 texcoord0)
         vec3 clip = vec3(texcoord0 * 2.0 - 1.0, data.depth);
         clip = clipTransform(clip);
         vec3 world_position = clipToWorld(u_invViewProj, clip);
-        vec3 view_position = mul(u_view, vec4(world_position, 1.0)).xyz;
-        vec3 view_normal = normalize(mul(u_view, vec4(data.world_normal, 0.0)).xyz);
-        float NoV = max(saturate(dot(view_normal, normalize(-view_position))), 1e-5);
-        float lighting_visibility = saturate(sqrt(Luminance(eval_irradiance_sh(s_tex6, data.world_normal))));
-        float occlusion = ComputeSpecularOcclusion(NoV, data.roughness, data.ambient_occlusion, lighting_visibility);
-        // Times the GTSO cone term when GTAO is bound (a white fallback opens the cone to
-        // the hemisphere, so the term is 1 without it).
-        vec4 gtao = texture2D(s_tex8, texcoord0);
-        vec3 bent_normal = gtao.xyz * 2.0 - vec3_splat(1.0);
-        if(dot(bent_normal, bent_normal) > 1e-4)
-        {
-            vec3 view_vec = normalize(mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz - world_position);
-            occlusion *= ConeConeSpecularOcclusion(view_vec, normalize(data.world_normal), normalize(bent_normal), gtao.a, data.roughness);
-        }
-        color = vec3_splat(occlusion);
+        vec3 N = normalize(data.world_normal);
+        vec3 V = normalize(mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz - world_position);
+        float ambient_occlusion = data.ambient_occlusion * ScreenSpaceAO(texture2D(s_tex8, texcoord0).a, u_screen_ao.x);
+        color = vec3_splat(ComputeSpecularOcclusion(N, V, GeometricSpecularAA(N, data.roughness), ambient_occlusion));
     }
-    else if(u_mode == GTAO)
+    else if(u_mode == AO_BENT_NORMALS)
     {
-        color = vec3_splat(texture2D(s_tex8, texcoord0).a);
-    }
-    else if(u_mode == GTAO_BENT_NORMAL)
-    {
-        color = texture2D(s_tex8, texcoord0).rgb;
+        // White when the screen-space AO carries no bent normal (ASSAO, or no pass).
+        color = u_screen_ao.w > 0.5 ? texture2D(s_tex8, texcoord0).rgb : vec3_splat(1.0);
     }
 
     // The decode helpers now return LINEAR base color (and colors derived from

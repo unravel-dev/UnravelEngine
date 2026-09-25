@@ -74,12 +74,12 @@ public:
         /// Relative view-depth tolerance for the temporal disocclusion test.
         float temporal_depth_threshold = 0.1f;
         /// How far the diffuse lookups (the GI probes and the environment SH) follow the bent
-        /// normal, weighted by the occlusion (an open pixel keeps its normal). 0 = off: the
-        /// bent normal then serves the specular occlusion only.
+        /// normal, weighted by the occlusion (an open pixel keeps its normal). 0 = off.
         float bent_normal_strength = 0.0f;
-        /// Multi-bounce approximation (Jimenez 2016): brightens the diffuse occlusion on light
-        /// albedos by the interreflection a crevice gets back from its own walls; the albedo
-        /// is clamped to 0.5 so near-white surfaces keep some occlusion.
+        /// Multi-bounce approximation (Jimenez 2016) on the GTAO term: brightens the diffuse
+        /// occlusion on light albedos by the interreflection a crevice gets back from its own
+        /// walls; the albedo is clamped to 0.5 so near-white surfaces keep some occlusion. The
+        /// material AO always takes it.
         bool multi_bounce = true;
         /// Generate the receiver normal from the depth buffer (the geometric normal, edge-aware)
         /// instead of reading the G-buffer.

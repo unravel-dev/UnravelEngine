@@ -53,8 +53,8 @@ enum class visualization_mode : int
     gi_probe_sky = 27,
     gi_vis_memo = 28,
     velocity = 29,
-    gtao = 30,
-    gtao_bent_normal = 31,
+    /// The screen-space AO bent normal (GTAO only).
+    ao_bent_normals = 31,
     gi_attr_emissive = 32,
     gi_cage_health = 33,
     gi_dirty_regions = 34,

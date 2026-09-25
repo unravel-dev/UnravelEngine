@@ -511,11 +511,13 @@ void draw_scene_section()
               fmt::format("{}", total_calls - editor_calls),
               "Draw commands sent to the GPU for the scene, without the editor UI.\n"
               "Fewer draw calls cost the CPU less."});
+    draw_row({"Compute Calls", fmt::format("{}", stats->numCompute), "Compute shader dispatches of this frame."});
+    draw_row({"Draw Calls Peak", fmt::format("{}", stats->numDrawCallsPeak), "Highest number of draw+compute calls requested in a single frame so far."});
+    draw_row({"Blit Calls", fmt::format("{}", stats->numBlit), "Texture copies of this frame: resolves and render target transfers."});
+    // draw_row({"Blit Calls Repacked", fmt::format("{}", stats->numBlitRepack), "Number of buffer to texture blit calls that had to be repacked,."});
     draw_row({"Render Passes",
               fmt::format("{}", gfx::render_pass::get_last_frame_max_pass_id()),
               "Passes of this frame: geometry, lighting, shadows and post processing."});
-    draw_row({"Compute Dispatches", fmt::format("{}", stats->numCompute), "Compute shader dispatches of this frame."});
-    draw_row({"Blits", fmt::format("{}", stats->numBlit), "Texture copies of this frame: resolves and render target transfers."});
 }
 
 void draw_paging_rows()

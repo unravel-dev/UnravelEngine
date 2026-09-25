@@ -226,8 +226,9 @@ constexpr std::array<visualization_group_entry, 6> k_visualization_groups = {{
      "occlusion",
      ICON_MDI_BLUR,
      "Ambient Occlusion",
-     "The occlusion chain: the baked material term, the GTAO pass, and the specular term "
-     "derived from them. These feed the indirect lighting only, never direct light."},
+     "The occlusion chain: the material AO times the screen-space AO (GTAO, or ASSAO when GTAO "
+     "is off), and the specular term derived from it. These feed the indirect lighting only, "
+     "never direct light."},
     {visualization_group::lighting,
      "lighting",
      ICON_MDI_LIGHTBULB,
@@ -262,7 +263,7 @@ constexpr std::array<visualization_group_entry, 6> k_visualization_groups = {{
 // get_visualization_modes(group) relies on that contiguity.
 // -----------------------------------------------------------------------------
 
-constexpr std::array<visualization_mode_entry, 43> k_visualization_modes = {{
+constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
     {visualization_mode::full,
      visualization_group::none,
      "full",
@@ -333,32 +334,26 @@ constexpr std::array<visualization_mode_entry, 43> k_visualization_modes = {{
     {visualization_mode::ambient_occlusion,
      visualization_group::occlusion,
      "ambient_occlusion",
-     "G-Buffer AO",
-     "The AO channel packed into the G-Buffer alpha: material and baked occlusion, multiplied "
-     "in place by ASSAO when that pass runs - so this is NOT a pure material readout. "
+     "Ambient Occlusion",
+     "The occlusion the indirect lighting applies: the material AO from the G-Buffer times the "
+     "screen-space AO (GTAO, or ASSAO when GTAO is off), before the diffuse multi-bounce. "
      "White = unoccluded.",
      {}},
-    {visualization_mode::gtao,
+    {visualization_mode::ao_bent_normals,
      visualization_group::occlusion,
-     "gtao",
-     "GTAO Visibility",
-     "Ground-truth ambient occlusion visibility from the GTAO pass. White = fully visible, "
-     "black = fully occluded. Uniform white means the GTAO pass produced nothing.",
-     {}},
-    {visualization_mode::gtao_bent_normal,
-     visualization_group::occlusion,
-     "gtao_bent_normal",
-     "GTAO Bent Normal",
-     "The GTAO pass world-space bent normal, encoded n * 0.5 + 0.5, so an unoccluded surface "
-     "reads as its normal shifted into the 0..1 range. Flat WHITE = the pass produced nothing "
-     "and the white fallback texture is bound.",
+     "ao_bent_normals",
+     "AO Bent Normals",
+     "The world-space bent normal of the screen-space AO, encoded n * 0.5 + 0.5, so an "
+     "unoccluded surface reads as its normal shifted into the 0..1 range. Flat WHITE = no bent "
+     "normal: GTAO is off (ASSAO has none).",
      {}},
     {visualization_mode::specular_occlusion,
      visualization_group::occlusion,
      "specular_occlusion",
      "Specular Occlusion",
-     "The derived specular occlusion term (AO, roughness and view angle, times the GTAO cone "
-     "when a bent normal is bound). White = reflections arrive unoccluded.",
+     "The specular occlusion the reflection probes apply, from the ambient occlusion, "
+     "roughness and view angle. SSR and GI reflection hits are not occluded. "
+     "White = reflections arrive unoccluded.",
      {}},
 
     // -- Lighting -------------------------------------------------------------
@@ -577,7 +572,7 @@ constexpr std::array<visualization_mode_entry, 43> k_visualization_modes = {{
      "Explicit emitter sampling per traced screen probe: the aimed rays' share of the probe's "
      "energy (red), of its rays (green), and the emitters it selected (blue).",
      k_legend_gi_emitter_share},
-}};
+});
 
 // Drift guards: the enum is the editor-side mirror of the engine's debug pass ids.
 static_assert(static_cast<int>(visualization_mode::sdf_normals) == rendering::deferred::debug_pass_sdf_normals,
@@ -602,10 +597,8 @@ static_assert(static_cast<int>(visualization_mode::gi_vis_memo) == rendering::de
               "visualization_mode drifted from deferred::debug_pass_sdf_vis_memo");
 static_assert(static_cast<int>(visualization_mode::velocity) == rendering::deferred::debug_pass_velocity,
               "visualization_mode drifted from deferred::debug_pass_velocity");
-static_assert(static_cast<int>(visualization_mode::gtao) == rendering::deferred::debug_pass_gtao,
-              "visualization_mode drifted from deferred::debug_pass_gtao");
-static_assert(static_cast<int>(visualization_mode::gtao_bent_normal) == rendering::deferred::debug_pass_gtao_bent_normal,
-              "visualization_mode drifted from deferred::debug_pass_gtao_bent_normal");
+static_assert(static_cast<int>(visualization_mode::ao_bent_normals) == rendering::deferred::debug_pass_ao_bent_normals,
+              "visualization_mode drifted from deferred::debug_pass_ao_bent_normals");
 static_assert(static_cast<int>(visualization_mode::gi_attr_emissive) ==
                   rendering::deferred::debug_pass_gi_attr_emissive,
               "visualization_mode drifted from deferred::debug_pass_gi_attr_emissive");

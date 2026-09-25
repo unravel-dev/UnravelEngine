@@ -35,8 +35,9 @@ SAMPLER2D(s_cloudShadow, 11);
 #if PBR_INDIRECT
 SAMPLER2D(s_irradiance, 7);
 SAMPLER2D(s_ssil, 8);
-// GTAO: rgb = world bent normal * 0.5 + 0.5, a = visibility (gtao_pass).
-SAMPLER2D(s_gtao, 9);
+// Screen-space AO (GTAO, or ASSAO when GTAO is off): a = visibility; rgb = GTAO bent
+// normal * 0.5 + 0.5.
+SAMPLER2D(s_screen_ao, 9);
 #include "pre_exposure.sh"
 #else
 SAMPLER2D(s_shadowMap0, 7);
@@ -45,13 +46,17 @@ SAMPLER2D(s_shadowMap2, 9);
 SAMPLER2D(s_shadowMap3, 10);
 #endif
 
-// x = GTAO bound (0/1), y = bent normal strength, z = intensity, w = multi-bounce (0/1).
-#define GTAO_MULTIBOUNCE_MAX_ALBEDO 0.5
-uniform vec4 u_gtao_params;
+// Screen-space AO: x = intensity, y = bent normal strength (0 without GTAO), z = multi-bounce
+// of the screen term (0/1), w = 1 when the texture carries a bent normal (GTAO).
+uniform vec4 u_screen_ao;
+#define u_screen_ao_intensity     u_screen_ao.x
+#define u_screen_ao_bent_strength u_screen_ao.y
+#define u_screen_ao_multi_bounce  u_screen_ao.z
+/// Albedo cap of the multi-bounce fit: near-white surfaces keep some occlusion.
+#define AO_MULTIBOUNCE_MAX_ALBEDO 0.5
 // x = indirect diffuse bound (0/1): 1 when a real GI resolve / SSIL texture feeds s_ssil, 0
-// when the transparent fallback does (deferred/pipeline.cpp, beside the s_ssil bind). The
-// shader cannot derive it: an absent system and a pixel the GI resolved nothing for both
-// read (0,0,0,0). Same pattern as u_gtao_params.x.
+// when the transparent fallback does. The shader cannot derive it: an absent system and a
+// pixel the GI resolved nothing for both read (0,0,0,0).
 uniform vec4 u_indirect_params;
 /// The GI resolve alpha above which a pixel counts as SERVED by the GI (pbr_indirect): served
 /// pixels read 0.996-1.0, unserved ones 0, and the bilateral upsample leaves fractions only
@@ -776,86 +781,48 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
 {
     ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
     GBufferData data = DecodeGBufferTexel(gbuf_texel, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
+    // Reflections, with the specular occlusion already applied to the probe captures.
     vec3 indirect_specular = texture2D(s_tex5, texcoord0).xyz;
     vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, data.depth, s_tex4);
     vec3 world_position = clipToWorld(u_invViewProj, clip);
-    vec3 indirect_color = u_light_data.xyz;
-    float indirect_intensity = u_light_data.w;
 
     vec3 N = normalize(data.world_normal);
     vec3 V = normalize(u_camera_position.xyz - world_position);
 
-    // GTAO: its visibility occludes the indirect terms (the GI resolve already reads its
-    // probes at the bent normal - the mean unoccluded direction - and so does the SH lookup
-    // below; the visibility itself is applied here, at full resolution, after the GI's
-    // denoise chain). The diffuse takes the MULTI-BOUNCE form (per channel: light albedos
-    // give part of the occluded energy back through interreflection); the specular
-    // occlusion keeps the plain visibility. Direct light is untouched by design.
-    float screen_ao = 1.0;
-    vec3 diffuse_normal = N;
-    vec3 bent_normal = N;
-    if(u_gtao_params.x > 0.5)
+    // The ambient occlusion of the indirect terms is the material AO times the screen-space AO;
+    // the reflection probe pass applies it to the captures, this pass to the diffuse. Direct
+    // light takes none. The diffuse takes both terms in the multi-bounce form, per albedo
+    // channel (the screen term plain when GTAO turns its multi-bounce off).
+    vec4 screen_ao_sample = texture2D(s_screen_ao, texcoord0);
+    float screen_ao = ScreenSpaceAO(screen_ao_sample.a, u_screen_ao_intensity);
+    vec3 multi_bounce_albedo = min(data.diffuse_color, vec3_splat(AO_MULTIBOUNCE_MAX_ALBEDO));
+    vec3 diffuse_screen_ao = vec3_splat(screen_ao);
+    if(u_screen_ao_multi_bounce > 0.5)
     {
-        vec4 gtao = texture2D(s_gtao, texcoord0);
-        screen_ao = mix(1.0, gtao.a, u_gtao_params.z);
-        bent_normal = normalize(gtao.xyz * 2.0 - 1.0);
-        // The lookup follows the bent normal by how much is occluded (an open pixel keeps
-        // its normal), scaled by the strength knob.
-        vec3 occluded_normal = normalize(mix(bent_normal, N, screen_ao));
-        diffuse_normal = normalize(mix(N, occluded_normal, u_gtao_params.y));
+        diffuse_screen_ao = MultiBounceAO(screen_ao, multi_bounce_albedo);
     }
-    // Multi-bounce with the albedo clamped: near-white surfaces keep some occlusion.
-    vec3 diffuse_screen_ao = u_gtao_params.w > 0.5 ? MultiBounceAO(screen_ao, min(data.diffuse_color, vec3_splat(GTAO_MULTIBOUNCE_MAX_ALBEDO)))
-                                                   : vec3_splat(screen_ao);
+    vec3 diffuse_occlusion = MultiBounceAO(data.ambient_occlusion, multi_bounce_albedo) * diffuse_screen_ao;
 
-    vec3 irradiance = eval_irradiance_sh(s_irradiance, diffuse_normal);
-    // THE INDIRECT DIFFUSE CONTRACT (energy audit): this slot carries E/pi - the
-    // cosine-weighted MEAN incoming radiance - because StandardShadingIndirect multiplies it
-    // by plain DiffuseColor. Lambert's BRDF is albedo/pi and the direct path pays its pi in
-    // Diffuse_Lambert; folding the other pi here keeps ONE convention on both paths:
-    // outgoing = albedo * E/pi. SSIL and the GI resolve already PRODUCE E/pi natively (a
-    // cosine-importance mean of radiance IS E/pi), so they feed the slot unscaled - the old
-    // "* PI" here was the single factor that made every indirect bounce pi times hotter than
-    // the same light arriving directly. eval_irradiance_sh returns TRUE irradiance E (raw
-    // cosine-convolution constants), so the SH branch divides here.
-    //
-    // SSIL/GI REPLACES the SH probe by its alpha rather than adding to it -- adding would
-    // double-count the environment. Alpha is the blend weight: per-frame trace coverage when
-    // temporal is off, accumulated screen-hit evidence when temporal is on. When both are
-    // disabled the bound fallback has alpha 0 -> pure SH.
+    // The SH lookup follows the GTAO bent normal as far as the pixel is occluded.
+    vec3 diffuse_normal = N;
+    if(u_screen_ao_bent_strength > 0.0)
+    {
+        vec3 bent_normal = normalize(screen_ao_sample.xyz * 2.0 - 1.0);
+        vec3 occluded_normal = normalize(mix(bent_normal, N, screen_ao));
+        diffuse_normal = normalize(mix(N, occluded_normal, u_screen_ao_bent_strength));
+    }
+
+    // Indirect diffuse is carried as E/pi, the cosine-weighted mean incoming radiance, so that
+    // outgoing = albedo * E/pi as on the direct path. The SH returns E; SSIL and the GI resolve
+    // produce E/pi. A pixel the GI resolve serves takes it outright (it includes the sky); any
+    // other pixel takes the SH. The SH is absolute, the GI and RBUFFER carry the pre-exposure.
+    vec3 ambient_sh = eval_irradiance_sh(s_irradiance, diffuse_normal) * RECIP_PI * u_pre_exposure_value;
     vec4 ssil_sample = texture2D(s_ssil, texcoord0);
-    // WHERE THE GI SERVES A PIXEL, THE GI OWNS THE INDIRECT DIFFUSE OUTRIGHT. The resolve
-    // already carries the sky where the sky is visible (its rays and completions read the sky
-    // SH per direction), so weighting the UNOCCLUDED environment SH by (1 - alpha) double
-    // counts it - and it lands exactly where the GI has least: alpha reads 0.996 on covered
-    // vertical faces (the filter stamps every live texel's weight as 1 and the SH3 projection
-    // of that constant lands just under it), and the unoccluded SH there is a hundred times
-    // the face's own GI, so 0.4 percent of it was 30-80 percent of a pier face's light
-    // (user-found 2026-09-17 on presets/Scene3D with a green sky tint). Alpha is NOT a sky
-    // visibility; it is the SERVED flag the original contract meant, and a threshold makes it
-    // one: a served pixel takes the resolve, an unserved one (sky silhouettes, degenerate
-    // normals, thin geometry no probe plane-agrees with and no cage covers - the bilateral
-    // upsample blends their alpha 0 into fractions at the edges) takes the SH as before.
-    // Where no GI / SSIL texture is bound at all the pure-SH probe answers unchanged.
-    // The SH holds absolute irradiance; SSIL / the GI resolve and RBUFFER already carry the
-    // view's pre-exposure.
     float gi_served = saturate(u_indirect_params.x) * step(PBR_GI_SERVED_ALPHA, ssil_sample.a);
-    vec3 ambient_sh = irradiance * RECIP_PI * u_pre_exposure_value;
-    vec3 indirect_diffuse = mix(ambient_sh, ssil_sample.rgb, gi_served) * diffuse_screen_ao;
+    vec3 indirect_diffuse = mix(ambient_sh, ssil_sample.rgb, gi_served) * diffuse_occlusion;
 
     float indirect_filtered_roughness = GeometricSpecularAA(N, data.roughness);
-    float lighting_visibility = saturate(sqrt(Luminance(indirect_diffuse)));
-    // GTSO: the specular lobe against the visible cone about the bent normal (Jimenez 2016),
-    // in place of pushing the plain visibility through the diffuse-style fit - a glossy
-    // surface whose reflection direction looks into the open stays bright, one whose lobe
-    // points at the occluder darkens, at any visibility.
-    float specular_screen_ao = u_gtao_params.x > 0.5
-                                   ? ConeConeSpecularOcclusion(V, N, bent_normal, screen_ao, indirect_filtered_roughness)
-                                   : 1.0;
-
-    // Diffuse: the material AO (the screen term is already folded into indirect_diffuse per
-    // channel); specular: the material AO through the fit, times the GTSO cone term.
-    vec3 indirect_lighting = StandardShadingIndirectAO(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, data.ambient_occlusion, data.ambient_occlusion, specular_screen_ao, lighting_visibility, V, N);
+    vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, V, N);
     return vec4(indirect_lighting + data.emissive_color * u_pre_exposure_value, 1.0f);
 }
 #endif

@@ -97,7 +97,6 @@ auto assao_pass::init(rtti::context& ctx) -> bool
     m_postprocessImportanceMapAProgram   = loadProgram("cs_assao_postprocess_importance_map_a");
     m_postprocessImportanceMapBProgram   = loadProgram("cs_assao_postprocess_importance_map_b");
     m_loadCounterClearProgram            = loadProgram("cs_assao_load_counter_clear");
-    m_updateGBufferProgram               = loadProgram("cs_assao_update_g_buffer");
     // clang-format on
 
     m_loadCounter = bgfx::createDynamicIndexBuffer(1, BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
@@ -477,16 +476,12 @@ void assao_pass::run(const camera& cam, gfx::render_view& rview, const run_param
 
 #endif
 
-    {
-        gfx::render_pass pass("ASSAO/Update G-Buffer AO Pass");
-        const auto& aoMapTex = rview.tex_get("ASSAO_AO_MAP");
-        bgfx::setImage(0, params.color_ao->native_handle(), 0, bgfx::Access::ReadWrite);
-        bgfx::setImage(1, aoMapTex->native_handle(), 0, bgfx::Access::Read);
-
-        bgfx::dispatch(pass.id, m_updateGBufferProgram, (dims.size[0] + 7) / 8, (dims.size[1] + 7) / 8);
-    }
-
     bgfx::discard();
+}
+
+auto assao_pass::get_ao_texture(gfx::render_view& rview) const -> gfx::texture::ptr
+{
+    return rview.tex_safe_get("ASSAO_AO_MAP");
 }
 
 auto assao_pass::shutdown() -> int32_t
@@ -610,15 +605,17 @@ void assao_pass::create_or_update_frame_buffers(gfx::render_view& rview, const d
                                                            BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_LINEAR_CLAMP);
     }
 
+    // RGBA8 with the AO in every channel: the lighting reads the screen-space AO from alpha,
+    // the layout GTAO's output has.
     auto& aoMap = rview.tex_get_or_emplace("ASSAO_AO_MAP");
-    if(gfx::needs_recreate(aoMap, fullSz))
+    if(gfx::needs_recreate(aoMap, fullSz, bgfx::TextureFormat::RGBA8))
     {
         aoMap.reset();
         aoMap = std::make_shared<gfx::texture>(uint16_t(dims.size[0]),
                                                uint16_t(dims.size[1]),
                                                false,
                                                1,
-                                               bgfx::TextureFormat::R8,
+                                               bgfx::TextureFormat::RGBA8,
                                                BGFX_TEXTURE_COMPUTE_WRITE | SAMPLER_POINT_CLAMP);
     }
 }

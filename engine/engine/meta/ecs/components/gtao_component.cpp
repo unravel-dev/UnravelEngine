@@ -140,7 +140,7 @@ REFLECT_INLINE(gtao_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "multi_bounce"},
             entt::attribute{"pretty_name", "Multi-Bounce"},
-            entt::attribute{"tooltip", "Brighten the diffuse occlusion on light albedos by the light a crevice gets back from\nits own walls. Off = single-bounce visibility."},
+            entt::attribute{"tooltip", "Brighten the GTAO diffuse occlusion on light albedos by the light a crevice gets back\nfrom its own walls. Off = single-bounce visibility (the material AO keeps its multi-bounce)."},
         })
         .data<&settings::generate_normals>("generate_normals"_hs)
         .custom<entt::attributes>(entt::attributes{

@@ -127,7 +127,6 @@ public:
     {
         gfx::texture* depth{};
         gfx::texture* normal{};
-        gfx::texture* color_ao{};
 
         settings params{};
     };
@@ -143,6 +142,11 @@ public:
     void run(const camera& camera, gfx::render_view& rview, const run_params& params);
     auto shutdown() -> int32_t;
     void release_resources(gfx::render_view& rview);
+
+    /// The full-resolution AO this view's last run produced (RGBA8, the visibility in every
+    /// channel), or null when the pass is not running. The lighting reads it as the
+    /// screen-space AO when GTAO is off.
+    auto get_ao_texture(gfx::render_view& rview) const -> gfx::texture::ptr;
 
 private:
     struct dimensions
@@ -233,8 +237,6 @@ private:
     bgfx::ProgramHandle m_postprocessImportanceMapAProgram{bgfx::kInvalidHandle};
     bgfx::ProgramHandle m_postprocessImportanceMapBProgram{bgfx::kInvalidHandle};
     bgfx::ProgramHandle m_loadCounterClearProgram{bgfx::kInvalidHandle};
-
-    bgfx::ProgramHandle m_updateGBufferProgram{bgfx::kInvalidHandle};
 
     // Shader uniforms
     bgfx::UniformHandle u_rect{bgfx::kInvalidHandle};

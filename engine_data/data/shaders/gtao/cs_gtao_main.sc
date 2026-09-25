@@ -6,7 +6,7 @@
  * view-depth mips along +/- the slice direction. Two integrations of one search:
  *  - the two-horizon closed form (default): the largest horizon angle on
  *    each side bounds the visible arc; the bent normal - the mean unoccluded direction the
- *    lighting steers its lookups and specular occlusion by - comes from the arc's moments;
+ *    lighting steers its diffuse lookups by - comes from the arc's moments;
  *  - the VISIBILITY BITMASK (Therrien, Levesque, Gilet 2023; u_gtao_bitmask): the projected
  *    normal's hemisphere split into GTAO_SECTOR_COUNT sectors, each sample marking the
  *    sectors between its front face and the face one slab depth behind it, so what lies

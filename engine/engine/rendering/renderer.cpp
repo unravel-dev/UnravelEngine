@@ -298,9 +298,6 @@ auto renderer::init_backend(const cmd_line::parser& parser) -> bool
     }
     reset_flags_ = init_data.reset;
 
-    init_data.limits.numDrawCalls = 65536;
-    init_data.limits.numDrawCallPeakFrames = 0;
-
     if(!gfx::init(init_data))
     {
         APPLOG_ERROR("Could not initialize rendering backend!");

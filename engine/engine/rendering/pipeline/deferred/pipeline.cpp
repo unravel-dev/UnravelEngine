@@ -925,8 +925,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_velocity_pass(visibility_set, camera, rview);
 
-    run_assao_pass(camera, rview, dt, params);
-    run_gtao_pass(camera, rview, params);
+    run_screen_ao_pass(camera, rview, dt, params);
 
     run_reflection_probe_pass(scn, camera, rview, build_reflection_probes, dt);
 
@@ -1026,7 +1025,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
             // but keeps what is underneath.
             run_exposure_debug_pass(rview, output, params);
         }
-        else if(debug_pass_ == debug_pass_gtao || debug_pass_ == debug_pass_gtao_bent_normal)
+        else if(debug_pass_ == debug_pass_ao_bent_normals)
         {
             run_debug_visualization_pass(camera, rview, output);
         }
@@ -1763,14 +1762,12 @@ void deferred::run_assao_pass(const camera& camera,
 
     const auto& gbuffer = rview.fbo_get("GBUFFER");
 
-    auto color_ao = gbuffer->get_texture(0);
     auto normal = gbuffer->get_texture(1);
     auto depth = gbuffer->get_texture(4);
 
     assao_pass::run_params params;
     params.depth = depth.get();
     params.normal = normal.get();
-    params.color_ao = color_ao.get();
 
     rparams.fill_assao_params(params);
 
@@ -2334,18 +2331,12 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     // without it the environment SH answers (fs_pbr_lighting.sh, pbr_indirect).
     const float indirect_params[4] = {indirect_diffuse_tex ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(iprogram.u_indirect_params, indirect_params);
-    // GTAO: bent normal + visibility for the indirect terms only (never direct light). The
-    // flag lane tells the shader whether the texture carries anything; the strengths come
-    // from the settings the pass ran with this frame.
-    auto gtao_tex = rview.tex_safe_get("GTAO");
-    const auto& gtao_settings = rview.data().get_or_emplace<gtao_pass::settings>("GTAO_SETTINGS");
-    const float gtao_params[4] = {gtao_tex ? 1.0f : 0.0f,
-                                  gtao_settings.bent_normal_strength,
-                                  gtao_settings.intensity,
-                                  gtao_settings.multi_bounce ? 1.0f : 0.0f};
-    gfx::set_uniform(iprogram.u_gtao_params, gtao_params);
+    // Screen-space AO for the indirect diffuse (the probe pass already applied it to the
+    // reflection captures).
+    const auto screen_ao = get_screen_ao_inputs(rview);
+    gfx::set_texture(iprogram.s_screen_ao, 9, screen_ao.texture);
+    gfx::set_uniform(iprogram.u_screen_ao, screen_ao.params.data());
     gfx::set_uniform(iprogram.u_pre_exposure, get_pre_exposure(rview).to_uniform().data());
-    gfx::set_texture(iprogram.s_gtao, 9, gtao_tex ? gtao_tex : default_textures::get().white_texture());
     
 
     auto topology = gfx::clip_quad(1.0f);
@@ -2414,6 +2405,11 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
                   // If the reflection methods are the same, compare based on the maximum range
                   return lhs_probe.get_max_range() > rhs_probe.get_max_range(); // Smaller ranges first
               });
+
+    // The captures are unoccluded: each probe applies the specular occlusion of the pixel's
+    // ambient occlusion (material AO times screen-space AO) before the traced reflections
+    // composite over them.
+    const auto screen_ao = get_screen_ao_inputs(rview);
 
     // Render or process the sorted probes
     for(const auto& e : sorted_probes)
@@ -2487,6 +2483,8 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
             }
 
             gfx::set_texture(ref_probe_program->s_tex_cube, 5, cubemap);
+            gfx::set_texture(ref_probe_program->s_screen_ao, 6, screen_ao.texture);
+            gfx::set_uniform(ref_probe_program->u_screen_ao, screen_ao.params.data());
 
             bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
             auto topology = gfx::clip_quad(1.0f);
@@ -2681,13 +2679,24 @@ void deferred::run_ssr_pass(const camera& camera,
     ssr_pass_.run(rview, ssr_params);
 }
 
-void deferred::run_gtao_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams)
+void deferred::run_screen_ao_pass(const camera& camera, gfx::render_view& rview, delta_t dt, const run_params& rparams)
+{
+    // GTAO takes precedence: with both volumes enabled only GTAO runs.
+    if(run_gtao_pass(camera, rview, rparams))
+    {
+        assao_pass_.release_resources(rview);
+        return;
+    }
+    run_assao_pass(camera, rview, dt, rparams);
+}
+
+auto deferred::run_gtao_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool
 {
     if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_gtao_params)
     {
         gtao_pass_.release_resources(rview);
         rview.tex_remove("GTAO");
-        return;
+        return false;
     }
     gtao_pass::run_params gtao_params;
     gtao_params.g_buffer = rview.fbo_get("GBUFFER");
@@ -2701,10 +2710,33 @@ void deferred::run_gtao_pass(const camera& camera, gfx::render_view& rview, cons
     if(!result)
     {
         rview.tex_remove("GTAO");
-        return;
+        return false;
     }
     rview.tex_get_or_emplace("GTAO") = result;
     rview.data().get_or_emplace<gtao_pass::settings>("GTAO_SETTINGS") = gtao_params.config;
+    return true;
+}
+
+auto deferred::get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_inputs
+{
+    screen_ao_inputs inputs;
+    inputs.texture = default_textures::get().white_texture();
+    inputs.params = {1.0f, 0.0f, 1.0f, 0.0f};
+    const auto& gtao_tex = rview.tex_safe_get("GTAO");
+    const auto* gtao_settings = rview.data().try_get<gtao_pass::settings>("GTAO_SETTINGS");
+    if(gtao_tex && gtao_settings)
+    {
+        inputs.texture = gtao_tex;
+        inputs.params = {gtao_settings->intensity,
+                         gtao_settings->bent_normal_strength,
+                         gtao_settings->multi_bounce ? 1.0f : 0.0f,
+                         1.0f};
+    }
+    else if(auto assao_tex = assao_pass_.get_ao_texture(rview))
+    {
+        inputs.texture = assao_tex;
+    }
+    return inputs;
 }
 
 void deferred::run_ssil_pass(const camera& camera,
@@ -3444,15 +3476,11 @@ void deferred::run_debug_visualization_pass(const camera& camera,
 
     debug_visualization_program_.program->begin();
 
-    // The GTAO views live past the SDF range in the pass ids; the shader knows them as 15 / 16.
+    // The AO bent normal view lives past the SDF range in the pass ids; the shader knows it as 15.
     int shader_mode = debug_pass_;
-    if(debug_pass_ == debug_pass_gtao)
+    if(debug_pass_ == debug_pass_ao_bent_normals)
     {
         shader_mode = 15;
-    }
-    else if(debug_pass_ == debug_pass_gtao_bent_normal)
-    {
-        shader_mode = 16;
     }
     // y = the linear readback scale of the indirect-diffuse view (see set_debug_view_scale).
     float u_params[4] = {float(shader_mode), debug_view_scale_, 0.0f, 0.0f};
@@ -3482,10 +3510,9 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     {
         gfx::set_texture(debug_visualization_program_.s_tex[i], i, indirect_diffuse_tex);
     }
-    auto gtao_tex = rview.tex_safe_get("GTAO");
-    gfx::set_texture(debug_visualization_program_.s_tex[8],
-                     8,
-                     gtao_tex ? gtao_tex : default_textures::get().white_texture());
+    const auto screen_ao = get_screen_ao_inputs(rview);
+    gfx::set_texture(debug_visualization_program_.s_tex[8], 8, screen_ao.texture);
+    gfx::set_uniform(debug_visualization_program_.u_screen_ao, screen_ao.params.data());
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
     bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());

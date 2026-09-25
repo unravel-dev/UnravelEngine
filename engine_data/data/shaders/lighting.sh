@@ -1493,56 +1493,33 @@ vec3 StandardShadingDirect(
     return (DiffuseLighting * EnergyPreservationFactor * DirectAO) + specular;
 }
 
-// Overlap of two cones of half-angles ArcLength0 / ArcLength1 whose axes are AngleBetween
-// apart, as a fraction of the smaller cone (the paper's smoothstep fit of the spherical-cap
-// overlap).
-float ApproximateConeConeIntersection(float ArcLength0, float ArcLength1, float AngleBetween)
+/// The screen-space ambient occlusion (GTAO, or ASSAO when GTAO is off) at its intensity.
+/// Without either pass the texture reads white (visibility 1).
+float ScreenSpaceAO(float Visibility, float Intensity)
 {
-    float AngleDifference = abs(ArcLength0 - ArcLength1);
-    float Overlap = 1.0 - saturate((AngleBetween - AngleDifference) / max(ArcLength0 + ArcLength1 - AngleDifference, 1e-4));
-    return smoothstep(0.0, 1.0, Overlap);
+    return mix(1.0, Visibility, Intensity);
 }
 
-// Specular occlusion from a bent normal and its visibility: the GGX lobe as a cone of half-angle roughness * pi about the reflection
-// vector, the visible region as a cone of half-angle AO * pi about the bent normal, and the
-// occlusion their overlap; faded to fully occluded below AO 0.1, where the bent normal's
-// direction is no longer reliable. 1 when nothing is known (AO = 1 opens the cone).
-float ConeConeSpecularOcclusion(vec3 V, vec3 N, vec3 BentNormal, float Visibility, float Roughness)
+/// Occlusion of the reflection captures from the pixel's ambient occlusion (material AO times
+/// screen-space AO), as UE applies it to reflection captures and sky specular. Traced
+/// reflections (SSR, GI reflection hits) see their occluders and do not take it.
+float ComputeSpecularOcclusion(vec3 N, vec3 V, float Roughness, float AO)
 {
-    float ReflectionConeAngle = max(Roughness, 0.1) * PI;
-    float UnoccludedAngle = Visibility * PI;
-    vec3 R = reflect(-V, N);
-    float AngleBetween = acos(clamp(dot(BentNormal, R), -1.0, 1.0));
-    float Occlusion = ApproximateConeConeIntersection(ReflectionConeAngle, UnoccludedAngle, AngleBetween);
-    return mix(0.0, Occlusion, saturate((UnoccludedAngle - 0.1) / 0.2));
+    float NoV = max(saturate(dot(N, V)), 1e-5f);
+    float SafeRoughness = MakeRoughnessSafe(Roughness);
+    return GetSpecularOcclusion(NoV, SafeRoughness * SafeRoughness, AO);
 }
 
-float ComputeSpecularOcclusion(float NoV, float Roughness, float AO, float LightingVisibility)
-{
-    float RoughnessSq = Roughness * Roughness;
-
-    float GeometricVisibility = saturate(AO);
-    float GeometricOcclusion = GetSpecularOcclusion(NoV, RoughnessSq, GeometricVisibility);
-
-    return GeometricOcclusion;
-}
-
-// Indirect lighting only - environment BRDF + indirect diffuse, evaluated once per pixel.
-// EnergyPreservationFactor accounts for specular layer absorbing energy from the diffuse layer.
-/// The indirect terms with SEPARATE occlusion for the diffuse and the specular lobe: a
-/// consumer that folds a per-channel (multi-bounce) screen AO into IndirectDiffuse passes the
-/// material AO alone as DiffuseAO and the full scalar occlusion as SpecularAO.
-vec3 StandardShadingIndirectAO(
+/// Indirect lighting - the environment BRDF over the indirect specular plus the indirect
+/// diffuse, evaluated once per pixel. Both inputs arrive occluded: the diffuse occlusion is
+/// folded into IndirectDiffuse and the specular occlusion into the reflection captures.
+vec3 StandardShadingIndirect(
  vec3 DiffuseColor,
  vec3 IndirectDiffuse,
  vec3 SpecularColor,
  vec3 IndirectSpecular,
  sampler2D BRDFIntegrationMap,
  float Roughness,
- float DiffuseAO,
- float SpecularAO,
- float SpecularOcclusionScale,
- float LightingVisibility,
  vec3 V,
  vec3 N )
 {
@@ -1551,37 +1528,18 @@ vec3 StandardShadingIndirectAO(
     const float kNoVEpsilon = 1e-5f;
     float NoV = max(saturate(dot(N, V)), kNoVEpsilon);
 
-    // The material AO through the roughness-aware fit; a directional screen-space term
-    // (GTSO) arrives as a plain scale so the two are not both fitted.
-    float SpecularOcclusion = ComputeSpecularOcclusion(NoV, Roughness, SpecularAO, LightingVisibility) * SpecularOcclusionScale;
-
 #if USE_ENERGY_CONSERVATION > 0
     FBxDFEnergyTerms SpecularEnergyTerms = ComputeGGXSpecEnergyTerms(Roughness, NoV, SpecularColor);
     vec3 EnvBRDFValue = SpecularEnergyTerms.E;
+    // The specular layer's share of the energy never reaches the diffuse layer.
     float EnergyPreservationFactor = ComputeEnergyPreservation(SpecularEnergyTerms);
 #else
     vec3 EnvBRDFValue = GetEnvBRDF(SpecularColor, Roughness, NoV, BRDFIntegrationMap);
     float EnergyPreservationFactor = 1.0f;
 #endif
 
-    return (DiffuseColor * DiffuseAO * IndirectDiffuse * EnergyPreservationFactor)
-         + (IndirectSpecular * EnvBRDFValue * SpecularOcclusion);
-}
-
-vec3 StandardShadingIndirect(
- vec3 DiffuseColor,
- vec3 IndirectDiffuse,
- vec3 SpecularColor,
- vec3 IndirectSpecular,
- sampler2D BRDFIntegrationMap,
- float Roughness,
- float AO,
- float LightingVisibility,
- vec3 V,
- vec3 N )
-{
-    return StandardShadingIndirectAO(DiffuseColor, IndirectDiffuse, SpecularColor, IndirectSpecular,
-                                     BRDFIntegrationMap, Roughness, AO, AO, 1.0, LightingVisibility, V, N);
+    return (DiffuseColor * IndirectDiffuse * EnergyPreservationFactor)
+         + (IndirectSpecular * EnvBRDFValue);
 }
 
 /// Multi-bounce ambient occlusion (Jimenez et al. 2016, eq. 9): the fit of a path-traced

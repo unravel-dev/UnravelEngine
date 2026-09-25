@@ -115,9 +115,11 @@ public:
     void run_ssr_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 
     void run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
-    /// Ground Truth Ambient Occlusion into the "GTAO" texture (runs right after the G-buffer,
-    /// consumed by the indirect lighting).
-    void run_gtao_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
+    /// The screen-space AO of the frame, right after the G-buffer: GTAO when its volume is
+    /// enabled, otherwise ASSAO - never both.
+    void run_screen_ao_pass(const camera& camera, gfx::render_view& rview, delta_t dt, const run_params& rparams);
+    /// Ground Truth Ambient Occlusion into the "GTAO" texture. @return true when it ran.
+    auto run_gtao_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool;
 
     auto run_taa_pass(const camera& camera,
                       gfx::render_view& rview,
@@ -166,10 +168,9 @@ public:
     /// BEFORE the >= debug_pass_sdf_normals check. Selecting it forces velocity production
     /// for camera runs even when no other consumer (TAA) is active.
     static constexpr int debug_pass_velocity = 29;
-    /// GTAO visibility and bent normal (the "GTAO" texture), through the G-buffer visualization
-    /// program (shader modes 15 / 16); dispatched BEFORE the >= debug_pass_sdf_normals check.
-    static constexpr int debug_pass_gtao = 30;
-    static constexpr int debug_pass_gtao_bent_normal = 31;
+    /// The screen-space AO bent normal, through the G-buffer visualization program (shader
+    /// mode 15); dispatched BEFORE the >= debug_pass_sdf_normals check.
+    static constexpr int debug_pass_ao_bent_normals = 31;
 
     /// GI views added after the velocity/GTAO ids, so those keep the numbers the editor's
     /// static_asserts pin. All four are >= debug_pass_sdf_normals, so they route to the SDF
@@ -274,6 +275,8 @@ private:
             cache_uniform(program.get(), s_tex[3], "s_tex3", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[4], "s_tex4", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex_cube, "s_tex_cube", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_screen_ao, "s_screen_ao", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_screen_ao, "u_screen_ao", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr u_data0;
@@ -282,6 +285,9 @@ private:
 
         std::array<gfx::program::uniform_ptr, 5> s_tex;
         gfx::program::uniform_ptr s_tex_cube;
+        /// Screen-space AO for the specular occlusion of the capture (get_screen_ao_inputs).
+        gfx::program::uniform_ptr s_screen_ao;
+        gfx::program::uniform_ptr u_screen_ao;
 
         std::unique_ptr<gpu_program> program;
     };
@@ -506,8 +512,8 @@ private:
             cache_uniform(program.get(), s_tex[6], "s_tex6", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_irradiance, "s_irradiance", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_ssil, "s_ssil", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_gtao, "s_gtao", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), u_gtao_params, "u_gtao_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_screen_ao, "s_screen_ao", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_screen_ao, "u_screen_ao", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_indirect_params, "u_indirect_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
         }
@@ -517,8 +523,9 @@ private:
         std::array<gfx::program::uniform_ptr, 7> s_tex;
         gfx::program::uniform_ptr s_irradiance;
         gfx::program::uniform_ptr s_ssil;
-        gfx::program::uniform_ptr s_gtao;
-        gfx::program::uniform_ptr u_gtao_params;
+        /// Screen-space AO texture and parameters (get_screen_ao_inputs).
+        gfx::program::uniform_ptr s_screen_ao;
+        gfx::program::uniform_ptr u_screen_ao;
         /// x = 1 when a real GI resolve / SSIL texture feeds s_ssil, 0 when the transparent
         /// fallback does; the shader then takes the resolve outright instead of mixing the
         /// environment SH back in (fs_pbr_lighting.sh, pbr_indirect).
@@ -543,10 +550,13 @@ private:
             cache_uniform(program.get(), s_tex[7], "s_tex7", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_tex[8], "s_tex8", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_screen_ao, "u_screen_ao", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_params;
+        /// Screen-space AO parameters for the occlusion views (get_screen_ao_inputs).
+        gfx::program::uniform_ptr u_screen_ao;
         std::array<gfx::program::uniform_ptr, 9> s_tex;
 
         std::unique_ptr<gpu_program> program;
@@ -610,6 +620,17 @@ private:
 public:
 
 private:
+    /// The screen-space AO the lighting combines with the material AO: GTAO's texture, or
+    /// ASSAO's when GTAO is off (visibility in alpha either way), white when neither ran.
+    struct screen_ao_inputs
+    {
+        gfx::texture::ptr texture;
+        /// u_screen_ao: x = intensity, y = bent normal strength (GTAO only), z = multi-bounce of
+        /// the screen term (GTAO's setting, on otherwise), w = 1 when the texture is GTAO's.
+        std::array<float, 4> params{};
+    };
+    auto get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_inputs;
+
     /// After SSIL/SSR; copies G-buffer depth into @c PREV_DEPTH for next-frame reprojection.
     void snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size);
 
