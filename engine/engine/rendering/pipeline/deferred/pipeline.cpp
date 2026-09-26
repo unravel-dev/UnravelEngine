@@ -952,7 +952,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // GI reflections layer UNDER SSR: the world-space specular tier draws over the authored
     // probes in RBUFFER, then SSR composites the sharp on-screen result on top - screen space
     // belongs to SSR alone. Runs after Hi-Z (positions reconstruct from the pyramid).
-    run_gi_reflection_pass(camera, rview, params);
+    const bool gi_reflection_ran = run_gi_reflection_pass(camera, rview, params);
 
     // SSR samples last frame's PREV_SCENE_HDR snapshot (post-TAA, scene-referred linear).
     // It must NOT sample the final OBUFFER: that image is tonemapped, sRGB-encoded and has
@@ -976,6 +976,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         // Far-field fallback reads PREV_SCENE_HDR (last frame's post-TAA linear scene
         // color) - the same history SSR consumed above.
         gi_resolve_active = run_gi_resolve_pass(camera, rview, params);
+        // The reflections' rough tier reads the gather's rough specular and resolve, so it blends
+        // into the probe layer only now, before the indirect pass composes it.
+        run_gi_reflection_rough_tier(camera, rview, params, gi_reflection_ran);
     }
 
     // SSIL pass
@@ -3254,16 +3257,16 @@ void deferred::run_gi_world_probe_pass(const camera& camera,
     gi_world_probe_pass_.run(rview, probe_params);
 }
 
-void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rview, const run_params& params)
+auto deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rview, const run_params& params) -> bool
 {
     if(params.run_type != pipeline_run_type::camera)
     {
-        return;
+        return false;
     }
     gi_settings gi_reflection_settings;
     if(!resolve_gi_settings(params, gi_reflection_settings) || !gi_reflection_settings.resolve.enable_reflections)
     {
-        return;
+        return false;
     }
     gi_reflection_pass::run_params grp;
     grp.g_buffer = rview.fbo_safe_get("GBUFFER");
@@ -3272,20 +3275,18 @@ void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
     grp.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
     // Sky-miss fallback: PBUFFER holds exactly the freshly drawn, unoccluded authored probe
     // layer at this point (cleared and rebuilt by run_reflection_probe_pass earlier this frame;
-    // the pass's rough tier writes into it later). Without the probe stack this frame the
+    // the rough tier writes into it after the gather). Without the probe stack this frame the
     // buffer is stale with last frame's probes and rough tier - reading it would feed the pass
-    // its own output - so the pass falls back to the sky SH and leaves the rough tier out.
+    // its own output - so the pass falls back to the sky SH.
     if(reflection_screen_stack_enabled(params))
     {
-        grp.probe_output = rview.fbo_safe_get("PBUFFER");
-        if(grp.probe_output)
+        if(const auto pbuffer = rview.fbo_safe_get("PBUFFER"))
         {
-            grp.probe_layer = grp.probe_output->get_texture(0);
+            grp.probe_layer = pbuffer->get_texture(0);
         }
     }
-    // This pass runs before the frame's GI resolve, so the stored texture still holds
-    // LAST frame's denoised result - the rough-specular source (one frame of lag, the
-    // same convention as prev_color).
+    // This pass runs before the frame's GI resolve, so the stored texture still holds LAST
+    // frame's denoised result (one frame of lag, the same convention as prev_color).
     grp.gi_diffuse = rview.tex_safe_get("GI_RESOLVE");
     // Last frame's composited colour (the same snapshot the gather's screen tier and SSR
     // read): the compute trace upgrades on-screen world hits to the lit pixel with it.
@@ -3307,7 +3308,30 @@ void deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
     grp.pre_exposure = get_pre_exposure(rview);
     grp.surface_cache = &engine::context().get_cached<surface_cache_system>();
     grp.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
-    gi_reflection_pass_.run(rview, grp);
+    return gi_reflection_pass_.run(rview, grp);
+}
+
+void deferred::run_gi_reflection_rough_tier(const camera& camera,
+                                            gfx::render_view& rview,
+                                            const run_params& params,
+                                            bool reflection_ran)
+{
+    // PBUFFER is only this frame's probe layer when the probe stack drew it; the rough tier
+    // must not blend into last frame's.
+    if(!reflection_ran || !reflection_screen_stack_enabled(params))
+    {
+        return;
+    }
+    gi_reflection_pass::rough_tier_params rtp;
+    rtp.g_buffer = rview.fbo_safe_get("GBUFFER");
+    rtp.probe_output = rview.fbo_safe_get("PBUFFER");
+    // This frame's resolve and rough specular: the gather just produced both (either is absent
+    // when it did not run - no resolve leaves the rough lobes to the probes, no rough specular
+    // falls back to the resolve).
+    rtp.gi_diffuse = rview.tex_safe_get("GI_RESOLVE");
+    rtp.rough_specular = rview.tex_safe_get("GI_ROUGH_SPECULAR");
+    rtp.cam = &camera;
+    gi_reflection_pass_.run_rough_tier(rview, rtp);
 }
 
 auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool
@@ -3371,6 +3395,8 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
         // would look like GI that simply stopped updating rather than like a disabled feature.
         rview.tex_remove("GI_RESOLVE");
         rview.fbo_remove("GI_RESOLVE");
+        // The rough specular goes with it: the rough tier reads neither without the other.
+        rview.tex_remove("GI_ROUGH_SPECULAR");
     }
     return result != nullptr;
 }

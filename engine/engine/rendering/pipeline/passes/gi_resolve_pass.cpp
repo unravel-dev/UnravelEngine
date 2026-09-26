@@ -9,7 +9,9 @@
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 
+#include <algorithm>
 #include <cmath>
+#include <iterator>
 
 namespace unravel
 {
@@ -201,6 +203,14 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
         APPLOG_WARNING("[SurfaceCache] GI upsample program failed to load. The gather will be "
                        "reconstructed bilinearly and will fringe at silhouettes.");
     }
+    auto fs_rough_specular = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_rough_specular.sc");
+    rough_specular_program_.cache_uniforms();
+    rough_specular_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_rough_specular);
+    if(!rough_specular_program_.is_valid())
+    {
+        APPLOG_WARNING("[SurfaceCache] GI rough specular program failed to load. Rough "
+                       "reflections fall back to the diffuse resolve.");
+    }
     auto fs_gi_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_denoise.sc");
     denoise_program_.cache_uniforms();
     denoise_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_gi_denoise);
@@ -229,6 +239,9 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
 auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
     APP_SCOPE_PERF("Rendering/GI/Resolve Pass");
+    // Republished below only when the rough specular runs this frame: the rough tier must fall
+    // back to the diffuse resolve rather than read a stale image.
+    rview.tex_remove("GI_ROUGH_SPECULAR");
     if(!has_gather_programs() || !params.g_buffer || !params.cam || !params.surface_cache ||
        !params.view_cache)
     {
@@ -671,12 +684,15 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                 bgfx::dispatch(pass.id, interp_program_.program->native_handle(), probes_x, probes_y, 1);
                 interp_program_.program->end();
             }
+            // The final filtered radiance, for the rough specular below.
+            gfx::texture::ptr filtered_radiance;
             {
                 // PROBE-SPACE FILTER, settings::probe_filter_passes times (Lumen's
                 // SpatialFilterNumPasses): every pass but the last filters the radiance into a
                 // derived atlas the next pass reads (two ping-pong atlases, never the trace
                 // atlas - the trace's firefly governor reads its own last-frame texel there);
-                // the last pass filters once more and convolves to irradiance.
+                // the last pass filters once more and convolves to irradiance. Every pass writes
+                // its filtered radiance; the last pass's atlas is the rough specular's source.
                 const int filter_passes = std::clamp(s.probe_filter_passes, 1, 4);
                 auto filter_source = probe_atlas;
                 for(int filter_pass = 0; filter_pass < filter_passes; ++filter_pass)
@@ -714,11 +730,9 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     gfx::set_uniform(filter_program_.u_gi_probe_filter, probe_filter);
                     bgfx::dispatch(pass.id, filter_program_.program->native_handle(), probes_x, probes_y, 1);
                     filter_program_.program->end();
-                    if(!final_pass)
-                    {
-                        filter_source = filter_target;
-                    }
+                    filter_source = filter_target;
                 }
+                filtered_radiance = filter_source;
             }
             {
                 // Fused: bind the history MRT and blend in-register; split: write GI_TRACE
@@ -879,6 +893,30 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
                     rview.tex_get_or_emplace("GI_MOMENTS") = history.write_moments;
                     rview.tex_get_or_emplace("GI_FAST") = history.write_fast;
                 }
+            }
+            // begin() is the gate, not is_valid(): it relinks the program once its shader has
+            // finished importing, which may be after init.
+            if(s.enable_reflections && rough_specular_program_.program &&
+               rough_specular_program_.program->begin())
+            {
+                rough_specular_inputs rough_inputs;
+                rough_inputs.filtered_radiance = filtered_radiance;
+                std::copy(std::begin(probe_params), std::end(probe_params), rough_inputs.probe_params.begin());
+                std::copy(std::begin(probe_screen), std::end(probe_screen), rough_inputs.probe_screen.begin());
+                std::copy(std::begin(probe_temporal), std::end(probe_temporal), rough_inputs.probe_temporal.begin());
+                std::copy(std::begin(gi_camera), std::end(gi_camera), rough_inputs.gi_camera.begin());
+                std::copy(std::begin(gi_jitter), std::end(gi_jitter), rough_inputs.gi_jitter.begin());
+                // zw: the lobe samples walk the UNBOUNDED R2 sequence (in double, as the gather's
+                // offsets). A cycle the running mean holds whole converges every texel to a fixed
+                // sample set, and its error prints as a static hatch in the rough reflections.
+                const double sample_index = double(gfx::get_render_frame());
+                rough_inputs.gi_jitter[2] = float(std::fmod(0.754877666 * sample_index, 1.0));
+                rough_inputs.gi_jitter[3] = float(std::fmod(0.569840291 * sample_index, 1.0));
+                rough_inputs.projection = gather_projection;
+                rough_inputs.dirty_margin = wp_base_spacing;
+                rough_inputs.lighting_hot = lighting_hot;
+                rough_inputs.target_size = target_size;
+                run_rough_specular(rview, params, rough_inputs);
             }
             bgfx::discard();
         }
@@ -1160,6 +1198,80 @@ auto gi_resolve_pass::measure_camera_motion(const run_params& params) -> float
     prev_camera_axis_ = axis;
     has_prev_camera_ = true;
     return math::clamp(motion, 0.0f, 1.0f);
+}
+
+void gi_resolve_pass::run_rough_specular(gfx::render_view& rview,
+                                         const run_params& params,
+                                         const rough_specular_inputs& inputs)
+{
+    // Ping-pong, with the gather history's continuity rule (acquire_history): last frame's
+    // result is only history when it was written on the frame the previous depth comes from.
+    auto& parity = rview.data_get_or_emplace("GI_ROUGH_SPECULAR_PARITY", 0u);
+    const bool even_frame = (parity & 1u) == 0u;
+    ++parity;
+    auto& written_frame = rview.data_get_or_emplace("GI_ROUGH_SPECULAR_FRAME", 0u);
+    const uint32_t render_frame = gfx::get_render_frame();
+    const bool continuous = written_frame != 0u && render_frame == written_frame + 1u;
+    written_frame = render_frame;
+    const char* write_name = even_frame ? "GI_ROUGH_SPECULAR_A" : "GI_ROUGH_SPECULAR_B";
+    const char* read_name = even_frame ? "GI_ROUGH_SPECULAR_B" : "GI_ROUGH_SPECULAR_A";
+    gfx::texture::ptr write_tex;
+    auto write_fbo = create_or_update_target(rview, write_name, inputs.target_size, write_tex);
+    const auto read_tex = rview.tex_safe_get(read_name);
+    const bool has_history = continuous && read_tex && params.prev_depth &&
+                             read_tex->get_size().width == inputs.target_size.width &&
+                             read_tex->get_size().height == inputs.target_size.height;
+    const bool use_velocity = params.velocity != nullptr;
+    const auto black = default_textures::get().black_texture();
+
+    gfx::render_pass pass("GI/Rough Specular");
+    pass.bind(write_fbo.get());
+    pass.set_view_proj(params.cam->get_view(), inputs.projection);
+    rough_specular_program_.program->begin();
+    gfx::set_texture(rough_specular_program_.s_rough_probe_radiance, 2, inputs.filtered_radiance);
+    gfx::set_texture(rough_specular_program_.s_rough_history, 5, has_history ? read_tex : black);
+    gfx::set_texture(rough_specular_program_.s_gi_prev_depth,
+                     6,
+                     params.prev_depth ? params.prev_depth : params.g_buffer->get_texture(4));
+    bgfx::setBuffer(7, probe_buffer_, bgfx::Access::Read);
+    gfx::set_texture(rough_specular_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
+    gfx::set_texture(rough_specular_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+    gfx::set_texture(rough_specular_program_.s_gi_velocity,
+                     14,
+                     use_velocity ? params.velocity : black,
+                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
+    gfx::set_uniform(rough_specular_program_.u_gi_camera, inputs.gi_camera.data());
+    gfx::set_uniform(rough_specular_program_.u_gi_jitter, inputs.gi_jitter.data());
+    gfx::set_uniform(rough_specular_program_.u_gi_probe_params, inputs.probe_params.data());
+    gfx::set_uniform(rough_specular_program_.u_gi_probe_screen, inputs.probe_screen.data());
+    gfx::set_uniform(rough_specular_program_.u_gi_probe_temporal, inputs.probe_temporal.data());
+    // The TAA-unjittered previous pair, the gather temporal's convention: a still camera must
+    // reproject onto itself.
+    const auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
+    gfx::set_uniform(rough_specular_program_.u_gi_prev_view_proj, prev_view_proj.get_matrix());
+    const auto prev_inv_view_proj = glm::inverse(prev_view_proj.get_matrix());
+    gfx::set_uniform(rough_specular_program_.u_gi_prev_inv_view_proj, prev_inv_view_proj);
+    // The dirty regions, the camera motion and the uv world scale, bound for this draw (bgfx
+    // clears uniform state at every submit).
+    const bool dirty_overflow = bind_dirty_regions(params, inputs.dirty_margin);
+    // The window at rest is the gather's slow lane, which drops to the fast cap while lighting
+    // changes, exactly as the diffuse resolve's does (the rough specular reads the same probes).
+    const float rest_window = (dirty_overflow || inputs.lighting_hot) ? float(gi::GI_TEMPORAL_FAST_FRAMES)
+                                                                      : params.settings.temporal_slow_frames;
+    const float rough_specular_params[4] = {has_history ? math::max(rest_window, 1.0f) : 0.0f,
+                                            use_velocity ? 1.0f : 0.0f,
+                                            math::max(params.settings.intensity, 0.0f),
+                                            params.settings.reprojection_tolerance};
+    gfx::set_uniform(rough_specular_program_.u_gi_rough_specular, rough_specular_params);
+    gfx::set_uniform(rough_specular_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
+    auto topology = gfx::clip_quad(1.0f);
+    bgfx::setState(topology | BGFX_STATE_DEPTH_TEST_NEVER | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::submit(pass.id, rough_specular_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
+    rough_specular_program_.program->end();
+    // Published under a stable name for the reflection pass's rough tier (the result
+    // ping-pongs between two targets).
+    rview.tex_get_or_emplace("GI_ROUGH_SPECULAR") = write_tex;
 }
 
 auto gi_resolve_pass::acquire_history(gfx::render_view& rview,

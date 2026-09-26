@@ -102,7 +102,8 @@ auto gi_reflection_pass::init(rtti::context& ctx) -> bool
 
 auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) -> bool
 {
-    (void)rview;
+    // Set again below once this frame's accumulation exists: the rough tier reads its coverage.
+    accumulation_.reset();
     if(!program_.is_valid() || !temporal_program_.is_valid() || !composite_program_.is_valid() ||
        !params.output || !params.g_buffer || !params.hiz || !params.cam ||
        !params.surface_cache || !params.view_cache)
@@ -499,38 +500,9 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         bgfx::setState(BGFX_STATE_DEFAULT);
         composite_program_.program->end();
     }
-    // ROUGH TIER: last frame's resolved gather, src-alpha into the probe layer at the weight
-    // that completes the traced composite's split (gi_reflection_tiers.sh). It is untraced, so
-    // it takes the probe layer's occlusion in the indirect pass. The trace read the probe layer
-    // as its sky before this draw. Without a resolve yet the probes answer the rough lobes.
-    // begin() is the gate, not is_valid(): it relinks a program whose shader finished importing
-    // after init, which is_valid() alone would report invalid for good.
-    if(params.probe_output && has_gi_diffuse && rough_program_.program && rough_program_.program->begin())
-    {
-        gfx::render_pass rpass("GI/Reflections Rough Tier");
-        rpass.bind(params.probe_output.get());
-        gfx::set_texture(rough_program_.s_refl_acc, 0, write_tex);
-        gfx::set_texture(rough_program_.s_gi_normal, 1, params.g_buffer->get_texture(1));
-        gfx::set_texture(rough_program_.s_hiz, 2, params.hiz);
-        gfx::set_texture(rough_program_.s_gi_diffuse, 3, params.gi_diffuse);
-        gfx::set_uniform(rough_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
-        auto rtopology = gfx::clip_fullscreen_triangle(1.0f);
-        if(rtopology == 0)
-        {
-            rtopology = gfx::clip_quad(1.0f);
-        }
-        // Over-blend like the probes: rgb premultiplied, alpha the union coverage, so the
-        // indirect pass fills only what neither the probes nor the rough tier answer with the
-        // environment (CompleteProbeLayer). The trace has already read the probes' own coverage.
-        bgfx::setState(rtopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA,
-                                                      BGFX_STATE_BLEND_INV_SRC_ALPHA,
-                                                      BGFX_STATE_BLEND_ONE,
-                                                      BGFX_STATE_BLEND_INV_SRC_ALPHA));
-        bgfx::submit(rpass.id, rough_program_.program->native_handle());
-        bgfx::setState(BGFX_STATE_DEFAULT);
-        rough_program_.program->end();
-    }
+    // The rough tier blends into the probe layer after the gather (run_rough_tier) at the weight
+    // that completes this composite's split; it reads this accumulation's coverage.
+    accumulation_ = write_tex;
     bgfx::discard();
     // A FULL-RESOLUTION mirror tier lived here briefly (capped compacted list re-traced at
     // output res over the composite) and was REMOVED on the user's verdict: +0.6 ms at FHD
@@ -540,6 +512,56 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     // returns, its sky fallback must read the probe layer (PBUFFER) before the rough tier
     // blends into it, and the half-res classify should exclude the pixels the tier will
     // overwrite.
+    return true;
+}
+
+auto gi_reflection_pass::run_rough_tier(gfx::render_view& rview, const rough_tier_params& params) -> bool
+{
+    (void)rview;
+    // begin() is the gate, not is_valid(): it relinks a program whose shader finished importing
+    // after init, which is_valid() alone would report invalid for good. Without a resolve yet the
+    // probes answer the rough lobes.
+    if(!accumulation_ || !params.probe_output || !params.gi_diffuse || !params.g_buffer || !params.cam ||
+       !rough_program_.program || !rough_program_.program->begin())
+    {
+        accumulation_.reset();
+        return false;
+    }
+    gfx::render_pass rpass("GI/Reflections Rough Tier");
+    rpass.bind(params.probe_output.get());
+    // The rough specular's upsample rebuilds world positions from depth with the gather's
+    // TAA-unjittered projection, the one its texels were computed with.
+    rpass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
+    gfx::set_texture(rough_program_.s_refl_acc, 0, accumulation_);
+    gfx::set_texture(rough_program_.s_gi_normal, 1, params.g_buffer->get_texture(1));
+    gfx::set_texture(rough_program_.s_gi_depth, 2, params.g_buffer->get_texture(4));
+    gfx::set_texture(rough_program_.s_gi_diffuse, 3, params.gi_diffuse);
+    const bool has_rough_specular = params.rough_specular != nullptr;
+    gfx::set_texture(rough_program_.s_gi_rough_specular,
+                     4,
+                     has_rough_specular ? params.rough_specular : default_textures::get().black_texture());
+    const auto camera_position = params.cam->get_position();
+    const float reflection_camera[4] = {camera_position.x, camera_position.y, camera_position.z, 0.0f};
+    gfx::set_uniform(rough_program_.u_gi_reflection_camera, reflection_camera);
+    const float rough_params[4] = {has_rough_specular ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
+    gfx::set_uniform(rough_program_.u_gi_refl_rough, rough_params);
+    auto topology = gfx::clip_fullscreen_triangle(1.0f);
+    if(topology == 0)
+    {
+        topology = gfx::clip_quad(1.0f);
+    }
+    // Over-blend like the probes: rgb premultiplied, alpha the union coverage, so the indirect
+    // pass fills only what neither the probes nor the rough tier answer with the environment
+    // (CompleteProbeLayer). The trace has already read the probes' own coverage.
+    bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                   BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA,
+                                                  BGFX_STATE_BLEND_INV_SRC_ALPHA,
+                                                  BGFX_STATE_BLEND_ONE,
+                                                  BGFX_STATE_BLEND_INV_SRC_ALPHA));
+    bgfx::submit(rpass.id, rough_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
+    rough_program_.program->end();
+    accumulation_.reset();
     return true;
 }
 

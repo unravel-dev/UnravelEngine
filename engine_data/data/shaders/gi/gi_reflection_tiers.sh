@@ -35,4 +35,14 @@ float GiReflectionRoughWeight(float coverage, float rough_share)
 	return saturate(coverage * rough_share / max(uncovered, 1e-4));
 }
 
+/// The diffuse resolve's share of the rough tier: the rough specular (the screen-probe radiance
+/// over the pixel's lobe) fades linearly into it from GI_REFLECTION_ROUGH_SPECULAR_DIFFUSE_START
+/// to GI_REFLECTION_ROUGH_SPECULAR_MAX, where the lobe is wide enough that the two agree
+/// (Lumen's RoughReflectionsDiffuseLerp).
+float GiReflectionRoughDiffuseShare(float roughness)
+{
+	return saturate((roughness - GI_REFLECTION_ROUGH_SPECULAR_DIFFUSE_START) /
+	                (GI_REFLECTION_ROUGH_SPECULAR_MAX - GI_REFLECTION_ROUGH_SPECULAR_DIFFUSE_START));
+}
+
 #endif // __GI_REFLECTION_TIERS_SH__

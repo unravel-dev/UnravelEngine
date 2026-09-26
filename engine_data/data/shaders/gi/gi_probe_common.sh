@@ -60,6 +60,11 @@
 /// two-layer machinery); the record indexing keeps the parameter for layout stability.
 #define GI_PROBE_LAYERS     1
 
+/// How far a bracket probe's anchor may sit off a pixel's plane, as a fraction of the pixel's
+/// view distance, before it stops serving the pixel: the integrate's bracket weight and the
+/// rough specular's use the same rule.
+#define GI_INTEGRATE_PLANE_TOLERANCE 0.05
+
 /// x = probe count x, y = probe count y, z = probe spacing in TRACE-RESOLUTION pixels,
 /// w = frame index.
 uniform vec4 u_gi_probe_params;

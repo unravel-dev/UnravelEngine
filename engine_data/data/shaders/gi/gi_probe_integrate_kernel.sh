@@ -60,8 +60,6 @@ uniform vec4 u_gi_intensity;
 #define u_gi_gtao_bound     u_gi_intensity.y
 #define u_gi_gtao_bent      u_gi_intensity.z
 
-#define GI_INTEGRATE_PLANE_TOLERANCE 0.05
-
 /// Accumulates the 2x2 probe bracket at @p base: bilinear x plane weights, irradiance sampled
 /// at the pixel normal via octahedral-wrapped manual bilinear. One function so the jittered and
 /// the fallback unjittered brackets run identical code.

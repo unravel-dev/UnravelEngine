@@ -818,6 +818,29 @@
       " left: C0 continuity into the rough tier at the cutoff, over the last quarter of the"       \
       " traced range only - a wide fade from the mirror end read as content dissolving"            \
       " instead of blurring (measured, round 3)")                                                  \
+    X(GI_REFLECTION_ROUGH_SPECULAR_MAX, 0.8f,                                                      \
+      "GGX roughness", "ported from Lumen"                                                         \
+      " (r.Lumen.ScreenProbeGather.MaxRoughnessToEvaluateRoughSpecular, UE 5.8"                    \
+      " LumenScreenProbeGather.cpp:355-357): from here on the rough tier is the diffuse resolve"   \
+      " alone - the lobe is wide enough that its radiance and the irradiance agree - and the"      \
+      " rough specular pass (fs_gi_rough_specular.sc) skips the pixel")                            \
+    X(GI_REFLECTION_ROUGH_SPECULAR_DIFFUSE_START, 0.6f,                                            \
+      "GGX roughness", "ported from Lumen (RoughReflectionsDiffuseLerp's 0.2 fade length, UE 5.8"  \
+      " LumenScreenProbeTileClassication.ush:25-37): the rough specular fades linearly into the"   \
+      " diffuse resolve from here to GI_REFLECTION_ROUGH_SPECULAR_MAX")                            \
+    X(GI_REFLECTION_ROUGH_SPECULAR_SAMPLES, 4,                                                     \
+      "lobe samples per pixel per frame", "ported from Lumen (NumSpecularSamples, UE 5.8"          \
+      " LumenScreenProbeGather.usf:1516): each is one VNDF direction of the pixel's lobe, looked"  \
+      " up in the filtered radiance of the four probes bracketing it; the running mean over"       \
+      " GI_REFLECTION_ROUGH_SPECULAR_FRAMES integrates the rest")                                  \
+    X(GI_REFLECTION_ROUGH_SPECULAR_FRAMES, 10.0f,                                                  \
+      "frames", "ported from Lumen (r.Lumen.ScreenProbeGather.Temporal.MaxFramesAccumulated,"      \
+      " UE 5.8 LumenScreenProbeGather.cpp:227): the rough specular's running-mean cap while the"   \
+      " camera moves - a moving view changes what a lobe sees. Lumen filters its rough specular"   \
+      " with the screen-probe temporal, not the reflection denoiser, and so does this: surface"    \
+      " reprojection and per-tap depth validity, the gather's slow window at rest (the same"       \
+      " probes carry the same noise), collapsed toward GI_TEMPORAL_MOVING_MIN_FRAMES where the"    \
+      " probes' rays hit moving geometry or a placement changed")                                  \
     /* --- temporal (plan 3.5) --- */                                                              \
     X(GI_INTERPOLATION_JITTER_TILES, 0.75f,                                                     \
       "probe tiles", "published-then-tuned: [CVar] ScreenProbeGather.FullResolutionJitterWidth"    \

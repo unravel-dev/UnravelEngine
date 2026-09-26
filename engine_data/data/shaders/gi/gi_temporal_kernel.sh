@@ -68,6 +68,9 @@ SAMPLER2D(s_gi_velocity, 14);
 uniform mat4 u_gi_prev_view_proj;
 uniform mat4 u_gi_prev_inv_view_proj;
 
+// GiHistoryTapValid and GiTemporalMovingAmount, shared with the rough specular's temporal.
+#include "gi/gi_temporal_common.sh"
+
 /// x = reprojection tolerance as a FRACTION of view distance, y = the FAST lane's
 /// accumulation cap, z = the SLOW lane's accumulation cap, w = 1 when a usable history
 /// exists.
@@ -229,30 +232,6 @@ vec4 GiFreshMoments(vec4 current)
 vec4 GiFastOutput(vec4 fast, float cause)
 {
 	return vec4(fast.xyz, u_gi_cause_lane ? cause / GI_TEMPORAL_CAUSE_SCALE : fast.w);
-}
-
-/**
- * 1 when the history texel centred at @p tap_uv held THIS surface last frame: the world
- * position reconstructed from the previous depth buffer under that texel lies within
- * @p tolerance of @p world_position. The depth is a POINT fetch of the full-resolution
- * previous depth under the history texel's centre - a filtered depth at a silhouette is a
- * value between two surfaces that belongs to neither, exactly what the test must not see.
- * Sky (depth 1) is never a valid history for a surface.
- */
-float GiHistoryTapValid(vec2 tap_uv, vec3 world_position, float tolerance)
-{
-	ivec2 prev_depth_size = textureSize(s_gi_prev_depth, 0);
-	ivec2 depth_texel = clamp(ivec2(tap_uv * vec2(prev_depth_size)),
-	                          ivec2(0, 0),
-	                          prev_depth_size - ivec2(1, 1));
-	float prev_depth = texelFetch(s_gi_prev_depth, depth_texel, 0).x;
-	if(prev_depth >= 1.0)
-	{
-		return 0.0;
-	}
-	vec3 prev_clip_stored = clipTransform(vec3(tap_uv * 2.0 - 1.0, toClipSpaceDepth(prev_depth)));
-	vec3 prev_world = clipToWorld(u_gi_prev_inv_view_proj, prev_clip_stored);
-	return length(prev_world - world_position) <= tolerance ? 1.0 : 0.0;
 }
 
 /**
@@ -526,10 +505,7 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	// placement, sixteen at most) resolve. The amount is carried one frame in the moments'
 	// w lane (max with the reprojected history) so the frames right after a mover passed
 	// still flush; it stores the CURRENT amount, so it decays the frame the hits stop.
-	float moving_amount = saturate(moving_share / GI_TEMPORAL_MOVING_FRACTION_FULL);
-	moving_amount = saturate(min((moving_amount - GI_TEMPORAL_MOVING_DEAD_ZONE) /
-	                                 (1.0 - GI_TEMPORAL_MOVING_DEAD_ZONE),
-	                             GI_TEMPORAL_MOVING_MAX));
+	float moving_amount = GiTemporalMovingAmount(moving_share);
 	float moving_effective = max(moving_amount, saturate(history_moments.w));
 	slow_cap = mix(slow_cap, max(GI_TEMPORAL_MOVING_MIN_FRAMES, 1.0), moving_effective);
 	float count = min(history_moments.z + 1.0, slow_cap);

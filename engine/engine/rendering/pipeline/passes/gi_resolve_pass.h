@@ -13,6 +13,8 @@
 
 #include "trace_resolution.h"
 
+#include <array>
+
 namespace unravel
 {
 
@@ -281,6 +283,40 @@ private:
                       const run_params& params,
                       const gfx::texture::ptr& input,
                       const usize32_t& source_size) -> gfx::texture::ptr;
+
+    /// This frame's probe data as the rough specular pass reads it; filled inside run().
+    struct rough_specular_inputs
+    {
+        /// The probe filter's final filtered radiance atlas.
+        gfx::texture::ptr filtered_radiance;
+        /// The probe lattice uniforms exactly as the integrate got them.
+        std::array<float, 4> probe_params{};
+        std::array<float, 4> probe_screen{};
+        std::array<float, 4> probe_temporal{};
+        std::array<float, 4> gi_camera{};
+        std::array<float, 4> gi_jitter{};
+        /// The TAA-unjittered projection the whole gather chain reconstructs positions with.
+        math::transform projection;
+        /// Soft margin of the dirty regions (one level-0 world-probe spacing), as the gather
+        /// temporal binds them.
+        float dirty_margin{};
+        /// The lighting-change signal is hot: the rest window drops to the fast cap, as the
+        /// gather's slow lane does.
+        bool lighting_hot{};
+        usize32_t target_size{};
+    };
+
+    /**
+     * @brief The rough specular (fs_gi_rough_specular.sc): the filtered probe radiance
+     *        integrated against each rough pixel's GGX lobe, with its own running mean.
+     *
+     * Publishes the result as "GI_ROUGH_SPECULAR" at the trace resolution for the reflection
+     * pass's rough tier; the name is removed whenever the pass does not run, so the rough tier
+     * falls back to the diffuse resolve instead of reading a stale image.
+     */
+    void run_rough_specular(gfx::render_view& rview,
+                            const run_params& params,
+                            const rough_specular_inputs& inputs);
 
     /// GI gather programs (plan phase 5). Constant-driven: their only uniforms are the probe
     /// lattice descriptors, the camera, and the world-structure bindings.
@@ -735,6 +771,55 @@ private:
             return program && program->is_valid();
         }
     } denoise_program_;
+
+    /// The rough specular (fs_gi_rough_specular.sc), one fragment pass at the trace resolution.
+    struct rough_specular_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_camera;
+        gfx::program::uniform_ptr u_gi_jitter;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_prev_view_proj;
+        gfx::program::uniform_ptr u_gi_prev_inv_view_proj;
+        /// x = history valid, y = velocity bound, z = GI intensity, w = reprojection tolerance.
+        gfx::program::uniform_ptr u_gi_rough_specular;
+        gfx::program::uniform_ptr s_rough_probe_radiance;
+        gfx::program::uniform_ptr s_rough_history;
+        gfx::program::uniform_ptr s_gi_prev_depth;
+        gfx::program::uniform_ptr s_gi_depth;
+        gfx::program::uniform_ptr s_gi_normal;
+        gfx::program::uniform_ptr s_gi_velocity;
+        /// View pre-exposure (pre_exposure.sh): corrects the history from last frame's scale.
+        gfx::program::uniform_ptr u_pre_exposure;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_camera, "u_gi_camera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_jitter, "u_gi_jitter", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), u_gi_prev_inv_view_proj, "u_gi_prev_inv_view_proj",
+                          bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), u_gi_rough_specular, "u_gi_rough_specular", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_rough_probe_radiance, "s_rough_probe_radiance",
+                          bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_rough_history, "s_rough_history", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_prev_depth, "s_gi_prev_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_depth, "s_gi_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_normal, "s_gi_normal", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_velocity, "s_gi_velocity", bgfx::UniformType::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } rough_specular_program_;
 
     struct upsample_program : uniforms_cache
     {

@@ -236,9 +236,18 @@ public:
                                  const gi_settings& gi,
                                  bgfx::IndirectBufferHandle indirect);
 
-    /// World-space specular tier into RBUFFER, layered UNDER SSR, and its rough tier into
-    /// PBUFFER, the probe layer. No-op unless a camera run with GI reflections enabled.
-    void run_gi_reflection_pass(const camera& camera, gfx::render_view& rview, const run_params& params);
+    /// World-space specular tier into RBUFFER, layered UNDER SSR. No-op unless a camera run with
+    /// GI reflections enabled.
+    /// @return true when the traced tier ran this frame (the rough tier then follows the gather).
+    auto run_gi_reflection_pass(const camera& camera, gfx::render_view& rview, const run_params& params) -> bool;
+
+    /// The GI reflections' rough tier into PBUFFER, the probe layer: this frame's rough specular
+    /// fading into the resolve, after the gather that produced both. No-op unless
+    /// @p reflection_ran and the probe stack drew PBUFFER this frame.
+    void run_gi_reflection_rough_tier(const camera& camera,
+                                      gfx::render_view& rview,
+                                      const run_params& params,
+                                      bool reflection_ran);
 
     /// Gathers the world structures into a screen-space indirect diffuse buffer.
     /// See gi_resolve_pass.

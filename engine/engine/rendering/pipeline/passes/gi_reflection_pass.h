@@ -26,9 +26,11 @@ namespace unravel
  * wide lobes reuse last frame's resolved gather, sharper ones trace the SDF world tier
  * (roughness-adaptive mesh-exact range, clipmap finder + mesh refine, light voxels
  * at snapped hits; unrefined clipmap hits on sharp pixels leave the authored probes).
- * The traced tier goes into RBUFFER with the traced layers; the rough tier is untraced (it
- * carries the probe lattice's visibility, not the pixel's) and goes into the probe layer,
- * PBUFFER, whose occlusion the indirect pass applies.
+ * The traced tier goes into RBUFFER with the traced layers; the rough tier - the gather's rough
+ * specular, fading into its diffuse resolve - is untraced (it carries the probe lattice's
+ * visibility, not the pixel's) and goes into the probe layer, PBUFFER, whose occlusion the
+ * indirect pass applies. It blends in after the gather (run_rough_tier), so it reads this
+ * frame's rough specular and resolve.
  * Everything is owned by gi_constants; the pass has no tuning surface beyond its enable.
  */
 class gi_reflection_pass
@@ -51,14 +53,10 @@ public:
         /// PBUFFER is then stale with last frame's probes and rough tier, and reading it would
         /// feed the pass its own output. Null binds transparent black, degrading misses to the SH.
         gfx::texture::ptr probe_layer;
-        /// PBUFFER itself: the rough tier blends into the probe layer after the trace has read
-        /// it, because it is untraced and takes the probe layer's occlusion. Null (with
-        /// probe_layer) leaves the rough lobes to the probes.
-        gfx::frame_buffer::ptr probe_output;
-        /// Last frame's resolved GI (temporally filtered, denoised E/pi per pixel) - the rough
-        /// specular source: a wide lobe converges to the diffuse irradiance, and this is the
-        /// smoothest per-pixel estimate the engine owns (the Lumen recipe - reuse the gather,
-        /// never a raw world lattice). Null on the first frames; the shader falls back to SH.
+        /// Last frame's resolved GI (temporally filtered, denoised E/pi per pixel): the value
+        /// past-cutoff texels store for the temporal's neighbourhood, and the stand-in for traced
+        /// hits the light voxels cannot answer. Null on the first frames; the shader falls back
+        /// to SH.
         gfx::texture::ptr gi_diffuse;
         /// Last frame's composited scene colour (PREV_SCENE_HDR, view depth in alpha when
         /// RGBA16F): the compute trace upgrades an on-screen world hit to the exact lit
@@ -97,10 +95,34 @@ public:
         pre_exposure_state pre_exposure{};
     };
 
+    /// Inputs of the rough tier, which blends into the probe layer after the gather.
+    struct rough_tier_params
+    {
+        gfx::frame_buffer::ptr g_buffer;
+        /// PBUFFER: the rough tier is untraced and takes the probe layer's occlusion.
+        gfx::frame_buffer::ptr probe_output;
+        /// This frame's resolved GI (GI_RESOLVE, E/pi): the rough tier past
+        /// GI_REFLECTION_ROUGH_SPECULAR_MAX and wherever no rough specular exists.
+        gfx::texture::ptr gi_diffuse;
+        /// This frame's rough specular (GI_ROUGH_SPECULAR, trace resolution, a = accumulated
+        /// frames). Null falls back to the diffuse resolve.
+        gfx::texture::ptr rough_specular;
+        const camera* cam{};
+    };
+
     ~gi_reflection_pass();
 
     auto init(rtti::context& ctx) -> bool;
     auto run(gfx::render_view& rview, const run_params& params) -> bool;
+
+    /**
+     * @brief Blends the rough tier into the probe layer at the weight that completes this
+     *        frame's traced composite (gi_reflection_tiers.sh).
+     *
+     * Runs after the gather, whose rough specular and resolve it reads, and only on a frame
+     * whose run() succeeded: the weights read that run's accumulated coverage.
+     */
+    auto run_rough_tier(gfx::render_view& rview, const rough_tier_params& params) -> bool;
 
 private:
     struct reflection_program : uniforms_cache
@@ -346,26 +368,34 @@ private:
         }
     } composite_program_;
 
-    /// The rough tier into the probe layer (fs_gi_reflection_rough.sc), after the composite.
+    /// The rough tier into the probe layer (fs_gi_reflection_rough.sc), after the gather.
     struct rough_program : uniforms_cache
     {
         gpu_program::ptr program;
         gfx::program::uniform_ptr s_refl_acc;
         gfx::program::uniform_ptr s_gi_normal;
-        gfx::program::uniform_ptr s_hiz;
+        gfx::program::uniform_ptr s_gi_depth;
         gfx::program::uniform_ptr s_gi_diffuse;
-        /// View pre-exposure (pre_exposure.sh): corrects last frame's resolve into this frame's.
-        gfx::program::uniform_ptr u_pre_exposure;
+        gfx::program::uniform_ptr s_gi_rough_specular;
+        gfx::program::uniform_ptr u_gi_reflection_camera;
+        /// x = 1 when the rough specular is bound; yzw unused.
+        gfx::program::uniform_ptr u_gi_refl_rough;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), s_refl_acc, "s_refl_acc", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_gi_normal, "s_gi_normal", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), s_hiz, "s_hiz", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_depth, "s_gi_depth", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_gi_diffuse, "s_gi_diffuse", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_gi_rough_specular, "s_gi_rough_specular", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_gi_reflection_camera, "u_gi_reflection_camera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_refl_rough, "u_gi_refl_rough", bgfx::UniformType::Vec4);
         }
     } rough_program_;
+
+    /// This frame's accumulated traced tier (its alpha is the coverage the rough tier's weight
+    /// completes), set by a successful run() and read by run_rough_tier(); null otherwise.
+    gfx::texture::ptr accumulation_;
 
     /// Composed-content epoch of the view's clipmap at the last run, and the frame it last
     /// advanced: the STRUCTURAL half of the temporal's stillness-release cap. The mover
