@@ -33,7 +33,9 @@ BUFFER_RW(b_world_probe_select, uint, 9);
 BUFFER_RW(b_world_probe_list, uint, 10);
 
 /// x = phase (0 histogram, 1 threshold, 2 emit), y = the frame's budget in probes, z = the frame
-/// index masked to the schedule word's 20 bits.
+/// index masked to the schedule word's 20 bits, w = the settled buckets' cap in probes (0 = none):
+/// claims, scrolled-in slots and first windows are listed up to the budget as always, and the
+/// settled probes after them only up to this many (the camera-only budget, gi_world_probe_pass).
 uniform vec4 u_gi_world_probe_select;
 /// The trace's window centres (xyz = centre cell per level): a dense slot's cell this frame.
 uniform vec4 u_gi_world_probe_window[SDF_CLIPMAP_LEVEL_COUNT];
@@ -96,6 +98,8 @@ void main()
 		uint threshold = uint(GI_WORLD_PROBE_SELECT_BUCKETS);
 		uint quota = 0u;
 		uint pending = 0u;
+		uint limit = budget;
+		uint settled_cap = uint(u_gi_world_probe_select.w);
 		for(int bucket = 0; bucket < GI_WORLD_PROBE_SELECT_BUCKETS; ++bucket)
 		{
 			uint count = b_world_probe_select[bucket];
@@ -104,12 +108,16 @@ void main()
 			{
 				pending += count;
 			}
+			if(bucket == GI_WORLD_PROBE_SELECT_FIRST_WINDOW_BUCKETS + 1 && settled_cap > 0u)
+			{
+				limit = min(budget, spent + settled_cap);
+			}
 			if(threshold == uint(GI_WORLD_PROBE_SELECT_BUCKETS))
 			{
-				if(spent + count > budget)
+				if(spent + count > limit)
 				{
 					threshold = uint(bucket);
-					quota = budget - spent;
+					quota = limit - spent;
 				}
 				else
 				{

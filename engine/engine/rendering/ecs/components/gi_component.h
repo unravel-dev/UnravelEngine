@@ -56,6 +56,8 @@ public:
         r.probe_filter_passes = dominant ? f.probe_filter_passes : r.probe_filter_passes;
         r.adaptive_probes = dominant ? f.adaptive_probes : r.adaptive_probes;
         r.adaptive_rays = dominant ? f.adaptive_rays : r.adaptive_rays;
+        r.reprojected_firefly_reference =
+            dominant ? f.reprojected_firefly_reference : r.reprojected_firefly_reference;
         r.world_probe_jitter = dominant ? f.world_probe_jitter : r.world_probe_jitter;
         r.enable_reflections = dominant ? f.enable_reflections : r.enable_reflections;
         r.reflection_temporal_frames =
@@ -81,6 +83,7 @@ public:
         r.upsample_normal_power = std::lerp(r.upsample_normal_power, f.upsample_normal_power, contribution);
         r.upsample_plane_tolerance =
             std::lerp(r.upsample_plane_tolerance, f.upsample_plane_tolerance, contribution);
+        r.hold_at_rest = dominant ? f.hold_at_rest : r.hold_at_rest;
         // Cascade geometry is discrete: a resolution between two volumes is neither volume
         // and forces a rebuild per blend step.
         auto& rc = result.clipmap;

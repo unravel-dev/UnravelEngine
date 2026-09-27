@@ -30,6 +30,12 @@ namespace ANONYMOUS
 /// (tasks/lumen_parity_log.md, the instance grid sweep). Lossless: every resolution lists the same
 /// instances for a ray.
 constexpr uint32_t instance_grid_resolution = 16u;
+/// Longest cell edge of that grid, in metres: a scene longer than instance_grid_resolution x this (a city
+/// block, not a courtyard) gets more cells instead of longer ones. A fixed count along the longest axis
+/// would make cells list the instances of whole streets, and every ray crossing one pays a bounds test per
+/// listed instance; much smaller cells stop paying off near the mesh trace ranges, where a march restarts
+/// in every cell it crosses.
+constexpr float instance_grid_max_cell_size = 6.0f;
 
 /// Layout of the instance buffer: a flat array of vec4, matching BUFFER_RO(_, vec4, _).
 auto get_vec4_buffer_layout() -> const bgfx::VertexLayout&
@@ -83,6 +89,7 @@ auto surface_cache_system::init(rtti::context& ctx) -> bool
     }
     sdf_instance_grid::settings grid_settings;
     grid_settings.resolution = ANONYMOUS::instance_grid_resolution;
+    grid_settings.max_cell_size = ANONYMOUS::instance_grid_max_cell_size;
     grid_.init(grid_settings);
     if(!light_buffer_.init())
     {

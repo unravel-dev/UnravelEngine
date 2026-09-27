@@ -180,13 +180,14 @@ private:
 
     gate_program program_;
     bgfx::IndirectBufferHandle indirect_{bgfx::kInvalidHandle};
-    /// The sample ring: three header slots (count, head, the sparse-probe hold) then the
-    /// samples as float bits. Never written by the CPU - bgfx forbids updating a
-    /// compute-writable buffer - so the kernel clears it from the reset lane instead.
+    /// The sample ring: four header slots (count, head, the sparse-probe hold, whether the last
+    /// verdict ran the gated dispatches) then the samples as float bits. Never written by the
+    /// CPU - bgfx forbids updating a compute-writable buffer - so the kernel clears it from the
+    /// reset lane instead.
     bgfx::DynamicIndexBufferHandle ring_{bgfx::kInvalidHandle};
     /// Slots the ring buffer holds: the header plus both compared windows, twice - the
     /// absolute change ring and the signed drift ring (GI_QUIESCENCE_DRIFT_FRACTION).
-    static constexpr uint32_t ring_header_slots = 3u;
+    static constexpr uint32_t ring_header_slots = 4u;
     static constexpr uint32_t ring_sample_slots =
         2u * (uint32_t(gi::GI_QUIESCENCE_COMPARE_FRAMES) + uint32_t(gi::GI_QUIESCENCE_WINDOW_FRAMES));
     /// The memo texture the ring was last fed from: a fresh allocation carries an unwritten

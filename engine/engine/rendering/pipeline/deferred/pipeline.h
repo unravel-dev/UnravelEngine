@@ -259,6 +259,12 @@ public:
                              gfx::render_view& rview,
                              const run_params& rparams) -> bool;
 
+    /// Whether this view's screen-side GI is held this frame (gi_resolve_pass::settings::
+    /// hold_at_rest): the camera, pre-exposure and GI settings unchanged, no mover drawn and the
+    /// world side settled, for long enough. Decided once per frame and view; the reflection
+    /// trace and the gather share the verdict.
+    auto update_gi_hold(const camera& camera, gfx::render_view& rview, const gi_settings& gi) -> bool;
+
     void build_reflections(scene& scn, const camera& camera, delta_t dt);
 
     void build_shadows(scene& scn, const camera& camera, delta_t dt, layer_mask render_mask = layer_mask{layer_reserved::everything_layer});

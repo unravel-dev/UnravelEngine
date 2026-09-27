@@ -14,10 +14,17 @@
  *    samples on the very brightest), every other block traces one cell jittered across
  *    its quad with GI_ADAPTIVE_COARSE_SAMPLES samples and splats it - 16 + 3K rays per
  *    probe plus the detail texels' supersamples, against the full program's 48-64. FOUR probes pack
- *    into each 64-lane group (16 lanes each, rays pulled round-robin so one bright
- *    block never idles the wave); a 16-thread group alone would leave three quarters
- *    of every wave idle. The trade is per-frame variance and 4x4 angular granularity
+ *    into each 64-lane group (16 lanes each); a 16-thread group alone would leave three
+ *    quarters of every wave idle. The trade is per-frame variance and 4x4 angular granularity
  *    in DIM octants only - white, one-frame-lived, integrated by the resolve temporal.
+ *
+ * Both programs trace through a SAMPLE POOL: the group numbers every sample of its probes
+ * (slot by slot, ray unit by ray unit) and lane L of the 64 traces samples L, L + 64, ...
+ * A group lasts as long as its slowest lane, and a lane per ray unit would carry its unit's
+ * whole chain - a supersampled texel's four samples beside lanes with one or none, a bright
+ * probe's detail blocks beside a dim probe's quads - where the pool gives every lane
+ * ceil(samples / 64) of them. The splat is integer atomics, so which lane traced a sample
+ * cannot change the result.
  *
  * There is deliberately NO probe-space temporal accumulation in either form.
  * Direction-stratum amortization (16-ray windows blended 1/n into the tile) was built,
@@ -121,7 +128,8 @@ uniform vec4 u_gi_camera;
 /// DOUBLE on the CPU: fract(R2 x float(frame)) here had 1/128 precision after ~1e5 frames and
 /// the jitter collapsed to a few positions in long sessions. xy = the integrate's offset.
 uniform vec4 u_gi_jitter;
-/// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs. y unused.
+/// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs. y > 0 when the firefly
+/// governor's reference is the reprojected probe's direction block (reprojected_firefly_reference).
 /// z = the adaptive flag - consumed by the CLASSIFY pass, bound here only for layout parity.
 /// w > 0 when s_gi_prev_color holds last frame's composited output; > 1.5 when its alpha
 /// also carries each pixel's view depth (the RGBA16F history), which GiReadHistory then
@@ -142,6 +150,28 @@ uniform mat4 u_gi_prev_view_proj;
 // = (GI_PROBE_DIR_EDGE / 2) squared, written as a literal: it feeds NUM_THREADS, and a GLSL
 // 430 layout id takes no expression (glslang: 'non-literal layout-id value').
 #define GI_TRACE_ADAPTIVE_LANES 16
+/// Lanes per group (both programs), and per probe slot.
+#define GI_TRACE_GROUP_LANES 64
+#if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
+#	define GI_TRACE_SLOT_LANES GI_TRACE_ADAPTIVE_LANES
+#else
+#	define GI_TRACE_SLOT_LANES GI_TRACE_GROUP_LANES
+#endif
+/// Ray units per slot at most: 16 blocks x 4 detail texels, or the full program's 64 texels.
+#define GI_TRACE_MAX_UNITS 64
+/// Pool entries per slot: its units, then its total.
+#define GI_TRACE_POOL_STRIDE (GI_TRACE_MAX_UNITS + 1)
+/// A ray unit's samples at most, and phase-2 iterations per lane at most (a bound for the compiler).
+#define GI_TRACE_UNIT_MAX_SAMPLES (GI_IMPORTANCE_SUPERSAMPLE_MAX + GI_EMISSIVE_NEE_SAMPLES)
+#define GI_TRACE_POOL_GUARD (GI_TRACE_SLOT_COUNT * GI_TRACE_MAX_UNITS * GI_TRACE_UNIT_MAX_SAMPLES / GI_TRACE_GROUP_LANES + 1)
+/// Binary-search steps over a slot's GI_TRACE_POOL_STRIDE prefix entries.
+#define GI_TRACE_POOL_SEARCH_STEPS 7
+/// The group's SAMPLE POOL. Per slot: one entry per ray unit - its exclusive sample prefix (low 16 bits) and its
+/// cell (base x bits 16-18, base y bits 19-21, bit 22 = 2x2 span) - then one entry holding the slot's sample
+/// total; plus the slot's unit count and packed probe coordinate.
+SHARED uint s_pool_entry[GI_TRACE_SLOT_COUNT * GI_TRACE_POOL_STRIDE];
+SHARED uint s_pool_units[GI_TRACE_SLOT_COUNT];
+SHARED uint s_pool_probe[GI_TRACE_SLOT_COUNT];
 
 SHARED vec3 s_anchor_normal[GI_TRACE_SLOT_COUNT];
 SHARED vec3 s_origin[GI_TRACE_SLOT_COUNT];
@@ -417,6 +447,15 @@ vec3 GiFarFieldFallback(vec3 hit_position, vec3 sample_dir)
 	return GiFarFieldRadiance(hit_position, sample_dir);
 }
 
+/// The reprojected probe's luminance for one of the 16 2x2 direction blocks, as the importance
+/// mip staged it (pre-exposure corrected).
+float GiImportanceBlockLuma(int slot, int block)
+{
+	vec4 mip = s_importance_mip[slot * 4 + block / 4];
+	int lane = block % 4;
+	return lane == 0 ? mip.x : (lane == 1 ? mip.y : (lane == 2 ? mip.z : mip.w));
+}
+
 void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 {
 	// No absolute clamp on the cell's radiance (measured 2026-09-10, gi_emissive_research 1.5:
@@ -426,26 +465,45 @@ void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 	vec3 averaged = radiance;
 	// FIREFLY GOVERNOR: a ray landing on a small bright emitter dominates the whole tile
 	// when it enters at full weight - the probe's screen footprint pops for a frame. Each
-	// new sample is capped at GI_GATHER_FIREFLY_CLAMP x its reference: LAST frame's value
-	// of this texel (the tile is single-buffered, so it is still in place), FLOORED by the
+	// new sample is capped at GI_GATHER_FIREFLY_CLAMP x its reference. By default: LAST
+	// frame's value of this texel (the tile is single-buffered, so it is still in place), FLOORED by the
 	// reprojected previous tile's mean luminance (s_importance_mean - looked up by WORLD
 	// position with a plane test, so it survives camera motion that leaves the texel
 	// holding a nearby point's radiance). Without the floor, a dark stale texel crushed
 	// legitimate arrivals to 8x darkness - measured as pumping noise in emissive-lit dark
 	// scenes the moment the camera moved. A texel whose own history legitimately sees the
 	// emitter raises its own ceiling and converges unbiased (per-texel, never ONLY the
-	// tile mean - that would crush a lone bright texel to mean x k / 256). No meaningful
-	// reference at all (fresh tile, failed reprojection): the first measurement stores
+	// tile mean - that would crush a lone bright texel to mean x k / 256). A probe that
+	// reprojected onto last frame's lattice is governed however dark its history, its reference
+	// floored at GI_GATHER_FIREFLY_REFERENCE_FLOOR: a rare ray that finds a sunlit patch its dark
+	// history never saw is capped instead of blinking the footprint white, and a light that
+	// persists climbs by up to GI_GATHER_FIREFLY_CLAMP per frame. No reprojected history and no
+	// reference above the floor (fresh tile, failed reprojection): the first measurement stores
 	// unclamped - progressive ramps from black would dim every disocclusion instead.
 	// The texel and the tile mean are LAST frame's, written under the previous pre-exposure;
 	// the mean was corrected where it was staged, the texel is corrected here.
-	vec4 hist = imageLoad(s_probe_radiance_out, texel);
-	float reference = max(Luminance(hist.xyz) * u_history_pre_exposure_correction,
-	                      s_importance_mean[slot]);
+	// With the reprojected reference (u_gi_screen_trace.y) the reference is instead the
+	// reprojected probe's luminance for this texel's 2x2 direction block, floored by its tile
+	// mean: the same world point's recent radiance around this direction, so the ceiling follows
+	// the surface through camera motion instead of staying with the screen slot. A probe whose
+	// reprojection failed has no reference and stores uncapped, like a fresh tile.
+	float reference;
 	BRANCH
-	if(reference > 1e-3)
+	if(u_gi_screen_trace.y > 0.5)
 	{
-		float ceiling = GI_GATHER_FIREFLY_CLAMP * reference;
+		ivec2 local_texel = ivec2(int(uint(texel.x) % uint(GI_PROBE_DIR_EDGE)), int(uint(texel.y) % uint(GI_PROBE_DIR_EDGE)));
+		int block = (local_texel.y / 2) * 4 + (local_texel.x / 2);
+		reference = s_history_record[slot] < 0 ? 0.0 : max(GiImportanceBlockLuma(slot, block), s_importance_mean[slot]);
+	}
+	else
+	{
+		vec4 hist = imageLoad(s_probe_radiance_out, texel);
+		reference = max(Luminance(hist.xyz) * u_history_pre_exposure_correction, s_importance_mean[slot]);
+	}
+	BRANCH
+	if(s_history_record[slot] >= 0 || reference > GI_GATHER_FIREFLY_REFERENCE_FLOOR)
+	{
+		float ceiling = GI_GATHER_FIREFLY_CLAMP * max(reference, GI_GATHER_FIREFLY_REFERENCE_FLOOR);
 		float luma = Luminance(averaged);
 		if(luma > ceiling)
 		{
@@ -463,10 +521,7 @@ float GiScreenProbeBlockRatio(int slot, int block)
 	{
 		return 1.0;
 	}
-	vec4 mip = s_importance_mip[slot * 4 + block / 4];
-	int lane = block % 4;
-	float importance = lane == 0 ? mip.x : (lane == 1 ? mip.y : (lane == 2 ? mip.z : mip.w));
-	return importance / s_importance_mean[slot];
+	return GiImportanceBlockLuma(slot, block) / s_importance_mean[slot];
 }
 
 /*
@@ -891,15 +946,19 @@ void GiPublishCell(int slot, ivec2 base, int span, int jittered_samples, int nee
 }
 
 /// The balance-heuristic denominator for a direction landing in a cell: the cell's own
-/// jittered density plus every aimed cone that contains the direction.
-float GiSampleDenominator(int slot, ivec2 base, int span, vec3 direction)
+/// jittered density plus every aimed cone that contains the direction. @p own_cone is the cone
+/// an aimed sample was drawn from (-1 for a jittered sample) and always counts: a far emitter's
+/// cone is a few float ulps wide in cosine, so a direction drawn at its rim can test as outside
+/// it, and without its own density the aimed sample would be weighted as a jittered one - orders
+/// of magnitude too heavy, a probe-sized spike wherever the aimed ray hits a lit surface.
+float GiSampleDenominator(int slot, ivec2 base, int span, vec3 direction, int own_cone)
 {
 	float denominator = float(s_cell_rays[GiCellIndex(slot, base)]) *
 	                    GiOctCellDirectionalPdf(direction, span, GI_PROBE_DIR_EDGE);
 	for(int k = 0; k < GI_NEE_K; ++k)
 	{
 		float cos_k = s_nee_cos[slot * GI_NEE_K + k];
-		if(cos_k <= 1.0 && dot(direction, s_nee_axis[slot * GI_NEE_K + k]) >= cos_k)
+		if(cos_k <= 1.0 && (k == own_cone || dot(direction, s_nee_axis[slot * GI_NEE_K + k]) >= cos_k))
 		{
 			denominator += float(s_nee_rays[slot * GI_NEE_K + k]) / max(GiConeSolidAngle(cos_k), 1e-6);
 		}
@@ -907,12 +966,14 @@ float GiSampleDenominator(int slot, ivec2 base, int span, vec3 direction)
 	return max(denominator, 1e-6);
 }
 
-/// Adds one traced sample to the accumulators of the cell its direction lands in.
+/// Adds one traced sample to the accumulators of the cell its direction lands in. @p own_cone is
+/// the aimed emitter the sample was drawn toward, -1 for a jittered sample.
 void GiSplatSample(int slot, ivec2 base, int span, vec3 direction, vec3 radiance, float hit_t,
-                   bool is_aimed)
+                   int own_cone)
 {
+	bool is_aimed = own_cone >= 0;
 	// The cap goes on the ESTIMATOR OUTPUT, after the division - see GI_NEE_CONTRIBUTION_MAX.
-	vec3 contribution = min(radiance / GiSampleDenominator(slot, base, span, direction),
+	vec3 contribution = min(radiance / GiSampleDenominator(slot, base, span, direction, own_cone),
 	                        vec3_splat(GI_NEE_CONTRIBUTION_MAX));
 	uvec3 fixed_point = uvec3(max(contribution, vec3_splat(0.0)) * GI_NEE_FIXED + vec3_splat(0.5));
 	uint hit_bits = floatBitsToUint(max(hit_t, 0.0));
@@ -966,56 +1027,150 @@ void GiFinalizeTexel(int slot, ivec2 atlas_base, ivec2 local)
 	GiStoreScreenProbeRay(slot, texel, radiance, hit_t);
 }
 
-/// Traces one ray unit's samples - its jittered ones, then the aimed ones - through the
-/// single trace call site, splatting each into the cell it lands in.
-void GiTraceRayUnit(int slot, ivec2 probe, GiRayUnit unit)
+/// Traces sample @p k of one ray unit - its jittered samples first, then the aimed ones - through the
+/// single trace call site, splatting it into the cell it lands in. A k past the unit's samples, and an
+/// aimed direction under the anchor's tangent cap, trace nothing.
+void GiTraceUnitSample(int slot, ivec2 probe, GiRayUnit unit, int k)
 {
 	int idx = GiCellIndex(slot, unit.base);
 	int jittered = int(s_cell_rays[idx]);
 	int nee = s_cell_nee[idx];
 	int aimed = nee >= 0 ? GI_EMISSIVE_NEE_SAMPLES : 0;
+	if(k >= jittered + aimed)
+	{
+		return;
+	}
 	vec3 nee_axis = nee >= 0 ? s_nee_axis[slot * GI_NEE_K + nee] : vec3(0.0, 1.0, 0.0);
 	float nee_cos = nee >= 0 ? s_nee_cos[slot * GI_NEE_K + nee] : 1.0;
 	// The multi-sample pattern is the first four points of a shifted (0,2)-net: positions
 	// 0/1 are the exact antithetic pair, so counts one and two reproduce the classic
 	// estimator. Addressed by PROBE and cell (GiProbeCellNoise): well spread across adjacent
 	// probes for the same cell, decorrelated across the cells of one tile.
-	vec2 sub_positions[GI_IMPORTANCE_SUPERSAMPLE_MAX];
 	int cell_index = unit.base.y * GI_PROBE_DIR_EDGE + unit.base.x;
-	sub_positions[0] = fract(s_frame_r2 + GiProbeCellNoise(probe, cell_index));
-	sub_positions[1] = fract(sub_positions[0] + vec2(0.5, 0.5));
-	sub_positions[2] = fract(sub_positions[0] + vec2(0.25, 0.75));
-	sub_positions[3] = fract(sub_positions[0] + vec2(0.75, 0.25));
-	LOOP
-	for(int s = 0; s < jittered + aimed; ++s)
+	vec2 first_position = fract(s_frame_r2 + GiProbeCellNoise(probe, cell_index));
+	int position = min(k, GI_IMPORTANCE_SUPERSAMPLE_MAX - 1);
+	vec2 net_offset = position == 1 ? vec2(0.5, 0.5) : (position == 2 ? vec2(0.25, 0.75) : vec2(0.75, 0.25));
+	vec2 xi = position == 0 ? first_position : fract(first_position + net_offset);
+	bool is_aimed = k >= jittered;
+	vec3 direction =
+	    is_aimed ? GiSampleCone(nee_axis, nee_cos, xi)
+	             : GiOctDecode((vec2(unit.base) + xi * float(unit.span)) / float(GI_PROBE_DIR_EDGE));
+	// An aimed direction under the anchor's tangent cap cannot light it (the cull the
+	// jittered rays get per cell).
+	if(is_aimed && dot(direction, s_anchor_normal[slot]) < -0.2)
 	{
-		bool is_aimed = s >= jittered;
-		vec2 xi = sub_positions[min(s, GI_IMPORTANCE_SUPERSAMPLE_MAX - 1)];
-		vec3 direction =
-		    is_aimed ? GiSampleCone(nee_axis, nee_cos, xi)
-		             : GiOctDecode((vec2(unit.base) + xi * float(unit.span)) / float(GI_PROBE_DIR_EDGE));
-		// An aimed direction under the anchor's tangent cap cannot light it (the cull the
-		// jittered rays get per cell).
-		if(is_aimed && dot(direction, s_anchor_normal[slot]) < -0.2)
+		return;
+	}
+	vec4 traced = GiTraceScreenProbeDirection(slot, direction);
+	ivec2 land_base = unit.base;
+	int land_span = unit.span;
+	if(is_aimed)
+	{
+		GiRayUnit land = GiCellOfTexel(slot, GiTexelOfDirection(direction));
+		land_base = land.base;
+		land_span = land.span;
+	}
+	GiSplatSample(slot, land_base, land_span, direction, traced.xyz, traced.w, is_aimed ? nee : -1);
+}
+
+/// Publishes ray unit @p r of a slot to the pool: its sample count (GiPoolScan turns it into the exclusive
+/// prefix) and its cell.
+void GiPoolPublishUnit(int slot, int r, GiRayUnit unit, int samples)
+{
+	s_pool_entry[slot * GI_TRACE_POOL_STRIDE + r] = uint(samples) | (uint(unit.base.x) << 16u) |
+	                                                (uint(unit.base.y) << 19u) |
+	                                                (unit.span == 2 ? (1u << 22u) : 0u);
+}
+
+/// The slot leader's scan: every unit's count becomes its exclusive prefix, entry @p units the slot's total.
+void GiPoolScan(int slot, int units)
+{
+	uint running = 0u;
+	LOOP
+	for(int r = 0; r < units; ++r)
+	{
+		uint entry = s_pool_entry[slot * GI_TRACE_POOL_STRIDE + r];
+		s_pool_entry[slot * GI_TRACE_POOL_STRIDE + r] = (entry & 0xFFFF0000u) | running;
+		running += entry & 0xFFFFu;
+	}
+	s_pool_entry[slot * GI_TRACE_POOL_STRIDE + units] = running;
+}
+
+/// Ray unit @p r of a slot, from its pool entry.
+GiRayUnit GiPoolUnit(int slot, int r)
+{
+	uint entry = s_pool_entry[slot * GI_TRACE_POOL_STRIDE + r];
+	GiRayUnit unit;
+	unit.base = ivec2(int((entry >> 16u) & 7u), int((entry >> 19u) & 7u));
+	unit.span = (entry & (1u << 22u)) != 0u ? 2 : 1;
+	unit.samples = 0;
+	unit.traced = true;
+	return unit;
+}
+
+/// The sample prefix of pool entry @p r of a slot (the slot's total at r = its unit count).
+uint GiPoolPrefix(int slot, int r)
+{
+	return s_pool_entry[slot * GI_TRACE_POOL_STRIDE + r] & 0xFFFFu;
+}
+
+/// The probe a slot traces, from its packed pool coordinate.
+ivec2 GiPoolProbe(int slot)
+{
+	uint packed_probe = s_pool_probe[slot];
+	return ivec2(int(packed_probe & 0xFFFFu), int(packed_probe >> 16u));
+}
+
+/// PHASE 2 for lane @p lane of the group's 64: traces pool samples lane, lane + 64, ... - each found as its
+/// slot (the slot totals in order) and its unit (a binary search over the slot's prefix) - through the one
+/// trace call site.
+void GiTraceSamplePool(int lane)
+{
+	uint pool_index = uint(lane);
+	LOOP
+	for(int guard = 0; guard < GI_TRACE_POOL_GUARD; ++guard)
+	{
+		uint local_index = pool_index;
+		int work_slot = 0;
+		for(int walk_slot = 0; walk_slot < GI_TRACE_SLOT_COUNT - 1; ++walk_slot)
 		{
-			continue;
+			uint walk_total = GiPoolPrefix(walk_slot, int(s_pool_units[walk_slot]));
+			if(work_slot == walk_slot && local_index >= walk_total)
+			{
+				local_index -= walk_total;
+				work_slot = walk_slot + 1;
+			}
 		}
-		vec4 traced = GiTraceScreenProbeDirection(slot, direction);
-		ivec2 land_base = unit.base;
-		int land_span = unit.span;
-		if(is_aimed)
+		int work_units = int(s_pool_units[work_slot]);
+		if(local_index >= GiPoolPrefix(work_slot, work_units))
 		{
-			GiRayUnit land = GiCellOfTexel(slot, GiTexelOfDirection(direction));
-			land_base = land.base;
-			land_span = land.span;
+			break;
 		}
-		GiSplatSample(slot, land_base, land_span, direction, traced.xyz, traced.w, is_aimed);
+		int lo = 0;
+		int hi = work_units;
+		LOOP
+		for(int search = 0; search < GI_TRACE_POOL_SEARCH_STEPS && hi - lo > 1; ++search)
+		{
+			int mid = (lo + hi) / 2;
+			if(GiPoolPrefix(work_slot, mid) <= local_index)
+			{
+				lo = mid;
+			}
+			else
+			{
+				hi = mid;
+			}
+		}
+		GiTraceUnitSample(work_slot, GiPoolProbe(work_slot), GiPoolUnit(work_slot, lo),
+		                  int(local_index - GiPoolPrefix(work_slot, lo)));
+		pool_index += uint(GI_TRACE_GROUP_LANES);
 	}
 }
 
 /// Phase 1 for one ray unit: the cell's jittered count (one supersample gives way to the
-/// aimed ray, never the last) and its aimed emitter, published for the MIS sums.
-void GiAllocateRayUnit(int slot, GiRayUnit unit)
+/// aimed ray, never the last) and its aimed emitter, published for the MIS sums. Returns the
+/// unit's sample count (jittered + aimed).
+int GiAllocateRayUnit(int slot, GiRayUnit unit)
 {
 	int nee = unit.traced ? GiSelectNeeForCell(slot, unit.base, unit.span) : -1;
 	int aimed = nee >= 0 ? GI_EMISSIVE_NEE_SAMPLES : 0;
@@ -1025,6 +1180,7 @@ void GiAllocateRayUnit(int slot, GiRayUnit unit)
 	{
 		atomicAdd(s_nee_rays[slot * GI_NEE_K + nee], uint(aimed));
 	}
+	return jittered + aimed;
 }
 
 #if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
@@ -1310,20 +1466,18 @@ void main()
 	// No early return for an inactive slot (a partial final adaptive group): the phase
 	// barriers below must stay in uniform flow control, so the work is guarded instead.
 	ivec2 atlas_base = GiProbeAtlasBase(probe.x, probe.y, 0);
-	// THREE PHASES per probe, two barriers: (1) every ray unit publishes its cell's
-	// jittered count and aimed emitter, so the balance heuristic knows every technique's
-	// sample count; (2) every unit traces its samples through the ONE trace call site
-	// (fxc fully inlines every call site of the trace body - Hi-Z + SDF march +
-	// completion, thousands of instructions - and a second instantiation alone took this
-	// program's s_5_0 compile from ~4 s to ~17 s) and splats them; (3) every texel resolves
-	// its cell's accumulators. Every texel is written every frame - by its cell's samples,
-	// or by the cull's zero store.
+	// THREE PHASES, three barriers: (1) every ray unit publishes its cell's jittered count
+	// and aimed emitter, so the balance heuristic knows every technique's sample count, and
+	// its sample count to the pool, which each slot's leader turns into prefixes; (2) the
+	// group traces the pool (GiTraceSamplePool) through the ONE trace call site (fxc fully
+	// inlines every call site of the trace body - Hi-Z + SDF march + completion, thousands
+	// of instructions - and a second instantiation alone took this program's s_5_0 compile
+	// from ~4 s to ~17 s) and splats; (3) every texel resolves its cell's accumulators.
+	// Every texel is written every frame - by its cell's samples, or by the cull's zero store.
 #if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
-	// ADAPTIVE SCHEDULE (see the header): 16 + 3K rays for K detail blocks, pulled
-	// round-robin across the 16 lanes so one bright block never idles the wave (lane time
-	// = ceil(rays / 16) iterations, not one block's whole cost). The block walk is pure
-	// shared-memory arithmetic per lane; with sixteen blocks a scan beats any prefix
-	// machinery.
+	// ADAPTIVE SCHEDULE (see the header): 16 + 3K ray units for K detail blocks, allocated
+	// round-robin across the slot's 16 lanes. The block walk is pure shared-memory
+	// arithmetic per lane; with sixteen blocks a scan beats any prefix machinery.
 	int total_rays = 0;
 	if(probe_active)
 	{
@@ -1335,19 +1489,34 @@ void main()
 		LOOP
 		for(int r = thread; r < total_rays; r += GI_TRACE_ADAPTIVE_LANES)
 		{
-			GiAllocateRayUnit(slot, GiAdaptiveRayUnit(slot, r));
+			GiRayUnit unit = GiAdaptiveRayUnit(slot, r);
+			GiPoolPublishUnit(slot, r, unit, GiAllocateRayUnit(slot, unit));
 		}
 	}
-	barrier();
-	if(probe_active)
+	int pool_units = total_rays;
+#else
+	ivec2 local = ivec2(gl_LocalInvocationID.xy);
+	int thread = local.y * GI_PROBE_DIR_EDGE + local.x;
 	{
-		LOOP
-		for(int r = thread; r < total_rays; r += GI_TRACE_ADAPTIVE_LANES)
-		{
-			GiTraceRayUnit(slot, probe, GiAdaptiveRayUnit(slot, r));
-		}
+		GiRayUnit unit = GiFullRayUnit(slot, local);
+		GiPoolPublishUnit(slot, thread, unit, GiAllocateRayUnit(slot, unit));
+	}
+	int pool_units = GI_PROBE_DIR_COUNT;
+#endif
+	if(leader)
+	{
+		s_pool_units[slot] = uint(pool_units);
+		s_pool_probe[slot] = packed_probe;
 	}
 	barrier();
+	if(leader)
+	{
+		GiPoolScan(slot, pool_units);
+	}
+	barrier();
+	GiTraceSamplePool(slot * GI_TRACE_SLOT_LANES + thread);
+	barrier();
+#if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
 	if(probe_active)
 	{
 		if(leader)
@@ -1361,12 +1530,6 @@ void main()
 		}
 	}
 #else
-	ivec2 local = ivec2(gl_LocalInvocationID.xy);
-	GiRayUnit unit = GiFullRayUnit(slot, local);
-	GiAllocateRayUnit(slot, unit);
-	barrier();
-	GiTraceRayUnit(slot, probe, unit);
-	barrier();
 	if(leader)
 	{
 		GiStoreScreenShare(slot, record);

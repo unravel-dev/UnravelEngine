@@ -56,7 +56,8 @@ vec3 GiClampRayRadiance(vec3 radiance, float ceiling)
 /// x = attribute resolution (voxels per axis), y = telemetry mirror of the sun-tier debug
 /// state (the kernel does NOT read it - the debug write is a compiled program variant, see
 /// gi_light_voxels_kernel.sh; the lane exists so a GPU debugger can inspect whether uniforms
-/// arrive), z = frame index, w = non-zero when the light volume is resident.
+/// arrive), z = the frame over its period (gi_light_voxel_pass.cpp light_voxel_frame_period) - the
+/// rotation phase and each entry's relight count - w = non-zero when the light volume is resident.
 uniform vec4 u_gi_light_voxel_params;
 #define u_light_voxel_resolution int(u_gi_light_voxel_params.x)
 #define u_light_voxel_frame      uint(u_gi_light_voxel_params.z)

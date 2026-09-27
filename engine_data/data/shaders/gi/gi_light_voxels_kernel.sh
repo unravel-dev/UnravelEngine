@@ -14,12 +14,13 @@
  * quarter of the resident surface set regardless of scene size - the property the old 524k-slot
  * cache sweep lacked.
  *
- * NO temporal accumulation here, deliberately. Direct lighting with traced shadows is
- * deterministic - there is no variance to average - so the volume just holds the latest answer
- * and a light change propagates in at most one full rotation (4 frames). The stochastic
- * machinery lives where the stochastic rays are: the world probes (Phase 3). When the bounce
- * term arrives (Phase 4) it reads the probes' FILTERED irradiance, which is equally
- * deterministic per frame, so this stays a plain write.
+ * SAMPLED, AND INTEGRATED HERE. Each relight evaluates the direct light at one dithered point per
+ * voxel (GI_LIGHT_VOXEL_SUN_DITHER) and fills a face's blocked share from the first hit of a
+ * rotating pair of its escape rays (GI_BOUNCE_FILL_RAYS), both stepped by the entry's relight
+ * count, so near shadow edges and in enclosures one relight is a sample; the relight EMA
+ * (GI_LIGHT_VOXEL_EMA_BLEND) folds it into the voxel's history. A global light change or a
+ * scene-wide edit writes through (blend 1) for one full rotation, and a dirty region does per voxel
+ * (history_trusted), so those land within 4 frames.
  *
  * The dispatch covers every level's full segment and early-outs beyond each level's count; the
  * counts live on the GPU, so a tighter launch needs indirect dispatch args - a measured
@@ -44,6 +45,7 @@
 #define GI_WORLD_PROBE_INDEX_RW
 #include "gi/gi_world_probes.sh"
 #include "gi/gi_dirty_regions.sh"
+#include "gi/gi_noise.sh"
 
 /// Surface-voxel list, written by cs_gi_clipmap_attributes: a SDF_CLIPMAP_LEVEL_COUNT-entry
 /// header of per-level counts (index = level), then one capacity-sized entry segment per
@@ -898,16 +900,22 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 	escape_seed *= 0x5bd1e995u;
 	escape_seed ^= escape_seed >> 15u;
 	float escape_rotation = float(escape_seed & 0xFFFFu) * (6.2831853 / 65536.0);
-	uint fill_ray_base = ((u_light_voxel_frame / uint(GI_LIGHT_VOXEL_UPDATE_DENOM)) * uint(GI_BOUNCE_FILL_RAYS) +
-	                      (escape_seed >> 16u)) % uint(GI_BOUNCE_ESCAPE_RAYS);
+	// This entry's relight count: the rotation relights it on one frame in
+	// GI_LIGHT_VOXEL_UPDATE_DENOM, so the frame lane over the rotation counts its relights.
+	uint relight_index = u_light_voxel_frame / uint(GI_LIGHT_VOXEL_UPDATE_DENOM);
+	uint fill_ray_base =
+	    (relight_index * uint(GI_BOUNCE_FILL_RAYS) + (escape_seed >> 16u)) % uint(GI_BOUNCE_ESCAPE_RAYS);
 	// DIRECT-LIGHTING DITHER (GI_LIGHT_VOXEL_SUN_DITHER): the evaluation point walks within
-	// the voxel per relight, so shadow edges land in the volume as temporal dither instead of
-	// a voxel staircase - the probes' stratum window and the gather temporal integrate it
-	// into penumbra. Per-VOXEL (hoisted, shared by all six faces and the directional memo);
-	// the tunnel guard, cavity march and bounce read stay un-dithered - their verdicts are
-	// memoised as pure functions of the field, and the bounce lattice is smooth anyway.
-	vec3 dither_seed = fract(vec3(cell) * vec3(0.1031, 0.1030, 0.0973) +
-	                         vec3(0.9151, 0.8380, 0.7548) * float(u_light_voxel_frame));
+	// the voxel per relight - along R3 by the entry's relight count, from a per-cell offset -
+	// so shadow edges land in the volume as temporal dither instead of a voxel staircase - the
+	// relight EMA, the probes' stratum window and the gather temporal integrate it into
+	// penumbra. Per-VOXEL (hoisted, shared by all six faces and the directional memo); each
+	// face's point and the memo's traced origin take the walk only inside their own empty
+	// ball (GiDitherInRoom). The tunnel guard, cavity march and bounce read stay un-dithered -
+	// their verdicts are memoised as pure functions of the field, and the bounce lattice is
+	// smooth anyway.
+	vec3 dither_seed =
+	    fract(vec3(cell) * vec3(0.1031, 0.1030, 0.0973) + GI_R3_ADVANCE * float(relight_index));
 	vec3 light_jitter =
 	    (dither_seed - vec3_splat(0.5)) * (2.0 * GI_LIGHT_VOXEL_SUN_DITHER * attr_voxel);
 	// Inside a DIRTY REGION (a placement just moved, appeared or vanished; an emissive one
@@ -1278,13 +1286,17 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		{
 			continue;
 		}
-		vec3 irradiance = GiEvalDirectLightingVoxel(position + light_jitter,
+		// The face's walk stays inside the empty ball at its launch point, so a wall or roof
+		// thinner than the walk never lends the face the light beyond it.
+		vec3 face_jitter = GiDitherInRoom(light_jitter, SdfSampleClipmapLevel(int(level), position));
+		vec3 irradiance = GiEvalDirectLightingVoxel(position + face_jitter,
 		                                            direction,
 		                                            max(level_data.w, 0.01),
 		                                            u_gi_shadow_near_field * near_scale,
-		                                            center + light_jitter,
+		                                            center,
 		                                            center_lift,
 		                                            int(level),
+		                                            light_jitter,
 		                                            cached_dir_visibility,
 		                                            cached_dir_index);
 		// Bounce: LAST frame's world-probe irradiance around this face (the probes traced after
@@ -1334,9 +1346,9 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// their emission out of the lit estimate it remodulates (gi_light_voxels.sh).
 		bool source_dominated = GiStatsLuminance(emissive) > GiStatsLuminance(radiance - emissive);
 		// RELIGHT EMA (GI_LIGHT_VOXEL_EMA_BLEND): the relight is SAMPLED - one dithered
-		// evaluation point per rotation (light_jitter above) - so near shadow edges and
-		// 1/r^2 falloffs the raw store is a limit cycle at the rotation period. The gather
-		// and probes are contracted to integrate that; MIRRORS read the volume raw and
+		// evaluation point and one fill pair per relight (above) - so near shadow edges,
+		// 1/r^2 falloffs and enclosures the raw store varies from relight to relight. The
+		// gather and probes are contracted to integrate that; MIRRORS read the volume raw and
 		// showed it as shimmer. Folding each relight into the voxel's own history makes the
 		// volume the integrator. Blend 1 (CPU-held on light/content change, debug writes,
 		// first frames) writes through; a previous texel with alpha 0 was culled or never

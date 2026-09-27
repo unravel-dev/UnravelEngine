@@ -60,6 +60,11 @@ public:
         std::vector<float> std_grid;
         /// Mean change per grid cell over its measured pixels, same layout.
         std::vector<float> delta_grid;
+        /// Per-pixel planes, only when the request kept images: width x height floats each, rows
+        /// from the top of the image - the mean luminance, its standard deviation, the mean
+        /// reprojected change (-1 where it was measured on under half of the frame pairs) and the
+        /// LAST measured frame's luminance (frame-locked to the end of the measurement).
+        std::vector<float> images;
     };
 
     struct run_params
@@ -81,7 +86,8 @@ public:
     /// runs every statistic on a small box mean of the displayed luminance (cs_temporal_probe.sc,
     /// PROBE_LOWPASS_RADIUS): under camera motion the raw reprojected change is dominated by the sub-pixel
     /// resampling of textured detail, which the box removes while patch-scale flicker stays.
-    void request(uint32_t frames, bool is_lowpass = false);
+    /// @p keeps_images also reads back the per-pixel planes (result::images).
+    void request(uint32_t frames, bool is_lowpass = false, bool keeps_images = false);
 
     /// Frames folded in so far by the current or last measurement.
     auto get_frames_done() const -> uint32_t;
@@ -140,6 +146,11 @@ private:
     std::array<gfx::texture::ptr, 2> luma_{};
     gfx::texture::ptr readback_;
     std::vector<float> readback_data_;
+    /// The last measured frame's luminance, read back when a request keeps images.
+    gfx::texture::ptr readback_luma_;
+    std::vector<float> readback_luma_data_;
+    bool keeps_images_ = false;
+    bool readback_keeps_images_ = false;
     result result_{};
     uint32_t frames_requested_ = 0;
     uint32_t frames_done_ = 0;

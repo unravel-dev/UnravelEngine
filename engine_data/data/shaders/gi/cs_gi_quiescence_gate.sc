@@ -71,11 +71,14 @@ uniform vec4 u_gi_gate_groups[GI_GATE_ENTRY_COUNT];
 
 /// Ring header, then the samples as float bits (exact, and the buffer is typed uint): the
 /// absolute change ring, then the signed drift ring, one head and count for both. The third
-/// header slot is the sparse-probe HOLD: frames the gate stays open after an allocation.
+/// header slot is the sparse-probe HOLD: frames the gate stays open after an allocation; the
+/// fourth is 1 when the last frame's verdict ran the gated dispatches, so this frame's drained
+/// slice is a measurement.
 #define GI_GATE_RING_COUNT_SLOT 0
 #define GI_GATE_RING_HEAD_SLOT  1
 #define GI_GATE_RING_HOLD_SLOT  2
-#define GI_GATE_RING_BASE       3
+#define GI_GATE_RING_RAN_SLOT   3
+#define GI_GATE_RING_BASE       4
 /// The hold armed by an allocation: GI_WORLD_PROBE_ALLOC_HOLD_WINDOWS probe windows.
 #define GI_GATE_ALLOC_HOLD_FRAMES (GI_WORLD_PROBE_ALLOC_HOLD_WINDOWS * GI_WORLD_PROBE_WINDOW)
 #define GI_GATE_RING_SIZE       (GI_QUIESCENCE_COMPARE_FRAMES + GI_QUIESCENCE_WINDOW_FRAMES)
@@ -99,9 +102,11 @@ NUM_THREADS(1, 1, 1)
 void main()
 {
 	// LAST frame's relight, summed per level and drained so the next frame measures only its
-	// own writes. Drained unconditionally: a frame whose dispatches the gate zeroed adds
-	// nothing, so the slice reads 0 and the verdict latches - exactly the fixed point the CPU
-	// path reaches, and only a CPU-side change (the reset lane) leaves it.
+	// own writes. Drained unconditionally, but a frame whose dispatches the gate zeroed
+	// measured nothing - its slice reads 0 by construction - so it adds no sample (below): the
+	// ring keeps the samples that closed the gate and the verdict latches under either test,
+	// as on the CPU path, which samples only frames whose passes ran. Only a CPU-side change
+	// (the reset lane) or a forced run (the hold, pending probes) leaves it.
 	float change = 0.0;
 	float faces = 0.0;
 	float rise = 0.0;
@@ -158,10 +163,13 @@ void main()
 	// A never-written buffer reads as allocation garbage on some backends, so the head is
 	// wrapped rather than trusted; the count is clamped by the same bound below.
 	head = head % uint(GI_GATE_RING_SIZE);
-	s_gi_gate_ring[GI_GATE_RING_BASE + int(head)] = floatBitsToUint(mean);
-	s_gi_gate_ring[GI_GATE_DRIFT_RING_BASE + int(head)] = floatBitsToUint(drift);
-	head = (head + 1u) % uint(GI_GATE_RING_SIZE);
-	count = min(count + 1u, uint(GI_GATE_RING_SIZE));
+	if(s_gi_gate_ring[GI_GATE_RING_RAN_SLOT] == 1u)
+	{
+		s_gi_gate_ring[GI_GATE_RING_BASE + int(head)] = floatBitsToUint(mean);
+		s_gi_gate_ring[GI_GATE_DRIFT_RING_BASE + int(head)] = floatBitsToUint(drift);
+		head = (head + 1u) % uint(GI_GATE_RING_SIZE);
+		count = min(count + 1u, uint(GI_GATE_RING_SIZE));
+	}
 	s_gi_gate_ring[GI_GATE_RING_COUNT_SLOT] = count;
 	s_gi_gate_ring[GI_GATE_RING_HEAD_SLOT] = head;
 
@@ -197,6 +205,7 @@ void main()
 	// the allocation hold, this overrides both closed answers.
 	uint pending_probes = u_gi_gate_params.w > 0.5 ? b_world_probe_select[GI_GATE_PROBE_PENDING_SLOT] : 0u;
 	bool run = u_gate_mode == 0 || hold > 0u || pending_probes > 0u || (u_gate_mode == 1 && !converged);
+	s_gi_gate_ring[GI_GATE_RING_RAN_SLOT] = run ? 1u : 0u;
 	// TIGHT RELIGHT LAUNCH: the CPU can only size the light-voxel entry for a full volume (a
 	// rotation slice of the whole capacity at every level), and every lane past a level's
 	// count returns at once - on Sponza most of the 262,144 lanes per open frame. The kernel

@@ -238,6 +238,44 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
 
 auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
+    if(params.hold && held_result_)
+    {
+        return hold(rview);
+    }
+    held_result_ = run_gather(rview, params);
+    held_rough_specular_ = held_result_ ? rview.tex_safe_get("GI_ROUGH_SPECULAR") : gfx::texture::ptr{};
+    return held_result_;
+}
+
+auto gi_resolve_pass::hold(gfx::render_view& rview) -> gfx::texture::ptr
+{
+    rview.touch_prefixed("GI_");
+    // The held frame stands in for a gathered one: histories written "this frame" keep the
+    // continuity test (acquire_history, run_rough_specular) passing on the next gathered frame.
+    const uint32_t render_frame = gfx::get_render_frame();
+    auto& history_frame = rview.data_get_or_emplace("GI_HISTORY_FRAME", 0u);
+    if(history_frame != 0u)
+    {
+        history_frame = render_frame;
+    }
+    if(held_rough_specular_)
+    {
+        rview.tex_get_or_emplace("GI_ROUGH_SPECULAR") = held_rough_specular_;
+        auto& rough_frame = rview.data_get_or_emplace("GI_ROUGH_SPECULAR_FRAME", 0u);
+        if(rough_frame != 0u)
+        {
+            rough_frame = render_frame;
+        }
+    }
+    else
+    {
+        rview.tex_remove("GI_ROUGH_SPECULAR");
+    }
+    return held_result_;
+}
+
+auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
+{
     APP_SCOPE_PERF("Rendering/GI/Resolve Pass");
     // Republished below only when the rough specular runs this frame: the rough tier must fall
     // back to the diffuse resolve rather than read a stale image.
@@ -517,7 +555,7 @@ auto gi_resolve_pass::run(gfx::render_view& rview, const run_params& params) -> 
             // movers reproject through it).
             const bool trace_velocity = prev_color_carries_depth && params.velocity != nullptr;
             const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
-                                                  0.0f,
+                                                  s.reprojected_firefly_reference ? 1.0f : 0.0f,
                                                   adaptive ? 1.0f : 0.0f,
                                                   has_prev_color ? (trace_velocity ? 3.0f : prev_color_carries_depth ? 2.0f : 1.0f)
                                                                  : 0.0f};

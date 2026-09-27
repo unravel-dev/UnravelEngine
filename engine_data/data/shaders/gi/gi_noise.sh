@@ -23,6 +23,9 @@
 
 /// The R2 low-discrepancy sequence's per-index advance (1 / plastic number and its square).
 #define GI_R2_ADVANCE vec2(0.754877666, 0.569840291)
+/// The R3 sequence's per-index advance (1 / phi3 and its square and cube, phi3 the real root of
+/// x^4 = x + 1): successive indices spread evenly through the unit cube.
+#define GI_R3_ADVANCE vec3(0.819172513, 0.671043607, 0.549700478)
 
 /// The jitter pattern at a pixel, both channels independent, in [0, 1).
 vec2 GiIgnNoise(ivec2 pixel)

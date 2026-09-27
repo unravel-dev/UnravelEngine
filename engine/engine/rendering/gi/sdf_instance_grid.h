@@ -46,6 +46,10 @@ public:
         ///< cells of that same cube size they need, so an elongated scene does not waste cells on
         ///< empty space.
         uint32_t resolution = 32;
+        ///< Longest cell edge in metres (0 = unbounded): a scene larger than resolution x this gets
+        ///< more cells along its longest axis instead of longer cells, so a cell's instance list
+        ///< stays proportional to the space a ray crosses rather than to the scene size.
+        float max_cell_size = 0.0f;
         ///< Guard on total cells, in case degenerate bounds produce an extreme aspect ratio.
         ///< Exceeding it coarsens the cells rather than cropping the grid: a cropped grid would
         ///< leave instances unreachable, which is the one failure this structure must not have.

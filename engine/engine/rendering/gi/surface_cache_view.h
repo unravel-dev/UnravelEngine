@@ -181,6 +181,13 @@ public:
         return quiescence_frames_;
     }
 
+    /// Treats the next update_quiescence as a change: the world side runs its full-rate window
+    /// again (the end of a camera-only budget, whose frames must not close the gate).
+    void request_settle()
+    {
+        settle_requested_ = true;
+    }
+
     /// Frames since the LIGHT SET changed (the light-buffer hash). Content changes - an
     /// instance moved, appeared, vanished, changed material - are deliberately NOT in this
     /// signal any more: they are region-local and carried by
@@ -232,6 +239,8 @@ private:
     std::array<math::vec3, global_sdf_clipmap::level_count> quiescence_origins_{};
     std::array<math::ivec3, global_sdf_clipmap::level_count> quiescence_probe_cells_{};
     uint32_t quiescence_frames_ = 0;
+    /// Set by request_settle, consumed by the next update_quiescence.
+    bool settle_requested_ = false;
     /// See get_lighting_quiet_frames; saturates so it never wraps back into "recent".
     uint32_t lighting_quiet_frames_ = 0;
     /// The convergence samples seen since the last input change, newest at head - 1; sized

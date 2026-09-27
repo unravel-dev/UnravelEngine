@@ -24,6 +24,18 @@ constexpr float fast_window_jump_cells = 2.0f;
 /// jump landed over several frames, keeping it on for about a window and a quarter; three
 /// windows (48 frames) keep a margin for the budgeted recomposes of a long jump.
 constexpr uint32_t fast_window_jump_windows = 3u;
+/// CAMERA-ONLY BUDGET. Camera travel re-opens the world side (new window cells, scrolled slabs) while
+/// no light changed: the scheduler then lists claims, scrolled-in slots and first windows as always,
+/// but only this many settled probes per frame - camera travel changes no light, so re-tracing a
+/// settled probe mostly re-measures what it already holds. The budget engages once no light, sky,
+/// content edit or jump has armed a fast window for camera_budget_quiet_frames and the camera moved
+/// within camera_budget_moving_frames; a stop asks the gate for a full-rate settle, so the rest state
+/// is measured as without the budget.
+constexpr uint32_t camera_budget_settled_probes = 512u;
+constexpr uint32_t camera_budget_quiet_frames = 256u;
+constexpr uint32_t camera_budget_moving_frames = 8u;
+/// A camera position change below this (metres) is not travel.
+constexpr float camera_budget_motion_epsilon = 1e-4f;
 /// Four probes per 64-lane group (PROBE_TRACE_SLOTS in cs_gi_world_probe_trace.sc): a 16-lane
 /// group left half or three quarters of every wave idle.
 constexpr uint32_t probes_per_trace_group = 4u;
@@ -292,6 +304,25 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
     last_level0_cell_[1] = window[1];
     last_level0_cell_[2] = window[2];
     has_last_level0_cell_ = true;
+    // CAMERA-ONLY BUDGET (camera_budget_settled_probes).
+    quiet_frames_ = fast_frames_ > 0 ? 0u : std::min(quiet_frames_ + 1u, camera_budget_quiet_frames);
+    const bool camera_moved = has_last_camera_position_ &&
+                              math::distance(params.camera_position, last_camera_position_) > camera_budget_motion_epsilon;
+    moving_frames_ = camera_moved ? 0u : std::min(moving_frames_ + 1u, camera_budget_moving_frames);
+    last_camera_position_ = params.camera_position;
+    has_last_camera_position_ = true;
+    const bool camera_budget = quiet_frames_ >= camera_budget_quiet_frames &&
+                               moving_frames_ < camera_budget_moving_frames &&
+                               surface_cache.get_dirty_region_total() == 0u;
+    // The settle is owed only when budgeted frames ran while the gate could be open.
+    const bool gate_open = params.view_cache &&
+                           params.view_cache->get_quiet_frames() < uint32_t(gi::GI_QUIESCENCE_MAX_FRAMES);
+    if(camera_budget_active_ && !camera_budget && settle_owed_ && params.view_cache)
+    {
+        params.view_cache->request_settle();
+    }
+    settle_owed_ = camera_budget && (settle_owed_ || gate_open);
+    camera_budget_active_ = camera_budget;
     const uint32_t strata_per_frame = fast_frames_ > 0 ? 4u : 1u;
     static_assert(gi::GI_WORLD_PROBE_WINDOW % 4 == 0,
                   "fast-window strata must divide the probe window (exhaustive coverage)");
@@ -326,7 +357,10 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
             bgfx::setBuffer(9, clipmap_gpu.get_world_probe_select(), bgfx::Access::ReadWrite);
             bgfx::setBuffer(10, clipmap_gpu.get_world_probe_list(), bgfx::Access::ReadWrite);
             bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::ReadWrite);
-            const float select_params[4] = {phase, float(budget), float(params.frame & schedule_frame_mask), 0.0f};
+            const float select_params[4] = {phase,
+                                            float(budget),
+                                            float(params.frame & schedule_frame_mask),
+                                            camera_budget ? float(camera_budget_settled_probes) : 0.0f};
             gfx::set_uniform(select_program_.u_gi_world_probe_select, select_params);
             gfx::set_uniform(select_program_.u_gi_world_probe_window, window, global_sdf_clipmap::level_count);
             if(bgfx::isValid(params.indirect))

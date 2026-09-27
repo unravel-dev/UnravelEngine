@@ -15,7 +15,8 @@
  *
  * List layout (raw uint, so no typed-UAV float canonicalisation concerns; keep in step
  * with cs_gi_reflection_args.sc, which owns the full picture):
- *   [0] = the append cursor, atomically bumped here, RESET by the args pass for the next
+ *   [0] = the append cursor, bumped here once per 8x8 group by the group's count of tracing
+ *         texels (each group writes one contiguous run), RESET by the args pass for the next
  *         frame (this pass is the frame's first writer, so it cannot reset it itself).
  *   [1] = the staged trace count the kernel bounds-checks against.
  *   [2 .. 2 + GI_REFLECTION_MEAN_SLOTS*3) = the texture means the args pass stages for the
@@ -46,27 +47,29 @@ uniform vec4 u_gi_reflection_jitter;
 /// xy = one texel of the trace target, zw = its dimensions.
 uniform vec4 u_gi_reflection_texel;
 
-NUM_THREADS(8, 8, 1)
-void main()
+/// The group's tracing texels, counted, and where their run of the list starts.
+SHARED uint s_tile_count;
+SHARED uint s_tile_base;
+
+/// The texel's tier: answers sky, degenerate and rough texels in place and returns whether it traces.
+bool GiReflectionClassifyTexel(ivec2 pixel, ivec2 size)
 {
-	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 size = ivec2(u_gi_reflection_texel.zw);
 	if(pixel.x >= size.x || pixel.y >= size.y)
 	{
-		return;
+		return false;
 	}
 	vec2 uv = (vec2(pixel) + vec2_splat(0.5)) * u_gi_reflection_texel.xy;
 	float depth = texture2DLod(s_hiz, uv, 0.0).x;
 	if(depth >= 1.0)
 	{
 		imageStore(s_gi_refl_out, pixel, vec4_splat(0.0));
-		return;
+		return false;
 	}
 	GBufferDataNormalMetalRoughness nd = DecodeGBufferNormalMetalRoughnessLod(uv, s_gi_normal, 0.0);
 	if(dot(nd.world_normal, nd.world_normal) < 0.5)
 	{
 		imageStore(s_gi_refl_out, pixel, vec4_splat(0.0));
-		return;
+		return false;
 	}
 	// RAW authored roughness, exactly as the kernel tiers (MakeRoughnessSafe floors it, and
 	// a floored mirror leaked a fraction of the coarse world tier through the fade).
@@ -93,10 +96,44 @@ void main()
 			rough_value = eval_radiance_sh(s_gi_env_sh, reflected) * u_pre_exposure_value;
 		}
 		imageStore(s_gi_refl_out, pixel, vec4(rough_value, 1.0));
-		return;
+		return false;
 	}
-	uint slot;
-	atomicFetchAndAdd(b_gi_refl_list[0], 1u, slot);
-	b_gi_refl_list[2u + uint(GI_REFLECTION_MEAN_SLOTS) * 3u + uint(GI_ENV_SH_COEFFS) * 3u + slot] =
-	    (uint(pixel.y) << 16u) | uint(pixel.x);
+	return true;
+}
+
+NUM_THREADS(8, 8, 1)
+void main()
+{
+	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 size = ivec2(u_gi_reflection_texel.zw);
+	bool traces = GiReflectionClassifyTexel(pixel, size);
+	uint list_base = 2u + uint(GI_REFLECTION_MEAN_SLOTS) * 3u + uint(GI_ENV_SH_COEFFS) * 3u;
+	uint packed_texel = (uint(pixel.y) << 16u) | uint(pixel.x);
+	// ONE RUN PER GROUP: the group's tracing texels count themselves in shared memory and take one
+	// contiguous run of the list with a single global atomic, so a trace wave holds neighbouring
+	// texels - nearby origins and directions that share grid cells, bricks and cache lines - where
+	// a per-texel append interleaved the waves of the whole dispatch.
+	uint lane = gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
+	if(lane == 0u)
+	{
+		s_tile_count = 0u;
+	}
+	barrier();
+	uint rank = 0u;
+	if(traces)
+	{
+		atomicFetchAndAdd(s_tile_count, 1u, rank);
+	}
+	barrier();
+	if(lane == 0u)
+	{
+		uint run_base = 0u;
+		atomicFetchAndAdd(b_gi_refl_list[0], s_tile_count, run_base);
+		s_tile_base = run_base;
+	}
+	barrier();
+	if(traces)
+	{
+		b_gi_refl_list[list_base + s_tile_base + rank] = packed_texel;
+	}
 }

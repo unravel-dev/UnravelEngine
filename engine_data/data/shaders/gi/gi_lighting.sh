@@ -380,8 +380,9 @@ vec3 GiEvalDirectLighting(vec3 world_position, vec3 world_normal, float voxel_si
  * one answer - and for level >= 2 (no CSM cover, no mesh near field) that was the majority
  * of the pass's shadow cost. The trace is memoised per (voxel, light): the first face out of
  * shadow-map coverage traces from a SHARED origin - the voxel centre lifted along the ray
- * itself, by the same centre lift the faces use plus the answering level's normal bias -
- * and every later face reuses the verdict with its own n.l. The CSM tier stays per face:
+ * itself, by the same centre lift the faces use plus the answering level's normal bias, then
+ * walked by the voxel's dither inside its own empty ball (GiDitherInRoom) - and every later
+ * face reuses the verdict with its own n.l. The CSM tier stays per face:
  * four taps, area-averaged over the face, and the sharper answer wherever it covers.
  *
  * The receiver was already treated as a voxel-wide beam (see GiTraceShadow), so a shared
@@ -423,9 +424,23 @@ bool GiSharedOriginClear(int level, vec3 voxel_center, vec3 shared_origin, float
 	return true;
 }
 
+/// The dither walk held inside the empty ball around its evaluation point: `room` is the field
+/// there, and the walk reaches at most GI_LIGHT_VOXEL_DITHER_ROOM of it, so it stays on the same
+/// side of every surface - a shadow edge still dithers into penumbra, and a wall or roof
+/// thinner than the walk never lends the point the light beyond it.
+vec3 GiDitherInRoom(vec3 jitter, float room)
+{
+	float reach = GI_LIGHT_VOXEL_DITHER_ROOM * max(room, 0.0);
+	float walk = length(jitter);
+	return walk > reach ? jitter * (reach / walk) : jitter;
+}
+
+/// `voxel_center` is the true centre (the shared origin's lift is validated from it);
+/// `origin_jitter` is the voxel's dither walk, taken by the validated origin inside its own
+/// empty ball.
 vec3 GiEvalDirectLightingVoxel(vec3 world_position, vec3 world_normal, float voxel_size,
                                float near_field, vec3 voxel_center, float center_lift,
-                               int level, inout float cached_dir_visibility,
+                               int level, vec3 origin_jitter, inout float cached_dir_visibility,
                                inout int cached_dir_index)
 {
 	vec3 total = vec3_splat(0.0);
@@ -475,6 +490,7 @@ vec3 GiEvalDirectLightingVoxel(vec3 world_position, vec3 world_normal, float vox
 				BRANCH
 				if(GiSharedOriginClear(level, voxel_center, shared_origin, voxel_size))
 				{
+					shared_origin += GiDitherInRoom(origin_jitter, SdfSampleClipmapLevel(level, shared_origin));
 					visibility = GiTraceShadow(shared_origin, to_light, to_light,
 					                           u_gi_shadow_distance, voxel_size, near_field);
 					cached_dir_visibility = visibility;

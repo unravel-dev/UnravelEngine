@@ -92,6 +92,31 @@ auto fold_uint(uint64_t hash, uint64_t value) -> uint64_t
 {
     return fold_bytes(hash, &value, sizeof(value));
 }
+
+/// Frames a view must stay still (update_gi_hold) before its GI is held: past the screen
+/// temporal's slow window, so the held result is a converged one.
+constexpr uint32_t gi_hold_still_frames = 64;
+/// Relative pre-exposure drift a held result tolerates: the held textures are in the exposure
+/// they were produced under, so a slowly adapting exposure resumes the gather once it has moved
+/// this far from where the still streak began.
+constexpr float gi_hold_exposure_tolerance = 0.002f;
+/// Where update_gi_hold keeps its per-view state in gfx::render_view::data().
+constexpr const char* gi_hold_key = "GI_HOLD";
+
+/// What update_gi_hold compares frame to frame, and its verdict.
+struct gi_hold_state
+{
+    uint64_t frame{~0ull};
+    uint32_t still_frames{0};
+    bool hold{false};
+    math::transform view{};
+    math::transform projection{};
+    usize32_t size{};
+    float pre_exposure{0.0f};
+    /// The pre-exposure the current still streak began under.
+    float streak_pre_exposure{0.0f};
+    gi_resolve_pass::settings settings{};
+};
 } // namespace ANONYMOUS
 } // namespace unravel
 
@@ -3269,6 +3294,7 @@ auto deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rv
         return false;
     }
     gi_reflection_pass::run_params grp;
+    grp.hold = update_gi_hold(camera, rview, gi_reflection_settings);
     grp.g_buffer = rview.fbo_safe_get("GBUFFER");
     grp.output = rview.fbo_safe_get("RBUFFER");
     grp.hiz = rview.tex_safe_get("HIZBUFFER");
@@ -3359,6 +3385,7 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
     {
         gi_resolve_pass::run_params params;
         params.settings = resolve_settings;
+        params.hold = update_gi_hold(camera, rview, gi);
         params.cause_lane = debug_pass_ == debug_pass_gi_temporal_cause;
         params.probe_census = debug_pass_ == debug_pass_gi_probe_tiers || debug_pass_ == debug_pass_gi_emitter_share;
         params.g_buffer = rview.fbo_safe_get("GBUFFER");
@@ -3399,6 +3426,46 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
         rview.tex_remove("GI_ROUGH_SPECULAR");
     }
     return result != nullptr;
+}
+
+auto deferred::update_gi_hold(const camera& camera, gfx::render_view& rview, const gi_settings& gi) -> bool
+{
+    auto& state = rview.data().get_or_emplace<ANONYMOUS::gi_hold_state>(ANONYMOUS::gi_hold_key);
+    const uint64_t frame_now = gfx::get_render_frame();
+    if(state.frame == frame_now)
+    {
+        return state.hold;
+    }
+    state.frame = frame_now;
+    const auto* view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+    const auto view = camera.get_view();
+    const auto projection = camera.get_projection_unjittered();
+    const auto size = camera.get_viewport_size();
+    const float pre_exposure = get_pre_exposure(rview).value;
+    const bool movers_recent = velocity_movers_frame_ != ~0ull && frame_now >= velocity_movers_frame_ &&
+                               frame_now - velocity_movers_frame_ <= uint64_t(ANONYMOUS::gi_hold_still_frames);
+    // The world side past its forced settle: nothing it feeds the gather is still converging.
+    const bool world_settled =
+        view_cache && view_cache->get_quiet_frames() >= uint32_t(gi::GI_QUIESCENCE_MAX_FRAMES);
+    const bool exposure_held = state.streak_pre_exposure > 0.0f &&
+                               std::abs(pre_exposure / state.streak_pre_exposure - 1.0f) <=
+                                   ANONYMOUS::gi_hold_exposure_tolerance;
+    const bool unchanged = view == state.view && projection == state.projection && size == state.size &&
+                           exposure_held && gi.resolve == state.settings;
+    const bool still =
+        gi.resolve.hold_at_rest && debug_pass_ < 0 && world_settled && unchanged && !movers_recent;
+    state.view = view;
+    state.projection = projection;
+    state.size = size;
+    state.pre_exposure = pre_exposure;
+    state.settings = gi.resolve;
+    state.still_frames = still ? std::min(state.still_frames + 1u, ANONYMOUS::gi_hold_still_frames) : 0u;
+    if(!still)
+    {
+        state.streak_pre_exposure = pre_exposure;
+    }
+    state.hold = state.still_frames >= ANONYMOUS::gi_hold_still_frames;
+    return state.hold;
 }
 
 void deferred::run_sdf_debug_pass(const camera& camera,

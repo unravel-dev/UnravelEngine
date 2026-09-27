@@ -84,7 +84,12 @@ void sdf_instance_grid::build(const std::vector<math::bbox>& instance_bounds, co
     const math::bbox& scene = region;
     const math::vec3 extent = scene.get_dimensions();
     const float longest = math::max(extent.x, math::max(extent.y, extent.z));
-    cell_size_ = math::max(longest / float(settings_.resolution), min_cell_size);
+    cell_size_ = longest / float(settings_.resolution);
+    if(settings_.max_cell_size > 0.0f)
+    {
+        cell_size_ = math::min(cell_size_, settings_.max_cell_size);
+    }
+    cell_size_ = math::max(cell_size_, min_cell_size);
     const auto axis_cells = [&](float axis_extent) -> uint32_t
     {
         return math::max(1u, uint32_t(std::ceil(axis_extent / cell_size_)));

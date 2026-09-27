@@ -136,13 +136,23 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     // shaders resolution-agnostic.
     const auto full_size = params.output->get_size();
     const usize32_t trace_size = compute_trace_size(full_size, params.resolution);
+    if(params.hold && held_accumulation_ && held_accumulation_->info.width == trace_size.width &&
+       held_accumulation_->info.height == trace_size.height)
+    {
+        rview.touch_prefixed("GI_REFL");
+        run_composite(params, held_accumulation_, trace_size);
+        accumulation_ = held_accumulation_;
+        bgfx::discard();
+        return true;
+    }
     // The compute chain is the deliverable path; the fragment program is the fallback when
     // any of its three programs failed to load. RAW opens for image stores accordingly.
     const bool compute_trace =
         classify_program_.is_valid() && args_program_.is_valid() && trace_program_.is_valid();
     auto raw_fbo =
         create_or_update_target(rview, "GI_REFL_RAW", trace_size, raw_tex, raw_created, compute_trace);
-    const bool odd_frame = (gfx::get_render_frame() & 1u) != 0u;
+    const bool odd_frame = (accumulation_parity_ & 1u) != 0u;
+    ++accumulation_parity_;
     auto read_fbo = create_or_update_target(rview,
                                             odd_frame ? "GI_REFL_ACC_A" : "GI_REFL_ACC_B",
                                             trace_size,
@@ -466,43 +476,11 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         bgfx::setState(BGFX_STATE_DEFAULT);
         temporal_program_.program->end();
     }
-    // COMPOSITE: the traced tier, src-alpha into RBUFFER. Coverage is 1 for mesh-exact /
-    // refined hits and 0 for an unrefined clipmap on a sharp pixel, so probes remain the
-    // far-field image where the clipmap isosurface would be a wrong silhouette; the rough tier's
-    // share is left out (it goes into the probe layer below). Alpha is multiplied by
-    // 1 - coverage, so RBUFFER keeps the share the traced layers leave to the probe layer.
-    // SSR composites the sharp on-screen result on top afterwards, the same way.
-    {
-        gfx::render_pass cpass("GI/Reflections Composite");
-        cpass.bind(params.output.get());
-        composite_program_.program->begin();
-        gfx::set_texture(composite_program_.s_refl_acc, 0, write_tex);
-        gfx::set_texture(composite_program_.s_gi_normal, 1, params.g_buffer->get_texture(1));
-        gfx::set_texture(composite_program_.s_hiz, 2, params.hiz);
-        // Offsets measure ACCUMULATION texels (equal to output texels at full res): at half
-        // res the composite's edge-stopped 3x3 becomes a joint bilateral upsample for free.
-        const float composite_params[4] = {1.0f / float(trace_size.width),
-                                           1.0f / float(trace_size.height),
-                                           0.0f,
-                                           0.0f};
-        gfx::set_uniform(composite_program_.u_gi_refl_composite, composite_params);
-        auto ctopology = gfx::clip_fullscreen_triangle(1.0f);
-        if(ctopology == 0)
-        {
-            ctopology = gfx::clip_quad(1.0f);
-        }
-        bgfx::setState(ctopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
-                       BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA,
-                                                      BGFX_STATE_BLEND_INV_SRC_ALPHA,
-                                                      BGFX_STATE_BLEND_ZERO,
-                                                      BGFX_STATE_BLEND_INV_SRC_ALPHA));
-        bgfx::submit(cpass.id, composite_program_.program->native_handle());
-        bgfx::setState(BGFX_STATE_DEFAULT);
-        composite_program_.program->end();
-    }
+    run_composite(params, write_tex, trace_size);
     // The rough tier blends into the probe layer after the gather (run_rough_tier) at the weight
     // that completes this composite's split; it reads this accumulation's coverage.
     accumulation_ = write_tex;
+    held_accumulation_ = write_tex;
     bgfx::discard();
     // A FULL-RESOLUTION mirror tier lived here briefly (capped compacted list re-traced at
     // output res over the composite) and was REMOVED on the user's verdict: +0.6 ms at FHD
@@ -513,6 +491,41 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     // blends into it, and the half-res classify should exclude the pixels the tier will
     // overwrite.
     return true;
+}
+
+void gi_reflection_pass::run_composite(const run_params& params,
+                                       const gfx::texture::ptr& accumulation,
+                                       const usize32_t& trace_size)
+{
+    // COMPOSITE: the traced tier, src-alpha into RBUFFER. Coverage is 1 for mesh-exact /
+    // refined hits and 0 for an unrefined clipmap on a sharp pixel, so probes remain the
+    // far-field image where the clipmap isosurface would be a wrong silhouette; the rough tier's
+    // share is left out (run_rough_tier blends it into the probe layer). Alpha is multiplied by
+    // 1 - coverage, so RBUFFER keeps the share the traced layers leave to the probe layer.
+    // SSR composites the sharp on-screen result on top afterwards, the same way.
+    gfx::render_pass cpass("GI/Reflections Composite");
+    cpass.bind(params.output.get());
+    composite_program_.program->begin();
+    gfx::set_texture(composite_program_.s_refl_acc, 0, accumulation);
+    gfx::set_texture(composite_program_.s_gi_normal, 1, params.g_buffer->get_texture(1));
+    gfx::set_texture(composite_program_.s_hiz, 2, params.hiz);
+    // Offsets measure ACCUMULATION texels (equal to output texels at full res): at half
+    // res the composite's edge-stopped 3x3 becomes a joint bilateral upsample for free.
+    const float composite_params[4] = {1.0f / float(trace_size.width), 1.0f / float(trace_size.height), 0.0f, 0.0f};
+    gfx::set_uniform(composite_program_.u_gi_refl_composite, composite_params);
+    auto ctopology = gfx::clip_fullscreen_triangle(1.0f);
+    if(ctopology == 0)
+    {
+        ctopology = gfx::clip_quad(1.0f);
+    }
+    bgfx::setState(ctopology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
+                   BGFX_STATE_BLEND_FUNC_SEPARATE(BGFX_STATE_BLEND_SRC_ALPHA,
+                                                  BGFX_STATE_BLEND_INV_SRC_ALPHA,
+                                                  BGFX_STATE_BLEND_ZERO,
+                                                  BGFX_STATE_BLEND_INV_SRC_ALPHA));
+    bgfx::submit(cpass.id, composite_program_.program->native_handle());
+    bgfx::setState(BGFX_STATE_DEFAULT);
+    composite_program_.program->end();
 }
 
 auto gi_reflection_pass::run_rough_tier(gfx::render_view& rview, const rough_tier_params& params) -> bool

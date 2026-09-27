@@ -93,6 +93,9 @@ public:
         /// the composited output are in pre-exposed space (Lumen's reflections): the stores
         /// convert on read, the history and last frame's resolve by P / Pprev.
         pre_exposure_state pre_exposure{};
+        /// The view is held (gi_resolve_pass::settings::hold_at_rest): the last accumulation
+        /// is composited again instead of tracing.
+        bool hold = false;
     };
 
     /// Inputs of the rough tier, which blends into the probe layer after the gather.
@@ -125,6 +128,9 @@ public:
     auto run_rough_tier(gfx::render_view& rview, const rough_tier_params& params) -> bool;
 
 private:
+    /// Composites an accumulation over the probe layer in RBUFFER (params.output).
+    void run_composite(const run_params& params, const gfx::texture::ptr& accumulation, const usize32_t& trace_size);
+
     struct reflection_program : uniforms_cache
     {
         gpu_program::ptr program;
@@ -396,6 +402,11 @@ private:
     /// This frame's accumulated traced tier (its alpha is the coverage the rough tier's weight
     /// completes), set by a successful run() and read by run_rough_tier(); null otherwise.
     gfx::texture::ptr accumulation_;
+    /// The accumulation the last TRACED frame wrote, which held frames composite again.
+    gfx::texture::ptr held_accumulation_;
+    /// Ping-pong phase of the accumulation pair. It advances on traced frames only, so the
+    /// frame after a hold reads the accumulation the hold composited.
+    uint32_t accumulation_parity_ = 0;
 
     /// Composed-content epoch of the view's clipmap at the last run, and the frame it last
     /// advanced: the STRUCTURAL half of the temporal's stillness-release cap. The mover

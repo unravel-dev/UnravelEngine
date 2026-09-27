@@ -950,12 +950,19 @@
       " per voxel per relight, so shadow edges stand in the light volume as voxel-scale"           \
       " staircases that the trilinear read softens but cannot remove - and every mirror"           \
       " reflects them. The evaluation point now dithers within the voxel by this amplitude"        \
-      " per relight (a low-discrepancy walk keyed on cell and frame): the staircase becomes"       \
-      " dither that the world-probe stratum window and the gather temporal integrate into"         \
-      " penumbra. A quarter voxel keeps the traced tier's launch clear of the surface (the"        \
-      " lift guarantees half a voxel, computed at the true centre); the cavity and tunnel"         \
-      " gates stay UN-dithered - their verdicts are memoised as pure functions of the field."      \
-      " 0 disables, the A/B")                                                                      \
+      " per relight (an R3 walk keyed on cell and relight count): the staircase becomes"           \
+      " dither that the relight EMA, the world-probe stratum window and the gather temporal"       \
+      " integrate into penumbra. Each evaluation point walks only inside its own empty ball"       \
+      " (GI_LIGHT_VOXEL_DITHER_ROOM), and the traced tier's launch is lifted and validated"        \
+      " from the true centre before it walks; the cavity and tunnel gates stay UN-dithered -"      \
+      " their verdicts are memoised as pure functions of the field. 0 disables, the A/B")          \
+    X(GI_LIGHT_VOXEL_DITHER_ROOM, 0.8f,                                                            \
+      "fraction of the field distance", "derived: the dither walk (GI_LIGHT_VOXEL_SUN_DITHER)"     \
+      " reaches at most this fraction of the field at its evaluation point - a face's launch"      \
+      " point, the traced tier's validated origin - so it stays inside the empty ball there,"      \
+      " on the same side of every surface: a wall or roof thinner than the walk never lends a"     \
+      " relight the light beyond it. The margin covers the composed field's interpolation"         \
+      " error near sub-voxel geometry")                                                            \
     X(GI_LIGHT_VOXEL_EMA_BLEND, 0.125f,                                                            \
       "per-relight blend weight", "derived: 1/8 - two full 4-frame relight rotations of"           \
       " history. The volume's relight is sampled (one dithered evaluation point per voxel per"     \
@@ -980,11 +987,13 @@
       " (no float atomics on the SM5 / GLSL 4.3 floor); 1024 steps per unit of relative"           \
       " change resolve 0.1% per face, and the worst-case sum (2^18 relit faces at full"            \
       " change x 1024) stays under 2^32")                                                          \
-    X(GI_QUIESCENCE_MIN_FRAMES, 32,                                                                \
-      "frames", "derived: two complete world-probe windows (GI_WORLD_PROBE_WINDOW): the probe"     \
+    X(GI_QUIESCENCE_MIN_FRAMES, 128,                                                               \
+      "frames", "derived: eight complete world-probe windows (GI_WORLD_PROBE_WINDOW): the probe"   \
       " atlas is a windowed mean that reaches its fixed point one window after the last"           \
-      " voxel change, and the bounce feeds back once more through the voxels. Nothing"             \
-      " freezes earlier however still the relight reads")                                          \
+      " voxel change, but the bounce loop settles over several voxel-probe round trips (a"         \
+      " window and a rotation each), and under a sampled relight that climb sits below the"        \
+      " relight noise the convergence tests read. Nothing freezes earlier however still the"       \
+      " relight reads")                                                                            \
     X(GI_QUIESCENCE_MAX_FRAMES, 1024,                                                              \
       "frames", "derived: the hard ceiling on how long a still scene keeps the world passes"       \
       " alive, 4x the old fixed settle: a relight that never reads stationary (an unstable"        \
@@ -994,8 +1003,7 @@
     X(GI_QUIESCENCE_CONVERGED_MEAN, 0.0005f,                                                       \
       "relative change per relit face", "derived: half of one 8-bit step of a face at unit"        \
       " luminance, per relight. A volume whose mean relative change is below this rewrites"        \
-      " values no reader can distinguish, so the passes stop at GI_QUIESCENCE_MIN_FRAMES"          \
-      " instead of the old 256 - static exteriors freeze 8x sooner")                               \
+      " values no reader can distinguish, so the passes stop at GI_QUIESCENCE_MIN_FRAMES")         \
     X(GI_QUIESCENCE_STATIONARY_FRACTION, 0.95f,                                                    \
       "unitless", "derived: at rest the relight is a stationary process (the sun dither at"        \
       " shadow edges, folded in by the EMA) whose mean relative change never reaches the"          \
@@ -1009,8 +1017,8 @@
       " the mean twice, which cancels the per-phase difference of the rotation's face sets")       \
     X(GI_QUIESCENCE_COMPARE_FRAMES, 32,                                                            \
       "frames", "derived: eight rotations apart - far enough for the slowest decay to show (see"   \
-      " GI_QUIESCENCE_STATIONARY_FRACTION), short enough that a stationary scene freezes"          \
-      " within 40 frames of stillness")                                                            \
+      " GI_QUIESCENCE_STATIONARY_FRACTION), short enough that both windows fill inside"            \
+      " GI_QUIESCENCE_MIN_FRAMES, so a stationary scene freezes at that floor")                    \
     X(GI_QUIESCENCE_DRIFT_FRACTION, 0.25f,                                                         \
       "unitless", "derived: the stationarity ratio reads a STEADY per-relight change as rest,"     \
       " but a volume climbing or falling through its bounce loop is a steady change too - the"     \
@@ -1037,6 +1045,19 @@
       " raising its own ceiling and converging unbiased. No reference at all (fresh tile,"         \
       " failed reprojection): the first measurement stores unclamped - progressive ramps"          \
       " from black would dim every disocclusion instead")                                          \
+    X(GI_GATHER_FIREFLY_REFERENCE_FLOOR, 0.001f,                                                   \
+      "luminance, pre-exposed", "derived: the governor's near-black floor. A probe that"           \
+      " reprojected onto last frame's lattice (the same surface, by the plane test) is governed"   \
+      " however dark its history, its reference floored here: a dark history is a measurement"     \
+      " too, and a rare ray that reaches a small sunlit patch or emitter that history never saw"   \
+      " is the sparse spike the governor exists for - admitted whole, the probe's footprint"       \
+      " blinks white in a dark room beside a lit one. A light that persists raises its own"        \
+      " reference, so it climbs by up to GI_GATHER_FIREFLY_CLAMP per frame from"                   \
+      " GI_GATHER_FIREFLY_CLAMP x this floor - four frames to a pre-exposed 1 on a texel's own"    \
+      " history, inside the ten-frame convergence window. Without reprojected history only a"      \
+      " reference above the floor governs, so a disocclusion's first measurement still stores"     \
+      " unclamped. A pre-exposed 1e-3 is near display black: below it a reference says nothing"    \
+      " about what the probe sees")                                                                \
     X(GI_TEMPORAL_CHANGE_SIGMA, 3.0f,                                                              \
       "standard deviations", "derived: the fast and slow lanes are means of the same sample"       \
       " stream, so their gap's variance is the single-sample variance x (1/n_fast +"               \

@@ -281,9 +281,9 @@ public:
     /// frames and reads the reduced statistics once the single readback lands. Nothing is
     /// dispatched while no measurement is armed. @p is_lowpass selects the probe's low-pass lane
     /// (temporal_probe_pass::request).
-    void request_temporal_probe(uint32_t frames, bool is_lowpass = false)
+    void request_temporal_probe(uint32_t frames, bool is_lowpass = false, bool keeps_images = false)
     {
-        temporal_probe_pass_.request(frames, is_lowpass);
+        temporal_probe_pass_.request(frames, is_lowpass, keeps_images);
     }
     auto get_temporal_probe() const -> const temporal_probe_pass&
     {

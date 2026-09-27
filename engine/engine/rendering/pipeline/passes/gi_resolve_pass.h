@@ -83,6 +83,15 @@ public:
         /// temporal integrates it (the removed temporal's blob pathology cannot occur
         /// without blending). Off = every texel traces its own ray, the quality ceiling.
         bool adaptive_rays = true;
+        /// The reference the gather's firefly governor caps each new sample against
+        /// (GI_GATHER_FIREFLY_CLAMP x reference). Off: last frame's value of the same
+        /// screen-slot texel, floored by the reprojected tile mean - once the camera moves the
+        /// slot holds another world point, so the ceiling is screen-locked and clamps in a
+        /// pattern that slides over the world. On: the reprojected probe's 2x2 direction block,
+        /// floored by its tile mean - the same world point's radiance around the direction, so
+        /// the ceiling follows the surface through camera motion; a probe without reprojected
+        /// history stores its samples uncapped.
+        bool reprojected_firefly_reference = false;
         /// World-probe rays JITTER inside their octahedral texel per window and the atlas
         /// becomes a converging running mean (GI_WORLD_PROBE_EMA_WINDOWS): removes the
         /// per-probe bias of fixed texel-centre rays (a small emitter skewered or missed per
@@ -144,6 +153,15 @@ public:
         bool enable_bilateral_upsample = true;
         float upsample_normal_power = 32.0f;
         float upsample_plane_tolerance = 0.02f;
+        /// HOLD AT REST: once the view has been still long enough (camera, exposure, these
+        /// settings, no movers, the world side settled - deferred::update_gi_hold), the
+        /// screen-side gather and the reflection trace stop re-tracing and their last
+        /// converged results stand in for each frame; any of those changing resumes them from
+        /// the held history. Changes the pipeline cannot see (particles, animated materials
+        /// outside the light set) do not reach the image while held.
+        bool hold_at_rest = false;
+
+        auto operator==(const settings&) const -> bool = default;
     };
 
     struct run_params
@@ -190,6 +208,8 @@ public:
         /// on read, and the history is corrected by P / Pprev (gi_pre_exposure.sh).
         pre_exposure_state pre_exposure{};
         settings settings;
+        /// The view is held (settings::hold_at_rest): the last result stands in for this frame.
+        bool hold{};
     };
 
     ~gi_resolve_pass();
@@ -220,6 +240,12 @@ public:
     }
 
 private:
+    /// The gather chain of run(): placement through the upsample.
+    auto run_gather(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr;
+    /// A held frame: the last result stands in, its targets stay resident and the histories
+    /// count as written this frame, so the next gathered frame resumes from them.
+    auto hold(gfx::render_view& rview) -> gfx::texture::ptr;
+
     /// The double-buffered temporal history pair for this frame: acquired once per frame by
     /// whichever form of the temporal runs (fused or split) - it advances the parity counter
     /// and owns the no-history warning.
@@ -625,6 +651,9 @@ private:
     /// False until both record halves hold real data; gates the trace's importance
     /// reprojection so freshly allocated garbage is never read as history.
     bool records_trusted_ = false;
+    /// The last gathered result and rough specular, which held frames republish.
+    gfx::texture::ptr held_result_;
+    gfx::texture::ptr held_rough_specular_;
     /// Last frame's camera pose for the temporal's camera-motion collapse (the z lane of
     /// u_gi_temporal_dirty): position and view axis, valid once has_prev_camera_ is set.
     math::vec3 prev_camera_position_{};

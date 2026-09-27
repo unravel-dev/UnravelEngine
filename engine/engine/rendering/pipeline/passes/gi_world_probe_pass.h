@@ -262,6 +262,15 @@ private:
     /// Probes the scheduler lists per frame: GI_WORLD_PROBE_TRACE_BUDGET, or every slot while a fast
     /// window is armed. Set by run(), read by the gate's group counts the next frame.
     uint32_t frame_budget_ = probe_count;
+    /// Camera-only budget state (camera_budget_settled_probes): frames since a fast window was
+    /// last armed and since the camera last moved, the position that measures it, and whether
+    /// the budget ran last frame (its end asks the gate for a settle).
+    uint32_t quiet_frames_ = 0;
+    uint32_t moving_frames_ = 0;
+    math::vec3 last_camera_position_{0.0f};
+    bool has_last_camera_position_ = false;
+    bool camera_budget_active_ = false;
+    bool settle_owed_ = false;
 };
 
 } // namespace unravel

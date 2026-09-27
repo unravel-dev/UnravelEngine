@@ -61,10 +61,11 @@ auto temporal_probe_pass::init(rtti::context& ctx) -> bool
     return program_.is_valid();
 }
 
-void temporal_probe_pass::request(uint32_t frames, bool is_lowpass)
+void temporal_probe_pass::request(uint32_t frames, bool is_lowpass, bool keeps_images)
 {
     frames_requested_ = std::clamp(frames, 2u, max_frames);
     is_lowpass_ = is_lowpass;
+    keeps_images_ = keeps_images;
     frames_done_ = 0;
     armed_ = true;
     result_ = {};
@@ -155,6 +156,13 @@ void temporal_probe_pass::allocate(uint16_t width, uint16_t height)
                                                bgfx::TextureFormat::RGBA32F,
                                                BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
     readback_data_.assign(size_t(width) * size_t(height) * 4u, 0.0f);
+    readback_luma_ = std::make_shared<gfx::texture>(width,
+                                                    height,
+                                                    false,
+                                                    1,
+                                                    bgfx::TextureFormat::R32F,
+                                                    BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+    readback_luma_data_.assign(size_t(width) * size_t(height), 0.0f);
 }
 
 void temporal_probe_pass::dispatch_frame(const run_params& params)
@@ -201,6 +209,18 @@ void temporal_probe_pass::issue_readback()
                bgfx::TextureRegion{.handle = readback_->native_handle(), .width = width_, .height = height_},
                bgfx::TextureRegion{.handle = sums_->native_handle(), .width = width_, .height = height_});
     readback_ready_frame_ = bgfx::read(bgfx::TextureRegion{.handle = readback_->native_handle()}, readback_data_.data());
+    readback_keeps_images_ = keeps_images_;
+    if(keeps_images_)
+    {
+        // dispatch_frame has already flipped the write index: the frame just folded in wrote the other one.
+        const auto& last_luma = luma_[1u - luma_write_];
+        bgfx::blit(pass.id,
+                   bgfx::TextureRegion{.handle = readback_luma_->native_handle(), .width = width_, .height = height_},
+                   bgfx::TextureRegion{.handle = last_luma->native_handle(), .width = width_, .height = height_});
+        readback_ready_frame_ = std::max(readback_ready_frame_,
+                                         bgfx::read(bgfx::TextureRegion{.handle = readback_luma_->native_handle()},
+                                                    readback_luma_data_.data()));
+    }
     readback_frames_ = frames_done_;
     readback_lowpass_ = is_lowpass_;
     readback_pending_ = true;
@@ -216,6 +236,12 @@ void temporal_probe_pass::reduce_readback()
     std::vector<float> changes;
     deviations.reserve(size_t(width) * height);
     changes.reserve(size_t(width) * height);
+    const size_t plane = size_t(width) * height;
+    std::vector<float> images;
+    if(readback_keeps_images_)
+    {
+        images.assign(plane * 4u, 0.0f);
+    }
     std::vector<double> std_cells(size_t(grid_size) * grid_size, 0.0);
     std::vector<double> change_cells(size_t(grid_size) * grid_size, 0.0);
     std::vector<uint32_t> std_counts(size_t(grid_size) * grid_size, 0u);
@@ -236,13 +262,22 @@ void temporal_probe_pass::reduce_readback()
             deviations.push_back(deviation);
             std_cells[cell] += deviation;
             ++std_counts[cell];
+            float change = -1.0f;
             if(frames > 1u && texel[3] >= std::max(min_measured, 1.0f))
             {
-                const float change = texel[2] / texel[3];
+                change = texel[2] / texel[3];
                 changes.push_back(change);
                 change_cells[cell] += change;
                 ++change_counts[cell];
                 change_sum += change;
+            }
+            if(!images.empty())
+            {
+                const size_t pixel = size_t(image_y) * width + x;
+                images[pixel] = texel[0];
+                images[plane + pixel] = deviation;
+                images[2u * plane + pixel] = change;
+                images[3u * plane + pixel] = readback_luma_data_[size_t(y) * width + x];
             }
         }
     }
@@ -265,6 +300,7 @@ void temporal_probe_pass::reduce_readback()
         next.std_grid[cell] = std_counts[cell] ? float(std_cells[cell] / std_counts[cell]) : 0.0f;
         next.delta_grid[cell] = change_counts[cell] ? float(change_cells[cell] / change_counts[cell]) : 0.0f;
     }
+    next.images = std::move(images);
     result_ = std::move(next);
 }
 

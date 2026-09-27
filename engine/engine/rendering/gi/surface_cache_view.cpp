@@ -180,6 +180,11 @@ auto surface_cache_view::update_quiescence(uint64_t light_hash,
             changed = true;
         }
     }
+    if(settle_requested_)
+    {
+        settle_requested_ = false;
+        changed = true;
+    }
     if(changed)
     {
         quiescence_frames_ = 0;

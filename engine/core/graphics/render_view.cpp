@@ -90,6 +90,23 @@ void render_view::fbo_remove(const hpp::string_view& id)
     }
 }
 
+void render_view::touch_prefixed(const hpp::string_view& prefix)
+{
+    const uint32_t frame = get_render_frame();
+    const auto stamp = [&](auto& entries)
+    {
+        // Ids sort lexicographically, so the prefixed ones are one contiguous run.
+        for(auto it = entries.lower_bound(prefix);
+            it != entries.end() && it->first.compare(0, prefix.size(), prefix.data(), prefix.size()) == 0;
+            ++it)
+        {
+            it->second.last_used_frame = frame;
+        }
+    };
+    stamp(textures_);
+    stamp(fbos_);
+}
+
 void render_view::release_unused(uint32_t current_frame, uint32_t max_idle_frames)
 {
     // Framebuffers first, so an expired fbo+texture pair cascades in one call: the fbo

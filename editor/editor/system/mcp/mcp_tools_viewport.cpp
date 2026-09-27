@@ -21,6 +21,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <map>
 #include <thread>
 #include <vector>
@@ -662,10 +663,15 @@ void register_viewport_tools(mcp_tool_registry& registry)
              "a 5x5 box mean of the luminance: under camera motion the raw change is dominated by the sub-pixel "
              "resampling of textured detail, which the box removes. Optional `motion` drives the Scene camera "
              "across exactly the measured frames: {\"type\":\"path\",\"from_position\":[..],"
-             "\"from_target\":[..],\"to_position\":[..],\"to_target\":[..]} or {\"type\":\"orbit\","
-             "\"center\":[..],\"radius\":r,\"height\":h,\"start_degrees\":a,\"degrees\":sweep}.",
+             "\"from_target\":[..],\"to_position\":[..],\"to_target\":[..]}, {\"type\":\"orbit\","
+             "\"center\":[..],\"radius\":r,\"height\":h,\"start_degrees\":a,\"degrees\":sweep} or a pure turn at "
+             "a constant rate {\"type\":\"yaw\",\"position\":[..],\"forward\":[..],\"start_degrees\":a,"
+             "\"degrees\":sweep} (the forward rotated about world up). Optional `save` (absolute file path) also "
+             "writes the per-pixel planes as raw little-endian float32, rows from the top: the mean luminance, its "
+             "std, the mean reprojected change (-1 where unmeasured) and the LAST measured frame's luminance - "
+             "frame-locked to the end of the measurement (and of the motion).",
          .input_schema_json =
-             R"json({"type":"object","properties":{"frames":{"type":"integer","minimum":2,"maximum":4096},"timeout_ms":{"type":"integer","minimum":1000,"maximum":600000},"motion":{"type":"object"},"lowpass":{"type":"boolean"}}})json",
+             R"json({"type":"object","properties":{"frames":{"type":"integer","minimum":2,"maximum":4096},"timeout_ms":{"type":"integer","minimum":1000,"maximum":600000},"motion":{"type":"object"},"lowpass":{"type":"boolean"},"save":{"type":"string"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -687,6 +693,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  timeout_ms = requested_timeout;
              }
+             std::string save_path;
+             read_string(args, "save", save_path);
              struct motion_spec
              {
                  std::string type;
@@ -694,6 +702,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  math::vec3 from_target{};
                  math::vec3 to_position{};
                  math::vec3 to_target{};
+                 math::vec3 position{};
+                 math::vec3 forward{0.0f, 0.0f, 1.0f};
                  math::vec3 center{};
                  float radius = 4.0f;
                  float height = 2.0f;
@@ -735,9 +745,18 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          return {.text = "motion orbit needs center", .is_error = true};
                      }
                  }
+                 else if(motion.type == "yaw")
+                 {
+                     if(!read_vec3(motion_args, "position", motion.position) ||
+                        !read_vec3(motion_args, "forward", motion.forward) || math::length(motion.forward) < 1e-6f)
+                     {
+                         return {.text = "motion yaw needs position and a non-zero forward", .is_error = true};
+                     }
+                     motion.forward = math::normalize(motion.forward);
+                 }
                  else if(!motion.type.empty())
                  {
-                     return {.text = "motion type must be \"path\" or \"orbit\"", .is_error = true};
+                     return {.text = "motion type must be \"path\", \"orbit\" or \"yaw\"", .is_error = true};
                  }
              }
              const bool has_motion = !motion.type.empty();
@@ -755,6 +774,18 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  {
                      position = motion.from_position + (motion.to_position - motion.from_position) * u;
                      target = motion.from_target + (motion.to_target - motion.from_target) * u;
+                 }
+                 else if(motion.type == "yaw")
+                 {
+                     constexpr float degrees_to_radians = 0.017453292f;
+                     const float angle = (motion.start_degrees + motion.degrees * u) * degrees_to_radians;
+                     const float c = std::cos(angle);
+                     const float s = std::sin(angle);
+                     const math::vec3 direction(c * motion.forward.x + s * motion.forward.z,
+                                                motion.forward.y,
+                                                -s * motion.forward.x + c * motion.forward.z);
+                     position = motion.position;
+                     target = motion.position + direction * 10.0f;
                  }
                  else
                  {
@@ -790,7 +821,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      {
                          apply_pose(0.0f);
                      }
-                     pipeline->request_temporal_probe(uint32_t(frames), lowpass);
+                     pipeline->request_temporal_probe(uint32_t(frames), lowpass, !save_path.empty());
                      return true;
                  });
              if(!armed || !*armed)
@@ -807,6 +838,9 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  return json + "]";
              };
              const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+             std::vector<float> saved_images;
+             uint32_t saved_width = 0;
+             uint32_t saved_height = 0;
              while(std::chrono::steady_clock::now() < deadline)
              {
                  auto polled = mcp.invoke_on_main(
@@ -827,6 +861,12 @@ void register_viewport_tools(mcp_tool_registry& registry)
                              return {};
                          }
                          const auto& r = probe.get_result();
+                         if(!save_path.empty())
+                         {
+                             saved_images = r.images;
+                             saved_width = r.width;
+                             saved_height = r.height;
+                         }
                          return fmt::format(
                              R"({{"frames":{},"lowpass":{},"width":{},"height":{},"std":{{"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1_5":{:.5f},"share_gt_4":{:.5f}}},"delta":{{"pixels":{},"mean":{:.3f},"p50":{:.3f},"p95":{:.3f},"p99":{:.3f},"share_gt_1":{:.5f},"share_gt_4":{:.5f}}},"std_grid":{},"delta_grid":{}}})",
                              r.frames, r.lowpass, r.width, r.height, r.std_percentiles[0], r.std_percentiles[1],
@@ -840,6 +880,25 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      if(*polled == "!")
                      {
                          return {.text = "Scene panel camera has no pipeline", .is_error = true};
+                     }
+                     if(!save_path.empty())
+                     {
+                         const size_t expected = size_t(saved_width) * saved_height * 4u;
+                         if(saved_images.size() != expected || expected == 0u)
+                         {
+                             return {.text = "temporal probe returned no per-pixel planes to save", .is_error = true};
+                         }
+                         std::FILE* file = std::fopen(save_path.c_str(), "wb");
+                         if(file == nullptr)
+                         {
+                             return {.text = "cannot open the save path for writing", .is_error = true};
+                         }
+                         const size_t written = std::fwrite(saved_images.data(), sizeof(float), saved_images.size(), file);
+                         std::fclose(file);
+                         if(written != saved_images.size())
+                         {
+                             return {.text = "short write to the save path", .is_error = true};
+                         }
                      }
                      return {.text = *polled, .is_error = false};
                  }

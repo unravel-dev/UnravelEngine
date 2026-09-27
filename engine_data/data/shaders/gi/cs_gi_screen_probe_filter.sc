@@ -76,7 +76,7 @@ SHARED vec3 s_dir[GI_PROBE_DIR_COUNT];
 /// Every texel's solid angle (GiOctTexelSolidAngle): the octahedral map is not equal-area.
 SHARED float s_omega[GI_PROBE_DIR_COUNT];
 /// The probe's filtered radiance in nine real SH coefficients (rgb, w = the measured lane), projected once per
-/// probe by thread 0 and evaluated by every thread.
+/// probe - one coefficient per thread on threads 0-8 - and evaluated by every thread.
 SHARED vec4 s_sh[9];
 
 /// Real spherical-harmonic basis normalisations for bands 0-2, and the clamped-cosine convolution's band scales
@@ -98,6 +98,7 @@ int GiFilterTapStride(ivec2 probe)
 		return 1;
 	}
 	bool skipped_region = false;
+	UNROLL
 	for(int m = 0; m < 9; ++m)
 	{
 		int mx = clamp(probe.x + m % 3 - 1, 0, u_gi_probe_count_x - 1);
@@ -167,8 +168,21 @@ void main()
 		    texelFetch(s_probe_radiance, GiProbeAtlasBase(probe.x, probe.y, 0) + local, 0);
 		own_hit_t = center_texel.w;
 		float weight_sum = 0.0;
+		// The nine taps are fetched before any is tested - a tap's test reads only its own value,
+		// so the fetches need not wait on each other. A tap without plane weight fetches its
+		// clamped neighbour and discards it (a weighted tap is always in range).
+		vec4 neighbour_values[9];
+		UNROLL
+		for(int fetch_n = 0; fetch_n < 9; ++fetch_n)
+		{
+			int fetch_x = clamp(probe.x + (fetch_n % 3 - 1) * s_tap_stride, 0, u_gi_probe_count_x - 1);
+			int fetch_y = clamp(probe.y + (fetch_n / 3 - 1) * s_tap_stride, 0, u_gi_probe_count_y - 1);
+			neighbour_values[fetch_n] =
+			    texelFetch(s_probe_radiance, GiProbeAtlasBase(fetch_x, fetch_y, 0) + local, 0);
+		}
 		// Same neighbour order as the old oy-outer / ox-inner walk, so the summation order -
 		// and with it the floating-point result - is unchanged.
+		UNROLL
 		for(int n = 0; n < 9; ++n)
 		{
 			float weight = s_nb_weight[n];
@@ -177,10 +191,7 @@ void main()
 				continue;
 			}
 			vec4 neighbour_meta = s_nb_meta[n];
-			int nx = probe.x + (n % 3 - 1) * s_tap_stride;
-			int ny = probe.y + (n / 3 - 1) * s_tap_stride;
-			vec4 neighbour_value =
-			    texelFetch(s_probe_radiance, GiProbeAtlasBase(nx, ny, 0) + local, 0);
+			vec4 neighbour_value = neighbour_values[n];
 			// The hitT-clamped reprojection test, only when both probes actually HIT (a
 			// completed/sky texel has no parallax to test and shares freely). The limit is
 			// PARALLAX-ADAPTIVE: a co-planar neighbour's hit reprojects with an error of
@@ -226,27 +237,27 @@ void main()
 	barrier();
 	// SH3 PROJECTION of the filtered sphere, once per probe: each direction weighted by its texel's SOLID ANGLE
 	// (the octahedral map is not equal-area - GiOctTexelSolidAngle), so a uniform field L projects to exactly
-	// E/pi = L below. The directions and solid angles come from shared memory.
-	if(center_valid && local.x == 0 && local.y == 0)
+	// E/pi = L below. The directions and solid angles come from shared memory. Nine threads, one coefficient
+	// each, every coefficient summed over the directions in index order.
+	if(center_valid && dir_index < 9)
 	{
-		for(int c = 0; c < 9; ++c)
-		{
-			s_sh[c] = vec4_splat(0.0);
-		}
+		vec4 coefficient = vec4_splat(0.0);
 		for(int d = 0; d < GI_PROBE_DIR_COUNT; ++d)
 		{
 			vec3 w = s_dir[d];
 			vec4 weighted = s_filtered[d] * s_omega[d];
-			s_sh[0] += weighted * GI_SH_BASIS_0;
-			s_sh[1] += weighted * (GI_SH_BASIS_1 * w.y);
-			s_sh[2] += weighted * (GI_SH_BASIS_1 * w.z);
-			s_sh[3] += weighted * (GI_SH_BASIS_1 * w.x);
-			s_sh[4] += weighted * (GI_SH_BASIS_2_CROSS * w.x * w.y);
-			s_sh[5] += weighted * (GI_SH_BASIS_2_CROSS * w.y * w.z);
-			s_sh[6] += weighted * (GI_SH_BASIS_2_ZZ * (3.0 * w.z * w.z - 1.0));
-			s_sh[7] += weighted * (GI_SH_BASIS_2_CROSS * w.x * w.z);
-			s_sh[8] += weighted * (GI_SH_BASIS_2_XX_YY * (w.x * w.x - w.y * w.y));
+			float basis = dir_index == 0   ? GI_SH_BASIS_0
+			              : dir_index == 1 ? GI_SH_BASIS_1 * w.y
+			              : dir_index == 2 ? GI_SH_BASIS_1 * w.z
+			              : dir_index == 3 ? GI_SH_BASIS_1 * w.x
+			              : dir_index == 4 ? GI_SH_BASIS_2_CROSS * w.x * w.y
+			              : dir_index == 5 ? GI_SH_BASIS_2_CROSS * w.y * w.z
+			              : dir_index == 6 ? GI_SH_BASIS_2_ZZ * (3.0 * w.z * w.z - 1.0)
+			              : dir_index == 7 ? GI_SH_BASIS_2_CROSS * w.x * w.z
+			                               : GI_SH_BASIS_2_XX_YY * (w.x * w.x - w.y * w.y);
+			coefficient += weighted * basis;
 		}
+		s_sh[dir_index] = coefficient;
 	}
 	barrier();
 	// IMPORTANCE MIP for next frame's ray allocation: 16 blocks of 2x2 texels, each block's

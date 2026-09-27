@@ -20,6 +20,17 @@ namespace
 {
 /// Must match NUM_THREADS in gi_light_voxels_kernel.sh (both compiled variants share it).
 constexpr uint32_t light_voxel_group_size = 64u;
+/// Period of the kernel's frame lane (u_gi_light_voxel_params.z). The kernel reads the rotation
+/// phase from it (frame % GI_LIGHT_VOXEL_UPDATE_DENOM) and each entry's relight count
+/// (frame / GI_LIGHT_VOXEL_UPDATE_DENOM), which steps the fill rays through the escape set and the
+/// sun dither along R3. A multiple of the rotation and of the fill cycle, so both run on across the
+/// wrap, and small enough that the float lane and the dither's fract stay exact.
+constexpr uint32_t light_voxel_frame_period = 4096u;
+static_assert(light_voxel_frame_period %
+                      (uint32_t(gi::GI_LIGHT_VOXEL_UPDATE_DENOM) *
+                       (uint32_t(gi::GI_BOUNCE_ESCAPE_RAYS) / uint32_t(gi::GI_BOUNCE_FILL_RAYS))) ==
+                  0u,
+              "the frame lane must wrap on a whole number of fill cycles");
 } // namespace
 
 auto gi_light_voxel_pass::get_dispatch_groups(const surface_cache_view& view_cache)
@@ -283,12 +294,13 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     // program was compiled in (see the variant note in gi_light_voxels_kernel.sh). The lanes
     // stay so a GPU-debugger capture can finally answer whether these uniforms ever arrive,
     // the question two hunts could not settle from the CPU side.
-    // The frame lane carries only the rotation phase, never the raw frame count: past 2^24 a
-    // float frame quantises to multiples of 2 and then 4, freezing `frame % 4` on one phase -
-    // three quarters of the surface set would silently stop relighting after ~77 h at 60 fps.
+    // The frame lane carries the frame over light_voxel_frame_period, never the raw frame count:
+    // past 2^24 a float frame quantises to multiples of 2 and then 4, freezing `frame % 4` on one
+    // phase - three quarters of the surface set would silently stop relighting after ~77 h at
+    // 60 fps. The period keeps both the rotation phase and each entry's relight count.
     const float voxel_params[4] = {float(attr_resolution),
                                    params.sun_tier_debug ? 1.0f : 0.0f,
-                                   float(params.frame % gi::GI_LIGHT_VOXEL_UPDATE_DENOM),
+                                   float(params.frame % light_voxel_frame_period),
                                    1.0f};
     gfx::set_uniform(program_.u_gi_light_voxel_params, voxel_params);
     // Logged on every flip: the one question a screenshot cannot answer is whether the flag

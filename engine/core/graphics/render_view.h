@@ -64,6 +64,16 @@ public:
      */
     void release_unused(uint32_t current_frame, uint32_t max_idle_frames = default_max_idle_frames);
 
+    /**
+     * @brief Counts every texture and framebuffer entry whose id starts with @p prefix as
+     * accessed this frame.
+     *
+     * For a feature that keeps its targets across frames without binding them (a held
+     * result): without the stamp, release_unused() drops them once the hold outlasts the
+     * idle window, and the feature resumes on fresh targets with no history.
+     */
+    void touch_prefixed(const hpp::string_view& prefix);
+
     auto data_get_or_emplace(const hpp::string_view& id, uint32_t default_val = 0) -> uint32_t&;
     auto data_get(const hpp::string_view& id, uint32_t default_val = 0) const -> uint32_t;
 

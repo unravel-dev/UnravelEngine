@@ -118,6 +118,19 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "small dispatches are latency-bound and run the full trace either "
                             "way. Off traces every direction individually."},
         })
+        .data<&settings::reprojected_firefly_reference>("reprojected_firefly_reference"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reprojected_firefly_reference"},
+            entt::attribute{"pretty_name", "Reprojected Firefly Reference"},
+            entt::attribute{"group", "Gather"},
+            entt::attribute{"tooltip",
+                            "The firefly governor caps each new gather sample at a multiple of a "
+                            "reference. Off: the same screen slot's last value, which belongs to "
+                            "another surface point once the camera moves. On: the reprojected "
+                            "probe's own recent radiance around the direction, so the cap follows "
+                            "the surface through camera motion; the image clamps less and reads "
+                            "slightly brighter."},
+        })
         .data<&settings::world_probe_jitter>("world_probe_jitter"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "world_probe_jitter"},
@@ -307,6 +320,18 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"tooltip",
                             "Depth tolerance for upsample taps as a fraction of view distance; "
                             "taps off the pixel's surface plane beyond this are rejected."},
+        })
+        .data<&settings::hold_at_rest>("hold_at_rest"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "hold_at_rest"},
+            entt::attribute{"pretty_name", "Hold At Rest"},
+            entt::attribute{"group", "Budget"},
+            entt::attribute{"tooltip",
+                            "Once the camera, exposure, lights and scene have been still long "
+                            "enough for the GI to settle, the screen gather and the reflection "
+                            "trace stop re-tracing and show their last converged result; any "
+                            "such change resumes them from it. Changes outside what the renderer "
+                            "tracks (particles, animated materials) are not seen while held."},
         });
 }
 
@@ -445,6 +470,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     // probe_space_temporal / max_accum_frames are gone with the removed probe-space
     // temporal; stored keys in old scenes are simply not read (the sparse-load rule).
     try_save(ar, ser20::make_nvp("adaptive_rays", obj.adaptive_rays));
+    try_save(ar, ser20::make_nvp("reprojected_firefly_reference", obj.reprojected_firefly_reference));
     try_save(ar, ser20::make_nvp("world_probe_jitter", obj.world_probe_jitter));
     try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
@@ -463,6 +489,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("enable_bilateral_upsample", obj.enable_bilateral_upsample));
     try_save(ar, ser20::make_nvp("upsample_normal_power", obj.upsample_normal_power));
     try_save(ar, ser20::make_nvp("upsample_plane_tolerance", obj.upsample_plane_tolerance));
+    try_save(ar, ser20::make_nvp("hold_at_rest", obj.hold_at_rest));
 }
 SAVE_INSTANTIATE(gi_resolve_pass::settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(gi_resolve_pass::settings, ser20::oarchive_binary_t);
@@ -477,6 +504,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("probe_filter_passes", obj.probe_filter_passes));
     try_load(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     try_load(ar, ser20::make_nvp("adaptive_rays", obj.adaptive_rays));
+    try_load(ar, ser20::make_nvp("reprojected_firefly_reference", obj.reprojected_firefly_reference));
     try_load(ar, ser20::make_nvp("world_probe_jitter", obj.world_probe_jitter));
     try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
@@ -495,6 +523,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("enable_bilateral_upsample", obj.enable_bilateral_upsample));
     try_load(ar, ser20::make_nvp("upsample_normal_power", obj.upsample_normal_power));
     try_load(ar, ser20::make_nvp("upsample_plane_tolerance", obj.upsample_plane_tolerance));
+    try_load(ar, ser20::make_nvp("hold_at_rest", obj.hold_at_rest));
 }
 LOAD_INSTANTIATE(gi_resolve_pass::settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(gi_resolve_pass::settings, ser20::iarchive_binary_t);

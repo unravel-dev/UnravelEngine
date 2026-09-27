@@ -879,11 +879,12 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 				result.clearance = 0.0;
 				result.t = t;
 				result.hit_field = max(world_distance, 0.0);
+				// The accepted LOCAL point: the walk derives the normal once it has settled its
+				// winner (SdfDeriveInstanceNormal), so a hit a nearer instance replaces later in the
+				// walk never pays for a gradient, and no lane stalls its wave on one mid-walk.
 				if(want_normal)
 				{
-					vec3 local_normal = SdfGradientLocal(header, local_position);
-					result.normal =
-					    normalize(SdfTransformDirection(inst.local_to_world_rows, local_normal));
+					result.normal = local_position;
 				}
 				else
 				{
@@ -905,6 +906,21 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 		t += max(world_distance, hit_threshold);
 	}
 	result.exhausted = result.exhausted || !resolved;
+}
+
+/// The world normal of a per-instance walk's winning hit, from the local point SdfTestInstance left in
+/// result.normal.
+SdfRayHit SdfDeriveInstanceNormal(SdfRayHit result, bool want_normal)
+{
+	BRANCH
+	if(want_normal && result.hit)
+	{
+		SdfInstance inst = SdfLoadInstance(result.instance_index);
+		SdfHeader header = SdfLoadHeader(inst.header_index);
+		vec3 local_normal = SdfGradientLocal(header, result.normal);
+		result.normal = normalize(SdfTransformDirection(inst.local_to_world_rows, local_normal));
+	}
+	return result;
 }
 
 /**
@@ -937,7 +953,7 @@ SdfRayHit SdfTraceInstancesEx(vec3 origin, vec3 direction, float t_min, float t_
 			SdfTestInstance(i, origin, direction, inv_dir, t_min, t_max, max_steps, surface_bias,
 			                relaxation, want_normal, resumed, result);
 		}
-		return result;
+		return SdfDeriveInstanceNormal(result, want_normal);
 	}
 	vec3 grid_min = u_sdf_grid_origin;
 	vec3 grid_max = u_sdf_grid_origin + u_sdf_grid_dim * u_sdf_grid_cell_size;
@@ -1041,7 +1057,7 @@ SdfRayHit SdfTraceInstancesEx(vec3 origin, vec3 direction, float t_min, float t_
 			break;
 		}
 	}
-	return result;
+	return SdfDeriveInstanceNormal(result, want_normal);
 }
 
 SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
