@@ -2236,7 +2236,7 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
             {
                 for(uint8_t ii = 1, jj = 2; ii < settings_.m_numSplits; ++ii, jj += 2)
                 {
-                    const uint8_t viewId = RENDERVIEW_VBLUR_0_ID + jj;
+                    const bgfx::ViewId viewId = RENDERVIEW_VBLUR_0_ID + jj;
 
                     bgfx::setTexture(4, shadow_map_[0], bgfx::getTexture(rt_shadow_map_[ii]));
                     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
@@ -2253,7 +2253,7 @@ void shadowmap_generator::generate_shadowmaps(const shadow_map_models_t& models,
     }
 }
 
-auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
+auto shadowmap_generator::render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_id,
                                                       const shadow_map_models_t& models,
                                                       const math::frustum lightFrustums[ShadowMapRenderTargets::Count],
                                                       ShadowMapSettings* currentSmSettings,
@@ -2399,7 +2399,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
                 continue;
             }
 
-            const uint8_t viewId = shadowmap_1_id + ii;
+            const bgfx::ViewId viewId = shadowmap_1_id + ii;
 
             uint8_t renderStateIndex = RenderState::ShadowMap_PackDepth;
             if(LightType::PointLight == settings_.m_lightType && settings_.m_stencilPack)
@@ -2509,7 +2509,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
     {
         for(uint8_t ii = 0; ii < drawNum; ++ii)
         {
-            const uint8_t viewId = shadowmap_1_id + ii;
+            const bgfx::ViewId viewId = shadowmap_1_id + ii;
             
             uint8_t renderStateIndex = RenderState::ShadowMap_PackDepth;
             if(LightType::PointLight == settings_.m_lightType && settings_.m_stencilPack)
@@ -2527,7 +2527,7 @@ auto shadowmap_generator::render_scene_into_shadowmap(uint8_t shadowmap_1_id,
 }
 
 void shadowmap_generator::submit_batched_shadow_geometry_cascade(shadow_batch_collector& collector,
-                                                                uint8_t viewId, 
+                                                                bgfx::ViewId viewId, 
                                                                 ShadowMapSettings* currentSmSettings,
                                                                 const RenderState& renderState,
                                                                 ::unravel::rendering::pipeline_stats* stats)

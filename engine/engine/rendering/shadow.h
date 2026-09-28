@@ -848,7 +848,7 @@ public:
     auto get_max_altitude_boost() const -> float { return adaptive_params_.max_altitude_boost; }
 
 private:
-    auto render_scene_into_shadowmap(uint8_t shadowmap_1_id,
+    auto render_scene_into_shadowmap(bgfx::ViewId shadowmap_1_id,
                                      const shadow_map_models_t& models,
                                      const math::frustum frustums[ShadowMapRenderTargets::Count],
                                      ShadowMapSettings* currentSmSettings,
@@ -856,7 +856,7 @@ private:
                                      ::unravel::rendering::pipeline_stats* stats = nullptr) -> bool;
     
     void submit_batched_shadow_geometry_cascade(shadow_batch_collector& collector,
-                                               uint8_t viewId, 
+                                               bgfx::ViewId viewId, 
                                                ShadowMapSettings* currentSmSettings,
                                                const RenderState& renderState,
                                                ::unravel::rendering::pipeline_stats* stats = nullptr);

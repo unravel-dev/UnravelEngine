@@ -32,7 +32,7 @@ struct batch_stats
 
 struct submit_context
 {
-    uint16_t view_id = 0;
+    bgfx::ViewId view_id = 0;
     math::vec3 camera_position = math::vec3(0.0f);
     bool enable_distance_sorting = false;
     uint32_t max_instances_per_batch = 1024;
