@@ -736,6 +736,17 @@
       " the bounds already fetch). An established bright pixel raises its own ceiling and"         \
       " converges unbiased; no reference stores unclamped (disocclusions must not ramp from"       \
       " black). Same multiple as the gather's - the two governors bound the same physics")         \
+    X(GI_REFLECTION_FIREFLY_REFERENCE_FLOOR, 0.001f,                                               \
+      "luminance, pre-exposed", "derived: GI_GATHER_FIREFLY_REFERENCE_FLOOR's role at the"         \
+      " reflection temporal. A rough pixel with a history is governed however dark that"           \
+      " history, its reference floored here: a VNDF ray that finds a small bright source its"      \
+      " dark history and neighbourhood never saw is the sparse spike the governor exists for,"     \
+      " a dancing dot on a dark room's rough floor otherwise. A light that persists raises the"    \
+      " pixel's own mean and climbs from GI_REFLECTION_FIREFLY_CLAMP x this floor; a change"       \
+      " that lights the whole neighbourhood is admitted at once through the neighbourhood"         \
+      " floor. Mirrors fire one deterministic ray per frame - no sparse spikes, only lag to"       \
+      " gain - and keep the reference-above-the-floor rule. Same value as the gather's - the"      \
+      " two governors bound the same physics")                                                     \
     X(GI_REFLECTION_MOVER_STILL_CAP, 0.125f,                                                       \
       "stillness fraction", "derived: ceiling on the temporal's stillness release while the"       \
       " velocity pass drew any mover within one temporal window. The release reads RECEIVER"       \

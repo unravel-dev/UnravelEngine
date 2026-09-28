@@ -24,9 +24,11 @@ $input v_texcoord0
  * accumulated luminance, floored by the neighbourhood mean of this frame's geometric
  * samples (fetched by the same 3x3 the bounds already pay for). An established bright
  * pixel raises its own ceiling and converges unbiased; the halo near an emitter builds as
- * a stable glow instead of noise. No meaningful reference (fresh surroundings, dark
- * scene): the sample stores unclamped - progressive ramps from black would dim every
- * disocclusion instead.
+ * a stable glow instead of noise. A rough pixel with a history is governed however dark
+ * that history, its reference floored at GI_REFLECTION_FIREFLY_REFERENCE_FLOOR - a dark
+ * room's rough floor is where a lone hit on a small bright source shows most. No history
+ * and no reference above the floor (fresh surroundings): the sample stores unclamped -
+ * progressive ramps from black would dim every disocclusion instead.
  */
 
 #include "../common.sh"
@@ -509,8 +511,11 @@ void main()
 		float trimmed = max(GiReflLuma(neighbor_sum) - neighbor_luma_max, 0.0) / (neighbor_count - 1.0);
 		reference = max(reference, trimmed);
 	}
-	bool has_reference = reference > 1e-3;
-	float ceiling = GI_REFLECTION_FIREFLY_CLAMP * reference;
+	// A mirror fires one deterministic ray per frame: it has no sparse spikes to govern, only lag
+	// to gain from a floored ceiling, so only a stochastic lobe's history governs by itself.
+	bool has_reference = (history_texel.w >= 0.5 && nd.roughness > GI_REFLECTION_MIRROR_ROUGHNESS) ||
+	                     reference > GI_REFLECTION_FIREFLY_REFERENCE_FLOOR;
+	float ceiling = GI_REFLECTION_FIREFLY_CLAMP * max(reference, GI_REFLECTION_FIREFLY_REFERENCE_FLOOR);
 	BRANCH
 	if(has_reference)
 	{
@@ -520,11 +525,11 @@ void main()
 			curr.xyz *= ceiling / luma;
 		}
 	}
-	// The resolve runs only with an ESTABLISHED reference and applies the same ceiling to
-	// every neighbour it averages: without a reference the neighbourhood is sparse spikes
-	// on dark, and averaging those can only spread the dots (the no-reference store stays
-	// unclamped exactly as before, one pixel per hit). The average itself runs in the
-	// bounded range, so a tap that survives the ceiling still cannot carry the mean.
+	// The resolve runs only where the governor does and applies the same ceiling to every
+	// neighbour it averages: without a reference the neighbourhood is sparse spikes on dark,
+	// and averaging those can only spread the dots (the no-reference store stays unclamped,
+	// one pixel per hit). The average itself runs in the bounded range, so a tap that
+	// survives the ceiling still cannot carry the mean.
 	BRANCH
 	if(has_reference && resolve_scale > 0.0)
 	{
