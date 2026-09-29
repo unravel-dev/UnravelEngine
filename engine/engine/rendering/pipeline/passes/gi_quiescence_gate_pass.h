@@ -18,19 +18,19 @@ namespace unravel
  *        passes are skipped on the GPU without a CPU readback.
  *
  * WHY THIS EXISTS. The convergence half of the gate (surface_cache_view::update_quiescence)
- * needs a statistic only the GPU can produce: the mean relative change per relit face. That
- * statistic used to reach the CPU through a staging blit plus bgfx::read, which moved
- * 32 bytes and cost about a GPU frame of render-thread time per frame the gate was open -
- * bgfx::read advertises frameNum + 2 latency but every desktop backend implements it
- * as a blocking sync (D3D11 Map without DO_NOT_WAIT, D3D12 CopyTextureRegion + finish,
- * Vulkan kick(true), GL glGetTextureSubImage), run in the post-command buffer AFTER the
- * frame's submit. So the render thread waited for GPU idle at the tail of every moving
- * frame, to save the ~0.8 ms the gate skips in a parked one.
+ * needs a statistic only the GPU can produce: the mean relative change per relit face.
+ * Getting it to the CPU takes a staging blit plus bgfx::read, which moves 32 bytes but costs about
+ * a GPU frame of render-thread time per frame the gate is open - bgfx::read advertises
+ * frameNum + 2 latency but every desktop backend implements it as a blocking sync (D3D11 Map
+ * without DO_NOT_WAIT, D3D12 CopyTextureRegion + finish, Vulkan kick(true), GL
+ * glGetTextureSubImage), run in the post-command buffer AFTER the frame's submit. The render
+ * thread would wait for GPU idle at the tail of every moving frame, to save the work the gate
+ * skips in a parked one.
  *
  * The kernel here reads the same statistic in place, keeps the sample ring in a GPU buffer,
  * applies the same two convergence tests, and writes each gated dispatch's group counts (or
  * zeros). Nothing crosses back to the CPU, and the verdict is one frame behind the relight
- * instead of three.
+ * instead of the readback path's three.
  *
  * FALLBACK. Backends without BGFX_CAPS_DRAW_INDIRECT - and any failure to build the program
  * or the buffers - leave run() returning false, and the pipeline uses the readback path
@@ -102,7 +102,7 @@ public:
      *        probe texels against texels that changed.
      *
      * ON DEMAND ONLY. The copy ends in bgfx::read, which is a full CPU-GPU sync on
-     * every desktop backend (the reason the per-frame gate moved onto the GPU), so this is
+     * every desktop backend (the reason the per-frame gate runs on the GPU), so this is
      * an instrument for a tool to ask for, never something a frame path calls. Rows 0-2
      * are the gate's own sums for the frame before the snapshot; the census rows hold the
      * last frame the gated passes actually ran (the gate zeroes them only on those frames).

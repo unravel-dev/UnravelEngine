@@ -134,8 +134,7 @@ void main()
 		}
 	}
 	// Every candidate rejected: a thin feature whose low-resolution neighbours all belong to other
-	// surfaces. Falling back to the bilinear tap keeps a plausible value rather than a black hole,
-	// and it is the same answer the old path always gave, so this can only be an improvement.
+	// surfaces. Falling back to the bilinear tap keeps a plausible value rather than a black hole.
 	if(weight_sum <= 1e-6)
 	{
 		gl_FragColor = texture2DLod(s_gi_input, uv, 0.0);

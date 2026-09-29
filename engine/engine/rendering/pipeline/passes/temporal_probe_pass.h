@@ -19,13 +19,13 @@ class camera;
 /**
  * @brief Measures the temporal stability of the image a pipeline displays.
  *
- * An instrument for GI and anti-aliasing work (tasks/lumen57_deep_dive_2026-09-14.md, plan item
- * 1.0). A tool arms it for a number of frames; each armed frame one compute dispatch folds the
- * displayed luminance into per-pixel statistics - a running mean and sum of squared deviations
- * (the variance a still camera sees) and the absolute change against the previous frame
- * reprojected through the velocity buffer (flicker that survives camera motion). After the
- * last frame one readback lands the sums and the CPU reduces them to percentiles. Screen
- * captures taken through the editor tooling are ~170 ms apart and cannot see per-frame flicker.
+ * An instrument for GI and anti-aliasing work. A tool arms it for a number of frames; each armed
+ * frame one compute dispatch folds the displayed luminance into per-pixel statistics - a running
+ * mean and sum of squared deviations (the variance a still camera sees) and the absolute change
+ * against the previous frame reprojected through the velocity buffer (flicker that survives
+ * camera motion). After the last frame one readback lands the sums and the CPU reduces them to
+ * percentiles. Screen captures taken through the editor tooling are many frames apart and
+ * cannot see per-frame flicker.
  *
  * Nothing is dispatched unless a measurement is armed, so a normal frame pays nothing.
  */

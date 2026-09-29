@@ -2,7 +2,7 @@
 #define __GI_REFLECTION_KERNEL_SH__
 
 /*
- * GI reflections (plan phase 9) - the world-space specular tier, layered UNDER SSR: drawn
+ * GI reflections - the world-space specular tier, layered UNDER SSR: drawn
  * into the reflection buffer over the authored probes, before SSR composites the sharp
  * on-screen result on top. What it adds is exactly what SSR cannot have: reflected content
  * that is off screen or behind the camera.
@@ -10,12 +10,12 @@
  * SHARED KERNEL BODY, two consumers. cs_gi_reflection_trace.sc is the deliverable path:
  * the classify pass answers sky / degenerate / rough pixels directly and compacts the
  * sharp (tracing) pixels into a dense list, so every 64-lane trace group is fully
- * populated with rays - the fragment form paid a whole wave wherever ONE quad pixel
- * traced, and its worst-case register footprint throttled even the early-out pixels.
+ * populated with rays - the fragment form pays a whole wave wherever ONE quad pixel
+ * traces, and its worst-case register footprint throttles even the early-out pixels.
  * fs_gi_reflection.sc is that fragment form, kept as the fallback when the compute
  * chain is unavailable.
  *
- * ROUGHNESS TIERING, with the cutoff derived rather than tuned: past roughness ~0.4 the GGX
+ * ROUGHNESS TIERING at GI_REFLECTION_ROUGH_CUTOFF, where SSR fades out too: past it the GGX
  * lobe is wide enough that its specular converges to the diffuse irradiance, so those pixels
  * reuse LAST frame's resolved GI - the temporally filtered, denoised per-pixel gather - and
  * pay no ray (the Lumen recipe: rough specular comes from your own gather, never from a raw
@@ -34,28 +34,27 @@
  * trilinear mix - see the block at the read site for the full contract.
  *
  * NO SCREEN TIER: screen space belongs to SSR, which composites over this pass with its own
- * stochastic spread, denoise, and fades. Two screen tracers on the same pixel gave two
- * different answers wherever their validation or fades differed (measured, round 6), and a
- * single deterministic ray can never reproduce SSR's filtered result - so this pass never
- * traces the screen at all.
+ * stochastic spread, denoise, and fades. Two screen tracers on the same pixel give two
+ * different answers wherever their validation or fades differ, and a single deterministic
+ * ray can never reproduce SSR's filtered result - so this pass never traces the screen at
+ * all.
  *
  * STOCHASTIC GGX: each frame the ray direction is importance-sampled from the visible
  * normal distribution (Heitz VNDF) with an R2 sequence per frame + IGN per pixel - the
- * gather's proven jitter recipe - and the temporal pass integrates the lobe over
+ * gather's jitter recipe - and the temporal pass integrates the lobe over
  * GI_REFLECTION_TEMPORAL_FRAMES of reprojected history. Roughness therefore SPREADS the
  * reflection the way SSR's stochastic trace does, instead of any fixed fade. At mirror
  * roughness alpha collapses the distribution and the ray is deterministic. Per-pixel
- * world-probe cage reads remain deliberately ABSENT: the 2 m lattice's
- * interpolation pattern stamps into the image as blotches, not blur (measured twice, rounds
- * 2 and 8). The GATHER_FADE_START..ROUGH_CUTOFF band hands over to the rough tier in the two
- * composites (gi_reflection_tiers.sh), not here: the rough tier is untraced and goes into the
- * probe layer, which the indirect pass occludes, so this pass returns the traced value alone.
- * Output = incoming radiance along the sampled ray at FULL weight - energy is
- * constant across roughness (fading the sharp end read as brightness rising with roughness,
- * round 10). Alpha is coverage below 1 (mesh-exact and refined hits cover the probe layer,
- * an unrefined clipmap hit on a sharp pixel does not) and encodes the HIT DISTANCE above 1
- * for the temporal's mover gate - see the encoding note at the return. SSR composites on
- * top.
+ * world-probe cage reads are deliberately ABSENT: the 2 m lattice's interpolation pattern
+ * stamps into the image as blotches, not blur. The GATHER_FADE_START..ROUGH_CUTOFF band
+ * hands over to the rough tier in the two composites (gi_reflection_tiers.sh), not here: the
+ * rough tier is untraced and goes into the probe layer, which the indirect pass occludes, so
+ * this pass returns the traced value alone. Output = incoming radiance along the sampled ray
+ * at FULL weight - energy is constant across roughness (fading the sharp end reads as
+ * brightness rising with roughness). Alpha is coverage below 1 (mesh-exact and refined hits
+ * cover the probe layer, an unrefined clipmap hit on a sharp pixel does not) and encodes the
+ * HIT DISTANCE above 1 for the temporal's mover gate - see the encoding note at the return.
+ * SSR composites on top.
  */
 
 #include "../common.sh"
@@ -73,16 +72,14 @@
 // history reads correct from last frame's scale.
 #include "gi/gi_pre_exposure.sh"
 
-/// The per-ray firefly ceiling, in the pre-exposed space the radiance now lives in.
+/// The per-ray firefly ceiling, in the pre-exposed space the radiance lives in.
 ///
-/// Lumen's MaxRayIntensity is a PRE-EXPOSED number, but GI_MAX_RAY_RADIANCE was tuned here as
-/// an ABSOLUTE radiance (gi_emissive_research 2026-09-10, on emitters of 5 to 192), and the two
-/// readings differ by the whole exposure range: in a sealed emissive room metering at P = 367,
-/// a pre-exposed 40 is 0.109 of absolute radiance and crushes the room's own bounce (measured
-/// 2026-09-16: the cell lost 24% of its display mean against the pre-pre-exposure baseline).
-/// Converting the constant keeps the clamp where it was tuned, at the cost of no longer
-/// following the adapted exposure the way Lumen's does. Measured: this site alone recovers
-/// about half the loss (0.166 -> 0.187), the world-probe emitter gate the rest (-> 0.234).
+/// Lumen's MaxRayIntensity is a PRE-EXPOSED number, but GI_MAX_RAY_RADIANCE is tuned as an
+/// ABSOLUTE radiance, and the two readings differ by the whole exposure range: a dark room lit
+/// only by its emitters is metered at a large pre-exposure, where a pre-exposed ceiling amounts
+/// to a small absolute radiance and crushes the room's own bounce. Converting the constant keeps the
+/// clamp in the absolute units it is tuned in, at the cost of not following the adapted exposure
+/// the way Lumen's does.
 #define GI_MAX_RAY_RADIANCE_VIEW (GI_MAX_RAY_RADIANCE * u_pre_exposure_value)
 
 /// Analytic irradiance from one emitter piece at @p position for a receiver facing @p normal:
@@ -208,14 +205,14 @@ SAMPLER2D(s_gi_probe_layer, 6);
 SAMPLER2D(s_hiz, 8);
 /// LAST frame's resolved GI (E/pi per pixel, temporally filtered and denoised): the rough
 /// specular source, exactly as Lumen reuses its own gather - a wide lobe converges to the
-/// diffuse irradiance, and this is the smoothest estimate of it the engine owns. Reading the
-/// raw world-probe cage here instead produced 2 m-scale mottling.
+/// diffuse irradiance, and this is the smoothest estimate of it the engine owns. The raw
+/// world-probe cage would print its 2 m lattice here as mottling.
 SAMPLER2D(s_gi_diffuse, 9);
 #if defined(GI_REFLECTION_ENV_SH_FROM_LIST)
 /// LAST frame's composited output with each pixel's view depth in alpha (the gather's
 /// screen tier and SSR read the same snapshot): the ON-SCREEN HIT UPGRADE below serves a
 /// world hit the exact lit pixel when the depth buffer, the hit normal and the stored
-/// depth all agree. The sky SH that held this stage rides the trace list's SH block.
+/// depth all agree. The sky SH rides the trace list's SH block, which leaves this stage free.
 SAMPLER2D(s_gi_prev_color, 14);
 /// Reprojection of a world hit into last frame's snapshot (the unjittered pair).
 uniform mat4 u_gi_refl_prev_view_proj;
@@ -257,7 +254,7 @@ vec3 GiReflectionEnvRadiance(vec3 direction)
  * buffer shows THIS frame is served last frame's composited pixel - the exact lit surface
  * at pixel precision, direct light, shadows and all - instead of the voxel walk's cell
  * estimate. This is the tier SSR cannot reach (its screen march gave up behind a
- * foreground object, or its confidence faded) and where the voxel lattice printed as
+ * foreground object, or its confidence faded) and where the voxel lattice would print as
  * blocks on reflected walls. Four gates, every one a rejection back to the voxel read:
  *   1. the hit faces the camera (a back-facing hit is not the pixel the depth shows),
  *   2. it projects on screen inside a dithered vignette (no hard edge at the border),
@@ -352,7 +349,7 @@ vec3 GiReflectionSkyFallback(vec2 uv, vec3 direction)
 	return probe_layer.xyz + GiReflectionEnvRadiance(direction) * (1.0 - probe_alpha);
 }
 
-/// Mesh-exact walk length: mirrors pay the long range, gloss pays less than the old flat 16 m.
+/// Mesh-exact walk length: mirrors pay the long range, gloss a shorter one.
 float GiReflectionMeshRange(float roughness)
 {
 	float range_t = saturate(roughness / max(GI_REFLECTION_GATHER_FADE_START, 1e-4));
@@ -369,7 +366,7 @@ float GiReflectionRefineWindow(vec3 hit_position)
 	float voxel;
 	int level = SdfFindClipmapLevel(hit_position, field_blend, voxel);
 	// Nested rather than one &&-chain: SdfFindClipmapLevel returns LEVEL_COUNT off coverage,
-	// and HLSL && does not short-circuit, so the flat form indexed one past the uniform array.
+	// and HLSL && does not short-circuit, so the flat form would index one past the uniform array.
 	if(level + 1 < SDF_CLIPMAP_LEVEL_COUNT)
 	{
 		float edge = max(field_blend,
@@ -432,15 +429,13 @@ GiReflectionFarField GiReflectionFarFieldMake(SdfRayHit hit, bool shell)
  *
  * The clipmap is composed conservatively, so its isosurface is FATTER than the meshes it holds. A
  * ray passing BESIDE an object within that margin reports a hit on the fat shell - or, grazing it,
- * burns its step budget there - and the old answers for such hits drew a bright achromatic outline
- * around every far reflected silhouette: unrefined, the authored probe layer on a mirror; given up,
- * the receiver's own irradiance (measured 2026-09-21 on the Bistro mirror slab: those two paths
- * carried 79% of the outline's excess luminance, all of it past the mesh-exact range - far
- * reflections showed it, close ones did not). So every find is refined in its window, given-up
- * ones included:
+ * burns its step budget there - and answering such hits as they stand draws a bright achromatic
+ * outline around every far reflected silhouette: unrefined, the authored probe layer on a mirror;
+ * given up, the receiver's own irradiance. So every find is refined in its window, given-up ones
+ * included:
  *   - a mesh hit there is the answer;
  *   - a miss with no mesh inside the window (clearance) is geometry only the clipmap holds, and
- *     keeps the unrefined answer as before;
+ *     keeps the unrefined answer;
  *   - a miss that PASSED a mesh inside the window was the fat shell: the finder resumes past the
  *     window up to u_gi_reflection_trace.x times (the setting; clamped here too), and a ray still
  *     in a shell after that is answered as the surface it grazes (shell) - an object-coloured
@@ -546,13 +541,13 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	vec3 view = normalize(u_gi_reflection_camera.xyz - world_position);
 	vec3 reflected = normalize(reflect(-view, normal));
 	// RAW authored roughness for the tiering: MakeRoughnessSafe floors it, and a floored
-	// mirror (authored 0) leaked a fraction of the coarse world tier through the fade.
+	// mirror (authored 0) would leak a fraction of the coarse world tier through the fade.
 	float roughness = nd.roughness;
 	// ROUGH VALUE - the wide-lobe limit. Rough specular converges to the diffuse irradiance,
 	// and last frame's resolved GI is the engine's smoothest per-pixel estimate of it (the
 	// Lumen recipe: reuse your own denoised gather; never a raw world lattice).
-	// An explicit branch on the wave-uniform condition: as a ternary both arms ran, and the
-	// SH arm is 9 texelFetches paid by every pixel including the rough fast path below.
+	// An explicit branch on the wave-uniform condition: as a ternary both arms would run, and
+	// the SH arm is 9 texelFetches paid by every pixel including the rough fast path below.
 	vec3 rough_value;
 	BRANCH
 	if(u_gi_reflection_camera.w > 0.5)
@@ -570,10 +565,10 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		return vec4(rough_value, 1.0);
 	}
 	// GLOSS CONTINUITY FADE into the rough tier over the residual band below the cutoff is NOT
-	// mixed in here any more: the rough tier is untraced (it carries the probe lattice's
-	// visibility, not the pixel's), so fs_gi_reflection_rough.sc composites it into the probe
-	// layer, which the indirect pass occludes, while this pass returns the traced value alone
-	// and the composite takes the complementary share (GiReflectionRoughShare).
+	// mixed in here: the rough tier is untraced (it carries the probe lattice's visibility, not
+	// the pixel's), so fs_gi_reflection_rough.sc composites it into the probe layer, which the
+	// indirect pass occludes, while this pass returns the traced value alone and the composite
+	// takes the complementary share (GiReflectionRoughShare).
 	// STOCHASTIC direction: jitter the ray inside the GGX lobe (bounded-cap VNDF), decorrelated
 	// per pixel by IGN and advanced per frame by R2; the temporal pass integrates. The whole
 	// sampler lives in gi_reflection_sampling.sh because the temporal RESOLVE has to reproduce
@@ -582,14 +577,13 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	// The determinism gate (inside GiReflectionMakeRay) is on DECODED roughness against the
 	// encoder floor, never on alpha against a small epsilon: the G-buffer write clamps
 	// roughness to >= 0.05, so an authored mirror decodes at the floor and its alpha (2.5e-3)
-	// sailed over the old 1e-4 gate - every mirror pixel jittered, and rays near-missing a
-	// small emissive hit it on the VNDF tail as full-radiance fireflies (the recorded
-	// decoded-roughness-floor lesson).
+	// clears any small alpha gate - every mirror pixel would jitter, and rays near-missing a
+	// small emissive would hit it on the VNDF tail as full-radiance fireflies.
 	//
 	// TWO independent noise channels for a true 2D point: deriving the second coordinate from
-	// the first put every sample on a 1D curve through the unit square, so the azimuthal half
-	// of the lobe was never properly covered and high-contrast regions could not converge
-	// (measured, round 13; the shared pattern in gi_noise.sh).
+	// the first puts every sample on a 1D curve through the unit square, so the azimuthal half
+	// of the lobe is never properly covered and high-contrast regions cannot converge (the
+	// shared pattern in gi_noise.sh).
 	vec2 xi = fract(GiIgnNoise(ivec2(frag_coord)) + u_gi_reflection_jitter.xy);
 	reflected = GiReflectionMakeRay(normal, view, roughness, xi).direction;
 	// WORLD tier: launch clear of the composed surface, exactly as the gather lifts.
@@ -599,11 +593,10 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	voxel = max(voxel, 0.01);
 	float lift = max(0.0, -field) + GI_PROBE_TRACE_SURFACE_BIAS * voxel;
 	vec3 origin = world_position + normal * lift;
-	// Adaptive mesh-exact range, then clipmap as a FINDER (expand never: image vs estimate,
-	// round 3) whose every find the mesh tier settles - see GiReflectionTraceFarField; an
-	// unrefined clipmap hit is not drawn on sharp pixels (coverage 0, authored probes show
-	// through). Acceptance is contact-only -
-	// the gather cone is what fattened the 16 m handover into boxes.
+	// Adaptive mesh-exact range, then clipmap as a FINDER (expand never: image vs estimate)
+	// whose every find the mesh tier settles - see GiReflectionTraceFarField; an unrefined
+	// clipmap hit is not drawn on sharp pixels (coverage 0, authored probes show through).
+	// Acceptance is contact-only - a gather-style cone would fatten the handover into boxes.
 	float mesh_range = GiReflectionMeshRange(roughness);
 	SdfRayHit hit = SdfTraceInstances(origin, reflected, 0.0, mesh_range, GI_TRACE_MAX_STEPS,
 	                                  GI_REFLECTION_TRACE_SURFACE_BIAS,
@@ -639,8 +632,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		// ray never reached. A mesh-tier hit can carry the exhausted flag too - it is set whenever
 		// ANY instance march along the ray ran out of steps in its cell segment, the 16-step
 		// refine walk included - but its hit is a real accepted surface; serving it the stand-in
-		// painted the receiver's own irradiance onto refined far hits (measured 2026-09-21: most
-		// exhausted outline pixels on the Bistro mirror slab carried an instance).
+		// would paint the receiver's own irradiance onto refined far hits.
 		bool gave_up = hit.exhausted && hit.instance_index == SDF_NO_INSTANCE;
 		bool clipmap_shape = hit.instance_index == SDF_NO_INSTANCE && !gave_up;
 		float shape_ok = 1.0;
@@ -648,8 +640,8 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		{
 			// Unrefined clipmap isosurface: legitimate lighting for satin, a wrong silhouette
 			// on a mirror. Fade coverage out so the probe layer replaces the blob - except in a
-			// grazed mesh's shell, where the probe layer drew the white outline: that answer is
-			// the surface itself, a fringe in its own colour.
+			// grazed mesh's shell, where the probe layer would draw a white outline: that answer
+			// is the surface itself, a fringe in its own colour.
 			shape_ok = shell ? 1.0
 			                 : smoothstep(GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF * 0.5,
 			                              GI_REFLECTION_CLIPMAP_SHAPE_CUTOFF, roughness);
@@ -659,9 +651,9 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		// an unmeasured coarse face must NOT answer with black. The gather's
 		// honest-darkness contract exists to stop light leaking INTO the scene; a
 		// reflection fallback cannot leak light anywhere - black here only punches holes
-		// in the image, which grew with camera distance as rays grazed ever-coarser
-		// cascades (measured, round 14). The receiver's own gather value is the smoothest
-		// energy-plausible stand-in; faces MEASURED dark stay honestly dark.
+		// in the image, which grow with camera distance as rays graze ever-coarser cascades.
+		// The receiver's own gather value is the smoothest energy-plausible stand-in; faces
+		// MEASURED dark stay honestly dark.
 		//
 		// Branched, never an || chain: HLSL's || may evaluate both operands, and the
 		// light-voxel read is up to two dozen 3D fetches that an exhausted hit discards.
@@ -717,12 +709,12 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
 			// MATCHED-WEIGHT read (compute form): the radiance and the remodulation
 			// denominator below come from ONE walk with identical face-alpha x facing x
-			// trilinear weights. The split readers this replaces disagreed wherever face
-			// culling thinned the radiance set but not the albedo set - crevices, rims,
-			// every silhouette a mirror ray grazes - and the ratio slammed to its clamp:
-			// a standing bright outline along reflected junctions, and a x4 window that
-			// kept a departed emitter's residual glowing as a line long after the lattice
-			// had converged (the "leftover red lines where the cubes passed").
+			// trilinear weights. Split readers disagree wherever face culling thins the
+			// radiance set but not the albedo set - crevices, rims, every silhouette a
+			// mirror ray grazes - and slam the ratio to its clamp: a standing bright
+			// outline along reflected junctions, and a departed emitter's residual,
+			// amplified up to the clamp, glowing as a line long after the lattice has
+			// converged.
 			vec3 measured_albedo;
 			bool measured_albedo_ok;
 			vec3 measured_lit;
@@ -744,11 +736,10 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 			// CULLED IS DARK FOR THE GATHER, A HOLE FOR AN IMAGE. A face whose cavity cone is
 			// closed stores the provenance alpha GI_LIGHT_VOXEL_CULLED_ALPHA, which the read
 			// above normalises into a MEASURED black - right for irradiance (a closed cone must
-			// not leak), wrong here: the underside of a box floating 0.4 m over a mirror floor
-			// is culled toward that floor, and the floor reflected it as a black rectangle
-			// framed by the lit side faces bleeding in at its edges (the "projection of the
-			// cube" under the mover). A footprint whose measured share is only that epsilon
-			// takes the stand-in path below with the unmeasured ones.
+			// not leak), wrong here: the underside of a box floating just over a mirror floor
+			// is culled toward that floor, and the floor would reflect it as a black rectangle
+			// framed by the lit side faces bleeding in at its edges. A footprint whose measured
+			// share is only that epsilon takes the stand-in path below with the unmeasured ones.
 			bool measured_image = measured_ok && measured_mass >= GI_REFLECTION_MEASURED_MASS_MIN;
 #else
 			// De-pre-exposed in, converted out - see the remodulating form above.
@@ -762,42 +753,39 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
 			// The hit's exact emission is added AFTER the firefly clamp when the remodulated
 			// branch composes it: a mirror's emission is deterministic, never a firefly, and
-			// clamping it capped every reflected emitter at GI_MAX_RAY_RADIANCE
-			// (gi_emissive_research 2026-09-10).
+			// clamping it would cap every reflected emitter at GI_MAX_RAY_RADIANCE.
 			bool exact_emission = false;
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
 			if(measured_image)
 			{
 				radiance = measured;
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
-				// ALBEDO REMODULATION - the "voxelized colour" fix. The volume stores
-				// bounded_albedo * E / pi + emissive per face, and its trilinear read mixes
-				// the WINNING albedos of a 0.25-1 m cell neighbourhood - a curtain hit next
-				// to a wall answers pink. A mesh-exact (or refined) hit knows its instance,
-				// so divide the cell-mixed albedo back out and multiply the hit's own in:
-				// colour boundaries move from the attribute lattice to the SDF silhouette,
-				// while the irradiance keeps the volume's smooth estimate. Only measured
-				// radiance is remodulated (rough_value and the sky fallback are not voxel
-				// products); emissive hits are skipped rather than having their emission
-				// separated (the albedo ratio does not apply to a source term). With the
-				// matched-weight denominator the ratio is exact under locally uniform
-				// lighting at every boundary; the floor and cap now bound only
-				// quantisation noise and genuinely non-uniform lighting across the
+				// ALBEDO REMODULATION. The volume stores bounded_albedo * E / pi + emissive
+				// per face, and its trilinear read mixes the WINNING albedos of a 0.25-1 m
+				// cell neighbourhood - a hit beside a differently coloured surface answers in
+				// their blend. A mesh-exact (or refined) hit knows its instance, so divide the
+				// cell-mixed albedo back out and multiply the hit's own in: colour boundaries
+				// move from the attribute lattice to the SDF silhouette, while the irradiance
+				// keeps the volume's smooth estimate. Only measured radiance is remodulated
+				// (rough_value and the sky fallback are not voxel products), and never an
+				// emitter's own emission - the albedo ratio does not apply to a source term
+				// (see SOURCE SPLIT below). With the matched-weight denominator the ratio is
+				// exact under locally uniform lighting at every boundary; the floor and cap
+				// bound only quantisation noise and genuinely non-uniform lighting across the
 				// footprint. A fallback-mixed answer carries no matching albedo
 				// (measured_albedo_ok false) and is served unremodulated.
 				BRANCH
 				if(hit_has_material && measured_albedo_ok)
 				{
 					// SOURCE SPLIT: the volume mixes a voxelised emitter's own emission into
-					// every read within a cell or two of it, so a mirror showed the strip's
-					// exact silhouette next to a fat glowing bar of the ceiling's voxels
-					// (the user's "light blob voxels next to accurate geometry"). The walk
-					// now hands back the LIT estimate over non-source faces, which is
-					// remodulated by the hit's own albedo as before, and the hit's OWN
-					// emission - exact, at the SDF silhouette - is added on top: the
-					// ceiling reflects the strip's light as a smooth gradient, the strip
-					// reflects as itself. A footprint with no lit face (all source) borrows
-					// the first coarser level's lit estimate inside the walk.
+					// every read within a cell or two of it, so a mirror would show an emissive
+					// strip's exact silhouette next to a fat glowing bar of voxels. The walk
+					// hands back the LIT estimate over non-source faces, which is remodulated
+					// by the hit's own albedo, and the hit's OWN emission - exact, at the SDF
+					// silhouette - is added on top: the surface around a strip reflects its
+					// light as a smooth gradient, the strip reflects as itself. A footprint
+					// with no lit face (all source) borrows the first coarser level's lit
+					// estimate inside the walk.
 					vec3 voxel_albedo = min(measured_albedo, vec3_splat(GI_MAX_ALBEDO));
 					vec3 ratio = hit_albedo /
 					             max(voxel_albedo,
@@ -805,8 +793,8 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 					bool hit_emits = dot(hit_emissive, hit_emissive) > 0.0;
 					// No lit face at any level (the walk borrows from coarser levels first):
 					// a non-emissive hit keeps the voxel total rather than the receiver's own
-					// gather, which on a mirror floor beside a strip is bright and painted a
-					// block along the strip line.
+					// gather, which on a mirror floor beside a strip is bright and would paint
+					// a block along the strip line.
 					vec3 lit = hit_emits ? vec3_splat(0.0) : measured;
 					BRANCH
 					if(measured_lit_share > 0.0)
@@ -815,7 +803,7 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 						                           vec3_splat(0.0),
 						                           vec3_splat(GI_REFLECTION_REMODULATE_RATIO_MAX));
 						// NEAR-FIELD REMODULATION: a cell beside a strip holds one lit value
-						// for its whole 0.25 m, and the mirror drew it as a block. The
+						// for its whole 0.25 m, and a mirror would draw it as a block. The
 						// emitter table knows the strip exactly, so the part of the cell's
 						// value the emitters account for is rescaled from where the walk
 						// measured it (the lit-weighted cell centres) to the hit - the 1/d
@@ -827,27 +815,25 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 					// METAL LIFT: the lattice holds diffuse bounce (albedo x E / pi) and a metal
 					// has none - its appearance is F0 times the radiance arriving from its mirror
 					// direction, which no diffuse lattice can hold, so a metal reached through
-					// this tier can come back near black wherever its own cell measured little.
-					// Through the mirror floor the brushed north wall, in the band hidden behind
-					// the floating box on screen (neither SSR nor the on-screen upgrade can see
-					// it), reflected as a black rectangle beside the bright rendered wall SSR
-					// shows around it. The receiver's own irradiance is a second isotropic
-					// estimate of the light arriving at the hit, and the base colour is F0; a
-					// metal takes the BRIGHTER of the two estimates, so a cell the lattice already
-					// lit keeps its answer and only the dark ones are lifted; blended by metalness
-					// so dielectrics keep their measured bounce untouched.
+					// this tier can come back near black wherever its own cell measured little:
+					// a metal wall hidden behind a foreground object on screen (where neither SSR
+					// nor the on-screen upgrade can see it) would reflect as a black patch beside
+					// the bright wall SSR shows around it. The receiver's own irradiance is a
+					// second isotropic estimate of the light arriving at the hit, and the base
+					// colour is F0; a metal takes the BRIGHTER of the two estimates, so a cell the
+					// lattice already lit keeps its answer and only the dark ones are lifted;
+					// blended by metalness so dielectrics keep their measured bounce untouched.
 					vec3 metal_lift = max(lit, hit_albedo * rough_value);
 					radiance = mix(lit, metal_lift, hit_metalness);
 					exact_emission = true;
 				}
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
-				// FIREFLY CLAMP, the gather's per-ray contract applied to the one tier that
-				// lacked it: the volume stores emissive UNBOUNDED, so a single ray landing on
-				// a small bright emitter returned its full radiance - two orders over the
-				// scene - and no temporal window can hide an unbounded spike (1/p samples
-				// needed). Only the voxel-measured answer is capped: rough_value is last
-				// frame's denoised resolve and the sky fallback is a stable per-pixel image,
-				// neither a stochastic spike source.
+				// FIREFLY CLAMP, the gather's per-ray contract: the volume stores emissive
+				// UNBOUNDED, so a single ray landing on a small bright emitter would return its
+				// full radiance - orders of magnitude over the scene - and no temporal window
+				// can hide an unbounded spike (1/p samples needed). Only the voxel-measured
+				// answer is capped: rough_value is last frame's denoised resolve and the sky
+				// fallback is a stable per-pixel image, neither a stochastic spike source.
 				radiance = GiClampRayRadiance(radiance, GI_MAX_RAY_RADIANCE_VIEW);
 #if defined(GI_LIGHT_VOXEL_READ_ALBEDO)
 				if(exact_emission)
@@ -865,9 +851,9 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 				// serves - but a hit with a known material is that surface, not the receiver:
 				// its albedo over the receiver's irradiance is what it would bounce if that
 				// light reached it (for a mirror receiver exactly the mirror image's light,
-				// which no diffuse lattice can hold), and its own emission rides on top. The
-				// culled underside now reflects as the dim orange of the box it belongs to,
-				// continuous with the front face's reflection, instead of neutral grey or black.
+				// which no diffuse lattice can hold), and its own emission rides on top. A
+				// culled underside reflects in its own material's colour, continuous with the
+				// rest of the object's reflection, instead of neutral grey or black.
 				radiance = GiClampRayRadiance(hit_albedo * rough_value, GI_MAX_RAY_RADIANCE_VIEW) + hit_emissive;
 			}
 #endif // GI_LIGHT_VOXEL_READ_ALBEDO
@@ -890,22 +876,22 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 		// probe reaches. Coverage stays 1 so the miss remains an image and the temporal mean
 		// integrates hit and sky fractions of the lobe together - dropping coverage instead
 		// would make the composite full-cover the probes with a geometry-only mean on every
-		// glossy silhouette. (The cage was tried here twice and both reads were wrong: 100 m
-		// out it leaves the lattice, at the receiver it stamps the 2 m pattern - round 8.)
+		// glossy silhouette. (The world-probe cage cannot answer here: 100 m out the read
+		// leaves the lattice, and at the receiver it stamps the 2 m pattern.)
 		radiance = GiReflectionSkyFallback(uv, reflected);
 	}
 	// CONSTANT ENERGY across roughness: the lobe's incoming radiance barely changes from a
-	// mirror to satin, so the tier serves full weight at EVERY roughness - the early fades
-	// (mirror fade, footprint confidence) removed energy at the sharp end, which read as
-	// "brightness rises with roughness" next to SSR's constant-energy blur (measured, round
-	// 10). Roughness now changes only WHERE the stochastic rays go, exactly as it should.
+	// mirror to satin, so the tier serves full weight at EVERY roughness - a fade (a mirror
+	// fade, a footprint confidence) removes energy at the sharp end, which reads as
+	// "brightness rises with roughness" next to SSR's constant-energy blur. Roughness
+	// changes only WHERE the stochastic rays go, exactly as it should.
 	//
 	// RAW ALPHA ENCODING: coverage for the probe-layer composite in [0, 1) (shape-fade),
 	// EXACTLY 1.0 for the rough tier (the classify pass writes it too), and above 1.0 the
 	// HIT DISTANCE rides along - 1 + t / GI_SHADOW_DISTANCE for a full-coverage geometric
 	// hit, 2.0 for a miss (the sky answered). The temporal pass rebuilds the reflected hit
 	// from this to read the velocity buffer THERE (its mover gate); every >= 0.5 image test
-	// downstream and the composite's saturate() are unchanged by construction.
+	// downstream and the composite's saturate() hold by construction.
 	float alpha = coverage;
 	if(hit.hit && coverage >= 1.0)
 	{

@@ -54,11 +54,11 @@
 // Floor for the Chebyshev visibility weight in the DDGI read chain. This is the
 // through-wall bleed knob: an exterior sunlit probe adjacent to a sealed room
 // contributes floor x crush of its brightness to every interior query no matter
-// what the depth moments say. At 0.05 that bleed measured ~0.1-0.5% of sun level,
-// which the closed-room bounce amplifies ~10x - invisible at exposure 1, a full
-// wash under auto exposure's dark-adaptation gain. 0.005 cuts it 10x (the crush
-// then takes it to ~1e-6) while the weight_sum <= 1e-5 fallback still catches
-// fully-dead cages, and ITS consumers fail toward darkness, the safe direction.
+// what the depth moments say, and the closed-room bounce amplifies that bleed -
+// invisible at exposure 1, a full wash under auto exposure's dark-adaptation gain.
+// Hence a small floor (the crush then takes the bleed to ~1e-6), while the
+// weight_sum <= 1e-5 fallback still catches fully-dead cages, and ITS consumers
+// fail toward darkness, the safe direction.
 #define GI_CHEBYSHEV_WEIGHT_FLOOR       0.005
 #define GI_WORLD_PROBE_CAGE_VIS_STEPS   40
 #define GI_WORLD_PROBE_CAGE_VIS_ACCEPT_VOXELS -0.1
@@ -76,6 +76,7 @@
 #define GI_PROBE_FILTER_PASSES          3
 #define GI_SCREEN_PROBE_SPACING         16
 #define GI_ADAPTIVE_PLANE_TOLERANCE     0.05
+#define GI_ADAPTIVE_NORMAL_MIN_COS      0.7
 #define GI_ADAPTIVE_RADIANCE_TOLERANCE  1.0
 #define GI_ADAPTIVE_REVALIDATE_FRAMES   8
 #define GI_ADAPTIVE_COARSE_SAMPLES      1

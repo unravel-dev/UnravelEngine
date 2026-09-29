@@ -41,45 +41,45 @@ public:
         direct = 6,
         ///< Which cascade answers at the traced surface, and its cross-fade band.
         cascade_levels = 7,
-        ///< GI v2: the attribute voxel albedo at the traced hit (yellow = unattributed).
+        ///< GI: the attribute voxel albedo at the traced hit (yellow = unattributed).
         attr_albedo = 8,
-        ///< GI v2: the light voxels at the traced hit - what a gather ray reads.
+        ///< GI: the light voxels at the traced hit - what a gather ray reads.
         light_voxels = 9,
-        ///< GI v2: world probe irradiance interpolated at the traced hit.
+        ///< GI: world probe irradiance interpolated at the traced hit.
         world_probes = 10,
-        ///< GI v2: which tier answered SUN visibility per voxel face. Needs the light-voxel
+        ///< GI: which tier answered SUN visibility per voxel face. Needs the light-voxel
         ///< pass's matching debug write (gi_light_voxel_pass::run_params::sun_tier_debug),
         ///< which replaces the volume's radiance with tier colors while active.
         sun_tiers = 11,
-        ///< GI v2: SKY FRACTION of the world-probe answer at the traced hit. Sealed interiors
+        ///< GI: SKY FRACTION of the world-probe answer at the traced hit. Sealed interiors
         ///< must read zero; warm colors mean probe rays complete with sky - the bounce-path
         ///< injection channel the sun-tier view cannot see. Pure read, no debug write needed.
         probe_sky = 12,
-        ///< GI v2: the EMISSIVE attribute voxel at the traced hit - what a gather ray reads as
+        ///< GI: the EMISSIVE attribute voxel at the traced hit - what a gather ray reads as
         ///< emitted radiance, and the only view of the emissive texture-mean scaling.
         attr_emissive = 13,
-        ///< GI v2: how much of the world-probe cage survived at the traced hit. The consequence
+        ///< GI: how much of the world-probe cage survived at the traced hit. The consequence
         ///< view for probe placement: red is where the lattice left nothing usable.
         cage_health = 14,
-        ///< GI v2: the temporal's dirty regions, shaded on the traced surface.
+        ///< GI: the temporal's dirty regions, shaded on the traced surface.
         dirty_regions = 15,
-        ///< GI v2: the level-0 probe lattice drawn as spheres, coloured by probe state. The
+        ///< GI: the level-0 probe lattice drawn as spheres, coloured by probe state. The
         ///< only view that shows a probe BURIED in geometry or a room the lattice missed.
         probe_lattice = 16,
-        ///< GI v2: screen-probe placement and ray allocation, as a screen-space overlay.
+        ///< GI: screen-probe placement and ray allocation, as a screen-space overlay.
         screen_probes = 17,
-        ///< GI v2: the temporal accumulator's health per pixel - how many frames each pixel
+        ///< GI: the temporal accumulator's health per pixel - how many frames each pixel
         ///< has actually integrated, and where the change detector reset it.
         temporal_health = 18,
-        ///< GI v2: which tier answered each traced screen probe's rays (record [11]) - the
+        ///< GI: which tier answered each traced screen probe's rays (record [11]) - the
         ///< ray-budget instrument: the screen-tier share is the idle-lane fraction.
         probe_tiers = 19,
-        ///< GI v2: WHY the temporal limited each pixel's accumulation count this frame - the
+        ///< GI: WHY the temporal limited each pixel's accumulation count this frame - the
         ///< cause code the kernel writes into the fast lane's alpha (fresh / dirty region /
         ///< camera motion / moving hits / change detector). The fast history is bound in
         ///< place of the moments for this mode.
         temporal_cause = 20,
-        ///< GI v2: the explicit emitter sampling census per traced screen probe (record [7]):
+        ///< GI: the explicit emitter sampling census per traced screen probe (record [7]):
         ///< the aimed rays' share of the probe's energy, of its rays, and the emitters selected.
         emitter_share = 21,
     };
@@ -87,7 +87,7 @@ public:
     struct settings
     {
         /// Sphere-trace steps per instance. Generous because this is a diagnostic view where
-        /// coverage matters more than cost; the GI tracer will run a much tighter budget.
+        /// coverage matters more than cost; the GI tracer runs a much tighter budget.
         ///
         /// Raising this pushes the falloff further out but does not remove it: a ray grazing
         /// along a surface advances by a distance that stays small for its whole length, so
@@ -125,15 +125,15 @@ public:
         ///
         /// This widens the ACCEPTANCE, never the step. Forcing a minimum step instead makes a
         /// grazing ray jump straight through a surface and miss in bands -- concentric rings,
-        /// far worse than the fade it was meant to cure. Widening acceptance can only stop a
+        /// far worse than the fade it would cure. Widening acceptance can only stop a
         /// ray early, so the trace stays conservative.
         ///
         /// The cost is that distant surfaces are fattened by the cone radius, which errs toward
         /// over-occluding at range -- the safe direction. Zero gives an exact sphere trace and
         /// restores the fade.
-        /// Defaults to zero: an exact sphere trace. Two attempts at trading exactness for
-        /// reach here made the image worse, so the honest default is the exact trace with its
-        /// known falloff, and this stays available to experiment with.
+        /// Defaults to zero: an exact sphere trace. Trading exactness for reach here costs more
+        /// image quality than the falloff it removes, so the honest default is the exact trace
+        /// with its known falloff, and this stays available to experiment with.
         float step_relaxation = 0.0f;
         /// The cage-visibility variance gate (gi_resolve_pass::settings), so the world-probe
         /// debug views (world_probes, probe_sky) read the cages exactly as the lit path does.

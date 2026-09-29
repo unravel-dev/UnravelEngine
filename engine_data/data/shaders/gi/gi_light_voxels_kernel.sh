@@ -2,17 +2,18 @@
 #define __GI_LIGHT_VOXELS_KERNEL_SH__
 
 /*
- * Lights the surface voxels (gi_rewrite_plan.md 3.2): one thread per surface-list entry, direct
- * lighting with traced shadows per EXPOSED FACE, written straight into the light volume.
+ * Lights the surface voxels: one thread per surface-list entry, direct lighting with traced
+ * shadows per EXPOSED FACE, written straight into the light volume.
  *
- * SHARED KERNEL BODY: compiled twice, as cs_gi_light_voxels.sc (radiance) and as
- * cs_gi_light_voxels_debug.sc (GI_SUN_TIER_DEBUG_VARIANT - tier-attribution colors). The C++
- * pass selects the PROGRAM; see the variant note at u_light_voxel_debug_sun_tiers below.
+ * SHARED KERNEL BODY: compiled three times, as cs_gi_light_voxels.sc (radiance),
+ * cs_gi_light_voxels_debug.sc (GI_SUN_TIER_DEBUG_VARIANT - tier-attribution colors) and
+ * cs_gi_light_voxels_vis_memo_debug.sc (GI_VIS_MEMO_DEBUG_VARIANT - the bounce vis-memo
+ * transaction per face). The C++ pass selects the PROGRAM; see the variant note at
+ * u_light_voxel_debug_sun_tiers below.
  *
  * BUDGETED BY CONSTRUCTION: only listed surface voxels are processed, and each is re-lit every
  * GI_LIGHT_VOXEL_UPDATE_DENOM frames (entry index + frame phase), so the per-frame cost is a
- * quarter of the resident surface set regardless of scene size - the property the old 524k-slot
- * cache sweep lacked.
+ * quarter of the resident surface set regardless of scene size.
  *
  * SAMPLED, AND INTEGRATED HERE. Each relight evaluates the direct light at one dithered point per
  * voxel (GI_LIGHT_VOXEL_SUN_DITHER) and fills a face's blocked share from the first hit of a
@@ -22,22 +23,23 @@
  * scene-wide edit writes through (blend 1) for one full rotation, and a dirty region does per voxel
  * (history_trusted), so those land within 4 frames.
  *
- * The dispatch covers every level's full segment and early-outs beyond each level's count; the
- * counts live on the GPU, so a tighter launch needs indirect dispatch args - a measured
- * optimisation for later, not a correctness matter (an early-out thread costs one buffer read).
+ * The CPU sizes the dispatch for every level's full segment and a thread early-outs beyond its
+ * level's count (an early-out thread costs one buffer read); on the indirect path the
+ * quiescence gate narrows the launch to the largest level's due entries from the GPU-side
+ * counts (cs_gi_quiescence_gate.sc).
  */
 
 #include "bgfx_compute.sh"
 #include "gi/sdf_common.sh"
 #include "gi/gpu_lights.sh"
-// Sun visibility from the sun's own cascade 0 where it covers, traced field beyond - see the
+// Sun visibility from the sun's own CSM cascades where they cover, traced field beyond - see the
 // tier note in gi_lighting.sh. Only this pass defines it: the debug direct view deliberately
 // keeps showing the pure traced tier.
 #define GI_SUN_SHADOWMAP_TIER
 #include "gi/gi_lighting.sh"
 #include "gi/gi_light_voxels.sh"
-// The bounce term (gi_rewrite_plan.md Phase 4): last frame's world-probe irradiance closes the
-// infinite-bounce loop - probes read voxels, voxels read probes, gain bounded by GI_MAX_ALBEDO.
+// The bounce term: last frame's world-probe irradiance closes the infinite-bounce loop - probes
+// read voxels, voxels read probes, gain bounded by GI_MAX_ALBEDO.
 #define GI_WORLD_PROBE_READ
 // The bounce REQUESTS the sparse level-0 cages it reads (stage 13, read-write): the cells
 // around every relit face's biased point are what the alcove's own 2 m probes get allocated
@@ -51,7 +53,7 @@
 /// header of per-level counts (index = level), then one capacity-sized entry segment per
 /// level. ONE buffer at a high stage ON PURPOSE: OpenGL guarantees only eight image units
 /// (bindings 0-7), so the low stages are reserved for this pass's 3D IMAGES while buffers
-/// and samplers tolerate the high ones - the old split count buffer occupied this pass's
+/// and samplers tolerate the high ones - and a separate count buffer would take this pass's
 /// last free stage.
 BUFFER_RO(b_surface_list, uint, 10);
 /// Attribute volumes: what the surface looks like.
@@ -77,9 +79,9 @@ IMAGE3D_RW(s_light_voxels_out, rgba16f, 7);
 /// permanent miss. Every verdict here is a pure function of the field and the window, both
 /// of which the generation tracks (field content changed, probe window scrolled) - see
 /// GiBounceProbeIrradiance. Stage 6 is an IMAGE on purpose: OpenGL guarantees only eight
-/// image units (bindings 0-7), which is why the surface list vacated it.
+/// image units (bindings 0-7), which is why the surface list sits at a high buffer stage.
 UIMAGE3D_RW(s_gi_vis_memo, r32ui, 6);
-// imageAtomicAdd for 3D uimages: GiImageAtomicAdd3D in gi_light_voxels.sh (shared with the
+// imageAtomicAdd for 3D uimages: the overload in gi_light_voxels.sh (shared with the
 // world-probe trace's census).
 
 /// Group scratch for the relight convergence statistic (see main).
@@ -121,13 +123,11 @@ uniform vec4 u_gi_vis_memo_bounds[GI_TEMPORAL_DIRTY_MAX_BOUNDS * 2];
 /// live (negative: the list overflowed its budget and every stale word marches in full).
 #define u_vis_memo_keep_age uint(u_gi_vis_memo_params.z)
 #define u_vis_memo_region_count int(u_gi_vis_memo_params.w)
-/// COMPILE-TIME variant switch, deliberately NOT a uniform. The debug write spent two hunts
-/// dead behind runtime flags that provably left the CPU (two independent lanes, current
-/// binaries, one camera, per-submit capture semantics) yet never steered the kernel - never
-/// explained. Program selection cannot be stomped by the five other passes that set the same
-/// uniform names, cannot go stale against constant-buffer reflection, and reproduces the
-/// hardcoded-flag mode that verifiably worked. The uniform lanes (params.y, camera.w) still
-/// CARRY the flag as telemetry, so a GPU debugger can settle the old mystery some day.
+/// COMPILE-TIME variant switch, deliberately NOT a uniform: a runtime flag can verifiably leave
+/// the CPU and still never steer this kernel. Program selection cannot be stomped by the five
+/// other passes that set the same uniform names and cannot go stale against constant-buffer
+/// reflection. The uniform lanes (params.y, camera.w) still
+/// CARRY the flag as telemetry, so a GPU debugger can inspect whether uniforms arrive.
 /// The dead branch compiles out of each variant; the ternaries below cost nothing.
 #ifdef GI_SUN_TIER_DEBUG_VARIANT
 #	define u_light_voxel_debug_sun_tiers true
@@ -136,11 +136,9 @@ uniform vec4 u_gi_vis_memo_bounds[GI_TEMPORAL_DIRTY_MAX_BOUNDS * 2];
 #endif
 /// Third compiled variant (cs_gi_light_voxels_vis_memo_debug.sc): paints the LIVE bounce
 /// visibility-memo transaction per face into the light volume instead of radiance - the
-/// instrument for "is the memo hitting" (measured: Light Voxels +0.5 ms over the
-/// pre-memo build = the miss-every-rotation cost signature; the CPU-side links all verified,
-/// exactly the situation the sun-tier saga taught to settle with a compiled variant, never a
-/// runtime flag). It runs the real memo path - load, miss-march, restamp - so the view shows
-/// the mechanism itself, not a simulation of it.
+/// instrument for "is the memo hitting", a compiled variant for the reason above. It runs the
+/// real memo path - load, miss-march, restamp - so the view shows the mechanism itself, not a
+/// simulation of it.
 #ifdef GI_VIS_MEMO_DEBUG_VARIANT
 #	define u_light_voxel_debug_vis_memo true
 #else
@@ -155,11 +153,10 @@ uniform vec4 u_gi_vis_memo_bounds[GI_TEMPORAL_DIRTY_MAX_BOUNDS * 2];
  * probe spacing; a ray that reads a surface is blocked, one that reaches the spacing (or
  * exhausts its budget without a hit) has escaped. This measures EXACTLY the band the world
  * probes cannot: below the spacing the probe cage cannot see the enclosure, above it the
- * probes' own Chebyshev visibility already handles occlusion. It replaced three field
- * samples along the face normal, which only saw what stood in FRONT of the face: a room
- * behind an arch, a vault over an arcade, a wall beside a floor all read fully open, and the
- * face took the whole ambient of a probe cage standing outside - the far-end niche of the
- * Sponza atrium rendered from the coarse levels 12x brighter than from level 0 (2026-09-12).
+ * probes' own Chebyshev visibility already handles occlusion. Samples along the face normal
+ * alone see only what stands in FRONT of the face: a room behind an arch, a vault over an
+ * arcade, a wall beside a floor would all read fully open, and the face would take the whole
+ * ambient of a probe cage standing outside.
  * The blocked share is not lost: the caller fills it with what the rays hit
  * (GiBounceRayFillRadiance), so an enclosure keeps its own inter-reflection.
  *
@@ -244,8 +241,8 @@ float GiBounceCavityVisibility(vec3 position, vec3 direction, float attr_voxel, 
 
 /*
  * NEAR-EDGE TINT FILL for the bounce term. The cavity march above attenuates the cage's
- * ambient by its visibility, but the BLOCKED fraction of the face's cone contributed
- * black - a white floor face beside a red wall lost exactly the wall's red, the
+ * ambient by its visibility, which alone leaves the BLOCKED fraction of the face's cone
+ * black - a white floor face beside a red wall would lose exactly the wall's red, the
  * sub-spacing colour adjacency the probe cage cannot represent (the DDGI-family chroma
  * wash near edges and corners). The blocked fraction is owned by whatever surface
  * encroaches within the march's own band, and that surface's outgoing radiance is already
@@ -296,11 +293,11 @@ bool GiBounceBlockerRadiance(vec3 position, vec3 best_point, float best_distance
 	// only where the gradient is axis-aligned. At a CONVEX silhouette edge the field rounds
 	// over to about 45 degrees, where two axes read 1/sqrt(2) and the dominant-axis pick below
 	// is decided by an epsilon - so the slab selected can be the face around the corner, lit by
-	// an emitter the reader cannot see (measured: cyan emissive bleeding around a box corner
-	// onto its shadowed face). Requiring one axis to carry GI_BOUNCE_TINT_MIN_AXIS_DOMINANCE
-	// puts the threshold above that 1/sqrt(2) tie with margin for field noise. Declining
-	// returns the pre-fill behaviour - the blocked fraction contributes black - which is the
-	// safe direction, and the early-out lands ahead of the imageLoad.
+	// an emitter the reader cannot see, which then bleeds around the corner onto the shadowed
+	// face. Requiring one axis to carry GI_BOUNCE_TINT_MIN_AXIS_DOMINANCE puts the threshold
+	// above that 1/sqrt(2) tie with margin for field noise. Declining leaves the blocked
+	// fraction black, which is the safe direction, and the early-out lands ahead of the
+	// imageLoad.
 	vec3 magnitude = abs(normal);
 	if(max(magnitude.x, max(magnitude.y, magnitude.z)) < GI_BOUNCE_TINT_MIN_AXIS_DOMINANCE)
 	{
@@ -308,7 +305,7 @@ bool GiBounceBlockerRadiance(vec3 position, vec3 best_point, float best_distance
 	}
 	// Half a voxel INSIDE the surface: the attribute band is a voxel wide, so a real contact
 	// lands in a listed surface voxel; a deep or false contact lands in an unmeasured cell
-	// and fails the alpha test below - toward darkness, the current behaviour.
+	// and fails the alpha test below - toward darkness, the safe direction.
 	vec3 surface_point = best_point - normal * (max(best_distance, 0.0) + 0.5 * attr_voxel);
 	// EDGE GUARD 2 - the reader must lie on the OUTWARD side of the blocker's own surface.
 	// A face only radiates into the half-space its normal points at, and surface_point was
@@ -411,8 +408,8 @@ bool GiBounceRayFillRadiance(vec3 position, vec3 direction, float rotation, uint
  * @p out_memo_state reports the transaction for the vis-memo debug variant:
  * GI_VIS_MEMO_STATE_OFF = generation 0 (memo unavailable, gated fallback ran),
  * _HIT = stored verdicts served, _MISS = marched and restamped, _NONE = no covering cage
- * answered (nothing added); the _FAR forms are their in-the-blend-band siblings (the L8
- * coverage instrument). Costs nothing in the radiance variant - dead writes fold away.
+ * answered (nothing added); the _FAR forms are their in-the-blend-band siblings. Costs nothing
+ * in the radiance variant - dead writes fold away.
  */
 #define GI_VIS_MEMO_STATE_OFF      0
 #define GI_VIS_MEMO_STATE_HIT      1
@@ -425,11 +422,9 @@ bool GiBounceRayFillRadiance(vec3 position, vec3 direction, float rotation, uint
  * SEGMENT-LOCAL INVALIDATION of the bounce vis-memo.
  *
  * The memo's generation bumps on every composed content landing and every probe-window
- * cell crossing, and a bump used to mean "every face re-marches its whole cage once" -
- * with movers a level lands every few frames, so every face paid the 8-corner march on
- * every rotation: measured 2026-09-09 as 1.4 ms of the 2.25 ms world block with five movers
- * (a variant that treated a stale generation as a hit dropped the relight from 1.9 to
- * 0.49 ms), against 0.25 ms for the masked read the memo exists to feed.
+ * cell crossing. If a bump meant "every face re-marches its whole cage once", then with
+ * movers (a level lands every few frames) every face would pay the 8-corner march on
+ * every rotation - far more than the masked read the memo exists to feed.
  *
  * A corner's verdict is a pure function of the field along ONE segment, from the biased
  * query to that probe. The field changed only within the composed reach of a placement
@@ -447,15 +442,15 @@ bool GiBounceRayFillRadiance(vec3 position, vec3 direction, float rotation, uint
  *    the segment (GiVisMemoChangeReach);
  *  - a level scroll changes which level answers the samples near its edge and no region
  *    names its slabs, so the CPU's keep age (u_gi_vis_memo_params.z) is 0 on a generation
- *    that landed after any composed origin moved: older words march in full, as before;
+ *    that landed after any composed origin moved: older words march in full;
  *  - an overflowed region list (u_gi_vis_memo_params.w < 0) and a slot claimed since the
  *    face was last relit (its faces read alpha 0: the attribute pass zeroes them on a claim)
- *    march everything, exactly as before.
- * The 2026-09-04 region-local build inflated each box by the whole cage diagonal - 3.5 m at
- * level 0, 28 m at level 3 - and the first segment build read the temporal's regions, which
- * an emissive placement inflates to its light's reach (16 m): both touched nearly every
- * face and measured neutral. CPU transcriptions in gi_oracle.cpp (segment_touches_box,
- * cage_corners_untouched): keep in step by hand.
+ *    march everything.
+ * The test is per SEGMENT against the RAW bounds on purpose: a box inflated by the whole cage
+ * diagonal (3.5 m at level 0, 28 m at level 3), or the temporal's regions, which an emissive
+ * placement inflates to its light's reach, touches nearly every face and keeps nothing.
+ * CPU transcriptions in gi_oracle.cpp (segment_touches_box, cage_corners_untouched): keep in
+ * step by hand.
  */
 bool GiSegmentTouchesBox(vec3 a, vec3 b, vec3 box_min, vec3 box_max)
 {
@@ -627,10 +622,9 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 				}
 			}
 			// A real BRANCH, never a ternary: HLSL's ?: is a SELECT that may evaluate BOTH
-			// operands, and with the 8-corner march on the miss side the fill executed on
-			// every face and was discarded on hits - the memo classified perfectly (view 28
-			// solid green) while the pass still paid march-every-rotation prices (measured:
-			// the entire +0.5 ms the memo was built to reclaim).
+			// operands, and with the 8-corner march on the miss side the fill would execute on
+			// every face and be discarded on hits - a perfectly classifying memo that still
+			// pays march-every-rotation prices.
 			BRANCH if(hit)
 			{
 				mask = GiWorldProbeVisMemoMask(memo_word);
@@ -653,7 +647,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 		if(!answered)
 		{
 			// All-dead cage: no data is not a verdict - the coarser level answers, marched
-			// and sealed like this one (the round-2 fall-through contract). The far mask is
+			// and sealed like this one (the fall-through contract). The far mask is
 			// deliberately not marched yet: on fall-through it would duplicate the next
 			// level's own near march.
 			continue;
@@ -667,7 +661,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 		if(restamp)
 		{
 			// Near verdicts stamped now; the far mask fills LAZILY on the first hit (see the
-			// layout note in gi_world_probes.sh) - an eager far march here regressed motion
+			// layout note in gi_world_probes.sh) - an eager far march here would tax motion
 			// frames, where every rotation is a miss and this store is per-face per-frame.
 			imageStore(s_gi_vis_memo, memo_texel,
 			           uvec4(GiWorldProbeVisMemoPackProbe(mask, u_vis_memo_generation, level,
@@ -686,7 +680,7 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 			bool far_answered;
 			BRANCH if(!memo_live || (restamp && !far_kept))
 			{
-				// Memo off, or a miss rotation: the plain gated read - exactly the pre-memo
+				// Memo off, or a miss rotation: the plain gated read - exactly the memo-off
 				// cost, so churning generations (window re-snaps under camera motion) never
 				// pay the 8-corner far march on top of the near one they already marched.
 				far_answered = GiWorldProbeIrradiance(position, face_direction, face_direction,
@@ -741,13 +735,13 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
 }
 
 /*
- * SUN-TIER DEBUG (the sealed-box leak hunt): classify each face by WHICH TIER answers sun
- * visibility and WHAT it answers, written into the light volume in place of radiance so the
- * SDF debug view (mode: sun_tiers) shows the injection tier per voxel face in one screenshot.
+ * SUN-TIER DEBUG: classify each face by WHICH TIER answers sun visibility and WHAT it answers,
+ * written into the light volume in place of radiance so the SDF debug view (mode: sun_tiers)
+ * shows the injection tier per voxel face in one screenshot.
  *
  *   GREEN -> the CSM quadrature answered; brightness = lit fraction, so a face the map calls
  *            fully shadowed reads dim green and one it calls lit reads bright green. Bright
- *            green on a sealed interior IS the leak, attributed to the shadow-map tier.
+ *            green on a sealed interior IS a leak, attributed to the shadow-map tier.
  *   RED   -> the traced field answered with a resolved hit: fully occluded, injects nothing.
  *   WHITE -> the traced field answered lit; brightness = clearance visibility, so penumbra
  *            greys. White on a sealed interior means rays thread the field (corner gaps).
@@ -762,9 +756,10 @@ bool GiBounceProbeIrradiance(vec3 position, vec3 face_direction, ivec3 memo_texe
  * a stale-texel population that matters on its own: frozen radiance keeps emitting whatever
  * light it captured last, forever, into every consumer.
  *
- * If EVERY interior face reads red / dim green yet the box still washes out, no tier stamps
- * sun directly and the energy enters through the bounce path (probe completions, screen-trace
- * commits) instead - the view discriminates that case too, by elimination.
+ * If EVERY interior face of a sealed room reads red / dim green yet the room still washes out,
+ * no tier stamps sun directly and the energy enters through the bounce path (probe
+ * completions, screen-trace commits) instead - the view discriminates that case too, by
+ * elimination.
  *
  * While active this REPLACES the volume's radiance, so the probes and the screen gather
  * ingest tier colors for as long as the view is up; the volume relights within the usual
@@ -836,8 +831,7 @@ vec4 GiDebugSunTierColor(vec3 world_position, vec3 world_normal, float voxel_siz
 /*
  * The relight of ONE surface-list entry, every early-out intact. Split from main() so the
  * group-wide convergence statistic can sit in uniform control flow: a barrier after a
- * lane's early return is illegal, and re-indenting this body under a flag would have
- * touched the whole file.
+ * lane's early return is illegal.
  */
 void GiRelightEntry(uint level, uint entry, inout float stats_change, inout float stats_faces,
                     inout float stats_rise, inout float stats_moved, inout float stats_visible)
@@ -873,8 +867,8 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// De-listed between compose and this slice's turn: nothing to light.
 		return;
 	}
-	// The gain clamp that closes the (future) bounce recursion below 1 lives at the one place
-	// radiance is produced, exactly as the old cache update kept it.
+	// The gain clamp that closes the bounce recursion below 1 lives at the one place radiance
+	// is produced.
 	vec3 bounded_albedo = min(albedo.xyz, vec3_splat(GI_MAX_ALBEDO));
 	// A voxel that can emit nothing produces zero radiance on every measurable face no matter
 	// what the lights say, so the lighting below is skipped for it. The gates still run: the
@@ -930,13 +924,13 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 	// FINE-LEVEL INHERITANCE. A coarse cell whose centre lies inside the next finer level's
 	// composed window has eight finer children that are relit with the finer field, the
 	// finer verdict scale and (at level 0) the shadow-mapped sun. Relighting the coarse cell at
-	// its own scale gave a DIFFERENT answer for the same surface - fatter occluders, coarser
-	// cavity marches, the traced sun - and the camera-following window boundary dragged that
-	// disagreement across the scene as a lighting step. LIT ONCE (single lighting plan, phase
-	// C): wherever a finer level has measured the surface, the coarse face is that measurement's
-	// MIP - the mean of its measured children (eight image loads in place of the shadow rays and
-	// the bounce read) - so the cross-fade band blends identical values and every reader that
-	// ends on a coarse level (world-probe rays, the gather's far field) sees the finer answer.
+	// its own scale would give a DIFFERENT answer for the same surface - fatter occluders,
+	// coarser cavity marches, the traced sun - and the camera-following window boundary would
+	// drag that disagreement across the scene as a lighting step. LIT ONCE: wherever a finer
+	// level has measured the surface, the coarse face is that measurement's MIP - the mean of
+	// its measured children (eight image loads in place of the shadow rays and the bounce
+	// read) - so the cross-fade band blends identical values and every reader that ends on a
+	// coarse level (world-probe rays, the gather's far field) sees the finer answer.
 	// Every child inside the finer window counts, partial coverage included (a child outside it
 	// holds another cell's slot and is never read), and there is no contrast gate: a parent
 	// straddling a lighting edge (a sun pool's rim) holds the edge's mean, which is the
@@ -947,9 +941,8 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 	// never measured (no surface at the finer scale) leave the coarse relight to answer, and so
 	// does a face this level's own gates cull: the pull runs AFTER the gates (see the branch
 	// below them), because a finer child exposed on the far side of the geometry is a legitimate
-	// measurement the coarse face must not carry (measured: a bright full-height column at a
-	// convex wall corner, 3x its level, from one child face that looked onto the sunlit
-	// exterior).
+	// measurement the coarse face must not carry (at a convex wall corner, one child face that
+	// looks onto the sunlit exterior would light a full-height column on the interior side).
 	bool has_fine_level = false;
 	vec4 fine_level_data = vec4_splat(0.0);
 	float fine_attr_voxel = 0.0;
@@ -997,8 +990,7 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// a culled alpha proves survival while a parent-seeded claim (GI_LIGHT_VOXEL_SEED_ALPHA)
 		// does not - and (b) no changed region reaches the escape sphere (an overflowed region
 		// list touches everything). The probe half still re-marches on every bump; without
-		// this keep every crossing re-marched the sixteen rays of every face (measured
-		// 2026-09-12: a 6 ms relight spike against a 1.4 ms probe-half sweep).
+		// this keep every crossing would re-march the sixteen rays of every face.
 		bool face_keep = false;
 		BRANCH
 		if(face_memo_live && !face_fresh && GiWorldProbeVisMemoGeneration(memo_word) != 0u)
@@ -1016,17 +1008,15 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		{
 			// FACE MEMO HIT: the tunnel guard and the cavity march are pure functions of the
 			// field and the window, both frozen within a generation - the stored verdict
-			// answers. The march is memoised; the ZERO STORE is NOT elidable. The old skip
-			// assumed "a culled face's texel already holds zero", and that invariant broke in
-			// the field: content that lands in a culled face's texel between stamps (a
+			// answers. The march is memoised; the ZERO STORE is NOT elidable. A culled face's
+			// texel cannot be assumed to hold zero: content lands in it between stamps (a
 			// transit-era measurement whose cull verdict returned under the epoch churn of
-			// moving objects, a debug variant's attribution colours) was then SERVED FOREVER -
-			// this was the only relight route that never wrote, so grazing junction reads
-			// (diagonal hit normals mix side faces that no surface-aligned read ever shows)
-			// kept a departed emitter's radiance as permanent lines along the borders it
-			// passed. One redundant store per culled face per rotation buys the invariant
-			// being enforced instead of assumed: any orphan now self-heals within one
-			// rotation.
+			// moving objects, a debug variant's attribution colours), and a route that never
+			// writes would serve it FOREVER - grazing junction reads (diagonal hit normals mix
+			// side faces that no surface-aligned read ever shows) would keep a departed
+			// emitter's radiance as permanent lines along the borders it passed. One redundant
+			// store per culled face per rotation enforces the invariant instead of assuming
+			// it: any orphan self-heals within one rotation.
 			if(GiWorldProbeVisMemoFaceCulled(memo_word))
 			{
 				imageStore(s_light_voxels_out, texel, vec4(0.0, 0.0, 0.0, GI_LIGHT_VOXEL_CULLED_ALPHA));
@@ -1041,8 +1031,8 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 			// (1-Lipschitz from inside the band); a lift whose midpoint reads DEEPER than the
 			// centre crossed the slab core - it exited through the FAR side, and everything
 			// measured from there (direct sun, exterior ambient) belongs to the wrong side of
-			// the wall. Un-guarded, buried faces near walls were lit by the sunlit exterior
-			// and stamped white into enclosed rooms. One field sample, only for deep lifts.
+			// the wall. Un-guarded, buried faces near walls would be lit by the sunlit exterior
+			// and stamp white into enclosed rooms. One field sample, only for deep lifts.
 			bool culled = false;
 			if(lift > attr_voxel)
 			{
@@ -1052,20 +1042,19 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 					culled = true;
 				}
 			}
-			// FACING GATE (2026-09-13, plan phase C). A face is a stand-in for the surface in
-			// its cell that FACES that direction; a cell holds six faces whether or not such a
-			// surface exists, and the ones that stand for nothing were still lit. A 0.25 m
-			// cell straddling a 0.05 m roof has its +-x and +-z face points ABOVE the roof
-			// (the centre lies above it, the lift puts the point at the cell boundary at that
-			// height), where the sky and the sun light them; a wall hit just below the ceiling
-			// reads the -x face slab trilinearly over its neighbours and blends those roof
-			// cells in - measured as the seam leak into the GI test suite's thin sealed cell
-			// once exact hits landed on the surface (audit section 19). Every flat surface's
-			// tangent faces carried the same kind of value. The field's gradient at the launch
-			// point is the local surface normal; a face whose direction lies more than ~72
-			// degrees from it (GI_LIGHT_VOXEL_FACING_MIN) stands for no surface here and is
-			// culled like a closed one. A pure function of the level's field, so the memo
-			// stamp below serves it for the generation. Four field taps per face.
+			// FACING GATE. A face is a stand-in for the surface in its cell that FACES that
+			// direction; a cell holds six faces whether or not such a surface exists, and the
+			// ones that stand for nothing must not be lit. A 0.25 m cell straddling a 0.05 m
+			// roof has its +-x and +-z face points ABOVE the roof (the centre lies above it, the
+			// lift puts the point at the cell boundary at that height), where the sky and the
+			// sun light them; a wall hit just below the ceiling reads the -x face slab
+			// trilinearly over its neighbours and would blend those roof cells in - a seam leak
+			// into a thin sealed room. Every flat surface's tangent faces would carry the same
+			// kind of value. The field's gradient at the launch point is the local surface
+			// normal; a face whose direction lies more than ~72 degrees from it
+			// (GI_LIGHT_VOXEL_FACING_MIN) stands for no surface here and is culled like a
+			// closed one. A pure function of the level's field, so the memo stamp below serves
+			// it for the generation. Four field taps per face.
 			if(!culled)
 			{
 				vec3 face_gradient = GiFaceFieldGradient(int(level), position, level_data.w);
@@ -1077,15 +1066,14 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 				}
 			}
 			// A face is MEASURABLE when any of its hemisphere escapes - the same visibility
-			// the ambient below is weighted by, computed once and shared. This replaced a
-			// single-step field-rise test, which cannot see past a coarse level's blob
-			// plateau: small geometry merges into blobs whose shell voxels sit a voxel or
-			// more deep, the one-voxel step stays inside, and every face read as unexposed -
-			// whole objects went black wherever only coarse levels covered them (the
-			// far-distance failure). The rays leave the LIFTED point at 30 and 60 degrees and
-			// see past the plateau; a face pointing into real interior still reads closed in
-			// every direction and stays dark, both sides of a thin wall still measure open
-			// through their own slabs.
+			// the ambient below is weighted by, computed once and shared. A single-step
+			// field-rise test cannot see past a coarse level's blob plateau: small geometry
+			// merges into blobs whose shell voxels sit a voxel or more deep, the one-voxel
+			// step stays inside, and every face would read as unexposed - whole objects black
+			// wherever only coarse levels cover them. The rays leave the LIFTED point at 30 and
+			// 60 degrees and see past the plateau; a face pointing into real interior still
+			// reads closed in every direction and stays dark, both sides of a thin wall still
+			// measure open through their own slabs.
 			if(!culled)
 			{
 				visibility = GiBounceCavityVisibility(position, direction, attr_voxel,
@@ -1109,12 +1097,11 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 				// PROOF of a radiance-path write (flag not arriving), not of a stale texel.
 				// CULLED IS A MEASUREMENT (GI_LIGHT_VOXEL_CULLED_ALPHA): the face's cone is closed at
 				// this level - a crevice, the strip of floor beside a door slab - and the readers
-				// must answer DARK here, never fall through to a coarser level. Alpha 0 meant
-				// "never measured", and the cascade fallback then handed exactly these faces to a
-				// level whose cell straddles the thin geometry the cull was reacting to, with a
-				// shadow ray launched from its sunlit side (measured: the GI Room's door tunnel
-				// floor and lintel lit through the 25 cm baffle from level 2). The epsilon alpha
-				// carries no energy and next to no weight in the trilinear mix; it only stops the
+				// must answer DARK here, never fall through to a coarser level. Alpha 0 means
+				// "never measured", and with it the cascade fallback would hand exactly these
+				// faces to a level whose cell straddles the thin geometry the cull was reacting
+				// to, with a shadow ray launched from its sunlit side. The epsilon alpha carries
+				// no energy and next to no weight in the trilinear mix; it only stops the
 				// fallback.
 				imageStore(s_light_voxels_out, texel,
 				           u_light_voxel_debug_sun_tiers
@@ -1162,10 +1149,10 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 				{
 					memo_color = vec4(1.0, 0.0, 0.0, GI_SUN_TIER_DEBUG_ALPHA);
 				}
-				// The far-blend band, the L8 coverage instrument: TEAL = probe hit in the
-				// band (stored far verdicts served, or the one-time lazy fill), ORANGE =
-				// miss in the band (the gated far read; the mask fills on the first hit).
-				// Their area is the share of faces paying (or saving) the level+1 read.
+				// The far-blend band: TEAL = probe hit in the band (stored far verdicts served, or
+				// the one-time lazy fill), ORANGE = miss in the band (the gated far read; the mask
+				// fills on the first hit). Their area is the share of faces paying (or saving) the
+				// level+1 read.
 				else if(memo_state == GI_VIS_MEMO_STATE_HIT_FAR)
 				{
 					memo_color = vec4(0.0, 0.7, 0.7, GI_SUN_TIER_DEBUG_ALPHA);
@@ -1198,19 +1185,15 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// FINE-LEVEL INHERITANCE, after every gate on purpose: the face has passed this
 		// level's own exposure verdict (tunnel guard, cavity cone), so a coarse face that
 		// this level culls stays culled even when a finer child of it is exposed on the
-		// far side of the geometry (measured: at a convex wall corner one child face of a
-		// coarse cell looked out onto the sunlit exterior, and inheriting it before the
-		// gates painted a bright column on the interior side, 3x its level).
+		// far side of the geometry (at a convex wall corner, one child face of a coarse cell
+		// that looks out onto the sunlit exterior would, inherited before the gates, paint a
+		// bright column on the interior side).
 		//
-		// FLAG, NOT `continue`: this block used to end its inherited case with a `continue`
-		// of the face loop, placed after the eight-child loop inside the branch. The DXBC
-		// build of that shape skipped the REMAINING faces of the cell whenever a face
-		// inherited (measured with stamped variants: a cell whose first exposed face took
-		// the inheritance never stored its +Y face again, at every rotation, for as long as
-		// the finer window covered it - the light a departed emissive left in a coarse cell
-		// stayed there until a slot re-claim, and the world probes kept serving it; the
-		// same body with the inherited case folded into a flag stored every face). The
-		// relight below is skipped through the flag, at the loop's own level.
+		// FLAG, NOT `continue`: a `continue` of the face loop placed after the eight-child
+		// loop inside this branch miscompiles on DXBC - the build skips the REMAINING faces
+		// of the cell whenever a face inherits, so a coarse cell keeps the light a departed
+		// emissive left there (and the world probes keep serving it) until a slot re-claim.
+		// The relight below is skipped through the flag, at the loop's own level.
 		bool inherited = false;
 		BRANCH
 		if(has_fine_level)
@@ -1261,7 +1244,7 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 			}
 			// Children all culled, all outside the finer window, or none at all (the finer level
 			// has no surface here): the provenance keep or the coarse relight below answers. The
-			// all-culled case no longer forces a cull - this level's own gates above already judged
+			// all-culled case does not force a cull - this level's own gates above already judged
 			// the face exposed, and the finer children's cones are a different scale's verdict.
 		}
 		// PROVENANCE KEEP: a face holding a finer level's mip keeps it when no measured child is
@@ -1306,7 +1289,8 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// and biasing purely along the face normal is the direction that clears its own surface.
 		//
 		// Branched, never an && chain: the right operand does an imageStore (the memo restamp),
-		// and HLSL's && does not guarantee short-circuiting - the ternary lesson's sibling.
+		// and HLSL's && does not guarantee short-circuiting, just as its ?: may evaluate both
+		// operands.
 		vec3 probe_value;
 		float sky_fraction;
 		int memo_state_unused;
@@ -1349,7 +1333,7 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 		// evaluation point and one fill pair per relight (above) - so near shadow edges,
 		// 1/r^2 falloffs and enclosures the raw store varies from relight to relight. The
 		// gather and probes are contracted to integrate that; MIRRORS read the volume raw and
-		// showed it as shimmer. Folding each relight into the voxel's own history makes the
+		// would show it as shimmer. Folding each relight into the voxel's own history makes the
 		// volume the integrator. Blend 1 (CPU-held on light/content change, debug writes,
 		// first frames) writes through; a previous texel with alpha 0 was culled or never
 		// measured - its zero is provenance, not radiance, and is never blended in.
@@ -1389,19 +1373,17 @@ void GiRelightEntry(uint level, uint entry, inout float stats_change, inout floa
 NUM_THREADS(64, 1, 1)
 void main()
 {
-	// One thread per entry due for relight THIS frame. The 4-frame rotation used to be a
-	// `(entry + frame) % 4` test over the dense list, which left exactly 8 of every 32 lanes
-	// alive in a live warp while the warp still issued the full body - the trace, the cage
-	// chain, all six faces - for a quarter of the output. Folding the rotation into the
-	// launch (entry = denom * id + phase selects the identical set) makes every lane of a
-	// live warp do real work, with the entry footprint per wave unchanged in spirit: still
-	// a contiguous stretch of the same compacted list.
+	// One thread per entry due for relight THIS frame. The rotation is folded into the
+	// launch (entry = denom * id + phase selects the set `(entry + frame) % denom == 0`), so
+	// every lane of a live warp does real work: a per-lane rotation test over the dense list
+	// would leave three lanes in four idle while the warp still issues the full body - the
+	// trace, the cage chain, all six faces. Each wave still covers a contiguous stretch of
+	// the same compacted list.
 	//
 	// The level rides gl_WorkGroupID.y, which keeps it provably wave-uniform (scalar loads
-	// for the per-level state) and removes two integer divisions by a non-constant. One
+	// for the per-level state) and avoids two integer divisions by a non-constant. One
 	// launch for every level ON PURPOSE: a launch per level (so each could bind its own CSM
-	// cascade) measured 2x this pass's cost and even two launches cost +0.4 ms - the
-	// serialised tail of each launch on the shared light volume.
+	// cascade) pays the serialised tail of every launch on the shared light volume.
 	uint level = gl_WorkGroupID.y;
 	float stats_change = 0.0;
 	float stats_faces = 0.0;

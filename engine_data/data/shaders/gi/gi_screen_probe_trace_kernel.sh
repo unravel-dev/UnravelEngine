@@ -2,7 +2,7 @@
 #define __GI_SCREEN_PROBE_TRACE_KERNEL_SH__
 
 /*
- * GI screen probe trace (plan 3.4) - the Lumen recipe. Compiled twice:
+ * GI screen probe trace - the Lumen recipe. Compiled twice:
  *
  *  - cs_gi_screen_probe_trace_full.sc: one 8x8 group per traced probe, one thread per
  *    octahedral texel - all 64 rays fresh every frame. The default and the quality
@@ -10,9 +10,10 @@
  *  - cs_gi_screen_probe_trace_adaptive.sc (GI_SCREEN_PROBE_TRACE_ADAPTIVE, the
  *    settings::adaptive_rays checkbox): Lumen's structured-importance-sampling shape at
  *    the same per-frame-complete contract - 2x2 blocks whose reprojected importance
- *    concentrates energy (ratio over the tile mean) trace at FULL per-texel detail (x2
- *    samples on the very brightest), every other block traces one cell jittered across
- *    its quad with GI_ADAPTIVE_COARSE_SAMPLES samples and splats it - 16 + 3K rays per
+ *    concentrates energy (ratio over the tile mean) or straddle the cull line trace at FULL
+ *    per-texel detail (x2 samples on the very brightest), every other block traces one cell
+ *    jittered across its quad with GI_ADAPTIVE_COARSE_SAMPLES samples and splats it. Both
+ *    programs cull the same texels (GiTexelVisible) - 16 + 3K rays per
  *    probe plus the detail texels' supersamples, against the full program's 48-64. FOUR probes pack
  *    into each 64-lane group (16 lanes each); a 16-thread group alone would leave three
  *    quarters of every wave idle. The trade is per-frame variance and 4x4 angular granularity
@@ -26,16 +27,14 @@
  * ceil(samples / 64) of them. The splat is integer atomics, so which lane traced a sample
  * cannot change the result.
  *
- * There is deliberately NO probe-space temporal accumulation in either form.
- * Direction-stratum amortization (16-ray windows blended 1/n into the tile) was built,
- * rebuilt as a blended adaptive schedule, and finally REMOVED: averaging in probe space
- * turns white per-frame noise into probe-granular correlated drift - tiles serving
- * differently-aged strata, rare emitter arrivals living for ~cap frames as 16px-coherent
- * blobs, walk cadences stepping every anchor at once - and correlated drift is exactly
- * what the downstream per-pixel temporal cannot remove (it passes through as signal and
- * its change detector snaps on it; measured as still-camera moving blobs across three
- * schemes). The per-frame gather stays white; the full-res dual-rate temporal and the
- * spatial denoiser own ALL accumulation. Ray budget scales with PROBE DENSITY
+ * There is deliberately NO probe-space temporal accumulation in either form. Averaging in
+ * probe space (e.g. direction-stratum windows blended 1/n into the tile) turns white
+ * per-frame noise into probe-granular correlated drift - tiles serving differently-aged
+ * strata, rare emitter arrivals living for ~cap frames as 16px-coherent blobs, walk
+ * cadences stepping every anchor at once - and correlated drift is exactly what the
+ * downstream per-pixel temporal cannot remove (it passes through as signal and its change
+ * detector snaps on it). The per-frame gather stays white; the full-res dual-rate temporal
+ * and the spatial denoiser own ALL accumulation. Ray budget scales with PROBE DENSITY
  * (settings::probe_spacing) first - the artifact-free knob, and the one Lumen ships -
  * and with adaptive_rays second.
  *
@@ -65,8 +64,8 @@
  * hit was off-screen last frame. Anything else - miss, left the screen, low confidence -
  * falls through to the SDF trace unchanged.
  * The march is BOUNDED by the ray's own short range (projected once per ray) and by the
- * viewport: hits past either bound were unconditionally rejected by the tests below, so the
- * old unbounded march only ever spent budget on answers it then threw away.
+ * viewport: the tests below reject every hit past either bound, so marching further would
+ * only spend budget on answers that are then thrown away.
  *
  * Everything here is owned by gi_constants - the pass has no tuning surface beyond the
  * lattice descriptors and the adaptive_rays checkbox.
@@ -118,15 +117,15 @@ SAMPLER2D(s_gi_normal, 9);
 /// This frame's velocity buffer (full camera resolution): RG = total uv-delta, BA = the
 /// OBJECT-ONLY component. A screen hit on an object-motion pixel reprojects through it to
 /// the mover's own last-frame pixel instead of being declined by the depth test (the
-/// camera reprojection lands where the mover was NOT). Stage 14 was the environment SH,
-/// which now rides the probe buffer's SH block (GiProbeEnvShBase, staged by the args pass).
+/// camera reprojection lands where the mover was NOT). The environment SH takes no stage:
+/// it rides the probe buffer's SH block (GiProbeEnvShBase, staged by the args pass).
 SAMPLER2D(s_gi_velocity, 14);
 
 /// xyz = camera position (world-probe window centre), w = frame index.
 uniform vec4 u_gi_camera;
 /// zw = this frame's R2 offset for the sub-texel cone jitter (the direction cycle), computed in
-/// DOUBLE on the CPU: fract(R2 x float(frame)) here had 1/128 precision after ~1e5 frames and
-/// the jitter collapsed to a few positions in long sessions. xy = the integrate's offset.
+/// DOUBLE on the CPU: fract(R2 x float(frame)) in float has 1/128 precision after ~1e5 frames,
+/// which collapses the jitter to a few positions in long sessions. xy = the integrate's offset.
 uniform vec4 u_gi_jitter;
 /// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs. y > 0 when the firefly
 /// governor's reference is the reprojected probe's direction block (reprojected_firefly_reference).
@@ -184,8 +183,8 @@ SHARED vec3 s_vs_origin[GI_TRACE_SLOT_COUNT];
 /// Base record index of the reprojected PREVIOUS probe, or -1 when reprojection failed.
 SHARED int s_history_record[GI_TRACE_SLOT_COUNT];
 SHARED float s_importance_mean[GI_TRACE_SLOT_COUNT];
-/// The reprojected probe's 4x4 importance mip, staged by the leader: the per-ray lookup used
-/// to re-read the same four record vec4s the leader had already loaded for the mean.
+/// The reprojected probe's 4x4 importance mip, staged by the leader, so the per-ray lookup
+/// does not re-read the four record vec4s the leader already loaded for the mean.
 SHARED vec4 s_importance_mip[GI_TRACE_SLOT_COUNT * 4];
 /// The probe's importance PDF total - cosine to the anchor normal x the block's reprojected importance, over
 /// the texels the BRDF cull keeps - staged by the leader for the full program's allocation (GiFullRayUnit).
@@ -203,28 +202,26 @@ SHARED vec2 s_frame_r2;
 /// ray is traced, hence the two extra barriers in main.
 #define GI_NEE_K GI_EMISSIVE_NEE_PER_PROBE
 /// Fixed-point scale of the accumulators. A unit is 1 / (GI_NEE_FIXED x omega) of RADIANCE,
-/// not 1 / GI_NEE_FIXED - the resolve divides the sum by the cell's solid angle - so at the
-/// old 16384 one unit was 2.1e-4 to 5.9e-4 across an 8x8 tile, and since GiSplatSample rounds
-/// each sample independently, every ray measuring under ~1e-4 radiance rounded to EXACTLY
-/// ZERO. That is the regime this engine works in (radiance of order 1e-4) and
-/// where auto exposure's dark adaptation makes it visible; worse, the threshold varies 5x
-/// with the octahedral |d|_1, so the truncation printed as a direction-dependent pattern.
-/// Eight times finer puts the floor at 1.5e-5 to 4.1e-5, under anything the light voxels
-/// carry. The ceiling stays safe because the cap below now bounds the CONTRIBUTION: a cell
+/// not 1 / GI_NEE_FIXED - the resolve divides the sum by the cell's solid angle - and
+/// GiSplatSample rounds each sample independently, so a ray under the rounding floor adds
+/// EXACTLY ZERO. This scale puts that floor at 1.5e-5 to 4.1e-5 across an 8x8 tile, under
+/// anything the light voxels carry: this engine works at radiance of order 1e-4, where auto
+/// exposure's dark adaptation makes any loss visible, and the floor varies 5x with the
+/// octahedral |d|_1, so a coarser scale prints the truncation as a direction-dependent
+/// pattern. The ceiling stays safe because the cap below bounds the CONTRIBUTION: a cell
 /// would need 409 capped samples to wrap 2^32, against the ~20 it actually receives.
 #define GI_NEE_FIXED 131072.0
 /// Per-sample cap on the CONTRIBUTION - L / pdf, the estimator's own output - not on L.
 ///
-/// Capping L was wrong in a way that defeated the whole point of aiming rays. A JITTERED
-/// sample's denominator is the cell PDF (3 to 16), so its contribution is about L and a cap
-/// on L is nearly a cap on the contribution. An AIMED sample is divided by n_e / Omega_e,
-/// which for a small emitter is enormous - a bulb subtending 6e-4 sr gives ~1600 - so its
-/// contribution is a hundredth of L or less, far under any ceiling, while a cap on L cut its
-/// radiance directly. A bulb of radiance 5000 resolved to 2.05 instead of 16.0: an 8x
-/// under-estimate scaling as cap/L, worst for the smallest and brightest emitters, which are
-/// exactly what explicit emissive sampling exists to find. The jittered technique cannot make
-/// it back, because near the emitter the balance-heuristic denominator is dominated by the
-/// aimed density.
+/// A cap on L would defeat the whole point of aiming rays. A JITTERED sample's denominator
+/// is the cell PDF (3 to 16), so its contribution is about L and a cap on L is nearly a cap
+/// on the contribution. An AIMED sample is divided by n_e / Omega_e, which for a small
+/// emitter is enormous - a bulb subtending 6e-4 sr gives ~1600 - so its contribution is a
+/// hundredth of L or less, far under any ceiling, while a cap on L would cut its radiance
+/// directly: an under-estimate scaling as cap/L, worst for the smallest and brightest
+/// emitters, which are exactly what explicit emissive sampling exists to find. The jittered
+/// technique cannot make it back, because near the emitter the balance-heuristic
+/// denominator is dominated by the aimed density.
 ///
 /// The value is what one sample may contribute to the cell's MEAN radiance. A single sample
 /// carrying a whole coarse cell that resolves at the store's GI_MAX_RAY_RADIANCE needs about
@@ -235,10 +232,8 @@ SHARED vec2 s_frame_r2;
 /// march that left the viewport, ran out of iterations or found a crossing the validation
 /// rejected (Lumen's HZB trace writes the last visible distance on a miss and its SDF trace
 /// starts there). The verified point is the boundary of the last Hi-Z tile the march
-/// skipped, so the margin only has to cover that tile's own depth spread. Measured
-/// 2026-09-18 (Sponza, probe spacing 8): 0.15 and 0.5 m cost the same, the sealed cells of
-/// the GI test suite read identical to a march from t = 0, and the resume takes 9-13 percent
-/// off the trace. Owned here like GI_NEE_FIXED: a single consumer. 1e6 turns the resume off.
+/// skipped, so the margin only has to cover that tile's own depth spread. Owned here like
+/// GI_NEE_FIXED: a single consumer. 1e6 turns the resume off.
 #define GI_SCREEN_TRACE_RESUME_MARGIN 0.15
 SHARED vec3 s_nee_axis[GI_TRACE_SLOT_COUNT * GI_NEE_K];
 SHARED float s_nee_cos[GI_TRACE_SLOT_COUNT * GI_NEE_K];
@@ -337,10 +332,10 @@ vec3 GiProbeEnvRadiance(vec3 dir)
  * reprojected pixel: on screen last frame and, when the snapshot carries its view depth
  * (u_gi_screen_trace.w > 1.5), the stored depth agrees with the hit's reprojected depth
  * within GI_TEMPORAL_DEPTH_TOLERANCE of it - the temporal accumulation's own tolerance.
- * Without the test a disoccluded reprojection read whatever surface last frame showed at
- * that pixel, and the first frame after a disocclusion measured a different source (the
- * light voxels) than the frames after it (the composite) - a bias step the temporal then
- * carried. No stage was free for a depth history; the snapshot's alpha carries it instead.
+ * Without the test a disoccluded reprojection would read whatever surface last frame showed
+ * at that pixel, and the first frame after a disocclusion would measure a different source
+ * (the light voxels) than the frames after it (the composite) - a bias step the temporal
+ * would carry. No stage is free for a depth history; the snapshot's alpha carries it instead.
  */
 bool GiReadHistory(vec3 hit_position, out vec3 radiance)
 {
@@ -373,13 +368,13 @@ bool GiReadHistory(vec3 hit_position, out vec3 radiance)
 
 /*
  * Radiance for a hit whose light-voxel read failed, BEYOND the outermost cascade - where "no
- * data" must not mean "no light" (the black wall at the end of the street): the Lumen
+ * data" must not mean "no light" (a distant wall rendering black): the Lumen
  * far-field recipe applies - reproject the hit into LAST frame's composited output, which
  * already carries that geometry's shadow-mapped lighting (the SSR scene-colour convention;
  * the temporal mean and the radiance clamp bound the feedback); off-screen or history-less,
  * the sky SH along the ray, the miss contract. WITHIN the cascades the callers answer honest
  * darkness directly - sub-voxel contact occlusion, sealed rooms - using the level search they
- * already ran, so this function no longer re-runs it.
+ * already ran, so this function does not re-run it.
  */
 vec3 GiFarFieldRadiance(vec3 hit_position, vec3 sample_dir)
 {
@@ -397,8 +392,8 @@ vec3 GiFarFieldRadiance(vec3 hit_position, vec3 sample_dir)
  * at the hit pixel) reprojects through the mover's own velocity to the pixel it occupied
  * last frame - which holds the mover's own lit colour - while everything else takes the
  * camera reprojection with its depth validation (GiReadHistory). Without this every hit on
- * moving geometry was declined (the camera reprojection lands where the mover was NOT and
- * the stored depth disagrees) and shaded from a voxel up to a relight rotation old. The
+ * moving geometry would be declined (the camera reprojection lands where the mover was NOT
+ * and the stored depth disagrees) and shaded from a voxel up to a relight rotation old. The
  * velocity buffer carries no depth, so a mover's pixel gets only a loose depth agreement
  * (twice the camera path's tolerance) against gross occlusion changes; the neighbourhood
  * the temporal accumulates over bounds the rest, as it does for the mover's own history.
@@ -458,10 +453,10 @@ float GiImportanceBlockLuma(int slot, int block)
 
 void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 {
-	// No absolute clamp on the cell's radiance (measured 2026-09-10, gi_emissive_research 1.5:
-	// the clamp at GI_MAX_RAY_RADIANCE plateaued a white panel's spread at 6.5x for a 16x
-	// intensity). An emitter that fills the cell is not a firefly; the MIS contribution cap
-	// (GI_NEE_CONTRIBUTION_MAX, per sample) and the governor below bound the estimator's step.
+	// No absolute clamp on the cell's radiance: a clamp at GI_MAX_RAY_RADIANCE plateaus a
+	// bright emitter's spread well below its intensity. An emitter that fills the cell is not a
+	// firefly; the MIS contribution cap (GI_NEE_CONTRIBUTION_MAX, per sample) and the governor
+	// below bound the estimator's step.
 	vec3 averaged = radiance;
 	// FIREFLY GOVERNOR: a ray landing on a small bright emitter dominates the whole tile
 	// when it enters at full weight - the probe's screen footprint pops for a frame. Each
@@ -469,9 +464,9 @@ void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 	// frame's value of this texel (the tile is single-buffered, so it is still in place), FLOORED by the
 	// reprojected previous tile's mean luminance (s_importance_mean - looked up by WORLD
 	// position with a plane test, so it survives camera motion that leaves the texel
-	// holding a nearby point's radiance). Without the floor, a dark stale texel crushed
-	// legitimate arrivals to 8x darkness - measured as pumping noise in emissive-lit dark
-	// scenes the moment the camera moved. A texel whose own history legitimately sees the
+	// holding a nearby point's radiance). Without the floor, a dark stale texel would crush
+	// legitimate arrivals to 8x darkness - pumping noise in emissive-lit dark scenes the
+	// moment the camera moves. A texel whose own history legitimately sees the
 	// emitter raises its own ceiling and converges unbiased (per-texel, never ONLY the
 	// tile mean - that would crush a lone bright texel to mean x k / 256). A probe that
 	// reprojected onto last frame's lattice is governed however dark its history, its reference
@@ -482,23 +477,33 @@ void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 	// unclamped - progressive ramps from black would dim every disocclusion instead.
 	// The texel and the tile mean are LAST frame's, written under the previous pre-exposure;
 	// the mean was corrected where it was staged, the texel is corrected here.
+	// Both are floored in turn by the reprojected probe's FILTERED luminance around this
+	// direction (its 2x2 block of the importance mip): a direction that alternates between a
+	// bright opening and the dark frame around it reads bright there on average, so its bright
+	// samples are not clipped every time the previous one happened to be dark - a loss that
+	// would darken all light arriving through openings. A lone hit on something the filtered
+	// probe field never saw still meets a dark block and is capped.
 	// With the reprojected reference (u_gi_screen_trace.y) the reference is instead the
 	// reprojected probe's luminance for this texel's 2x2 direction block, floored by its tile
 	// mean: the same world point's recent radiance around this direction, so the ceiling follows
 	// the surface through camera motion instead of staying with the screen slot. A probe whose
 	// reprojection failed has no reference and stores uncapped, like a fresh tile.
+	ivec2 local_texel = ivec2(int(uint(texel.x) % uint(GI_PROBE_DIR_EDGE)), int(uint(texel.y) % uint(GI_PROBE_DIR_EDGE)));
+	int block = (local_texel.y / 2) * 4 + (local_texel.x / 2);
 	float reference;
 	BRANCH
 	if(u_gi_screen_trace.y > 0.5)
 	{
-		ivec2 local_texel = ivec2(int(uint(texel.x) % uint(GI_PROBE_DIR_EDGE)), int(uint(texel.y) % uint(GI_PROBE_DIR_EDGE)));
-		int block = (local_texel.y / 2) * 4 + (local_texel.x / 2);
 		reference = s_history_record[slot] < 0 ? 0.0 : max(GiImportanceBlockLuma(slot, block), s_importance_mean[slot]);
 	}
 	else
 	{
 		vec4 hist = imageLoad(s_probe_radiance_out, texel);
 		reference = max(Luminance(hist.xyz) * u_history_pre_exposure_correction, s_importance_mean[slot]);
+		if(s_history_record[slot] >= 0)
+		{
+			reference = max(reference, GiImportanceBlockLuma(slot, block));
+		}
 	}
 	BRANCH
 	if(s_history_record[slot] >= 0 || reference > GI_GATHER_FIREFLY_REFERENCE_FLOOR)
@@ -514,7 +519,7 @@ void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 }
 
 /// The block's reprojected importance over the tile mean; 1.0 (neutral) when history is
-/// absent or reprojection failed - uniform allocation, as ever.
+/// absent or reprojection failed - uniform allocation.
 float GiScreenProbeBlockRatio(int slot, int block)
 {
 	if(s_history_record[slot] < 0 || s_importance_mean[slot] <= 1e-4)
@@ -527,20 +532,19 @@ float GiScreenProbeBlockRatio(int slot, int block)
 /*
  * ONE direction, answered Hi-Z -> SDF -> world-probe completion. Returns (radiance, hitT;
  * -1 = completed/sky). Returned, never out-parameters - the shaderc HLSL path miscompiles
- * out-params in .sc helpers silently (tasks/lessons.md). The sample loop lives in the
- * caller (main), which chooses each direction: a jitter inside the cell, or an aimed
- * direction inside an emitter's cone (gi_emissive_nee.sh) - one call site either way.
+ * out-params in .sc helpers silently. The sample loop lives in the caller (main), which
+ * chooses each direction: a jitter inside the cell, or an aimed direction inside an
+ * emitter's cone (gi_emissive_nee.sh) - one call site either way.
  *
  * Sub-texel DIRECTION jitter (the caller's). Fixed centre rays ALIAS small bright sources: a source
  * smaller than one cone is either skewered or missed by the grid, and which probes catch
  * it varies smoothly with anchor position - printing stationary whitish blobs across
  * walls that NO downstream filter can remove, because the per-probe estimates are BIASED,
- * not noisy (measured: blobs immune to temporal off, denoise off, spacing, and every
- * writer-side fix). Jittering the sample within its cone per frame turns that bias into
+ * not noisy. Jittering the sample within its cone per frame turns that bias into
  * per-frame variance the temporal chain integrates - each cone measures its whole solid
  * angle over the accumulation window. R2 low-discrepancy across frames; the pattern is
  * addressed by PROBE and cell (GiProbeCellNoise in gi_noise.sh - NOT by atlas texel, whose
- * stride-8 IGN printed moving waves). The multi-sample pattern is the first four points of
+ * stride-8 IGN prints moving waves). The multi-sample pattern is the first four points of
  * a shifted (0,2)-net: positions 0/1 are the exact antithetic pair, so counts one and two
  * reproduce the classic estimator.
  */
@@ -557,8 +561,7 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 		// Where the SDF march starts: 0, or the last screen-verified distance less a margin
 		// when the march left the screen, ran out of iterations or found a crossing the
 		// validation rejected (Lumen writes that distance on a miss and its SDF trace resumes
-		// there). Measured 2026-09-18 at probe spacing 8: 84 percent of rays fall through to
-		// the SDF after a march that verified their first ~1.5 m.
+		// there).
 		float sdf_t_min = 0.0;
 		// The hit landed on moving geometry (see s_moving_rays).
 		bool moving = false;
@@ -636,11 +639,10 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 							}
 							// SCREEN-HIT LIGHTING from last frame's composited output: the
 							// screen tier resolves geometry at pixel precision, but reading
-							// the 0.25 m light voxels at that hit re-imprinted the voxel
+							// the 0.25 m light voxels at that hit would re-imprint the voxel
 							// lattice onto every nearby receiver as CONVERGED voxel-scale
 							// blotches larger than any downstream kernel's footprint - the
-							// denoiser provably cannot reach them (measured: parameter
-							// changes did nothing; a 0.5 m voxel at 3 m spans ~100 px
+							// denoiser cannot reach them (a 0.5 m voxel at 3 m spans ~100 px
 							// against a ~16 px a-trous reach). Last frame's composite
 							// carries this surface's radiance at FULL pixel resolution and
 							// is ALREADY this kernel's trusted source for the far field
@@ -650,15 +652,14 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 							// validated against the depth the snapshot carries (GiReadHistory):
 							// a disoccluded reprojection declines instead of reading whatever
 							// surface last frame showed there. Off-screen last frame, no
-							// history, or a depth mismatch: the voxel read answers exactly as
-							// before.
+							// history, or a depth mismatch: the voxel read answers.
 							// DIRTY-REGION CUT: where a placement just moved, appeared or
 							// vanished (an emissive one: out to its light's reach), last
 							// frame's composite still carries the light it left, and
-							// reading it here fed that light back into the gather - with
-							// the temporal's memory on top, a moved emissive's pool decayed
-							// over seconds. Inside a region the voxel read answers (relit
-							// within a rotation) until the hold expires.
+							// reading it here would feed that light back into the gather -
+							// with the temporal's memory on top, a moved emissive's pool
+							// would decay over seconds. Inside a region the voxel read
+							// answers (relit within a rotation) until the hold expires.
 							moving = GiHitObjectMotion(ss_hit.xy) >= 0.5;
 							bool screen_lit = GiDirtyRegionFactor(hit_position) < 0.5 &&
 							                  GiReadHistoryScreen(hit_position, ss_hit.xy, radiance);
@@ -698,8 +699,8 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 			// Mesh-exact over GI_MESH_SDF_TRACE_RANGE from wherever the screen march stopped
 			// vouching, then the cascade the way Lumen traces its global distance field
 			// (SdfTraceRayGather, SdfTraceClipmapLumen): the exact first metres are the thin-wall
-			// defence and the contact detail, the per-instance walk past them was two thirds of
-			// this pass (GI_MESH_SDF_TRACE_RANGE).
+			// defence and the contact detail, and past them the per-instance walk would dominate
+			// this pass's cost (GI_MESH_SDF_TRACE_RANGE).
 			SdfRayHit hit = SdfMakeMiss();
 			BRANCH
 			if(!screen_reached)
@@ -739,7 +740,7 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 				float hit_blend;
 				float hit_voxel;
 				int hit_level = SdfFindClipmapLevel(hit_position, hit_blend, hit_voxel);
-				// One level search serves all three of its consumers now: the buried-hit
+				// One level search serves all three of its consumers: the buried-hit
 				// guard, the within/beyond-cascade split, and (by making the beyond branch
 				// explicit) the far-field fallback's own coverage test.
 				if(hit_level < SDF_CLIPMAP_LEVEL_COUNT)
@@ -758,10 +759,10 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 					{
 						radiance = vec3_splat(0.0);
 					}
-					// Cross-faded across cascade levels (GI_LIGHT_VOXEL_FADE_VOXELS): the
-					// first-success walk switched from 0.25 m to 0.5 m voxels at a knife edge
-					// the camera dragged across every surface (measured pops at the level-0
-					// re-snap). The blend mixes two MEASURED answers only; a hole still
+					// Cross-faded across cascade levels (GI_LIGHT_VOXEL_FADE_VOXELS): a
+					// first-success walk would switch from 0.25 m to 0.5 m voxels at a knife
+					// edge the camera drags across every surface, popping at each level-0
+					// re-snap. The blend mixes two MEASURED answers only; a hole still
 					// falls through to the walk.
 					else if(GiLightVoxelReadBlend(hit_position, hit_normal,
 					                              GI_LIGHT_VOXEL_FADE_VOXELS, radiance))
@@ -772,8 +773,7 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 					else
 					{
 						// Occluded but unmeasured within the cascades: honest darkness (the
-						// sealed-room branch) - exactly what the old fallback's covered
-						// branch returned, minus its second level search.
+						// sealed-room branch).
 						radiance = vec3_splat(0.0);
 					}
 				}
@@ -833,14 +833,36 @@ vec4 GiTraceScreenProbeDirection(int slot, vec3 sample_dir)
 	}
 }
 
+/// The one cull both programs share: a texel is traced and stored only when its centre direction
+/// rises GI_IMPORTANCE_MIN_COSINE above the anchor's tangent plane. A ray under the plane runs back
+/// into the probe's own surface and returns that surface's radiance, which the SH3 irradiance
+/// projection then spreads into the directions that do light the surface.
+bool GiTexelVisible(int slot, ivec2 local)
+{
+	vec2 tile_uv = (vec2(local) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
+	return dot(GiOctDecode(tile_uv), s_anchor_normal[slot]) >= GI_IMPORTANCE_MIN_COSINE;
+}
+
 #if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
 
 /// Rays the adaptive schedule grants a block this frame: 4 per-texel DETAIL rays when the
-/// block concentrates energy, 1 coarse cone otherwise (a culled block's single "ray" is
-/// the coarse executor's zero-store walk - no trace).
+/// block concentrates energy or straddles the cull line (each texel then keeps or culls
+/// itself, as in the full program - a coarse cone across the line would spread samples from
+/// under the surface over its visible texels), 1 coarse cone otherwise (a block wholly under
+/// the line keeps its single "ray" as the coarse executor's zero-store walk - no trace).
 int GiScreenProbeBlockRays(int slot, int block)
 {
-	return GiScreenProbeBlockRatio(slot, block) > GI_IMPORTANCE_SUPERSAMPLE_RATIO ? 4 : 1;
+	if(GiScreenProbeBlockRatio(slot, block) > GI_IMPORTANCE_SUPERSAMPLE_RATIO)
+	{
+		return 4;
+	}
+	ivec2 quad = ivec2((block % 4) * 2, (block / 4) * 2);
+	int visible = 0;
+	for(int t = 0; t < 4; ++t)
+	{
+		visible += GiTexelVisible(slot, quad + ivec2(t & 1, t >> 1)) ? 1 : 0;
+	}
+	return visible == 0 || visible == 4 ? 1 : 4;
 }
 
 #endif // GI_SCREEN_PROBE_TRACE_ADAPTIVE
@@ -880,9 +902,8 @@ GiRayUnit GiCellOfTexel(int slot, ivec2 local)
 }
 
 /// Evaluated per call on purpose: a per-texel table staged in shared memory (one evaluation
-/// per lane, reads here) MEASURED slower on the gather (scene view probe trace 0.513 ->
-/// 0.549 ms, same session, 200-sample means) - the same verdict the blue-noise tile staging
-/// got in gi_noise.sh; the recompute is ALU the wave hides, the staging is not.
+/// per lane, reads here) is slower on the gather - the recompute is ALU the wave hides, the
+/// staging is not.
 float GiCellSolidAngle(ivec2 base, int span)
 {
 	float omega = 0.0;
@@ -1007,14 +1028,12 @@ void GiFinalizeTexel(int slot, ivec2 atlas_base, ivec2 local)
 {
 	ivec2 texel = atlas_base + local;
 	int idx = GiCellIndex(slot, local);
-	vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
 	uint acc_r = s_acc_r[idx];
 	uint acc_g = s_acc_g[idx];
 	uint acc_b = s_acc_b[idx];
-	// The cap texel's contract: exact zero, negative hitT (its converged value by
+	// The culled texel's contract: exact zero, negative hitT (its converged value by
 	// definition); a cell no ray served this frame stores the same.
-	if(dot(GiOctDecode(tile_uv), s_anchor_normal[slot]) < -0.2 ||
-	   (s_cell_rays[idx] == 0u && (acc_r | acc_g | acc_b) == 0u))
+	if(!GiTexelVisible(slot, local) || (s_cell_rays[idx] == 0u && (acc_r | acc_g | acc_b) == 0u))
 	{
 		imageStore(s_probe_radiance_out, texel, vec4(0.0, 0.0, 0.0, -1.0));
 		return;
@@ -1029,7 +1048,7 @@ void GiFinalizeTexel(int slot, ivec2 atlas_base, ivec2 local)
 
 /// Traces sample @p k of one ray unit - its jittered samples first, then the aimed ones - through the
 /// single trace call site, splatting it into the cell it lands in. A k past the unit's samples, and an
-/// aimed direction under the anchor's tangent cap, trace nothing.
+/// aimed direction landing in a culled texel, trace nothing.
 void GiTraceUnitSample(int slot, ivec2 probe, GiRayUnit unit, int k)
 {
 	int idx = GiCellIndex(slot, unit.base);
@@ -1055,9 +1074,9 @@ void GiTraceUnitSample(int slot, ivec2 probe, GiRayUnit unit, int k)
 	vec3 direction =
 	    is_aimed ? GiSampleCone(nee_axis, nee_cos, xi)
 	             : GiOctDecode((vec2(unit.base) + xi * float(unit.span)) / float(GI_PROBE_DIR_EDGE));
-	// An aimed direction under the anchor's tangent cap cannot light it (the cull the
+	// An aimed direction landing in a culled texel would be stored nowhere (the cull the
 	// jittered rays get per cell).
-	if(is_aimed && dot(direction, s_anchor_normal[slot]) < -0.2)
+	if(is_aimed && !GiTexelVisible(slot, GiTexelOfDirection(direction)))
 	{
 		return;
 	}
@@ -1202,15 +1221,16 @@ GiRayUnit GiAdaptiveRayUnit(int slot, int r)
 		scan -= block_rays;
 	}
 	float ratio = GiScreenProbeBlockRatio(slot, block);
-	bool detail = ratio > GI_IMPORTANCE_SUPERSAMPLE_RATIO;
+	// The schedule's own verdict: a dim block across the cull line is detail too.
+	bool detail = GiScreenProbeBlockRays(slot, block) == 4;
 	ivec2 quad = ivec2((block % 4) * 2, (block / 4) * 2);
 	GiRayUnit unit;
 	// DETAIL: ray `scan` in [0,4) owns one texel of the 2x2 quad, on the full program's
 	// supersampling ladder - 2 samples past the ratio squared, GI_IMPORTANCE_SUPERSAMPLE_MAX
-	// past its cube (it used to reach 2 at the cube and stop there: the bright texels are
-	// where this program's extra noise lived - measured 2026-09-17, the dim blocks' sample
-	// count moved nothing). COARSE: one cell spanning the whole quad footprint, sampled
-	// GI_ADAPTIVE_COARSE_SAMPLES times with its mean stored to all four texels.
+	// past its cube: the bright texels are where this program's extra noise lives, so the
+	// extra samples go there rather than to the dim blocks. COARSE: one cell spanning the
+	// whole quad footprint, sampled GI_ADAPTIVE_COARSE_SAMPLES times with its mean stored to
+	// all four texels.
 	unit.base = detail ? quad + ivec2(scan & 1, scan >> 1) : quad;
 	unit.span = detail ? 1 : 2;
 	float ratio_squared = GI_IMPORTANCE_SUPERSAMPLE_RATIO * GI_IMPORTANCE_SUPERSAMPLE_RATIO;
@@ -1218,11 +1238,9 @@ GiRayUnit GiAdaptiveRayUnit(int slot, int r)
 	                             ? GI_IMPORTANCE_SUPERSAMPLE_MAX
 	                             : (ratio > ratio_squared ? 2 : 1))
 	                      : GI_ADAPTIVE_COARSE_SAMPLES;
-	// Cone-centre cull: the detail texel's own threshold, or the quad centre loosened by
-	// its cosine half-span (~0.25) - a quad it rejects has every texel at or under the
-	// tangent cap, where cosine weights vanish anyway.
-	vec2 centre_uv = (vec2(unit.base) + vec2_splat(0.5 * float(unit.span))) / float(GI_PROBE_DIR_EDGE);
-	unit.traced = dot(GiOctDecode(centre_uv), s_anchor_normal[slot]) >= (detail ? -0.2 : -0.45);
+	// The full program's cull, per texel: a coarse quad never straddles the line, so its first
+	// texel speaks for all four.
+	unit.traced = GiTexelVisible(slot, unit.base);
 	return unit;
 }
 #else
@@ -1232,8 +1250,8 @@ GiRayUnit GiAdaptiveRayUnit(int slot, int r)
  * GI_IMPORTANCE_MIN_COSINE, and a fixed budget of GI_IMPORTANCE_SAMPLE_BUDGET jittered samples is shared by the
  * rest in proportion to cosine x the block's reprojected importance (GiScreenProbeBlockRatio), 1 to
  * GI_IMPORTANCE_SUPERSAMPLE_MAX per texel. Every texel's estimate stays unbiased at any count - the balance
- * heuristic divides by the texel's own count - so the cull is the one bias, a darkening: measured 3-9% of
- * indirect, accepted for 10-15% less per-frame change at the same trace cost (tasks/lumen_parity_log.md).
+ * heuristic divides by the texel's own count - so the cull is the one bias, a darkening accepted for less
+ * per-frame change at the same trace cost.
  */
 GiRayUnit GiFullRayUnit(int slot, ivec2 local)
 {
@@ -1242,7 +1260,7 @@ GiRayUnit GiFullRayUnit(int slot, ivec2 local)
 	unit.span = 1;
 	vec2 tile_uv = (vec2(local.xy) + vec2_splat(0.5)) / float(GI_PROBE_DIR_EDGE);
 	float cosine = dot(GiOctDecode(tile_uv), s_anchor_normal[slot]);
-	unit.traced = cosine >= GI_IMPORTANCE_MIN_COSINE;
+	unit.traced = GiTexelVisible(slot, local);
 	float pdf = max(cosine, 0.0) * GiScreenProbeBlockRatio(slot, (local.y / 2) * 4 + (local.x / 2));
 	float share = GI_IMPORTANCE_SAMPLE_BUDGET * pdf / max(s_importance_pdf_sum[slot], 1e-6);
 	unit.samples = int(clamp(floor(share + 0.5), 1.0, float(GI_IMPORTANCE_SUPERSAMPLE_MAX)));
@@ -1471,8 +1489,8 @@ void main()
 	// its sample count to the pool, which each slot's leader turns into prefixes; (2) the
 	// group traces the pool (GiTraceSamplePool) through the ONE trace call site (fxc fully
 	// inlines every call site of the trace body - Hi-Z + SDF march + completion, thousands
-	// of instructions - and a second instantiation alone took this program's s_5_0 compile
-	// from ~4 s to ~17 s) and splats; (3) every texel resolves its cell's accumulators.
+	// of instructions - and this program's s_5_0 compile time grows superlinearly with each
+	// instantiation) and splats; (3) every texel resolves its cell's accumulators.
 	// Every texel is written every frame - by its cell's samples, or by the cull's zero store.
 #if defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)
 	// ADAPTIVE SCHEDULE (see the header): 16 + 3K ray units for K detail blocks, allocated

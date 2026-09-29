@@ -28,7 +28,7 @@ struct global_sdf_instance
     math::bbox world_bounds{};
     ///< Smallest scale axis: converts a local-space distance to a conservative world distance.
     float local_to_world_scale = 1.0f;
-    ///< Surface properties for the attribute voxels (GI v2 plan 3.1): what the winning instance
+    ///< Surface properties for the attribute voxels: what the winning instance
     ///< at a surface voxel looks like. This is what lets a cascade hit be attributed to a
     ///< material, which the distance field alone cannot do. Albedo is the base colour FACTOR;
     ///< the GPU attribute composer multiplies it by the texture mean at @ref mean_slot.
@@ -185,8 +185,8 @@ public:
      *
      * Consumers whose state derives from the COMPOSED field key on this one: the bounce
      * vis-memo's verdicts are marched against the composed volume, so invalidating them on
-     * the target epoch during a drag re-marched every relight against a field that had not
-     * changed since the last recompose (~1.3 ms of pure loss per drag frame).
+     * the target epoch during a drag would re-march every relight against a field that has
+     * not changed since the last recompose.
      */
     auto get_composed_content_epoch() const -> uint64_t
     {
@@ -200,9 +200,9 @@ public:
      *
      * The composed epoch above also moves whenever a window scroll brings different instances
      * into a level, which is every few metres of camera travel. The world-probe fast window
-     * keyed on it quadrupled every probe's rays for a window after each scroll during camera
-     * motion (1.5-2.2 ms of a 6 ms frame, gi_perf_investigation_2026-09-13.md). Consumers
-     * that react to scene changes rather than to the field's contents key on this one.
+     * keyed on it would quadruple every probe's rays for a window after each scroll during
+     * camera motion. Consumers that react to scene changes rather than to the field's
+     * contents key on this one.
      */
     auto get_edited_content_epoch() const -> uint64_t
     {
@@ -239,7 +239,7 @@ public:
         ///< The origin's move for a scroll-only recompose, in this level's voxels: the new
         ///< window's voxel v holds what the old window held at v + scroll_shift.
         math::ivec3 scroll_shift{0};
-        ///< Attribute voxels at half the distance resolution (GI v2 plan 3.1), recomposed with
+        ///< Attribute voxels at half the distance resolution, recomposed with
         ///< the level. RGBA8 packed (r,g,b = winning instance albedo, a = 255 where the voxel is
         ///< SURFACE - within GI_SURFACE_VOXEL_BAND attribute voxels of the composed isosurface -
         ///< and 0 everywhere else). (attr_resolution)^3, x-major like @ref voxels.
@@ -281,20 +281,18 @@ public:
      * have to tell the cascade that something moved, and could not tell it WHICH levels care.
      *
      * Recomposition is BUDGETED even when instances moved. Composing a level is expensive enough
-     * to be a visible hitch, and doing all four in the frame something moved is what made any
+     * to be a visible hitch, and doing all four in the frame something moved would make any
      * animation in the scene stutter. The cost of budgeting is that a moved object keeps
      * occluding from its old position for a few frames rather than one; that is bounded and
-     * eventually consistent, where the failure this replaces -- never noticing at all -- was
-     * permanent. Staleness age drives the order, so no level can starve.
+     * eventually consistent. Staleness age drives the order, so no level can starve.
      *
      * @param instances Every resident field placement in the world, NOT only visible ones.
      * @param camera_position Centre of the cascade.
      * @param instances_revision Monotonic revision of everything the level fingerprints can
      *        depend on (surface_cache_system::get_content_revision). While it and a level's
      *        target origin both hold still, that level's fingerprint is recalled from cache
-     *        instead of re-walking every instance - the walk ran for all four levels every
-     *        frame regardless of change. 0 means "unknown", which disables the cache and
-     *        keeps the old always-recompute behaviour.
+     *        instead of re-walking every instance. 0 means "unknown", which disables the cache
+     *        and recomputes every fingerprint on every update.
      * @return The number of levels recomposed, for budgeting and diagnostics.
      */
     auto update(const std::vector<global_sdf_instance>& instances,
@@ -402,15 +400,15 @@ public:
                                      std::array<voxel_box, 3>& out_exposed) -> uint32_t;
 
     /// Attribute voxels per axis: half the distance resolution. Halving is the memory/coverage
-    /// point the plan's section 6 budget is computed at; the light voxels this feeds live at the
-    /// same resolution.
+    /// point the attribute and light-voxel memory budget is sized for; the light voxels this
+    /// feeds live at the same resolution.
     static constexpr uint32_t attr_downsample = 2;
 
     /// Origin snap granularity, in ATTRIBUTE voxels. Must stay an integer so the toroidal
     /// attribute/light-volume cell identity survives re-snaps; raising it trades a fraction of
     /// guaranteed level coverage at the window edge (half a snap, absorbed by the cross-fade
     /// and the next level) for proportionally fewer full recomposes while the camera moves -
-    /// at 1 the finest level recomposed every 0.25 m of travel.
+    /// at 1 the finest level would recompose every 0.25 m of travel.
     static constexpr uint32_t origin_snap_attr_voxels = 8;
 
     auto get_attr_resolution() const -> uint32_t
@@ -444,10 +442,11 @@ private:
      * thick objects read as "near a surface" to them, while the composed level saturates in
      * LEVEL voxels and excludes interiors correctly.
      *
-     * The winner is the instance with the smallest |distance| at the voxel centre, ties broken
-     * by the smaller GLOBAL instance index. The tie-break is load bearing: the CPU and GPU walks
-     * visit candidates in different orders, and argmin without a deterministic tie rule would
-     * make the two composers disagree on exactly the voxels where two surfaces meet.
+     * The two instances with the smallest |distance| at the voxel centre, ties broken by the
+     * smaller GLOBAL instance index, are blended by coverage-scaled proximity; a voxel with a
+     * single source copies it exactly. The tie-break is load bearing: the CPU and GPU walks
+     * visit candidates in different orders, and a selection without a deterministic tie rule
+     * would make the two composers disagree on exactly the voxels where two surfaces meet.
      */
     void compose_level_attributes(uint32_t index, const std::vector<global_sdf_instance>& instances);
 

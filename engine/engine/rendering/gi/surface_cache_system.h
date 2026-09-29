@@ -36,7 +36,7 @@ class model_component;
  * @c rtti::context rather than in a @c gfx::render_view: the fields describe the world, not
  * a view of it, and a scene rendered by three cameras must not upload them three times.
  *
- * Responsibilities in this phase:
+ * Responsibilities:
  *   - make a mesh's baked field resident on first use, keyed by asset uid;
  *   - rebuild the per-frame instance list the tracer transforms rays through.
  */
@@ -115,7 +115,7 @@ public:
      *
      * Takes no camera, and that is the point of the split. Everything here is a function of the
      * WORLD, so it is identical for every camera and is skipped after the first call in a frame --
-     * with two cameras it used to rebuild the same instance list and re-upload the same grid twice.
+     * two cameras do not rebuild the same instance list or re-upload the same grid twice.
      * The camera-dependent half is @ref surface_cache_view.
      */
     void update_world(scene& scn);
@@ -133,8 +133,8 @@ public:
      *        frames (it moved, appeared, vanished or changed material).
      *
      * The temporal accumulators localise their fast-flush window to these regions instead of
-     * dropping the whole screen to the fast cap whenever anything anywhere moves - which is
-     * what one oscillating cube in a far cell used to do to every pixel of a still shot.
+     * dropping the whole screen to the fast cap whenever anything anywhere moves, which would
+     * let one oscillating object far away disturb every pixel of a still shot.
      */
     struct dirty_region
     {
@@ -205,7 +205,7 @@ public:
         return instance_buffer_;
     }
 
-    /// One emissive instance the probes sample explicitly (GI S4, next-event estimation):
+    /// One emissive instance the probes sample explicitly (next-event estimation):
     /// the bounding sphere of its placed bounds, its emitted radiance and its power.
     struct emitter
     {
@@ -219,7 +219,7 @@ public:
         /// The axis-aligned extent of this piece, metres (at most GI_EMISSIVE_NEE_SEGMENT
         /// per axis) - the reflection tier's near-field term samples the piece along its
         /// longest axis. Packed 8 bits per axis into the power lane, negated and offset by
-        /// one as the marker an older upload cannot produce.
+        /// one as the marker an unpacked (positive) power lane cannot produce.
         math::vec3 extent{0.0f, 0.0f, 0.0f};
     };
 
@@ -320,8 +320,8 @@ public:
     /**
      * @brief Runtime experiment flags every tracer reads (get_grid_params()[8], sdf_common.sh
      *        SDF_EXPERIMENT_*): two code paths compiled into one program, alternated inside ONE editor
-     *        launch for cost A/Bs - a relaunch's own variance hides effects under ~20 percent. Zero in
-     *        production; set by the editor MCP tool gi_set_experiment_flags.
+     *        launch for cost A/B comparisons - the variance between launches hides small effects.
+     *        Zero in production; set by the editor MCP tool gi_set_experiment_flags.
      */
     void set_experiment_flags(uint32_t flags)
     {
@@ -347,10 +347,6 @@ public:
      * region is held; beside a held region it is left to the regular probe and relight schedules,
      * as Lumen leaves a mesh-SDF mip swap to its caches. Lumen responds to a moving object the
      * same way: through its budgeted, priority-ordered caches, never with a global flush.
-     * Measured 2026-09-23 on the GI test suite in play mode (cell-06 movers, --novsync): GI total
-     * 3.67 -> 1.96 ms (world-probe trace 1.51 -> 0.24, convolve 0.49 -> 0.10); static-surface
-     * noise, cell-07 stability, sealed cells and the 60 Hz blinker decay unchanged
-     * (tasks/lumen58_gi_comparison_2026-09-22.md).
      */
     auto is_placement_local_edit() const -> bool
     {
@@ -395,7 +391,7 @@ private:
         ///< Set when the mesh has no baked field at all. PERMANENT, and deliberately distinct from
         ///< the atlas refusing an upload for want of room: that is a statement about the atlas at
         ///< one moment, not about the mesh, and it stops being true as soon as anything is
-        ///< released. Conflating the two is what left a scene's meshes excluded from GI forever
+        ///< released. Conflating the two would leave a scene's meshes excluded from GI forever
         ///< after a busier scene had filled the atlas once.
         bool has_no_field = false;
         ///< World frame this was last asked for. Anything not asked for in the current frame is
@@ -465,9 +461,8 @@ private:
     ///< Without it the walk is greedy and first-come-first-served: while the atlas has room every
     ///< field takes its finest level, so the first arrivals spend the whole atlas and the fallback
     ///< only engages for the stragglers -- by which point nothing fits, not even their coarsest
-    ///< level. Measured on Bistro: 1291 submeshes at their finest level filled 373,248 bricks
-    ///< exactly, and the remaining 204 were refused outright. Biasing the START of the walk is
-    ///< what turns "the last ones lose" into "everyone is a little coarser".
+    ///< level. Biasing the START of the walk is what turns "the last ones lose" into "everyone is
+    ///< a little coarser".
     uint32_t global_mip_bias_ = 0;
     ///< Rejected-brick total at the last bias decision, so a bump happens once per overrun rather
     ///< than once per refused mesh.
@@ -530,8 +525,8 @@ private:
         };
         std::vector<history_entry> history;
         /// Index of the first entry still inside the hold window. Entries are appended in frame
-        /// order, so the aged ones are a prefix; advancing this is O(1) where erasing them
-        /// shifted the whole vector every frame. Compacted once the dead prefix outweighs the
+        /// order, so the aged ones are a prefix; advancing this is O(1) where erasing them would
+        /// shift the whole vector every frame. Compacted once the dead prefix outweighs the
         /// live tail (rebuild_dirty_regions).
         size_t history_begin = 0;
     };
@@ -550,8 +545,7 @@ private:
      * @param identity Stable key of the placement (entity, submesh, placement index), so a pose
      *        can be compared against the same placement's previous frame.
      * @return The record and whether this call created it. One lookup serves both the pose
-     *         cache and @ref record_placement; the find-then-try_emplace pair this replaced
-     *         hashed the identity twice per placement.
+     *         cache and @ref record_placement, so the identity is hashed once per placement.
      */
     auto acquire_tracked(uint64_t identity) -> std::pair<tracked_placement&, bool>;
 
@@ -581,10 +575,10 @@ private:
     /**
      * @brief What the walk needs from a material, decoded once per material per frame.
      *
-     * Two thousand placements of one material used to decode its colours (six pow() calls),
-     * cast it and look up its texture-mean slots two thousand times; the answers are the same
-     * for every placement in the frame, so they are memoised by material pointer for the
-     * duration of the walk (see @ref summarize_material).
+     * Decoding a material's colours (six pow() calls), casting it and looking up its
+     * texture-mean slots give the same answers for every placement in the frame, so they are
+     * memoised by material pointer for the duration of the walk (see @ref summarize_material)
+     * rather than repeated for every placement that shares the material.
      */
     struct material_summary
     {
@@ -701,7 +695,7 @@ private:
     /// reads. @ref dirty_region_total_ is how many there were before the cut.
     std::vector<dirty_region> dirty_regions_;
     /// A local light's recent influence changes, by entity, aged out over
-    /// GI_TEMPORAL_DIRTY_HOLD_FRAMES like a placement's history (plan item 1.2).
+    /// GI_TEMPORAL_DIRTY_HOLD_FRAMES like a placement's history.
     struct light_change_entry
     {
         uint64_t frame = 0;
@@ -731,7 +725,7 @@ private:
 
     /// Packed instance data and its GPU mirror, rebuilt each frame. Uploaded only when the
     /// fingerprint over the packed bytes changes: a static scene keeps it byte-identical, and
-    /// re-staging megabytes per frame anyway kept the Vulkan backend allocating continuously.
+    /// re-staging megabytes per frame anyway would keep the Vulkan backend allocating continuously.
     bgfx::DynamicVertexBufferHandle instance_buffer_{bgfx::kInvalidHandle};
     uint32_t instance_buffer_capacity_ = 0;
     std::vector<float> instance_data_;

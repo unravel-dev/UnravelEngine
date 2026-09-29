@@ -98,7 +98,7 @@ public:
         return attr_emissive_texture_;
     }
 
-    /// The light volume (GI v2 plan 3.2): outgoing radiance per exposed face per surface voxel,
+    /// The light volume: outgoing radiance per exposed face per surface voxel,
     /// Z-stacked as (level * 6 + face) slabs of attribute resolution. Written by
     /// cs_gi_light_voxels, zeroed per recomposed level by cs_gi_clipmap_attributes.
     auto get_light_voxel_texture() const -> const gfx::texture::ptr&
@@ -152,9 +152,8 @@ public:
     /// gi oracle suite checks the mirror). Level 0 is the SPARSE level's index window - wide on
     /// purpose, since the gather completes its rays and the relight reads its bounce from the
     /// finest probe cage covering the point, and only the 2 m lattice resolves an opening's sky
-    /// visibility (gi_lighting_audit sections 18 and 20); its probes live in a pool of
-    /// @ref world_probe_pool_l0 slots handed out on request. Independent of the cascade
-    /// resolution.
+    /// visibility; its probes live in a pool of @ref world_probe_pool_l0 slots handed out on
+    /// request. Independent of the cascade resolution.
     static constexpr std::array<uint32_t, global_sdf_clipmap::level_count> world_probe_axis{49u, 13u, 13u, 9u};
     static_assert(global_sdf_clipmap::level_count == 4u, "world_probe_axis lists one axis per level");
     /// Level 0's probe pool (GI_WORLD_PROBE_POOL_L0): the slots the sparse index allocates.
@@ -256,7 +255,7 @@ public:
     /// gi_world_probes.sh): the priority histogram, the threshold, the quota, the listed count.
     static constexpr uint32_t world_probe_select_size = 20u;
 
-    /// The trace scheduler's state (cs_gi_world_probe_select.sc, plan item 2.1).
+    /// The trace scheduler's state (cs_gi_world_probe_select.sc).
     auto get_world_probe_select() const -> bgfx::DynamicIndexBufferHandle
     {
         return world_probe_select_;
@@ -331,8 +330,8 @@ public:
 
     /// Surface-voxel list WITH ITS COUNTS: a level_count-entry header of append cursors
     /// (index = level), then one attr_resolution^3 segment of packed entries per level
-    /// (global_sdf_clipmap::pack_surface_voxel layout). One buffer on purpose - the split
-    /// count buffer cost cs_gi_light_voxels its last free bgfx stage.
+    /// (global_sdf_clipmap::pack_surface_voxel layout). One buffer on purpose - a separate
+    /// count buffer would cost cs_gi_light_voxels a bgfx stage it does not have.
     auto get_surface_list_buffer() const -> bgfx::DynamicIndexBufferHandle
     {
         return surface_list_;
@@ -350,8 +349,8 @@ public:
      * with, which does not fail loudly -- it just means the two never find each other's entries.
      *
      * The texture depth is deliberately absent: it is `resolution * level_count`, and the shader
-     * already hardcodes that layout in its texel addressing, so uploading it separately was one
-     * more value that could disagree.
+     * already hardcodes that layout in its texel addressing, so uploading it separately would be
+     * one more value that could disagree.
      */
     auto get_sampling_params() const -> const float*
     {

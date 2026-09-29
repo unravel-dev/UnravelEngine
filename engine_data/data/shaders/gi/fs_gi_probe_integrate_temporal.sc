@@ -1,9 +1,9 @@
 $input v_texcoord0
 
 /*
- * FUSED integrate + temporal (G5): the gather result feeds the temporal blend in
- * registers, so this frame's gather never round-trips through the GI_TRACE target (a full
- * RGBA16F write + read per frame that existed only to hand one pixel's value to the next
+ * FUSED integrate + temporal: the gather result feeds the temporal blend in registers,
+ * so this frame's gather never round-trips through the GI_TRACE target (a full RGBA16F
+ * write + read per frame whose only job would be to hand one pixel's value to the next
  * pass). Emits the temporal history MRT (color + moments) directly.
  *
  * The temporal kernel compiles with GI_TEMPORAL_FUSED: the neighbourhood clamp needs this
@@ -51,7 +51,7 @@ void main()
 	vec3 world_position;
 	// The gather is finite by construction (probe atlases are sanitized upstream and the
 	// weights are clamped), matching the split path: GiSanitize there guards the TEXTURE
-	// round-trip this form no longer takes.
+	// round-trip this form does not take.
 	float screen_share;
 	float moving_share;
 	vec4 current = GiIntegrateGather(uv, gl_FragCoord.xy, depth, world_position, screen_share, moving_share);

@@ -11,17 +11,17 @@
  * is Dupuy & Benyoub (HPG 2023) and the `k` bound is Eto & Tokuyoshi (Siggraph Asia 2023),
  * which is what UE 5.8 ships (MonteCarlo.ush:386-471, GGX_BOUNDED_VNDF_SAMPLING on by
  * default). `k` shrinks the sampled cap so a half-vector whose REFLECTION would fall below
- * the horizon is never drawn. The Heitz 2018 disk form this replaces had no such bound: at
- * grazing angles it produced below-horizon reflections that the caller discarded by keeping
- * the mirror direction, which piled probability mass on a single direction and biased
- * exactly the geometry where reflections matter most (floors, wet ground). The cap form is
- * also CHEAPER - one lerp, one sqrt, one sincos, against the disk remap plus its `s` blend.
+ * the horizon is never drawn. The Heitz 2018 disk form has no such bound: at grazing angles
+ * it produces below-horizon reflections that a caller can only discard for the mirror
+ * direction, which piles probability mass on a single direction and biases exactly the
+ * geometry where reflections matter most (floors, wet ground). The cap form is also
+ * CHEAPER - one lerp, one sqrt, one sincos, against the disk remap plus its `s` blend.
  *
  * NOISE CONVENTION: u1 drives the azimuth, u2 the polar extent (u2 = 0 is the specular
  * peak), matching UE's E.x / E.y so a Lumen-style sampling bias on u2 stays portable.
  *
- * shaderc: NO `out` parameters in this file. They miscompile silently on the HLSL path
- * (tasks/lessons.md) - everything returns by value, structs included.
+ * shaderc: NO `out` parameters in this file. They miscompile silently on the HLSL path -
+ * everything returns by value, structs included.
  */
 
 #include "gi/gi_constants.sh"
@@ -146,8 +146,8 @@ GiReflectionRay GiReflectionMakeRay(vec3 normal, vec3 view, float roughness, vec
 		vec3 sampled_ts = GiReflectionSampleGgxVndf(view_ts, alpha, xi.x, xi.y);
 		vec3 half_ws = normalize(GiReflectionToWorld(basis, sampled_ts));
 		vec3 jittered = reflect(-view, half_ws);
-		// The cap bound makes this practically unreachable; it stays as a NaN guard, not as
-		// the rejection strategy it used to be.
+		// The cap bound makes this practically unreachable; it is a NaN guard, not a
+		// rejection strategy.
 		if(dot(jittered, normal) > 1e-3)
 		{
 			ray.direction = normalize(jittered);

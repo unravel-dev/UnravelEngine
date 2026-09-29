@@ -20,9 +20,8 @@ namespace
 /// quiescence gate's scene-wide change mean reads rest. Continuous flight moves a fraction of a
 /// 2 m cell per frame and stays at one stratum.
 constexpr float fast_window_jump_cells = 2.0f;
-/// Windows of fast refresh a jump arms. The scroll composes that used to arm the window after a
-/// jump landed over several frames, keeping it on for about a window and a quarter; three
-/// windows (48 frames) keep a margin for the budgeted recomposes of a long jump.
+/// Windows of fast refresh a jump arms: a long jump's budgeted recomposes land over several
+/// frames, and three windows (48 frames) keep a margin for them.
 constexpr uint32_t fast_window_jump_windows = 3u;
 /// CAMERA-ONLY BUDGET. Camera travel re-opens the world side (new window cells, scrolled slabs) while
 /// no light changed: the scheduler then lists claims, scrolled-in slots and first windows as always,
@@ -37,7 +36,7 @@ constexpr uint32_t camera_budget_moving_frames = 8u;
 /// A camera position change below this (metres) is not travel.
 constexpr float camera_budget_motion_epsilon = 1e-4f;
 /// Four probes per 64-lane group (PROBE_TRACE_SLOTS in cs_gi_world_probe_trace.sc): a 16-lane
-/// group left half or three quarters of every wave idle.
+/// group would leave half or three quarters of every wave idle.
 constexpr uint32_t probes_per_trace_group = 4u;
 /// One thread per pool slot or index cell (NUM_THREADS of cs_gi_world_probe_alloc.sc).
 constexpr uint32_t alloc_threads_per_group = 64u;
@@ -248,16 +247,15 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
     }
     const float base_spacing =
         clipmap.get_level(0).voxel_size * float(gi::GI_WORLD_PROBE_DIVISOR);
-    // Change fast window (plan section 8): a changed light set OR changed scene content
-    // quadruples the strata per frame for one full window, so the whole atlas re-measures
-    // within 4 frames exactly while something is changing and costs nothing while the scene
-    // is still. x4 rather than the original x2 because the world probes sit mid-chain in the
-    // reactivity path (recompose -> relight -> HERE -> screen probes -> resolve temporal)
-    // and every stage's latency SERIALIZES - an 8-frame refresh here was a third of the
-    // measured emissive-drag trail on its own. The stratum count must divide
-    // GI_WORLD_PROBE_WINDOW so the per-frame coverage stays exhaustive. The content epoch
-    // fires on geometry/material changes (a door closing) and is scroll-suppressed, so
-    // camera motion alone never pins the fast path.
+    // Change fast window: a changed light set OR changed scene content quadruples the strata
+    // per frame for one full window, so the whole atlas re-measures within 4 frames exactly
+    // while something is changing and costs nothing while the scene is still. x4 because the
+    // world probes sit mid-chain in the reactivity path (recompose -> relight -> HERE ->
+    // screen probes -> resolve temporal) and every stage's latency SERIALIZES - a slower
+    // refresh here is a large share of a dragged emissive's trail on its own. The stratum
+    // count must divide GI_WORLD_PROBE_WINDOW so the per-frame coverage stays exhaustive. The
+    // content epoch fires on geometry/material changes (a door closing) and is
+    // scroll-suppressed, so camera motion alone never pins the fast path.
     if(params.light_hash != last_light_hash_)
     {
         last_light_hash_ = params.light_hash;
@@ -274,11 +272,10 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
     // fast window keys on content actually landing - during an edit drag the target epoch
     // churns every frame while recomposes coalesce, and each landing re-arms the window. Not
     // the composed epoch itself: that one also moves on every window scroll that brings new
-    // instances into a level, and keyed on it camera motion held the whole atlas at four
-    // strata per frame (1.5-2.2 ms of a 6 ms frame, gi_perf_investigation_2026-09-13.md).
-    // A PLACEMENT-LOCAL edit (surface_cache_system::is_placement_local_edit) does not arm it:
-    // continuous movers re-landed a recompose every few frames and kept the whole atlas at
-    // four strata for as long as anything moved.
+    // instances into a level, so keyed on it camera motion would hold the whole atlas at four
+    // strata per frame. A PLACEMENT-LOCAL edit (surface_cache_system::is_placement_local_edit)
+    // does not arm it: continuous movers land a recompose every few frames and would keep the
+    // whole atlas at four strata for as long as anything moves.
     if(clipmap.get_edited_content_epoch() != last_content_epoch_)
     {
         last_content_epoch_ = clipmap.get_edited_content_epoch();
@@ -287,11 +284,10 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
             fast_frames_ = gi::GI_WORLD_PROBE_WINDOW;
         }
     }
-    // CAMERA JUMP (fast_window_jump_cells): the scroll composes no longer arm the window, so
-    // a teleport into a new region re-measured its probes over a whole window while the gate's
-    // scene-wide change mean already read rest - the GI test suite's thin-walled sealed cell
-    // then froze at 2.7x its converged indirect (0.0431 against 0.0157; the trace at four
-    // strata every frame restored 0.0157, the convolve without its rotation did not).
+    // CAMERA JUMP (fast_window_jump_cells): scroll composes do not arm the window, so without
+    // this a teleport into a new region would re-measure its probes over a whole window while
+    // the gate's scene-wide change mean already reads rest, and the gate could freeze the
+    // region's indirect far from its converged value.
     const float jump_cells = std::max(std::abs(window[0] - last_level0_cell_[0]),
                                       std::max(std::abs(window[1] - last_level0_cell_[1]),
                                                std::abs(window[2] - last_level0_cell_[2])));
@@ -332,15 +328,15 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
     }
     // w carries the cage-visibility variance gate, its documented meaning for every reading
     // consumer. The trace's strata-per-frame rides the trace-only seed-atlas uniform's z lane
-    // instead (see cs_gi_world_probe_trace.sc) - the old aliasing was one #define away from
-    // the gate silently becoming the stratum count.
+    // instead (see cs_gi_world_probe_trace.sc), so the two values never share a lane and the
+    // gate can never be read as the stratum count.
     const float probe_params[4] = {base_spacing,
                                    float(params.frame),
                                    1.0f,
                                    gi::GI_WORLD_PROBE_CAGE_VIS_VARIANCE_GATE};
     const auto env_sh =
         params.irradiance_sh ? params.irradiance_sh : default_textures::get().black_texture();
-    // TRACE SCHEDULER (plan item 2.1, Lumen's radiance-cache update budget): the probes this
+    // TRACE SCHEDULER (Lumen's radiance-cache update budget): the probes this
     // frame's trace and convolve process, listed by cs_gi_world_probe_select.sc - claims and
     // scrolled-in slots first, then first-window probes, then the stalest by level-weighted age -
     // up to GI_WORLD_PROBE_TRACE_BUDGET, or every live probe while a fast window is armed. Each
@@ -397,7 +393,7 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         bgfx::setBuffer(8, clipmap_gpu.get_world_probe_cells(), bgfx::Access::ReadWrite);
         bgfx::setBuffer(7, clipmap_gpu.get_world_probe_counts(), bgfx::Access::ReadWrite);
         // The bounce vis-memo for its statistics slice alone: the probe census the waste
-        // ledger reads back on demand (GI_STATS_PROBES_*). Stage 8 is free in this kernel.
+        // ledger reads back on demand (GI_STATS_PROBES_*).
         const auto& vis_memo = clipmap_gpu.get_bounce_vis_memo();
         if(vis_memo && vis_memo->is_valid())
         {
@@ -426,7 +422,7 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
         bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
         // The sparse index: the trace refreshes the relocation lane once per probe window.
         bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::ReadWrite);
-        // The scheduler's list and state (plan item 2.1).
+        // The scheduler's list and state.
         bgfx::setBuffer(9, clipmap_gpu.get_world_probe_list(), bgfx::Access::Read);
         bgfx::setBuffer(15, clipmap_gpu.get_world_probe_select(), bgfx::Access::Read);
         gfx::set_texture(trace_program_.s_gi_env_sh, 14, env_sh);
@@ -467,7 +463,7 @@ auto gi_world_probe_pass::run(gfx::render_view& rview, const run_params& params)
                          clipmap_gpu.get_world_probe_radiance());
         // The cell ids, for the free-slot skip (most of the sparse pool is free).
         bgfx::setBuffer(7, clipmap_gpu.get_world_probe_cells(), bgfx::Access::Read);
-        // The scheduler's list and state: exactly the probes the trace refreshed (plan item 2.1).
+        // The scheduler's list and state: exactly the probes the trace refreshed.
         bgfx::setBuffer(9, clipmap_gpu.get_world_probe_list(), bgfx::Access::Read);
         bgfx::setBuffer(10, clipmap_gpu.get_world_probe_select(), bgfx::Access::Read);
         bgfx::setImage(5,

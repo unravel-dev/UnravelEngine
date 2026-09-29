@@ -23,9 +23,9 @@
  * a NaN-poisoned or half-landed slot answers "no mean" rather than garbage.
  *
  * ENVIRONMENT SH: the trace kernel's sky (misses past the probe layer, the rough value
- * before a resolve exists) was a 9x1 texture on the kernel's last sampler stage; that
- * stage now carries last frame's colour for the on-screen hit upgrade, so this pass stages
- * the nine coefficients into the list as well (rgb float bits each).
+ * before a resolve exists) reads the 9x1 SH, but the kernel's last sampler stage carries
+ * last frame's colour for the on-screen hit upgrade, so this pass stages the nine
+ * coefficients into the list as well (rgb float bits each).
  *
  * List layout (keep in step with cs_gi_reflection_classify.sc / cs_gi_reflection_trace.sc):
  *   [0]                                  append cursor

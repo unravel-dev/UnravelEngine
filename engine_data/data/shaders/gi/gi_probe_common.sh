@@ -21,8 +21,8 @@
  *  - Probe buffer: GI_PROBE_STRIDE vec4s per probe, probe-major:
  *      [0..3]  the 4x4 importance mip the filter writes for next frame's ray allocation
  *      [4]     xyz = lifted trace origin, w = shortened-ray range (placement pass)
- *      [5]     xy = anchor uv, z = anchor device depth, w = 0 (reserved; held the
- *              removed probe-space temporal's walk flag - kept for layout stability)
+ *      [5]     xy = anchor uv, z = anchor device depth, w = 0 (reserved, kept for layout
+ *              stability)
  *      [6]     x = the SCREEN-TIER SHARE of the probe's traced rays this frame (the trace;
  *              the interp pass mirrors its parents' mean) - the temporal's camera-motion
  *              collapse weight, yzw = 0
@@ -43,7 +43,7 @@
  *              y = mesh SDF, z = clipmap SDF, w = sky (a completion the world probes could
  *              not answer); the world-probe completion share is the remainder. Written by
  *              the trace only (interpolated probes keep whatever the slot held) and read by
- *              the gi_probe_tiers debug view - the waste ledger's ray-budget instrument.
+ *              the gi_probe_tiers debug view - a ray-budget instrument.
  */
 
 #define GI_PROBE_DIR_EDGE   8
@@ -56,8 +56,8 @@
 #define GI_PROBE_META       9
 #define GI_PROBE_META2      10
 #define GI_PROBE_TIERS      11
-/// Single layer: the gather anchors one probe per tile (Phase 8 removed the v1
-/// two-layer machinery); the record indexing keeps the parameter for layout stability.
+/// Single layer: the gather anchors one probe per tile; the record indexing keeps the
+/// parameter for layout stability.
 #define GI_PROBE_LAYERS     1
 
 /// How far a bracket probe's anchor may sit off a pixel's plane, as a fraction of the pixel's
@@ -228,8 +228,7 @@ vec2 GiHalton8(uint frame)
 	uint n2 = index + 1u;
 	// Distinct loop variables per digit: HLSL's legacy for-scope leaks the control variable
 	// into the enclosing function, so two `for(int i ...)` in one body is a redeclaration
-	// (X3078). fxc reports it as a warning in the compute profiles and FAILS the fragment one,
-	// which is how it surfaced when the SDF debug view first included this header.
+	// (X3078). fxc reports it as a warning in the compute profiles and FAILS the fragment one.
 	for(int digit2 = 0; digit2 < 4 && n2 > 0u; ++digit2)
 	{
 		h2 += f2 * float(n2 % 2u);
@@ -290,7 +289,7 @@ uint GiProbeTracedListBase()
 /// First vec4 of the environment SH block: past the traced list (one entry per lattice
 /// probe). GI_ENV_SH_COEFFS vec4s, rgb = the coefficient, staged by the args pass from the
 /// IRRADIANCE_SH texture; the trace reads the completion sky from here because its last
-/// sampler stage now carries the velocity buffer.
+/// sampler stage carries the velocity buffer.
 uint GiProbeEnvShBase()
 {
 	return GiProbeTracedListBase() + uint(u_gi_probe_count_x * u_gi_probe_count_y);

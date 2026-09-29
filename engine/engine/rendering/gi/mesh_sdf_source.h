@@ -58,9 +58,10 @@ auto extract_sdf_source_geometry(const mesh::load_data& data,
  * @brief Extracts one submesh from a chosen LOD, for a cheaper bake.
  *
  * A closest-point query costs roughly the square root of the triangle count, not its logarithm,
- * so simplified geometry is a real saving rather than a rounding error: measured at ~3.8x for 16x
- * the triangles (`test_bake_cost_is_dominated_by_voxels_not_triangles`). It does NOT change the
- * voxel count, which is the other and larger term -- see @ref mesh_sdf_bake_settings::max_total_voxels.
+ * so simplified geometry is a real saving rather than a rounding error
+ * (`test_bake_cost_is_dominated_by_voxels_not_triangles` checks the triangle term). It does NOT
+ * change the voxel count, which is the other and larger term -- see
+ * @ref mesh_sdf_bake_settings::max_total_voxels.
  *
  * @param lod_index 0 for the base topology. The valid range is [0, number of GENERATED levels];
  *                  a higher request is clamped to the coarsest level available rather than

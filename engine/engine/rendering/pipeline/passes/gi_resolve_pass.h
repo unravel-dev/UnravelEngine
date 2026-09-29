@@ -23,8 +23,8 @@ namespace unravel
  *
  * The consumer of the surface cache. Rays leave each shading point through the distance field and
  * read the radiance already stored wherever they land, so a single ray returns a fully lit result
- * instead of an unlit hit that would have to be shaded again -- and, once the update pass casts
- * rays of its own, a multi-bounce one.
+ * instead of an unlit hit that would have to be shaded again -- and, since the relight folds a
+ * bounce from the world probes into that radiance, a multi-bounce one.
  *
  * A ray may land on geometry that is off screen or behind the camera and still read a valid
  * value, because the cache is anchored to the world rather than to the frame. That is the
@@ -36,8 +36,7 @@ public:
     struct settings
     {
         /// Artistic multiplier on the scene's own bounce (the environment fallback keeps probe
-        /// intensity). The one energy knob that survives the Phase 8 collapse: everything else
-        /// is derived or owned by gi_constants (tasks/gi_rewrite_plan.md, section 5).
+        /// intensity). The one energy knob: everything else is derived or owned by gi_constants.
         float intensity = 1.0f;
         /// Indirect diffuse is low frequency; tracing below full resolution costs little.
         trace_resolution resolution = trace_resolution::half;
@@ -69,44 +68,43 @@ public:
         /// classification is exactly the interpolation test the integrate pass applies per
         /// pixel, so a skipped probe's tile is one the pixels would have blended to anyway.
         bool adaptive_probes = true;
-        /// A windowed PROBE-SPACE temporal (16-ray direction strata blended 1/n into the
-        /// tile) lived here and was REMOVED: averaging in probe space turns
-        /// white per-frame noise into probe-granular correlated drift the full-res temporal
-        /// cannot remove - measured as still-camera moving blobs across three schemes. All
-        /// texels trace fresh every frame; scale cost with probe_spacing first (spatial
-        /// softness, the artifact-free trade) and adaptive_rays second.
+        /// All texels trace fresh every frame, with no probe-space temporal: averaging in
+        /// probe space turns white per-frame noise into probe-granular correlated drift
+        /// (blobs moving under a still camera) the full-res temporal cannot remove. Scale cost
+        /// with probe_spacing first (spatial softness, the artifact-free trade) and
+        /// adaptive_rays second.
         /// Importance-driven ray allocation (Lumen's structured-importance-sampling shape,
         /// blend-free): bright 2x2 octahedral blocks trace at full per-texel detail, dim
-        /// blocks as one splatted cone - 16 + 3K rays per probe instead of 64, roughly
-        /// halving the trace at 4K. The trade is per-frame variance and 4x4 angular
-        /// granularity in DIM octants only - white and one-frame-lived, so the resolve
-        /// temporal integrates it (the removed temporal's blob pathology cannot occur
-        /// without blending). Off = every texel traces its own ray, the quality ceiling.
+        /// blocks as one splatted cone - 16 + 3K rays per probe instead of 64. The trade is
+        /// per-frame variance and 4x4 angular granularity in DIM octants only - white and
+        /// one-frame-lived, so the resolve temporal integrates it (without probe-space
+        /// blending that drift cannot occur). Off = every texel traces its own ray, the
+        /// quality ceiling.
         bool adaptive_rays = true;
         /// The reference the gather's firefly governor caps each new sample against
-        /// (GI_GATHER_FIREFLY_CLAMP x reference). Off: last frame's value of the same
-        /// screen-slot texel, floored by the reprojected tile mean - once the camera moves the
-        /// slot holds another world point, so the ceiling is screen-locked and clamps in a
-        /// pattern that slides over the world. On: the reprojected probe's 2x2 direction block,
-        /// floored by its tile mean - the same world point's radiance around the direction, so
-        /// the ceiling follows the surface through camera motion; a probe without reprojected
-        /// history stores its samples uncapped.
+        /// (GI_GATHER_FIREFLY_CLAMP x reference). Off: the larger of last frame's value of the
+        /// same screen-slot texel and the reprojected probe's luminance (its tile mean and,
+        /// where the probe reprojected, its filtered 2x2 block around the direction); the texel
+        /// term is screen-locked - once the camera moves the slot holds another world point. On:
+        /// the reprojected probe's luminance alone - the same world point's radiance around the
+        /// direction, so the ceiling follows the surface through camera motion; a probe without
+        /// reprojected history stores its samples uncapped.
         bool reprojected_firefly_reference = false;
         /// World-probe rays JITTER inside their octahedral texel per window and the atlas
         /// becomes a converging running mean (GI_WORLD_PROBE_EMA_WINDOWS): removes the
         /// per-probe bias of fixed texel-centre rays (a small emitter skewered or missed per
         /// direction - the blotch field on emissive-lit walls) at the price of a settle after
         /// every probe-window scroll: scrolled-in probes re-converge over seconds and dark,
-        /// probe-lit regions drift while they do (measured 2-3x the post-translation frame
-        /// change). Off = the deterministic atlas: zero variance, biased, settles at once.
+        /// probe-lit regions drift while they do. Off = the deterministic atlas: zero
+        /// variance, biased, settles at once.
         bool world_probe_jitter = false;
-        /// World-space specular tier (plan phase 9), layered under SSR: rough lobes read the
+        /// World-space specular tier, layered under SSR: rough lobes read the
         /// world-probe radiance atlas, sharp ones trace (screen first, SDF + light voxels
         /// beyond) - contributing the off-screen reflections SSR cannot have.
         bool enable_reflections = true;
         /// Temporal window (frames) for the stochastic reflection ray - steady-state blend
         /// weight is one over this. 0 or 1 disables the reflection temporal entirely, the
-        /// A/B knob for verifying the accumulation is alive.
+        /// diagnostic for verifying the accumulation is alive.
         int reflection_temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
         /// Far-field reflection rays that the clipmap finder sent into an object's fattened
         /// shell resume past it this many times before they are shaded as the surface they
@@ -114,10 +112,10 @@ public:
         /// thin outline left along far grazing facades, at wave-wide cost. Clamped to
         /// [GI_REFLECTION_FINDER_RESUMES_MIN, GI_REFLECTION_FINDER_RESUMES_MAX].
         int reflection_finder_resumes = gi::GI_REFLECTION_FINDER_RESUMES;
-        // A screen-space contact AO stage was tried in this pass and REMOVED: it duplicated
-        // ASSAO's role at best. The under-overhang darkness it chased is a RADIANCE property
-        // - the bounce term's cavity occlusion (GiBounceCavityVisibility in
-        // cs_gi_light_voxels) - not a post-multiply. Screen-space AO stays ASSAO's job.
+        // No screen-space AO stage in this pass: under-overhang darkness is a RADIANCE
+        // property - the bounce term's cavity occlusion (GiBounceCavityVisibility in
+        // cs_gi_light_voxels) - not a post-multiply, and screen-space AO belongs to the
+        // dedicated AO passes.
         /// Full-resolution temporal accumulation over the integrated irradiance.
         bool enable_temporal = true;
         /// The full-res temporal's SLOW lane cap - the stability window: three placement
@@ -132,10 +130,10 @@ public:
         bool enable_spatial_denoise = true;
         /// Converged-tile skip: an 8x8 tile whose every pixel sits at the slow cap with no
         /// moving-hit share and an accumulated-mean noise under GI_DENOISE_CONVERGED_NOISE is
-        /// copied through the a-trous passes instead of filtered (cs_gi_denoise.sc). The old
-        /// per-pixel criterion compared the edge-stop width to a noise floor and never fired;
-        /// the tile form is what actually saves the pass at rest (measured 2026-09-09). The
-        /// A/B switch for verifying no residual chroma structure is lost.
+        /// copied through the a-trous passes instead of filtered (cs_gi_denoise.sc). Decided
+        /// per tile: a per-pixel test of the edge-stop width against a noise floor never
+        /// fires, so only the tile form saves the pass at rest. Off is the check that no
+        /// residual chroma structure is lost.
         bool denoise_converged_early_out = true;
         int denoise_passes = 4;
         float denoise_normal_power = 32.0f;
@@ -144,8 +142,8 @@ public:
         /// variance-driven stop collapses on converged pixels and then preserves ANY
         /// leftover structure - including the coherent probe/voxel-scale sampling-bias
         /// blobs no temporal window can remove. The floor keeps same-plane neighbours
-        /// within this contrast merging after convergence; 0 restores the pure
-        /// variance-driven stop (the A/B).
+        /// within this contrast merging after convergence; 0 gives the pure
+        /// variance-driven stop.
         float denoise_luma_floor = 0.08f;
         float denoise_plane_tolerance = 0.02f;
         float denoise_low_count_boost = 16.0f;
@@ -173,7 +171,7 @@ public:
         /// This frame's velocity buffer, passed explicitly by the pipeline. A valid texture
         /// IS the enable: history reprojects through it and FOLLOWS moving receivers (the
         /// world-position test is skipped for them; the dual-rate change detector owns
-        /// rejection there). Null = legacy matrix reprojection.
+        /// rejection there). Null = matrix reprojection.
         gfx::texture::ptr velocity;
         /// The frame's Hi-Z depth pyramid (shared with SSR/SSIL). When present the gather's
         /// screen-trace tier runs; null falls back to pure SDF tracing with the raw G-buffer
@@ -222,15 +220,14 @@ public:
      *
      * The output matches the SSIL convention exactly -- RGB is a hemispherical indirect diffuse
      * estimate in radiance-mean units, A is the weight with which it replaces the environment
-     * probe -- so the existing consumer needs no change and the two stay directly comparable.
+     * probe -- so one consumer serves both and the two stay directly comparable.
      */
     auto run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr;
 
-    /// Whether the gather programs loaded. The legacy hash-cache paths are gone (Phase 8);
-    /// without these programs the pass clears its output and the environment term covers.
-    /// Placement, classification, the indirect-args writer and the interp/clear pass are all
-    /// REQUIRED with the compacted gather: the trace launches from the classify pass's list
-    /// and no longer writes non-traced tiles itself.
+    /// Whether the gather programs loaded. Without these programs the pass clears its output
+    /// and the environment term covers. Placement, classification, the indirect-args writer
+    /// and the interp/clear pass are all REQUIRED with the compacted gather: the trace
+    /// launches from the classify pass's list and does not write non-traced tiles itself.
     auto has_gather_programs() const -> bool
     {
         return place_program_.is_valid() && classify_program_.is_valid() &&
@@ -344,7 +341,7 @@ private:
                             const run_params& params,
                             const rough_specular_inputs& inputs);
 
-    /// GI gather programs (plan phase 5). Constant-driven: their only uniforms are the probe
+    /// GI gather programs. Constant-driven: their only uniforms are the probe
     /// lattice descriptors, the camera, and the world-structure bindings.
     struct trace_program : uniforms_cache
     {
@@ -357,8 +354,8 @@ private:
         gpu_program::ptr adaptive_program;
         gfx::program::uniform_ptr u_gi_camera;
         /// xy = this frame's R2 offset for the cone jitter, computed in double on the CPU:
-        /// fract(R2 x float(frame)) in the shader lost the jitter to float precision after
-        /// ~1e5 frames (a half-hour session).
+        /// fract(R2 x float(frame)) in the shader loses the jitter to float precision after
+        /// ~1e5 frames (about half an hour at 60 fps).
         gfx::program::uniform_ptr u_gi_jitter;
         gfx::program::uniform_ptr u_gi_screen_trace;
         gfx::program::uniform_ptr u_gi_temporal_dirty;
@@ -385,8 +382,8 @@ private:
         gfx::program::uniform_ptr s_world_probe_depth;
         gfx::program::uniform_ptr s_world_probe_radiance_read;
         /// Stage 14: this frame's velocity buffer, so a screen hit ON a mover reads the
-        /// mover's own last-frame pixel (the sky SH moved into the probe buffer's SH block
-        /// to free the stage; the args pass stages it).
+        /// mover's own last-frame pixel (the sky SH rides the probe buffer's SH block, which
+        /// frees the stage; the args pass stages it).
         gfx::program::uniform_ptr s_gi_velocity;
         gfx::program::uniform_ptr s_gi_prev_color;
         /// View pre-exposure (pre_exposure.sh): the space the traced radiance is written in.
@@ -560,7 +557,7 @@ private:
 
     /// Reconstruction (adaptive gather): fills interpolated probes' tiles from their parents
     /// between the trace and the filter - and clears dead probes' tiles, which the compacted
-    /// trace no longer visits.
+    /// trace does not visit.
     struct interp_program : uniforms_cache
     {
         gpu_program::ptr program;

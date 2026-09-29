@@ -2,16 +2,16 @@
  * Edge-preserving spatial filter for the surface cache gather (a-trous wavelet) - the
  * COMPUTE form of fs_gi_denoise.sc, same math, different memory shape.
  *
- * The fragment form paid three texture fetches per tap (input, depth, normal) plus a
- * normal decode-and-normalize, 24 taps per pixel per pass - measured fetch-bound at 4K.
- * Here each 8x8 tile stages its whole tap footprint into shared memory once: the input
- * colour and a packed guide (normalized normal + device depth), with the decode amortized
- * per STAGED TEXEL instead of per tap. Taps then read shared memory only. At step 4 a tile
- * stages 24x24 texels for 64 pixels - 9 staged texels per pixel against the 72 fetches per
- * pixel per pass the fragment form issued.
+ * The fragment form pays three texture fetches per tap (input, depth, normal) plus a
+ * normal decode-and-normalize, 24 taps per pixel per pass. Here each 8x8 tile stages its
+ * whole tap footprint into shared memory once: the input colour and a packed guide
+ * (normalized normal + device depth), with the decode amortized per STAGED TEXEL instead
+ * of per tap. Taps then read shared memory only. At step 4 a tile stages 24x24 texels for
+ * 64 pixels - 9 staged texels per pixel against the 72 fetches per pixel per pass the
+ * fragment form issues.
  *
  * Out-of-image staged texels carry the sky sentinel (guide.w = 1), which the tap loop
- * already skips - the exact set of taps the fragment form's uv-bounds test rejected.
+ * already skips - the exact set of taps the fragment form's uv-bounds test rejects.
  * Everything else transcribes fs_gi_denoise.sc line for line; keep the two in step.
  */
 
@@ -91,13 +91,10 @@ void main()
 	ivec2 stage_base = ivec2(gl_WorkGroupID.xy) * DENOISE_TILE - ivec2(reach, reach);
 	int lane = int(gl_LocalInvocationID.y) * DENOISE_TILE + int(gl_LocalInvocationID.x);
 	// CONVERGED-TILE SKIP (u_gi_denoise_converged_cap > 0, the converged early-out setting).
-	// The old per-pixel early-out never fired (its sigma test compared an edge-stop width to
-	// a noise floor) and could not have saved much if it had: this kernel stages the whole
-	// 24x24 footprint before any pixel decides. A tile is skipped as a GROUP - every pixel
+	// A per-pixel early-out could not save much here: this kernel stages the whole 24x24
+	// footprint before any pixel decides. A tile is skipped as a GROUP - every pixel
 	// at the temporal's slow cap with no moving-hit share and an accumulated-mean noise
-	// under GI_DENOISE_CONVERGED_NOISE (measured: at rest 99% of the non-sky frame sits at
-	// the cap, and copying those tiles through changed the image by less than the
-	// launch-to-launch noise floor) - and copies its input to its output instead, so the
+	// under GI_DENOISE_CONVERGED_NOISE - and copies its input to its output instead, so the
 	// later passes and the neighbouring tiles' taps read exactly what a filtered pass would
 	// have written for a settled pixel. Group-uniform, so the staging barrier below never
 	// diverges; in motion nothing is at the cap and nothing changes.
@@ -201,8 +198,8 @@ void main()
 	float low_count_widen = max(u_gi_denoise_low_count_boost / count, 1.0);
 	float tap_luma_cap = GI_DENOISE_TAP_LUMA_CAP * low_count_widen * max(center_luma, 1e-3);
 	float log_luma_phi = GI_DENOISE_LOG_LUMA_PHI * low_count_widen;
-	// The per-pixel converged early-out lived here; the tile skip at the top of main is what
-	// replaced it (see the note there).
+	// No per-pixel converged early-out (the fragment form has one here): the tile skip at the
+	// top of main covers it (see the note there).
 	// One mat4 fold per pixel; taps evaluate the centre's plane with two dot4s (see the
 	// fragment form's derivation).
 	vec4 plane_row = mul(vec4(center_normal, 0.0), u_invViewProj);
@@ -228,7 +225,7 @@ void main()
 			int tap_index = tap_local.y * stage_edge + tap_local.x;
 			vec4 tap_guide = s_stage_guide[tap_index];
 			// Sky and out-of-image staged texels both carry w >= 1: the same rejects the
-			// fragment form applied through its uv-bounds and depth tests.
+			// fragment form applies through its uv-bounds and depth tests.
 			if(tap_guide.w >= 1.0)
 			{
 				continue;
@@ -263,8 +260,7 @@ void main()
 				tap_value.xyz *= tap_luma_cap / tap_luma;
 			}
 			// Every stop shares one exponential: exp(-a) * exp(-b) is exp(-(a + b)) exactly,
-			// and the transcendental count per tap is what this pass is actually bound by
-			// (measured: LDS staging barely moved it).
+			// and the transcendental count per tap is what this pass is actually bound by.
 			float attenuation = plane_distance / plane_tolerance +
 			                    abs(log(max(tap_luma, 1e-4) / max(center_luma, 1e-4))) / log_luma_phi;
 			if(use_luma_stop)

@@ -13,10 +13,10 @@ namespace unravel
 {
 
 /**
- * @brief Traces and convolves the world probe cascades (GI v2 plan 3.3, revised design).
+ * @brief Traces and convolves the world probe cascades.
  *
- * Every scheduled probe traces its next direction stratum (cs_gi_world_probe_select.sc, plan
- * item 2.1: up to GI_WORLD_PROBE_TRACE_BUDGET probes per frame, claims first, then the stalest):
+ * Every scheduled probe traces its next direction stratum (cs_gi_world_probe_select.sc: up to
+ * GI_WORLD_PROBE_TRACE_BUDGET probes per frame, claims first, then the stalest):
  * the 16x16 radiance atlas is a windowed mean over the probe's own sixteen traces, and the
  * convolution materialises the listed probes' irradiance + Chebyshev depth moments. Camera rotation is a no-op on all of it;
  * translation re-claims only the slots whose world cell changed.
@@ -33,15 +33,15 @@ public:
         gfx::texture::ptr irradiance_sh;
         uint32_t frame = 0;
         /// Global light revision (gpu_light_buffer::get_global_revision); a change arms the fast
-        /// refresh window for one full window (the DDGI event pattern, plan section 8). Local
-        /// light changes do not bump it (tasks/lumen57_deep_dive_2026-09-14.md plan item 1.2).
+        /// refresh window for one full window (the DDGI event pattern). Local light changes do
+        /// not bump it.
         uint64_t light_hash = 0;
         /// GLOBAL revision of the environment radiance behind @ref irradiance_sh (the deferred
         /// irradiance pass's graded revision: a kind change or a brightness change past the 4x
-        /// rule; plan item 1.2). Every sky miss integrates that
-        /// SH, so a sky edit stales the whole atlas exactly as a light edit does and earns the
-        /// same fast window; without it a sky changed on its own arrived at the probes' own slow
-        /// stratum rate, if the quiescence gate let them run at all.
+        /// rule). Every sky miss integrates that SH, so a sky edit stales the whole atlas
+        /// exactly as a light edit does and earns the same fast window; without it a sky change
+        /// on its own would reach the probes only at their slow stratum rate, if the quiescence
+        /// gate let them run at all.
         uint64_t environment_hash = 0;
         /// gi_resolve_pass::settings::world_probe_jitter: sub-texel direction jitter plus the
         /// converging running mean. Off = fixed texel centres written through (the

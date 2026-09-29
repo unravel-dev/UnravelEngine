@@ -173,8 +173,8 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     const auto camera_position = params.cam->get_position();
     // TAA-JITTER-FREE projection for every pass in this chain: these passes reconstruct
     // world positions from u_invViewProj, and the jittered projection's sub-pixel wobble
-    // times the mirror lever arm swept the light-voxel read at the hit by centimetres per
-    // frame, marching to the TAA sequence (the measured mirror shimmer near emissives).
+    // times the mirror lever arm would sweep the light-voxel read at the hit by centimetres
+    // per frame, marching to the TAA sequence (mirror shimmer near emissives).
     // The temporal reprojects via the TAA-unjittered PREVIOUS pair for the same reason: a
     // still camera must reproject onto itself exactly, or its motion-gated clamp release
     // reads a parked camera as moving.
@@ -185,9 +185,8 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                                         camera_position.z,
                                         has_gi_diffuse ? 1.0f : 0.0f};
     // R2 low-discrepancy sequence advancing per frame; the shader decorrelates per pixel
-    // with blue noise. zw unused (the checkerboard that armed them was removed: its parity
-    // pattern showed at silhouettes and its held half ghosted - quality it cost outweighed
-    // the trace it saved).
+    // with blue noise. zw unused (no checkerboard: its parity pattern shows at silhouettes
+    // and its held half ghosts - the quality it costs outweighs the trace it saves).
     const double frame_index = double(gfx::get_render_frame());
     const float jitter[4] = {float(std::fmod(0.754877666 * frame_index, 1.0)),
                              float(std::fmod(0.569840291 * frame_index, 1.0)),
@@ -219,9 +218,9 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     {
         // CLASSIFY -> ARGS -> compacted indirect TRACE: classify answers sky / degenerate /
         // rough texels straight into RAW and appends the tracing texels to a dense list, so
-        // every 64-lane trace group is fully populated with rays. The fragment form paid a
-        // whole wave wherever one quad pixel traced, and its worst-case register footprint
-        // throttled even the early-out pixels.
+        // every 64-lane trace group is fully populated with rays. The fragment form pays a
+        // whole wave wherever one quad pixel traces, and its worst-case register footprint
+        // throttles even the early-out pixels.
         //
         // The list also carries a texture-mean block between its header and the pixel slots
         // (layout in cs_gi_reflection_args.sc): the trace kernel's albedo remodulation needs
@@ -231,7 +230,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                       "shader-side block size must match the buffer's capacity.");
         const uint32_t mean_block_indices = uint32_t(gi::GI_REFLECTION_MEAN_SLOTS) * 3u;
         // The environment SH rides the list too (rgb float bits per coefficient): the trace
-        // kernel reads the sky from the block the args pass stages, which freed its stage 14
+        // kernel reads the sky from the block the args pass stages, which frees its stage 14
         // for last frame's colour (layout in cs_gi_reflection_args.sc).
         const uint32_t env_sh_indices = uint32_t(gi::GI_ENV_SH_COEFFS) * 3u;
         const uint32_t required_indices =
@@ -330,7 +329,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                              BGFX_SAMPLER_W_CLAMP);
             bgfx::setBuffer(12, surface_cache.get_grid_buffer(), bgfx::Access::Read);
             // Stage 14: last frame's composited colour for the on-screen hit upgrade (the sky
-            // SH now rides the list buffer's SH block). Black stands in when absent; the
+            // SH rides the list buffer's SH block). Black stands in when absent; the
             // flag lane keeps it unread then.
             const bool has_prev_color = params.prev_color && params.prev_color->is_valid();
             const bool prev_color_carries_depth =
@@ -396,7 +395,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
                          global_sdf_clipmap::level_count);
         gfx::set_uniform(program_.u_gi_light_voxel_params, light_voxel_params);
         // Fullscreen triangle, not a quad: the quad's diagonal produces partially covered
-        // 2x2 quads whose helper lanes run the full trace (ssil/ssr already switched).
+        // 2x2 quads whose helper lanes run the full trace (ssil/ssr draw the same way).
         auto topology = gfx::clip_fullscreen_triangle(1.0f);
         if(topology == 0)
         {
@@ -441,7 +440,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         // content epoch is the STRUCTURAL half of the same signal: an instance destroyed
         // while parked never draws into the velocity buffer again, but the composed field
         // it vanishes from advances the epoch - without this the dead object's reflection
-        // out-lived it at the released (extended) window under a still camera.
+        // would outlive it at the released (extended) window under a still camera.
         const uint64_t content_epoch = params.view_cache->get_clipmap().get_composed_content_epoch();
         const uint64_t frame_now = gfx::get_render_frame();
         if(content_epoch_seen_ != content_epoch)
@@ -465,7 +464,7 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
         // (bgfx clears uniform state at every submit - the trace's set does not carry here).
         gfx::set_uniform(temporal_program_.u_gi_reflection_jitter, jitter);
         // The topology helpers stage a transient vertex buffer consumed by ONE submit - every
-        // draw needs its own call (reusing the trace's left this submit with no vertices).
+        // draw needs its own call (reusing the trace's would leave this submit with no vertices).
         auto ttopology = gfx::clip_fullscreen_triangle(1.0f);
         if(ttopology == 0)
         {
@@ -482,14 +481,6 @@ auto gi_reflection_pass::run(gfx::render_view& rview, const run_params& params) 
     accumulation_ = write_tex;
     held_accumulation_ = write_tex;
     bgfx::discard();
-    // A FULL-RESOLUTION mirror tier lived here briefly (capped compacted list re-traced at
-    // output res over the composite) and was REMOVED on the user's verdict: +0.6 ms at FHD
-    // for fidelity that did not read, plus artifacts - the sharp trace ran after the
-    // composite and bound RBUFFER both as its sky-fallback sampler and as its RW output
-    // image in one dispatch, a read-write alias that is undefined on every backend. If it
-    // returns, its sky fallback must read the probe layer (PBUFFER) before the rough tier
-    // blends into it, and the half-res classify should exclude the pixels the tier will
-    // overwrite.
     return true;
 }
 

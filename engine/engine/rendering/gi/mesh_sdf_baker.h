@@ -89,8 +89,8 @@ auto summarize_connected_components(const sdf_source_geometry& geometry) -> sdf_
  */
 struct mesh_sdf_bake_settings
 {
-    ///< THE knob. Edge length of one voxel, in local units; 0 means derive it from
-    ///< @ref resolution, which is what every existing asset does.
+    ///< THE knob. Edge length of one voxel, in local units; 0 (the default) means derive it
+    ///< from @ref resolution.
     ///<
     ///< This is the quantity everything else is a function of, which is why it is the one worth
     ///< setting directly:
@@ -102,15 +102,15 @@ struct mesh_sdf_bake_settings
     ///<     -- halving this costs about four times as much, not eight.
     ///<
     ///< Finer is not simply better, and the range line above is why: see the sizing comment in
-    ///< bake_mesh_sdf for the measurement that settles it.
+    ///< bake_mesh_sdf.
     ///<
     ///< The caps only ever coarsen, so a request can be refused but never exceeded. When one
     ///< does refuse, the asset compiler says so rather than leaving the setting looking ignored.
     float target_voxel_size = 0.0f;
     ///< Fallback used when @ref target_voxel_size is 0: target voxel count along the longest
     ///< BOUNDS axis. A poor proxy for quality, because it is relative to the mesh rather than to
-    ///< the world -- a 10 m wall and a 1 m prop at 64 differ seventeenfold in the size they
-    ///< actually resolve. Kept so existing assets bake exactly as they did.
+    ///< the world -- a 10 m wall and a 1 m prop at 64 differ tenfold in the size they
+    ///< actually resolve. Assets that set no voxel size bake from this.
     uint32_t resolution = 64;
     ///< Lower clamp on the derived voxel size, in local units. Stops tiny props from
     ///< producing needlessly dense fields.
@@ -133,8 +133,8 @@ struct mesh_sdf_bake_settings
     ///<
     ///< It measures the DENSE grid, which is admittedly the wrong shape: a surface is
     ///< two-dimensional, so this charges a hollow or flat mesh for space it never stores.
-    ///< Budgeting stored bricks instead was built and reverted -- see the sizing comment in
-    ///< bake_mesh_sdf. If it returns it replaces this setting rather than joining it; one field
+    ///< Budgeting stored bricks instead would only loosen the cap -- see the sizing comment in
+    ///< bake_mesh_sdf. A brick budget would replace this setting rather than join it; one field
     ///< should not need two budgets to describe its cost.
     uint64_t max_total_voxels = 262144;
     ///< Bake an unsigned shell instead of a signed field. Required for foliage cards and

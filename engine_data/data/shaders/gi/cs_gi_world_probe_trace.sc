@@ -1,9 +1,10 @@
 /*
- * Traces every world probe's per-frame direction stratum (gi_rewrite_plan.md 3.3, revised design - see
- * gi_world_probes.sh). One thread group per probe SLOT, one thread per ray:
- * thread t traces octahedral texel t * WINDOW + (frame mod WINDOW), so over one window every
- * texel of the 16x16 radiance atlas refreshes exactly once - the atlas IS the windowed mean,
- * with zero steady-state variance on a static scene (R1) and one-window reaction latency (R4).
+ * Traces the per-frame direction stratum of every world probe the scheduler listed (see
+ * gi_world_probes.sh). PROBE_TRACE_SLOTS probes per thread group, one thread per ray:
+ * thread t traces octahedral texel t * WINDOW + the probe's stratum cursor, so over one window
+ * every texel of the 16x16 radiance atlas refreshes exactly once - with the direction jitter off
+ * the atlas IS the windowed mean, with zero steady-state variance on a static scene and
+ * one-window reaction latency.
  *
  * Rays march the mesh-exact fields over GI_WORLD_PROBE_MESH_RANGE and the global cascade
  * beyond. Hits read the light voxels; misses read the sky SH. A dense-level slot whose world
@@ -22,7 +23,8 @@
 #include "gi/sdf_common.sh"
 #define GI_LIGHT_VOXEL_READ
 #include "gi/gi_light_voxels.sh"
-/// The sparse index (stage 13, read-write): the relocation lane, refreshed here every frame.
+/// The sparse index (stage 13, read-write): the relocation lane, refreshed here once per window
+/// of each probe's traces.
 #define GI_WORLD_PROBE_INDEX_RW
 #define GI_WORLD_PROBE_RELOCATE
 #include "gi/gi_world_probes.sh"
@@ -38,14 +40,13 @@
 /// How much of a texel's cone the emitter table covers around @p direction, seen from
 /// @p origin: the solid angles of every piece whose bounding cone intersects the texel's,
 /// over the texel's solid angle, saturated. A centre ray that skewers a small emitter
-/// would otherwise hold the emitter's full radiance as the texel's mean - the aliasing the
-/// old absolute clamp (GI_MAX_RAY_RADIANCE) bounded by capping radiance, which also capped
-/// every large emitter's spread (gi_emissive_research 1.5). This bounds it by the geometry
-/// instead: a big panel's pieces add up to the whole texel (1, energy-preserving), a lone
-/// small piece gives the cone's mean. The single hit piece's own fraction darkened a
-/// segmented panel's far texels (land1, cell 11 -7%), hence the union. Pieces come from
-/// the emitter table the probe tracers aim at (gi_emissive_nee.sh; the instance buffer and
-/// the count are bound to this pass); a direction no piece covers is left unscaled.
+/// would otherwise hold the emitter's full radiance as the texel's mean. The bound is the
+/// geometry, not a radiance cap, which would also cap every large emitter's spread: a big
+/// panel's pieces add up to the whole texel (1, energy-preserving), a lone small piece gives
+/// the cone's mean. The union is taken because the single hit piece's own fraction darkens
+/// a segmented panel's far texels. Pieces come from the emitter table the probe tracers aim
+/// at (gi_emissive_nee.sh; the instance buffer and the count are bound to this pass); a
+/// direction no piece covers is left unscaled.
 float GiWorldProbeEmitterCoverage(vec3 direction, vec3 origin)
 {
 	int emitter_count = min(u_sdf_emitter_count, GI_EMISSIVE_NEE_MAX_EMITTERS);
@@ -76,9 +77,9 @@ float GiWorldProbeEmitterCoverage(vec3 direction, vec3 origin)
 	return any_piece ? saturate(covered / GI_WORLD_PROBE_TEXEL_SOLID_ANGLE) : 1.0;
 }
 
-/// rgb = radiance, a = hitT (negative = sky/miss). READ-write: the radiance is a converging
-/// running mean over windows (GI_WORLD_PROBE_EMA_WINDOWS) - the read is this texel's own
-/// previous value; hitT stays the latest sample.
+/// rgb = radiance, a = hitT (the clamped depth: 0 = never measured, the clamp = miss/sky).
+/// READ-write: both are a converging running mean over windows (GI_WORLD_PROBE_EMA_WINDOWS) -
+/// the read is this texel's own previous value.
 IMAGE2D_RW(s_world_probe_radiance_out, rgba16f, 5);
 /// One packed cell id per probe slot across all cascades (GiWorldProbePackCell). Stage 8: a
 /// buffer may sit past 7 on every backend; an IMAGE may not on OpenGL (eight image units,
@@ -87,8 +88,8 @@ BUFFER_RW(b_world_probe_cells, uint, 8);
 /// Complete windows accumulated per probe slot since its claim or the last fast window - the
 /// running mean's count (saturating at GI_WORLD_PROBE_EMA_WINDOWS).
 BUFFER_RW(b_world_probe_counts, uint, 7);
-/// The scheduler's list of this frame's probes and its state (cs_gi_world_probe_select.sc, plan
-/// item 2.1): a trace group's lanes serve list entries, not pool slots.
+/// The scheduler's list of this frame's probes and its state (cs_gi_world_probe_select.sc): a
+/// trace group's lanes serve list entries, not pool slots.
 BUFFER_RO(b_world_probe_list, uint, 9);
 BUFFER_RO(b_world_probe_select, uint, 15);
 /// xy = this window's R2 offset for the sub-texel direction jitter (double on the CPU, from
@@ -109,8 +110,8 @@ UIMAGE3D_RW(s_gi_vis_memo, r32ui, 6);
 /// xy = 1 / irradiance-depth atlas size (the seeding read shares the irradiance tile layout).
 /// z = strata per frame (the fast-refresh window). Carried HERE, in a trace-only uniform,
 /// rather than in u_gi_world_probe_params.w: that lane is the cage-visibility variance gate
-/// for every reading consumer, and aliasing the two meant one added #define away from the
-/// gate silently becoming 1.0 or 2.0 and the sealed-box leak defence never marching.
+/// for every reading consumer, and aliasing the two would leave the gate one added #define
+/// away from silently becoming 1.0 or 2.0 and the sealed-box leak defence never marching.
 uniform vec4 u_gi_world_probe_seed_atlas;
 
 /// x = window centre CELL of level 0 (int as float) per axis... levels each get a vec4:
@@ -139,9 +140,9 @@ NUM_THREADS(64, 1, 1)
 void main()
 {
 	int slot_in_group = int(gl_LocalInvocationID.x) / GI_WORLD_PROBE_RAYS_PER_FRAME;
-	// THE SCHEDULED PROBE (plan item 2.1): the group's lanes serve list entries; an entry past the
-	// scheduler's count maps one slot past the last level, which the partial-group path below
-	// already treats as inactive.
+	// THE SCHEDULED PROBE: the group's lanes serve list entries; an entry past the scheduler's
+	// count maps one slot past the last level, which the partial-group path below already treats
+	// as inactive.
 	int list_index = int(gl_WorkGroupID.x) * PROBE_TRACE_SLOTS + slot_in_group;
 	int slot_linear = list_index < int(b_world_probe_select[GI_WORLD_PROBE_SELECT_COUNT])
 	                      ? int(b_world_probe_list[list_index])
@@ -174,10 +175,10 @@ void main()
 		packed_cell = GiWorldProbePackCell(cell, level);
 		fresh = b_world_probe_cells[slot_index] != packed_cell;
 	}
-	// THE SCHEDULE (plan item 2.1): the probe's own stratum cursor, not the frame, picks the
-	// directions it traces - a probe traced on non-consecutive frames still covers its sixteen
-	// strata in order. A fast window's strata per frame align the cursor down to their multiple,
-	// so a window never spills into the next texel row. A fresh slot starts at stratum 0.
+	// THE SCHEDULE: the probe's own stratum cursor, not the frame, picks the directions it
+	// traces - a probe traced on non-consecutive frames still covers its sixteen strata in order.
+	// A fast window's strata per frame align the cursor down to their multiple, so a window never
+	// spills into the next texel row. A fresh slot starts at stratum 0.
 	uint schedule_word = b_world_probe_counts[slot_index];
 	int stratum_count = int(max(u_gi_world_probe_seed_atlas.z, 1.0));
 	uint cursor = fresh ? 0u : GiWorldProbeCountCursor(schedule_word);
@@ -188,12 +189,10 @@ void main()
 	// probe's offset from its lattice point with the probe's other lanes. The relocation
 	// pass computed it at claim; the trace re-runs it once per window of the probe's own traces
 	// (at its first stratum: a mover or a field streamed in after the claim moves the origin
-	// within one window) and reads the stored lane otherwise - every frame for every probe cost
-	// 0.6 ms of the pass in motion. The barrier is uniform: no lane has returned yet.
+	// within one window) and reads the stored lane otherwise, which keeps the relocation's field
+	// samples off most traces. The barrier is uniform: no lane has returned yet.
 	if(thread == 0)
 	{
-		// THE ALLOCATION CLOCK advances in the scheduler's threshold phase (plan item 2.1): still
-		// once per frame the world side runs, but slot 0 is no longer traced every frame.
 		vec3 relocation = vec3_splat(0.0);
 		if(probe_active && level == 0)
 		{
@@ -214,11 +213,11 @@ void main()
 	}
 	barrier();
 	vec3 origin = nominal + s_probe_offset[slot_in_group];
-	// FAST-REFRESH WINDOW (gi_rewrite_plan.md section 8, the DDGI event pattern adapted): while the
-	// light set is changing, each frame covers TWO strata instead of one, halving the window to
-	// 8 frames so a moved or toggled light propagates through the probes at double speed. The
-	// stratum formula stays exhaustive either way: count consecutive strata per frame cover
-	// every direction once per (WINDOW / count) frames.
+	// FAST-REFRESH WINDOW (the DDGI event pattern adapted): while the light set is changing, each
+	// frame covers TWO strata instead of one, halving the window to 8 frames so a moved or toggled
+	// light propagates through the probes at double speed. The stratum formula stays exhaustive
+	// either way: count consecutive strata per frame cover every direction once per
+	// (WINDOW / count) frames.
 	// (stratum_count and stratum_base: the probe's schedule, decoded above.)
 	ivec2 tile = GiWorldProbeTileBase(slot_linear, GI_WORLD_PROBE_OCT_RADIANCE);
 	// Scroll claim (dense levels): the slot's stored cell is compared by every thread (uniform
@@ -232,32 +231,25 @@ void main()
 	// both sides' light - including sky through the miss fallback - while its depth moments in
 	// room-facing directions measure the open ROOM; Chebyshev then trusts it at FULL weight.
 	// Visibility-true, content-false: one embedded junction probe floods a sealed interior
-	// with the sunlit exterior (measured - no weight floor or bias tuning can reject it,
-	// because the visibility math is being told the truth about the wrong point). Writing
-	// zero radiance with ZERO-DISTANCE hits collapses its convolved depth, and the visibility
-	// test itself then kills it at every read. Cost: one field sample per probe slice.
+	// with the sunlit exterior (no weight floor or bias tuning can reject it, because the
+	// visibility math is being told the truth about the wrong point). Writing zero radiance
+	// with ZERO-DISTANCE hits collapses its convolved depth, and the visibility test itself
+	// then kills it at every read. Cost: one field sample per probe slice.
 	//
-	// The MESH fields decide, not the clipmap (2026-09-13, plan phase D): the clipmap's
-	// finest level at a probe is the CAMERA's, and from 21 m that is the 1 m level, which
-	// cannot see the floor slab or the niche wall a 2 m lattice point sits in. Such probes
-	// read alive from far and dead from near, and alive-but-buried they traced from inside
-	// the geometry: the lion niche's cage carried 9% sky (through the underside of its floor)
-	// from 21 m and 0% from 3 m, its cage read fell through to the 8 m lattice in the open
-	// hall, and the niche rendered 0.8 E/pi against 0.08 (audit section 21). The verdict is
-	// now a function of the probe's position alone.
+	// The MESH fields decide, not the clipmap: the clipmap's finest level at a probe is the
+	// CAMERA's, which from a distance is too coarse to see the floor slab or wall a lattice
+	// point sits in. A clipmap verdict would read such a probe alive from far and dead from
+	// near, and alive-but-buried it would trace from inside the geometry, mixing the sky
+	// beneath a floor into its atlas. The verdict is a function of the probe's position alone.
 	bool buried = probe_active && SdfSampleInstancesPoint(origin) < 0.0;
 	// OCCUPANCY CLASSIFICATION (RTXGI's probe classification, answered by the field like the gate
 	// above): a level-0 probe with no geometry within GI_WORLD_PROBE_SLEEP_SPACINGS of it cannot
 	// be a cage corner for any ON-SURFACE query. It is COUNTED, not slept: it goes to the census
 	// (GI_STATS_PROBES_ASLEEP) and the Probe Lattice view, and keeps tracing. Putting such probes
-	// to sleep - zero radiance and depth, like a buried probe - was measured 2026-09-09 (same
-	// session, interleaved launches, tasks/gi_perf_research_2026-09.md section 3): 39% of level
-	// 0 asleep, 42% fewer level-0 texels traced, World Probe Trace 0.068 -> 0.064 ms median on
-	// open-gate frames, i.e. nothing outside noise, because 729 four-probe groups are
-	// latency-bound whatever their lanes do. What sleeping changes in principle is the
-	// completion read of screen-probe rays, which queries the lattice in the AIR (origin +
-	// direction x short range), where such a probe IS a legitimate cage corner. No saving to
-	// pay for a behaviour change: the mechanism went, the measurement stayed.
+	// to sleep - zero radiance and depth, like a buried probe - saves next to nothing, because
+	// the trace's four-probe groups are latency-bound whatever their lanes do, and it would
+	// change the completion read of screen-probe rays, which queries the lattice in the AIR
+	// (origin + direction x short range), where such a probe IS a legitimate cage corner.
 	//
 	// Sampled from the COARSEST level, not the one covering the probe. The cascade is a narrow
 	// band saturating at mesh_sdf::encode_range (4) VOXELS, so level 0's own field certifies only
@@ -277,17 +269,17 @@ void main()
 	// One word for "this probe writes nothing this frame". Only buried probes are inactive;
 	// the occupancy classification above is a count, never a skip (see it).
 	bool inactive = buried;
-	// CONVERGING MEAN (GI_WORLD_PROBE_EMA_WINDOWS). The atlas used to be a windowed mean over
-	// FIXED texel-centre directions: zero variance, but BIASED per probe - a small emitter is
-	// skewered or missed per direction and neighbouring probes disagree, which entered the
-	// voxel bounce as the blotch field on emissive-lit walls. Directions now jitter inside
-	// their texel per window and each texel is a running mean over the last windows; a fresh
-	// claim or a fast (light/content change) window resets the count so changes still land
-	// in one window at write-through. Every thread reads the count before thread 0 advances it.
+	// CONVERGING MEAN (GI_WORLD_PROBE_EMA_WINDOWS). A windowed mean over FIXED texel-centre
+	// directions has zero variance but is BIASED per probe - a small emitter is skewered or
+	// missed per direction and neighbouring probes disagree, which enters the voxel bounce as a
+	// blotch field on emissive-lit walls. With the jitter on, directions jitter inside their
+	// texel per window and each texel is a running mean over the last windows; a fresh claim or
+	// a fast (light/content change) window resets the count so changes still land in one window
+	// at write-through. Every thread reads the count before thread 0 advances it.
 	uint windows_seen = fresh ? 0u : GiWorldProbeCountWindows(schedule_word);
 	// The stored count is windows since the claim or the last fast window WHATEVER the jitter
-	// setting: the trace scheduler's first-window bucket reads it (plan item 2.1). The
-	// running mean below still restarts every window while the jitter is off.
+	// setting: the trace scheduler's first-window bucket reads it. The running mean below
+	// still restarts every window while the jitter is off.
 	uint windows_counted = windows_seen;
 	bool fast_window = stratum_count > 1;
 	// The jitter/mean is a SETTING (u_gi_world_probe_jitter.z, gi_resolve_pass::settings::
@@ -339,36 +331,35 @@ void main()
 		// each texel's direction - the cosine-weighted mean of what the parent sees that way,
 		// in exactly the E/pi = mean-radiance units a radiance texel holds on average - soft,
 		// energy-consistent, refined stratum by stratum over the window. Without it every
-		// window edge dragged a dark frontier that took a full window (a quarter second) to
+		// window edge would drag a dark frontier that takes a full window (a quarter second) to
 		// converge. The outermost level has no parent and keeps the dark clear (energy loss,
-		// never invention); buried and sleeping probes stay dead.
+		// never invention); buried probes stay dead.
 		//
 		// The seed is RADIANCE ONLY. hitT is left at 0 - the "never measured" value the atlas
-		// clear writes - never at the -1 sky marker this claim used to stamp. That marker was
-		// a lie about GEOMETRY with no relation to the seed: the convolve turns every sky
-		// texel into depth = GI_WORLD_PROBE_DEPTH_CLAMP x spacing at near-zero variance, so a
-		// just-claimed slot advertised "confidently open in every direction" for a whole
-		// window. A cage corner is at most sqrt(3) x spacing away against a 1.5 x spacing
-		// clamp, so most corners then took the readers' no-test path (distance <= mean, low
-		// variance = neither Chebyshev nor the field march runs) at FULL trilinear weight -
-		// and what they read was the COARSER cascade's irradiance, which straddles walls worse
-		// by construction. That is a cascade-down import into sealed interiors, re-arming
-		// every time the camera crosses a probe cell, and it bypasses every defence in the
-		// reader. Leaving hitT at 0 drags the convolved mean toward zero instead, which
-		// over-occludes: the fresh cage is rejected and the query falls through to the coarser
-		// level - the same energy, by the legitimate path that still gets a visibility test.
-		// Untraced strata also stop counting as sky, so a fresh interior probe no longer
-		// reports sky_fraction 1.
+		// clear writes - never at the miss marker (the clamp), which would be a lie about
+		// GEOMETRY with no relation to the seed: the convolve turns every miss texel into
+		// depth = GI_WORLD_PROBE_DEPTH_CLAMP x spacing at near-zero variance, so a just-claimed
+		// slot would advertise "confidently open in every direction" for a whole window. A cage
+		// corner is at most sqrt(3) x spacing away against a 1.5 x spacing clamp, so most
+		// corners would take the readers' no-test path (distance <= mean, low variance =
+		// neither Chebyshev nor the field march runs) at FULL trilinear weight - reading the
+		// COARSER cascade's irradiance, which straddles walls worse by construction. That is a
+		// cascade-down import into sealed interiors, re-arming every time the camera crosses a
+		// probe cell, and it bypasses every defence in the reader. Leaving hitT at 0 drags the
+		// convolved mean toward zero instead, which over-occludes: the fresh cage is rejected
+		// and the query falls through to the coarser level - the same energy, by the legitimate
+		// path that still gets a visibility test. Untraced strata also do not count as sky, so a
+		// fresh interior probe does not report sky_fraction 1.
 		int parent_level = level + 1;
 		bool parent_valid = false;
 		ivec2 parent_tile = ivec2(0, 0);
 		// The SPARSE level seeds BLACK (energy loss for one window, never invention): its
 		// parent is the 4 m lattice, whose probes straddle every wall thinner than their
 		// spacing, and a sparse slot is claimed for exactly the cells that matter - a sealed
-		// room's own air. Seeding those from the exterior cage put the sunlit outdoors into
-		// the GI test suite's thin-walled cell for a window after every claim (2026-09-13).
-		// Until the slot's first window completes the cage reads it as dead (depth 0) and
-		// the coarser lattice answers, which is what happened before the slot existed.
+		// room's own air. Seeding those from the exterior cage would put the sunlit outdoors
+		// into a thin-walled room for a window after every claim. Until the slot's first window
+		// completes the cage reads it as dead (depth 0) and the coarser lattice answers, exactly
+		// as for a cell that holds no slot.
 		if(!inactive && level > 0 && parent_level < SDF_CLIPMAP_LEVEL_COUNT)
 		{
 			float parent_spacing = GiWorldProbeSpacing(parent_level);
@@ -421,45 +412,39 @@ void main()
 		// Sub-texel direction jitter, per window (R2) and per atlas texel (IGN, so neighbouring
 		// probes and texels decorrelate): the running mean integrates the texel's whole solid
 		// angle instead of its centre ray. FAST windows (a light or content change) sample the
-		// texel CENTRE at write-through instead - deterministic and reactive, exactly the old
-		// atlas - because a jittered sample written through every 4 frames is a flickering
-		// probe, and content churn (movers) keeps the fast window open for as long as it lasts
-		// (measured: static surfaces noisier under movers than before the jitter). The
+		// texel CENTRE at write-through instead - deterministic and reactive, as with the jitter
+		// off - because a jittered sample written through every 4 frames is a flickering probe,
+		// and content churn (movers) keeps the fast window open for as long as it lasts. The
 		// converging mean resumes from that deterministic base when the scene settles.
 		// A probe's FIRST window (fresh claim, or the window after a fast one) samples the
 		// centres too: the mean has no base yet and a lone jittered sample written through is
-		// a noisy probe for a whole window (measured as a pop at the level-0 scroll).
+		// a noisy probe for a whole window.
 		bool deterministic_window = fast_window || windows_seen == 0u || u_gi_world_probe_jitter.z < 0.5;
 		vec2 texel_jitter = deterministic_window ? vec2_splat(0.5)
 		                                         : fract(GiIgnNoise(texel) + u_gi_world_probe_jitter.xy);
 		vec2 tile_uv = (vec2(texel - tile) + texel_jitter) / float(GI_WORLD_PROBE_OCT_RADIANCE);
 		vec3 direction = GiOctDecode(tile_uv);
-		// MESH-EXACT NEAR FIELD (2026-09-13, plan phase B; 6 m since 2026-09-14): the first
-		// GI_WORLD_PROBE_MESH_RANGE metres of every probe ray march the per-instance fields, as the
-		// gather's rays do. The exact tier is the sealed-box defence - the leak channel was the
-		// cascade's porous field, which the exact tier does not have. The cascade takes over beyond
-		// (see the far tier's note); the near tier's steps, exhaustion and clearance are carried into
-		// the far hit (SdfTraceRayEx does the same) so the open-exhaustion miss below reads the
-		// whole ray.
+		// MESH-EXACT NEAR FIELD: the first GI_WORLD_PROBE_MESH_RANGE metres of every probe ray
+		// march the per-instance fields, as the gather's rays do. The exact tier is the sealed-box
+		// defence - the leak channel is the cascade's porous field, which the exact tier does not
+		// have. The cascade takes over beyond (see the far tier's note); the near tier's steps,
+		// exhaustion and clearance are carried into the far hit (SdfTraceRayEx does the same) so
+		// the open-exhaustion miss below reads the whole ray.
 		float near_field = min(GI_WORLD_PROBE_MESH_RANGE, t_max);
 		SdfRayHit near_hit = SdfTraceInstances(origin, direction, 0.0, near_field,
 		                                       GI_WORLD_PROBE_TRACE_STEPS, GI_WORLD_PROBE_TRACE_BIAS,
 		                                       GI_WORLD_PROBE_TRACE_RELAXATION, true);
 		// Coarse world structure beyond the near field: the cascade tier called DIRECTLY with NO
 		// surface expand (expand_start -1) and the probe-specific suppression hardening
-		// (expand_full). The full-strength expand was the sealed-box defence while probe rays were
-		// cascade-only; kept past a 6 m exact range it fattened every surface by up to 0.87 voxel
-		// and darkened the lit image 13-20 percent, while without it the leak does not return and
-		// the result matches 20 m exact rays within ~1 percent (GI_WORLD_PROBE_MESH_RANGE).
-		// Acceptance is the tracing default and the trace is EXACT (no cone): at a full voxel
-		// of acceptance plus the expand, with the cone capped at a voxel beyond 20 voxels of
-		// travel, a probe ray accepted anything within 1.87 voxels of its path. On the Sponza
-		// courtyard every steep ray from the wall cages resolved such a hit at 4-6 m and no
-		// world probe carried the sky (audit 2026-09-12, section 3). With the half-voxel
-		// acceptance, the exact trace and the open-exhaustion miss below, the upper walls'
-		// cages read 41-48 percent sky for their steep rays and a 4.5x sky change moves the
-		// shadowed walls' GI by 14-100 percent where it moved nothing before (derivations in
-		// gi_constants.h).
+		// (expand_full). Behind the mesh-exact near field the expand is not needed against the
+		// sealed-box leak, and it would fatten every surface by up to 0.87 voxel and darken the
+		// lit image (GI_WORLD_PROBE_MESH_RANGE). Acceptance is the tracing default and the trace
+		// is EXACT (no cone): a full voxel of acceptance plus the expand, with a cone capped at a
+		// voxel beyond 20 voxels of travel, would accept anything within 1.87 voxels of a probe
+		// ray's path, so steep rays from wall cages would resolve such hits and no world probe
+		// would carry the sky. The half-voxel acceptance, the exact trace and the
+		// open-exhaustion miss below let those rays see the sky, so a change of sky intensity
+		// carries into the shadowed walls' GI (derivations in gi_constants.h).
 		SdfRayHit hit = near_hit;
 		BRANCH
 		if(!near_hit.hit)
@@ -475,13 +460,11 @@ void main()
 		float hit_t;
 		// The stored distance is the CLAMPED depth the convolve consumes (misses store the clamp
 		// itself, hits at most GI_WORLD_PROBE_HIT_DEPTH_CAP of it: a miss and a hit beyond the
-		// clamp are the same moments within one percent but DISTINCT sky shares - before the
-		// cap every hit past 1.5 spacings counted as sky), always positive, so it can ride the
-		// running mean like the
-		// radiance - under the direction jitter a "latest sample" depth made the Chebyshev
-		// moments flicker per window and tripped the cage-visibility marches (measured: Light
-		// Voxels 2x). Zero stays the never-measured mark (fresh clear, buried or sleeping
-		// probes).
+		// clamp are the same moments within one percent but DISTINCT sky shares), always
+		// positive, so it can ride the running mean like the radiance - under the direction
+		// jitter a "latest sample" depth would make the Chebyshev moments flicker per window and
+		// trip the cage-visibility marches. Zero stays the never-measured mark (a fresh clear or
+		// a buried probe).
 		float depth_clamp = GI_WORLD_PROBE_DEPTH_CLAMP * GiWorldProbeSpacing(level);
 		// EXHAUSTION IN OPEN AIR IS A MISS for a probe ray. The trace's exhaustion hit is an
 		// occlusion contract for surface-born rays; a budget-dead radiance-cache ray that never
@@ -489,8 +472,8 @@ void main()
 		// count) took at least 1.13 voxels per step while its level answered, so it crossed
 		// about 18 m of open air at level 0 before dying: not an occluder, it reads the sky, as
 		// GiTraceShadow grades its own exhaustion. A ray hugging a wall stays a hit - inside a
-		// sealed room that is the ray that must not launder into sky (at one voxel it did,
-		// measured on the GI test suite).
+		// sealed room that is the ray that must not launder into sky, which a one-voxel
+		// clearance threshold lets it do.
 		float probe_voxel = u_sdf_clipmap_levels[level].w;
 		bool open_exhaustion =
 		    hit.exhausted && hit.clearance >= GI_WORLD_PROBE_OPEN_CLEARANCE_VOXELS * probe_voxel;
@@ -505,9 +488,9 @@ void main()
 			// voxels short of it, and the raw field reading there is a lower bound on the
 			// remaining distance (SdfRayHit::hit_field) - exact for a head-on hit,
 			// conservative at grazing incidence, never beyond the first surface. Without it
-			// every live probe over a flat floor measured the floor ~1.4 voxels nearer than
-			// the floor's own biased query and the Chebyshev test rejected the whole cage
-			// with confidence: the courtyard floor read zero irradiance (2026-09-12).
+			// every live probe over a flat floor would measure the floor nearer than the floor's
+			// own biased query, and the Chebyshev test would reject the whole cage with
+			// confidence, leaving the floor with zero irradiance.
 			// Capped UNDER the clamp: the clamp itself is the miss marker the convolve's sky
 			// share reads (GI_WORLD_PROBE_HIT_DEPTH_CAP).
 			hit_t = min(hit.t + hit.hit_field, depth_clamp * GI_WORLD_PROBE_HIT_DEPTH_CAP);
@@ -526,25 +509,21 @@ void main()
 				voxel_radiance = vec3_splat(0.0);
 			}
 			radiance = voxel_radiance;
-			// The cone bound only where the old absolute clamp would have acted (a hit brighter
-			// than GI_MAX_RAY_RADIANCE): the table walk per hit measured +0.08 ms on the world
-			// probe trace with movers when every hit paid it (gi_emissive_research 3.5).
+			// The cone bound only for a hit brighter than GI_MAX_RAY_RADIANCE: the emitter table
+			// walk is too costly to pay on every hit.
 			//
 			// The threshold is ABSOLUTE, not the view-relative GiViewToCached form Lumen's
 			// radiosity rule would use. This atlas is a PERSISTENT store shared across views,
 			// and an exposure-relative gate makes its contents follow whatever the camera was
-			// metering when each probe last traced. Measured 2026-09-16 (GI_TestSuite): at the
-			// sealed cell's P = 367 the relative form is a threshold of 0.109 absolute, so the
-			// bound fired on ordinary emitter-lit texels it was never meant to touch and the
-			// cell lost display mean against the pre-pre-exposure baseline.
+			// metering when each probe last traced; under a high pre-exposure the relative
+			// threshold also drops low enough to fire on ordinary emitter-lit texels.
 			if(GiStatsLuminance(voxel_radiance) > GI_MAX_RAY_RADIANCE)
 			{
 				radiance *= GiWorldProbeEmitterCoverage(direction, origin);
 			}
 		}
 		// No absolute radiance clamp: a small emitter's texel is bounded by its cone fraction
-		// above (the geometry), a large one keeps its radiance (measured 2026-09-10: the clamp
-		// at 40 held a 192-radiance panel's probe irradiance at 6.2x for a 16x intensity).
+		// above (the geometry), a large one keeps its radiance, which a clamp would cap.
 		vec3 stored = radiance;
 		float stored_t = hit_t;
 		// The texel's previous value: the running mean's base below, and the census's

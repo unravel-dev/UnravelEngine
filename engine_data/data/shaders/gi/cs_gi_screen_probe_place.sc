@@ -5,17 +5,16 @@
  *
  * The anchor is a Halton-jittered pixel of the probe's tile, re-jittered EVERY
  * frame: each frame's gather is a fresh, independent estimate and the per-frame
- * anchor variance is white noise the full-res temporal integrates (the
- * probe-space temporal that once kept anchors sticky for windowed accumulation
- * is REMOVED - amortizing in probe space turned that white noise into
- * probe-granular correlated drift no downstream filter could remove).
+ * anchor variance is white noise the full-res temporal integrates. Anchors are
+ * never held sticky for probe-space accumulation - amortizing in probe space turns
+ * that white noise into probe-granular correlated drift no downstream filter can remove.
  *
  * Splitting placement from tracing is what makes per-probe ADAPTIVITY possible at all: a probe
  * can only judge whether its parents' plane predicts its own anchor after every anchor exists,
- * and groups of a single dispatch have no ordering. The trace reads records instead of
- * recomputing, classifies odd-lattice probes against their even-lattice parents, and skips the
- * 64-ray march wherever a parent blend answers (cs_gi_screen_probe_interp reconstructs
- * those tiles).
+ * and groups of a single dispatch have no ordering. The classify pass reads the records,
+ * judges odd-lattice probes against their even-lattice parents, and lists only the probes to
+ * trace, so the 64-ray march is skipped wherever a parent blend answers
+ * (cs_gi_screen_probe_interp reconstructs those tiles).
  *
  * Cost: one dispatch of probe-count threads doing a couple of texture reads and one clipmap
  * sample each - noise next to the trace it gates.
@@ -45,20 +44,18 @@ void GiCommitScreenProbe(uint record, vec3 world_position, vec3 world_normal, ve
 	float d = SdfSampleClipmapEx(world_position, voxel);
 	voxel = max(voxel, 0.01);
 	float lift = max(0.0, -d) + GI_PROBE_TRACE_SURFACE_BIAS * voxel;
-	// The shortened-ray range is the SAME at every camera distance (GI_SCREEN_PROBE_SHORT_RANGE,
-	// mesh-exact over its whole length). It used to be twice the covering cascade's probe
-	// spacing - 4 m near the camera, 8 m and 16 m further out - so a surface's rays established
-	// their own visibility through a fatter field and completed from a higher, coarser cage the
-	// farther the camera stood from it; the same floor read E/pi 1.2 from 2.5 m and 0.25 from
-	// 15 m (gi_lighting_audit section 18). A surface's lighting must not know where the camera
-	// is.
+	// The shortened-ray range is the SAME at every camera distance (GI_SCREEN_PROBE_SHORT_RANGE;
+	// mesh-exact over its first GI_MESH_SDF_TRACE_RANGE). A range tied to the covering
+	// cascade's probe spacing would make a surface's rays establish their own visibility
+	// through a fatter field and complete from a higher, coarser cage the farther the camera
+	// stands from it, so the same floor would read differently from near and far. A surface's
+	// lighting must not know where the camera is.
 	b_gi_probes[record + uint(GI_PROBE_META)] = vec4(world_position, 1.0);
 	b_gi_probes[record + uint(GI_PROBE_META2)] =
 	    vec4(world_normal, length(world_position - u_gi_camera.xyz));
 	b_gi_probes[record + uint(GI_PROBE_ORIGIN)] =
 	    vec4(world_position + world_normal * lift, GI_SCREEN_PROBE_SHORT_RANGE);
-	// ANCHOR.w is reserved (the removed probe-space temporal's walk flag); kept zero for
-	// layout stability.
+	// ANCHOR.w is reserved; kept zero for layout stability.
 	b_gi_probes[record + uint(GI_PROBE_ANCHOR)] = vec4(uv, depth, 0.0);
 }
 

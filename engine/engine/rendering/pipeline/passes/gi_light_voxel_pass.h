@@ -20,15 +20,13 @@ class shadowmap_generator;
 }
 
 /**
- * @brief Lights the cascade's surface voxels with direct lighting and traced shadows
- *        (GI v2 plan 3.2).
+ * @brief Lights the cascade's surface voxels with direct lighting and traced shadows.
  *
  * One thread per surface-list entry, a quarter of the list per frame
  * (GI_LIGHT_VOXEL_UPDATE_DENOM), radiance written straight to the light volume - no temporal
  * state, because direct lighting with traced shadows is deterministic and the stochastic
- * machinery belongs to the world probes. This replaces the unbudgeted whole-table sweep the
- * radiance-hash update pass performed: cost is proportional to resident SURFACE, not to table
- * capacity, and bounded by the rotation denominator.
+ * machinery belongs to the world probes. Cost is proportional to resident SURFACE, not to a
+ * table's capacity, and bounded by the rotation denominator.
  */
 class gi_light_voxel_pass
 {
@@ -61,16 +59,15 @@ public:
         /// ([near, cascade-0 far] in view depth, inside the FOV): the map's crop footprint
         /// (a bounding sphere of the slice) extends metres BEHIND and beside the camera, and
         /// receivers there project into the map but are outside its contract - the raster
-        /// never samples them, and they measured LIT for sealed-room faces behind the camera
-        /// (the first-look glow: the room lights up while the camera faces away, then decays
-        /// when it turns). Outside the slice the traced field answers, as it does past the
-        /// map's edge.
+        /// never samples them, and the map can answer LIT for sealed-room faces behind the
+        /// camera (the room would light up while the camera faces away, then decay when it
+        /// turns). Outside the slice the traced field answers, as it does past the map's edge.
         math::mat4 camera_view_proj{1.0f};
         /// Diagnostic: dispatch the SUN-TIER debug PROGRAM (cs_gi_light_voxels_debug.sc),
         /// which writes tier-attribution colors into the light volume instead of radiance
         /// (see GiDebugSunTierColor in gi_light_voxels_kernel.sh), for the sun_tiers debug
-        /// view. A compiled variant selected here on the CPU, not a shader flag: two hunts
-        /// lost to a runtime flag that left the CPU but never steered the kernel. Downstream
+        /// view. A compiled variant selected here on the CPU, not a shader flag: a runtime
+        /// flag can leave the CPU and still never steer the kernel, silently. Downstream
         /// GI consumers ingest the colors while this is set; the volume relights within its
         /// usual rotation once cleared.
         bool sun_tier_debug = false;
@@ -90,8 +87,8 @@ public:
         uint16_t indirect_entry = gi_quiescence_gate_pass::entry_light_voxels;
         /// Stage and read back the convergence statistic for the CPU gate. False whenever
         /// the GPU gate owns the decision - it drains the same statistics slice itself - and
-        /// on frames the CPU gate could not use the sample anyway, which is where the
-        /// readback's stall used to be paid for nothing.
+        /// on frames the CPU gate could not use the sample anyway, so the readback's stall is
+        /// never paid for nothing.
         bool collect_stats = true;
         /// The editor's GI census is armed (gi_quiescence_gate_pass::is_census_armed): the
         /// relight accumulates its census rows (GI_STATS_RELIGHT_FACES_MOVED / _VISIBLE).
@@ -143,10 +140,10 @@ private:
     bool vis_memo_invalid_warning_emitted_ = false;
     /// Last logged state of run_params::vis_memo_debug; see the flip log in run().
     bool vis_memo_debug_logged_ = false;
-    /// Last logged bounce vis-memo generation. Changes are logged: they are legitimate on
-    /// scene edits and window scrolls, but a STREAM of them with a parked camera in a
-    /// static scene means an invalidation tracker is churning and the memo can never hit -
-    /// the CPU-side discriminator for the measured miss-every-rotation cost signature.
+    /// Last seen bounce vis-memo generation, for the change log line (silenced in run()).
+    /// Changes are legitimate on scene edits and window scrolls, but a STREAM of them with a
+    /// parked camera in a static scene means an invalidation tracker is churning and the memo
+    /// can never hit - the CPU-side discriminator for a miss-every-rotation cost signature.
     uint32_t vis_memo_generation_logged_ = uint32_t(-1);
     /// Relight-EMA change tracking (u_gi_vis_memo_params.y): what the blend was last
     /// computed against, and how many write-through frames remain so every voxel's first
@@ -182,7 +179,7 @@ private:
     std::unique_ptr<gpu_program> stats_program_;
     gfx::texture::ptr stats_texture_;
     /// The sun's CSM cascades copied into the layers of one texture array: the tier's single
-    /// stage holds every split (phase E). Rebuilt when the generator's map size changes,
+    /// stage holds every split. Rebuilt when the generator's map size changes,
     /// blitted on the frames the relight runs with the tier active.
     gfx::texture::ptr sun_cascades_;
     uint16_t sun_cascades_size_ = 0;

@@ -322,8 +322,7 @@ void sdf_atlas::flush_pending_bricks()
 auto sdf_atlas::allocate_indirection(uint32_t count) -> uint32_t
 {
     // First fit over the regions release() gave back, before growing. Reuse is what keeps this
-    // bounded: abandoning a released field's region was harmless while fields only died with the
-    // asset, but they are now released as soon as nothing references them, so without this a scene
+    // bounded: fields are released as soon as nothing references them, so without it a scene
     // reload would grow the table by the whole scene's worth every time.
     for(size_t i = 0; i < free_indirection_ranges_.size(); ++i)
     {
@@ -415,9 +414,9 @@ auto sdf_atlas::upload(const mesh_sdf& sdf) -> uint32_t
             if(rejected_brick_total_ >= next_rejection_report_)
             {
                 // Doubling, so a scene that overruns by thousands of meshes reports a handful of
-                // times rather than once per mesh. Saturating rather than wrapping: this used to be
-                // 32-bit, and once the total passed two billion the doubling wrapped to a small
-                // number, which made the throttle fire on every refusal instead of suppressing it.
+                // times rather than once per mesh. Saturating rather than wrapping: a doubling that
+                // wrapped to a small number would make the throttle fire on every refusal instead
+                // of suppressing it.
                 next_rejection_report_ = rejected_brick_total_ > (UINT64_MAX / 2u)
                                              ? UINT64_MAX
                                              : rejected_brick_total_ * 2u;
@@ -516,10 +515,8 @@ void sdf_atlas::release(uint32_t header_index)
     field.brick_slots.clear();
     field.is_alive = false;
     // Returned for reuse IN PLACE, never compacted: moving it would shift every later field's
-    // offset and require rewriting all their headers. Reuse used to be skipped entirely on the
-    // grounds that fields only died when an asset unloaded, so the waste was bounded by asset
-    // churn -- that stopped being true once fields are released as soon as nothing references
-    // them, which happens on every scene change.
+    // offset and require rewriting all their headers. Reuse matters because fields are released
+    // as soon as nothing references them, which happens on every scene change.
     if(field.indirection_count > 0)
     {
         free_indirection_ranges_.push_back({field.indirection_offset, field.indirection_count});
@@ -599,7 +596,7 @@ void sdf_atlas::flush()
     if(indirection_dirty_min_ < indirection_dirty_max_ && !indirection_data_.empty())
     {
         // Only the touched span: the full table reaches millions of entries on a big scene,
-        // and re-uploading all of it once per frame while fields stream in outweighed the
+        // and re-uploading all of it once per frame while fields stream in would outweigh the
         // bricks themselves.
         const uint32_t begin = indirection_dirty_min_;
         const uint32_t count = indirection_dirty_max_ - begin;

@@ -35,15 +35,14 @@
  * noisy for a few frames, a wrongly accepted one is visibly wrong for as long as it survives.
  *
  * DUAL-RATE HISTORY: two running means of the same sample stream ride the MRT - the SLOW
- * lane (cap ~96) is the output and carries the stability, the FAST lane (cap 8) exists to
- * measure it. A small bright emissive source excites amortization phase waves (the
- * world-probe stratum ramp x the light-voxel rotation, ~16-frame period) that a short mean
- * renders as crawling voxel-scale blobs - only a LONG mean averages them, but a long mean
- * alone answers real lighting changes late. The detector closes that: the two lanes' gap
- * has a known noise level (the moments' single-sample variance over both counts), and a
- * luminance gap beyond GI_TEMPORAL_CHANGE_SIGMA of it is a mean SHIFT - the slow lane
- * snaps to the fast one and re-accumulates, so a light turning on lands within the fast
- * window while steady flicker integrates over the slow one.
+ * lane (cap GI_TEMPORAL_SLOW_FRAMES, the settings window) is the output and carries the
+ * stability, the FAST lane (cap GI_TEMPORAL_FAST_FRAMES) exists to measure it. Only a LONG
+ * mean integrates the per-frame cone and placement jitter (three placement cycles), but a
+ * long mean alone answers real lighting changes late. The detector closes that: the two
+ * lanes' gap has a known noise level (the moments' single-sample variance over both
+ * counts), and a luminance gap beyond GI_TEMPORAL_CHANGE_SIGMA of it is a mean SHIFT - the
+ * slow lane snaps to the fast one and re-accumulates, so a light turning on lands within
+ * the fast window while steady flicker integrates over the slow one.
  *
  * The consumer declares s_gi_history, s_gi_history_fast and s_gi_history_moments at its
  * own free stages before including this; current, depth and world position arrive as
@@ -61,8 +60,8 @@
 /// D3D t-register space is shared between samplers AND buffers (b_gi_probes sits on t7,
 /// the SDF tables on t1-t3/t12-t13), so "free" must be judged across both. The kernel owns
 /// the declaration. Never re-derive camera velocity from matrices here and compare against
-/// this buffer - measured in this engine, the previous view-projection is NOT guaranteed
-/// identical across passes within one frame (see the velocity plan).
+/// this buffer: the previous view-projection is NOT guaranteed identical across passes
+/// within one frame.
 SAMPLER2D(s_gi_velocity, 14);
 
 uniform mat4 u_gi_prev_view_proj;
@@ -83,7 +82,7 @@ uniform vec4 u_gi_temporal_params;
 /// xy = one texel of this buffer, zw = its dimensions.
 uniform vec4 u_gi_temporal_texel;
 /// xyz = camera position; w = 1 when the velocity buffer is bound and should drive the
-/// history reprojection (0 = legacy matrix path).
+/// history reprojection (0 = the matrix reprojection alone).
 uniform vec4 u_gi_temporal_camera;
 #define u_gi_velocity_available (u_gi_temporal_camera.w > 0.5)
 
@@ -224,10 +223,8 @@ vec4 GiFreshMoments(vec4 current)
  * snap copies it into the slow lane, the denoise filters it and the composite blends with
  * it. The cause code (GI_TEMPORAL_CAUSE_*) takes that alpha over ONLY while the Temporal
  * Reset Cause view is displayed (u_gi_cause_lane). Written unconditionally, every snap
- * handed the consumer a cause code for a weight - a blob per snap for a window, visible as
- * white patches at the far end of an emitter's reach (gi_emissive_research 7: cell 07's
- * spill zone, strong-flicker pixels 0.16-0.83 % of the frame against 0.06-0.08 % with the
- * alpha left alone).
+ * would hand the consumer a cause code for a weight - a blob per snap for a window, visible
+ * as white patches at the far end of an emitter's reach.
  */
 vec4 GiFastOutput(vec4 fast, float cause)
 {
@@ -241,7 +238,7 @@ vec4 GiFastOutput(vec4 fast, float cause)
  * what it reads - which the inner 2x2 validity alone does not cover.
  *
  * Returned as a vec3 rather than through out parameters: shaderc's HLSL path miscompiles
- * out-parameters in .sh helpers silently (tasks/lessons.md).
+ * out-parameters in .sh helpers silently.
  */
 vec3 GiCatmullRomTapAxisUv(float sample_coord, float size)
 {
@@ -303,8 +300,7 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	// object-only split), where it makes history FOLLOW the mover so lighting accumulates
 	// on moving geometry instead of resetting every frame. Trusting RG for camera pixels
 	// drags the whole image: the buffer's camera component is written with a previous
-	// view-projection that is not reliably this pass's own (measured; open engine issue -
-	// see the velocity plan). Same gating as the TAA resolve, where the pattern was proven.
+	// view-projection that is not reliably this pass's own. Same gating as the TAA resolve.
 	float object_w = 0.0;
 	vec2 prev_uv_object = vec2_splat(0.0);
 	// The OBJECT-ONLY screen displacement, kept for the validity tolerance below: it is this
@@ -340,23 +336,23 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	// PER-TAP VALIDITY: the history is read through its own
 	// 2x2 bilinear footprint and every tap is validated on its OWN stored depth - the world
 	// position last frame's depth buffer held under THAT texel against this pixel's - with
-	// the failing taps weighted out and the rest renormalised. The single reprojected tap
-	// this replaced sat between two surfaces at every silhouette (a filtered depth belongs to
-	// neither), so a pixel on a depth edge lost its whole history on half the frames of any
-	// camera translation and shimmered (F10). A pixel now keeps the taps on its own surface;
-	// only a pixel with no valid tap starts fresh. Comparing WORLD positions keeps the test
+	// the failing taps weighted out and the rest renormalised. A single reprojected tap would
+	// sit between two surfaces at every silhouette (a filtered depth belongs to neither), so a
+	// pixel on a depth edge would lose its whole history on half the frames of any camera
+	// translation and shimmer. A pixel keeps the taps on its own surface; only a pixel with no
+	// valid tap starts fresh. Comparing WORLD positions keeps the test
 	// independent of the depth encoding and projection; the tolerance scales with view
 	// distance so one value works near and far, and is DITHERED per pixel
 	// (GI_TEMPORAL_VALIDITY_DITHER) so the rejection edge is a soft band
 	// rather than a hard temporal seam.
-	// OBJECT-MOTION pixels are tested too, against a WIDENED tolerance. Skipping them, as this
-	// did, was the only way to keep a mover's own history - its world position legitimately
-	// changed, so the static tolerance rejects it - but it left moving pixels with no
-	// correspondence test at all, and a mover emerging from behind an occluder then inherited
-	// the occluder's lighting outright. The displacement is not unknown though: the velocity
-	// buffer's object lane is this surface's own screen motion, and one unit of screen uv spans
-	// u_gi_uv_world_scale world units per unit of view distance. Widening by that displacement,
-	// times GI_TEMPORAL_OBJECT_MOTION_SLACK for the component along the view ray that leaves no
+	// OBJECT-MOTION pixels are tested too, against a WIDENED tolerance. A mover's world
+	// position legitimately changes, so the static tolerance would reject its own history,
+	// while skipping the test would leave moving pixels with no correspondence test at all -
+	// a mover emerging from behind an occluder would inherit the occluder's lighting outright.
+	// The displacement is known though: the velocity buffer's object lane is this surface's
+	// own screen motion, and one unit of screen uv spans u_gi_uv_world_scale world units per
+	// unit of view distance. Widening by that displacement, times
+	// GI_TEMPORAL_OBJECT_MOTION_SLACK for the component along the view ray that leaves no
 	// screen trace, keeps the mover's history and still rejects an occluder a depth gap away.
 	// The dual-rate change detector remains the second line, not the only one.
 	vec2 history_size = u_gi_temporal_texel.zw;
@@ -392,20 +388,20 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 		out_moments = GiFreshMoments(current);
 		return;
 	}
-	// The normal agreement test that used to sit here is gone, and deliberately.
+	// No normal agreement test here, deliberately.
 	//
-	// It sampled the CURRENT normal buffer at two UVs -- uv and prev_uv -- so it never compared
-	// this frame's surface against the previous frame's; it compared two points of this one. That
-	// is a weak proxy at best, and under sub-pixel jitter it is actively wrong: the two taps sit a
+	// Sampling the CURRENT normal buffer at two UVs -- uv and prev_uv -- never compares this
+	// frame's surface against the previous frame's; it compares two points of this one. That is
+	// a weak proxy at best, and under sub-pixel jitter it is actively wrong: the two taps sit a
 	// fraction of a pixel apart every frame, which on high-frequency geometry (foliage, railings,
-	// ivy) disagree constantly. Every disagreement threw the whole history away and left the pixel
-	// showing one frame of a four-ray gather, which is what fireflies ARE -- visible with the
-	// camera completely still, because the jitter moves even when nothing else does.
+	// ivy) disagree constantly. Every disagreement would throw the whole history away and leave
+	// the pixel showing one frame of a four-ray gather, which is what fireflies ARE -- visible
+	// with the camera completely still, because the jitter moves even when nothing else does.
 	//
-	// The neighbourhood clamp below covers what this was meant to catch, without a cliff.
+	// The neighbourhood clamp below covers what such a test would catch, without a cliff.
 
 	// The bicubic reads FOUR TEXELS FURTHER OUT than the 2x2 the validity above covers, so an
-	// all-valid inner footprint was never enough to license it: one texel inside a silhouette
+	// all-valid inner footprint is not enough to license it: one texel inside a silhouette
 	// the outer ring still sits on the neighbouring surface, and Catmull-Rom's negative lobes
 	// then pull that surface's radiance in with the wrong sign. Its four outer bilinear taps are
 	// validated at the same points the resample addresses them; anything less than all four
@@ -477,10 +473,10 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	// The slow lane's cap is REGION-LOCAL: the fast cap inside a dirty region (a changed
 	// instance's stale bounce flushes there), the settings window everywhere else - a
 	// continuous mix over the margin so the flush boundary never prints as a noise step.
-	// CAMERA MOTION [S5.3]. The gather is not stationary under camera translation: which of
+	// CAMERA MOTION. The gather is not stationary under camera translation: which of
 	// a pixel's rays read the screen history and which the light voxels is a partition that
-	// follows the viewport, and the slow lane, fed by the reprojected history, kept the old
-	// partition for its whole window after every dolly (sharp patches converging on walls,
+	// follows the viewport, and the slow lane, fed by the reprojected history, would keep the
+	// old partition for its whole window after every dolly (sharp patches converging on walls,
 	// nothing the 3-sigma detector sees). While the camera moves the slow cap collapses
 	// toward the fast cap by the pixel's SCREEN SHARE - the screen-lit part of its gather -
 	// so cache-lit pixels keep their history (world light does not go stale with camera
@@ -490,10 +486,10 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	// the velocity buffer's business already.
 	float motion_collapse = u_gi_camera_motion * saturate(screen_share);
 	// RAW regions only (GiDirtyRegionFactorRaw): an emissive placement's reach-inflated
-	// region collapsed every pixel it covered (83% of the arena's frame for a 1 m sphere,
-	// gi_emissive_research 2.4); the pool a moved emitter lights is shortened through the
-	// moving-hit lane instead - the probes that aim at a moved emitter carry its contribution
-	// share as moving share (gi_screen_probe_trace_kernel.sh GiStoreScreenShare).
+	// region would collapse every pixel it covers, far beyond the emitter itself; the pool a
+	// moved emitter lights is shortened through the moving-hit lane instead - the probes that
+	// aim at a moved emitter carry its contribution share as moving share
+	// (gi_screen_probe_trace_kernel.sh GiStoreScreenShare).
 	float collapse = max(GiDirtyRegionFactorRaw(world_position), motion_collapse);
 	float slow_cap = mix(max(u_gi_max_accum, 1.0), max(u_gi_fast_accum, 1.0), collapse);
 	// HIT-MOTION FAST UPDATE: the fraction of the gather's rays

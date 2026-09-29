@@ -144,7 +144,7 @@ void global_sdf_clipmap::refresh_instance_entry_hashes(const std::vector<global_
     // The per-instance entry is independent of the level; only the membership test is per
     // level. Hashing it once per content revision instead of once per level per frame is
     // what keeps a mover's frame from paying four walks of the whole instance list. Revision
-    // 0 means "unknown" and refreshes every call, the old always-recompute behaviour.
+    // 0 means "unknown" and refreshes every call.
     const bool current = instances_revision != 0 && instances_revision == instance_entry_hash_revision_ &&
                          instance_entry_hashes_.size() == instances.size();
     if(current)
@@ -266,9 +266,9 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
         // voxels and the origin inherits the alignment.)
         const float extent = get_level_extent(i);
         // Snap COARSENING (still a multiple of the attribute voxel, so the toroidal identity
-        // invariant above holds): at attribute granularity level 0 re-snapped - and fully
-        // recomposed its 128^3 non-toroidal distance volume plus attributes - every 0.25 m of
-        // camera travel, which at walking speed made it dirty essentially every frame. Eight
+        // invariant above holds): at attribute granularity level 0 would re-snap - and fully
+        // recompose its 128^3 non-toroidal distance volume plus attributes - every 0.25 m of
+        // camera travel, which at walking speed dirties it essentially every frame. Eight
         // attribute voxels per snap makes that every 2 m at level 0 (scaling per level), an 8x
         // cut in recompose frequency for half a snap of guaranteed-coverage margin at the
         // window edge, which the cross-fade band and the coarser level behind it absorb.
@@ -277,8 +277,7 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
         target_origin[i] = snapped_center - math::vec3(extent * 0.5f);
         // The fingerprint is a pure function of (level bounds, reach, instance content). With
         // the content revision and the target origin both unchanged, last frame's value is
-        // the answer, and the full instance walk - which ran for every level on every frame,
-        // change or not - is skipped.
+        // the answer, and the full instance walk is skipped.
         if(revision_cached && target_origin[i] == cached_target_origin_[i])
         {
             target_fingerprint[i] = cached_target_fingerprint_[i];
@@ -296,10 +295,9 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
         // EDIT COALESCING (GI_CLIPMAP_EDIT_THROTTLE_FRAMES), leading-edge: a continuously
         // edited instance re-fingerprints this level EVERY frame, and each recompose is the
         // full distance volume + attributes AND a vis-memo generation bump that turns every
-        // light-voxel relight into a miss - measured as 4.8 ms drag frames against 2.8 for
-        // pure camera motion. The FIRST edit after a quiet stretch recomposes immediately
-        // (idle_start - the pinned editor behaviour); a continuous stream coalesces to the
-        // window cadence (window_open is the release valve; note the diff persists after
+        // light-voxel relight into a miss. The FIRST edit after a quiet stretch recomposes
+        // immediately (idle_start - the pinned editor behaviour); a continuous stream coalesces
+        // to the window cadence (window_open is the release valve; note the diff persists after
         // the stream ends and keeps re-stamping last_content_seen_, so the FINAL state
         // lands through window_open, within one window of the last recompose). Origin
         // re-snaps stay immediate, and the `stale_updates > 0` term latches a level already
@@ -521,9 +519,9 @@ void global_sdf_clipmap::compose_level(uint32_t index, const std::vector<global_
     // that can reach it rather than every instance the level as a whole overlaps.
     //
     // The per-level cull above is not enough on its own: the coarsest level spans the whole scene,
-    // so nearly every instance survives it and the inner loop below becomes voxels x instances --
-    // measured at 64^3 x ~1600 for a city block, about a second of aggregate CPU for one level,
-    // which is what made composition a visible hitch whenever the camera crossed a coarse voxel.
+    // so nearly every instance survives it and the inner loop below becomes voxels x instances,
+    // which on a dense scene makes composition a visible hitch whenever the camera crosses a
+    // coarse voxel.
     //
     // The bounds are inflated by the same reach: a voxel must find every instance within encoding
     // distance, not only the ones containing it. Cells are several voxels across, which keeps the
@@ -565,8 +563,8 @@ void global_sdf_clipmap::compose_level(uint32_t index, const std::vector<global_
                   [&](uint32_t z)
                   {
                       // On the POOL thread's own lane. The enclosing scope runs on the main
-                      // thread, which blocks on the futures and therefore reports ~98% idle --
-                      // a reading that makes a 45 ms composition look free. The real work only
+                      // thread, which blocks on the futures and therefore reports as idle --
+                      // a reading that makes a long composition look free. The real work only
                       // becomes visible with a marker inside the parallel body, and it is also
                       // the only way to tell genuine compute from time spent queued behind
                       // whatever else is sharing this pool.
@@ -620,10 +618,8 @@ void global_sdf_clipmap::compose_level(uint32_t index, const std::vector<global_
                                   // and therefore on how they were binned: two correct traversals
                                   // of the same scene produce different voxels.
                                   //
-                                  // Found by test_clipmap_compose_shader_transcription_matches_cpu,
-                                  // which compared this against a differently ordered gather and
-                                  // disagreed in BOTH directions -- the signature of order
-                                  // dependence rather than of a missing instance.
+                                  // test_clipmap_compose_shader_transcription_matches_cpu guards
+                                  // this by comparing against a differently ordered gather.
                                   if(nearest >= 0.0f && to_bounds >= nearest)
                                   {
                                       continue;
@@ -686,16 +682,14 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                     (math::vec3(cell) + math::vec3(0.5f)) * attr_voxel_size;
                 // The COMPOSED field's band judges surfaceness, alone. Deep interiors are
                 // excluded by it already - they read the bake's conservative empty-inside
-                // distances, well outside the band (measured on the thick-box fixture with no
-                // other gate). A gradient gate briefly existed here to trim the saturated ring
-                // just inside surface bricks, and was REMOVED for cause: a thin wall's field is
-                // a VALLEY - it rises on both sides, the central difference along the wall
-                // normal cancels to ~0 - so the gate's plateau signature matched every wall
-                // thinner than two attribute voxels, which in built content is most of them at
-                // every cascade. That presented as unattributed (yellow) surfaces everywhere
-                // and starved the whole bounce loop through the "honest darkness" reads. The
-                // ring it protected against costs a few over-lit sub-surface voxels; the walls
-                // it rejected cost the system its energy.
+                // distances, well outside the band. No gradient gate trims the saturated ring
+                // just inside surface bricks: a thin wall's field is a VALLEY - it rises on
+                // both sides, the central difference along the wall normal cancels to ~0 - so
+                // a plateau test would match every wall thinner than two attribute voxels,
+                // which in built content is most of them at every cascade, and leave those
+                // surfaces unattributed, starving the bounce loop through the "honest
+                // darkness" reads. The ring costs a few over-lit sub-surface voxels; rejecting
+                // the walls would cost the system its energy.
                 const float field_distance = sample_level(index, center);
                 if(field_distance >= outside_distance || std::fabs(field_distance) > band)
                 {
@@ -703,13 +697,11 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                 }
                 // TOP-2 attribution, blended by proximity - not winner-take-all. A coarse voxel
                 // genuinely CONTAINS a mixture of the surfaces inside it, and linear albedo
-                // mixing is the correct prefilter for diffuse; the argmin this replaced painted
-                // whole coarse voxels one instance's colour (measured: red halos around distant
-                // awnings once coarse faces became measurable). Both slots are tracked
-                // min-style with index tie-breaks, so the update is IDEMPOTENT under repeated
-                // candidate visits - the property that keeps this loop and the shader's
-                // duplicate-visiting grid walk in exact agreement, which is what argmin was
-                // originally chosen for.
+                // mixing is the correct prefilter for diffuse; an argmin would paint whole
+                // coarse voxels one instance's colour. Both slots are tracked min-style with
+                // index tie-breaks, so the update is IDEMPOTENT under repeated candidate
+                // visits - the property that keeps this loop and the shader's
+                // duplicate-visiting grid walk in exact agreement.
                 float m1 = attr_reach;
                 float m2 = attr_reach;
                 size_t i1 = instances.size();
@@ -733,12 +725,12 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                     }
                     const math::vec4 local = instance.world_to_local * math::vec4(center, 1.0f);
                     // Compete at TRUE surface distance (mirrors cs_gi_clipmap_attributes.sc): a
-                    // two-sided shell reads |distance to sheet| - half_thickness, so raw |d| put
-                    // its zero isosurface - a phantom skin half a metre off the cloth at
+                    // two-sided shell reads |distance to sheet| - half_thickness, so raw |d| would
+                    // put its zero isosurface - a phantom skin half a metre off the cloth at
                     // production bake scales - ahead of honest signed fields wherever the skin
-                    // crossed them, painting curtain and rope albedo onto Sponza's stone. Adding
-                    // back the applied half-thickness (zero for signed fields) restores the
-                    // unsigned sheet distance.
+                    // crosses them, painting curtain and rope albedo onto the surfaces around
+                    // them. Adding back the applied half-thickness (zero for signed fields)
+                    // restores the unsigned sheet distance.
                     const float shell_bias =
                         instance.sdf->is_two_sided ? instance.sdf->two_sided_thickness : 0.0f;
                     const float magnitude =
@@ -767,13 +759,11 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                 }
                 // Single-source voxels copy EXACTLY: (a * w) / w is not an identity in
                 // float, and a one-ULP wobble flips quantisation on boundary values (0.8
-                // lands precisely on the 204.5 rounding edge - measured as 48 wrong-material
-                // voxels on a one-box fixture).
+                // lands precisely on the 204.5 rounding edge).
                 const auto& first = instances[i1];
                 // Emissive is a SOURCE: its power scales with the emitting area, so a small
                 // emitter must not light the world through a coarse voxel's whole
-                // cross-section (a 0.5 m cube read as a 2 m blob is a 16x amplifier -
-                // measured as red on buildings tens of metres away). Scaled by the
+                // cross-section (a 0.5 m cube read as a 2 m blob is a 16x amplifier). Scaled by the
                 // instance's largest silhouette over the voxel's cross-section; albedo keeps
                 // full-value stamping (bounded reflectance, no power of its own). Mirrors
                 // GiAttrEmissiveAreaFraction in cs_gi_clipmap_attributes.sc - the expression

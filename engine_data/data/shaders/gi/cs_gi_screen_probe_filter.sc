@@ -1,5 +1,5 @@
 /*
- * GI probe-space filter + irradiance convolution (plan 3.4) - one thread group per probe.
+ * GI probe-space filter + irradiance convolution - one thread group per probe.
  *
  * Filters each direction across the 3x3 probe neighbourhood - a 3-probe kernel in probe space
  * is a ~48-pixel kernel in screen space [S21 s57] - with the two guards that matter:
@@ -10,25 +10,14 @@
  *    is the fix for the naive test's failure - distant hits have no parallax, always pass, and
  *    leak over local shadowing.
  *
- * SKIPPED REGIONS FILTER AT THE PARENT LATTICE. Where the adaptive gather interpolated probes
- * (mode 2) the surface was SAMPLED at the even-lattice parents - one traced tile per 2x2 - while
- * a stride-1 kernel reached half the footprint that sample density needs, and most of what it
- * reached were blends of the centre's own rays. The radiance-only passes therefore tap at
- * GI_FILTER_PARENT_STRIDE wherever the centre probe or one of its eight direct neighbours is
- * interpolated; the final pass stays at stride 1 and closes the a-trous gaps. Measured
- * 2026-09-19 (Sponza, adaptive probes, 3 passes; Indirect rest std p95 | rest frame delta p95 |
- * turn 2 deg/f delta | residual that moves under a 3 degree turn): spacing 8 0.91 | 0.69 | 1.22
- * | 5.5 -> 0.61 | 0.51 | 1.05 | 4.2 (adaptive off: 0.64 | 0.43 | 0.92 | 2.8); spacing 16 with the
- * spatial denoise 0.90 | 0.61 | 1.17 | 7.8 -> 0.72 | 0.50 | 1.11 | 6.5 (off: 0.75 | 0.49 | 0.98 |
- * 6.1), for +0.005 ms. The price is the look: soft lighting on flat surfaces blurs to about what
- * the parent spacing's own filter does (converged on-vs-off difference 1.3-2.7 -> 2.8-4.4 levels
- * at spacing 8). Striding the final pass too measured no quieter and a further 20% off the look.
+ * Every pass taps the direct neighbours, interpolated probes (the adaptive gather) included:
+ * a wider stride over skipped regions doubles the kernel's reach and the parallax the angle
+ * test tolerates, and blurs contact shading off the corners it belongs to.
  *
  * Then projects the filtered sphere onto third-order spherical harmonics (nine solid-angle weighted
  * coefficients per probe) and evaluates the clamped-cosine convolution from them into the probe's 8x8
  * octahedral IRRADIANCE tile (E(n)/pi), which is what integration samples at each pixel's own normal - Lumen's
- * irradiance path (ScreenProbeConvertToIrradiance). Against the exact per-direction cosine sum it replaced:
- * per-frame noise unchanged, lit images 1-8% brighter (tasks/lumen_parity_log.md).
+ * irradiance path (ScreenProbeConvertToIrradiance).
  */
 
 #include "bgfx_compute.sh"
@@ -36,9 +25,8 @@
 #include "gi/gi_probe_common.sh"
 
 SAMPLER2D(s_probe_radiance, 0);
-/// RW: this pass also writes the probe's 4x4 importance mip into record slots 0-3 (the slots
-/// the retired SH design left spare), which next frame's trace reads - through the buffer it
-/// already binds - to supersample bright cones. No new bindings anywhere.
+/// RW: this pass also writes the probe's 4x4 importance mip into record slots 0-3, which next
+/// frame's trace reads - through the buffer it already binds - to supersample bright cones.
 BUFFER_RW(b_gi_probes, vec4, 7);
 IMAGE2D_WO(s_probe_irradiance_out, rgba16f, 2);
 /// The filtered RADIANCE (rgb, w = the probe's own hitT lane verbatim, so the next pass's
@@ -47,13 +35,8 @@ IMAGE2D_WO(s_probe_irradiance_out, rgba16f, 2);
 /// pass's is what the rough specular (fs_gi_rough_specular.sc) integrates its lobes over.
 IMAGE2D_WO(s_probe_filtered_out, rgba16f, 3);
 /// x = 1 for a radiance-only pass (write s_probe_filtered_out and stop), 0 for the final
-/// pass that also convolves to irradiance and writes the importance mip. y = 1 while the adaptive
-/// gather skips probes (settings::adaptive_probes): only then can a record hold mode 2, so the
-/// stride test below costs nothing otherwise.
+/// pass that also convolves to irradiance and writes the importance mip.
 uniform vec4 u_gi_probe_filter;
-
-/// Tap stride in skipped regions: the adaptive gather's parent lattice (every second probe).
-#define GI_FILTER_PARENT_STRIDE 2
 
 /// Plane tolerance as a fraction of view distance - the adaptive spatial-error rule every
 /// screen-space consumer shares (GI-1.0's cell_size heuristic, here in its simplest form).
@@ -61,17 +44,15 @@ uniform vec4 u_gi_probe_filter;
 
 SHARED vec4 s_filtered[GI_PROBE_DIR_COUNT];
 /// The 3x3 neighbourhood's metas and plane weights are per-GROUP quantities: staged once by
-/// nine threads instead of being re-derived by all 64 (that was 704 buffer loads per probe
-/// where 11 carry information).
+/// nine threads instead of being re-derived by all 64 (704 buffer loads per probe where 11
+/// carry information).
 SHARED vec4 s_nb_meta[9];
 SHARED float s_nb_weight[9];
 /// Anchor-to-anchor distance, the parallax baseline of the adaptive angle test below.
 SHARED float s_nb_baseline[9];
-/// This group's tap stride (GiFilterTapStride), published by thread 0 for the filter phase.
-SHARED int s_tap_stride;
 /// Every thread's decoded direction, for the SH3 projection below: 64 threads re-decoding all
-/// 64 directions ran GiOctDecode (a normalize among other things) 4096 times per probe for
-/// 64 distinct values each thread already computed once.
+/// 64 directions would run GiOctDecode (a normalize among other things) 4096 times per probe
+/// for 64 distinct values each thread already computes once.
 SHARED vec3 s_dir[GI_PROBE_DIR_COUNT];
 /// Every texel's solid angle (GiOctTexelSolidAngle): the octahedral map is not equal-area.
 SHARED float s_omega[GI_PROBE_DIR_COUNT];
@@ -88,27 +69,6 @@ SHARED vec4 s_sh[9];
 #define GI_SH_BASIS_2_XX_YY  0.546274
 #define GI_SH_COSINE_BAND_1  (2.0 / 3.0)
 #define GI_SH_COSINE_BAND_2  0.25
-
-/// 1, or GI_FILTER_PARENT_STRIDE on a radiance-only pass where the probe or a direct neighbour
-/// was interpolated (see the header). Group-uniform: a function of the records alone.
-int GiFilterTapStride(ivec2 probe)
-{
-	if(u_gi_probe_filter.x < 0.5 || u_gi_probe_filter.y < 0.5)
-	{
-		return 1;
-	}
-	bool skipped_region = false;
-	UNROLL
-	for(int m = 0; m < 9; ++m)
-	{
-		int mx = clamp(probe.x + m % 3 - 1, 0, u_gi_probe_count_x - 1);
-		int my = clamp(probe.y + m / 3 - 1, 0, u_gi_probe_count_y - 1);
-		uint record = (GiProbeRecord(mx, my, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
-		float mode = b_gi_probes[record + uint(GI_PROBE_META)].w;
-		skipped_region = skipped_region || (mode > 1.5 && mode < 2.5);
-	}
-	return skipped_region ? GI_FILTER_PARENT_STRIDE : 1;
-}
 
 NUM_THREADS(8, 8, 1)
 void main()
@@ -130,15 +90,8 @@ void main()
 	s_omega[dir_index] = GiOctTexelSolidAngle(local, GI_PROBE_DIR_EDGE);
 	if(dir_index < 9)
 	{
-		// The nine staging threads each derive the stride (it addresses their neighbour);
-		// thread 0 publishes it for the filter phase behind the barrier.
-		int staging_stride = center_valid ? GiFilterTapStride(probe) : 1;
-		if(dir_index == 0)
-		{
-			s_tap_stride = staging_stride;
-		}
-		int ox = (dir_index % 3 - 1) * staging_stride;
-		int oy = (dir_index / 3 - 1) * staging_stride;
+		int ox = dir_index % 3 - 1;
+		int oy = dir_index / 3 - 1;
 		int nx = probe.x + ox;
 		int ny = probe.y + oy;
 		float plane_weight = 0.0;
@@ -175,13 +128,11 @@ void main()
 		UNROLL
 		for(int fetch_n = 0; fetch_n < 9; ++fetch_n)
 		{
-			int fetch_x = clamp(probe.x + (fetch_n % 3 - 1) * s_tap_stride, 0, u_gi_probe_count_x - 1);
-			int fetch_y = clamp(probe.y + (fetch_n / 3 - 1) * s_tap_stride, 0, u_gi_probe_count_y - 1);
+			int fetch_x = clamp(probe.x + fetch_n % 3 - 1, 0, u_gi_probe_count_x - 1);
+			int fetch_y = clamp(probe.y + fetch_n / 3 - 1, 0, u_gi_probe_count_y - 1);
 			neighbour_values[fetch_n] =
 			    texelFetch(s_probe_radiance, GiProbeAtlasBase(fetch_x, fetch_y, 0) + local, 0);
 		}
-		// Same neighbour order as the old oy-outer / ox-inner walk, so the summation order -
-		// and with it the floating-point result - is unchanged.
 		UNROLL
 		for(int n = 0; n < 9; ++n)
 		{
@@ -195,9 +146,9 @@ void main()
 			// The hitT-clamped reprojection test, only when both probes actually HIT (a
 			// completed/sky texel has no parallax to test and shares freely). The limit is
 			// PARALLAX-ADAPTIVE: a co-planar neighbour's hit reprojects with an error of
-			// about baseline/hitT purely from geometry, so a fixed pi/50 rejected ALL
+			// about baseline/hitT purely from geometry, so a fixed pi/50 would reject ALL
 			// sharing for hits within ~16 baselines - exactly the voxel-read band, whose
-			// per-probe sampling bias then stood unfiltered as wall blotches. The accepted
+			// per-probe sampling bias would then stand unfiltered as wall blotches. The accepted
 			// angle is GI_FILTER_PARALLAX_SCALE x that intrinsic error, capped
 			// (GI_FILTER_ANGLE_RELAX_MAX - contact scale stays the screen trace's), floored
 			// by the published pi/50 for the far field (min of cosines = wider angle wins).
@@ -267,7 +218,7 @@ void main()
 	if(center_valid && local.y == 0 && local.x < 4)
 	{
 		// Explicit components rather than a dynamically indexed vec4 write, which does not
-		// survive every backend translation (see lessons on HLSL-only failures).
+		// survive every backend translation.
 		float block_luminance[4];
 		for(int b = 0; b < 4; ++b)
 		{

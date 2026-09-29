@@ -50,7 +50,7 @@ constexpr size_t k_max_brick_candidates = 64;
 
 /// How far the one-voxel shell floor may exceed the authored two-sided thickness before the
 /// bake spends resolution to close the gap (see the thin-geometry escalation in bake_mesh_sdf).
-/// Four keeps mildly-coarse shells - awnings, banners - baking exactly as they always have,
+/// Four leaves mildly-coarse shells - awnings, banners - at the voxel their bounds give them,
 /// while catching the order-of-magnitude phantoms (a rope shelled to 10-20x its diameter).
 constexpr float k_max_shell_floor_ratio = 4.0f;
 
@@ -953,8 +953,8 @@ auto prepare_bake(const sdf_source_geometry& geometry,
  *
  * Split out so a mip chain can share ONE accelerator across its levels. The BVH build and the
  * connected-component scan are linear-ish in the TRIANGLE count and do not shrink when the voxel
- * grows, so rebuilding them per level made a three-level chain cost about twice a single bake
- * instead of the third extra its voxel work actually needs (measured on Bistro: 11.1 s -> 21.7 s).
+ * grows, so rebuilding them per level would make a three-level chain cost about twice a single
+ * bake instead of the third extra its voxel work actually needs.
  */
 auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
                                  const mesh_sdf_bake_settings& settings,
@@ -974,7 +974,7 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
     // field resolves, the reach of its narrow band (encode_range voxels), the size of a brick
     // (brick_size voxels) and its memory (a surface is 2D, so cost goes as the inverse square).
     // Auto answers it with the longest BOUNDS axis over @ref resolution, which is a poor proxy:
-    // a 10 m wall and a 1 m prop at the same resolution differ seventeenfold in the size they
+    // a 10 m wall and a 1 m prop at the same resolution differ tenfold in the size they
     // actually resolve, and walls and floors are the surfaces light leaks through.
     const float requested_voxel_size =
         settings.target_voxel_size > 0.0f ? settings.target_voxel_size
@@ -984,13 +984,13 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
     // bounds wraps thin geometry in a shell many times fatter than the author intended - at
     // material-merged scales (a 3 cm parapet rope spanning 30 m bakes metre voxels) the result
     // is not a coarse field but a PHANTOM: a metre-thick blob that occludes rays and steals GI
-    // attribution over a whole neighbourhood (measured: Sponza's gallery floor attributed
-    // rope-red). REQUEST a voxel the authored thickness can justify and let the existing caps
-    // arbitrate: the grow loop below reclaims whatever the per-axis and total budgets cannot
-    // afford, so volume-filling meshes end up exactly where they always did, while long-thin
-    // bounds - the pathological case - fit easily and bake representable shells. This is also
-    // what makes Max Total Voxels an effective lever for thin shells: before it, Resolution
-    // pinned the voxel and a raised budget could not reach anything finer.
+    // attribution over a whole neighbourhood. REQUEST a voxel the authored thickness can
+    // justify and let the caps below arbitrate: the grow loop reclaims whatever the per-axis
+    // and total budgets cannot afford, so volume-filling meshes end up where the budgets alone
+    // put them, while long-thin bounds - the pathological case - fit easily and bake
+    // representable shells. This is also what makes Max Total Voxels an effective lever for
+    // thin shells: without it, Resolution would pin the voxel and a raised budget could not
+    // reach anything finer.
     if(use_unsigned)
     {
         const float shell_target = k_max_shell_floor_ratio *
@@ -1041,22 +1041,20 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
     //
     // The dense grid is admittedly the wrong SHAPE for a cost measure: a surface is
     // two-dimensional, so it charges a hollow or flat mesh for space it never stores. Budgeting
-    // the bricks actually stored instead was built and reverted, because without somewhere to
-    // spend the difference it only loosens this cap, and loosening it is what the note below
-    // rules out. If it comes back, it replaces this cap rather than joining it -- one budget.
+    // the bricks actually stored instead would, without somewhere to spend the difference, only
+    // loosen this cap, and loosening it is what the note below rules out. A stored-brick budget
+    // would replace this cap rather than join it -- one budget.
     //
-    // The voxel size only ever GROWS from here. Spending leftover budget on a FINER voxel was
-    // implemented and reverted: the band is mesh_sdf::encode_range voxels WIDE, so its reach in
-    // world units is proportional to the voxel. Halving the voxel doubles surface detail and
-    // halves the distance over which the field can report anything at all, and every consumer
-    // that reads a DISTANCE rather than a hit degrades with it -- the clipmap composition,
-    // sphere-trace step lengths, the soft-shadow penumbra term. Measured on the oracle suite's
-    // colonnade (test_shadow_through_colonnade): refining the columns from a 0.33 m band to a
-    // 0.11 m one made grazing sun rays through the gaps read as shadowed. Floored so the band
-    // stayed at 0.25 m, the global clipmap's own finest voxel, it still misreported and started
-    // leaking shadow as well. The sizes this produces today are already close to the shortest
-    // band the composition tolerates, so finer fields need a wider encode_range first -- a
-    // storage-format change shared with the tracing shaders, not a sizing change.
+    // The voxel size only ever GROWS from here; leftover budget is never spent on a FINER voxel.
+    // The band is mesh_sdf::encode_range voxels WIDE, so its reach in world units is
+    // proportional to the voxel. Halving the voxel doubles surface detail and halves the
+    // distance over which the field can report anything at all, and every consumer that reads a
+    // DISTANCE rather than a hit degrades with it -- the clipmap composition, sphere-trace step
+    // lengths, the soft-shadow penumbra term. With too short a band, grazing sun rays through
+    // narrow gaps read as shadowed (test_shadow_through_colonnade exercises this). The sizes
+    // this produces are already close to the shortest band the composition tolerates, so finer
+    // fields need a wider encode_range first -- a storage-format change shared with the tracing
+    // shaders, not a sizing change.
     //
     // Iterated because each correction changes the padding, which changes the grid. Growth is
     // monotone, so this converges in a couple of rounds; the bound is a guard, not a limit.
@@ -1219,9 +1217,8 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
                                                                             collect_reach,
                                                                             candidates.data(),
                                                                             uint32_t(candidates.size()));
-            // An over-full list is slower to scan than the traversal it replaced, and an empty one
-            // carries no sign at all. Both fall back to the per-voxel query, which is exactly the
-            // pre-existing path.
+            // An over-full list is slower to scan than the traversal, and an empty one carries no
+            // sign at all. Both fall back to the per-voxel query.
             const bool use_candidates = candidate_count > 0 && candidate_count <= candidates.size();
             for(uint32_t lz = 0; lz < mesh_sdf::brick_stride; ++lz)
             {
@@ -1365,7 +1362,7 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
     }
     // ONE accelerator for the whole chain. The BVH build and the connected-component scan are
     // linear-ish in the TRIANGLE count and do not shrink when the voxel grows, so paying for them
-    // per level is what made a three-level chain cost about twice a single bake rather than the
+    // per level would make a three-level chain cost about twice a single bake rather than the
     // third extra its voxel work needs.
     sdf_triangle_accelerator accelerator;
     bool use_unsigned = false;
@@ -1400,10 +1397,8 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
         // A coarser level is not automatically a smaller one. The padding is encode_range voxels
         // per side, so it grows with the voxel: a level covers a proportionally larger region at a
         // proportionally larger voxel, and once that padding dominates the mesh's own extent the
-        // grid stops shrinking at all. A small submesh then bakes three levels of identical cost
-        // that are identically expensive to store -- measured on a 49k-triangle sphere at
-        // resolution 8, where a three-level chain cost 2.5x a single bake instead of 1.3x, and on
-        // Bistro, where the chain doubled a 1591-submesh bake.
+        // grid stops shrinking at all. A small submesh would then bake three levels of identical
+        // cost that are identically expensive to store.
         //
         // Predicted rather than measured-then-discarded because the point is not to pay for it.
         const math::uvec3 predicted =
@@ -1436,9 +1431,9 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
 auto sample_mesh_sdf(const mesh_sdf& sdf, const math::vec3& local_position) -> float
 {
     // Deliberately NOT is_valid(): that walks every indirection entry, which is linear in the
-    // brick count and was being paid on every one of the millions of samples a clipmap
-    // composition makes. The range check it existed to provide is done below, on the single
-    // entry actually dereferenced.
+    // brick count and would be paid on every one of the millions of samples a clipmap
+    // composition makes. The range check it provides is done below, on the single entry
+    // actually dereferenced.
     if(!sdf.is_sampleable())
     {
         return std::numeric_limits<float>::max();
@@ -1455,11 +1450,11 @@ auto sample_mesh_sdf(const mesh_sdf& sdf, const math::vec3& local_position) -> f
         // rather than merely nice: without it this is zero exactly on the boundary, where
         // every entering ray starts. (2) The field's own reading at the nearest boundary point
         // minus the distance to it (the field is 1-Lipschitz). (1) alone reads four mesh
-        // voxels on every box face however far the surface is, and the coarse cascade levels'
-        // acceptance plus expand (up to 1.87 m) accepted that as a hit: every bounding box was
-        // a phantom surface at levels 1-3 - a solid ceiling over an open courtyard where the
-        // building's box top crosses the atrium (measured 2026-09-12). (2) keeps the box faces
-        // open wherever the field behind them is.
+        // voxels on every box face however far the surface is, which the coarse cascade levels'
+        // acceptance plus expand (up to 1.87 m) would take as a hit: every bounding box would be
+        // a phantom surface at levels 1-3 - a solid ceiling over an open courtyard wherever a
+        // building's box top spans it. (2) keeps the box faces open wherever the field behind
+        // them is.
         const float to_bounds = std::sqrt(distance_squared_to_bounds(sdf.bounds, local_position));
         const math::vec3 boundary_grid = math::clamp(grid_position, math::vec3(0.0f), grid_max);
         return std::max(to_bounds + sdf.get_bounds_padding(),

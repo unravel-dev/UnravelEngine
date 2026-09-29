@@ -9,7 +9,7 @@ $input v_texcoord0
  * is only that surface's color while the pixel still shows that surface. A blit could not say;
  * this pass stores the depth the reprojection must agree with - the clip w the readers compute
  * from the same (TAA-unjittered) view-projection next frame - so a disoccluded reprojection is
- * declined instead of read (GiReadHistory). A depth-history sampler was not an option: the
+ * declined instead of read (GiReadHistory). A depth-history sampler is not an option: the
  * gather's trace already binds every stage it has.
  *
  * Stored as view depth rather than device depth: the alpha is a 16-bit float, whose relative

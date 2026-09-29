@@ -4,11 +4,11 @@
 /*
  * ROUGHNESS TIERS of the GI reflections, shared by the two composites that split each pixel
  * between them. The traced tier (fs_gi_reflection_composite.sc) saw its occluders and goes
- * into RBUFFER with the traced layers; the rough tier - last frame's resolved gather, which
- * carries the probe lattice's visibility and not the pixel's - is untraced and goes into the
- * probe layer (fs_gi_reflection_rough.sc), which the indirect pass occludes. Their weights
- * reproduce the single blend they replace: over the probe layer P, the traced value T at
- * coverage c and the rough value R used to composite as c * mix(T, R, s) + (1 - c) * P.
+ * into RBUFFER with the traced layers; the rough tier - this frame's rough specular and
+ * resolved gather, which carry the probe lattice's visibility and not the pixel's - is
+ * untraced and goes into the probe layer (fs_gi_reflection_rough.sc), which the indirect pass
+ * occludes. Together their weights compose, over the probe layer P, the traced value T at
+ * coverage c and the rough value R as c * mix(T, R, s) + (1 - c) * P.
  */
 
 #include "gi/gi_constants.sh"

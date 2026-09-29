@@ -1,8 +1,8 @@
 /*
- * One-time GPU capture of a material texture's MEAN colour into the texture-mean buffer
- * (gi_rewrite_plan.md 3.1). The attribute composer multiplies an instance's base colour factor by
- * this mean, so bounce light carries the surface's true average reflectance instead of the
- * factor alone (white on every textured material - the over-bright-GI failure mode).
+ * One-time GPU capture of a material texture's MEAN colour into the texture-mean buffer. The
+ * attribute composer multiplies an instance's base colour factor by this mean, so bounce light
+ * carries the surface's true average reflectance instead of the factor alone (white on every
+ * textured material - the over-bright-GI failure mode).
  *
  * The mip chain is already a box-filtered mean of the texture, so this samples an 8x8 grid
  * at the mip whose resolution is about 8x8 and averages - for a mipped texture that reads

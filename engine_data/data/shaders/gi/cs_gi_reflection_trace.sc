@@ -20,7 +20,7 @@
 #include "gi/gi_constants.sh"
 
 // The output image sits on stage 7: OpenGL guarantees only eight image units (0-7), while
-// a buffer tolerates the high stages, so the trace list moved up to 15.
+// a buffer tolerates the high stages, so the trace list sits on 15.
 BUFFER_RO(b_gi_refl_list, uint, 15);
 
 /// A slot of the texture-mean block the args pass staged into the list. Slot 0 is the
@@ -35,8 +35,8 @@ vec3 GiReflectionMeanAlbedo(uint slot)
 }
 
 /// The k-th environment SH coefficient from the list's SH block (layout in
-/// cs_gi_reflection_args.sc): the kernel's sky reads it from here, which freed stage 14
-/// for last frame's colour.
+/// cs_gi_reflection_args.sc): the kernel's sky reads it from here, which leaves stage 14
+/// free for last frame's colour.
 vec3 GiReflectionEnvSh(int k)
 {
 	uint base = 2u + uint(GI_REFLECTION_MEAN_SLOTS) * 3u + uint(k) * 3u;
@@ -46,8 +46,8 @@ vec3 GiReflectionEnvSh(int k)
 }
 
 // Arms the kernel's remodulation block and gi_light_voxels.sh's attribute-albedo read
-// (SAMPLER3D stage 11), the list-sourced sky SH (GiReflectionEnvSh above) and, on the
-// freed stage 14, last frame's colour for the on-screen hit upgrade. Must precede the
+// (SAMPLER3D stage 11), the list-sourced sky SH (GiReflectionEnvSh above) and, on
+// stage 14, last frame's colour for the on-screen hit upgrade. Must precede the
 // kernel include.
 #define GI_LIGHT_VOXEL_READ_ALBEDO
 #define GI_REFLECTION_ENV_SH_FROM_LIST

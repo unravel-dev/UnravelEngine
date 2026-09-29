@@ -8,9 +8,7 @@ $input v_texcoord0
  * cycle multiplying by albedo < 1. The artistic GI intensity multiplier breaks that contract
  * when it rides the loop: the composite carries intensity x bounce, the gather re-ingests it,
  * and the effective cycle gain becomes intensity x albedo x view-factor - supercritical FIRST
- * at creases and in enclosed rooms, where opposing faces see each other at view factors near
- * one (measured: glowing crease lines that brighten with the intensity slider, and a sealed
- * room running away to its clamps).
+ * at creases and in enclosed rooms, where opposing faces see each other at view factors near one.
  *
  * This pass rebuilds the snapshot with the bounce term UNSCALED: the GI resolve's rgb carries
  * intensity x G and its alpha the weight it replaced the environment with, so the composite's

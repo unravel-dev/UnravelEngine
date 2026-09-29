@@ -23,33 +23,31 @@
 
 #if defined(GI_SUN_SHADOWMAP_TIER)
 /*
- * SUN SHADOW-MAP TIER: cascade 0 of the sun's own CSM, sampled instead of traced wherever a
- * position lands inside it.
+ * SUN SHADOW-MAP TIER: the cascades of the sun's own CSM, sampled instead of traced wherever a
+ * position lands inside one of them.
  *
  * The traced field CANNOT answer the sun through real openings the bake fattened shut:
  * material-grouped architecture bakes whole arcades as one submesh, mostly non-manifold, so
  * every member becomes a two-sided shell floored at one mesh voxel - metres-scale slabs at
- * production resolutions - and the composed cascade inherits the fat. Measured on Sponza:
- * the corridor's light voxels converged black while the raster's shadow-mapped sun pools lit
- * the same floor on screen. The shadow map IS the raster's answer, so sampling it makes the
- * GI's notion of "where the sun lands" agree with the image by construction, and one tap is
- * far cheaper than the sphere trace it replaces.
+ * production resolutions - and the composed cascade inherits the fat, so a traced corridor's
+ * light voxels converge black while the raster's shadow-mapped sun pools light the same floor
+ * on screen. The shadow map IS the raster's answer, so sampling it makes the GI's notion of
+ * "where the sun lands" agree with the image by construction, and one tap is far cheaper than
+ * the sphere trace it replaces.
  *
- * EVERY split (phase E of gi_single_lighting_plan.md): the includer (cs_gi_light_voxels) has
- * exactly one free resource stage, so the cascades arrive as the layers of ONE texture array
- * (gi_light_voxel_pass.cpp blits the generator's maps into it on the frames the relight runs;
- * nothing is re-rendered and the shadow pass's per-cascade caster sets are untouched). The
- * receiver picks the SMALLEST cascade whose crop contains it, exactly the raster's rule
- * (fs_pbr_lighting.sh): that rule is what the shadow pass's nested-cascade caster culling is
- * exact for (shadow.cpp - a caster fully inside a nearer crop is drawn into that map only,
- * and whatever can shadow a receiver of crop j shares its light-space column and is in map
- * j). Selecting by view distance instead would read maps that lack the near casters.
- * Outside every crop, outside the frustum slices the cascades were fitted to (see the
- * contract in GiSunShadowmapVisibility), and for every other light, the traced field
- * remains the answer. A world-stable map of the GI's own would answer the unseen faces
- * too, but it costs a second scene render per window scroll, which was judged not worth
- * it. Gated by a define so the debug direct view keeps showing the PURE traced tier -
- * the diagnostic contrast that found this bug.
+ * EVERY split: the includer (cs_gi_light_voxels) has exactly one free resource stage, so the
+ * cascades arrive as the layers of ONE texture array (gi_light_voxel_pass.cpp blits the
+ * generator's maps into it on the frames the relight runs; nothing is re-rendered and the
+ * shadow pass's per-cascade caster sets are untouched). The receiver picks the SMALLEST cascade
+ * whose crop contains it, exactly the raster's rule (fs_pbr_lighting.sh): that rule is what the
+ * shadow pass's nested-cascade caster culling is exact for (shadow.cpp - a caster fully inside
+ * a nearer crop is drawn into that map only, and whatever can shadow a receiver of crop j
+ * shares its light-space column and is in map j). Selecting by view distance instead would
+ * read maps that lack the near casters. Outside every crop, outside the frustum slices the
+ * cascades were fitted to (see the contract in GiSunShadowmapVisibility), and for every other
+ * light, the traced field remains the answer. A world-stable map of the GI's own would answer
+ * the unseen faces too, but it would cost a second scene render per window scroll. Gated by a
+ * define so the debug direct view keeps showing the PURE traced tier for contrast.
  */
 SAMPLER2DARRAY(s_gi_sun_shadowmap, 14);
 /// World -> shadow texcoord of every cascade (the raster's u_shadowMapMtx0..3), layer = split.
@@ -81,26 +79,23 @@ uniform vec4 u_gi_sun_shadowmap_bias;
  * AREA average, not a point sample: the receiver is a whole attribute-voxel FACE (up to
  * metres at coarse levels), and sun pools at that scale are cell-sized - a single centre
  * tap answers "is this exact point lit" and quantises a 40%-sunlit cell to all-or-nothing,
- * which erased every pool beyond the finest window (measured: the injected pools stopped
- * at level 0's edge). A 2x2 quadrature over the face integrates fractional coverage, which
- * is exactly the energy the cell re-emits. The face is axis-aligned, so its tangents are
- * axis permutations, and the projection is affine, so the four coords are two vector adds
- * each.
+ * which erases the pools of every level past the finest window. A 2x2 quadrature over the
+ * face integrates fractional coverage, which is exactly the energy the cell re-emits. The
+ * face is axis-aligned, so its tangents are axis permutations, and the projection is affine,
+ * so the four coords are two vector adds each.
  *
  * Split out of GiEvalLight so the sun-tier debug view (cs_gi_light_voxels) attributes
  * coverage through EXACTLY the code the lighting takes - a parallel implementation would
  * drift and the attribution would lie.
  *
  * THE RECEIVER BIAS IS CAPPED (GI_SUN_SHADOWMAP_SLOPE_CAP): the slope cover the quadrature
- * needs was one LEVEL voxel of light-space depth, which also meant the tier reported LIT
- * through any occluder thinner than that voxel - at the coarse cascades metres, a sealed
- * room lit from outside through its roof by a path no field defence can see (measured:
- * interior ceiling brightest, sun-white, falling off downward). The coarse levels declined
- * the map for that (GI_SUN_SHADOWMAP_MAX_VOXEL 0.125 kept only level 0). Now every level
- * biases by min(voxel, cap) - level 0 is unchanged and a coarse face carries level 0's
- * bias: a tilted coarse face may self-shadow at its outer taps (a darker pool), never light
- * a sealed room, and the large axis-aligned sunlit surfaces (floors, sun-facing walls) read
- * the raster's exact answer at every level. The level gate sits FIRST: declining costs one
+ * needs is one LEVEL voxel of light-space depth, which would also report LIT through any
+ * occluder thinner than that voxel - at the coarse cascades metres, a sealed room lit from
+ * outside through its roof by a path no field defence can see. Every level biases by
+ * min(voxel, cap) instead, so a coarse face carries level 0's bias: a tilted coarse face may
+ * self-shadow at its outer taps (a darker pool), never light a sealed room, and the large
+ * axis-aligned sunlit surfaces (floors, sun-facing walls) read the raster's exact answer at
+ * every level. The level gate (GI_SUN_SHADOWMAP_MAX_VOXEL) sits FIRST: declining costs one
  * compare and skips the projection and the taps.
  *
  * @param voxel_size Voxel of the answering cascade level: the quadrature half-extent.
@@ -121,12 +116,11 @@ bool GiSunShadowmapVisibility(vec3 world_position, vec3 world_normal, float voxe
 	// raster samples them for nothing outside the frustum. A crop footprint - a bounding
 	// sphere of its slice - reaches metres BEHIND and beside the camera, so a world-space
 	// receiver there projects inside a map's texcoords while nothing about the fit is
-	// contracted for it. Measured: faces of a sealed room BEHIND the camera read LIT through
-	// cascade 0 while the camera faced away, and every camera turn then revealed a lit room
-	// that decayed over seconds through the relight EMA and the closed-room bounce (the
-	// first-look glow). A receiver outside the frustum - behind the near plane, past the last
-	// cascade's far plane, or outside the field of view - declines here and the traced field
-	// answers, exactly as it does past the maps' edges. Costs one mat4 transform per face.
+	// contracted for it: a sealed room BEHIND the camera would read LIT through cascade 0, and
+	// a camera turn would reveal a lit room decaying over seconds through the relight EMA and
+	// the closed-room bounce. A receiver outside the frustum - behind the near plane, past the
+	// last cascade's far plane, or outside the field of view - declines here and the traced
+	// field answers, exactly as it does past the maps' edges. Costs one mat4 transform per face.
 	int splits = clamp(u_gi_sun_splits, 1, 4);
 	float far_last = splits == 1 ? u_gi_sun_shadowmap_slice.x
 	                             : (splits == 2 ? u_gi_sun_shadowmap_slice.y
@@ -213,18 +207,17 @@ uniform vec4 u_gi_shadow_params;
 /// x = hit acceptance in voxels, y = cone relaxation.
 ///
 /// The relaxation ships as ZERO for shadow rays: a shadow ray accepts CONTACT only. With a cone,
-/// a near-miss within the answering level's voxel -- metres, at coarse levels -- resolved as a
-/// hit, and a resolved hit is FULL occlusion below, so every sun ray threading a real opening
-/// (a colonnade, a window, clearance over a roofline) went black (measured: Sponza's arcade
-/// light voxels converged black corridor-wide). The grazing-cost problem the cone once solved
-/// belongs to the exhaustion contract now: a budget-dead ray answers with its accumulated
-/// clearance (see below), which reads a graze as penumbra rather than as washout or blackness.
+/// a near-miss within the answering level's voxel -- metres, at coarse levels -- would resolve as
+/// a hit, and a resolved hit is FULL occlusion below, so every sun ray threading a real opening
+/// (a colonnade, a window, clearance over a roofline) would go black. Grazing cost belongs to
+/// the exhaustion contract instead: a budget-dead ray answers with its accumulated clearance
+/// (see below), which reads a graze as penumbra rather than as washout or blackness.
 uniform vec4 u_gi_shadow_params2;
 #define u_gi_shadow_surface_bias u_gi_shadow_params2.x
 #define u_gi_shadow_relaxation   u_gi_shadow_params2.y
 /// z = 1 while the editor's GI census is armed (gi_quiescence_gate_pass::is_census_armed): the
 /// relight's census rows (GI_STATS_RELIGHT_FACES_MOVED / _VISIBLE) accumulate only then. A lane
-/// of a uniform every relight consumer binds anyway (it carried the finest cascade voxel once).
+/// of a uniform every relight consumer binds anyway.
 #define u_gi_stats_census        (u_gi_shadow_params2.z > 0.5)
 /// How far along the ray a shadow ray starts, in voxels. Same reasoning as the gather ray:
 /// see gi_resolve_pass::settings::ray_start_voxels.
@@ -266,42 +259,37 @@ float GiTraceShadow(vec3 world_position, vec3 world_normal, vec3 to_light, float
 	// a surface that is simply too bright with nothing to say why.
 	//
 	// A FIXED count, deliberately - do not scale this by incidence. A slope-aware start
-	// (start / dot(ray, normal), tried in round 15c against what turned out to be the trace's
-	// exhaustion blob) teleports the origin THROUGH any sun-facing wall closer than the scaled
-	// skip, and the launch suppression then walks out the far side: measured as lit strips at
-	// wall bases on the shadow side (test_shadow_blob_floor_building). Walking out of the launch
-	// band at grazing incidence is the suppression walk's job, and budget death on long grazing
-	// marches is answered by the trace's saturation step boost + the clearance fallback below.
+	// (start / dot(ray, normal)) teleports the origin THROUGH any sun-facing wall closer than the
+	// scaled skip, and the launch suppression then walks out the far side, lighting strips at
+	// wall bases on the shadow side. Walking out of the launch band at grazing incidence is the
+	// suppression walk's job, and budget death on long grazing marches is answered by the
+	// trace's saturation step boost + the clearance fallback below.
 	origin += to_light * (u_gi_shadow_ray_start * voxel_size);
 	// Expand OFF (-1): an occlusion-only ray toward a light must not see surfaces fattened by
-	// up to a coarse voxel diagonal. Both directions of this trade were MEASURED: expand from
-	// the mesh-tier boundary onward visibly darkened sunlit Bistro (grazing rays along real
-	// geometry, audit A1c's failure), while the leak it chased turned out to be the world-probe
-	// self-shadow bias tunnelling through walls, not shadow rays at all. Thin-geometry defence
-	// for these rays stays the bake-time shell floor within the mesh tier.
+	// up to a coarse voxel diagonal - expanding from the mesh-tier boundary onward visibly
+	// darkens sunlit scenes wherever rays graze real geometry. Thin-geometry defence for these
+	// rays is the bake-time shell floor within the mesh tier.
 	SdfRayHit hit = SdfTraceRayEx(origin, to_light, max_distance, near_field,
 	                              u_gi_shadow_max_steps, u_gi_shadow_surface_bias,
 	                              u_gi_shadow_relaxation, false, -1.0);
-	// Exhaustion now REPORTS A HIT inside the trace itself (GI trace rework - a ray that ran
-	// out of budget occludes at its final position), so a grazing shadow ray that gives up reads
-	// as shadowed rather than as a surface that is inexplicably too bright. Over-occlusion is the
-	// direction that degrades gracefully, and it is the same contract every tracing consumer now
-	// shares; with the relaxation at zero, grazing rays reach that contract instead of being
-	// cone-caught early, and its clearance fallback is what grades them.
+	// The trace REPORTS A HIT on exhaustion (a ray that runs out of budget occludes at its final
+	// position, flagged exhausted): over-occlusion is the direction that degrades gracefully, and
+	// it is the contract every tracing consumer shares. With the relaxation at zero, grazing rays
+	// reach that contract instead of being cone-caught early, and the clearance fallback below is
+	// what grades them.
 	//
 	// BEAM visibility, not a binary ray: the receiver is a VOXEL, so what reaches it is a
 	// parallel beam half a receiving voxel wide (= voxel_size, the level voxel: the attribute
 	// voxel spans two of them). Clearance smaller than the half-width partially occludes the
-	// beam - a continuous penumbra where the binary answer flipped per voxel, whose quantised
-	// lit/unlit patchwork read as blotches through the trilinear read and the gather (measured:
-	// the test room's walls near the door's light path). One min per march step pays for it.
-	// EXHAUSTION IS NOT OCCLUSION for a sun ray: a march that ran out of budget while
-	// GRAZING open space (long floor-parallel paths at low sun angles) reported as a hit and
-	// stamped a deterministic black shadow blob onto every voxel whose ray grazed longest -
-	// anchored to the cascade layout (camera position) and swinging with the light (measured,
-	// round 15; same failure Bistro exposed in the bounce). The ray never FOUND a surface, so
-	// its beam clearance is the honest answer: a corridor at least a voxel wide stays lit, a
-	// hug-the-floor graze keeps a proportional penumbra. Resolved hits stay fully dark.
+	// beam - a continuous penumbra where a binary answer would flip per voxel, and its quantised
+	// lit/unlit patchwork would read as blotches through the trilinear read and the gather. One
+	// min per march step pays for it.
+	// EXHAUSTION IS NOT OCCLUSION for a sun ray: a march that runs out of budget while GRAZING
+	// open space (long floor-parallel paths at low sun angles), taken as a hit, would stamp a
+	// deterministic black shadow blob onto every voxel whose ray grazes longest - anchored to the
+	// cascade layout (camera position) and swinging with the light. The ray never FOUND a
+	// surface, so its beam clearance is the honest answer: a corridor at least a voxel wide stays
+	// lit, a hug-the-floor graze keeps a proportional penumbra. Resolved hits stay fully dark.
 	if(hit.hit && !hit.exhausted)
 	{
 		return 0.0;
@@ -376,18 +364,17 @@ vec3 GiEvalDirectLighting(vec3 world_position, vec3 world_normal, float voxel_si
  * VOXEL instead of per face.
  *
  * A voxel's sun-facing faces launch from within one attribute voxel of each other along the
- * identical direction, so tracing each one separately paid up to three ~100 m marches for
- * one answer - and for level >= 2 (no CSM cover, no mesh near field) that was the majority
- * of the pass's shadow cost. The trace is memoised per (voxel, light): the first face out of
+ * identical direction, so tracing each one separately would pay up to three ~100 m marches
+ * for one answer. The trace is memoised per (voxel, light): the first face out of
  * shadow-map coverage traces from a SHARED origin - the voxel centre lifted along the ray
  * itself, by the same centre lift the faces use plus the answering level's normal bias, then
  * walked by the voxel's dither inside its own empty ball (GiDitherInRoom) - and every later
  * face reuses the verdict with its own n.l. The CSM tier stays per face:
  * four taps, area-averaged over the face, and the sharper answer wherever it covers.
  *
- * The receiver was already treated as a voxel-wide beam (see GiTraceShadow), so a shared
- * per-voxel verdict is the same contract at the same scale; what changes is only that the
- * faces of one voxel can no longer disagree about the traced tier's answer.
+ * The receiver is treated as a voxel-wide beam anyway (see GiTraceShadow), so a shared
+ * per-voxel verdict is the same contract at the same scale; the only difference is that the
+ * faces of one voxel cannot disagree about the traced tier's answer.
  *
  * One cached slot: scenes with several directional lights fall back to per-face traces for
  * all but the first one encountered, which is the safe direction. A cached index of -2
@@ -398,11 +385,10 @@ vec3 GiEvalDirectLighting(vec3 world_position, vec3 world_normal, float voxel_si
  * SHARED-ORIGIN VALIDATION (GI_SHARED_ORIGIN_REDESCENT_VOXELS). The shared ray launches
  * from the voxel centre lifted along the light by the centre's depth plus half an attribute
  * voxel. That lift is the answering level's own scale - 0.5 to 1 m at the coarse levels -
- * and it crosses any occluder thinner than itself standing between the voxel and the sun
- * (measured: the door tunnel's floor faces lit through a 25 cm baffle, the shared ray
- * starting on the baffle's sunlit side). The field along the lift tells the two cases
- * apart: leaving the voxel's own surface the distance RISES; a re-descent before the
- * origin means the segment entered another surface. Sampled once per voxel, on the face
+ * and it crosses any occluder thinner than itself standing between the voxel and the sun,
+ * starting the shared ray on the occluder's sunlit side. The field along the lift tells the
+ * two cases apart: leaving the voxel's own surface the distance RISES; a re-descent before
+ * the origin means the segment entered another surface. Sampled once per voxel, on the face
  * that would establish the memo.
  */
 bool GiSharedOriginClear(int level, vec3 voxel_center, vec3 shared_origin, float voxel_size)

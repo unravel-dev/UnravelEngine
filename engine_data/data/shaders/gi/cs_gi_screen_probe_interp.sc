@@ -1,5 +1,5 @@
 /*
- * GI adaptive-gather reconstruction: probes the trace marked INTERPOLATED (meta mode 2)
+ * GI adaptive-gather reconstruction: probes the classify pass marked INTERPOLATED (meta mode 2)
  * get their radiance tile rebuilt from their even-lattice parents, texel by texel - the same
  * bilinear blend the integrate pass performs per pixel, materialised once per tile instead of
  * traced 64 times. Runs between the trace and the probe-space filter, so the filter and
@@ -104,8 +104,8 @@ void main()
 	barrier();
 	if(!valid)
 	{
-		// Dead anchor: the compacted trace never launches a group for it, so the black tile
-		// the trace used to write moves here - this pass owns every non-traced tile.
+		// Dead anchor: the compacted trace never launches a group for it, so its black tile is
+		// written here - this pass owns every non-traced tile.
 		imageStore(s_probe_radiance_rw, own_texel, vec4(0.0, 0.0, 0.0, -1.0));
 		return;
 	}

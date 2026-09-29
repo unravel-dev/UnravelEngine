@@ -17,7 +17,7 @@ namespace unravel
 {
 
 /**
- * @brief The GI's world-space specular tier (plan phase 9), layered UNDER SSR.
+ * @brief The GI's world-space specular tier, layered UNDER SSR.
  *
  * Draws into the reflection buffer over the authored probes, before SSR composites the sharp
  * on-screen result on top - contributing exactly what SSR cannot: reflected content that is
@@ -64,14 +64,14 @@ public:
         /// agree. Null degrades those hits to the voxel walk.
         gfx::texture::ptr prev_color;
         /// Temporal window in frames for the stochastic ray; <= 1 bypasses the accumulation
-        /// (raw passthrough) - the A/B knob for verifying the temporal is alive.
+        /// (raw passthrough) - the diagnostic for verifying the temporal is alive.
         int temporal_frames = gi::GI_REFLECTION_TEMPORAL_FRAMES;
         /// Times a far-field ray caught in an object's fattened clipmap shell resumes past it
         /// before it is shaded as that surface (the GI setting reflection_finder_resumes;
         /// clamped to [GI_REFLECTION_FINDER_RESUMES_MIN, GI_REFLECTION_FINDER_RESUMES_MAX]).
         int finder_resumes = gi::GI_REFLECTION_FINDER_RESUMES;
         /// This frame's velocity buffer, passed explicitly by the pipeline. A valid texture
-        /// IS the enable; null = legacy matrix reprojection of the receiver.
+        /// IS the enable; null = matrix reprojection of the receiver.
         gfx::texture::ptr velocity;
         /// True while the velocity pass drew ANY mover within one temporal window: caps the
         /// temporal's stillness release at GI_REFLECTION_MOVER_STILL_CAP so a still camera
@@ -184,9 +184,9 @@ private:
 
     /// The deliverable trace path: classify answers sky / degenerate / rough texels and
     /// compacts the tracing ones into a dense list, args sizes the indirect launch, and the
-    /// 64-lane trace groups run only rays - the fragment form (program_, kept as the
-    /// fallback) paid a whole wave wherever one quad pixel traced, and its worst-case
-    /// register footprint throttled even the early-out pixels.
+    /// 64-lane trace groups run only rays - the fragment form (program_, the fallback)
+    /// pays a whole wave wherever one quad pixel traces, and its worst-case register
+    /// footprint throttles even the early-out pixels.
     struct reflection_classify_program : uniforms_cache
     {
         gpu_program::ptr program;
@@ -222,7 +222,7 @@ private:
     {
         gpu_program::ptr program;
         /// The environment SH texture the args pass stages into the list's SH block: the
-        /// trace kernel reads the sky from the list, which freed its stage 14 for the
+        /// trace kernel reads the sky from the list, which frees its stage 14 for the
         /// previous-frame colour.
         gfx::program::uniform_ptr s_gi_env_sh;
 
@@ -257,8 +257,8 @@ private:
         gfx::program::uniform_ptr s_hiz;
         gfx::program::uniform_ptr s_gi_diffuse;
         gfx::program::uniform_ptr s_light_voxels;
-        /// Stage 14 of the compute form: last frame's composited colour (the sky SH moved
-        /// into the list buffer's SH block to free the stage).
+        /// Stage 14 of the compute form: last frame's composited colour (the sky SH rides
+        /// the list buffer's SH block, which frees the stage).
         gfx::program::uniform_ptr s_gi_prev_color;
         gfx::program::uniform_ptr s_gi_attr_albedo;
         /// Reprojection of a world hit into last frame's snapshot (the unjittered pair).

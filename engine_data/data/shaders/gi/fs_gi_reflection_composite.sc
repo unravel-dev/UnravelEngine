@@ -8,22 +8,22 @@ $input v_texcoord0
  * SSR composites the sharp on-screen result on top afterwards.
  *
  * SPATIAL FINISH: one roughness-scaled 3x3 cross-bilateral over the ACCUMULATED result - the
- * temporal EMA alone leaves visible sample shimmer once the GGX lobe widens (~0.35 measured),
- * because one stochastic ray per frame over an 8-frame window cannot fully integrate a wide
- * lobe. Neighbour weight ramps with roughness over the traced band (a mirror keeps its
+ * temporal EMA alone leaves visible sample shimmer once the GGX lobe widens, because one
+ * stochastic ray per frame over an 8-frame window cannot fully integrate a wide lobe.
+ * Neighbour weight ramps with roughness over the traced band (a mirror keeps its
  * sharpness untouched, wide lobes average fully - SSR's spatial-denoise convention), guarded
  * by depth and normal edge-stops so reflections never bleed across silhouettes. Filtering
  * AFTER accumulation means the blur never feeds back into history.
  *
- * GATED, not unconditional. The roughness ramp alone kept filtering every pixel of the
- * traced band for as long as it existed, so a glossy surface that converged hundreds of
- * frames ago was still being blurred - a permanent sharpness loss across the whole band for
- * shimmer that was no longer there. Lumen runs its equivalent only where the temporal
+ * GATED, not unconditional. The roughness ramp alone would keep filtering every pixel of the
+ * traced band for as long as it exists, so a glossy surface that converged hundreds of
+ * frames ago would still be blurred - a permanent sharpness loss across the whole band for
+ * shimmer that is no longer there. Lumen runs its equivalent only where the temporal
  * variance says the pixel is still noisy, plus a ramp over the first few accumulated frames
  * (LumenReflectionDenoiserSpatial.usf:83-104, the ramp new in UE 5.8). We have no second
  * moment, so the gate is built from the local deviation of the same 3x3 the kernel already
  * fetches, taken with the accumulation count that already rides the target's alpha. A
- * converged, flat pixel now skips the kernel outright - which also skips its depth and
+ * converged, flat pixel skips the kernel outright - which also skips its depth and
  * normal fetches, so the gate pays for itself.
  */
 
@@ -61,11 +61,11 @@ void main()
 	// keep full sharpness, lobes near the cutoff average the whole neighbourhood.
 	float blur_scale = smoothstep(0.0, GI_REFLECTION_ROUGH_CUTOFF, nd.roughness);
 	// Two early-outs bound the kernel to the band that has shimmer to hide. Below: authored
-	// mirrors are rarely exactly 0, so `<= 0.0` never fired - a roughness-0.02 pixel ran all
-	// 24 taps to apply a total neighbour weight under 0.004. Anything below 0.05 is beneath
-	// the target's own quantisation. Above: pixels past the cutoff never traced - their
-	// accumulated value is last frame's temporally filtered, denoised resolve, which has no
-	// stochastic shimmer for the kernel to remove.
+	// mirrors are rarely exactly 0, and a near-mirror pixel would run all 24 taps to apply a
+	// negligible total neighbour weight - anything below 0.05 is beneath the target's own
+	// quantisation. Above: pixels past the cutoff never traced - their accumulated value is
+	// last frame's temporally filtered, denoised resolve, which has no stochastic shimmer for
+	// the kernel to remove.
 	BRANCH
 	if(blur_scale < 0.05 || nd.roughness >= GI_REFLECTION_ROUGH_CUTOFF)
 	{

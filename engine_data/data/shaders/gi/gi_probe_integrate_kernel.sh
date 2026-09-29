@@ -2,14 +2,14 @@
 #define __GI_PROBE_INTEGRATE_KERNEL_SH__
 
 /*
- * GI integration (plan 3.4): per pixel, the four probes bracketing it, weighted by bilinear
+ * GI integration: per pixel, the four probes bracketing it, weighted by bilinear
  * position and plane agreement, each evaluated at the PIXEL's own normal from its convolved
  * octahedral irradiance tile. No layers, no traced fallback, no contact rays - pixels no probe
  * serves fall back to the WORLD probes (positional and stable), then to the environment SH.
- * Contact detail is the short-range AO's job, composited after the temporal filter (Phase 6).
+ * Contact detail is the short-range AO's job, composited after the temporal filter.
  *
- * Output convention unchanged from v1: rgb = irradiance/pi, a = the weight with which it
- * replaces the environment term downstream.
+ * Output convention: rgb = irradiance/pi, a = the weight with which it replaces the
+ * environment term downstream.
  *
  * SHARED KERNEL BODY, two consumers: fs_gi_probe_integrate_temporal.sc fuses the temporal
  * blend onto the gather (the deliverable path - the gather never round-trips through the
@@ -35,7 +35,7 @@ SAMPLER2D(s_probe_irradiance, 2);
 /// The GTAO output (rgb = world bent normal * 0.5 + 0.5, a = visibility), full resolution.
 /// Stage 3 is the mesh-SDF instance buffer in sdf_common.sh, which this program never
 /// references (no instance trace here - the cage-visibility march reads the clipmap alone),
-/// so the register is free on every backend. 13 became the sparse world-probe index
+/// so the register is free on every backend. 13 is the sparse world-probe index
 /// (gi_world_probes.sh), live here through the irradiance cascade read; 14 is the temporal
 /// variant's velocity buffer.
 SAMPLER2D(s_gi_gtao, 3);

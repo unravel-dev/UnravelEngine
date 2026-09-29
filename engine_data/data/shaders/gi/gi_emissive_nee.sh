@@ -2,7 +2,7 @@
 #define __GI_EMISSIVE_NEE_SH__
 
 /*
- * Explicit emissive sampling for the probe tracers (GI S4, next-event estimation).
+ * Explicit emissive sampling for the probe tracers (next-event estimation).
  *
  * A probe's cone rays find a small emitter by chance: a bulb-sized source at a few metres
  * subtends well under one percent of the hemisphere, so its energy arrives as rare bright
@@ -32,7 +32,7 @@
  * MIRROR OF surface_cache_system::emitter / upload_instances and gi_emitter_packing.h.
  *
  * Every helper returns by value: the shaderc HLSL path miscompiles out-parameters in
- * .sh helpers silently (tasks/lessons.md).
+ * .sh helpers silently.
  */
 
 #include "gi/gi_constants.sh"
@@ -48,11 +48,11 @@ struct GiEmitter
 	vec3 radiance;
 	/// The piece's ranking weight, luminance x emitting area - ALWAYS POSITIVE. The upload
 	/// spends the fourth lane on the extent, so this is RECONSTRUCTED from the decode below
-	/// rather than read; only a legacy table (a positive lane) supplies it directly.
+	/// rather than read; only an unpacked (positive) power lane supplies it directly.
 	float power;
 	/// The piece's axis-aligned extent in metres, decoded from the power lane (the upload
-	/// packs it there, negated and offset by one); zero with has_extent false when the
-	/// table came from an upload that still wrote the power.
+	/// packs it there, negated and offset by one); zero with has_extent false when the lane
+	/// holds an unpacked (positive) power.
 	vec3 extent;
 	bool has_extent;
 };
@@ -109,9 +109,9 @@ GiEmitter GiLoadEmitter(int index)
 		float y8 = floor(mod(extent_bits / 256.0, 256.0));
 		float z8 = floor(extent_bits / 65536.0);
 		e.extent = vec3(x8, y8, z8) * (GI_EMISSIVE_NEE_SEGMENT / 255.0);
-		// The packed lane is NEGATIVE, so leaving it in power made every consumer's score
-		// negative: the reflection near-field's descending top-K starts its scores at zero,
-		// so no piece was ever selected and the correction silently returned its identity.
+		// The packed lane is NEGATIVE, so the power is rebuilt rather than left in place: every
+		// consumer ranks by a positive score (the reflection near-field's descending top-K
+		// starts its scores at zero, so a negative one would never be selected).
 		// MIRROR OF gi::emitter_selection_weight - the same weight the CPU ranks the table by.
 		e.power = GiEmitterLuminance(e) * GiEmitterEmittingArea(e.extent);
 	}

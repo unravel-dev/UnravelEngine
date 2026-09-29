@@ -38,10 +38,10 @@ auto carries_no_surface(const math::vec3& a, const math::vec3& b, const math::ve
     // 10000:1 -- comfortably past any tessellation an artist authors, while leaving the 10:1 to 100:1
     // trim, mullions and floor strips that make up much of a building's occlusion.
     //
-    // Measured by test_surface_test_keeps_ordinary_tessellation: a 40:1 panel measures 0.025, so a
-    // threshold anywhere near 0.1 discards it outright and the geometry produces no field at all.
-    // That failure is near-invisible -- a missing occluder leaks light somewhere across the project
-    // rather than drawing a block in front of the camera -- which is why the value has a test.
+    // A 40:1 panel scores 1/40 = 0.025, so a threshold anywhere near 0.1 would discard it outright
+    // and the geometry would produce no field at all. That failure is near-invisible -- a missing
+    // occluder leaks light somewhere across the project rather than drawing a block in front of the
+    // camera -- which is why test_surface_test_keeps_ordinary_tessellation pins the value.
     //
     // This CANNOT be used to suppress an unrepresentable field. A submesh whose parts are scattered
     // is not thin, so no threshold separates it from real geometry; that is what the sparsity check

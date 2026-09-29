@@ -9,9 +9,9 @@ $input v_texcoord0
  * the two agree, and the diffuse resolve alone where no probe served the pixel. Both are
  * gathered at the probe lattice and carry its visibility, not the pixel's, so they go into the
  * probe layer, which the indirect pass occludes (ComposeIndirectSpecular) - Lumen occludes its
- * rough specular the same way - while the traced tier went into RBUFFER. The weights
- * (gi_reflection_tiers.sh) reproduce the single blend the two replace, and read the same
- * history coverage the traced composite did. The weight also joins the layer's union coverage
+ * rough specular the same way - while the traced tier goes into RBUFFER. The weights
+ * (gi_reflection_tiers.sh) split one blend between the two tiers, and read the same history
+ * coverage as the traced composite. The weight also joins the layer's union coverage
  * in alpha, so the indirect pass fills only what neither the probes nor this tier answer with
  * the environment (CompleteProbeLayer).
  *

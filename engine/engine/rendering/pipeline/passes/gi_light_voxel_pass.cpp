@@ -76,8 +76,8 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     if(!program_.is_valid())
     {
         // Loudly, once: a program that failed to create leaves the light volume unwritten -
-        // every downstream view then paints allocation garbage with a perfectly clean log,
-        // which is how a whole backend's GI stayed silently broken (measured: Linux GL).
+        // every downstream view then paints allocation garbage, and without this line the
+        // log stays clean while a whole backend's GI is broken.
         if(!invalid_warning_emitted_)
         {
             invalid_warning_emitted_ = true;
@@ -105,10 +105,9 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     auto& atlas = surface_cache.get_atlas();
     const auto& instances = surface_cache.get_instances();
     // The sun-tier debug write is a compiled VARIANT of the kernel, selected here - program
-    // choice is the one switch no uniform stomp or stale constant buffer can undo (the
-    // runtime-flag approach died twice with every CPU-side link verified). Falls back to the
-    // radiance program, loudly, if the variant never built: the view then shows all-magenta
-    // provenance, which is at least an honest "the write is not happening".
+    // choice is the one switch no uniform stomp or stale constant buffer can undo. Falls back
+    // to the radiance program, loudly, if the variant never built: the view then shows
+    // all-magenta provenance, which is at least an honest "the write is not happening".
     const bool want_debug = params.sun_tier_debug;
     const bool debug_available = program_.debug_program && program_.debug_program->is_valid();
     if(want_debug && !debug_available && !debug_invalid_warning_emitted_)
@@ -176,7 +175,7 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
                                    0.0f,
                                    0.0f};
     gfx::set_uniform(program_.u_gpu_light_params, light_params);
-    // Shadow tracing wholly owned by gi_constants (Phase 8): no settings, one source.
+    // Shadow tracing wholly owned by gi_constants: no settings, one source.
     const float shadow_params[4] = {float(gi::GI_SHADOW_DISTANCE),
                                     float(gi::GI_SHADOW_NORMAL_BIAS_VOXELS),
                                     float(gi::GI_RELIGHT_SHADOW_NEAR_FIELD),
@@ -250,10 +249,10 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
             // the raster samples them for nothing outside the frustum. A crop footprint (a
             // bounding sphere of its slice) reaches metres behind and beside the camera, and
             // receivers there project INTO a map while nothing about the fit is contracted
-            // for them - measured as LIT verdicts for sealed-room faces behind the camera
-            // (the room lights up while the camera faces away and decays when it turns: the
-            // first-look glow). The kernel declines outside the frustum and the traced
-            // field answers, exactly as it does past the maps' edges.
+            // for them - a map can answer LIT for sealed-room faces behind the camera (the
+            // room would light up while the camera faces away and decay when it turns). The
+            // kernel declines outside the frustum and the traced field answers, exactly as
+            // it does past the maps' edges.
             gfx::set_uniform(program_.u_gi_sun_shadowmap_camera_vp, params.camera_view_proj);
             gfx::set_uniform(program_.u_gi_sun_shadowmap_slice, slice_params);
             gfx::set_uniform(program_.u_gi_sun_shadowmap_bias, bias_params);
@@ -292,8 +291,8 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     const uint32_t attr_resolution = clipmap_gpu.get_attr_resolution();
     // y and camera.w mirror the debug state as TELEMETRY only - the kernel decides by which
     // program was compiled in (see the variant note in gi_light_voxels_kernel.sh). The lanes
-    // stay so a GPU-debugger capture can finally answer whether these uniforms ever arrive,
-    // the question two hunts could not settle from the CPU side.
+    // exist so a GPU-debugger capture can answer whether these uniforms arrive, which the
+    // CPU side cannot settle.
     // The frame lane carries the frame over light_voxel_frame_period, never the raw frame count:
     // past 2^24 a float frame quantises to multiples of 2 and then 4, freezing `frame % 4` on one
     // phase - three quarters of the surface set would silently stop relighting after ~77 h at
@@ -336,8 +335,8 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     // 0 means the memo is not yet seeded and the kernel takes the plain gated-march path.
     // Composed, not target: the verdicts are marched against the composed field, and during
     // an edit drag the target epoch churns every frame while the field only changes when
-    // the coalescing throttle lets a recompose land - keying on the target re-marched every
-    // relight against an unchanged field.
+    // the coalescing throttle lets a recompose land - keying on the target would re-march
+    // every relight against an unchanged field.
     uint32_t vis_memo_generation = 0;
     const auto& vis_memo = clipmap_gpu.get_bounce_vis_memo();
     if(vis_memo && vis_memo->is_valid())
@@ -358,9 +357,7 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     // crossing counts as a scroll as well: the crossing bumps the generation on the frame
     // the camera moved, while the composed origin follows one frame later, and on that one
     // frame every stale word would otherwise keep its verdicts against probe slots the
-    // window has just re-assigned (measured 2026-09-10: 24k corners and 17k face verdicts
-    // kept on the jump frame, a different one-rotation transient than stock's march, and
-    // the quiescence gate froze its residual in the emissive cell).
+    // window has just re-assigned.
     for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
     {
         const math::vec3& origin = view_clipmap.get_level(level).origin;
@@ -393,9 +390,10 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     const float memo_region_lane = memo_region_total > size_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS)
                                        ? -1.0f
                                        : float(memo_region_total);
-    // Every change is logged: bumps are legitimate on edits and window scrolls, but a stream
-    // of these with a parked camera in a static scene means an invalidation tracker churns
-    // and the memo can never hit - the CPU-side discriminator for a miss-shaped cost.
+    // Every change is tracked for the (silenced) log line below: bumps are legitimate on edits
+    // and window scrolls, but a stream of these with a parked camera in a static scene means an
+    // invalidation tracker churns and the memo can never hit - the CPU-side discriminator for a
+    // miss-shaped cost.
     if(vis_memo_generation != vis_memo_generation_logged_)
     {
         // APPLOG_INFO("[SurfaceCache] Bounce vis-memo generation {} -> {} (frame {}, epoch {}).",
@@ -422,10 +420,10 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     // of the surface set relights per frame, so every voxel's first relight after the change
     // has to snap. A LOCAL light change needs no snap: its influence region rides the dirty
     // regions, and inside one the kernel writes through per voxel (history_trusted).
-    // CAMERA TRAVEL DOES NOT SNAP (plan item 1.3): the attribute pass clears a scrolled-in
-    // slot to alpha 0 or seeds it at GI_LIGHT_VOXEL_SEED_ALPHA, and the kernel never blends a
-    // history below alpha 0.5 - keyed on the vis-memo generation, the snap discarded the whole
-    // volume's integration on every probe-cell crossing and scroll compose while moving.
+    // CAMERA TRAVEL DOES NOT SNAP: the attribute pass clears a scrolled-in slot to alpha 0 or
+    // seeds it at GI_LIGHT_VOXEL_SEED_ALPHA, and the kernel never blends a history below alpha
+    // 0.5 - a snap keyed on the vis-memo generation would discard the whole volume's
+    // integration on every probe-cell crossing and scroll compose while moving.
     // Debug variants overwrite the volume with attribution colors, so the rotation after they
     // clear snaps too. Generation 0 means the change tracker is unavailable - the EMA stays
     // off rather than integrating over undetected changes.
@@ -459,8 +457,8 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     gfx::set_uniform(program_.u_gi_vis_memo_params, vis_memo_params);
     // DIRTY REGIONS (gi_dirty_regions.sh): inside one the radiance store writes through
     // instead of folding into the EMA - the bounce it integrates there is the light a moved
-    // placement left, and blending it in at 1/8 per relight kept a moved emissive's pool in
-    // the volume for a rotation window after the temporal's hold had already expired.
+    // placement left, and blending it in at 1/8 per relight would keep a moved emissive's pool
+    // in the volume for a rotation window after the temporal's hold expires.
     {
         constexpr uint32_t max_regions = uint32_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS);
         float dirty_bounds[max_regions * 2u * 4u] = {};
@@ -486,8 +484,8 @@ auto gi_light_voxel_pass::run(gfx::render_view& rview, const run_params& params)
     {
         // The probe samplers are ACTIVE regardless of the ready flag (a uniform branch
         // eliminates nothing), and OpenGL fails the whole dispatch when an unbound sampler's
-        // unit-0 default collides with the 3D atlas bound there - which blacked out the light
-        // voxels and with them the entire GI chain on that backend. The ready flag in
+        // unit-0 default collides with the 3D atlas bound there - which would black out the
+        // light voxels and with them the entire GI chain on that backend. The ready flag in
         // u_gi_world_probe_params gates what is actually read.
         const auto black = default_textures::get().black_texture();
         gfx::set_texture(program_.s_world_probe_irradiance, 11, black);

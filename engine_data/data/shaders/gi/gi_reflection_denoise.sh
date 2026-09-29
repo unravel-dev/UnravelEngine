@@ -6,13 +6,12 @@
  * clamp in the temporal and the composite runs in.
  *
  * Ported from Lumen (LumenReflectionDenoiserCommon.ush:12-39,
- * r.Lumen.Reflections.DenoiserTonemapRange). Two properties, both of which this chain used
- * to lack:
+ * r.Lumen.Reflections.DenoiserTonemapRange). Two properties:
  *
  *  - BOUNDED RANGE. L / (1 + Lum / range) is near-linear up to scene-referred whites and
- *    compresses only spikes, so a single firefly tap can no longer carry a weighted mean
- *    and a single bright NEIGHBOUR can no longer stretch the history clamp box until it
- *    rejects nothing. Expanded back exactly at the store, so the accumulated mean stays a
+ *    compresses only spikes, so a single firefly tap cannot carry a weighted mean and a
+ *    single bright NEIGHBOUR cannot stretch the history clamp box until it rejects
+ *    nothing. Expanded back exactly at the store, so the accumulated mean stays a
  *    linear, pre-exposed radiance that the composite and RBUFFER can consume unchanged -
  *    and so the history's pre-exposure correction, which is a linear scale, stays valid.
  *

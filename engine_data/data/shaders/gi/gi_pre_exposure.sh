@@ -2,7 +2,7 @@
 #define __GI_PRE_EXPOSURE_SH__
 
 /*
- * PRE-EXPOSURE FOR THE GI (UE's Lumen scheme, tasks/auto_exposure_plan.md phase 4).
+ * PRE-EXPOSURE FOR THE GI (UE's Lumen scheme).
  *
  * Two spaces meet in the GI, and every read across the boundary converts:
  *

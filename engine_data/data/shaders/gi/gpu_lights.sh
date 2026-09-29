@@ -88,9 +88,9 @@ float GpuSpotAttenuation(vec3 light_vector, vec3 spot_direction, float cos_inner
  * Irradiance arriving at a world point from one light, UNSHADOWED.
  *
  * Lambertian: the caller multiplies by albedo / PI to get outgoing radiance. Shadowing is not
- * applied here -- until the shadow atlas is resident there is nothing to test against, and a
- * silently unshadowed result is far easier to reason about than one that is shadowed for some
- * lights and not others.
+ * applied here -- callers that shadow trace their own rays (the Ex form below hands them the
+ * geometry), and a silently unshadowed result is far easier to reason about than one that is
+ * shadowed for some lights and not others.
  */
 /// The Ex form also reports the shadow-ray geometry it already derived - direction toward the
 /// light and the distance to it - so callers that trace do not recompute the same length and

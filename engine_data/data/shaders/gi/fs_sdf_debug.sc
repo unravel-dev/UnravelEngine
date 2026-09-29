@@ -113,7 +113,7 @@ bool RunDiagnosticMode(vec3 ray_origin, vec3 ray_dir, out vec4 out_color)
 	out_color = vec4(0.0, 0.0, 0.0, 0.0);
 	vec3 inv_dir = 1.0 / max(abs(ray_dir), vec3_splat(1e-8)) * sign(ray_dir + vec3_splat(1e-20));
 	// LOOP on the fat-bodied loops here too (see sdf_common's compile-time note): a
-	// debug-only shader still costs every import 7+ seconds when fxc unrolls them.
+	// debug-only shader still costs every import seconds of compile time when fxc unrolls them.
 	LOOP
 	for(int i = 0; i < u_sdf_instance_count; ++i)
 	{
@@ -316,8 +316,8 @@ void main()
 		// mapped to its attribute voxel in the finest covering cascade.
 		//
 		//   MAGENTA -> hit outside every cascade level (per-instance tier answered alone).
-		//   YELLOW  -> the voxel is not marked SURFACE (attribution missed the hit - a band or
-		//              gradient-gate failure worth investigating if widespread).
+		//   YELLOW  -> the voxel is not marked SURFACE (attribution missed the hit - a band
+		//              failure worth investigating if widespread).
 		vec3 hit_position = ray_origin + ray_dir * hit.t;
 		float attr_blend;
 		float attr_answered_voxel;
@@ -329,7 +329,7 @@ void main()
 		}
 		// Level fallback, exactly as GiLightVoxelRead performs it: the blended isosurface can sit
 		// a coarse voxel off the finest level's own, so a reader steps down until a level's
-		// surface band covers the hit. Yellow now means NO level attributed it.
+		// surface band covers the hit. Yellow means NO level attributed it.
 		int attr_res = u_light_voxel_resolution;
 		vec4 albedo = vec4_splat(0.0);
 		int attributed_level = SDF_CLIPMAP_LEVEL_COUNT;
@@ -448,7 +448,7 @@ void main()
 		{
 			// How much of the cage's answer at this point is SKY - but from the FINEST covering
 			// level ALONE, deliberately without the cascade's far blend. The full cascade read
-			// could not distinguish the two remaining entry channels: level-N probes' own rays
+			// cannot distinguish the two sky entry channels: level-N probes' own rays
 			// escaping (writer) versus the blend band importing the next level's cage, whose
 			// probes straddle the walls and legitimately see sky (reader). This view separates
 			// them: warm colors here mean the covering level's OWN probes carry sky; a shell
@@ -466,7 +466,7 @@ void main()
 			//   here is an artifact of the TRACE (launch suppression releasing through thin
 			//   geometry at the mesh<->clipmap handover shell), not a cage leak. The real
 			//   gather guards these hits into honest darkness; this lane exists so seam
-			//   artifacts stop masquerading as reader leaks in this view.
+			//   artifacts do not masquerade as reader leaks in this view.
 			{
 				float hit_blend;
 				float hit_voxel;
@@ -793,10 +793,9 @@ void main()
 	{
 		// The LEVEL-0 world probe lattice itself, drawn as spheres where the probes actually
 		// sit. Every other probe view shades a SURFACE by what the cage answered there, which
-		// cannot show a probe buried inside a wall or a room the lattice missed entirely - the
-		// two states that decide whether probe relocation is worth building. Level 0 alone: it
-		// is the finest lattice and the one whose spacing decides whether a small room gets any
-		// probe at all.
+		// cannot show a probe buried inside a wall or a room the lattice missed entirely. Level 0
+		// alone: it is the finest lattice and the one whose spacing decides whether a small room
+		// gets any probe at all.
 		//
 		// "Which probes update" is not a binary: every probe traces one stratum of its
 		// directions every frame, so they all update, partially. What varies - and what this
@@ -807,10 +806,8 @@ void main()
 		//             sits inside geometry. Every cage using it renormalises onto its neighbours,
 		//             and a room whose corners are all red is one the lattice missed entirely.
 		//   BLUE   -> UNOCCUPIED: no geometry within GI_WORLD_PROBE_SLEEP_SPACINGS (it cannot be
-		//             a cage corner for any on-surface query; it still traces - sleeping it was
-		//             measured and dropped, see the constant). The share of blue IS the occupancy
-		//             measurement: a lattice that is mostly blue is one a sparse, on-demand
-		//             allocation could cover at a far finer spacing for the same slot count.
+		//             a cage corner for any on-surface query; it is counted, not slept, and
+		//             still traces). The share of blue IS the occupancy measurement.
 		//   (nothing drawn) -> no probe: the sparse level-0 pool holds a slot only for cells a
 		//             cage reader requested (gi_world_probes.sh), so an empty lattice point is
 		//             one nothing has asked for - the air of a space no gather ray completes in
@@ -829,8 +826,8 @@ void main()
 		float limit = hit.hit ? hit.t : u_max_distance;
 		// Only as far as the window actually REACHES. It is GI_WORLD_PROBE_AXIS_L0 cells wide
 		// and centred on the camera's cell, so it extends half that in each direction; marching
-		// the full width drew lattice points whose atlas slot serves a different cell entirely -
-		// grey spheres that are not probes at all, and most of the clutter in this view.
+		// the full width would draw lattice points whose atlas slot serves a different cell
+		// entirely - grey spheres that are not probes at all.
 		limit = min(limit, spacing * float((GI_WORLD_PROBE_AXIS_L0 - 1) / 2));
 		float best_t = limit;
 		ivec3 best_cell = ivec3(0, 0, 0);
@@ -863,9 +860,9 @@ void main()
 			}
 		}
 		// ONLY THE PROBES. This pass composites over the finished image, so writing zero alpha
-		// leaves the real scene showing through - which reads far better than the dimmed normal
-		// shading this replaced, where a busy surface competed with the spheres and a dark one
-		// made an unlit probe indistinguishable from the background.
+		// leaves the real scene showing through - which reads far better than a dimmed normal
+		// shading, where a busy surface competes with the spheres and a dark one makes an unlit
+		// probe indistinguishable from the background.
 		if(!found)
 		{
 			gl_FragColor = vec4(0.0, 0.0, 0.0, 0.0);
@@ -927,9 +924,9 @@ void main()
 			    u_gi_world_probe_atlas.xy;
 			vec3 irradiance = max(texture2DLod(s_world_probe_irradiance, irradiance_uv, 0.0).xyz,
 			                      vec3_splat(0.0));
-			// Tonemapped, with a floor. Raw irradiance made an unlit probe invisible against the
-			// scene and blew a bright one out to white, so the two states this view exists to
-			// separate - alive-and-dark versus not-drawn - looked identical.
+			// Tonemapped, with a floor. Raw irradiance would make an unlit probe invisible against
+			// the scene and blow a bright one out to white, so the two states this view exists to
+			// separate - alive-and-dark versus not-drawn - would look identical.
 			probe_color = irradiance / (vec3_splat(1.0) + irradiance) * 0.85 + vec3_splat(0.1);
 		}
 		// A headlight lambert so the lattice reads as spheres rather than flat discs.
@@ -1000,7 +997,7 @@ void main()
 		// whole multiples of the spacing, so a room whose air holds no lattice point has every
 		// corner of its cage buried and zeroed - and no other view shows that directly, because
 		// a starved cage renormalises onto whatever survived and still returns a plausible
-		// colour. Red here is where relocation would pay.
+		// colour.
 		//
 		//   GREEN   -> the cage answered at full weight.
 		//   ORANGE  -> partly rejected; the read renormalised onto the survivors.
@@ -1048,8 +1045,8 @@ void main()
 		//
 		// The factor is 1 only INSIDE a box and fades to 0 over the margin outside it, so the two
 		// are shown as different answers rather than as one ramp: the margin is a soft skirt one
-		// probe spacing wide, and painting it at full strength made a single small mover look
-		// like a scene-wide flush.
+		// probe spacing wide, and painting it at full strength would make a single small mover
+		// look like a scene-wide flush.
 		//
 		//   RED     -> inside a region: full flush weight.
 		//   AMBER   -> in the soft margin around one, by how much.
@@ -1088,8 +1085,7 @@ void main()
 		                                       hit.normal,
 		                                       max(direct_voxel, 0.01),
 		                                       u_gi_shadow_near_field);
-		// A neutral albedo keeps this a view of the LIGHTING rather than of surface colour,
-		// which the fields do not carry yet (material voxels are a later phase).
+		// A neutral albedo keeps this a view of the LIGHTING rather than of surface colour.
 		gl_FragColor = vec4(irradiance * 0.8 * u_view_scale, 1.0);
 		return;
 	}

@@ -37,8 +37,6 @@ public:
 
     struct settings
     {
-        /// Atlas size in bricks per axis. 32 gives 32768 bricks in a 320^3 R8 texture,
-        /// about 32 MB, which holds roughly a hundred typical props.
         /// Bricks per axis. Total capacity is the cube of this, and the backing texture is
         /// `atlas_brick_dim * brick_stride` voxels per axis (R8), so the memory cost is cubic
         /// too: 64 is a 640^3 texture at 262 MB, 72 is 720^3 at 373 MB.
@@ -48,8 +46,8 @@ public:
         /// contributing to global illumination -- so it is worth leaving headroom.
         uint32_t atlas_brick_dim = 72;
         /// Ceiling @ref grow may raise the brick dimension to. 96 is a 960^3 texture at 885 MB,
-        /// which is a lot of VRAM but is the point: a scene that needs it currently loses its
-        /// occluders instead, silently. Growth stops here and the fields start dropping to
+        /// which is a lot of VRAM but is the point: a scene that needs it would otherwise lose
+        /// its occluders, silently. Growth stops here and the fields start dropping to
         /// coarser mips, which is the graceful end of the same trade.
         uint32_t max_atlas_brick_dim = 96;
         /// Brick bytes @ref upload may push in one frame before @ref has_upload_budget starts
@@ -216,9 +214,9 @@ private:
     void queue_bricks(const std::vector<uint32_t>& slots, const mesh_sdf& sdf);
     /// Pushes the frame's queued bricks with as FEW texture updates as possible: contiguous
     /// slot runs become boxed region updates (partial row, then whole rows, then whole
-    /// slabs). One update per BRICK melted the render thread on every backend that allocates
+    /// slabs). One update per BRICK would melt the render thread on every backend that allocates
     /// staging per call - D3D12 creates a committed resource for EACH texture update, so a
-    /// large scene's warmup (tens of thousands of bricks per frame) turned into seconds of
+    /// large scene's warmup (tens of thousands of bricks per frame) would turn into seconds of
     /// driver allocation per frame. Boxing collapses that to a handful of calls per frame.
     /// Slots allocate mostly ascending on a fresh atlas, so the runs are long; a fragmented
     /// free list degrades gracefully toward smaller boxes.
@@ -244,13 +242,12 @@ private:
     /// whole when dirty rather than tracked at sub-range granularity.
     std::vector<float> header_data_;
     std::vector<uint32_t> indirection_data_;
-    /// Allocated GPU capacity, in elements (vec4 for headers, uint32 for indirection).
     /// Running totals for the atlas-full report, so the warning can name the shortfall rather
     /// than repeat itself once per refused mesh.
-    /// 64-bit, and that is not paranoia: as 32-bit values these reached 3.4 billion in a scene that
-    /// overruns the atlas, and the `total * 2` that schedules the next report then overflowed and
-    /// wrapped to a small number -- so the condition was true again immediately and the warning
-    /// printed on EVERY refusal, thousands per frame. A counter that only ever grows needs a type
+    /// 64-bit, and that is not paranoia: in a scene that overruns the atlas these reach billions,
+    /// and as 32-bit values the `total * 2` that schedules the next report would overflow and wrap
+    /// to a small number -- so the condition would be true again immediately and the warning would
+    /// print on EVERY refusal, thousands per frame. A counter that only ever grows needs a type
     /// that cannot wrap, or the throttle built on it silently becomes the opposite of a throttle.
     uint64_t rejected_mesh_count_ = 0;
     uint64_t rejected_brick_total_ = 0;
@@ -268,13 +265,14 @@ private:
     /// The frame's queued bricks and their copied voxels, drained by @ref flush_pending_bricks.
     std::vector<pending_brick> pending_bricks_;
     std::vector<uint8_t> pending_brick_voxels_;
+    /// Allocated GPU capacity, in elements (vec4 for headers, uint32 for indirection).
     uint32_t header_capacity_vec4_ = 0;
     uint32_t indirection_capacity_ = 0;
     bool headers_dirty_ = false;
     /// Dirty SPAN of @ref indirection_data_ (entries, [min, max)), empty when min >= max.
     /// A range rather than a flag because the table reaches millions of entries on a big
-    /// scene, and re-uploading all of it once per frame while fields stream in made the
-    /// warmup's frames tens of megabytes heavier than the bricks they carried.
+    /// scene, and re-uploading all of it once per frame while fields stream in would make the
+    /// warmup's frames tens of megabytes heavier than the bricks they carry.
     uint32_t indirection_dirty_min_ = 0;
     uint32_t indirection_dirty_max_ = 0;
 

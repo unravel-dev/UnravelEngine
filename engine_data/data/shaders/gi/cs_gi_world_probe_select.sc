@@ -1,15 +1,15 @@
 /*
- * WORLD-PROBE TRACE SCHEDULER (plan item 2.1, tasks/lumen57_deep_dive_2026-09-14.md; Lumen's
- * radiance-cache update budget, LumenRadianceCacheUpdate.usf). Every live slot gets a priority
- * bucket, and the probes of the most urgent buckets are listed for this frame's trace and convolve
- * up to u_gi_world_probe_select.y probes, so the world side's cost follows the budget instead of
- * the pool. Bucket 0: a sparse claim (GI_WORLD_PROBE_COUNT_FRESH) or a dense slot the window
- * scrolled onto a new cell - its tiles belong to another cell until traced. Buckets 1 to
- * GI_WORLD_PROBE_SELECT_FIRST_WINDOW_BUCKETS: probes still inside their first window, by the log2
- * of their age since the last trace. The buckets above: settled probes by the log2 of that age
- * divided by (level + 1) - a coarse cage feeds farther receivers and may age proportionally
- * longer. The oldest first within each band: a band-wide constant priority let an over-budget
- * band fill its quota in slot order and re-pick the same lowest slots every frame.
+ * WORLD-PROBE TRACE SCHEDULER (Lumen's radiance-cache update budget, LumenRadianceCacheUpdate.usf).
+ * Every live slot gets a priority bucket, and the probes of the most urgent buckets are listed for
+ * this frame's trace and convolve up to u_gi_world_probe_select.y probes, so the world side's cost
+ * follows the budget instead of the pool. Bucket 0: a sparse claim (GI_WORLD_PROBE_COUNT_FRESH) or
+ * a dense slot the window scrolled onto a new cell - its tiles belong to another cell until
+ * traced. Buckets 1 to GI_WORLD_PROBE_SELECT_FIRST_WINDOW_BUCKETS: probes still inside their first
+ * window, by the log2 of their age since the last trace. The buckets above: settled probes by the
+ * log2 of that age divided by (level + 1) - a coarse cage feeds farther receivers and may age
+ * proportionally longer. The oldest first within each band: a band-wide constant priority would
+ * let an over-budget band fill its quota in slot order and re-pick the same lowest slots every
+ * frame.
  *
  * One kernel, three phases (u_gi_world_probe_select.x), each dispatched through its own
  * quiescence-gate entry, so a closed gate stops the scheduler with the passes it feeds:

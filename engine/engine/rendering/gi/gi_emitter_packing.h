@@ -33,8 +33,8 @@ inline auto quantize_emitter_extent_axis(float metres) -> float
     return float(math::clamp(int(std::lround(unit * float(EMITTER_EXTENT_LANE_STEPS))), 0, EMITTER_EXTENT_LANE_STEPS));
 }
 
-/// The power lane for a piece of the given extent: three 8-bit axes, negated and offset so a
-/// shader fed by an older upload (a positive power) still reads "no extent".
+/// The power lane for a piece of the given extent: three 8-bit axes, negated and offset so an
+/// unpacked (positive) power lane reads "no extent".
 inline auto pack_emitter_extent_lane(const math::vec3& extent) -> float
 {
     const float x8 = quantize_emitter_extent_axis(extent.x);
@@ -43,13 +43,13 @@ inline auto pack_emitter_extent_lane(const math::vec3& extent) -> float
     return -(x8 + y8 * 256.0f + z8 * 65536.0f) - EMITTER_EXTENT_LANE_OFFSET;
 }
 
-/// Whether @p lane carries a packed extent rather than a legacy power.
+/// Whether @p lane carries a packed extent rather than an unpacked power.
 inline auto has_emitter_extent_lane(float lane) -> bool
 {
     return lane < -0.5f;
 }
 
-/// The extent @ref pack_emitter_extent_lane encoded, or zero for a legacy power lane.
+/// The extent @ref pack_emitter_extent_lane encoded, or zero for an unpacked power lane.
 inline auto unpack_emitter_extent_lane(float lane) -> math::vec3
 {
     if(!has_emitter_extent_lane(lane))
@@ -72,14 +72,14 @@ inline auto emitter_surface_area(const math::vec3& extent) -> float
 
 /// The area of one emitter piece that can actually radiate: its two largest faces.
 ///
-/// Not the full box area, which the ranking used to take. Subdivision is VOLUMETRIC while
-/// emission is a surface, so a thick emissive solid produces interior pieces that emit
-/// nothing at all - and a 1x1x1 interior piece scores 6 on box area against ~2.04 for a
-/// 1x1x0.01 piece of a real emitting panel, so the pieces that emit nothing outranked the
-/// ones that do by three to one. The largest face pair scores both at 2: it cannot tell an
-/// interior piece from a surface one either, but it stops rewarding the interior for its
-/// thickness, and for the thin panels most emissive content is actually made of it is the
-/// correct emitting area rather than an approximation of it.
+/// Not the full box area. Subdivision is VOLUMETRIC while emission is a surface, so a thick
+/// emissive solid produces interior pieces that emit nothing at all - and a 1x1x1 interior
+/// piece scores 6 on box area against ~2.04 for a 1x1x0.01 piece of a real emitting panel,
+/// so on box area the pieces that emit nothing would outrank the ones that do by three to
+/// one. The largest face pair scores both at 2: it cannot tell an interior piece from a
+/// surface one either, but it stops rewarding the interior for its thickness, and for the
+/// thin panels most emissive content is actually made of it is the correct emitting area
+/// rather than an approximation of it.
 inline auto emitter_emitting_area(const math::vec3& extent) -> float
 {
     const float smallest = math::min(extent.x, math::min(extent.y, extent.z));

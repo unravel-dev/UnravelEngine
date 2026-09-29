@@ -50,10 +50,9 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     APP_SCOPE_PERF("Rendering/GI/Clipmap Compose");
     if(!compose_program_.is_valid())
     {
-        // Loudly, once: this early-out used to be silent, and it sits BEFORE the helper
-        // warning below - a backend where the main compose program fails to create fell
-        // back to the CPU composer with a perfectly clean log (measured: Linux GL, where
-        // the whole GI stack ran half-broken and nothing said why).
+        // Loudly, once: this early-out sits BEFORE the helper warning below, so without it a
+        // backend where the main compose program fails to create would fall back to the CPU
+        // composer with a clean log while the whole GI stack runs half-broken.
         if(!helper_warning_emitted_)
         {
             helper_warning_emitted_ = true;
@@ -253,11 +252,11 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     // STABLE VIEW LAYOUT. These four views exist every frame, in this order, empty when the
     // frame has nothing to compose. bgfx reports a view's GPU time from an OLDER frame's
     // timestamp query for the same VIEW ID under the current frame's name (renderer.h
-    // viewStats), so a layout that only gains these views on dirty frames shifted every
-    // later GI row's timing by two to four rows for a frame or two after each change - the
-    // relight's time was read under "Clipmap Attributes" and "World Probe Convolve" in every
-    // profile taken under motion. Four touched-but-empty views cost nothing measurable and
-    // make the per-pass rows trustworthy exactly where they matter, on the moving frames.
+    // viewStats), so a layout that only gains these views on dirty frames would shift every
+    // later GI row's timing by several rows for a frame or two after each change, attributing
+    // one pass's time to another in every profile taken under motion. Touched-but-empty views
+    // are close to free and keep the per-pass rows trustworthy exactly where they matter, on
+    // the moving frames.
     gfx::render_pass scroll_copy_pass("GI/Clipmap Scroll Copy");
     gfx::render_pass scroll_place_pass("GI/Clipmap Scroll Place");
     gfx::render_pass compose_pass("GI/Clipmap Compose");
@@ -407,7 +406,7 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
     // the bytes a recompose would write, so it is moved - out to the scratch slab and back
     // in at its new position, two blits, since a blit cannot shift voxels within one
     // texture - and only the exposed slabs are composed. A scratch that failed to allocate
-    // composes in full as before.
+    // falls back to composing the whole level.
     if(lvl.scroll_only)
     {
         exposed_count = global_sdf_clipmap::compute_scroll_boxes(lvl.scroll_shift, resolution, overlap, exposed);
@@ -511,8 +510,8 @@ void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
     // update_texture_3d the CPU path pays.
     gfx::set_image_3d(5, clipmap_gpu.get_texture()->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
     // The level's surface-list cursor resets in this dispatch (thread 0); the attribute
-    // pass's sampled read of the distance volume is the transition that orders it - the
-    // old standalone 1-thread reset relied on submission order, which D3D12 does not
+    // pass's sampled read of the distance volume is the transition that orders it - a
+    // standalone reset dispatch would rely on submission order, which D3D12 does not
     // guarantee for same-state UAV access.
     bgfx::setBuffer(9, clipmap_gpu.get_surface_list_buffer(), bgfx::Access::ReadWrite);
     const float sdf_params[4] = {float(atlas.get_atlas_brick_dim()),

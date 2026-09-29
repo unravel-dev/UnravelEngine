@@ -43,10 +43,10 @@ struct mesh_sdf
     /// about a quarter of the bricks (a surface is two-dimensional) and reaches twice as far
     /// before saturating.
     ///
-    /// The point is residency, not detail. A scene whose fields do not all fit the shared atlas
-    /// currently loses whole meshes from GI; with a chain it loses RESOLUTION instead, because the
-    /// atlas can fall back to a level that fits. Three matches UE's DistanceField::NumMips, whose
-    /// coarsest level is always resident for exactly this reason.
+    /// The point is residency, not detail. Without a chain, a scene whose fields do not all fit
+    /// the shared atlas loses whole meshes from GI; with one it loses RESOLUTION instead, because
+    /// the atlas can fall back to a level that fits. Three matches UE's DistanceField::NumMips,
+    /// whose coarsest level is always resident for exactly this reason.
     static constexpr uint32_t mip_count = 3;
 
     /// Voxel distances are stored as R8 unorm covering [-encode_range, +encode_range]
@@ -109,11 +109,11 @@ struct mesh_sdf
      *
      * @ref is_valid additionally verifies every indirection entry against the stored brick count,
      * which is linear in the brick count and belongs at load or upload time. Calling it per
-     * sample made each lookup hundreds of times more expensive than the lookup itself, and it
-     * did not show up as a slow function -- it showed up as the whole clipmap composition being
-     * inexplicably slow while every count around it looked healthy.
+     * sample would make each lookup hundreds of times more expensive than the lookup itself, and
+     * it would not show up as a slow function -- only as the whole clipmap composition being
+     * inexplicably slow while every count around it looks healthy.
      *
-     * The out-of-range protection that scan provided is not lost: sampling range-checks the one
+     * Sampling keeps the out-of-range protection that scan provides: it range-checks the one
      * entry it actually dereferences, which is the same guarantee for O(1) instead of O(bricks).
      */
     auto is_sampleable() const -> bool

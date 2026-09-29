@@ -16,8 +16,8 @@ namespace unravel
  *
  * The per-instance tier is exact where it applies, and it is what makes thin geometry occlude, but
  * it costs a bounds test per instance per ray. That is invisible in a test scene and O(instances)
- * in a real one -- a model like Bistro registers a field per submesh, so a single ray was testing
- * over a thousand bounds to find the handful it crosses.
+ * in a real one -- a large model registers a field per submesh, so without the grid a single ray
+ * would test over a thousand bounds to find the handful it crosses.
  *
  * WORLD SPACE, not view space. The name "froxel grid" comes from clustered lighting, where the
  * grid is a subdivision of the camera frustum; that would be the wrong structure here, because the
@@ -165,8 +165,8 @@ private:
     std::vector<uint32_t> cell_offsets_;
     std::vector<uint32_t> cell_instances_;
     /// build() scratch, kept so a rebuild reuses its allocations: a scene with movers rebuilds
-    /// the grid every frame, and constructing these fresh was three 128 KiB allocations (and a
-    /// zero-fill) per frame at the default 32^3 cells. Not part of the grid's state.
+    /// the grid every frame, and constructing these fresh would mean a 128 KiB allocation each
+    /// (and a zero-fill) per frame at the default 32^3 cells. Not part of the grid's state.
     std::vector<uint32_t> counts_scratch_;
     std::vector<uint32_t> cursor_scratch_;
 };

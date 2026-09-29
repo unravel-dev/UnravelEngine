@@ -1,18 +1,17 @@
 /*
- * Sparse world-probe RELOCATION (gi_single_lighting_plan.md D8, audit section 22): one thread
- * per pool slot, acting on the slots the allocation pass claimed THIS frame (the FRESH count
- * sentinel). The slot's lattice point is moved out of geometry and to clearance by
- * GiWorldProbeRelocate (DDGI / RTXGI probe relocation, answered by the mesh fields); the
- * offset goes to the index's relocation lane for the readers and the trace (which refreshes
- * it every frame after this). A point that stays inside geometry is a DEAD probe for every
- * reader, so the slot goes straight back to the free stack, the cell's lane takes the BURIED
- * marker (the allocation pass then skips the cell until its re-test tick), and the claim's
- * allocation count is withdrawn so a static buried cell does not hold the gate open.
+ * Sparse world-probe RELOCATION: one thread per pool slot, acting on the slots the allocation
+ * pass claimed THIS frame (the FRESH count sentinel). The slot's lattice point is moved out of
+ * geometry and to clearance by GiWorldProbeRelocate (DDGI / RTXGI probe relocation, answered by
+ * the mesh fields); the offset goes to the index's relocation lane for the readers and the
+ * trace (which refreshes it once per window of the probe's traces). A point that stays inside
+ * geometry is a DEAD probe for every reader, so the slot goes straight back to the free stack,
+ * the cell's lane takes the BURIED marker (the allocation pass then skips the cell until its
+ * re-test tick), and the claim's allocation count is withdrawn so a static buried cell does not
+ * hold the gate open.
  *
- * A separate program on purpose: the 22 field samples of the relocation inlined into the
- * allocation kernel raised its temporaries from 5 to 18 and its cost from 0.06 to 0.18 ms at
- * rest - the 117649 index-cell threads that return at once paid the occupancy. Here only the
- * frame's fresh claims pay anything.
+ * A separate program on purpose: the relocation's 22 field samples, inlined into the allocation
+ * kernel, raise its register pressure, and every one of its index-cell threads - nearly all of
+ * which return at once - pays the lost occupancy. Here only the frame's fresh claims pay anything.
  */
 
 #include "bgfx_compute.sh"

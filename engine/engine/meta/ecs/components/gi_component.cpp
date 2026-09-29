@@ -10,10 +10,6 @@ namespace unravel
 
 // `trace_resolution` is reflected once, by ssr_component.cpp. Registering it again would be a
 // duplicate type in the meta registry, so this file only uses it as a field type.
-//
-// Phase 8 (tasks/gi_rewrite_plan.md): the cache block and the v1 gather fields are gone with
-// their subsystems; try_load simply ignores their names in old scenes, so existing saves load
-// clean with defaults for everything the collapse removed.
 
 REFLECT_INLINE(gi_resolve_pass::settings)
 {
@@ -33,8 +29,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 4.0f},
             entt::attribute{"tooltip",
-                            "Scales the gathered bounce light. Applies to the scene's own indirect "
-                            "only; the sky/environment fallback keeps its calibrated brightness."},
+                            "Multiplier on the traced indirect diffuse light and the probe-lit "
+                            "rough reflections. 1 is physically based. The environment probe "
+                            "that fills in where the gather finds no result is not scaled."},
         })
         .data<&settings::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -42,10 +39,11 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Trace Resolution"},
             entt::attribute{"group", "Gather"},
             entt::attribute{"tooltip",
-                            "Internal resolution of the gather and its filter chain, as a fraction "
-                            "of the frame; reflections trace at the same resolution. Indirect light "
-                            "is low frequency, so Half loses little - the bilateral upsample "
-                            "reconstructs full resolution."},
+                            "Internal resolution of the GI gather, its filters and the GI "
+                            "reflections, relative to the output. Indirect lighting is low "
+                            "frequency: Half loses little detail and the bilateral upsample "
+                            "restores full-resolution edges. Lower settings are faster but "
+                            "softer."},
         })
         .data<&settings::probe_spacing>("probe_spacing"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -55,9 +53,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 8.0f},
             entt::attribute{"max", 48.0f},
             entt::attribute{"tooltip",
-                            "Distance between screen probes, in full-resolution pixels. Lower means "
-                            "denser probes and finer indirect detail; ray cost grows with the "
-                            "inverse square."},
+                            "Distance between screen probes, in output pixels. Lower values "
+                            "place probes more densely for finer indirect detail and contact "
+                            "shading; the trace cost grows with the inverse square of the "
+                            "spacing."},
         })
         .data<&settings::enable_screen_trace>("enable_screen_trace"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -65,8 +64,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Screen Trace"},
             entt::attribute{"group", "Gather"},
             entt::attribute{"tooltip",
-                            "Hi-Z screen tier: gather rays march the depth pyramid first and commit "
-                            "pixel-precise on-screen hits before the SDF answers."},
+                            "Marches gather rays through the depth buffer first and takes their "
+                            "on-screen hits exactly; the distance field answers the rest. Adds "
+                            "detail from visible geometry that the coarse distance field cannot "
+                            "represent. Off traces the distance field only."},
         })
         .data<&settings::probe_visibility_variance_gate>("probe_visibility_variance_gate"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -76,12 +77,11 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 0.5f},
             entt::attribute{"tooltip",
-                            "How statistically ambiguous a world probe's depth estimate must be "
-                            "before its visibility is settled by marching the distance field "
-                            "(std of the depth lobe, in probe spacings). 0 marches every probe: "
-                            "maximum leak protection, slowest. Higher trusts the depth "
-                            "statistics over a wider band: faster, with a wider leak margin "
-                            "through silhouette gaps."},
+                            "How uncertain a world probe's depth estimate may be before its "
+                            "visibility is verified by marching the distance field, as the "
+                            "standard deviation of the estimate in probe spacings. Lower values "
+                            "march more probes: less light leaking through thin geometry, at a "
+                            "higher cost. 0 marches every probe."},
         })
         .data<&settings::probe_filter_passes>("probe_filter_passes"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -91,9 +91,11 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 4.0f},
             entt::attribute{"tooltip",
-                            "Probe-space radiance filter passes before the irradiance convolution "
-                            "(Lumen runs 3). More passes share more neighbouring probes, which "
-                            "steadies the probe lattice under camera turns."},
+                            "Spatial filter passes over the screen-probe radiance before it is "
+                            "converted to irradiance. Each pass blends every direction with "
+                            "neighbouring probes on the same surface, reducing per-probe noise "
+                            "and the blotches it causes in motion. More passes also soften "
+                            "small-scale indirect shadowing."},
         })
         .data<&settings::adaptive_probes>("adaptive_probes"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -101,9 +103,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Adaptive Probes"},
             entt::attribute{"group", "Gather"},
             entt::attribute{"tooltip",
-                            "Probes on flat regions skip tracing and reconstruct from their "
-                            "neighbours; geometry breaks keep full probe density. Flat scenes "
-                            "trace a fraction of the rays for the same image."},
+                            "Probes on flat, continuous surfaces skip tracing and are "
+                            "interpolated from their traced neighbours; probes at depth or "
+                            "orientation changes always trace. Flat areas trace only a quarter "
+                            "of their probes. Off traces every probe."},
         })
         .data<&settings::adaptive_rays>("adaptive_rays"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -111,12 +114,14 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Adaptive Rays"},
             entt::attribute{"group", "Gather"},
             entt::attribute{"tooltip",
-                            "Importance-driven ray allocation: bright octahedral blocks trace at "
-                            "full per-texel detail, dim blocks as one wider cone - cheaper at "
-                            "high resolutions for slightly more noise and coarser angular detail "
-                            "in dim directions. Engages only on large probe lattices (4K-class); "
-                            "small dispatches are latency-bound and run the full trace either "
-                            "way. Off traces every direction individually."},
+                            "Allocates each probe's rays by importance: directions that carried "
+                            "bright light in the previous frame are traced individually, dim "
+                            "directions in groups of four with one wider ray. Cheaper, with "
+                            "slightly more noise in dim directions. Off traces every direction "
+                            "individually.\n"
+                            "Applies from 4096 probes up (for example a 1080p view at the "
+                            "default spacing); smaller probe counts are latency-bound and always "
+                            "use the full trace."},
         })
         .data<&settings::reprojected_firefly_reference>("reprojected_firefly_reference"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -124,12 +129,13 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Reprojected Firefly Reference"},
             entt::attribute{"group", "Gather"},
             entt::attribute{"tooltip",
-                            "The firefly governor caps each new gather sample at a multiple of a "
-                            "reference. Off: the same screen slot's last value, which belongs to "
-                            "another surface point once the camera moves. On: the reprojected "
-                            "probe's own recent radiance around the direction, so the cap follows "
-                            "the surface through camera motion; the image clamps less and reads "
-                            "slightly brighter."},
+                            "Reference for the firefly clamp, which limits each new probe sample "
+                            "to a multiple of recently observed radiance.\n"
+                            "Off: the larger of the same screen texel's previous value and the "
+                            "reprojected probe's own radiance.\n"
+                            "On: the reprojected probe's radiance only, so the limit follows the "
+                            "surface rather than the screen during camera motion; probes without "
+                            "reprojected history are not clamped."},
         })
         .data<&settings::world_probe_jitter>("world_probe_jitter"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -137,12 +143,12 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "World Probe Jitter"},
             entt::attribute{"group", "Gather"},
             entt::attribute{"tooltip",
-                            "World-probe rays jitter inside their texel and the probe atlas "
-                            "converges as a running mean over several seconds: removes the "
-                            "per-probe bias that shows as blotches on emissive-lit walls, at the "
-                            "price of a visible re-settle after every probe-window scroll while "
-                            "the camera travels. Off keeps the deterministic, instantly settled "
-                            "atlas."},
+                            "Jitters world-probe rays within their direction cell and "
+                            "accumulates each probe as a running average over several seconds. "
+                            "Removes the fixed per-probe bias that shows as blotches on walls "
+                            "lit by small emitters, but probes visibly re-converge after the "
+                            "probe grid scrolls with a moving camera. Off uses fixed ray "
+                            "directions: biased, but settled immediately."},
         })
         .data<&settings::enable_reflections>("enable_reflections"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -150,8 +156,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Reflections"},
             entt::attribute{"group", "Gather"},
             entt::attribute{"tooltip",
-                            "World-space specular tier under SSR: rough lobes from the world "
-                            "probes, sharp ones traced - off-screen reflections SSR cannot see."},
+                            "World-space reflections beneath SSR: rough surfaces reflect the "
+                            "probe lighting, glossy and mirror-like surfaces trace rays through "
+                            "the screen and then the distance field. Supplies the off-screen "
+                            "reflections SSR cannot resolve."},
         })
         .data<&settings::reflection_finder_resumes>("reflection_finder_resumes"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -161,10 +169,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", float(gi::GI_REFLECTION_FINDER_RESUMES_MIN)},
             entt::attribute{"max", float(gi::GI_REFLECTION_FINDER_RESUMES_MAX)},
             entt::attribute{"tooltip",
-                            "Far reflection rays caught by an object's coarse distance-field "
-                            "margin resume past it this many times before being shaded as that "
-                            "object. More removes more of the thin outline along far grazing "
-                            "surfaces, at a trace cost."},
+                            "How many times a distant reflection ray may continue past an object "
+                            "it only grazed before it is shaded as a hit. Higher values remove "
+                            "more of the thin false outlines along distant grazing surfaces, at "
+                            "a higher trace cost."},
         })
 
         .data<&settings::enable_temporal>("enable_temporal"_hs)
@@ -172,7 +180,11 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"name", "enable_temporal"},
             entt::attribute{"pretty_name", "Temporal"},
             entt::attribute{"group", "Filtering"},
-            entt::attribute{"tooltip", "Full-resolution temporal accumulation (depth-rejection only)."},
+            entt::attribute{"tooltip",
+                            "Accumulates the gathered indirect light over frames, reprojected "
+                            "with motion vectors and discarded where depth disagrees. Removes "
+                            "most of the per-frame noise; off shows the raw gather and is "
+                            "intended for diagnosis."},
         })
         .data<&settings::reflection_temporal_frames>("reflection_temporal_frames"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -182,8 +194,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 64.0f},
             entt::attribute{"tooltip",
-                            "Stochastic reflection accumulation window; 0/1 turns the "
-                            "reflection temporal off."},
+                            "Number of frames the GI reflection rays are averaged over. Longer "
+                            "windows give smoother glossy reflections but react more slowly to "
+                            "change. 0 or 1 disables the reflection temporal filter."},
         })
         .data<&settings::temporal_slow_frames>("temporal_slow_frames"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -193,9 +206,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 8.0f},
             entt::attribute{"max", 256.0f},
             entt::attribute{"tooltip",
-                            "The full-res temporal's slow-lane window: long means average out the "
-                            "amortization waves a small bright source excites. Costs no response "
-                            "time - a detected lighting change snaps to the 8-frame fast lane."},
+                            "History length, in frames, of the indirect-light accumulation where "
+                            "lighting is stable. Longer windows smooth more residual flicker. "
+                            "Detected lighting changes still fall back to a short 8-frame "
+                            "window, so responsiveness is kept."},
         })
         .data<&settings::denoise_converged_early_out>("denoise_converged_early_out"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -203,8 +217,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Denoise Converged Early-Out"},
             entt::attribute{"group", "Filtering"},
             entt::attribute{"tooltip",
-                            "Skip the spatial denoise kernel on pixels whose temporal estimate "
-                            "has fully settled."},
+                            "Skips the spatial denoise on screen tiles whose temporal "
+                            "accumulation has converged with low noise, saving most of the "
+                            "denoise cost while the view is still. Requires Temporal."},
         })
         .data<&settings::reprojection_tolerance>("reprojection_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -213,14 +228,21 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"group", "Filtering"},
             entt::attribute{"min", 0.01f},
             entt::attribute{"max", 1.0f},
-            entt::attribute{"tooltip", "Relative depth error per unit view distance before history is cut."},
+            entt::attribute{"tooltip",
+                            "Depth mismatch allowed between a pixel and its reprojected history "
+                            "before the history is discarded, relative to view distance. Lower "
+                            "values reject history sooner (less ghosting, more noise in motion); "
+                            "higher values keep more history."},
         })
         .data<&settings::enable_spatial_denoise>("enable_spatial_denoise"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_spatial_denoise"},
             entt::attribute{"pretty_name", "Spatial Denoise"},
             entt::attribute{"group", "Denoise"},
-            entt::attribute{"tooltip", "Variance-guided a-trous over the accumulated result."},
+            entt::attribute{"tooltip",
+                            "Edge-aware a-trous filter over the accumulated indirect light, "
+                            "guided by depth, normals and the local noise estimate. Removes the "
+                            "noise the temporal accumulation leaves behind."},
         })
         .data<&settings::denoise_passes>("denoise_passes"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -230,8 +252,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 6.0f},
             entt::attribute{"tooltip",
-                            "A-trous filter passes; each doubles the filter's reach. More passes "
-                            "smooth broader noise at some cost in fine lighting detail."},
+                            "Number of a-trous iterations; each doubles the filter footprint. "
+                            "More passes remove coarser noise at the cost of fine lighting "
+                            "detail and GPU time. 0 disables the filter."},
         })
         .data<&settings::denoise_normal_power>("denoise_normal_power"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -241,8 +264,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
             entt::attribute{"tooltip",
-                            "How strictly the filter stops at normal differences. Higher keeps "
-                            "corners and curvature crisp; lower blurs across them."},
+                            "Exponent on the normal agreement between a pixel and its filter "
+                            "taps. Higher values stop the filter at smaller normal changes, "
+                            "keeping corners and curvature crisp; lower values blur across them."},
         })
         .data<&settings::denoise_luma_phi>("denoise_luma_phi"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -252,9 +276,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
             entt::attribute{"tooltip",
-                            "Brightness tolerance of the filter, scaled by the local variance "
-                            "estimate. Higher smooths more aggressively across lighting contrast; "
-                            "lower preserves shadow edges and highlights."},
+                            "Brightness tolerance of the filter, in multiples of the pixel's "
+                            "estimated noise. Higher values smooth across stronger lighting "
+                            "contrast; lower values preserve shadow edges and highlights. "
+                            "Requires Temporal, which provides the noise estimate."},
         })
         .data<&settings::denoise_plane_tolerance>("denoise_plane_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -264,9 +289,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 0.001f},
             entt::attribute{"max", 0.2f},
             entt::attribute{"tooltip",
-                            "Depth tolerance as a fraction of view distance: filter taps lying off "
-                            "the pixel's surface plane by more than this are rejected, keeping "
-                            "light from bleeding across depth breaks."},
+                            "How far a filter tap may lie off the pixel's surface plane, as a "
+                            "fraction of view distance, before its weight falls off. Keeps light "
+                            "from bleeding across depth discontinuities; lower is stricter."},
         })
         .data<&settings::denoise_low_count_boost>("denoise_low_count_boost"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -276,8 +301,10 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 64.0f},
             entt::attribute{"tooltip",
-                            "Extra smoothing for pixels with little temporal history "
-                            "(disocclusions, fresh camera cuts); fades out as history accumulates."},
+                            "Extra brightness tolerance for pixels with little temporal history, "
+                            "such as disocclusions and camera cuts, so they are smoothed harder. "
+                            "The tolerance is widened by this value over the frames accumulated "
+                            "and returns to normal once the history reaches this length."},
         })
         .data<&settings::denoise_luma_floor>("denoise_luma_floor"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -287,16 +314,21 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 0.5f},
             entt::attribute{"tooltip",
-                            "Lets the denoise keep smoothing coherent low-contrast structure "
-                            "(probe/voxel-scale blotches) after the temporal has converged. "
-                            "Fraction of each pixel's own luminance; 0 = variance-driven only."},
+                            "Minimum brightness tolerance of the filter, as a fraction of each "
+                            "pixel's own luminance. Keeps smoothing the faint low-contrast "
+                            "blotches that remain after the temporal accumulation has converged; "
+                            "0 relies on the noise estimate alone."},
         })
         .data<&settings::enable_bilateral_upsample>("enable_bilateral_upsample"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enable_bilateral_upsample"},
             entt::attribute{"pretty_name", "Bilateral Upsample"},
             entt::attribute{"group", "Upsample"},
-            entt::attribute{"tooltip", "Surface-aware reconstruction to full resolution."},
+            entt::attribute{"tooltip",
+                            "Reconstructs the output resolution from the trace resolution, "
+                            "guided by full-resolution depth and normals so indirect light stays "
+                            "on the correct side of edges. Runs only when Trace Resolution is "
+                            "below Full; off uses the low-resolution result as is."},
         })
         .data<&settings::upsample_normal_power>("upsample_normal_power"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -306,9 +338,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 1.0f},
             entt::attribute{"max", 128.0f},
             entt::attribute{"tooltip",
-                            "How strictly upsample taps must agree with the pixel's normal. Higher "
-                            "keeps indirect light from bleeding across edges during the low-res to "
-                            "full-res reconstruction."},
+                            "Exponent on the normal agreement between a pixel and the "
+                            "low-resolution samples it is reconstructed from. Higher values keep "
+                            "indirect light from bleeding across edges and creases."},
         })
         .data<&settings::upsample_plane_tolerance>("upsample_plane_tolerance"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -318,8 +350,9 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"min", 0.001f},
             entt::attribute{"max", 0.2f},
             entt::attribute{"tooltip",
-                            "Depth tolerance for upsample taps as a fraction of view distance; "
-                            "taps off the pixel's surface plane beyond this are rejected."},
+                            "How far a low-resolution sample may lie off the pixel's surface "
+                            "plane, as a fraction of view distance, before its weight falls off. "
+                            "Lower values keep depth edges sharper."},
         })
         .data<&settings::hold_at_rest>("hold_at_rest"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -327,11 +360,12 @@ REFLECT_INLINE(gi_resolve_pass::settings)
             entt::attribute{"pretty_name", "Hold At Rest"},
             entt::attribute{"group", "Budget"},
             entt::attribute{"tooltip",
-                            "Once the camera, exposure, lights and scene have been still long "
-                            "enough for the GI to settle, the screen gather and the reflection "
-                            "trace stop re-tracing and show their last converged result; any "
-                            "such change resumes them from it. Changes outside what the renderer "
-                            "tracks (particles, animated materials) are not seen while held."},
+                            "Pauses GI tracing while the view is at rest: once the camera, "
+                            "exposure, lights and scene have been still long enough to converge, "
+                            "the gather and the reflection trace reuse their last converged "
+                            "result. Any tracked change resumes tracing from it. Changes the "
+                            "renderer does not track, such as particles and animated materials, "
+                            "are not picked up while paused."},
         });
 }
 
@@ -351,9 +385,9 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"pretty_name", "Compose On GPU"},
             entt::attribute{"group", "Composition"},
             entt::attribute{"tooltip",
-                            "Build the cascade voxels in a compute dispatch instead of on the CPU. "
-                            "Output is identical; the CPU path stalls the main thread whenever a "
-                            "level rebuilds and exists as a diagnostic fallback."},
+                            "Builds the distance-field cascade in a GPU compute pass. The CPU "
+                            "path produces identical voxels but stalls the main thread whenever "
+                            "a level rebuilds; it is kept as a diagnostic reference."},
         })
         .data<&settings::resolution>("resolution"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -363,10 +397,10 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"max", 128},
             entt::attribute{"group", "Composition"},
             entt::attribute{"tooltip",
-                            "Voxels per axis in every cascade level; memory and composition cost "
-                            "scale with the cube. 128 is required for the world probes - other "
-                            "values disable them and with them the whole gather. Changing it "
-                            "rebuilds the cascade, which flickers for a few frames."},
+                            "Voxels per axis in each cascade level; memory and rebuild cost grow "
+                            "with the cube. The world probes require 128: other values disable "
+                            "them, and with them the GI gather. Changing it rebuilds the "
+                            "cascade, which flickers for a few frames."},
         })
         .data<&settings::base_extent>("base_extent"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -376,9 +410,10 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"step", 1.0f},
             entt::attribute{"group", "Coverage"},
             entt::attribute{"tooltip",
-                            "World-space size of the finest level. With Level Scale this sets both "
-                            "how fine the near field is and how far GI sees at all: total coverage is "
-                            "base extent times level scale cubed. Rebuilds the cascade."},
+                            "World-space size of the finest cascade level, in metres. With Level "
+                            "Scale it sets both the near-field precision and the total reach: "
+                            "the coarsest level spans Base Extent x Level Scale^3. Changing it "
+                            "rebuilds the cascade."},
         })
         .data<&settings::level_scale>("level_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -389,11 +424,10 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"step", 0.1f},
             entt::attribute{"group", "Coverage"},
             entt::attribute{"tooltip",
-                            "Size multiplier between consecutive levels. Doubling keeps the far "
-                            "cascades fine enough that a floor does not appear to float -- a tracer "
-                            "stops within a fraction of a VOXEL, so at 8 m voxels that error is "
-                            "metres. Quadrupling buys range and costs exactly that. Rebuilds the "
-                            "cascade."},
+                            "Size ratio between consecutive cascade levels. Ray hits are "
+                            "accurate to a fraction of a voxel, so coarse far levels make "
+                            "distant surfaces appear offset: 2 keeps them fine, larger ratios "
+                            "extend the reach at that cost. Changing it rebuilds the cascade."},
         })
         .data<&settings::blend_voxels>("blend_voxels"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -404,10 +438,11 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"step", 0.5f},
             entt::attribute{"group", "Coverage"},
             entt::attribute{"tooltip",
-                            "Width of the cross-fade into the next level, in voxels of the level "
-                            "fading out. Levels are composed independently so their isosurfaces sit "
-                            "about a coarse voxel apart; the band has to be wider than that to hide "
-                            "it. Zero restores a hard switch, which pops as the camera moves."},
+                            "Width of the cross-fade into the next cascade level, in voxels of "
+                            "the finer level. Levels are built independently, so their surfaces "
+                            "can differ by about one coarse voxel; the band must be wider than "
+                            "that to hide the seam. 0 switches levels abruptly, which pops as "
+                            "the camera moves."},
         })
         .data<&settings::max_levels_per_update>("max_levels_per_update"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -417,10 +452,10 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"max", global_sdf_clipmap::level_count},
             entt::attribute{"group", "Budget"},
             entt::attribute{"tooltip",
-                            "Cascade levels recomposed per frame at most - the budget that spreads "
-                            "geometry changes over frames. Low values smooth the cost but let a "
-                            "moved object keep occluding from its old position for a few frames; "
-                            "high values react in fewer frames at a higher per-frame peak."},
+                            "Maximum number of cascade levels rebuilt per frame. Lower values "
+                            "spread the rebuild cost over frames but let a moved object occlude "
+                            "from its old position for a few frames; higher values react sooner "
+                            "with larger frame-time spikes."},
         })
         .data<&settings::cull_composition>("cull_composition"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -428,9 +463,9 @@ REFLECT_INLINE(global_sdf_clipmap::settings)
             entt::attribute{"pretty_name", "Cull Composition"},
             entt::attribute{"group", "Budget"},
             entt::attribute{"tooltip",
-                            "Bin instances into a grid so each voxel tests only the ones within "
-                            "reach, instead of every instance in the level. Output is identical "
-                            "either way; disabling is only useful to diagnose composition issues."},
+                            "Bins instances into a grid so each voxel tests only the instances "
+                            "within reach. The output is identical either way; disable only to "
+                            "diagnose composition issues."},
         });
 }
 
@@ -446,15 +481,17 @@ REFLECT_INLINE(gi_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "resolve"},
             entt::attribute{"pretty_name", "Gather"},
-            entt::attribute{"tooltip", "The screen probe gather and its filter chain - resolution, "
-                                       "probe density, temporal and denoise quality."},
+            entt::attribute{"tooltip",
+                            "Screen-probe gather and its filter chain: resolution, probe "
+                            "density, temporal accumulation and denoising."},
         })
         .data<&gi_settings::clipmap>("clipmap"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "clipmap"},
             entt::attribute{"pretty_name", "Cascade"},
-            entt::attribute{"tooltip", "The world distance field every GI structure anchors to. "
-                                       "Resolution 128 is required for the world probes."},
+            entt::attribute{"tooltip",
+                            "World-space distance-field cascade that all GI tracing runs "
+                            "against. Resolution 128 is required for the world probes."},
         });
 }
 
@@ -467,8 +504,6 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("probe_visibility_variance_gate", obj.probe_visibility_variance_gate));
     try_save(ar, ser20::make_nvp("probe_filter_passes", obj.probe_filter_passes));
     try_save(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
-    // probe_space_temporal / max_accum_frames are gone with the removed probe-space
-    // temporal; stored keys in old scenes are simply not read (the sparse-load rule).
     try_save(ar, ser20::make_nvp("adaptive_rays", obj.adaptive_rays));
     try_save(ar, ser20::make_nvp("reprojected_firefly_reference", obj.reprojected_firefly_reference));
     try_save(ar, ser20::make_nvp("world_probe_jitter", obj.world_probe_jitter));
@@ -590,9 +625,12 @@ REFLECT(gi_component)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "enabled"},
             entt::attribute{"pretty_name", "Enabled"},
-            entt::attribute{"tooltip", "Enable/disable surface cache global illumination.\nWhen off the "
-                                       "indirect consumer falls back to SSIL, then to the environment "
-                                       "probe."},
+            entt::attribute{"tooltip",
+                            "Enables global illumination: multi-bounce indirect diffuse lighting "
+                            "and, with Reflections on, world-space reflections, traced against "
+                            "the scene's distance field.\n"
+                            "When off, indirect diffuse falls back to SSIL when present, "
+                            "otherwise to the environment probe."},
         })
         .data<&gi_component::settings>("settings"_hs)
         .custom<entt::attributes>(entt::attributes{

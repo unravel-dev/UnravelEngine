@@ -2,9 +2,9 @@
 #define __GI_WORLD_PROBES_SH__
 
 /*
- * World probe cascades (gi_rewrite_plan.md 3.3, revised): octahedral radiance/irradiance probes on a
- * TOROIDAL world-anchored lattice per SDF cascade. They carry offscreen and distant energy,
- * complete shortened gather rays, and feed the light voxels' bounce term.
+ * World probe cascades: octahedral radiance/irradiance probes on a TOROIDAL world-anchored
+ * lattice per SDF cascade. They carry offscreen and distant energy, complete shortened gather
+ * rays, and feed the light voxels' bounce term.
  *
  * LATTICE. Probes live on an absolute world grid of spacing = cascade voxel *
  * GI_WORLD_PROBE_DIVISOR (2 m at level 0). A level's window covers GiWorldProbeAxis(level)^3
@@ -12,29 +12,29 @@
  * 1-3 are DENSE: a probe's storage slot is its world cell index mod the axis, so camera
  * motion never moves or copies a probe - cells enter and leave the window, and a slot whose
  * cell changed is detected by the cell-id buffer and refilled. Camera ROTATION touches
- * nothing (R1 by construction).
+ * nothing, by construction.
  *
- * LEVEL 0 IS SPARSE (2026-09-13, gi_single_lighting_plan.md phase D, the shape of Lumen's
- * radiance cache): its window is wide (+-46 m) but only the cells a consumer ASKED FOR hold
- * a probe. A dense toroidal INDEX (one entry per window cell, GI_WORLD_PROBE_AXIS_L0^3) maps
- * a cell to a slot of a fixed POOL (GI_WORLD_PROBE_POOL_L0), or to none. Every reader that
- * resolves a level-0 cage stamps its base cell into the index's request lane
- * (GiWorldProbeRequest); an ungated allocation pass before the quiescence gate
+ * LEVEL 0 IS SPARSE (the shape of Lumen's radiance cache): its window is wide (+-46 m) but only
+ * the cells a consumer ASKED FOR hold a probe. A dense toroidal INDEX (one entry per window
+ * cell, GI_WORLD_PROBE_AXIS_L0^3) maps a cell to a slot of a fixed POOL (GI_WORLD_PROBE_POOL_L0),
+ * or to none. Every reader that resolves a level-0 cage stamps its base cell into the index's
+ * request lane (GiWorldProbeRequest); an ungated allocation pass before the quiescence gate
  * (cs_gi_world_probe_alloc.sc) claims free pool slots for the eight cells around every
  * recent stamp, frees slots whose cell left the window or went unrequested, and the trace
  * seeds and traces a fresh slot the same frame. A cell without a probe reads as a DEAD cage
  * corner (no data, no verdict), so a cage arriving probe by probe renormalises onto what it
  * has and an all-absent cage falls through to the coarser lattice - exactly the buried-probe
- * contract. Why: the 2 m cage must answer in the alcove's own air from ANY camera distance
- * (the lion niche read 0.078 from 2.8 m and 1.41 from 21 m through the hall's 4 m probes,
- * gi_lighting_audit section 20), and a dense 2 m lattice over the same reach would be 36k
- * probes; Sponza's live set is a few thousand.
+ * contract. Why: the 2 m cage must answer in an alcove's own air from ANY camera distance (a
+ * coarser cage reads the hall's probes into the alcove, so its lighting would change with the
+ * camera's distance), and a dense 2 m lattice over the same reach would be
+ * GI_WORLD_PROBE_AXIS_L0^3 probes, far more than the cells consumers actually request.
  *
- * UPDATE. Every probe, every frame, GI_WORLD_PROBE_RAYS_PER_FRAME rays at FIXED octahedral
- * texel centres: stratum s = frame mod GI_WORLD_PROBE_WINDOW covers texels where
- * (texel_index mod WINDOW) == s, so every direction refreshes exactly once per window and the
- * radiance atlas is a zero-variance windowed mean. Rays read the light voxels at hits and the
- * sky SH at miss.
+ * UPDATE. Each probe the trace scheduler lists (cs_gi_world_probe_select.sc) traces
+ * GI_WORLD_PROBE_RAYS_PER_FRAME rays at FIXED octahedral texel centres: its stratum cursor s
+ * covers texels where (texel_index mod WINDOW) == s, so every direction refreshes exactly once
+ * per window of the probe's traces and the radiance atlas is a zero-variance windowed mean
+ * (the optional direction jitter makes it a converging mean instead - see the trace). Rays
+ * read the light voxels at hits and the sky SH at miss.
  *
  * ATLASES (2D; every probe slot of every level in ONE row-major run of
  * GI_WORLD_PROBE_ATLAS_TILES_X tiles per row, addressed by the LINEAR slot index - level 0's
@@ -55,10 +55,9 @@
 #define GI_FINITE_OR_ZERO_DEFINED
 /// Zero when non-finite (or absurdly large): the probe<->voxel feedback loop has no decay for
 /// a NaN - each side re-ingests the other every cycle, so one poisoned texel converges the
-/// whole field to NaN within a window (measured on Linux/Vulkan, where never-written texels
-/// read as garbage: a white flash, then GI collapsing to black). An ordered comparison is
-/// used rather than isnan(), which relaxed-math shader compilation may fold away; NaN fails
-/// every ordered comparison, so it cannot pass this one.
+/// whole field to NaN within a window (a white flash, then GI collapsing to black). An ordered
+/// comparison is used rather than isnan(), which relaxed-math shader compilation may fold
+/// away; NaN fails every ordered comparison, so it cannot pass this one.
 vec3 GiFiniteOrZero(vec3 v)
 {
 	return all(lessThan(abs(v), vec3_splat(1e30))) ? v : vec3_splat(0.0);
@@ -66,28 +65,27 @@ vec3 GiFiniteOrZero(vec3 v)
 #endif // GI_FINITE_OR_ZERO_DEFINED
 
 /// Cells per axis of each level's window - odd, so a window has a centre cell. LEVEL 0 IS
-/// WIDE ON PURPOSE (measured 2026-09-13, gi_lighting_audit sections 18 and 20): a gather ray
-/// completes from the finest probe cage covering its completion point and the relight's
-/// bounce reads the finest cage covering its cell, and only the 2 m lattice resolves the
-/// courtyard's sky visibility or an alcove's own opening - a 4 m or 8 m cage blends gallery
-/// probes into open-well queries and hall probes into the alcove, and the same floor read
-/// E/pi 1.2 from 2.5 m and 0.25 from 15 m. Level 0 is the sparse pool's INDEX window: 49
-/// cells reach +-46 m usable, so a surface up to ~40 m from the camera resolves its 2 m cage
-/// at any camera distance, paid for only where probes were requested (see the header). The
-/// coarser lattices answer where level 0 has no probe yet and beyond its reach (levels 1 and
-/// 2 at 13: +-20 m / +-40 m; level 3 at 9: +-48 m). The lattice does not derive from the
-/// cascade resolution: the SDF window and the probe window are independent extents. Mirrored
-/// by global_sdf_clipmap_gpu::world_probe_axis / world_probe_pool_l0 /
-/// world_probe_atlas_tiles_x (atlas and buffer sizes) and verified by the gi oracle suite.
+/// WIDE ON PURPOSE: a gather ray completes from the finest probe cage covering its completion
+/// point and the relight's bounce reads the finest cage covering its cell, and only the 2 m
+/// lattice resolves a courtyard's sky visibility or an alcove's own opening - a 4 m or 8 m
+/// cage blends gallery probes into open-well queries and hall probes into the alcove, so the
+/// same floor would read differently as the camera's distance moves it between levels.
+/// Level 0 is the sparse pool's INDEX window: 49 cells reach +-46 m usable, so a surface up to
+/// ~40 m from the camera resolves its 2 m cage at any camera distance, paid for only where
+/// probes were requested (see the header). The coarser lattices answer where level 0 has no
+/// probe yet and beyond its reach (levels 1 and 2 at 13: +-20 m / +-40 m; level 3 at 9:
+/// +-48 m). The lattice does not derive from the cascade resolution: the SDF window and the
+/// probe window are independent extents. Mirrored by
+/// global_sdf_clipmap_gpu::world_probe_axis / world_probe_pool_l0 / world_probe_atlas_tiles_x
+/// (atlas and buffer sizes) and verified by the gi oracle suite.
 #define GI_WORLD_PROBE_AXIS_L0 49
 #define GI_WORLD_PROBE_AXIS_L1 13
 #define GI_WORLD_PROBE_AXIS_L2 13
 #define GI_WORLD_PROBE_AXIS_L3 9
-/// Level 0's probe POOL: the slots the index hands out. Sponza's live set measured ~4900;
-/// the GI test suite (twelve cells spread over the window) filled 8192 exactly and its
-/// sealed thin-walled cell then read 3x brighter, its cages handed to the wall-straddling
-/// 4 m lattice while requests waited (2026-09-13). 16384 with buried cells never claiming
-/// a slot leaves both scenes headroom; the allocation pass tightens its eviction age when
+/// Level 0's probe POOL: the slots the index hands out, sized with headroom over a large
+/// scene's live set (buried cells never claim a slot): an exhausted pool leaves requests
+/// waiting and hands their cages to the wall-straddling 4 m lattice, which lights a
+/// thin-walled sealed room from outside. The allocation pass tightens its eviction age when
 /// fewer than a GI_WORLD_PROBE_POOL_PRESSURE_DIVISOR-th is free. A multiple of the trace's
 /// four-probe groups.
 #define GI_WORLD_PROBE_POOL_L0 16384
@@ -116,8 +114,8 @@ vec3 GiFiniteOrZero(vec3 v)
 /// The window count the allocation pass writes into a freshly claimed pool slot: the trace
 /// reads it as "seed and clear me" and replaces it with a real count the same frame.
 #define GI_WORLD_PROBE_COUNT_FRESH 0xFFFFFFFFu
-/// THE SCHEDULE WORD (b_world_probe_counts, plan item 2.1): GI_WORLD_PROBE_COUNT_FRESH on a claim,
-/// otherwise the windows the probe has completed (8 bits, saturating below the sentinel's byte),
+/// THE SCHEDULE WORD (b_world_probe_counts): GI_WORLD_PROBE_COUNT_FRESH on a claim, otherwise
+/// the windows the probe has completed (8 bits, saturating below the sentinel's byte),
 /// the next stratum its trace covers (4 bits) and the frame of its last trace (20 bits, wrapping -
 /// ages are taken modulo 2^20). Zero, the seed and an evicted slot, reads as no windows, stratum 0.
 #define GI_WORLD_PROBE_COUNT_WINDOWS_MAX 254u
@@ -242,7 +240,7 @@ ivec3 GiWorldProbeSlot(ivec3 cell, int level)
 	// on negatives, so bias well into positives first (cells are bounded far below 1<<20).
 	// The remainder is taken in UNSIGNED arithmetic: the operands are non-negative by the bias
 	// above, and fxc rejects a signed modulus outright when it compiles with warnings as errors
-	// (the shader-compile suite's own invocation does - it failed there and nowhere else).
+	// (the shader-compile suite's own invocation does).
 	uint axis = uint(GiWorldProbeAxis(level));
 	uvec3 biased = uvec3(cell + ivec3(1048576, 1048576, 1048576));
 	return ivec3(int(biased.x % axis), int(biased.y % axis), int(biased.z % axis));
@@ -261,7 +259,7 @@ ivec2 GiWorldProbeTileBase(int slot_linear, int tile_edge)
 {
 	// Unsigned remainder and divide: a slot index is non-negative by construction, and fxc
 	// rejects a signed modulus outright when it compiles with warnings as errors - which the
-	// shader-compile suite's invocation does, and this line was the one it failed on.
+	// shader-compile suite's invocation does.
 	uint slot = uint(max(slot_linear, 0));
 	uint tiles_x = uint(GI_WORLD_PROBE_ATLAS_TILES_X);
 	return ivec2(int(slot % tiles_x) * tile_edge, int(slot / tiles_x) * tile_edge);
@@ -322,9 +320,9 @@ ivec3 GiWorldProbeUnpackCell(uint packed_word)
 	       ivec3(512, 512, 512);
 }
 
-/// A sparse probe's RELOCATION offset from its lattice point (DDGI / RTXGI probe relocation,
-/// audit section 22): 10 bits per axis in 1/1024ths of the level-0 spacing (2 mm; the
-/// radius is under half a spacing). The zero offset is the index lane's seed value; the
+/// A sparse probe's RELOCATION offset from its lattice point (DDGI / RTXGI probe relocation):
+/// 10 bits per axis in 1/1024ths of the level-0 spacing (2 mm; the radius is under half a
+/// spacing). The zero offset is the index lane's seed value; the
 /// BURIED marker is what the relocation pass leaves on a cell whose lattice point could not
 /// be moved out of geometry - the allocation pass skips such a cell until its re-test tick.
 #define GI_WORLD_PROBE_OFFSET_ZERO   0x20080200u
@@ -346,9 +344,9 @@ vec3 GiWorldProbeUnpackOffset(uint packed_word, float spacing)
 
 /// The finest level COARSER than @p level whose window covers a point @p largest (Chebyshev
 /// distance) from the window centre; SDF_CLIPMAP_LEVEL_COUNT when none does. The cascade
-/// readers blend a cage into this one over its window's outer band. It used to be level + 1
-/// by construction (each window enclosed the finer one); level 0's +-46 m index window now
-/// reaches past levels 1 and 2, so its outer band blends into level 3.
+/// readers blend a cage into this one over its window's outer band. It is not simply
+/// level + 1: level 0's +-46 m index window reaches past levels 1 and 2, so its outer band
+/// blends into level 3.
 int GiWorldProbeFarLevel(int level, float largest)
 {
 	LOOP
@@ -362,10 +360,10 @@ int GiWorldProbeFarLevel(int level, float largest)
 	return SDF_CLIPMAP_LEVEL_COUNT;
 }
 
-/// The sparse index (see the layout defines). Stage 13, which the cull grid's second buffer
-/// held until the two were merged (sdf_common.sh b_sdf_grid). Read-write for the consumers
-/// that REQUEST probes (GI_WORLD_PROBE_INDEX_RW: the gather, the relight, the allocation pass
-/// itself), read-only for the rest of the cage readers.
+/// The sparse index (see the layout defines), at stage 13 (free because the cull grid is one
+/// buffer, sdf_common.sh b_sdf_grid). Read-write for the consumers that REQUEST probes
+/// (GI_WORLD_PROBE_INDEX_RW: the gather, the relight, the allocation pass itself), read-only
+/// for the rest of the cage readers.
 #if defined(GI_WORLD_PROBE_INDEX_RW)
 BUFFER_RW(b_world_probe_index, uint, 13);
 #define GI_WORLD_PROBE_INDEX_BOUND
@@ -491,7 +489,7 @@ uniform vec4 u_gi_world_probe_atlas;
  * octahedral depth texel averages a ~22-degree cone, so from a probe OUTSIDE a room a
  * direction grazing a wall edge mixes "wall at 3 m" with "open to 12 m" - the mean lands
  * beyond the interior query (no Chebyshev test at all) and the variance explodes (Chebyshev
- * ~1 when tested). Measured: a sealed box read the exterior cage's sky at full weight through
+ * ~1 when tested). A sealed box would read the exterior cage's sky at full weight through
  * exactly those texel wedges, at every level whose probes straddle the walls. The clipmap has
  * the wall itself; asking it is exact where the moments are statistical.
  *
@@ -509,12 +507,12 @@ uniform vec4 u_gi_world_probe_atlas;
 /// SdfSampleClipmapEx applies is what TRACING wants - one continuous function so consumers
 /// resolve one surface - and exactly wrong for an occlusion VERDICT: inside the blend band the
 /// coarse level contaminates the reading, so along the camera-locked handover shell a thin
-/// wall's blended through-minimum floats above any conviction depth (measured: sky arcs on
-/// sealed walls tracking the shell) and an on-surface query's blended reading dips below it
-/// (measured: a dark low-sky ring on open ground at the shell radius). Each level alone is
-/// conservative (test_clipmap_is_conservative), so the unblended verdict stays sound; the
-/// step discontinuity between samples that the blend exists to remove is harmless to a walk
-/// that never resolves a surface.
+/// wall's blended through-minimum floats above any conviction depth (sky arcs on sealed walls
+/// tracking the shell) and an on-surface query's blended reading dips below it (a dark
+/// low-sky ring on open ground at the shell radius). Each level alone is conservative
+/// (test_clipmap_is_conservative), so the unblended verdict stays sound; the step
+/// discontinuity between samples that the blend exists to remove is harmless to a walk that
+/// never resolves a surface.
 float GiCageVisibilitySample(vec3 position)
 {
 	float blend;
@@ -559,7 +557,7 @@ float GiWorldProbeCageVisibility(vec3 from, vec3 to, float spacing)
 	 * sign). Raising this threshold to a positive proximity is what cannot be done: legitimate
 	 * cage segments run PARALLEL to the query's own surface by construction - on flat ground
 	 * four of the eight cage probes lie in the floor plane and the biased query clears it by
-	 * ~0.4 voxel - and a proximity test blocked those whole cages, painting the black
+	 * ~0.4 voxel - and a proximity test would block those whole cages, painting the black
 	 * rings/donuts on open ground that ACCEPT_VOXELS is negative to avoid.
 	 *
 	 * Proximity is the wrong question; the field's SHAPE along the segment separates the two
@@ -618,11 +616,11 @@ float GiWorldProbeCageVisibility(vec3 from, vec3 to, float spacing)
 /// visibility test. CAPPED at field-voxel scale: the spacing-proportional magnitude DDGI
 /// publishes (0.225 x spacing = 0.45 m at the 2 m lattice) TUNNELS THROUGH any wall thinner
 /// than it - the biased point lands outside, Chebyshev sees the exterior probe unoccluded,
-/// and a sunlit exterior floods a closed room (measured on the thick-walled test room; the
-/// documented DDGI thin-wall failure). Clearing the query surface's own field shadow is a
-/// VOXEL-scale need, so two voxels of the level's field is enough - and stays below any
-/// wall the field itself can resolve. Shared by the cage read and the bounce memo's mask
-/// fill - the mask's bits must describe exactly the biased point the read walks from.
+/// and a sunlit exterior floods a closed room (the documented DDGI thin-wall failure).
+/// Clearing the query surface's own field shadow is a VOXEL-scale need, so two voxels of the
+/// level's field is enough - and stays below any wall the field itself can resolve. Shared by
+/// the cage read and the bounce memo's mask fill - the mask's bits must describe exactly the
+/// biased point the read walks from.
 /// CPU transcription in gi_tests.cpp (world_probe_biased_query): keep in step by hand.
 vec3 GiWorldProbeBiasedQuery(vec3 position, vec3 normal, vec3 view_direction, float spacing)
 {
@@ -674,7 +672,7 @@ uint GiWorldProbeCageMask(vec3 position, vec3 normal, vec3 view_direction, int l
 	return mask;
 }
 
-/// Bounce visibility-memo texel layout (an R32U volume, all 32 bits now spoken for):
+/// Bounce visibility-memo texel layout (an R32U volume, all 32 bits spoken for):
 ///   bits  0-7  = the 8-bit NEAR cage mask above,
 ///   bits  8-13 = a wrapping generation tag shared by both halves (0 reserved as "never
 ///                stamped" - the volume clears to 0 and the CPU hands out generations 1..63),
@@ -687,9 +685,9 @@ uint GiWorldProbeCageMask(vec3 position, vec3 normal, vec3 view_direction, int l
 ///   bit  22    = the FAR mask (below) is filled. Filled LAZILY, on the first probe-half HIT
 ///                whose blend band is open - never on a miss: a miss marches enough already
 ///                (the near cage), and on churning generations (camera motion re-snapping
-///                windows every few frames) an eager ungated far march on every miss cost
-///                MORE than the gated read it replaced. A generation that survives to its
-///                first hit has proven stable enough to amortise.
+///                windows every few frames) an eager ungated far march on every miss costs
+///                MORE than the gated read it would replace. A generation that survives to
+///                its first hit has proven stable enough to amortise.
 ///   bit  23    = the PROBE half (near mask, level) is populated. A culled or zero-radiance
 ///                face stamps only the face half; fabricating mask 0 + level 0 instead would
 ///                decode as a valid "all-dead level 0" verdict and pin the texel's cage
@@ -783,8 +781,7 @@ uint GiWorldProbeVisMemoFarMask(uint texel_value)
  * caller as a per-corner bitmask (the light-voxel bounce memo - see
  * GiWorldProbeIrradianceMasked). Everything else in the chain is identical between the two.
  *
- * All the constants are the published DDGI/RTXGI values, owned by gi_constants
- * (tasks/research/research_probe_systems.md section 1.3 quotes the chain verbatim).
+ * All the constants are the published DDGI/RTXGI values, owned by gi_constants.
  */
 bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direction, int level,
                                     bool use_mask, uint visibility_mask,
@@ -795,8 +792,8 @@ bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direct
 	// The cage's VISIBLE fraction: the weight that survived the field's verdict over the weight
 	// the statistical chain granted. 0 for a sealed cage. The cascade readers scale their
 	// blend toward the coarser cage by it, so a fine cage the field sealed never admits a
-	// coarse cage that straddles the wall (measured: the completion blend lit a thin-walled
-	// sealed room and a narrow corridor from the level-1 cages outside them).
+	// coarse cage that straddles the wall (which would light a thin-walled sealed room or a
+	// narrow corridor from the coarser cages outside it).
 	out_visible = 0.0;
 	float spacing = GiWorldProbeSpacing(level);
 	vec3 biased = GiWorldProbeBiasedQuery(position, normal, view_direction, spacing);
@@ -866,7 +863,7 @@ bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direct
 		// depth lobe saw ONE thing (a wall, or open space) and can be trusted BOTH ways;
 		// high variance means a silhouette wedge - the 8x8 oct texel mixes near-wall with
 		// far-open, the mean lands anywhere, Chebyshev saturates, and only the field march
-		// can answer (the measured sealed-box import channel). The gate is the live setting
+		// can answer (the sealed-box import channel). The gate is the live setting
 		// carried in u_gi_world_probe_params.w (default: the constant of the same name).
 		float variance = abs(moments.y - moments.x * moments.x);
 		bool moments_ambiguous = variance > u_world_probe_cage_vis_gate *
@@ -902,8 +899,8 @@ bool GiWorldProbeIrradianceInternal(vec3 position, vec3 normal, vec3 view_direct
 		// exactly nothing, no matter how loud its moments say otherwise (the silhouette-wedge
 		// leak). Masked callers apply their pre-paid verdicts to EVERY probe (strictly wider
 		// leak margin); marching callers gate to the ambiguous band, which is what keeps the
-		// pass affordable - ungated the march walked 8 probes per query and tripled the
-		// light-voxel pass, while flat-wall and open lobes never needed it.
+		// pass affordable - ungated, the march would walk 8 probes per query, while flat-wall and
+		// open lobes never need it.
 		if(use_mask)
 		{
 			if((visibility_mask & (1u << uint(corner))) == 0u)
@@ -1049,7 +1046,7 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 {
 	out_radiance = vec3_splat(0.0);
 	// LOOP on levels, cages and corners, exactly as the irradiance cage: the corner body
-	// carries the (gated) cage-visibility march, and unrolled it multiplied the largest
+	// carries the (gated) cage-visibility march, and unrolled it multiplies the largest
 	// instruction footprint of every completing trace kernel by eight per level.
 	LOOP
 	for(int level = 0; level < SDF_CLIPMAP_LEVEL_COUNT; ++level)
@@ -1062,12 +1059,12 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 		{
 			continue;
 		}
-		// CASCADE BLEND, the irradiance cascade's band (GiWorldProbeIrradianceCascade): the
-		// completion used to take the finest covering level outright, so every gather ray's far
-		// energy switched cages at a knife edge 6 / 12 / 24 m from the camera cell - an edge the
-		// camera drags across every surface (measured as brightness pops on translation). The
-		// far cage is evaluated by the SAME loop body (k = 1) so fxc instantiates the corner
-		// walk once (the one-call-site contract of the trace mega-bodies).
+		// CASCADE BLEND, the irradiance cascade's band (GiWorldProbeIrradianceCascade): taking
+		// the finest covering level outright would switch every gather ray's far energy between
+		// cages at a knife edge around the camera cell - an edge the camera drags across every
+		// surface, popping brightness on translation. The far cage is evaluated by the SAME loop
+		// body (k = 1) so fxc instantiates the corner walk once (the one-call-site contract of
+		// the trace mega-bodies).
 		float band = GI_WORLD_PROBE_BLEND_BAND * level_spacing;
 		float blend = saturate((largest - (half_extent - band)) / band);
 		int far_level = GiWorldProbeFarLevel(level, largest);
@@ -1158,8 +1155,8 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 				// Field visibility for the AMBIGUOUS band only, unfloored (see the irradiance
 				// cage): the depth moments blur silhouettes into ~22-degree wedges that pass
 				// exterior probes at full weight, and a completed ray carries that import into
-				// every gather cone - the dominant sealed-room leak once the trace side was
-				// watertight. The gate keeps completions affordable: most miss-ray cages are
+				// every gather cone - a sealed-room leak that a watertight trace side does not
+				// prevent. The gate keeps completions affordable: most miss-ray cages are
 				// open-lobe or flat-wall cases the moments already answer.
 				//
 				// Nested, never an && chain: HLSL && may evaluate both operands (FXC does),
@@ -1176,11 +1173,9 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 				// sphere. The stored mean depth toward the RAY direction is the sphere radius
 				// estimate - EXCEPT at the depth clamp, which marks "beyond" (the sky, or a hit
 				// past GI_WORLD_PROBE_DEPTH_CLAMP spacings), not a radius: treating the clamp as
-				// one pulled a vertical sky completion 2 m beside a level-0 probe 34 degrees off
-				// the zenith into the walls, so mid-cell completions never read a probe's sky
-				// texels (measured 2026-09-12: the courtyard floor's completions returned
-				// exactly zero under a sky of E(up) 3). Beyond the clamp the ray's own
-				// direction is the better estimate.
+				// one would tilt a vertical sky completion beside a probe far off the zenith,
+				// into the walls, so mid-cell completions would never read a probe's sky texels.
+				// Beyond the clamp the ray's own direction is the better estimate.
 				ivec2 tile = GiWorldProbeTileBase(probe_slot, GI_WORLD_PROBE_OCT_RADIANCE);
 				vec2 radius_uv = (vec2(depth_tile) + vec2_splat(1.0) +
 				                  GiOctEncode(direction) * float(GI_WORLD_PROBE_OCT_DEPTH)) *
@@ -1227,9 +1222,8 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 		{
 			// Every probe of the near cage DEAD (buried lattice points near dense geometry).
 			// No data is not an answer: let the next level's cage try, marched and sealed like
-			// this one. Returning false here handed these queries to the environment SH -
-			// measured as sky patches inside sealed rooms wherever the finest covering cage
-			// was fully buried.
+			// this one. Returning false here would hand these queries to the environment SH -
+			// sky patches inside sealed rooms wherever the finest covering cage is fully buried.
 			continue;
 		}
 		if(far_answered)
@@ -1255,11 +1249,11 @@ bool GiWorldProbeRadiance(vec3 position, vec3 direction, vec3 window_center, out
 /// spacings. A point that cannot reach the clearance within the radius keeps its clamped
 /// offset and the caller's buried test (SdfSampleInstancesPoint at nominal + offset) makes
 /// it dead. Why it exists: a 2 m lattice puts a corner of most covered faces' cages inside
-/// a wall, a floor slab or a column, and a dead corner is weight the cage loses - on
-/// covered faces the level-0 cage kept 44% of its weight and answered black for a third of
-/// them (audit section 22). Moving the corner to the room's side of its wall gives the cage
-/// a live probe that measured the room; a corner pushed to the FAR side of a thin wall stays
-/// rejected by the visibility test, as a buried one was, so no coarse cage is imported.
+/// a wall, a floor slab or a column, and a dead corner is weight the cage loses - enough
+/// dead corners leave a covered face's cage answering black. Moving the corner to the room's
+/// side of its wall gives the cage a live probe that measures the room; a corner pushed to
+/// the FAR side of a thin wall stays rejected by the visibility test, as a buried one would
+/// be, so no coarse cage is imported.
 /// Consumers that define GI_WORLD_PROBE_RELOCATE include sdf_common.sh first (the trace and
 /// the relocation pass, cs_gi_world_probe_relocate.sc).
 vec3 GiWorldProbeRelocate(vec3 nominal, float spacing)

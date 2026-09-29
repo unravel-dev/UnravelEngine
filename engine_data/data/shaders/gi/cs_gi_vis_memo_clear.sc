@@ -2,8 +2,8 @@
  * One-time zero of the bounce visibility memo (gi_light_voxels_kernel.sh). Generation 0 is
  * reserved as "never stamped" and the CPU hands out 1..63, so a zeroed texel can never match
  * a live generation - without this clear, allocation garbage could masquerade as a stamped
- * mask on backends that hand out non-zero memory (measured on Linux/Vulkan for the light
- * volume, the same defect family).
+ * mask on backends that hand out non-zero memory (the same defect family as the light volume,
+ * cs_gi_volume_clear.sc).
  */
 
 #include "bgfx_compute.sh"

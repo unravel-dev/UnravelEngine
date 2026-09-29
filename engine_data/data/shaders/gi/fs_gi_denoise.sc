@@ -127,18 +127,18 @@ void main()
 	// COHERENT-STRUCTURE FLOOR: on converged pixels the variance collapses and the stop
 	// preserves ANY leftover structure - including the probe/voxel-scale sampling-bias blobs
 	// that are precisely what needs smoothing (coherent, not noise: no temporal window
-	// removes them, and they survived every pass of this filter by design). The floor keeps
-	// same-plane neighbours within this fraction of the centre's own luminance merging after
-	// convergence; contrast above it, and anything across a plane or normal break, is
-	// preserved exactly as before. Keep in step with the compute form.
+	// removes them, and the variance stop alone passes them through every pass of this
+	// filter). The floor keeps same-plane neighbours within this fraction of the centre's own
+	// luminance merging after convergence; contrast above it, and anything across a plane or
+	// normal break, is preserved. Keep in step with the compute form.
 	luma_sigma = max(luma_sigma, u_gi_denoise_luma_floor * max(center_luma, 1e-3));
 	// BRIGHT-TAP BOUND (GI_DENOISE_TAP_LUMA_CAP / GI_DENOISE_LOG_LUMA_PHI): the variance stop
 	// above is inert against a compact bright feature - phi x the single-sample std over
-	// sqrt(count) is several times the luminance - so the wide passes copied the floor hotspot
-	// under an emitter to their tap offsets as disks. A tap's luminance is bounded to a
-	// multiple of the centre's, and a relative log-ratio stop weights it out beside the plane
-	// stop; both widen with the low-count boost so a young pixel still reconstructs from
-	// whatever its neighbours hold. Keep in step with the compute form.
+	// sqrt(count) is several times the luminance - so on its own the wide passes would copy
+	// the floor hotspot under an emitter to their tap offsets as disks. A tap's luminance is
+	// bounded to a multiple of the centre's, and a relative log-ratio stop weights it out
+	// beside the plane stop; both widen with the low-count boost so a young pixel still
+	// reconstructs from whatever its neighbours hold. Keep in step with the compute form.
 	float low_count_widen = max(u_gi_denoise_low_count_boost / count, 1.0);
 	float tap_luma_cap = GI_DENOISE_TAP_LUMA_CAP * low_count_widen * max(center_luma, 1e-3);
 	float log_luma_phi = GI_DENOISE_LOG_LUMA_PHI * low_count_widen;
@@ -147,7 +147,7 @@ void main()
 	// operator producing its input at 24 taps of cost (the note on the luminance stop above
 	// promises exactly this behaviour; this acts on it). The threshold is relative to the
 	// centre's own luminance and sits well below the target's quantisation. Disabled by a
-	// zero cap, the A/B switch.
+	// zero cap.
 	BRANCH
 	if(u_gi_denoise_converged_cap > 0.0)
 	{

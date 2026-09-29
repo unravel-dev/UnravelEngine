@@ -4,9 +4,9 @@
  * The volume's slots zero themselves lazily on FIRST CLAIM (the cell-id sentinel scheme), but
  * texels of slots nothing ever claims are still READ - GiLightVoxelRead filters over 2x2x2
  * neighbourhoods and falls back level by level - and a fresh allocation is only zero where the
- * driver happens to zero it. On drivers that do not (measured: Linux/Vulkan) the garbage
- * half-floats enter the probe<->voxel feedback loop, flash the GI white, and collapse it to
- * NaN black. Reading never-written memory is the defect; this makes every texel written, once.
+ * driver happens to zero it. On drivers that do not, the garbage half-floats enter the
+ * probe<->voxel feedback loop, flash the GI white, and collapse it to NaN black. Reading
+ * never-written memory is the defect; this makes every texel written, once.
  */
 
 #include "bgfx_compute.sh"

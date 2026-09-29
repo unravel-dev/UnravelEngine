@@ -9,17 +9,17 @@ $input v_texcoord0
  * averages out; the clamp fades out under a still camera (the motion release below) so
  * sparse-bright content can converge - capped by the MOVER GATE while the velocity pass
  * drew movers, because the release reads receiver motion only and a still camera watching
- * a moving emitter otherwise held its ghost unclamped. Raw alpha is coverage below 1 and
+ * a moving emitter would otherwise hold its ghost unclamped. Raw alpha is coverage below 1 and
  * encodes the hit distance above 1 (the trace kernel's contract; >= 0.5 image tests hold).
  * A coverage-0 sample is not an image: history is held so a refined mean is not bleached
  * by sky - held with a per-frame COUNT DECAY (see the branch), so a pixel that stops
- * producing images ever again ages out to the probe layer instead of freezing its last
- * mean forever - and a zero count lets the composite reveal the authored probe layer.
+ * producing images ever again ages out to the trace's own live fallback (the authored probe
+ * layer, the sky SH where no probe reaches) instead of freezing its last mean forever.
  *
  * FIREFLY GOVERNOR (the gather's recipe, GI_REFLECTION_FIREFLY_CLAMP): one VNDF ray per
  * pixel per frame makes a small bright emitter a sparse-spike process on rough surfaces -
  * a hit returns the emitter's (ray-capped) radiance, orders over the local mean, and no
- * running mean can hide an isolated spike entering at 1/count (the dancing red pixels).
+ * running mean can hide an isolated spike entering at 1/count.
  * Each new sample is capped at the clamp's multiple of its REFERENCE: the pixel's own
  * accumulated luminance, floored by the neighbourhood mean of this frame's geometric
  * samples (fetched by the same 3x3 the bounds already pay for). An established bright
@@ -64,11 +64,10 @@ uniform vec4 u_gi_refl_temporal;
 /// pass drew any mover - or the composed SDF content changed (an instance appeared,
 /// vanished, or moved: the structural signal a parked-then-destroyed object leaves when
 /// it can no longer draw into the velocity buffer) - within one temporal window, 1.0
-/// otherwise. The cap applies
-/// EVERYWHERE and the per-pixel hit read below only TIGHTENS it - a departed mover reads
-/// static at exactly its ghost's pixels (the current mirror hit is the revealed
-/// background), so a depth-confirmed "static now" reading that superseded the cap
-/// preserved the trail at the full release (measured; present cannot validate history).
+/// otherwise. The cap applies EVERYWHERE and the per-pixel hit read below only TIGHTENS
+/// it - a departed mover reads static at exactly its ghost's pixels (the current mirror hit
+/// is the revealed background), so a depth-confirmed "static now" reading that superseded
+/// the cap would preserve the trail at the full release (present cannot validate history).
 uniform vec4 u_gi_refl_velocity;
 /// xyz = camera position (shared with the trace programs - bgfx uniforms are name-global).
 uniform vec4 u_gi_reflection_camera;
@@ -137,15 +136,14 @@ void main()
 	// VIRTUAL-IMAGE reprojection: camera-consistent pixels ALWAYS use this pass's own matrix
 	// reprojection; the velocity buffer's RG drives only OBJECT-motion pixels (BA gate).
 	// Trusting RG for camera pixels drags the image - the buffer's camera component is not
-	// reliably this pass's own previous view-projection (measured; open engine issue, see
-	// the velocity plan). Same gating as the TAA resolve.
+	// reliably this pass's own previous view-projection. Same gating as the TAA resolve.
 	//
 	// The point that reprojects is NOT the receiver: reflected content lives at the mirror
 	// image of the hit, |camera - P| + hit_t along the view ray through P (exact for a
 	// planar reflector - the standard SSR hit-distance reprojection). Reprojecting the
-	// RECEIVER fetched history from where the SURFACE was, not where the reflected content
-	// was, so camera translation dragged sky and far-content reflections with receiver
-	// parallax - motion trails that only caught up once the camera stopped. hit_t rides the
+	// RECEIVER would fetch history from where the SURFACE was, not where the reflected content
+	// was, so camera translation would drag sky and far-content reflections with receiver
+	// parallax - motion trails that only catch up once the camera stops. hit_t rides the
 	// raw alpha (the trace kernel's contract): 1 < w < 2 is a geometric hit, w = 2 a sky
 	// miss, pushed far enough that translation parallax cancels and rotation alone remains.
 	// Rough-tier (w = 1) and shape-fade pixels keep the receiver point - their content is
@@ -155,12 +153,12 @@ void main()
 	vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(depth)));
 	vec3 world_position = clipToWorld(u_invViewProj, clip);
 	// TWO reprojections, deliberately: the virtual image answers WHERE the history is, the
-	// receiver answers WHETHER it may be trusted. Conflating them broke the release: a
+	// receiver answers WHETHER it may be trusted. Conflating them breaks the release: a
 	// sky-classified pixel's virtual point sits far enough that it reprojects onto uv even
-	// while the camera strafes, so pixels the reflected building had just LEFT read as
-	// perfectly still, released the clamp at the extended window, and held the building's
-	// ghost - a sawtooth trail that snapped only when the sweeping boundary handed the
-	// pixel a geometric sample again (real motion measured, clamp re-engaged). The
+	// while the camera strafes, so pixels a reflected building has just LEFT would read as
+	// perfectly still, release the clamp at the extended window, and hold the building's
+	// ghost - a sawtooth trail that snaps only when the sweeping boundary hands the pixel a
+	// geometric sample again (real motion measured, clamp re-engaged). The
 	// stillness gates therefore measure RECEIVER motion - is this pixel's viewing geometry
 	// parked - which is the actual precondition for "the history is my own sample stream";
 	// converged sky content survives the engaged clamp anyway (it agrees with the current
@@ -211,10 +209,10 @@ void main()
 	// unclamped; the release also extends the running-mean window (the count cap below), so
 	// spikes enter at 1/(scale x window) weight. Motion is the only per-frame discriminator
 	// between ghosts and sparse-bright samples without a velocity buffer - a moving emitter
-	// under a still camera can trail over the extended window (accepted, documented). This
-	// gate only reads truly still because the whole chain runs on TAA-unjittered matrices
-	// (the pass subtracts the jitter; jittered matrices read a parked camera as 0.25-0.5
-	// texel/frame of motion and silently kept the clamp engaged).
+	// under a still camera can trail over the extended window (accepted). This gate only
+	// reads truly still because the whole chain runs on TAA-unjittered matrices (the pass
+	// subtracts the jitter; jittered matrices would read a parked camera as a fraction of a
+	// texel of motion every frame and silently keep the clamp engaged).
 	// RECEIVER-motion texels, never the fetch offset: see the two-reprojection note above.
 	vec2 motion_texels = (uv - recv_prev_uv) / max(texel, vec2_splat(1e-6));
 	// Measured receiver stillness, kept SEPARATE from the release gates below: the
@@ -224,8 +222,8 @@ void main()
 	float still_motion = 1.0 - saturate(length(motion_texels) / GI_REFLECTION_CLAMP_MOTION_TEXELS);
 	float still = still_motion;
 	// MOVER GATE, part one - the global cap (u_gi_refl_velocity.y, see its declaration):
-	// receiver motion is the only thing `still` measured, so a parked camera watching a
-	// MOVING emitter held the ghost's history unclamped at the extended window. While any
+	// receiver motion is the only thing `still` measures, so a parked camera watching a
+	// MOVING emitter would hold the ghost's history unclamped at the extended window. While any
 	// mover was drawn recently the release is capped screen-wide; ghosts flush at roughly
 	// the base window while converged static content loses only the release's tail.
 	still = min(still, u_gi_refl_velocity.y);
@@ -235,8 +233,8 @@ void main()
 	// ray every frame: there is no lobe variance to integrate, every sample is the full
 	// truth, and an unclamped extended hold can only preserve stale content. Mirrors
 	// therefore keep the clamp engaged and the base window at ANY stillness - history that
-	// disagrees with the current neighbourhood dies within frames, which is exactly the
-	// surface where departed-content lines proved able to outlive every upstream flush.
+	// disagrees with the current neighbourhood dies within frames, which matters most on a
+	// mirror, where departed-content lines can otherwise outlive every upstream flush.
 	// The decode is shared with the mover gate's mirror-direction rebuild below.
 	GBufferDataNormalMetalRoughness nd = DecodeGBufferNormalMetalRoughnessLod(uv, s_refl_normal, 0.0);
 	if(nd.roughness <= GI_REFLECTION_MIRROR_ROUGHNESS)
@@ -276,10 +274,8 @@ void main()
 		// a coverage-0 frame is already the trace's own fallback answer (shape_ok 0 mixes
 		// to pure GiReflectionSkyFallback): the steady state of a persistently-non-image
 		// pixel is the LIVE sky/probe answer at count 1 - never a bare low alpha that
-		// uncovers the probe layer, because where no probe reaches that "reveal" was a black
-		// hole before the indirect pass filled it with the SH (measured: black bands rimmed with
-		// the last held colour at every
-		// persistent-non-image silhouette once the count decayed). The count floors at 1:
+		// uncovers the probe layer: where no probe reaches, that would replace the trace's
+		// own answer with the indirect pass's environment fill alone. The count floors at 1:
 		// the fallback IS an image, and the next geometric sample restarts a fresh mean
 		// on top of it instead of resurrecting anything.
 		float held = min(history_texel.w,
@@ -290,10 +286,9 @@ void main()
 		// the fetch is a NEIGHBOUR'S mean dragged at receiver parallax (band content mixes
 		// wall and sky, so no single hit distance can reproject it), and the band sweeping
 		// across the screen re-inherits converged neighbours every frame - displaying that
-		// at full trust was a self-refreshing smear along reflected silhouettes (the
-		// wall-edge motion trails). On a deterministic mirror (still forced 0 above) a
-		// coverage-0 answer is PERSISTENT, not a gap, so the live fallback is the correct
-		// display there at any camera state.
+		// at full trust would be a self-refreshing smear along reflected silhouettes. On a
+		// deterministic mirror (still forced 0 above) a coverage-0 answer is PERSISTENT, not
+		// a gap, so the live fallback is the correct display there at any camera state.
 		float trust = saturate(held) * still;
 		gl_FragColor = vec4(mix(curr.xyz, history_texel.xyz, trust), max(held, 1.0));
 		return;
@@ -382,10 +377,9 @@ void main()
 	// apply the governor's ceiling to each of them.
 	//
 	// STATISTICS SPACE: mean and variance in bounded-range YCoCg (gi_reflection_denoise.sh),
-	// never the linear-RGB min/max AABB this used to build. A min/max box is set by its
-	// single brightest member, so one firefly widened it until it rejected nothing - the
-	// recorded "a colour-space clamp flushes only as well as its box is tight" lesson - and
-	// it was exactly where the box was widest that ghosts survived.
+	// never a linear-RGB min/max AABB. A min/max box is set by its single brightest member,
+	// so one firefly widens it until it rejects nothing - and a clamp flushes ghosts only as
+	// well as its box is tight.
 	vec3 box_sum = vec3_splat(0.0);
 	vec3 box_sq_sum = vec3_splat(0.0);
 	float box_count = 0.0;
@@ -501,10 +495,6 @@ void main()
 	// emissive hit (up to GI_MAX_RAY_RADIANCE) sets every neighbour's ceiling to its own
 	// height, and the resolve then spreads that hit into a 3x3 of unclamped dots.
 	// With one neighbour there is nothing to trim: the history alone is the reference.
-	//
-	// The bounded-range resolve below now suppresses the same spikes by construction, so
-	// this governor and its trimmed mean are candidates for removal - but only against the
-	// brushed-metal case that put them here, not on principle.
 	float reference = history_texel.w >= 0.5 ? GiReflLuma(history_texel.xyz) : 0.0;
 	if(neighbor_count > 1.0)
 	{
@@ -572,8 +562,8 @@ void main()
 	                      vec3_splat(GI_REFLECTION_CONFIDENCE_EXTENT_FLOOR));
 	// RUNNING MEAN, not a fixed EMA: alpha carries the accumulated frame count (the SSR
 	// temporal-resolve convention). A fixed-weight EMA has a permanent variance floor -
-	// about a quarter of the sample spread at weight 1/8 - which read as reflections that
-	// never converge exactly where the stochastic spread is widest (measured, round 13).
+	// about a quarter of the sample spread at weight 1/8 - which reads as reflections that
+	// never converge exactly where the stochastic spread is widest.
 	// The count clamp keeps steady-state responsiveness at one over the settings window.
 	vec3 history_rgb = curr.xyz;
 	float prev_count = 0.0;
@@ -596,8 +586,8 @@ void main()
 		// outside the box re-accumulates with a large alpha in the frames that follow instead
 		// of only being pinned to the box edge. The floor keeps a little history on a merely
 		// noisy pixel; the release (stillness) lifts the collapse in step with the clamp, so
-		// sparse-bright content under a parked camera converges exactly as before - the
-		// mover cap keeps the collapse engaged while anything moves.
+		// sparse-bright content under a parked camera converges unhindered - the mover cap
+		// keeps the collapse engaged while anything moves.
 		// Measured directly in the statistics space, so there is no second tonemap here.
 		float confidence =
 		    saturate(1.0 - length((history_denoise - clamped_denoise) / box_extent));

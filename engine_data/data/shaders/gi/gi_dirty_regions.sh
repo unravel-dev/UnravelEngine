@@ -12,9 +12,9 @@
 /// collapses to the fast cap so the stale light flushes, and the screen probe trace stops
 /// reading last frame's composite at hits inside it - that read carries the accumulated
 /// glow back into the gather, and with the lane's memory on top the residual of a moved
-/// emissive decayed over seconds. The old trigger was the content epoch - GLOBAL, so one
-/// cube oscillating 30 m away pinned every pixel at the fast cap (measured: static-floor
-/// noise doubled in a still shot).
+/// emissive would decay over seconds. The regions are LOCAL on purpose: a global trigger
+/// such as the clipmap's content epoch would pin every pixel at the fast cap whenever any
+/// instance anywhere moves.
 uniform vec4 u_gi_temporal_dirty;
 uniform vec4 u_gi_temporal_bounds[GI_TEMPORAL_DIRTY_MAX_BOUNDS * 2];
 

@@ -2,10 +2,9 @@
 #define __GI_LIGHT_VOXELS_SH__
 
 /*
- * Light voxels (gi_rewrite_plan.md 3.2): outgoing radiance per EXPOSED FACE of every surface voxel of
- * the SDF cascade, at attribute resolution. This is what a traced ray reads at a cascade hit -
- * the positional replacement for the surface-addressed radiance hash, with no writer/reader
- * agreement problem: the address is the voxel.
+ * Light voxels: outgoing radiance per EXPOSED FACE of every surface voxel of the SDF cascade, at
+ * attribute resolution. This is what a traced ray reads at a cascade hit - addressed by
+ * position, so there is no writer/reader agreement problem: the address is the voxel.
  *
  * LAYOUT: one 3D texture; Z stacks (level, face) slabs of attr_resolution each:
  *   slab z = ((level * 6 + face) * attr_resolution) + voxel_z
@@ -13,8 +12,8 @@
  * i.e. +X, -X, +Y, -Y, +Z, -Z. rgb = outgoing radiance (albedo/pi * E + emissive), a = 1 where
  * the face is exposed and lit, 0 where it measured nothing.
  *
- * Two sides of a wall live in different face slabs of the same voxel - the positional analogue
- * of the old cache's normal-in-key leak defence.
+ * Two sides of a wall live in different face slabs of the same voxel, so the light on one side
+ * never leaks onto the other.
  */
 
 #include "gi_constants.sh"
@@ -22,11 +21,10 @@
 #ifndef GI_FINITE_OR_ZERO_DEFINED
 #define GI_FINITE_OR_ZERO_DEFINED
 /// Zero when non-finite (or absurdly large): the probe<->voxel feedback loop has no decay for
-/// a NaN - each side re-ingests the other every cycle, so one poisoned texel converges the
-/// whole field to NaN within a window (measured on Linux/Vulkan, where never-written texels
-/// read as garbage: a white flash, then GI collapsing to black). An ordered comparison is
-/// used rather than isnan(), which relaxed-math shader compilation may fold away; NaN fails
-/// every ordered comparison, so it cannot pass this one.
+/// a NaN - each side re-ingests the other every cycle, so one poisoned texel (never-written
+/// texels read as garbage on some backends) converges the whole field to NaN within a window.
+/// An ordered comparison is used rather than isnan(), which relaxed-math shader compilation
+/// may fold away; NaN fails every ordered comparison, so it cannot pass this one.
 vec3 GiFiniteOrZero(vec3 v)
 {
 	return all(lessThan(abs(v), vec3_splat(1e30))) ? v : vec3_splat(0.0);
@@ -42,8 +40,8 @@ vec3 GiFiniteOrZero(vec3 v)
 /// collapsed from 20:1 to 4:1, so a coloured neon strip desaturates toward white in the bounce
 /// while a grey one of the same luminance does not change at all. Scaling the whole triple by
 /// ceiling/luma removes exactly as much energy and none of the colour. This is the same
-/// treatment GI_GATHER_FIREFLY_CLAMP already gives the relative ceiling in the screen probe
-/// gather; the two clamps disagreed for no reason.
+/// treatment GI_GATHER_FIREFLY_CLAMP gives the relative ceiling in the screen probe gather,
+/// so the two clamps agree.
 ///
 /// Luminance is spelled out rather than taken from lighting.sh so this header stands alone.
 vec3 GiClampRayRadiance(vec3 radiance, float ceiling)
@@ -114,7 +112,7 @@ ivec3 GiLightVoxelStatsTexel(int level, int quantity)
 /// ivec3, uint)) for the HLSL-syntax family - D3D, and SPIR-V / Metal, which bgfx
 /// compiles through the HLSL front-end too (the compute header splits on the same
 /// test). bgfx_compute.sh covers only the 2D form; without this the SPIR-V build silently
-/// matched the 2D template and emitted a mistyped OpStore. Lives here, in the header the
+/// matches the 2D template and emits a mistyped OpStore. Lives here, in the header the
 /// statistics-slice writers share (the relight kernel and the world-probe trace), because
 /// bgfx_compute.sh is overwritten from deps on every build.
 void imageAtomicAdd(RWTexture3D<uint> _image, ivec3 _uvw, uint _value)
@@ -286,11 +284,10 @@ bool GiLightVoxelReadLevel(vec3 position, vec3 normal, int level, out vec3 out_r
  *
  * FALLS BACK one level at a time from the finest covering cascade. A traced hit follows the
  * cascade's BLENDED isosurface, which inside a cross-fade band sits up to a coarse voxel off
- * the finest level's own isosurface - so the finest level's surface band legitimately missed
- * that voxel while the next level's, twice as wide, covers it. Same reasoning (and the same
- * fix) as the old cache's level cross-fade: within a band the surface is represented at both
- * levels, and a reader that cannot step down goes dark in a camera-following shell - which is
- * exactly the distance fade the Attr Albedo debug view showed as yellow banding.
+ * the finest level's own isosurface - so the finest level's surface band can legitimately miss
+ * that voxel while the next level's, twice as wide, covers it. Within a band the surface is
+ * represented at both levels, and a reader that cannot step down goes dark in a
+ * camera-following shell.
  *
  * Returns false only when NO level holds a measured voxel there - the caller decides its own
  * fallback (never fabricate energy here).
@@ -374,8 +371,8 @@ bool GiLightVoxelReadFade(vec3 position, vec3 normal, vec3 fallback, float fade_
  * The irradiance consumers' cascade read (gather rays, world-probe rays): cross-fades the
  * finer and coarser levels' MEASURED answers over @p fade_voxels of the finer level, with no
  * foreign fallback - where only one level measured the point, that level answers alone, and
- * where neither did the walk continues outward exactly as GiLightVoxelRead. The first-success
- * walk switched hit radiance from 0.25 m to 0.5 m voxels at a knife edge 8 m from the camera,
+ * where neither did the walk continues outward exactly as GiLightVoxelRead. A first-success
+ * walk switches hit radiance from 0.25 m to 0.5 m voxels at a knife edge 8 m from the camera,
  * and that edge sweeps every surface as the camera translates (GI_LIGHT_VOXEL_FADE_VOXELS).
  */
 bool GiLightVoxelReadBlend(vec3 position, vec3 normal, float fade_voxels, out vec3 out_radiance)
@@ -439,11 +436,11 @@ SAMPLER3D(s_gi_attr_albedo, 11);
  * THE WEIGHT SETS MUST BE IDENTICAL. The ratio's correctness rests on
  * radiance_mean / albedo_mean cancelling to the (albedo-weighted) irradiance: with the same
  * weights, sum(w * a * albedo * E) / sum(w * a * albedo) is exact under locally uniform
- * lighting at EVERY material boundary. The previous split readers weighted radiance by
- * face-alpha x facing but albedo by plain cell-trilinear, and wherever face culling thinned
- * one set (crevices, rims - any silhouette a reflection ray grazes) the ratio over/undershot
+ * lighting at EVERY material boundary. Split readers - radiance weighted by face-alpha x
+ * facing, albedo by plain cell-trilinear - disagree wherever face culling thins one set
+ * (crevices, rims - any silhouette a reflection ray grazes), and the ratio over/undershoots
  * to its clamp: a standing bright outline on the lighter material and a dark edging on the
- * darker one, stamped along every reflected junction - and a x4 amplifier window that kept
+ * darker one along every reflected junction, plus a x4 amplifier window that keeps
  * otherwise-invisible residual radiance (a departed emitter's tail) glowing as a line.
  *
  * Explicit 2x2x2 corner walk instead of hardware trilinear, because the albedo texels must be

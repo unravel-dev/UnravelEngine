@@ -33,7 +33,7 @@ IMAGE3D_RW(s_attr_albedo_out, rgba8, 5);
 /// rgb = winning emissive (radiance units), a unused.
 IMAGE3D_WO(s_attr_emissive_out, rgba16f, 6);
 /// The surface-voxel list: a SDF_CLIPMAP_LEVEL_COUNT-entry header of append cursors (index =
-/// level, reset by cs_gi_surface_count_reset before this dispatch), then one segment of
+/// level, reset by cs_gi_clipmap_compose.sc before this dispatch), then one segment of
 /// attr_resolution^3 packed entries per level. One buffer so the light-voxel kernel spends
 /// one stage on both. At a high stage ON PURPOSE: OpenGL guarantees only eight image units
 /// (bindings 0-7), so the light-volume IMAGE below takes the low slot while buffers tolerate
@@ -86,10 +86,10 @@ float GiAttrShellCoverage(SdfHeader header, float scale)
 
 /// Emissive is a SOURCE, so its power scales with the area that emits. Stamping a small
 /// emitter's full radiance across a coarse voxel makes the voxel's whole cross-section
-/// emit - a 0.5 m cube read as a 2 m blob is a 16x energy amplifier, measured as red on
-/// buildings tens of metres from one small emissive cube. Scale the stored radiance by the
-/// instance's largest silhouette (extent product over the smallest extent - exact for
-/// boxes and sheets, conservative for everything else) over the voxel's cross-section,
+/// emit - a 0.5 m cube read as a 2 m blob is a 16x energy amplifier, lighting surfaces tens
+/// of metres away. Scale the stored radiance by the instance's largest silhouette (extent
+/// product over the smallest extent - exact for boxes and sheets, conservative for everything
+/// else) over the voxel's cross-section,
 /// saturating for anything that genuinely fills the cell: large emissive surfaces are
 /// untouched at every level, and the fine levels see small emitters at full strength.
 /// Albedo deliberately keeps full-value stamping - reflectance is bounded and carries no
@@ -176,24 +176,23 @@ void main()
 		}
 	}
 	float band = GI_SURFACE_VOXEL_BAND * u_attr_voxel_size;
-	// Band gate on the composed field, ALONE (transcribes the CPU reference, including the
-	// removal of the gradient gate - see compose_level_attributes for the thin-wall-valley
-	// reasoning). Deep interiors read the bake's conservative empty-inside distances and fail
-	// the band on their own.
+	// Band gate on the composed field, ALONE - no gradient gate (transcribes the CPU reference;
+	// see compose_level_attributes for the thin-wall-valley reasoning). Deep interiors read the
+	// bake's conservative empty-inside distances and fail the band on their own.
 	float field_distance = SdfSampleClipmapLevel(u_attr_level, center);
 	bool is_surface = field_distance < 0.5 * SDF_CLIPMAP_OUTSIDE && abs(field_distance) <= band;
 	if(!is_surface)
 	{
 		// A voxel that STOPPED being surface leaves the list and is never re-lit, so its
-		// radiance must die here or it survives as a ghost: geometry that moved away kept
-		// glowing at its old cells (a closed door's old radiance held the room lit through
-		// the trilinear neighbourhood). Surface voxels keep their radiance - zeroing THOSE
-		// is the recompose flicker this pass's claim logic exists to prevent.
+		// radiance must die here or it survives as a ghost: geometry that moved away would
+		// keep glowing at its old cells (a closed door's old radiance holding the room lit
+		// through the trilinear neighbourhood). Surface voxels keep their radiance - zeroing
+		// THOSE is the recompose flicker this pass's claim logic exists to prevent.
 		//
 		// TRANSITION-ONLY: the previous alpha says whether there is anything to tear down.
 		// A voxel that was already non-surface holds zeros in all eight texels (this rule
 		// plus the cell-claim's own clear are the only writers), and re-storing zeros over
-		// zeros was most of the pass's store traffic on every recompose.
+		// zeros would be most of the pass's store traffic on every recompose.
 		vec4 previous = imageLoad(s_attr_albedo_out, texel);
 		if(previous.a > 0.0)
 		{
@@ -212,11 +211,11 @@ void main()
 	// cs_gi_clipmap_compose, for the same reason: an instance within reach of this voxel
 	// without containing it must still be found.
 	// TOP-2 attribution, blended by proximity (see the CPU reference for the full argument):
-	// a coarse voxel CONTAINS a mixture of the surfaces inside it, and winner-take-all painted
-	// whole voxels one instance's colour (red halos around distant awnings). Both slots update
-	// min-style with index tie-breaks and skip already-tracked indices, so repeated candidate
-	// visits from overlapping grid cells stay no-ops - the idempotence that keeps this walk
-	// and the CPU composer's full loop in exact agreement.
+	// a coarse voxel CONTAINS a mixture of the surfaces inside it, and winner-take-all would
+	// paint whole voxels one instance's colour (colour halos around distant thin geometry).
+	// Both slots update min-style with index tie-breaks and skip already-tracked indices, so
+	// repeated candidate visits from overlapping grid cells stay no-ops - the idempotence that
+	// keeps this walk and the CPU composer's full loop in exact agreement.
 	float best_magnitude = u_attr_reach;
 	float second_magnitude = u_attr_reach;
 	int best_index = -1;
@@ -264,11 +263,11 @@ void main()
 						// Candidates compete at TRUE surface distance. A two-sided shell reads
 						// |distance to sheet| - half_thickness, so its zero isosurface is a
 						// phantom skin floating half a metre from the cloth at production bake
-						// scales - and raw |d| let that skin beat honest signed fields wherever
-						// it crossed them (measured: curtain and rope albedo painted onto
-						// Sponza's stone, ring-shaped where the skin crossed columns). Adding
-						// back the applied half-thickness (zero for signed fields, so no branch)
-						// restores the unsigned sheet distance the contest should judge on.
+						// scales - and raw |d| would let that skin beat honest signed fields
+						// wherever it crosses them (cloth albedo painted onto nearby stone,
+						// ring-shaped where the skin crosses columns). Adding back the applied
+						// half-thickness (zero for signed fields, so no branch) restores the
+						// unsigned sheet distance the contest should judge on.
 						float magnitude =
 						    abs((SdfSampleLocal(header, local_position) + header.two_sided_thickness) *
 						        inst.local_to_world_scale);
@@ -318,11 +317,10 @@ void main()
 		first_albedo *= b_gi_texture_means[first.mean_slot].xyz;
 	}
 	// The EMISSIVE map's mean, exactly as albedo takes the colour map's one line above. Without
-	// it the GI never saw the emissive texture at all and bounced the colour FACTOR over the
-	// whole silhouette: a sign whose texture is a few percent lit glyphs on black lit the room
-	// as a fully lit panel at peak radiance - about 1/mean too much energy, routinely 5-20x,
-	// with the glyphs' shape replaced by the submesh's outline. Stable and noise-free, so it
-	// never read as a filtering artefact; it read as the GI being wrong.
+	// it the GI would never see the emissive texture and would bounce the colour FACTOR over the
+	// whole silhouette: a sign whose texture is a few percent lit glyphs on black would light the
+	// room as a fully lit panel at peak radiance - about 1/mean too much energy, with the glyphs'
+	// shape replaced by the submesh's outline.
 	vec3 first_emissive_factor = first.emissive;
 	if(first.emissive_mean_slot != 0u)
 	{
@@ -353,8 +351,8 @@ void main()
 		// COVERAGE-scaled proximity, not proximity alone: the blend approximates the mixture
 		// of surfaces INSIDE the cell, and a thin shell's volume fraction is bounded by its
 		// thickness over the cell size - a 3 cm rope equidistant with the floor is 2% of the
-		// cell, not half of it (measured: rope-red floors wherever ropes ran along a parapet).
-		// Solids keep weight 1; shells fade from coarse cells exactly as their footprint does.
+		// cell, not half of it. Solids keep weight 1; shells fade from coarse cells exactly as
+		// their footprint does.
 		float first_coverage =
 		    GiAttrShellCoverage(SdfLoadHeader(first.header_index), first.local_to_world_scale);
 		float second_coverage =
@@ -373,16 +371,17 @@ void main()
 		// PARENT level's radiance for the same point instead of black. The parent scrolls half
 		// as often, so its cell is valid here; the seed is stored premultiplied under a
 		// provenance alpha the readers accept as measured and the relight EMA does not (so the
-		// first relight writes through and replaces it). Zero-claimed cells stayed black until
-		// their first relight - up to one rotation - a dark frontier dragged through the near
-		// field every level-0 re-snap. The probes seed from their parent cascade the same way.
+		// first relight writes through and replaces it). A zero-claimed cell would stay black
+		// until its first relight - up to one rotation - dragging a dark frontier through the
+		// near field at every level-0 re-snap. The probes seed from their parent cascade the
+		// same way.
 		//
 		// LISTED CELLS ONLY, which is why the seed lives here and not in the claim above. A
-		// seeded slot that never made the list was never relit and never torn down (the
+		// seeded slot that never makes the list is never relit and never torn down (the
 		// teardowns above fire on the slot's PREVIOUS albedo alpha, which an air-to-air or
-		// air-to-unattributed claim leaves at zero), so it served its parent's radiance at the
-		// seed weight to every hit in its trilinear neighbourhood for as long as it held the
-		// cell (measured: a departed emissive's red at the coarse levels after camera motion).
+		// air-to-unattributed claim leaves at zero), so it would serve its parent's radiance at
+		// the seed weight to every hit in its trilinear neighbourhood for as long as it holds
+		// the cell - a departed emissive's colour lingering at the coarse levels.
 		int parent_level = u_attr_level + 1;
 		bool parent_ok = false;
 		ivec3 parent_slot = ivec3(0, 0, 0);

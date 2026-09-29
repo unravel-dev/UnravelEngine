@@ -56,9 +56,9 @@ void surface_cache_view::update(const std::vector<global_sdf_instance>& instance
         }
     }
     // The cascade decides for itself which levels a change reached. A single global "something
-    // moved" flag could only say "all of them", which meant composing four levels in the frame
-    // anything moved -- and composing a level is expensive enough that this was the whole cost of
-    // having animation in the scene.
+    // moved" flag could only say "all of them", which would mean composing four levels in the
+    // frame anything moved -- and composing a level is expensive enough that this would be the
+    // whole cost of having animation in the scene.
     const uint32_t composed = clipmap_.update(instances, camera_position, instances_revision);
     if(composed > 0)
     {
@@ -107,17 +107,15 @@ auto surface_cache_view::update_quiescence(uint64_t light_hash,
         quiescence_light_hash_ = light_hash;
         changed = true;
     }
-    // The ENVIRONMENT is lighting too, and it was the one input this gate could not see: world
-    // probes integrate the sky SH on every miss, so a tint, an intensity, a turbidity or a
-    // swapped cubemap changed on its own left the atlas holding the old sky behind a gate with
-    // no reason to open. Editing a sky next to its directional light hid this, because the light
-    // set changed with it.
+    // The ENVIRONMENT is lighting too: world probes integrate the sky SH on every miss, so
+    // without this a tint, an intensity, a turbidity or a swapped cubemap changed on its own
+    // would leave the atlas holding the old sky behind a gate with no reason to open.
     if(environment_hash != quiescence_environment_hash_)
     {
         quiescence_environment_hash_ = environment_hash;
         changed = true;
     }
-    // GRADED (plan item 1.2, Lumen's sun / sky rule): only a GLOBAL revision - a directional
+    // GRADED (Lumen's sun / sky rule): only a GLOBAL revision - a directional
     // light or the sky past the 4x brightness ratio, or one added or removed - is a LIGHTING
     // change that pins the screen temporal's scene-wide fast window. A moving local light
     // flushes only its own influence region (the dirty regions), and a drifting sun or sky
@@ -141,13 +139,12 @@ auto surface_cache_view::update_quiescence(uint64_t light_hash,
         changed = true;
     }
     // The lighting-only counter (see get_lighting_quiet_frames) follows the LIGHT SET alone.
-    // Content changes (an instance moved, appeared, vanished) used to reset it too, and that
-    // made the signal global: one oscillating cube anywhere in the clipmap held every pixel's
-    // temporal at the fast cap for the whole motion plus the settle (measured: a mover 30 m
-    // away doubled static-floor noise in a still shot). Instance changes are now REGION-LOCAL
-    // - surface_cache_system::get_dirty_bounds carries where they happened, and the temporal
-    // flushes only there. Origins and probe cells below deliberately do not touch the counter
-    // either - camera travel does not stale accumulated light.
+    // Content changes (an instance moved, appeared, vanished) do not reset it: that would make
+    // the signal global, and one oscillating object anywhere in the clipmap would hold every
+    // pixel's temporal at the fast cap for the whole motion plus the settle. Instance changes
+    // are REGION-LOCAL - surface_cache_system::get_dirty_regions carries where they happened,
+    // and the temporal flushes only there. Origins and probe cells below deliberately do not
+    // touch the counter either - camera travel does not stale accumulated light.
     if(lighting_changed)
     {
         lighting_quiet_frames_ = 0;

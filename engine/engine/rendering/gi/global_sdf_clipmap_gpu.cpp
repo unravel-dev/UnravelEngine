@@ -55,7 +55,7 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
         resolution_ = 0;
         return false;
     }
-    // Attribute voxels (GI v2 plan 3.1): albedo + emissive at half resolution, and the
+    // Attribute voxels: albedo + emissive at half resolution, and the
     // surface-voxel list segments + cursors the light-voxel update consumes. Created alongside
     // the distance volume because they recompose with it and share its lifetime.
     const uint32_t attr_resolution = get_attr_resolution();
@@ -119,9 +119,9 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
     // consumers only ever read it from compute, which both flag sets allow.
     //
     // ONE buffer holds counts AND entries: a level_count-entry HEADER of append cursors
-    // (index = level), then the per-level entry segments. Folding the old count buffer in
-    // freed a bgfx stage in cs_gi_light_voxels - the pass occupied all 16 and the bounce
-    // visibility memo needed an image stage in OpenGL's 0-7 image-unit range.
+    // (index = level), then the per-level entry segments. A separate count buffer would cost
+    // cs_gi_light_voxels a bgfx stage it does not have: the pass occupies all 16, and the
+    // bounce visibility memo needs an image stage in OpenGL's 0-7 image-unit range.
     const uint64_t surface_flags =
         (compose_on_gpu_ ? BGFX_BUFFER_COMPUTE_READ_WRITE : BGFX_BUFFER_COMPUTE_READ) |
         BGFX_BUFFER_INDEX32;
@@ -157,7 +157,7 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
     // A level's cursor is only meaningful once that level has composed; the compose pass's seed
     // dispatch zeroes them all so a consumer reading an as-yet-uncomposed level sees an empty
     // list rather than allocation garbage.
-    // World probes (GI v2 plan 3.3). The atlases hold every level's tiles in one row-major run
+    // World probes. The atlases hold every level's tiles in one row-major run
     // over the linear slot index - level 0's sparse pool first, then the dense levels
     // (gi_world_probes.sh, GiWorldProbeTileBase); the lattice extents are independent of the
     // cascade resolution.

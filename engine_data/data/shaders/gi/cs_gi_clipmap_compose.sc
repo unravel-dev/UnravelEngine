@@ -1,18 +1,17 @@
 /*
  * Composes ONE cascade level of the global SDF clipmap, one thread per voxel.
  *
- * TRANSCRIPTION of global_sdf_clipmap::compose_level. That function stays as the reference
- * implementation and as the fallback when compute is unavailable, and
+ * TRANSCRIPTION of global_sdf_clipmap::compose_level. That function is the reference
+ * implementation and the fallback when compute is unavailable, and
  * test_clipmap_gpu_composition_matches_cpu asserts the two agree -- the same arrangement that
- * already guards SdfResolveSurfacePoint, which is the one place this system's correctness rests
- * on agreement between a CPU writer and a GPU reader.
+ * guards SdfResolveSurfacePoint, which is the one place this system's correctness rests on
+ * agreement between a CPU writer and a GPU reader.
  *
- * Why this moved to the GPU: the CPU composer measured 4.20 ms of WALL time on the main thread
- * (87% of it blocked on the pool it dispatches to), which is very nearly the entire GI GPU cost
- * for the frame. It fires whenever the camera moves far enough to re-snap a level, so it lands
- * as a stutter during movement rather than as steady cost.
+ * Why on the GPU: the CPU composer costs milliseconds of main-thread WALL time, most of it
+ * blocked on the pool it dispatches to, and it fires whenever the camera moves far enough to
+ * re-snap a level, so it lands as a stutter during movement rather than as steady cost.
  *
- * No new GPU data. The instances, their transforms, the atlas and the cull grid are all already
+ * No GPU data of its own. The instances, their transforms, the atlas and the cull grid are all
  * resident for tracing, so this reads exactly what a ray reads -- which is also what keeps the
  * composed field and the traced field from drifting apart.
  */
@@ -26,9 +25,9 @@ IMAGE3D_WO(s_clipmap_out, r8, 5);
 /// pass only RESETS its level's append cursor - folded in here, rather than in a separate
 /// one-thread dispatch, because the attribute pass that appends SAMPLES the distance volume
 /// this pass writes as an image: that read-after-write is a genuine resource transition on
-/// every backend, and it is what orders the reset ahead of the appends. The old standalone
-/// reset relied on submission order alone, which D3D12 does not turn into a barrier for
-/// same-state UAV->UAV access - the appends could begin before the reset landed.
+/// every backend, and it is what orders the reset ahead of the appends. A standalone reset
+/// dispatch would rely on submission order alone, which D3D12 does not turn into a barrier for
+/// same-state UAV->UAV access - the appends could begin before the reset lands.
 BUFFER_RW(b_surface_list, uint, 9);
 
 /// x = level index, y = voxels per axis, z = this level's voxel size, w = reach in world units

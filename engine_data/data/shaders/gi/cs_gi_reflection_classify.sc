@@ -2,7 +2,7 @@
  * Classify + compact for the GI reflection trace (the fragment form's early-out tiers,
  * lifted into their own cheap pass so the expensive kernel never launches for them).
  *
- * Per trace-target texel, exactly the decisions fs_gi_reflection.sc made at its top -
+ * Per trace-target texel, exactly the decisions fs_gi_reflection.sc makes at its top -
  * KEEP THE TWO IN STEP:
  *   - sky, or a degenerate G-buffer normal: answer 0 directly.
  *   - roughness at/past GI_REFLECTION_ROUGH_CUTOFF: the wide-lobe limit - last frame's
@@ -10,8 +10,8 @@
  *     coverage, no ray.
  *   - everything sharper TRACES: the texel is appended to the compacted list the indirect
  *     args pass sizes the trace launch from, so every 64-lane trace group is dense with
- *     rays. In the fragment form one tracing pixel dragged its whole wave through the
- *     march, and the kernel's worst-case register footprint throttled every pixel.
+ *     rays. In the fragment form one tracing pixel drags its whole wave through the
+ *     march, and the kernel's worst-case register footprint throttles every pixel.
  *
  * List layout (raw uint, so no typed-UAV float canonicalisation concerns; keep in step
  * with cs_gi_reflection_args.sc, which owns the full picture):
@@ -72,7 +72,7 @@ bool GiReflectionClassifyTexel(ivec2 pixel, ivec2 size)
 		return false;
 	}
 	// RAW authored roughness, exactly as the kernel tiers (MakeRoughnessSafe floors it, and
-	// a floored mirror leaked a fraction of the coarse world tier through the fade).
+	// a floored mirror would leak a fraction of the coarse world tier through the fade).
 	float roughness = nd.roughness;
 	BRANCH
 	if(roughness >= GI_REFLECTION_ROUGH_CUTOFF)
@@ -112,7 +112,7 @@ void main()
 	// ONE RUN PER GROUP: the group's tracing texels count themselves in shared memory and take one
 	// contiguous run of the list with a single global atomic, so a trace wave holds neighbouring
 	// texels - nearby origins and directions that share grid cells, bricks and cache lines - where
-	// a per-texel append interleaved the waves of the whole dispatch.
+	// a per-texel append would interleave the waves of the whole dispatch.
 	uint lane = gl_LocalInvocationID.y * 8u + gl_LocalInvocationID.x;
 	if(lane == 0u)
 	{

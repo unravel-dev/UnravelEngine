@@ -5,14 +5,13 @@
  * anything left to write, and publishes the answer as indirect dispatch arguments the two
  * passes consume the same frame.
  *
- * This replaces a staging blit plus bgfx::readTexture per frame. That readback moved 32
- * bytes and cost about a GPU frame of render-thread time: bgfx's readTexture promises
- * frameNum + 2 latency at the API level but every desktop backend implements it as a
- * blocking sync (D3D11 Map without DO_NOT_WAIT, D3D12 CopyTextureRegion + finish, Vulkan
- * kick(true), GL glGetTextureSubImage), executed in the post-command buffer AFTER the
- * frame's submit - so the render thread waited for GPU idle at the tail of every frame the
- * gate was open, which is every frame the camera moves. The path is kept as a fallback for
- * backends without BGFX_CAPS_DRAW_INDIRECT; see gi_quiescence_gate_pass.
+ * A CPU verdict would need a staging blit plus bgfx::readTexture per frame, and that stalls:
+ * bgfx's readTexture promises frameNum + 2 latency at the API level but every desktop backend
+ * implements it as a blocking sync (D3D11 Map without DO_NOT_WAIT, D3D12 CopyTextureRegion +
+ * finish, Vulkan kick(true), GL glGetTextureSubImage), executed in the post-command buffer
+ * AFTER the frame's submit - so the render thread waits for GPU idle at the tail of every
+ * frame the gate is open, which is every frame the camera moves. That readback path remains
+ * the fallback for backends without BGFX_CAPS_DRAW_INDIRECT; see gi_quiescence_gate_pass.
  *
  * The convergence tests mirror surface_cache_view::evaluate_relight_quiescence exactly.
  * One thread: the whole job is a handful of loads and two 40-entry rings.
@@ -177,7 +176,7 @@ void main()
 	// distinguish, or when it has stopped falling (a stationary dithered equilibrium at
 	// shadow edges never reaches the floor, while a decaying tail shrinks between the two
 	// windows) AND is not trending: a volume climbing through its bounce loop is also a
-	// steady change (GI_QUIESCENCE_DRIFT_FRACTION), which the ratio alone called rest.
+	// steady change (GI_QUIESCENCE_DRIFT_FRACTION), which the ratio alone would call rest.
 	// surface_cache_view::evaluate_relight_quiescence is the same test.
 	bool converged = false;
 	if(count >= uint(GI_QUIESCENCE_WINDOW_FRAMES))
@@ -201,17 +200,17 @@ void main()
 	// sparse-probe hold overrides both closed answers.
 	// PENDING PROBES: under the trace budget a claim completes its first window over as many
 	// frames as the budget needs to reach it again; closing on the relight's convergence alone
-	// froze such probes with their seeded texels (the thick sealed cell, 0.0017 -> 0.0048). Like
-	// the allocation hold, this overrides both closed answers.
+	// would freeze such probes with their seeded texels. Like the allocation hold, this
+	// overrides both closed answers.
 	uint pending_probes = u_gi_gate_params.w > 0.5 ? b_world_probe_select[GI_GATE_PROBE_PENDING_SLOT] : 0u;
 	bool run = u_gate_mode == 0 || hold > 0u || pending_probes > 0u || (u_gate_mode == 1 && !converged);
 	s_gi_gate_ring[GI_GATE_RING_RAN_SLOT] = run ? 1u : 0u;
 	// TIGHT RELIGHT LAUNCH: the CPU can only size the light-voxel entry for a full volume (a
 	// rotation slice of the whole capacity at every level), and every lane past a level's
-	// count returns at once - on Sponza most of the 262,144 lanes per open frame. The kernel
-	// maps lane i to entry i x GI_LIGHT_VOXEL_UPDATE_DENOM + phase and the level rides the
-	// group row, so ceil(count / denom) lanes of the largest level cover every level's due
-	// entries whatever the phase. The counts are the ones the attribute pass wrote this frame.
+	// count returns at once - usually most of such a launch. The kernel maps lane i to entry
+	// i x GI_LIGHT_VOXEL_UPDATE_DENOM + phase and the level rides the group row, so
+	// ceil(count / denom) lanes of the largest level cover every level's due entries whatever
+	// the phase. The counts are the ones the attribute pass wrote this frame.
 	uint relight_entries = 0u;
 	for(int count_level = 0; count_level < SDF_CLIPMAP_LEVEL_COUNT; ++count_level)
 	{

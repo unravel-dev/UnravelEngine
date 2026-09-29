@@ -10,10 +10,11 @@
  *    GI_WORLD_PROBE_POOL_PRESSURE_DIVISOR-th of it is free (a parked camera with the relight
  *    gated off stamps nothing from the relight for minutes; its cages must not churn). The
  *    index entry still pointing at the slot is cleared and the slot pushed on the free stack.
- *    The allocation clock the request stamps carry is advanced by the world-probe trace,
- *    once per frame it runs (cs_gi_world_probe_trace.sc): a closed gate freezes every age, so
- *    a parked shot never evicts and re-allocates its cages - with a full pool that churn
- *    re-opened the gate through the allocation hold and kept the world side running at rest.
+ *    The allocation clock the request stamps carry is advanced by the trace scheduler, once
+ *    per frame the world side runs (cs_gi_world_probe_select.sc): a closed gate freezes every
+ *    age, so a parked shot never evicts and re-allocates its cages - with a full pool that
+ *    churn would re-open the gate through the allocation hold and keep the world side running
+ *    at rest.
  *  - ALLOCATE, one thread per index entry: an unallocated cell that any of the eight base
  *    cells around it stamped within GI_WORLD_PROBE_REQUEST_AGE ticks, and that the relocation
  *    pass (cs_gi_world_probe_relocate.sc, run right after) has not marked BURIED since its
@@ -142,13 +143,12 @@ void main()
 		return;
 	}
 	// A cell the relocation pass found BURIED (its lattice point inside geometry even after
-	// relocation) is a dead probe for every reader, so it needs no slot: without this the GI
-	// test suite's twelve cells filled the pool with 13% buried slots and its sealed
-	// thin-walled cell's cages waited on the stack while the wall-straddling 4 m lattice
-	// answered for them (2026-09-13). The verdict is the relocation pass's, made on the
-	// claim it frees again the same frame; it is re-made every
-	// GI_WORLD_PROBE_RELOCATE_RETEST_TICKS ticks (a mover may have left). The fields are not
-	// sampled here on purpose: inlined, they tripled this kernel's cost through occupancy.
+	// relocation) is a dead probe for every reader, so it needs no slot: buried claims would
+	// crowd the pool while live cages wait on the stack and the wall-straddling 4 m lattice
+	// answers for them. The verdict is the relocation pass's, made on the claim it frees again
+	// the same frame; it is re-made every GI_WORLD_PROBE_RELOCATE_RETEST_TICKS ticks (a mover
+	// may have left). The fields are not sampled here on purpose: inlined, their register cost
+	// would lower this kernel's occupancy for every index-cell thread.
 	if(b_world_probe_index[GI_WORLD_PROBE_INDEX_OFFSET_BASE + index] == GI_WORLD_PROBE_OFFSET_BURIED &&
 	   (clock + uint(index)) % uint(GI_WORLD_PROBE_RELOCATE_RETEST_TICKS) != 0u)
 	{

@@ -23,12 +23,9 @@ namespace
 namespace ANONYMOUS
 {
 /// Cells of the tracers' instance grid along the scene's longest axis (sdf_instance_grid defaults to
-/// 32). A mesh-exact walk pays for every cell it crosses as well as for every instance a cell lists,
-/// and on Sponza the traversal dominated: 16 measured every tracer 2-9 percent cheaper (GI total dolly
-/// 4.60 -> 4.51 ms, orbit 4.47 -> 4.36, parked court 3.79 -> 3.70), 64 slower everywhere, and 12 or 8
-/// traded the gather's saving for long reflection and probe rays walking fuller cells
-/// (tasks/lumen_parity_log.md, the instance grid sweep). Lossless: every resolution lists the same
-/// instances for a ray.
+/// 32). A mesh-exact walk pays for every cell it crosses as well as for every instance a cell lists:
+/// more cells make the cell traversal dominate, while fewer make long reflection and probe rays walk
+/// fuller cells; 16 balances the two. Lossless: every resolution lists the same instances for a ray.
 constexpr uint32_t instance_grid_resolution = 16u;
 /// Longest cell edge of that grid, in metres: a scene longer than instance_grid_resolution x this (a city
 /// block, not a courtyard) gets more cells instead of longer ones. A fixed count along the longest axis
@@ -67,7 +64,7 @@ namespace unravel
 auto surface_cache_system::init(rtti::context& ctx) -> bool
 {
     // The whole feature is compute-shaped: compose, attributes, light voxels and probes are
-    // dispatches, and even the debug views read SSBOs. A backend without compute (measured:
+    // dispatches, and even the debug views read SSBOs. A backend without compute (for example
     // Mesa handing bgfx a GL 3.1 compatibility context) cannot run ANY of it - the dispatches
     // are silently dropped, every volume keeps its allocation garbage, and the views paint
     // that garbage with nothing in the log to say why. Refusing loudly here is the honest
@@ -238,8 +235,7 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
     // Name the phantom fields, once each: a shell floored this fat means the geometry is far
     // below its own field's resolution (a rope or curtain submesh whose bounds span a building
     // bakes metre voxels), and the result is not a bad field but a PHANTOM - a metre-thick blob
-    // that occludes rays and steals attribution over a whole neighbourhood (measured: Sponza's
-    // parapet ropes painting the gallery floor red in the albedo view). The bake cannot do
+    // that occludes rays and steals attribution over a whole neighbourhood. The bake cannot do
     // better at that voxel size; the mesh needs a finer SDF resolution in its import settings,
     // or to opt out of GI entirely.
     if(sdf.is_two_sided && sdf.two_sided_thickness > 0.25f && !record.thickness_warned)
@@ -276,11 +272,11 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
         return {};
     }
     record.attempt_generation = generation;
-    // Finest level that FITS, not finest level full stop. A scene whose fields do not all fit the
-    // shared atlas used to lose whole submeshes from GI -- silently in the image, since a missing
-    // occluder just leaks light somewhere else. With a chain the same scene loses RESOLUTION
-    // instead: each level down holds about a quarter of the bricks and reaches twice as far before
-    // saturating, which for a distant or small submesh is a trade nobody sees.
+    // Finest level that FITS, not finest level full stop. Without a chain, a scene whose fields do
+    // not all fit the shared atlas would lose whole submeshes from GI -- silently in the image,
+    // since a missing occluder just leaks light somewhere else. With a chain the same scene loses
+    // RESOLUTION instead: each level down holds about a quarter of the bricks and reaches twice as
+    // far before saturating, which for a distant or small submesh is a trade nobody sees.
     //
     // Checked against free slots BEFORE committing, because a refused upload is not free: it burns
     // the generation stamp and the submesh then waits for an unrelated release to retry.
@@ -485,9 +481,8 @@ auto surface_cache_system::take_texture_mean_captures(uint32_t budget)
 namespace
 {
 /// One FNV-1a round over a float's bits. Component by component, never over sizeof:
-/// math::vec3 carries alignment padding whose bytes are indeterminate, and hashing them made
-/// every static placement read as moved every frame (measured: 163 regions per frame in a
-/// parked scene, the whole screen at the fast cap).
+/// math::vec3 carries alignment padding whose bytes are indeterminate, and hashing them would
+/// make every static placement read as moved every frame.
 auto mix_float(uint64_t hash, float value) -> uint64_t
 {
     uint32_t bits = 0;
@@ -570,9 +565,9 @@ void surface_cache_system::record_placement(tracked_placement& tracked,
     // kernel's margin), but an emitter lights everything it faces out to where L x A / d^2
     // drops below GI_TEMPORAL_DIRTY_EMISSIVE_IRRADIANCE. Its region is inflated to that
     // distance so the pool it LEFT flushes too: the temporal collapses there and the screen
-    // tier stops reading last frame's composite there (the loop that kept the old glow alive
-    // for seconds). Power-derived, so a bullet inflates by centimetres, a room panel by the
-    // room.
+    // tier stops reading last frame's composite there (a loop that would keep the old glow
+    // alive for seconds). Power-derived, so a bullet inflates by centimetres, a room panel by
+    // the room.
     math::bbox region_bounds = bounds;
     const float luminance = 0.2126f * emissive.x + 0.7152f * emissive.y + 0.0722f * emissive.z;
     float reach = 0.0f;
@@ -673,9 +668,8 @@ void surface_cache_system::rebuild_dirty_regions()
         }
         // Age out the history beyond the hold window. Entries are appended in frame order, so
         // the aged ones are a PREFIX: the begin index steps past them in O(1) per frame, where
-        // the erase this replaced shifted every surviving entry - about 96 of them, 32 bytes
-        // each, for every mover, every frame, which was most of this function's cost with a
-        // crowd. Compacted once the dead prefix outweighs the live tail, so memory stays bounded.
+        // an erase would shift every surviving entry for every mover, every frame. Compacted
+        // once the dead prefix outweighs the live tail, so memory stays bounded.
         auto& history = tracked.history;
         size_t& begin = tracked.history_begin;
         while(begin < history.size() && world_frame_ - history[begin].frame > hold)
@@ -706,9 +700,8 @@ void surface_cache_system::rebuild_dirty_regions()
     // Only the GI_TEMPORAL_DIRTY_MAX_BOUNDS most recent regions ever reach a shader
     // (pack_dirty_regions); past that count the consumers switch to their screen-wide fallback
     // and never read the rest. So the unions - each a walk of a placement's whole window - are
-    // computed for the top of the list only, and the full sort that ordered two thousand
-    // regions to hand over sixteen is a partial one. At or under the budget the output is
-    // exactly what it was.
+    // computed for the top of the list only, and the sort that picks it is a partial one. At
+    // or under the budget nothing is cut.
     constexpr size_t budget = size_t(gi::GI_TEMPORAL_DIRTY_MAX_BOUNDS);
     // The vis-memo's list (pack_vis_memo_regions) is the same placements over its shorter
     // hold, so its total is counted before the cut: the cut keeps the newest, which is every
@@ -789,11 +782,10 @@ void surface_cache_system::rebuild_dirty_regions()
     // Over budget the total is the candidate count (the cut discarded the rest); under it every
     // candidate with a populated box is in the list, so the list is the exact count.
     size_t region_total = candidate_total > budget ? candidate_total : dirty_regions_.size();
-    // LOCAL LIGHT CHANGES (plan item 1.2): a point or spot light that appeared, vanished, moved
-    // or changed flushes the temporal and writes the relight through inside the influence
-    // spheres it lit and lights - one region per light over the hold - where every pixel used to
-    // drop to the fast cap on any light byte. Not a field change: the vis-memo's list never sees
-    // them.
+    // LOCAL LIGHT CHANGES: a point or spot light that appeared, vanished, moved or changed
+    // flushes the temporal and writes the relight through inside the influence spheres it lit
+    // and lights - one region per light over the hold - rather than dropping every pixel to the
+    // fast cap on any light byte. Not a field change: the vis-memo's list never sees them.
     const auto newer_region_first = [](const dirty_region& a, const dirty_region& b)
     {
         return a.last_change_frame > b.last_change_frame;
@@ -917,7 +909,7 @@ void surface_cache_system::add_instance(uint64_t identity,
     {
         auto& moving = instances_.back();
         // A point's displacement is (L1 - L0) x point: one matrix difference and eight
-        // products, where two transforms per corner was sixteen.
+        // products, where two transforms per corner would be sixteen.
         const math::mat4 delta = local_to_world - tracked.last_local_to_world;
         moving.velocity = math::vec3(delta * math::vec4(sdf.bounds.get_center(), 1.0f));
         float max_corner = 0.0f;
@@ -930,9 +922,10 @@ void surface_cache_system::add_instance(uint64_t identity,
     tracked.last_local_to_world = local_to_world;
     tracked.has_last_pose = true;
     // The clipmap composer borrows a raw mesh_sdf pointer, so the owning mesh has to be kept
-    // alive for as long as the composition input list references it. A crowd of one mesh pushed
-    // the same pointer once per placement; consecutive placements of one mesh now share an
-    // entry. A repeat is harmless and an omission is not, so only the previous entry is compared.
+    // alive for as long as the composition input list references it. Consecutive placements of
+    // one mesh share an entry, so a crowd of one mesh does not push the same pointer once per
+    // placement. A repeat is harmless and an omission is not, so only the previous entry is
+    // compared.
     if(clipmap_keepalive_.empty() || clipmap_keepalive_.back().get() != owner.get())
     {
         clipmap_keepalive_.push_back(owner);
@@ -942,7 +935,7 @@ void surface_cache_system::add_instance(uint64_t identity,
     clipmap_instance.world_to_local = inst.world_to_local;
     clipmap_instance.world_bounds = inst.world_bounds;
     clipmap_instance.local_to_world_scale = inst.local_to_world_scale;
-    // Attribute-voxel material (GI v2 plan 3.1): the same per-submesh values the tracer's
+    // Attribute-voxel material: the same per-submesh values the tracer's
     // instance buffer carries, so a cascade surface voxel and a near-field hit agree on what
     // the surface looks like.
     clipmap_instance.albedo = inst.albedo;
@@ -959,9 +952,9 @@ void surface_cache_system::upload_instance_grid()
     APP_SCOPE_PERF("GI/SurfaceCache/Upload Instance Grid");
     // The grid is a pure function of the instance set (bounds are part of the packed data the
     // fingerprint covers), so an unchanged fingerprint means an identical grid: skip the CPU
-    // rebuild and the multi-megabyte re-upload. Without this a static scene re-staged the whole
-    // structure every frame - at Bistro scale that alone kept the Vulkan backend allocating
-    // staging memory continuously.
+    // rebuild and the multi-megabyte re-upload. Without this a static scene would re-stage the
+    // whole structure every frame, which on a large scene alone keeps the Vulkan backend
+    // allocating staging memory continuously.
     if(grid_uploaded_fingerprint_ == instance_fingerprint_ && grid_.is_valid() &&
        bgfx::isValid(grid_buffer_))
     {
@@ -1118,10 +1111,10 @@ void surface_cache_system::rebuild_emitters()
 void surface_cache_system::upload_instances()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Upload Instances");
-    // resize, not assign: every one of the 40 floats per instance is written below (including
-    // the trailing pad), so the quarter-megabyte zero-fill assign did at Bistro scale was
-    // fully overwritten every frame. The emitter table rides after the instances (see
-    // rebuild_emitters): the tracers bind this buffer already and have no stage to spare.
+    // resize, not assign: every float of every record is written below, so an assign's
+    // zero-fill would be fully overwritten every frame. The emitter table rides after the
+    // instances (see rebuild_emitters): the tracers bind this buffer already and have no
+    // stage to spare.
     const size_t instance_floats = size_t(instances_.size()) * instance_vec4_stride * 4u;
     instance_data_.resize(instance_floats + emitters_.size() * emitter_vec4_stride * 4u);
     for(size_t i = 0; i < emitters_.size(); ++i)
@@ -1137,7 +1130,7 @@ void surface_cache_system::upload_instances()
         dst[6] = e.radiance.z;
         // The piece extent rides the power lane (see emitter::extent and gi_emitter_packing.h):
         // 8 bits per axis as a fraction of GI_EMISSIVE_NEE_SEGMENT, exact in a float, negated
-        // and offset so a shader fed by an older upload (a positive power) reads "no extent".
+        // and offset so an unpacked (positive) power lane reads "no extent".
         // The power itself does not survive; GiLoadEmitter rebuilds it from this extent and the
         // radiance with gi::emitter_selection_weight's shader mirror.
         dst[7] = gi::pack_emitter_extent_lane(e.extent);
@@ -1192,10 +1185,10 @@ void surface_cache_system::upload_instances()
             dst[43] = inst.max_corner_displacement;
         });
     // Content hash over the exact bytes the GPU receives: any change to a transform, material
-    // colour, bounds, or field index flips it. Eight bytes per round instead of the byte-serial
-    // FNV chain this used to run - the old loop was ~256K dependent multiplies at Bistro scale,
-    // ~100 us of main thread per frame spent deciding to skip an upload. FNV-1a over 64-bit
-    // lanes keeps the same "any byte flips it" property at an eighth of the rounds.
+    // colour, bounds, or field index flips it. Eight bytes per round rather than a byte-serial
+    // FNV chain, whose dependent multiplies would cost the main thread real time every frame
+    // just to decide to skip an upload. FNV-1a over 64-bit lanes keeps the same "any byte
+    // flips it" property at an eighth of the rounds.
     uint64_t fingerprint = 1469598103934665603ull;
     {
         const auto* bytes = reinterpret_cast<const uint8_t*>(instance_data_.data());
@@ -1323,8 +1316,8 @@ void surface_cache_system::walk_scene(scene& scn)
             // The test has to be on THIS submesh's transform list. Testing whether the outer
             // list is populated instead reads as "the hierarchy resolved" and is true for a
             // primitive, whose pose is sized to the submesh count but never mapped, because
-            // nothing carries a submesh_component -- so every primitive silently vanished from
-            // GI while still rendering normally.
+            // nothing carries a submesh_component -- so every primitive would silently vanish
+            // from GI while still rendering normally.
             const auto& submesh_transforms = model_comp.get_submesh_transforms();
             const math::mat4& world_transform = transform_comp.get_transform_global().get_matrix();
             const uint32_t sdf_count = mesh_ptr->get_sdf_count();
@@ -1345,10 +1338,10 @@ void surface_cache_system::walk_scene(scene& scn)
                     summarize_material(resolve_submesh_material(mdl, *mesh_ptr, submesh_index));
                 // THE ONE DEFINITION of "has a field", so the two paths below stay disjoint and no
                 // submesh falls through both. Skinned submeshes never place a field, even when
-                // the compiled asset carries one (assets baked before the compiler learned to
-                // refuse them still do): the field is bind-pose geometry and pinning it to the
-                // entity's root transform drags a rigid statue through the clipmap in a pose the
-                // character is not in - deforming geometry receives GI without contributing.
+                // the compiled asset carries one: the field is bind-pose geometry and pinning it
+                // to the entity's root transform drags a rigid statue through the clipmap in a
+                // pose the character is not in - deforming geometry receives GI without
+                // contributing.
                 // Alpha-blended submeshes never occlude either: a blended surface transmits
                 // light, so a field there blocks bounces that should pass straight through -
                 // glass that darkens the room behind it. Decided here rather than only at bake
@@ -1364,9 +1357,9 @@ void surface_cache_system::walk_scene(scene& scn)
                     // screen, a hologram, a glowing decal) are not voxelised: they light the gather
                     // through the screen tier alone. The light one leaves behind when it moves is
                     // exactly the residual the dirty regions flush, and without a placement it
-                    // never registered one - an emissive moved in the editor kept its old glow on
-                    // the walls until the camera moved (the screen-history loop's memory). They are
-                    // tracked here with their drawn bounds.
+                    // would never register one - an emissive moved in the editor would keep its old
+                    // glow on the walls until the camera moved (the screen-history loop's memory).
+                    // They are tracked here with their drawn bounds.
                     if(!material.is_pbr ||
                        material.emissive_luminance < float(gi::GI_EMISSIVE_NEE_MIN_LUMINANCE))
                     {
@@ -1488,8 +1481,7 @@ void surface_cache_system::update_world(scene& scn)
     // outgoing ones still hold their bricks, and succeed on the retry once this has run. Sweeping
     // first would need the whole scene walked twice to know what to keep.
     release_unused_fields();
-    // The lights before the regions: a local light's change joins this frame's dirty regions
-    // (plan item 1.2).
+    // The lights before the regions: a local light's change joins this frame's dirty regions.
     light_buffer_.update(scn);
     record_light_changes();
     rebuild_dirty_regions();

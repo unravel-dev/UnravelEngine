@@ -13,18 +13,17 @@ namespace unravel
 /**
  * @brief Composes the stale cascade levels on the GPU, one thread per voxel.
  *
- * Replaces the per-voxel loop in @c global_sdf_clipmap::compose_level, which measured 4.20 ms of
- * WALL time on the main thread (87% of it blocked on the pool it dispatches to) -- very nearly the
- * entire GI GPU cost for a frame, landing as a stutter whenever the camera moved far enough to
- * re-snap a level.
+ * Takes the per-voxel loop of @c global_sdf_clipmap::compose_level off the main thread: composed on
+ * the CPU, a level blocks the frame on the pool it dispatches to, which lands as a stutter whenever
+ * the camera moves far enough to re-snap a level.
  *
- * The CPU composer is NOT deleted. It remains the reference implementation that @c sample,
- * @c sample_ex and @c resolve_surface_point read, which is what the bake tests check this dispatch
- * against, and it remains the fallback when the compute program fails to load.
+ * The CPU composer is the reference implementation that @c sample, @c sample_ex and
+ * @c resolve_surface_point read, which is what the bake tests check this dispatch against, and
+ * the fallback when the compute program fails to load.
  *
- * Only the voxels move. Deciding WHICH levels to rebuild -- snapping, fingerprinting, staleness
- * ageing, the budget -- stays on the CPU in @c global_sdf_clipmap::update, because that logic is
- * subtle, tested, and identical either way.
+ * Only the voxel work runs here. Deciding WHICH levels to rebuild -- snapping, fingerprinting,
+ * staleness ageing, the budget -- stays on the CPU in @c global_sdf_clipmap::update, because that
+ * logic is subtle, tested, and identical either way.
  */
 class gi_clipmap_compose_pass
 {
@@ -95,7 +94,7 @@ private:
         }
     } compose_program_;
 
-    /// Attribute composer (GI v2 plan 3.1): albedo/emissive voxels + the surface-voxel list,
+    /// Attribute composer: albedo/emissive voxels + the surface-voxel list,
     /// dispatched per recomposed level after its distance voxels are written.
     struct attributes_program : uniforms_cache
     {

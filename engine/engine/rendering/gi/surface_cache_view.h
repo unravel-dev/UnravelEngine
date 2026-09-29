@@ -20,11 +20,10 @@ namespace unravel
  * not: it is four levels snapped around a viewer, so it is a function of the camera as much as of
  * the scene.
  *
- * Keeping it on the service made two cameras fight over one cascade. Each pipeline run re-snapped
- * the origins to its own position, every level read as stale, and the budgeted recomposition
- * rebuilt one level per run forever without ever settling -- so each camera spent half its frames
- * tracing a cascade centred on the other one. Nothing errored; the cascade was simply always out of
- * date and always being rebuilt.
+ * Keeping it on the service would make two cameras fight over one cascade. Each pipeline run would
+ * re-snap the origins to its own position, every level would read as stale, and the budgeted
+ * recomposition would rebuild one level per run forever without ever settling -- so each camera
+ * would spend half its frames tracing a cascade centred on the other one, with no error to say so.
  *
  * Lives in @c gfx::render_view::data() alongside the other per-view state, rather than in the
  * render view proper, because the graphics library has no business knowing what a cascade is.
@@ -142,9 +141,9 @@ public:
      *
      * CONVERGENCE, MEASURED. Stillness of the inputs is not convergence of the volume: the
      * relight folds each visit into a per-voxel EMA and the closed-room bounce loop stretches
-     * its tail, so a fixed settle count froze a sealed room mid-decay at whatever residual it
-     * had reached (a room that read lit and stayed lit). The light-voxel pass now reads back
-     * the mean relative change per relit face (@p relight); the gate opens when that mean is
+     * its tail, so a fixed settle count would freeze a sealed room mid-decay at whatever
+     * residual it had reached (a room that reads lit and stays lit). The light-voxel pass reads
+     * back the mean relative change per relit face (@p relight); the gate opens when that mean is
      * below GI_QUIESCENCE_CONVERGED_MEAN, or has stopped falling (a stationary dithered
      * equilibrium: GI_QUIESCENCE_STATIONARY_FRACTION) without trending (the signed change
      * a small share of the absolute one: GI_QUIESCENCE_DRIFT_FRACTION), never before
@@ -156,7 +155,7 @@ public:
      *        directional light added, removed or past the 4x brightness rule). With
      *        @p environment_revision the only inputs that reset the lighting-only counter which
      *        pins the screen temporal at its fast cap; the hashes change on ANY light or sky
-     *        byte and only wake the gate (plan item 1.2).
+     *        byte and only wake the gate.
      * @param environment_revision The deferred irradiance pass's graded environment revision
      *        (the sky changed kind, or brightness past the same ratio).
      * @param wants_debug A writer-side SDF debug view is up: those views paint per frame
@@ -190,8 +189,8 @@ public:
 
     /// Frames since the LIGHT SET changed (the light-buffer hash). Content changes - an
     /// instance moved, appeared, vanished, changed material - are deliberately NOT in this
-    /// signal any more: they are region-local and carried by
-    /// surface_cache_system::get_dirty_bounds, which the temporal tests per pixel. A light
+    /// signal: they are region-local and carried by
+    /// surface_cache_system::get_dirty_regions, which the temporal tests per pixel. A light
     /// change is genuinely global (a sun or a room light reaches everything), so the temporal
     /// accumulators key their screen-wide fast-flush window off this alone: a camera pan keeps
     /// full temporal depth, a light edit drops to the fast caps until the stale energy has
@@ -205,13 +204,12 @@ public:
     /// sixteen complete probe windows (GI_WORLD_PROBE_WINDOW frames each). The bounce
     /// FEEDBACK settles within one window, but the light-voxel relight converges by EMA
     /// (GI_LIGHT_VOXEL_EMA_BLEND 0.125, one visit per 4-frame rotation): after the last
-    /// content change a voxel still holds 0.875^(frames/4) of its stale radiance. The old
-    /// 64-frame settle froze that tail at ~13% - invisible on flat surfaces, but a departed
-    /// emitter's residual stayed a visible line wherever reflections amplify (measured:
-    /// the red edge lines after emissive movers passed). 256 frames leaves ~0.02%, below
-    /// perception at any amplification the reflection path can apply. Camera-driven churn
-    /// resets the counter anyway, so the cost is only ~3 extra seconds of GI passes after
-    /// an edit in an otherwise parked shot. See update_quiescence.
+    /// content change a voxel still holds 0.875^(frames/4) of its stale radiance. A 64-frame
+    /// settle would freeze that tail at ~13% - invisible on flat surfaces, but a departed
+    /// emitter's residual stays a visible line wherever reflections amplify. 256 frames
+    /// leaves ~0.02%, below perception at any amplification the reflection path can apply.
+    /// Camera-driven churn resets the counter anyway, so the cost is only ~3 extra seconds of
+    /// GI passes after an edit in an otherwise parked shot. See update_quiescence.
     static constexpr uint32_t quiescence_settle_frames = 16u * 16u;
     static_assert(quiescence_settle_frames >= 32u, "must cover at least two probe windows");
 

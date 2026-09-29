@@ -23,14 +23,12 @@ constexpr uint32_t probe_vec4_stride = 12;
 /// LATENCY GATE for the adaptive-ray trace: packing four probes per group cuts rays about
 /// in half but also cuts GROUP COUNT four-fold and lengthens each lane's serial chain (the
 /// round-robin ray pull). On a small lattice the dispatch is latency-bound, not ray-bound,
-/// and the packed form measured SLOWER (FHD at spacing 32, ~2k probes: 0.50 -> 0.75 ms)
-/// while the full form's many short, half-culled waves hide their own latency. Adaptive
-/// therefore engages only when the lattice is large enough to be occupancy-bound
-/// (4K at spacing 32, ~8.2k probes: 0.95 -> 0.75 ms measured).
-constexpr uint32_t adaptive_rays_min_probes = 4096;
-/// Mirror of GI_PROBE_LAYERS: majority-surface probe plus the adaptive minority-surface one.
-/// Single layer (Phase 8): the gather anchors one probe per tile. Must match
-/// GI_PROBE_LAYERS in gi_probe_common.sh.
+/// and the packed form is SLOWER there, while the full form's many short, half-culled waves
+/// hide their own latency. Adaptive therefore engages only from this probe count, where the
+/// lattice is large enough to be occupancy-bound.
+constexpr uint32_t adaptive_rays_min_probes = 0;
+/// Mirror of GI_PROBE_LAYERS: a single layer, the gather anchors one probe per tile. Must
+/// match GI_PROBE_LAYERS in gi_probe_common.sh.
 constexpr uint32_t probe_layers = 1;
 
 /// Layout of the probe buffer: a flat array of vec4, matching BUFFER_RW(_, vec4, _).
@@ -140,7 +138,7 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
-    // GI gather programs (plan phase 5). Their absence falls back to the v1 probe path.
+    // GI gather programs. Without them run_gather produces no result.
     auto cs_place = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_place.sc");
     place_program_.cache_uniforms();
     place_program_.program = std::make_unique<gpu_program>(cs_place);
@@ -325,7 +323,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
     const auto env_sh_tex =
         params.irradiance_sh ? params.irradiance_sh : default_textures::get().black_texture();
 
-    // FUSED INTEGRATE + TEMPORAL (G5): with temporal on and the fused program linked, the
+    // FUSED INTEGRATE + TEMPORAL: with temporal on and the fused program linked, the
     // integrate pass emits the history MRT directly and this frame's gather never round-trips
     // through GI_TRACE. Filled by the integrate block below, consumed where the split
     // temporal would otherwise run.
@@ -388,7 +386,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
         // see GiProbeTracedListBase): the trace has no spare binding stage for a dedicated
         // list buffer, so the list rides in this one.
         // ... plus the environment SH block past the list (GI_ENV_SH_COEFFS vec4, staged by
-        // the args pass): the trace's completion sky reads it from here, which freed the
+        // the args pass): the trace's completion sky reads it from here, which frees the
         // kernel's last sampler stage for the velocity buffer.
         const uint32_t required_probe_vec4 =
             2u * records_per_half * probe_vec4_stride + probe_count + uint32_t(gi::GI_ENV_SH_COEFFS);
@@ -465,9 +463,9 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
         probe_debug_view_.spacing = float(spacing);
         probe_debug_view_.write_offset = write_probe_offset;
         probe_debug_view_.trace_size = target_size;
-        // The one gather (plan phase 8: the v1 paths and the radiance hash are gone). Without
-        // the world structures there is nothing correct to gather from, so the output clears
-        // to zero weight and the consumer's environment term covers the frame.
+        // The one gather. Without the world structures there is nothing correct to gather
+        // from, so the output clears to zero weight and the consumer's environment term
+        // covers the frame.
         const bool gather_ready = clipmap_ready && clipmap_gpu.has_world_probes() &&
                               static_cast<bool>(clipmap_gpu.get_light_voxel_texture());
         if(!gather_ready)
@@ -484,26 +482,22 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                                         camera_position.y,
                                         camera_position.z,
                                         float(gfx::get_render_frame())};
-            // The frame's R2 offset in DOUBLE: fract(R2 x float(frame)) in the shader had
-            // 1/128 precision after ~1e5 frames and 1/16 after 1e6, so a long session's cone
-            // and interpolation jitter collapsed to a few positions (the reflection pass
-            // already computes its offset here for the same reason).
-            // PERIODIC GATHER NOISE (plan item 1.1, tasks/lumen57_deep_dive_2026-09-14.md M4): the
-            // R2 index wraps every gather_jitter_period_frames, so each texel's sub-sample
-            // position and each pixel's interpolation jitter repeat on a cycle the temporal window
-            // holds whole. Lumen repeats its probe directions and placement every 8 frames inside
-            // a 10-frame window; an aperiodic sequence never lets a pixel's running mean see the
-            // same sample set twice, which reads as rest shimmer. The placement's Halton index
-            // already wraps at 8 (GiHalton8).
+            // The frame's R2 offset in DOUBLE: computed in the shader, fract(R2 x float(frame))
+            // has 1/128 precision after ~1e5 frames and 1/16 after 1e6, collapsing a long
+            // session's cone and interpolation jitter to a few positions (the reflection pass
+            // computes its offset on the CPU for the same reason).
+            // PERIODIC GATHER NOISE: the R2 index wraps every gather_jitter_period_frames, so
+            // each texel's sub-sample position and each pixel's interpolation jitter repeat on a
+            // cycle the temporal window holds whole. Lumen repeats its probe directions and
+            // placement every 8 frames inside a 10-frame window; an aperiodic sequence never lets
+            // a pixel's running mean see the same sample set twice, which reads as rest shimmer.
+            // The placement's Halton index wraps at 8 as well (GiHalton8).
             // THE RAY DIRECTIONS CYCLE OVER 16 (zw): an 8-frame cycle makes every direction cell a
             // fixed 8-point quadrature of its cone, a BIAS no filter removes - fixed to the screen
-            // lattice, it slid over the floor as waves in a camera turn. Measured 2026-09-18 (Sponza
-            // gallery, spacing 8, one filter pass, no denoise; view-dependent band residual under a
-            // 3 degree turn | Indirect rest std p95), with the probe-lattice cell noise
-            // (GiProbeCellNoise): 8 frames 4.2 | 0.73, 16 frames 1.8 | 0.98, 32 frames 1.4 | 1.18,
-            // aperiodic 0.8 | 1.65, against 8.8 | 1.05 before. 16 is the longest cycle that stays
-            // under the old rest noise; frame-to-frame change is 0.69 at every length (was 1.00).
-            // The integrate's bracket jitter (xy) keeps the 8-frame cycle it was measured with.
+            // lattice, it slides over the floor as waves in a camera turn. Longer cycles trade that
+            // bias for rest noise, the aperiodic sequence most of all; with the probe-lattice cell
+            // noise (GiProbeCellNoise), 16 frames removes most of the bias at a modest rest-noise
+            // cost. The integrate's bracket jitter (xy) keeps the 8-frame cycle.
             constexpr uint32_t gather_jitter_period_frames = 8u;
             constexpr uint32_t gather_direction_period_frames = 16u;
             const double frame_index = double(gfx::get_render_frame() % gather_jitter_period_frames);
@@ -544,9 +538,9 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
             // TAA-JITTER-FREE matrices for the whole gather chain: every pass here
             // reconstructs world positions from depth (probe anchors, trace origins,
             // integration, reprojection), and the jittered projection's sub-pixel wobble
-            // made those positions - and with them the probe anchors and the reprojection
-            // of a parked camera - march to the TAA sequence every frame (the same defect
-            // measured and fixed in the reflection chain). The previous pair is the
+            // would make those positions - and with them the probe anchors and the
+            // reprojection of a parked camera - march to the TAA sequence every frame (the
+            // reflection chain is unjittered for the same reason). The previous pair is the
             // TAA-unjittered record for the same reason: still camera, exact reprojection.
             const math::transform gather_projection = params.cam->get_projection_unjittered();
             const auto gather_prev_view_proj = params.cam->get_prev_view_projection_unjittered();
@@ -653,7 +647,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 gfx::set_texture(trace_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
                 gfx::set_texture(trace_program_.s_light_voxels, 10, clipmap_gpu.get_light_voxel_texture());
                 // Stage 11 carries LAST frame's composited output (far-field radiance beyond
-                // the cascades) - freed from the irradiance cage the trace never read
+                // the cascades) - free because the trace reads no irradiance cage
                 // (GI_WORLD_PROBE_SKIP_IRRADIANCE); the traced list rides in the probe
                 // buffer's list region at stage 7.
                 gfx::set_texture(trace_program_.s_gi_prev_color,
@@ -665,7 +659,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 // requests the level-0 cage it reads (gi_world_probes.sh).
                 bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::ReadWrite);
                 // Stage 14: this frame's velocity buffer (the sky SH rides the probe buffer's
-                // SH block now). A screen hit on an OBJECT-motion pixel reprojects through it
+                // SH block). A screen hit on an OBJECT-motion pixel reprojects through it
                 // to the mover's own last-frame pixel; black stands in when absent and the
                 // screen-trace flag lane keeps it unread then.
                 gfx::set_texture(trace_program_.s_gi_velocity,
@@ -705,7 +699,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
             {
                 // RECONSTRUCTION + CLEAR: interpolated probes' tiles rebuilt from their
                 // parents, dead probes' tiles cleared to black - everything the compacted
-                // trace no longer visits. Parents are always trace-written (evens never
+                // trace does not visit. Parents are always trace-written (evens never
                 // interpolate), so one read-write image binding carries no intra-pass hazard.
                 gfx::render_pass pass("GI/Probe Interp");
                 interp_program_.program->begin();
@@ -756,12 +750,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                                    bgfx::TextureFormat::RGBA16F);
                     // ReadWrite: the final pass writes the importance mip into the record slots.
                     bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
-                    // y: the adaptive gather may have skipped probes this frame - the filter's
-                    // parent-lattice stride test runs only then (cs_gi_screen_probe_filter.sc).
-                    const float probe_filter[4] = {final_pass ? 0.0f : 1.0f,
-                                                   s.adaptive_probes ? 1.0f : 0.0f,
-                                                   0.0f,
-                                                   0.0f};
+                    const float probe_filter[4] = {final_pass ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f};
                     gfx::set_uniform(filter_program_.u_gi_probe_params, probe_params);
                     gfx::set_uniform(filter_program_.u_gi_probe_screen, probe_screen);
                     gfx::set_uniform(filter_program_.u_gi_probe_temporal, probe_temporal);
@@ -814,8 +803,8 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 // Stage 13: the sparse world-probe index the cascade fallback resolves level 0
                 // through (read-only here). Left unbound it reads as zero on D3D11, which the
                 // lookup takes for pool slot 0: every pixel without screen-probe coverage - the
-                // silhouette edges - then read one arbitrary probe's tile and rendered as a
-                // white halo that the temporal could not settle (measured 2026-09-13).
+                // silhouette edges - would then read one arbitrary probe's tile and render as a
+                // white halo the temporal cannot settle.
                 bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::Read);
                 gfx::set_uniform(integrate_program_.u_sdf_clipmap_levels,
                                  clipmap_gpu.get_level_params(),
@@ -880,10 +869,10 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                     // the stale energy actually flushes before the long window returns; a
                     // still world then earns it and the amortization waves average out. The
                     // per-pixel 3-sigma detector snaps only the bright core of a change - the
-                    // DIM PENUMBRA of a moved emissive sits below the lane noise and, at the
-                    // old hot cap of GI_TEMPORAL_MAX_FRAMES, decayed as the visible
-                    // second-long trail (see the constant's justification) - so the global
-                    // signal owns the whole flush.
+                    // DIM PENUMBRA of a moved emissive sits below the lane noise and, under a
+                    // long cap such as GI_TEMPORAL_MAX_FRAMES, decays as a visible second-long
+                    // trail (see GI_TEMPORAL_FAST_FRAMES) - so the global signal owns the whole
+                    // flush.
                     // REGION-LOCAL for instance changes: the changed placements' bounds ride
                     // u_gi_temporal_bounds and the kernel drops to the fast cap only around
                     // them (soft over one probe spacing); more regions than the budget holds
@@ -1117,9 +1106,9 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
     }
     // REVEAL PASS (the ReBLUR history-fix idea): pixels whose accumulation count is still
     // below GI_DENOISE_REVEAL_COUNT get one more a-trous pass at twice the widest regular
-    // spacing; converged pixels pass through at the cost of one moments fetch. A just-revealed
-    // region otherwise showed one to eight frames of a 64-ray gather at the fixed 8-texel
-    // reach and stayed 3-4x noisier than its surroundings for a dozen frames (measured).
+    // spacing; converged pixels pass through at the cost of one moments fetch. Without it a
+    // just-revealed region shows its first few frames of a 64-ray gather at the fixed 8-texel
+    // reach and stays visibly noisier than its surroundings until its history fills.
     if(moments && s.enable_temporal && s.denoise_passes > 0)
     {
         const bool into_a = (s.denoise_passes % 2) == 0;
@@ -1188,9 +1177,9 @@ auto gi_resolve_pass::bind_dirty_regions(const run_params& params, float margin)
                                    signed_uv_world_scale};
     gfx::set_uniform(temporal_program_.u_gi_temporal_dirty, dirty_params);
     // Attribution log, throttled, for the OVER-BUDGET case only: it means more placements
-    // changed than the region budget holds and the screen-wide fast cap is back. Legitimate
+    // changed than the region budget holds and the screen-wide fast cap applies. Legitimate
     // for a scene load or a crowd; a parked scene reporting it means a placement's pose or
-    // material hash churns every frame (measured once: vec3 padding bytes in the hash).
+    // material hash churns every frame.
     if(overflow && (gfx::get_render_frame() % 120u) == 0u && params.surface_cache != nullptr)
     {
         const auto& regions = params.surface_cache->get_dirty_regions();
@@ -1215,9 +1204,9 @@ auto gi_resolve_pass::measure_camera_motion(const run_params& params) -> float
 {
     const math::vec3 position = params.cam->get_position();
     // Normalised here: the view axis comes out of the inverse view transform with a length
-    // a little off one, and acos of a dot near one turns that into a standing "turn" of
-    // most of a degree per frame (measured 0.7-0.8 of the full rate on a parked camera).
-    // The chord of two unit axes is exactly zero for an unchanged pose.
+    // a little off one, and acos of a dot near one turns that into a standing "turn" on a
+    // parked camera, large enough to read as motion. The chord of two unit axes is exactly
+    // zero for an unchanged pose.
     const math::vec3 axis = math::normalize(params.cam->z_unit_axis());
     float motion = 0.0f;
     if(has_prev_camera_)
@@ -1225,10 +1214,8 @@ auto gi_resolve_pass::measure_camera_motion(const run_params& params) -> float
         const float travel = math::length(position - prev_camera_position_);
         const float half_chord = math::clamp(0.5f * math::length(axis - prev_camera_axis_), 0.0f, 1.0f);
         const float turn_degrees = math::degrees(2.0f * std::asin(half_chord));
-        // The turn term was A/B'd on 2026-09-17 (GI_TestSuite cell 07, translation-only
-        // collapse): the Indirect view's change under a 0.5 deg/frame turn fell 8 percent and
-        // did not move at 2 deg/frame - the turn shimmer is the gather's tier partition, not
-        // this collapse - so the term stays for the partition lag it was added against.
+        // The turn term covers the tier partition's lag under a turn; the turn shimmer itself
+        // comes from the gather's tier partition, not from this collapse.
         motion = math::max(travel / gi::GI_TEMPORAL_CAMERA_MOTION_FULL,
                            turn_degrees / gi::GI_TEMPORAL_CAMERA_ROTATION_FULL);
     }
@@ -1409,7 +1396,7 @@ auto gi_resolve_pass::run_temporal(gfx::render_view& rview,
     gfx::render_pass temporal_pass("GI/Temporal Pass");
     temporal_pass.bind(write_fbo.get());
     // Jitter-free reconstruction, TAA-unjittered previous pair below: a still camera
-    // must reproject onto itself exactly (the reflection chain's measured lesson).
+    // must reproject onto itself exactly.
     temporal_pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     temporal_program_.program->begin();
     gfx::set_texture(temporal_program_.s_gi_current, 0, current);

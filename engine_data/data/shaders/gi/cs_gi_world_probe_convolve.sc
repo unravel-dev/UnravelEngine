@@ -1,25 +1,26 @@
 /*
  * Convolves each world probe's 16x16 radiance atlas into its 8x8 irradiance tile and 8x8 depth
  * moment tile, gutters included - one thread group per probe the trace scheduler listed this
- * frame (cs_gi_world_probe_select.sc, plan item 2.1): exactly the probes whose radiance just
- * changed, so every integral stays as current as its atlas at the scheduler's cost.
+ * frame (cs_gi_world_probe_select.sc): exactly the probes whose radiance just changed, so every
+ * integral stays as current as its atlas at the scheduler's cost.
  *
- *  - Irradiance: E(n)/pi = sum(L_d * max(0, n . w_d)) / (N / 4) - equal-solid-angle octahedral
- *    texels (the same identity the screen probe filter uses). Sky rides in alpha: the
- *    cosine-weighted fraction of the lobe that escaped, which is what lets a consumer split
- *    "measured scene energy" from "sky the environment term already covers".
+ *  - Irradiance: E(n)/pi = sum(L_d * max(0, n . w_d) * omega_d) / sum(max(0, n . w_d) * omega_d),
+ *    omega_d the octahedral texel's solid angle (the same weighting the screen probe filter
+ *    uses). Sky rides in alpha: the cosine-weighted fraction of the lobe that escaped, which is
+ *    what lets a consumer split "measured scene energy" from "sky the environment term already
+ *    covers".
  *  - Depth: mean and mean^2 of hitT under a cos^GI_WORLD_PROBE_DEPTH_SHARPNESS lobe [RTXGI],
  *    misses clamped to GI_WORLD_PROBE_DEPTH_CLAMP spacings - the moments Chebyshev asks for.
  *  - Gutter: the 1-texel octahedral mirror border that makes hardware bilinear correct at tile
  *    edges (DDGI's border-copy map, computed rather than table-driven).
  *
  * GROUP SHAPE AND STAGING. 8x8 = 64 threads, every lane an interior texel through the heavy
- * phase - the old 10x10 group carried 36 lanes that idled at the barrier while 64 worked,
+ * phase - a 10x10 group covering the gutter would idle 36 lanes at the barrier while 64 work,
  * padding the group to 4 half-busy warps. The 256 radiance texels and their 256 decoded
  * directions are staged into shared memory ONCE by the group (4 per thread) instead of each
- * of the 64 threads fetching and decoding all 256 privately - that was 16,384 fetches and
- * 16,384 normalize()s per group for 256 distinct values of each. The gutter is written after
- * the barrier by the first 36 threads from the shared interior results, exactly as before.
+ * of the 64 threads fetching and decoding all 256 privately (16,384 fetches and 16,384
+ * normalize()s per group for 256 distinct values of each). The gutter is written after the
+ * barrier by the first 36 threads from the shared interior results.
  */
 
 #include "bgfx_compute.sh"
@@ -99,7 +100,7 @@ void main()
 	// cos = 0.829, under RG16F's own precision, so those terms are skipped. The irradiance
 	// cosine sum is untouched. Every term carries the texel's solid angle (the octahedral map
 	// is not equal-area) and the irradiance normalises by sum(cos x omega): a uniform field
-	// integrates exactly (the equal-weight sum over N/4 under-counted by ~5% at 16x16).
+	// integrates exactly, which an equal-weight sum over N/4 does not.
 	LOOP
 	for(int d = 0; d < RADIANCE_TEXELS; ++d)
 	{
@@ -153,7 +154,7 @@ void main()
 	barrier();
 	// Octahedral gutter: the first 36 threads write the 10x10 border from the shared interior
 	// results. Crossing a tile edge lands on the mirrored interior texel (transverse axis
-	// flipped); corners map to the diagonally opposite corner - the same wrap as before.
+	// flipped); corners map to the diagonally opposite corner.
 	if(lane < 36)
 	{
 		ivec2 border;
