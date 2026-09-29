@@ -3,7 +3,8 @@
  * G-buffer pixel, its world position and normal, the lifted trace origin and
  * the shortened-ray range - into the record buffer, BEFORE the trace dispatch.
  *
- * The anchor is a Halton-jittered pixel of the probe's tile, re-jittered EVERY
+ * The anchor is a Halton-jittered position in the probe's tile - the surface point under it,
+ * not its texel (GiScreenProbeContinuousAnchor) - re-jittered EVERY
  * frame: each frame's gather is a fresh, independent estimate and the per-frame
  * anchor variance is white noise the full-res temporal integrates. Anchors are
  * never held sticky for probe-space accumulation - amortizing in probe space turns
@@ -59,6 +60,83 @@ void GiCommitScreenProbe(uint record, vec3 world_position, vec3 world_normal, ve
 	b_gi_probes[record + uint(GI_PROBE_ANCHOR)] = vec4(uv, depth, 0.0);
 }
 
+/// Below this cosine between the camera ray and the anchor texel's plane the plane is seen
+/// edge-on and the ray's intersection is ill-conditioned: the texel's own point answers.
+#define GI_ANCHOR_MIN_FACING 0.02
+/// How far, in the texel's own neighbour spacings, the ray's hit may land from the texel's
+/// point before it counts as a silhouette (the plane belongs to the texel, not to what lies past it).
+#define GI_ANCHOR_MAX_REACH 1.5
+
+/// World position (xyz) of full-resolution depth texel @p texel; w = 1 when it holds geometry.
+vec4 GiAnchorDepthTexel(ivec2 texel, ivec2 size)
+{
+	ivec2 t = clamp(texel, ivec2(0, 0), size - ivec2(1, 1));
+	float depth = texelFetch(s_hiz, t, 0).x;
+	vec2 uv = (vec2(t) + vec2_splat(0.5)) / vec2(size);
+	vec3 position = clipToWorld(u_invViewProj, clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(depth))));
+	return vec4(position, depth < 1.0 ? 1.0 : 0.0);
+}
+
+/// The surface's slope along one axis: the smaller of the two one-sided differences whose far
+/// texel holds geometry, so a neighbour across a depth edge is not used. w = 0 when neither does.
+vec4 GiAnchorTangent(vec4 forward, vec4 center, vec4 backward)
+{
+	vec3 ahead = forward.xyz - center.xyz;
+	vec3 behind = center.xyz - backward.xyz;
+	if(forward.w < 0.5 && backward.w < 0.5)
+	{
+		return vec4_splat(0.0);
+	}
+	if(forward.w < 0.5)
+	{
+		return vec4(behind, 1.0);
+	}
+	if(backward.w < 0.5)
+	{
+		return vec4(ahead, 1.0);
+	}
+	return vec4(dot(ahead, ahead) < dot(behind, behind) ? ahead : behind, 1.0);
+}
+
+/**
+ * The anchor at its EXACT lattice position @p uv rather than at a texel: the camera ray through
+ * it meets the plane of the full-resolution depth texel it falls in. A texel anchor snaps as the
+ * image moves, and on a grazing surface one texel spans metres - the probe would jump along the
+ * floor, and its lighting with it, although the lattice follows the surface exactly. Silhouettes,
+ * edge-on planes and texels without two usable tangents keep the texel's own point; a texel
+ * without geometry keeps @p fallback.
+ */
+vec3 GiScreenProbeContinuousAnchor(vec2 uv, vec3 fallback)
+{
+	ivec2 size = ivec2(textureSize(s_hiz, 0));
+	ivec2 texel = ivec2(uv * vec2(size));
+	vec4 center = GiAnchorDepthTexel(texel, size);
+	if(center.w < 0.5)
+	{
+		return fallback;
+	}
+	vec4 tangent_x = GiAnchorTangent(GiAnchorDepthTexel(texel + ivec2(1, 0), size), center,
+	                                 GiAnchorDepthTexel(texel - ivec2(1, 0), size));
+	vec4 tangent_y = GiAnchorTangent(GiAnchorDepthTexel(texel + ivec2(0, 1), size), center,
+	                                 GiAnchorDepthTexel(texel - ivec2(0, 1), size));
+	vec3 normal = cross(tangent_x.xyz, tangent_y.xyz);
+	if(tangent_x.w < 0.5 || tangent_y.w < 0.5 || dot(normal, normal) < 1e-16)
+	{
+		return center.xyz;
+	}
+	normal = normalize(normal);
+	vec3 far_point = clipToWorld(u_invViewProj, clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(0.5))));
+	vec3 ray = normalize(far_point - u_gi_camera.xyz);
+	float facing = dot(ray, normal);
+	if(abs(facing) < GI_ANCHOR_MIN_FACING)
+	{
+		return center.xyz;
+	}
+	vec3 hit = u_gi_camera.xyz + ray * (dot(center.xyz - u_gi_camera.xyz, normal) / facing);
+	float reach = GI_ANCHOR_MAX_REACH * max(length(tangent_x.xyz), length(tangent_y.xyz));
+	return length(hit - center.xyz) <= reach ? hit : center.xyz;
+}
+
 NUM_THREADS(8, 8, 1)
 void main()
 {
@@ -73,10 +151,22 @@ void main()
 	}
 	uint record = (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_write_offset) * uint(GI_PROBE_STRIDE);
 	vec2 jitter = GiHalton8(uint(u_gi_camera.w));
-	vec2 pixel = (vec2(probe.xy) + jitter) * u_gi_probe_spacing;
-	pixel = min(pixel, u_gi_probe_screen.xy - vec2_splat(1.0));
+	// The lattice follows the camera's rotation (gi_probe_common.sh), so its tiles sit at any
+	// offset against the screen and are slightly warped: a tile wholly off screen holds no probe,
+	// and a partly visible one keeps its anchor in the visible part of its bounds.
+	vec2 corner00 = GiProbeLatticePixel(vec2(probe.xy));
+	vec2 corner10 = GiProbeLatticePixel(vec2(probe.xy) + vec2(1.0, 0.0));
+	vec2 corner01 = GiProbeLatticePixel(vec2(probe.xy) + vec2(0.0, 1.0));
+	vec2 corner11 = GiProbeLatticePixel(vec2(probe.xy) + vec2_splat(1.0));
+	vec2 tile_min = min(min(corner00, corner10), min(corner01, corner11));
+	vec2 tile_max = max(max(corner00, corner10), max(corner01, corner11));
+	vec2 visible_min = max(tile_min, vec2_splat(0.0));
+	vec2 visible_max = min(tile_max, u_gi_probe_screen.xy) - vec2_splat(1.0);
+	bool visible = all(greaterThanEqual(visible_max, visible_min));
+	vec2 pixel = clamp(GiProbeLatticePixel(vec2(probe.xy) + jitter), visible_min,
+	                   max(visible_max, visible_min) + vec2_splat(0.999));
 	vec2 uv = (floor(pixel) + vec2_splat(0.5)) * u_gi_probe_screen.zw;
-	float depth = texture2DLod(s_hiz, uv, 0.0).x;
+	float depth = visible ? texture2DLod(s_hiz, uv, 0.0).x : 1.0;
 	if(depth < 1.0)
 	{
 		vec3 clip = clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(depth)));
@@ -84,7 +174,10 @@ void main()
 		GBufferDataNormalMetalRoughness nd = DecodeGBufferNormalMetalRoughnessLod(uv, s_gi_normal, 0.0);
 		if(dot(nd.world_normal, nd.world_normal) >= 0.5)
 		{
-			GiCommitScreenProbe(record, world_position, normalize(nd.world_normal), uv, depth);
+			// The Hi-Z tier keeps the texel as its screen-space origin: the march compares against
+			// the depth the texel stores, which a sub-texel point on a slanted surface does not lie on.
+			vec3 anchor = GiScreenProbeContinuousAnchor(pixel * u_gi_probe_screen.zw, world_position);
+			GiCommitScreenProbe(record, anchor, normalize(nd.world_normal), uv, depth);
 			return;
 		}
 	}

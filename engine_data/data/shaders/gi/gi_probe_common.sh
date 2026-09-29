@@ -91,6 +91,93 @@ uniform vec4 u_gi_probe_temporal;
 #define u_gi_probe_write_offset  uint(u_gi_probe_temporal.z)
 #define u_gi_probe_read_offset   uint(u_gi_probe_temporal.w)
 
+/// The probe lattice ORIGIN, which follows the camera's rotation (gi_resolve_pass
+/// advance_probe_lattice): a turn moves the lattice with the image, so each probe keeps
+/// sampling the same surfaces instead of sliding across them. xy = this frame, zw = last frame,
+/// each packed as offset + GI_PROBE_LATTICE_WRAP_TILES x spacing x wraps: the offset, in trace
+/// pixels below one wrap period, places the lattice, and the wrap count (modulo
+/// GI_PROBE_LATTICE_WRAP_COUNT) says how many periods it has moved, so a probe keeps its lattice
+/// coordinate across a wrap.
+uniform vec4 u_gi_probe_lattice;
+
+/// The lattice WARP: a turn moves the image by a homography, not a shift, so the origin alone
+/// tracks the screen centre exactly and lets the rest slide. The warp carries the lattice plane
+/// (the origin-placed tiles, in trace pixels) onto the screen with the rest of the turn, so
+/// every probe stays on its surfaces. Three 3x3 matrices, one row per vec4 (xyz):
+/// [0..2] this frame's warp, [3..5] its inverse, [6..8] last frame's inverse.
+uniform vec4 u_gi_probe_lattice_warp[9];
+
+/// Index offset of the lattice plane's first tile: the wrap margin plus the warp margin.
+#define GI_PROBE_LATTICE_MARGIN (GI_PROBE_LATTICE_WRAP_TILES + GI_PROBE_LATTICE_WARP_TILES)
+
+float GiProbeLatticePeriod()
+{
+	return float(GI_PROBE_LATTICE_WRAP_TILES) * u_gi_probe_spacing;
+}
+
+vec2 GiProbeLatticeOffsetOf(vec2 packed_origin)
+{
+	float period = GiProbeLatticePeriod();
+	return packed_origin - vec2_splat(period) * floor(packed_origin / period);
+}
+
+vec2 GiProbeLatticeWrapsOf(vec2 packed_origin)
+{
+	return floor(packed_origin / GiProbeLatticePeriod());
+}
+
+/// Applies the warp matrix whose first row is u_gi_probe_lattice_warp[@p row] to @p position.
+vec2 GiProbeLatticeWarp(int row, vec2 position)
+{
+	vec3 h = vec3(position, 1.0);
+	vec3 r = vec3(dot(u_gi_probe_lattice_warp[row].xyz, h),
+	              dot(u_gi_probe_lattice_warp[row + 1].xyz, h),
+	              dot(u_gi_probe_lattice_warp[row + 2].xyz, h));
+	return r.xy / r.z;
+}
+
+/// The trace-resolution pixel of lattice position @p lattice: probe i's tile is [i, i + 1).
+vec2 GiProbeLatticePixel(vec2 lattice)
+{
+	return GiProbeLatticeWarp(0, (lattice - float(GI_PROBE_LATTICE_MARGIN)) * u_gi_probe_spacing +
+	                                 GiProbeLatticeOffsetOf(u_gi_probe_lattice.xy));
+}
+
+/// The lattice position of trace-resolution pixel @p pixel (the inverse of GiProbeLatticePixel).
+vec2 GiProbeLatticeOfPixel(vec2 pixel)
+{
+	return (GiProbeLatticeWarp(3, pixel) - GiProbeLatticeOffsetOf(u_gi_probe_lattice.xy)) / u_gi_probe_spacing +
+	       float(GI_PROBE_LATTICE_MARGIN);
+}
+
+/// The same in LAST frame's lattice, for a position reprojected into last frame's screen.
+vec2 GiProbeLatticeOfPrevPixel(vec2 pixel)
+{
+	return (GiProbeLatticeWarp(6, pixel) - GiProbeLatticeOffsetOf(u_gi_probe_lattice.zw)) / u_gi_probe_spacing +
+	       float(GI_PROBE_LATTICE_MARGIN);
+}
+
+/// Last frame's index of the probe that covers the same surfaces as @p probe does this frame.
+ivec2 GiProbeLatticePrevIndex(ivec2 probe)
+{
+	vec2 wraps = GiProbeLatticeWrapsOf(u_gi_probe_lattice.zw) - GiProbeLatticeWrapsOf(u_gi_probe_lattice.xy);
+	wraps -= float(GI_PROBE_LATTICE_WRAP_COUNT) * floor(wraps / float(GI_PROBE_LATTICE_WRAP_COUNT) + vec2_splat(0.5));
+	return probe + GI_PROBE_LATTICE_WRAP_TILES * ivec2(wraps);
+}
+
+/// @p probe's lattice coordinate, which stays with the surfaces while the camera turns: what
+/// is keyed per probe (its jitter pattern, its revalidation phase) follows the surfaces too.
+ivec2 GiProbeLatticeKey(ivec2 probe)
+{
+	return probe - GI_PROBE_LATTICE_WRAP_TILES * ivec2(GiProbeLatticeWrapsOf(u_gi_probe_lattice.xy));
+}
+
+/// Whether the lattice wrapped since last frame: a probe slot then holds another tile's history.
+bool GiProbeLatticeWrapped()
+{
+	return any(notEqual(GiProbeLatticeWrapsOf(u_gi_probe_lattice.xy), GiProbeLatticeWrapsOf(u_gi_probe_lattice.zw)));
+}
+
 /**
  * Octahedral decode: maps a [0,1]^2 tile coordinate to a unit direction on the full sphere.
  * The normalized octahedral mapping is not equal-area; jittered UV samples require the

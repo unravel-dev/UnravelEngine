@@ -498,7 +498,9 @@ void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 	}
 	else
 	{
-		vec4 hist = imageLoad(s_probe_radiance_out, texel);
+		// The lattice follows the camera's rotation, so the slot holds last frame's value of the
+		// same surfaces - except in the frame the lattice wraps, when it holds another tile's.
+		vec4 hist = GiProbeLatticeWrapped() ? vec4_splat(0.0) : imageLoad(s_probe_radiance_out, texel);
 		reference = max(Luminance(hist.xyz) * u_history_pre_exposure_correction, s_importance_mean[slot]);
 		if(s_history_record[slot] >= 0)
 		{
@@ -1064,9 +1066,10 @@ void GiTraceUnitSample(int slot, ivec2 probe, GiRayUnit unit, int k)
 	// The multi-sample pattern is the first four points of a shifted (0,2)-net: positions
 	// 0/1 are the exact antithetic pair, so counts one and two reproduce the classic
 	// estimator. Addressed by PROBE and cell (GiProbeCellNoise): well spread across adjacent
-	// probes for the same cell, decorrelated across the cells of one tile.
+	// probes for the same cell, decorrelated across the cells of one tile. The probe's lattice
+	// key follows the surfaces through a camera turn, so a surface keeps its pattern.
 	int cell_index = unit.base.y * GI_PROBE_DIR_EDGE + unit.base.x;
-	vec2 first_position = fract(s_frame_r2 + GiProbeCellNoise(probe, cell_index));
+	vec2 first_position = fract(s_frame_r2 + GiProbeCellNoise(GiProbeLatticeKey(probe), cell_index));
 	int position = min(k, GI_IMPORTANCE_SUPERSAMPLE_MAX - 1);
 	vec2 net_offset = position == 1 ? vec2(0.5, 0.5) : (position == 2 ? vec2(0.25, 0.75) : vec2(0.75, 0.25));
 	vec2 xi = position == 0 ? first_position : fract(first_position + net_offset);
@@ -1414,7 +1417,7 @@ void main()
 				{
 					vec3 prev_clip = clipTransform(prev_clip4.xyz / prev_clip4.w);
 					vec2 prev_uv = clamp(prev_clip.xy * 0.5 + 0.5, vec2_splat(0.0), vec2_splat(1.0));
-					vec2 prev_probe = floor(prev_uv * u_gi_probe_screen.xy / u_gi_probe_spacing);
+					vec2 prev_probe = floor(GiProbeLatticeOfPrevPixel(prev_uv * u_gi_probe_screen.xy));
 					int hx = int(clamp(prev_probe.x, 0.0, float(u_gi_probe_count_x - 1)));
 					int hy = int(clamp(prev_probe.y, 0.0, float(u_gi_probe_count_y - 1)));
 					uint history_base =

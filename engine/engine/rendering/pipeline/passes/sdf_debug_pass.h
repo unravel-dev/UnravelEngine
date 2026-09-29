@@ -186,6 +186,8 @@ private:
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_probe_lattice;
+        gfx::program::uniform_ptr u_gi_probe_lattice_warp;
         gfx::program::uniform_ptr u_gi_temporal_dirty;
         gfx::program::uniform_ptr u_gi_temporal_bounds;
         gfx::program::uniform_ptr s_light_voxels;
@@ -214,6 +216,8 @@ private:
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice, "u_gi_probe_lattice", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice_warp, "u_gi_probe_lattice_warp", bgfx::UniformType::Vec4, 9);
             cache_uniform(program.get(), u_gi_temporal_dirty, "u_gi_temporal_dirty", bgfx::UniformType::Vec4);
             cache_uniform(program.get(),
                           u_gi_temporal_bounds,

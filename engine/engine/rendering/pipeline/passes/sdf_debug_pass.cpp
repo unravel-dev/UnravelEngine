@@ -109,6 +109,8 @@ auto sdf_debug_pass::run(gfx::render_view& rview, const run_params& params) -> b
         // Only the WRITE half matters here: this view shows what the gather just produced.
         const float probe_temporal[4] = {0.0f, 0.0f, float(params.probes.write_offset), 0.0f};
         gfx::set_uniform(debug_program_.u_gi_probe_temporal, probe_temporal);
+        gfx::set_uniform(debug_program_.u_gi_probe_lattice, params.probes.lattice.origin.data());
+        gfx::set_uniform(debug_program_.u_gi_probe_lattice_warp, params.probes.lattice.warp.data(), 9);
     }
     // Stage 7: D3D shares its 16 SRV registers between buffers and textures, and every other
     // one is taken - which is why the probe window-COUNT buffer is not bound (see the shader).

@@ -54,14 +54,23 @@ void main()
 	vec3 world_position = meta.xyz;
 	vec4 meta2 = b_gi_probes[record + uint(GI_PROBE_META2)];
 	bool interpolated = false;
+	// The revalidation phase is keyed by the lattice coordinate, which stays with the surfaces
+	// while the camera turns.
+	ivec2 key = GiProbeLatticeKey(probe);
 	bool revalidate =
-	    ((uint(probe.x) * 3u + uint(probe.y) * 5u + u_gi_probe_frame) %
+	    ((uint(key.x) * 3u + uint(key.y) * 5u + u_gi_probe_frame) %
 	     uint(GI_ADAPTIVE_REVALIDATE_FRAMES)) == 0u;
-	// LAST frame's mode, from the read half: a sticky-traced probe stays traced between
-	// revalidations. Its own revalidation frame re-decides.
-	uint last_record =
-	    (GiProbeRecord(probe.x, probe.y, 0) + u_gi_probe_read_offset) * uint(GI_PROBE_STRIDE);
-	float last_mode = b_gi_probes[last_record + uint(GI_PROBE_META)].w;
+	// LAST frame's mode of the same surfaces, from the read half: a sticky-traced probe stays
+	// traced between revalidations. Its own revalidation frame re-decides.
+	ivec2 last_probe = GiProbeLatticePrevIndex(probe);
+	float last_mode = 0.0;
+	if(last_probe.x >= 0 && last_probe.y >= 0 && last_probe.x < u_gi_probe_count_x &&
+	   last_probe.y < u_gi_probe_count_y)
+	{
+		uint last_record = (GiProbeRecord(last_probe.x, last_probe.y, 0) + u_gi_probe_read_offset) *
+		                   uint(GI_PROBE_STRIDE);
+		last_mode = b_gi_probes[last_record + uint(GI_PROBE_META)].w;
+	}
 	bool odd = ((probe.x | probe.y) & 1) != 0;
 	bool adaptive = u_gi_screen_trace.z > 0.0 && odd;
 	// THE GEOMETRIC GATE, first and for every odd probe: may its even-lattice parents stand in

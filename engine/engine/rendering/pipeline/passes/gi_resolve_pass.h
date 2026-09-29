@@ -210,6 +210,16 @@ public:
         bool hold{};
     };
 
+    /// The screen-probe lattice's placement for one frame (gi_probe_common.sh).
+    struct probe_lattice
+    {
+        /// u_gi_probe_lattice: xy = this frame's packed origin, zw = last frame's.
+        std::array<float, 4> origin{};
+        /// u_gi_probe_lattice_warp: three 3x3 matrices, one row per vec4 - this frame's warp,
+        /// its inverse, last frame's inverse.
+        std::array<float, 36> warp{};
+    };
+
     ~gi_resolve_pass();
 
     auto init(rtti::context& ctx) -> bool;
@@ -279,6 +289,26 @@ private:
      */
     auto measure_camera_motion(const run_params& params) -> float;
 
+    /**
+     * @brief Moves the screen-probe lattice with the camera's rotation, so each probe keeps
+     *        sampling the surfaces it sampled last frame instead of sliding across them
+     *        (follow_lattice_turn). Translation leaves the lattice where it is.
+     * @param spacing Probe spacing in trace-resolution pixels; a new spacing or target size
+     *        restarts the lattice.
+     */
+    auto advance_probe_lattice(const run_params& params, const usize32_t& target_size, uint32_t spacing)
+        -> probe_lattice;
+
+    /**
+     * @brief Composes one frame's turn into the lattice. A turn moves the image by the
+     *        homography of the camera's direction rows, view x last_view^-1 (in trace pixels):
+     *        its motion at the screen centre moves the origin, and the rest goes into the warp,
+     *        which is exact while its screen-corner displacement stays within
+     *        GI_PROBE_LATTICE_WARP_TILES and is relaxed back to that bound beyond it.
+     * @param view The camera's direction rows this frame (clip x, y and w of a world direction).
+     */
+    void follow_lattice_turn(const math::mat3& view, const usize32_t& target_size, uint32_t spacing);
+
     /// Blends this frame's gather into the reprojected history. Returns the accumulated texture.
     /// The split fallback: the deliverable path fuses this blend onto the integrate pass.
     auto run_temporal(gfx::render_view& rview,
@@ -316,6 +346,7 @@ private:
         std::array<float, 4> probe_params{};
         std::array<float, 4> probe_screen{};
         std::array<float, 4> probe_temporal{};
+        probe_lattice lattice;
         std::array<float, 4> gi_camera{};
         std::array<float, 4> gi_jitter{};
         /// The TAA-unjittered projection the whole gather chain reconstructs positions with.
@@ -364,6 +395,8 @@ private:
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_probe_lattice;
+        gfx::program::uniform_ptr u_gi_probe_lattice_warp;
         gfx::program::uniform_ptr u_gi_light_voxel_params;
         gfx::program::uniform_ptr u_gi_world_probe_params;
         gfx::program::uniform_ptr u_gi_world_probe_atlas;
@@ -405,6 +438,8 @@ private:
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice, "u_gi_probe_lattice", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice_warp, "u_gi_probe_lattice_warp", bgfx::UniformType::Vec4, 9);
             cache_uniform(program.get(), u_gi_light_voxel_params, "u_gi_light_voxel_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", bgfx::UniformType::Vec4);
@@ -482,6 +517,8 @@ private:
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_probe_lattice;
+        gfx::program::uniform_ptr u_gi_probe_lattice_warp;
         gfx::program::uniform_ptr u_gi_world_probe_params;
         gfx::program::uniform_ptr u_sdf_clipmap_levels;
         gfx::program::uniform_ptr u_sdf_clipmap_params;
@@ -495,6 +532,8 @@ private:
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice, "u_gi_probe_lattice", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice_warp, "u_gi_probe_lattice_warp", bgfx::UniformType::Vec4, 9);
             cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", bgfx::UniformType::Vec4,
                           global_sdf_clipmap::level_count);
@@ -517,12 +556,14 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_probe_lattice;
         gfx::program::uniform_ptr u_gi_screen_trace;
 
         void cache_uniforms()
         {
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice, "u_gi_probe_lattice", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_screen_trace, "u_gi_screen_trace", bgfx::UniformType::Vec4);
         }
 
@@ -592,6 +633,8 @@ private:
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_probe_lattice;
+        gfx::program::uniform_ptr u_gi_probe_lattice_warp;
         gfx::program::uniform_ptr u_gi_world_probe_params;
         gfx::program::uniform_ptr u_gi_world_probe_atlas;
         gfx::program::uniform_ptr u_sdf_clipmap_levels;
@@ -623,6 +666,8 @@ private:
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice, "u_gi_probe_lattice", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice_warp, "u_gi_probe_lattice_warp", bgfx::UniformType::Vec4, 9);
             cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", bgfx::UniformType::Vec4,
@@ -658,6 +703,16 @@ private:
     bool has_prev_camera_ = false;
     /// This frame's camera motion (measure_camera_motion), bound with the dirty regions.
     float camera_motion_ = 0.0f;
+    /// The probe lattice (advance_probe_lattice): the origin's offset in trace pixels within one
+    /// wrap period and its wrap counts modulo GI_PROBE_LATTICE_WRAP_COUNT, the warp from the
+    /// lattice plane to the screen, the camera direction rows it was last placed with, and the
+    /// spacing and target size it was built for (spacing 0 = not started).
+    math::vec2 lattice_offset_{0.0f};
+    std::array<int32_t, 2> lattice_wraps_{};
+    math::mat3 lattice_warp_{1.0f};
+    math::mat3 lattice_view_{0.0f};
+    uint32_t lattice_spacing_ = 0;
+    usize32_t lattice_size_{};
     /// Probe lattice of the last traced frame. Reprojection indexes the READ half by the same
     /// layout, so a lattice change makes the whole history unaddressable and must reset it.
     uint32_t probe_grid_x_ = 0;
@@ -680,6 +735,8 @@ public:
         float spacing = 0.0f;
         /// Offset in PROBES of the half written this frame.
         uint32_t write_offset = 0;
+        /// The lattice placement the gather placed its probes with.
+        probe_lattice lattice;
         /// The trace-resolution target the lattice was sized against.
         usize32_t trace_size{};
     };
@@ -807,6 +864,8 @@ private:
         gfx::program::uniform_ptr u_gi_probe_params;
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
+        gfx::program::uniform_ptr u_gi_probe_lattice;
+        gfx::program::uniform_ptr u_gi_probe_lattice_warp;
         gfx::program::uniform_ptr u_gi_prev_view_proj;
         gfx::program::uniform_ptr u_gi_prev_inv_view_proj;
         /// x = history valid, y = velocity bound, z = GI intensity, w = reprojection tolerance.
@@ -828,6 +887,8 @@ private:
             cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice, "u_gi_probe_lattice", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice_warp, "u_gi_probe_lattice_warp", bgfx::UniformType::Vec4, 9);
             cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", bgfx::UniformType::Mat4);
             cache_uniform(program.get(), u_gi_prev_inv_view_proj, "u_gi_prev_inv_view_proj",
                           bgfx::UniformType::Mat4);

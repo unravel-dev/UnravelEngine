@@ -565,7 +565,7 @@ void main()
 		// The gather's lattice is sized in TRACE-resolution pixels; this pass runs at full
 		// resolution, so the uv maps through the trace target rather than through gl_FragCoord.
 		vec2 trace_pixel = v_texcoord0 * u_gi_probe_screen.xy;
-		vec2 probe_f = trace_pixel / max(u_gi_probe_spacing, 1.0);
+		vec2 probe_f = GiProbeLatticeOfPixel(trace_pixel);
 		ivec2 probe_xy = ivec2(floor(probe_f));
 		if(probe_xy.x >= u_gi_probe_count_x || probe_xy.y >= u_gi_probe_count_y ||
 		   probe_xy.x < 0 || probe_xy.y < 0)
@@ -672,7 +672,7 @@ void main()
 			return;
 		}
 		vec2 trace_pixel = v_texcoord0 * u_gi_probe_screen.xy;
-		vec2 probe_f = trace_pixel / max(u_gi_probe_spacing, 1.0);
+		vec2 probe_f = GiProbeLatticeOfPixel(trace_pixel);
 		ivec2 probe_xy = ivec2(floor(probe_f));
 		if(probe_xy.x >= u_gi_probe_count_x || probe_xy.y >= u_gi_probe_count_y ||
 		   probe_xy.x < 0 || probe_xy.y < 0)
@@ -724,7 +724,7 @@ void main()
 			return;
 		}
 		vec2 trace_pixel = v_texcoord0 * u_gi_probe_screen.xy;
-		vec2 probe_f = trace_pixel / max(u_gi_probe_spacing, 1.0);
+		vec2 probe_f = GiProbeLatticeOfPixel(trace_pixel);
 		ivec2 probe_xy = ivec2(floor(probe_f));
 		if(probe_xy.x >= u_gi_probe_count_x || probe_xy.y >= u_gi_probe_count_y ||
 		   probe_xy.x < 0 || probe_xy.y < 0)

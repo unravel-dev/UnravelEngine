@@ -373,6 +373,27 @@
       " 16x16 full-res pixels backed by ADAPTIVE REFINEMENT probes at interpolation failures;"     \
       " ours is backed by adaptive SKIPPING instead - the refinement direction is the open"        \
       " quality lever if sparse lattices ever show silhouette errors")                             \
+    X(GI_PROBE_LATTICE_WRAP_TILES, 2,                                                              \
+      "probe tiles", "derived: the screen-probe lattice follows the camera's rotation"             \
+      " (gi_resolve_pass advance_probe_lattice), so a turn moves the probes with the surfaces"     \
+      " they sample, and its origin wraps after this many tiles. Two, not one: a wrap"             \
+      " renumbers the probes by an even count, so the adaptive lattice's even-lattice parents"     \
+      " stay on the same surfaces. The lattice carries this many extra probe columns and"          \
+      " rows, enough to cover the screen at any origin")                                           \
+    X(GI_PROBE_LATTICE_WRAP_COUNT, 64,                                                             \
+      "wraps", "derived: the packed lattice origin counts its wraps modulo this, so a probe"       \
+      " keeps its lattice coordinate - its jitter pattern and last frame's record - across a"      \
+      " wrap. It only has to exceed the wraps of one frame's turn; 64 double tiles keep the"       \
+      " packed origin exact in a float at any spacing")                                            \
+    X(GI_PROBE_LATTICE_WARP_TILES, 4,                                                              \
+      "probe tiles", "derived: a turn moves the image by a homography, which the lattice"          \
+      " origin alone follows only at the screen centre; the lattice warp (gi_probe_common.sh"      \
+      " u_gi_probe_lattice_warp) carries the rest, so a probe away from the centre stays on"       \
+      " its surfaces too. The warp follows a turn exactly while it displaces the screen"           \
+      " corners by at most this many tiles - a left-right turn of several degrees - and a"         \
+      " longer one-way turn relaxes it back to the bound, the probes then sliding as slowly"       \
+      " as the origin-only lattice. The lattice carries this many extra tiles on every side"       \
+      " so the warped screen stays covered")                                                       \
     /* There is no probe-space temporal: averaging in probe space turns white per-frame noise  */  \
     /* into probe-granular correlated drift (blobs moving under a still camera) the downstream */  \
     /* temporal cannot remove. All 64 texels trace fresh every frame; the ray budget scales    */  \

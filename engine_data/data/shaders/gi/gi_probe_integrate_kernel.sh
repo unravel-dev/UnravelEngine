@@ -155,7 +155,7 @@ vec4 GiIntegrateGather(vec2 uv, vec2 frag_coord, out float out_depth, out vec3 o
 	float view_distance = max(length(world_position - u_gi_camera.xyz), 1e-3);
 	float plane_tolerance = GI_INTEGRATE_PLANE_TOLERANCE * view_distance;
 	vec2 pixel = uv * u_gi_probe_screen.xy;
-	vec2 grid = pixel / u_gi_probe_spacing - vec2_splat(0.5);
+	vec2 grid = GiProbeLatticeOfPixel(pixel) - vec2_splat(0.5);
 	// Interpolation JITTER [S21 s39]: offsetting which bracket a pixel reads spatially
 	// distributes probe-to-probe differences, which the temporal chain then integrates -
 	// without it the probe lattice prints through as tile-sized plateaus. Two-channel IGN

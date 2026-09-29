@@ -258,7 +258,7 @@ void main()
 	// jittered probe fails the plane test.
 	float plane_tolerance = GI_INTEGRATE_PLANE_TOLERANCE * view_distance;
 	ivec2 pixel = ivec2(uv * u_gi_probe_screen.xy);
-	vec2 grid = uv * u_gi_probe_screen.xy / u_gi_probe_spacing - vec2_splat(0.5);
+	vec2 grid = GiProbeLatticeOfPixel(uv * u_gi_probe_screen.xy) - vec2_splat(0.5);
 	vec2 pixel_noise = GiIgnNoise(pixel);
 	vec2 jitter = (fract(pixel_noise + u_gi_jitter.xy) - vec2_splat(0.5)) * GI_INTERPOLATION_JITTER_TILES;
 	vec2 base = floor(grid + jitter);

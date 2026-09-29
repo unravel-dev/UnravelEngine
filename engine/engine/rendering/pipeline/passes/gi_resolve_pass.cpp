@@ -330,8 +330,14 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
         // Probe lattice, sized in TRACE-target pixels so probe density follows trace resolution.
         const uint32_t divisor = get_divisor(s.resolution);
         const uint32_t spacing = math::max(uint32_t(math::max(s.probe_spacing, 4)) / math::max(divisor, 1u), 2u);
-        const uint32_t probes_x = (target_size.width + spacing - 1u) / spacing;
-        const uint32_t probes_y = (target_size.height + spacing - 1u) / spacing;
+        // The lattice follows the camera's rotation, so its origin sits anywhere within a wrap
+        // period and its warp displaces the screen corners by up to GI_PROBE_LATTICE_WARP_TILES:
+        // the extra columns and rows cover the screen at any placement.
+        const probe_lattice lattice = advance_probe_lattice(params, target_size, spacing);
+        const uint32_t lattice_margin =
+            uint32_t(gi::GI_PROBE_LATTICE_WRAP_TILES) + 2u * uint32_t(gi::GI_PROBE_LATTICE_WARP_TILES);
+        const uint32_t probes_x = (target_size.width + spacing - 1u) / spacing + lattice_margin;
+        const uint32_t probes_y = (target_size.height + spacing - 1u) / spacing + lattice_margin;
         const float probe_params[4] = {float(probes_x),
                                        float(probes_y),
                                        float(spacing),
@@ -455,6 +461,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
         probe_debug_view_.count_y = probes_y;
         probe_debug_view_.spacing = float(spacing);
         probe_debug_view_.write_offset = write_probe_offset;
+        probe_debug_view_.lattice = lattice;
         probe_debug_view_.trace_size = target_size;
         // The one gather. Without the world structures there is nothing correct to gather
         // from, so the output clears to zero weight and the consumer's environment term
@@ -566,6 +573,8 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 gfx::set_uniform(place_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(place_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(place_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(place_program_.u_gi_probe_lattice, lattice.origin.data());
+                gfx::set_uniform(place_program_.u_gi_probe_lattice_warp, lattice.warp.data(), 9);
                 gfx::set_uniform(place_program_.u_gi_camera, gi_camera);
                 gfx::set_uniform(place_program_.u_gi_world_probe_params, wp_params);
                 bgfx::dispatch(pass.id,
@@ -584,6 +593,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
                 gfx::set_uniform(classify_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(classify_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(classify_program_.u_gi_probe_lattice, lattice.origin.data());
                 gfx::set_uniform(classify_program_.u_gi_screen_trace, screen_trace_params);
                 bgfx::dispatch(pass.id,
                                classify_program_.program->native_handle(),
@@ -671,6 +681,8 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 gfx::set_uniform(trace_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(trace_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(trace_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(trace_program_.u_gi_probe_lattice, lattice.origin.data());
+                gfx::set_uniform(trace_program_.u_gi_probe_lattice_warp, lattice.warp.data(), 9);
                 gfx::set_uniform(trace_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
                 gfx::set_uniform(trace_program_.u_gi_camera, gi_camera);
                 gfx::set_uniform(trace_program_.u_gi_jitter, gi_jitter);
@@ -806,6 +818,8 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 gfx::set_uniform(integrate_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(integrate_program_.u_gi_probe_screen, probe_screen);
                 gfx::set_uniform(integrate_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(integrate_program_.u_gi_probe_lattice, lattice.origin.data());
+                gfx::set_uniform(integrate_program_.u_gi_probe_lattice_warp, lattice.warp.data(), 9);
                 gfx::set_uniform(integrate_program_.u_gi_camera, gi_camera);
                 gfx::set_uniform(integrate_program_.u_gi_jitter, gi_jitter);
                 const float gi_intensity[4] = {math::max(s.intensity, 0.0f),
@@ -924,6 +938,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 std::copy(std::begin(probe_params), std::end(probe_params), rough_inputs.probe_params.begin());
                 std::copy(std::begin(probe_screen), std::end(probe_screen), rough_inputs.probe_screen.begin());
                 std::copy(std::begin(probe_temporal), std::end(probe_temporal), rough_inputs.probe_temporal.begin());
+                rough_inputs.lattice = lattice;
                 std::copy(std::begin(gi_camera), std::end(gi_camera), rough_inputs.gi_camera.begin());
                 std::copy(std::begin(gi_jitter), std::end(gi_jitter), rough_inputs.gi_jitter.begin());
                 // zw: the lobe samples walk the UNBOUNDED R2 sequence (in double, as the gather's
@@ -1218,6 +1233,145 @@ auto gi_resolve_pass::measure_camera_motion(const run_params& params) -> float
     return math::clamp(motion, 0.0f, 1.0f);
 }
 
+namespace
+{
+/// Writes @p matrix into @p rows (one matrix row per vec4, xyz) from vec4 @p first_row on.
+void write_lattice_rows(std::array<float, 36>& rows, size_t first_row, const math::mat3& matrix)
+{
+    for(size_t row = 0; row < 3; ++row)
+    {
+        const size_t base = (first_row + row) * 4u;
+        rows[base + 0u] = matrix[0][int(row)];
+        rows[base + 1u] = matrix[1][int(row)];
+        rows[base + 2u] = matrix[2][int(row)];
+        rows[base + 3u] = 0.0f;
+    }
+}
+
+/// @p point carried by the homography @p matrix.
+auto apply_homography(const math::mat3& matrix, const math::vec2& point) -> math::vec2
+{
+    const math::vec3 carried = matrix * math::vec3(point, 1.0f);
+    return math::vec2(carried) / carried.z;
+}
+} // namespace
+
+auto gi_resolve_pass::advance_probe_lattice(const run_params& params,
+                                            const usize32_t& target_size,
+                                            uint32_t spacing) -> probe_lattice
+{
+    // The rows of the view-projection that take a world DIRECTION to clip x, y and w: a point at
+    // infinity, which a turn moves across the screen and a translation does not.
+    const math::mat4 view_projection = params.cam->get_view_projection_unjittered().get_matrix();
+    math::mat3 view{};
+    for(int column = 0; column < 3; ++column)
+    {
+        view[column] = math::vec3(view_projection[column][0], view_projection[column][1], view_projection[column][3]);
+    }
+    if(lattice_spacing_ != spacing || lattice_size_ != target_size)
+    {
+        lattice_spacing_ = spacing;
+        lattice_size_ = target_size;
+        lattice_offset_ = math::vec2(0.0f);
+        lattice_wraps_ = {};
+        lattice_warp_ = math::mat3(1.0f);
+        lattice_view_ = view;
+    }
+    const float period = float(uint32_t(gi::GI_PROBE_LATTICE_WRAP_TILES) * spacing);
+    const auto pack = [&]() -> math::vec2
+    {
+        return lattice_offset_ + period * math::vec2(float(lattice_wraps_[0]), float(lattice_wraps_[1]));
+    };
+    const math::vec2 previous_origin = pack();
+    const math::mat3 previous_inverse = glm::inverse(lattice_warp_);
+    // An unchanged view moves nothing: the matrix rounding would otherwise creep the lattice
+    // across a parked view.
+    if(view != lattice_view_)
+    {
+        follow_lattice_turn(view, target_size, spacing);
+    }
+    lattice_view_ = view;
+    const math::vec2 origin = pack();
+    probe_lattice lattice;
+    lattice.origin = {origin.x, origin.y, previous_origin.x, previous_origin.y};
+    write_lattice_rows(lattice.warp, 0u, lattice_warp_);
+    write_lattice_rows(lattice.warp, 3u, glm::inverse(lattice_warp_));
+    write_lattice_rows(lattice.warp, 6u, previous_inverse);
+    return lattice;
+}
+
+void gi_resolve_pass::follow_lattice_turn(const math::mat3& view, const usize32_t& target_size, uint32_t spacing)
+{
+    const math::vec2 size(float(target_size.width), float(target_size.height));
+    const math::vec2 center = 0.5f * size;
+    // NDC -> trace pixels, with the trace targets' uv convention: v runs down the screen unless
+    // the origin is bottom-left.
+    const float v_direction = bgfx::getCaps()->originBottomLeft ? 1.0f : -1.0f;
+    const math::mat3 to_pixels(math::vec3(center.x, 0.0f, 0.0f),
+                               math::vec3(0.0f, v_direction * center.y, 0.0f),
+                               math::vec3(center.x, center.y, 1.0f));
+    // An orthographic view has no direction rows to follow, and a turn past the edge of the
+    // screen in one frame leaves nothing on screen whose history a warp could keep: the lattice
+    // then stays put and its warp restarts.
+    constexpr float min_view_determinant = 1e-12f;
+    if(std::abs(glm::determinant(view)) < min_view_determinant ||
+       std::abs(glm::determinant(lattice_view_)) < min_view_determinant)
+    {
+        lattice_warp_ = math::mat3(1.0f);
+        return;
+    }
+    const math::mat3 turn = to_pixels * view * glm::inverse(lattice_view_) * glm::inverse(to_pixels);
+    const math::mat3 moved = turn * lattice_warp_;
+    // The lattice-plane point the turned warp puts at the screen centre: the origin moves by its
+    // offset from the centre, which keeps the warp free of translation.
+    const math::vec3 source = glm::inverse(moved) * math::vec3(center, 1.0f);
+    if(!(source.z > 0.0f) || !std::isfinite(source.x) || !std::isfinite(source.y))
+    {
+        lattice_warp_ = math::mat3(1.0f);
+        return;
+    }
+    const math::vec2 shift = center - math::vec2(source) / source.z;
+    constexpr float max_shift_screens = 2.0f;
+    if(math::length(shift) > max_shift_screens * math::length(size))
+    {
+        lattice_warp_ = math::mat3(1.0f);
+        return;
+    }
+    const float period = float(uint32_t(gi::GI_PROBE_LATTICE_WRAP_TILES) * spacing);
+    lattice_offset_ += shift;
+    const int32_t wrap_count = int32_t(gi::GI_PROBE_LATTICE_WRAP_COUNT);
+    for(int32_t component = 0; component < 2; ++component)
+    {
+        const float wraps = std::floor(lattice_offset_[component] / period);
+        lattice_offset_[component] -= wraps * period;
+        lattice_wraps_[component] =
+            ((lattice_wraps_[component] + int32_t(wraps)) % wrap_count + wrap_count) % wrap_count;
+    }
+    const math::mat3 unshift(math::vec3(1.0f, 0.0f, 0.0f),
+                             math::vec3(0.0f, 1.0f, 0.0f),
+                             math::vec3(-shift.x, -shift.y, 1.0f));
+    math::mat3 warp = moved * unshift;
+    warp /= (warp * math::vec3(center, 1.0f)).z;
+    // The margin covers the screen while the warp moves its corners by no more than
+    // GI_PROBE_LATTICE_WARP_TILES in the lattice plane; a longer one-way turn blends the warp back
+    // toward the plain lattice just enough to stay inside (a slow slide, only while turning).
+    constexpr float warp_bound_share = 0.9f;
+    const float bound = warp_bound_share * float(gi::GI_PROBE_LATTICE_WARP_TILES) * float(spacing);
+    const math::mat3 inverse = glm::inverse(warp);
+    float displacement = 0.0f;
+    for(const math::vec2& corner : {math::vec2(0.0f), math::vec2(size.x, 0.0f), math::vec2(0.0f, size.y), size})
+    {
+        displacement = math::max(displacement, math::length(apply_homography(inverse, corner) - corner));
+    }
+    if(displacement > bound)
+    {
+        const float keep = bound / displacement;
+        warp = keep * warp + (1.0f - keep) * math::mat3(1.0f);
+        warp /= (warp * math::vec3(center, 1.0f)).z;
+    }
+    lattice_warp_ = warp;
+}
+
 void gi_resolve_pass::run_rough_specular(gfx::render_view& rview,
                                          const run_params& params,
                                          const rough_specular_inputs& inputs)
@@ -1263,6 +1417,8 @@ void gi_resolve_pass::run_rough_specular(gfx::render_view& rview,
     gfx::set_uniform(rough_specular_program_.u_gi_probe_params, inputs.probe_params.data());
     gfx::set_uniform(rough_specular_program_.u_gi_probe_screen, inputs.probe_screen.data());
     gfx::set_uniform(rough_specular_program_.u_gi_probe_temporal, inputs.probe_temporal.data());
+    gfx::set_uniform(rough_specular_program_.u_gi_probe_lattice, inputs.lattice.origin.data());
+    gfx::set_uniform(rough_specular_program_.u_gi_probe_lattice_warp, inputs.lattice.warp.data(), 9);
     // The TAA-unjittered previous pair, the gather temporal's convention: a still camera must
     // reproject onto itself.
     const auto prev_view_proj = params.cam->get_prev_view_projection_unjittered();
