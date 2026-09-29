@@ -118,10 +118,7 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "bright light in the previous frame are traced individually, dim "
                             "directions in groups of four with one wider ray. Cheaper, with "
                             "slightly more noise in dim directions. Off traces every direction "
-                            "individually.\n"
-                            "Applies from 4096 probes up (for example a 1080p view at the "
-                            "default spacing); smaller probe counts are latency-bound and always "
-                            "use the full trace."},
+                            "individually."},
         })
         .data<&settings::reprojected_firefly_reference>("reprojected_firefly_reference"_hs)
         .custom<entt::attributes>(entt::attributes{

@@ -20,13 +20,6 @@ namespace
 /// Mirror of GI_PROBE_DIR_EDGE / GI_PROBE_STRIDE in gi/gi_probe_common.sh.
 constexpr uint32_t probe_dir_edge = 8;
 constexpr uint32_t probe_vec4_stride = 12;
-/// LATENCY GATE for the adaptive-ray trace: packing four probes per group cuts rays about
-/// in half but also cuts GROUP COUNT four-fold and lengthens each lane's serial chain (the
-/// round-robin ray pull). On a small lattice the dispatch is latency-bound, not ray-bound,
-/// and the packed form is SLOWER there, while the full form's many short, half-culled waves
-/// hide their own latency. Adaptive therefore engages only from this probe count, where the
-/// lattice is large enough to be occupancy-bound.
-constexpr uint32_t adaptive_rays_min_probes = 0;
 /// Mirror of GI_PROBE_LAYERS: a single layer, the gather anchors one probe per tile. Must
 /// match GI_PROBE_LAYERS in gi_probe_common.sh.
 constexpr uint32_t probe_layers = 1;
@@ -616,7 +609,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 gfx::render_pass pass("GI/Probe Trace");
                 pass.set_view_proj(params.cam->get_view(), gather_projection);
                 gpu_program* trace_cs = trace_program_.select(
-                    s.adaptive_rays && probe_count >= adaptive_rays_min_probes);
+                    s.adaptive_rays);
                 if(trace_cs == nullptr || !trace_cs->is_valid())
                 {
                     ensure_trace_target();
