@@ -32,13 +32,15 @@ public static class Random
     }
 
     /// <summary>
-    /// Seeds the generator using the current system time (ticks + process ID).
+    /// Seeds the generator using the current system time mixed with OS-provided entropy.
     /// </summary>
     public static void SeedWithTime()
     {
-        ulong timePart = (ulong)DateTime.UtcNow.Ticks;
-        ulong pidPart  = (ulong)System.Diagnostics.Process.GetCurrentProcess().Id;
-        ulong mixed    = timePart ^ (pidPart << 32);
+        ulong timePart    = (ulong)DateTime.UtcNow.Ticks;
+        // System.Random.Shared is seeded by the OS on every platform, unlike the
+        // process id (System.Diagnostics.Process is unsupported on browser).
+        ulong entropyPart = (ulong)System.Random.Shared.NextInt64();
+        ulong mixed       = timePart ^ entropyPart;
 
         // Mix it a bit more to avoid low-entropy time bits
         mixed ^= (mixed >> 33);
@@ -63,8 +65,8 @@ public static class Random
         ulong[] result = new ulong[4];
         result[0] = splitmix64(seed);
         result[1] = splitmix64(result[0]);
-        result[2] = splitmix64(result[2]);
-        result[3] = splitmix64(result[3]);
+        result[2] = splitmix64(result[1]);
+        result[3] = splitmix64(result[2]);
         return result;
     }
 

@@ -66,10 +66,19 @@ public class Texture : Asset<Texture>
 [StructLayout(LayoutKind.Sequential)]
 public struct MaterialProperties
 {
+    // A bool field makes the struct non-blittable, so every internal call passing
+    // it by value needs a marshalling stub generated at run time. A byte keeps
+    // the one-byte layout of the native bool.
+    private byte validFlag;
+
     /// <summary>
     /// Whether this property block contains valid data.
     /// </summary>
-    public bool valid;
+    public bool valid
+    {
+        get => validFlag != 0;
+        set => validFlag = value ? (byte)1 : (byte)0;
+    }
 
     /// <summary>
     /// Base (albedo) color.
@@ -153,7 +162,7 @@ public class Material : Asset<Material>
 
     internal MaterialProperties GetProperties()
     {
-        MaterialProperties props;
+        MaterialProperties props = default;
         props.baseColor = this.color;
         props.emissiveColor = this.emissiveColor;
         props.tiling = this.tiling;

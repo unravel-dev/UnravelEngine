@@ -104,9 +104,6 @@ namespace Unravel.Core
 		/// <returns><c>true</c> if the specified entity is equal to the current entity; otherwise, <c>false</c>.</returns>
 		public bool Equals(Entity other)
 		{
-			if (ReferenceEquals(this, other))
-				return true;
-
 			return Id == other.Id;
 		}
 
