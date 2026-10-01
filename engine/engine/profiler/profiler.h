@@ -521,8 +521,11 @@ inline void profile_end(uint32_t idx)
     }
 
     auto& buf = data->write_buffer();
-    buf.events[idx].end_ns = get_time_ns();
+    // The reverse of profile_begin(): the CPU interval lies inside the wall interval, so the busy
+    // time can never come out longer than the wall time. Read the other way round, the CPU clock
+    // (a system call) could sample after the wall clock and add up to a microsecond.
     buf.events[idx].cpu_end_ns = platform::get_thread_cpu_time_ns();
+    buf.events[idx].end_ns = get_time_ns();
     buf.depth--;
 }
 

@@ -26,12 +26,15 @@ private:
     void draw_menubar_child(rtti::context& ctx);
     void draw_play_toolbar(rtti::context& ctx);
 
-    void draw_project_badge(rtti::context& ctx);
-    // The play toolbar, a panel_toolbar strip: deploy on the left, the play controls in the
-    // middle, the simulation and frame pacing on the right.
+    /// Project and scene, centered on the menu bar. Call between BeginMenuBar and EndMenuBar.
+    void draw_title(rtti::context& ctx);
+    /// A line along the bottom edge of the header in the color of the play state.
+    void draw_play_state_line(rtti::context& ctx);
+    // The play toolbar, a panel_toolbar strip: deploy and the play options on the left, the
+    // play controls in the middle, the simulation and frame pacing on the right.
     void draw_deploy_button(rtti::context& ctx);
-    void draw_transport_controls(rtti::context& ctx);
     void draw_play_options(rtti::context& ctx);
+    void draw_transport_controls(rtti::context& ctx);
     void draw_time_scale(rtti::context& ctx);
     void draw_frame_pacing(rtti::context& ctx);
 

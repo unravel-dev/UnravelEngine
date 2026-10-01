@@ -18,7 +18,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace unravel
@@ -220,17 +222,64 @@ auto dim_color(ImU32 col) -> ImU32
     return IM_COL32(r, g, b, 140);
 }
 
-auto format_time(float ms) -> std::string
+constexpr int64_t nanoseconds_per_microsecond = 1'000;
+constexpr int64_t nanoseconds_per_millisecond = 1'000'000;
+/// The wall clock ticks at 10 MHz: a split time is shown no finer than that.
+constexpr int64_t time_split_step_ns = 100;
+constexpr int64_t permille_whole = 1'000;
+
+/// A wall time split into busy and idle, as tooltip text. Formatted one by one, each picked its
+/// own unit and rounding: 1.1037 ms of wall showed as 1.10 ms next to 1.10 ms busy and 3.7 us
+/// idle. Here all three share the unit the wall time picks, wall and busy are rounded to its step
+/// first, and idle is what the rounded busy time leaves of the rounded wall time.
+struct time_split
 {
-    if(ms < 0.001f)
+    std::string wall;
+    std::string busy;
+    std::string idle;
+    /// Tenths of a percent, so that the two shares add up to exactly 100.0%.
+    int64_t busy_permille{};
+    int64_t idle_permille{};
+    bool has_idle{};
+};
+
+auto make_time_split(int64_t wall_ns, int64_t busy_ns) -> time_split
+{
+    struct time_unit
     {
-        return fmt::format("{:.0f} ns", ms * 1'000'000.0f);
-    }
-    if(ms < 1.0f)
+        const char* name{};
+        int64_t divisor{};
+        int64_t step{};
+        int decimals{};
+    };
+    const time_unit unit = wall_ns < nanoseconds_per_microsecond   ? time_unit{"ns", 1, 1, 0}
+                           : wall_ns < nanoseconds_per_millisecond ? time_unit{"us", nanoseconds_per_microsecond, time_split_step_ns, 1}
+                                                                   : time_unit{"ms", nanoseconds_per_millisecond, time_split_step_ns, 4};
+    const auto to_steps = [&unit](int64_t ns) -> int64_t
     {
-        return fmt::format("{:.1f} us", ms * 1'000.0f);
-    }
-    return fmt::format("{:.2f} ms", ms);
+        return (std::max<int64_t>(0, ns) + unit.step / 2) / unit.step;
+    };
+    const auto format_steps = [&unit](int64_t steps) -> std::string
+    {
+        const double value = static_cast<double>(steps * unit.step) / static_cast<double>(unit.divisor);
+        return fmt::format("{:.{}f} {}", value, unit.decimals, unit.name);
+    };
+    const int64_t wall_steps = to_steps(wall_ns);
+    const int64_t busy_steps = to_steps(busy_ns);
+    const int64_t idle_steps = std::max<int64_t>(0, wall_steps - busy_steps);
+    time_split split{};
+    split.wall = format_steps(wall_steps);
+    split.busy = format_steps(busy_steps);
+    split.idle = format_steps(idle_steps);
+    split.busy_permille = wall_steps > 0 ? (busy_steps * permille_whole + wall_steps / 2) / wall_steps : permille_whole;
+    split.idle_permille = std::max<int64_t>(0, permille_whole - split.busy_permille);
+    split.has_idle = idle_steps > 0;
+    return split;
+}
+
+auto to_percent(int64_t permille) -> float
+{
+    return static_cast<float>(permille) / 10.0f;
 }
 
 using lane_context = profiler_timeline_panel::lane_context;
@@ -830,19 +879,16 @@ void profiler_timeline_panel::timeline_render_event_block(const lane_context& lc
     const ImVec2 mouse = ImGui::GetMousePos();
     if(mouse.x >= x0 && mouse.x <= x1 && mouse.y >= y0 && mouse.y <= y1)
     {
-        const float wall_ms = static_cast<float>(ev.end_ns - ev.start_ns) / 1'000'000.0f;
-        const float cpu_ms = static_cast<float>(ev.cpu_end_ns - ev.cpu_start_ns) / 1'000'000.0f;
-        const float wait_ms = std::max(0.0f, wall_ms - cpu_ms);
+        const time_split split = make_time_split(ev.end_ns - ev.start_ns, ev.cpu_end_ns - ev.cpu_start_ns);
 
         ImGui::SetNextWindowViewportToCurrent();
         ImGui::BeginTooltip();
         ImGui::Text("%s", ev.name());
-        ImGui::Text("Wall:   %s", format_time(wall_ms).c_str());
-        ImGui::Text("Busy:   %s (%.0f%%)", format_time(cpu_ms).c_str(), cpu_ratio * 100.0f);
-        if(wait_ms > 0.0001f)
+        ImGui::Text("Wall:   %s", split.wall.c_str());
+        ImGui::Text("Busy:   %s (%.1f%%)", split.busy.c_str(), to_percent(split.busy_permille));
+        if(split.has_idle)
         {
-            ImGui::Text("Idle:   %s (%.0f%%)", format_time(wait_ms).c_str(),
-                        (1.0f - cpu_ratio) * 100.0f);
+            ImGui::Text("Idle:   %s (%.1f%%)", split.idle.c_str(), to_percent(split.idle_permille));
         }
         ImGui::Text("Depth:  %d", ev.depth);
         ImGui::Text("Thread: %s", thread_name.c_str());
@@ -1377,18 +1423,20 @@ void profiler_timeline_panel::handle_histogram_input(performance_profiler* profi
             if(hsnap && hsnap->frame_wall_ms > 0.0f)
             {
                 const float hms = hsnap->frame_wall_ms;
-                const float busy_ms = hsnap->frame_busy_ms;
-                const float wait_ms = std::max(0.0f, hms - busy_ms);
-                const float busy_pct = (hms > 0.001f) ? (busy_ms / hms) * 100.0f : 0.0f;
+                const auto to_ns = [](float ms) -> int64_t
+                {
+                    return std::llround(static_cast<double>(ms) * static_cast<double>(nanoseconds_per_millisecond));
+                };
+                const time_split split = make_time_split(to_ns(hms), to_ns(hsnap->frame_busy_ms));
 
                 ImGui::SetNextWindowViewportToCurrent();
                 ImGui::BeginTooltip();
                 ImGui::Text("Frame %d / %u", hover_idx + 1, frame_count);
-                ImGui::Text("Wall:       %.2f ms (%.0f FPS)", hms, hms > 0.001f ? 1000.0f / hms : 0.0f);
-                ImGui::Text("Busy:  %.2f ms (%.0f%%)", busy_ms, busy_pct);
-                if(wait_ms > 0.001f)
+                ImGui::Text("Wall:  %s (%.0f FPS)", split.wall.c_str(), hms > 0.001f ? 1000.0f / hms : 0.0f);
+                ImGui::Text("Busy:  %s (%.1f%%)", split.busy.c_str(), to_percent(split.busy_permille));
+                if(split.has_idle)
                 {
-                    ImGui::Text("Wait:  %.2f ms (%.0f%%)", wait_ms, 100.0f - busy_pct);
+                    ImGui::Text("Wait:  %s (%.1f%%)", split.idle.c_str(), to_percent(split.idle_permille));
                 }
                 const auto heap_pretty = format_bytes(
                     static_cast<std::uint64_t>(std::max<int64_t>(0, hsnap->cpu_heap_used_bytes)), 0);

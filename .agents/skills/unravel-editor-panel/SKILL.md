@@ -92,7 +92,8 @@ One module gives every panel toolbar the same look: `panel_toolbar`
   end; `begin_field(width)` / `end_field()` wrap one framed ImGui widget (search input,
   slider); `calc_flexible_width(min, max)` lets a search field give way in a narrow dock;
   `begin_group()` / `end_group()` make several items one ImGui item (one tooltip, one
-  `BeginDisabled`)
+  `BeginDisabled`); `begin_segment()` / `end_segment()` do the same on a rounded fill of their
+  own - a segmented control (the header's play / pause / step)
 
 Dropdowns (`begin_dropdown`) open on a press and on nothing else - never on hover. An open popup
 shields what lies under it. A press on ANOTHER dropdown while one is open switches in one click:
@@ -129,6 +130,12 @@ returns no `MenuBar`).
   `visualization_menu::draw_toolbar_dropdown`, `viewport_stats_overlay::draw_toolbar_toggle`
 - A popup whose content fills its height (entity inspector) needs an explicit size, not
   auto-resize; a `SetNextWindowSize*` right before `begin_dropdown` reaches the popup
+- Overlay cards: `begin_overlay(id, top_right, width, max_height)` auto-sizes its height (a frame
+  late); `begin_overlay(id, rect)` takes an exact rectangle, for a card anchored to a bottom
+  corner. The selected camera's preview (`scene_panel/camera_preview_overlay`, drawn from
+  `scene_panel::draw_selected_camera`) is one: title row with align-with-view (Shift+F) and
+  collapse, output fitted to its aspect, resolution / projection badge; hidden when the view is
+  too small for it
 
 ### Docked strips (content, console)
 
@@ -138,8 +145,12 @@ returns no `MenuBar`).
 - `console_log_panel.cpp` -> `draw_toolbar` (Clear + auto-clear options, search, level filters
   with counts), `draw_log_list` (single-line rows through `draw_log_line`, which the status bar
   reuses for the last log), `draw_details`
-- `header_panel.cpp` -> `draw_play_toolbar`: flat strip - deploy | play / pause / step (one
-  group, disabled by compile errors), script mode, splash | time scale, VSync, max FPS.
+- `header_panel.cpp` -> `draw_play_toolbar`: flat strip - Deploy split button, play options
+  dropdown (script mode + splash, locked while playing) | play / pause / step (one segment,
+  disabled by compile errors) | time scale dropdown, frame pacing dropdown (VSync + max FPS).
+  The dropdown faces show the current value (`width_text` keeps them steady while a slider in
+  the popup drags). `draw_title` centers project / scene on the menu bar and yields to the
+  menus; `draw_play_state_line` tints the bottom edge while playing / paused.
   `header_panel::calc_height()` tells `panel.cpp` how tall the header is
 - `inspector_panel.cpp` -> `draw_toolbar` (lock, debug view); component headers come from
   `draw_component_header` in `inspector_entity.cpp` (a `CollapsingHeader("##...")` for the

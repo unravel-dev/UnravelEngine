@@ -8,6 +8,7 @@
 #if UNRAVEL_PLATFORM_WINDOWS && (UNRAVEL_COMPILER_MSVC || UNRAVEL_COMPILER_CLANG)
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#include <intrin.h>
 
 #ifdef min
 #undef min
@@ -59,24 +60,50 @@ inline void set_thread_name(const char* threadName)
     set_thread_name(threadId, threadName);
 }
 
-inline auto get_boot_max_mhz() -> DWORD
+#if UNRAVEL_CPU_X86
+/// The time stamp counter and the performance counter, read as close together as two calls allow.
+struct clock_sample
 {
-    using get_max_proc_freq_fn = DWORD(WINAPI*)(DWORD, BYTE);
-    static const get_max_proc_freq_fn fn = []() -> get_max_proc_freq_fn
-    {
-        return reinterpret_cast<get_max_proc_freq_fn>(
-            GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "GetMaximumProcessorFrequency"));
-    }();
-    if(fn != nullptr)
-    {
-        const DWORD m = fn(0, 0);
-        if(m != 0)
-        {
-            return m;
-        }
-    }
-    return 3000;
+    LONGLONG performance_ticks{};
+    ULONG64 tsc_ticks{};
+};
+
+inline auto read_clock_sample() -> clock_sample
+{
+    LARGE_INTEGER performance_ticks{};
+    const ULONG64 tsc_before = __rdtsc();
+    QueryPerformanceCounter(&performance_ticks);
+    const ULONG64 tsc_after = __rdtsc();
+    return {performance_ticks.QuadPart, tsc_before + (tsc_after - tsc_before) / 2};
 }
+
+/// Nanoseconds per tick of the time stamp counter, measured once against the performance counter.
+/// QueryThreadCycleTime() counts in these ticks, and the invariant TSC of x64 CPUs ticks at one
+/// fixed rate - the nominal clock, neither the boost clock nor an advertised maximum. Any other
+/// rate scales every thread CPU time, until a busy time comes out longer than its wall time.
+inline auto get_tsc_tick_ns() -> double
+{
+    static const double tick_ns = []() -> double
+    {
+        // A hundredth of the performance counter frequency: a 10 ms measurement.
+        constexpr LONGLONG CALIBRATION_DIVISOR = 100;
+        constexpr double NANOSECONDS_PER_SECOND = 1e9;
+        LARGE_INTEGER frequency{};
+        QueryPerformanceFrequency(&frequency);
+        const LONGLONG calibration_ticks = frequency.QuadPart / CALIBRATION_DIVISOR;
+        const clock_sample start = read_clock_sample();
+        clock_sample end = start;
+        while(end.performance_ticks - start.performance_ticks < calibration_ticks)
+        {
+            end = read_clock_sample();
+        }
+        const double elapsed_ns = static_cast<double>(end.performance_ticks - start.performance_ticks) *
+                                  NANOSECONDS_PER_SECOND / static_cast<double>(frequency.QuadPart);
+        return elapsed_ns / static_cast<double>(end.tsc_ticks - start.tsc_ticks);
+    }();
+    return tick_ns;
+}
+#endif
 
 inline auto get_thread_cpu_time_ns() -> int64_t
 {
@@ -84,20 +111,15 @@ inline auto get_thread_cpu_time_ns() -> int64_t
     // system timer resolution (~15.6 ms by default). Scoped measurements shorter than
     // that almost always see identical user+kernel FILETIMEs -> delta 0 -> bogus 0% CPU.
     //
-    // QueryThreadCycleTime() counts CPU cycles attributed to the thread while it runs;
-    // deltas are fine-grained. We convert cumulative cycles to approximate nanoseconds
-    // using the CPU's advertised max frequency (GetMaximumProcessorFrequency when present).
+    // QueryThreadCycleTime() counts the TSC ticks attributed to the thread while it runs;
+    // deltas are fine-grained, and get_tsc_tick_ns() turns them into nanoseconds.
+#if UNRAVEL_CPU_X86
     ULONG64 cycles = 0;
     if(QueryThreadCycleTime(GetCurrentThread(), &cycles))
     {
-        static const double ns_per_cycle = []() -> double
-        {
-            const DWORD mhz = get_boot_max_mhz();
-            const double hz = static_cast<double>(mhz) * 1e6;
-            return 1e9 / hz;
-        }();
-        return static_cast<int64_t>(static_cast<double>(cycles) * ns_per_cycle);
+        return static_cast<int64_t>(static_cast<double>(cycles) * get_tsc_tick_ns());
     }
+#endif
 
     FILETIME creation, exit, kernel, user;
     if(GetThreadTimes(GetCurrentThread(), &creation, &exit, &kernel, &user))

@@ -4,6 +4,7 @@
 #include <math/math.h>
 
 #include "camera_controller.h"
+#include "camera_preview_overlay.h"
 #include "gizmos/gizmos_renderer.h"
 #include "../viewport_stats_overlay.h"
 #include "../panel_toolbar.h"
@@ -62,7 +63,8 @@ private:
     void draw_scene(rtti::context& ctx, delta_t dt);
 
     void draw_ui(rtti::context& ctx) override;
-    void draw_selected_camera(rtti::context& ctx, entt::handle editor_camera, const ImVec2& size);
+    /// Preview card of the selected camera at the bottom right corner of view_rect.
+    void draw_selected_camera(rtti::context& ctx, entt::handle editor_camera, const ImRect& view_rect);
     auto begin_panel(const char* name, ImGuiWindowFlags flags) -> bool override;
 
     // Floating toolbar (panel_toolbar): the tools bar on the left, the view bar on the right,
@@ -143,6 +145,7 @@ private:
 
     viewport_stats_overlay::state stats_overlay_state_{};
     visualization_menu::state visualization_menu_state_{};
+    camera_preview_overlay::state camera_preview_state_{};
 
     /// Compact drops the text labels; stacked also moves the view bar to a second row.
     panel_toolbar::layout_state toolbar_layout_{};

@@ -16,6 +16,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/defaults/defaults.h>
+#include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/ecs/ecs.h>
 #include <engine/rendering/ecs/components/assao_component.h>
@@ -2125,7 +2126,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
     manipulation_gizmos(gizmo_at_center_, was_using_gizmo_, get_center(), camera_entity, em, overlay_top);
     handle_camera_movement(camera_entity);
     draw_camera_fly_speed_hint(size, pos);
-    draw_selected_camera(ctx, camera_entity, size);
+    draw_selected_camera(ctx, camera_entity, ImRect(pos, pos + size));
 
     // {
 
@@ -2265,47 +2266,58 @@ void scene_panel::draw_ui(rtti::context& ctx)
     }
 }
 
-void scene_panel::draw_selected_camera(rtti::context& ctx, entt::handle editor_camera, const ImVec2& size)
+namespace
+{
+auto make_camera_preview_projection(const camera& preview_camera) -> std::string
+{
+    if(preview_camera.get_projection_mode() == projection_mode::orthographic)
+    {
+        return fmt::format("Ortho {:.1f}", preview_camera.get_ortho_size());
+    }
+    return fmt::format("FOV {:.0f}", preview_camera.get_fov());
+}
+
+auto make_camera_preview_name(entt::handle entity) -> std::string
+{
+    const auto* tag = entity.try_get<tag_component>();
+    if(tag == nullptr || tag->name.empty())
+    {
+        return "Camera";
+    }
+    return tag->name;
+}
+} // namespace
+
+void scene_panel::draw_selected_camera(rtti::context& ctx, entt::handle editor_camera, const ImRect& view_rect)
 {
     auto& em = ctx.get_cached<editing_manager>();
-
-    if(auto sel = em.try_get_active_selection_as<entt::handle>())
+    const auto* selection = em.try_get_active_selection_as<entt::handle>();
+    if(selection == nullptr || !selection->valid() || !selection->all_of<camera_component>())
     {
-        if(sel && sel->valid() && sel->all_of<camera_component>())
-        {
-            const auto& selected_camera = sel->get<camera_component>();
-
-            auto& game_panel = parent_->get_game_panel();
-            game_panel.set_visible_force(true);
-
-            const auto& camera = selected_camera.get_camera();
-            const auto& render_view = selected_camera.get_render_view();
-            const auto& viewport_size = camera.get_viewport_size();
-            const auto& obuffer = render_view.fbo_safe_get("OBUFFER");
-
-            if(!obuffer)
-            {
-                return;
-            }
-            float factor = std::min(size.x / float(viewport_size.width), size.y / float(viewport_size.height)) / 4.0f;
-            ImVec2 bounds(viewport_size.width * factor, viewport_size.height * factor);
-            // Calculate the position to place the image
-            ImVec2 image_pos =
-                ImVec2(ImGui::GetWindowSize().x - 20 - bounds.x, ImGui::GetWindowSize().y - 20 - bounds.y);
-
-            // Move the cursor to the calculated position
-            ImGui::SetCursorPos(image_pos);
-
-            const auto& tex = obuffer->get_texture(0);
-            ImGui::Image(ImGui::ToId(tex), bounds);
-
-            if(ImGui::IsKeyChordPressed(shortcuts::snap_scene_camera_to_selected_camera))
-            {
-                auto& transform = editor_camera.get<transform_component>();
-                auto& transform_selected = sel->get<transform_component>();
-                transform_selected.set_transform_global(transform.get_transform_global());
-            }
-        }
+        return;
+    }
+    const entt::handle selected = *selection;
+    // The camera renders its output only while the game view is shown.
+    parent_->get_game_panel().set_visible_force(true);
+    const auto& selected_camera = selected.get<camera_component>();
+    const auto& camera = selected_camera.get_camera();
+    const auto& viewport_size = camera.get_viewport_size();
+    const auto& obuffer = selected_camera.get_render_view().fbo_safe_get("OBUFFER");
+    const std::string name = make_camera_preview_name(selected);
+    const std::string projection = make_camera_preview_projection(camera);
+    camera_preview_overlay::preview_desc desc{};
+    desc.name = name.c_str();
+    if(obuffer && obuffer->get_attachment_count() > 0)
+    {
+        desc.texture = ImGui::ToId(obuffer->get_texture(0));
+    }
+    desc.resolution = ImVec2(static_cast<float>(viewport_size.width), static_cast<float>(viewport_size.height));
+    desc.projection = projection.c_str();
+    const auto request = camera_preview_overlay::draw("##camera_preview", desc, view_rect, camera_preview_state_);
+    if(request.is_align_pressed || ImGui::IsKeyChordPressed(shortcuts::snap_scene_camera_to_selected_camera))
+    {
+        const auto& view_transform = editor_camera.get<transform_component>();
+        selected.get<transform_component>().set_transform_global(view_transform.get_transform_global());
     }
 }
 

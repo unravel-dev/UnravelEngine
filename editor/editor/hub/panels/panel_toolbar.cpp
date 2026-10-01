@@ -51,6 +51,8 @@ constexpr float STRIP_BG_DARKEN = 0.22f;
 constexpr ImU32 FIELD_BG_COLOR = IM_COL32(255, 255, 255, 14);
 constexpr ImU32 FIELD_BG_HOVERED_COLOR = IM_COL32(255, 255, 255, 24);
 constexpr ImU32 FIELD_BG_ACTIVE_COLOR = IM_COL32(255, 255, 255, 30);
+constexpr ImU32 SEGMENT_BG_COLOR = IM_COL32(255, 255, 255, 12);
+constexpr ImU32 SEGMENT_BORDER_COLOR = IM_COL32(255, 255, 255, 20);
 constexpr float CARET_ALPHA = 0.6f;
 // Text on the accent flips to black once the accent gets this bright.
 constexpr float ACCENT_LIGHT_LUMINANCE = 0.62f;
@@ -71,6 +73,10 @@ constexpr int STRIP_STYLE_COLORS = 2;
 constexpr int FIELD_STYLE_VARS = 2;
 constexpr int FIELD_STYLE_COLORS = 3;
 constexpr int POPUP_STYLE_VARS = 3;
+// The fill of a segment is only known once its items are laid out, yet goes under them.
+constexpr int SEGMENT_FILL_CHANNEL = 0;
+constexpr int SEGMENT_ITEMS_CHANNEL = 1;
+constexpr int SEGMENT_CHANNEL_COUNT = 2;
 
 struct bar_state
 {
@@ -117,6 +123,7 @@ struct item_desc
 
 bar_state g_bar{};
 dropdown_state g_dropdown{};
+ImDrawListSplitter g_segment_splitter{};
 
 auto to_pixels(float font_units) -> float
 {
@@ -429,6 +436,23 @@ void set_next_popup_placement(const ImRect& item_bb)
     ImGui::SetNextWindowPos(ImVec2(item_bb.Min.x, y), ImGuiCond_Always, ImVec2(0.0f, 0.0f));
 }
 
+void push_overlay_style()
+{
+    const float padding = to_pixels(OVERLAY_PADDING);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, to_pixels(BAR_ROUNDING));
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padding, padding));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, get_bar_bg_color());
+    ImGui::PushStyleColor(ImGuiCol_Border, BAR_BORDER_COLOR);
+}
+
+/// Right after the BeginChild of the card: its content and its tooltips keep the theme.
+void pop_overlay_style()
+{
+    ImGui::PopStyleColor(OVERLAY_STYLE_COLORS);
+    ImGui::PopStyleVar(OVERLAY_STYLE_VARS);
+}
+
 void push_popup_style()
 {
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(to_pixels(POPUP_PADDING_X), to_pixels(POPUP_PADDING_Y)));
@@ -560,22 +584,32 @@ void draw_readout(const bar_placement& placement, const char* text, const char* 
 
 auto begin_overlay(const char* id, const ImVec2& top_right, float width, float max_height) -> bool
 {
-    const float padding = to_pixels(OVERLAY_PADDING);
     ImGui::SetCursorScreenPos(ImVec2(top_right.x - width, top_right.y));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, to_pixels(BAR_ROUNDING));
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padding, padding));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, get_bar_bg_color());
-    ImGui::PushStyleColor(ImGuiCol_Border, BAR_BORDER_COLOR);
+    push_overlay_style();
     ImGui::SetNextWindowSizeConstraints(ImVec2(width, 0.0f), ImVec2(width, max_height));
     const ImGuiChildFlags child_flags = ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_AutoResizeY |
                                         ImGuiChildFlags_AlwaysAutoResize | ImGuiChildFlags_Borders;
     const ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav;
     const bool is_open = ImGui::BeginChild(id, ImVec2(width, 0.0f), child_flags, window_flags);
-    // Only the card itself: its content and its tooltips keep the theme.
-    ImGui::PopStyleColor(OVERLAY_STYLE_COLORS);
-    ImGui::PopStyleVar(OVERLAY_STYLE_VARS);
+    pop_overlay_style();
     return is_open;
+}
+
+auto begin_overlay(const char* id, const ImRect& rect) -> bool
+{
+    ImGui::SetCursorScreenPos(rect.Min);
+    push_overlay_style();
+    const ImGuiChildFlags child_flags = ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_Borders;
+    const ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav;
+    const bool is_open = ImGui::BeginChild(id, rect.GetSize(), child_flags, window_flags);
+    pop_overlay_style();
+    return is_open;
+}
+
+auto get_overlay_padding() -> float
+{
+    return to_pixels(OVERLAY_PADDING);
 }
 
 void end_overlay()
@@ -654,6 +688,28 @@ void end_group()
 {
     ImGui::EndGroup();
     g_bar.has_items = true;
+}
+
+void begin_segment()
+{
+    begin_group();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    g_segment_splitter.Split(draw_list, SEGMENT_CHANNEL_COUNT);
+    g_segment_splitter.SetCurrentChannel(draw_list, SEGMENT_ITEMS_CHANNEL);
+}
+
+void end_segment()
+{
+    end_group();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    g_segment_splitter.SetCurrentChannel(draw_list, SEGMENT_FILL_CHANNEL);
+    // Flush with the items: the hover fill of the outer buttons follows its rounded ends.
+    const ImVec2 fill_min = ImGui::GetItemRectMin();
+    const ImVec2 fill_max = ImGui::GetItemRectMax();
+    const float rounding = to_pixels(BUTTON_ROUNDING);
+    draw_list->AddRectFilled(fill_min, fill_max, SEGMENT_BG_COLOR, rounding);
+    draw_list->AddRect(fill_min, fill_max, SEGMENT_BORDER_COLOR, rounding);
+    g_segment_splitter.Merge(draw_list);
 }
 
 void begin_field(float width)
@@ -796,10 +852,12 @@ auto filter_toggle(const char* id,
     return is_pressed;
 }
 
-auto begin_dropdown(const char* id, const char* text, const char* tooltip, ImU32 text_color) -> bool
+auto begin_dropdown(const char* id, const char* text, const char* tooltip, ImU32 text_color, const char* width_text)
+    -> bool
 {
     item_desc desc{};
     desc.text = text;
+    desc.width_text = width_text;
     desc.has_caret = true;
     desc.text_color = text_color;
     // A menu opens on the press, not on the release.

@@ -130,6 +130,16 @@ void end_group();
 
 //-----------------------------------------------------------------------------
 /// <summary>
+/// Make the items until end_segment() one segmented control: a group, as begin_group() makes,
+/// that sits on a rounded fill of its own. For a few buttons that act on the same thing (play,
+/// pause, step).
+/// </summary>
+//-----------------------------------------------------------------------------
+void begin_segment();
+void end_segment();
+
+//-----------------------------------------------------------------------------
+/// <summary>
 /// Make room on the line for one framed ImGui widget (input, slider) and give it the height and
 /// the rounding of the buttons. Submit the widget, then call end_field().
 /// </summary>
@@ -166,7 +176,19 @@ void draw_readout(const bar_placement& placement, const char* text, const char* 
 /// </summary>
 //-----------------------------------------------------------------------------
 auto begin_overlay(const char* id, const ImVec2& top_right, float width, float max_height) -> bool;
+
+//-----------------------------------------------------------------------------
+/// <summary>
+/// Begin an overlay card of exactly the given screen rectangle, for a host that lays the card out
+/// itself: a card anchored to a bottom corner has to know its height before it begins, and an
+/// auto-sized one learns it a frame late. Always pair with end_overlay(), whatever is returned.
+/// </summary>
+//-----------------------------------------------------------------------------
+auto begin_overlay(const char* id, const ImRect& rect) -> bool;
 void end_overlay();
+
+/// Space between the edge of an overlay card and its content.
+auto get_overlay_padding() -> float;
 
 /// Thin vertical divider between groups of items.
 void separator();
@@ -229,8 +251,14 @@ auto filter_toggle(const char* id,
 /// right before the call applies to the popup.
 /// </summary>
 /// <param name="text_color">Optional tint of the text, 0 for the default</param>
+/// <param name="width_text">Optional text the width is measured from instead, for a dropdown that
+/// shows a value its popup changes</param>
 //-----------------------------------------------------------------------------
-auto begin_dropdown(const char* id, const char* text, const char* tooltip, ImU32 text_color = 0) -> bool;
+auto begin_dropdown(const char* id,
+                    const char* text,
+                    const char* tooltip,
+                    ImU32 text_color = 0,
+                    const char* width_text = nullptr) -> bool;
 void end_dropdown();
 
 } // namespace unravel::panel_toolbar

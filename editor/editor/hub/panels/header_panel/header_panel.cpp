@@ -21,7 +21,9 @@
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/threading/threader.h>
 #include <array>
+#include <cmath>
 #include <exception>
+#include <string>
 #include <simulation/simulation.h>
 #include <version/version.h>
 
@@ -40,9 +42,22 @@ namespace
 constexpr ImU32 HEADER_PLAYING_COLOR = IM_COL32(46, 125, 50, 255);
 constexpr ImU32 HEADER_PAUSED_COLOR = IM_COL32(178, 106, 20, 255);
 constexpr ImU32 HEADER_DEBUGGER_ATTACHED_COLOR = IM_COL32(90, 220, 90, 255);
-constexpr float HEADER_SLIDER_WIDTH = 100.0f;
+// A simulation setting off its default is easy to forget: its value stands out.
+constexpr ImU32 HEADER_CHANGED_VALUE_COLOR = IM_COL32(255, 183, 77, 255);
+constexpr float HEADER_TITLE_SCENE_ALPHA = 0.5f;
+// Sizes are in units of the font size, so the header follows the UI scale of the editor.
+constexpr float HEADER_TITLE_MARGIN = 2.0f;
+constexpr float HEADER_PLAY_STATE_LINE_HEIGHT = 0.12f;
+constexpr float HEADER_POPUP_SLIDER_WIDTH = 11.0f;
+constexpr const char* HEADER_TITLE_SEPARATOR = "  /  ";
 constexpr float HEADER_TIME_SCALE_MAX = 3.0f;
+constexpr float HEADER_TIME_SCALE_DEFAULT = 1.0f;
+// Half a step of the two decimals the time scale is shown with.
+constexpr float HEADER_TIME_SCALE_TOLERANCE = 0.005f;
+constexpr std::array<float, 6> HEADER_TIME_SCALE_PRESETS = {0.1f, 0.25f, 0.5f, 1.0f, 2.0f, 3.0f};
 constexpr int HEADER_MAX_FPS_LIMIT = 240;
+// 0 is uncapped.
+constexpr std::array<int, 6> HEADER_MAX_FPS_PRESETS = {0, 30, 60, 120, 144, 240};
 
 /// Switching the mode recompiles and reloads every script, so only a real change goes through.
 void set_script_debug_mode(bool is_debug_mode)
@@ -55,19 +70,9 @@ void set_script_debug_mode(bool is_debug_mode)
     script_system::set_needs_recompile("app", true);
 }
 
-void draw_script_mode_dropdown()
+void draw_script_mode_items()
 {
-    const bool is_debugger_attached = script_system::is_debugger_attached();
     const bool is_debug_mode = script_system::get_script_debug_mode();
-    const char* text = is_debug_mode ? ICON_MDI_BUG_CHECK " Debug" : ICON_MDI_BUG " Release";
-    const char* state = is_debug_mode ? "Debugger Enabled" : "Debugger Disabled";
-    const char* tooltip = is_debugger_attached ? "Debugger Attached" : state;
-    const ImU32 text_color = is_debugger_attached ? HEADER_DEBUGGER_ATTACHED_COLOR : 0;
-    if(!panel_toolbar::begin_dropdown("##script_mode", text, tooltip, text_color))
-    {
-        return;
-    }
-    ImGui::SeparatorText("Script Mode");
     if(ImGui::MenuItem(ICON_MDI_BUG_CHECK " Debug", nullptr, is_debug_mode))
     {
         set_script_debug_mode(true);
@@ -86,7 +91,109 @@ void draw_script_mode_dropdown()
                             "but improves C# performance.\n"
                             "Switching to Release mode will recompile\n"
                             "and reload all scripts.");
-    panel_toolbar::end_dropdown();
+}
+
+/// The open scene, or the prefab in prefab mode, with a star while it has unsaved changes.
+auto make_scene_title(rtti::context& ctx) -> std::string
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    if(em.is_prefab_mode())
+    {
+        return em.edited_prefab.name();
+    }
+    std::string name = em.get_active_scene(ctx)->source.name();
+    if(name.empty())
+    {
+        name = "Untitled";
+    }
+    if(em.has_unsaved_changes())
+    {
+        name.append("*");
+    }
+    return name;
+}
+
+auto is_time_scale_at(float time_scale, float value) -> bool
+{
+    return std::abs(time_scale - value) < HEADER_TIME_SCALE_TOLERANCE;
+}
+
+void draw_time_scale_popup(simulation& sim, float time_scale)
+{
+    ImGui::SeparatorText("Time Scale");
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * HEADER_POPUP_SLIDER_WIDTH);
+    if(ImGui::KnobSliderScalarT("##time_scale_slider", &time_scale, 0.0f, HEADER_TIME_SCALE_MAX, "%.2fx"))
+    {
+        sim.set_time_scale(time_scale);
+    }
+    for(const float preset : HEADER_TIME_SCALE_PRESETS)
+    {
+        const std::string name = fmt::format("{}x", preset);
+        if(ImGui::MenuItem(name.c_str(), nullptr, is_time_scale_at(time_scale, preset)))
+        {
+            sim.set_time_scale(preset);
+        }
+    }
+}
+
+auto make_max_fps_name(int max_fps) -> std::string
+{
+    return max_fps <= 0 ? std::string("Uncapped") : fmt::format("{} FPS", max_fps);
+}
+
+auto make_widest_max_fps_name() -> std::string
+{
+    const std::string zeros(std::to_string(HEADER_MAX_FPS_LIMIT).size(), '0');
+    return zeros + " FPS";
+}
+
+void set_max_fps(simulation& sim, int max_fps)
+{
+    sim.set_max_fps(static_cast<uint32_t>(max_fps < 0 ? 0 : max_fps));
+}
+
+struct frame_pacing_text
+{
+    std::string text;
+    /// Empty when the text holds no number.
+    std::string width_text;
+};
+
+/// The cap changes while its slider is dragged, so the width is measured from as many zeros as
+/// the highest cap has digits: a changing width would move the whole right aligned group.
+auto make_frame_pacing_text(bool is_vsync_on, int max_fps) -> frame_pacing_text
+{
+    const std::string prefix = is_vsync_on ? ICON_MDI_SPEEDOMETER " VSync" : ICON_MDI_SPEEDOMETER;
+    if(max_fps <= 0)
+    {
+        return {is_vsync_on ? prefix : prefix + " Uncapped", {}};
+    }
+    const std::string cap_prefix = prefix + (is_vsync_on ? ", " : " ");
+    return {cap_prefix + make_max_fps_name(max_fps), cap_prefix + make_widest_max_fps_name()};
+}
+
+void draw_frame_pacing_popup(renderer& rend, simulation& sim, bool is_vsync_on, int max_fps)
+{
+    ImGui::SeparatorText("Presentation");
+    if(ImGui::MenuItem("VSync", nullptr, is_vsync_on))
+    {
+        rend.set_vsync(!is_vsync_on);
+    }
+    ImGui::SetItemTooltipEx("%s", "Wait for the display before presenting a frame");
+    ImGui::SeparatorText("Max FPS");
+    const char* max_fps_format = (max_fps <= 0) ? "Uncapped" : "%d FPS";
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * HEADER_POPUP_SLIDER_WIDTH);
+    if(ImGui::KnobSliderScalarT("##max_fps_slider", &max_fps, 0, HEADER_MAX_FPS_LIMIT, max_fps_format, ImGuiSliderFlags_AlwaysClamp))
+    {
+        set_max_fps(sim, max_fps);
+    }
+    for(const int preset : HEADER_MAX_FPS_PRESETS)
+    {
+        if(ImGui::MenuItem(make_max_fps_name(preset).c_str(), nullptr, preset == max_fps))
+        {
+            set_max_fps(sim, preset);
+        }
+    }
 }
 } // namespace
 
@@ -484,6 +591,7 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
             ImGui::EndMenu();
         }
 
+        draw_title(ctx);
         ImGui::EndMenuBar();
     }
 
@@ -538,51 +646,72 @@ void header_panel::draw_menubar_child(rtti::context& ctx)
     ImGui::EndChild();
 }
 
-void header_panel::draw_project_badge(rtti::context& ctx)
+void header_panel::draw_title(rtti::context& ctx)
 {
-    auto& pm = ctx.get_cached<project_manager>();
+    // Right after the last menu, the cursor marks where the menus end.
+    const float menus_end_x = ImGui::GetCursorScreenPos().x;
+    const std::string& project_name = ctx.get_cached<project_manager>().get_name();
+    const std::string scene_text = HEADER_TITLE_SEPARATOR + make_scene_title(ctx);
+    ImGui::PushFont(ImGui::Font::Bold);
+    const ImVec2 project_size = ImGui::CalcTextSize(project_name.c_str());
+    ImGui::PopFont();
+    const ImVec2 scene_size = ImGui::CalcTextSize(scene_text.c_str());
+    const ImRect bar = ImGui::GetCurrentWindow()->MenuBarRect();
+    const float margin = ImGui::GetFontSize() * HEADER_TITLE_MARGIN;
+    const float title_width = project_size.x + scene_size.x;
+    // Centered on the editor, but never over the menus; a window too narrow for both drops it.
+    const float title_x = ImMax(ImFloor(bar.GetCenter().x - title_width * 0.5f), menus_end_x + margin);
+    if(title_x + title_width > bar.Max.x - margin)
+    {
+        return;
+    }
+    const float title_y = ImFloor(bar.GetCenter().y - project_size.y * 0.5f);
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+    ImGui::PushFont(ImGui::Font::Bold);
+    draw_list->AddText(ImVec2(title_x, title_y), ImGui::GetColorU32(ImGuiCol_Text), project_name.c_str());
+    ImGui::PopFont();
+    draw_list->AddText(ImVec2(title_x + project_size.x, title_y),
+                       ImGui::GetColorU32(ImGuiCol_Text, HEADER_TITLE_SCENE_ALPHA),
+                       scene_text.c_str());
+}
+
+void header_panel::draw_play_state_line(rtti::context& ctx)
+{
     auto& play = ctx.get_cached<play_mode>();
-    const ImVec2 window_pos = ImGui::GetWindowPos();
-    const ImVec2 window_size = ImGui::GetWindowSize();
-    auto logo = fmt::format("{}", pm.get_name());
-    auto logo_size = ImGui::CalcTextSize(logo.c_str());
-    const float badge_h_pad = 30.0f;
-    const float badge_taper = 12.0f;
-    const float badge_width = logo_size.x + badge_h_pad * 2;
-    // The badge hangs from the top edge over the menu bar row.
-    const float badge_height = ImGui::GetFrameHeight();
-    const ImVec2 badge_pos(window_pos.x + window_size.x * 0.5f - badge_width * 0.5f, window_pos.y);
-    std::array<ImVec2, 5> points = {
-        ImVec2(badge_pos.x, badge_pos.y),
-        ImVec2(badge_pos.x + badge_taper, badge_pos.y + badge_height),
-        ImVec2(badge_pos.x + badge_width - badge_taper, badge_pos.y + badge_height),
-        ImVec2(badge_pos.x + badge_width, badge_pos.y),
-        ImVec2(badge_pos.x, badge_pos.y)};
-    ImU32 badge_color = ImGui::GetColorU32(ImGuiCol_MenuBarBg);
-    if(play.is_active())
+    if(!play.is_active())
     {
-        badge_color = ImGui::GetColorU32(ImVec4(0.0f, 0.5f, 0.0f, 0.5f));
+        return;
     }
-    if(play.is_paused())
-    {
-        badge_color = ImGui::GetColorU32(ImVec4(0.6f, 0.3f, 0.0f, 0.5f));
-    }
-    ImGui::GetWindowDrawList()->AddConvexPolyFilled(points.data(), 5, badge_color);
-    const ImVec2 text_pos(badge_pos.x + badge_width * 0.5f - logo_size.x * 0.5f,
-                          badge_pos.y + (badge_height - logo_size.y) * 0.5f);
-    ImGui::GetWindowDrawList()->AddText(text_pos, ImGui::GetColorU32(ImGuiCol_Text), logo.c_str());
+    const ImU32 color = play.is_paused() ? HEADER_PAUSED_COLOR : HEADER_PLAYING_COLOR;
+    const ImVec2 window_min = ImGui::GetWindowPos();
+    const ImVec2 window_max = window_min + ImGui::GetWindowSize();
+    const float line_height = ImMax(1.0f, ImFloor(ImGui::GetFontSize() * HEADER_PLAY_STATE_LINE_HEIGHT));
+    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(window_min.x, window_max.y - line_height), window_max, color);
 }
 
 void header_panel::draw_deploy_button(rtti::context& ctx)
 {
-    const bool is_deploying = parent_->get_deploy_panel().is_deploying();
+    auto& deploy = parent_->get_deploy_panel();
+    const bool is_deploying = deploy.is_deploying();
+    const std::string text = is_deploying ? fmt::format(ICON_MDI_PACKAGE_VARIANT_CLOSED " Deploying {}%",
+                                                        static_cast<int>(deploy.get_progress() * 100.0f))
+                                          : std::string(ICON_MDI_PACKAGE_VARIANT_CLOSED " Deploy");
     ImGui::BeginDisabled(is_deploying);
-    const bool is_pressed =
-        panel_toolbar::button("##deploy",
-                              ICON_MDI_PACKAGE,
-                              "Deploy and Run. For more control visit Deploy/Deploy Project menu.");
+    bool is_deploy_requested = panel_toolbar::button("##deploy", text.c_str(), "Deploy the project and run it");
     ImGui::EndDisabled();
-    if(!is_pressed)
+    if(panel_toolbar::begin_dropdown("##deploy_options", nullptr, "Deploy options"))
+    {
+        if(ImGui::MenuItem("Deploy and Run", nullptr, false, !is_deploying))
+        {
+            is_deploy_requested = true;
+        }
+        if(ImGui::MenuItem(ICON_MDI_COG " Deploy Settings..."))
+        {
+            deploy.show(true);
+        }
+        panel_toolbar::end_dropdown();
+    }
+    if(!is_deploy_requested)
     {
         return;
     }
@@ -590,7 +719,35 @@ void header_panel::draw_deploy_button(rtti::context& ctx)
     auto deploy_settings = pm.get_deploy_settings();
     deploy_settings.deploy_and_run = true;
     deploy_settings.deploy_dependencies = true;
-    parent_->get_deploy_panel().deploy_and_run(ctx, deploy_settings);
+    deploy.deploy_and_run(ctx, deploy_settings);
+}
+
+void header_panel::draw_play_options(rtti::context& ctx)
+{
+    auto& play = ctx.get_cached<play_mode>();
+    const bool is_debugger_attached = script_system::is_debugger_attached();
+    const bool is_debug_mode = script_system::get_script_debug_mode();
+    const char* text = is_debug_mode ? ICON_MDI_BUG_CHECK " Debug" : ICON_MDI_BUG " Release";
+    const char* state = is_debug_mode ? "Debugger Enabled" : "Debugger Disabled";
+    const char* tooltip = is_debugger_attached ? "Debugger Attached" : state;
+    const ImU32 text_color = is_debugger_attached ? HEADER_DEBUGGER_ATTACHED_COLOR : 0;
+    // Both apply to the next play session, so they are locked during one.
+    ImGui::BeginDisabled(play.is_active());
+    if(panel_toolbar::begin_dropdown("##play_options", text, tooltip, text_color))
+    {
+        ImGui::SeparatorText("Script Mode");
+        draw_script_mode_items();
+        ImGui::SeparatorText("Play Mode");
+        if(ImGui::MenuItem("Splash Screen", nullptr, play_splash_in_editor_))
+        {
+            play_splash_in_editor_ = !play_splash_in_editor_;
+        }
+        ImGui::SetItemTooltipEx("%s",
+                                "Show the splash screen when play starts.\n"
+                                "It also has to be enabled in the project settings.");
+        panel_toolbar::end_dropdown();
+    }
+    ImGui::EndDisabled();
 }
 
 void header_panel::draw_transport_controls(rtti::context& ctx)
@@ -599,8 +756,8 @@ void header_panel::draw_transport_controls(rtti::context& ctx)
     const ImGuiKeyChord play_chord = shortcuts::play_toggle;
     // Compile errors keep the editor out of play mode, but never inside it.
     const bool has_errors = !editor_actions::can_enter_play(ctx) && !play.is_active();
-    // The controls are one group, so the reason they are disabled has a whole area to show up on.
-    panel_toolbar::begin_group();
+    // The controls are one segment, so the reason they are disabled has a whole area to show up on.
+    panel_toolbar::begin_segment();
     ImGui::BeginDisabled(has_errors);
     const char* play_icon = play.is_active() ? ICON_MDI_STOP : ICON_MDI_PLAY;
     const bool is_play_clicked = panel_toolbar::toggle("##play",
@@ -622,7 +779,7 @@ void header_panel::draw_transport_controls(rtti::context& ctx)
     }
     ImGui::PopItemFlag();
     ImGui::EndDisabled();
-    panel_toolbar::end_group();
+    panel_toolbar::end_segment();
     if(has_errors && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
     {
         ImGui::SetTooltip("%s", "All compiler errors must be fixed before you can enter Play Mode!");
@@ -634,39 +791,19 @@ void header_panel::draw_transport_controls(rtti::context& ctx)
     }
 }
 
-void header_panel::draw_play_options(rtti::context& ctx)
-{
-    auto& play = ctx.get_cached<play_mode>();
-    // Both apply to the next play session, so they are locked during one.
-    ImGui::BeginDisabled(play.is_active());
-    draw_script_mode_dropdown();
-    if(panel_toolbar::toggle("##splash",
-                             "Splash",
-                             play_splash_in_editor_,
-                             "Allow splash on play; still requires splash enabled in project settings"))
-    {
-        play_splash_in_editor_ = !play_splash_in_editor_;
-    }
-    ImGui::EndDisabled();
-}
-
 void header_panel::draw_time_scale(rtti::context& ctx)
 {
     auto& sim = ctx.get_cached<simulation>();
-    float time_scale = sim.get_time_scale();
-    panel_toolbar::label(ICON_MDI_PLAY_SPEED);
-    ImGui::SetItemTooltipEx("%s", "Time scale");
-    panel_toolbar::begin_field(HEADER_SLIDER_WIDTH);
-    if(ImGui::KnobSliderScalarT("###Time Scale", &time_scale, 0.0f, HEADER_TIME_SCALE_MAX))
+    const float time_scale = sim.get_time_scale();
+    const std::string text = fmt::format(ICON_MDI_PLAY_SPEED " {:.2f}x", time_scale);
+    const bool is_default = is_time_scale_at(time_scale, HEADER_TIME_SCALE_DEFAULT);
+    const ImU32 text_color = is_default ? 0 : HEADER_CHANGED_VALUE_COLOR;
+    if(!panel_toolbar::begin_dropdown("##time_scale", text.c_str(), "Time scale", text_color, ICON_MDI_PLAY_SPEED " 0.00x"))
     {
-        sim.set_time_scale(time_scale);
+        return;
     }
-    ImGui::SetItemTooltipEx("%s", "Time scale");
-    panel_toolbar::end_field();
-    if(panel_toolbar::button("##reset_time_scale", ICON_MDI_UNDO_VARIANT, "Reset time scale to 1.0"))
-    {
-        sim.set_time_scale(1.0f);
-    }
+    draw_time_scale_popup(sim, time_scale);
+    panel_toolbar::end_dropdown();
 }
 
 void header_panel::draw_frame_pacing(rtti::context& ctx)
@@ -674,31 +811,26 @@ void header_panel::draw_frame_pacing(rtti::context& ctx)
     auto& rend = ctx.get_cached<renderer>();
     auto& sim = ctx.get_cached<simulation>();
     const bool is_vsync_on = rend.get_vsync();
-    if(panel_toolbar::toggle("##vsync", "VSync", is_vsync_on, "Wait for the display before presenting a frame"))
+    const int max_fps = static_cast<int>(sim.get_max_fps());
+    const frame_pacing_text text = make_frame_pacing_text(is_vsync_on, max_fps);
+    const char* width_text = text.width_text.empty() ? nullptr : text.width_text.c_str();
+    if(!panel_toolbar::begin_dropdown("##frame_pacing", text.text.c_str(), "Frame pacing: VSync and max FPS", 0, width_text))
     {
-        rend.set_vsync(!is_vsync_on);
+        return;
     }
-    int max_fps = static_cast<int>(sim.get_max_fps());
-    const char* max_fps_format = (max_fps <= 0) ? "Uncapped" : "%d FPS";
-    panel_toolbar::begin_field(HEADER_SLIDER_WIDTH);
-    if(ImGui::KnobSliderScalarT("###Max FPS", &max_fps, 0, HEADER_MAX_FPS_LIMIT, max_fps_format, ImGuiSliderFlags_AlwaysClamp))
-    {
-        sim.set_max_fps(static_cast<uint32_t>(max_fps < 0 ? 0 : max_fps));
-    }
-    ImGui::SetItemTooltipEx("%s", "Max FPS (0 = uncapped)");
-    panel_toolbar::end_field();
+    draw_frame_pacing_popup(rend, sim, is_vsync_on, max_fps);
+    panel_toolbar::end_dropdown();
 }
 
 void header_panel::draw_play_toolbar(rtti::context& ctx)
 {
-    draw_project_badge(ctx);
     if(panel_toolbar::begin_strip("##header_toolbar", panel_toolbar::strip_style::flat))
     {
         draw_deploy_button(ctx);
-        panel_toolbar::align_center();
-        draw_transport_controls(ctx);
         panel_toolbar::separator();
         draw_play_options(ctx);
+        panel_toolbar::align_center();
+        draw_transport_controls(ctx);
         panel_toolbar::align_right();
         draw_time_scale(ctx);
         panel_toolbar::separator();
@@ -743,6 +875,7 @@ void header_panel::on_frame_ui_render(rtti::context& ctx, float header_size)
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y);
         draw_play_toolbar(ctx);
         ImGui::PopStyleColor();
+        draw_play_state_line(ctx);
     }
 
     ImGui::End();

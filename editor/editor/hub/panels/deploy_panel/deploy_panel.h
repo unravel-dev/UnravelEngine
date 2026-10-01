@@ -25,13 +25,14 @@ public:
 
     void deploy_and_run(rtti::context& ctx, const deploy_settings& params);
     auto is_deploying() const -> bool;
+    /// Share of the deploy steps that are done, 0 to 1; 1 while nothing deploys.
+    auto get_progress() const -> float;
 
 private:
     void draw_ui(rtti::context& ctx);
     void draw_settings(rtti::context& ctx);
     void draw_status(rtti::context& ctx);
     void draw_actions(rtti::context& ctx);
-    auto get_progress() const -> float;
 
     imgui_panels* parent_{};
     bool show_request_{};

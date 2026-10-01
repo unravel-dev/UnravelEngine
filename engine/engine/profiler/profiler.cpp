@@ -288,6 +288,11 @@ auto performance_profiler::get_frame_end_ns() const -> int64_t
 void performance_profiler::sync_capture_active_to_threads()
 {
     const uint8_t v = (recording_state_ == recording_state::recording) ? 1u : 0u;
+    if(v != 0)
+    {
+        // The first thread CPU time read measures the cycle rate; read here, no scope pays for it.
+        platform::get_thread_cpu_time_ns();
+    }
     profiler_process_capture_gate_store(v);
 }
 

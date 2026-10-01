@@ -79,6 +79,7 @@ build/Debug/bin/unravel-tests.exe --suite serialization        # substring match
 | `ecs serialization / prefabs / cloning` | Save/load, prefab statements, cloning (`--bench` adds timings) | Serialization, meta, prefabs, components |
 | `physics contacts / destroy funnel` | Contact events, entity-destroy funnel | Physics, entity lifecycle |
 | `ik solvers` | IK correctness | Animation/IK |
+| `thread cpu time` | Thread CPU time never exceeds wall time; sleeps are not busy; no `profile_begin`/`profile_end` scope is busier than its wall time (clock read order) | `platform::get_thread_cpu_time_ns`, profiler timing |
 | `animation` | Blend spaces, root motion, replay | Animation |
 | `gi constants / reference oracle` | GI constants parity (C++ vs shader mirror), reference tracer | GI code or GI shaders |
 | `gi bake / sdf / clipmap` | Bake pipeline; also **compiles every GI shader via shaderc** | GI shaders / SDF |
