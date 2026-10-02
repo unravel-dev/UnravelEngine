@@ -10,6 +10,10 @@
  *   even-lattice probes -> always traced (the coarse base everything else leans on);
  *   the geometric gate -> an odd probe whose parents do not share its tangent plane (and it
  *     theirs) is traced, full stop; only a probe that passes is a CANDIDATE for the rest;
+ *   the young-pixel gate -> a probe whose anchor pixel held fewer than
+ *     GI_ADAPTIVE_YOUNG_PIXEL_FRAMES frames of temporal history last frame (or lay off screen) is
+ *     traced: its pixels have no history to average the parents' blend with, so a revealed strip
+ *     would show the parents' single-frame estimate at twice the probe spacing;
  *   phased revalidation -> a candidate is traced (mode 4), because an interpolated probe's own
  *     history is derived from its parents and no test below can see what the substitution
  *     erased. The traced tile is NOT shown as such: the interp pass compares it with the
@@ -19,11 +23,19 @@
  *   sticky-traced last frame -> traced again (mode 3) until the next revalidation;
  *   every other candidate -> interpolated from its parents (mode 2).
  *
- * Radiance agreement (the importance mips) is not part of the gate; the periodic revalidation
+ * Radiance agreement (the importance states) is not part of the gate; the periodic revalidation
  * is what catches a substitution the geometry test gets wrong.
+ *
+ * The LIGHTING PRIOR's requests, for every probe with geometry: a probe without history at its
+ * surface - the trace's importance lookup finds no record on its plane, or none of the filter's
+ * state candidates holds a state - is marked for the prior pass to read the world-probe cache
+ * (cs_gi_screen_probe_prior.sc); a tile whose previous record carries a cache floor younger
+ * than the cache's window carries it on instead, so an isolated tile reads the cache once per
+ * window.
  */
 
 #include "bgfx_compute.sh"
+#include "../common.sh"
 #include "gi/gi_constants.sh"
 #include "gi/gi_probe_common.sh"
 
@@ -32,8 +44,80 @@
 BUFFER_RW(b_gi_probe_traced, uint, 6);
 BUFFER_RW(b_gi_probes, vec4, 7);
 
-/// z > 0 = adaptive gather enabled; other components unused here.
+/// y = the young-pixel threshold in frames (0 = no temporal history to read), z > 0 = adaptive
+/// gather enabled; other components unused here.
 uniform vec4 u_gi_screen_trace;
+/// Last frame's temporal moments (z = the frames each pixel had accumulated), for the young-pixel
+/// gate.
+SAMPLER2D(s_gi_prev_moments, 0);
+/// The previous view projection: the anchor reprojects into last frame's view.
+uniform mat4 u_gi_prev_view_proj;
+
+/// The lighting prior's request and the carried floor (see the header): writes [8] (z = the
+/// floor's age, w = the request) and, for a carried floor, [12..15]. @p prev_uv is the anchor's
+/// unclamped uv in last frame's view, valid when @p prev_in_front.
+void GiClassifyPrior(uint record, vec3 world_position, vec4 meta2, vec2 prev_uv, bool prev_in_front)
+{
+	bool trace_history = false;
+	bool filter_history = false;
+	uint floor_record = 0u;
+	float floor_age = 0.0;
+	if(u_gi_probe_trusted && prev_in_front)
+	{
+		ivec2 centre = clamp(ivec2(floor(GiProbeLatticeOfPrevPixel(clamp(prev_uv, vec2_splat(0.0), vec2_splat(1.0)) *
+		                                                            u_gi_probe_screen.xy))),
+		                     ivec2(0, 0),
+		                     ivec2(u_gi_probe_count_x - 1, u_gi_probe_count_y - 1));
+		// The trace's lookup: the record at the clamped reprojection, on this anchor's plane.
+		uint centre_base = (GiProbeRecord(centre.x, centre.y, 0) + u_gi_probe_read_offset) * uint(GI_PROBE_STRIDE);
+		vec4 centre_meta = b_gi_probes[centre_base + uint(GI_PROBE_META)];
+		vec4 centre_held = b_gi_probes[centre_base + uint(GI_PROBE_IMPORTANCE_FRAMES)];
+		float plane_tolerance = GI_FILTER_PLANE_TOLERANCE * max(meta2.w, 0.1);
+		trace_history = centre_meta.w > 0.5 && centre_held.x >= 1.0 &&
+		                abs(dot(centre_meta.xyz - world_position, meta2.xyz)) < plane_tolerance;
+		// The filter's candidates: within one tile of last frame's border, the 3x3 around the
+		// reprojection on this anchor's plane holding a state. The centre's floor is the tile's,
+		// whichever surface the anchor is on.
+		vec2 reach = vec2_splat(u_gi_probe_spacing) * u_gi_probe_screen.zw;
+		if(all(greaterThanEqual(prev_uv, -reach)) && all(lessThanEqual(prev_uv, vec2_splat(1.0) + reach)))
+		{
+			if(centre_meta.w > 0.5)
+			{
+				floor_record = centre_base;
+				floor_age = max(centre_held.z, 0.0);
+			}
+			for(int n = 0; n < 9; ++n)
+			{
+				ivec2 candidate = centre + ivec2(n % 3 - 1, n / 3 - 1);
+				if(candidate.x < 0 || candidate.y < 0 || candidate.x >= u_gi_probe_count_x ||
+				   candidate.y >= u_gi_probe_count_y)
+				{
+					continue;
+				}
+				uint candidate_base =
+				    (GiProbeRecord(candidate.x, candidate.y, 0) + u_gi_probe_read_offset) * uint(GI_PROBE_STRIDE);
+				vec4 candidate_meta = b_gi_probes[candidate_base + uint(GI_PROBE_META)];
+				if(candidate_meta.w > 0.5 &&
+				   abs(dot(candidate_meta.xyz - world_position, meta2.xyz)) < plane_tolerance &&
+				   b_gi_probes[candidate_base + uint(GI_PROBE_IMPORTANCE_FRAMES)].x >= 1.0)
+				{
+					filter_history = true;
+				}
+			}
+		}
+	}
+	bool carried = floor_age >= 1.0 && floor_age < float(GI_IMPORTANCE_STATE_FRAMES);
+	if(carried)
+	{
+		for(int lane = 0; lane < 4; ++lane)
+		{
+			b_gi_probes[record + uint(GI_PROBE_FLOOR + lane)] = b_gi_probes[floor_record + uint(GI_PROBE_FLOOR + lane)];
+		}
+	}
+	bool request = !carried && (!trace_history || !filter_history);
+	b_gi_probes[record + uint(GI_PROBE_IMPORTANCE_FRAMES)] =
+	    vec4(0.0, 0.0, carried ? floor_age + 1.0 : 0.0, request ? 1.0 : 0.0);
+}
 
 NUM_THREADS(8, 8, 1)
 void main()
@@ -53,6 +137,15 @@ void main()
 	}
 	vec3 world_position = meta.xyz;
 	vec4 meta2 = b_gi_probes[record + uint(GI_PROBE_META2)];
+	// The anchor in last frame's view: the lighting prior's request.
+	vec4 prev_clip4 = mul(u_gi_prev_view_proj, vec4(world_position, 1.0));
+	bool prev_in_front = prev_clip4.w > 0.0;
+	vec2 prev_uv = vec2_splat(-1.0);
+	if(prev_in_front)
+	{
+		prev_uv = clipTransform(prev_clip4.xyz / prev_clip4.w).xy * 0.5 + vec2_splat(0.5);
+	}
+	GiClassifyPrior(record, world_position, meta2, prev_uv, prev_in_front);
 	bool interpolated = false;
 	// The revalidation phase is keyed by the lattice coordinate, which stays with the surfaces
 	// while the camera turns.
@@ -114,8 +207,20 @@ void main()
 			}
 		}
 	}
+	// THE YOUNG-PIXEL GATE: the parents stand in only for a probe whose anchor pixel already holds
+	// the history to average their blend with (last frame's count, reprojected; off screen = none).
+	BRANCH
+	if(parents_stand_in && u_gi_screen_trace.y > 0.0)
+	{
+		float pixel_frames = 0.0;
+		if(prev_in_front && all(greaterThanEqual(prev_uv, vec2_splat(0.0))) && all(lessThan(prev_uv, vec2_splat(1.0))))
+		{
+			pixel_frames = texture2DLod(s_gi_prev_moments, prev_uv, 0.0).z;
+		}
+		parents_stand_in = pixel_frames >= u_gi_screen_trace.y;
+	}
 	// Revalidation and the sticky mode are decisions about probes the geometry ALLOWS to be
-	// skipped. A probe that fails the gate above is simply traced (mode 1): routing it through
+	// skipped. A probe that fails the gates above is simply traced (mode 1): routing it through
 	// mode 4 would let the interp pass overwrite its trace with the parents' blend one frame
 	// in eight.
 	bool candidate = adaptive && parents_stand_in;

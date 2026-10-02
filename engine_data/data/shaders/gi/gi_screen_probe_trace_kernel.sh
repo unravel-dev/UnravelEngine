@@ -127,15 +127,15 @@ uniform vec4 u_gi_camera;
 /// DOUBLE on the CPU: fract(R2 x float(frame)) in float has 1/128 precision after ~1e5 frames,
 /// which collapses the jitter to a few positions in long sessions. xy = the integrate's offset.
 uniform vec4 u_gi_jitter;
-/// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs. y > 0 when the firefly
-/// governor's reference is the reprojected probe's direction block (reprojected_firefly_reference).
-/// z = the adaptive flag - consumed by the CLASSIFY pass, bound here only for layout parity.
+/// x > 0 when s_hiz holds a full pyramid and the screen-trace tier runs. y = the young-pixel
+/// threshold and z = the adaptive flag - consumed by the CLASSIFY pass, bound here only for layout
+/// parity.
 /// w > 0 when s_gi_prev_color holds last frame's composited output; > 1.5 when its alpha
 /// also carries each pixel's view depth (the RGBA16F history), which GiReadHistory then
 /// validates a reprojection against.
 uniform vec4 u_gi_screen_trace;
 /// Previous view projection: the anchor reprojects into LAST frame's lattice to read the
-/// importance mip the filter stored in that probe's record slots.
+/// importance state the filter keeps in that probe's record slots.
 uniform mat4 u_gi_prev_view_proj;
 
 /// Probe slots per group: the adaptive program packs four 16-lane probes into one 64-lane
@@ -183,8 +183,9 @@ SHARED vec3 s_vs_origin[GI_TRACE_SLOT_COUNT];
 /// Base record index of the reprojected PREVIOUS probe, or -1 when reprojection failed.
 SHARED int s_history_record[GI_TRACE_SLOT_COUNT];
 SHARED float s_importance_mean[GI_TRACE_SLOT_COUNT];
-/// The reprojected probe's 4x4 importance mip, staged by the leader, so the per-ray lookup
-/// does not re-read the four record vec4s the leader already loaded for the mean.
+/// The reprojected probe's importance state (its 4x4 direction blocks), staged by the leader,
+/// so the per-ray lookup does not re-read the four record vec4s the leader already loaded for
+/// the mean.
 SHARED vec4 s_importance_mip[GI_TRACE_SLOT_COUNT * 4];
 /// The probe's importance PDF total - cosine to the anchor normal x the block's reprojected importance, over
 /// the texels the BRDF cull keeps - staged by the leader for the full program's allocation (GiFullRayUnit).
@@ -226,7 +227,7 @@ SHARED vec2 s_frame_r2;
 /// The value is what one sample may contribute to the cell's MEAN radiance. A single sample
 /// carrying a whole coarse cell that resolves at the store's GI_MAX_RAY_RADIANCE needs about
 /// 46 (40 x the largest coarse omega), so twice the store clamp leaves headroom without
-/// letting a genuine firefly through - the store clamp and the governor below still see it.
+/// letting a genuine firefly through - the probe filter's governor still sees it.
 #define GI_NEE_CONTRIBUTION_MAX (2.0 * GI_MAX_RAY_RADIANCE)
 /// How far before its last screen-verified point a ray's SDF march resumes after a screen
 /// march that left the viewport, ran out of iterations or found a crossing the validation
@@ -270,11 +271,12 @@ SHARED uint s_total_contribution[GI_TRACE_SLOT_COUNT];
 SHARED uint s_aimed_rays[GI_TRACE_SLOT_COUNT];
 SHARED uint s_selected_emitters[GI_TRACE_SLOT_COUNT];
 
-/// The probe's screen share (x) and moving share (y) for the temporal: rays the screen tier
-/// answered, and rays that hit moving geometry, over rays traced (all counted where the
-/// tier is decided). Written by the slot leader after the trace barrier; interpolated probes
-/// get their parents' mean from the interp pass. The full tier split goes to record [11]
-/// for the gi_probe_tiers debug view.
+/// The probe's screen share (x) and moving share (y): rays the screen tier answered, and rays
+/// that hit moving geometry, over rays traced (all counted where the tier is decided). The
+/// moving share is the temporal's and the rough specular's moving-hit collapse weight.
+/// Written by the slot leader after the trace barrier; interpolated probes get their
+/// parents' mean from the interp pass. The full tier split goes to record [11] for the
+/// gi_probe_tiers debug view.
 void GiStoreScreenShare(int slot, uint record)
 {
 	uint traced = s_traced_rays[slot];
@@ -443,7 +445,7 @@ vec3 GiFarFieldFallback(vec3 hit_position, vec3 sample_dir)
 }
 
 /// The reprojected probe's luminance for one of the 16 2x2 direction blocks, as the importance
-/// mip staged it (pre-exposure corrected).
+/// state staged it (pre-exposure corrected).
 float GiImportanceBlockLuma(int slot, int block)
 {
 	vec4 mip = s_importance_mip[slot * 4 + block / 4];
@@ -453,75 +455,18 @@ float GiImportanceBlockLuma(int slot, int block)
 
 void GiStoreScreenProbeRay(int slot, ivec2 texel, vec3 radiance, float hit_t)
 {
-	// No absolute clamp on the cell's radiance: a clamp at GI_MAX_RAY_RADIANCE plateaus a
-	// bright emitter's spread well below its intensity. An emitter that fills the cell is not a
-	// firefly; the MIS contribution cap (GI_NEE_CONTRIBUTION_MAX, per sample) and the governor
-	// below bound the estimator's step.
-	vec3 averaged = radiance;
-	// FIREFLY GOVERNOR: a ray landing on a small bright emitter dominates the whole tile
-	// when it enters at full weight - the probe's screen footprint pops for a frame. Each
-	// new sample is capped at GI_GATHER_FIREFLY_CLAMP x its reference. By default: LAST
-	// frame's value of this texel (the tile is single-buffered, so it is still in place), FLOORED by the
-	// reprojected previous tile's mean luminance (s_importance_mean - looked up by WORLD
-	// position with a plane test, so it survives camera motion that leaves the texel
-	// holding a nearby point's radiance). Without the floor, a dark stale texel would crush
-	// legitimate arrivals to 8x darkness - pumping noise in emissive-lit dark scenes the
-	// moment the camera moves. A texel whose own history legitimately sees the
-	// emitter raises its own ceiling and converges unbiased (per-texel, never ONLY the
-	// tile mean - that would crush a lone bright texel to mean x k / 256). A probe that
-	// reprojected onto last frame's lattice is governed however dark its history, its reference
-	// floored at GI_GATHER_FIREFLY_REFERENCE_FLOOR: a rare ray that finds a sunlit patch its dark
-	// history never saw is capped instead of blinking the footprint white, and a light that
-	// persists climbs by up to GI_GATHER_FIREFLY_CLAMP per frame. No reprojected history and no
-	// reference above the floor (fresh tile, failed reprojection): the first measurement stores
-	// unclamped - progressive ramps from black would dim every disocclusion instead.
-	// The texel and the tile mean are LAST frame's, written under the previous pre-exposure;
-	// the mean was corrected where it was staged, the texel is corrected here.
-	// Both are floored in turn by the reprojected probe's FILTERED luminance around this
-	// direction (its 2x2 block of the importance mip): a direction that alternates between a
-	// bright opening and the dark frame around it reads bright there on average, so its bright
-	// samples are not clipped every time the previous one happened to be dark - a loss that
-	// would darken all light arriving through openings. A lone hit on something the filtered
-	// probe field never saw still meets a dark block and is capped.
-	// With the reprojected reference (u_gi_screen_trace.y) the reference is instead the
-	// reprojected probe's luminance for this texel's 2x2 direction block, floored by its tile
-	// mean: the same world point's recent radiance around this direction, so the ceiling follows
-	// the surface through camera motion instead of staying with the screen slot. A probe whose
-	// reprojection failed has no reference and stores uncapped, like a fresh tile.
-	ivec2 local_texel = ivec2(int(uint(texel.x) % uint(GI_PROBE_DIR_EDGE)), int(uint(texel.y) % uint(GI_PROBE_DIR_EDGE)));
-	int block = (local_texel.y / 2) * 4 + (local_texel.x / 2);
-	float reference;
-	BRANCH
-	if(u_gi_screen_trace.y > 0.5)
-	{
-		reference = s_history_record[slot] < 0 ? 0.0 : max(GiImportanceBlockLuma(slot, block), s_importance_mean[slot]);
-	}
-	else
-	{
-		// The lattice follows the camera's rotation, so the slot holds last frame's value of the
-		// same surfaces - except in the frame the lattice wraps, when it holds another tile's.
-		vec4 hist = GiProbeLatticeWrapped() ? vec4_splat(0.0) : imageLoad(s_probe_radiance_out, texel);
-		reference = max(Luminance(hist.xyz) * u_history_pre_exposure_correction, s_importance_mean[slot]);
-		if(s_history_record[slot] >= 0)
-		{
-			reference = max(reference, GiImportanceBlockLuma(slot, block));
-		}
-	}
-	BRANCH
-	if(s_history_record[slot] >= 0 || reference > GI_GATHER_FIREFLY_REFERENCE_FLOOR)
-	{
-		float ceiling = GI_GATHER_FIREFLY_CLAMP * max(reference, GI_GATHER_FIREFLY_REFERENCE_FLOOR);
-		float luma = Luminance(averaged);
-		if(luma > ceiling)
-		{
-			averaged *= ceiling / luma;
-		}
-	}
-	imageStore(s_probe_radiance_out, texel, vec4(averaged, hit_t));
+	// The cell stores what it measured. No absolute clamp on its radiance: a clamp at
+	// GI_MAX_RAY_RADIANCE plateaus a bright emitter's spread well below its intensity, and an
+	// emitter that fills the cell is not a firefly. The MIS contribution cap
+	// (GI_NEE_CONTRIBUTION_MAX, per sample) bounds the estimator's step here; the firefly
+	// governor caps each tap against the probe's importance state in the filter's first pass
+	// (cs_gi_screen_probe_filter.sc), where the reference is a measurement the cap cannot
+	// feed back into.
+	imageStore(s_probe_radiance_out, texel, vec4(radiance, hit_t));
 }
 
-/// The block's reprojected importance over the tile mean; 1.0 (neutral) when history is
-/// absent or reprojection failed - uniform allocation.
+/// The block's importance over the tile mean - the reprojected state, or for a probe without
+/// history the lighting prior; 1.0 (neutral) when neither exists - uniform allocation.
 float GiScreenProbeBlockRatio(int slot, int block)
 {
 	if(s_history_record[slot] < 0 || s_importance_mean[slot] <= 1e-4)
@@ -1025,7 +970,7 @@ void GiSplatSample(int slot, ivec2 base, int span, vec3 direction, vec3 radiance
 	}
 }
 
-/// Resolves one texel from its cell's accumulators and stores it (governor included).
+/// Resolves one texel from its cell's accumulators and stores it.
 void GiFinalizeTexel(int slot, ivec2 atlas_base, ivec2 local)
 {
 	ivec2 texel = atlas_base + local;
@@ -1329,7 +1274,7 @@ void main()
 			s_selected_emitters[slot] = 0u;
 			// Placement computed the anchor, classification put this probe on the traced
 			// list - the records are valid by construction; this thread only unpacks them
-			// and reprojects the anchor for the importance mip.
+			// and reprojects the anchor for the importance state.
 			vec4 meta = b_gi_probes[record + uint(GI_PROBE_META)];
 			vec4 meta2 = b_gi_probes[record + uint(GI_PROBE_META2)];
 			vec3 world_position = meta.xyz;
@@ -1401,7 +1346,7 @@ void main()
 					}
 				}
 			}
-			// Reproject the anchor into LAST frame's lattice for the importance mip. The
+			// Reproject the anchor into LAST frame's lattice for the importance state. The
 			// lookup CLAMPS to the border instead of requiring an on-screen reprojection:
 			// content revealed by panning or rotation often shares a surface with the
 			// nearest screen-edge probe of the previous frame, and the plane test below is
@@ -1437,6 +1382,27 @@ void main()
 						}
 						s_importance_mean[slot] = total / 16.0;
 					}
+				}
+			}
+			// THE LIGHTING PRIOR (cs_gi_screen_probe_prior.sc): a probe without history at its
+			// surface allocates by the world-probe cache's luminance per block - the radiance
+			// cache as the lighting PDF of a probe without history, as Lumen's - instead of one
+			// coarse ray per block, which leaves a revealed region's bright openings to a coin
+			// flip per probe.
+			if(s_history_record[slot] < 0 || s_importance_mean[slot] <= 1e-4)
+			{
+				float prior_age = b_gi_probes[record + uint(GI_PROBE_IMPORTANCE_FRAMES)].z;
+				if(prior_age >= 1.0 && prior_age < float(GI_IMPORTANCE_STATE_FRAMES))
+				{
+					float prior_total = 0.0;
+					for(int prior_m = 0; prior_m < 4; ++prior_m)
+					{
+						vec4 prior_mip = b_gi_probes[record + uint(GI_PROBE_FLOOR + prior_m)];
+						s_importance_mip[slot * 4 + prior_m] = prior_mip;
+						prior_total += prior_mip.x + prior_mip.y + prior_mip.z + prior_mip.w;
+					}
+					s_importance_mean[slot] = prior_total / 16.0;
+					s_history_record[slot] = int(record);
 				}
 			}
 #if !defined(GI_SCREEN_PROBE_TRACE_ADAPTIVE)

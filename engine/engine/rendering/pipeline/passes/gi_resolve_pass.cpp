@@ -19,10 +19,18 @@ namespace
 {
 /// Mirror of GI_PROBE_DIR_EDGE / GI_PROBE_STRIDE in gi/gi_probe_common.sh.
 constexpr uint32_t probe_dir_edge = 8;
-constexpr uint32_t probe_vec4_stride = 12;
+constexpr uint32_t probe_vec4_stride = 16;
 /// Mirror of GI_PROBE_LAYERS: a single layer, the gather anchors one probe per tile. Must
 /// match GI_PROBE_LAYERS in gi_probe_common.sh.
 constexpr uint32_t probe_layers = 1;
+/// How the passes that run at the TRACE resolution read the full-resolution depth and
+/// normal: a trace pixel's centre lies on the boundary of four full-resolution texels, and a
+/// linear fetch there averages four packed normals (a normal-mapped wall's average points
+/// into the wall for some pixels, whose irradiance lookup then lands in a dark octahedral
+/// texel - dark squares the size of a trace pixel) and four depths across any edge. Point
+/// sampling reads one texel, the same one for every consumer at that resolution.
+constexpr uint32_t trace_resolution_gbuffer_sampler =
+    BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT | BGFX_SAMPLER_MIP_POINT;
 
 /// Layout of the probe buffer: a flat array of vec4, matching BUFFER_RW(_, vec4, _).
 auto get_probe_vec4_layout() -> const bgfx::VertexLayout&
@@ -164,6 +172,9 @@ auto gi_resolve_pass::init(rtti::context& ctx) -> bool
     auto cs_filter = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_filter.sc");
     filter_program_.cache_uniforms();
     filter_program_.program = std::make_unique<gpu_program>(cs_filter);
+    auto cs_prior = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_screen_probe_prior.sc");
+    prior_program_.cache_uniforms();
+    prior_program_.program = std::make_unique<gpu_program>(cs_prior);
     auto fs_integrate = am.get_asset<gfx::shader>("engine:/data/shaders/gi/fs_gi_probe_integrate.sc");
     integrate_program_.cache_uniforms();
     integrate_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_integrate);
@@ -347,8 +358,7 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                                        1.0f / float(target_size.width),
                                        1.0f / float(target_size.height)};
         // Radiance atlas: one 8x8 octahedral tile per probe, single-buffered and fully
-        // rewritten every frame (traced, interpolated or cleared) - the firefly governor
-        // reads last frame's texel from it before the overwrite.
+        // rewritten every frame (traced, interpolated or cleared).
         const usize32_t atlas_size{probes_x * probe_dir_edge, probes_y * probe_layers * probe_dir_edge};
         const auto ensure_atlas = [&](const char* name) -> gfx::texture::ptr
         {
@@ -376,6 +386,11 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
         auto probe_atlas = ensure_atlas("GI_PROBE_ATLAS");
         // Derived data, fully rewritten by the filter each frame: no ping-pong needed.
         auto irradiance_atlas = ensure_atlas("GI_PROBE_IRRADIANCE");
+        // The governor's EXCESS ATLAS (cs_gi_screen_probe_filter.sc), double buffered with the
+        // record halves: the first pass continues a texel's running mean from the probe whose
+        // state it continues.
+        auto excess_write = ensure_atlas(even_probe_frame ? "GI_PROBE_EXCESS_A" : "GI_PROBE_EXCESS_B");
+        auto excess_read = ensure_atlas(even_probe_frame ? "GI_PROBE_EXCESS_B" : "GI_PROBE_EXCESS_A");
         // DOUBLE buffered: the importance reprojection needs last frame's meta and mip
         // resident alongside this frame's, and the halves swap each frame. Each half holds
         // every LAYER's full lattice.
@@ -544,12 +559,19 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
             // TAA-unjittered record for the same reason: still camera, exact reprojection.
             const math::transform gather_projection = params.cam->get_projection_unjittered();
             const auto gather_prev_view_proj = params.cam->get_prev_view_projection_unjittered();
-            // y unused. w: 0 no previous colour, 1 colour, 2 colour with view depth in
-            // alpha, 3 that plus the velocity buffer bound at the trace (screen hits on
-            // movers reproject through it).
+            // THE YOUNG-PIXEL GATE reads last frame's temporal moments - the temporal publishes
+            // them under GI_MOMENTS and has not run yet this frame - to trace the probes whose
+            // pixels hold too little history for their parents' blend to stand in.
+            const auto prev_moments = rview.tex_safe_get("GI_MOMENTS");
+            const bool young_gate = s.enable_temporal && prev_moments != nullptr &&
+                                    prev_moments->get_size().width == target_size.width &&
+                                    prev_moments->get_size().height == target_size.height;
+            // y = the young-pixel threshold (0 = no history to read). w: 0 no previous colour,
+            // 1 colour, 2 colour with view depth in alpha, 3 that plus the velocity buffer bound
+            // at the trace (screen hits on movers reproject through it).
             const bool trace_velocity = prev_color_carries_depth && params.velocity != nullptr;
             const float screen_trace_params[4] = {screen_trace ? 1.0f : 0.0f,
-                                                  s.reprojected_firefly_reference ? 1.0f : 0.0f,
+                                                  young_gate ? float(gi::GI_ADAPTIVE_YOUNG_PIXEL_FRAMES) : 0.0f,
                                                   adaptive ? 1.0f : 0.0f,
                                                   has_prev_color ? (trace_velocity ? 3.0f : prev_color_carries_depth ? 2.0f : 1.0f)
                                                                  : 0.0f};
@@ -591,16 +613,51 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 classify_program_.program->begin();
                 bgfx::setBuffer(6, probe_traced_, bgfx::Access::ReadWrite);
                 bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
+                gfx::set_texture(classify_program_.s_gi_prev_moments, 0, young_gate ? prev_moments : hiz_or_depth);
                 gfx::set_uniform(classify_program_.u_gi_probe_params, probe_params);
                 gfx::set_uniform(classify_program_.u_gi_probe_temporal, probe_temporal);
                 gfx::set_uniform(classify_program_.u_gi_probe_lattice, lattice.origin.data());
                 gfx::set_uniform(classify_program_.u_gi_screen_trace, screen_trace_params);
+                gfx::set_uniform(classify_program_.u_gi_probe_screen, probe_screen);
+                gfx::set_uniform(classify_program_.u_gi_probe_lattice_warp, lattice.warp.data(), 9);
+                gfx::set_uniform(classify_program_.u_gi_prev_view_proj, gather_prev_view_proj.get_matrix());
                 bgfx::dispatch(pass.id,
                                classify_program_.program->native_handle(),
                                (probes_x + 7u) / 8u,
                                (probes_y + 7u) / 8u,
                                1);
                 classify_program_.program->end();
+            }
+            if(prior_program_.is_valid())
+            {
+                // THE LIGHTING PRIOR: the world-probe cache read per direction for the probes the
+                // classify marked (no history at their surface), into their records for the trace's
+                // allocation.
+                gfx::render_pass pass("GI/Probe Prior");
+                prior_program_.program->begin();
+                gfx::set_texture(prior_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+                gfx::set_texture(prior_program_.s_world_probe_radiance_read,
+                                 6,
+                                 clipmap_gpu.get_world_probe_radiance());
+                bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
+                bgfx::setBuffer(13, clipmap_gpu.get_world_probe_index(), bgfx::Access::Read);
+                gfx::set_texture(prior_program_.s_world_probe_depth,
+                                 15,
+                                 clipmap_gpu.get_world_probe_depth());
+                gfx::set_uniform(prior_program_.u_gi_probe_params, probe_params);
+                gfx::set_uniform(prior_program_.u_gi_probe_temporal, probe_temporal);
+                gfx::set_uniform(prior_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
+                gfx::set_uniform(prior_program_.u_gi_camera, gi_camera);
+                gfx::set_uniform(prior_program_.u_gi_world_probe_params, wp_params);
+                gfx::set_uniform(prior_program_.u_gi_world_probe_atlas,
+                                 clipmap_gpu.get_world_probe_atlas_params());
+                gfx::set_uniform(prior_program_.u_gi_world_probe_radiance_atlas, wp_radiance_atlas);
+                gfx::set_uniform(prior_program_.u_sdf_clipmap_levels,
+                                 clipmap_gpu.get_level_params(),
+                                 global_sdf_clipmap::level_count);
+                gfx::set_uniform(prior_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+                bgfx::dispatch(pass.id, prior_program_.program->native_handle(), probes_x, probes_y, 1);
+                prior_program_.program->end();
             }
             {
                 // Also stages the traced count into the list head for the kernel's
@@ -726,11 +783,12 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
             {
                 // PROBE-SPACE FILTER, settings::probe_filter_passes times (Lumen's
                 // SpatialFilterNumPasses): every pass but the last filters the radiance into a
-                // derived atlas the next pass reads (two ping-pong atlases, never the trace
-                // atlas - the trace's firefly governor reads its own last-frame texel there);
-                // the last pass filters once more and convolves to irradiance. Every pass writes
+                // derived atlas the next pass reads (two ping-pong atlases); the last pass
+                // filters once more and convolves to irradiance. The FIRST pass is the firefly
+                // governor: it caps the taps against the probe's importance state and advances
+                // the state in the records, which the trace reads next frame. Every pass writes
                 // its filtered radiance; the last pass's atlas is the rough specular's source.
-                const int filter_passes = std::clamp(s.probe_filter_passes, 1, 4);
+                const int filter_passes = s.probe_filter_passes;
                 auto filter_source = probe_atlas;
                 for(int filter_pass = 0; filter_pass < filter_passes; ++filter_pass)
                 {
@@ -753,9 +811,28 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                                    0,
                                    bgfx::Access::Write,
                                    bgfx::TextureFormat::RGBA16F);
-                    // ReadWrite: the final pass writes the importance mip into the record slots.
+                    // ReadWrite: the first pass writes the importance state into the record slots.
                     bgfx::setBuffer(7, probe_buffer_, bgfx::Access::ReadWrite);
-                    const float probe_filter[4] = {final_pass ? 0.0f : 1.0f, 0.0f, 0.0f, 0.0f};
+                    // The first pass reads last frame's excess means and writes this frame's; every
+                    // pass binds both (the kernel declares them).
+                    gfx::set_texture(filter_program_.s_gi_probe_excess, 1, excess_read);
+                    bgfx::setImage(4, excess_write->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
+                    // The state's mean holds single frames for GI_TEMPORAL_FAST_FRAMES after a
+                    // lighting change - the frames the light voxels relight over, which a mean
+                    // taken from the change would lag - and grows to its window from there.
+                    const uint32_t quiet_frames = params.view_cache->get_lighting_quiet_frames();
+                    const uint32_t relight_frames = uint32_t(gi::GI_TEMPORAL_FAST_FRAMES);
+                    const float state_frames = float(
+                        math::min(quiet_frames > relight_frames ? quiet_frames - relight_frames + 1u : 1u,
+                                  uint32_t(gi::GI_IMPORTANCE_STATE_FRAMES)));
+                    const float probe_filter[4] = {final_pass ? 0.0f : 1.0f,
+                                                   filter_pass == 0 ? 1.0f : 0.0f,
+                                                   state_frames,
+                                                   0.0f};
+                    gfx::set_uniform(filter_program_.u_gi_probe_lattice, lattice.origin.data());
+                    gfx::set_uniform(filter_program_.u_gi_probe_lattice_warp, lattice.warp.data(), 9);
+                    gfx::set_uniform(filter_program_.u_gi_prev_view_proj, gather_prev_view_proj.get_matrix());
+                    gfx::set_uniform(filter_program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
                     gfx::set_uniform(filter_program_.u_gi_probe_params, probe_params);
                     gfx::set_uniform(filter_program_.u_gi_probe_screen, probe_screen);
                     gfx::set_uniform(filter_program_.u_gi_probe_temporal, probe_temporal);
@@ -790,8 +867,14 @@ auto gi_resolve_pass::run_gather(gfx::render_view& rview, const run_params& para
                 gfx::set_texture(integrate_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
                 gfx::set_texture(integrate_program_.s_probe_irradiance, 2, irradiance_atlas);
                 bgfx::setBuffer(7, probe_buffer_, bgfx::Access::Read);
-                gfx::set_texture(integrate_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
-                gfx::set_texture(integrate_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+                gfx::set_texture(integrate_program_.s_gi_depth,
+                                 8,
+                                 params.g_buffer->get_texture(4),
+                                 trace_resolution_gbuffer_sampler);
+                gfx::set_texture(integrate_program_.s_gi_normal,
+                                 9,
+                                 params.g_buffer->get_texture(1),
+                                 trace_resolution_gbuffer_sampler);
                 // GTAO bent normal for the lookup direction (the kernel's u_gi_intensity note);
                 // white stands in when the pass did not run and the flag lane keeps it unread.
                 const auto gtao_tex = rview.tex_safe_get("GTAO");
@@ -1001,8 +1084,9 @@ auto gi_resolve_pass::run_upsample(gfx::render_view& rview,
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     upsample_program_.program->begin();
     gfx::set_texture(upsample_program_.s_gi_input, 0, input);
-    gfx::set_texture(upsample_program_.s_gi_depth, 1, params.g_buffer->get_texture(4));
-    gfx::set_texture(upsample_program_.s_gi_normal, 2, params.g_buffer->get_texture(1));
+    // The taps land on the trace-resolution sample centres: the same texel the integrate read.
+    gfx::set_texture(upsample_program_.s_gi_depth, 1, params.g_buffer->get_texture(4), trace_resolution_gbuffer_sampler);
+    gfx::set_texture(upsample_program_.s_gi_normal, 2, params.g_buffer->get_texture(1), trace_resolution_gbuffer_sampler);
     const float texel[4] = {1.0f / float(source_size.width),
                             1.0f / float(source_size.height),
                             float(source_size.width),
@@ -1073,8 +1157,8 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
             pass.set_view_proj(params.cam->get_view(), denoise_projection);
             denoise_program_.compute_program->begin();
             gfx::set_texture(denoise_program_.s_gi_input, 0, source);
-            gfx::set_texture(denoise_program_.s_gi_depth, 1, params.g_buffer->get_texture(4));
-            gfx::set_texture(denoise_program_.s_gi_normal, 2, params.g_buffer->get_texture(1));
+            gfx::set_texture(denoise_program_.s_gi_depth, 1, params.g_buffer->get_texture(4), trace_resolution_gbuffer_sampler);
+            gfx::set_texture(denoise_program_.s_gi_normal, 2, params.g_buffer->get_texture(1), trace_resolution_gbuffer_sampler);
             gfx::set_texture(denoise_program_.s_gi_moments, 3, moments ? moments : input);
             bgfx::setImage(4, result->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
             gfx::set_uniform(denoise_program_.u_gi_denoise_params, denoise_params);
@@ -1095,8 +1179,8 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
         pass.set_view_proj(params.cam->get_view(), denoise_projection);
         denoise_program_.program->begin();
         gfx::set_texture(denoise_program_.s_gi_input, 0, source);
-        gfx::set_texture(denoise_program_.s_gi_depth, 1, params.g_buffer->get_texture(4));
-        gfx::set_texture(denoise_program_.s_gi_normal, 2, params.g_buffer->get_texture(1));
+        gfx::set_texture(denoise_program_.s_gi_depth, 1, params.g_buffer->get_texture(4), trace_resolution_gbuffer_sampler);
+        gfx::set_texture(denoise_program_.s_gi_normal, 2, params.g_buffer->get_texture(1), trace_resolution_gbuffer_sampler);
         // Without temporal accumulation there is no variance estimate, and the pass below is told
         // to skip the luminance stop rather than be fed a meaningless one.
         gfx::set_texture(denoise_program_.s_gi_moments, 3, moments ? moments : input);
@@ -1135,8 +1219,8 @@ auto gi_resolve_pass::run_spatial_denoise(gfx::render_view& rview,
         pass.set_view_proj(params.cam->get_view(), denoise_projection);
         denoise_program_.program->begin();
         gfx::set_texture(denoise_program_.s_gi_input, 0, source);
-        gfx::set_texture(denoise_program_.s_gi_depth, 1, params.g_buffer->get_texture(4));
-        gfx::set_texture(denoise_program_.s_gi_normal, 2, params.g_buffer->get_texture(1));
+        gfx::set_texture(denoise_program_.s_gi_depth, 1, params.g_buffer->get_texture(4), trace_resolution_gbuffer_sampler);
+        gfx::set_texture(denoise_program_.s_gi_normal, 2, params.g_buffer->get_texture(1), trace_resolution_gbuffer_sampler);
         gfx::set_texture(denoise_program_.s_gi_moments, 3, moments);
         gfx::set_uniform(denoise_program_.u_gi_denoise_params, denoise_params);
         gfx::set_uniform(denoise_program_.u_gi_denoise_texel, texel);
@@ -1406,8 +1490,8 @@ void gi_resolve_pass::run_rough_specular(gfx::render_view& rview,
                      6,
                      params.prev_depth ? params.prev_depth : params.g_buffer->get_texture(4));
     bgfx::setBuffer(7, probe_buffer_, bgfx::Access::Read);
-    gfx::set_texture(rough_specular_program_.s_gi_depth, 8, params.g_buffer->get_texture(4));
-    gfx::set_texture(rough_specular_program_.s_gi_normal, 9, params.g_buffer->get_texture(1));
+    gfx::set_texture(rough_specular_program_.s_gi_depth, 8, params.g_buffer->get_texture(4), trace_resolution_gbuffer_sampler);
+    gfx::set_texture(rough_specular_program_.s_gi_normal, 9, params.g_buffer->get_texture(1), trace_resolution_gbuffer_sampler);
     gfx::set_texture(rough_specular_program_.s_gi_velocity,
                      14,
                      use_velocity ? params.velocity : black,

@@ -120,20 +120,6 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "slightly more noise in dim directions. Off traces every direction "
                             "individually."},
         })
-        .data<&settings::reprojected_firefly_reference>("reprojected_firefly_reference"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "reprojected_firefly_reference"},
-            entt::attribute{"pretty_name", "Reprojected Firefly Reference"},
-            entt::attribute{"group", "Gather"},
-            entt::attribute{"tooltip",
-                            "Reference for the firefly clamp, which limits each new probe sample "
-                            "to a multiple of recently observed radiance.\n"
-                            "Off: the larger of the same screen texel's previous value and the "
-                            "reprojected probe's own radiance.\n"
-                            "On: the reprojected probe's radiance only, so the limit follows the "
-                            "surface rather than the screen during camera motion; probes without "
-                            "reprojected history are not clamped."},
-        })
         .data<&settings::world_probe_jitter>("world_probe_jitter"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "world_probe_jitter"},
@@ -502,7 +488,6 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("probe_filter_passes", obj.probe_filter_passes));
     try_save(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     try_save(ar, ser20::make_nvp("adaptive_rays", obj.adaptive_rays));
-    try_save(ar, ser20::make_nvp("reprojected_firefly_reference", obj.reprojected_firefly_reference));
     try_save(ar, ser20::make_nvp("world_probe_jitter", obj.world_probe_jitter));
     try_save(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_save(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));
@@ -536,7 +521,6 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("probe_filter_passes", obj.probe_filter_passes));
     try_load(ar, ser20::make_nvp("adaptive_probes", obj.adaptive_probes));
     try_load(ar, ser20::make_nvp("adaptive_rays", obj.adaptive_rays));
-    try_load(ar, ser20::make_nvp("reprojected_firefly_reference", obj.reprojected_firefly_reference));
     try_load(ar, ser20::make_nvp("world_probe_jitter", obj.world_probe_jitter));
     try_load(ar, ser20::make_nvp("enable_reflections", obj.enable_reflections));
     try_load(ar, ser20::make_nvp("reflection_temporal_frames", obj.reflection_temporal_frames));

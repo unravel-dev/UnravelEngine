@@ -34,15 +34,29 @@
  * smears light behind moving geometry, so the test errs toward rejection: a rejected pixel is
  * noisy for a few frames, a wrongly accepted one is visibly wrong for as long as it survives.
  *
- * DUAL-RATE HISTORY: two running means of the same sample stream ride the MRT - the SLOW
- * lane (cap GI_TEMPORAL_SLOW_FRAMES, the settings window) is the output and carries the
- * stability, the FAST lane (cap GI_TEMPORAL_FAST_FRAMES) exists to measure it. Only a LONG
- * mean integrates the per-frame cone and placement jitter (three placement cycles), but a
- * long mean alone answers real lighting changes late. The detector closes that: the two
- * lanes' gap has a known noise level (the moments' single-sample variance over both
- * counts), and a luminance gap beyond GI_TEMPORAL_CHANGE_SIGMA of it is a mean SHIFT - the
- * slow lane snaps to the fast one and re-accumulates, so a light turning on lands within
- * the fast window while steady flicker integrates over the slow one.
+ * DUAL-RATE HISTORY: two lanes ride the MRT. The FAST lane (cap GI_TEMPORAL_FAST_FRAMES) is
+ * a running mean of the samples. The SLOW lane is the output: while its count still grows it
+ * is the plain running mean of the samples (a fresh pixel converges as 1/n), and once it holds
+ * its window (cap GI_TEMPORAL_SLOW_FRAMES, the settings window) it is a running mean of the
+ * FAST LANE over the window past the fast cap - two accumulators in series. The pair has the
+ * mean delay and the white-noise variance of one running mean over the whole window and rolls
+ * off twice as steeply above it, where the gather's sampling cycles sit: a single mean capped
+ * at the window lets them through as shimmer on a parked camera and as frame-to-frame flicker
+ * in motion. A long window alone answers real lighting changes late.
+ * The detector closes that: the two lanes' gap has a bounded noise level (the moments'
+ * single-sample variance over both counts), and a luminance gap beyond
+ * GI_TEMPORAL_CHANGE_SIGMA of it is a mean SHIFT - the slow lane snaps to the fast one and
+ * re-accumulates, so a light turning on lands within the fast window while steady flicker
+ * integrates over the slow one.
+ *
+ * THE REVEAL FEATHER: a camera walking back or turning reveals a strip at the screen edges every
+ * frame. Its pixels start from this frame's gather alone, the strip revealed a frame earlier holds
+ * two frames, and so on; where two strips meet the count steps, and every step prints as a line
+ * along its strip - lines concentric with the viewport. The strip revealed last frame is feathered
+ * across its own width as the next one comes in (GiRevealFeather): its history counts from nothing
+ * at the boundary with the new strip to all of it one strip inward, so every strip ramps into its
+ * neighbours instead of stepping, and each pixel is feathered once, however slow the motion. Only
+ * the pixel's own samples are reweighted; at rest and moving forward no pixel moves off an edge.
  *
  * The consumer declares s_gi_history, s_gi_history_fast and s_gi_history_moments at its
  * own free stages before including this; current, depth and world position arrive as
@@ -88,8 +102,7 @@ uniform vec4 u_gi_temporal_camera;
 
 #include "gi/gi_dirty_regions.sh"
 #include "gi/gi_noise.sh"
-// z = the camera's motion this frame against the GI_TEMPORAL_CAMERA_*_FULL rates, [0, 1].
-#define u_gi_camera_motion    u_gi_temporal_dirty.z
+// z = the camera's motion this frame, read by the rough specular's motion cap only.
 // w = world units per unit of screen uv on the wider projection axis, so a screen-space object
 // displacement becomes the world displacement it stands for. POSITIVE means perspective and the
 // value is per unit of view distance; NEGATIVE means orthographic, where the span does not scale
@@ -100,13 +113,12 @@ uniform vec4 u_gi_temporal_camera;
 /// is written by this kernel and read by nothing - the consumers take the slow lane's
 /// weight, and the fast history's own alpha is only ever fed back into this blend - so it
 /// carries, as code / 8 (exact in fp16), WHY this pixel's accumulation count was limited
-/// this frame: which of the five mechanisms bound. The lit result is untouched.
+/// this frame: which of the four mechanisms bound. The lit result is untouched.
 #define GI_TEMPORAL_CAUSE_NONE      0.0
 #define GI_TEMPORAL_CAUSE_FRESH     1.0
 #define GI_TEMPORAL_CAUSE_DIRTY     2.0
-#define GI_TEMPORAL_CAUSE_CAMERA    3.0
-#define GI_TEMPORAL_CAUSE_MOVING    4.0
-#define GI_TEMPORAL_CAUSE_DETECTOR  5.0
+#define GI_TEMPORAL_CAUSE_MOVING    3.0
+#define GI_TEMPORAL_CAUSE_DETECTOR  4.0
 #define GI_TEMPORAL_CAUSE_SCALE     8.0
 /// The threshold below which a collapse term is not counted as a cause: a term this small
 /// shortens the cap by under one frame of a 24-frame window.
@@ -211,6 +223,32 @@ void GiNeighbourhoodRange(vec2 uv, float sigma_scale, out vec3 out_min, out vec3
 }
 #endif // !GI_TEMPORAL_FUSED
 
+/// The shift away from a screen edge, in history pixels, under which a pixel reveals nothing: a strip
+/// under a pixel wide holds no pixel of its own.
+#define GI_TEMPORAL_REVEAL_MIN_SHIFT_PX 1.0
+
+/// How much of the history at @p prev_uv counts for the pixel at @p uv (THE REVEAL FEATHER, see the
+/// header). A pixel that moved away from a screen edge by some shift this frame has the strip
+/// revealed this frame, one shift wide, outward of it. If it sat within one shift of that edge last
+/// frame, it belongs to the strip revealed the frame before, across which its history counts from
+/// nothing at the boundary with the new strip to all of it at the far side - the shift capped at
+/// GI_TEMPORAL_REVEAL_FEATHER_PX. Both coordinates are uv of @p size pixels.
+float GiRevealFeather(vec2 uv, vec2 prev_uv, vec2 size)
+{
+	vec2 prev_low = prev_uv * size;
+	vec2 prev_high = size - prev_low;
+	vec2 shift_low = uv * size - prev_low;
+	vec2 reveals_low = step(vec2_splat(GI_TEMPORAL_REVEAL_MIN_SHIFT_PX), shift_low);
+	vec2 reveals_high = step(vec2_splat(GI_TEMPORAL_REVEAL_MIN_SHIFT_PX), -shift_low);
+	vec2 width_low =
+	    clamp(shift_low, vec2_splat(GI_TEMPORAL_REVEAL_MIN_SHIFT_PX), vec2_splat(GI_TEMPORAL_REVEAL_FEATHER_PX));
+	vec2 width_high =
+	    clamp(-shift_low, vec2_splat(GI_TEMPORAL_REVEAL_MIN_SHIFT_PX), vec2_splat(GI_TEMPORAL_REVEAL_FEATHER_PX));
+	vec2 feather_low = mix(vec2_splat(1.0), saturate(prev_low / width_low), reveals_low);
+	vec2 feather_high = mix(vec2_splat(1.0), saturate(prev_high / width_high), reveals_high);
+	return min(min(feather_low.x, feather_low.y), min(feather_high.x, feather_high.y));
+}
+
 /// A first frame: current estimate, one accumulated sample, zero variance.
 vec4 GiFreshMoments(vec4 current)
 {
@@ -277,8 +315,8 @@ vec4 GiGatherHistoryTaps(sampler2D tex, vec2 base, vec4 weights, vec2 tex_size)
  * them from a helper fails on the D3D backend alone with an undeclared-identifier error that does
  * not name the output.
  */
-void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, float screen_share,
-                       float moving_share, out vec4 out_color, out vec4 out_fast, out vec4 out_moments)
+void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, float moving_share,
+                       out vec4 out_color, out vec4 out_fast, out vec4 out_moments)
 {
 	if(!u_gi_has_history)
 	{
@@ -457,6 +495,8 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	fast_history.xyz *= pre_exposure_correction;
 	history_moments.x *= pre_exposure_correction;
 	history_moments.y *= pre_exposure_correction * pre_exposure_correction;
+	// Next to a strip revealed this frame the history counts for less (THE REVEAL FEATHER).
+	history_moments.z *= GiRevealFeather(uv, prev_uv, history_size);
 #ifndef GI_TEMPORAL_FUSED
 	if(u_gi_clamp_sigma > 0.0)
 	{
@@ -473,24 +513,16 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	// The slow lane's cap is REGION-LOCAL: the fast cap inside a dirty region (a changed
 	// instance's stale bounce flushes there), the settings window everywhere else - a
 	// continuous mix over the margin so the flush boundary never prints as a noise step.
-	// CAMERA MOTION. The gather is not stationary under camera translation: which of
-	// a pixel's rays read the screen history and which the light voxels is a partition that
-	// follows the viewport, and the slow lane, fed by the reprojected history, would keep the
-	// old partition for its whole window after every dolly (sharp patches converging on walls,
-	// nothing the 3-sigma detector sees). While the camera moves the slow cap collapses
-	// toward the fast cap by the pixel's SCREEN SHARE - the screen-lit part of its gather -
-	// so cache-lit pixels keep their history (world light does not go stale with camera
-	// travel) and screen-lit pixels re-converge in fast-cap frames instead of slow-cap ones.
-	// u_gi_camera_motion is the resolve pass's per-frame translation and turn against the
-	// GI_TEMPORAL_CAMERA_*_FULL rates, saturated. Object motion is the dirty regions' and
-	// the velocity buffer's business already.
-	float motion_collapse = u_gi_camera_motion * saturate(screen_share);
+	// Camera motion does not shorten the window: the history is reprojected per pixel and
+	// validated per tap, object motion is the dirty regions' and the velocity buffer's
+	// business, and a pixel whose rays the screen tier answered gathers the same light from
+	// the light voxels once its hits leave the view.
 	// RAW regions only (GiDirtyRegionFactorRaw): an emissive placement's reach-inflated
 	// region would collapse every pixel it covers, far beyond the emitter itself; the pool a
 	// moved emitter lights is shortened through the moving-hit lane instead - the probes that
 	// aim at a moved emitter carry its contribution share as moving share
 	// (gi_screen_probe_trace_kernel.sh GiStoreScreenShare).
-	float collapse = max(GiDirtyRegionFactorRaw(world_position), motion_collapse);
+	float collapse = GiDirtyRegionFactorRaw(world_position);
 	float slow_cap = mix(max(u_gi_max_accum, 1.0), max(u_gi_fast_accum, 1.0), collapse);
 	// HIT-MOTION FAST UPDATE: the fraction of the gather's rays
 	// that hit MOVING geometry (the probe records' moving share, bracket-weighted per pixel)
@@ -508,10 +540,16 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	float count_fast = min(count, max(u_gi_fast_accum, 1.0));
 	float alpha = 1.0 / count;
 	float luma = Luminance(current.xyz);
-	vec4 slow = mix(history, current, alpha);
 	vec4 fast = mix(fast_history, current, 1.0 / count_fast);
+	// THE SLOW LANE INTEGRATES THE FAST ONE once it holds its window (see the header): the
+	// weight is that of a mean over the window past the fast cap, and the hand-over is
+	// continuous - the plain mean of the whole window is what the lane held the frame before.
+	// The moments below keep the plain 1/count weight: they estimate the single-sample
+	// variance the detector needs.
+	vec4 slow = count < slow_cap ? mix(history, current, alpha)
+	                             : mix(history, fast, 1.0 / max(count - count_fast + 1.0, 1.0));
 	// THE CHANGE DETECTOR (see the header): both lanes average the same stream, so their gap's
-	// noise variance is the single-sample variance over both counts. A gap beyond
+	// noise variance is bounded by the single-sample variance over both counts. A gap beyond
 	// GI_TEMPORAL_CHANGE_SIGMA of that is a mean shift - lighting actually changed - and the
 	// slow lane snaps to the fast one and re-accumulates from its window. The moments follow
 	// the same reset so the denoise's luminance stop widens exactly where history restarted.
@@ -547,18 +585,13 @@ void GiResolveTemporal(vec2 uv, vec4 current, float depth, vec3 world_position, 
 	if(u_gi_cause_lane && cap_bound)
 	{
 		float dirty_term = GiDirtyRegionFactorRaw(world_position);
-		if(moving_effective >= GI_TEMPORAL_CAUSE_MIN_TERM && moving_effective >= dirty_term &&
-		   moving_effective >= motion_collapse)
+		if(moving_effective >= GI_TEMPORAL_CAUSE_MIN_TERM && moving_effective >= dirty_term)
 		{
 			cause = GI_TEMPORAL_CAUSE_MOVING;
 		}
-		else if(dirty_term >= GI_TEMPORAL_CAUSE_MIN_TERM && dirty_term >= motion_collapse)
+		else if(dirty_term >= GI_TEMPORAL_CAUSE_MIN_TERM)
 		{
 			cause = GI_TEMPORAL_CAUSE_DIRTY;
-		}
-		else if(motion_collapse >= GI_TEMPORAL_CAUSE_MIN_TERM)
-		{
-			cause = GI_TEMPORAL_CAUSE_CAMERA;
 		}
 	}
 	if(gap * gap > gate || chroma_gap > chroma_gate)

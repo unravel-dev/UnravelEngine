@@ -56,8 +56,6 @@ public:
         r.probe_filter_passes = dominant ? f.probe_filter_passes : r.probe_filter_passes;
         r.adaptive_probes = dominant ? f.adaptive_probes : r.adaptive_probes;
         r.adaptive_rays = dominant ? f.adaptive_rays : r.adaptive_rays;
-        r.reprojected_firefly_reference =
-            dominant ? f.reprojected_firefly_reference : r.reprojected_firefly_reference;
         r.world_probe_jitter = dominant ? f.world_probe_jitter : r.world_probe_jitter;
         r.enable_reflections = dominant ? f.enable_reflections : r.enable_reflections;
         r.reflection_temporal_frames =

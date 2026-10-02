@@ -548,7 +548,7 @@ void main()
 		// do with it, and how many rays it spent. Every other GI view shows the RESULT of the
 		// gather; this shows its plan.
 		//
-		// Tile hue is the probe's mode, tile brightness is the ray budget the importance mip
+		// Tile hue is the probe's mode, tile brightness is the ray budget the importance state
 		// asked for - so it is a cost map as much as a correctness one: bright green is where
 		// Probe Trace's time actually goes.
 		//
@@ -576,8 +576,8 @@ void main()
 		uint record = (GiProbeRecord(probe_xy.x, probe_xy.y, 0) + u_gi_probe_write_offset) *
 		              uint(GI_PROBE_STRIDE);
 		vec4 meta = b_gi_probes[record + uint(GI_PROBE_META)];
-		// The 4x4 importance mip the filter wrote for this frame's allocation: its total is
-		// what the args pass turned into a ray count.
+		// The importance state the filter keeps (one luminance per 2x2 direction block): its
+		// total is what the trace turned into a ray count.
 		float importance = 0.0;
 		for(int mip_row = 0; mip_row < 4; ++mip_row)
 		{
@@ -640,13 +640,9 @@ void main()
 		}
 		else if(cause == 3)
 		{
-			cause_color = vec3(0.1, 0.3, 1.0);
-		}
-		else if(cause == 4)
-		{
 			cause_color = vec3(1.0, 0.1, 1.0);
 		}
-		else if(cause == 5)
+		else if(cause == 4)
 		{
 			cause_color = vec3(1.0, 0.9, 0.1);
 		}

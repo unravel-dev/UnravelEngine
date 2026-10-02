@@ -441,6 +441,14 @@
       " structure can stay hidden to less than the accumulation window absorbs, for an eighth"     \
       " of the skipped rays; the phase hash keeps neighbouring probes from revalidating in the"    \
       " same frame, so the cost is spread, never pulsed")                                          \
+    X(GI_ADAPTIVE_YOUNG_PIXEL_FRAMES, 4,                                                           \
+      "frames", "measured: a probe whose anchor pixel held fewer than this many frames of"         \
+      " temporal history last frame - or lay off screen - is traced, never interpolated from its"  \
+      " parents. Its pixels have no history to average the parents' blend with, so a strip a"      \
+      " moving camera reveals would show the single-frame estimate at the parents' spacing, where" \
+      " the shared parents print as probe-sized blotches; Lumen traces every probe every frame."   \
+      " The first frames carry the reveal's noise: a longer window, or every block in per-texel"   \
+      " detail for these probes, measured no quieter")                                             \
     X(GI_ADAPTIVE_COARSE_SAMPLES, 1,                                                               \
       "jittered samples per coarse 2x2 block", "measured: the adaptive-rays program traces one"    \
       " cell per dim 2x2 block of the octahedral tile and splats it to all four texels. More"      \
@@ -572,6 +580,13 @@
       " baselines of hit distance the parallax term would accept nearly anything; contact-scale"   \
       " visibility there belongs to the pixel-precise screen trace, but the cap keeps the"         \
       " probe-space filter from ever dissolving it outright")                                      \
+    X(GI_FILTER_YOUNG_FRAMES, 4,                                                                   \
+      "frames", "derived: a probe whose importance state has been continued at its surface for"    \
+      " fewer frames than this takes the outer ring of the 5x5 probes in the first filter pass"    \
+      " besides the 3x3 - the probes a moving camera brings on screen, whose pixels start from"    \
+      " a single frame of gather. By the time the probe leaves the band its pixels hold as many"   \
+      " frames, so the wider kernel stays a small share of their history window and its softer"    \
+      " detail does not outlast the reveal")                                                       \
     /* --- reflections --- */                                                                      \
     X(GI_REFLECTION_ROUGH_CUTOFF, 0.6f,                                                            \
       "GGX roughness", "matched to the SSR: fs_ssr_composite.sc fades the screen-space"            \
@@ -890,22 +905,23 @@
       " quiescence hold) for reactivity, and costs nothing while still")                           \
     X(GI_TEMPORAL_SLOW_FRAMES, 24,                                                                 \
       "frames", "derived: three anchor-placement cycles (the 8-cycle Halton), the window"          \
-      " at which GI_TEMPORAL_MAX_FRAMES holds stable under per-frame cone jitter. A longer mean"   \
-      " lowers no still-camera noise (the light-voxel EMA and the relight rotation leave no"       \
-      " world-probe amortization wave to hide) and assumes the gather is stationary per surface"   \
-      " point, which it is not: which rays read the screen history and which the voxels follows"   \
-      " the camera, so after every translation a long lane keeps the old partition for seconds"    \
-      " (sharp patches converging on walls). The slow lane also collapses under camera motion"     \
-      " by its screen share (GI_TEMPORAL_CAMERA_MOTION_FULL)")                                     \
+      " at which GI_TEMPORAL_MAX_FRAMES holds stable under per-frame cone jitter. The slow lane"   \
+      " spends the first GI_TEMPORAL_FAST_FRAMES of it as the fast lane and the rest as a"         \
+      " running mean OF the fast lane (gi_temporal_kernel.sh): the same delay and white-noise"     \
+      " variance as one mean over the window, a steeper roll-off at the sampling cycles. A"        \
+      " longer mean lowers no still-camera noise (the light-voxel EMA and the relight rotation"    \
+      " leave no world-probe amortization wave to hide). Camera motion does not shorten it:"       \
+      " the history is reprojected per pixel and validated per tap, and a lane collapsed under"    \
+      " motion by the pixel's screen share only added noise to every walk and turn")               \
     X(GI_TEMPORAL_CAMERA_MOTION_FULL, 0.02f,                                                       \
-      "metres per frame", "derived: camera translation per frame at which a pixel lit through"     \
-      " the SCREEN tier has its slow lane fully collapsed to the fast cap (scaled by the pixel's"  \
-      " screen share, so cache-lit pixels keep their history - camera travel does not stale"       \
-      " accumulated world light, it stales the screen-history partition). A walking pace at"       \
-      " 60 Hz; a slow dolly collapses proportionally")                                             \
+      "metres per frame", "derived: camera translation per frame at which the rough specular's"    \
+      " history cap (fs_gi_rough_specular.sc) is fully at GI_REFLECTION_ROUGH_SPECULAR_FRAMES: a"  \
+      " glossy lobe's history is view dependent, so a moving camera shortens it. A walking pace"   \
+      " at 60 Hz; a slow dolly shortens proportionally. The GI temporal itself does not shorten"   \
+      " under camera motion")                                                                      \
     X(GI_TEMPORAL_CAMERA_ROTATION_FULL, 1.0f,                                                      \
-      "degrees per frame", "derived: the rotation-rate counterpart - a turn moves the viewport"    \
-      " edge, which is the screen partition's boundary, across every wall it crosses")             \
+      "degrees per frame", "derived: the rotation-rate counterpart for the same cap - a turn"      \
+      " changes the view direction every lobe depends on")                                         \
     X(GI_TEMPORAL_DIRTY_EMISSIVE_IRRADIANCE, 0.05f,                                                \
       "radiance units", "derived: an emissive placement's dirty region is inflated to the"         \
       " distance where its irradiance L x A / d^2 falls to this - the pool it lit. Without it"     \
@@ -1024,32 +1040,35 @@
       " signs, so the mean over 10^5 relit faces is noise of order 1/sqrt(N)). Stationary is"      \
       " accepted only under a quarter: the directional part is then a minor share of what the"     \
       " ratio test already tolerates")                                                             \
-    X(GI_GATHER_FIREFLY_CLAMP, 8.0f,                                                               \
-      "x the governor's reference", "derived: a gather ray that lands on a small bright"           \
-      " emitter returns a radiance that dominates its probe's whole tile - and a probe whose"      \
-      " accumulation just reset (a Halton walk, temporal off) ingests it at full weight, so the"   \
-      " probe's entire screen footprint flashes for a frame and fades. Each texel's new sample"    \
-      " is clamped to this many times its reference: the texel's own blended history, FLOORED"     \
-      " by the reprojected previous tile's mean luminance (world-anchored, so it survives"         \
-      " camera-slide re-anchors - a per-texel reference alone goes stale and dark on every"        \
-      " slide, crushing legitimate energy in emissive-lit dark scenes and pumping as it"           \
-      " re-ramps). Never ONLY the tile mean - that crushes a lone bright texel to mean x k /"      \
-      " 256; the max() keeps an established bright texel raising its own ceiling and converging"   \
-      " unbiased. No reference at all (fresh tile, failed reprojection): the first measurement"    \
-      " stores unclamped - progressive ramps from black would dim every disocclusion instead")     \
+    X(GI_GATHER_FIREFLY_CLAMP, 4.0f,                                                               \
+      "x the probe's importance state", "measured: a gather ray that lands on a small bright"      \
+      " source returns a radiance that dominates its probe's whole tile, and a probe or pixel"     \
+      " whose accumulation just reset ingests it at full weight - the probe's screen footprint"    \
+      " flashes and fades. The probe filter's first pass caps every tap of a probe with a"         \
+      " settled importance state at this many times the luminance the state holds for the"         \
+      " tap's direction block (floored by the tile mean) and returns what it removed as each"      \
+      " texel's running mean over the frames the probe has capped in a row"                        \
+      " (cs_gi_screen_probe_filter.sc): the cap shapes a frame's noise and keeps no light, so a"   \
+      " probe's level does not depend on how long it has been capping. At 4 the corridor's rest"   \
+      " noise is 40% under the uncapped taps' at the same level")                                  \
     X(GI_GATHER_FIREFLY_REFERENCE_FLOOR, 0.001f,                                                   \
-      "luminance, pre-exposed", "derived: the governor's near-black floor. A probe that"           \
-      " reprojected onto last frame's lattice (the same surface, by the plane test) is governed"   \
-      " however dark its history, its reference floored here: a dark history is a measurement"     \
-      " too, and a rare ray that reaches a small sunlit patch or emitter that history never saw"   \
-      " is the sparse spike the governor exists for - admitted whole, the probe's footprint"       \
-      " blinks white in a dark room beside a lit one. A light that persists raises its own"        \
-      " reference, so it climbs by up to GI_GATHER_FIREFLY_CLAMP per frame from"                   \
-      " GI_GATHER_FIREFLY_CLAMP x this floor - four frames to a pre-exposed 1 on a texel's own"    \
-      " history, inside the ten-frame convergence window. Without reprojected history only a"      \
-      " reference above the floor governs, so a disocclusion's first measurement still stores"     \
-      " unclamped. A pre-exposed 1e-3 is near display black: below it a reference says nothing"    \
-      " about what the probe sees")                                                                \
+      "luminance, pre-exposed", "derived: the governor's near-black floor. A probe is governed"    \
+      " however dark its state, the reference floored here: a dark state is a measurement too,"    \
+      " and a rare ray that reaches a small sunlit patch or emitter the state never saw is the"    \
+      " sparse spike the governor exists for - admitted whole, the probe's footprint blinks"       \
+      " white in a dark room beside a lit one. A light that persists raises the state, whose"      \
+      " mean holds single frames while the light voxels relight after a lighting change. A"        \
+      " pre-exposed 1e-3 is near display black: below it a reference says nothing about what"      \
+      " the probe sees")                                                                           \
+    X(GI_IMPORTANCE_STATE_FRAMES, 16,                                                              \
+      "frames", "derived: the running-mean window of a probe's importance state - one direction"   \
+      " cycle (the 16-frame R2 sequence of the cone jitter), so at rest the state holds every"     \
+      " cone position once and does not ride the cycle. It is the cap's reference and the"         \
+      " trace's ray allocation: longer windows follow a surface's lighting later than the"         \
+      " temporal's fast window does, shorter ones let single frames set their own ceiling. The"    \
+      " mean holds single frames while the light voxels relight after a lighting change"           \
+      " (GI_TEMPORAL_FAST_FRAMES) and grows again from there. A probe caps only once its state"    \
+      " is settled: continued at its surface for the whole window and holding all of it")          \
     X(GI_TEMPORAL_CHANGE_SIGMA, 3.0f,                                                              \
       "standard deviations", "derived: the fast and slow lanes are means of the same sample"       \
       " stream, so their gap's variance is the single-sample variance x (1/n_fast +"               \
@@ -1107,6 +1126,12 @@
       "fraction of the tolerance", "derived: the per-tap validity tolerance is scaled by"          \
       " +-50% per pixel with the IGN pattern, so the rejection edge is a dithered band"            \
       " rather than a hard temporal seam that prints as a line where history restarts")            \
+    X(GI_TEMPORAL_REVEAL_FEATHER_PX, 16.0f,                                                        \
+      "history pixels", "derived: the widest feather of the reveal boundary"                       \
+      " (gi_temporal_kernel.sh GiRevealFeather) - the strip a camera motion revealed is"           \
+      " feathered across its own width, one frame's shift, up to this many history pixels: one"    \
+      " probe spacing, about the strip a backward walk reveals per frame beside a near wall. A"    \
+      " wider strip ramps over its first spacing and holds its own count beyond it")               \
     X(GI_TEMPORAL_MOVING_SPEED, 0.005f,                                                            \
       "world displacement per frame per unit of probe view distance", "derived: a ray whose hit"   \
       " moved by more than this fraction of the probe's depth since last frame is a MOVING"        \

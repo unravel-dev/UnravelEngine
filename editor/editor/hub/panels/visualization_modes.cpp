@@ -186,11 +186,10 @@ constexpr std::array<visualization_swatch, 4> k_legend_gi_temporal = {{
     {{0.1f, 0.2f, 1.0f}, "Blue lift: the moving-hit share is shortening this window on purpose"},
 }};
 
-constexpr std::array<visualization_swatch, 6> k_legend_gi_temporal_cause = {{
+constexpr std::array<visualization_swatch, 5> k_legend_gi_temporal_cause = {{
     {{0.05f, 0.35f, 0.1f}, "No cause: the count grew this frame, or sits at the settings window"},
     {{1.0f, 1.0f, 1.0f}, "Fresh: no usable history (first frame, off-screen last frame, disocclusion)"},
     {{1.0f, 0.1f, 0.05f}, "Dirty region: a placement changed nearby and collapsed the slow lane"},
-    {{0.1f, 0.3f, 1.0f}, "Camera motion: the screen-share weighted collapse"},
     {{1.0f, 0.1f, 1.0f}, "Moving hits: the probe's rays hit moving geometry"},
     {{1.0f, 0.9f, 0.1f}, "Change detector: the slow lane snapped to the fast one"},
 }};

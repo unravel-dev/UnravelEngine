@@ -481,8 +481,8 @@ uniform vec4 u_gi_world_probe_atlas;
 
 /**
  * Straight-segment visibility between a query point and one cage probe, asked of the global
- * SDF clipmap itself (every GI_WORLD_PROBE_READ consumer includes sdf_common.sh first, so
- * SdfSampleClipmap is in scope). Returns 1 when the field stays open along the segment, 0 when
+ * SDF clipmap itself (every GI_WORLD_PROBE_READ consumer includes sdf_clipmap.sh - through
+ * sdf_common.sh or alone - first, so the clipmap sampling is in scope). Returns 1 when the field stays open along the segment, 0 when
  * a closed surface separates the pair.
  *
  * This is the reader-side defence the depth moments cannot provide at silhouettes: an 8x8

@@ -81,15 +81,6 @@ public:
         /// blending that drift cannot occur). Off = every texel traces its own ray, the
         /// quality ceiling.
         bool adaptive_rays = true;
-        /// The reference the gather's firefly governor caps each new sample against
-        /// (GI_GATHER_FIREFLY_CLAMP x reference). Off: the larger of last frame's value of the
-        /// same screen-slot texel and the reprojected probe's luminance (its tile mean and,
-        /// where the probe reprojected, its filtered 2x2 block around the direction); the texel
-        /// term is screen-locked - once the camera moves the slot holds another world point. On:
-        /// the reprojected probe's luminance alone - the same world point's radiance around the
-        /// direction, so the ceiling follows the surface through camera motion; a probe without
-        /// reprojected history stores its samples uncapped.
-        bool reprojected_firefly_reference = false;
         /// World-probe rays JITTER inside their octahedral texel per window and the atlas
         /// becomes a converging running mean (GI_WORLD_PROBE_EMA_WINDOWS): removes the
         /// per-probe bias of fixed texel-centre rays (a small emitter skewered or missed per
@@ -489,9 +480,21 @@ private:
         gfx::program::uniform_ptr u_gi_probe_screen;
         gfx::program::uniform_ptr u_gi_probe_temporal;
         /// x = 1 for a radiance-only pass (writes the filtered atlas at image 3 and stops),
-        /// 0 for the final pass that convolves to irradiance and writes the importance mip.
+        /// 0 for the final pass that convolves to irradiance; y = 1 for the first pass, which
+        /// governs the taps and advances the importance state; z = the frames the state's mean
+        /// may hold.
         gfx::program::uniform_ptr u_gi_probe_filter;
+        /// The lattice and the previous view projection: the first pass reprojects each anchor
+        /// into last frame's lattice for the state it continues.
+        gfx::program::uniform_ptr u_gi_probe_lattice;
+        gfx::program::uniform_ptr u_gi_probe_lattice_warp;
+        gfx::program::uniform_ptr u_gi_prev_view_proj;
+        /// The state is pre-exposed luminance; last frame's is corrected on read.
+        gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr s_probe_radiance;
+        /// Last frame's excess atlas: the light the first pass's cap removed, as each texel's
+        /// running mean, which the pass continues and returns.
+        gfx::program::uniform_ptr s_gi_probe_excess;
 
         void cache_uniforms()
         {
@@ -499,7 +502,12 @@ private:
             cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_filter, "u_gi_probe_filter", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice, "u_gi_probe_lattice", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice_warp, "u_gi_probe_lattice_warp", bgfx::UniformType::Vec4, 9);
+            cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), s_probe_radiance, "s_probe_radiance", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_gi_probe_excess, "s_gi_probe_excess", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -507,6 +515,55 @@ private:
             return program && program->is_valid();
         }
     } filter_program_;
+
+    /// The LIGHTING PRIOR (cs_gi_screen_probe_prior.sc): the world-probe radiance cache read per
+    /// direction for the probes the classify marks, ahead of the trace - the lighting PDF of a
+    /// probe without history.
+    struct prior_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_gi_probe_params;
+        gfx::program::uniform_ptr u_gi_probe_temporal;
+        /// The cache is pre-exposure converted into the gather's space.
+        gfx::program::uniform_ptr u_pre_exposure;
+        gfx::program::uniform_ptr u_gi_camera;
+        gfx::program::uniform_ptr u_gi_world_probe_params;
+        gfx::program::uniform_ptr u_gi_world_probe_atlas;
+        gfx::program::uniform_ptr u_gi_world_probe_radiance_atlas;
+        gfx::program::uniform_ptr u_sdf_clipmap_levels;
+        gfx::program::uniform_ptr u_sdf_clipmap_params;
+        gfx::program::uniform_ptr s_sdf_clipmap;
+        gfx::program::uniform_ptr s_world_probe_depth;
+        gfx::program::uniform_ptr s_world_probe_radiance_read;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_gi_probe_params, "u_gi_probe_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_camera, "u_gi_camera", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_params, "u_gi_world_probe_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_world_probe_atlas, "u_gi_world_probe_atlas", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(),
+                          u_gi_world_probe_radiance_atlas,
+                          "u_gi_world_probe_radiance_atlas",
+                          bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_clipmap_levels, "u_sdf_clipmap_levels", bgfx::UniformType::Vec4,
+                          global_sdf_clipmap::level_count);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_world_probe_depth, "s_world_probe_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(),
+                          s_world_probe_radiance_read,
+                          "s_world_probe_radiance_read",
+                          bgfx::UniformType::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } prior_program_;
 
     /// Placement (adaptive gather): computes every probe's anchor into the records before the
     /// trace, which is what lets the trace classify a probe against its parents' anchors.
@@ -558,6 +615,13 @@ private:
         gfx::program::uniform_ptr u_gi_probe_temporal;
         gfx::program::uniform_ptr u_gi_probe_lattice;
         gfx::program::uniform_ptr u_gi_screen_trace;
+        /// The anchor's view last frame: the lighting prior's request looks up the state the probe
+        /// would continue.
+        gfx::program::uniform_ptr u_gi_probe_screen;
+        gfx::program::uniform_ptr u_gi_probe_lattice_warp;
+        gfx::program::uniform_ptr u_gi_prev_view_proj;
+        /// Last frame's temporal moments: the young-pixel gate reads each anchor pixel's frame count.
+        gfx::program::uniform_ptr s_gi_prev_moments;
 
         void cache_uniforms()
         {
@@ -565,6 +629,10 @@ private:
             cache_uniform(program.get(), u_gi_probe_temporal, "u_gi_probe_temporal", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_probe_lattice, "u_gi_probe_lattice", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_gi_screen_trace, "u_gi_screen_trace", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_screen, "u_gi_probe_screen", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_gi_probe_lattice_warp, "u_gi_probe_lattice_warp", bgfx::UniformType::Vec4, 9);
+            cache_uniform(program.get(), u_gi_prev_view_proj, "u_gi_prev_view_proj", bgfx::UniformType::Mat4);
+            cache_uniform(program.get(), s_gi_prev_moments, "s_gi_prev_moments", bgfx::UniformType::Sampler);
         }
 
         auto is_valid() const -> bool
@@ -696,7 +764,7 @@ private:
     /// The last gathered result and rough specular, which held frames republish.
     gfx::texture::ptr held_result_;
     gfx::texture::ptr held_rough_specular_;
-    /// Last frame's camera pose for the temporal's camera-motion collapse (the z lane of
+    /// Last frame's camera pose for the rough specular's motion cap (the z lane of
     /// u_gi_temporal_dirty): position and view axis, valid once has_prev_camera_ is set.
     math::vec3 prev_camera_position_{};
     math::vec3 prev_camera_axis_{};

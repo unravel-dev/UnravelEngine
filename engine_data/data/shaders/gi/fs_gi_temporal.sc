@@ -39,7 +39,7 @@ void main()
 	// The split form has no per-pixel screen or moving share (the gather went through a
 	// texture): the camera-motion and hit-motion collapses are off here, the fused form is
 	// the deliverable path.
-	GiResolveTemporal(uv, current, depth, world_position, 0.0, 0.0, color, fast, moments);
+	GiResolveTemporal(uv, current, depth, world_position, 0.0, color, fast, moments);
 	GI_COLOR_OUT = color;
 	GI_MOMENTS_OUT = moments;
 	GI_FAST_OUT = fast;

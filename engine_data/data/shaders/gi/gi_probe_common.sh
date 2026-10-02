@@ -19,19 +19,29 @@
  *    away, 0 where the texel measured nothing. Fully rewritten every frame (traced,
  *    interpolated or cleared) - there is no probe-space accumulation.
  *  - Probe buffer: GI_PROBE_STRIDE vec4s per probe, probe-major:
- *      [0..3]  the 4x4 importance mip the filter writes for next frame's ray allocation
+ *      [0..3]  the IMPORTANCE STATE the filter's first pass keeps: the luminance of each of the
+ *              tile's 4x4 direction blocks, filtered over the 3x3 probes before the firefly cap
+ *              and averaged over frames at the surface (cs_gi_screen_probe_filter.sc). The
+ *              filter's own cap reference and next frame's ray allocation
  *      [4]     xyz = lifted trace origin, w = shortened-ray range (placement pass)
  *      [5]     xy = anchor uv, z = anchor device depth, w = 0 (reserved, kept for layout
  *              stability)
  *      [6]     x = the SCREEN-TIER SHARE of the probe's traced rays this frame (the trace;
- *              the interp pass mirrors its parents' mean) - the temporal's camera-motion
- *              collapse weight, yzw = 0
+ *              the interp pass mirrors its parents' mean), y = the MOVING share - rays that hit
+ *              moving geometry, the temporal's and the rough specular's moving-hit collapse
+ *              weight - zw = 0
  *      [7]     the EXPLICIT EMITTER SAMPLING census of a traced probe (the trace writes it,
  *              interpolated probes keep the slot): x = share of the probe's gathered energy
  *              (the sum of MIS contributions, luminance) that AIMED rays delivered, y = aimed
  *              rays over traced rays, z = emitters selected over GI_EMISSIVE_NEE_PER_PROBE,
  *              w = the probe's total contribution luminance. Read by the gi_emitter_share
  *              debug view - an instrument, no lit consumer
+ *      [8]     x = the frames the importance state's mean holds, y = the frames the state has
+ *              been continued at its surface (its age), z = the age of the cache floor the tile
+ *              carries in [12..15] (0 = none), w = 1 while the lighting-prior pass is to read the
+ *              cache for this probe this frame (the classify's request), which the filter's first
+ *              pass replaces with the frames the probe has capped in a row (the count its excess
+ *              mean continues next frame, 0 = not capped)
  *      [9]     xyz = anchor world position, w = the probe MODE: 0 = no geometry, 1 = traced,
  *              2 = interpolated from its even-lattice parents (adaptive gather), 3 = traced
  *              because its last revalidation disagreed with the parents' blend (sticky until
@@ -44,18 +54,31 @@
  *              not answer); the world-probe completion share is the remainder. Written by
  *              the trace only (interpolated probes keep whatever the slot held) and read by
  *              the gi_probe_tiers debug view - a ray-budget instrument.
+ *      [12..15] the tile's CACHE FLOOR: the world-probe radiance cache's luminance per direction
+ *              block at the probe's origin, read by the lighting-prior pass for a probe with no
+ *              history at its surface and carried by the tile for the cache's window
+ *              (cs_gi_screen_probe_prior.sc): the trace's lighting PDF of a probe without history.
  */
 
 #define GI_PROBE_DIR_EDGE   8
 #define GI_PROBE_DIR_COUNT  64
-#define GI_PROBE_STRIDE     12
+/// The tile's 4x4 blocks of 2x2 direction texels: the resolution of the importance state.
+#define GI_PROBE_BLOCK_COUNT 16
+#define GI_PROBE_STRIDE     16
 #define GI_PROBE_ORIGIN     4
 #define GI_PROBE_ANCHOR     5
 #define GI_PROBE_SCREEN_SHARE 6
 #define GI_PROBE_EMITTER    7
+#define GI_PROBE_IMPORTANCE_FRAMES 8
 #define GI_PROBE_META       9
 #define GI_PROBE_META2      10
 #define GI_PROBE_TIERS      11
+#define GI_PROBE_FLOOR      12
+
+/// Plane tolerance as a fraction of view distance - the adaptive spatial-error rule every
+/// screen-space consumer shares (GI-1.0's cell_size heuristic, here in its simplest form): the
+/// filter's neighbours and state candidates, the classify's history test.
+#define GI_FILTER_PLANE_TOLERANCE 0.05
 /// Single layer: the gather anchors one probe per tile; the record indexing keeps the
 /// parameter for layout stability.
 #define GI_PROBE_LAYERS     1
@@ -170,12 +193,6 @@ ivec2 GiProbeLatticePrevIndex(ivec2 probe)
 ivec2 GiProbeLatticeKey(ivec2 probe)
 {
 	return probe - GI_PROBE_LATTICE_WRAP_TILES * ivec2(GiProbeLatticeWrapsOf(u_gi_probe_lattice.xy));
-}
-
-/// Whether the lattice wrapped since last frame: a probe slot then holds another tile's history.
-bool GiProbeLatticeWrapped()
-{
-	return any(notEqual(GiProbeLatticeWrapsOf(u_gi_probe_lattice.xy), GiProbeLatticeWrapsOf(u_gi_probe_lattice.zw)));
 }
 
 /**
