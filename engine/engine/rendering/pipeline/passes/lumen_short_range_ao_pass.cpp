@@ -9,6 +9,7 @@
 #include <engine/rendering/gi/lumen_constants.h>
 
 #include <graphics/graphics.h>
+#include <graphics/render_pass.h>
 #include <logging/logging.h>
 
 namespace unravel
@@ -37,6 +38,7 @@ void lumen_short_range_ao_pass::uniforms::cache_uniforms()
     cache_uniform(nullptr, u_lumen_frame, "u_lumen_frame", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_probes, "u_lumen_probes", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_view, "u_lumen_view", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, u_lumen_settings, "u_lumen_settings", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_short_range_ao, "u_lumen_short_range_ao", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_prev_view_proj, "u_lumen_prev_view_proj", bgfx::UniformType::Mat4);
     cache_uniform(nullptr, u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
@@ -106,6 +108,7 @@ void lumen_short_range_ao_pass::set_frame_uniforms(const run_params& params, boo
     gfx::set_uniform(uniforms_.u_lumen_frame, params.frame);
     gfx::set_uniform(uniforms_.u_lumen_probes, params.probes);
     gfx::set_uniform(uniforms_.u_lumen_view, params.view);
+    gfx::set_uniform(uniforms_.u_lumen_settings, lumen_pass::make_settings_uniform(gather.settings).data());
     const float short_range_ao[4] = {has_history ? 1.0f : 0.0f, params.r2_noise ? 1.0f : 0.0f, 0.0f, 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_short_range_ao, short_range_ao);
     gfx::set_uniform(uniforms_.u_lumen_prev_view_proj, gather.cam->get_prev_view_projection_unjittered().get_matrix());

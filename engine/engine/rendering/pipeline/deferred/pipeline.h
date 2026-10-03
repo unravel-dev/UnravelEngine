@@ -147,57 +147,23 @@ public:
     /// The lit image's tone mapping operator, which the debug views that read like the frame go through (none
     /// without HDR).
     static auto get_debug_tonemapping(const run_params& rparams) -> tonemapping_method;
-    /// The G-buffer visualiser's views; @p tonemapping is the lit image's operator, which the indirect diffuse view
-    /// goes through as UE's does.
+    /// The G-buffer visualiser's views; the indirect diffuse view goes through the lit image's tone mapping
+    /// operator (get_debug_tonemapping) as UE's does.
     void run_debug_visualization_pass(const camera& camera,
                                       gfx::render_view& rview,
                                       const gfx::frame_buffer::ptr& output,
-                                      tonemapping_method tonemapping);
+                                      const run_params& rparams);
 
-    /// Debug pass ids at or above this one are handled by the distance field visualiser
-    /// rather than by the G-buffer visualiser, whose shader only knows modes 0..14.
-    static constexpr int debug_pass_sdf_normals = 15;
-    static constexpr int debug_pass_sdf_step_count = 16;
-    static constexpr int debug_pass_sdf_headers = 17;
-    static constexpr int debug_pass_sdf_probe = 18;
-    static constexpr int debug_pass_sdf_entry = 19;
-    static constexpr int debug_pass_sdf_clipmap = 20;
-    static constexpr int debug_pass_sdf_direct = 21;
-    static constexpr int debug_pass_sdf_cascade_levels = 22;
-    static constexpr int debug_pass_sdf_attr_albedo = 23;
-    static constexpr int debug_pass_sdf_light_voxels = 24;
-    static constexpr int debug_pass_sdf_world_probes = 25;
-    static constexpr int debug_pass_sdf_sun_tiers = 26;
-    static constexpr int debug_pass_sdf_probe_sky = 27;
-    static constexpr int debug_pass_sdf_vis_memo = 28;
-    /// Velocity buffer visualization. Not part of the SDF band: dispatched by an exact match
-    /// BEFORE the >= debug_pass_sdf_normals check. Selecting it forces velocity production
-    /// for camera runs even when no other consumer (TAA) is active.
+    /// Debug pass ids below this one are the G-buffer visualizer shader's own modes; every view with a larger id is
+    /// dispatched by an exact match.
+    static constexpr int debug_pass_gbuffer_modes = 15;
+    /// Velocity buffer visualization. Selecting it forces velocity production for camera runs even when no other
+    /// consumer (TAA) is active.
     static constexpr int debug_pass_velocity = 29;
-    /// The screen-space AO bent normal, through the G-buffer visualization program (shader
-    /// mode 15); dispatched BEFORE the >= debug_pass_sdf_normals check.
+    /// The screen-space AO bent normal, through the G-buffer visualization program.
     static constexpr int debug_pass_ao_bent_normals = 31;
-
-    /// GI views added after the velocity/GTAO ids, so those keep the numbers the editor's
-    /// static_asserts pin. All four are >= debug_pass_sdf_normals, so they route to the SDF
-    /// debug pass and keep the GI world state alive exactly like the rest of that group.
-    static constexpr int debug_pass_gi_attr_emissive = 32;
-    static constexpr int debug_pass_gi_cage_health = 33;
-    static constexpr int debug_pass_gi_dirty_regions = 34;
-    static constexpr int debug_pass_gi_probe_lattice = 35;
-    /// SCREEN-SPACE GI views. Also handled by the SDF debug pass (it is the one fullscreen pass
-    /// with the GI bindings), but they read screen buffers rather than tracing, so the shader
-    /// answers them before the march.
-    static constexpr int debug_pass_gi_screen_probes = 36;
-    static constexpr int debug_pass_gi_temporal = 37;
-    static constexpr int debug_pass_gi_probe_tiers = 38;
-    /// The temporal's reset CAUSE per pixel (which mechanism limited the accumulation count)
-    /// and the explicit emitter sampling census per screen probe (record [7]).
-    static constexpr int debug_pass_gi_temporal_cause = 39;
-    static constexpr int debug_pass_gi_emitter_share = 40;
     /// Auto exposure's own state, drawn as a blended panel OVER the finished image (UE's
-    /// Visualize HDR). Dispatched by an exact match before the >= debug_pass_sdf_normals
-    /// check, like velocity and GTAO - it is an overlay, not a replacement image.
+    /// Visualize HDR): an overlay, not a replacement image.
     static constexpr int debug_pass_exposure = 41;
     /// Lumen surface cache views (lumen_surface_cache_pass::run_debug): the global distance field traced from
     /// the camera and shaded from the cards (UE's Lumen Scene and Surface Cache views), and the physical card atlas.
@@ -210,96 +176,48 @@ public:
     static constexpr int debug_pass_lumen_scene_direct = 48;
     static constexpr int debug_pass_lumen_scene_indirect = 49;
     /// UE's Dedicated Reflection Rays view (r.Lumen.Visualize 7), drawn by the G-buffer visualizer:
-    /// the pixels Lumen traces reflections for. Dispatched by an exact match before the SDF check.
+    /// the pixels Lumen traces reflections for.
     static constexpr int debug_pass_lumen_reflection_rays = 50;
     void run_exposure_debug_pass(gfx::render_view& rview,
                                  const gfx::frame_buffer::ptr& output,
                                  const run_params& rparams);
-    /// Lumen surface cache for this frame: card placement and resolution, captures rasterized with
-    /// the G-buffer program (one orthographic view per page), copied into the physical atlases, then
-    /// lit (direct lighting and the final combine).
-    void run_lumen_surface_cache(const camera& camera, gfx::render_view& rview, surface_cache_system& gi_scene);
+    /// Lumen surface cache for this frame under the view's @p scene_settings: card placement and resolution,
+    /// captures rasterized with the G-buffer program (one orthographic view per page), copied into the physical
+    /// atlases, then lit (direct lighting and the final combine).
+    void run_lumen_surface_cache(const camera& camera,
+                                 gfx::render_view& rview,
+                                 surface_cache_system& gi_scene,
+                                 const gi_settings::scene_settings& scene_settings);
     /// Rasterizes this frame's card captures, one orthographic view per page.
     void capture_lumen_cards(const camera& camera, const surface_cache_system& gi_scene);
-    void run_sdf_debug_pass(const camera& camera,
-                            gfx::render_view& rview,
-                            const run_params& rparams,
-                            const gfx::frame_buffer::ptr& output);
 
     /// Resolves the blended gi_settings for this run from the volume hooks; false = GI off.
     auto resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool;
 
-    /// GI world-state preparation for a camera run: surface-cache residency, the
-    /// viewer-snapped clipmap cascade and its compose (also kept alive for the SDF
-    /// debug views), then -- when a gi_component asks for GI -- voxel lighting and
-    /// world-probe tracing. No-op for probe captures and when neither GI nor the
-    /// SDF debug views need the cache.
+    /// The GI scene for a camera run that asks for GI: instance residency (shared by every camera, refreshed once per
+    /// frame) and this view's global distance field, snapped around the camera and composed on the GPU.
     void run_gi_scene_passes(scene& scn, const camera& camera, gfx::render_view& rview, const run_params& params);
 
-    /// Lights the resident surface voxels (GI v2 plan 3.2), with sun visibility
-    /// answered by the sun's CSM cascade 0 when one was rendered this frame.
-    /// @param indirect The quiescence gate's argument buffer when it decides on the GPU,
-    ///        invalid when the CPU already decided (see gi_quiescence_gate_pass).
-    /// @param collect_stats Stage the convergence readback this frame; only ever true on the
-    ///        readback path, and only while the CPU-side inputs are still enough for the
-    ///        sample to survive update_quiescence.
-    void run_gi_light_voxel_pass(scene& scn,
-                                 const camera& camera,
-                                 gfx::render_view& rview,
-                                 surface_cache_system& surface_cache,
-                                 surface_cache_view& view_cache,
-                                 const gi_settings& gi,
-                                 bgfx::IndirectBufferHandle indirect,
-                                 bool collect_stats);
-
-    /// Traces world probes against the freshly lit voxels (GI v2 plan 3.3).
-    /// @param indirect See run_gi_light_voxel_pass.
-    void run_gi_world_probe_pass(const camera& camera,
-                                 gfx::render_view& rview,
-                                 surface_cache_system& surface_cache,
-                                 surface_cache_view& view_cache,
-                                 const gi_settings& gi,
-                                 bgfx::IndirectBufferHandle indirect);
-
-    /// World-space specular tier into RBUFFER, layered UNDER SSR. No-op unless a camera run with
-    /// GI reflections enabled.
-    /// @return true when the traced tier ran this frame (the rough tier then follows the gather).
-    auto run_gi_reflection_pass(const camera& camera, gfx::render_view& rview, const run_params& params) -> bool;
-
     /// Whether Lumen's reflections own this view's reflection buffers: a camera run with the probe stack and
-    /// float buffers, the Lumen gather and GI reflections enabled. SSR, the GI reflection tier and the probes
-    /// then step aside (UE composites no other specular under Lumen's).
+    /// float buffers and GI with its reflections enabled. SSR and the reflection probes then step aside (UE
+    /// composites no other specular under Lumen's).
     auto lumen_reflections_own_view(const run_params& rparams) -> bool;
-    /// True when the Lumen gather's short-range AO replaces the screen-space AO in this view (UE applies no
-    /// SSAO under Lumen GI while its short-range AO is on).
+    /// True when Lumen's short-range AO is enabled in this view: it replaces the screen-space AO at any intensity
+    /// (UE applies no SSAO under Lumen GI, r.Lumen.DiffuseIndirect.SSAO 0).
     auto lumen_short_range_ao_owns_view(const run_params& rparams) -> bool;
 
     /// Lumen's reflections into RBUFFER and PBUFFER after the Lumen gather of @p gather_params.
-    void run_lumen_reflection_pass(gfx::render_view& rview, const gi_resolve_pass::run_params& gather_params);
+    void run_lumen_reflection_pass(gfx::render_view& rview, const lumen_run_params& gather_params);
 
-    /// The GI reflections' rough tier into PBUFFER, the probe layer: this frame's rough specular
-    /// fading into the resolve, after the gather that produced both. No-op unless
-    /// @p reflection_ran and the probe stack drew PBUFFER this frame.
-    void run_gi_reflection_rough_tier(const camera& camera,
-                                      gfx::render_view& rview,
-                                      const run_params& params,
-                                      bool reflection_ran);
-
-    /// Gathers the world structures into a screen-space indirect diffuse buffer.
-    /// See gi_resolve_pass.
-    /// @return true when the pass produced a result, which also means it needs PREV_DEPTH
+    /// Lumen GI for a camera run that asks for it: the surface cache, the screen probe gather (published as
+    /// GI_RESOLVE, its rough specular as GI_ROUGH_SPECULAR) and the reflections.
+    /// @return true when the gather produced a result, which also means it needs PREV_DEPTH
     ///         snapshotted this frame for its temporal accumulation.
-    /// Far-field radiance for hits beyond the cascades comes from @c PREV_SCENE_HDR
-    /// (last frame's post-TAA linear scene color -- the SSR convention, same source).
-    auto run_gi_resolve_pass(const camera& camera,
-                             gfx::render_view& rview,
-                             const run_params& rparams) -> bool;
+    auto run_lumen_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool;
 
-    /// Whether this view's screen-side GI is held this frame (gi_resolve_pass::settings::
-    /// hold_at_rest): the camera, pre-exposure and GI settings unchanged, no mover drawn and the
-    /// world side settled, for long enough. Decided once per frame and view; the reflection
-    /// trace and the gather share the verdict.
-    auto update_gi_hold(const camera& camera, gfx::render_view& rview, const gi_settings& gi) -> bool;
+    /// This view's inputs to the Lumen passes under @p gi.
+    auto make_lumen_run_params(const camera& camera, gfx::render_view& rview, const gi_settings& gi)
+        -> lumen_run_params;
 
     void build_reflections(scene& scn, const camera& camera, delta_t dt);
 
@@ -629,11 +547,6 @@ private:
         gfx::texture::ptr irradiance_tex;
         math::vec3 global_color = {1.0f, 1.0f, 1.0f};
         float global_intensity = 0.0f;
-        /// Revision of the environment radiance this pass baked: every input that can change
-        /// IRRADIANCE_SH, folded. The GI world side keys its wake-up on it, because neither the
-        /// analytic light set nor the clipmap content epoch moves when only the sky changes.
-        /// Also published on the render view under GI_ENVIRONMENT_HASH, next to the texture.
-        uint64_t environment_hash = 0;
     };
     auto run_irradiance_pass(scene& scn, gfx::render_view& rview) -> irradiance_pass_result;
 
@@ -700,9 +613,9 @@ private:
     void snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size);
 
     /// After TAA; copies the SCENE-REFERRED linear HDR target into @c PREV_SCENE_HDR for
-    /// next frame's SSR trace and GI far-field. Deliberately pre-bloom/tonemap/UI: the old
-    /// source (final OBUFFER) fed display-encoded values back into linear lighting, which
-    /// with free-floating auto exposure formed a brightness feedback loop in dark scenes.
+    /// next frame's SSR trace and Lumen screen traces. Deliberately pre-bloom/tonemap/UI:
+    /// display-encoded values fed back into linear lighting would, with free-floating auto
+    /// exposure, form a brightness feedback loop in dark scenes.
     void snapshot_prev_scene_color(gfx::render_view& rview,
                                    const gfx::frame_buffer::ptr& source,
                                    const camera& camera);
@@ -730,13 +643,11 @@ private:
     /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).
     bool velocity_run_active_{false};
     /// Render frame of the last velocity pass that drew ANY mover (individual or batched),
-    /// stamped inside run_velocity_pass's own visibility walk - the CPU-side signal for the
-    /// GI reflection temporal's mover gate, held one temporal window by the consumer.
-    /// Riding the owning pass's loop keeps the signal exactly as covered as the buffer it
-    /// describes (off-screen movers are accepted as uncovered by design - no registry scan).
+    /// stamped inside run_velocity_pass's own visibility walk - the CPU-side signal for SSR's
+    /// mover gate, held one temporal window by the consumer. Riding the owning pass's loop keeps
+    /// the signal exactly as covered as the buffer it describes (off-screen movers are accepted as
+    /// uncovered by design - no registry scan).
     uint64_t velocity_movers_frame_{~0ull};
-    /// Rotation phase of the light-voxel update (GI_LIGHT_VOXEL_UPDATE_DENOM slices).
-    uint32_t light_voxel_frame_{0};
 
 };
 

@@ -13,10 +13,9 @@
 
 #include "lumen/lumen_common.sh"
 
-/// x = Hi-Z mip count, y = flags (1: the screen traces run, 2: the traces paint their type instead of radiance, 4: the
-/// rays rotate their noise by a per-frame hash instead of the R2 sequence),
-/// z = the roughness the traced reflections end at (LUMEN_MAX_ROUGHNESS_TO_TRACE; UE
-/// r.Lumen.Reflections.MaxRoughnessToTrace overrides it), w > 0 when the denoiser histories hold last frame.
+/// x = Hi-Z mip count, y = flags (1: the screen traces run, 2: the traces paint their type instead of radiance),
+/// z = the roughness the traced reflections end at (UE LumenMaxRoughnessToTraceReflections, the gi_component's
+/// Max Roughness To Trace), w > 0 when the denoiser histories hold last frame.
 uniform vec4 u_lumen_reflection;
 
 #define u_lumen_reflection_hiz_mip_count   int(u_lumen_reflection.x)
@@ -24,7 +23,6 @@ uniform vec4 u_lumen_reflection;
 /// UE DEBUG_VISUALIZE_TRACE_TYPES: screen hits red, distance-field hits green (yellow when lit by last frame's
 /// scene colour), misses blue.
 #define u_lumen_reflection_show_trace_types ((int(u_lumen_reflection.y) & 2) != 0)
-#define u_lumen_reflection_hash_noise ((int(u_lumen_reflection.y) & 4) != 0)
 #define u_lumen_reflection_max_roughness   u_lumen_reflection.z
 #define u_lumen_reflection_has_history     (u_lumen_reflection.w > 0.0)
 

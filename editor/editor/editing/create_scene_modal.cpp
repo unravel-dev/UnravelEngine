@@ -35,13 +35,13 @@ const preset_card_info presets[] = {
     {"preset_high",
      ICON_MDI_DIAMOND_STONE,
      "High End",
-     "Volumetric clouds, World GI, SSR, TAA, GTAO, Bloom, Auto-Exposure and Contact Shadows.\n"
+     "Volumetric clouds, Lumen GI and reflections, TAA, Bloom, Auto-Exposure and Contact Shadows.\n"
      "Best for high-end desktop.",
      defaults::scene_preset::high},
     {"preset_showcase",
      ICON_MDI_GIFT,
      "Showcase",
-     "Volumetric clouds, World GI, SSR, TAA, GTAO, Bloom, Auto-Exposure and Contact Shadows.\n"
+     "Volumetric clouds, Lumen GI and reflections, TAA, Bloom, Auto-Exposure and Contact Shadows.\n"
      "Highest quality lighting and shadows. Requires a powerful GPU.",
      defaults::scene_preset::showcase},
 };

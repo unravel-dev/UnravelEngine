@@ -33,13 +33,11 @@ public:
         /// occluder stays visible) instead of the two-horizon closed form.
         bool visibility_bitmask = false;
         /// World-space radius of the occlusion search. Contact scale (XeGTAO ships 0.5): the
-        /// GI already resolves the room-scale term twice - the screen probes march the Hi-Z
-        /// pyramid from the pixel, the light voxels attenuate their bounce by the cavity cone -
-        /// so the 4 m radius this replaced cut a further 30-40 percent from surfaces whose
-        /// occlusion the gather had integrated (audit 2026-09-12, section 4: arcades 0.58 ->
-        /// 0.73, shadowed courtyard wall 0.69 -> 0.93 at 0.5 m). Lumen's short-range AO is a
-        /// few percent of the screen for the same reason: it fills only what the probe
-        /// interpolation misses. The search is capped on screen by max_screen_radius.
+        /// GI resolves the room-scale term itself (its screen probes trace from the pixel), so a
+        /// room-scale radius would darken surfaces whose occlusion the gather already integrated.
+        /// Lumen's short-range AO is a few percent of the screen for the same reason: it fills
+        /// only what the probe interpolation misses. The search is capped on screen by
+        /// max_screen_radius.
         float radius = 0.5f;
         /// Portion of the radius over which an occluder's influence fades to zero. 0.3 keeps
         /// most of the radius at full weight without the pop a hard cutoff shows when an

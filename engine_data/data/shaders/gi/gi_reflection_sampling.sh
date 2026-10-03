@@ -24,8 +24,6 @@
  * everything returns by value, structs included.
  */
 
-#include "gi/gi_constants.sh"
-
 #define GI_REFLECTION_TWO_PI 6.283185307
 #define GI_REFLECTION_PI     3.141592653
 
@@ -108,55 +106,6 @@ float GiReflectionVndfPdf(vec3 view_ts, vec3 half_ts, float alpha)
 	float k = GiReflectionVndfCapBound(view_ts, alpha);
 	float denom = k * n_dot_v + sqrt(max(n_dot_v * (n_dot_v - n_dot_v * a2) + a2, 0.0));
 	return (2.0 * v_dot_h * d) / max(denom, 1e-8);
-}
-
-struct GiReflectionRay
-{
-	vec3 direction;
-	float pdf;
-};
-
-/*
- * The ray one texel fires, and its density. `roughness` is the RAW authored value (the
- * mirror gate keys on it - see the trace kernel), `view` points from the surface to the
- * camera, `xi` is the texel's jitter pair.
- *
- * At or below GI_REFLECTION_MIRROR_ROUGHNESS the ray is deterministic (the determinism
- * gate the temporal also keys on) and the density is the peak of a lobe floored at
- * GI_REFLECTION_MIN_LOBE_ALPHA - large but finite, so a mirror neighbour correctly carries
- * almost no weight in a glossy pixel's resolve instead of dividing by zero.
- */
-GiReflectionRay GiReflectionMakeRay(vec3 normal, vec3 view, float roughness, vec2 xi)
-{
-	GiReflectionRay ray;
-	ray.direction = normalize(reflect(-view, normal));
-
-	float alpha = max(roughness * roughness, GI_REFLECTION_MIN_LOBE_ALPHA);
-	GiReflectionBasis basis = GiReflectionMakeBasis(normal);
-	vec3 view_ts = GiReflectionToTangent(basis, view);
-	// The half-vector the returned direction actually corresponds to; (0,0,1) is the mirror
-	// case, whose half-vector IS the normal.
-	vec3 half_ts = vec3(0.0, 0.0, 1.0);
-
-	// A normal-mapped texel can face away from the view; the cap is undefined there and the
-	// stretched frame degenerates. Keep the mirror answer rather than emit a NaN.
-	BRANCH
-	if(roughness > GI_REFLECTION_MIRROR_ROUGHNESS && view_ts.z > 1e-4)
-	{
-		vec3 sampled_ts = GiReflectionSampleGgxVndf(view_ts, alpha, xi.x, xi.y);
-		vec3 half_ws = normalize(GiReflectionToWorld(basis, sampled_ts));
-		vec3 jittered = reflect(-view, half_ws);
-		// The cap bound makes this practically unreachable; it is a NaN guard, not a
-		// rejection strategy.
-		if(dot(jittered, normal) > 1e-3)
-		{
-			ray.direction = normalize(jittered);
-			half_ts = sampled_ts;
-		}
-	}
-
-	ray.pdf = max(GiReflectionVndfPdf(view_ts, half_ts, alpha), 1e-8);
-	return ray;
 }
 
 /// BRDF-over-pdf weight of a sample that arrives along `direction` at a surface whose lobe

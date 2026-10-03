@@ -1,26 +1,18 @@
 #include "global_sdf_clipmap_gpu.h"
-#include "gi_constants.h"
 
 #include <engine/profiler/profiler.h>
 
 #include <logging/logging.h>
 
-#include <bx/math.h>
-
-#include <algorithm>
-#include <cmath>
 #include <cstring>
-#include <vector>
 
 namespace unravel
 {
 
-auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu, bool distance_only) -> bool
+auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
 {
     shutdown();
     resolution_ = resolution;
-    compose_on_gpu_ = compose_on_gpu;
-    distance_only_ = distance_only;
     const uint32_t depth = resolution * global_sdf_clipmap::level_count;
     if(depth > 2048u)
     {
@@ -57,190 +49,6 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu, bool
         resolution_ = 0;
         return false;
     }
-    if(distance_only_)
-    {
-        return init_distance_only(depth);
-    }
-    // Attribute voxels: albedo + emissive at half resolution, and the
-    // surface-voxel list segments + cursors the light-voxel update consumes. Created alongside
-    // the distance volume because they recompose with it and share its lifetime.
-    const uint32_t attr_resolution = get_attr_resolution();
-    const uint32_t attr_depth = attr_resolution * global_sdf_clipmap::level_count;
-    attr_albedo_texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
-                                                          static_cast<uint16_t>(attr_resolution),
-                                                          static_cast<uint16_t>(attr_depth),
-                                                          false,
-                                                          bgfx::TextureFormat::RGBA8,
-                                                          flags);
-    attr_emissive_texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
-                                                            static_cast<uint16_t>(attr_resolution),
-                                                            static_cast<uint16_t>(attr_depth),
-                                                            false,
-                                                            bgfx::TextureFormat::RGBA16F,
-                                                            flags);
-    // Six face slabs per level (gi_light_voxels.sh layout). At the runtime default this is
-    // 64 * 4 * 6 = 1536 deep - inside the 2048 texture limit the distance volume already guards.
-    const uint32_t light_depth = attr_resolution * global_sdf_clipmap::level_count * 6u;
-    if(light_depth > 2048u)
-    {
-        APPLOG_ERROR("[SurfaceCache] Light voxel volume needs a {}-deep texture, over the 2048 limit.",
-                     light_depth);
-        shutdown();
-        return false;
-    }
-    // REPEAT in u/v (bgfx default, so no clamp flags): the volume is TOROIDAL in xy and the
-    // filtered read relies on hardware wrap to interpolate across the seam onto the far edge,
-    // which holds the world-adjacent cells. W stays clamped - z packs (level, face) slabs and
-    // the reader lerps its two z taps manually at texel centres.
-    const uint64_t light_flags = BGFX_SAMPLER_W_CLAMP | BGFX_TEXTURE_COMPUTE_WRITE;
-    light_voxel_texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
-                                                          static_cast<uint16_t>(attr_resolution),
-                                                          static_cast<uint16_t>(light_depth),
-                                                          false,
-                                                          bgfx::TextureFormat::RGBA16F,
-                                                          light_flags);
-    // The bounce's cage-visibility memo mirrors the light volume texel for texel (mask +
-    // generation + probe level in the low 16 bits; see gi_light_voxels_kernel.sh). Image
-    // access only, never sampled. R32U rather than R16U DELIBERATELY: typed UAV LOADS of
-    // 32-bit formats are mandatory on every backend, while 16-bit typed loads are an
-    // optional capability - unsupported, the load silently returns zero, which never
-    // matches a live generation and turns the memo into a permanent miss (the failure is
-    // invisible except as light-voxel cost). ~25 MB at the runtime default - half the
-    // light volume.
-    // One slice deeper than the light volume: the relight convergence statistic lives past
-    // the last face slab (GiLightVoxelStatsTexel) - the pass has no free stage for a
-    // buffer of its own, and this image is bound read-write on every backend.
-    bounce_vis_memo_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(attr_resolution),
-                                                      static_cast<uint16_t>(attr_resolution),
-                                                      static_cast<uint16_t>(light_depth + 1u),
-                                                      false,
-                                                      bgfx::TextureFormat::R32U,
-                                                      BGFX_TEXTURE_COMPUTE_WRITE);
-    bounce_vis_memo_seeded_ = false;
-    bounce_vis_generation_ = 0;
-    const uint32_t segment = attr_resolution * attr_resolution * attr_resolution;
-    // The surface list flags follow the COMPOSER: the GPU compose pass writes it from
-    // compute (needs COMPUTE_WRITE, and bgfx forbids CPU updates on such buffers), while the
-    // CPU composer uploads it with bgfx::update (which requires COMPUTE_WRITE absent). The
-    // consumers only ever read it from compute, which both flag sets allow.
-    //
-    // ONE buffer holds counts AND entries: a level_count-entry HEADER of append cursors
-    // (index = level), then the per-level entry segments. A separate count buffer would cost
-    // cs_gi_light_voxels a bgfx stage it does not have: the pass occupies all 16, and the
-    // bounce visibility memo needs an image stage in OpenGL's 0-7 image-unit range.
-    const uint64_t surface_flags =
-        (compose_on_gpu_ ? BGFX_BUFFER_COMPUTE_READ_WRITE : BGFX_BUFFER_COMPUTE_READ) |
-        BGFX_BUFFER_INDEX32;
-    surface_list_ = bgfx::createDynamicIndexBuffer(
-        global_sdf_clipmap::level_count + segment * global_sdf_clipmap::level_count,
-        surface_flags);
-    attr_cells_ = bgfx::createDynamicIndexBuffer(segment * global_sdf_clipmap::level_count,
-                                                 BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
-    // Sentinel cell ids (no real cell packs to ~0u, so every slot claims and zeroes its light
-    // texels on first use) and the zeroed cursors are seeded ON THE GPU by the compose pass:
-    // these buffers are compute-writable, and bgfx forbids - in debug - CPU updates on those.
-    // The seed runs regardless of the composer - the light/world-probe passes write the cell
-    // buffers in both modes.
-    needs_buffer_seed_ = true;
-    needs_texture_clear_ = true;
-    // A CPU-composed list header cannot be seeded by that dispatch (no COMPUTE_WRITE), and it
-    // does not need to be: it is CPU-writable, so the zeroed cursors upload right here.
-    // Uncomposed levels then read an empty list rather than allocation garbage.
-    if(!compose_on_gpu_ && bgfx::isValid(surface_list_))
-    {
-        const std::array<uint32_t, global_sdf_clipmap::level_count> zero_counts{};
-        bgfx::update(surface_list_, 0, bgfx::copy(zero_counts.data(), sizeof(zero_counts)));
-    }
-    if(!attr_albedo_texture_ || !attr_albedo_texture_->is_valid() || !attr_emissive_texture_ ||
-       !attr_emissive_texture_->is_valid() || !light_voxel_texture_ || !light_voxel_texture_->is_valid() ||
-       !bounce_vis_memo_ || !bounce_vis_memo_->is_valid() || !bgfx::isValid(surface_list_) ||
-       !bgfx::isValid(attr_cells_))
-    {
-        APPLOG_ERROR("[SurfaceCache] Failed to create the clipmap attribute resources.");
-        shutdown();
-        return false;
-    }
-    // A level's cursor is only meaningful once that level has composed; the compose pass's seed
-    // dispatch zeroes them all so a consumer reading an as-yet-uncomposed level sees an empty
-    // list rather than allocation garbage.
-    // World probes. The atlases hold every level's tiles in one row-major run
-    // over the linear slot index - level 0's sparse pool first, then the dense levels
-    // (gi_world_probes.sh, GiWorldProbeTileBase); the lattice extents are independent of the
-    // cascade resolution.
-    {
-        const uint32_t probe_count = get_world_probe_count();
-        const uint32_t tile_rows = (probe_count + world_probe_atlas_tiles_x - 1u) / world_probe_atlas_tiles_x;
-        const uint32_t radiance_w = world_probe_atlas_tiles_x * 16u;
-        const uint32_t radiance_h = tile_rows * 16u;
-        const uint32_t gutter_w = world_probe_atlas_tiles_x * 10u;
-        const uint32_t gutter_h = tile_rows * 10u;
-        world_probe_radiance_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(radiance_w),
-                                                               static_cast<uint16_t>(radiance_h),
-                                                               false,
-                                                               1,
-                                                               bgfx::TextureFormat::RGBA16F,
-                                                               flags);
-        world_probe_irradiance_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(gutter_w),
-                                                                 static_cast<uint16_t>(gutter_h),
-                                                                 false,
-                                                                 1,
-                                                                 bgfx::TextureFormat::RGBA16F,
-                                                                 flags);
-        world_probe_depth_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(gutter_w),
-                                                            static_cast<uint16_t>(gutter_h),
-                                                            false,
-                                                            1,
-                                                            bgfx::TextureFormat::RG16F,
-                                                            flags);
-        world_probe_cells_ = bgfx::createDynamicIndexBuffer(probe_count,
-                                                            BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                                BGFX_BUFFER_INDEX32);
-        world_probe_counts_ = bgfx::createDynamicIndexBuffer(probe_count,
-                                                             BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                                 BGFX_BUFFER_INDEX32);
-        // The sparse level-0 index; its sentinels and free stack are written by the allocation
-        // pass's init phase (needs_world_probe_index_seed), as CPU updates are forbidden.
-        world_probe_index_ = bgfx::createDynamicIndexBuffer(get_world_probe_index_count(),
-                                                            BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                                BGFX_BUFFER_INDEX32);
-        // The trace scheduler's state (seeded by the compose pass's GPU fill) and its list.
-        world_probe_select_ = bgfx::createDynamicIndexBuffer(world_probe_select_size,
-                                                             BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                                 BGFX_BUFFER_INDEX32);
-        world_probe_list_ = bgfx::createDynamicIndexBuffer(probe_count,
-                                                           BGFX_BUFFER_COMPUTE_READ_WRITE |
-                                                               BGFX_BUFFER_INDEX32);
-        needs_world_probe_index_seed_ = true;
-        world_probe_atlas_params_[0] = 1.0f / float(gutter_w);
-        world_probe_atlas_params_[1] = 1.0f / float(gutter_h);
-        world_probe_atlas_params_[2] = float(gutter_w);
-        world_probe_atlas_params_[3] = float(gutter_h);
-        if(!world_probe_radiance_ || !world_probe_radiance_->is_valid() || !world_probe_irradiance_ ||
-           !world_probe_irradiance_->is_valid() || !world_probe_depth_ || !world_probe_depth_->is_valid() ||
-           !bgfx::isValid(world_probe_cells_) || !bgfx::isValid(world_probe_counts_) ||
-           !bgfx::isValid(world_probe_index_) || !bgfx::isValid(world_probe_select_) ||
-           !bgfx::isValid(world_probe_list_))
-        {
-            APPLOG_ERROR("[SurfaceCache] Failed to create the world probe resources.");
-            shutdown();
-            return false;
-        }
-        // Sentinel cell ids (every slot claims and zeroes its strata on first trace) are seeded
-        // by the compose pass's GPU fill - see needs_buffer_seed.
-        world_probe_cell_count_ = probe_count;
-    }
-    APPLOG_INFO("[SurfaceCache] Global SDF clipmap ready: {} levels of {}^3 + {}^3 attributes ({} KB).",
-                global_sdf_clipmap::level_count,
-                resolution,
-                attr_resolution,
-                (size_t(resolution) * resolution * depth +
-                 size_t(attr_resolution) * attr_resolution * attr_depth * 12u) /
-                    1024);
-    return true;
-}
-
-auto global_sdf_clipmap_gpu::init_distance_only(uint32_t depth) -> bool
-{
     // Covered (255) until the compose writes a level: a level not composed yet traces as the plain field.
     const uint32_t coverage_resolution = resolution_ / coverage_downsample;
     const uint32_t coverage_depth = depth / coverage_downsample;
@@ -252,9 +60,7 @@ auto global_sdf_clipmap_gpu::init_distance_only(uint32_t depth) -> bool
                                                        static_cast<uint16_t>(coverage_depth),
                                                        false,
                                                        bgfx::TextureFormat::R8,
-                                                       BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
-                                                           BGFX_SAMPLER_W_CLAMP | BGFX_TEXTURE_COMPUTE_WRITE |
-                                                           BGFX_TEXTURE_BLIT_DST,
+                                                       flags | BGFX_TEXTURE_BLIT_DST,
                                                        covered);
     if(!coverage_texture_ || !coverage_texture_->is_valid())
     {
@@ -262,26 +68,7 @@ auto global_sdf_clipmap_gpu::init_distance_only(uint32_t depth) -> bool
         shutdown();
         return false;
     }
-    // The compose dispatch resets its level's append cursor whatever the mirror holds, so the
-    // surface list keeps its per-level header; there are no entry segments to append to.
-    const uint64_t surface_flags =
-        (compose_on_gpu_ ? BGFX_BUFFER_COMPUTE_READ_WRITE : BGFX_BUFFER_COMPUTE_READ) | BGFX_BUFFER_INDEX32;
-    surface_list_ = bgfx::createDynamicIndexBuffer(global_sdf_clipmap::level_count, surface_flags);
-    if(!bgfx::isValid(surface_list_))
-    {
-        APPLOG_ERROR("[SurfaceCache] Failed to create the clipmap cursor header.");
-        shutdown();
-        return false;
-    }
-    needs_texture_clear_ = false;
-    // A GPU-owned header is zeroed by the compose pass's seed; a CPU-owned one right here.
-    needs_buffer_seed_ = compose_on_gpu_;
-    if(!compose_on_gpu_)
-    {
-        const std::array<uint32_t, global_sdf_clipmap::level_count> zero_counts{};
-        bgfx::update(surface_list_, 0, bgfx::copy(zero_counts.data(), sizeof(zero_counts)));
-    }
-    APPLOG_INFO("[SurfaceCache] Global SDF clipmap ready, distance only: {} levels of {}^3 ({} KB).",
+    APPLOG_INFO("[SurfaceCache] Global SDF clipmap ready: {} levels of {}^3 ({} KB).",
                 global_sdf_clipmap::level_count,
                 resolution_,
                 size_t(resolution_) * resolution_ * depth / 1024);
@@ -292,54 +79,6 @@ void global_sdf_clipmap_gpu::shutdown()
 {
     texture_.reset();
     coverage_texture_.reset();
-    attr_albedo_texture_.reset();
-    attr_emissive_texture_.reset();
-    light_voxel_texture_.reset();
-    bounce_vis_memo_.reset();
-    bounce_vis_memo_seeded_ = false;
-    bounce_vis_generation_ = 0;
-    world_probe_radiance_.reset();
-    world_probe_irradiance_.reset();
-    world_probe_depth_.reset();
-    if(bgfx::isValid(world_probe_cells_))
-    {
-        bgfx::destroy(world_probe_cells_);
-        world_probe_cells_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
-    }
-    if(bgfx::isValid(world_probe_counts_))
-    {
-        bgfx::destroy(world_probe_counts_);
-        world_probe_counts_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
-    }
-    if(bgfx::isValid(world_probe_index_))
-    {
-        bgfx::destroy(world_probe_index_);
-        world_probe_index_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
-    }
-    if(bgfx::isValid(world_probe_select_))
-    {
-        bgfx::destroy(world_probe_select_);
-        world_probe_select_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
-    }
-    if(bgfx::isValid(world_probe_list_))
-    {
-        bgfx::destroy(world_probe_list_);
-        world_probe_list_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
-    }
-    needs_world_probe_index_seed_ = false;
-    world_probe_cell_count_ = 0;
-    needs_buffer_seed_ = false;
-    if(bgfx::isValid(attr_cells_))
-    {
-        bgfx::destroy(attr_cells_);
-        attr_cells_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
-    }
-    world_probe_atlas_params_.fill(0.0f);
-    if(bgfx::isValid(surface_list_))
-    {
-        bgfx::destroy(surface_list_);
-        surface_list_ = bgfx::DynamicIndexBufferHandle{bgfx::kInvalidHandle};
-    }
     resolution_ = 0;
     level_params_.fill(0.0f);
     // Zeroing this clears the "cascade is resident" flag in w, which is what stops a consumer
@@ -381,7 +120,7 @@ void global_sdf_clipmap_gpu::upload(global_sdf_clipmap& clipmap)
     //
     // The parameter refresh above still has to happen, because origins move whether or not the
     // voxels are rewritten here.
-    if(clipmap.get_settings().compose_on_gpu)
+    if(clipmap_settings.compose_on_gpu)
     {
         return;
     }
@@ -410,80 +149,8 @@ void global_sdf_clipmap_gpu::upload(global_sdf_clipmap& clipmap)
                               static_cast<uint16_t>(resolution_),
                               static_cast<uint16_t>(resolution_),
                               bgfx::copy(lvl.voxels.data(), uint32_t(lvl.voxels.size())));
-        // Attributes ride along: the CPU composer produced them with the distance voxels, and a
-        // consumer cannot tell which composer wrote what it samples, so the two paths must ship
-        // the same set of resources.
-        const uint32_t attr_resolution = get_attr_resolution();
-        const size_t attr_count = size_t(attr_resolution) * attr_resolution * attr_resolution;
-        if(!distance_only_ && lvl.attr_albedo.size() == attr_count && lvl.attr_emissive.size() == attr_count)
-        {
-            bgfx::updateTexture3D(attr_albedo_texture_->native_handle(),
-                                  0,
-                                  0,
-                                  0,
-                                  static_cast<uint16_t>(i * attr_resolution),
-                                  static_cast<uint16_t>(attr_resolution),
-                                  static_cast<uint16_t>(attr_resolution),
-                                  static_cast<uint16_t>(attr_resolution),
-                                  bgfx::copy(lvl.attr_albedo.data(), uint32_t(attr_count * sizeof(uint32_t))));
-            std::vector<uint16_t> half_emissive(attr_count * 4u, 0u);
-            for(size_t v = 0; v < attr_count; ++v)
-            {
-                half_emissive[v * 4u + 0u] = bx::halfFromFloat(lvl.attr_emissive[v].x);
-                half_emissive[v * 4u + 1u] = bx::halfFromFloat(lvl.attr_emissive[v].y);
-                half_emissive[v * 4u + 2u] = bx::halfFromFloat(lvl.attr_emissive[v].z);
-            }
-            bgfx::updateTexture3D(attr_emissive_texture_->native_handle(),
-                                  0,
-                                  0,
-                                  0,
-                                  static_cast<uint16_t>(i * attr_resolution),
-                                  static_cast<uint16_t>(attr_resolution),
-                                  static_cast<uint16_t>(attr_resolution),
-                                  static_cast<uint16_t>(attr_resolution),
-                                  bgfx::copy(half_emissive.data(), uint32_t(half_emissive.size() * sizeof(uint16_t))));
-            const uint32_t count = uint32_t(lvl.attr_surface_list.size());
-            bgfx::update(surface_list_, i, bgfx::copy(&count, sizeof(count)));
-            if(count > 0u)
-            {
-                bgfx::update(surface_list_,
-                             global_sdf_clipmap::level_count + i * uint32_t(attr_count),
-                             bgfx::copy(lvl.attr_surface_list.data(), count * uint32_t(sizeof(uint32_t))));
-            }
-        }
     }
     clipmap.clear_dirty_levels();
-}
-
-auto global_sdf_clipmap_gpu::refresh_bounce_vis_generation(uint64_t content_epoch,
-                                                           const math::vec3& camera_position,
-                                                           float base_spacing) -> uint32_t
-{
-    if(!bounce_vis_memo_seeded_ || !(base_spacing > 0.0f))
-    {
-        return 0u;
-    }
-    bool moved = content_epoch != bounce_vis_content_epoch_;
-    std::array<std::array<int32_t, 3>, global_sdf_clipmap::level_count> cells{};
-    for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
-    {
-        const float spacing = base_spacing * float(1u << level);
-        cells[level] = {int32_t(std::floor(camera_position.x / spacing)),
-                        int32_t(std::floor(camera_position.y / spacing)),
-                        int32_t(std::floor(camera_position.z / spacing))};
-        moved = moved || cells[level] != bounce_vis_window_cells_[level];
-    }
-    if(moved || bounce_vis_generation_ == 0u)
-    {
-        bounce_vis_content_epoch_ = content_epoch;
-        bounce_vis_window_cells_ = cells;
-        // 6-bit tag with 0 reserved as "never stamped" (the memo clears to 0), so live
-        // generations wrap 1..63. A 63-bump-old texel could collide with the wrapped tag and
-        // serve one stale verdict set for one rotation - bounded, and it self-heals on the
-        // next bump.
-        bounce_vis_generation_ = bounce_vis_generation_ % uint32_t(gi::GI_VIS_MEMO_GENERATION_WRAP) + 1u;
-    }
-    return bounce_vis_generation_;
 }
 
 } // namespace unravel

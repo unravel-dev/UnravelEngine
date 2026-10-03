@@ -1159,21 +1159,6 @@ void shadowmap_generator::submit_uniforms(uint8_t stage) const
     }
 }
 
-auto shadowmap_generator::get_shadow_map_matrix(uint8_t split) const -> const float*
-{
-    return shadow_map_mtx_[split];
-}
-
-auto shadowmap_generator::get_shadow_map_bias() const -> float
-{
-    return uniforms_.m_shadowMapBias * uniforms_.m_csmTexelWorld[0] * uniforms_.m_shadowBiasParams[1];
-}
-
-auto shadowmap_generator::get_shadow_map_world_to_depth() const -> float
-{
-    return uniforms_.m_shadowBiasParams[1];
-}
-
 auto shadowmap_generator::already_resolved() const -> bool
 {
     return last_resolve_frame_ == gfx::get_render_frame();

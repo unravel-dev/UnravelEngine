@@ -1,5 +1,6 @@
 #pragma once
 
+#include <engine/rendering/gi/gi_settings.h>
 #include <engine/rendering/gi/lumen_mesh_cards.h>
 
 #include <math/math.h>
@@ -23,9 +24,10 @@ class material;
  * Every GI instance with cards gets its cards placed in the world (oriented boxes). Each frame a card's
  * resolution follows its distance to the viewer exactly as Lumen chooses it (texel density 100 x half
  * extent / distance, at most 20 texels per metre and 512 texels, a power of two, aspect-biased per
- * axis); a card whose resolution changes is reallocated and recaptured, nearest first, within the
- * capture budget. Mips above 128 texels are paged into 128x128 physical pages, each holding 127
- * virtual texels plus half-texel borders on interior edges; smaller mips share physical pages.
+ * axis; the density and the resolution limits scale with the view's surface cache resolution); a card
+ * whose resolution changes is reallocated and recaptured, nearest first, within the capture budget.
+ * Mips above 128 texels are paged into 128x128 physical pages, each holding 127 virtual texels plus
+ * half-texel borders on interior edges; smaller mips share physical pages.
  *
  * A card is (re)allocated only when its whole mip has physical room beside everything resident and room in
  * this frame's capture atlas, so every page it maps is captured in the frame it is allocated; a reallocated
@@ -36,7 +38,8 @@ class material;
  *
  * schedule_lighting() picks the pages the card lighting updates each frame as Lumen does: per page and per
  * context (direct lighting, radiosity) a priority bucket from the frames since its last update and its speed
- * (distance and frustum), spent bucket by bucket against a fixed tile budget per context.
+ * (distance and frustum), spent bucket by bucket against a tile budget per context that grows with the view's
+ * lighting update speed.
  */
 class lumen_scene
 {
@@ -49,7 +52,8 @@ public:
         uint32_t capture_atlas_size = 1024;
         ///< r.LumenScene.SurfaceCache.CardCapturesPerFrame.
         uint32_t max_captures_per_frame = 300;
-        ///< Cards farther than this are not resident (the last global SDF clipmap's extent).
+        ///< Cards farther than this are never resident, whatever the view distance: the reach of the global distance
+        ///< field (half the extent of its last level), beyond which no ray hits them.
         float max_card_distance = 200.0f;
         ///< r.LumenScene.SurfaceCache.CardTexelDensityScale (texels per unit half-extent / distance).
         float texel_density_scale = 100.0f;
@@ -177,6 +181,22 @@ public:
         hold_resident_resolutions_ = hold;
     }
 
+    /// The view's Lumen scene settings (UE LumenSceneViewDistance, LumenSurfaceCacheResolution,
+    /// LumenSceneLightingUpdateSpeed), applied by the update() and schedule_lighting() calls that follow.
+    void set_view_settings(const gi_settings::scene_settings& view_settings)
+    {
+        view_settings_ = view_settings;
+    }
+
+    /// The distance from the viewer within which cards are resident: the view distance, at most
+    /// settings::max_card_distance.
+    auto get_max_card_distance() const -> float;
+
+    /// A lighting context's update factor at the view's lighting update speed (R/LumenSceneLighting.cpp:561-584): the
+    /// context's factor (LUMEN_SCENE_DIRECT_UPDATE_FACTOR, LUMEN_SCENE_RADIOSITY_UPDATE_FACTOR) over the speed clamped
+    /// to [0.5, 16], rounded.
+    auto get_lighting_update_factor(lighting_context context) const -> uint32_t;
+
     auto get_settings() const -> const settings&
     {
         return settings_;
@@ -299,6 +319,16 @@ private:
         std::vector<std::vector<uint64_t>> used;
     };
 
+    /// A card's resolution rule at the view's surface cache resolution (UE GetCardTexelDensity, GetCardMaxResolution,
+    /// GetCardMinResolution at a Lumen scene detail of 1).
+    struct resolution_rule
+    {
+        float texel_density_scale = 0.0f;
+        uint32_t max_resolution = 0;
+        uint32_t min_resolution = 0;
+    };
+
+    auto get_resolution_rule() const -> resolution_rule;
     auto compute_mip_desc(uint32_t res_level, const math::uvec2& bias) const -> mip_desc;
     /// The card UV rectangle of one page of a mip, with half a texel of border on interior edges.
     static auto compute_page_uv_rect(const mip_desc& mip, uint32_t page) -> math::vec4;
@@ -314,6 +344,7 @@ private:
         -> int32_t;
 
     settings settings_{};
+    gi_settings::scene_settings view_settings_{};
     uint32_t pages_per_side_ = 0;
     std::vector<uint32_t> free_pages_;
     std::vector<sub_allocation_bin> bins_;

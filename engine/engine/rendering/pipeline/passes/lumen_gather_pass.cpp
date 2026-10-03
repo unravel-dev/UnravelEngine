@@ -9,6 +9,7 @@
 #include <engine/rendering/gi/lumen_constants.h>
 
 #include <graphics/graphics.h>
+#include <graphics/render_pass.h>
 #include <logging/logging.h>
 
 #include <algorithm>
@@ -79,6 +80,7 @@ void lumen_gather_pass::uniforms::cache_uniforms()
     cache_uniform(nullptr, s_lumen_rc_final, "s_lumen_rc_final", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_rc_depth, "s_lumen_rc_depth", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, u_lumen_options, "u_lumen_options", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, u_lumen_settings, "u_lumen_settings", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_ray_gen, "u_lumen_ray_gen", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_prev_probe, "u_lumen_prev_probe", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_prev_inv_view_proj, "u_lumen_prev_inv_view_proj", bgfx::UniformType::Mat4);
@@ -130,9 +132,9 @@ auto lumen_gather_pass::has_programs() const -> bool
            valid(integrate_program_) && adaptive_probes_.has_programs();
 }
 
-auto lumen_gather_pass::uses_short_range_ao(uint32_t experiments) -> bool
+auto lumen_gather_pass::uses_short_range_ao(const gi_settings::ambient_occlusion_settings& settings) -> bool
 {
-    return (experiments & experiment_screen_space_ao) == 0u;
+    return settings.enabled && settings.intensity > 0.0f;
 }
 
 auto lumen_gather_pass::has_short_range_ao() const -> bool
@@ -215,7 +217,7 @@ auto lumen_gather_pass::final_filter_index() -> size_t
 }
 
 auto lumen_gather_pass::acquire_history(gfx::render_view& rview,
-                                        const gi_resolve_pass::run_params& params,
+                                        const lumen_run_params& params,
                                         const usize32_t& size) -> history_targets
 {
     // Ping-pong per render view; the read half is history only when it was written on the frame
@@ -237,8 +239,7 @@ auto lumen_gather_pass::acquire_history(gfx::render_view& rview,
     history.rough_write = ensure_texture(rview, rough_write_name, size, bgfx::TextureFormat::RGBA16F);
     history.rough_read = rview.tex_safe_get(rough_read_name);
     history.has_history = continuous && (experiments_ & experiment_no_history) == 0u && history.read &&
-                          history.rough_read && params.prev_depth &&
-                          params.settings.enable_temporal && history.read->get_size().width == size.width &&
+                          history.rough_read && params.prev_depth && history.read->get_size().width == size.width &&
                           history.read->get_size().height == size.height &&
                           history.rough_read->get_size().width == size.width &&
                           history.rough_read->get_size().height == size.height;
@@ -268,9 +269,10 @@ void lumen_gather_pass::set_layout_uniforms(const frame_layout& layout)
                               (experiments_ & experiment_reject_near_screen_hits) != 0u ? 1.0f : 0.0f,
                               (experiments_ & experiment_voxel_screen_hits) != 0u ? 1.0f : 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_options, options);
+    gfx::set_uniform(uniforms_.u_lumen_settings, settings_uniform_.data());
 }
 
-void lumen_gather_pass::bind_surface_cache(const gi_resolve_pass::run_params& params) const
+void lumen_gather_pass::bind_surface_cache(const lumen_run_params& params) const
 {
     if(params.lumen_surface_cache != nullptr)
     {
@@ -294,7 +296,7 @@ void lumen_gather_pass::bind_radiance_cache(bool radiance_cache_ready) const
     gfx::set_texture(uniforms_.s_lumen_rc_depth, 9, black);
 }
 
-void lumen_gather_pass::run_generate_rays(const gi_resolve_pass::run_params& params,
+void lumen_gather_pass::run_generate_rays(const lumen_run_params& params,
                                           const frame_layout& layout,
                                           const probe_targets& targets,
                                           const history_targets& history,
@@ -329,7 +331,7 @@ void lumen_gather_pass::run_generate_rays(const gi_resolve_pass::run_params& par
     generate_rays_program_->end();
 }
 
-void lumen_gather_pass::run_place(const gi_resolve_pass::run_params& params,
+void lumen_gather_pass::run_place(const lumen_run_params& params,
                                   const frame_layout& layout,
                                   const probe_targets& targets)
 {
@@ -349,7 +351,7 @@ void lumen_gather_pass::run_place(const gi_resolve_pass::run_params& params,
     place_program_->end();
 }
 
-void lumen_gather_pass::run_adaptive_probes(const gi_resolve_pass::run_params& params,
+void lumen_gather_pass::run_adaptive_probes(const lumen_run_params& params,
                                             const frame_layout& layout,
                                             const probe_targets& targets)
 {
@@ -366,7 +368,7 @@ void lumen_gather_pass::run_adaptive_probes(const gi_resolve_pass::run_params& p
     adaptive_probes_.run(inputs);
 }
 
-void lumen_gather_pass::run_trace(const gi_resolve_pass::run_params& params,
+void lumen_gather_pass::run_trace(const lumen_run_params& params,
                                   const frame_layout& layout,
                                   const probe_targets& targets,
                                   bool radiance_cache_ready)
@@ -375,10 +377,7 @@ void lumen_gather_pass::run_trace(const gi_resolve_pass::run_params& params,
     const auto& black = default_textures::get().black_texture();
     const bool has_hiz = params.hiz && params.hiz->is_valid();
     const bool has_prev_color = params.prev_color && params.prev_color->is_valid();
-    // Lumen always traces the screen first (r.Lumen.ScreenProbeGather.ScreenTraces 1): the old gather's
-    // enable_screen_trace switch does not apply here.
-    const bool screen_traces = has_hiz && has_prev_color && params.prev_depth &&
-                               (experiments_ & experiment_no_screen_traces) == 0u;
+    const bool screen_traces = has_hiz && has_prev_color && params.prev_depth && params.settings.diffuse.screen_traces;
     gfx::render_pass pass("GI/Lumen Probe Trace");
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     trace_program_->begin();
@@ -427,7 +426,7 @@ void lumen_gather_pass::run_composite(const frame_layout& layout, const probe_ta
     composite_program_->end();
 }
 
-auto lumen_gather_pass::run_filter(const gi_resolve_pass::run_params& params,
+auto lumen_gather_pass::run_filter(const lumen_run_params& params,
                                    const frame_layout& layout,
                                    const probe_targets& targets) -> gfx::texture::ptr
 {
@@ -476,7 +475,7 @@ void lumen_gather_pass::run_border(const frame_layout& layout,
     border_program_->end();
 }
 
-void lumen_gather_pass::run_integrate(const gi_resolve_pass::run_params& params,
+void lumen_gather_pass::run_integrate(const lumen_run_params& params,
                                       const frame_layout& layout,
                                       const probe_targets& targets,
                                       const history_targets& history,
@@ -503,7 +502,7 @@ void lumen_gather_pass::run_integrate(const gi_resolve_pass::run_params& params,
     set_layout_uniforms(layout);
     const bool rough_specular_enabled = (experiments_ & experiment_no_rough_specular) == 0u;
     const float temporal[4] = {history.has_history ? 1.0f : 0.0f,
-                               std::max(params.settings.intensity, 0.0f),
+                               std::max(params.settings.diffuse.intensity, 0.0f),
                                rough_specular_enabled ? 1.0f : 0.0f,
                                (experiments_ & experiment_show_interpolation_fallback) != 0u ? 1.0f : 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_temporal, temporal);
@@ -518,7 +517,7 @@ void lumen_gather_pass::run_integrate(const gi_resolve_pass::run_params& params,
 }
 
 void lumen_gather_pass::run_short_range_ao(gfx::render_view& rview,
-                                           const gi_resolve_pass::run_params& params,
+                                           const lumen_run_params& params,
                                            const frame_layout& layout,
                                            const history_targets& history)
 {
@@ -537,9 +536,11 @@ void lumen_gather_pass::run_short_range_ao(gfx::render_view& rview,
     }
     rview.tex_get_or_emplace(screen_ao_texture) = screen_ao;
     rview.data_get_or_emplace(screen_ao_frame, 0u) = uint32_t(gfx::get_render_frame());
+    const float intensity = std::clamp(params.settings.ambient_occlusion.intensity, 0.0f, 1.0f);
+    rview.data().get_or_emplace<float>(screen_ao_intensity, 1.0f) = intensity;
 }
 
-auto lumen_gather_pass::run(gfx::render_view& rview, const gi_resolve_pass::run_params& params) -> gfx::texture::ptr
+auto lumen_gather_pass::run(gfx::render_view& rview, const lumen_run_params& params) -> gfx::texture::ptr
 {
     APP_SCOPE_PERF("Rendering/GI/Lumen Gather");
     rview.tex_remove("GI_ROUGH_SPECULAR");
@@ -553,6 +554,7 @@ auto lumen_gather_pass::run(gfx::render_view& rview, const gi_resolve_pass::run_
         return {};
     }
     experiments_ = params.surface_cache ? params.surface_cache->get_experiment_flags() : 0u;
+    settings_uniform_ = lumen_pass::make_settings_uniform(params.settings);
     const auto layout = make_frame_layout(params.g_buffer->get_size());
     // The expanded bilinear interpolation reads a 2x2 probe neighbourhood; probe records pack their pixel below
     // LUMEN_PROBE_PIXEL_STRIDE per axis.
@@ -590,11 +592,11 @@ auto lumen_gather_pass::run(gfx::render_view& rview, const gi_resolve_pass::run_
     run_sh(layout, targets, filtered);
     run_border(layout, targets, filtered);
     run_integrate(params, layout, targets, history, resolve, rough_specular);
-    if(uses_short_range_ao(experiments_))
+    if(uses_short_range_ao(params.settings.ambient_occlusion))
     {
         run_short_range_ao(rview, params, layout, history);
     }
-    // The rough tier of the reflections reads the gather's rough specular (a = frames + 1).
+    // The reflections read the gather's rough specular (a = frames + 1).
     rview.tex_get_or_emplace("GI_ROUGH_SPECULAR") = rough_specular;
     bgfx::discard();
     return resolve;

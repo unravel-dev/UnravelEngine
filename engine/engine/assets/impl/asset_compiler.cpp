@@ -806,7 +806,9 @@ auto compile_shader_to_file(const fs::path& input_path,
     if(!run_process(shaderc.string(), args_array, true, error))
     {
         APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", str_input, output_path.filename().string(), error);
-        fs::remove(str_output);
+        // Non-throwing: this runs inside atomic_write_file's noexcept callback, where any removal error would
+        // terminate the process. Whatever survives here, atomic_write_file's temp guard reclaims.
+        fs::remove(output_path, err);
         return false;
     }
     return true;

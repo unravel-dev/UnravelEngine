@@ -27,9 +27,12 @@ uniform vec4 u_lumen_probes;
 uniform vec4 u_lumen_view;
 /// x > 0 when the probes trace importance-sampled ray slots (cs_lumen_probe_generate_rays.sc); y > 0 turns
 /// the integrate's full-resolution jitter off, z > 0 rejects screen hits within a few pixels of the probe,
-/// w > 0 shades screen hits from the distance-field hits' store (the cards, or the light voxels) instead of
-/// last frame's colour (experiment toggles).
+/// w > 0 shades screen hits from the distance-field hits' store (the cards) instead of last frame's colour
+/// (experiment toggles).
 uniform vec4 u_lumen_options;
+/// The view's GI settings (lumen_pass::make_settings_uniform): x = the farthest a ray travels in metres, y = the
+/// frames the gather's temporal accumulates at most, z = the roughness below which pixels trace reflection rays.
+uniform vec4 u_lumen_settings;
 
 #define u_lumen_frame_index       u_lumen_frame.x
 #define u_lumen_frame_mod         u_lumen_frame.y
@@ -43,6 +46,9 @@ uniform vec4 u_lumen_options;
 #define u_lumen_full_res_jitter     (u_lumen_options.y <= 0.0)
 #define u_lumen_reject_near_hits    (u_lumen_options.z > 0.0)
 #define u_lumen_voxel_screen_hits   (u_lumen_options.w > 0.0)
+#define u_lumen_max_trace_distance     u_lumen_settings.x
+#define u_lumen_temporal_max_frames    u_lumen_settings.y
+#define u_lumen_max_roughness_to_trace u_lumen_settings.z
 
 /// Two noise values per pixel and frame in the role of UE's spatiotemporal blue noise (BlueNoiseVec2):
 /// SpatioTemporalNoise2D over the frame index, so any window of frames stratifies a pixel's samples.

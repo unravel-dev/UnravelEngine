@@ -127,10 +127,10 @@ void main()
 	float step_noise = mix(LUMEN_REFLECTION_SDF_STEP_DITHER, 1.0 / LUMEN_REFLECTION_SDF_STEP_DITHER,
 	                       InterleavedGradientNoise(vec2(pixel), u_lumen_frame_mod));
 	float step_factor = mix(step_noise, 1.0, saturate(ray.w / LUMEN_REFLECTION_SDF_STEP_DITHER_CONE));
-	LumenSdfHit hit = LumenTraceGlobalSdfStepped(origin, direction, t_start, LUMEN_MAX_TRACE_DISTANCE, false, 0.0, 0.0,
+	LumenSdfHit hit = LumenTraceGlobalSdfStepped(origin, direction, t_start, u_lumen_max_trace_distance, false, 0.0, 0.0,
 	                                             step_factor);
 	vec3 radiance = vec3_splat(0.0);
-	float hit_distance = LUMEN_MAX_TRACE_DISTANCE;
+	float hit_distance = u_lumen_max_trace_distance;
 	BRANCH
 	if(hit.hit)
 	{

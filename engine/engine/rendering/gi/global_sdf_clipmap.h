@@ -33,21 +33,6 @@ struct global_sdf_instance
     float local_to_world_scale = 1.0f;
     ///< World length of each local axis, for the per-axis box bounds of sample_instance_distance.
     math::vec3 axis_scale{1.0f};
-    ///< Surface properties for the attribute voxels: what the winning instance
-    ///< at a surface voxel looks like. This is what lets a cascade hit be attributed to a
-    ///< material, which the distance field alone cannot do. Albedo is the base colour FACTOR;
-    ///< the GPU attribute composer multiplies it by the texture mean at @ref mean_slot.
-    math::vec3 albedo{0.5f};
-    math::vec3 emissive{0.0f};
-    ///< Slot in the texture-mean buffer; 0 is reserved white (no texture / CPU compose path).
-    uint32_t mean_slot = 0;
-    ///< Whether the mean at @ref mean_slot has been captured. Hashed into the content
-    ///< fingerprint so the level recomposes exactly once when a mean lands.
-    bool mean_captured = false;
-    ///< The same pair for the EMISSIVE map, which the GPU composer applies to @ref emissive
-    ///< exactly as it applies @ref mean_slot to @ref albedo.
-    uint32_t emissive_mean_slot = 0;
-    bool emissive_mean_captured = false;
 };
 
 /**
@@ -81,10 +66,8 @@ public:
         ///< Voxels per axis in every level. Memory is level_count * resolution^3 bytes.
         ///
         /// The STRUCT default stays 64 -- the value the CPU composer, the tests and any headless
-        /// consumer can afford, since composition work is cubic in it. The RUNTIME defaults to
-        /// 128 with GPU composition instead (see gi_settings), which halves the level-0 voxel and
-        /// with it the scale of everything the cascade gets wrong: thin-geometry leaks, isosurface
-        /// displacement, and the acne both produce.
+        /// consumer can afford, since composition work is cubic in it. The runtime uses Lumen's
+        /// layout (lumen_constants.h LUMEN_GLOBAL_SDF_RESOLUTION) with GPU composition.
         uint32_t resolution = 64;
         ///< World-space extent covered by level 0.
         float base_extent = 16.0f;
@@ -96,9 +79,8 @@ public:
         /// the far cascades fine enough for that error to stay small, at the cost of total
         /// range (16/32/64/128 m rather than 8/32/128/512 m).
         ///
-        /// Range is the cheaper thing to give up here: the near field is covered by per-instance
-        /// fields out to sdf_debug_pass::settings::near_field_distance, and GI rays are bounded
-        /// well inside the outermost cascade anyway.
+        /// Range is the cheaper thing to give up here: GI rays are bounded well inside the outermost
+        /// cascade anyway.
         float level_scale = 2.0f;
         ///< Distance encoded before the R8 storage saturates, in voxels of that level. Matches
         ///< the mesh field's convention so the two decode identically.
@@ -124,100 +106,20 @@ public:
         /// and only the per-voxel loop moves. `update` then reports the same dirty mask and the
         /// dispatch composes exactly those levels.
         ///
-        /// The CPU composer remains the REFERENCE: `sample`, `sample_ex` and `resolve_surface_point`
-        /// read `level::voxels`, and the bake tests are their only consumers, so they keep working
-        /// against a CPU-composed cascade while the runtime uses the GPU one.
+        /// The CPU composer remains the REFERENCE: `sample` and `sample_ex` read `level::voxels`,
+        /// and the bake tests are their only consumers, so they keep working against a
+        /// CPU-composed cascade while the runtime uses the GPU one.
         ///
         /// False HERE because a true default silently leaves every headless consumer -- the tests
-        /// above all -- with a cascade nothing composes. The RUNTIME opts in through gi_settings,
-        /// where a GPU is guaranteed; that is also what makes its 128 resolution affordable.
+        /// above all -- with a cascade nothing composes. The runtime opts in wherever the compose
+        /// program loaded, which is also what makes Lumen's resolution affordable.
         bool compose_on_gpu = false;
         ///< Levels recomposed per update, at most. Composition touches every voxel of a level,
         ///< so recomposing all of them in the frame the camera crosses a voxel boundary would
         ///< hitch. Levels are considered finest first, which is also the order they go stale in
         ///< (level 0 has the smallest voxels, so its origin re-snaps most often).
         uint32_t max_levels_per_update = 1;
-        ///< Keep the distance volume only, as Lumen's global distance field does: no attribute
-        ///< volumes, light voxels, world probes or surface lists. The Lumen pipeline reads none of
-        ///< them - its hits read the surface cache - and they would cost hundreds of MB at its layout.
-        ///< Part of the layout: changing it recreates the GPU mirror.
-        bool distance_only = false;
     };
-
-    /**
-     * @brief What the last composition actually did, for diagnosing cost in a REAL scene.
-     *
-     * The shape of the work depends entirely on how the instances are distributed, and a
-     * synthetic fixture can be made to show almost any answer. These are the numbers that
-     * distinguish the possible causes from each other: too many instances reaching a level, too
-     * many sharing a cull cell, or the cheap reject failing so that most candidates are sampled
-     * in full.
-     */
-    struct compose_stats
-    {
-        uint32_t level = 0;
-        ///< Instances whose bounds reach this level at all, after the per-level cull.
-        uint32_t relevant_instances = 0;
-        uint32_t cull_cells = 0;
-        ///< Instance-in-cell entries. Divided by cells, the mean candidates a voxel considers.
-        uint32_t cull_references = 0;
-        ///< Worst cell. A scene-spanning instance lands in EVERY cell, so a high floor here
-        ///< means the grid cannot help however fine the cells get.
-        uint32_t max_candidates_in_cell = 0;
-        ///< Candidates considered, and how many survived the cheap bounds reject to be sampled.
-        ///< The ratio is what says whether the remaining cost is rejects or real field lookups.
-        uint64_t candidate_tests = 0;
-        uint64_t field_samples = 0;
-    };
-
-    auto get_last_compose_stats() const -> const compose_stats&
-    {
-        return last_compose_stats_;
-    }
-
-    /**
-     * @brief Counter that advances once per actual CONTENT change of any level - an instance
-     *        moved, appeared, vanished, or changed material - and never from camera scroll.
-     *
-     * Reactivity consumers key their fast paths on it: the world-probe pass doubles its trace
-     * strata for one window when it moves, so a door closing propagates into the bounce at the
-     * fast cadence, the same way a light change does through the light-buffer hash.
-     */
-    auto get_content_epoch() const -> uint64_t
-    {
-        return content_epoch_;
-    }
-
-    /**
-     * @brief As @ref get_content_epoch, but advancing only when changed content actually
-     *        LANDS in a composed level - the edit-coalescing throttle and the per-update
-     *        budget both sit between the two.
-     *
-     * Consumers whose state derives from the COMPOSED field key on this one: the bounce
-     * vis-memo's verdicts are marched against the composed volume, so invalidating them on
-     * the target epoch during a drag would re-march every relight against a field that has
-     * not changed since the last recompose.
-     */
-    auto get_composed_content_epoch() const -> uint64_t
-    {
-        return composed_content_epoch_;
-    }
-
-    /**
-     * @brief The composed epoch without camera scrolls: bumped when a recompose lands a
-     *        content change that is not a pure scroll (the instances revision moved since
-     *        the level's last compose, or the origin held still).
-     *
-     * The composed epoch above also moves whenever a window scroll brings different instances
-     * into a level, which is every few metres of camera travel. The world-probe fast window
-     * keyed on it would quadruple every probe's rays for a window after each scroll during
-     * camera motion. Consumers that react to scene changes rather than to the field's
-     * contents key on this one.
-     */
-    auto get_edited_content_epoch() const -> uint64_t
-    {
-        return edited_content_epoch_;
-    }
 
     struct level
     {
@@ -250,17 +152,6 @@ public:
         ///< The origin's move for a scroll-only recompose, in this level's voxels: the new
         ///< window's voxel v holds what the old window held at v + scroll_shift.
         math::ivec3 scroll_shift{0};
-        ///< Attribute voxels at half the distance resolution, recomposed with
-        ///< the level. RGBA8 packed (r,g,b = winning instance albedo, a = 255 where the voxel is
-        ///< SURFACE - within GI_SURFACE_VOXEL_BAND attribute voxels of the composed isosurface -
-        ///< and 0 everywhere else). (attr_resolution)^3, x-major like @ref voxels.
-        std::vector<uint32_t> attr_albedo;
-        ///< Winning instance emissive per attribute voxel, radiance units. Zero off-surface.
-        std::vector<math::vec3> attr_emissive;
-        ///< The surface-voxel list: packed attribute-voxel coordinates (see pack_surface_voxel)
-        ///< of every voxel whose albedo alpha is 255. CPU reference of the GPU append buffer
-        ///< that drives the light-voxel update's indirect dispatch.
-        std::vector<uint32_t> attr_surface_list;
 
         /// The level exists: its planning (snapping, fingerprints, the recompose budget) runs whichever composer
         /// fills it.
@@ -418,29 +309,11 @@ public:
                                      voxel_box& out_overlap,
                                      std::array<voxel_box, 3>& out_exposed) -> uint32_t;
 
-    /// Attribute voxels per axis: half the distance resolution. Halving is the memory/coverage
-    /// point the attribute and light-voxel memory budget is sized for; the light voxels this
-    /// feeds live at the same resolution.
-    static constexpr uint32_t attr_downsample = 2;
-
-    /// Origin snap granularity, in ATTRIBUTE voxels. Must stay an integer so the toroidal
-    /// attribute/light-volume cell identity survives re-snaps; raising it trades a fraction of
-    /// guaranteed level coverage at the window edge (half a snap, absorbed by the cross-fade
-    /// and the next level) for proportionally fewer full recomposes while the camera moves -
-    /// at 1 the finest level would recompose every 0.25 m of travel.
-    static constexpr uint32_t origin_snap_attr_voxels = 8;
-
-    auto get_attr_resolution() const -> uint32_t
-    {
-        return settings_.resolution / attr_downsample;
-    }
-
-    /// Packs an attribute-voxel coordinate + level into one uint for the surface-voxel list.
-    /// 8 bits per axis (attribute resolutions through 256) + 2 bits of level.
-    static auto pack_surface_voxel(uint32_t x, uint32_t y, uint32_t z, uint32_t level) -> uint32_t
-    {
-        return x | (y << 8u) | (z << 16u) | (level << 24u);
-    }
+    /// Origin snap granularity, in voxels of each level: a whole number of the GPU coverage's texels (two voxels), so
+    /// a scroll-only recompose moves the coverage by whole texels. Raising it trades a fraction of guaranteed level
+    /// coverage at the window edge (half a snap, absorbed by the cross-fade and the next level) for proportionally
+    /// fewer recomposes while the camera moves.
+    static constexpr uint32_t origin_snap_voxels = 16;
 
     auto get_memory_usage() const -> size_t;
 
@@ -448,26 +321,6 @@ private:
     /// Composes one level's voxels from the instances reaching it.
     void compose_level(uint32_t index, const std::vector<global_sdf_instance>& instances);
 
-    /**
-     * @brief Composes one level's ATTRIBUTE voxels (albedo, emissive, surface list) from the
-     *        instances, after the distance voxels are current.
-     *
-     * REFERENCE IMPLEMENTATION of cs_gi_clipmap_attributes.sc, in the same relationship as
-     * compose_level is to cs_gi_clipmap_compose.sc.
-     *
-     * A voxel is SURFACE when the composed field at its centre lies within
-     * GI_SURFACE_VOXEL_BAND attribute voxels of zero. The field is the judge - not the raw
-     * per-instance samples - because mesh fields saturate at mesh scale, so deep interiors of
-     * thick objects read as "near a surface" to them, while the composed level saturates in
-     * LEVEL voxels and excludes interiors correctly.
-     *
-     * The two instances with the smallest |distance| at the voxel centre, ties broken by the
-     * smaller GLOBAL instance index, are blended by coverage-scaled proximity; a voxel with a
-     * single source copies it exactly. The tie-break is load bearing: the CPU and GPU walks
-     * visit candidates in different orders, and a selection without a deterministic tie rule
-     * would make the two composers disagree on exactly the voxels where two surfaces meet.
-     */
-    void compose_level_attributes(uint32_t index, const std::vector<global_sdf_instance>& instances);
 
     /// World-space region a level covers, given its origin.
     auto compute_level_bounds(uint32_t index, const math::vec3& origin) const -> math::bbox;
@@ -482,7 +335,7 @@ private:
                                    float reach,
                                    const std::vector<global_sdf_instance>& instances) const -> uint64_t;
 
-    /// One instance's contribution to a level fingerprint: placement, identity and material.
+    /// One instance's contribution to a level fingerprint: placement and identity.
     static auto compute_instance_entry_hash(const global_sdf_instance& instance) -> uint64_t;
 
     /// Recomputes @ref instance_entry_hashes_ when the content revision moved (or is unknown).
@@ -490,18 +343,7 @@ private:
                                        uint64_t instances_revision);
 
     settings settings_{};
-    compose_stats last_compose_stats_{};
     std::array<level, level_count> levels_{};
-    /// Last fingerprint SEEN per level (independent of what was composed), driving
-    /// @ref get_content_epoch - the compose-time content_fingerprint lags until the budget
-    /// reaches the level, which would re-fire the epoch every frame while a level waits.
-    std::array<uint64_t, level_count> seen_fingerprints_{};
-    uint64_t content_epoch_ = 0;
-    /// See get_composed_content_epoch - bumped in the compose pass when a level lands a
-    /// content_fingerprint it did not hold before.
-    uint64_t composed_content_epoch_ = 0;
-    /// See get_edited_content_epoch.
-    uint64_t edited_content_epoch_ = 0;
     /// The fingerprint cache update() recalls when neither the instances revision nor a
     /// level's target origin moved. Revision 0 = nothing cached.
     std::array<math::vec3, level_count> cached_target_origin_{};

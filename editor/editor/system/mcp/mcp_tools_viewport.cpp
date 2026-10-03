@@ -13,10 +13,8 @@
 #include <engine/ecs/components/transform_component.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/ecs/components/camera_component.h>
-#include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/surface_cache_system.h>
-#include <engine/rendering/pipeline/passes/gi_quiescence_gate_pass.h>
 #include <engine/rendering/pipeline/pipeline.h>
 #include <seq/seq.h>
 
@@ -603,13 +601,11 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "viewport_set_debug_view",
          .description = "Set the Scene panel debug visualization mode. Pass mode as a name string "
-                        "(e.g. \"full\", \"base_color\", \"normals\", \"gi_light_voxels\") or as the "
-                        "raw integer id (-1..31). \"full\" (-1) restores the normal render. Call "
+                        "(e.g. \"full\", \"base_color\", \"normals\", \"lumen_scene\") or as the "
+                        "raw integer id. \"full\" (-1) restores the normal render. Call "
                         "viewport_list_debug_views for every mode with its group, what it actually "
-                        "shows and its color legend. Optional scale (default 1): a linear readback "
-                        "multiplier for the radiance-valued views (gi_light_voxels, gi_world_probes, "
-                        "gi_attr_emissive, gi_direct_lighting, indirect_diffuse), applied before the "
-                        "8-bit store so a capture reads linear radiance at any magnitude.",
+                        "shows and its color legend. Optional scale (default 1): an exposure "
+                        "multiplier the indirect_diffuse view applies ahead of its tone map.",
          .input_schema_json = R"({"type":"object","properties":{"mode":{"description":"Mode name or raw integer id"},"scale":{"type":"number","minimum":0.0000001,"maximum":1000000}},"required":["mode"]})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
@@ -998,187 +994,6 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .requires_main_thread = false});
 
     registry.add(
-        {.name = "gi_get_stats",
-         .description =
-             "The GI waste census for the Scene panel camera: one on-demand readback of the "
-             "relight / world-probe statistics slice (never per frame - it is a GPU sync). Per "
-             "cascade level: relit faces and how many changed past the quiescence floor "
-             "(GI_QUIESCENCE_CONVERGED_MEAN) and past GI_STATS_VISIBLE_CHANGE, world probes by "
-             "state (active / asleep / buried) and their traced texels by the same thresholds. "
-             "Rows 0-2 describe the frame before the snapshot; the census rows hold the last "
-             "frame the gated passes actually ran. The census rows are instrument work the "
-             "passes do only while this tool has been called within the last ~240 frames: "
-             "the first call arms them and holds the copy a few frames so they accumulate "
-             "(a closed gate keeps them at their last armed frame). camera = \"scene\" (default, the Scene "
-             "panel's editing camera) or \"game\" (the scene's rendering camera - the only one "
-             "that renders while the Game panel is focused, e.g. in play mode).",
-         .input_schema_json = R"({"type":"object","properties":{"timeout_ms":{"type":"integer","minimum":100,"maximum":10000},"camera":{"type":"string","enum":["scene","game"]}}})",
-         .handler =
-             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
-         {
-             auto& mcp = ctx.get_cached<mcp_manager>();
-             int64_t timeout_ms = 3000;
-             if(args["timeout_ms"].get(timeout_ms))
-             {
-                 timeout_ms = 3000;
-             }
-             std::string camera_arg = "scene";
-             read_string(args, "camera", camera_arg);
-             const bool game_camera = camera_arg == "game";
-             auto resolve_pipeline = [&ctx, game_camera]() -> rendering::pipeline*
-             {
-                 if(game_camera)
-                 {
-                     auto& em = ctx.get_cached<editing_manager>();
-                     auto* scn = em.get_active_scene(ctx);
-                     if(scn == nullptr)
-                     {
-                         return nullptr;
-                     }
-                     rendering::pipeline* found = nullptr;
-                     scn->registry->view<camera_component, active_component>().each(
-                         [&](auto, auto& cc, auto&)
-                         {
-                             if(found == nullptr && cc.get_pipeline_data().get_pipeline())
-                             {
-                                 found = cc.get_pipeline_data().get_pipeline().get();
-                             }
-                         });
-                     return found;
-                 }
-                 auto camera_ent = resolve_scene_panel(ctx).get_camera();
-                 if(!camera_ent || !camera_ent.all_of<camera_component>())
-                 {
-                     return nullptr;
-                 }
-                 return camera_ent.get<camera_component>().get_pipeline_data().get_pipeline().get();
-             };
-             auto requested = mcp.invoke_on_main(
-                 [&]() -> uint32_t
-                 {
-                     auto* pipeline = resolve_pipeline();
-                     if(pipeline == nullptr)
-                     {
-                         return uint32_t(-1);
-                     }
-                     pipeline->request_gi_stats_snapshot();
-                     return gfx::get_render_frame();
-                 });
-             if(!requested || *requested == uint32_t(-1))
-             {
-                 return {.text = "Scene panel camera has no pipeline", .is_error = true};
-             }
-             const uint32_t request_frame = *requested;
-             const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-             while(std::chrono::steady_clock::now() < deadline)
-             {
-                 std::this_thread::sleep_for(std::chrono::milliseconds(40));
-                 auto fetched = mcp.invoke_on_main(
-                     [&]() -> std::string
-                     {
-                         auto* pipeline = resolve_pipeline();
-                         if(pipeline == nullptr)
-                         {
-                             return {};
-                         }
-                         const auto& snap = pipeline->get_gi_stats_snapshot();
-                         if(!snap.valid || snap.frame < request_frame)
-                         {
-                             return {};
-                         }
-                         using snapshot = gi_quiescence_gate_pass::stats_snapshot;
-                         static constexpr const char* names[snapshot::quantity_count] = {
-                             "relight_change_sum", "relight_faces", "relight_rise_sum", "relight_faces_moved",
-                             "relight_faces_visible", "probes_active", "probes_asleep", "probes_buried",
-                             "probe_texels", "probe_texels_moved", "probe_texels_visible",
-                             "probes_allocated", "probes_evicted"};
-                         // The two fixed-point sums (GI_STATS_RELIGHT_CHANGE / _RISE).
-                         static constexpr uint32_t rise_row = 2u;
-                         std::string json = fmt::format(R"({{"frame":{},"levels":[)", snap.frame);
-                         for(uint32_t level = 0; level < snapshot::level_count; ++level)
-                         {
-                             json += level == 0 ? "{" : ",{";
-                             for(uint32_t q = 0; q < snapshot::quantity_count; ++q)
-                             {
-                                 const uint32_t raw = snap.at(q, level);
-                                 if(q == 0 || q == rise_row)
-                                 {
-                                     json += fmt::format(R"({}"{}":{:.4f})",
-                                                         q == 0 ? "" : ",",
-                                                         names[q],
-                                                         double(raw) / double(gi::GI_QUIESCENCE_STATS_SCALE));
-                                 }
-                                 else
-                                 {
-                                     json += fmt::format(R"(,"{}":{})", names[q], raw);
-                                 }
-                             }
-                             json += "}";
-                         }
-                         // The emitter table the tracers aim at (surface_cache_system::rebuild_emitters):
-                         // count after the cap, pieces built before it, and the strongest entries.
-                         {
-                             const auto& surface_cache = ctx.get_cached<surface_cache_system>();
-                             const auto& emitters = surface_cache.get_emitters();
-                             json += fmt::format(R"(],"emitters":{{"count":{},"total":{},"listed":[)",
-                                                 emitters.size(),
-                                                 surface_cache.get_emitter_total());
-                             constexpr size_t listed_max = 16;
-                             for(size_t i = 0; i < emitters.size() && i < listed_max; ++i)
-                             {
-                                 const auto& e = emitters[i];
-                                 const float luminance = 0.2126f * e.radiance.x + 0.7152f * e.radiance.y + 0.0722f * e.radiance.z;
-                                 json += fmt::format(R"({}{{"center":[{:.3f},{:.3f},{:.3f}],"radius":{:.3f},"luminance":{:.4f},"extent":[{:.3f},{:.3f},{:.3f}],"power":{:.4f}}})",
-                                                     i == 0 ? "" : ",",
-                                                     e.center.x,
-                                                     e.center.y,
-                                                     e.center.z,
-                                                     e.radius,
-                                                     luminance,
-                                                     e.extent.x,
-                                                     e.extent.y,
-                                                     e.extent.z,
-                                                     e.power);
-                             }
-                             json += "]}";
-                             // The temporal's dirty regions as the shaders receive them (the budget cut
-                             // applied), with the total before the cut.
-                             const auto& regions = surface_cache.get_dirty_regions();
-                             json += fmt::format(R"(,"dirty_regions":{{"count":{},"total":{},"bounds":[)",
-                                                 regions.size(),
-                                                 surface_cache.get_dirty_region_total());
-                             for(size_t i = 0; i < regions.size(); ++i)
-                             {
-                                 const auto& region = regions[i].bounds;
-                                 json += fmt::format(R"({}[{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f}])",
-                                                     i == 0 ? "" : ",",
-                                                     region.min.x,
-                                                     region.min.y,
-                                                     region.min.z,
-                                                     region.max.x,
-                                                     region.max.y,
-                                                     region.max.z,
-                                                     regions[i].emissive_reach);
-                             }
-                             json += "]}";
-                         }
-                         json += fmt::format(R"(,"thresholds":{{"moved":{},"visible":{}}}}})",
-                                             double(gi::GI_QUIESCENCE_CONVERGED_MEAN),
-                                             double(gi::GI_STATS_VISIBLE_CHANGE));
-                         return json;
-                     });
-                 if(fetched && !fetched->empty())
-                 {
-                     return {.text = *fetched, .is_error = false};
-                 }
-             }
-             return {.text = "Timed out waiting for the GI stats readback (is the profiler / GI running?)",
-                     .is_error = true};
-         },
-         .mutates_scene = false,
-         .requires_main_thread = false});
-
-    registry.add(
         {.name = "profiler_get_cpu_scopes",
          .description =
              "CPU profiler scopes (APP_SCOPE_PERF) of the newest captured frames, wall ms per "
@@ -1379,10 +1194,11 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "gi_set_experiment_flags",
          .description =
-             "Runtime experiment flags every GI tracer reads (u_sdf_grid_params[2].x, sdf_common.sh "
-             "u_sdf_experiment_flags; no experiment is compiled in at the moment). Two code paths "
-             "compiled into one program alternate "
-             "inside ONE editor launch for cost A/Bs. 0 is production. Returns the new and previous flags.",
+             "Runtime experiment flags of the Lumen passes (surface_cache_system::get_experiment_flags): each bit "
+             "switches one stage for an in-session A/B - the gather's bits are listed in lumen_gather_pass.h, the "
+             "reflections' in lumen_reflection_pass.h, the surface cache's in lumen_surface_cache_pass.h, the global "
+             "distance field's in lumen_pass_common.h and the deferred pipeline. 0 is production. Returns the new and "
+             "previous flags.",
          .input_schema_json =
              R"({"type":"object","properties":{"flags":{"type":"integer","minimum":0}},"required":["flags"]})",
          .handler =

@@ -47,83 +47,26 @@ constexpr int contact_shadow_dither_frames = 16;
 /// RBUFFER's clear, packed RGBA8 (bgfx converts it for float targets): black with alpha 1 - no
 /// traced reflection yet, and the whole pixel left to the probe layer.
 constexpr uint32_t reflection_traced_clear_rgba = 0x000000ff;
-/// GI experiment flag (surface_cache_system::get_experiment_flags): Lumen views keep the volume's
-/// authored clipmap layout instead of Lumen's, for an A/B of layouts.
-constexpr uint32_t lumen_experiment_authored_clipmap = 1u << 19u;
-/// GI experiment flag: the global SDF clipmap stays where it was when the bit was set (no camera
-/// re-snaps), to isolate re-snap transients in A/Bs.
+/// GI experiment flag (surface_cache_system::get_experiment_flags): the global SDF clipmap stays where it was when
+/// the bit was set (no camera re-snaps), to isolate re-snap transients in A/Bs.
 constexpr uint32_t lumen_experiment_freeze_clipmap_origin = 1u << 27u;
+/// The global distance field's level scale in Lumen views: each level doubles the previous one's extent.
+constexpr float lumen_clipmap_level_scale = 2.0f;
 
-/// Where the environment revision is published on a render view, for the GI world side to read
-/// next to the IRRADIANCE_SH texture it belongs to (see run_irradiance_pass).
-constexpr const char* environment_hash_key = "GI_ENVIRONMENT_HASH";
-/// The graded environment revision (plan item 1.2) and the state it was last bumped under.
-constexpr const char* environment_revision_key = "GI_ENVIRONMENT_REVISION";
-constexpr const char* environment_revision_structure_key = "GI_ENVIRONMENT_REVISION_STRUCTURE";
-constexpr const char* environment_revision_level_key = "GI_ENVIRONMENT_REVISION_LEVEL";
-
-/// FNV-1a, the fold gpu_light_buffer's content hash already uses. Values are folded ONE AT A
-/// TIME rather than as struct bytes: padding is not zero-initialised, and hashing it once made
-/// a parked scene report a change every frame.
-constexpr uint64_t fnv_offset_basis = 1469598103934665603ull;
-constexpr uint64_t fnv_prime = 1099511628211ull;
-
-auto fold_bytes(uint64_t hash, const void* data, size_t size) -> uint64_t
+/// The global distance field Lumen traces (its hits read the surface cache) in Lumen's layout (lumen_constants.h),
+/// with the view's rebuild budget and level blend.
+auto make_lumen_clipmap_settings(const gi_settings::distance_field_settings& field, bool compose_on_gpu)
+    -> global_sdf_clipmap::settings
 {
-    const auto* bytes = static_cast<const uint8_t*>(data);
-    for(size_t i = 0; i < size; ++i)
-    {
-        hash = (hash ^ bytes[i]) * fnv_prime;
-    }
-    return hash;
+    global_sdf_clipmap::settings settings;
+    settings.resolution = uint32_t(gi::lumen::LUMEN_GLOBAL_SDF_RESOLUTION);
+    settings.base_extent = gi::lumen::LUMEN_GLOBAL_SDF_EXTENT;
+    settings.level_scale = lumen_clipmap_level_scale;
+    settings.compose_on_gpu = compose_on_gpu;
+    settings.max_levels_per_update = std::clamp(field.levels_per_update, 1u, global_sdf_clipmap::level_count);
+    settings.blend_voxels = std::max(field.level_blend_band, 0.0f);
+    return settings;
 }
-
-auto fold_float(uint64_t hash, float value) -> uint64_t
-{
-    // Normalise the one float whose bit pattern is not unique for its value, so a sign flip on
-    // an otherwise-zero uniform cannot read as an environment change.
-    const float normalized = value == 0.0f ? 0.0f : value;
-    return fold_bytes(hash, &normalized, sizeof(normalized));
-}
-
-auto fold_floats(uint64_t hash, const float* values, size_t count) -> uint64_t
-{
-    for(size_t i = 0; i < count; ++i)
-    {
-        hash = fold_float(hash, values[i]);
-    }
-    return hash;
-}
-
-auto fold_uint(uint64_t hash, uint64_t value) -> uint64_t
-{
-    return fold_bytes(hash, &value, sizeof(value));
-}
-
-/// Frames a view must stay still (update_gi_hold) before its GI is held: past the screen
-/// temporal's slow window, so the held result is a converged one.
-constexpr uint32_t gi_hold_still_frames = 64;
-/// Relative pre-exposure drift a held result tolerates: the held textures are in the exposure
-/// they were produced under, so a slowly adapting exposure resumes the gather once it has moved
-/// this far from where the still streak began.
-constexpr float gi_hold_exposure_tolerance = 0.002f;
-/// Where update_gi_hold keeps its per-view state in gfx::render_view::data().
-constexpr const char* gi_hold_key = "GI_HOLD";
-
-/// What update_gi_hold compares frame to frame, and its verdict.
-struct gi_hold_state
-{
-    uint64_t frame{~0ull};
-    uint32_t still_frames{0};
-    bool hold{false};
-    math::transform view{};
-    math::transform projection{};
-    usize32_t size{};
-    float pre_exposure{0.0f};
-    /// The pre-exposure the current still streak began under.
-    float streak_pre_exposure{0.0f};
-    gi_resolve_pass::settings settings{};
-};
 } // namespace ANONYMOUS
 } // namespace unravel
 
@@ -948,8 +891,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // with their own unit pre-exposure). Stored in the render view; the passes read it back.
     const pre_exposure_state pre_exposure = update_pre_exposure(rview, params, is_camera_run);
 
-    // GI world-state preparation: surface-cache residency, clipmap compose, voxel
-    // lighting and world probes (details and gating rationale at the definition).
+    // The GI scene: instance residency and this view's global distance field (gating rationale at the definition).
     run_gi_scene_passes(scn, camera, rview, params);
 
     const auto& viewport_size = camera.get_viewport_size();
@@ -993,11 +935,6 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     const bool hiz_active = run_hiz_pass(camera, rview, params, viewport_size, dt);
 
-    // GI reflections layer UNDER SSR: the world-space specular tier draws over the authored
-    // probes in RBUFFER, then SSR composites the sharp on-screen result on top - screen space
-    // belongs to SSR alone. Runs after Hi-Z (positions reconstruct from the pyramid).
-    const bool gi_reflection_ran = run_gi_reflection_pass(camera, rview, params);
-
     // SSR samples last frame's PREV_SCENE_HDR snapshot (post-TAA, scene-referred linear).
     // It must NOT sample the final OBUFFER: that image is tonemapped, sRGB-encoded and has
     // UI composited on it -- display-referred values injected into linear lighting, which
@@ -1011,18 +948,12 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
     target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, dt);
 
-    // Surface cache: register visible surfaces and light every resident entry. Runs after
-    // direct lighting so the light buffer for this frame is populated, and before the indirect
-    // pass, which is what will eventually consume the cache.
-    bool gi_resolve_active = false;
+    // Lumen: the surface cache, the screen probe gather and the reflections. Runs after direct lighting, so this
+    // frame's light buffer is populated, and before the indirect pass, which composites the results.
+    bool gi_active = false;
     if(is_camera_run)
     {
-        // Far-field fallback reads PREV_SCENE_HDR (last frame's post-TAA linear scene
-        // color) - the same history SSR consumed above.
-        gi_resolve_active = run_gi_resolve_pass(camera, rview, params);
-        // The reflections' rough tier reads the gather's rough specular and resolve, so it blends
-        // into the probe layer only now, before the indirect pass composes it.
-        run_gi_reflection_rough_tier(camera, rview, params, gi_reflection_ran);
+        gi_active = run_lumen_gi_pass(camera, rview, params);
     }
 
     // SSIL pass
@@ -1092,7 +1023,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         }
         else if(debug_pass_ == debug_pass_ao_bent_normals || debug_pass_ == debug_pass_lumen_reflection_rays)
         {
-            run_debug_visualization_pass(camera, rview, output, get_debug_tonemapping(params));
+            run_debug_visualization_pass(camera, rview, output, params);
         }
         else if(debug_pass_ >= debug_pass_lumen_scene && debug_pass_ <= debug_pass_lumen_scene_indirect)
         {
@@ -1106,13 +1037,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
             lumen_debug.tonemapping = get_debug_tonemapping(params);
             lumen_surface_cache_pass_.run_debug(lumen_debug);
         }
-        else if(debug_pass_ >= debug_pass_sdf_normals)
+        else if(debug_pass_ >= 0 && debug_pass_ < debug_pass_gbuffer_modes)
         {
-            run_sdf_debug_pass(camera, rview, params, output);
-        }
-        else if(debug_pass_ >= 0)
-        {
-            run_debug_visualization_pass(camera, rview, output, get_debug_tonemapping(params));
+            run_debug_visualization_pass(camera, rview, output, params);
         }
     }
 
@@ -1133,10 +1060,9 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path).
     //
-    // The GI resolve is a second, independent consumer: its temporal accumulation validates
-    // reprojected history against this depth, and treats a missing one as "no history" -- so
-    // leaving the snapshot gated purely on the Hi-Z stack made GI accumulation silently depend on
-    // an unrelated feature being enabled, and never converge when it was not.
+    // Lumen GI is a second, independent consumer: its temporal accumulation validates
+    // reprojected history against this depth and treats a missing one as "no history", so the
+    // snapshot cannot be gated on the Hi-Z stack alone.
     // TAA is a third consumer: its disocclusion test compares the reprojected
     // expected depth against this snapshot (a null snapshot degrades the test to a
     // same-frame approximation on frame 0 only).
@@ -1144,7 +1070,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // GTAO is a fourth consumer: its temporal accumulation reprojects against this depth and
     // treats a missing one as "no history" (raw per-frame noise).
     const bool gtao_active = static_cast<bool>(rview.tex_safe_get("GTAO"));
-    if(hiz_active || gi_resolve_active || taa_active || gtao_active)
+    if(hiz_active || gi_active || taa_active || gtao_active)
     {
         snapshot_prev_depth(rview, viewport_size);
     }
@@ -2069,80 +1995,6 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         float mode_vec[4] = {float(mode), dominant.sun_weight, couple_clouds ? 1.0f : 0.0f, 0.0f};
         gfx::set_uniform(irradiance_compute_program_.u_mode, mode_vec);
 
-        // ENVIRONMENT REVISION. The world GI's wake-up keys are the analytic light set and the
-        // clipmap's content epoch; neither of them moves when only the SKY changes. World probes
-        // sample this texture, so a tint, an intensity, a turbidity or a swapped cubemap edited
-        // on its own used to land in the probes' radiance and then sit behind a quiescence gate
-        // that had no reason to open -- invisible until something else happened to wake the
-        // world side. Editing a sky alongside its directional light masked it, because the light
-        // set changed too. Everything the dispatch below can vary is folded in, so consumers can
-        // treat a changed value as "the environment radiance is different now".
-        // Animated cloud COVERAGE is deliberately absent: it is a continuous signal, not a
-        // revision, and folding the shadow map in would report a change on every frame it drifts.
-        uint64_t environment_hash = ANONYMOUS::fnv_offset_basis;
-        environment_hash = ANONYMOUS::fold_floats(environment_hash, ambient_vec, 4);
-        environment_hash = ANONYMOUS::fold_float(environment_hash, exp_val);
-        environment_hash = ANONYMOUS::fold_floats(environment_hash, mode_vec, 4);
-        environment_hash = ANONYMOUS::fold_uint(environment_hash, use_cubemap ? 1ull : 0ull);
-        if(use_cubemap)
-        {
-            // The cubemap's ASSET identity, not its texture handle: a freed handle's index is
-            // reused, so a swapped skybox could otherwise hash to the value it replaced.
-            environment_hash =
-                ANONYMOUS::fold_uint(environment_hash, uint64_t(std::hash<hpp::uuid>{}(dominant.cubemap.uid())));
-        }
-        if(dominant.use_perez)
-        {
-            environment_hash = ANONYMOUS::fold_floats(environment_hash, &dominant.perez.sun_direction.x, 3);
-            environment_hash = ANONYMOUS::fold_floats(environment_hash, &dominant.perez.sun_luminance_rgb.x, 3);
-            environment_hash = ANONYMOUS::fold_floats(environment_hash, &dominant.perez.sky_luminance_xyz.x, 3);
-            environment_hash = ANONYMOUS::fold_floats(environment_hash, &dominant.perez.perez_coeff[0][0], 5 * 4);
-        }
-        result.environment_hash = environment_hash;
-        rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_hash_key, 0ull) = environment_hash;
-        // GRADED ENVIRONMENT CHANGE (plan item 1.2, Lumen's sun / sky rule). The hash above wakes
-        // the world side on any sky edit; the REVISION bumps only when the environment changes
-        // kind (mode, cubemap identity, Perez on / off) or its brightness moves past
-        // gpu_light_buffer::global_change_ratio since the last revision. The probes' fast window,
-        // the relight's EMA snap and the screen temporal's scene-wide fast cap key on the
-        // revision, so a drifting time-of-day sky refreshes through the normal cadence instead of
-        // flushing every pixel every frame.
-        uint64_t environment_structure = ANONYMOUS::fnv_offset_basis;
-        environment_structure = ANONYMOUS::fold_uint(environment_structure, uint64_t(mode));
-        environment_structure = ANONYMOUS::fold_uint(environment_structure, use_cubemap ? 1ull : 0ull);
-        environment_structure = ANONYMOUS::fold_uint(environment_structure, dominant.use_perez ? 1ull : 0ull);
-        if(use_cubemap)
-        {
-            environment_structure = ANONYMOUS::fold_uint(environment_structure,
-                                                         uint64_t(std::hash<hpp::uuid>{}(dominant.cubemap.uid())));
-        }
-        constexpr float luminance_r = 0.2126f;
-        constexpr float luminance_g = 0.7152f;
-        constexpr float luminance_b = 0.0722f;
-        float environment_level =
-            (luminance_r * ambient_vec[0] + luminance_g * ambient_vec[1] + luminance_b * ambient_vec[2]) * ambient_vec[3];
-        if(dominant.use_perez)
-        {
-            const auto& sun = dominant.perez.sun_luminance_rgb;
-            const float sun_level = (luminance_r * sun.x + luminance_g * sun.y + luminance_b * sun.z) * dominant.sun_weight;
-            environment_level = math::max(environment_level, math::max(dominant.perez.sky_luminance_xyz.y, sun_level));
-        }
-        auto& environment_revision = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_revision_key, 0ull);
-        auto& revision_structure =
-            rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_revision_structure_key, 0ull);
-        auto& revision_level = rview.data().get_or_emplace<float>(ANONYMOUS::environment_revision_level_key, -1.0f);
-        const float level_low = math::min(environment_level, revision_level);
-        const float level_high = math::max(environment_level, revision_level);
-        const bool level_global =
-            revision_level < 0.0f ||
-            (level_high > 0.0f && (level_low <= 0.0f || level_high > gpu_light_buffer::global_change_ratio * level_low));
-        if(environment_revision == 0ull || environment_structure != revision_structure || level_global)
-        {
-            ++environment_revision;
-            revision_structure = environment_structure;
-            revision_level = environment_level;
-        }
-
         bgfx::dispatch(irr_pass.id, irradiance_compute_program_.program->native_handle(), 1, 1, 1);
         irradiance_compute_program_.program->end();
 
@@ -2829,13 +2681,15 @@ auto deferred::get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_
     inputs.params = {1.0f, 0.0f, 1.0f, 0.0f};
     // Lumen's short-range AO when the gather produced it this frame (UE DiffuseIndirectComposite.usf
     // GetShadingOcclusion): the diffuse takes the visibility through the multi-bounce fit at the post-process
-    // intensity 1 (no bent normal: the ambient axis stays the normal), the untraced specular the bent cone.
+    // intensity the gather published with it (no bent normal: the ambient axis stays the normal), the untraced
+    // specular the bent cone.
     const auto& lumen_ao = rview.tex_safe_get(lumen_gather_pass::screen_ao_texture);
     const auto* lumen_ao_frame = rview.data().try_get<uint32_t>(lumen_gather_pass::screen_ao_frame);
     if(lumen_ao && lumen_ao_frame && *lumen_ao_frame == uint32_t(gfx::get_render_frame()))
     {
+        const auto* lumen_ao_intensity = rview.data().try_get<float>(lumen_gather_pass::screen_ao_intensity);
         inputs.texture = lumen_ao;
-        inputs.params = {1.0f, 0.0f, 1.0f, 1.0f};
+        inputs.params = {lumen_ao_intensity ? *lumen_ao_intensity : 1.0f, 0.0f, 1.0f, 1.0f};
         inputs.multi_bounce_albedo_cap = gi::lumen::LUMEN_SHORT_RANGE_AO_MAX_MULTIBOUNCE_ALBEDO;
         return inputs;
     }
@@ -3109,87 +2963,23 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     return tonemapping_pass_.run(rview, params);
 }
 
-namespace
-{
-// The sun's CSM was rendered earlier this frame (build_shadows), so its cascade 0 can
-// answer sun visibility for the voxels it covers - the raster's own mesh-exact shadows,
-// which the traced field cannot reproduce through openings the bake fattened.
-// The index walks the SAME view in the SAME order the GPU light buffer was filled from
-// (surface_cache.update_world, this frame), so the shader can match the map to exactly
-// the light it was rendered for.
-void find_sun_shadowmap(scene& scn, gi_light_voxel_pass::run_params& light_params)
-{
-    int light_index = 0;
-    scn.registry->view<transform_component, light_component, active_component>().each(
-        [&](auto light_entity, auto&& light_transform, auto&& light_comp, auto&& active)
-        {
-            const auto& l = light_comp.get_light();
-            if(light_params.sun_light_index < 0 && l.type == light_type::directional && l.casts_shadows)
-            {
-                const auto& generator = light_comp.get_shadowmap_generator();
-                if(bgfx::isValid(generator.get_rt_texture(0)))
-                {
-                    light_params.sun_shadows = &generator;
-                    light_params.sun_light_index = light_index;
-                }
-            }
-            ++light_index;
-        });
-}
-} // namespace
-
 void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render_view& rview, const run_params& params)
 {
-    // Surface cache residency is world state shared by every camera, so it is refreshed once
-    // per camera-driven frame and skipped entirely for reflection probe captures, which would
-    // otherwise rebuild the same instance list six more times per probe.
-    //
-    // Gated on GI actually being asked for. This is not a token early-out: the update rebuilds the
-    // instance list for every model in the scene, flushes atlas uploads and composes a cascade
-    // level, which measured 2.75 ms of CPU on Bistro. Paying that for a camera with no
-    // gi_component would make the feature cost most of its price while switched off.
-    //
-    // Also kept alive for the SDF debug views, which inspect this very state: requiring a
-    // gi_component before they show anything would mean the tooling for diagnosing GI is only
-    // available once GI already works.
-    const bool is_camera_run = params.run_type == pipeline_run_type::camera;
-    const bool wants_sdf_debug = debug_pass_ >= debug_pass_sdf_normals;
-    if(!is_camera_run || (!params.fill_gi_params && !wants_sdf_debug))
+    // The GI scene is world state shared by every camera, refreshed once per camera-driven frame; reflection probe
+    // captures skip it. Gated on a gi_component asking for GI: the update rebuilds the instance list of every model and
+    // composes clipmap levels, a cost a camera without GI must not pay.
+    gi_settings gi;
+    if(params.run_type != pipeline_run_type::camera || !resolve_gi_settings(params, gi))
     {
         return;
     }
-    auto& ctx = engine::context();
-    auto& surface_cache = ctx.get_cached<surface_cache_system>();
+    auto& surface_cache = engine::context().get_cached<surface_cache_system>();
     // World half: identical for every camera, so it self-limits to once per frame.
     surface_cache.update_world(scn);
     // Camera half: the cascade is snapped around THIS viewer, so it belongs to the render
     // view. Two cameras sharing one cascade re-snapped it to each other's position every
     // frame and it never settled.
     auto& view_cache = rview.data().get_or_emplace<surface_cache_view>(surface_cache_view::view_key);
-    // Composing the voxels on the GPU is conditional on the compute program having loaded.
-    // Asked once here and threaded through, so the cascade and the dispatch cannot disagree
-    // about who owns the voxels -- if both believed they did, the dispatch would overwrite
-    // the CPU's work every frame; if neither did, the cascade would never be composed at all.
-    // Authored per volume, but GPU composition is additionally gated on the compute program
-    // having loaded: a scene that asks for it on a backend that cannot provide it must still
-    // compose, on the CPU, rather than leave the cascade permanently empty.
-    gi_settings gi;
-    resolve_gi_settings(params, gi);
-    auto clipmap_settings = gi.clipmap;
-    clipmap_settings.compose_on_gpu = clipmap_settings.compose_on_gpu && gi_clipmap_compose_pass_.is_valid();
-    if(gi.resolve.enable_lumen_gather)
-    {
-        // Lumen fixes its own global distance field, whatever the volume authored: the distance
-        // volume alone (its hits read the surface cache), in Lumen's layout (lumen_constants.h) - a
-        // level-0 edge inside the view makes the converged lighting move with the camera.
-        clipmap_settings.distance_only = true;
-        if((surface_cache.get_experiment_flags() & ANONYMOUS::lumen_experiment_authored_clipmap) == 0u)
-        {
-            clipmap_settings.resolution = uint32_t(gi::lumen::LUMEN_GLOBAL_SDF_RESOLUTION);
-            clipmap_settings.base_extent = gi::lumen::LUMEN_GLOBAL_SDF_EXTENT;
-            clipmap_settings.level_scale = 2.0f;
-        }
-    }
     const bool freeze_origin =
         (surface_cache.get_experiment_flags() & ANONYMOUS::lumen_experiment_freeze_clipmap_origin) != 0u;
     if(!freeze_origin || !has_frozen_clipmap_camera_)
@@ -3197,15 +2987,13 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
         clipmap_camera_ = camera.get_position();
         has_frozen_clipmap_camera_ = freeze_origin;
     }
+    // The GPU composes the voxels when its program loaded; otherwise the CPU does, so the cascade is never left empty.
     view_cache.update(surface_cache.get_clipmap_instances(),
                       clipmap_camera_,
-                      clipmap_settings,
+                      ANONYMOUS::make_lumen_clipmap_settings(gi.distance_field, gi_clipmap_compose_pass_.is_valid()),
                       surface_cache.get_content_revision());
-    // Runs whenever the programs exist, not only when the GPU composes: the pass also
-    // seeds the compute-writable cell buffers and drains the texture-mean captures, and
-    // the CPU composer needs both. The dirty-mask handoff keeps the composers exclusive
-    // -- on the CPU path the upload above already consumed and cleared the dirty levels,
-    // so the pass finds nothing to compose and does only that upkeep.
+    // The GPU composes the levels the update above marked dirty; without the program the CPU
+    // composer already wrote and uploaded them.
     if(gi_clipmap_compose_pass_.is_valid())
     {
         gi_clipmap_compose_pass::run_params compose_params;
@@ -3213,144 +3001,6 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
         compose_params.view_cache = &view_cache;
         gi_clipmap_compose_pass_.run(rview, compose_params);
     }
-    // Light the surface voxels while the cascade and its attributes are current, then trace
-    // the world probes against them. Gated on GI actually being requested - the
-    // sdf-debug-only path keeps the cascade alive but has no lights to spend - and on a cascade
-    // that holds them: Lumen's distance-only field has no surface voxels to light.
-    if(params.fill_gi_params && !view_cache.get_clipmap_gpu().is_distance_only())
-    {
-        // SPARSE LEVEL-0 PROBE ALLOCATION (gi_world_probes.sh): ungated and AHEAD of the gate.
-        // It claims probes for the cells last frame's cage readers stamped, frees the ones
-        // nobody asks for any more, and its allocation count is what the gate below reads to
-        // hold every world-side dispatch open while the fresh probes converge - a camera turn
-        // reveals a room without scrolling a window, and the gate would otherwise sleep on it.
-        {
-            gi_world_probe_pass::run_params alloc_params;
-            alloc_params.surface_cache = &surface_cache;
-            alloc_params.view_cache = &view_cache;
-            alloc_params.camera_position = camera.get_position();
-            alloc_params.census = gi_quiescence_gate_pass_.is_census_armed();
-            gi_world_probe_pass_.run_alloc(rview, alloc_params);
-        }
-        // QUIESCENCE GATE: with the light set, the clipmap content and origins, and the
-        // probe window all provably still for several complete windows, re-running the
-        // world side rewrites bit-identical values - the trace re-traces the same stratum,
-        // the convolve re-integrates the same atlas, the voxels relight to the same
-        // radiance. ~0.8 ms/frame of GPU skipped in a parked shot, resumed the same frame
-        // anything changes. Held open while an SDF debug view is up: those views paint per
-        // frame through these very dispatches.
-        const uint64_t light_hash = surface_cache.get_light_buffer().get_content_hash();
-        // The environment revision the irradiance pass published beside IRRADIANCE_SH. Read
-        // from the view rather than passed down, so it always describes the texture the probes
-        // are about to sample - whichever side of this block the irradiance pass ran on.
-        const uint64_t environment_hash = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_hash_key, 0ull);
-        const uint64_t light_revision = surface_cache.get_light_buffer().get_global_revision();
-        const uint64_t environment_revision =
-            rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_revision_key, 0ull);
-        const auto verdict = view_cache.update_quiescence(light_hash,
-                                                          environment_hash,
-                                                          light_revision,
-                                                          environment_revision,
-                                                          camera.get_position(),
-                                                          gi_light_voxel_pass_.get_relight_sample(),
-                                                          wants_sdf_debug);
-        // WHERE THE VERDICT COMES FROM. The convergence half of the gate needs a statistic
-        // only the GPU can produce, and carrying it back per frame cost a full CPU-GPU sync
-        // (see gi_quiescence_gate_pass). When the backend can dispatch indirectly the gate
-        // evaluates that half in place and publishes group counts - or zeros - for all three
-        // dispatches; the passes then run their CPU half unconditionally and the GPU decides
-        // whether anything executes. Otherwise the readback path answers here as before.
-        gi_quiescence_gate_pass::run_params gate_params;
-        gate_params.view_cache = &view_cache;
-        gate_params.mode = verdict.mode;
-        gate_params.reset = verdict.changed;
-        gate_params.groups[gi_quiescence_gate_pass::entry_light_voxels] =
-            gi_light_voxel_pass::get_dispatch_groups(view_cache);
-        // The world-probe scheduler (plan item 2.1) runs on its own three entries ahead of the
-        // trace; the trace and the convolve are sized by the budget the probe pass last set.
-        gate_params.groups[gi_quiescence_gate_pass::entry_probe_select_histogram] =
-            gi_world_probe_pass::get_select_dispatch_groups(gi_quiescence_gate_pass::entry_probe_select_histogram);
-        gate_params.groups[gi_quiescence_gate_pass::entry_probe_select_threshold] =
-            gi_world_probe_pass::get_select_dispatch_groups(gi_quiescence_gate_pass::entry_probe_select_threshold);
-        gate_params.groups[gi_quiescence_gate_pass::entry_probe_select_emit] =
-            gi_world_probe_pass::get_select_dispatch_groups(gi_quiescence_gate_pass::entry_probe_select_emit);
-        gate_params.groups[gi_quiescence_gate_pass::entry_probe_trace] =
-            gi_world_probe_pass_.get_trace_dispatch_groups();
-        gate_params.groups[gi_quiescence_gate_pass::entry_probe_convolve] =
-            gi_world_probe_pass_.get_convolve_dispatch_groups();
-        const bool gpu_gated = gi_quiescence_gate_pass_.run(rview, gate_params);
-        const auto indirect = gpu_gated ? gi_quiescence_gate_pass_.get_indirect_buffer()
-                                        : bgfx::IndirectBufferHandle{bgfx::kInvalidHandle};
-        if(gpu_gated || !verdict.quiescent)
-        {
-            // On the readback path the sample is only worth its stall while the CPU-side
-            // inputs are still: update_quiescence clears the ring on any change, so a
-            // statistic taken during camera motion is deleted on arrival.
-            const bool collect_stats =
-                !gpu_gated && verdict.mode == surface_cache_view::quiescence_mode::measure;
-            run_gi_light_voxel_pass(scn, camera, rview, surface_cache, view_cache, gi, indirect, collect_stats);
-            run_gi_world_probe_pass(camera, rview, surface_cache, view_cache, gi, indirect);
-        }
-        // One frame counter for both passes; each consumer keys its own rotation off it.
-        ++light_voxel_frame_;
-    }
-}
-
-void deferred::run_gi_light_voxel_pass(scene& scn,
-                                       const camera& camera,
-                                       gfx::render_view& rview,
-                                       surface_cache_system& surface_cache,
-                                       surface_cache_view& view_cache,
-                                       const gi_settings& gi,
-                                       bgfx::IndirectBufferHandle indirect,
-                                       bool collect_stats)
-{
-    gi_light_voxel_pass::run_params light_params;
-    light_params.indirect = indirect;
-    light_params.collect_stats = collect_stats;
-    light_params.surface_cache = &surface_cache;
-    light_params.view_cache = &view_cache;
-    light_params.frame = light_voxel_frame_;
-    light_params.camera_position = camera.get_position();
-    // Unjittered: the cascade fit in build_shadows ran before the TAA jitter was applied,
-    // and the slice test in the kernel must describe the same frustum.
-    light_params.camera_view_proj = camera.get_view_projection_unjittered().get_matrix();
-    light_params.probe_visibility_variance_gate = gi.resolve.probe_visibility_variance_gate;
-    // The sun-tier and vis-memo views are WRITER-side diagnostics: the compute
-    // pass stamps categorical colors into the light volume and the debug pass
-    // merely displays them.
-    light_params.sun_tier_debug = debug_pass_ == debug_pass_sdf_sun_tiers;
-    light_params.vis_memo_debug = debug_pass_ == debug_pass_sdf_vis_memo;
-    light_params.census = gi_quiescence_gate_pass_.is_census_armed();
-    find_sun_shadowmap(scn, light_params);
-    gi_light_voxel_pass_.run(rview, light_params);
-}
-
-void deferred::run_gi_world_probe_pass(const camera& camera,
-                                       gfx::render_view& rview,
-                                       surface_cache_system& surface_cache,
-                                       surface_cache_view& view_cache,
-                                       const gi_settings& gi,
-                                       bgfx::IndirectBufferHandle indirect)
-{
-    // World probes trace against the freshly lit voxels (GI v2 plan 3.3).
-    gi_world_probe_pass::run_params probe_params;
-    probe_params.indirect = indirect;
-    probe_params.surface_cache = &surface_cache;
-    probe_params.view_cache = &view_cache;
-    probe_params.camera_position = camera.get_position();
-    probe_params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
-    probe_params.frame = light_voxel_frame_;
-    // GLOBAL revisions only (plan item 1.2): a local light's change reaches the probes through
-    // their normal stratum cadence; the fast window stays for the changes that stale the whole
-    // atlas - a directional light or the sky past the 4x brightness rule, or a kind change.
-    probe_params.light_hash = surface_cache.get_light_buffer().get_global_revision();
-    probe_params.environment_hash = rview.data().get_or_emplace<uint64_t>(ANONYMOUS::environment_revision_key, 0ull);
-    probe_params.jitter_directions = gi.resolve.world_probe_jitter;
-    probe_params.census = gi_quiescence_gate_pass_.is_census_armed();
-    // Only for the emitter-coverage bound's threshold; the atlas stores cached lighting.
-    probe_params.pre_exposure = get_pre_exposure(rview);
-    gi_world_probe_pass_.run(rview, probe_params);
 }
 
 auto deferred::lumen_short_range_ao_owns_view(const run_params& rparams) -> bool
@@ -3359,13 +3009,9 @@ auto deferred::lumen_short_range_ao_owns_view(const run_params& rparams) -> bool
     {
         return false;
     }
+    // At any intensity: at 0 the gather skips the pass and the view has no screen-space AO at all.
     gi_settings gi;
-    if(!resolve_gi_settings(rparams, gi) || !gi.resolve.enable_lumen_gather)
-    {
-        return false;
-    }
-    const uint32_t experiments = engine::context().get_cached<surface_cache_system>().get_experiment_flags();
-    return lumen_gather_pass::uses_short_range_ao(experiments);
+    return resolve_gi_settings(rparams, gi) && gi.ambient_occlusion.enabled;
 }
 
 auto deferred::lumen_reflections_own_view(const run_params& rparams) -> bool
@@ -3375,15 +3021,10 @@ auto deferred::lumen_reflections_own_view(const run_params& rparams) -> bool
         return false;
     }
     gi_settings gi;
-    if(!resolve_gi_settings(rparams, gi) || !gi.resolve.enable_lumen_gather || !gi.resolve.enable_reflections)
-    {
-        return false;
-    }
-    const uint32_t experiments = engine::context().get_cached<surface_cache_system>().get_experiment_flags();
-    return (experiments & lumen_reflection_pass::experiment_previous_reflections) == 0u;
+    return resolve_gi_settings(rparams, gi) && gi.reflections.enabled;
 }
 
-void deferred::run_lumen_reflection_pass(gfx::render_view& rview, const gi_resolve_pass::run_params& gather_params)
+void deferred::run_lumen_reflection_pass(gfx::render_view& rview, const lumen_run_params& gather_params)
 {
     const auto rbuffer = rview.fbo_safe_get("RBUFFER");
     const auto pbuffer = rview.fbo_safe_get("PBUFFER");
@@ -3399,84 +3040,6 @@ void deferred::run_lumen_reflection_pass(gfx::render_view& rview, const gi_resol
     lumen_reflection_pass_.run(rview, params);
 }
 
-auto deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rview, const run_params& params) -> bool
-{
-    if(params.run_type != pipeline_run_type::camera || lumen_reflections_own_view(params))
-    {
-        return false;
-    }
-    gi_settings gi_reflection_settings;
-    if(!resolve_gi_settings(params, gi_reflection_settings) || !gi_reflection_settings.resolve.enable_reflections)
-    {
-        return false;
-    }
-    gi_reflection_pass::run_params grp;
-    grp.hold = update_gi_hold(camera, rview, gi_reflection_settings);
-    grp.g_buffer = rview.fbo_safe_get("GBUFFER");
-    grp.output = rview.fbo_safe_get("RBUFFER");
-    grp.hiz = rview.tex_safe_get("HIZBUFFER");
-    grp.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
-    // Sky-miss fallback: PBUFFER holds exactly the freshly drawn, unoccluded authored probe
-    // layer at this point (cleared and rebuilt by run_reflection_probe_pass earlier this frame;
-    // the rough tier writes into it after the gather). Without the probe stack this frame the
-    // buffer is stale with last frame's probes and rough tier - reading it would feed the pass
-    // its own output - so the pass falls back to the sky SH.
-    if(reflection_screen_stack_enabled(params))
-    {
-        if(const auto pbuffer = rview.fbo_safe_get("PBUFFER"))
-        {
-            grp.probe_layer = pbuffer->get_texture(0);
-        }
-    }
-    // This pass runs before the frame's GI resolve, so the stored texture still holds LAST
-    // frame's denoised result (one frame of lag, the same convention as prev_color).
-    grp.gi_diffuse = rview.tex_safe_get("GI_RESOLVE");
-    // Last frame's composited colour (the same snapshot the gather's screen tier and SSR
-    // read): the compute trace upgrades on-screen world hits to the lit pixel with it.
-    grp.prev_color = rview.tex_safe_get("PREV_SCENE_HDR");
-    grp.temporal_frames = gi_reflection_settings.resolve.reflection_temporal_frames;
-    grp.finder_resumes = gi_reflection_settings.resolve.reflection_finder_resumes;
-    // This frame's velocity buffer, handed to the pass explicitly (a valid texture IS the enable).
-    grp.velocity = rview.tex_safe_get("VELOCITY");
-    // Mover signal for the temporal's stillness-release cap, held one temporal window past
-    // the last mover draw so a just-departed mover's ghost still flushes under the clamp.
-    const uint64_t frame_now = gfx::get_render_frame();
-    grp.velocity_movers_recent =
-        velocity_movers_frame_ != ~0ull && frame_now >= velocity_movers_frame_ &&
-        frame_now - velocity_movers_frame_ <= uint64_t(math::max(grp.temporal_frames, 1));
-    grp.resolution = gi_reflection_settings.resolve.resolution;
-    grp.cam = &camera;
-    // The traced radiance, the probe layer it composites over and last frame's resolve are all
-    // in this run's pre-exposed space (tasks/auto_exposure_plan.md phase 4).
-    grp.pre_exposure = get_pre_exposure(rview);
-    grp.surface_cache = &engine::context().get_cached<surface_cache_system>();
-    grp.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
-    return gi_reflection_pass_.run(rview, grp);
-}
-
-void deferred::run_gi_reflection_rough_tier(const camera& camera,
-                                            gfx::render_view& rview,
-                                            const run_params& params,
-                                            bool reflection_ran)
-{
-    // PBUFFER is only this frame's probe layer when the probe stack drew it; the rough tier
-    // must not blend into last frame's.
-    if(!reflection_ran || !reflection_screen_stack_enabled(params))
-    {
-        return;
-    }
-    gi_reflection_pass::rough_tier_params rtp;
-    rtp.g_buffer = rview.fbo_safe_get("GBUFFER");
-    rtp.probe_output = rview.fbo_safe_get("PBUFFER");
-    // This frame's resolve and rough specular: the gather just produced both (either is absent
-    // when it did not run - no resolve leaves the rough lobes to the probes, no rough specular
-    // falls back to the resolve).
-    rtp.gi_diffuse = rview.tex_safe_get("GI_RESOLVE");
-    rtp.rough_specular = rview.tex_safe_get("GI_ROUGH_SPECULAR");
-    rtp.cam = &camera;
-    gi_reflection_pass_.run_rough_tier(rview, rtp);
-}
-
 auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool
 {
     // Off unless a gi_component asks for it, the same contract every other pass here follows. The
@@ -3489,51 +3052,18 @@ auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -
     return true;
 }
 
-auto deferred::run_gi_resolve_pass(const camera& camera,
-                                   gfx::render_view& rview,
-                                   const run_params& rparams) -> bool
+auto deferred::run_lumen_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool
 {
-    auto& ctx = engine::context();
     gfx::texture::ptr result;
     gi_settings gi;
-    const bool enabled = resolve_gi_settings(rparams, gi);
-    const auto& resolve_settings = gi.resolve;
-    if(enabled)
+    if(resolve_gi_settings(rparams, gi))
     {
-        gi_resolve_pass::run_params params;
-        params.settings = resolve_settings;
-        params.hold = update_gi_hold(camera, rview, gi);
-        params.cause_lane = debug_pass_ == debug_pass_gi_temporal_cause;
-        params.probe_census = debug_pass_ == debug_pass_gi_probe_tiers || debug_pass_ == debug_pass_gi_emitter_share;
-        params.g_buffer = rview.fbo_safe_get("GBUFFER");
-        // Still the PREVIOUS frame's depth at this point: the snapshot happens later in the
-        // frame, which is exactly what temporal reprojection needs to validate history.
-        params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
-        // This frame's velocity buffer, handed to the pass explicitly (a valid texture IS the enable).
-        params.velocity = rview.tex_safe_get("VELOCITY");
-        // Last frame's environment SH (the irradiance pass runs later in the frame), for the
-        // ray-miss sky measurement -- same sourcing as the SSIL pass. Null on the first frame.
-        params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
-        // This frame's Hi-Z pyramid (built earlier in the frame) for the screen-trace tier.
-        params.hiz = rview.tex_safe_get("HIZBUFFER");
-        // Last frame's post-TAA linear scene color for the far-field fallback; null
-        // (first frame, probe captures) degrades those hits to the sky SH.
-        params.prev_color = rview.tex_safe_get("PREV_SCENE_HDR");
-        params.cam = &camera;
-        // The gather, its history and the resolve run in this run's pre-exposed space.
-        params.pre_exposure = get_pre_exposure(rview);
-        params.surface_cache = &ctx.get_cached<surface_cache_system>();
-        params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
-        if(resolve_settings.enable_lumen_gather)
-        {
-            run_lumen_surface_cache(camera, rview, *params.surface_cache);
-            params.lumen_surface_cache = &lumen_surface_cache_pass_;
-        }
-        result = resolve_settings.enable_lumen_gather ? lumen_gather_pass_.run(rview, params)
-                                                      : gi_resolve_pass_.run(rview, params);
+        const auto params = make_lumen_run_params(camera, rview, gi);
+        run_lumen_surface_cache(camera, rview, *params.surface_cache, gi.scene);
+        result = lumen_gather_pass_.run(rview, params);
         // Lumen's reflections follow its gather (UE: the screen probe gather, then the reflections), whose
         // rough specular they composite under the traced layer.
-        if(result && resolve_settings.enable_lumen_gather && lumen_reflections_own_view(rparams))
+        if(result && lumen_reflections_own_view(rparams))
         {
             run_lumen_reflection_pass(rview, params);
         }
@@ -3543,64 +3073,49 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
         // The accumulated result ping-pongs between two targets, so it is published under a
         // stable name for the indirect consumer rather than being looked up by its own.
         rview.tex_get_or_emplace("GI_RESOLVE") = result;
+        return true;
     }
-    if(!result)
-    {
-        // The consumer picks GI_RESOLVE over SSIL purely by presence, so a buffer left behind
-        // from when the pass last ran would keep overriding SSIL with a frozen image -- and
-        // would look like GI that simply stopped updating rather than like a disabled feature.
-        rview.tex_remove("GI_RESOLVE");
-        rview.fbo_remove("GI_RESOLVE");
-        // The rough specular goes with it: the rough tier reads neither without the other.
-        rview.tex_remove("GI_ROUGH_SPECULAR");
-    }
-    return result != nullptr;
+    // The consumer picks GI_RESOLVE over SSIL purely by presence, so a buffer left behind from when
+    // the pass last ran would keep overriding SSIL with a frozen image.
+    rview.tex_remove("GI_RESOLVE");
+    rview.fbo_remove("GI_RESOLVE");
+    // The rough specular goes with it: the reflections read neither without the other.
+    rview.tex_remove("GI_ROUGH_SPECULAR");
+    return false;
 }
 
-auto deferred::update_gi_hold(const camera& camera, gfx::render_view& rview, const gi_settings& gi) -> bool
+auto deferred::make_lumen_run_params(const camera& camera, gfx::render_view& rview, const gi_settings& gi)
+    -> lumen_run_params
 {
-    auto& state = rview.data().get_or_emplace<ANONYMOUS::gi_hold_state>(ANONYMOUS::gi_hold_key);
-    const uint64_t frame_now = gfx::get_render_frame();
-    if(state.frame == frame_now)
-    {
-        return state.hold;
-    }
-    state.frame = frame_now;
-    const auto* view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
-    const auto view = camera.get_view();
-    const auto projection = camera.get_projection_unjittered();
-    const auto size = camera.get_viewport_size();
-    const float pre_exposure = get_pre_exposure(rview).value;
-    const bool movers_recent = velocity_movers_frame_ != ~0ull && frame_now >= velocity_movers_frame_ &&
-                               frame_now - velocity_movers_frame_ <= uint64_t(ANONYMOUS::gi_hold_still_frames);
-    // The world side past its forced settle: nothing it feeds the gather is still converging.
-    const bool world_settled =
-        view_cache && view_cache->get_quiet_frames() >= uint32_t(gi::GI_QUIESCENCE_MAX_FRAMES);
-    const bool exposure_held = state.streak_pre_exposure > 0.0f &&
-                               std::abs(pre_exposure / state.streak_pre_exposure - 1.0f) <=
-                                   ANONYMOUS::gi_hold_exposure_tolerance;
-    const bool unchanged = view == state.view && projection == state.projection && size == state.size &&
-                           exposure_held && gi.resolve == state.settings;
-    const bool still =
-        gi.resolve.hold_at_rest && debug_pass_ < 0 && world_settled && unchanged && !movers_recent;
-    state.view = view;
-    state.projection = projection;
-    state.size = size;
-    state.pre_exposure = pre_exposure;
-    state.settings = gi.resolve;
-    state.still_frames = still ? std::min(state.still_frames + 1u, ANONYMOUS::gi_hold_still_frames) : 0u;
-    if(!still)
-    {
-        state.streak_pre_exposure = pre_exposure;
-    }
-    state.hold = state.still_frames >= ANONYMOUS::gi_hold_still_frames;
-    return state.hold;
+    lumen_run_params params;
+    params.settings = gi;
+    params.g_buffer = rview.fbo_safe_get("GBUFFER");
+    // Still the PREVIOUS frame's depth at this point: the snapshot happens later in the
+    // frame, which is exactly what temporal reprojection needs to validate history.
+    params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
+    // Last frame's environment SH (the irradiance pass runs later in the frame), the sky of the
+    // rays that leave the scene. Null on the first frame.
+    params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
+    // This frame's Hi-Z pyramid (built earlier in the frame) for the screen traces.
+    params.hiz = rview.tex_safe_get("HIZBUFFER");
+    // Last frame's post-TAA linear scene color, the radiance of screen trace hits.
+    params.prev_color = rview.tex_safe_get("PREV_SCENE_HDR");
+    params.cam = &camera;
+    // Every Lumen target, its history included, is in this run's pre-exposed space.
+    params.pre_exposure = get_pre_exposure(rview);
+    params.surface_cache = &engine::context().get_cached<surface_cache_system>();
+    params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+    params.lumen_surface_cache = &lumen_surface_cache_pass_;
+    return params;
 }
 
-void deferred::run_lumen_surface_cache(const camera& camera, gfx::render_view& rview, surface_cache_system& gi_scene)
+void deferred::run_lumen_surface_cache(const camera& camera,
+                                       gfx::render_view& rview,
+                                       surface_cache_system& gi_scene,
+                                       const gi_settings::scene_settings& scene_settings)
 {
     APP_SCOPE_PERF("Rendering/Lumen Surface Cache");
-    lumen_surface_cache_pass_.update(gi_scene, camera.get_position(), camera.get_frustum());
+    lumen_surface_cache_pass_.update(gi_scene, camera.get_position(), camera.get_frustum(), scene_settings);
     capture_lumen_cards(camera, gi_scene);
     lumen_surface_cache_pass_.copy_captures();
     lumen_surface_cache_pass::lighting_inputs inputs;
@@ -3670,136 +3185,12 @@ void deferred::capture_lumen_cards(const camera& camera, const surface_cache_sys
     }
 }
 
-void deferred::run_sdf_debug_pass(const camera& camera,
-                                  gfx::render_view& rview,
-                                  const run_params& rparams,
-                                  const gfx::frame_buffer::ptr& output)
-{
-    auto& ctx = engine::context();
-
-    auto& surface_cache = ctx.get_cached<surface_cache_system>();
-    sdf_debug_pass::run_params params;
-    params.output = output;
-    params.cam = &camera;
-    params.surface_cache = &surface_cache;
-    params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
-    // The screen-space GI views read what the gather just produced: its probe records and the
-    // temporal's moments. Both are empty when the resolve did not run this frame, which the
-    // shader answers as "no data" rather than by reading a stale buffer.
-    params.probes = gi_resolve_pass_.get_probe_debug_view();
-    params.moments = rview.tex_safe_get("GI_MOMENTS");
-    // The fast history carries the temporal's reset-cause code in its alpha (the
-    // gi_temporal_cause view); published by the resolve under a stable name like the moments.
-    params.fast = rview.tex_safe_get("GI_FAST");
-    params.settings.view_scale = debug_view_scale_;
-    // The world-probe debug views must read the cages exactly as the lit path does, so the
-    // authored variance gate rides along; the constant default covers the no-gi_component
-    // case (these views stay usable while GI itself is off).
-    gi_settings gi;
-    if(resolve_gi_settings(rparams, gi))
-    {
-        params.settings.probe_visibility_variance_gate = gi.resolve.probe_visibility_variance_gate;
-    }
-    params.settings.mode = sdf_debug_pass::debug_mode::normals;
-    if(debug_pass_ == debug_pass_sdf_step_count)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::step_count;
-    }
-    else if(debug_pass_ == debug_pass_sdf_headers)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::headers;
-    }
-    else if(debug_pass_ == debug_pass_sdf_probe)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::probe;
-    }
-    else if(debug_pass_ == debug_pass_sdf_entry)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::entry;
-    }
-    else if(debug_pass_ == debug_pass_sdf_clipmap)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::clipmap;
-    }
-    else if(debug_pass_ == debug_pass_sdf_direct)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::direct;
-    }
-    else if(debug_pass_ == debug_pass_sdf_cascade_levels)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::cascade_levels;
-    }
-    else if(debug_pass_ == debug_pass_sdf_attr_albedo)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::attr_albedo;
-    }
-    else if(debug_pass_ == debug_pass_sdf_light_voxels)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::light_voxels;
-    }
-    else if(debug_pass_ == debug_pass_sdf_world_probes)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::world_probes;
-    }
-    else if(debug_pass_ == debug_pass_sdf_sun_tiers)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::sun_tiers;
-    }
-    else if(debug_pass_ == debug_pass_sdf_probe_sky)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::probe_sky;
-    }
-    else if(debug_pass_ == debug_pass_gi_attr_emissive)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::attr_emissive;
-    }
-    else if(debug_pass_ == debug_pass_gi_cage_health)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::cage_health;
-    }
-    else if(debug_pass_ == debug_pass_gi_dirty_regions)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::dirty_regions;
-    }
-    else if(debug_pass_ == debug_pass_gi_probe_lattice)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::probe_lattice;
-    }
-    else if(debug_pass_ == debug_pass_gi_screen_probes)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::screen_probes;
-    }
-    else if(debug_pass_ == debug_pass_gi_temporal)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::temporal_health;
-    }
-    else if(debug_pass_ == debug_pass_gi_probe_tiers)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::probe_tiers;
-    }
-    else if(debug_pass_ == debug_pass_gi_temporal_cause)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::temporal_cause;
-    }
-    else if(debug_pass_ == debug_pass_gi_emitter_share)
-    {
-        params.settings.mode = sdf_debug_pass::debug_mode::emitter_share;
-    }
-    else if(debug_pass_ == debug_pass_sdf_vis_memo)
-    {
-        // The vis-memo variant stamps its categorical colors into the light volume; the
-        // sun-tiers display mode is exactly the nearest-fetch categorical reader of that
-        // volume, so it shows them verbatim - no second display path needed.
-        params.settings.mode = sdf_debug_pass::debug_mode::sun_tiers;
-    }
-    sdf_debug_pass_.run(rview, params);
-}
-
 void deferred::run_debug_visualization_pass(const camera& camera,
                                             gfx::render_view& rview,
                                             const gfx::frame_buffer::ptr& output,
-                                            tonemapping_method tonemapping)
+                                            const run_params& rparams)
 {
+    const tonemapping_method tonemapping = get_debug_tonemapping(rparams);
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
     const auto& gbuffer = rview.fbo_get("GBUFFER");
@@ -3816,23 +3207,24 @@ void deferred::run_debug_visualization_pass(const camera& camera,
 
     debug_visualization_program_.program->begin();
 
-    // The AO bent normal and dedicated reflection ray views live past the SDF range in the pass ids;
-    // the shader knows them as 15 and 16.
+    // The AO bent normal and dedicated reflection ray views live past the G-buffer modes in the pass ids;
+    // the shader knows them as the two modes after those.
     int shader_mode = debug_pass_;
     if(debug_pass_ == debug_pass_ao_bent_normals)
     {
-        shader_mode = 15;
+        shader_mode = debug_pass_gbuffer_modes;
     }
     else if(debug_pass_ == debug_pass_lumen_reflection_rays)
     {
-        shader_mode = 16;
+        shader_mode = debug_pass_gbuffer_modes + 1;
     }
     // y = the debug-view scale (see set_debug_view_scale), z = the roughness below which Lumen traces reflection
-    // rays (the dedicated reflection ray view).
-    const uint32_t lumen_experiments = engine::context().get_cached<surface_cache_system>().get_experiment_flags();
+    // rays (the dedicated reflection ray view; the default when no gi_component asks for GI).
+    gi_settings gi;
+    resolve_gi_settings(rparams, gi);
     float u_params[4] = {float(shader_mode),
                          debug_view_scale_,
-                         lumen_reflection_pass::get_max_roughness_to_trace(lumen_experiments),
+                         lumen_reflection_pass::get_max_roughness_to_trace(gi.reflections),
                          0.0f};
 
     gfx::set_uniform(debug_visualization_program_.u_params, u_params);
@@ -3890,13 +3282,11 @@ auto deferred::run_hiz_pass(const camera& camera,
                               delta_t dt) -> bool
 {
     (void)dt;
-    // The GI gather's screen-trace tier marches this same pyramid, so GI being enabled is a
-    // producer condition of its own - without it the tier silently degrades to pure SDF
-    // tracing whenever the reflection stack happens to be off.
-    gi_settings gi_probe;
-    const bool gi_wants_hiz = params.run_type == pipeline_run_type::camera &&
-                              resolve_gi_settings(params, gi_probe) &&
-                              gi_probe.resolve.enable_screen_trace;
+    // Lumen's screen traces march this same pyramid, so GI with screen traces on is a producer
+    // condition of its own, whether or not the screen-space reflection stack runs.
+    gi_settings gi;
+    const bool gi_wants_hiz = params.run_type == pipeline_run_type::camera && resolve_gi_settings(params, gi) &&
+                              (gi.diffuse.screen_traces || (gi.reflections.enabled && gi.reflections.screen_traces));
     const bool want_hiz =
         (reflection_screen_stack_enabled(params) && (params.fill_ssr_params || params.fill_ssil_params)) ||
         gi_wants_hiz;
@@ -3905,7 +3295,7 @@ auto deferred::run_hiz_pass(const camera& camera,
     {
         rview.tex_remove("HIZBUFFER");
         // PREV_DEPTH deliberately survives. It is a SHARED history resource with more than one
-        // consumer -- the GI resolve validates reprojected history against it -- and this pass
+        // consumer -- Lumen GI validates reprojected history against it -- and this pass
         // runs before them, so dropping it here destroyed the next consumer's input before it
         // ever ran. Its lifetime belongs to the one place that decides whether to produce it,
         // at the end of the frame.

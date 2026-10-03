@@ -7,9 +7,9 @@
  * MIRROR OF engine/engine/rendering/gpu_light_buffer.h. The packing must match exactly.
  *
  * The deferred path draws one fullscreen pass per light with that light's parameters in
- * uniforms, which cannot answer "how much light reaches world point P" from inside a tracing
- * shader -- there is only ever the one light currently bound. Global illumination needs that
- * question answered at arbitrary points along a traced ray.
+ * uniforms, which cannot answer "how much light reaches world point P" from inside a compute
+ * shader -- there is only ever the one light currently bound. The Lumen surface cache needs that
+ * question answered at every card texel it lights.
  *
  * The attenuation here is deliberately identical to RadialAttenuation / SpotAttenuation in
  * lighting.sh. If the two drift, indirect light stops agreeing with the direct light it is
@@ -82,71 +82,6 @@ float GpuSpotAttenuation(vec3 light_vector, vec3 spot_direction, float cos_inner
 	float inv_range = 1.0 / max(cos_inner - cos_outer, 1e-4);
 	float cone = saturate((dot(normalize(light_vector), -spot_direction) - cos_outer) * inv_range);
 	return cone * cone;
-}
-
-/**
- * Irradiance arriving at a world point from one light, UNSHADOWED.
- *
- * Lambertian: the caller multiplies by albedo / PI to get outgoing radiance. Shadowing is not
- * applied here -- callers that shadow trace their own rays (the Ex form below hands them the
- * geometry), and a silently unshadowed result is far easier to reason about than one that is
- * shadowed for some lights and not others.
- */
-/// The Ex form also reports the shadow-ray geometry it already derived - direction toward the
-/// light and the distance to it - so callers that trace do not recompute the same length and
-/// normalize. For a directional light the distance is huge-but-finite; the caller substitutes
-/// its own shadow range.
-vec3 GpuEvalLightUnshadowedEx(GpuLight light, vec3 world_position, vec3 world_normal,
-                              out vec3 out_to_light, out float out_distance)
-{
-	vec3 to_light;
-	float attenuation = 1.0;
-	out_distance = 1e8;
-	if(light.type == GPU_LIGHT_TYPE_DIRECTIONAL)
-	{
-		to_light = -light.direction;
-	}
-	else
-	{
-		vec3 delta = light.position - world_position;
-		vec3 over_range = delta / max(light.range, 1e-4);
-		if(light.type == GPU_LIGHT_TYPE_POINT)
-		{
-			attenuation = GpuRadialAttenuation(over_range, light.falloff_exponent);
-		}
-		else
-		{
-			attenuation = GpuRadialAttenuation(over_range, 1.0) *
-			              GpuSpotAttenuation(delta, light.direction, light.cos_inner, light.cos_outer);
-		}
-		float distance = length(delta);
-		to_light = distance > 1e-6 ? delta / distance : vec3(0.0, 1.0, 0.0);
-		out_distance = distance;
-	}
-	out_to_light = to_light;
-	float n_dot_l = saturate(dot(world_normal, to_light));
-	return light.color * (light.intensity * attenuation * n_dot_l);
-}
-
-vec3 GpuEvalLightUnshadowed(GpuLight light, vec3 world_position, vec3 world_normal)
-{
-	vec3 ignored_to_light;
-	float ignored_distance;
-	return GpuEvalLightUnshadowedEx(light, world_position, world_normal, ignored_to_light,
-	                                ignored_distance);
-}
-
-/**
- * Total unshadowed irradiance at a world point from every resident light.
- */
-vec3 GpuEvalDirectLightingUnshadowed(vec3 world_position, vec3 world_normal)
-{
-	vec3 total = vec3_splat(0.0);
-	for(int i = 0; i < u_gpu_light_count; ++i)
-	{
-		total += GpuEvalLightUnshadowed(GpuLoadLight(i), world_position, world_normal);
-	}
-	return total;
 }
 
 #endif // __GI_GPU_LIGHTS_SH__

@@ -1165,7 +1165,7 @@ void test_trace_from_outside_hits_the_surface_not_the_bounds()
     settings.min_voxel_size = 0.001f;
     mesh_sdf sdf;
     check(bake_mesh_sdf(geometry, settings, sdf), "bake succeeds");
-    // Same defaults as sdf_debug_pass::settings.
+    // A camera march's bias and step budget.
     const float surface_bias = 0.01f;
     const int max_steps = 96;
     const math::vec3 center = sdf.bounds.get_center();
@@ -2224,10 +2224,9 @@ void test_clipmap_recomposes_moved_geometry_within_budget()
 /**
  * @brief Continuous edits coalesce to the throttle cadence; the final state still lands.
  *
- * A dragged instance re-fingerprints its levels EVERY frame, and before the leading-edge
- * throttle (GI_CLIPMAP_EDIT_THROTTLE_FRAMES) that meant one full recompose per frame for as
- * long as the drag lasted - measured as ~2 ms of compose + attributes per drag frame, plus a
- * vis-memo generation bump that turned every light-voxel relight into a miss. The contract:
+ * A dragged instance re-fingerprints its levels EVERY frame; without the leading-edge
+ * throttle (GI_CLIPMAP_EDIT_THROTTLE_FRAMES) that is one full recompose per frame for as long
+ * as the drag lasts. The contract:
  * the FIRST edit after a quiet stretch composes immediately (the pinned editor behaviour of
  * the test above), a continuous stream composes at the window cadence rather than per frame,
  * and the final position always lands once the stream ends.
@@ -3441,11 +3440,10 @@ void test_clipmap_is_world_stable()
     }
     check(identical, "cameras within one voxel produce a bit-identical cascade");
     // And moving past a whole snap cell must actually re-snap, or the cascade would drift out
-    // from under the camera and stop covering it. The snap granularity is
-    // attr_downsample * origin_snap_attr_voxels fine voxels (the recompose-frequency
-    // coarsening); anything within one cell is the world-stability case above.
-    const float snap_cell = level0_voxel * float(global_sdf_clipmap::attr_downsample) *
-                            float(global_sdf_clipmap::origin_snap_attr_voxels);
+    // from under the camera and stop covering it. The snap granularity is origin_snap_voxels
+    // fine voxels (the recompose-frequency coarsening); anything within one cell is the
+    // world-stability case above.
+    const float snap_cell = level0_voxel * float(global_sdf_clipmap::origin_snap_voxels);
     global_sdf_clipmap c;
     c.init(clipmap_settings);
     c.update(instances, camera_a + math::vec3(snap_cell * 1.5f, 0.0f, 0.0f));
@@ -3459,10 +3457,9 @@ void test_clipmap_is_world_stable()
 /// SCROLL-ONLY recompose (global_sdf_clipmap::level::scroll_only): a level whose origin moved
 /// by whole snap cells while the instance content held still holds, in the overlap of its
 /// old and new windows, exactly the bytes a recompose writes - the premise on which the GPU
-/// composer copies the overlap and composes only the exposed slabs, and on which the
-/// attribute pass keeps surviving interior cells. Pinned on the CPU reference composer for
-/// the distance voxels, the attribute voxels (toroidal, so a surviving cell keeps its slot)
-/// and the surface list, together with the slab decomposition the pass dispatches.
+/// composer copies the overlap and composes only the exposed slabs. Pinned on the CPU
+/// reference composer for the distance voxels, together with the slab decomposition the pass
+/// dispatches.
 void test_clipmap_scroll_copy_matches_recompose()
 {
     std::printf("test_clipmap_scroll_copy_matches_recompose\n");
@@ -3490,14 +3487,11 @@ void test_clipmap_scroll_copy_matches_recompose()
     // One snap cell along x and along z at level 0; the coarser levels' snap is larger, so
     // they stay put and must report no scroll.
     const float level0_voxel = before[0].voxel_size;
-    const float snap_cell = level0_voxel * float(global_sdf_clipmap::attr_downsample) *
-                            float(global_sdf_clipmap::origin_snap_attr_voxels);
+    const float snap_cell = level0_voxel * float(global_sdf_clipmap::origin_snap_voxels);
     const math::vec3 camera_b(snap_cell, 0.0f, snap_cell);
     const uint32_t recomposed = clipmap.update(instances, camera_b, revision);
     check(recomposed >= 1, "the scroll recomposed at least level 0");
     const int res = int(clipmap_settings.resolution);
-    const int attr_res = int(clipmap.get_attr_resolution());
-    const auto wrap = [](int v, int n) -> int { return ((v % n) + n) % n; };
     for(uint32_t i = 0; i < global_sdf_clipmap::level_count; ++i)
     {
         const auto& after = clipmap.get_level(i);
@@ -3562,69 +3556,6 @@ void test_clipmap_scroll_copy_matches_recompose()
         check(compared > 0 && mismatched == 0,
               level_tag + "every overlap voxel is byte-identical to its old-window source (" +
                   std::to_string(mismatched) + " of " + std::to_string(compared) + " differ)");
-        // The attributes: a slot whose cell survived the scroll at least one cell inside both
-        // windows keeps its albedo, emissive and list membership.
-        const float attr_voxel = after.voxel_size * float(global_sdf_clipmap::attr_downsample);
-        const auto window_base = [&](const math::vec3& origin)
-        {
-            return math::ivec3(int(std::floor(origin.x / attr_voxel + 0.5f)),
-                               int(std::floor(origin.y / attr_voxel + 0.5f)),
-                               int(std::floor(origin.z / attr_voxel + 0.5f)));
-        };
-        const math::ivec3 base_old = window_base(before[i].origin);
-        const math::ivec3 base_new = window_base(after.origin);
-        const math::ivec3 attr_shift = base_new - base_old;
-        check(attr_shift * int(global_sdf_clipmap::attr_downsample) == shift,
-              level_tag + "the shift is a whole number of attribute cells");
-        std::vector<uint8_t> listed_before(size_t(attr_res) * attr_res * attr_res, 0u);
-        std::vector<uint8_t> listed_after(listed_before.size(), 0u);
-        for(uint32_t packed : before[i].attr_surface_list)
-        {
-            listed_before[size_t(packed & 0xFFu) + size_t((packed >> 8u) & 0xFFu) * attr_res +
-                          size_t((packed >> 16u) & 0xFFu) * attr_res * attr_res] = 1u;
-        }
-        for(uint32_t packed : after.attr_surface_list)
-        {
-            listed_after[size_t(packed & 0xFFu) + size_t((packed >> 8u) & 0xFFu) * attr_res +
-                         size_t((packed >> 16u) & 0xFFu) * attr_res * attr_res] = 1u;
-        }
-        size_t survivors = 0;
-        size_t attr_mismatched = 0;
-        for(int z = 0; z < attr_res; ++z)
-        {
-            for(int y = 0; y < attr_res; ++y)
-            {
-                for(int x = 0; x < attr_res; ++x)
-                {
-                    const math::ivec3 slot(x, y, z);
-                    const math::ivec3 offset_new(wrap(x - wrap(base_new.x, attr_res), attr_res),
-                                                 wrap(y - wrap(base_new.y, attr_res), attr_res),
-                                                 wrap(z - wrap(base_new.z, attr_res), attr_res));
-                    const math::ivec3 offset_old = offset_new + attr_shift;
-                    const auto interior = [&](const math::ivec3& o)
-                    {
-                        return o.x >= 1 && o.y >= 1 && o.z >= 1 && o.x <= attr_res - 2 && o.y <= attr_res - 2 &&
-                               o.z <= attr_res - 2;
-                    };
-                    if(!interior(offset_new) || !interior(offset_old))
-                    {
-                        continue;
-                    }
-                    ++survivors;
-                    const size_t index = size_t(x) + size_t(y) * attr_res + size_t(z) * attr_res * attr_res;
-                    const bool same = before[i].attr_albedo[index] == after.attr_albedo[index] &&
-                                      before[i].attr_emissive[index] == after.attr_emissive[index] &&
-                                      listed_before[index] == listed_after[index];
-                    if(!same)
-                    {
-                        ++attr_mismatched;
-                    }
-                }
-            }
-        }
-        check(survivors > 0 && attr_mismatched == 0,
-              level_tag + "every surviving interior attribute cell is unchanged (" +
-                  std::to_string(attr_mismatched) + " of " + std::to_string(survivors) + " differ)");
     }
     // A content change between the two updates must NOT be a scroll: the revision moves.
     global_sdf_clipmap edited;

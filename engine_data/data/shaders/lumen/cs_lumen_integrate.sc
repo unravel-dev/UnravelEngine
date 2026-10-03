@@ -16,11 +16,11 @@
  * LUMEN_ROUGH_SPECULAR_MIN_ROUGHNESS, E.y squeezed by LUMEN_SPECULAR_SAMPLE_BIAS) look up the same four
  * probes' bordered radiance with the same weights; their mean is taken in the x / (1 + Y) range and fades
  * into E / pi over LUMEN_ROUGH_SPECULAR_FADE_LENGTH. Pixels the traced reflections own fully (roughness
- * below LUMEN_MAX_ROUGHNESS_TO_TRACE - LUMEN_ROUGHNESS_FADE_LENGTH) keep E / pi.
+ * below the traced roughness limit - LUMEN_ROUGHNESS_FADE_LENGTH) keep E / pi.
  *
  * Temporal: last frame's result at the pixel's reprojection, from the 2x2 history taps whose stored
  * depth agrees with the reprojected depth (1% x U(0.5, 1.5) / lerp(0.1, 1, NoV) of it), blended with
- * weight 1 / (1 + N), N = the taps' frame count + 1, up to LUMEN_TEMPORAL_MAX_FRAMES; the rough specular
+ * weight 1 / (1 + N), N = the taps' frame count + 1, up to u_lumen_temporal_max_frames; the rough specular
  * history shares the taps and the weight. No neighbourhood clamp: camera motion never shortens the
  * history.
  *
@@ -218,7 +218,7 @@ vec3 LumenInterpolateRadiance(LumenProbeSample probes, vec3 direction)
 /// or the lobe is wide enough), 0 = all GGX samples.
 float LumenRoughDiffuseLerp(float roughness)
 {
-	float traced = saturate((LUMEN_MAX_ROUGHNESS_TO_TRACE - roughness) / LUMEN_ROUGHNESS_FADE_LENGTH);
+	float traced = saturate((u_lumen_max_roughness_to_trace - roughness) / LUMEN_ROUGHNESS_FADE_LENGTH);
 	if(traced >= 1.0)
 	{
 		return 1.0;

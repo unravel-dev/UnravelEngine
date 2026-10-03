@@ -51,7 +51,8 @@
     X(LUMEN_SURFACE_BIAS, 0.05f,                                                                   \
       "m", "SDF stage origin offset along the ray and the normal (R/LumenDiffuseIndirect.cpp:25)") \
     X(LUMEN_MAX_TRACE_DISTANCE, 200.0f,                                                            \
-      "m", "PP LumenMaxTraceDistance 20000 cm (R/LumenDiffuseIndirect.cpp:228-231)")               \
+      "m", "PP LumenMaxTraceDistance 20000 cm (R/LumenDiffuseIndirect.cpp:228-231): the default of" \
+      " gi_settings::diffuse_settings::max_trace_distance")                                        \
     X(LUMEN_FILTER_PASSES, 3,                                                                      \
       "passes", "r.Lumen.ScreenProbeGather.SpatialFilterNumPasses (R/LumenScreenProbeFiltering.cpp:583-621)") \
     X(LUMEN_FILTER_POSITION_WEIGHT_SCALE, 1000.0f,                                                 \
@@ -72,7 +73,8 @@
     X(LUMEN_FULL_RES_JITTER_PLANE_WEIGHT, 1000000.0f,                                              \
       "", "a jittered pixel is used only if exp2(-w r^2) > 0.01 (S/LumenScreenProbeGather.usf:1187-1195)") \
     X(LUMEN_TEMPORAL_MAX_FRAMES, 10,                                                               \
-      "frames", "r.Lumen.ScreenProbeGather.Temporal.MaxFramesAccumulated (R/LumenScreenProbeGather.cpp:227-231)") \
+      "frames", "r.Lumen.ScreenProbeGather.Temporal.MaxFramesAccumulated (R/LumenScreenProbeGather.cpp:227-231)," \
+      " over the square root of the final gather update speed (R/LumenScreenProbeGather.cpp:570-575)") \
     X(LUMEN_TEMPORAL_DEPTH_THRESHOLD, 0.01f,                                                       \
       "ratio", "history tap kept within 1% x U(0.5, 1.5) / lerp(0.1, 1, NoV) of the reprojected"   \
       " depth (StochasticLighting/StochasticLightingTileClassification.usf:884-1085)")              \
@@ -178,7 +180,8 @@
     X(LUMEN_RADIANCE_CACHE_MAX_PROBES, 8192,                                                       \
       "probes", "probe pool: 128 x 64 (Lumen 128 x 128 at R11G11B10; RGBA16F here, half the pool)") \
     X(LUMEN_RADIANCE_CACHE_TRACE_BUDGET, 150,                                                      \
-      "probes", "probes re-traced per frame beyond the new ones, Epic (NumProbesToTraceBudget, BaseScalability.ini:435)") \
+      "probes", "probes re-traced per frame beyond the new ones, Epic (NumProbesToTraceBudget,"    \
+      " BaseScalability.ini:435), times the final gather update speed (R/LumenScreenProbeGather.cpp:741-744)") \
     X(LUMEN_RADIANCE_CACHE_MAX_TRACES, 2752,                                                       \
       "probes", "per-frame trace cap (temp atlas capacity, R/LumenRadianceCache.cpp:1625-1650)")   \
     X(LUMEN_RADIANCE_CACHE_KEEP_FRAMES, 8,                                                         \
@@ -214,7 +217,8 @@
     X(LUMEN_MAX_ROUGHNESS_TO_TRACE, 0.4f,                                                          \
       "roughness", "traced reflections below this roughness: PP"                                   \
       " LumenMaxRoughnessToTraceReflections (Engine/Private/Scene.cpp:658,"                        \
-      " S/LumenReflectionsCombine.ush:12-16)")                                                     \
+      " S/LumenReflectionsCombine.ush:12-16), the default of"                                      \
+      " gi_settings::reflection_settings::max_roughness_to_trace")                                 \
     X(LUMEN_ROUGHNESS_FADE_LENGTH, 0.1f,                                                           \
       "roughness", "r.Lumen.Reflections.RoughnessFadeLength: the traced weight fades over"         \
       " this band (R/LumenReflections.cpp:425)")                                                   \
@@ -315,10 +319,11 @@
       "m", "extent of global distance field level 0 in Lumen views, doubling per level: 19.8 cm voxels to 25 m," \
       " UE's r.LumenScene.GlobalSDF.ClipmapExtent (R/LumenScene.cpp:77)")                         \
     X(LUMEN_SCENE_DIRECT_UPDATE_FACTOR, 32,                                                        \
-      "", "r.LumenScene.DirectLighting.UpdateFactor at Epic: a frame relights the card tiles of a square of"  \
-      " atlas / sqrt(this) texels (R/LumenSceneLighting.cpp:98-126; BaseScalability.ini:429)")     \
+      "", "r.LumenScene.DirectLighting.UpdateFactor at Epic: a frame relights the card tiles of a square of" \
+      " atlas / sqrt(this / the lighting update speed) texels (R/LumenSceneLighting.cpp:98-126, 561-584;" \
+      " BaseScalability.ini:429)")                                                                 \
     X(LUMEN_SCENE_RADIOSITY_UPDATE_FACTOR, 64,                                                     \
-      "", "r.LumenScene.Radiosity.UpdateFactor at Epic, the radiosity's budget the same way"         \
+      "", "r.LumenScene.Radiosity.UpdateFactor at Epic, the radiosity's budget the same way"       \
       " (BaseScalability.ini:430)")                                                                \
     X(LUMEN_SCENE_LIGHTING_PRIORITY_DISTANCE, 25.0f,                                               \
       "m", "a card page's update speed is 1 / (1 + distance / this): the first global SDF clipmap's extent" \

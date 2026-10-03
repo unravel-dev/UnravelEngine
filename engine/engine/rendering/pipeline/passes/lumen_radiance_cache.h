@@ -1,7 +1,7 @@
 #pragma once
 
 #include <engine/rendering/gpu_program.h>
-#include <engine/rendering/pipeline/passes/gi_resolve_pass.h>
+#include <engine/rendering/pipeline/passes/lumen_run_params.h>
 
 #include <graphics/texture.h>
 
@@ -14,11 +14,11 @@ namespace unravel
  * @brief The Lumen radiance cache (UE 5.8 LumenRadianceCache, analysis chapter f): sparse, world-locked
  *        radiance probes on 4 camera-centred clipmaps of 48^3 cells (1.04 m doubling), marked by the
  *        screen probes that will read them, new probes traced the frame they appear, the rest re-traced
- *        oldest first within a fixed budget, filtered over their face neighbours and stored with an
- *        octahedral border for bilinear reads.
+ *        oldest first within a budget that grows with the final gather update speed, filtered over their face
+ *        neighbours and stored with an octahedral border for bilinear reads.
  *
  * Owned by lumen_gather_pass, which updates it after the probe placement and binds it to the probe trace
- * for the hand-off. The probes' rays read the light voxels at hits (the surface cache's stand-in).
+ * for the hand-off. The probes' rays read the surface cache at global distance field hits.
  */
 class lumen_radiance_cache
 {
@@ -26,7 +26,7 @@ public:
     /// The screen-probe layout the marking pass reads (lumen_common.sh uniforms).
     struct frame_inputs
     {
-        const gi_resolve_pass::run_params* params{};
+        const lumen_run_params* params{};
         gfx::texture::ptr probe_records;
         uint32_t probes_x{};
         /// Rows of the probe atlas: the uniform probes and the adaptive ones below them all mark.
@@ -57,6 +57,7 @@ private:
         gfx::program::uniform_ptr u_lumen_frame;
         gfx::program::uniform_ptr u_lumen_probes;
         gfx::program::uniform_ptr u_lumen_view;
+        gfx::program::uniform_ptr u_lumen_settings;
         gfx::program::uniform_ptr u_sdf_clipmap_levels;
         gfx::program::uniform_ptr u_sdf_clipmap_params;
         gfx::program::uniform_ptr u_lumen_hit_lighting;
@@ -126,6 +127,8 @@ private:
     uint32_t current_ = 0;
     /// Cache frames since the start (0 = never updated); the probes' last-used / last-traced stamps.
     uint32_t frame_ = 0;
+    /// The probes re-traced per frame beyond the new ones (lumen_pass::get_radiance_cache_trace_budget).
+    uint32_t trace_budget_ = 0;
     /// False until a frame has run with these resources: the next frame then starts from scratch.
     bool persistent_ = false;
 };

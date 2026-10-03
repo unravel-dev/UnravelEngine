@@ -18,8 +18,7 @@ namespace
 // swatch in the menu matches the pixel on screen. Sources:
 //   engine_data/data/shaders/gbuffer/fs_gbuffer_visualize.sc   (G-Buffer / lighting / GTAO)
 //   engine_data/data/shaders/velocity/fs_velocity_debug.sc     (motion vectors)
-//   engine_data/data/shaders/gi/fs_sdf_debug.sc                (traced views)
-//   engine_data/data/shaders/gi/gi_light_voxels_kernel.sh      (sun tiers, vis memo writes)
+//   engine_data/data/shaders/lumen/fs_lumen_scene_debug.sc     (Lumen views)
 // Continuous readouts (roughness, depth, ...) carry no legend; their range is stated in the
 // description instead.
 // -----------------------------------------------------------------------------
@@ -44,162 +43,6 @@ constexpr std::array<visualization_swatch, 4> k_legend_normals = {{
 constexpr std::array<visualization_swatch, 2> k_legend_velocity = {{
     {{0.0f, 0.0f, 0.0f}, "Still - no screen motion this frame"},
     {{1.0f, 0.0f, 1.0f}, "NaN or infinite velocity - a broken previous transform"},
-}};
-
-constexpr std::array<visualization_swatch, 3> k_legend_sdf_step_count = {{
-    {{0.0f, 1.0f, 0.0f}, "Cheap - the ray resolved in few steps"},
-    {{1.0f, 0.0f, 0.0f}, "Expensive - close to the step budget"},
-    {{0.0f, 0.0f, 1.0f}, "Budget exhausted without resolving (grazing ray, or too far)"},
-}};
-
-/// A channel readout, so there is one categorical color: all-zero. Blue IS the voxel-size
-/// presence flag, which is why "blue but no voxel size" cannot occur.
-constexpr std::array<visualization_swatch, 1> k_legend_sdf_headers = {{
-    {{0.0f, 0.0f, 0.0f}, "Every channel zero - no header at all, the buffer never arrived"},
-}};
-
-/// Only the red entry is a flag; the rest is SdfProbeLocal's raw texel value, so the ramp is
-/// the legend. Bright green just inside the bounds is EXPECTED - the bake keeps the surface
-/// encode_range (4) voxels away from the boundary, and an 8-voxel brick straddles both.
-constexpr std::array<visualization_swatch, 4> k_legend_sdf_brick_probe = {{
-    {{1.0f, 0.0f, 0.0f}, "Empty brick - the indirection entry says it owns no voxels"},
-    {{0.0f, 1.0f, 0.0f}, "Surface brick, texel saturated OUTSIDE (+4 voxels) - the normal reading in the bounds padding"},
-    {{0.0f, 0.5f, 0.0f}, "Surface brick, texel near distance zero - the probe point is on the surface"},
-    {{0.0f, 0.0f, 0.0f}, "Surface brick, texel saturated INSIDE (-4 voxels) - the probe point is in solid geometry"},
-}};
-
-constexpr std::array<visualization_swatch, 3> k_legend_sdf_bounds_entry = {{
-    {{0.0f, 1.0f, 0.0f}, "Healthy - comfortably above the hit threshold"},
-    {{0.0f, 0.0f, 1.0f}, "Positive but under the threshold - reads as an immediate hit"},
-    {{1.0f, 0.0f, 0.0f}, "Negative - the bounds start inside the surface"},
-}};
-
-constexpr std::array<visualization_swatch, 5> k_legend_sdf_cascade_levels = {{
-    {{1.0f, 0.15f, 0.15f}, "Level 0 - finest"},
-    {{0.15f, 1.0f, 0.15f}, "Level 1"},
-    {{0.2f, 0.4f, 1.0f}, "Level 2"},
-    {{1.0f, 0.9f, 0.2f}, "Level 3 - coarsest"},
-    {{0.25f, 0.25f, 0.25f}, "Outside every cascade - per-instance fields answered alone"},
-}};
-
-constexpr std::array<visualization_swatch, 2> k_legend_gi_voxel_albedo = {{
-    {{1.0f, 0.9f, 0.0f}, "Not attributed at any level - attribution missed the hit"},
-    {{1.0f, 0.0f, 1.0f}, "Hit outside every cascade level"},
-}};
-
-constexpr std::array<visualization_swatch, 4> k_legend_gi_light_voxels = {{
-    {{0.0f, 0.05f, 0.35f}, "Attributed but UNMEASURED - every face was gated, or has had no rotation slot"},
-    {{0.0f, 0.0f, 0.0f}, "Measured darkness - a shadow ray found no light (not the same as the above)"},
-    {{1.0f, 0.9f, 0.0f}, "Not attributed at any level"},
-    {{1.0f, 0.0f, 1.0f}, "Hit outside every cascade level"},
-}};
-
-constexpr std::array<visualization_swatch, 1> k_legend_gi_world_probes = {{
-    {{1.0f, 0.0f, 1.0f}, "No cascade probe window covers the hit, or every cage weight died"},
-}};
-
-constexpr std::array<visualization_swatch, 6> k_legend_gi_probe_sky = {{
-    {{0.0f, 0.08f, 0.0f}, "Zero sky - what a sealed interior must read"},
-    {{0.5f, 0.0f, 0.0f}, "Low sky fraction"},
-    {{1.0f, 1.0f, 0.2f}, "High sky fraction (the ramp is 4x scaled, so it saturates early)"},
-    {{0.0f, 0.08f, 0.5f}, "Blue channel forced up over any of the above: inside the blend band, where the reader mixes the next level in"},
-    {{0.1f, 0.3f, 1.0f}, "Pure blue: the hit landed INSIDE the field - a trace artifact, not a leak"},
-    {{1.0f, 0.0f, 1.0f}, "No level cage answered"},
-}};
-
-constexpr std::array<visualization_swatch, 7> k_legend_gi_sun_tiers = {{
-    {{0.0f, 0.8f, 0.0f}, "Shadow map answered (the smallest CSM cascade whose crop holds the face; "
-                         "blue = 0.04 x cascade); brightness = lit fraction"},
-    {{1.0f, 0.0f, 0.0f}, "Traced field answered OCCLUDED - the face injects nothing"},
-    {{0.85f, 0.85f, 0.85f}, "Traced field answered LIT; brightness = clearance visibility"},
-    {{0.0f, 0.2f, 1.0f}, "Never queried - no directional sun, or the face points away from it"},
-    {{0.0f, 0.05f, 0.35f}, "Culled by the pass gates (tunnel guard, cavity visibility)"},
-    {{1.0f, 0.9f, 0.0f}, "Not attributed at any level (from the shared attribution pre-check)"},
-    {{1.0f, 0.0f, 1.0f}, "OVERLOADED: hit outside every cascade level, OR a stale texel the pass has not rewritten"},
-}};
-
-/// This view is DISPLAYED through the sun-tier reader, so the last three rows come from that
-/// shared path (attribution pre-check, then the alpha classifier) rather than from the memo.
-constexpr std::array<visualization_swatch, 8> k_legend_gi_vis_memo = {{
-    {{0.0f, 0.8f, 0.0f}, "Memo HIT - the stored verdict was served (healthy steady state)"},
-    {{1.0f, 0.0f, 0.0f}, "Memo MISS - marched and restamped (one sweep after a generation bump is the fill)"},
-    {{0.0f, 0.7f, 0.7f}, "Far-band hit - a stored far verdict served in the blend band"},
-    {{1.0f, 0.5f, 0.0f}, "Far-band miss - the gated far read"},
-    {{0.1f, 0.3f, 1.0f}, "Generation 0 - the memo was never seeded, or the uniform never arrived"},
-    {{0.15f, 0.15f, 0.15f}, "No covering cage answered"},
-    {{0.0f, 0.05f, 0.35f}, "Culled by the pass gates before the memo is ever consulted"},
-    {{1.0f, 0.0f, 1.0f}, "OVERLOADED: hit outside every cascade level, OR a stale texel the pass has not rewritten"},
-}};
-
-constexpr std::array<visualization_swatch, 3> k_legend_gi_attr_emissive = {{
-    {{0.0f, 0.0f, 0.0f}, "Attributed and genuinely not emissive - the common case"},
-    {{1.0f, 0.9f, 0.0f}, "Not attributed at any level"},
-    {{1.0f, 0.0f, 1.0f}, "Hit outside every cascade level"},
-}};
-
-constexpr std::array<visualization_swatch, 4> k_legend_gi_cage_health = {{
-    {{0.0f, 1.0f, 0.1f}, "The cage answered at full weight"},
-    {{1.0f, 0.5f, 0.0f}, "Partly rejected - the read renormalised onto the survivors"},
-    {{1.0f, 0.05f, 0.0f}, "Almost nothing survived - sealed, or every cage probe dead"},
-    {{1.0f, 0.0f, 1.0f}, "No level's cage answered at all"},
-}};
-
-constexpr std::array<visualization_swatch, 3> k_legend_gi_dirty_regions = {{
-    {{1.0f, 0.1f, 0.05f}, "Inside a dirty region - full flush weight"},
-    {{1.0f, 0.75f, 0.1f}, "In the soft margin around one (one probe spacing wide), by how much"},
-    {{0.3f, 0.3f, 0.3f}, "Outside every region - the temporal keeps its full history here"},
-}};
-
-constexpr std::array<visualization_swatch, 3> k_legend_gi_probe_lattice = {{
-    {{1.0f, 0.0f, 0.0f}, "DEAD - the lattice point is inside geometry, so the buried-probe gate "
-                         "zeroed it; a room whose corners are all red is one the lattice missed"},
-    {{0.15f, 0.3f, 1.0f}, "UNOCCUPIED - no geometry within GI_WORLD_PROBE_SLEEP_SPACINGS; it still "
-                          "traces (sleeping it measured no saving). The share of blue is the "
-                          "occupancy: mostly blue means a sparse lattice could cover the same slots "
-                          "at a far finer spacing"},
-    {{0.6f, 0.6f, 0.5f}, "Alive - the probe's own irradiance toward the viewer, tonemapped with a "
-                         "floor so a dim probe still reads as a sphere"},
-}};
-
-constexpr std::array<visualization_swatch, 5> k_legend_gi_screen_probes = {{
-    {{0.2f, 1.0f, 0.3f}, "Traced this frame - brightness is the ray budget it was allocated"},
-    {{0.1f, 0.35f, 1.0f}, "Interpolated from its even-lattice parents (the adaptive saving)"},
-    {{0.6f, 0.0f, 0.0f}, "Placed but no geometry under it"},
-    {{1.0f, 1.0f, 1.0f}, "Tile borders, so probe spacing and lattice origin are readable"},
-    {{0.0f, 0.0f, 0.0f}, "Outside the lattice, or the gather did not run this frame"},
-}};
-
-constexpr std::array<visualization_swatch, 6> k_legend_gi_probe_tiers = {{
-    {{1.0f, 0.0f, 0.0f}, "Screen tier answered (Hi-Z hit read from last frame's composite) - these "
-                         "lanes idle while the rest of the 8x8 group marches the SDF"},
-    {{0.0f, 1.0f, 0.0f}, "SDF hit (mesh tier or clipmap)"},
-    {{0.0f, 0.0f, 1.0f}, "Sky: a completion the world probes could not answer"},
-    {{0.1f, 0.1f, 0.1f}, "The remainder: world-probe completions"},
-    {{0.25f, 0.25f, 0.25f}, "Interpolated probe - no rays of its own"},
-    {{0.0f, 0.0f, 0.0f}, "No geometry under the probe, or the gather did not run"},
-}};
-
-constexpr std::array<visualization_swatch, 4> k_legend_gi_temporal = {{
-    {{0.6f, 0.0f, 0.0f}, "1-2 frames integrated - effectively unfiltered; fireflies live here"},
-    {{1.0f, 0.5f, 0.0f}, "Re-converging"},
-    {{0.1f, 1.0f, 0.2f}, "At or near the slow cap - a settled pixel"},
-    {{0.1f, 0.2f, 1.0f}, "Blue lift: the moving-hit share is shortening this window on purpose"},
-}};
-
-constexpr std::array<visualization_swatch, 5> k_legend_gi_temporal_cause = {{
-    {{0.05f, 0.35f, 0.1f}, "No cause: the count grew this frame, or sits at the settings window"},
-    {{1.0f, 1.0f, 1.0f}, "Fresh: no usable history (first frame, off-screen last frame, disocclusion)"},
-    {{1.0f, 0.1f, 0.05f}, "Dirty region: a placement changed nearby and collapsed the slow lane"},
-    {{1.0f, 0.1f, 1.0f}, "Moving hits: the probe's rays hit moving geometry"},
-    {{1.0f, 0.9f, 0.1f}, "Change detector: the slow lane snapped to the fast one"},
-}};
-
-constexpr std::array<visualization_swatch, 5> k_legend_gi_emitter_share = {{
-    {{1.0f, 0.0f, 0.0f}, "Share of the probe's gathered energy the AIMED emitter rays delivered"},
-    {{0.0f, 1.0f, 0.0f}, "Aimed rays over traced rays"},
-    {{0.0f, 0.0f, 1.0f}, "Emitters selected over GI_EMISSIVE_NEE_PER_PROBE"},
-    {{0.25f, 0.25f, 0.25f}, "Interpolated probe - no rays of its own"},
-    {{0.0f, 0.0f, 0.0f}, "No geometry under the probe, or no emitter in reach"},
 }};
 
 constexpr std::array<visualization_swatch, 6> k_legend_exposure = {{
@@ -255,7 +98,7 @@ constexpr std::array<visualization_swatch, 7> k_legend_lumen_card_coverage = {{
 // Groups
 // -----------------------------------------------------------------------------
 
-constexpr std::array<visualization_group_entry, 7> k_visualization_groups = {{
+constexpr std::array<visualization_group_entry, 5> k_visualization_groups = {{
     {visualization_group::surface,
      "surface",
      ICON_MDI_LAYERS,
@@ -280,26 +123,13 @@ constexpr std::array<visualization_group_entry, 7> k_visualization_groups = {{
      "Motion",
      "Screen-space motion. Selecting a view here forces the velocity buffer to be produced "
      "even when no other consumer (TAA) is active."},
-    {visualization_group::distance_field,
-     "distance_field",
-     ICON_MDI_CUBE_SCAN,
-     "Distance Fields",
-     "Sphere-traced from the camera through the resident distance fields - NOT the raster "
-     "image. Rays that hit nothing leave the shaded scene showing through. Needs the surface "
-     "cache enabled with at least one resident field, otherwise nothing is drawn."},
-    {visualization_group::global_illumination,
-     "global_illumination",
-     ICON_MDI_LIGHTBULB_ON_OUTLINE,
-     "Global Illumination",
-     "The GI caches read at a traced hit, exactly as a gather ray reads them. Same trace and "
-     "the same preconditions as the Distance Fields group."},
     {visualization_group::lumen,
      "lumen",
      ICON_MDI_CARDS_OUTLINE,
      "Lumen",
      "Lumen's scene representation: the global distance field its rays march, and the surface cache of mesh "
-     "cards that shades their hits. These views need the Lumen gather enabled on the Global Illumination "
-     "volume, because the surface cache updates only while the gather runs."},
+     "cards that shades their hits. These views need global illumination enabled on the camera or a volume, "
+     "because the surface cache updates only while it runs."},
 }};
 
 // -----------------------------------------------------------------------------
@@ -382,9 +212,9 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      "ambient_occlusion",
      "Ambient Occlusion",
      "The occlusion of the untraced indirect lighting (environment SH, reflection probes): the "
-     "material AO from the G-Buffer times the screen-space AO (GTAO, or ASSAO when GTAO is off), "
-     "before the diffuse multi-bounce. The GI takes the same; SSIL and traced reflections take "
-     "only the material AO. White = unoccluded.",
+     "material AO from the G-Buffer times the screen-space AO (Lumen's short-range AO under global "
+     "illumination, otherwise GTAO, or ASSAO when GTAO is off), before the diffuse multi-bounce. The "
+     "GI takes the same; SSIL and traced reflections take only the material AO. White = unoccluded.",
      {}},
     {visualization_mode::ao_bent_normals,
      visualization_group::occlusion,
@@ -392,15 +222,15 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      "AO Bent Normals",
      "The world-space bent normal of the screen-space AO, encoded n * 0.5 + 0.5, so an "
      "unoccluded surface reads as its normal shifted into the 0..1 range. Flat WHITE = no bent "
-     "normal: GTAO is off (ASSAO has none).",
+     "normal: neither GTAO nor Lumen's short-range AO runs (ASSAO has none).",
      {}},
     {visualization_mode::specular_occlusion,
      visualization_group::occlusion,
      "specular_occlusion",
      "Specular Occlusion",
-     "The specular occlusion of the untraced reflections (probes, sky, the GI rough tier): the "
-     "share of the GGX lobe inside the visibility cone of the ambient occlusion, around the GTAO "
-     "bent normal, with the multi-bounce of F0 (tinted on metals). SSR and GI reflection hits "
+     "The specular occlusion of the untraced reflections (probes, sky, Lumen's rough specular): the "
+     "share of the GGX lobe inside the visibility cone of the ambient occlusion, around its bent "
+     "normal, with the multi-bounce of F0 (tinted on metals). SSR and Lumen's traced reflections "
      "take only the material AO's. White = reflections arrive unoccluded.",
      {}},
 
@@ -423,17 +253,16 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      visualization_group::lighting,
      "reflections",
      "Reflections",
-     "The indirect specular radiance, ahead of the environment BRDF: the traced layers (SSR over "
-     "the GI reflection tier; Lumen's reflections with the Lumen gather) plus the share they leave "
-     "of the probe layer (the probes; Lumen's rough specular) - completed with the environment SH "
-     "where nothing covers it - each under its specular occlusion. This is what the indirect pass "
-     "mixes in as specular.",
+     "The indirect specular radiance, ahead of the environment BRDF: the traced layers (SSR, or "
+     "Lumen's traced reflections) plus the share they leave of the probe layer (the reflection probes, "
+     "or Lumen's rough specular) - completed with the environment SH where nothing covers it - each "
+     "under its specular occlusion. This is what the indirect pass mixes in as specular.",
      {}},
     {visualization_mode::reflection_coverage,
      visualization_group::lighting,
      "reflection_coverage",
      "Reflection Coverage",
-     "The share of the specular the traced reflections (SSR, GI reflections, or Lumen's) cover; "
+     "The share of the specular the traced reflections (SSR, or Lumen's) cover; "
      "the rest comes from the probe layer. White = fully traced, black = probe layer only.",
      {}},
     {visualization_mode::exposure,
@@ -453,176 +282,6 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      "The velocity buffer: hue = direction of screen motion, brightness = magnitude, with 8 "
      "pixels of motion mapped to full brightness.",
      k_legend_velocity},
-
-    // -- Distance Fields ------------------------------------------------------
-    {visualization_mode::sdf_normals,
-     visualization_group::distance_field,
-     "sdf_normals",
-     "Field Surface",
-     "Shades the traced isosurface by its gradient normal with a headlight. Geometry missing "
-     "here is missing from every distance-field consumer.",
-     {}},
-    {visualization_mode::sdf_step_count,
-     visualization_group::distance_field,
-     "sdf_step_count",
-     "Trace Step Count",
-     "Heat map of sphere-trace steps per pixel - where the fields refuse to let rays skip. A "
-     "ray that hits nothing draws nothing, so the shaded scene shows through.",
-     k_legend_sdf_step_count},
-    {visualization_mode::sdf_cascade_levels,
-     visualization_group::distance_field,
-     "sdf_cascade_levels",
-     "Cascade Levels",
-     "Which global cascade level answers at the traced surface. A smooth gradient between two "
-     "colors is the cross-fade band working; a hard edge means the fade is off.",
-     k_legend_sdf_cascade_levels},
-    {visualization_mode::sdf_clipmap,
-     visualization_group::distance_field,
-     "sdf_clipmap",
-     "Clipmap Only",
-     "Traces the global cascade ALONE with the per-instance fields disabled, shaded by normal. "
-     "A fault in the cascade is invisible in the combined trace.",
-     {}},
-    {visualization_mode::sdf_headers,
-     visualization_group::distance_field,
-     "sdf_headers",
-     "Field Headers",
-     "Paints each resident field's bounds with its header channels: red = voxel size x20, "
-     "green = grid dimension / 256, blue = 1 when the header carries a voxel size. A readout, "
-     "not a verdict - it exists so a header that never arrived reads black rather than being "
-     "inferred from a wrong-looking trace. First field in buffer order, not depth sorted.",
-     k_legend_sdf_headers},
-    {visualization_mode::sdf_brick_probe,
-     visualization_group::distance_field,
-     "sdf_brick_probe",
-     "Brick Probe",
-     "What the brick indirection resolves to 0.05 units inside each field's bounds. Red is a "
-     "flag; green is the raw encoded distance texel there, so a healthy field reads mostly "
-     "green. A fault looks like per-pixel noise, not like the presence of green. Answers the "
-     "first field in buffer order the ray enters, so it is not depth sorted.",
-     k_legend_sdf_brick_probe},
-    {visualization_mode::sdf_bounds_entry,
-     visualization_group::distance_field,
-     "sdf_bounds_entry",
-     "Bounds Entry Sample",
-     "Classifies the FIRST field sample of the march, at the bounds entry point - the only "
-     "place instance scale and the hit threshold are applied. Answers the first field in "
-     "buffer order the ray enters, so it is not depth sorted.",
-     k_legend_sdf_bounds_entry},
-
-    // -- Global Illumination --------------------------------------------------
-    {visualization_mode::gi_direct_lighting,
-     visualization_group::global_illumination,
-     "gi_direct_lighting",
-     "Direct Lighting (Traced)",
-     "Direct lighting evaluated at the traced hit from the resident light buffer, shadowed by "
-     "tracing the fields toward each light. Neutral albedo, so this is the lighting alone.",
-     {}},
-    {visualization_mode::gi_voxel_albedo,
-     visualization_group::global_illumination,
-     "gi_voxel_albedo",
-     "Voxel Albedo",
-     "The attribute-voxel albedo at the traced hit - the surface color the GI cache carries.",
-     k_legend_gi_voxel_albedo},
-    {visualization_mode::gi_light_voxels,
-     visualization_group::global_illumination,
-     "gi_light_voxels",
-     "Light Voxels",
-     "The lit voxel cache at the traced hit, through the same reader a gather ray uses. This is "
-     "the radiance GI redistributes; judge interior darkness here, not in the tonemapped image.",
-     k_legend_gi_light_voxels},
-    {visualization_mode::gi_world_probes,
-     visualization_group::global_illumination,
-     "gi_world_probes",
-     "World Probe Irradiance",
-     "World-probe irradiance interpolated at the traced hit through the full DDGI weight chain "
-     "- what the bounce term and shortened gather rays read.",
-     k_legend_gi_world_probes},
-    {visualization_mode::gi_probe_sky,
-     visualization_group::global_illumination,
-     "gi_probe_sky",
-     "Probe Sky Fraction",
-     "How much of the probe answer at the hit is SKY, from the finest covering level alone "
-     "(no far blend). A sealed interior must read dark green; warm means sky enters the cage.",
-     k_legend_gi_probe_sky},
-    {visualization_mode::gi_sun_tiers,
-     visualization_group::global_illumination,
-     "gi_sun_tiers",
-     "Sun Visibility Tiers",
-     "Which tier answers SUN visibility per voxel face. While active this REPLACES the light "
-     "volume radiance with tier colors, so GI ingests them - diagnostic only.",
-     k_legend_gi_sun_tiers},
-    {visualization_mode::gi_vis_memo,
-     visualization_group::global_illumination,
-     "gi_vis_memo",
-     "Bounce Visibility Memo",
-     "The live bounce visibility-memo transaction per face - the instrument for whether the "
-     "memo is actually hitting. Runs the real load / miss-march / restamp path.",
-     k_legend_gi_vis_memo},
-    {visualization_mode::gi_attr_emissive,
-     visualization_group::global_illumination,
-     "gi_attr_emissive",
-     "Voxel Emissive",
-     "Emitted radiance in the attribute volume at the traced hit - what a gather ray reads as "
-     "emission, and the only view of the emissive texture-mean scaling.",
-     k_legend_gi_attr_emissive},
-    {visualization_mode::gi_cage_health,
-     visualization_group::global_illumination,
-     "gi_cage_health",
-     "Probe Cage Health",
-     "How much of the world-probe cage survived at the traced hit, after the dead-probe gate, "
-     "Chebyshev and the field march. Red is where the lattice left nothing usable.",
-     k_legend_gi_cage_health},
-    {visualization_mode::gi_dirty_regions,
-     visualization_group::global_illumination,
-     "gi_dirty_regions",
-     "Dirty Regions",
-     "Where the temporal is flushing accumulated light because a placement moved, appeared, "
-     "vanished or changed material. Only the regions that fit the shader budget are shown.",
-     k_legend_gi_dirty_regions},
-    {visualization_mode::gi_probe_lattice,
-     visualization_group::global_illumination,
-     "gi_probe_lattice",
-     "Probe Lattice",
-     "Only the level-0 probes, drawn as spheres where they actually sit and composited over the "
-     "normal image. Blue is unoccupied (no geometry within reach); the share of blue is the "
-     "lattice's occupancy.",
-     k_legend_gi_probe_lattice},
-    {visualization_mode::gi_screen_probes,
-     visualization_group::global_illumination,
-     "gi_screen_probes",
-     "Screen Probes",
-     "Where the adaptive gather placed a probe, whether it traced or interpolated it, and the "
-     "ray budget it spent - a cost map as much as a correctness one.",
-     k_legend_gi_screen_probes},
-    {visualization_mode::gi_temporal,
-     visualization_group::global_illumination,
-     "gi_temporal",
-     "Temporal Health",
-     "How many frames each pixel has actually integrated. Answers 'why is this noisy' and "
-     "'why is this lagging': pinned-low pixels are being reset every frame.",
-     k_legend_gi_temporal},
-    {visualization_mode::gi_probe_tiers,
-     visualization_group::global_illumination,
-     "gi_probe_tiers",
-     "Probe Ray Tiers",
-     "Which tier answered each traced screen probe's rays, as a share per tile: the red share "
-     "is the fraction of the trace group's lanes that idle while their neighbours march the SDF.",
-     k_legend_gi_probe_tiers},
-    {visualization_mode::gi_temporal_cause,
-     visualization_group::global_illumination,
-     "gi_temporal_cause",
-     "Temporal Reset Cause",
-     "Which mechanism limited each pixel's accumulation count this frame: fresh history, a "
-     "dirty region, the camera-motion collapse, moving hits, or the change detector.",
-     k_legend_gi_temporal_cause},
-    {visualization_mode::gi_emitter_share,
-     visualization_group::global_illumination,
-     "gi_emitter_share",
-     "Emitter Sampling Share",
-     "Explicit emitter sampling per traced screen probe: the aimed rays' share of the probe's "
-     "energy (red), of its rays (green), and the emitters it selected (blue).",
-     k_legend_gi_emitter_share},
 
     // -- Lumen ----------------------------------------------------------------
     {visualization_mode::lumen_scene,
@@ -674,7 +333,8 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      "lumen_reflection_rays",
      "Dedicated Reflection Rays",
      "Which surfaces trace their own reflection rays. Every surface smoother than the traced-roughness limit "
-     "(a roughness of 0.4) is drawn in red, brighter the smoother it is.",
+     "(the Global Illumination component's Max Roughness To Trace, 0.4 by default) is drawn in red, brighter "
+     "the smoother it is.",
      k_legend_lumen_reflection_rays},
     {visualization_mode::lumen_card_atlas,
      visualization_group::lumen,
@@ -693,54 +353,10 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
 });
 
 // Drift guards: the enum is the editor-side mirror of the engine's debug pass ids.
-static_assert(static_cast<int>(visualization_mode::sdf_normals) == rendering::deferred::debug_pass_sdf_normals,
-              "visualization_mode drifted from deferred::debug_pass_sdf_normals");
-static_assert(static_cast<int>(visualization_mode::sdf_brick_probe) == rendering::deferred::debug_pass_sdf_probe,
-              "visualization_mode drifted from deferred::debug_pass_sdf_probe");
-static_assert(static_cast<int>(visualization_mode::sdf_bounds_entry) == rendering::deferred::debug_pass_sdf_entry,
-              "visualization_mode drifted from deferred::debug_pass_sdf_entry");
-static_assert(static_cast<int>(visualization_mode::gi_direct_lighting) == rendering::deferred::debug_pass_sdf_direct,
-              "visualization_mode drifted from deferred::debug_pass_sdf_direct");
-static_assert(static_cast<int>(visualization_mode::gi_voxel_albedo) == rendering::deferred::debug_pass_sdf_attr_albedo,
-              "visualization_mode drifted from deferred::debug_pass_sdf_attr_albedo");
-static_assert(static_cast<int>(visualization_mode::gi_light_voxels) == rendering::deferred::debug_pass_sdf_light_voxels,
-              "visualization_mode drifted from deferred::debug_pass_sdf_light_voxels");
-static_assert(static_cast<int>(visualization_mode::gi_world_probes) == rendering::deferred::debug_pass_sdf_world_probes,
-              "visualization_mode drifted from deferred::debug_pass_sdf_world_probes");
-static_assert(static_cast<int>(visualization_mode::gi_sun_tiers) == rendering::deferred::debug_pass_sdf_sun_tiers,
-              "visualization_mode drifted from deferred::debug_pass_sdf_sun_tiers");
-static_assert(static_cast<int>(visualization_mode::gi_probe_sky) == rendering::deferred::debug_pass_sdf_probe_sky,
-              "visualization_mode drifted from deferred::debug_pass_sdf_probe_sky");
-static_assert(static_cast<int>(visualization_mode::gi_vis_memo) == rendering::deferred::debug_pass_sdf_vis_memo,
-              "visualization_mode drifted from deferred::debug_pass_sdf_vis_memo");
 static_assert(static_cast<int>(visualization_mode::velocity) == rendering::deferred::debug_pass_velocity,
               "visualization_mode drifted from deferred::debug_pass_velocity");
 static_assert(static_cast<int>(visualization_mode::ao_bent_normals) == rendering::deferred::debug_pass_ao_bent_normals,
               "visualization_mode drifted from deferred::debug_pass_ao_bent_normals");
-static_assert(static_cast<int>(visualization_mode::gi_attr_emissive) ==
-                  rendering::deferred::debug_pass_gi_attr_emissive,
-              "visualization_mode drifted from deferred::debug_pass_gi_attr_emissive");
-static_assert(static_cast<int>(visualization_mode::gi_cage_health) == rendering::deferred::debug_pass_gi_cage_health,
-              "visualization_mode drifted from deferred::debug_pass_gi_cage_health");
-static_assert(static_cast<int>(visualization_mode::gi_dirty_regions) ==
-                  rendering::deferred::debug_pass_gi_dirty_regions,
-              "visualization_mode drifted from deferred::debug_pass_gi_dirty_regions");
-static_assert(static_cast<int>(visualization_mode::gi_probe_lattice) ==
-                  rendering::deferred::debug_pass_gi_probe_lattice,
-              "visualization_mode drifted from deferred::debug_pass_gi_probe_lattice");
-static_assert(static_cast<int>(visualization_mode::gi_screen_probes) ==
-                  rendering::deferred::debug_pass_gi_screen_probes,
-              "visualization_mode drifted from deferred::debug_pass_gi_screen_probes");
-static_assert(static_cast<int>(visualization_mode::gi_temporal) == rendering::deferred::debug_pass_gi_temporal,
-              "visualization_mode drifted from deferred::debug_pass_gi_temporal");
-static_assert(static_cast<int>(visualization_mode::gi_probe_tiers) == rendering::deferred::debug_pass_gi_probe_tiers,
-              "visualization_mode drifted from deferred::debug_pass_gi_probe_tiers");
-static_assert(static_cast<int>(visualization_mode::gi_temporal_cause) ==
-                  rendering::deferred::debug_pass_gi_temporal_cause,
-              "visualization_mode drifted from deferred::debug_pass_gi_temporal_cause");
-static_assert(static_cast<int>(visualization_mode::gi_emitter_share) ==
-                  rendering::deferred::debug_pass_gi_emitter_share,
-              "visualization_mode drifted from deferred::debug_pass_gi_emitter_share");
 static_assert(static_cast<int>(visualization_mode::exposure) == rendering::deferred::debug_pass_exposure,
               "visualization_mode drifted from deferred::debug_pass_exposure");
 static_assert(static_cast<int>(visualization_mode::lumen_scene) == rendering::deferred::debug_pass_lumen_scene,

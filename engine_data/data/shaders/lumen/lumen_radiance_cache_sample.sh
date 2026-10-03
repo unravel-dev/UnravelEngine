@@ -15,7 +15,7 @@
 
 struct LumenRcSample
 {
-	/// Cached lighting (the light voxels' space).
+	/// Cached lighting (GI_CACHED_LIGHTING_PRE_EXPOSURE, gi_pre_exposure.sh).
 	vec3 radiance;
 	/// The probes' interpolated hit distance along the lookup directions.
 	float hit_distance;

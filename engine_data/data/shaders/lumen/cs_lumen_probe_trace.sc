@@ -16,11 +16,11 @@
  *     hit reads the surface cache through the object grid, faded to black within one voxel of the origin against
  *     self-lighting.
  *  3. The radiance cache, interpolated at the probe's position (lumen_radiance_cache_sample.sh); beyond
- *     the cache's reach the distance field runs to LUMEN_MAX_TRACE_DISTANCE and a miss reads the sky.
+ *     the cache's reach the distance field runs to the maximum trace distance and a miss reads the sky.
  *
  * Writes rgb = pre-exposed radiance, a = the distance the spatial filter's angle weight sees: the screen
  * hit's distance, the trace length for distance-field hits, the cache probes' hit distance for the
- * hand-off, LUMEN_MAX_TRACE_DISTANCE for the sky.
+ * hand-off, the maximum trace distance for the sky.
  */
 
 #include "bgfx_compute.sh"
@@ -118,7 +118,7 @@ LumenScreenRay LumenTraceScreenRay(vec3 position, vec3 normal, vec2 uv, float de
 	                                             LUMEN_SCREEN_TRACE_RELATIVE_THICKNESS);
 	vec3 trace_world = LumenWorldFromDepth(trace.position.xy, trace.position.z);
 	float miss_offset = (!trace.hit && !trace.uncertain) ? LUMEN_SCREEN_TRACE_MISS_OFFSET : 0.0;
-	result.distance = min(length(trace_world - position) + miss_offset, LUMEN_MAX_TRACE_DISTANCE);
+	result.distance = min(length(trace_world - position) + miss_offset, u_lumen_max_trace_distance);
 	if(!trace.hit)
 	{
 		return result;
@@ -203,7 +203,7 @@ void main()
 	vec4 record = texelFetch(s_lumen_probe_records, tile, 0);
 	if(record.x <= 0.0)
 	{
-		imageStore(s_lumen_trace_radiance, trace_texel, vec4(0.0, 0.0, 0.0, LUMEN_MAX_TRACE_DISTANCE));
+		imageStore(s_lumen_trace_radiance, trace_texel, vec4(0.0, 0.0, 0.0, u_lumen_max_trace_distance));
 		return;
 	}
 	ivec2 pixel = LumenProbeRecordPixel(record);
@@ -217,7 +217,7 @@ void main()
 	vec3 direction = LumenEquiAreaSphericalMapping((vec2(ray.xy) + jitter) / float(LumenRayResolution(ray.z)));
 	int cache_clipmap = u_lumen_radiance_cache ? LumenRcClipmapOf(position) : LUMEN_RADIANCE_CACHE_CLIPMAPS;
 	bool cached_far_field = cache_clipmap < LUMEN_RADIANCE_CACHE_CLIPMAPS;
-	float near_field = cached_far_field ? LumenRcHandOffDistance(cache_clipmap) : LUMEN_MAX_TRACE_DISTANCE;
+	float near_field = cached_far_field ? LumenRcHandOffDistance(cache_clipmap) : u_lumen_max_trace_distance;
 	vec3 radiance = vec3_splat(0.0);
 	float filter_distance = near_field;
 	float vouched = 0.0;
@@ -269,7 +269,7 @@ void main()
 		else
 		{
 			radiance = eval_radiance_sh(s_lumen_env_sh, direction) * u_pre_exposure_value;
-			filter_distance = LUMEN_MAX_TRACE_DISTANCE;
+			filter_distance = u_lumen_max_trace_distance;
 		}
 	}
 	BRANCH

@@ -30,7 +30,7 @@
 /// vec4 elements per field header, per sdf_atlas::header_vec4_count.
 #define SDF_HEADER_STRIDE 5
 /// vec4 elements per instance, per surface_cache_system::instance_vec4_stride.
-#define SDF_INSTANCE_STRIDE 13
+#define SDF_INSTANCE_STRIDE 10
 /// No instance produced this hit: either nothing was hit, or the global cascade answered, which
 /// is composed from many fields and cannot attribute a sample to one.
 #define SDF_NO_INSTANCE (-1)
@@ -42,16 +42,11 @@ BUFFER_RO(b_sdf_instances, vec4, 3);
 /// Uniform world-space grid over the instances, so a ray tests the ones near it rather than all
 /// of them. ONE buffer: the CSR offsets first (cell c owns [offsets[c], offsets[c + 1]) of the
 /// instance list), then the instance indices from u_sdf_grid_instance_base. See
-/// sdf_instance_grid. One buffer rather than two keeps stage 13 free in every tracer for the
-/// sparse world-probe index (gi_world_probes.sh): the gather, the relight and the SDF debug
-/// view have all sixteen bgfx stages spoken for.
+/// sdf_instance_grid. One buffer rather than two keeps a bgfx stage free in every tracer.
 BUFFER_RO(b_sdf_grid, uint, 12);
 
 /// [0] = grid origin xyz, cell size w. [1] = cell counts xyz, w = the instance list's base entry
-/// in b_sdf_grid (the offset count) - non-zero when the grid is usable. [2] x = the runtime
-/// EXPERIMENT flags (surface_cache_system::set_experiment_flags, MCP gi_set_experiment_flags): two
-/// code paths compiled into one program, alternated inside ONE editor launch for cost A/Bs - a
-/// relaunch's own variance hides small effects. Zero in production.
+/// in b_sdf_grid (the offset count) - non-zero when the grid is usable.
 /// Filled by surface_cache_system::get_grid_params, the single owner: every pass that traces
 /// must walk the same cells, and a pass that derived different ones would simply find different
 /// instances -- geometry that occludes in one pass and not another, with no error anywhere.
@@ -61,8 +56,6 @@ uniform vec4 u_sdf_grid_params[GI_SDF_GRID_PARAMS_VEC4];
 #define u_sdf_grid_dim       u_sdf_grid_params[1].xyz
 #define u_sdf_grid_enabled   (u_sdf_grid_params[1].w > 0.0)
 #define u_sdf_grid_instance_base uint(u_sdf_grid_params[1].w)
-#define u_sdf_experiment_flags   uint(u_sdf_grid_params[2].x)
-/// No experiment bit is compiled in.
 /// Cells a traversal may visit before giving up. A ray crossing an n-cell grid diagonally touches
 /// about 3n, so this is generous; it exists so a denormal direction cannot spin, not as a budget.
 #define SDF_GRID_MAX_STEPS 256
@@ -70,32 +63,12 @@ uniform vec4 u_sdf_grid_params[GI_SDF_GRID_PARAMS_VEC4];
 /// and treating the instance as non-occluding for the rest of that cell segment. See the
 /// suppress_steps note in SdfTestInstance for why the walk cannot otherwise terminate.
 #define SDF_SUPPRESS_MAX_STEPS 8
-/// SdfTraceClipmapLumen, after UE 5.8 RayTraceGlobalDistanceField (GlobalDistanceFieldUtils.ush):
-/// the surface expand in voxels of the answering level (Lumen's ClipmapVoxelExtent is HALF a
-/// voxel), the travel over which it ramps up from zero (ExpandSurfaceFalloff = one voxel), the
-/// step floor (MinStepFactor 1 x half a voxel) and the step budget (MaxSteps 256 per clipmap).
-#define SDF_LUMEN_EXPAND_VOXELS 0.5
-#define SDF_LUMEN_EXPAND_RAMP_VOXELS 1.0
-#define SDF_LUMEN_MIN_STEP_VOXELS 0.5
-#define SDF_LUMEN_MAX_STEPS 256
 
 /// x = atlas size in bricks per axis, y = atlas size in voxels per axis, z = instance count.
 uniform vec4 u_sdf_params;
 #define u_sdf_atlas_brick_dim u_sdf_params.x
 #define u_sdf_atlas_voxel_dim u_sdf_params.y
 #define u_sdf_instance_count  int(u_sdf_params.z)
-/// Emissive instances in the table appended to b_sdf_instances after the instances (see
-/// gi_emissive_nee.sh); 0 when the probes have nothing to sample explicitly.
-#define u_sdf_emitter_count   int(u_sdf_params.w)
-
-/// The instance's world displacement since its previous frame (surface_cache_system packs
-/// lane 10: xyz = the bounds centre delta, w = the largest corner displacement, which a
-/// spinning placement has while its centre stays put): the gather temporal's hit-motion
-/// signal.
-vec4 SdfInstanceVelocity(int index)
-{
-	return b_sdf_instances[uint(index) * uint(SDF_INSTANCE_STRIDE) + 10u];
-}
 
 struct SdfHeader
 {
@@ -144,15 +117,6 @@ struct SdfInstance
 	uint header_index;
 	/// Smallest scale axis: converts a local-space distance to a conservative world distance.
 	float local_to_world_scale;
-	/// Material of the submesh this placement draws, so a bounce ray can colour a cell it
-	/// discovers. Albedo is the base colour FACTOR and emissive is the emissive colour FACTOR
-	/// times its intensity; the attribute composer multiplies each by the texture mean at its
-	/// own slot, so a texture-dominated material bounces what it really reflects and emits.
-	vec3 albedo;
-	vec3 emissive;
-	/// Slots in the texture-mean buffer (cs_gi_texture_mean.sc); 0 is reserved white.
-	uint mean_slot;
-	uint emissive_mean_slot;
 	/// The submesh's material renders both faces (UE bMostlyTwoSided): the Lumen coverage leaves space near only such
 	/// instances uncovered.
 	bool is_two_sided;
@@ -163,21 +127,6 @@ struct SdfInstance
 	/// The chain's coarsest resident level, or header_index when that is the coarsest (SdfInstanceStandaloneDistance).
 	uint coarse_header_index;
 };
-
-/// The two texture-mean slots share one float lane, the colour map's below the emissive map's.
-/// Both are under surface_cache_system::texture_mean_capacity (1024), so the packed value is an
-/// integer under 2^21 and exact in a float32 mantissa; the radix is a power of two, so the
-/// divide below is an exponent shift and cannot round the high slot down.
-/// MIRROR OF surface_cache_system::upload_instances.
-#define SDF_MEAN_SLOT_RADIX 2048.0
-uint SdfMeanSlotColor(float lane)
-{
-	return uint(mod(lane, SDF_MEAN_SLOT_RADIX));
-}
-uint SdfMeanSlotEmissive(float lane)
-{
-	return uint(lane / SDF_MEAN_SLOT_RADIX);
-}
 
 SdfInstance SdfLoadInstance(int index)
 {
@@ -195,17 +144,12 @@ SdfInstance SdfLoadInstance(int index)
 	inst.header_index = uint(b0.w);
 	inst.world_bounds_max = b1.xyz;
 	inst.local_to_world_scale = b1.w;
-	vec4 material0 = b_sdf_instances[base + 8u];
-	inst.albedo = material0.xyz;
-	inst.mean_slot = SdfMeanSlotColor(material0.w);
-	inst.emissive_mean_slot = SdfMeanSlotEmissive(material0.w);
-	inst.emissive = b_sdf_instances[base + 9u].xyz;
-	vec4 lane11 = b_sdf_instances[base + 11u];
-	uint flags = uint(lane11.x + 0.5);
+	vec4 lane8 = b_sdf_instances[base + 8u];
+	uint flags = uint(lane8.x + 0.5);
 	inst.is_two_sided = (flags & 1u) != 0u;
 	inst.is_emissive_light_source = (flags & 2u) != 0u;
-	inst.axis_scale = lane11.yzw;
-	inst.coarse_header_index = uint(b_sdf_instances[base + 12u].x + 0.5);
+	inst.axis_scale = lane8.yzw;
+	inst.coarse_header_index = uint(b_sdf_instances[base + 9u].x + 0.5);
 	return inst;
 }
 
@@ -301,21 +245,6 @@ float SdfSampleLocal(SdfHeader header, vec3 local_position)
 	           : distance;
 }
 
-/**
- * Distance to a field's surface with a two-sided field read as the zero-thickness sheet it
- * represents, in LOCAL units.
- *
- * The bake stores two-sided fields as |distance| - half thickness (bake_mesh_sdf), a shell the
- * per-instance tracers walk out of. The global clipmap composes the sheet itself, as Lumen's
- * global distance field does: its march thickens every surface by the ray-time expand, and a
- * shell would put the launch point of every ray born on a sheet - Sponza's floor, any open
- * submesh - inside geometry, killing the ray at t = 0. Signed fields carry a zero thickness.
- */
-float SdfSheetDistance(SdfHeader header, vec3 local_position)
-{
-	return SdfSampleLocal(header, local_position) + header.two_sided_thickness;
-}
-
 /// Signed distance from a point at the absolute per-axis @p offset from a box's centre to the box of half extent
 /// @p extent, each axis scaled by @p scale: exact in world units for a scaled, rotated box.
 float SdfScaledBoxDistance(vec3 offset, vec3 extent, vec3 scale)
@@ -336,8 +265,8 @@ float SdfScaledBoxDistance(vec3 offset, vec3 extent, vec3 scale)
  * pad it unevenly), and outside the bounds the field at the nearest boundary point less the world distance to it
  * (1-Lipschitz). Inside the bounds the field is converted with the smallest axis scale, and a negative reading
  * there stands (UE's volume-box term): an open sheet signed by the bake's vote is solid beyond its own box. @p sheet
- * reads a two-sided field as its zero-thickness sheet (SdfSheetDistance); read as stored, a shell reaches its
- * thickness past the box.
+ * reads a two-sided field as the zero-thickness sheet it represents (the stored shell plus its half thickness); read
+ * as stored, a shell reaches its thickness past the box.
  */
 float SdfInstanceWorldDistance(SdfInstance inst, SdfHeader header, vec3 local_position, bool sheet)
 {
@@ -407,53 +336,6 @@ bool SdfLumenCascadeKeepsInstance(SdfInstance inst, float voxel, float min_radiu
 }
 
 /**
- * Reports what the lookup at a local-space position actually resolved to.
- *
- * Diagnostic only. Every failure in the residency path -- indirection buffer not bound, atlas
- * never written, wrong slot arithmetic -- degrades into per-pixel noise in the traced image,
- * which looks identical whichever stage broke. This returns the intermediate values so the
- * stage can be identified directly instead of inferred.
- *
- *   x = 1 when the brick is empty (no voxel storage), 0 when it is a surface brick
- *   y = the raw encoded atlas texel, before decoding (0.5 is distance zero)
- *   z = the atlas slot, normalised by the atlas capacity
- *   w = 1 when the position is inside the field bounds
- */
-vec4 SdfProbeLocal(SdfHeader header, vec3 local_position)
-{
-	if(!(header.voxel_size > 0.0))
-	{
-		return vec4(0.0, 0.0, 0.0, 0.0);
-	}
-	vec3 grid = (local_position - header.bounds_min) / header.voxel_size;
-	vec3 clamped_grid = clamp(grid, vec3_splat(0.0), header.grid_dim);
-	if(length((grid - clamped_grid) * header.voxel_size) > 0.0)
-	{
-		return vec4(0.0, 0.0, 0.0, 0.0);
-	}
-	vec3 brick_coord = clamp(floor(grid / SDF_BRICK_SIZE), vec3_splat(0.0), header.brick_dim - vec3_splat(1.0));
-	uint brick_index = uint(brick_coord.x) +
-	                   uint(brick_coord.y) * uint(header.brick_dim.x) +
-	                   uint(brick_coord.z) * uint(header.brick_dim.x) * uint(header.brick_dim.y);
-	uint entry = b_sdf_indirection[uint(header.indirection_offset) + brick_index];
-	if((entry & SDF_INDIRECTION_EMPTY_FLAG) != 0u)
-	{
-		return vec4(1.0, 0.0, 0.0, 1.0);
-	}
-	float atlas_brick_dim = u_sdf_atlas_brick_dim;
-	float slot = float(entry);
-	vec3 slot_coord;
-	slot_coord.x = mod(slot, atlas_brick_dim);
-	slot_coord.y = mod(floor(slot / atlas_brick_dim), atlas_brick_dim);
-	slot_coord.z = floor(slot / (atlas_brick_dim * atlas_brick_dim));
-	vec3 brick_local = grid - brick_coord * SDF_BRICK_SIZE;
-	vec3 atlas_coord = slot_coord * SDF_BRICK_STRIDE + brick_local + vec3_splat(SDF_BRICK_BORDER);
-	float encoded = texture3DLod(s_sdf_atlas, atlas_coord / u_sdf_atlas_voxel_dim, 0.0).x;
-	float capacity = atlas_brick_dim * atlas_brick_dim * atlas_brick_dim;
-	return vec4(0.0, encoded, slot / max(capacity, 1.0), 1.0);
-}
-
-/**
  * Gradient of the field at a local-space position, giving the surface normal.
  *
  * FOUR tetrahedral taps rather than six central differences. The four corners of a tetrahedron
@@ -475,65 +357,6 @@ vec3 SdfGradientLocal(SdfHeader header, vec3 local_position)
 	                k3 * SdfSampleLocal(header, local_position + k3 * e);
 	float len = length(gradient);
 	return len > 1e-8 ? gradient / len : vec3(0.0, 1.0, 0.0);
-}
-
-/**
- * The mesh fields at a POINT: the minimum over the resident instances whose cull-grid cell
- * holds it, in world units - SDF_CLIPMAP_OUTSIDE when no instance is near. Exact to the
- * resident mips and CAMERA-INDEPENDENT, which the clipmap is not: its finest level covering a
- * point is the camera's, and from 20 m that is the 1 m level, whose voxels straddle a floor
- * slab or a niche wall. The world-probe trace's dead-probe gate asks this instead: through the
- * clipmap, lattice points buried in a floor or wall read as alive from far, trace from inside
- * the geometry and mix the sky beneath the floor into their atlas. The composer's per-voxel
- * loop (cs_gi_clipmap_compose.sc) is the same walk with a reach; this is its reach-0 form.
- * Outside an instance's bounds its field reports the distance to the bounds plus the bake
- * padding, so only a point genuinely inside a mesh reads negative.
- */
-float SdfSampleInstancesPoint(vec3 world_position)
-{
-	float nearest = SDF_CLIPMAP_OUTSIDE;
-	if(!u_sdf_grid_enabled)
-	{
-		LOOP
-		for(int i = 0; i < u_sdf_instance_count; ++i)
-		{
-			SdfInstance inst = SdfLoadInstance(i);
-			vec3 clamped_to_bounds = clamp(world_position, inst.world_bounds_min, inst.world_bounds_max);
-			if(length(world_position - clamped_to_bounds) >= nearest)
-			{
-				continue;
-			}
-			SdfHeader header = SdfLoadHeader(inst.header_index);
-			vec3 local_position = SdfTransformPoint(inst.world_to_local_rows, world_position);
-			nearest = min(nearest, SdfSampleLocal(header, local_position) * inst.local_to_world_scale);
-		}
-		return nearest;
-	}
-	vec3 last_cell = u_sdf_grid_dim - vec3_splat(1.0);
-	vec3 cell_f = floor((world_position - u_sdf_grid_origin) / u_sdf_grid_cell_size);
-	if(any(lessThan(cell_f, vec3_splat(0.0))) || any(greaterThan(cell_f, last_cell)))
-	{
-		return nearest;
-	}
-	int cell_index = int(cell_f.x + cell_f.y * u_sdf_grid_dim.x + cell_f.z * u_sdf_grid_dim.x * u_sdf_grid_dim.y);
-	uint begin = b_sdf_grid[cell_index] + u_sdf_grid_instance_base;
-	uint end = b_sdf_grid[cell_index + 1] + u_sdf_grid_instance_base;
-	LOOP
-	for(uint entry_index = begin; entry_index < end; ++entry_index)
-	{
-		SdfInstance inst = SdfLoadInstance(int(b_sdf_grid[entry_index]));
-		// Outside the bounds the distance to them is already a valid lower bound, and never a
-		// negative one: a bounds reject can only skip instances that cannot bury the point.
-		vec3 clamped_to_bounds = clamp(world_position, inst.world_bounds_min, inst.world_bounds_max);
-		if(length(world_position - clamped_to_bounds) >= nearest)
-		{
-			continue;
-		}
-		SdfHeader header = SdfLoadHeader(inst.header_index);
-		vec3 local_position = SdfTransformPoint(inst.world_to_local_rows, world_position);
-		nearest = min(nearest, SdfSampleLocal(header, local_position) * inst.local_to_world_scale);
-	}
-	return nearest;
 }
 
 /**
@@ -564,27 +387,14 @@ struct SdfRayHit
 	/// True when a march ran out of budget instead of resolving. Distinguishes "found nothing"
 	/// from "gave up", which are otherwise indistinguishable in the output.
 	bool exhausted;
-	/// Minimum UNEXPANDED field reading seen along the ray outside the launch slab, in world
-	/// units; 0 on a hit, huge when nothing was sampled. This is the ray's closest approach to
-	/// real geometry, which is what turns a binary occlusion ray into a BEAM test: a receiver
-	/// with spatial extent (a light voxel) is partially occluded whenever the clearance is
-	/// smaller than its half-width. Costs one min per march step.
-	float clearance;
 	/// The RAW field reading at the accepted point, in world units (0 for a miss). The march
 	/// accepts a hit bias + expand voxels short of the surface, and no surface lies within
 	/// this reading of that point, so t + hit_field never exceeds the distance along the ray
-	/// to the first surface: a consumer storing a DEPTH for a visibility test adds it. The
-	/// world probes' Chebyshev moments need it - without it a flat surface measures nearer
-	/// than its own query biased off it, and a low-variance depth lobe rejects the probe with
-	/// confidence (a floor whose only live cage probes sit straight above it would read zero
-	/// irradiance).
+	/// to the first surface: a consumer that reads a surface store (the cards) steps onto the
+	/// surface with it.
 	float hit_field;
-	/// Instance that produced the hit, or SDF_NO_INSTANCE when the global cascade answered.
-	///
-	/// Carries the MATERIAL to the caller. A distance field stores geometry only, so a bounce ray
-	/// that discovers a surface no on-screen pixel has ever registered would otherwise have no
-	/// colour to give it. The cascade is composed from many fields at once and cannot attribute a
-	/// sample to one of them, so a far-field hit legitimately has no material.
+	/// Instance that produced the hit, or SDF_NO_INSTANCE when the global cascade answered: the
+	/// cascade is composed from many fields at once and cannot attribute a sample to one of them.
 	int instance_index;
 };
 
@@ -624,7 +434,6 @@ SdfRayHit SdfMakeMiss()
 	result.steps = 0;
 	result.exhausted = false;
 	result.instance_index = SDF_NO_INSTANCE;
-	result.clearance = 1e8;
 	result.hit_field = 0.0;
 	return result;
 }
@@ -735,9 +544,9 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 	{
 		float origin_distance = SdfSampleLocal(header, local_origin) * inst.local_to_world_scale;
 		bool two_sided = header.two_sided_thickness > 0.0;
-		// A RESUMED ray (SdfTraceRayGather, t_min > 0) starts in space its screen march verified
-		// empty: a first sample inside a band there is a genuine occluder, never the launch
-		// surface, and walking out of it would tunnel.
+		// A RESUMED ray (t_min > 0) starts in space a screen march verified empty: a first
+		// sample inside a band there is a genuine occluder, never the launch surface, and
+		// walking out of it would tunnel.
 		suppressed = !resumed && origin_distance < hit_threshold &&
 		             (two_sided || origin_distance > -hit_threshold);
 	}
@@ -802,7 +611,6 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 			if(t < result.t || !result.hit)
 			{
 				result.hit = true;
-				result.clearance = 0.0;
 				result.t = t;
 				result.hit_field = max(world_distance, 0.0);
 				// The accepted LOCAL point: the walk derives the normal once it has settled its
@@ -824,8 +632,6 @@ void SdfTestInstance(int index, vec3 origin, vec3 direction, vec3 inv_dir, float
 			resolved = true;
 			break;
 		}
-		// Closest approach to real geometry, for beam-visibility consumers (see SdfRayHit).
-		result.clearance = min(result.clearance, world_distance);
 		// Step by the true distance, never more: overstepping would pass through the
 		// surface. Floored only by the base threshold so a zero reading cannot stall.
 		// Termination comes from the widening acceptance above, not from a forced step.
@@ -991,495 +797,6 @@ SdfRayHit SdfTraceInstances(vec3 origin, vec3 direction, float t_min, float t_ma
 {
 	return SdfTraceInstancesEx(origin, direction, t_min, t_max, max_steps, surface_bias, relaxation,
 	                           want_normal, false);
-}
-
-SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
-                          float surface_bias, float relaxation, bool want_normal, float expand_start,
-                          bool expand_full, bool want_normal_on_exhaustion)
-{
-	SdfRayHit result = SdfMakeMiss();
-	if(!u_sdf_clipmap_enabled || t_min >= t_max)
-	{
-		return result;
-	}
-	float t = t_min;
-	// Launch-surface suppression, mirroring the per-instance tier: a gather, bounce or shadow ray
-	// is born ON a surface, and the cascade represents that surface as a slab inflated by the
-	// composed shells' thickness -- so the first sample is routinely a "hit" that is nothing but
-	// the launch surface occluding itself, and the ray must see clear space before a hit counts.
-	//
-	// The arming condition differs by where this tier starts. When the cascade traces from the
-	// ray's true origin (t_min == 0, near field off) the whole acceptance band is the launch
-	// surface, exactly as in the instance tier. When it takes over FROM a near field (t_min > 0)
-	// a first sample within the acceptance may be a genuine occluder sitting just past the
-	// handover, so only a NEGATIVE reading -- strictly inside composed solid, which the near
-	// tier would have hit if it were real geometry in range -- is treated as launch overhang.
-	bool suppressed = false;
-	// Highest reading seen while suppressed. The walk out of the launch slab must see a
-	// monotonically rising distance; a drop of more than a voxel after rising means the walk
-	// crossed into a DIFFERENT surface's slab -- in a corridor the floor's and the wall's merge
-	// into one negative region, and without this test the escape tunnels through the wall and
-	// exits into the light on the far side. Occluding on re-descent errs dark, never leaks.
-	float suppress_best = -1e8;
-	// Distance walked while suppressed; probe rays (expand_full) bound it - see the walk.
-	float suppress_travel = 0.0;
-	bool first_sample = true;
-	bool from_origin = t_min <= 0.0;
-	// LOOP: see the compile-time note at the mesh march - this body additionally carries
-	// the coarse-level descent, so its unroll would be the widest of all.
-	LOOP
-	for(int step = 0; step < max_steps; ++step)
-	{
-		if(t > t_max)
-		{
-			return result;
-		}
-		vec3 p = origin + direction * t;
-		// Everything scaled to "a voxel" must use the voxel size of the cascade that actually
-		// answered, not the finest level's. The cascades differ by orders of magnitude, and
-		// using the wrong one collapses the gradient into quantisation noise, which breaks the
-		// traced surface into bands.
-		float voxel;
-		float d = SdfSampleClipmapEx(p, voxel);
-		// Clearance uses the REAL field: the expand below is a hit-test artifice, and beam
-		// visibility must measure geometry, not the fattening.
-		float d_raw = d;
-		++result.steps;
-		// Surface EXPAND, ramped with travel (after Lumen [S22 p48-50]): geometry thinner than a
-		// cascade voxel never crosses zero, so without this a ray at range tunnels straight through
-		// a distant wall the cascade knows about but cannot make solid. Subtracting the expand
-		// fattens every surface by up to half a voxel diagonal - and because it subtracts from the
-		// STEP as well as the hit test, the march cannot overstep the fattened surface.
-		// The ramp starts at zero so the contact zone, where the launch lift is the defence, keeps
-		// its shadows; both constants are owned by gi_constants (cap published, ramp derived).
-		// Applies to this tier only: the mesh tier's thin geometry is guaranteed representable at
-		// bake time (unsigned shells floored at one mesh voxel), a stronger defence than runtime
-		// expand, and doubling up would only add cost.
-		// Kept STRICTLY below the saturation margin by construction: saturated samples read
-		// encode_range voxels (= 4), the expand is at most 0.87 voxel, and the acceptance below is
-		// capped at one voxel, so a saturated sample can never read as a hit.
-		// GATED BY THE CALLER: gather and probe rays want the fattening (a distant thin wall
-		// must occlude their radiance estimate), but SHADOW rays must not - at coarse levels
-		// the expand approaches a voxel diagonal (metres), so a sun ray grazing a street canyon
-		// would read occluded almost everywhere and the whole light-voxel field would converge
-		// dark. The shadow leak defence is the bake-time shell floor.
-		if(expand_start >= 0.0 && (expand_full || t > expand_start))
-		{
-			// The ramp measures travel PAST expand_start: radiance rays pass 0 (expand from
-			// launch), occlusion rays pass their mesh-exact range - within it the per-instance
-			// fields and the bake shell floor ARE the thin-geometry defence, and beyond it only
-			// this voxel-resolution field answers, where a sub-voxel wall reads as a dip the
-			// acceptance can step across (sun shafts through thin walls).
-			//
-			// expand_full SKIPS the ramp: full fattening from the very first step. The ramp's
-			// grace zone exists for rays born ON surfaces, whose contact shadows the launch
-			// lift already defends; world-probe rays are born in OPEN space with no mesh tier
-			// under them, and their first metres are exactly where a sealed box leaks - a
-			// sub-voxel wall crossed at t ~ 1-2 m reads a dip the ramped expand (still near
-			// zero there) does not close, and because the porous field OVERESTIMATES distance
-			// the march can hop the dip without ever sampling it, which no acceptance raise
-			// can catch. Subtracting from the step as well as the test is what makes the
-			// expand the watertight defence, so probes take it whole from launch.
-			float diagonal = voxel * 1.7320508;
-			float ramp = expand_full
-			                 ? 1.0
-			                 : saturate((t - expand_start) / (GI_EXPAND_RAMP_VOXEL_DIAGONALS * diagonal));
-			float expand = GI_EXPAND_MAX_VOXEL_DIAGONALS * diagonal * ramp;
-			d -= expand;
-		}
-		float base_threshold = max(surface_bias * voxel, 1e-6);
-		// Capped at ONE voxel, not at the encode range.
-		//
-		// The correctness bound is the encode range: the levels saturate at that many voxels, so a
-		// cone grown past it makes every saturated sample read as a hit and the cascade reads solid.
-		// But the useful bound is far tighter. A cone radius is over-occlusion by construction -- it
-		// accepts a hit the ray never actually reached -- and the ray most affected is one grazing
-		// along the surface it STARTED on, which is every gather ray on a flat wall.
-		//
-		// That ray sits `lift` above its own surface and is caught once the radius reaches it, at
-		// t = lift / relaxation. With the radius free to grow to four voxels it keeps being caught
-		// however far it travels; capping at one voxel bounds the damage to geometry the cascade
-		// genuinely cannot resolve anyway. A loose cap shows as darkening that appears as the
-		// camera APPROACHES a wall -- closer means a finer level, a smaller voxel, and so a smaller
-		// lift, while the cone keeps growing at the same rate.
-		float accept = min(SdfConeRadius(t, base_threshold, relaxation), voxel);
-		if(first_sample)
-		{
-			first_sample = false;
-			// The continuation test must use the RAW reading. The expand is a hit-test
-			// artifice fattening surfaces AHEAD of the ray, and arming on the expanded
-			// reading would turn the whole fattening band at the tier handover into "launch
-			// overhang": every ray arriving at the handover within an expand of a surface
-			// it is ABOUT TO HIT would arm the walk instead, which then steps by |d| INTO
-			// the solid - accelerating - until the re-descent tolerance releases it up to
-			// half a voxel deep. That shows as a camera-locked seam ring at exactly
-			// GI_MESH_SDF_TRACE_RANGE: a band of buried hits whose face-slab and probe-cage
-			// reads answer the wrong side of the surface. Raw-negative means what the
-			// comment above promises: strictly inside composed solid the near tier vouched
-			// clear - the one case that genuinely is launch overhang.
-			suppressed = from_origin ? (d < accept) : (d_raw < 0.0);
-		}
-		if(suppressed)
-		{
-			if(d >= accept)
-			{
-				suppressed = false;
-			}
-			else if(d < suppress_best - (expand_full ? 0.15 * voxel : voxel))
-			{
-				// Re-descent: the walk rose toward its exit and dropped again -- a new occluder's
-				// slab, not the launch surface. Fall through to the hit test and occlude.
-				//
-				// The tolerance is a FULL voxel for surface-born rays, whose own slab legitimately
-				// wobbles at that scale, but a PROBE ray (expand_full) has no launch surface at
-				// all -- its suppression only ever means "the probe sits near geometry", and the
-				// walk crossing a porous sub-voxel wall reads as a shallow dip (~0.2-0.5 voxel)
-				// that a one-voxel tolerance would swallow whole: the walk would tunnel out of
-				// sealed rooms through their own roofs, hits never firing because suppression
-				// bypasses the hit test. 0.15 voxel sits above trilinear wobble and below every
-				// real wall dip; the cost is grazing probe rays near the cross-fade shell
-				// occluding early - the safe direction.
-				suppressed = false;
-			}
-			else
-			{
-				// Walking out of the launch band. |d| is the distance to the slab boundary, so
-				// stepping by it converges on the exit without crossing it (1-Lipschitz), and the
-				// floor keeps a zero reading from stalling.
-				float walk_step = max(abs(d), base_threshold);
-				// A probe ray's launch band cannot exceed the acceptance plus the full expand
-				// (about two voxels of the answering level): suppressed travel beyond that is a
-				// walk THROUGH something real - the monotonic-rise tunnel the descent test above
-				// cannot see, a probe sitting closer to a porous wall than the wall's own
-				// through-field minimum. Occlude; for probe rays dark is the safe direction.
-				if(expand_full && suppress_travel + walk_step > 3.0 * voxel)
-				{
-					suppressed = false;
-				}
-				else
-				{
-					suppress_best = max(suppress_best, d);
-					suppress_travel += walk_step;
-					t += walk_step;
-					continue;
-				}
-			}
-		}
-		if(d < accept)
-		{
-			result.hit = true;
-			result.clearance = 0.0;
-			result.t = t;
-			result.hit_field = max(d_raw, 0.0);
-			if(want_normal)
-			{
-				// Tetrahedral taps over one voxel OF THE ANSWERING LEVEL.
-				float e = voxel;
-				vec3 k0 = vec3(1.0, -1.0, -1.0);
-				vec3 k1 = vec3(-1.0, -1.0, 1.0);
-				vec3 k2 = vec3(-1.0, 1.0, -1.0);
-				vec3 k3 = vec3(1.0, 1.0, 1.0);
-				vec3 n = k0 * SdfSampleClipmap(p + k0 * e) + k1 * SdfSampleClipmap(p + k1 * e) +
-				         k2 * SdfSampleClipmap(p + k2 * e) + k3 * SdfSampleClipmap(p + k3 * e);
-				float len = length(n);
-				result.normal = len > 1e-8 ? n / len : vec3(0.0, 1.0, 0.0);
-			}
-			else
-			{
-				result.normal = vec3_splat(0.0);
-			}
-			return result;
-		}
-		// Closest approach to real geometry, for beam-visibility consumers (see SdfRayHit).
-		result.clearance = min(result.clearance, d_raw);
-		// SATURATION STEP BOOST: a saturated reading means "no geometry within the encode range OF
-		// THE ANSWERING LEVEL" - but the sampler answers with the FINEST covering level, so inside
-		// the fine windows the step is capped at 4 fine voxels however empty the space actually
-		// is. A 100 m sun ray crossing level 0's 16 m window would spend 32 of its 64 steps just to
-		// traverse it and die mid-air; the exhaustion contract then reads that as full occlusion,
-		// painting the fine windows' PROJECTED SHADOW along the sun azimuth onto every surface
-		// down-sun of the camera (a black blob anchored to camera position, swinging with the
-		// light, invisible in every geometry view). Every level is composed conservatively
-		// (test_clipmap_is_conservative), so the max of any levels' readings is still an
-		// under-estimate of the true distance - a legal sphere-trace step. The coarsest covering
-		// level has the largest saturation cap, so one extra sample buys up to an 8x longer step
-		// exactly where the capped steps would be wasted. Near-saturation gates the cost: near
-		// geometry (small readings) nothing changes, including the expand path's careful
-		// never-overstep-the-fattening behaviour - the boost cannot engage within the answering
-		// level's encode range of anything it represents, and no level's reading can step OVER
-		// geometry any level knows about.
-		float step_distance = d;
-		if(d_raw >= (u_sdf_clipmap_encode_range - 0.5) * voxel)
-		{
-			for(int coarse_index = SDF_CLIPMAP_LEVEL_COUNT - 1; coarse_index >= 0; --coarse_index)
-			{
-				float coarse_distance = SdfSampleClipmapLevel(coarse_index, p);
-				if(coarse_distance < SDF_CLIPMAP_OUTSIDE)
-				{
-					step_distance = max(step_distance, coarse_distance);
-					break;
-				}
-			}
-		}
-		t += max(step_distance, base_threshold);
-	}
-	// Budget exhausted: report a HIT at the current position, not a miss (after Lumen's forced
-	// 64th-iteration hit [S22 p36]). Exhaustion happens on grazing rays hugging geometry;
-	// laundering it into "clear" over-lights exactly the surfaces that are hardest to trace.
-	// Over-occlusion is the direction that degrades gracefully. The flag stays set so the
-	// step-count debug view can still show where budgets die.
-	//
-	// The accumulated CLEARANCE survives, deliberately: zeroing it here would silently disable
-	// GiTraceShadow's exhaustion fallback (clearance / voxel of an always-zero clearance is
-	// always full shadow). Clearance is the honest record of how close the marched prefix ever
-	// came to geometry: consumers that treat exhaustion as occlusion read .hit/.exhausted and are
-	// unaffected by it; the beam-visibility consumer gets to distinguish "gave up grazing a wall"
-	// (small clearance, dark) from "gave up crossing open space" (large clearance, lit).
-	//
-	// EXCEPT a ray that never left its launch slab: suppressed samples do not accumulate
-	// clearance, so a march that burned its whole budget still buried reports the untouched
-	// sentinel - and "never saw clear space" must stay dark, not launder into fully lit.
-	result.hit = true;
-	result.t = t;
-	result.exhausted = true;
-	if(result.clearance > 1e7)
-	{
-		result.clearance = 0.0;
-	}
-	// Gated separately from want_normal: a caller whose exhaustion path never consumes the
-	// normal (reflections fall back to the gather value on exhaustion) skips four full
-	// clipmap samples here. The overloads without this flag pass want_normal through.
-	if(want_normal_on_exhaustion)
-	{
-		vec3 p_exhausted = origin + direction * t;
-		float e_voxel;
-		SdfSampleClipmapEx(p_exhausted, e_voxel);
-		float e = max(e_voxel, 1e-3);
-		vec3 k0 = vec3(1.0, -1.0, -1.0);
-		vec3 k1 = vec3(-1.0, -1.0, 1.0);
-		vec3 k2 = vec3(-1.0, 1.0, -1.0);
-		vec3 k3 = vec3(1.0, 1.0, 1.0);
-		vec3 n = k0 * SdfSampleClipmap(p_exhausted + k0 * e) + k1 * SdfSampleClipmap(p_exhausted + k1 * e) +
-		         k2 * SdfSampleClipmap(p_exhausted + k2 * e) + k3 * SdfSampleClipmap(p_exhausted + k3 * e);
-		float len = length(n);
-		result.normal = len > 1e-8 ? n / len : vec3(0.0, 1.0, 0.0);
-	}
-	return result;
-}
-
-/// The form without the exhaustion gate: exhaustion keeps the normal whenever the caller
-/// wanted one.
-SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
-                          float surface_bias, float relaxation, bool want_normal, float expand_start,
-                          bool expand_full)
-{
-	return SdfTraceClipmap(origin, direction, t_min, t_max, max_steps, surface_bias, relaxation,
-	                       want_normal, expand_start, expand_full, want_normal);
-}
-
-/// The ramped-expand form: full-from-launch is opt-in for consumers with no mesh tier under
-/// their first steps (see expand_full above).
-SdfRayHit SdfTraceClipmap(vec3 origin, vec3 direction, float t_min, float t_max, int max_steps,
-                          float surface_bias, float relaxation, bool want_normal, float expand_start)
-{
-	return SdfTraceClipmap(origin, direction, t_min, t_max, max_steps, surface_bias, relaxation,
-	                       want_normal, expand_start, false);
-}
-
-/**
- * Traces a world-space ray through the cascade of representations, nearest and most accurate
- * first.
- *
- * The tiers exist because no single structure is right at every range. Per-instance fields
- * resolve thin geometry but cost a bounds test per instance; the global cascade covers the
- * whole world in one lookup but cannot represent anything thinner than its voxels. Splitting
- * by distance uses each where it is both cheapest and most accurate.
- *
- * A screen-space tier in front of these two (the gather's, see SdfTraceRayGather) covers the
- * first metre or so: the depth buffer resolves it exactly and in a few steps, which is also
- * where sphere tracing is at its worst.
- */
-/**
- * The Ex variant exposes @p expand_start: where the cascade tier's thin-surface fattening
- * begins along the ray. Radiance rays (gather, probe, bounce) pass 0 - a distant sub-voxel
- * wall must occlude their estimate from the launch on. Occlusion rays toward a LIGHT pass
- * their mesh-exact range: within it the per-instance fields and the bake shell floor handle
- * thin geometry exactly and the expand would only over-darken contacts, beyond it the expand
- * is the only thin-wall defence the voxel field has. Negative disables entirely.
- */
-SdfRayHit SdfTraceRayEx(vec3 origin, vec3 direction, float t_max, float near_field_distance,
-                        int max_steps, float surface_bias, float relaxation, bool want_normal,
-                        float expand_start)
-{
-	// Relaxation applies to the near field too. It cannot step a ray past a wall and leak light
-	// through it: the relaxation term feeds SdfConeRadius, which is consulted ONLY by the hit test
-	// (`world_distance < accept`), while the advance is `t += max(world_distance, hit_threshold)`
-	// and uses the base threshold. So it widens what counts as a hit and never the step -- it can
-	// only stop a ray EARLY, never carry it past a surface, which is the whole reason for the cone
-	// formulation over a forced minimum step.
-	//
-	// This matters because the near field is where the cost is, concentrated exactly where a ray
-	// runs nearly parallel to a large surface (the step-count view shows it) -- the grazing case a
-	// growing acceptance radius exists to bound.
-	//
-	// What it does cost is over-occlusion at range (distant geometry is effectively fattened by the
-	// cone radius) and a hit that sits further short of the surface, which the cache addressing has
-	// to absorb. Both are measurable rather than arguable: the first by eye, the second by the
-	// agreement rates in test_surface_resolve_addresses_one_cell_from_both_sides. The default is
-	// zero, so this has no effect until it is deliberately dialled up.
-	// Guarded rather than left to a zero-length segment, because that segment is NOT empty.
-	// SdfIntersectBounds clamps t_near to zero and t_far to t_max, so [0, 0] passes its `t_near <=
-	// t_far` test for any ray starting inside an instance's bounds; the march's own guard is
-	// `t > t_far`, which 0 > 0 fails; and the first sample is therefore taken AT THE ORIGIN and can
-	// return a hit at t = 0. A tier switched off by setting its range to zero would still stamp a
-	// zero-distance hit on every ray that begins within surface_bias mesh-voxels of a surface --
-	// which for a gather or shadow ray is every ray, since they begin on one by construction.
-	// The per-instance tier is capped at GI_MESH_SDF_TRACE_RANGE regardless of the caller's
-	// setting (Lumen's 2 m detail-trace bound [S22 p44]): mesh-exact contact detail is invisible
-	// past a couple of metres of any launch point, while the tier's cost is the dominant term of
-	// the whole GI frame. The cascade takes over beyond.
-	float near_field = min(near_field_distance, GI_MESH_SDF_TRACE_RANGE);
-	SdfRayHit near_hit = SdfMakeMiss();
-	if(near_field > 0.0)
-	{
-		near_hit = SdfTraceInstances(origin, direction, 0.0, min(near_field, t_max),
-		                             max_steps, surface_bias, relaxation, want_normal);
-		if(near_hit.hit)
-		{
-			return near_hit;
-		}
-	}
-	SdfRayHit far_hit = SdfTraceClipmap(origin, direction, near_field, t_max, max_steps,
-	                                    surface_bias, relaxation, want_normal, expand_start);
-	// Carry the near-field cost, exhaustion, and clearance forward, so the caller sees the
-	// whole ray's expense and its closest approach across BOTH tiers, not only the one that
-	// happened to answer.
-	far_hit.steps += near_hit.steps;
-	far_hit.exhausted = far_hit.exhausted || near_hit.exhausted;
-	far_hit.clearance = min(far_hit.clearance, near_hit.clearance);
-	return far_hit;
-}
-
-/**
- * The cascade march the way UE 5.8 Lumen traces its global distance field
- * (GlobalDistanceFieldUtils.ush, RayTraceGlobalDistanceField) - the gather's far tier.
- *
- * Against SdfTraceClipmap: the surface EXPAND ramps from zero at the ray start to half a voxel
- * after one voxel of travel and a sample is a hit when its reading is under it - there is NO
- * cone that widens the acceptance with distance (a cone reaching a full voxel within a few
- * metres would fatten every column and arch rim a gather ray passes); running out of steps is
- * a MISS, not a hit (a grazing ray that gives up over open ground completes from the world
- * probes instead of reading a voxel in mid air); and the hit is pulled back by the expand, with
- * hit_field carrying the distance from there to the surface estimate so a consumer that reads
- * a surface store can step onto it. No launch-band walk: the ramp starts at zero, so the launch
- * surface cannot be hit at the ray's own origin.
- *
- * The march costs about the same as SdfTraceClipmap. Empty space: Lumen reads a coarse mip per
- * clipmap; the saturation boost below is this field's equivalent, exactly as in SdfTraceClipmap.
- */
-SdfRayHit SdfTraceClipmapLumen(vec3 origin, vec3 direction, float t_min, float t_max, bool want_normal)
-{
-	SdfRayHit result = SdfMakeMiss();
-	if(!u_sdf_clipmap_enabled || t_min >= t_max)
-	{
-		return result;
-	}
-	float t = t_min;
-	LOOP
-	for(int step = 0; step < SDF_LUMEN_MAX_STEPS; ++step)
-	{
-		if(t > t_max)
-		{
-			return result;
-		}
-		vec3 p = origin + direction * t;
-		float voxel;
-		float d = SdfSampleClipmapEx(p, voxel);
-		++result.steps;
-		float expand = SDF_LUMEN_EXPAND_VOXELS * voxel *
-		               saturate(t / max(SDF_LUMEN_EXPAND_RAMP_VOXELS * voxel, 1e-4));
-		if(d < expand)
-		{
-			result.hit = true;
-			result.clearance = 0.0;
-			result.t = max(t + d - expand, 0.0);
-			result.hit_field = max(t + d - result.t, 0.0);
-			if(want_normal)
-			{
-				// Tetrahedral taps over one voxel OF THE ANSWERING LEVEL, as in SdfTraceClipmap.
-				float e = voxel;
-				vec3 k0 = vec3(1.0, -1.0, -1.0);
-				vec3 k1 = vec3(-1.0, -1.0, 1.0);
-				vec3 k2 = vec3(-1.0, 1.0, -1.0);
-				vec3 k3 = vec3(1.0, 1.0, 1.0);
-				vec3 n = k0 * SdfSampleClipmap(p + k0 * e) + k1 * SdfSampleClipmap(p + k1 * e) +
-				         k2 * SdfSampleClipmap(p + k2 * e) + k3 * SdfSampleClipmap(p + k3 * e);
-				float len = length(n);
-				result.normal = len > 1e-8 ? n / len : vec3(0.0, 1.0, 0.0);
-			}
-			else
-			{
-				result.normal = vec3_splat(0.0);
-			}
-			return result;
-		}
-		result.clearance = min(result.clearance, d);
-		float step_distance = d;
-		if(d >= (u_sdf_clipmap_encode_range - 0.5) * voxel)
-		{
-			for(int coarse_index = SDF_CLIPMAP_LEVEL_COUNT - 1; coarse_index >= 0; --coarse_index)
-			{
-				float coarse_distance = SdfSampleClipmapLevel(coarse_index, p);
-				if(coarse_distance < SDF_CLIPMAP_OUTSIDE)
-				{
-					step_distance = max(step_distance, coarse_distance);
-					break;
-				}
-			}
-		}
-		t += max(step_distance, SDF_LUMEN_MIN_STEP_VOXELS * voxel);
-	}
-	result.exhausted = true;
-	return result;
-}
-
-/**
- * The GATHER's tiered trace, starting at @p t_min along the ray: the per-instance fields over
- * [t_min, near_field), then the cascade through SdfTraceClipmapLumen from max(t_min, near_field).
- *
- * The caller vouches for [0, t_min): a screen-space march that stayed in front of the depth
- * buffer over that segment (the gather's screen tier; 0 when it has nothing to vouch for). A
- * ray resumed past its origin is not on its launch surface any more, so the near tier's
- * launch-band walk-out is off for it (SdfTestInstance). One instance-walk instantiation for
- * both cases - fxc inlines the whole walk per call site.
- */
-SdfRayHit SdfTraceRayGather(vec3 origin, vec3 direction, float t_min, float t_max,
-                            float near_field_distance, int max_steps, float surface_bias,
-                            float relaxation, bool want_normal)
-{
-	float near_field = min(near_field_distance, GI_MESH_SDF_TRACE_RANGE);
-	SdfRayHit near_hit = SdfMakeMiss();
-	if(near_field > t_min)
-	{
-		near_hit = SdfTraceInstancesEx(origin, direction, t_min, min(near_field, t_max), max_steps,
-		                               surface_bias, relaxation, want_normal, t_min > 0.0);
-		if(near_hit.hit)
-		{
-			return near_hit;
-		}
-	}
-	SdfRayHit far_hit = SdfTraceClipmapLumen(origin, direction, max(near_field, t_min), t_max, want_normal);
-	far_hit.steps += near_hit.steps;
-	far_hit.exhausted = far_hit.exhausted || near_hit.exhausted;
-	far_hit.clearance = min(far_hit.clearance, near_hit.clearance);
-	return far_hit;
-}
-
-SdfRayHit SdfTraceRay(vec3 origin, vec3 direction, float t_max, float near_field_distance,
-                      int max_steps, float surface_bias, float relaxation, bool want_normal)
-{
-	return SdfTraceRayEx(origin, direction, t_max, near_field_distance, max_steps, surface_bias,
-	                     relaxation, want_normal, 0.0);
 }
 
 #endif // __GI_SDF_COMMON_SH__

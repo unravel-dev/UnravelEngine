@@ -32,8 +32,8 @@ constexpr float sky_ambient_cubemap_parity = 2.0f;
 /// of direct sun on a normal surface (ratio 0.1-0.2); 0.2 is the bright end. With this the
 /// sun and the sky come from ONE knob, the directional light's intensity: the Perez
 /// exposition is solved per frame so the SH bake's horizontal irradiance lands exactly here
-/// (compute_irradiance_perez_params), and the sky dome, the world probes' sky texels and
-/// the reflection captures share that exposition. Without a directional light the fixed
+/// (compute_irradiance_perez_params), and the sky dome and the reflection captures share
+/// that exposition. Without a directional light the fixed
 /// conversion above applies unchanged. Measured 2026-09-12 (audit section 2): the fixed
 /// conversion gave a sun/sky ratio of 19 on the Sponza courtyard, 3-4x darker shade than
 /// daylight, and its value was unrelated to the sun's intensity by construction. The bake

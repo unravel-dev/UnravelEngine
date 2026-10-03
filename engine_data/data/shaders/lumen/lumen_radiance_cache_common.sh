@@ -15,7 +15,7 @@
  *  - counters: see LUMEN_RC_COUNTER_*;
  *  - trace list: two words per traced probe: cell + clipmap + force-downsample, probe index;
  *  - tile list: two words per 8x8 trace tile: tile + level, trace index.
- * Stored radiance is cached lighting (the light voxels' space, gi_pre_exposure.sh).
+ * Stored radiance is cached lighting (GI_CACHED_LIGHTING_PRE_EXPOSURE, gi_pre_exposure.sh).
  */
 
 #include "lumen/lumen_constants.sh"

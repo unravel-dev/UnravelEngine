@@ -22,18 +22,12 @@
 #include "passes/prefilter_pass.h"
 #include "passes/ssr_pass.h"
 #include "passes/gi_clipmap_compose_pass.h"
-#include "passes/gi_light_voxel_pass.h"
-#include "passes/gi_quiescence_gate_pass.h"
 #include "passes/temporal_probe_pass.h"
-#include "passes/gi_world_probe_pass.h"
-#include "passes/gi_reflection_pass.h"
-#include "passes/gi_resolve_pass.h"
 #include "passes/lumen_gather_pass.h"
 #include "passes/lumen_reflection_pass.h"
 #include "passes/lumen_surface_cache_pass.h"
 #include "passes/scene_history_pass.h"
 #include "passes/ssil_pass.h"
-#include "passes/sdf_debug_pass.h"
 #include "passes/bloom_pass.h"
 #include "passes/tonemapping_pass.h"
 #include "passes/taa_pass.h"
@@ -171,10 +165,7 @@ public:
         std::function<void(ssr_pass::run_params& params)> fill_ssr_params;
         std::function<void(ssil_pass::run_params& params)> fill_ssil_params;
         std::function<void(gtao_pass::run_params& params)> fill_gtao_params;
-        /// Surface cache GI. Both halves travel together because they are one feature: the cache
-        /// pass populates the world-space entries and the resolve pass gathers them, so settings
-        /// resolved from different sources would describe two different configurations.
-        /// Surface cache GI. Unset means off, exactly like the hooks above -- the feature runs only
+        /// Global illumination (Lumen). Unset means off, exactly like the hooks above -- the feature runs only
         /// where a gi_component asks for it.
         std::function<void(gi_settings&)> fill_gi_params;
     };
@@ -251,10 +242,8 @@ public:
 
     virtual void set_debug_pass(int pass) = 0;
 
-    /// Readback scale for the radiance-valued debug views: the light-voxel, world-probe,
-    /// emissive-attribute and direct views multiply their linear value by it before the LDR store,
-    /// so a capture reads linear radiance at any magnitude to 8-bit precision; the indirect-diffuse
-    /// view (UE's, tone mapped) takes it as an exposure factor ahead of the tone map.
+    /// Readback scale for the radiance-valued debug views: the indirect-diffuse view (UE's, tone
+    /// mapped) takes it as an exposure factor ahead of the tone map.
     /// An instrument for the editor's debug-view tooling (viewport_set_debug_view "scale");
     /// 1 = the views as shipped. The lit path never reads it.
     virtual void set_debug_view_scale(float scale)
@@ -267,18 +256,6 @@ public:
     {
         (void)rview;
         return {};
-    }
-
-    /// The GI waste census (gi_quiescence_gate_pass::stats_snapshot): a tool asks, the next
-    /// frame copies the statistics slice out, and the readback lands a few frames later.
-    /// Never call per frame - the readback is a CPU-GPU sync.
-    void request_gi_stats_snapshot()
-    {
-        gi_quiescence_gate_pass_.request_stats_snapshot();
-    }
-    auto get_gi_stats_snapshot() const -> const gi_quiescence_gate_pass::stats_snapshot&
-    {
-        return gi_quiescence_gate_pass_.get_stats_snapshot();
     }
 
     /// The temporal-stability instrument (temporal_probe_pass): a tool arms it for a number of
@@ -331,18 +308,12 @@ protected:
     hiz_pass hiz_pass_{}; ///< Hi-Z buffer generation pass
     ssil_pass ssil_pass_{};
     gtao_pass gtao_pass_{};
-    gi_clipmap_compose_pass gi_clipmap_compose_pass_{};
-    gi_quiescence_gate_pass gi_quiescence_gate_pass_{};
+    gi_clipmap_compose_pass gi_clipmap_compose_pass_{}; ///< The global distance field's GPU composition
     temporal_probe_pass temporal_probe_pass_{};
-    gi_light_voxel_pass gi_light_voxel_pass_{};
-    gi_world_probe_pass gi_world_probe_pass_{};
-    gi_resolve_pass gi_resolve_pass_{};
-    lumen_gather_pass lumen_gather_pass_{}; ///< gi_resolve_pass::settings::enable_lumen_gather
+    lumen_gather_pass lumen_gather_pass_{}; ///< Lumen's screen probe gather: the indirect diffuse
     lumen_surface_cache_pass lumen_surface_cache_pass_{}; ///< Lumen cards, atlases and captures
     lumen_reflection_pass lumen_reflection_pass_{}; ///< Lumen's reflections, with the Lumen gather
-    gi_reflection_pass gi_reflection_pass_{};
     scene_history_pass scene_history_pass_{}; ///< PREV_SCENE_HDR, view depth in alpha
-    sdf_debug_pass sdf_debug_pass_{}; ///< Diagnostic only; see sdf_debug_pass.h
 
     std::unique_ptr<gpu_program> particle_program_instanced_{};
     std::unique_ptr<gpu_program> particle_program_instanced_mask_{};

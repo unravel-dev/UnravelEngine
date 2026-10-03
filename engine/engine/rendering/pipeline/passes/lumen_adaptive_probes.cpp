@@ -8,6 +8,7 @@
 #include <engine/rendering/gi/lumen_constants.h>
 
 #include <graphics/graphics.h>
+#include <graphics/render_pass.h>
 #include <logging/logging.h>
 
 namespace unravel

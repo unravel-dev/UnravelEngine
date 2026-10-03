@@ -13,7 +13,7 @@ namespace unravel
 {
 
 /**
- * @brief GPU mirror of a @ref global_sdf_clipmap.
+ * @brief GPU mirror of a @ref global_sdf_clipmap: the distance volume and its Lumen coverage.
  *
  * The cascade lives in ONE 3D texture with the levels stacked along Z, rather than one texture
  * per level. bgfx has no 3D texture arrays, and the tracer is already using four of its
@@ -30,34 +30,9 @@ public:
     /// vec4 of level parameters uploaded per cascade: xyz = world origin, w = voxel size.
     static constexpr uint32_t level_param_count = global_sdf_clipmap::level_count;
 
-    /**
-     * @brief (Re)creates the GPU mirror for @p resolution.
-     *
-     * @param compose_on_gpu The EFFECTIVE composer for this mirror's lifetime. It decides the
-     * surface list/count buffer flags: the GPU composer writes them from compute, so they must
-     * be BGFX_BUFFER_COMPUTE_WRITE - which bgfx forbids updating from the CPU; the CPU composer
-     * uploads them with bgfx::update, which requires that flag absent. One set of flags cannot
-     * serve both, so a composer change re-creates the mirror (see surface_cache_view::update).
-     * @param distance_only Create the distance volume alone (global_sdf_clipmap::settings::
-     * distance_only): every attribute, light-voxel and world-probe resource stays null, and the
-     * surface list keeps only its per-level cursor header for the compose dispatch to reset.
-     */
-    auto init(uint32_t resolution, bool compose_on_gpu, bool distance_only = false) -> bool;
+    /// (Re)creates the GPU mirror for @p resolution voxels per level axis.
+    auto init(uint32_t resolution) -> bool;
     void shutdown();
-
-    /// The composer this mirror was created for. True = the compose pass writes the surface
-    /// list/count buffers on the GPU; false = upload() writes them from the CPU.
-    auto is_composed_on_gpu() const -> bool
-    {
-        return compose_on_gpu_;
-    }
-
-    /// True when the mirror holds the distance volume alone (no attributes, light voxels or world
-    /// probes; see init).
-    auto is_distance_only() const -> bool
-    {
-        return distance_only_;
-    }
 
     auto is_valid() const -> bool
     {
@@ -79,10 +54,10 @@ public:
     static constexpr uint32_t coverage_downsample = 2;
 
     /**
-     * @brief The Lumen coverage of a distance-only mirror (null otherwise): R8, one texel per coverage_downsample^3
-     *        voxels, levels stacked along Z like the distance; 0 where only two-sided meshes lie near the voxel, 1
-     *        elsewhere. The compose writes it with the distance (cs_gi_clipmap_compose.sc); the Lumen global SDF march
-     *        reads it (gi/sdf_clipmap.sh SdfSampleClipmapCoverage).
+     * @brief The Lumen coverage: R8, one texel per coverage_downsample^3 voxels, levels stacked along Z like the
+     *        distance; 0 where only two-sided meshes lie near the voxel, 1 elsewhere. The compose writes it with the
+     *        distance (cs_gi_clipmap_compose.sc); the Lumen global SDF march reads it (gi/sdf_clipmap.sh
+     *        SdfSampleClipmapCoverage).
      */
     auto get_coverage_texture() const -> const gfx::texture::ptr&
     {
@@ -103,275 +78,15 @@ public:
         return resolution_;
     }
 
-    /// Attribute voxels per axis (half the distance resolution; see
-    /// global_sdf_clipmap::attr_downsample).
-    auto get_attr_resolution() const -> uint32_t
-    {
-        return resolution_ / global_sdf_clipmap::attr_downsample;
-    }
-
-    /// rgb = winning albedo, a = 1 where surface. Levels stacked along Z, like the distance
-    /// volume, at attribute resolution.
-    auto get_attr_albedo_texture() const -> const gfx::texture::ptr&
-    {
-        return attr_albedo_texture_;
-    }
-
-    /// rgb = winning emissive in radiance units.
-    auto get_attr_emissive_texture() const -> const gfx::texture::ptr&
-    {
-        return attr_emissive_texture_;
-    }
-
-    /// The light volume: outgoing radiance per exposed face per surface voxel,
-    /// Z-stacked as (level * 6 + face) slabs of attribute resolution. Written by
-    /// cs_gi_light_voxels, zeroed per recomposed level by cs_gi_clipmap_attributes.
-    auto get_light_voxel_texture() const -> const gfx::texture::ptr&
-    {
-        return light_voxel_texture_;
-    }
-
-    /// The bounce's cage-visibility memo: R32U (32-bit so typed UAV loads are mandatory on
-    /// every backend), one texel per light-volume texel (same layout), holding mask +
-    /// generation + probe level in the low 16 bits (GiWorldProbeVisMemoPack in
-    /// gi_world_probes.sh). Read and restamped by cs_gi_light_voxels' bounce path alone.
-    auto get_bounce_vis_memo() const -> const gfx::texture::ptr&
-    {
-        return bounce_vis_memo_;
-    }
-
-    /// True until the compose pass zeroes the memo (generation 0 = "never stamped" relies on
-    /// it; allocation garbage could otherwise masquerade as a stamped mask). Kept separate
-    /// from the other one-time clears so a missing helper shader only costs the memo itself:
-    /// an unseeded memo hands the kernel generation 0, the safe-slow gated-march path.
-    auto needs_bounce_vis_memo_seed() const -> bool
-    {
-        return static_cast<bool>(bounce_vis_memo_) && !bounce_vis_memo_seeded_;
-    }
-
-    void mark_bounce_vis_memo_seeded()
-    {
-        bounce_vis_memo_seeded_ = true;
-    }
-
-    /**
-     * @brief The bounce visibility-memo generation for this frame, advancing it when any
-     *        memoised verdict may have changed.
-     *
-     * A stored verdict depends on the composed field (tracked by @p content_epoch, the
-     * clipmap's camera-independent content counter) and on the cage lattice positions the
-     * probe windows expose (tracked per level as the camera's window cell - a scroll re-fills
-     * probe slots, so the stored masks conservatively die with it). Camera motion WITHIN a
-     * cell can flip which cascade level answers a query without moving either tracker; the
-     * memo's per-texel LEVEL tag catches that, so it needs no invalidation here.
-     *
-     * Returns 0 - "memo unavailable, use the gated march" - until the memo is seeded. Live
-     * generations wrap 1..63 (the texel stores 6 bits, 0 reserved for "never stamped").
-     */
-    auto refresh_bounce_vis_generation(uint64_t content_epoch,
-                                       const math::vec3& camera_position,
-                                       float base_spacing) -> uint32_t;
-
-    /// World-probe window cells per axis of each level. MUST equal GI_WORLD_PROBE_AXIS_L0..L3
-    /// in gi_world_probes.sh (the shaders hardcode them for the index and dispatch decode; the
-    /// gi oracle suite checks the mirror). Level 0 is the SPARSE level's index window - wide on
-    /// purpose, since the gather completes its rays and the relight reads its bounce from the
-    /// finest probe cage covering the point, and only the 2 m lattice resolves an opening's sky
-    /// visibility; its probes live in a pool of @ref world_probe_pool_l0 slots handed out on
-    /// request. Independent of the cascade resolution.
-    static constexpr std::array<uint32_t, global_sdf_clipmap::level_count> world_probe_axis{49u, 13u, 13u, 9u};
-    static_assert(global_sdf_clipmap::level_count == 4u, "world_probe_axis lists one axis per level");
-    /// Level 0's probe pool (GI_WORLD_PROBE_POOL_L0): the slots the sparse index allocates.
-    static constexpr uint32_t world_probe_pool_l0 = 16384u;
-    static_assert(world_probe_pool_l0 % 4u == 0u, "the trace packs four probes per group");
-    /// Tiles per atlas row, every level's tiles in one linear run (GI_WORLD_PROBE_ATLAS_TILES_X).
-    static constexpr uint32_t world_probe_atlas_tiles_x = 128u;
-
-    /// Probe SLOTS of one level: the pool for level 0, the window's cells for the dense levels.
-    static constexpr auto get_world_probe_level_count(uint32_t level) -> uint32_t
-    {
-        if(level == 0u)
-        {
-            return world_probe_pool_l0;
-        }
-        return world_probe_axis[level] * world_probe_axis[level] * world_probe_axis[level];
-    }
-
-    /// Cells of the level-0 index window (one index entry each).
-    static constexpr auto get_world_probe_index_cell_count() -> uint32_t
-    {
-        return world_probe_axis[0] * world_probe_axis[0] * world_probe_axis[0];
-    }
-
-    /// Entries of the sparse index buffer: four lanes per index cell (slot, request, stamp,
-    /// relocation offset), the clock, the free count and the free stack
-    /// (GI_WORLD_PROBE_INDEX_SIZE).
-    static constexpr auto get_world_probe_index_count() -> uint32_t
-    {
-        return 4u * get_world_probe_index_cell_count() + 2u + world_probe_pool_l0;
-    }
-
-    /// Probes of the whole cascade set (the cell-id / count buffers, the convolve's thread
-    /// count and the base of the trace's group count).
-    static constexpr auto get_world_probe_count() -> uint32_t
-    {
-        uint32_t count = 0;
-        for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
-        {
-            count += get_world_probe_level_count(level);
-        }
-        return count;
-    }
-
-    auto has_world_probes() const -> bool
-    {
-        return static_cast<bool>(world_probe_radiance_);
-    }
-
-    /// 16x16 octahedral radiance tiles (rgb radiance, a hitT; a < 0 = sky), one row-major run
-    /// of tiles over the linear slot index, @ref world_probe_atlas_tiles_x per row - see
-    /// gi_world_probes.sh.
-    auto get_world_probe_radiance() const -> const gfx::texture::ptr&
-    {
-        return world_probe_radiance_;
-    }
-
-    /// 8x8 (+1 gutter) octahedral irradiance tiles: rgb = E/pi, a = sky fraction.
-    auto get_world_probe_irradiance() const -> const gfx::texture::ptr&
-    {
-        return world_probe_irradiance_;
-    }
-
-    /// 8x8 (+1 gutter) depth moments (mean, mean^2) for the Chebyshev visibility test.
-    auto get_world_probe_depth() const -> const gfx::texture::ptr&
-    {
-        return world_probe_depth_;
-    }
-
-    /// One packed world-cell id per probe slot (scroll detection).
-    auto get_world_probe_cells() const -> bgfx::DynamicIndexBufferHandle
-    {
-        return world_probe_cells_;
-    }
-
-    /// Entries in @ref get_world_probe_cells (0 when world probes are disabled).
-    auto get_world_probe_cell_count() const -> uint32_t
-    {
-        return world_probe_cell_count_;
-    }
-
-    /// One uint per probe slot: complete windows accumulated by the trace's running mean
-    /// (GI_WORLD_PROBE_EMA_WINDOWS); zero-seeded by the compose pass's buffer seed. A sparse
-    /// level-0 slot the allocation pass just claimed holds the FRESH sentinel instead.
-    auto get_world_probe_counts() const -> bgfx::DynamicIndexBufferHandle
-    {
-        return world_probe_counts_;
-    }
-
-    /// The sparse level-0 index (gi_world_probes.sh GI_WORLD_PROBE_INDEX_*): bound at stage 13
-    /// by every cage reader, read-write by the ones that request probes and by the allocation
-    /// pass.
-    auto get_world_probe_index() const -> bgfx::DynamicIndexBufferHandle
-    {
-        return world_probe_index_;
-    }
-
-    /// Entries of the trace scheduler's state buffer (GI_WORLD_PROBE_SELECT_SIZE in
-    /// gi_world_probes.sh): the priority histogram, the threshold, the quota, the listed count.
-    static constexpr uint32_t world_probe_select_size = 20u;
-
-    /// The trace scheduler's state (cs_gi_world_probe_select.sc).
-    auto get_world_probe_select() const -> bgfx::DynamicIndexBufferHandle
-    {
-        return world_probe_select_;
-    }
-
-    /// The scheduler's per-frame probe list: one slot index per entry, capacity every slot.
-    auto get_world_probe_list() const -> bgfx::DynamicIndexBufferHandle
-    {
-        return world_probe_list_;
-    }
-
-    /// True until the allocation pass's init phase has written the index's sentinels and the
-    /// free stack (a compute-writable buffer the CPU may not fill; see needs_buffer_seed).
-    auto needs_world_probe_index_seed() const -> bool
-    {
-        return needs_world_probe_index_seed_;
-    }
-
-    void mark_world_probe_index_seeded()
-    {
-        needs_world_probe_index_seed_ = false;
-    }
-
-    /**
-     * @brief True until the compose pass seeds the freshly created cell/cursor buffers.
-     *
-     * bgfx forbids CPU updates on compute-writable buffers (and compiles the check out in
-     * release, so relying on it silently diverges per config). The sentinels the claim logic
-     * needs - and the zeroed cursors an uncomposed level must present - are therefore GPU fill
-     * dispatches, run once by the compose pass, which calls @ref mark_seed_done.
-     */
-    auto needs_buffer_seed() const -> bool
-    {
-        return needs_buffer_seed_;
-    }
-
-    void mark_seed_done()
-    {
-        needs_buffer_seed_ = false;
-    }
-
-    /**
-     * @brief Whether the light volume and probe atlases still hold allocation garbage.
-     *
-     * A SEPARATE flag from the buffer seed, deliberately: the clears run through their own
-     * compute programs, and a machine where those fail to compile must still get its cell
-     * sentinels seeded - one late helper must not hold the other's one-time work hostage.
-     */
-    auto needs_texture_clear() const -> bool
-    {
-        return needs_texture_clear_;
-    }
-
-    void mark_texture_clear_done()
-    {
-        needs_texture_clear_ = false;
-    }
-
-    /// One packed world-cell id per ATTRIBUTE slot per level: the light-radiance survival
-    /// detector (a slot whose cell changed resets its light texels; see
-    /// cs_gi_clipmap_attributes.sc).
-    auto get_attr_cells() const -> bgfx::DynamicIndexBufferHandle
-    {
-        return attr_cells_;
-    }
-
-    /// xy = 1 / irradiance-depth atlas size (they share a layout), zw = atlas size.
-    auto get_world_probe_atlas_params() const -> const float*
-    {
-        return world_probe_atlas_params_.data();
-    }
-
-    /// Surface-voxel list WITH ITS COUNTS: a level_count-entry header of append cursors
-    /// (index = level), then one attr_resolution^3 segment of packed entries per level
-    /// (global_sdf_clipmap::pack_surface_voxel layout). One buffer on purpose - a separate
-    /// count buffer would cost cs_gi_light_voxels a bgfx stage it does not have.
-    auto get_surface_list_buffer() const -> bgfx::DynamicIndexBufferHandle
-    {
-        return surface_list_;
-    }
-
     /**
      * @brief The vec4 every clipmap consumer binds as `u_sdf_clipmap_params`.
      *
      * x = resolution, y = blend band width in voxels, z = encode range, w = non-zero when the
      * cascade is resident and worth consulting.
      *
-     * Built here rather than at each call site because three passes sample the same cascade and
-     * must derive the same function from it. A pass that used a different blend width would
-     * resolve surfaces a fraction of a voxel away from the pass it shares the radiance cache
-     * with, which does not fail loudly -- it just means the two never find each other's entries.
+     * Built here rather than at each call site because every pass that samples the cascade must
+     * derive the same function from it: a pass with a different blend width would resolve surfaces
+     * a fraction of a voxel away from the others.
      *
      * The texture depth is deliberately absent: it is `resolution * level_count`, and the shader
      * already hardcodes that layout in its texel addressing, so uploading it separately would be
@@ -383,37 +98,8 @@ public:
     }
 
 private:
-    /// The rest of init for a distance-only mirror: the surface list's cursor header alone.
-    auto init_distance_only(uint32_t depth) -> bool;
-
     gfx::texture::ptr texture_;
     gfx::texture::ptr coverage_texture_;
-    gfx::texture::ptr attr_albedo_texture_;
-    gfx::texture::ptr attr_emissive_texture_;
-    gfx::texture::ptr light_voxel_texture_;
-    gfx::texture::ptr bounce_vis_memo_;
-    gfx::texture::ptr world_probe_radiance_;
-    gfx::texture::ptr world_probe_irradiance_;
-    gfx::texture::ptr world_probe_depth_;
-    /// Bounce visibility-memo invalidation state (see refresh_bounce_vis_generation).
-    bool bounce_vis_memo_seeded_ = false;
-    uint32_t bounce_vis_generation_ = 0;
-    uint64_t bounce_vis_content_epoch_ = 0;
-    std::array<std::array<int32_t, 3>, global_sdf_clipmap::level_count> bounce_vis_window_cells_{};
-    bgfx::DynamicIndexBufferHandle surface_list_{bgfx::kInvalidHandle};
-    bgfx::DynamicIndexBufferHandle attr_cells_{bgfx::kInvalidHandle};
-    bgfx::DynamicIndexBufferHandle world_probe_cells_{bgfx::kInvalidHandle};
-    bgfx::DynamicIndexBufferHandle world_probe_counts_{bgfx::kInvalidHandle};
-    bgfx::DynamicIndexBufferHandle world_probe_index_{bgfx::kInvalidHandle};
-    bgfx::DynamicIndexBufferHandle world_probe_select_{bgfx::kInvalidHandle};
-    bgfx::DynamicIndexBufferHandle world_probe_list_{bgfx::kInvalidHandle};
-    uint32_t world_probe_cell_count_ = 0;
-    bool needs_world_probe_index_seed_ = false;
-    bool needs_buffer_seed_ = false;
-    bool needs_texture_clear_ = false;
-    bool compose_on_gpu_ = true;
-    bool distance_only_ = false;
-    std::array<float, 4> world_probe_atlas_params_{};
     uint32_t resolution_ = 0;
     std::array<float, size_t(level_param_count) * 4> level_params_{};
     std::array<float, 4> sampling_params_{};

@@ -27,15 +27,6 @@ IMAGE3D_WO(s_clipmap_out, r8, 5);
 /// are all two-sided, 1 elsewhere.
 IMAGE3D_WO(s_clipmap_coverage_out, r8, 6);
 
-/// The surface-voxel list (cursor header + entries; see cs_gi_clipmap_attributes.sc). This
-/// pass only RESETS its level's append cursor - folded in here, rather than in a separate
-/// one-thread dispatch, because the attribute pass that appends SAMPLES the distance volume
-/// this pass writes as an image: that read-after-write is a genuine resource transition on
-/// every backend, and it is what orders the reset ahead of the appends. A standalone reset
-/// dispatch would rely on submission order alone, which D3D12 does not turn into a barrier for
-/// same-state UAV->UAV access - the appends could begin before the reset lands.
-BUFFER_RW(b_surface_list, uint, 9);
-
 /// x = level index, y = voxels per axis, z = this level's voxel size, w = reach in world units
 /// (encode_range * voxel_size), the distance beyond a voxel at which an instance cannot change
 /// the byte written here.
@@ -50,11 +41,10 @@ uniform vec4 u_clipmap_compose_params;
 uniform vec4 u_clipmap_compose_origin;
 #define u_compose_lumen (u_clipmap_compose_origin.w > 0.5)
 
-/// The voxel box this dispatch composes: xyz = its minimum corner in level voxels, w > 0.5
-/// when this is the level's first dispatch of the frame and resets the surface-list cursor.
-/// A full recompose is one box over the whole level; a SCROLL-ONLY recompose (the origin
-/// moved with the instance content unchanged - global_sdf_clipmap::level::scroll_only) blits
-/// the overlap of the old and new windows into place and dispatches only the exposed slabs.
+/// The voxel box this dispatch composes: xyz = its minimum corner in level voxels. A full
+/// recompose is one box over the whole level; a SCROLL-ONLY recompose (the origin moved with
+/// the instance content unchanged - global_sdf_clipmap::level::scroll_only) blits the overlap
+/// of the old and new windows into place and dispatches only the exposed slabs.
 uniform vec4 u_clipmap_compose_range;
 /// xyz = the box's size in voxels.
 uniform vec4 u_clipmap_compose_range_size;
@@ -63,12 +53,6 @@ NUM_THREADS(4, 4, 4)
 void main()
 {
 	ivec3 local = ivec3(gl_GlobalInvocationID.xyz);
-	if(all(equal(local, ivec3(0, 0, 0))) && u_clipmap_compose_range.w > 0.5)
-	{
-		// This level's surface-list append cursor, reset for the attribute pass that follows
-		// (see the buffer's note above for why the reset lives here).
-		b_surface_list[uint(u_compose_level)] = 0u;
-	}
 	if(any(greaterThanEqual(local, ivec3(u_clipmap_compose_range_size.xyz))))
 	{
 		return;

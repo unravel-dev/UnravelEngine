@@ -9,6 +9,7 @@
 #include <engine/rendering/gi/lumen_constants.h>
 
 #include <graphics/graphics.h>
+#include <graphics/render_pass.h>
 #include <logging/logging.h>
 
 namespace unravel
@@ -33,6 +34,7 @@ void lumen_reflection_pass::uniforms::cache_uniforms()
     cache_uniform(nullptr, u_lumen_frame, "u_lumen_frame", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_view, "u_lumen_view", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_reflection, "u_lumen_reflection", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, u_lumen_settings, "u_lumen_settings", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_prev_view_proj, "u_lumen_prev_view_proj", bgfx::UniformType::Mat4);
     cache_uniform(nullptr, u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
     cache_uniform(nullptr,
@@ -96,9 +98,9 @@ auto lumen_reflection_pass::has_programs() const -> bool
            valid(spatial_program_);
 }
 
-auto lumen_reflection_pass::get_max_roughness_to_trace(uint32_t experiments) -> float
+auto lumen_reflection_pass::get_max_roughness_to_trace(const gi_settings::reflection_settings& settings) -> float
 {
-    return (experiments & experiment_trace_all_roughness) != 0u ? 1.0f : LUMEN_MAX_ROUGHNESS_TO_TRACE;
+    return lumen_pass::get_max_roughness_to_trace(settings);
 }
 
 auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview, const usize32_t& size) -> frame_targets
@@ -142,17 +144,17 @@ void lumen_reflection_pass::set_frame_uniforms(const run_params& params, const f
     gfx::set_uniform(uniforms_.u_lumen_view, view);
     const bool has_hiz = gather.hiz && gather.hiz->is_valid();
     const bool has_prev_color = gather.prev_color && gather.prev_color->is_valid();
-    // Lumen traces the screen first (r.Lumen.Reflections.ScreenTraces 1) whenever last frame is available.
+    // The screen trace needs last frame's colour and depth beside this frame's Hi-Z.
     const bool screen_traces =
-        has_hiz && has_prev_color && gather.prev_depth && (experiments_ & experiment_no_screen_traces) == 0u;
-    const uint32_t reflection_flags = (screen_traces ? 1u : 0u) |
-                                      ((experiments_ & experiment_show_trace_types) != 0u ? 2u : 0u) |
-                                      ((experiments_ & experiment_reflection_hash_noise) != 0u ? 4u : 0u);
+        has_hiz && has_prev_color && gather.prev_depth && gather.settings.reflections.screen_traces;
+    const uint32_t reflection_flags =
+        (screen_traces ? 1u : 0u) | ((experiments_ & experiment_show_trace_types) != 0u ? 2u : 0u);
     const float reflection[4] = {has_hiz ? float(gather.hiz->info.numMips) : 1.0f,
                                  float(reflection_flags),
-                                 get_max_roughness_to_trace(experiments_),
+                                 get_max_roughness_to_trace(gather.settings.reflections),
                                  targets.has_history && gather.prev_depth ? 1.0f : 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_reflection, reflection);
+    gfx::set_uniform(uniforms_.u_lumen_settings, lumen_pass::make_settings_uniform(gather.settings).data());
     gfx::set_uniform(uniforms_.u_lumen_prev_view_proj, gather.cam->get_prev_view_projection_unjittered().get_matrix());
     gfx::set_uniform(uniforms_.u_pre_exposure, gather.pre_exposure.to_uniform().data());
 }

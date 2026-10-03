@@ -1,7 +1,7 @@
 #pragma once
 
 #include <engine/rendering/gpu_program.h>
-#include <engine/rendering/pipeline/passes/gi_resolve_pass.h>
+#include <engine/rendering/pipeline/passes/lumen_run_params.h>
 
 #include <graphics/render_view.h>
 #include <graphics/texture.h>
@@ -16,9 +16,9 @@ namespace unravel
  *        composited into the reflection buffers.
  *
  * Runs after the Lumen gather, whose rough specular fills the untraced layer: the pass owns both reflection
- * buffers, in place of SSR, the GI reflection tier and the reflection probes (UE composites no other specular
- * under Lumen's). The constants and their UE sources are in engine/rendering/gi/lumen_constants.h; the plan and
- * the measurements in tasks/lumen_transform.
+ * buffers, in place of SSR and the reflection probes (UE composites no other specular under Lumen's). The
+ * constants and their UE sources are in engine/rendering/gi/lumen_constants.h; the plan and the measurements in
+ * tasks/lumen_transform.
  */
 class lumen_reflection_pass
 {
@@ -26,8 +26,9 @@ public:
     struct run_params
     {
         /// The gather's inputs this frame: the G-buffer, last frame's depth and scene colour, the Hi-Z, the
-        /// environment SH, the camera, the pre-exposure, the global SDF clipmap and the surface cache.
-        const gi_resolve_pass::run_params* gather{};
+        /// environment SH, the camera, the pre-exposure, the global SDF clipmap, the surface cache and the
+        /// settings (gi_settings::reflections).
+        const lumen_run_params* gather{};
         /// The gather's rough specular (full resolution; rgb pre-exposed, a = 0 where it holds no estimate).
         gfx::texture::ptr rough_specular;
         /// The traced and untraced reflection layers the indirect pass reads (RBUFFER and PBUFFER), RGBA16F and
@@ -41,25 +42,17 @@ public:
     /// changes one stage for an in-session A/B. Zero in production.
     enum experiment : uint32_t
     {
-        ///< The previous reflections (the GI reflection tier, SSR and the probes) instead of this pass.
-        experiment_previous_reflections = 1u << 16u,
-        ///< Rays skip the screen trace and start in the distance field.
-        experiment_no_screen_traces = 1u << 17u,
-        ///< Every roughness traces (UE r.Lumen.Reflections.MaxRoughnessToTrace 1).
-        experiment_trace_all_roughness = 1u << 18u,
         ///< The traces paint their type instead of radiance (UE DEBUG_VISUALIZE_TRACE_TYPES): screen hits red,
         ///< distance-field hits green (yellow when lit by last frame's scene colour), misses blue.
-        experiment_show_trace_types = 1u << 28u,
-        ///< The rays rotate their noise over frames by a per-frame hash (BlueNoise2D) instead of the R2 sequence.
-        experiment_reflection_hash_noise = 1u << 30u,
+        experiment_show_trace_types = 1u << 16u,
     };
 
     auto init(rtti::context& ctx) -> bool;
     auto has_programs() const -> bool;
 
-    /// The roughness below which pixels trace reflection rays under @p experiments (UE
-    /// r.Lumen.Reflections.MaxRoughnessToTrace); the traced weight fades to zero over LUMEN_ROUGHNESS_FADE_LENGTH below it.
-    static auto get_max_roughness_to_trace(uint32_t experiments) -> float;
+    /// The roughness below which pixels trace reflection rays under @p settings (UE LumenMaxRoughnessToTraceReflections,
+    /// in [0, 1]); the traced weight fades to zero over LUMEN_ROUGHNESS_FADE_LENGTH below it.
+    static auto get_max_roughness_to_trace(const gi_settings::reflection_settings& settings) -> float;
 
     /**
      * @brief Traces, denoises and composites this frame's reflections into params.traced_output and
@@ -75,6 +68,7 @@ private:
         gfx::program::uniform_ptr u_lumen_frame;
         gfx::program::uniform_ptr u_lumen_view;
         gfx::program::uniform_ptr u_lumen_reflection;
+        gfx::program::uniform_ptr u_lumen_settings;
         gfx::program::uniform_ptr u_lumen_prev_view_proj;
         gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_sdf_clipmap_levels;

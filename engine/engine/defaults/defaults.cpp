@@ -1182,13 +1182,11 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
                 comp->enabled = true;
             if(auto* comp = volume.try_get<bloom_component>())
                 comp->enabled = true;
-            // World GI owns indirect diffuse and the world-reflection tier under SSR; SSIL
-            // stays off with it (see the medium preset note).
+            // Lumen GI owns the indirect diffuse, the reflections and the short-range AO; SSIL
+            // stays off with it (see the medium preset note). SSR serves views where Lumen's
+            // reflections are off.
             if(auto* comp = volume.try_get<gi_component>())
-            {
                 comp->enabled = true;
-                comp->settings.resolve.resolution = trace_resolution::half;
-            }
             if(auto* comp = volume.try_get<ssr_component>())
                 comp->settings.fidelityfx.resolution = trace_resolution::half;
             if(auto* comp = volume.try_get<taa_component>())
@@ -1200,14 +1198,9 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
                 comp->enabled = true;
             if(auto* comp = volume.try_get<bloom_component>())
                 comp->enabled = true;
-            // As `high`, with the screen-space budget uncapped: SSR at full resolution over
-            // the same half-res GI (the gather is filtered irradiance - full-res tracing buys
-            // sharpness it cannot show; SSR is the pass that presents a pixel-exact image).
+            // As `high`, with SSR at full resolution where Lumen's reflections are off.
             if(auto* comp = volume.try_get<gi_component>())
-            {
                 comp->enabled = true;
-                comp->settings.resolve.resolution = trace_resolution::half;
-            }
             if(auto* comp = volume.try_get<ssr_component>())
                 comp->settings.fidelityfx.resolution = trace_resolution::full;
             if(auto* comp = volume.try_get<taa_component>())

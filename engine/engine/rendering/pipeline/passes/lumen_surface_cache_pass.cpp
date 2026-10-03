@@ -11,6 +11,7 @@
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
 
+#include <graphics/render_pass.h>
 #include <logging/logging.h>
 
 #include <algorithm>
@@ -290,7 +291,8 @@ auto lumen_surface_cache_pass::get_object_grid_params() const -> math::vec4
 
 void lumen_surface_cache_pass::update(const surface_cache_system& gi_scene,
                                       const math::vec3& view_origin,
-                                      const math::frustum& view_frustum)
+                                      const math::frustum& view_frustum,
+                                      const gi_settings::scene_settings& view_settings)
 {
     APP_SCOPE_PERF("GI/Lumen/Surface Cache Update");
     const auto& lumen_sources = gi_scene.get_lumen_sources();
@@ -310,6 +312,7 @@ void lumen_surface_cache_pass::update(const surface_cache_system& gi_scene,
                             instances[src.instance_index].is_emissive_light_source});
     }
     scene_.set_hold_resident_resolutions((experiment_flags_ & experiment_hold_card_resolution) != 0u);
+    scene_.set_view_settings(view_settings);
     scene_.update(sources_, uint32_t(gi_scene.get_instances().size()), view_origin);
     scene_.schedule_lighting(view_origin, view_frustum);
     upload_scene_table();
@@ -516,7 +519,7 @@ void lumen_surface_cache_pass::bind_sdf_instances(const surface_cache_system& gi
     const math::vec4 sdf_params(float(atlas.get_atlas_brick_dim()),
                                 float(atlas.get_atlas_voxel_dim()),
                                 float(gi_scene.get_instances().size()),
-                                float(gi_scene.get_emitters().size()));
+                                0.0f);
     gfx::set_uniform(uniforms_.u_sdf_params, sdf_params);
 }
 
@@ -524,7 +527,7 @@ void lumen_surface_cache_pass::update_object_grid(const surface_cache_system& gi
                                                   const surface_cache_view& view_cache)
 {
     const auto& clipmap = view_cache.get_clipmap();
-    const uint32_t resolution = view_cache.get_clipmap_gpu().get_attr_resolution();
+    const uint32_t resolution = view_cache.get_clipmap_gpu().get_resolution() / object_grid_downsample;
     if(resolution != object_grid_resolution_ || !object_grid_)
     {
         object_grid_resolution_ = resolution;

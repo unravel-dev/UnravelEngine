@@ -1,7 +1,7 @@
 #pragma once
 
 #include <engine/rendering/gpu_program.h>
-#include <engine/rendering/pipeline/passes/gi_resolve_pass.h>
+#include <engine/rendering/pipeline/passes/lumen_run_params.h>
 #include <engine/rendering/pipeline/passes/lumen_adaptive_probes.h>
 #include <engine/rendering/pipeline/passes/lumen_radiance_cache.h>
 #include <engine/rendering/pipeline/passes/lumen_short_range_ao_pass.h>
@@ -18,22 +18,22 @@ namespace unravel
  * @brief The Lumen screen probe gather (UE 5.8 Lumen, software ray tracing, Global Tracing, Epic
  *        scalability): stateless uniform screen probes, plus adaptive probes where they cannot interpolate,
  *        traced every frame, composited with an absolute per-ray clamp, filtered in probe space, projected to
- *        SH3, integrated per pixel and accumulated by a per-pixel 10-frame temporal.
+ *        SH3, integrated per pixel and accumulated by a per-pixel temporal (10 frames at the default update speed).
  *
- * Selected by gi_resolve_pass::settings::enable_lumen_gather and fed gi_resolve_pass's run parameters.
- * Publishes the same contract: rgb = E / pi in the view's pre-exposed space, alpha = served. Rays hand the
- * far field to the radiance cache (lumen_radiance_cache) past a near field the probes trace themselves.
- * Reuses the world structures as they are (the global SDF clipmap, the light voxels). The constants and their UE
- * sources are in engine/rendering/gi/lumen_constants.h; the plan and the measurements in
- * tasks/lumen_transform.
+ * The view's indirect diffuse: rgb = E / pi in the view's pre-exposed space, alpha = served. Rays hand the far field
+ * to the radiance cache (lumen_radiance_cache) past a near field the probes trace themselves, and global distance
+ * field hits read the surface cache (lumen_surface_cache_pass). The constants and their UE sources are in
+ * engine/rendering/gi/lumen_constants.h; the plan and the measurements in tasks/lumen_transform.
  */
 class lumen_gather_pass
 {
 public:
-    /// The render view's screen AO the gather publishes for the lighting composite (lumen_short_range_ao_pass) and
-    /// the render frame it was produced on: a texture from an older frame is stale.
+    /// The render view's screen AO the gather publishes for the lighting composite (lumen_short_range_ao_pass), the
+    /// render frame it was produced on (a texture from an older frame is stale) and the intensity the composite
+    /// applies it with (gi_settings::ambient_occlusion_settings::intensity).
     static constexpr const char* screen_ao_texture = "LUMEN_SCREEN_AO";
     static constexpr const char* screen_ao_frame = "LUMEN_SCREEN_AO_FRAME";
+    static constexpr const char* screen_ao_intensity = "LUMEN_SCREEN_AO_INTENSITY";
 
     auto init(rtti::context& ctx) -> bool;
 
@@ -41,10 +41,11 @@ public:
      * @brief Gathers indirect diffuse for every visible surface, and the short-range AO below the probe lattice.
      * @return The resolve texture (full resolution), or null when the pass could not run this frame.
      */
-    auto run(gfx::render_view& rview, const gi_resolve_pass::run_params& params) -> gfx::texture::ptr;
+    auto run(gfx::render_view& rview, const lumen_run_params& params) -> gfx::texture::ptr;
 
-    /// Whether Lumen views composite the short-range AO under @p experiments (else the screen-space AO).
-    static auto uses_short_range_ao(uint32_t experiments) -> bool;
+    /// Whether the gather runs the short-range AO under @p settings: enabled with a positive intensity (UE
+    /// UseShortRangeAmbientOcclusion).
+    static auto uses_short_range_ao(const gi_settings::ambient_occlusion_settings& settings) -> bool;
     auto has_short_range_ao() const -> bool;
 
 private:
@@ -78,6 +79,7 @@ private:
         gfx::program::uniform_ptr s_lumen_rc_final;
         gfx::program::uniform_ptr s_lumen_rc_depth;
         gfx::program::uniform_ptr u_lumen_options;
+        gfx::program::uniform_ptr u_lumen_settings;
         gfx::program::uniform_ptr u_lumen_ray_gen;
         gfx::program::uniform_ptr u_lumen_prev_probe;
         gfx::program::uniform_ptr u_lumen_prev_inv_view_proj;
@@ -143,7 +145,7 @@ private:
     auto acquire_probe_targets(gfx::render_view& rview, const frame_layout& layout) const -> probe_targets;
     /// The filter atlas the last of LUMEN_FILTER_PASSES writes.
     static auto final_filter_index() -> size_t;
-    auto acquire_history(gfx::render_view& rview, const gi_resolve_pass::run_params& params, const usize32_t& size)
+    auto acquire_history(gfx::render_view& rview, const lumen_run_params& params, const usize32_t& size)
         -> history_targets;
 
     /// Experiment toggles (surface_cache_system::get_experiment_flags, set by the editor's
@@ -156,7 +158,6 @@ private:
         ///< Rays reaching the distance-field stage paint (start / near field, hit, 0) instead of radiance.
         experiment_show_sdf_start = 1u << 7u,
         experiment_no_radiance_cache = 1u << 2u,
-        experiment_no_screen_traces = 1u << 3u,
         experiment_no_full_res_jitter = 1u << 4u,
         experiment_reject_near_screen_hits = 1u << 5u,
         experiment_voxel_screen_hits = 1u << 6u,
@@ -168,8 +169,6 @@ private:
         ///< Keep one tracing stage's radiance: low = screen, high = distance field, both = radiance cache.
         experiment_keep_stage_low = 1u << 14u,
         experiment_keep_stage_high = 1u << 15u,
-        ///< Lumen views keep the screen-space AO (GTAO or ASSAO) instead of the short-range AO.
-        experiment_screen_space_ao = 1u << 21u,
         ///< The resolve paints the pixels the uniform probes cannot interpolate (cs_lumen_integrate.sc).
         experiment_show_interpolation_fallback = 1u << 22u,
         ///< The short-range AO's noise rotates by a per-frame hash instead of the R2 sequence over frames.
@@ -182,18 +181,18 @@ private:
 
     /// Sets the per-frame layout uniforms every gather program reads (lumen_common.sh).
     void set_layout_uniforms(const frame_layout& layout);
-    void run_place(const gi_resolve_pass::run_params& params, const frame_layout& layout, const probe_targets& targets);
+    void run_place(const lumen_run_params& params, const frame_layout& layout, const probe_targets& targets);
     /// The adaptive probes below the uniform ones and this frame's per-probe dispatch arguments.
-    void run_adaptive_probes(const gi_resolve_pass::run_params& params,
+    void run_adaptive_probes(const lumen_run_params& params,
                              const frame_layout& layout,
                              const probe_targets& targets);
     /// Structured importance sampling: each probe's 64 ray slots (cs_lumen_probe_generate_rays.sc).
-    void run_generate_rays(const gi_resolve_pass::run_params& params,
+    void run_generate_rays(const lumen_run_params& params,
                            const frame_layout& layout,
                            const probe_targets& targets,
                            const history_targets& history,
                            bool radiance_cache_ready);
-    void run_trace(const gi_resolve_pass::run_params& params,
+    void run_trace(const lumen_run_params& params,
                    const frame_layout& layout,
                    const probe_targets& targets,
                    bool radiance_cache_ready);
@@ -201,14 +200,14 @@ private:
     /// Binds the radiance cache for the hand-off read at stages 7-9, or neutral textures without it.
     void bind_radiance_cache(bool radiance_cache_ready) const;
     /// Binds the surface cache for global-SDF hits at stages 13-15 (hits shade black without it).
-    void bind_surface_cache(const gi_resolve_pass::run_params& params) const;
+    void bind_surface_cache(const lumen_run_params& params) const;
     /// The spatial filter passes; returns the atlas the last pass wrote.
-    auto run_filter(const gi_resolve_pass::run_params& params, const frame_layout& layout, const probe_targets& targets)
+    auto run_filter(const lumen_run_params& params, const frame_layout& layout, const probe_targets& targets)
         -> gfx::texture::ptr;
     void run_sh(const frame_layout& layout, const probe_targets& targets, const gfx::texture::ptr& filtered);
     /// The final filtered radiance with its octahedral border, for the rough specular's bilinear lookups.
     void run_border(const frame_layout& layout, const probe_targets& targets, const gfx::texture::ptr& filtered);
-    void run_integrate(const gi_resolve_pass::run_params& params,
+    void run_integrate(const lumen_run_params& params,
                        const frame_layout& layout,
                        const probe_targets& targets,
                        const history_targets& history,
@@ -216,7 +215,7 @@ private:
                        const gfx::texture::ptr& rough_specular);
     /// The short-range AO over this frame's history taps, published as screen_ao_texture.
     void run_short_range_ao(gfx::render_view& rview,
-                            const gi_resolve_pass::run_params& params,
+                            const lumen_run_params& params,
                             const frame_layout& layout,
                             const history_targets& history);
 
@@ -235,6 +234,8 @@ private:
 
     /// This frame's experiment toggles (enum experiment).
     uint32_t experiments_ = 0;
+    /// This frame's u_lumen_settings (lumen_pass::make_settings_uniform), set with the layout uniforms.
+    std::array<float, 4> settings_uniform_{};
     /// Consecutive frames without a usable history; reported once when it persists.
     static constexpr uint32_t history_warning_frames = 120;
     uint32_t frames_without_history_ = 0;

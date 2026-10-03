@@ -91,8 +91,12 @@ public:
 
     auto init(rtti::context& ctx) -> bool;
 
-    /// CPU update from this frame's GI instances and the view the lighting is scheduled for; uploads the scene table.
-    void update(const surface_cache_system& gi_scene, const math::vec3& view_origin, const math::frustum& view_frustum);
+    /// CPU update from this frame's GI instances, the view the lighting is scheduled for and its Lumen scene settings;
+    /// uploads the scene table.
+    void update(const surface_cache_system& gi_scene,
+                const math::vec3& view_origin,
+                const math::frustum& view_frustum,
+                const gi_settings::scene_settings& view_settings);
 
     auto get_scene() const -> const lumen_scene&
     {
@@ -147,7 +151,7 @@ public:
 
     /// Binds the surface cache for a global-SDF hit sampler (lumen_surface_cache.sh with the object grid) at
     /// the given stages and sets u_lumen_hit_lighting: hits read the cards when @p enabled and the cache is
-    /// lit, the light voxels otherwise.
+    /// lit, and are black otherwise.
     void bind_for_sampling(uint8_t scene_stage, uint8_t final_stage, uint8_t grid_stage, bool enabled) const;
 
 private:

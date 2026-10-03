@@ -15,8 +15,7 @@ namespace
 {
 
 /// Guard against a degenerate ray spinning forever; a reference march is otherwise uncapped.
-/// Exhausting it is treated as a hit at the current t - the conservative direction, and the
-/// same contract the runtime tracer has (gi_constants.h, GI_TRACE_MAX_STEPS rationale).
+/// Exhausting it is treated as a hit at the current t - the conservative direction.
 constexpr uint32_t reference_max_steps = 8192;
 
 /// Hit acceptance and gradient step, as fractions of the winning instance's WORLD voxel. The

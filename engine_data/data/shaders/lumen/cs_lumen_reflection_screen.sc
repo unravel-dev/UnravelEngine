@@ -45,11 +45,6 @@ vec4 LumenReflectionRay(ivec2 pixel, vec3 position, vec3 normal, float roughness
 		return vec4(reflect(-view, normal), LUMEN_REFLECTION_MIN_CONE_ANGLE);
 	}
 	vec2 e = LumenSpatioTemporalNoise2D(vec2(pixel));
-	BRANCH
-	if(u_lumen_reflection_hash_noise)
-	{
-		e = BlueNoise2D(vec2(pixel), mod(u_lumen_frame_index, float(LUMEN_INTEGRATE_NOISE_PERIOD)));
-	}
 	e.y *= 1.0 - LUMEN_REFLECTION_GGX_SAMPLING_BIAS;
 	float alpha = roughness * roughness;
 	GiReflectionBasis basis = GiReflectionMakeBasis(normal);
@@ -104,7 +99,7 @@ void main()
 	if(u_lumen_reflection_screen_traces)
 	{
 		vec3 origin = LumenScreenTraceOrigin(position, normal, uv, depth01);
-		LumenScreenRaySegment segment = LumenScreenSegment(origin, ray.xyz, LUMEN_MAX_TRACE_DISTANCE);
+		LumenScreenRaySegment segment = LumenScreenSegment(origin, ray.xyz, u_lumen_max_trace_distance);
 		if(segment.valid)
 		{
 			LumenScreenTraceResult trace = LumenTraceHZB(s_lumen_hiz, u_lumen_reflection_hiz_mip_count, segment.start,
@@ -126,7 +121,7 @@ void main()
 			}
 			float miss_offset = (!hit && !trace.uncertain) ? LUMEN_SCREEN_TRACE_MISS_OFFSET : 0.0;
 			vec3 end_world = LumenWorldFromDepth(end_point.xy, end_point.z);
-			hit_distance = min(length(end_world - position) + miss_offset, LUMEN_MAX_TRACE_DISTANCE);
+			hit_distance = min(length(end_world - position) + miss_offset, u_lumen_max_trace_distance);
 		}
 	}
 	if(hit && u_lumen_reflection_show_trace_types)

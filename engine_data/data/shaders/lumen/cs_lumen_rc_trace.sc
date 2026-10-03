@@ -41,7 +41,7 @@ uniform vec4 u_lumen_hit_lighting;
 vec4 LumenRcTraceRay(vec3 origin, vec3 direction, float t_min, LumenSdfDither dither)
 {
 	LumenSdfHit hit =
-	    LumenTraceGlobalSdfDithered(origin, direction, t_min, LUMEN_MAX_TRACE_DISTANCE, false, 0.0, 0.0, 1.0, dither);
+	    LumenTraceGlobalSdfDithered(origin, direction, t_min, u_lumen_max_trace_distance, false, 0.0, 0.0, 1.0, dither);
 	if(!hit.hit)
 	{
 		vec3 sky = eval_radiance_sh(s_lumen_env_sh, direction) * GI_CACHED_LIGHTING_PRE_EXPOSURE;

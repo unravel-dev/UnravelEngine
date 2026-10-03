@@ -34,6 +34,14 @@ constexpr uint32_t k_lighting_tile_size = 8;
 constexpr uint32_t k_lighting_buckets = 16;
 /// The frustum planes the lighting priority tests: left, right, top, bottom and near (not far).
 constexpr uint32_t k_priority_frustum_planes = 5;
+/// The lighting update speed's range (R/LumenSceneLighting.cpp:565).
+constexpr float k_min_lighting_update_speed = 0.5f;
+constexpr float k_max_lighting_update_speed = 16.0f;
+/// The surface cache resolution's range (UE FPostProcessSettings::LumenSurfaceCacheResolution).
+constexpr float k_min_surface_cache_resolution = 0.5f;
+constexpr float k_max_surface_cache_resolution = 1.0f;
+/// The largest minimum card resolution (LumenScene::GetCardMinResolution).
+constexpr uint32_t k_max_card_min_resolution = 1024;
 
 auto floor_log2(uint32_t value) -> uint32_t
 {
@@ -179,6 +187,33 @@ void lumen_scene::init(const settings& s)
 {
     settings_ = s;
     reset();
+}
+
+auto lumen_scene::get_max_card_distance() const -> float
+{
+    return std::clamp(view_settings_.view_distance, 0.0f, settings_.max_card_distance);
+}
+
+auto lumen_scene::get_lighting_update_factor(lighting_context context) const -> uint32_t
+{
+    const float speed =
+        std::clamp(view_settings_.lighting_update_speed, k_min_lighting_update_speed, k_max_lighting_update_speed);
+    const float factor = context == lighting_direct ? float(gi::lumen::LUMEN_SCENE_DIRECT_UPDATE_FACTOR)
+                                                    : float(gi::lumen::LUMEN_SCENE_RADIOSITY_UPDATE_FACTOR);
+    return uint32_t(std::lround(factor / speed));
+}
+
+auto lumen_scene::get_resolution_rule() const -> resolution_rule
+{
+    const float scale = std::clamp(view_settings_.surface_cache_resolution,
+                                   k_min_surface_cache_resolution,
+                                   k_max_surface_cache_resolution);
+    resolution_rule rule;
+    rule.texel_density_scale = settings_.texel_density_scale * scale;
+    rule.max_resolution = uint32_t(std::max(1l, std::lround(float(settings_.card_max_resolution) * scale)));
+    rule.min_resolution = uint32_t(
+        std::clamp(std::lround(float(settings_.card_min_resolution) * scale), 1l, long(k_max_card_min_resolution)));
+    return rule;
 }
 
 void lumen_scene::reset()
@@ -484,7 +519,8 @@ void lumen_scene::update(const std::vector<source>& sources, uint32_t instance_c
     }
     // Resolution per card and the requests for every card whose resolution moved.
     std::vector<request> requests;
-    const uint32_t max_resolution = settings_.card_max_resolution;
+    const resolution_rule rule = get_resolution_rule();
+    const float max_card_distance = get_max_card_distance();
     for(uint32_t s : active)
     {
         const auto& src = sources[s];
@@ -495,17 +531,16 @@ void lumen_scene::update(const std::vector<source>& sources, uint32_t instance_c
             const world_card placed = place_card(entry.cards->cards[c], src.local_to_world);
             const float distance = std::max(distance_to_card(placed, view_origin), k_min_viewer_distance);
             const float max_extent = std::max(placed.extent.x, placed.extent.y);
-            const float projected = std::min(settings_.texel_density_scale * max_extent / distance,
+            const float projected = std::min(rule.texel_density_scale * max_extent / distance,
                                              settings_.max_texel_density * max_extent);
-            const uint32_t truncated = std::min(uint32_t(std::max(projected, 0.0f)), max_resolution);
+            const uint32_t truncated = std::min(uint32_t(std::max(projected, 0.0f)), rule.max_resolution);
             const uint32_t snapped = truncated == 0 ? 0u : round_up_power_of_two(truncated);
             const uint32_t min_resolution =
-                src.is_emissive_light_source ? k_emissive_min_card_resolution : settings_.card_min_resolution;
+                src.is_emissive_light_source ? k_emissive_min_card_resolution : rule.min_resolution;
             const float min_area = settings_.mesh_cards_min_size * settings_.mesh_cards_min_size *
                                    (src.is_emissive_light_source ? k_emissive_min_card_area_scale : 1.0f);
             const bool is_large_enough = 4.0f * placed.extent.x * placed.extent.y > min_area;
-            const bool visible =
-                is_large_enough && distance < settings_.max_card_distance && snapped >= min_resolution;
+            const bool visible = is_large_enough && distance < max_card_distance && snapped >= min_resolution;
             const uint32_t res_level = floor_log2(std::max(snapped, k_min_card_resolution));
             // Texels stay roughly square: the shorter axis drops a level per doubling of the aspect.
             const float aspect = placed.extent.x / std::max(placed.extent.y, 1e-6f);
@@ -727,8 +762,8 @@ void lumen_scene::schedule_lighting(const math::vec3& view_origin, const math::f
     }
     const uint32_t atlas_size = settings_.atlas_size;
     const std::array<uint32_t, lighting_context_count> budgets{
-        compute_lighting_tile_budget(atlas_size, uint32_t(gi::lumen::LUMEN_SCENE_DIRECT_UPDATE_FACTOR)),
-        compute_lighting_tile_budget(atlas_size, uint32_t(gi::lumen::LUMEN_SCENE_RADIOSITY_UPDATE_FACTOR))};
+        compute_lighting_tile_budget(atlas_size, get_lighting_update_factor(lighting_direct)),
+        compute_lighting_tile_budget(atlas_size, get_lighting_update_factor(lighting_radiosity))};
     std::vector<uint32_t> buckets(page_count);
     for(uint32_t context = 0; context < lighting_context_count; ++context)
     {

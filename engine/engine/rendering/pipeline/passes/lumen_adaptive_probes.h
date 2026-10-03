@@ -1,7 +1,7 @@
 #pragma once
 
 #include <engine/rendering/gpu_program.h>
-#include <engine/rendering/pipeline/passes/gi_resolve_pass.h>
+#include <engine/rendering/pipeline/passes/lumen_run_params.h>
 
 #include <graphics/texture.h>
 
@@ -40,7 +40,7 @@ public:
     /// The frame's probe layout and inputs (lumen_common.sh uniforms).
     struct frame_inputs
     {
-        const gi_resolve_pass::run_params* params{};
+        const lumen_run_params* params{};
         gfx::texture::ptr probe_records;
         uint32_t probes_x{};
         uint32_t probes_y{};

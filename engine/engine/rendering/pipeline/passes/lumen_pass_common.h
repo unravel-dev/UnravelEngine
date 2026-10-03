@@ -1,19 +1,25 @@
 #pragma once
 
 #include <engine/rendering/default_textures.h>
+#include <engine/rendering/gi/gi_settings.h>
 #include <engine/rendering/gi/global_sdf_clipmap_gpu.h>
+#include <engine/rendering/gi/lumen_constants.h>
 
 #include <graphics/render_view.h>
 #include <graphics/texture.h>
 
 #include <bgfx/bgfx.h>
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
 #include <string>
 
 /**
  * @file lumen_pass_common.h
- * @brief Dispatch and target helpers shared by the Lumen compute passes (the gather, the reflections).
+ * @brief Dispatch and target helpers shared by the Lumen compute passes (the gather, the reflections), and the
+ *        values the passes derive from the view's GI settings.
  */
 
 namespace unravel::lumen_pass
@@ -21,6 +27,55 @@ namespace unravel::lumen_pass
 
 /// Threads per group edge of the per-pixel and per-probe dispatches (NUM_THREADS(8, 8, 1)).
 inline constexpr uint32_t group_edge = 8;
+/// The final gather update speed's range for the temporal and for the radiance cache budget
+/// (R/LumenScreenProbeGather.cpp:572, 741).
+inline constexpr float min_update_speed = 0.5f;
+inline constexpr float max_temporal_update_speed = 8.0f;
+inline constexpr float max_budget_update_speed = 4.0f;
+/// The maximum trace distance's range in metres: UE's 0.01 cm floor and Lumen::MaxTraceDistance
+/// (half UE_OLD_WORLD_MAX, R/LumenDiffuseIndirect.cpp:230).
+inline constexpr float min_trace_distance = 0.0001f;
+inline constexpr float max_trace_distance = 10485.76f;
+
+/// The farthest a Lumen ray travels under the setting @p setting (UE Lumen::GetMaxTraceDistance).
+inline auto get_max_trace_distance(float setting) -> float
+{
+    return std::clamp(setting, min_trace_distance, max_trace_distance);
+}
+
+/// The frames the gather's temporal accumulates at most at the final gather update speed @p update_speed: the
+/// default over the square root of the speed, rounded (UE LumenScreenProbeGather GetMaxFramesAccumulated, without
+/// its editing scale).
+inline auto get_temporal_max_frames(float update_speed) -> float
+{
+    const float speed = std::clamp(update_speed, min_update_speed, max_temporal_update_speed);
+    return std::round(float(gi::lumen::LUMEN_TEMPORAL_MAX_FRAMES) / std::sqrt(speed));
+}
+
+/// The radiance cache probes re-traced per frame beyond the new ones at the final gather update speed
+/// @p update_speed (UE NumProbesToTraceBudget, without its editing scale).
+inline auto get_radiance_cache_trace_budget(float update_speed) -> uint32_t
+{
+    const float speed = std::clamp(update_speed, min_update_speed, max_budget_update_speed);
+    return uint32_t(std::lround(float(gi::lumen::LUMEN_RADIANCE_CACHE_TRACE_BUDGET) * speed));
+}
+
+/// The roughness below which pixels trace reflection rays under @p settings (UE LumenMaxRoughnessToTraceReflections,
+/// in [0, 1]).
+inline auto get_max_roughness_to_trace(const gi_settings::reflection_settings& settings) -> float
+{
+    return std::clamp(settings.max_roughness_to_trace, 0.0f, 1.0f);
+}
+
+/// The u_lumen_settings values of @p settings (lumen_common.sh): x = the maximum trace distance, y = the temporal's
+/// maximum frame count, z = the roughness below which pixels trace reflection rays.
+inline auto make_settings_uniform(const gi_settings& settings) -> std::array<float, 4>
+{
+    return {get_max_trace_distance(settings.diffuse.max_trace_distance),
+            get_temporal_max_frames(settings.diffuse.update_speed),
+            get_max_roughness_to_trace(settings.reflections),
+            0.0f};
+}
 /// A Lumen texture read with texelFetch and written as an image.
 inline constexpr uint64_t compute_texture_flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP |
                                                   BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_POINT |

@@ -9,6 +9,7 @@
 #include <engine/rendering/gi/lumen_constants.h>
 
 #include <graphics/graphics.h>
+#include <graphics/render_pass.h>
 #include <logging/logging.h>
 
 #include <cmath>
@@ -64,6 +65,7 @@ void lumen_radiance_cache::uniforms::cache_uniforms()
     cache_uniform(nullptr, u_lumen_frame, "u_lumen_frame", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_probes, "u_lumen_probes", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_view, "u_lumen_view", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, u_lumen_settings, "u_lumen_settings", bgfx::UniformType::Vec4);
     cache_uniform(nullptr,
                   u_sdf_clipmap_levels,
                   "u_sdf_clipmap_levels",
@@ -201,7 +203,7 @@ void lumen_radiance_cache::set_cache_uniforms(bookkeeping mode) const
 {
     gfx::set_uniform(uniforms_.u_lumen_rc_clipmaps, clipmaps_.data(), uint16_t(clipmaps));
     gfx::set_uniform(uniforms_.u_lumen_rc_prev_clipmaps, prev_clipmaps_.data(), uint16_t(clipmaps));
-    const float budget = persistent_ ? float(LUMEN_RADIANCE_CACHE_TRACE_BUDGET * LUMEN_RADIANCE_CACHE_COST_NORMAL)
+    const float budget = persistent_ ? float(trace_budget_ * uint32_t(LUMEN_RADIANCE_CACHE_COST_NORMAL))
                                      : unlimited_budget;
     const float params[4] = {float(frame_), budget, persistent_ ? 1.0f : 0.0f, float(int(mode))};
     gfx::set_uniform(uniforms_.u_lumen_rc_params, params);
@@ -296,8 +298,9 @@ void lumen_radiance_cache::run_trace(const frame_inputs& inputs) const
         gfx::set_uniform(uniforms_.u_lumen_hit_lighting, no_cards);
     }
     set_cache_uniforms(bookkeeping::frame_start);
-    // The trace's dithered transparency reads the frame (u_lumen_frame.y).
+    // The trace's dithered transparency reads the frame (u_lumen_frame.y), its length the maximum trace distance.
     gfx::set_uniform(uniforms_.u_lumen_frame, inputs.frame);
+    gfx::set_uniform(uniforms_.u_lumen_settings, lumen_pass::make_settings_uniform(inputs.params->settings).data());
     gfx::set_uniform(uniforms_.u_sdf_clipmap_levels, clipmap_gpu.get_level_params(), global_sdf_clipmap::level_count);
     gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
     bgfx::dispatch(pass.id, trace_program_->native_handle(), args_, 1, 1);
@@ -332,6 +335,7 @@ auto lumen_radiance_cache::update(const frame_inputs& inputs) -> bool
     }
     current_ ^= 1u;
     ++frame_;
+    trace_budget_ = lumen_pass::get_radiance_cache_trace_budget(inputs.params->settings.diffuse.update_speed);
     place_clipmaps(inputs.params->cam->get_position());
     if(!persistent_)
     {

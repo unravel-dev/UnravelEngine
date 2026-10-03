@@ -66,48 +66,12 @@ public:
         ///< World length of each local axis: the composed fields bound a non-uniformly scaled
         ///< placement per axis (sample_instance_distance) instead of by the smallest axis alone.
         math::vec3 axis_scale{1.0f};
-        ///< World displacement of the field's bounds centre since the placement's previous
-        ///< frame (zero for a static placement or a first sighting). The gather's temporal
-        ///< shortens a receiver's history by the fraction of its rays that hit MOVING
-        ///< instances - the receivers of a mover's shadow and bounce, which the per-pixel
-        ///< velocity buffer cannot see.
-        math::vec3 velocity{0.0f};
-        ///< The largest displacement of any corner of the field's local bounds over the same
-        ///< frame: a spinning placement moves its surface while its centre stays put.
-        float max_corner_displacement = 0.0f;
-        ///< Diffuse colour of this placement's material, and its emission.
-        ///
-        ///< A distance field carries geometry only, so a cell first discovered by a BOUNCE ray
-        ///< has no material and has to fall back to a neutral grey until an on-screen pixel
-        ///< registers one -- which never happens for anything the camera does not look at. The
-        ///< instance is where the material can be recovered without storing material voxels: a
-        ///< submesh is drawn with exactly one material, and one field is baked per submesh, so
-        ///< the mapping is already one to one.
-        ///
-        ///< This is the base colour FACTOR; the attribute composer multiplies it on the GPU by
-        ///< the texture mean at @ref mean_slot, so a texture-dominated material bounces its
-        ///< true average reflectance rather than its (usually white) tint.
-        math::vec3 albedo{0.5f, 0.5f, 0.5f};
-        math::vec3 emissive{0.0f, 0.0f, 0.0f};
-        ///< Material metalness factor. The light lattice stores diffuse bounce only, which a
-        ///< metal has none of; the reflection tier blends a hit's lattice answer toward its
-        ///< base colour over the receiver's irradiance by this (gi_reflection_kernel.sh).
-        float metalness = 0.0f;
-        ///< Slot of the material's colour map in the texture-mean buffer; 0 is reserved white.
-        uint32_t mean_slot = 0;
-        ///< Whether that mean has been captured (fingerprint input; see global_sdf_instance).
-        bool mean_captured = false;
-        ///< The same pair for the material's EMISSIVE map. Emission is a source, so its mean
-        ///< is what decides how much energy a textured emitter actually puts into the scene:
-        ///< without it a sign bounces its colour factor over its whole silhouette.
-        uint32_t emissive_mean_slot = 0;
-        bool emissive_mean_captured = false;
         ///< The material renders both faces (cull none; UE bMostlyTwoSided): the Lumen global SDF's coverage leaves
         ///< space near only such placements uncovered, which the march expands less and dithers through.
         bool is_two_sided = false;
-        ///< The material emits (its emissive luminance reaches GI_EMISSIVE_NEE_MIN_LUMINANCE): UE's Emissive Light
-        ///< Source, derived here rather than authored. Lumen keeps its cards resident down to one texel and composes
-        ///< it into the global SDF however small.
+        ///< The material emits (its emissive luminance reaches GI_EMISSIVE_LIGHT_SOURCE_MIN_LUMINANCE): UE's
+        ///< Emissive Light Source, derived here rather than authored. Lumen keeps its cards resident down to one
+        ///< texel and composes it into the global SDF however small.
         bool is_emissive_light_source = false;
     };
 
@@ -125,13 +89,6 @@ public:
         math::mat4 local_to_world{1.0f};
         ///< Null until the submesh's cards are built.
         std::shared_ptr<const lumen_mesh_cards> cards;
-    };
-
-    /// One texture whose mean is waiting to be captured on the GPU.
-    struct texture_mean_capture
-    {
-        gfx::texture::ptr texture;
-        uint32_t slot = 0;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -158,66 +115,6 @@ public:
         return clipmap_instances_;
     }
 
-    /**
-     * @brief A world region whose accumulated lighting went stale recently: the union of the
-     *        bounds a changed placement occupied within the last GI_TEMPORAL_DIRTY_HOLD_FRAMES
-     *        frames (it moved, appeared, vanished or changed material).
-     *
-     * The temporal accumulators localise their fast-flush window to these regions instead of
-     * dropping the whole screen to the fast cap whenever anything anywhere moves, which would
-     * let one oscillating object far away disturb every pixel of a still shot.
-     */
-    struct dirty_region
-    {
-        math::bbox bounds{};
-        /// Frame of the most recent change inside the region.
-        uint64_t last_change_frame = 0;
-        /// The largest emissive light reach (metres) folded into this region's bounds - zero
-        /// for a region that is a placement's own bounds plus the margin. Packed into the
-        /// min lane's w for the consumers (gi_dirty_regions.sh), an attribution instrument
-        /// today: nothing lit reads it.
-        float emissive_reach = 0.0f;
-    };
-
-    /// The most recent regions changed within the hold window, at most
-    /// GI_TEMPORAL_DIRTY_MAX_BOUNDS of them, newest first - exactly the set any consumer reads.
-    /// Rebuilt by @ref update_world.
-    auto get_dirty_regions() const -> const std::vector<dirty_region>&
-    {
-        return dirty_regions_;
-    }
-
-    /// How many regions there were this frame BEFORE the list was cut to the shader budget.
-    /// Past GI_TEMPORAL_DIRTY_MAX_BOUNDS the consumers fall back to their screen-wide behaviour;
-    /// compare this, not get_dirty_regions().size(), which never exceeds the budget.
-    auto get_dirty_region_total() const -> size_t
-    {
-        return dirty_region_total_;
-    }
-
-    /**
-     * @brief Packs the dirty regions as (min, max) vec4 pairs for the shader uniform of
-     *        gi_dirty_regions.sh, most recent first so a fixed budget keeps the regions
-     *        still flushing.
-     * @return The number of regions packed (at most @p max_regions); more regions than that
-     *         exist when get_dirty_regions().size() exceeds it.
-     */
-    auto pack_dirty_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t;
-
-    /**
-     * @brief The bounce vis-memo's own change list (gi_light_voxels_kernel.sh, the segment-local
-     *        keep): the same placements' RAW field bounds over GI_VIS_MEMO_REGION_HOLD_FRAMES,
-     *        packed like @ref pack_dirty_regions. The temporal's list is inflated to an
-     *        emitter's light reach, which is the light a mover left, not the field it changed.
-     */
-    auto pack_vis_memo_regions(float* out_bounds, uint32_t max_regions) const -> uint32_t;
-
-    /// As @ref get_dirty_region_total, for the vis-memo's list.
-    auto get_vis_memo_region_total() const -> size_t
-    {
-        return vis_memo_region_total_;
-    }
-
     auto get_atlas() -> sdf_atlas&
     {
         return atlas_;
@@ -236,82 +133,16 @@ public:
         return instance_buffer_;
     }
 
-    /// One emissive instance the probes sample explicitly (next-event estimation):
-    /// the bounding sphere of its placed bounds, its emitted radiance and its power.
-    struct emitter
-    {
-        math::vec3 center{0.0f, 0.0f, 0.0f};
-        float radius = 0.0f;
-        math::vec3 radiance{0.0f, 0.0f, 0.0f};
-        /// Luminance x emitting surface area (gi::emitter_selection_weight), the ordering key
-        /// for the cap. CPU only: the upload packs @ref extent into this lane instead, and the
-        /// shader rebuilds the same weight from the extent it decodes.
-        float power = 0.0f;
-        /// The axis-aligned extent of this piece, metres (at most GI_EMISSIVE_NEE_SEGMENT
-        /// per axis) - the reflection tier's near-field term samples the piece along its
-        /// longest axis. Packed 8 bits per axis into the power lane, negated and offset by
-        /// one as the marker an unpacked (positive) power lane cannot produce.
-        math::vec3 extent{0.0f, 0.0f, 0.0f};
-    };
-
-    /// This frame's emitter table (rebuilt by update_world, capped by power).
-    auto get_emitters() const -> const std::vector<emitter>&
-    {
-        return emitters_;
-    }
-
-    /// Emitter pieces built this frame BEFORE the GI_EMISSIVE_NEE_MAX_EMITTERS cut - how many
-    /// the table could not hold (an instrument for the gi_get_stats readout).
-    auto get_emitter_total() const -> size_t
-    {
-        return emitter_total_;
-    }
-
-    /// vec4 elements per emitter in the table appended to the instance buffer. Must match
-    /// SDF_EMITTER_STRIDE in gi/gi_emissive_nee.sh: (center, radius), (radiance, power).
-    static constexpr uint32_t emitter_vec4_stride = 2;
-
-    /// vec4 elements per packed instance. Must match SDF_INSTANCE_STRIDE in gi/sdf_common.sh.
-    /// Two carry the material; emission is HDR, so it gets its own vec4 rather than being packed into a
-    /// spare component; the eleventh is the instance velocity, the twelfth the flags and axis scales, the
-    /// thirteenth the coarse header.
-    static constexpr uint32_t instance_vec4_stride = 13;
-
-    /// Slot capacity of the mean buffer (16 KiB of vec4s). Overflow falls back to the white
-    /// slot with a one-time warning rather than growing - a scene with a thousand distinct
-    /// colour maps has bigger problems than its bounce tint. PUBLIC because the reflection
-    /// pass stages the whole buffer into its trace list (GI_REFLECTION_MEAN_SLOTS must equal
-    /// this; static_assert at the staging site).
-    static constexpr uint32_t texture_mean_capacity = 1024;
-    /// Radix packing the colour and emissive mean slots into one float lane of the instance
-    /// record (see upload_instances). A power of two, so the shader's divide is an exponent
-    /// shift. MIRROR OF SDF_MEAN_SLOT_RADIX in sdf_common.sh.
-    static constexpr uint32_t mean_slot_radix = 2048;
-
-    /// The per-texture mean buffer the attribute composer reads (slot 0 = white).
-    auto get_texture_mean_buffer() const -> bgfx::DynamicVertexBufferHandle
-    {
-        return texture_mean_buffer_;
-    }
-
-    /**
-     * @brief Hands up to @p budget pending mean captures to the caller for dispatch this frame.
-     *
-     * Marks them captured, which flips the content fingerprint of every instance using the slot
-     * on the NEXT world update - one frame after the capture dispatch executed, so the
-     * recompose that publishes the mean always reads a written value.
-     */
-    auto take_texture_mean_captures(uint32_t budget) -> std::vector<texture_mean_capture>;
-
-    /// Mean-capture dispatches per frame. Each is a 1x1x1 dispatch of 64 texture taps, so the
-    /// bound exists to pace the recompose wave a fresh scene triggers, not the GPU cost.
-    static constexpr uint32_t max_texture_mean_captures_per_frame = 4;
+    /// vec4 elements per packed instance. Must match SDF_INSTANCE_STRIDE in gi/sdf_common.sh: the two affine
+    /// transforms (three rows each), the bounds with the header and the scale, the flags with the axis scales, and
+    /// the coarse header.
+    static constexpr uint32_t instance_vec4_stride = 10;
 
     /**
      * @brief Monotonic revision of everything a clipmap-level fingerprint can depend on.
      *
-     * Bumped when the packed instance bytes change, when a texture-mean capture lands, and
-     * when the atlas residency moves (a field uploaded or released). While it holds still and
+     * Bumped when the packed instance bytes change and when the atlas residency moves (a field
+     * uploaded or released). While it holds still and
      * a level's target origin holds still, that level's content fingerprint is necessarily
      * unchanged - which is what lets global_sdf_clipmap::update skip re-walking every
      * instance for every level on every frame.
@@ -342,11 +173,6 @@ public:
         return grid_buffer_;
     }
 
-    auto get_instance_grid() const -> const sdf_instance_grid&
-    {
-        return grid_;
-    }
-
     /**
      * @brief The two vec4s every tracer binds to address the cull grid.
      *
@@ -363,39 +189,18 @@ public:
     }
 
     /**
-     * @brief Runtime experiment flags every tracer reads (get_grid_params()[8], sdf_common.sh
-     *        SDF_EXPERIMENT_*): two code paths compiled into one program, alternated inside ONE editor
-     *        launch for cost A/B comparisons - the variance between launches hides small effects.
-     *        Zero in production; set by the editor MCP tool gi_set_experiment_flags.
+     * @brief Runtime experiment flags the GI passes read on the CPU: two code paths in one build,
+     *        alternated inside ONE editor launch for A/B comparisons - the variance between launches
+     *        hides small effects. Zero in production; set by the editor MCP tool gi_set_experiment_flags.
      */
     void set_experiment_flags(uint32_t flags)
     {
         experiment_flags_ = flags;
-        grid_params_[8] = float(flags);
     }
 
     auto get_experiment_flags() const -> uint32_t
     {
         return experiment_flags_;
-    }
-
-    /**
-     * @brief True while the held dirty regions describe the content changes: at least one region,
-     *        none cut by the shader budget.
-     *
-     * The edited-epoch consumers then keep their SCENE-WIDE response off - the world-probe fast
-     * window (every probe at four strata per frame) and the relight EMA snap (every face written
-     * through) - because inside the regions the relight already writes through per voxel and the
-     * gather temporal flushes locally, which is where a moving placement's light changes. The
-     * regions come from the placement hash (pose, albedo, emissive), so a change outside it - a
-     * residency level swap, a texture mean landing - takes the scene-wide path only while no
-     * region is held; beside a held region it is left to the regular probe and relight schedules,
-     * as Lumen leaves a mesh-SDF mip swap to its caches. Lumen responds to a moving object the
-     * same way: through its budgeted, priority-ordered caches, never with a global flush.
-     */
-    auto is_placement_local_edit() const -> bool
-    {
-        return !dirty_regions_.empty() && dirty_region_total_ <= dirty_regions_.size();
     }
 
     auto get_instances() const -> const std::vector<instance>&
@@ -408,21 +213,10 @@ public:
         return lumen_sources_;
     }
 
+    /// The backend runs compute (checked at init) and the atlas exists.
     auto is_enabled() const -> bool
     {
-        return supported_ && enabled_ && atlas_.is_valid();
-    }
-
-    /// Whether the renderer backend can run GI at all (compute support, checked at init).
-    /// Distinct from @ref is_enabled: a user toggle cannot switch an unsupported backend on.
-    auto is_supported() const -> bool
-    {
-        return supported_;
-    }
-
-    void set_enabled(bool enabled)
-    {
-        enabled_ = enabled;
+        return supported_ && atlas_.is_valid();
     }
 
 private:
@@ -540,121 +334,38 @@ private:
      */
     void release_unused_fields();
 
-    /**
-     * @brief Appends one placement of a resident field to this frame's instance list.
-     * @param local_to_world The transform the RENDERER draws the geometry with, which for a
-     *        model with submesh nodes is the node's transform, not the model root's.
-     * @param mat The material this submesh is DRAWN with. Null falls back to a
-     *        neutral albedo; it must resolve the same way the renderer does, or a bounce would
-     *        tint light with a colour the surface is not actually painted.
-     */
-    /// Per-placement motion tracking behind @ref get_dirty_regions, and the cache of the
-    /// pose-derived values @ref add_instance would otherwise recompute every frame. `history`
-    /// holds the (frame, bounds) pairs the placement occupied within the hold window, newest
-    /// last; a placement that vanished keeps its entry until that history ages out.
+    /// The cache of the pose-derived values @ref add_instance would otherwise recompute every frame, kept per
+    /// placement identity: the inverse, the scales and the transformed bounds are pure functions of the transform
+    /// and the field's local bounds, so a static placement reuses them.
     struct tracked_placement
     {
-        /// FNV over the pose and the baked material (see compute_placement_hash).
-        uint64_t placement_hash = 0;
-        /// The region bounds (emissive-inflated) and the raw world bounds as of the last frame.
-        math::bbox bounds{};
-        math::bbox field_bounds{};
-        /// The emissive light reach (metres) `bounds` was inflated by, 0 if none.
-        float emissive_reach = 0.0f;
-        /// Pose-derived cache: valid while @ref pose_key matches the frame's (transform, field
-        /// bounds) - the inverse and the transformed corners are pure functions of those, so
-        /// a static placement reuses them instead of paying an inverse per frame.
+        /// Valid while it matches the frame's (transform, field bounds) key.
         uint64_t pose_key = 0;
         bool has_pose = false;
         math::mat4 world_to_local{1.0f};
         float local_to_world_scale = 1.0f;
         math::vec3 axis_scale{1.0f};
-        /// The placement's transform as of the previous frame, for the instance velocity
-        /// (the bounds centre's delta and the largest corner displacement).
-        math::mat4 last_local_to_world{1.0f};
-        bool has_last_pose = false;
+        math::bbox world_bounds{};
+        /// The last world frame the placement was drawn in.
         uint64_t seen_frame = 0;
-        /// Set once the sweep recorded the placement's disappearance; cleared if it returns.
-        bool swept = false;
-        struct history_entry
-        {
-            uint64_t frame = 0;
-            /// The region bounds (emissive-inflated) the temporal flushes.
-            math::bbox bounds{};
-            /// The raw world bounds - the field the placement changed (the vis-memo's list).
-            math::bbox field_bounds{};
-            /// The emissive light reach (metres) the region bounds were inflated by, 0 if none.
-            float emissive_reach = 0.0f;
-        };
-        std::vector<history_entry> history;
-        /// Index of the first entry still inside the hold window. Entries are appended in frame
-        /// order, so the aged ones are a prefix; advancing this is O(1) where erasing them would
-        /// shift the whole vector every frame. Compacted once the dead prefix outweighs the
-        /// live tail (rebuild_dirty_regions).
-        size_t history_begin = 0;
     };
 
-    /// FNV-1a over the pose and the material the attribute voxels bake, continued from the
-    /// placement's matrix hash (hash_matrix in the .cpp) so the sixteen matrix floats are hashed
-    /// once per placement and shared with the pose key. Component by component, never over
-    /// sizeof: math::vec3 carries indeterminate padding bytes.
-    static auto compute_placement_hash(uint64_t matrix_hash,
-                                       const math::vec3& albedo,
-                                       const math::vec3& emissive) -> uint64_t;
-
-    /**
-     * @brief The tracker record for a placement, created on first sight.
-     *
-     * @param identity Stable key of the placement (entity, submesh, placement index), so a pose
-     *        can be compared against the same placement's previous frame.
-     * @return The record and whether this call created it. One lookup serves both the pose
-     *         cache and @ref record_placement, so the identity is hashed once per placement.
-     */
-    auto acquire_tracked(uint64_t identity) -> std::pair<tracked_placement&, bool>;
-
-    /**
-     * @brief Records a placement's pose for @ref get_dirty_regions: a new, moved, re-materialed
-     *        or vanished placement adds the bounds it occupied to its region history.
-     *
-     * @param tracked The placement's record from @ref acquire_tracked.
-     * @param inserted Whether that call created the record (a first sighting is a change).
-     * @param placement_hash The frame's compute_placement_hash of the placement.
-     * @param field_bounds The placement's raw world bounds; the region bounds are derived here
-     *        (an emissive placement inflates by its light's reach).
-     */
-    void record_placement(tracked_placement& tracked,
-                          bool inserted,
-                          uint64_t placement_hash,
-                          const math::vec3& emissive,
-                          const math::bbox& field_bounds);
-
-    /// Sweeps placements not seen this frame (their last bounds go stale too), drops history
-    /// older than the hold window and rebuilds @ref dirty_regions_.
-    void rebuild_dirty_regions();
-    /// Appends this frame's local light changes (gpu_light_buffer::get_local_changes) to their
-    /// lights' histories; rebuild_dirty_regions turns each history into one dirty region.
-    void record_light_changes();
+    /// Drops the records of placements not drawn this frame.
+    void sweep_tracked_placements();
 
     /**
      * @brief What the walk needs from a material, decoded once per material per frame.
      *
-     * Decoding a material's colours (six pow() calls), casting it and looking up its
-     * texture-mean slots give the same answers for every placement in the frame, so they are
-     * memoised by material pointer for the duration of the walk (see @ref summarize_material)
-     * rather than repeated for every placement that shares the material.
+     * Casting a material and decoding its emission give the same answers for every placement in the frame, so they
+     * are memoised by material pointer for the duration of the walk (see @ref summarize_material) rather than
+     * repeated for every placement that shares the material.
      */
     struct material_summary
     {
         bool is_pbr = false;
         bool is_blended = false;
-        math::vec3 albedo{0.5f, 0.5f, 0.5f};
-        math::vec3 emissive{0.0f, 0.0f, 0.0f};
+        /// Luminance of the emissive colour times its intensity (instance::is_emissive_light_source).
         float emissive_luminance = 0.0f;
-        float metalness = 0.0f;
-        uint32_t mean_slot = 0;
-        bool mean_captured = false;
-        uint32_t emissive_mean_slot = 0;
-        bool emissive_mean_captured = false;
         /// The material culls no face (instance::is_two_sided).
         bool is_two_sided = false;
     };
@@ -662,8 +373,8 @@ private:
     /// The summary of @p mat for this frame, decoded on first sight (see material_summary).
     auto summarize_material(const material::sptr& mat) -> const material_summary&;
 
-    /// The scene walk of @ref update_world: every drawn submesh of every active model either
-    /// places its field or, lacking one, registers its emissive bounds with the dirty tracker.
+    /// The scene walk of @ref update_world: every drawn submesh of every active model places its field, when it has
+    /// one.
     void walk_scene(scene& scn);
 
     /// A placement's resident field: the level traced and, when finer than its chain's coarsest, that coarsest
@@ -676,6 +387,12 @@ private:
         const mesh_sdf* coarse_sdf = nullptr;
     };
 
+    /**
+     * @brief Appends one placement of a resident field to this frame's instance list.
+     * @param local_to_world The transform the RENDERER draws the geometry with, which for a
+     *        model with submesh nodes is the node's transform, not the model root's.
+     * @param material The summary of the material this submesh is DRAWN with (its sidedness and emission).
+     */
     void add_instance(uint64_t identity,
                       const placed_field& field,
                       const math::mat4& local_to_world,
@@ -692,19 +409,6 @@ private:
     static auto resolve_submesh_material(const model& mdl, const mesh& m, uint32_t submesh_index)
         -> material::sptr;
 
-    /**
-     * @brief Slot of a colour map's mean in the GPU texture-mean buffer, allocating on first sight.
-     *
-     * The factor alone is white on every textured material, which drives the bounce gain to the
-     * GI_MAX_ALBEDO cap instead of the surface's true reflectance and over-brightens every
-     * bounce. The mean itself never touches the CPU: a one-time cs_gi_texture_mean dispatch
-     * (run by the compose pass via @ref take_texture_mean_captures) samples the texture's own
-     * mip tail into the buffer, and the attribute composer multiplies factor x mean. Until a
-     * texture is loaded and captured its slot reads the seeded white, and @p out_captured flips
-     * the content fingerprint once when the capture lands, recomposing the affected levels.
-     */
-    auto acquire_texture_mean_slot(const asset_handle<gfx::texture>& color_map, bool& out_captured)
-        -> uint32_t;
 
     /**
      * @brief Packs the instance list into the layout SdfLoadInstance expects and uploads it.
@@ -714,14 +418,8 @@ private:
      */
     void upload_instances();
 
-    /// Rebuilds the emitter table from this frame's instances (bounding spheres of the
-    /// emissive ones), capped at GI_EMISSIVE_NEE_MAX_EMITTERS by power.
-    void rebuild_emitters();
-
     sdf_atlas atlas_;
     gpu_light_buffer light_buffer_;
-    std::vector<emitter> emitters_;
-    size_t emitter_total_ = 0;
     /// Identifies one submesh's field. Residency is per SUBMESH, not per mesh: each submesh has
     /// its own field and is uploaded to the atlas independently.
     struct field_key
@@ -745,46 +443,14 @@ private:
     };
 
     std::unordered_map<field_key, mesh_residency, field_key_hash> residency_;
-    /// Bookkeeping for one colour map's slot in the GPU mean buffer.
-    struct texture_mean_entry
-    {
-        uint32_t slot = 0;
-        ///< Queued into @ref pending_texture_means_ (a texture still streaming waits here).
-        bool queued = false;
-        ///< Handed to the compose pass for capture; mirrored into every instance that uses the
-        ///< slot, where the fingerprint reads it.
-        bool captured = false;
-    };
-    std::unordered_map<hpp::uuid, texture_mean_entry> texture_mean_slots_;
-    std::vector<texture_mean_capture> pending_texture_means_;
-    /// vec4 per slot, seeded white; written only by cs_gi_texture_mean dispatches.
-    bgfx::DynamicVertexBufferHandle texture_mean_buffer_{bgfx::kInvalidHandle};
-    uint32_t next_texture_mean_slot_ = 1;
-    bool texture_mean_overflow_warned_ = false;
     std::vector<instance> instances_;
     /// Lumen capture inputs, rebuilt each frame alongside @ref instances_ (same order).
     std::vector<lumen_source> lumen_sources_;
     lumen_card_library lumen_cards_;
     /// Clipmap composition input, rebuilt each frame alongside @ref instances_.
     std::vector<global_sdf_instance> clipmap_instances_;
+    /// Pose caches by placement identity (entity, submesh, placement index), swept of the placements not drawn.
     std::unordered_map<uint64_t, tracked_placement> tracked_placements_;
-    /// At most GI_TEMPORAL_DIRTY_MAX_BOUNDS regions, newest first: the only ones any consumer
-    /// reads. @ref dirty_region_total_ is how many there were before the cut.
-    std::vector<dirty_region> dirty_regions_;
-    /// A local light's recent influence changes, by entity, aged out over
-    /// GI_TEMPORAL_DIRTY_HOLD_FRAMES like a placement's history.
-    struct light_change_entry
-    {
-        uint64_t frame = 0;
-        math::bbox bounds{};
-    };
-    std::unordered_map<uint32_t, std::vector<light_change_entry>> light_change_history_;
-    size_t dirty_region_total_ = 0;
-    /// The vis-memo's list (pack_vis_memo_regions), built beside @ref dirty_regions_.
-    std::vector<dirty_region> vis_memo_regions_;
-    size_t vis_memo_region_total_ = 0;
-    /// rebuild_dirty_regions scratch: (latest change frame, placement) per live history.
-    std::vector<std::pair<uint64_t, tracked_placement*>> dirty_candidates_;
     /// Per-frame memo behind summarize_material, keyed by material pointer; cleared each walk.
     std::unordered_map<const material*, material_summary> material_summaries_;
     /// Keeps every mesh referenced by @ref clipmap_instances_ alive for the duration of
@@ -824,7 +490,6 @@ private:
     std::vector<uint32_t> grid_upload_;
     std::array<float, 4u * gi::GI_SDF_GRID_PARAMS_VEC4> grid_params_{};
     uint32_t experiment_flags_ = 0;
-    bool enabled_ = true;
     /// Backend capability, decided once at init: without compute shaders nothing here can run.
     bool supported_ = false;
     /// Frame the world state was last rebuilt in, so several cameras in one frame share one

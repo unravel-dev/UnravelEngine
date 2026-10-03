@@ -50,8 +50,8 @@ public:
     static constexpr std::uint32_t settings_version = 2;
 
     /// A camera move longer than this in one frame is a cut: the exposure snaps to its target
-    /// instead of adapting (UE bCameraCut). Matches the jump the GI world probes treat as a
-    /// teleport (two 2 m probe cells).
+    /// instead of adapting (UE bCameraCut). 240 m/s at 60 fps: only a teleport moves that far in
+    /// one frame.
     static constexpr float camera_cut_distance = 4.0f;
 
     struct settings

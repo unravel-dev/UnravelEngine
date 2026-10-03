@@ -62,116 +62,10 @@ void gpu_light_buffer::shutdown()
 
 namespace
 {
-/// Offsets into a packed light record (see update): type, range, colour, intensity.
-constexpr size_t record_type = 3;
-constexpr size_t record_range = 7;
-constexpr size_t record_color = 8;
-constexpr size_t record_intensity = 11;
-/// Rec. 709 luminance weights for a light's brightness.
-constexpr float luminance_r = 0.2126f;
-constexpr float luminance_g = 0.7152f;
-constexpr float luminance_b = 0.0722f;
-
-auto is_directional(const std::array<float, 16>& record) -> bool
-{
-    return static_cast<uint32_t>(record[record_type]) ==
-           static_cast<uint32_t>(gpu_light_buffer::gpu_light_type::directional);
-}
-
-auto light_brightness(const std::array<float, 16>& record) -> float
-{
-    return (luminance_r * record[record_color] + luminance_g * record[record_color + 1] +
-            luminance_b * record[record_color + 2]) *
-           record[record_intensity];
-}
-
-auto influence_bounds(const std::array<float, 16>& record) -> math::bbox
-{
-    const math::vec3 position(record[0], record[1], record[2]);
-    const math::vec3 reach(math::max(record[record_range], 0.0f));
-    math::bbox bounds;
-    bounds.min = position - reach;
-    bounds.max = position + reach;
-    return bounds;
-}
-
-/// True when two brightnesses differ by more than gpu_light_buffer::global_change_ratio; a
-/// light switched on or off always does.
-auto is_global_brightness_change(float before, float after) -> bool
-{
-    const float low = math::min(before, after);
-    const float high = math::max(before, after);
-    if(high <= 0.0f)
-    {
-        return false;
-    }
-    return low <= 0.0f || high > gpu_light_buffer::global_change_ratio * low;
-}
+/// FNV-1a 64-bit offset basis and prime.
+constexpr uint64_t fnv_offset_basis = 1469598103934665603ull;
+constexpr uint64_t fnv_prime = 1099511628211ull;
 } // namespace
-
-void gpu_light_buffer::classify_changes()
-{
-    local_changes_.clear();
-    bool global = false;
-    for(const auto& [id, record] : current_lights_)
-    {
-        const auto previous = previous_lights_.find(id);
-        if(previous == previous_lights_.end())
-        {
-            if(is_directional(record))
-            {
-                global = true;
-            }
-            else
-            {
-                local_changes_.push_back({id, influence_bounds(record)});
-            }
-            continue;
-        }
-        const auto& before = previous->second;
-        if(before == record)
-        {
-            continue;
-        }
-        const bool was_directional = is_directional(before);
-        const bool now_directional = is_directional(record);
-        if(was_directional && now_directional)
-        {
-            global = global || is_global_brightness_change(light_brightness(before), light_brightness(record));
-            continue;
-        }
-        global = global || was_directional || now_directional;
-        if(!was_directional)
-        {
-            local_changes_.push_back({id, influence_bounds(before)});
-        }
-        if(!now_directional)
-        {
-            local_changes_.push_back({id, influence_bounds(record)});
-        }
-    }
-    for(const auto& [id, record] : previous_lights_)
-    {
-        if(current_lights_.count(id) != 0)
-        {
-            continue;
-        }
-        if(is_directional(record))
-        {
-            global = true;
-        }
-        else
-        {
-            local_changes_.push_back({id, influence_bounds(record)});
-        }
-    }
-    if(global)
-    {
-        ++global_revision_;
-    }
-    previous_lights_.swap(current_lights_);
-    current_lights_.clear();
-}
 
 void gpu_light_buffer::ensure_capacity(uint32_t required_vec4)
 {
@@ -199,7 +93,7 @@ void gpu_light_buffer::update(scene& scn)
     data_.clear();
     light_count_ = 0;
     scn.registry->view<transform_component, light_component, active_component>().each(
-        [&](auto entity, auto&& transform_comp, auto&& light_comp, auto&& active)
+        [&](auto /*entity*/, auto&& transform_comp, auto&& light_comp, auto&& /*active*/)
         {
             const auto& light = light_comp.get_light();
             // Scale must not leak into a light's transform: only its position and orientation
@@ -236,8 +130,8 @@ void gpu_light_buffer::update(scene& scn)
             dst[5] = direction.y;
             dst[6] = direction.z;
             dst[7] = range;
-            // Same linear decode as the deferred direct-lighting pass: GI-lit voxels
-            // and directly-lit pixels must agree on the light's color.
+            // Same linear decode as the deferred direct-lighting pass: the surface cache's
+            // lighting and directly-lit pixels must agree on the light's color.
             const auto light_color_linear = light.color.to_linear();
             dst[8] = light_color_linear.value.r;
             dst[9] = light_color_linear.value.g;
@@ -249,34 +143,23 @@ void gpu_light_buffer::update(scene& scn)
             // Reserved for the shadow atlas slot, once shadows are resident. -1 means the
             // light casts no resident shadow and must be treated as unshadowed.
             dst[15] = -1.0f;
-            auto& record = current_lights_[static_cast<uint32_t>(entity)];
-            for(size_t i = 0; i < record.size(); ++i)
-            {
-                record[i] = dst[i];
-            }
             ++light_count_;
         });
-    classify_changes();
     if(data_.empty())
     {
-        // An emptied light set is a content change too: without flipping the hash, the last
-        // populated frame's value would linger and the probe fast-window (and the gate below,
-        // if lights later return unchanged) would read "nothing changed".
-        content_hash_ = 1469598103934665603ull;
+        // Nothing to upload; the reset hash makes the next populated frame upload whatever it holds.
+        content_hash_ = fnv_offset_basis;
         return;
     }
     ensure_capacity(uint32_t(data_.size() / 4u));
-    // FNV-1a over the exact bytes the GPU receives: any light property change flips the hash,
-    // which is what the world probes key their fast-refresh window on.
-    uint64_t hash = 1469598103934665603ull;
+    // FNV-1a over the exact bytes the GPU receives gates the upload: re-staging an unchanged
+    // light set every frame is, on Vulkan, continuous staging-allocator churn for identical bytes.
+    uint64_t hash = fnv_offset_basis;
     const auto* bytes = reinterpret_cast<const uint8_t*>(data_.data());
     for(size_t i = 0; i < data_.size() * sizeof(float); ++i)
     {
-        hash = (hash ^ bytes[i]) * 1099511628211ull;
+        hash = (hash ^ bytes[i]) * fnv_prime;
     }
-    // The hash it just computed also gates the upload: a static light set re-staged the whole
-    // buffer every frame - on Vulkan that is continuous staging-allocator churn for identical
-    // bytes (the same waste upload_instance_grid was already gated against).
     if(hash == content_hash_ && buffer_uploaded_)
     {
         return;

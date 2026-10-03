@@ -23,9 +23,8 @@ enum class visualization_mode : int
     base_color = 0,
     diffuse_color = 1,
     specular_color = 2,
-    /// The indirect specular radiance: the traced layers in RBUFFER (SSR over the GI reflection
-    /// tier, or Lumen's reflections) plus their uncovered share of the probe layer in PBUFFER, each
-    /// occluded.
+    /// The indirect specular radiance: the traced layers in RBUFFER (SSR, or Lumen's reflections) plus
+    /// their uncovered share of the probe layer in PBUFFER, each occluded.
     reflections = 3,
     irradiance = 4,
     ambient_occlusion = 5,
@@ -40,34 +39,9 @@ enum class visualization_mode : int
     /// 1 - RBUFFER alpha: the share of the specular the traced reflections cover.
     reflection_coverage = 13,
     specular_occlusion = 14,
-    sdf_normals = 15,
-    sdf_step_count = 16,
-    sdf_headers = 17,
-    sdf_brick_probe = 18,
-    sdf_bounds_entry = 19,
-    sdf_clipmap = 20,
-    gi_direct_lighting = 21,
-    sdf_cascade_levels = 22,
-    gi_voxel_albedo = 23,
-    gi_light_voxels = 24,
-    gi_world_probes = 25,
-    gi_sun_tiers = 26,
-    gi_probe_sky = 27,
-    gi_vis_memo = 28,
     velocity = 29,
-    /// The screen-space AO bent normal (GTAO only).
+    /// The screen-space AO bent normal (GTAO, or Lumen's short-range AO).
     ao_bent_normals = 31,
-    gi_attr_emissive = 32,
-    gi_cage_health = 33,
-    gi_dirty_regions = 34,
-    gi_probe_lattice = 35,
-    gi_screen_probes = 36,
-    gi_temporal = 37,
-    gi_probe_tiers = 38,
-    /// The temporal's reset cause per pixel (fresh / dirty region / camera / moving / detector).
-    gi_temporal_cause = 39,
-    /// Explicit emitter sampling census per screen probe (aimed energy share, aimed rays, emitters).
-    gi_emitter_share = 40,
     /// Auto exposure's own state over the lit image: the adaptation trace and this frame's
     /// metering histogram (UE's Visualize HDR).
     exposure = 41,
@@ -98,11 +72,7 @@ enum class visualization_group : int
     lighting,
     /// Screen-space motion.
     motion,
-    /// Distance-field integrity: sphere-traced from the camera, not the raster image.
-    distance_field,
-    /// Global illumination caches read at the traced hit.
-    global_illumination,
-    /// The Lumen surface cache (cards and their atlas).
+    /// Lumen's scene representation: the global distance field and the surface cache of cards.
     lumen,
     count,
 };

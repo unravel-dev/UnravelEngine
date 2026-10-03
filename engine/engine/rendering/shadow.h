@@ -772,42 +772,6 @@ public:
     auto get_depth_render_program(PackDepth::Enum depth) const -> gpu_program::ptr;
     void submit_uniforms(uint8_t stage) const;
 
-    /// World -> shadow-texcoord matrix (lViewProjCropBias) of one split, exactly as the
-    /// lighting shaders receive it via u_shadowMapMtx*. For consumers that sample a single
-    /// split directly (the GI light-voxel pass) instead of taking the full CSM uniform set.
-    auto get_shadow_map_matrix(uint8_t split) const -> const float*;
-
-    /// The constant receiver depth bias of cascade 0 in stored depth units (the texel bias
-    /// converted through the cascade's texel size and depth scale), for consumers that sample
-    /// the map with their own compare (the GI light-voxel pass).
-    auto get_shadow_map_bias() const -> float;
-
-    /// d(stored depth)/d(world distance along the light) of the directional map, so a consumer
-    /// can convert its own world-space bias (the GI pass covers a voxel of slope).
-    auto get_shadow_map_world_to_depth() const -> float;
-
-    /// View-space far distance of one directional split - the slice of the camera frustum the
-    /// cascade was fitted to. The map is defined ONLY for receivers inside that slice: the
-    /// raster never samples a cascade for pixels outside it, so nothing about the fit, the
-    /// caster set or the crop is contracted beyond it. A world-space consumer (the GI
-    /// light-voxel pass) needs the bound to stay inside the contract.
-    auto get_cascade_far_distance(uint8_t split) const -> float
-    {
-        return uniforms_.m_csmFarDistances[split];
-    }
-
-    /// World size of one texel of one directional split - the unit its biases are expressed
-    /// in (the GI light-voxel pass scales cascade 0's constant bias by it per split).
-    auto get_cascade_texel_world(uint8_t split) const -> float
-    {
-        return uniforms_.m_csmTexelWorld[split];
-    }
-
-    /// Active directional splits (the maps get_rt_texture answers for).
-    auto get_num_splits() const -> uint8_t
-    {
-        return uint8_t(settings_.m_numSplits);
-    }
 
     /// Edge of every split's map in texels.
     auto get_shadow_map_size() const -> uint16_t

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <engine/rendering/gpu_program.h>
-#include <engine/rendering/pipeline/passes/gi_resolve_pass.h>
+#include <engine/rendering/pipeline/passes/lumen_run_params.h>
 
 #include <graphics/render_view.h>
 #include <graphics/texture.h>
@@ -25,7 +25,7 @@ public:
     struct run_params
     {
         /// The gather's inputs this frame: the G-buffer, last frame's depth, the camera, the pre-exposure.
-        const gi_resolve_pass::run_params* gather{};
+        const lumen_run_params* gather{};
         /// The gather's history this frame reads (a = frame count) and whether it holds last frame: the AO history
         /// is reprojected over its taps and blended with its weight.
         gfx::texture::ptr gather_history;
@@ -55,6 +55,7 @@ private:
         gfx::program::uniform_ptr u_lumen_frame;
         gfx::program::uniform_ptr u_lumen_probes;
         gfx::program::uniform_ptr u_lumen_view;
+        gfx::program::uniform_ptr u_lumen_settings;
         gfx::program::uniform_ptr u_lumen_short_range_ao;
         gfx::program::uniform_ptr u_lumen_prev_view_proj;
         gfx::program::uniform_ptr u_pre_exposure;

@@ -100,7 +100,7 @@ vec4 LumenReadHistoryTaps(LumenHistoryTaps taps)
 		color += weight * history.xyz;
 		count += weight * (history.w + 1.0);
 	}
-	float frames = min(count / max(weight_sum, 1e-5), float(LUMEN_TEMPORAL_MAX_FRAMES));
+	float frames = min(count / max(weight_sum, 1e-5), u_lumen_temporal_max_frames);
 	return vec4(color / max(weight_sum, 1e-5) * u_history_pre_exposure_correction, frames);
 }
 
@@ -110,12 +110,12 @@ vec4 LumenReadHistory(ivec2 pixel, vec3 position, vec3 normal)
 	return LumenReadHistoryTaps(LumenHistoryReprojection(pixel, position, normal));
 }
 
-/// The frame count as the 4-bit history stores it: multiples of LUMEN_TEMPORAL_MAX_FRAMES / 15.
+/// The frame count as the 4-bit history stores it: multiples of the temporal's maximum frame count / 15.
 float LumenQuantizeFrames(float frames)
 {
 	float levels = float(LUMEN_TEMPORAL_COUNT_LEVELS);
-	return floor(saturate(frames / float(LUMEN_TEMPORAL_MAX_FRAMES)) * levels + 0.5) / levels *
-	       float(LUMEN_TEMPORAL_MAX_FRAMES);
+	return floor(saturate(frames / u_lumen_temporal_max_frames) * levels + 0.5) / levels *
+	       u_lumen_temporal_max_frames;
 }
 
 #endif // __LUMEN_HISTORY_SH__
