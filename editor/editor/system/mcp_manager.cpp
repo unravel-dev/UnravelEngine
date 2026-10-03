@@ -13,7 +13,11 @@
 namespace unravel
 {
 
-mcp_manager::mcp_manager() = default;
+mcp_manager::mcp_manager(cmd_line::parser& parser)
+{
+    parser.set_optional<int>("", "mcp-port", k_default_port, "Port of the editor MCP server.");
+}
+
 mcp_manager::~mcp_manager()
 {
     stop();
@@ -28,9 +32,14 @@ constexpr int k_invalid_params = -32602;
 constexpr int k_internal_error = -32603;
 } // namespace
 
-auto mcp_manager::init(rtti::context& ctx) -> bool
+auto mcp_manager::init(rtti::context& ctx, const cmd_line::parser& parser) -> bool
 {
     ctx_ = &ctx;
+    int port = k_default_port;
+    if(parser.try_get("mcp-port", port) && port > 0 && port <= k_max_port)
+    {
+        port_ = port;
+    }
     mcp::register_scene_tools(registry_);
     mcp::register_scene_batch_tools(registry_);
     mcp::register_ops_batch_tools(registry_);

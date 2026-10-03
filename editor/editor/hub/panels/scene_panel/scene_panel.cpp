@@ -1823,6 +1823,18 @@ void scene_panel::set_visualization_mode(int mode)
     visualize_passes_ = mode;
 }
 
+void scene_panel::set_forced_render_size(uint32_t width, uint32_t height)
+{
+    const bool is_forced = width > 0u && height > 0u;
+    forced_render_width_ = is_forced ? width : 0u;
+    forced_render_height_ = is_forced ? height : 0u;
+}
+
+auto scene_panel::get_forced_render_size() const -> std::pair<uint32_t, uint32_t>
+{
+    return {forced_render_width_, forced_render_height_};
+}
+
 auto scene_panel::get_visualization_mode() const -> int
 {
     return visualize_passes_;
@@ -2234,7 +2246,13 @@ void scene_panel::draw_ui(rtti::context& ctx)
     // camera viewport. If no resolution is configured, the panel falls back
     // to the full available area.
     ImVec2 view_size = avail;
-    if(const auto* current_res = viewport_resolution::get_resolution(ctx, current_resolution_index_))
+    const bool is_render_size_forced = forced_render_width_ > 0u && forced_render_height_ > 0u;
+    if(is_render_size_forced)
+    {
+        const float scale = std::min(avail.x / float(forced_render_width_), avail.y / float(forced_render_height_));
+        view_size = ImVec2(float(forced_render_width_) * scale, float(forced_render_height_) * scale);
+    }
+    else if(const auto* current_res = viewport_resolution::get_resolution(ctx, current_resolution_index_))
     {
         view_size = viewport_resolution::compute_fitted_size(*current_res, avail);
     }
@@ -2249,7 +2267,10 @@ void scene_panel::draw_ui(rtti::context& ctx)
     const ImRect toolbar_area(avail_origin, avail_origin + avail);
     update_toolbar_layout(ctx, toolbar_area);
 
-    setup_camera_viewport(camera_comp, view_size, view_pos);
+    const ImVec2 render_size = is_render_size_forced
+                                   ? ImVec2(float(forced_render_width_), float(forced_render_height_))
+                                   : view_size;
+    setup_camera_viewport(camera_comp, render_size, view_pos);
     draw_scene_viewport(ctx, view_size, view_pos);
     process_drag_drop_target(ctx, camera_comp);
     // After the image: the shadows of the bars go into this window's draw list, on top of it.

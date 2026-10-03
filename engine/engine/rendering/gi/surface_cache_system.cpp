@@ -55,6 +55,10 @@ void write_affine_row(float* dst, const ::math::mat4& m, int row)
     dst[2] = m[2][row];
     dst[3] = m[3][row];
 }
+
+/// FNV-1a over the placement identities in order (surface_cache_system::get_instance_order_hash).
+constexpr uint64_t instance_order_hash_seed = 1469598103934665603ull;
+constexpr uint64_t instance_order_hash_prime = 1099511628211ull;
 } // namespace ANONYMOUS
 } // namespace
 
@@ -110,6 +114,7 @@ auto surface_cache_system::init(rtti::context& ctx) -> bool
 auto surface_cache_system::deinit(rtti::context& ctx) -> bool
 {
     instances_.clear();
+    lumen_sources_.clear();
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();
     residency_.clear();
@@ -220,7 +225,7 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
         }
         if(record.header_index != sdf_atlas::invalid_index)
         {
-            return {record.header_index, record.resident_mip};
+            return complete_acquired_field(record, m, submesh_index);
         }
     }
     const auto& sdf = m.get_sdf(submesh_index);
@@ -309,10 +314,51 @@ auto surface_cache_system::acquire_field(const hpp::uuid& mesh_uid,
             // Residency moved: a level fingerprint hashes the sdf pointer, which the packed
             // instance bytes do not carry.
             ++content_revision_;
-            return {record.header_index, record.resident_mip};
+            return complete_acquired_field(record, m, submesh_index);
         }
     }
     return {};
+}
+
+auto surface_cache_system::complete_acquired_field(mesh_residency& record, const mesh& m, uint32_t submesh_index)
+    -> acquired_field
+{
+    acquired_field result{record.header_index, record.resident_mip};
+    const uint32_t mip_count = m.get_sdf_mip_count(submesh_index);
+    const uint32_t coarsest = mip_count > 0 ? mip_count - 1 : 0;
+    if(record.resident_mip >= coarsest)
+    {
+        // The traced level is the coarsest: a separate copy would only hold atlas space.
+        if(record.coarse_header_index != sdf_atlas::invalid_index)
+        {
+            atlas_.release(record.coarse_header_index);
+            record.coarse_header_index = sdf_atlas::invalid_index;
+            ++content_revision_;
+        }
+        return result;
+    }
+    if(record.coarse_header_index == sdf_atlas::invalid_index)
+    {
+        // Attempted once per atlas release generation, as the traced level is: a refusal for want of room only
+        // changes when something is released.
+        const auto& coarse = m.get_sdf(submesh_index, coarsest);
+        const uint32_t generation = atlas_.get_release_generation();
+        if(coarse.is_valid() && atlas_.has_upload_budget(coarse) && record.coarse_attempt_generation != generation)
+        {
+            record.coarse_attempt_generation = generation;
+            record.coarse_header_index = atlas_.upload(coarse);
+            if(record.coarse_header_index != sdf_atlas::invalid_index)
+            {
+                ++content_revision_;
+            }
+        }
+    }
+    if(record.coarse_header_index != sdf_atlas::invalid_index)
+    {
+        result.coarse_header_index = record.coarse_header_index;
+        result.coarse_mip_level = coarsest;
+    }
+    return result;
 }
 
 void surface_cache_system::apply_atlas_pressure()
@@ -355,6 +401,10 @@ void surface_cache_system::apply_atlas_pressure()
         {
             atlas_.release(entry.second.header_index);
         }
+        if(entry.second.coarse_header_index != sdf_atlas::invalid_index)
+        {
+            atlas_.release(entry.second.coarse_header_index);
+        }
     }
     residency_.clear();
     ++content_revision_;
@@ -380,6 +430,11 @@ void surface_cache_system::release_unused_fields()
             // Residency moved (see the matching bump in acquire_field).
             ++content_revision_;
             atlas_.release(it->second.header_index);
+        }
+        if(it->second.coarse_header_index != sdf_atlas::invalid_index)
+        {
+            ++content_revision_;
+            atlas_.release(it->second.coarse_header_index);
         }
         it = residency_.erase(it);
     }
@@ -836,12 +891,12 @@ void surface_cache_system::rebuild_dirty_regions()
 }
 
 void surface_cache_system::add_instance(uint64_t identity,
-                                         uint32_t header_index,
-                                         const mesh_sdf& sdf,
+                                         const placed_field& field,
                                          const math::mat4& local_to_world,
                                          const std::shared_ptr<mesh>& owner,
                                          const material_summary& material)
 {
+    const mesh_sdf& sdf = *field.sdf;
     instance inst;
     // Decoded once per material per frame (summarize_material); a non-PBR material keeps the
     // neutral defaults rather than guessing at a colour nothing on screen is painted with.
@@ -852,8 +907,15 @@ void surface_cache_system::add_instance(uint64_t identity,
     inst.mean_captured = material.mean_captured;
     inst.emissive_mean_slot = material.emissive_mean_slot;
     inst.emissive_mean_captured = material.emissive_mean_captured;
+    inst.is_two_sided = material.is_two_sided;
+    inst.is_emissive_light_source =
+        material.is_pbr && material.emissive_luminance >= float(gi::GI_EMISSIVE_NEE_MIN_LUMINANCE);
     inst.local_to_world = local_to_world;
-    inst.header_index = header_index;
+    inst.header_index = field.header_index;
+    inst.coarse_header_index =
+        field.coarse_header_index != sdf_atlas::invalid_index ? field.coarse_header_index : field.header_index;
+    // Chained, unlike the content fingerprints: it must change when the same placements arrive in another order.
+    instance_order_hash_ = (instance_order_hash_ ^ identity) * ANONYMOUS::instance_order_hash_prime;
     // POSE CACHE: the inverse, the smallest scale axis and the transformed bounds are pure
     // functions of the transform and the field's local bounds, and a static placement
     // presents the same pair every frame - the tracker keys placements by identity, so it
@@ -866,6 +928,7 @@ void surface_cache_system::add_instance(uint64_t identity,
     {
         inst.world_to_local = tracked.world_to_local;
         inst.local_to_world_scale = tracked.local_to_world_scale;
+        inst.axis_scale = tracked.axis_scale;
         inst.world_bounds = tracked.field_bounds;
     }
     else
@@ -886,6 +949,7 @@ void surface_cache_system::add_instance(uint64_t identity,
         // mean would let a sphere trace overshoot a non-uniformly scaled instance and pass
         // through it.
         inst.local_to_world_scale = math::max(math::min(scale_x, math::min(scale_y, scale_z)), 1e-6f);
+        inst.axis_scale = math::max(math::vec3(scale_x, scale_y, scale_z), math::vec3(1e-6f));
         // World-space AABB of the field's local bounds, for the tracer's broad phase: the exact
         // box of the transformed corners, so a rotated instance still gets a bound that
         // contains it.
@@ -901,6 +965,7 @@ void surface_cache_system::add_instance(uint64_t identity,
     tracked.has_pose = true;
     tracked.world_to_local = inst.world_to_local;
     tracked.local_to_world_scale = inst.local_to_world_scale;
+    tracked.axis_scale = inst.axis_scale;
     // INSTANCE VELOCITY (the gather temporal's hit-motion signal): the bounds centre's
     // displacement since this placement's previous frame, and the largest displacement of
     // any local-bounds corner (a spinning placement moves its surface, not its centre);
@@ -932,9 +997,11 @@ void surface_cache_system::add_instance(uint64_t identity,
     }
     global_sdf_instance clipmap_instance;
     clipmap_instance.sdf = &sdf;
+    clipmap_instance.coarse_sdf = field.coarse_sdf;
     clipmap_instance.world_to_local = inst.world_to_local;
     clipmap_instance.world_bounds = inst.world_bounds;
     clipmap_instance.local_to_world_scale = inst.local_to_world_scale;
+    clipmap_instance.axis_scale = inst.axis_scale;
     // Attribute-voxel material: the same per-submesh values the tracer's
     // instance buffer carries, so a cascade surface voxel and a near-field hit agree on what
     // the surface looks like.
@@ -1166,9 +1233,8 @@ void surface_cache_system::upload_instances()
             dst[33] = inst.albedo.y;
             dst[34] = inst.albedo.z;
             // Both texture-mean slots share this lane, the colour map's below the emissive map's:
-            // every one of the record's 44 floats is spoken for, and both slots are under
-            // texture_mean_capacity (1024), so the packed integer stays under 2^21 and exact in a
-            // float. MIRROR OF SdfMeanSlotColor / SdfMeanSlotEmissive in sdf_common.sh.
+            // both are under texture_mean_capacity (1024), so the packed integer stays under 2^21
+            // and exact in a float. MIRROR OF SdfMeanSlotColor / SdfMeanSlotEmissive in sdf_common.sh.
             static_assert(texture_mean_capacity <= mean_slot_radix,
                           "a mean slot must fit below the packing radix");
             dst[35] = float(inst.mean_slot) + float(inst.emissive_mean_slot) * float(mean_slot_radix);
@@ -1183,6 +1249,18 @@ void surface_cache_system::upload_instances()
             dst[41] = inst.velocity.y;
             dst[42] = inst.velocity.z;
             dst[43] = inst.max_corner_displacement;
+            // Lane 11: x = flags (1 two-sided: the Lumen global SDF's coverage; 2 emissive light source: kept by the
+            // Lumen cascade however small), yzw = the world length of each local axis (SdfInstanceWorldDistance's
+            // per-axis bounds). MIRROR OF SdfLoadInstance.
+            dst[44] = (inst.is_two_sided ? 1.0f : 0.0f) + (inst.is_emissive_light_source ? 2.0f : 0.0f);
+            dst[45] = inst.axis_scale.x;
+            dst[46] = inst.axis_scale.y;
+            dst[47] = inst.axis_scale.z;
+            // Lane 12: x = the coarse header (instance::coarse_header_index; the traced header when there is none).
+            dst[48] = float(inst.coarse_header_index);
+            dst[49] = 0.0f;
+            dst[50] = 0.0f;
+            dst[51] = 0.0f;
         });
     // Content hash over the exact bytes the GPU receives: any change to a transform, material
     // colour, bounds, or field index flips it. Eight bytes per round rather than a byte-serial
@@ -1244,6 +1322,7 @@ auto surface_cache_system::summarize_material(const material::sptr& mat) -> cons
     {
         return summary;
     }
+    summary.is_two_sided = mat && mat->get_cull_type() == cull_type::none;
     // Colour lives on pbr_material, not on the material base. A material of some other kind -
     // or a submesh with none at all - keeps the neutral defaults rather than guessing, which is
     // strictly better than tinting the scene with a colour nothing is painted with.
@@ -1334,8 +1413,8 @@ void surface_cache_system::walk_scene(scene& scn)
                 // same material), decoded once per material per frame, and shared by both paths
                 // below. Hoisted above acquire_field because the material can veto the placement
                 // outright, and a vetoed submesh must not take an atlas slot.
-                const material_summary& material =
-                    summarize_material(resolve_submesh_material(mdl, *mesh_ptr, submesh_index));
+                const material::sptr submesh_material = resolve_submesh_material(mdl, *mesh_ptr, submesh_index);
+                const material_summary& material = summarize_material(submesh_material);
                 // THE ONE DEFINITION of "has a field", so the two paths below stay disjoint and no
                 // submesh falls through both. Skinned submeshes never place a field, even when
                 // the compiled asset carries one: the field is bind-pose geometry and pinning it
@@ -1411,9 +1490,30 @@ void surface_cache_system::walk_scene(scene& scn)
                 // Its bounds and voxel differ from the finest level's, and those are what the
                 // placement and the tracer must agree on.
                 const auto& sdf = mesh_ptr->get_sdf(submesh_index, acquired.mip_level);
+                const placed_field field{header_index,
+                                         &sdf,
+                                         acquired.coarse_header_index,
+                                         acquired.coarse_header_index != sdf_atlas::invalid_index
+                                             ? &mesh_ptr->get_sdf(submesh_index, acquired.coarse_mip_level)
+                                             : nullptr};
+                // Every placement of the submesh shares one card set (built on first sight).
+                const bool two_sided = submesh_material && submesh_material->get_cull_type() == cull_type::none;
+                const auto cards = lumen_cards_.acquire(mesh_ptr, mesh_handle.uid(), submesh_index, two_sided);
+                // Called right after add_instance, so the placement's GI instance is the last one.
+                const auto add_lumen_source = [&](uint64_t identity, const math::mat4& local_to_world)
+                {
+                    lumen_sources_.push_back({identity,
+                                              uint32_t(instances_.size() - 1u),
+                                              mesh_ptr,
+                                              submesh_index,
+                                              submesh_material,
+                                              local_to_world,
+                                              cards});
+                };
                 if(!submesh_transforms.has_transforms(submesh_index))
                 {
-                    add_instance(submesh_key, header_index, sdf, world_transform, mesh_ptr, material);
+                    add_instance(submesh_key, field, world_transform, mesh_ptr, material);
+                    add_lumen_source(submesh_key, world_transform);
                     continue;
                 }
                 const size_t transform_count = submesh_transforms.get_transform_count(submesh_index);
@@ -1429,11 +1529,11 @@ void surface_cache_system::walk_scene(scene& scn)
                         continue;
                     }
                     add_instance(submesh_key | (uint64_t(instance_index) & 0xFFFFu),
-                                 header_index,
-                                 sdf,
+                                 field,
                                  *transform_ptr,
                                  mesh_ptr,
                                  material);
+                    add_lumen_source(submesh_key | (uint64_t(instance_index) & 0xFFFFu), *transform_ptr);
                 }
             }
         });
@@ -1462,15 +1562,22 @@ void surface_cache_system::update_world(scene& scn)
     apply_atlas_pressure();
     // Every camera, not the one rendering: residency is shared, so the level a field gets must be
     // a function of the world. Gathered before any placement so compute_wanted_mip sees them all.
-    camera_positions_.clear();
-    scn.registry->view<transform_component, camera_component>().each(
-        [&](auto /*entity*/, auto&& camera_transform, auto&& /*camera*/)
-        {
-            camera_positions_.push_back(camera_transform.get_transform_global().get_position());
-        });
+    // Diagnostic (experiment bit 1 << 31): the residency keeps the camera positions it last saw.
+    constexpr uint32_t experiment_freeze_residency = 1u << 31u;
+    if((experiment_flags_ & experiment_freeze_residency) == 0u || camera_positions_.empty())
+    {
+        camera_positions_.clear();
+        scn.registry->view<transform_component, camera_component>().each(
+            [&](auto /*entity*/, auto&& camera_transform, auto&& /*camera*/)
+            {
+                camera_positions_.push_back(camera_transform.get_transform_global().get_position());
+            });
+    }
     instances_.clear();
+    lumen_sources_.clear();
     clipmap_instances_.clear();
     clipmap_keepalive_.clear();
+    instance_order_hash_ = ANONYMOUS::instance_order_hash_seed;
     if(!is_enabled())
     {
         return;

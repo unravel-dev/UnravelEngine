@@ -65,10 +65,14 @@ void global_sdf_clipmap::init(const settings& settings)
     {
         auto& lvl = levels_[i];
         lvl.voxel_size = get_level_extent(i) / float(settings_.resolution);
-        lvl.voxels.assign(size_t(settings_.resolution) * settings_.resolution * settings_.resolution, 0u);
-        // Start saturated positive: an empty world reads as "nothing anywhere near", which is
-        // the conservative answer and keeps traces marching instead of hitting at the origin.
-        std::fill(lvl.voxels.begin(), lvl.voxels.end(), uint8_t(255));
+        // The CPU composer's voxels only: a GPU-composed level lives in the GPU mirror alone. Start saturated
+        // positive: an empty world reads as "nothing anywhere near", which is the conservative answer and keeps
+        // traces marching instead of hitting at the origin.
+        std::vector<uint8_t>().swap(lvl.voxels);
+        if(!settings_.compose_on_gpu)
+        {
+            lvl.voxels.assign(size_t(settings_.resolution) * settings_.resolution * settings_.resolution, uint8_t(255));
+        }
         // Deliberately not a valid snapped origin, so the first update always composes.
         lvl.origin = math::vec3(std::numeric_limits<float>::max());
     }
@@ -113,6 +117,7 @@ auto global_sdf_clipmap::compute_instance_entry_hash(const global_sdf_instance& 
         entry = (entry ^ uint64_t(words[i])) * 0x100000001b3ull;
     }
     entry = (entry ^ reinterpret_cast<uintptr_t>(instance.sdf)) * 0x100000001b3ull;
+    entry = (entry ^ reinterpret_cast<uintptr_t>(instance.coarse_sdf)) * 0x100000001b3ull;
     // Material too: albedo and emissive are BAKED into the attribute voxels at composition,
     // so a change nothing rehashes would keep bouncing the old colour forever. This is also
     // what publishes a lazily resolved texture-mean albedo (surface_cache_system) and any
@@ -219,11 +224,12 @@ auto global_sdf_clipmap::get_stale_level_count() const -> uint32_t
 
 auto global_sdf_clipmap::apply_settings(const settings& new_settings) -> bool
 {
-    // Only these three change what a voxel MEANS. Everything else is read afresh by the next
-    // composition, so assigning it is enough and costs nothing.
+    // These change what a voxel MEANS, or which volumes hold it. Everything else is read afresh by
+    // the next composition, so assigning it is enough and costs nothing.
     const bool layout_changed = new_settings.resolution != settings_.resolution ||
                                 new_settings.base_extent != settings_.base_extent ||
-                                new_settings.level_scale != settings_.level_scale;
+                                new_settings.level_scale != settings_.level_scale ||
+                                new_settings.distance_only != settings_.distance_only;
     if(layout_changed)
     {
         init(new_settings);
@@ -619,16 +625,24 @@ void global_sdf_clipmap::compose_level(uint32_t index, const std::vector<global_
                                   // of the same scene produce different voxels.
                                   //
                                   // test_clipmap_compose_shader_transcription_matches_cpu guards
-                                  // this by comparing against a differently ordered gather.
-                                  if(nearest >= 0.0f && to_bounds >= nearest)
+                                  // this by comparing against a differently ordered gather. Strict,
+                                  // for the same reason: at nearest == 0 (a voxel centre on a face)
+                                  // an instance containing the voxel reads to_bounds 0 too.
+                                  if(nearest >= 0.0f && to_bounds > nearest)
                                   {
                                       continue;
                                   }
                                   ++slice_samples;
                                   const math::vec4 local =
                                       instance->world_to_local * math::vec4(world_position, 1.0f);
-                                  const float local_distance = sample_mesh_sdf(*instance->sdf, math::vec3(local));
-                                  nearest = math::min(nearest, local_distance * instance->local_to_world_scale);
+                                  // Two-sided fields compose as zero-thickness sheets: the
+                                  // global field's march thickens surfaces by its own expand.
+                                  nearest = math::min(nearest,
+                                                      sample_instance_distance(*instance->sdf,
+                                                                               math::vec3(local),
+                                                                               instance->axis_scale,
+                                                                               instance->local_to_world_scale,
+                                                                               true));
                               }
                               const uint32_t offset = x + y * resolution + z * resolution * resolution;
                               lvl.voxels[offset] = encode_clipmap_distance(nearest / voxel_size, encode_range);
@@ -731,10 +745,8 @@ void global_sdf_clipmap::compose_level_attributes(uint32_t index,
                     // crosses them, painting curtain and rope albedo onto the surfaces around
                     // them. Adding back the applied half-thickness (zero for signed fields)
                     // restores the unsigned sheet distance.
-                    const float shell_bias =
-                        instance.sdf->is_two_sided ? instance.sdf->two_sided_thickness : 0.0f;
                     const float magnitude =
-                        std::fabs((sample_mesh_sdf(*instance.sdf, math::vec3(local)) + shell_bias) *
+                        std::fabs(sample_mesh_sdf_sheet(*instance.sdf, math::vec3(local)) *
                                   instance.local_to_world_scale);
                     if(magnitude < m1 || (magnitude == m1 && (i1 >= instances.size() || candidate < i1)))
                     {
@@ -824,7 +836,7 @@ auto global_sdf_clipmap::sample_level(uint32_t index, const math::vec3& world_po
         return outside_distance;
     }
     const auto& lvl = levels_[index];
-    if(!lvl.is_valid())
+    if(!lvl.has_voxels())
     {
         return outside_distance;
     }
@@ -868,7 +880,7 @@ auto global_sdf_clipmap::find_level(const math::vec3& world_position, float& out
     for(uint32_t i = 0; i < level_count; ++i)
     {
         const auto& lvl = levels_[i];
-        if(!lvl.is_valid())
+        if(!lvl.has_voxels())
         {
             continue;
         }
@@ -886,7 +898,7 @@ auto global_sdf_clipmap::find_level(const math::vec3& world_position, float& out
         const math::vec3 to_high = math::vec3(resolution - 0.5f) - grid;
         const math::vec3 nearest_face = math::min(to_low, to_high);
         const float edge_distance = math::min(nearest_face.x, math::min(nearest_face.y, nearest_face.z));
-        const bool has_next = (i + 1u) < level_count && levels_[i + 1u].is_valid();
+        const bool has_next = (i + 1u) < level_count && levels_[i + 1u].has_voxels();
         // The outermost level never fades. Beyond it there is only the give-up value, and mixing
         // toward that would report a distance far larger than the truth -- the one direction a
         // conservative field must never err in, since a trace would step straight through

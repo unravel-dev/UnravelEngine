@@ -7,6 +7,7 @@
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
+#include <engine/rendering/gi/lumen_constants.h>
 #include <engine/rendering/perez_luminance.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
@@ -46,6 +47,12 @@ constexpr int contact_shadow_dither_frames = 16;
 /// RBUFFER's clear, packed RGBA8 (bgfx converts it for float targets): black with alpha 1 - no
 /// traced reflection yet, and the whole pixel left to the probe layer.
 constexpr uint32_t reflection_traced_clear_rgba = 0x000000ff;
+/// GI experiment flag (surface_cache_system::get_experiment_flags): Lumen views keep the volume's
+/// authored clipmap layout instead of Lumen's, for an A/B of layouts.
+constexpr uint32_t lumen_experiment_authored_clipmap = 1u << 19u;
+/// GI experiment flag: the global SDF clipmap stays where it was when the bit was set (no camera
+/// re-snaps), to isolate re-snap transients in A/Bs.
+constexpr uint32_t lumen_experiment_freeze_clipmap_origin = 1u << 27u;
 
 /// Where the environment revision is published on a render view, for the GI world side to read
 /// next to the IRRADIANCE_SH texture it belongs to (see run_irradiance_pass).
@@ -357,13 +364,14 @@ auto create_or_resize_reflection_buffer(gfx::render_view& rview,
 /// The reflection buffers. RBUFFER holds the traced layers (GI reflections, then SSR),
 /// premultiplied in rgb, with the share they leave uncovered in alpha; PBUFFER holds the
 /// untraced layer (reflection probes, sky, the GI rough tier). The indirect pass occludes the
-/// two differently (ComposeIndirectSpecular in lighting.sh).
+/// two differently (ComposeIndirectSpecular in lighting.sh). Lumen's reflections write both
+/// from compute.
 void create_or_resize_reflection_buffers(gfx::render_view& rview,
                                          const usize32_t& viewport_size,
                                          const pipeline::run_params& params)
 {
     create_or_resize_reflection_buffer(rview, "RBUFFER", viewport_size, params, BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
-    create_or_resize_reflection_buffer(rview, "PBUFFER", viewport_size, params, BGFX_TEXTURE_RT);
+    create_or_resize_reflection_buffer(rview, "PBUFFER", viewport_size, params, BGFX_TEXTURE_RT | BGFX_TEXTURE_COMPUTE_WRITE);
 }
 auto create_or_resize_o_buffer(gfx::render_view& rview,
                                const usize32_t& viewport_size,
@@ -884,6 +892,17 @@ void deferred::set_debug_view_scale(float scale)
     debug_view_scale_ = scale > 0.0f ? scale : 1.0f;
 }
 
+auto deferred::get_debug_tonemapping(const run_params& rparams) -> tonemapping_method
+{
+    if(!rparams.fill_hdr_params)
+    {
+        return tonemapping_method::none;
+    }
+    tonemapping_pass::run_params tonemapping;
+    rparams.fill_hdr_params(tonemapping);
+    return tonemapping.config.method;
+}
+
 auto deferred::get_pre_exposure(gfx::render_view& rview) const -> pre_exposure_state
 {
     const auto* state = rview.data().try_get<pre_exposure_state>(pre_exposure_state::view_key);
@@ -1071,9 +1090,21 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
             // but keeps what is underneath.
             run_exposure_debug_pass(rview, output, params);
         }
-        else if(debug_pass_ == debug_pass_ao_bent_normals)
+        else if(debug_pass_ == debug_pass_ao_bent_normals || debug_pass_ == debug_pass_lumen_reflection_rays)
         {
-            run_debug_visualization_pass(camera, rview, output);
+            run_debug_visualization_pass(camera, rview, output, get_debug_tonemapping(params));
+        }
+        else if(debug_pass_ >= debug_pass_lumen_scene && debug_pass_ <= debug_pass_lumen_scene_indirect)
+        {
+            lumen_surface_cache_pass::debug_params lumen_debug;
+            lumen_debug.output = output.get();
+            lumen_debug.cam = &camera;
+            lumen_debug.gi_scene = &engine::context().get_cached<surface_cache_system>();
+            lumen_debug.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+            lumen_debug.mode = debug_pass_ - debug_pass_lumen_scene;
+            lumen_debug.exposure = get_pre_exposure(rview).value;
+            lumen_debug.tonemapping = get_debug_tonemapping(params);
+            lumen_surface_cache_pass_.run_debug(lumen_debug);
         }
         else if(debug_pass_ >= debug_pass_sdf_normals)
         {
@@ -1081,7 +1112,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         }
         else if(debug_pass_ >= 0)
         {
-            run_debug_visualization_pass(camera, rview, output);
+            run_debug_visualization_pass(camera, rview, output, get_debug_tonemapping(params));
         }
     }
 
@@ -2379,15 +2410,15 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     // estimate is SSIL's, whose rays resolved the screen-space visibility per pixel: it takes
     // no screen-space AO, where the GI resolve takes it below its probe lattice.
     const bool indirect_diffuse_is_ssil = indirect_diffuse_tex && !rview.tex_safe_get("GI_RESOLVE");
-    const float indirect_params[4] = {indirect_diffuse_tex ? 1.0f : 0.0f,
-                                      indirect_diffuse_is_ssil ? 1.0f : 0.0f,
-                                      0.0f,
-                                      0.0f};
-    gfx::set_uniform(iprogram.u_indirect_params, indirect_params);
     // The occlusion of both indirect terms: the screen-space AO, and the GTSO table for the
     // specular. The untraced reflection layer (PBUFFER) takes the full occlusion, the traced
     // layers in RBUFFER only the material AO's.
     const auto screen_ao = get_screen_ao_inputs(rview);
+    const float indirect_params[4] = {indirect_diffuse_tex ? 1.0f : 0.0f,
+                                      indirect_diffuse_is_ssil ? 1.0f : 0.0f,
+                                      screen_ao.multi_bounce_albedo_cap,
+                                      0.0f};
+    gfx::set_uniform(iprogram.u_indirect_params, indirect_params);
     gfx::set_texture(iprogram.s_screen_ao, 9, screen_ao.texture);
     gfx::set_uniform(iprogram.u_screen_ao, screen_ao.params.data());
     gfx::set_texture(iprogram.s_probe_layer,
@@ -2701,7 +2732,7 @@ void deferred::run_ssr_pass(const camera& camera,
                             gfx::render_view& rview,
                             const run_params& rparams)
 {
-    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_ssr_params)
+    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_ssr_params || lumen_reflections_own_view(rparams))
     {
         ssr_pass_.release_resources(rview);
         return;
@@ -2748,6 +2779,13 @@ void deferred::run_ssr_pass(const camera& camera,
 
 void deferred::run_screen_ao_pass(const camera& camera, gfx::render_view& rview, delta_t dt, const run_params& rparams)
 {
+    if(lumen_short_range_ao_owns_view(rparams))
+    {
+        gtao_pass_.release_resources(rview);
+        rview.tex_remove("GTAO");
+        assao_pass_.release_resources(rview);
+        return;
+    }
     // GTAO takes precedence: with both volumes enabled only GTAO runs.
     if(run_gtao_pass(camera, rview, rparams))
     {
@@ -2789,6 +2827,18 @@ auto deferred::get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_
     screen_ao_inputs inputs;
     inputs.texture = default_textures::get().white_texture();
     inputs.params = {1.0f, 0.0f, 1.0f, 0.0f};
+    // Lumen's short-range AO when the gather produced it this frame (UE DiffuseIndirectComposite.usf
+    // GetShadingOcclusion): the diffuse takes the visibility through the multi-bounce fit at the post-process
+    // intensity 1 (no bent normal: the ambient axis stays the normal), the untraced specular the bent cone.
+    const auto& lumen_ao = rview.tex_safe_get(lumen_gather_pass::screen_ao_texture);
+    const auto* lumen_ao_frame = rview.data().try_get<uint32_t>(lumen_gather_pass::screen_ao_frame);
+    if(lumen_ao && lumen_ao_frame && *lumen_ao_frame == uint32_t(gfx::get_render_frame()))
+    {
+        inputs.texture = lumen_ao;
+        inputs.params = {1.0f, 0.0f, 1.0f, 1.0f};
+        inputs.multi_bounce_albedo_cap = gi::lumen::LUMEN_SHORT_RANGE_AO_MAX_MULTIBOUNCE_ALBEDO;
+        return inputs;
+    }
     const auto& gtao_tex = rview.tex_safe_get("GTAO");
     const auto* gtao_settings = rview.data().try_get<gtao_pass::settings>("GTAO_SETTINGS");
     if(gtao_tex && gtao_settings)
@@ -3127,8 +3177,28 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
     resolve_gi_settings(params, gi);
     auto clipmap_settings = gi.clipmap;
     clipmap_settings.compose_on_gpu = clipmap_settings.compose_on_gpu && gi_clipmap_compose_pass_.is_valid();
+    if(gi.resolve.enable_lumen_gather)
+    {
+        // Lumen fixes its own global distance field, whatever the volume authored: the distance
+        // volume alone (its hits read the surface cache), in Lumen's layout (lumen_constants.h) - a
+        // level-0 edge inside the view makes the converged lighting move with the camera.
+        clipmap_settings.distance_only = true;
+        if((surface_cache.get_experiment_flags() & ANONYMOUS::lumen_experiment_authored_clipmap) == 0u)
+        {
+            clipmap_settings.resolution = uint32_t(gi::lumen::LUMEN_GLOBAL_SDF_RESOLUTION);
+            clipmap_settings.base_extent = gi::lumen::LUMEN_GLOBAL_SDF_EXTENT;
+            clipmap_settings.level_scale = 2.0f;
+        }
+    }
+    const bool freeze_origin =
+        (surface_cache.get_experiment_flags() & ANONYMOUS::lumen_experiment_freeze_clipmap_origin) != 0u;
+    if(!freeze_origin || !has_frozen_clipmap_camera_)
+    {
+        clipmap_camera_ = camera.get_position();
+        has_frozen_clipmap_camera_ = freeze_origin;
+    }
     view_cache.update(surface_cache.get_clipmap_instances(),
-                      camera.get_position(),
+                      clipmap_camera_,
                       clipmap_settings,
                       surface_cache.get_content_revision());
     // Runs whenever the programs exist, not only when the GPU composes: the pass also
@@ -3145,8 +3215,9 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
     }
     // Light the surface voxels while the cascade and its attributes are current, then trace
     // the world probes against them. Gated on GI actually being requested - the
-    // sdf-debug-only path keeps the cascade alive but has no lights to spend.
-    if(params.fill_gi_params)
+    // sdf-debug-only path keeps the cascade alive but has no lights to spend - and on a cascade
+    // that holds them: Lumen's distance-only field has no surface voxels to light.
+    if(params.fill_gi_params && !view_cache.get_clipmap_gpu().is_distance_only())
     {
         // SPARSE LEVEL-0 PROBE ALLOCATION (gi_world_probes.sh): ungated and AHEAD of the gate.
         // It claims probes for the cells last frame's cage readers stamped, frees the ones
@@ -3282,9 +3353,55 @@ void deferred::run_gi_world_probe_pass(const camera& camera,
     gi_world_probe_pass_.run(rview, probe_params);
 }
 
+auto deferred::lumen_short_range_ao_owns_view(const run_params& rparams) -> bool
+{
+    if(!reflection_screen_stack_enabled(rparams) || !lumen_gather_pass_.has_short_range_ao())
+    {
+        return false;
+    }
+    gi_settings gi;
+    if(!resolve_gi_settings(rparams, gi) || !gi.resolve.enable_lumen_gather)
+    {
+        return false;
+    }
+    const uint32_t experiments = engine::context().get_cached<surface_cache_system>().get_experiment_flags();
+    return lumen_gather_pass::uses_short_range_ao(experiments);
+}
+
+auto deferred::lumen_reflections_own_view(const run_params& rparams) -> bool
+{
+    if(!reflection_screen_stack_enabled(rparams) || !wants_hdr_buffers(rparams) || !lumen_reflection_pass_.has_programs())
+    {
+        return false;
+    }
+    gi_settings gi;
+    if(!resolve_gi_settings(rparams, gi) || !gi.resolve.enable_lumen_gather || !gi.resolve.enable_reflections)
+    {
+        return false;
+    }
+    const uint32_t experiments = engine::context().get_cached<surface_cache_system>().get_experiment_flags();
+    return (experiments & lumen_reflection_pass::experiment_previous_reflections) == 0u;
+}
+
+void deferred::run_lumen_reflection_pass(gfx::render_view& rview, const gi_resolve_pass::run_params& gather_params)
+{
+    const auto rbuffer = rview.fbo_safe_get("RBUFFER");
+    const auto pbuffer = rview.fbo_safe_get("PBUFFER");
+    if(!rbuffer || !pbuffer)
+    {
+        return;
+    }
+    lumen_reflection_pass::run_params params;
+    params.gather = &gather_params;
+    params.rough_specular = rview.tex_safe_get("GI_ROUGH_SPECULAR");
+    params.traced_output = rbuffer->get_texture(0);
+    params.probe_output = pbuffer->get_texture(0);
+    lumen_reflection_pass_.run(rview, params);
+}
+
 auto deferred::run_gi_reflection_pass(const camera& camera, gfx::render_view& rview, const run_params& params) -> bool
 {
-    if(params.run_type != pipeline_run_type::camera)
+    if(params.run_type != pipeline_run_type::camera || lumen_reflections_own_view(params))
     {
         return false;
     }
@@ -3407,7 +3524,19 @@ auto deferred::run_gi_resolve_pass(const camera& camera,
         params.pre_exposure = get_pre_exposure(rview);
         params.surface_cache = &ctx.get_cached<surface_cache_system>();
         params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
-        result = gi_resolve_pass_.run(rview, params);
+        if(resolve_settings.enable_lumen_gather)
+        {
+            run_lumen_surface_cache(camera, rview, *params.surface_cache);
+            params.lumen_surface_cache = &lumen_surface_cache_pass_;
+        }
+        result = resolve_settings.enable_lumen_gather ? lumen_gather_pass_.run(rview, params)
+                                                      : gi_resolve_pass_.run(rview, params);
+        // Lumen's reflections follow its gather (UE: the screen probe gather, then the reflections), whose
+        // rough specular they composite under the traced layer.
+        if(result && resolve_settings.enable_lumen_gather && lumen_reflections_own_view(rparams))
+        {
+            run_lumen_reflection_pass(rview, params);
+        }
     }
     if(result)
     {
@@ -3466,6 +3595,79 @@ auto deferred::update_gi_hold(const camera& camera, gfx::render_view& rview, con
     }
     state.hold = state.still_frames >= ANONYMOUS::gi_hold_still_frames;
     return state.hold;
+}
+
+void deferred::run_lumen_surface_cache(const camera& camera, gfx::render_view& rview, surface_cache_system& gi_scene)
+{
+    APP_SCOPE_PERF("Rendering/Lumen Surface Cache");
+    lumen_surface_cache_pass_.update(gi_scene, camera.get_position(), camera.get_frustum());
+    capture_lumen_cards(camera, gi_scene);
+    lumen_surface_cache_pass_.copy_captures();
+    lumen_surface_cache_pass::lighting_inputs inputs;
+    inputs.gi_scene = &gi_scene;
+    inputs.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+    // Last frame's environment SH: the irradiance pass runs later in the frame.
+    inputs.environment_sh = rview.tex_safe_get("IRRADIANCE_SH");
+    inputs.view_exposure = get_pre_exposure(rview).value;
+    lumen_surface_cache_pass_.light(inputs);
+}
+
+void deferred::capture_lumen_cards(const camera& camera, const surface_cache_system& gi_scene)
+{
+    const auto& captures = lumen_surface_cache_pass_.get_scene().get_captures();
+    if(captures.empty())
+    {
+        return;
+    }
+    const auto& sources = gi_scene.get_lumen_sources();
+    const auto& target = lumen_surface_cache_pass_.get_capture_target();
+    // The camera's winding convention, which every capture's culling is matched against.
+    const math::mat4 camera_view_proj = camera.get_projection() * camera.get_view();
+    const float camera_orientation = math::determinant(math::mat3(camera_view_proj)) < 0.0f ? -1.0f : 1.0f;
+    const math::vec2 clip_planes(camera.get_near_clip(), camera.get_far_clip());
+    // No LOD fade: x = 0 never discards.
+    const math::vec3 lod_params(0.0f, -1.0f, 1.0f);
+    const math::mat4 identity(1.0f);
+    for(const auto& cap : captures)
+    {
+        const auto& src = sources[cap.source_index];
+        const auto* submesh = src.owner ? src.owner->get_submesh(src.submesh_index) : nullptr;
+        if(submesh == nullptr || !src.material || !src.material->is<pbr_material>())
+        {
+            continue;
+        }
+        const auto view = lumen_surface_cache_pass_.compute_capture_view(cap);
+        const auto x = uint16_t(cap.capture_offset.x);
+        const auto y = uint16_t(cap.capture_offset.y);
+        const auto w = uint16_t(cap.size.x);
+        const auto h = uint16_t(cap.size.y);
+        gfx::render_pass pass("GI/Lumen Card Capture");
+        pass.bind(target.get());
+        pass.set_view_rect(x, y, w, h);
+        pass.set_view_scissor(x, y, w, h);
+        pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x00000000, 1.0f, 0);
+        pass.set_view_proj(math::value_ptr(identity), math::value_ptr(view.view_proj));
+        geom_program_.program->begin();
+        // The camera sits far in front of the card so the shader's near-camera dither never fires.
+        gfx::set_uniform(geom_program_.u_camera_wpos, math::vec4(view.far_eye, 0.0f));
+        gfx::set_uniform(geom_program_.u_camera_clip_planes, clip_planes);
+        gfx::set_uniform(geom_program_.u_lod_params, lod_params);
+        gfx::set_world_transform(&src.local_to_world);
+        src.owner->bind_render_buffers_for_submesh(submesh, 0);
+        const auto& pbr = static_cast<const pbr_material&>(*src.material);
+        submit_pbr_material(geom_program_, pbr);
+        // A card basis of the opposite orientation winds triangles the other way: flip culling.
+        uint64_t state = pbr.get_render_states(true, true, true);
+        if(view.orientation != camera_orientation)
+        {
+            const uint64_t cull = state & BGFX_STATE_CULL_MASK;
+            state &= ~BGFX_STATE_CULL_MASK;
+            state |= cull == BGFX_STATE_CULL_CW ? BGFX_STATE_CULL_CCW : (cull == BGFX_STATE_CULL_CCW ? BGFX_STATE_CULL_CW : 0);
+        }
+        bgfx::setState(state);
+        bgfx::submit(pass.id, geom_program_.program->native_handle());
+        geom_program_.program->end();
+    }
 }
 
 void deferred::run_sdf_debug_pass(const camera& camera,
@@ -3595,7 +3797,8 @@ void deferred::run_sdf_debug_pass(const camera& camera,
 
 void deferred::run_debug_visualization_pass(const camera& camera,
                                             gfx::render_view& rview,
-                                            const gfx::frame_buffer::ptr& output)
+                                            const gfx::frame_buffer::ptr& output,
+                                            tonemapping_method tonemapping)
 {
     const auto& view = camera.get_view();
     const auto& proj = camera.get_projection();
@@ -3613,14 +3816,24 @@ void deferred::run_debug_visualization_pass(const camera& camera,
 
     debug_visualization_program_.program->begin();
 
-    // The AO bent normal view lives past the SDF range in the pass ids; the shader knows it as 15.
+    // The AO bent normal and dedicated reflection ray views live past the SDF range in the pass ids;
+    // the shader knows them as 15 and 16.
     int shader_mode = debug_pass_;
     if(debug_pass_ == debug_pass_ao_bent_normals)
     {
         shader_mode = 15;
     }
-    // y = the linear readback scale of the indirect-diffuse view (see set_debug_view_scale).
-    float u_params[4] = {float(shader_mode), debug_view_scale_, 0.0f, 0.0f};
+    else if(debug_pass_ == debug_pass_lumen_reflection_rays)
+    {
+        shader_mode = 16;
+    }
+    // y = the debug-view scale (see set_debug_view_scale), z = the roughness below which Lumen traces reflection
+    // rays (the dedicated reflection ray view).
+    const uint32_t lumen_experiments = engine::context().get_cached<surface_cache_system>().get_experiment_flags();
+    float u_params[4] = {float(shader_mode),
+                         debug_view_scale_,
+                         lumen_reflection_pass::get_max_roughness_to_trace(lumen_experiments),
+                         0.0f};
 
     gfx::set_uniform(debug_visualization_program_.u_params, u_params);
     gfx::set_uniform(debug_visualization_program_.u_pre_exposure, get_pre_exposure(rview).to_uniform().data());
@@ -3643,13 +3856,18 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     {
         indirect_diffuse_tex = rview.tex_safe_get("SSIL");
     }
-    if(indirect_diffuse_tex)
-    {
-        gfx::set_texture(debug_visualization_program_.s_tex[i], i, indirect_diffuse_tex);
-    }
+    gfx::set_texture(debug_visualization_program_.s_tex[i],
+                     i,
+                     indirect_diffuse_tex ? indirect_diffuse_tex : default_textures::get().transparent_texture());
     const auto screen_ao = get_screen_ao_inputs(rview);
     gfx::set_texture(debug_visualization_program_.s_tex[8], 8, screen_ao.texture);
     gfx::set_uniform(debug_visualization_program_.u_screen_ao, screen_ao.params.data());
+    const bool indirect_diffuse_is_ssil = indirect_diffuse_tex && !rview.tex_safe_get("GI_RESOLVE");
+    const float visualize_indirect[4] = {float(tonemapping),
+                                         screen_ao.multi_bounce_albedo_cap,
+                                         indirect_diffuse_is_ssil ? 1.0f : 0.0f,
+                                         0.0f};
+    gfx::set_uniform(debug_visualization_program_.u_visualize_indirect, visualize_indirect);
     // The reflection views compose the two reflection buffers the way the indirect pass does.
     gfx::set_texture(debug_visualization_program_.s_tex[9], 9, pbuffer);
     gfx::set_texture(debug_visualization_program_.s_tex[10], 10, default_textures::get().specular_occlusion().texture.get());

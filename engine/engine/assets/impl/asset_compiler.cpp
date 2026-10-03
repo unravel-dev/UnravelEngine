@@ -1209,6 +1209,9 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                                                                   }));
         // One slot per submesh, each written by exactly one task, so this needs no synchronisation.
         std::vector<sdf_component_summary> component_summaries(data.submeshes.size());
+        // Whether each submesh ASKED for a two-sided field (asset setting or material), so a shell the
+        // bake chose on its own can be told apart from one that was requested. One slot per task.
+        std::vector<uint8_t> requested_two_sided(data.submeshes.size(), 0u);
         poolstl::for_each_par_if(
             parallel_submeshes,
             poolstl::iota_iter<size_t>(0),
@@ -1260,6 +1263,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                     submesh_settings.two_sided = true;
                     ++two_sided_by_material_count;
                 }
+                requested_two_sided[i] = submesh_settings.two_sided ? 1u : 0u;
                 // The whole chain, not just the finest level. The coarser ones exist so the
                 // runtime atlas can fall back to a level that FITS rather than dropping the
                 // submesh out of GI, and they cost about a third extra to bake because each
@@ -1337,7 +1341,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
             }
             surface_bricks += bricks;
             memory_bytes += field.get_memory_usage();
-            any_two_sided_fallback = any_two_sided_fallback || (field.is_two_sided && !sdf_settings.two_sided);
+            any_two_sided_fallback = any_two_sided_fallback || (field.is_two_sided && requested_two_sided[i] == 0u);
             const math::vec3 field_dimensions = field.bounds.get_dimensions();
             const float field_extent =
                 math::max(field_dimensions.x, math::max(field_dimensions.y, field_dimensions.z));
@@ -1537,11 +1541,10 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
             if(any_two_sided_fallback)
             {
                 // Reported rather than silent: an unsigned shell has no solid interior, so the
-                // mesh occludes but does not fill. If that is wrong for this asset, the mesh
-                // needs closing rather than a different SDF setting.
-                APPLOG_INFO("  {0} has submeshes that are not closed surfaces, so their SDFs were "
-                            "baked as unsigned shells. The inside/outside test is undefined on an "
-                            "open mesh and would otherwise mark regions outside it as solid.",
+                // mesh occludes but does not fill.
+                APPLOG_INFO("  {0} has doubled-sheet submeshes (every face paired with a coincident, "
+                            "oppositely wound twin), so their SDFs were baked as unsigned shells: such "
+                            "geometry renders from both sides and has no inside.",
                             str_input);
             }
             if(discarded_triangles.load() > 0)

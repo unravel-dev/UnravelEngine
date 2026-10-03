@@ -18,6 +18,16 @@
 /// [i * resolution, (i + 1) * resolution). See global_sdf_clipmap_gpu.
 SAMPLER3D(s_sdf_clipmap, 4);
 
+/// Voxels per coverage texel along each axis. Mirror of global_sdf_clipmap_gpu::coverage_downsample.
+#define SDF_CLIPMAP_COVERAGE_DOWNSAMPLE 2
+
+#ifdef SDF_CLIPMAP_COVERAGE_STAGE
+/// The Lumen coverage of the distance-only clipmap (global_sdf_clipmap_gpu::get_coverage_texture), stacked like the
+/// distance: 0 where only two-sided meshes lie within LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS of a voxel, 1 elsewhere
+/// (UE 5.8 GlobalDistanceFieldCompositeObjects.usf:61-72, 232-238). Texel c holds voxel 2c of its level.
+SAMPLER3D(s_sdf_clipmap_coverage, SDF_CLIPMAP_COVERAGE_STAGE);
+#endif
+
 /// Per cascade: xyz = world-space origin, w = voxel size. Zero w means the level is absent.
 uniform vec4 u_sdf_clipmap_levels[SDF_CLIPMAP_LEVEL_COUNT];
 /// x = voxels per axis in a level, y = cross-fade band width in voxels,
@@ -164,23 +174,43 @@ float SdfClipmapEdgeBlend(int index, vec3 world_position, float fade_voxels)
  * the band that is a mixture of two levels, and jumping it at the boundary would produce the
  * banding the per-level size exists to avoid.
  */
-float SdfSampleClipmapEx(vec3 world_position, out float out_voxel_size)
+/// One clipmap sample with the level that answered it, so a volume of the same layout (the coverage) reads the same
+/// levels without searching them again.
+struct SdfClipmapSample
 {
-	out_voxel_size = max(u_sdf_clipmap_levels[0].w, 1e-6);
+	float distance;
+	float voxel_size;
+	/// The finest covering level, SDF_CLIPMAP_LEVEL_COUNT where none covers the position.
+	int index;
+	/// The cross-fade toward level index + 1.
+	float blend;
+};
+
+SdfClipmapSample SdfSampleClipmapLevels(vec3 world_position)
+{
+	SdfClipmapSample s;
+	s.distance = SDF_CLIPMAP_OUTSIDE;
+	s.voxel_size = max(u_sdf_clipmap_levels[0].w, 1e-6);
+	s.index = SDF_CLIPMAP_LEVEL_COUNT;
+	s.blend = 0.0;
 	if(!u_sdf_clipmap_enabled)
 	{
-		return SDF_CLIPMAP_OUTSIDE;
+		return s;
 	}
 	float blend;
-	int index = SdfFindClipmapLevel(world_position, blend, out_voxel_size);
+	float voxel_size;
+	int index = SdfFindClipmapLevel(world_position, blend, voxel_size);
+	s.voxel_size = voxel_size;
+	s.index = index;
 	if(index >= SDF_CLIPMAP_LEVEL_COUNT)
 	{
-		return SDF_CLIPMAP_OUTSIDE;
+		return s;
 	}
 	float fine = SdfSampleClipmapLevel(index, world_position);
+	s.distance = fine;
 	if(blend <= 0.0)
 	{
-		return fine;
+		return s;
 	}
 	float coarse = SdfSampleClipmapLevel(index + 1, world_position);
 	if(coarse >= SDF_CLIPMAP_OUTSIDE)
@@ -188,10 +218,19 @@ float SdfSampleClipmapEx(vec3 world_position, out float out_voxel_size)
 		// The next level should always cover here -- it is larger and shares a centre -- so this
 		// only fires if snapping has pushed it off. Keeping the fine value is both conservative
 		// and the better answer; blending toward the give-up value would not be.
-		return fine;
+		return s;
 	}
-	out_voxel_size = mix(out_voxel_size, u_sdf_clipmap_levels[index + 1].w, blend);
-	return mix(fine, coarse, blend);
+	s.blend = blend;
+	s.voxel_size = mix(voxel_size, u_sdf_clipmap_levels[index + 1].w, blend);
+	s.distance = mix(fine, coarse, blend);
+	return s;
+}
+
+float SdfSampleClipmapEx(vec3 world_position, out float out_voxel_size)
+{
+	SdfClipmapSample s = SdfSampleClipmapLevels(world_position);
+	out_voxel_size = s.voxel_size;
+	return s.distance;
 }
 
 float SdfSampleClipmap(vec3 world_position)
@@ -199,5 +238,66 @@ float SdfSampleClipmap(vec3 world_position)
 	float ignored_voxel_size;
 	return SdfSampleClipmapEx(world_position, ignored_voxel_size);
 }
+
+#ifdef SDF_CLIPMAP_COVERAGE_STAGE
+/// One level's coverage at a WORLD position, trilinear within its slab (1 where the level does not cover it).
+float SdfSampleClipmapCoverageLevel(int index, vec3 world_position)
+{
+	vec4 level = u_sdf_clipmap_levels[index];
+	if(level.w <= 0.0)
+	{
+		return 1.0;
+	}
+	float resolution = u_sdf_clipmap_resolution;
+	float coverage_resolution = resolution / float(SDF_CLIPMAP_COVERAGE_DOWNSAMPLE);
+	vec3 grid = (world_position - level.xyz) / level.w;
+	if(any(lessThan(grid, vec3_splat(0.5))) || any(greaterThan(grid, vec3_splat(resolution - 0.5))))
+	{
+		return 1.0;
+	}
+	// Voxel 2c's centre (grid 2c + 0.5) is coverage texel c's centre (c + 0.5); clamped so the filter stays in the
+	// level's slab.
+	vec3 texel = clamp((grid + vec3_splat(0.5)) / float(SDF_CLIPMAP_COVERAGE_DOWNSAMPLE),
+	                   vec3_splat(0.5),
+	                   vec3_splat(coverage_resolution - 0.5));
+	vec3 uvw = vec3(texel.x / coverage_resolution,
+	                texel.y / coverage_resolution,
+	                (texel.z + float(index) * coverage_resolution) / (coverage_resolution * float(SDF_CLIPMAP_LEVEL_COUNT)));
+	return texture3DLod(s_sdf_clipmap_coverage, uvw, 0.0).x;
+}
+
+/// The coverage at a WORLD position from the levels @p s was read from, cross-faded the same way.
+float SdfSampleClipmapCoverageAt(SdfClipmapSample s, vec3 world_position)
+{
+	if(s.index >= SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		return 1.0;
+	}
+	float fine = SdfSampleClipmapCoverageLevel(s.index, world_position);
+	if(s.blend <= 0.0)
+	{
+		return fine;
+	}
+	return mix(fine, SdfSampleClipmapCoverageLevel(s.index + 1, world_position), s.blend);
+}
+
+/// The coverage at a WORLD position from the levels SdfSampleClipmapEx reads, cross-faded the same way.
+float SdfSampleClipmapCoverage(vec3 world_position)
+{
+	float blend;
+	float voxel_size;
+	int index = SdfFindClipmapLevel(world_position, blend, voxel_size);
+	if(index >= SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		return 1.0;
+	}
+	float fine = SdfSampleClipmapCoverageLevel(index, world_position);
+	if(blend <= 0.0)
+	{
+		return fine;
+	}
+	return mix(fine, SdfSampleClipmapCoverageLevel(index + 1, world_position), blend);
+}
+#endif
 
 #endif // __GI_SDF_CLIPMAP_SH__

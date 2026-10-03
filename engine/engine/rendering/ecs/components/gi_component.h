@@ -82,6 +82,7 @@ public:
         r.upsample_plane_tolerance =
             std::lerp(r.upsample_plane_tolerance, f.upsample_plane_tolerance, contribution);
         r.hold_at_rest = dominant ? f.hold_at_rest : r.hold_at_rest;
+        r.enable_lumen_gather = dominant ? f.enable_lumen_gather : r.enable_lumen_gather;
         // Cascade geometry is discrete: a resolution between two volumes is neither volume
         // and forces a rebuild per blend step.
         auto& rc = result.clipmap;

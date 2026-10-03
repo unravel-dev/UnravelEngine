@@ -28,9 +28,9 @@
 #define SDF_INDIRECTION_DISTANCE_MASK 0x00FFFFFFu
 
 /// vec4 elements per field header, per sdf_atlas::header_vec4_count.
-#define SDF_HEADER_STRIDE 3
+#define SDF_HEADER_STRIDE 5
 /// vec4 elements per instance, per surface_cache_system::instance_vec4_stride.
-#define SDF_INSTANCE_STRIDE 11
+#define SDF_INSTANCE_STRIDE 13
 /// No instance produced this hit: either nothing was hit, or the global cascade answered, which
 /// is composed from many fields and cannot attribute a sample to one.
 #define SDF_NO_INSTANCE (-1)
@@ -153,6 +153,15 @@ struct SdfInstance
 	/// Slots in the texture-mean buffer (cs_gi_texture_mean.sc); 0 is reserved white.
 	uint mean_slot;
 	uint emissive_mean_slot;
+	/// The submesh's material renders both faces (UE bMostlyTwoSided): the Lumen coverage leaves space near only such
+	/// instances uncovered.
+	bool is_two_sided;
+	/// World length of each local axis: the per-axis bounds of SdfInstanceWorldDistance.
+	vec3 axis_scale;
+	/// The material emits (UE's Emissive Light Source, derived): the Lumen cascade keeps it however small.
+	bool is_emissive_light_source;
+	/// The chain's coarsest resident level, or header_index when that is the coarsest (SdfInstanceStandaloneDistance).
+	uint coarse_header_index;
 };
 
 /// The two texture-mean slots share one float lane, the colour map's below the emissive map's.
@@ -191,6 +200,12 @@ SdfInstance SdfLoadInstance(int index)
 	inst.mean_slot = SdfMeanSlotColor(material0.w);
 	inst.emissive_mean_slot = SdfMeanSlotEmissive(material0.w);
 	inst.emissive = b_sdf_instances[base + 9u].xyz;
+	vec4 lane11 = b_sdf_instances[base + 11u];
+	uint flags = uint(lane11.x + 0.5);
+	inst.is_two_sided = (flags & 1u) != 0u;
+	inst.is_emissive_light_source = (flags & 2u) != 0u;
+	inst.axis_scale = lane11.yzw;
+	inst.coarse_header_index = uint(b_sdf_instances[base + 12u].x + 0.5);
 	return inst;
 }
 
@@ -284,6 +299,111 @@ float SdfSampleLocal(SdfHeader header, vec3 local_position)
 	return outside_distance > 0.0
 	           ? max(outside_distance + SDF_ENCODE_RANGE * header.voxel_size, distance - outside_distance)
 	           : distance;
+}
+
+/**
+ * Distance to a field's surface with a two-sided field read as the zero-thickness sheet it
+ * represents, in LOCAL units.
+ *
+ * The bake stores two-sided fields as |distance| - half thickness (bake_mesh_sdf), a shell the
+ * per-instance tracers walk out of. The global clipmap composes the sheet itself, as Lumen's
+ * global distance field does: its march thickens every surface by the ray-time expand, and a
+ * shell would put the launch point of every ray born on a sheet - Sponza's floor, any open
+ * submesh - inside geometry, killing the ray at t = 0. Signed fields carry a zero thickness.
+ */
+float SdfSheetDistance(SdfHeader header, vec3 local_position)
+{
+	return SdfSampleLocal(header, local_position) + header.two_sided_thickness;
+}
+
+/// Signed distance from a point at the absolute per-axis @p offset from a box's centre to the box of half extent
+/// @p extent, each axis scaled by @p scale: exact in world units for a scaled, rotated box.
+float SdfScaledBoxDistance(vec3 offset, vec3 extent, vec3 scale)
+{
+	vec3 to_box = (offset - extent) * scale;
+	return length(max(to_box, vec3_splat(0.0))) + min(max(to_box.x, max(to_box.y, to_box.z)), 0.0);
+}
+
+/**
+ * World distance from an instance's surface at the LOCAL position @p local_position, for the composed fields (the
+ * global distance field and the Lumen object grid; UE DistanceToNearestSurfaceForObject, MeshDistanceFieldCommon.ush).
+ * MIRROR OF sample_instance_distance (mesh_sdf_baker.cpp).
+ *
+ * A local distance times one scale is exact only along that scale's axis. With the smallest axis (the conservative
+ * choice) a wall scaled (10, 3, 0.2) reads 50x too close past its ends, so stretched primitives swell along their
+ * long axes and close the gaps between them. Two per-axis lower bounds keep the result tight and conservative: the
+ * world distance to the box the surface lies in (header lanes 3-4, the baked geometry's box; the field's bounds
+ * pad it unevenly), and outside the bounds the field at the nearest boundary point less the world distance to it
+ * (1-Lipschitz). Inside the bounds the field is converted with the smallest axis scale, and a negative reading
+ * there stands (UE's volume-box term): an open sheet signed by the bake's vote is solid beyond its own box. @p sheet
+ * reads a two-sided field as its zero-thickness sheet (SdfSheetDistance); read as stored, a shell reaches its
+ * thickness past the box.
+ */
+float SdfInstanceWorldDistance(SdfInstance inst, SdfHeader header, vec3 local_position, bool sheet)
+{
+	uint header_base = inst.header_index * uint(SDF_HEADER_STRIDE);
+	vec3 surface_min = b_sdf_headers[header_base + 3u].xyz;
+	vec3 surface_max = b_sdf_headers[header_base + 4u].xyz;
+	vec3 surface_extent = 0.5 * (surface_max - surface_min) + vec3_splat(sheet ? 0.0 : header.two_sided_thickness);
+	vec3 surface_offset = abs(local_position - 0.5 * (surface_min + surface_max));
+	float to_surface_box = SdfScaledBoxDistance(surface_offset, surface_extent, inst.axis_scale);
+	vec3 extent = 0.5 * header.grid_dim * header.voxel_size;
+	vec3 offset = abs(local_position - (header.bounds_min + extent));
+	float to_bounds = SdfScaledBoxDistance(offset, extent, inst.axis_scale);
+	vec3 boundary = clamp(local_position, header.bounds_min, header.bounds_min + 2.0 * extent);
+	float field = SdfSampleLocal(header, boundary) + (sheet ? header.two_sided_thickness : 0.0);
+	if(to_bounds <= 0.0 && field < 0.0)
+	{
+		return field * inst.local_to_world_scale;
+	}
+	return max(field * inst.local_to_world_scale - max(to_bounds, 0.0), to_surface_box);
+}
+
+/// World reach of a level's exact readings around the instance: its encoded band less the half voxel the filter
+/// blends with saturated neighbours, plus a two-sided level's shell.
+float SdfInstanceExactReach(SdfInstance inst, SdfHeader header)
+{
+	return ((SDF_ENCODE_RANGE - 0.5) * header.voxel_size + header.two_sided_thickness) * inst.local_to_world_scale;
+}
+
+/**
+ * UE's DistanceToMeshSurfaceStandalone (DistanceFieldLightingShared.ush:452-471) over the two resident levels: the
+ * coarsest answers where it reads farther than a quarter of the distance it encodes (one of its voxels), the traced
+ * level nearer the surface. The traced level's narrow band saturates short of the Lumen cascade's coverage band; the
+ * coarsest level's reaches it. x = the world distance (SdfInstanceWorldDistance), y = the answering level's exact
+ * reach (SdfInstanceExactReach).
+ */
+vec2 SdfInstanceStandaloneDistance(SdfInstance inst, SdfHeader header, vec3 local_position, bool sheet)
+{
+	BRANCH
+	if(inst.coarse_header_index != inst.header_index)
+	{
+		SdfHeader coarse = SdfLoadHeader(inst.coarse_header_index);
+		float coarse_distance = SdfInstanceWorldDistance(inst, coarse, local_position, sheet);
+		if(abs(coarse_distance) > 0.25 * SDF_ENCODE_RANGE * coarse.voxel_size * inst.local_to_world_scale)
+		{
+			return vec2(coarse_distance, SdfInstanceExactReach(inst, coarse));
+		}
+	}
+	return vec2(SdfInstanceWorldDistance(inst, header, local_position, sheet), SdfInstanceExactReach(inst, header));
+}
+
+/// World radius of the sphere around the instance's geometry box (UE DFObjectBounds.SphereRadius).
+float SdfInstanceWorldRadius(SdfInstance inst)
+{
+	uint header_base = inst.header_index * uint(SDF_HEADER_STRIDE);
+	vec3 surface_half = 0.5 * (b_sdf_headers[header_base + 4u].xyz - b_sdf_headers[header_base + 3u].xyz);
+	return length(surface_half * inst.axis_scale);
+}
+
+/**
+ * Whether a Lumen cascade level of voxel size @p voxel holds the instance (UE CullObjectsToClipmapCS,
+ * GlobalDistanceField.usf:125): an object whose bounding sphere is no larger than max(@p min_radius,
+ * @p min_radius_voxels voxels) is left out, unless an emissive light source.
+ */
+bool SdfLumenCascadeKeepsInstance(SdfInstance inst, float voxel, float min_radius, float min_radius_voxels)
+{
+	return inst.is_emissive_light_source || SdfInstanceWorldRadius(inst) > max(min_radius, min_radius_voxels * voxel);
 }
 
 /**

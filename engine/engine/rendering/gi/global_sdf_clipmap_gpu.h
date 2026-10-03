@@ -38,8 +38,11 @@ public:
      * be BGFX_BUFFER_COMPUTE_WRITE - which bgfx forbids updating from the CPU; the CPU composer
      * uploads them with bgfx::update, which requires that flag absent. One set of flags cannot
      * serve both, so a composer change re-creates the mirror (see surface_cache_view::update).
+     * @param distance_only Create the distance volume alone (global_sdf_clipmap::settings::
+     * distance_only): every attribute, light-voxel and world-probe resource stays null, and the
+     * surface list keeps only its per-level cursor header for the compose dispatch to reset.
      */
-    auto init(uint32_t resolution, bool compose_on_gpu) -> bool;
+    auto init(uint32_t resolution, bool compose_on_gpu, bool distance_only = false) -> bool;
     void shutdown();
 
     /// The composer this mirror was created for. True = the compose pass writes the surface
@@ -47,6 +50,13 @@ public:
     auto is_composed_on_gpu() const -> bool
     {
         return compose_on_gpu_;
+    }
+
+    /// True when the mirror holds the distance volume alone (no attributes, light voxels or world
+    /// probes; see init).
+    auto is_distance_only() const -> bool
+    {
+        return distance_only_;
     }
 
     auto is_valid() const -> bool
@@ -62,6 +72,21 @@ public:
     auto get_texture() const -> const gfx::texture::ptr&
     {
         return texture_;
+    }
+
+    /// Voxels per coverage texel along each axis (UE GLOBAL_DISTANCE_FIELD_COVERAGE_DOWNSAMPLE_FACTOR). Mirror of
+    /// SDF_CLIPMAP_COVERAGE_DOWNSAMPLE in gi/sdf_clipmap.sh.
+    static constexpr uint32_t coverage_downsample = 2;
+
+    /**
+     * @brief The Lumen coverage of a distance-only mirror (null otherwise): R8, one texel per coverage_downsample^3
+     *        voxels, levels stacked along Z like the distance; 0 where only two-sided meshes lie near the voxel, 1
+     *        elsewhere. The compose writes it with the distance (cs_gi_clipmap_compose.sc); the Lumen global SDF march
+     *        reads it (gi/sdf_clipmap.sh SdfSampleClipmapCoverage).
+     */
+    auto get_coverage_texture() const -> const gfx::texture::ptr&
+    {
+        return coverage_texture_;
     }
 
     /**
@@ -358,7 +383,11 @@ public:
     }
 
 private:
+    /// The rest of init for a distance-only mirror: the surface list's cursor header alone.
+    auto init_distance_only(uint32_t depth) -> bool;
+
     gfx::texture::ptr texture_;
+    gfx::texture::ptr coverage_texture_;
     gfx::texture::ptr attr_albedo_texture_;
     gfx::texture::ptr attr_emissive_texture_;
     gfx::texture::ptr light_voxel_texture_;
@@ -383,6 +412,7 @@ private:
     bool needs_buffer_seed_ = false;
     bool needs_texture_clear_ = false;
     bool compose_on_gpu_ = true;
+    bool distance_only_ = false;
     std::array<float, 4> world_probe_atlas_params_{};
     uint32_t resolution_ = 0;
     std::array<float, size_t(level_param_count) * 4> level_params_{};

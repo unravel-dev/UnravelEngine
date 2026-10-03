@@ -2,6 +2,10 @@
  * Hi-Z Buffer Downsampling Compute Shader
  * Reads from previous mip level and writes to current mip level
  * Input and output mip levels are set by the C++ code via gfx::set_image
+ *
+ * Each output texel takes the closest depth of every input texel its uv range overlaps. A tracer that maps a
+ * screen uv to texel uv x textureSize(mip) (the Lumen screen traces) sees that range reach into a third input
+ * texel along an odd input dimension; without it the coarse texel would miss geometry the ray then skips.
  */
 
 #include "../bgfx_compute.sh"
@@ -14,7 +18,7 @@ IMAGE2D_RO(s_hiz_input, r32f, 0);
 IMAGE2D_WO(s_hiz_output, r32f, 1);
 
 // Uniforms for mip generation
-// x: current_mip_width, y: current_mip_height, z: unused, w: current_mip_level
+// x: current_mip_width, y: current_mip_height, z: input_mip_width, w: input_mip_height
 uniform vec4 u_hiz_params;
 
 NUM_THREADS(8, 8, 1)
@@ -28,18 +32,25 @@ void main()
         return;
     }
     
-    // Calculate coordinates in the input (previous mip level)
-    // Each output texel corresponds to a 2x2 block in the input
+    // The input texels under this texel: 2 per axis, 3 along an odd input dimension
+    ivec2 inputSize = ivec2(u_hiz_params.zw);
+    ivec2 lastInput = inputSize - ivec2(1, 1);
+    ivec2 footprint = ivec2(2 + (inputSize.x & 1), 2 + (inputSize.y & 1));
     ivec2 inputCoord = coord * 2;
     
-    // Sample 4 depth values from the 2x2 block
-    float depth0 = imageLoad(s_hiz_input, inputCoord + ivec2(0, 0)).r;
-    float depth1 = imageLoad(s_hiz_input, inputCoord + ivec2(1, 0)).r;
-    float depth2 = imageLoad(s_hiz_input, inputCoord + ivec2(0, 1)).r;
-    float depth3 = imageLoad(s_hiz_input, inputCoord + ivec2(1, 1)).r;
-    
     // Find minimum depth for conservative occlusion testing (standard depth: 0.0 = near, 1.0 = far)
-    float minDepth = min(min(depth0, depth1), min(depth2, depth3));
+    float minDepth = 1.0;
+    for (int y = 0; y < 3; ++y)
+    {
+        for (int x = 0; x < 3; ++x)
+        {
+            if (x < footprint.x && y < footprint.y)
+            {
+                ivec2 texel = min(inputCoord + ivec2(x, y), lastInput);
+                minDepth = min(minDepth, imageLoad(s_hiz_input, texel).r);
+            }
+        }
+    }
     
     // Store result
     imageStore(s_hiz_output, coord, vec4(minDepth, 0.0, 0.0, 1.0));

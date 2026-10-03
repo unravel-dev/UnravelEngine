@@ -80,6 +80,9 @@ auto pipeline::init(rtti::context& ctx) -> bool
     gi_light_voxel_pass_.init(ctx);
     gi_world_probe_pass_.init(ctx);
     gi_resolve_pass_.init(ctx);
+    lumen_gather_pass_.init(ctx);
+    lumen_surface_cache_pass_.init(ctx);
+    lumen_reflection_pass_.init(ctx);
     gi_reflection_pass_.init(ctx);
     scene_history_pass_.init(ctx);
     sdf_debug_pass_.init(ctx);

@@ -33,7 +33,7 @@ public:
     static constexpr uint32_t invalid_index = 0xFFFFFFFFu;
 
     /// Floats per header in @ref get_header_buffer, as vec4 elements.
-    static constexpr uint32_t header_vec4_count = 3;
+    static constexpr uint32_t header_vec4_count = 5;
 
     struct settings
     {

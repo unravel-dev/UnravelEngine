@@ -610,6 +610,17 @@ public:
                       bool hardware_copy = true) -> bool;
 
     /**
+     * @brief The triangles global illumination represents a @ref create_plane plane by: its upward sheet alone.
+     *
+     * The plane renders two coincident, oppositely wound sheets so it shows from both sides. GI represents it as UE
+     * represents its plane mesh, by the upward sheet, which bakes signed (solid below). The doubled sheet bakes
+     * unsigned, and between two sample layers of the global SDF an unsigned sheet reads half a voxel, so a trace
+     * that registers surfaces within half a voxel passes through the floor.
+     */
+    static auto create_plane_gi_geometry(float width, float height, uint32_t width_segments, uint32_t height_segments)
+        -> sdf_source_geometry;
+
+    /**
      * @brief Creates a heightfield on the XZ plane (Y up): vertex grid (segments_x+1)*(segments_z+1).
      * @param heights Row-major samples indexed by z * (segments_x+1) + x, values in arbitrary units scaled by height_scale.
      * @param half_extent_x Half world size along X; vertices span [-half_extent_x, half_extent_x].
@@ -879,6 +890,12 @@ public:
      * @return true when a usable field was produced.
      */
     auto generate_sdf(const mesh_sdf_bake_settings& settings = runtime_sdf_bake_settings()) -> bool;
+
+    /**
+     * @brief The triangles global illumination represents this mesh by (its distance field and Lumen cards) when they
+     *        differ from the rendered ones (see @ref create_plane_gi_geometry); nullptr when they are the same.
+     */
+    auto get_gi_source_geometry() const -> const sdf_source_geometry*;
 
     /**
      * @brief Finishes a procedurally created mesh: @ref end_prepare, then @ref generate_sdf.
@@ -1393,6 +1410,8 @@ protected:
     std::vector<mesh_sdf> submesh_sdfs_;
     ///< Coarser levels per submesh; see load_data::submesh_sdf_coarse_mips.
     std::vector<std::vector<mesh_sdf>> submesh_sdf_coarse_mips_;
+    ///< See get_gi_source_geometry.
+    std::shared_ptr<const sdf_source_geometry> gi_source_geometry_;
     ///< Total number of faces in the prepared mesh.
     uint32_t face_count_ = 0;
     ///< Total number of vertices in the prepared mesh.

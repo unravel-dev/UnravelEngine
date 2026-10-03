@@ -95,6 +95,11 @@ struct mesh_sdf
     bool is_two_sided = false;
     /// Local-space half-thickness applied to two-sided fields.
     float two_sided_thickness = 0.0f;
+    /// Local-space box of the baked geometry itself. @ref bounds pads it unevenly - at least @ref get_bounds_padding
+    /// per side, plus the round-up to whole bricks on the max side and the offset that centres a sample layer on a
+    /// flat sheet - so it cannot be recovered from @ref bounds, and a box bound taken from them would grow by that
+    /// slack times the placement's scale. Read through @ref get_surface_bounds.
+    math::bbox surface_bounds{};
 
     /// One entry per brick, indexed `x + y * brick_dim.x + z * brick_dim.x * brick_dim.y`.
     /// See the INDIRECTION_* constants for the encoding.
@@ -181,6 +186,21 @@ struct mesh_sdf
     auto get_bounds_padding() const -> float
     {
         return encode_range * voxel_size;
+    }
+
+    /**
+     * @brief The box the surface lies in: @ref surface_bounds, or for a field that carries none, @ref bounds less
+     *        @ref get_bounds_padding on every side (a superset, since the bake pads by at least that much).
+     */
+    auto get_surface_bounds() const -> math::bbox
+    {
+        if(surface_bounds.is_populated())
+        {
+            return surface_bounds;
+        }
+        const math::vec3 inner_min = bounds.min + math::vec3(get_bounds_padding());
+        const math::vec3 grid_max = bounds.min + math::vec3(grid_dim) * voxel_size;
+        return math::bbox(inner_min, math::max(grid_max - math::vec3(get_bounds_padding()), inner_min));
     }
 
     /**

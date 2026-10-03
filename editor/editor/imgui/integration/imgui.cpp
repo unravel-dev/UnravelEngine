@@ -622,6 +622,12 @@ static void* memAlloc(size_t _size, void* _userData)
 static void memFree(void* _ptr, void* _userData)
 {
     BX_UNUSED(_userData);
+    // Static ImGui containers (text filters, splitters) release their memory during static destruction, after
+    // imguiDestroy cleared the allocator; the process is exiting, so those blocks are left to it.
+    if(s_ctx.m_allocator == nullptr)
+    {
+        return;
+    }
     bx::free(s_ctx.m_allocator, _ptr);
 }
 

@@ -45,7 +45,7 @@ uniform vec4 u_denoise_params;
 // Roughness at which the filter reaches full strength. It used to ramp all the way to the
 // trace cutoff (0.6), which left it at 4% on a 0.15 gloss and 40% on a 0.35 brushed metal -
 // the band where four jittered rays speckle most and the lobe is already wide enough to
-// hide a screen-space blur. Mirrors (the encoder floor) still bypass it entirely.
+// hide a screen-space blur. Mirrors (roughness below 0.05) still bypass it entirely.
 #define SSR_DENOISE_FULL_ROUGHNESS 0.3
 
 // 5-tap a-trous 1D kernel: [1/16, 1/4, 3/8, 1/4, 1/16]

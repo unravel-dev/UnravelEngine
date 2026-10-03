@@ -16,6 +16,9 @@
 #include <engine/meta/rendering/gi/mesh_sdf.hpp>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
 #include <engine/rendering/gi/gi_constants.h>
+#include <engine/rendering/gi/lumen_constants.h>
+#include <engine/rendering/gi/lumen_mesh_cards.h>
+#include <engine/rendering/gi/lumen_scene.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
@@ -628,63 +631,26 @@ void test_conservative_empty_bricks_in_a_shell()
 }
 
 /**
- * @brief Pins which bake setting actually controls the shell thickness on a large open submesh.
- *
- * An unsigned shell is floored at one voxel because a thinner one cannot be represented, so the
- * shell's WORLD thickness is set by the voxel size. The thin-geometry escalation REQUESTS a
- * voxel the authored thickness can justify whenever the derived one is coarser, and the caps
- * then arbitrate - which makes Max Total Voxels the governing lever for thin shells. Before the
- * escalation, Resolution pinned the voxel and raising the budget alone could not reach anything
- * finer: that trap made a phantom block look like a tracing bug rather than a sizing one, and
- * this test pinned it; it now pins the escalation's contract instead.
+ * @brief A large open one-sided submesh bakes as UE bakes it: signed by the backface vote, with no shell
+ *        and no thickness, solid behind its faces and empty in front of them.
  */
-void test_large_open_submesh_shell_is_governed_by_budget()
+void test_large_open_submesh_bakes_signed()
 {
-    std::printf("test_large_open_submesh_shell_is_governed_by_budget\n");
-    // Building-sized, and open so the bake takes the unsigned path on its own.
+    std::printf("test_large_open_submesh_bakes_signed\n");
     const auto geometry = make_open_box(math::vec3(15.0f));
-    constexpr float authored_thickness = 0.05f;
-    const auto bake_with = [&](uint32_t resolution, uint64_t budget, mesh_sdf& out) -> bool
-    {
-        mesh_sdf_bake_settings settings;
-        settings.resolution = resolution;
-        settings.max_total_voxels = budget;
-        settings.two_sided_thickness = authored_thickness;
-        return bake_mesh_sdf(geometry, settings, out);
-    };
-    constexpr uint64_t default_budget = 262144ull;
-    constexpr uint64_t raised_budget = default_budget * 8ull;
-    mesh_sdf base;
-    mesh_sdf budget_only;
-    mesh_sdf both;
-    check(bake_with(64, default_budget, base), "large open box bakes at the defaults");
-    check(bake_with(64, raised_budget, budget_only), "large open box bakes with a raised budget");
-    check(bake_with(256, raised_budget, both), "large open box bakes with both raised");
-    std::printf("  authored = %.3f | defaults: voxel %.3f shell %.3f | budget only: voxel %.3f "
-                "shell %.3f | both: voxel %.3f shell %.3f\n",
-                authored_thickness,
-                base.voxel_size,
-                base.two_sided_thickness,
-                budget_only.voxel_size,
-                budget_only.two_sided_thickness,
-                both.voxel_size,
-                both.two_sided_thickness);
-    check(base.is_two_sided, "an open submesh bakes as a shell without being asked");
-    // A volume-filling mesh at the default budget lands where it always did: the escalation
-    // requests finer, the budget takes it straight back. The phantom remains bounded only by
-    // what the budget can afford - which is why the runtime warns about the fat leftovers.
-    check(base.two_sided_thickness > authored_thickness * 5.0f,
-          "at the default budget a building-sized shell stays floored above the authored thickness");
-    // The point of the test, inverted from the pre-escalation contract: the budget alone now
-    // reaches a finer voxel, because the escalation's request is no longer pinned by Resolution.
-    check(budget_only.voxel_size < base.voxel_size * 0.6f,
-          "raising Max Total Voxels alone now reaches a finer voxel");
-    check(budget_only.two_sided_thickness < base.two_sided_thickness * 0.6f,
-          "raising Max Total Voxels alone now thins the shell with it");
-    // Resolution no longer adds anything for thin shells once the budget binds: both requests
-    // collapse onto the same budget-limited voxel.
-    check(both.voxel_size < budget_only.voxel_size * 1.05f,
-          "raising Resolution on top of the budget changes nothing the budget did not already set");
+    mesh_sdf_bake_settings settings;
+    settings.resolution = 64;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(geometry, settings, sdf), "large open box bakes at the defaults");
+    std::printf("  voxel %.3f, two-sided %d, thickness %.3f\n",
+                sdf.voxel_size,
+                int(sdf.is_two_sided),
+                sdf.two_sided_thickness);
+    check(!sdf.is_two_sided, "an open one-sided submesh bakes signed");
+    check(sdf.two_sided_thickness == 0.0f, "a signed field carries no shell");
+    const float offset = 1.5f * sdf.voxel_size;
+    check(sample_mesh_sdf(sdf, math::vec3(15.0f - offset, 0.0f, 0.0f)) < 0.0f, "behind the +X face is solid");
+    check(sample_mesh_sdf(sdf, math::vec3(15.0f + offset, 0.0f, 0.0f)) > 0.0f, "in front of the +X face is empty");
 }
 
 void test_conservative_empty_bricks()
@@ -1276,8 +1242,8 @@ void test_open_mesh_does_not_produce_inside_regions()
     // That is not a cosmetic error. An empty brick flagged inside returns a NEGATIVE distance,
     // the tracer reads any negative sample as a surface hit, and the result is that the field's
     // whole bounding box renders solid -- shaded by the box's own face normals -- instead of
-    // the mesh. The baker must detect an open surface and fall back to an unsigned shell, where
-    // the sign is never consulted.
+    // the mesh. The baker signs an open one-sided surface by UE's backface vote instead, which only
+    // signs the band around the surface.
     const math::vec3 half(0.5f, 0.5f, 0.5f);
     const auto geometry = make_open_box(half);
     mesh_sdf_bake_settings settings;
@@ -1285,7 +1251,26 @@ void test_open_mesh_does_not_produce_inside_regions()
     settings.min_voxel_size = 0.001f;
     mesh_sdf sdf;
     check(bake_mesh_sdf(geometry, settings, sdf), "open box bake succeeds");
-    check(sdf.is_two_sided, "an open surface falls back to an unsigned shell");
+    check(!sdf.is_two_sided, "an open one-sided surface bakes signed, by the backface vote");
+    // The vote makes the walls solid: just behind a face (inside the box) reads negative, just in
+    // front of it positive.
+    const float probe_offset = 1.5f * sdf.voxel_size;
+    int wrong_sides = 0;
+    for(const math::vec3& axis : {math::vec3(1.0f, 0.0f, 0.0f), math::vec3(-1.0f, 0.0f, 0.0f),
+                                  math::vec3(0.0f, 1.0f, 0.0f), math::vec3(0.0f, -1.0f, 0.0f),
+                                  math::vec3(0.0f, 0.0f, 1.0f)})
+    {
+        const math::vec3 face_center = axis * half;
+        const float behind = sample_mesh_sdf(sdf, face_center - axis * probe_offset);
+        const float in_front = sample_mesh_sdf(sdf, face_center + axis * probe_offset);
+        std::printf("  face (%+.0f %+.0f %+.0f): behind %.3f in front %.3f\n", axis.x, axis.y, axis.z, behind,
+                    in_front);
+        if(!(behind < 0.0f) || !(in_front > 0.0f))
+        {
+            ++wrong_sides;
+        }
+    }
+    check(wrong_sides == 0, "every closed face of an open box is solid behind and empty in front");
     // No brick may be flagged inside, and no sample well outside the mesh may read negative.
     int inside_bricks = 0;
     for(uint32_t entry : sdf.indirection)
@@ -1388,15 +1373,11 @@ void test_doubled_sheet_bakes_unsigned()
     check(negative_off_plane == 0, "no point clear of the slab reads as solid");
 }
 
-void test_engine_plane_primitive_bakes_flat()
+/// The EXACT geometry mesh::create_plane produces for the embedded "engine:/embedded/plane" asset
+/// (defaults::init_assets): a generator plane rotated -90 and +90 degrees about X and merged, i.e. two
+/// coincident, oppositely wound sheets - through the same generator templates, float trig and merge.
+auto make_engine_plane_geometry() -> sdf_source_geometry
 {
-    std::printf("test_engine_plane_primitive_bakes_flat\n");
-    // The EXACT geometry mesh::create_plane produces for the embedded "engine:/embedded/plane"
-    // asset (defaults::init_assets): a generator plane rotated -90 and +90 degrees about X and
-    // merged, i.e. two coincident, oppositely wound sheets. The doubled-sheet fixture above is a
-    // hand-built analog; this one goes through the same generator templates, the same float trig
-    // and the same merge, so a divergence between the two names the fixture as unfaithful rather
-    // than leaving it to be inferred from a screenshot.
     using namespace generator;
     plane_mesh_t plane({5.0f, 5.0f}, {1, 1});
     math::quat rot1(math::vec3(math::radians(-90.0f), 0.f, 0.0f));
@@ -1418,6 +1399,15 @@ void test_engine_plane_primitive_bakes_flat()
         g.indices.push_back(uint32_t(triangle.vertices[2]));
     }
     recompute_bounds(g);
+    return g;
+}
+
+void test_engine_plane_primitive_bakes_flat()
+{
+    std::printf("test_engine_plane_primitive_bakes_flat\n");
+    // The doubled-sheet fixture above is a hand-built analog of the engine plane; a divergence between the two
+    // names the fixture as unfaithful rather than leaving it to be inferred from a screenshot.
+    const sdf_source_geometry g = make_engine_plane_geometry();
     std::printf("  %zu vertices, %zu triangles, bounds y [%.6f, %.6f]\n",
                 g.positions.size(),
                 g.indices.size() / 3,
@@ -1540,41 +1530,25 @@ auto trace_instance_field(const mesh_sdf& sdf,
 }
 } // namespace
 
-void test_ray_from_open_sheet_escapes_its_own_shell()
+void test_open_sheet_bakes_solid_below()
 {
-    std::printf("test_ray_from_open_sheet_escapes_its_own_shell\n");
-    // A street-sized open sheet baked with the ASSET IMPORTER'S defaults. The shell of an open
-    // mesh is floored at one voxel, and a large submesh's voxel sits at the max_voxel_size clamp,
-    // so the field is a slab on the order of A METRE thick around the walkable surface. Every
-    // gather, bounce and shadow ray is born ON that surface -- deep inside its own field's
-    // "solid" -- and the per-instance tier accepted the first sample as a hit at t = 0. No
-    // cascade-derived bias can clear it, because the acceptance is measured in MESH voxels while
-    // every origin bias is measured in CASCADE voxels (see lessons.md). The visible result: the
-    // whole submesh's GI goes black wherever those biases are smaller than the shell, which is
-    // near the camera, with blob edges following submesh seams.
+    std::printf("test_open_sheet_bakes_solid_below\n");
+    // A street-sized one-sided sheet baked with the ASSET IMPORTER'S defaults, as UE bakes it: signed by
+    // the backface vote. Within the band the field is solid below the walkable surface and empty above
+    // it, so nothing born on the surface starts inside a slab of its own geometry.
     sdf_source_geometry g;
     const float half = 30.0f;
     add_quad(g, {-half, 0.0f, -half}, {-half, 0.0f, half}, {half, 0.0f, half}, {half, 0.0f, -half});
     recompute_bounds(g);
-    mesh_sdf_bake_settings settings; // Importer defaults: resolution 64, max_voxel_size 1.
+    mesh_sdf_bake_settings settings; // Importer defaults.
     mesh_sdf sdf;
     check(bake_mesh_sdf(g, settings, sdf), "street-sized sheet bake succeeds");
-    check(sdf.is_two_sided, "an open sheet bakes as a shell");
-    std::printf("  voxel = %.3f, shell half-thickness = %.3f\n", sdf.voxel_size, sdf.two_sided_thickness);
-    check(sdf.two_sided_thickness > 0.5f,
-          "the shell is thick enough to bury a surface ray (the premise being tested)");
-    // A gather ray as the resolve pass launches it: lifted a fraction of a CASCADE voxel
-    // (0.25 m at level 0), heading 45 degrees up.
-    const float cascade_lift = 0.256f * 0.25f;
-    const math::vec3 ray_origin(3.0f, cascade_lift, 2.0f);
-    const math::vec3 ray_dir = math::normalize(math::vec3(1.0f, 1.0f, 0.0f));
-    const auto buried = trace_instance_field(sdf, ray_origin, ray_dir, 40.0f, 0.1f, false);
-    check(buried.hit && buried.t < sdf.voxel_size,
-          "WITHOUT suppression the ray instantly hits its own launch shell (the bug)");
-    const auto freed = trace_instance_field(sdf, ray_origin, ray_dir, 40.0f, 0.1f, true);
-    check(!freed.hit, "with suppression the ray escapes its own launch shell");
-    // Occlusion must survive: a DIFFERENT field (a wall ahead) still stops the ray, because the
-    // suppression is per instance and the ray does not start inside the wall's shell.
+    std::printf("  voxel = %.3f, two-sided %d\n", sdf.voxel_size, int(sdf.is_two_sided));
+    check(!sdf.is_two_sided, "a one-sided street sheet bakes signed");
+    const float offset = 1.5f * sdf.voxel_size;
+    check(sample_mesh_sdf(sdf, math::vec3(3.0f, offset, 2.0f)) > 0.0f, "above the sheet is empty");
+    check(sample_mesh_sdf(sdf, math::vec3(3.0f, -offset, 2.0f)) < 0.0f, "below the sheet is solid");
+    // A one-sided wall in front of a ray still occludes it.
     sdf_source_geometry wall_geometry;
     add_quad(wall_geometry,
              {6.0f, 0.0f, -half},
@@ -1586,10 +1560,11 @@ void test_ray_from_open_sheet_escapes_its_own_shell()
     wall_settings.resolution = 64;
     mesh_sdf wall;
     check(bake_mesh_sdf(wall_geometry, wall_settings, wall), "wall bake succeeds");
-    const auto occluded = trace_instance_field(wall, ray_origin, ray_dir, 40.0f, 0.1f, true);
-    check(occluded.hit, "a wall the ray does NOT start inside still occludes");
-    // And a ray genuinely inside a SIGNED solid still reports the burial as a hit: that case is
-    // real occlusion, not a launch artefact, and the suppression must not free it.
+    const math::vec3 ray_origin(3.0f, 0.064f, 2.0f);
+    const math::vec3 ray_dir = math::normalize(math::vec3(1.0f, 1.0f, 0.0f));
+    const auto occluded = trace_instance_field(wall, ray_origin, ray_dir, 40.0f, 0.1f, false);
+    check(occluded.hit, "a wall in front of the ray occludes it");
+    // A ray genuinely inside a signed solid reports the burial as a hit.
     const auto solid_geometry = make_box(math::vec3(2.0f));
     mesh_sdf solid;
     mesh_sdf_bake_settings solid_settings;
@@ -1649,11 +1624,30 @@ auto make_scaled_clipmap_instance(const mesh_sdf& sdf, const math::vec3& transla
         glm::scale(glm::translate(math::mat4(1.0f), translation), math::vec3(scale));
     instance.world_to_local = glm::inverse(local_to_world);
     instance.local_to_world_scale = scale;
+    instance.axis_scale = math::vec3(scale);
     instance.world_bounds.reset();
     for(const auto& corner : sdf.bounds.get_corners())
     {
         const math::vec4 world_corner = local_to_world * math::vec4(corner, 1.0f);
         instance.world_bounds.add_point(math::vec3(world_corner));
+    }
+    return instance;
+}
+
+/// A field placed with a per-axis scale, as surface_cache_system places a stretched primitive.
+auto make_stretched_clipmap_instance(const mesh_sdf& sdf, const math::vec3& translation, const math::vec3& scale)
+    -> global_sdf_instance
+{
+    global_sdf_instance instance;
+    instance.sdf = &sdf;
+    const math::mat4 local_to_world = glm::scale(glm::translate(math::mat4(1.0f), translation), scale);
+    instance.world_to_local = glm::inverse(local_to_world);
+    instance.local_to_world_scale = math::min(scale.x, math::min(scale.y, scale.z));
+    instance.axis_scale = scale;
+    instance.world_bounds.reset();
+    for(const auto& corner : sdf.bounds.get_corners())
+    {
+        instance.world_bounds.add_point(math::vec3(local_to_world * math::vec4(corner, 1.0f)));
     }
     return instance;
 }
@@ -1710,6 +1704,48 @@ void test_sampling_cost_does_not_scale_with_field_size()
     // bricks are colder. What must NOT happen is cost tracking brick COUNT, which is what a scan
     // over the indirection array produces; that measured many times this bound.
     check(cost_ratio < 4.0, "sampling cost is independent of the field's brick count");
+}
+
+/// A GPU-composed cascade holds no CPU copy of its voxels, yet plans exactly as the CPU-composed one does: the same
+/// levels go dirty for the same instances, and the CPU samplers report nothing rather than stale bytes.
+void test_gpu_composed_clipmap_keeps_no_cpu_copy()
+{
+    std::printf("test_gpu_composed_clipmap_keeps_no_cpu_copy\n");
+    const auto geometry = make_sphere(0.8f, 16, 24);
+    mesh_sdf_bake_settings settings;
+    settings.resolution = 24;
+    settings.min_voxel_size = 0.001f;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(geometry, settings, sdf), "bake succeeds");
+    const std::vector<global_sdf_instance> instances{make_clipmap_instance(sdf, math::vec3(1.0f, 0.0f, 0.0f))};
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_settings.resolution = 32;
+    clipmap_settings.base_extent = 12.0f;
+    clipmap_settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    global_sdf_clipmap cpu;
+    cpu.init(clipmap_settings);
+    clipmap_settings.compose_on_gpu = true;
+    global_sdf_clipmap gpu;
+    gpu.init(clipmap_settings);
+    const uint32_t cpu_composed = cpu.update(instances, math::vec3(0.0f));
+    const uint32_t gpu_composed = gpu.update(instances, math::vec3(0.0f));
+    std::printf("  CPU copy: %zu bytes CPU-composed, %zu GPU-composed; levels dirty %x / %x\n",
+                cpu.get_memory_usage(),
+                gpu.get_memory_usage(),
+                cpu.get_dirty_levels(),
+                gpu.get_dirty_levels());
+    check(gpu.get_memory_usage() == 0, "the GPU-composed cascade keeps no CPU voxels");
+    check(cpu.get_memory_usage() > 0, "the CPU-composed one does");
+    check(gpu_composed == cpu_composed && gpu.get_dirty_levels() == cpu.get_dirty_levels() && gpu_composed > 0,
+          "both plan the same levels for recomposition");
+    for(uint32_t i = 0; i < global_sdf_clipmap::level_count; ++i)
+    {
+        check(gpu.get_level(i).is_valid() && gpu.get_level(i).origin == cpu.get_level(i).origin,
+              "every level is placed where the CPU-composed one is");
+    }
+    check(gpu.sample(math::vec3(1.0f, 0.0f, 0.0f)) == global_sdf_clipmap::outside_distance,
+          "the CPU samplers read nothing from a GPU-composed level");
+    check(cpu.sample(math::vec3(1.0f, 0.0f, 0.0f)) < 0.0f, "the CPU-composed one is inside the sphere there");
 }
 
 void test_clipmap_is_conservative()
@@ -1774,6 +1810,350 @@ void test_clipmap_is_conservative()
                 level0_voxel);
     check(samples > 5000, "enough samples land inside the cascade");
     check(over_estimates == 0, "the clipmap never over-estimates the distance to the nearest surface");
+}
+
+void test_clipmap_bounds_stretched_boxes_per_axis()
+{
+    std::printf("test_clipmap_bounds_stretched_boxes_per_axis\n");
+    // Walls built from a stretched unit cube, as primitive levels are. A local distance converted with the smallest
+    // axis scale (0.2 here) reads a point past a wall's end 20x too close, so the field swelled along the long axes
+    // and the 1 m doorway between the two walls read as solid. The per-axis bounds must keep the doorway open and
+    // the field conservative.
+    mesh_sdf_bake_settings settings;
+    settings.resolution = 32;
+    settings.min_voxel_size = 0.001f;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(make_box(math::vec3(0.5f)), settings, sdf), "unit cube bakes");
+    const math::vec3 scale(4.0f, 2.0f, 0.2f);
+    const math::vec3 left_center(-2.5f, 0.0f, 0.0f);
+    const math::vec3 right_center(2.5f, 0.0f, 0.0f);
+    const math::vec3 half = 0.5f * scale;
+    std::vector<global_sdf_instance> instances{make_stretched_clipmap_instance(sdf, left_center, scale),
+                                               make_stretched_clipmap_instance(sdf, right_center, scale)};
+    const auto box_distance = [&](const math::vec3& p, const math::vec3& center) -> float
+    {
+        const math::vec3 q = math::abs(p - center) - half;
+        return math::length(math::max(q, math::vec3(0.0f))) + math::min(math::max(q.x, math::max(q.y, q.z)), 0.0f);
+    };
+    const auto truth = [&](const math::vec3& p) -> float
+    {
+        return math::min(box_distance(p, left_center), box_distance(p, right_center));
+    };
+    // The instance distance itself, against the analytic box: past the end of the long axis and in the doorway.
+    const auto& left = instances[0];
+    const auto instance_distance = [&](const math::vec3& p) -> float
+    {
+        const math::vec3 local(left.world_to_local * math::vec4(p, 1.0f));
+        return sample_instance_distance(*left.sdf, local, left.axis_scale, left.local_to_world_scale, true);
+    };
+    const math::vec3 past_end(-5.5f, 0.0f, 0.0f);
+    const math::vec3 in_doorway(0.0f, 0.0f, 0.0f);
+    std::printf("  past the end: %.3f (truth %.3f), doorway: %.3f (truth %.3f)\n",
+                instance_distance(past_end),
+                box_distance(past_end, left_center),
+                instance_distance(in_doorway),
+                box_distance(in_doorway, left_center));
+    check(instance_distance(past_end) > 0.9f && instance_distance(past_end) <= 1.0f + 1e-3f,
+          "1 m past a stretched wall's end reads about 1 m");
+    check(instance_distance(in_doorway) > 0.45f && instance_distance(in_doorway) <= 0.5f + 1e-3f,
+          "the doorway centre reads its half width from the wall end");
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_settings.resolution = 64;
+    clipmap_settings.base_extent = 8.0f;
+    clipmap_settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(clipmap_settings);
+    clipmap.update(instances, math::vec3(0.0f));
+    const float voxel = clipmap.get_level(0).voxel_size;
+    const float doorway = clipmap.sample(in_doorway);
+    std::printf("  composed doorway: %.3f, level 0 voxel %.3f\n", doorway, voxel);
+    check(doorway > 0.5f - 2.0f * voxel, "the composed field keeps the doorway open");
+    int over_estimates = 0;
+    int samples = 0;
+    float worst_excess = 0.0f;
+    for(int i = 0; i < 20000; ++i)
+    {
+        const float t = float(i) / 20000.0f;
+        const math::vec3 p(3.8f * std::sin(t * 47.0f), 1.8f * std::cos(t * 31.0f), 1.8f * std::sin(t * 19.0f));
+        const float actual = clipmap.sample(p);
+        if(actual >= 1e5f)
+        {
+            continue;
+        }
+        ++samples;
+        const float excess = actual - truth(p);
+        if(excess > 2.0f * voxel)
+        {
+            ++over_estimates;
+            worst_excess = math::max(worst_excess, excess);
+        }
+    }
+    std::printf("  samples = %d, over-estimates = %d, worst excess = %.4f\n", samples, over_estimates, worst_excess);
+    check(samples > 5000, "enough samples land inside the cascade");
+    check(over_estimates == 0, "the stretched walls' composed field never over-estimates the distance");
+}
+
+void test_clipmap_rotated_room_matches_boxes()
+{
+    std::printf("test_clipmap_rotated_room_matches_boxes\n");
+    // test_watcher's Scene3D room: unit cubes placed T * R * S exactly as transform_t composes them (a glm quat from
+    // the authored Euler degrees), the roof turned about Z and the side walls about Y and Z. The composed field must
+    // match the analytic boxes: no surface above the roof, the doorway open.
+    struct placement
+    {
+        const char* name;
+        math::vec3 position;
+        math::vec3 euler_degrees;
+        math::vec3 scale;
+    };
+    const std::array<placement, 6> room{{
+        {"back", {0.0f, 0.5f, 0.0f}, {0.0f, -0.0f, 0.0f}, {1.0f, 3.0696418285369873f, 8.96141242980957f}},
+        {"front_left",
+         {3.3172574043273926f, 0.5f, -2.890000104904175f},
+         {0.0f, -0.0f, 0.0f},
+         {1.0f, 3.0696418285369873f, 4.301478385925293f}},
+        {"roof",
+         {1.6602678298950195f, 2.363849401473999f, 0.0f},
+         {0.0f, 0.0f, -90.0000228881836f},
+         {0.9999991655349731f, 4.234346866607666f, 7.337596416473389f}},
+        {"side_right",
+         {1.6602692604064941f, 0.363639235496521f, 2.5925261974334717f},
+         {0.12171151489019394f, 89.9720230102539f, -89.88166809082031f},
+         {0.999987006187439f, 4.234256267547607f, 4.798711776733398f}},
+        {"side_left",
+         {1.6602522134780884f, 0.3612446188926697f, -2.40747332572937f},
+         {-0.41711702942848206f, 90.0f, -90.42427062988281f},
+         {1.000025987625122f, 4.234201431274414f, 4.798858642578125f}},
+        {"front_right",
+         {3.3172574043273926f, 0.5f, 2.8555197715759277f},
+         {0.0f, -0.0f, 0.0f},
+         {1.0f, 3.0696418285369873f, 4.301478385925293f}},
+    }};
+    // The runtime primitive bake (mesh::runtime_sdf_bake_settings) of the embedded unit cube.
+    mesh_sdf_bake_settings settings;
+    settings.resolution = 64;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(make_box(math::vec3(0.5f)), settings, sdf), "unit cube bakes");
+    std::printf("  cube field: voxel %.4f, grid %u x %u x %u, bounds [%.4f, %.4f]\n",
+                sdf.voxel_size,
+                sdf.grid_dim.x,
+                sdf.grid_dim.y,
+                sdf.grid_dim.z,
+                sdf.bounds.min.x,
+                sdf.bounds.max.x);
+    std::vector<global_sdf_instance> instances;
+    for(const auto& p : room)
+    {
+        const math::mat3 rotation = glm::mat3_cast(glm::normalize(math::quat(math::radians(p.euler_degrees))));
+        math::mat4 local_to_world(1.0f);
+        local_to_world[0] = math::vec4(rotation[0] * p.scale.x, 0.0f);
+        local_to_world[1] = math::vec4(rotation[1] * p.scale.y, 0.0f);
+        local_to_world[2] = math::vec4(rotation[2] * p.scale.z, 0.0f);
+        local_to_world[3] = math::vec4(p.position, 1.0f);
+        global_sdf_instance instance;
+        instance.sdf = &sdf;
+        instance.world_to_local = glm::inverse(local_to_world);
+        instance.axis_scale = math::vec3(math::length(math::vec3(local_to_world[0])),
+                                         math::length(math::vec3(local_to_world[1])),
+                                         math::length(math::vec3(local_to_world[2])));
+        instance.local_to_world_scale =
+            math::min(instance.axis_scale.x, math::min(instance.axis_scale.y, instance.axis_scale.z));
+        instance.world_bounds.reset();
+        for(const auto& corner : sdf.bounds.get_corners())
+        {
+            instance.world_bounds.add_point(math::vec3(local_to_world * math::vec4(corner, 1.0f)));
+        }
+        std::printf("  %-11s axis scale (%.3f %.3f %.3f) world bounds (%.2f %.2f %.2f) - (%.2f %.2f %.2f)\n",
+                    p.name,
+                    instance.axis_scale.x,
+                    instance.axis_scale.y,
+                    instance.axis_scale.z,
+                    instance.world_bounds.min.x,
+                    instance.world_bounds.min.y,
+                    instance.world_bounds.min.z,
+                    instance.world_bounds.max.x,
+                    instance.world_bounds.max.y,
+                    instance.world_bounds.max.z);
+        instances.push_back(instance);
+    }
+    const auto box_distance = [](const global_sdf_instance& inst, const math::vec3& p) -> float
+    {
+        const math::vec3 local(inst.world_to_local * math::vec4(p, 1.0f));
+        const math::vec3 q = (math::abs(local) - math::vec3(0.5f)) * inst.axis_scale;
+        return math::length(math::max(q, math::vec3(0.0f))) + math::min(math::max(q.x, math::max(q.y, q.z)), 0.0f);
+    };
+    const auto truth = [&](const math::vec3& p) -> float
+    {
+        float nearest = 1e9f;
+        for(const auto& inst : instances)
+        {
+            nearest = math::min(nearest, box_distance(inst, p));
+        }
+        return nearest;
+    };
+    const auto& roof = instances[2];
+    int roof_misreads = 0;
+    for(float height : {3.0f, 3.5f, 4.5f, 6.0f, 9.0f})
+    {
+        const math::vec3 p(1.66f, height, 0.3f);
+        const math::vec3 local(roof.world_to_local * math::vec4(p, 1.0f));
+        const float actual = sample_instance_distance(*roof.sdf, local, roof.axis_scale, roof.local_to_world_scale, true);
+        const float expected = box_distance(roof, p);
+        std::printf("  roof instance at y %.1f: %.3f (box %.3f)\n", height, actual, expected);
+        roof_misreads += (actual < expected - 0.05f || actual > expected + 1e-3f) ? 1 : 0;
+    }
+    check(roof_misreads == 0, "the roof instance reads its box distance above it");
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_settings.resolution = 64;
+    clipmap_settings.base_extent = 12.8f;
+    clipmap_settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(clipmap_settings);
+    clipmap.update(instances, math::vec3(1.66f, 1.0f, 0.0f));
+    // Outside, an over-read is a sphere trace stepping through a wall. Inside, the smallest axis scale reads the
+    // depth shallower than the stretched box's (conservative, as UE's VolumeScale); only a deep point reading
+    // outside would be a hole.
+    int under_reads = 0;
+    int over_reads = 0;
+    int inside_holes = 0;
+    int samples = 0;
+    float worst_under = 0.0f;
+    math::vec3 worst_under_at(0.0f);
+    float worst_over = 0.0f;
+    math::vec3 worst_over_at(0.0f);
+    float worst_over_voxel = 0.0f;
+    for(float x = -3.0f; x <= 7.0f; x += 0.25f)
+    {
+        for(float y = -0.5f; y <= 6.0f; y += 0.25f)
+        {
+            for(float z = -7.0f; z <= 7.0f; z += 0.25f)
+            {
+                const math::vec3 p(x, y, z);
+                float voxel = 0.0f;
+                const float actual = clipmap.sample_ex(p, voxel);
+                if(actual >= 1e5f)
+                {
+                    continue;
+                }
+                ++samples;
+                const float exact = truth(p);
+                const float expected = math::min(exact, clipmap_settings.encode_range * voxel);
+                inside_holes += (exact < -1.5f * voxel && actual > 0.0f) ? 1 : 0;
+                if(actual < expected - 1.5f * voxel)
+                {
+                    ++under_reads;
+                    if(expected - actual > worst_under)
+                    {
+                        worst_under = expected - actual;
+                        worst_under_at = p;
+                    }
+                }
+                if(exact > 0.0f && actual > exact + 1.5f * voxel)
+                {
+                    ++over_reads;
+                    if(actual - exact > worst_over)
+                    {
+                        worst_over = actual - exact;
+                        worst_over_at = p;
+                        worst_over_voxel = voxel;
+                    }
+                }
+            }
+        }
+    }
+    std::printf("  samples %d, under-reads %d (worst %.3f at %.2f %.2f %.2f), over-reads %d (worst %.3f at %.2f %.2f "
+                "%.2f, voxel %.3f)\n",
+                samples,
+                under_reads,
+                worst_under,
+                worst_under_at.x,
+                worst_under_at.y,
+                worst_under_at.z,
+                over_reads,
+                worst_over,
+                worst_over_at.x,
+                worst_over_at.y,
+                worst_over_at.z,
+                worst_over_voxel);
+    std::printf("  deep inside reading outside: %d\n", inside_holes);
+    for(float height : {3.0f, 3.5f, 4.5f})
+    {
+        float voxel = 0.0f;
+        const math::vec3 p(1.66f, height, 0.3f);
+        const float composed = clipmap.sample_ex(p, voxel);
+        std::printf("  composed above the roof at y %.1f: %.3f (box %.3f, voxel %.3f)\n",
+                    height,
+                    composed,
+                    truth(p),
+                    voxel);
+    }
+    const math::vec3 doorway(3.3172574f, 0.9f, -0.02f);
+    std::printf("  composed doorway: %.3f (box %.3f)\n", clipmap.sample(doorway), truth(doorway));
+    check(under_reads == 0, "the room's composed field never swells past its boxes");
+    check(over_reads == 0, "the room's composed field never over-estimates the distance outside");
+    check(inside_holes == 0, "no point deep inside a wall reads as outside");
+}
+
+void test_engine_plane_composes_a_hittable_sheet()
+{
+    std::printf("test_engine_plane_composes_a_hittable_sheet\n");
+    // test_watcher's floor: the engine plane scaled 2.52, as GI represents it (mesh::create_plane_gi_geometry, the
+    // embedded plane's 10 x 10). Lumen's global-SDF trace registers a surface within half a voxel of the composed
+    // field (its surface expand), so the composed distance must come down to that over the plane, or rays pass
+    // through the floor; and the floor's hits need a card that faces up and spans it.
+    const sdf_source_geometry geometry = mesh::create_plane_gi_geometry(10.0f, 10.0f, 1, 1);
+    mesh_sdf_bake_settings settings;
+    settings.resolution = 64;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(geometry, settings, sdf), "engine plane bakes");
+    check(!sdf.is_two_sided, "the plane's GI sheet bakes signed, solid below");
+    lumen_mesh_cards cards;
+    check(build_lumen_mesh_cards(geometry, false, 12, cards), "the plane's GI sheet builds cards");
+    check(cards.cards.size() == 1 && cards.cards[0].direction == 3u, "the plane gets one card, facing up");
+    check(!cards.cards.empty() && cards.cards[0].extent.x > 4.75f && cards.cards[0].extent.y > 4.75f,
+          "the plane's card spans it");
+    const float scale = 2.52f;
+    std::vector<global_sdf_instance> instances{make_scaled_clipmap_instance(sdf, math::vec3(0.0f), scale)};
+    const auto& plane = instances[0];
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_settings.resolution = 128;
+    clipmap_settings.base_extent = 128.0f * 50.0f / 252.0f;
+    clipmap_settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    clipmap.init(clipmap_settings);
+    clipmap.update(instances, math::vec3(0.31f, 1.0f, 0.17f));
+    const float voxel = clipmap.get_level(0).voxel_size;
+    float worst_instance = 0.0f;
+    float worst_composed = 0.0f;
+    float worst_below = -1e9f;
+    const float below_floor = -0.3f;
+    for(const math::vec2& column : {math::vec2(0.13f, 0.27f), math::vec2(-2.41f, 1.77f), math::vec2(3.3f, -0.9f),
+                                    math::vec2(-0.71f, -3.13f), math::vec2(5.05f, 4.4f)})
+    {
+        float instance_min = 1e9f;
+        float composed_min = 1e9f;
+        for(float y = -0.6f; y <= 0.6f; y += 0.005f)
+        {
+            const math::vec3 p(column.x, y, column.y);
+            const math::vec3 local(plane.world_to_local * math::vec4(p, 1.0f));
+            instance_min = math::min(
+                instance_min,
+                sample_instance_distance(*plane.sdf, local, plane.axis_scale, plane.local_to_world_scale, true));
+            composed_min = math::min(composed_min, clipmap.sample(p));
+        }
+        worst_instance = math::max(worst_instance, instance_min);
+        worst_composed = math::max(worst_composed, composed_min);
+        worst_below = math::max(worst_below, clipmap.sample(math::vec3(column.x, below_floor, column.y)));
+    }
+    std::printf("  plane voxel %.3f m, level-0 voxel %.3f m; worst column minimum: instance %.3f m, composed %.3f m\n",
+                sdf.voxel_size * scale,
+                voxel,
+                worst_instance,
+                worst_composed);
+    check(worst_instance < 0.05f * sdf.voxel_size * scale, "the plane's own field reaches zero at the sheet");
+    check(worst_composed <= 0.5f * voxel, "the composed floor comes within Lumen's half-voxel expand");
+    std::printf("  composed %.1f m below the floor: at most %.3f m\n", -below_floor, worst_below);
+    check(worst_below < 0.0f, "the composed floor is solid below, as UE's plane is");
 }
 
 void test_clipmap_recomposes_moved_geometry_within_budget()
@@ -2039,8 +2419,12 @@ void test_clipmap_compose_shader_transcription_matches_cpu()
                                     }
                                     const math::vec4 local =
                                         inst.world_to_local * math::vec4(world_position, 1.0f);
-                                    const float local_distance = sample_mesh_sdf(*inst.sdf, math::vec3(local));
-                                    nearest = math::min(nearest, local_distance * inst.local_to_world_scale);
+                                    nearest = math::min(nearest,
+                                                        sample_instance_distance(*inst.sdf,
+                                                                                 math::vec3(local),
+                                                                                 inst.axis_scale,
+                                                                                 inst.local_to_world_scale,
+                                                                                 true));
                                 }
                             }
                         }
@@ -3921,6 +4305,129 @@ void test_a_coarse_mip_is_resident_where_the_finest_does_not_fit()
     check(mismatches == 0, "the fallback level samples through the atlas exactly as the reference does");
 }
 
+/// An open sheet signs the space behind it solid as far as its backface vote reaches (half the reach, where a quarter
+/// of all rays still hit its back). Every level of a chain votes with the finest level's reach, so all of them
+/// describe one solid, a coarse level as far as its sampling resolves that layer: reaching four of its own voxel
+/// diagonals it would claim a layer several times thicker, which a coarse-first distance composes past whatever
+/// separate submesh bounds the real solid.
+void test_mip_chain_bakes_one_solid()
+{
+    std::printf("test_mip_chain_bakes_one_solid\n");
+    // A vault's soffit: one quad facing down, open, so the bake signs it by the vote.
+    sdf_source_geometry geometry;
+    add_quad(geometry, {-3.0f, 0.0f, -3.0f}, {3.0f, 0.0f, -3.0f}, {3.0f, 0.0f, 3.0f}, {-3.0f, 0.0f, 3.0f});
+    recompute_bounds(geometry);
+    mesh_sdf_bake_settings settings;
+    settings.target_voxel_size = 0.1f;
+    settings.max_total_voxels = 4u * 1024u * 1024u;
+    std::vector<mesh_sdf> mips;
+    check(bake_mesh_sdf_mips(geometry, settings, mips), "the chain bakes");
+    check(mips.size() == mesh_sdf::mip_count, "the chain has every level");
+    const math::vec3 below(0.4f, -0.5f, -0.3f);
+    const float vote_reach = mesh_sdf::encode_range * mips.front().voxel_size * std::sqrt(3.0f);
+    const math::vec3 behind_near(0.4f, 0.25f, -0.3f);
+    const math::vec3 behind_far(0.4f, vote_reach + 0.3f, -0.3f);
+    for(size_t mip = 0; mip < mips.size(); ++mip)
+    {
+        const float in_front = sample_mesh_sdf(mips[mip], below);
+        const float near_reading = sample_mesh_sdf(mips[mip], behind_near);
+        const float far_reading = sample_mesh_sdf(mips[mip], behind_far);
+        std::printf("  mip %zu (voxel %.2f): in front %.3f, behind %.3f near, %.3f past the vote reach (%.2f m)\n",
+                    mip,
+                    mips[mip].voxel_size,
+                    in_front,
+                    near_reading,
+                    far_reading,
+                    vote_reach);
+        check(in_front > 0.0f, "the side the sheet faces is outside at every level");
+        check(mip > 0 || near_reading < 0.0f, "the space just behind the sheet is solid in the finest level");
+        check(far_reading > 0.0f, "past the finest level's vote reach no level claims the solid");
+    }
+}
+
+/// Two parallel slabs @p gap apart along z as one mesh: the space between them lies inside the geometry's box, where
+/// only the field, not the box, tells how far the surface is.
+auto make_slab_pair(const math::vec3& half_extents, float gap) -> sdf_source_geometry
+{
+    sdf_source_geometry g = make_box(half_extents);
+    const sdf_source_geometry second = make_box(half_extents);
+    const uint32_t base = uint32_t(g.positions.size());
+    const math::vec3 offset(0.0f, 0.0f, 2.0f * half_extents.z + gap);
+    for(const auto& p : second.positions)
+    {
+        g.positions.push_back(p + offset);
+    }
+    for(const uint32_t index : second.indices)
+    {
+        g.indices.push_back(base + index);
+    }
+    recompute_bounds(g);
+    return g;
+}
+
+/// UE composes its global distance field from each mesh's always-resident coarsest level wherever that level reads
+/// more than one of its voxels from the surface, and from the finest resident level nearer
+/// (DistanceToMeshSurfaceStandalone; SdfInstanceStandaloneDistance in gi/sdf_common.sh). The Lumen coverage band
+/// reaches past the traced level's narrow band on a Sponza-scale mesh; this is the rule that keeps the distances in it
+/// exact.
+void test_coarsest_mip_answers_the_lumen_coverage_band()
+{
+    std::printf("test_coarsest_mip_answers_the_lumen_coverage_band\n");
+    // Sponza's walls trace at about 10 cm voxels, so their narrow band ends near 0.35 m.
+    const math::vec3 half(5.0f, 3.0f, 0.15f);
+    const float gap = 3.7f;
+    const auto geometry = make_slab_pair(half, gap);
+    mesh_sdf_bake_settings settings;
+    settings.target_voxel_size = 0.1f;
+    settings.max_total_voxels = 4u * 1024u * 1024u;
+    std::vector<mesh_sdf> mips;
+    check(bake_mesh_sdf_mips(geometry, settings, mips), "the chain bakes");
+    check(mips.size() == mesh_sdf::mip_count, "the chain has every level");
+    const mesh_sdf& traced = mips.front();
+    const mesh_sdf& coarsest = mips.back();
+    const float coverage_band = gi::lumen::LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS * gi::lumen::LUMEN_GLOBAL_SDF_EXTENT /
+                                float(gi::lumen::LUMEN_GLOBAL_SDF_RESOLUTION);
+    const float traced_reach = (mesh_sdf::encode_range - 0.5f) * traced.voxel_size;
+    const float coarse_threshold = 0.25f * mesh_sdf::encode_range * coarsest.voxel_size;
+    std::printf("  traced voxel %.3f m (exact to %.3f m), coarsest voxel %.3f m, coverage band %.3f m\n",
+                traced.voxel_size,
+                traced_reach,
+                coarsest.voxel_size,
+                coverage_band);
+    check(traced_reach < coverage_band, "the traced band ends inside the coverage band, or this proves nothing");
+    constexpr int steps = 32;
+    int traced_short = 0;
+    int standalone_wrong = 0;
+    float worst_standalone = 0.0f;
+    float worst_traced = 0.0f;
+    for(int i = 0; i <= steps; ++i)
+    {
+        const float distance = traced_reach + (coverage_band - traced_reach) * float(i) / float(steps);
+        const math::vec3 p(0.3f, -0.2f, half.z + distance);
+        const float traced_reading = sample_instance_distance(traced, p, math::vec3(1.0f), 1.0f, true);
+        const float coarse_reading = sample_instance_distance(coarsest, p, math::vec3(1.0f), 1.0f, true);
+        const float standalone = std::fabs(coarse_reading) > coarse_threshold ? coarse_reading : traced_reading;
+        worst_traced = math::max(worst_traced, distance - traced_reading);
+        if(traced_reading < distance - 0.5f * traced.voxel_size)
+        {
+            ++traced_short;
+        }
+        const float error = std::fabs(standalone - distance);
+        worst_standalone = math::max(worst_standalone, error);
+        if(error > 0.5f * traced.voxel_size)
+        {
+            ++standalone_wrong;
+        }
+    }
+    std::printf("  traced level short by up to %.3f m (%d of %d samples), standalone off by up to %.3f m\n",
+                worst_traced,
+                traced_short,
+                steps + 1,
+                worst_standalone);
+    check(traced_short > 0, "the traced level saturates inside the coverage band");
+    check(standalone_wrong == 0, "the coarsest-first rule reads the true distance across the coverage band");
+}
+
 void test_total_voxel_budget_bounds_a_field()
 {
     std::printf("test_total_voxel_budget_bounds_a_field\n");
@@ -4529,6 +5036,308 @@ void test_parallel_submesh_bake_matches_serial()
     check(all_match, "the parallel submesh pass produces the same fields as the serial one");
 }
 
+auto count_cards_facing(const lumen_mesh_cards& cards, uint32_t direction) -> uint32_t
+{
+    return uint32_t(std::count_if(cards.cards.begin(),
+                                  cards.cards.end(),
+                                  [&](const lumen_card& card)
+                                  {
+                                      return card.direction == direction;
+                                  }));
+}
+
+/// A closed box gets one outer card per side, each facing its side and covering the face.
+void test_lumen_cards_box()
+{
+    std::printf("test_lumen_cards_box\n");
+    const sdf_source_geometry geometry = make_box(math::vec3(0.5f));
+    lumen_mesh_cards cards;
+    check(build_lumen_mesh_cards(geometry, false, 12, cards), "box cards build");
+    check(cards.cards.size() == 6, "a box gets six cards");
+    for(uint32_t direction = 0; direction < 6; ++direction)
+    {
+        check(count_cards_facing(cards, direction) == 1, "one card per side of a box");
+    }
+    for(const lumen_card& card : cards.cards)
+    {
+        math::vec3 normal(0.0f);
+        normal[card.direction / 2] = (card.direction & 1) != 0 ? 1.0f : -1.0f;
+        check(math::dot(card.axis_z, normal) > 0.999f, "a card faces its side");
+        check(card.extent.x > 0.45f && card.extent.y > 0.45f, "a box card covers the whole face");
+        // The card's front plane sits in front of (or on) the face it captures.
+        const float front = math::dot(card.origin + card.axis_z * card.extent.z, normal);
+        check(front >= 0.5f - 1e-4f, "the card's near plane is in front of its face");
+    }
+}
+
+/// An open one-sided sheet is seen only from its front side; a two-sided one from both.
+void test_lumen_cards_sheet()
+{
+    std::printf("test_lumen_cards_sheet\n");
+    sdf_source_geometry geometry;
+    add_quad(geometry, {-2.0f, 0.0f, 2.0f}, {2.0f, 0.0f, 2.0f}, {2.0f, 0.0f, -2.0f}, {-2.0f, 0.0f, -2.0f});
+    recompute_bounds(geometry);
+    const math::vec3 front = math::normalize(math::cross(geometry.positions[1] - geometry.positions[0],
+                                                         geometry.positions[2] - geometry.positions[0]));
+    const uint32_t front_direction = front.y > 0.0f ? 3u : 2u;
+    lumen_mesh_cards one_sided;
+    check(build_lumen_mesh_cards(geometry, false, 12, one_sided), "sheet cards build");
+    check(one_sided.cards.size() == 1, "a one-sided sheet gets one card");
+    check(count_cards_facing(one_sided, front_direction) == 1, "the one-sided sheet's card faces its front");
+    lumen_mesh_cards two_sided;
+    check(build_lumen_mesh_cards(geometry, true, 12, two_sided), "two-sided sheet cards build");
+    check(two_sided.cards.size() == 2, "a two-sided sheet gets a card on each side");
+    check(count_cards_facing(two_sided, 2u) == 1 && count_cards_facing(two_sided, 3u) == 1,
+          "the two-sided sheet's cards face both sides");
+}
+
+void test_lumen_cards_doubled_sheet()
+{
+    std::printf("test_lumen_cards_doubled_sheet\n");
+    // A sheet modelled as two coincident, oppositely wound sheets (the engine plane's render geometry) with a
+    // one-sided material: a ray returns either triangle first, so the build must read the front face from each side
+    // or half of each side gets no card.
+    const sdf_source_geometry geometry = make_engine_plane_geometry();
+    lumen_mesh_cards cards;
+    check(build_lumen_mesh_cards(geometry, false, 12, cards), "doubled sheet cards build");
+    const math::vec3 plane_extent = geometry.bounds.get_extents();
+    std::printf("  plane extent (%.3f %.3f %.3f), %zu cards\n", plane_extent.x, plane_extent.y, plane_extent.z,
+                cards.cards.size());
+    for(const auto& card : cards.cards)
+    {
+        std::printf("  direction %u origin (%.3f %.3f %.3f) extent (%.3f %.3f %.3f) axis_z (%.2f %.2f %.2f)\n",
+                    card.direction,
+                    card.origin.x,
+                    card.origin.y,
+                    card.origin.z,
+                    card.extent.x,
+                    card.extent.y,
+                    card.extent.z,
+                    card.axis_z.x,
+                    card.axis_z.y,
+                    card.axis_z.z);
+    }
+    check(count_cards_facing(cards, 2u) == 1 && count_cards_facing(cards, 3u) == 1,
+          "the doubled sheet gets one card facing each side");
+    for(const auto& card : cards.cards)
+    {
+        check(card.extent.x > 0.95f * plane_extent.x && card.extent.y > 0.95f * plane_extent.z,
+              "each doubled sheet card spans the whole sheet");
+    }
+}
+
+/// Two boxes in a row along X: the far box's inner face is hidden from the outer near plane, so
+/// each X side gets an interior layer card; the other sides see both boxes in one layer.
+void test_lumen_cards_interior_layers()
+{
+    std::printf("test_lumen_cards_interior_layers\n");
+    sdf_source_geometry geometry = make_box(math::vec3(0.4f));
+    sdf_source_geometry second = make_box(math::vec3(0.4f));
+    const uint32_t base = uint32_t(geometry.positions.size());
+    for(math::vec3& p : geometry.positions)
+    {
+        p.x -= 1.0f;
+    }
+    for(const math::vec3& p : second.positions)
+    {
+        geometry.positions.push_back(p + math::vec3(1.0f, 0.0f, 0.0f));
+    }
+    for(uint32_t index : second.indices)
+    {
+        geometry.indices.push_back(base + index);
+    }
+    recompute_bounds(geometry);
+    lumen_mesh_cards cards;
+    check(build_lumen_mesh_cards(geometry, false, 12, cards), "two-box cards build");
+    check(count_cards_facing(cards, 0u) == 2 && count_cards_facing(cards, 1u) == 2,
+          "each X side has an outer and an interior layer card");
+    for(uint32_t direction = 2; direction < 6; ++direction)
+    {
+        check(count_cards_facing(cards, direction) == 1, "the sides that see both boxes at once have one card");
+    }
+    lumen_mesh_cards limited;
+    check(build_lumen_mesh_cards(geometry, false, 6, limited), "two-box cards build with a budget");
+    check(limited.cards.size() == 6, "the card budget is respected");
+    lumen_mesh_cards again;
+    build_lumen_mesh_cards(geometry, false, 12, again);
+    bool same = again.cards.size() == cards.cards.size();
+    for(size_t i = 0; same && i < cards.cards.size(); ++i)
+    {
+        same = again.cards[i].origin == cards.cards[i].origin && again.cards[i].extent == cards.cards[i].extent;
+    }
+    check(same, "the card build is deterministic");
+}
+
+/// A placement of one wall-sized card (16 m x 16 m face) for the surface cache scene tests.
+auto make_wall_card_source() -> lumen_scene::source
+{
+    auto cards = std::make_shared<lumen_mesh_cards>();
+    lumen_card card;
+    card.extent = math::vec3(8.0f, 8.0f, 0.1f);
+    cards->cards.push_back(card);
+    lumen_scene::source source;
+    source.identity = 1;
+    source.instance_index = 0;
+    source.cards = cards;
+    return source;
+}
+
+/// UE maps a card's new mip only with physical room beside everything resident and room for every page in this
+/// frame's capture atlas, and the new pages inherit the lighting of the previous allocation
+/// (ProcessLumenSurfaceCacheRequests, bResampleLastLighting): lumen_scene lists that allocation for the resample.
+void test_lumen_scene_reallocation_lists_the_previous_mip()
+{
+    std::printf("test_lumen_scene_reallocation_lists_the_previous_mip\n");
+    const std::vector<lumen_scene::source> sources{make_wall_card_source()};
+    const math::vec3 far_view(0.0f, 0.0f, 40.0f);
+    const math::vec3 near_view(0.0f, 0.0f, 1.0f);
+    lumen_scene scene;
+    scene.init(lumen_scene::settings{});
+    scene.update(sources, 1, far_view);
+    const std::vector<lumen_scene::capture> first = scene.get_captures();
+    check(first.size() == 1 && first.front().resample_card < 0, "a first allocation has no lighting to inherit");
+    check(scene.get_resample_table().empty(), "and lists nothing to resample");
+    const math::vec4 first_mip = scene.get_card_table()[4];
+    std::printf("  far: %.0f x %.0f pages at res level %.0f x %.0f\n", first_mip.x, first_mip.y, first_mip.z, first_mip.w);
+    scene.update(sources, 1, near_view);
+    const auto& second = scene.get_captures();
+    const math::vec4 second_mip = scene.get_card_table()[4];
+    std::printf("  near: %.0f x %.0f pages at res level %.0f x %.0f, %zu captures\n",
+                second_mip.x,
+                second_mip.y,
+                second_mip.z,
+                second_mip.w,
+                second.size());
+    check(second_mip.z > first_mip.z, "the card is reallocated finer when the viewer comes close");
+    check(second.size() == size_t(second_mip.x * second_mip.y), "every page of the new mip is captured at once");
+    check(std::all_of(second.begin(),
+                      second.end(),
+                      [](const lumen_scene::capture& cap)
+                      {
+                          return cap.resample_card == 0;
+                      }),
+          "every new page inherits the previous allocation's lighting");
+    const auto& table = scene.get_resample_table();
+    check(scene.get_resample_page_base() == lumen_scene::card_stride && table.size() == lumen_scene::card_stride + 1u,
+          "the resample table holds the previous card and its one page");
+    check(table.size() > lumen_scene::card_stride && table[4] == first_mip, "with the previous mip");
+    check(table.size() > lumen_scene::card_stride &&
+              math::vec2(table[lumen_scene::card_stride]) == math::vec2(first.front().atlas_offset),
+          "and the previous page's atlas texels");
+    const auto& pages = scene.get_page_table();
+    check(std::all_of(pages.begin(),
+                      pages.end(),
+                      [](const math::vec4& page)
+                      {
+                          return page.z > 0.0f;
+                      }),
+          "every page of a resident card is mapped");
+    scene.update(sources, 1, near_view);
+    check(scene.get_captures().empty() && scene.get_resample_table().empty(), "a settled card is not reallocated");
+    // A capture atlas of one page cannot take the near mip's pages: the card keeps its far allocation and waits.
+    lumen_scene::settings small_capture;
+    small_capture.capture_atlas_size = lumen_scene::physical_page_size;
+    lumen_scene waiting;
+    waiting.init(small_capture);
+    waiting.update(sources, 1, far_view);
+    waiting.update(sources, 1, near_view);
+    check(waiting.get_captures().empty(), "a mip the capture atlas cannot take is not mapped");
+    check(waiting.get_card_table()[4] == first_mip, "the card keeps its previous allocation meanwhile");
+}
+
+/// UE's card lighting scheduler: the per-frame tile budgets, the priority buckets, and a scene with more resident
+/// tiles than a frame's budget (R/LumenSceneLighting.cpp:98-126, S/LumenSceneLighting.usf:105-366).
+void test_lumen_scene_lighting_schedule()
+{
+    std::printf("test_lumen_scene_lighting_schedule\n");
+    check(lumen_scene::compute_lighting_tile_budget(4096, 32) == 8281, "Epic's 4096 atlas relights 8281 direct tiles");
+    check(lumen_scene::compute_lighting_tile_budget(4096, 64) == 4096, "and 4096 radiosity tiles a frame");
+    check(lumen_scene::compute_lighting_tile_budget(2048, 32) == 2116, "a 2048 atlas 2116 direct tiles");
+    check(lumen_scene::compute_lighting_tile_budget(256, 1024) == 256, "never less than one full page");
+    check(lumen_scene::compute_lighting_bucket(2048, 2.0f) == 1, "a never-lit page in the frustum ranks 1");
+    check(lumen_scene::compute_lighting_bucket(2048, 1.0f) == 2, "out of it 2");
+    check(lumen_scene::compute_lighting_bucket(1, 2.0f) == 12, "a page lit last frame in the frustum ranks 12");
+    check(lumen_scene::compute_lighting_bucket(64, 2.0f) == 6, "64 frames later 6");
+    check(lumen_scene::compute_lighting_bucket(100000, 1.0f) == 0, "the most urgent bucket is 0");
+    // Twelve wall cards stacked away from the viewer: the near ones take 2 x 2 pages, far more tiles than a frame's
+    // budget. The frustum is far away, so only distance sets the speeds.
+    constexpr uint32_t card_count = 12;
+    std::vector<lumen_scene::source> sources;
+    for(uint32_t i = 0; i < card_count; ++i)
+    {
+        lumen_scene::source source = make_wall_card_source();
+        source.identity = i + 1u;
+        source.instance_index = i;
+        source.local_to_world = math::translate(math::mat4(1.0f), math::vec3(0.0f, 0.0f, -4.0f * float(i)));
+        sources.push_back(source);
+    }
+    const math::vec3 view(0.0f, 0.0f, 1.0f);
+    const math::frustum far_frustum(math::bbox(math::vec3(1000.0f), math::vec3(1001.0f)));
+    lumen_scene scene;
+    scene.init(lumen_scene::settings{});
+    const uint32_t budget_direct = lumen_scene::compute_lighting_tile_budget(scene.get_settings().atlas_size, 32);
+    const uint32_t budget_radiosity = lumen_scene::compute_lighting_tile_budget(scene.get_settings().atlas_size, 64);
+    constexpr uint32_t frame_count = 120;
+    std::vector<uint32_t> updates(card_count, 0u);
+    std::vector<uint32_t> pages_of_card(card_count, 0u);
+    bool within_budget = true;
+    uint32_t first_frame_unlit = 0;
+    for(uint32_t frame = 0; frame < frame_count; ++frame)
+    {
+        scene.update(sources, card_count, view);
+        scene.schedule_lighting(view, far_frustum);
+        within_budget = within_budget && scene.get_stats().lit_tiles[lumen_scene::lighting_direct] <= budget_direct &&
+                        scene.get_stats().lit_tiles[lumen_scene::lighting_radiosity] <= budget_radiosity;
+        const auto& pages = scene.get_resident_pages();
+        if(frame == 0)
+        {
+            first_frame_unlit = uint32_t(pages.size() - scene.get_lit_pages(lumen_scene::lighting_radiosity).size());
+        }
+        if(frame + 1u < frame_count / 2u)
+        {
+            continue;
+        }
+        // The second half, once every card is resident: radiosity updates per card, per page.
+        std::fill(pages_of_card.begin(), pages_of_card.end(), 0u);
+        for(const auto& page : pages)
+        {
+            ++pages_of_card[page.card_index];
+        }
+        for(const auto& lit : scene.get_lit_pages(lumen_scene::lighting_radiosity))
+        {
+            ++updates[pages[lit.resident_page].card_index];
+        }
+    }
+    const auto& pages = scene.get_resident_pages();
+    uint32_t total_tiles = 0;
+    for(const auto& page : pages)
+    {
+        total_tiles += (page.size.x / 8u) * (page.size.y / 8u);
+    }
+    std::printf("  %zu resident pages, %u tiles; budgets %u direct / %u radiosity; first frame left %u pages unlit\n",
+                pages.size(),
+                total_tiles,
+                budget_direct,
+                budget_radiosity,
+                first_frame_unlit);
+    for(uint32_t i = 0; i < card_count; ++i)
+    {
+        std::printf("  card %u (%.1f m): %u pages, %.2f radiosity updates per page per frame\n",
+                    i,
+                    0.9f + 4.0f * float(i),
+                    pages_of_card[i],
+                    pages_of_card[i] > 0 ? float(updates[i]) / float(pages_of_card[i]) / float(frame_count / 2u) : 0.0f);
+    }
+    check(total_tiles > budget_radiosity, "the scene holds more tiles than a frame's radiosity budget");
+    check(within_budget, "no frame lights more tiles than its budgets");
+    const auto rate = [&](uint32_t card) -> float
+    {
+        return pages_of_card[card] > 0 ? float(updates[card]) / float(pages_of_card[card]) : 0.0f;
+    };
+    check(std::all_of(updates.begin(), updates.end(), [](uint32_t n) { return n > 0u; }), "every card is relit");
+    check(rate(0) > rate(card_count - 1u), "a page near the viewer is relit more often than a far one");
+}
+
 void test_degenerate_inputs()
 {
     std::printf("test_degenerate_inputs\n");
@@ -4557,7 +5366,7 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_sign_correctness();
     test_conservative_empty_bricks();
     test_conservative_empty_bricks_in_a_shell();
-    test_large_open_submesh_shell_is_governed_by_budget();
+    test_large_open_submesh_bakes_signed();
     test_brick_seam_continuity();
     test_two_sided_shell();
     test_thin_wall();
@@ -4568,12 +5377,16 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_open_mesh_does_not_produce_inside_regions();
     test_doubled_sheet_bakes_unsigned();
     test_engine_plane_primitive_bakes_flat();
-    test_ray_from_open_sheet_escapes_its_own_shell();
+    test_open_sheet_bakes_solid_below();
     test_serialization_round_trip();
     test_invalid_field_is_rejected();
     test_determinism();
     test_sampling_cost_does_not_scale_with_field_size();
     test_clipmap_is_conservative();
+    test_gpu_composed_clipmap_keeps_no_cpu_copy();
+    test_clipmap_bounds_stretched_boxes_per_axis();
+    test_clipmap_rotated_room_matches_boxes();
+    test_engine_plane_composes_a_hittable_sheet();
     test_instance_grid_never_misses_an_instance();
     test_instance_grid_shader_walk_matches_cpu();
     test_instance_grid_cell_clamping_covers_every_instance();
@@ -4596,6 +5409,8 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_voxel_size_is_honoured_and_scale_free();
     test_mip_chain_is_coarser_cheaper_and_conservative();
     test_a_coarse_mip_is_resident_where_the_finest_does_not_fit();
+    test_coarsest_mip_answers_the_lumen_coverage_band();
+    test_mip_chain_bakes_one_solid();
     test_total_voxel_budget_bounds_a_field();
     test_lod_extraction_clamps_rather_than_failing();
     test_lod_extraction_keeps_each_submesh_to_its_own_bounds();
@@ -4605,6 +5420,12 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_bake_cost_is_dominated_by_voxels_not_triangles();
     test_parallel_submesh_bake_matches_serial();
     test_degenerate_inputs();
+    test_lumen_cards_box();
+    test_lumen_cards_sheet();
+    test_lumen_cards_doubled_sheet();
+    test_lumen_cards_interior_layers();
+    test_lumen_scene_reallocation_lists_the_previous_mip();
+    test_lumen_scene_lighting_schedule();
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

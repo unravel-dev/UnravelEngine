@@ -243,11 +243,19 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     //     rewrites the surface every frame, so the field could only ever occlude as a rigid
     //     bind-pose statue pinned to the entity's root transform. The runtime walk also refuses
     //     stale fields, so this bump is what reclaims the disk and atlas space they held.
+    // 22: fields carry the baked geometry's own box (mesh_sdf::surface_bounds). The grid rounds up to whole
+    //     bricks on the max side only, so the box cannot be recovered from the field bounds, and the composed
+    //     distance's per-axis box bound grew by that slack times the placement's scale.
+    // 23: a flat axis centres a sample layer on the sheet. Between two layers an unsigned sheet never read below
+    //     half a voxel, so Lumen's half-voxel surface expand let rays pass through scaled planes (floors).
+    // 24: a chain's coarser levels sign open surfaces with the finest level's vote reach. Each level's own reach
+    //     (four voxel diagonals) signed a 1.6 m layer behind a vault's back faces inside at 0.4 m voxels, which
+    //     the Lumen cascade's coarse-first distance composed above the floor slab another submesh holds.
     //
     // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
     // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing
     // projects silently keep the field produced by the previous code.
-    return 21;
+    return 24;
 }
 
 template<>

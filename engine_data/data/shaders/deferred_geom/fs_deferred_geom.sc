@@ -57,7 +57,8 @@ void main()
 		metalness *= metalness_val.r;
 	}
 	
-	roughness = clamp(roughness, 0.05f, 1.0f);
+	// The authored roughness: direct lighting applies its own floor (GetLightingRoughness in lighting.sh).
+	roughness = saturate(roughness);
 	
 	float ambient_occlusion = texture2D(s_tex_ao, texcoords).r;
 	vec3 emissive = texture2D(s_tex_emissive, texcoords).rgb;

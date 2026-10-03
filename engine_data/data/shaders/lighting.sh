@@ -157,6 +157,23 @@ float MakeRoughnessSafe(float Roughness)
     return max(Roughness, 0.002f);
 }
 
+/// Perceptual roughness analytic (delta) lights evaluate GGX at, at least: on a smoother surface their highlight
+/// shrinks below a pixel and aliases. The G-buffer keeps the authored roughness for every other consumer.
+#define DIRECT_LIGHTING_MIN_ROUGHNESS 0.05f
+
+/// The lowest perceptual roughness direct lighting evaluates (DIRECT_LIGHTING_MIN_ROUGHNESS).
+float GetMinLightingRoughness()
+{
+    return DIRECT_LIGHTING_MIN_ROUGHNESS;
+}
+
+/// The roughness direct lighting evaluates for an authored (G-buffer) @p roughness: clamped to
+/// [GetMinLightingRoughness(), 1]. Reflections, probes and the environment BRDF read the authored value.
+float GetLightingRoughness(float roughness)
+{
+    return clamp(roughness, GetMinLightingRoughness(), 1.0f);
+}
+
 // Geometric Specular Anti-Aliasing.
 // Reference: Tokuyoshi & Kaplanyan, "Improved Geometric Specular Antialiasing" (2019),
 //            Unity HDRP, Frostbite Engine.
@@ -1618,6 +1635,40 @@ vec3 MultiBounceAOGain(float visibility, vec3 albedo)
     vec3 b = -4.7951 * albedo + vec3_splat(0.6417);
     vec3 c = 2.7552 * albedo + vec3_splat(0.6903);
     return max(vec3_splat(1.0), (visibility * a + b) * visibility + c);
+}
+
+/// The albedo the multi-bounce fit uses: the diffuse albedo, capped at @p Cap when it is positive (UE's
+/// MaxMultibounceAlbedo for Lumen's short-range AO).
+vec3 MultiBounceAlbedo(vec3 DiffuseColor, float Cap)
+{
+    return Cap > 0.0 ? min(DiffuseColor, vec3_splat(Cap)) : DiffuseColor;
+}
+
+/// The occlusion the indirect diffuse estimate (GI resolve or SSIL) takes in pbr_indirect: the material AO times the
+/// screen-space AO with the multi-bounce gain of @p Albedo - over the combined visibility when @p ScreenMultiBounce is
+/// on, over the material AO alone otherwise. An estimate that resolved the screen-space visibility itself
+/// (@p ResolvedScreenVisibility: SSIL) takes the material AO alone.
+vec3 IndirectDiffuseOcclusion(float MaterialAO, float ScreenAO, float ScreenMultiBounce, bool ResolvedScreenVisibility,
+                              vec3 Albedo)
+{
+    if(ResolvedScreenVisibility)
+    {
+        return MaterialAO * MultiBounceAOGain(MaterialAO, Albedo);
+    }
+    float Visibility = MaterialAO * ScreenAO;
+    return Visibility * MultiBounceAOGain(ScreenMultiBounce > 0.5 ? Visibility : MaterialAO, Albedo);
+}
+
+/// The share of the energy the specular layer leaves the indirect diffuse (StandardShadingIndirect's
+/// EnergyPreservationFactor).
+float IndirectDiffuseEnergyPreservation(vec3 SpecularColor, float Roughness, vec3 V, vec3 N)
+{
+#if USE_ENERGY_CONSERVATION > 0
+    float NoV = max(saturate(dot(normalize(N), V)), 1e-5);
+    return ComputeEnergyPreservation(ComputeGGXSpecEnergyTerms(MakeRoughnessSafe(Roughness), NoV, SpecularColor));
+#else
+    return 1.0;
+#endif
 }
 
 /// The specular occlusion of the two reflection layers (ComposeIndirectSpecular). A trace saw

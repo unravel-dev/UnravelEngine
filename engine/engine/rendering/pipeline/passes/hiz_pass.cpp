@@ -1,5 +1,6 @@
 #include "hiz_pass.h"
 #include <engine/assets/asset_manager.h>
+#include <algorithm>
 #include <graphics/render_pass.h>
 #include <graphics/texture.h>
 #include <engine/profiler/profiler.h>
@@ -81,14 +82,11 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
 
         for (uint32_t mip = 1; mip < num_mips; ++mip)
         {
-            const uint32_t current_mip_width = hiz_width >> mip;
-            const uint32_t current_mip_height = hiz_height >> mip;
-
-            // Ensure minimum size of 1x1
-            if (current_mip_width == 0 || current_mip_height == 0)
-            {
-                break;
-            }
+            // Mip sizes as the texture has them: halved and rounded down, never below 1x1
+            const uint32_t current_mip_width = std::max(hiz_width >> mip, 1u);
+            const uint32_t current_mip_height = std::max(hiz_height >> mip, 1u);
+            const uint32_t input_mip_width = std::max(hiz_width >> (mip - 1u), 1u);
+            const uint32_t input_mip_height = std::max(hiz_height >> (mip - 1u), 1u);
 
             // Set input (previous mip level) as read-only image
             bgfx::setImage(0, output_hiz->native_handle(), mip - 1, bgfx::Access::Read);
@@ -97,7 +95,10 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
             bgfx::setImage(1, output_hiz->native_handle(), mip, bgfx::Access::Write);
 
             // Set parameters for the downsampling compute shader
-            math::vec4 hiz_params(float(current_mip_width), float(current_mip_height), 2.0f, float(mip));
+            const math::vec4 hiz_params(static_cast<float>(current_mip_width),
+                                        static_cast<float>(current_mip_height),
+                                        static_cast<float>(input_mip_width),
+                                        static_cast<float>(input_mip_height));
             gfx::set_uniform(hiz_downsample_.u_hiz_params, hiz_params);
 
             // Dispatch compute shader with 8x8 thread groups

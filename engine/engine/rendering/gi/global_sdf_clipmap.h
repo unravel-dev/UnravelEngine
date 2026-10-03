@@ -22,12 +22,17 @@ struct global_sdf_instance
 {
     ///< The field being placed. Borrowed; must outlive composition.
     const mesh_sdf* sdf = nullptr;
+    ///< The chain's coarsest level when resident beside a finer @ref sdf, else null. The GPU composes the Lumen
+    ///< cascade from it beyond @ref sdf's band; hashed into the level fingerprint so its arrival recomposes.
+    const mesh_sdf* coarse_sdf = nullptr;
     ///< World to local, for sampling the field at a world position.
     math::mat4 world_to_local{1.0f};
     ///< World-space bounds of the field, for culling.
     math::bbox world_bounds{};
     ///< Smallest scale axis: converts a local-space distance to a conservative world distance.
     float local_to_world_scale = 1.0f;
+    ///< World length of each local axis, for the per-axis box bounds of sample_instance_distance.
+    math::vec3 axis_scale{1.0f};
     ///< Surface properties for the attribute voxels: what the winning instance
     ///< at a surface voxel looks like. This is what lets a cascade hit be attributed to a
     ///< material, which the distance field alone cannot do. Albedo is the base colour FACTOR;
@@ -132,6 +137,11 @@ public:
         ///< hitch. Levels are considered finest first, which is also the order they go stale in
         ///< (level 0 has the smallest voxels, so its origin re-snaps most often).
         uint32_t max_levels_per_update = 1;
+        ///< Keep the distance volume only, as Lumen's global distance field does: no attribute
+        ///< volumes, light voxels, world probes or surface lists. The Lumen pipeline reads none of
+        ///< them - its hits read the surface cache - and they would cost hundreds of MB at its layout.
+        ///< Part of the layout: changing it recreates the GPU mirror.
+        bool distance_only = false;
     };
 
     /**
@@ -215,7 +225,8 @@ public:
         math::vec3 origin{0.0f};
         ///< World-space edge length of one voxel.
         float voxel_size = 0.0f;
-        ///< resolution^3 voxels, x-major (`x + y * res + z * res * res`), R8 encoded.
+        ///< resolution^3 voxels, x-major (`x + y * res + z * res * res`), R8 encoded: what the CPU composer writes
+        ///< and the CPU samplers read. Empty when the GPU composes the level (settings::compose_on_gpu).
         std::vector<uint8_t> voxels;
         ///< Fingerprint of the instances THIS level was composed from. Identity and placement,
         ///< order independent. Compared per level rather than globally so a moved instance only
@@ -251,7 +262,15 @@ public:
         ///< that drives the light-voxel update's indirect dispatch.
         std::vector<uint32_t> attr_surface_list;
 
+        /// The level exists: its planning (snapping, fingerprints, the recompose budget) runs whichever composer
+        /// fills it.
         auto is_valid() const -> bool
+        {
+            return voxel_size > 0.0f;
+        }
+
+        /// The CPU composer fills this level, so the CPU samplers can read it.
+        auto has_voxels() const -> bool
         {
             return voxel_size > 0.0f && !voxels.empty();
         }

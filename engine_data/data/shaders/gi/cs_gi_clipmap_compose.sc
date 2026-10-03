@@ -18,8 +18,14 @@
 
 #include "bgfx_compute.sh"
 #include "gi/sdf_common.sh"
+#include "lumen/lumen_constants.sh"
 
 IMAGE3D_WO(s_clipmap_out, r8, 5);
+/// The Lumen coverage of a distance-only clipmap (global_sdf_clipmap_gpu::get_coverage_texture), written at the voxels
+/// whose coordinates are all multiples of SDF_CLIPMAP_COVERAGE_DOWNSAMPLE when u_compose_coverage (UE 5.8
+/// GlobalDistanceFieldCompositeObjects.usf:46-75, 223-240): 0 where the instances within LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS
+/// are all two-sided, 1 elsewhere.
+IMAGE3D_WO(s_clipmap_coverage_out, r8, 6);
 
 /// The surface-voxel list (cursor header + entries; see cs_gi_clipmap_attributes.sc). This
 /// pass only RESETS its level's append cursor - folded in here, rather than in a separate
@@ -39,8 +45,10 @@ uniform vec4 u_clipmap_compose_params;
 #define u_compose_voxel_size u_clipmap_compose_params.z
 #define u_compose_reach      u_clipmap_compose_params.w
 
-/// xyz = this level's world-space origin (its minimum corner, already snapped).
+/// xyz = this level's world-space origin (its minimum corner, already snapped), w > 0.5 when the dispatch composes a
+/// Lumen cascade: it writes the coverage too and leaves small objects out (SdfLumenCascadeKeepsInstance).
 uniform vec4 u_clipmap_compose_origin;
+#define u_compose_lumen (u_clipmap_compose_origin.w > 0.5)
 
 /// The voxel box this dispatch composes: xyz = its minimum corner in level voxels, w > 0.5
 /// when this is the level's first dispatch of the frame and resets the surface-list cursor.
@@ -73,6 +81,11 @@ void main()
 	}
 	vec3 world_position =
 	    u_clipmap_compose_origin.xyz + (vec3(voxel) + vec3_splat(0.5)) * u_compose_voxel_size;
+	ivec3 coverage_texel = voxel / SDF_CLIPMAP_COVERAGE_DOWNSAMPLE;
+	bool writes_coverage = u_compose_lumen && all(equal(coverage_texel * SDF_CLIPMAP_COVERAGE_DOWNSAMPLE, voxel));
+	float coverage_band = LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS * u_compose_voxel_size;
+	bool near_one_sided = false;
+	bool near_two_sided = false;
 
 	// Seeded at the reach rather than at infinity. A voxel stores distances in [-reach, reach]
 	// and saturates beyond, so an instance further away cannot change the byte written here --
@@ -124,6 +137,17 @@ void main()
 					{
 						int index = int(b_sdf_grid[candidate]);
 						SdfInstance inst = SdfLoadInstance(index);
+						BRANCH
+						if(u_compose_lumen)
+						{
+							if(!SdfLumenCascadeKeepsInstance(inst,
+							                                 u_compose_voxel_size,
+							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS,
+							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS_VOXELS))
+							{
+								continue;
+							}
+						}
 						// Cheap reject before the field lookup: outside the instance's bounds the
 						// distance to those bounds is already a valid conservative answer, and
 						// usually a worse one than what another instance contributes.
@@ -133,16 +157,47 @@ void main()
 						// Guarded on nearest being non-negative, exactly as the CPU composer is:
 						// to_bounds is zero inside any bounds and never negative, so once the
 						// voxel is inside some instance this would skip every remaining candidate
-						// and the interior would depend on visit order.
-						if(nearest >= 0.0 && to_bounds >= nearest)
+						// and the interior would depend on visit order. A voxel writing the coverage
+						// keeps every candidate within the band, whose sidedness decides it (UE
+						// MaxEarlyOutDistance). Strict: at nearest == 0 (a voxel centre on a face) an
+						// instance containing the voxel reads to_bounds 0 too.
+						float reject_distance = writes_coverage ? max(nearest, coverage_band) : nearest;
+						if(nearest >= 0.0 && to_bounds > reject_distance)
 						{
 							continue;
 						}
 						SdfHeader header = SdfLoadHeader(inst.header_index);
 						vec3 local_position =
 						    SdfTransformPoint(inst.world_to_local_rows, world_position);
-						float local_distance = SdfSampleLocal(header, local_position);
-						nearest = min(nearest, local_distance * inst.local_to_world_scale);
+						// Two-sided fields compose as zero-thickness sheets (see SdfSheetDistance); a
+						// non-uniformly scaled placement is bounded per axis (SdfInstanceWorldDistance). A Lumen
+						// cascade reads beyond the traced level's band from the chain's coarsest level, as UE
+						// composes its global distance field (SdfInstanceStandaloneDistance); y = the answering
+						// level's exact reach.
+						vec2 distance_and_reach = vec2(0.0, 0.0);
+						BRANCH
+						if(u_compose_lumen)
+						{
+							distance_and_reach = SdfInstanceStandaloneDistance(inst, header, local_position, true);
+						}
+						else
+						{
+							distance_and_reach.x = SdfInstanceWorldDistance(inst, header, local_position, true);
+						}
+						float world_distance = distance_and_reach.x;
+						nearest = min(nearest, world_distance);
+						// A level's sample is its distance only inside its narrow band: beyond it the voxels
+						// saturate and empty bricks report a lower bound. A two-sided field is near where that
+						// lower bound lies within the coverage band (UE's distance would too, or nearly), a
+						// one-sided field only within the answering level's exact band: a large wall's saturated
+						// reading would otherwise cover all the space inside its bounds. The coarsest level's band
+						// reaches the coverage band, as UE's does.
+						float near_reach = inst.is_two_sided ? coverage_band : min(coverage_band, distance_and_reach.y);
+						if(writes_coverage && abs(world_distance) < near_reach)
+						{
+							near_two_sided = near_two_sided || inst.is_two_sided;
+							near_one_sided = near_one_sided || !inst.is_two_sided;
+						}
 					}
 				}
 			}
@@ -157,4 +212,12 @@ void main()
 	// The levels are stacked along Z in one volume, so this level's slab starts at level * res.
 	ivec3 texel = ivec3(voxel.x, voxel.y, voxel.z + u_compose_level * resolution);
 	imageStore(s_clipmap_out, texel, vec4_splat(encoded));
+	if(writes_coverage)
+	{
+		int coverage_resolution = resolution / SDF_CLIPMAP_COVERAGE_DOWNSAMPLE;
+		float coverage = near_two_sided && !near_one_sided ? 0.0 : 1.0;
+		imageStore(s_clipmap_coverage_out,
+		           ivec3(coverage_texel.x, coverage_texel.y, coverage_texel.z + u_compose_level * coverage_resolution),
+		           vec4_splat(coverage));
+	}
 }

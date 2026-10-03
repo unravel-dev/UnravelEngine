@@ -5,6 +5,7 @@
 #include <atomic>
 #include <base/basetypes.hpp>
 #include <chrono>
+#include <cmd_line/parser.h>
 #include <context/context.hpp>
 #include <deque>
 #include <functional>
@@ -41,12 +42,15 @@ class mcp_manager
 public:
     static constexpr const char* k_host = "127.0.0.1";
     static constexpr int k_default_port = 27182;
+    static constexpr int k_max_port = 65535;
     static constexpr size_t k_max_activity_entries = 256;
 
-    mcp_manager();
+    /// Registers --mcp-port: editors running side by side (other sessions, agents) need a port each.
+    explicit mcp_manager(cmd_line::parser& parser);
     ~mcp_manager();
 
-    auto init(rtti::context& ctx) -> bool;
+    /// Registers the tools and starts the server when enabled; --mcp-port overrides the port when in 1..k_max_port.
+    auto init(rtti::context& ctx, const cmd_line::parser& parser) -> bool;
     auto deinit(rtti::context& ctx) -> bool;
 
     void start();

@@ -20,6 +20,7 @@
 #include "gi_reference_tracer.h"
 
 #include <engine/rendering/gi/gi_constants.h>
+#include <engine/rendering/gi/lumen_constants.h>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
 #include <engine/rendering/gi/global_sdf_clipmap_gpu.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
@@ -70,9 +71,10 @@ void check_near(double actual, double expected, double tolerance, const std::str
 // Constants parity
 // ---------------------------------------------------------------------------------------
 
-/// Parses `#define GI_* <number>` lines from the shader mirror. Non-numeric defines (include
-/// guards) are skipped by the GI_ prefix requirement plus the numeric parse.
-auto parse_shader_constants(const std::string& path) -> std::map<std::string, double>
+/// Parses `#define <prefix>* <number>` lines from a shader mirror. Non-numeric defines (include
+/// guards) are skipped by the prefix requirement plus the numeric parse.
+auto parse_shader_constants(const std::string& path, const std::string& prefix = "GI_")
+    -> std::map<std::string, double>
 {
     std::map<std::string, double> result;
     std::ifstream file(path);
@@ -84,7 +86,7 @@ auto parse_shader_constants(const std::string& path) -> std::map<std::string, do
         std::string name;
         double value = 0.0;
         stream >> directive >> name;
-        if(directive != "#define" || name.rfind("GI_", 0) != 0)
+        if(directive != "#define" || name.rfind(prefix, 0) != 0)
         {
             continue;
         }
@@ -174,6 +176,39 @@ void test_shader_constants_match_cpp()
 #endif
 }
 
+/// The Lumen gather's constants: lumen_constants.h owns them, lumen_constants.sh mirrors them,
+/// checked in both directions like the GI table.
+void test_lumen_constants_match_cpp()
+{
+    std::printf("test_lumen_constants_match_cpp\n");
+#ifndef GI_TESTS_SHADER_DIR
+    check(false, "GI_TESTS_SHADER_DIR not defined by the build - the parity test cannot run");
+#else
+    const std::string path = std::string(GI_TESTS_SHADER_DIR) + "/lumen/lumen_constants.sh";
+    const auto shader_constants = parse_shader_constants(path, "LUMEN_");
+    check(!shader_constants.empty(), "lumen_constants.sh found and contains LUMEN_ defines at " + path);
+    for(const auto& row : unravel::gi::lumen::lumen_constant_rows)
+    {
+        const auto found = shader_constants.find(row.name);
+        if(found == shader_constants.end())
+        {
+            check(false, std::string(row.name) + " missing from lumen_constants.sh");
+            continue;
+        }
+        const double tolerance = 1e-6 * std::max(1.0, std::fabs(row.value));
+        check_near(found->second, row.value, tolerance, std::string(row.name) + " value matches");
+    }
+    for(const auto& [name, value] : shader_constants)
+    {
+        const bool owned = std::any_of(std::begin(unravel::gi::lumen::lumen_constant_rows),
+                                       std::end(unravel::gi::lumen::lumen_constant_rows),
+                                       [&](const auto& row) { return name == row.name; });
+        check(owned, name + " in lumen_constants.sh is owned by the table in lumen_constants.h");
+    }
+    std::printf("  %zu constants verified in both directions\n", std::size(unravel::gi::lumen::lumen_constant_rows));
+#endif
+}
+
 /// Compiles every GI shader with shaderc for the SM 5.0 floor - the binding platform
 /// constraint, tested first per the plan. An editor-side compile failure silently keeps the
 /// previous shader binary, so it presents as wrong RENDERING (black GI, dead debug views)
@@ -192,13 +227,21 @@ void test_gi_shaders_compile_sm50()
         std::printf("  SKIP: %s not built (build the editor first)\n", shaderc.string().c_str());
         return;
     }
-    const fs::path shader_dir = fs::path(GI_TESTS_SHADER_DIR) / "gi";
     const fs::path include_dir = GI_TESTS_SHADER_DIR;
-    const fs::path varying = shader_dir / "varying.def.io";
+    const fs::path varying = include_dir / "gi" / "varying.def.io";
     const fs::path out_dir = fs::temp_directory_path() / "gi_shader_compile_test";
     fs::create_directories(out_dir);
     size_t compiled = 0;
-    for(const auto& entry : fs::directory_iterator(shader_dir))
+    std::vector<fs::directory_entry> entries;
+    for(const char* folder : {"gi", "lumen"})
+    {
+        const fs::path shader_dir = include_dir / folder;
+        if(fs::exists(shader_dir))
+        {
+            entries.insert(entries.end(), fs::directory_iterator(shader_dir), fs::directory_iterator());
+        }
+    }
+    for(const auto& entry : entries)
     {
         const auto name = entry.path().filename().string();
         if(entry.path().extension() != ".sc")
@@ -2462,6 +2505,7 @@ void test_world_probe_vis_memo_segment_keep_is_conservative()
 auto run_gi_oracle_suite(rtti::context& /*ctx*/) -> int
 {
     test_shader_constants_match_cpp();
+    test_lumen_constants_match_cpp();
     test_world_probe_axis_matches_cpp();
     test_gi_shaders_compile_sm50();
     test_attribute_voxels_mark_the_surface_band();

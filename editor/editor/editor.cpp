@@ -61,7 +61,7 @@ auto editor::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<thumbnail_manager>();
     ctx.add<asset_watcher>();
     ctx.add<version_manager>();
-    ctx.add<mcp_manager>();
+    ctx.add<mcp_manager>(parser);
 
     return true;
 }
@@ -197,7 +197,7 @@ auto editor::init(const cmd_line::parser& parser) -> bool
     }
 
     ls.begin_module("MCP Server");
-    if(!ls.check(ctx.get_cached<mcp_manager>().init(ctx)))
+    if(!ls.check(ctx.get_cached<mcp_manager>().init(ctx, parser)))
     {
         return false;
     }

@@ -3,6 +3,7 @@ $input v_texcoord0
 #include "../common.sh"
 #include "../lighting.sh"
 #include "../pre_exposure.sh"
+#include "../tonemapping/tonemapping.sh"
 
 SAMPLER2D(s_tex0, 0);
 SAMPLER2D(s_tex1, 1);
@@ -24,8 +25,13 @@ uniform vec4 u_params;
 /// x = screen-space AO intensity, z = multi-bounce of the screen term (0/1), w = 1 when the
 /// texture is GTAO's (bent normal); y unused here.
 uniform vec4 u_screen_ao;
+/// The indirect diffuse view: x = the lit image's tone mapping operator (tonemapping.sh), y = the multi-bounce
+/// albedo cap (0 = none), z = 1 when s_tex7 is SSIL (it resolved its own screen-space visibility).
+uniform vec4 u_visualize_indirect;
 
 #define u_mode int(u_params.x)
+/// The roughness below which Lumen traces reflection rays (UE r.Lumen.Reflections.MaxRoughnessToTrace).
+#define u_max_roughness_to_trace u_params.z
 
 #define BASE_COLOR 0
 #define DIFFUSE_COLOR 1
@@ -43,6 +49,48 @@ uniform vec4 u_screen_ao;
 #define RADIANCE_ALPHA 13
 #define SPECULAR_OCCLUSION 14
 #define AO_BENT_NORMALS 15
+#define LUMEN_REFLECTION_RAYS 16
+
+/// The grey albedo the indirect diffuse view lights (UE DiffuseIndirectComposite.usf:565).
+#define VISUALIZE_DIFFUSE_ALBEDO 0.18
+
+/// UE's indirect diffuse view (r.Lumen.Visualize.IndirectDiffuse, DiffuseIndirectComposite.usf:565): what the indirect
+/// diffuse adds to an 18% grey surface - the GI resolve's (or SSIL's) E / pi times VISUALIZE_DIFFUSE_ALBEDO, the
+/// diffuse occlusion pbr_indirect gives it and the energy the specular layer leaves - at the frame's exposure times
+/// u_params.y (0 = 1), through the lit image's tone mapping operator. Black where neither ran.
+vec3 indirect_diffuse_view(GBufferData data, vec2 texcoord0)
+{
+    vec4 indirect = texture2D(s_tex7, texcoord0);
+    vec3 clip = clipTransform(vec3(texcoord0 * 2.0 - 1.0, data.depth));
+    vec3 world_position = clipToWorld(u_invViewProj, clip);
+    vec3 N = normalize(data.world_normal);
+    vec3 V = normalize(mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz - world_position);
+    float screen_ao = ScreenSpaceAO(texture2D(s_tex8, texcoord0).a, u_screen_ao.x);
+    vec3 occlusion = IndirectDiffuseOcclusion(data.ambient_occlusion,
+                                              screen_ao,
+                                              u_screen_ao.z,
+                                              u_visualize_indirect.z > 0.5,
+                                              MultiBounceAlbedo(data.diffuse_color, u_visualize_indirect.y));
+    float energy = IndirectDiffuseEnergyPreservation(data.specular_color, GeometricSpecularAA(N, data.roughness), V, N);
+    float scale = u_params.y > 0.0 ? u_params.y : 1.0;
+    vec3 radiance = VISUALIZE_DIFFUSE_ALBEDO * indirect.rgb * indirect.a * occlusion * energy * scale;
+    return apply_tonemapping(radiance, int(u_visualize_indirect.x), 1.0);
+}
+
+/// UE's Dedicated Reflection Rays view (LumenVisualize.ush:49-74, r.Lumen.Visualize 7): the albedo's luminance
+/// lit from one direction, and in red, brighter the smoother, every pixel whose roughness Lumen traces
+/// reflections for (LumenCombineReflectionsAlpha: below the max roughness to trace, fading over 0.1).
+vec3 lumen_reflection_rays(GBufferData data)
+{
+    vec3 light_direction = vec3(-0.707, 0.707, 0.0);
+    float lighting = 0.5 * dot(light_direction, normalize(data.world_normal)) + 0.5;
+    vec3 color = vec3_splat(sqrt(dot(data.diffuse_color, vec3(0.3, 0.59, 0.11)) * lighting * 1.5));
+    if(saturate((u_max_roughness_to_trace - data.roughness) / 0.1) > 0.0)
+    {
+        color = vec3(1.0, 0.0, 0.0) * ((1.0 - data.roughness) * 0.8 + 0.2);
+    }
+    return color;
+}
 
 /// The indirect specular of pbr_indirect, ahead of the environment BRDF: the two reflection
 /// buffers under their occlusion, the probe layer completed with the environment. Returns the
@@ -130,12 +178,7 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     }
     else if(u_mode == SSIL)
     {
-        vec4 ssil = texture2D(s_tex7, texcoord0);
-		color = ssil.rgb * PI * ssil.a * u_pre_exposure_inverse;
-        // Linear readback scale (the scene panel's debug-view scale, u_params.y; 0 = 1): the
-        // target is the LDR frame, so a scale lets a capture read the gather's radiance at
-        // any magnitude to 8-bit precision.
-        color *= u_params.y > 0.0 ? u_params.y : 1.0;
+        color = indirect_diffuse_view(data, texcoord0);
     }
     else if(u_mode == SPECULAR_OCCLUSION)
     {
@@ -149,6 +192,10 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     {
         // White when the screen-space AO carries no bent normal (ASSAO, or no pass).
         color = u_screen_ao.w > 0.5 ? texture2D(s_tex8, texcoord0).rgb : vec3_splat(1.0);
+    }
+    else if(u_mode == LUMEN_REFLECTION_RAYS)
+    {
+        color = lumen_reflection_rays(data);
     }
 
     // The decode helpers now return LINEAR base color (and colors derived from

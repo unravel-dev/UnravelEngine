@@ -2,6 +2,7 @@
 // built and validated in isolation from the asset and graphics layers. The mesh-format glue
 // lives in mesh_sdf_source.cpp -- keep it that way.
 #include "mesh_sdf_baker.h"
+#include "mesh_ray_tracing.h"
 
 #include <engine/profiler/profiler.h>
 
@@ -53,6 +54,22 @@ constexpr size_t k_max_brick_candidates = 64;
 /// Four leaves mildly-coarse shells - awnings, banners - at the voxel their bounds give them,
 /// while catching the order-of-magnitude phantoms (a rope shelled to 10-20x its diameter).
 constexpr float k_max_shell_floor_ratio = 4.0f;
+
+/// UE's mesh distance field sign (MeshDistanceFieldUtilities.cpp:213-283, 369-382): stratified rays per
+/// hemisphere (7 x 7), both hemispheres traced, and the share of them that must hit a back face for a
+/// point to count as inside.
+constexpr uint32_t k_sign_rays_per_hemisphere = 49;
+constexpr float k_sign_back_face_fraction = 0.25f;
+/// Vote rays start pulled back by this fraction of their reach, so a point lying exactly on a triangle
+/// still hits it.
+constexpr float k_sign_ray_pullback = 1.0e-4f;
+
+/// An axis along which the geometry spans less than this many voxels is flat: the grid centres a sample layer on it
+/// (compute_field_grid_min).
+constexpr float k_flat_axis_voxels = 0.01f;
+/// Extra grid extent along a flat axis: the centred layer lowers the grid by up to a voxel and a half beyond the
+/// padding, and the padding above the sheet must stay whole.
+constexpr float k_flat_axis_room_voxels = 2.0f;
 
 /// Which feature of a triangle the closest point landed on. Selects the pseudonormal used
 /// for the inside/outside test.
@@ -305,6 +322,20 @@ public:
         return boundary_edge_count_;
     }
 
+    /**
+     * @brief Whether the surface is a doubled sheet: geometry that renders from both sides because every
+     *        face has a coincident, oppositely wound twin.
+     *
+     * Two forms: the engine's plane primitive, whose mirrored triangulations weld into a closed manifold
+     * that encloses no volume, and a sheet merged with a copy that shares its triangulation, whose
+     * triangles pair up exactly with reversed winding. Either is two-sided geometry: no sign is
+     * meaningful, and a backface vote would be a coin toss between coincident faces.
+     */
+    auto is_doubled_sheet() const -> bool
+    {
+        return (boundary_edge_count_ == 0 && !encloses_volume_) || reversed_twin_fraction_ > 0.5f;
+    }
+
 private:
     struct node
     {
@@ -343,6 +374,8 @@ private:
     ///< False when the closed surface encloses no volume beyond rounding error -- a doubled
     ///< sheet, whose sign is meaningless. See @ref is_closed.
     bool encloses_volume_ = false;
+    ///< Share of the triangles whose welded vertices also form a triangle of the opposite winding.
+    float reversed_twin_fraction_ = 0.0f;
     ///< Per triangle geometric normal, normalized. Degenerate triangles are dropped before
     ///< this is built, so every entry is finite.
     std::vector<math::vec3> face_normals_;
@@ -535,6 +568,43 @@ auto sdf_triangle_accelerator::build(const sdf_source_geometry& geometry) -> boo
         {
             ++boundary_edge_count_;
         }
+    }
+    // Reversed twins: triangles keyed by their sorted welded vertices, with the winding as the parity
+    // of the sort. A key seen with both parities is a pair of coincident, oppositely wound faces.
+    reversed_twin_fraction_ = 0.0f;
+    constexpr uint32_t twin_key_bits = 21u;
+    if(positions_.size() < (size_t(1u) << twin_key_bits))
+    {
+        std::unordered_map<uint64_t, uint32_t> windings;
+        windings.reserve(triangle_count);
+        std::vector<uint64_t> keys(triangle_count, 0u);
+        uint32_t keyed = 0;
+        for(uint32_t t = 0; t < triangle_count; ++t)
+        {
+            if(is_welded_degenerate(t))
+            {
+                continue;
+            }
+            const uint32_t i0 = welded_[indices_[t * 3 + 0]];
+            const uint32_t i1 = welded_[indices_[t * 3 + 1]];
+            const uint32_t i2 = welded_[indices_[t * 3 + 2]];
+            const uint32_t inversions = uint32_t(i0 > i1) + uint32_t(i0 > i2) + uint32_t(i1 > i2);
+            const uint32_t lo = std::min(i0, std::min(i1, i2));
+            const uint32_t hi = std::max(i0, std::max(i1, i2));
+            const uint32_t mid = i0 + i1 + i2 - lo - hi;
+            keys[t] = uint64_t(lo) | (uint64_t(mid) << twin_key_bits) | (uint64_t(hi) << (2u * twin_key_bits));
+            windings[keys[t]] |= 1u << (inversions & 1u);
+            ++keyed;
+        }
+        uint32_t twins = 0;
+        for(uint32_t t = 0; t < triangle_count; ++t)
+        {
+            if(!is_welded_degenerate(t) && windings[keys[t]] == 3u)
+            {
+                ++twins;
+            }
+        }
+        reversed_twin_fraction_ = keyed > 0 ? float(twins) / float(keyed) : 0.0f;
     }
     // Flatten per triangle edge so the hot query path is an array index, not a hash lookup.
     edge_pseudonormals_.resize(size_t(triangle_count) * 3);
@@ -864,6 +934,63 @@ auto find_root(std::vector<uint32_t>& parent, uint32_t node) -> uint32_t
 
 
 /**
+ * @brief UE's sign for an open, one-sided surface: the share of rays from a point that hit a back face.
+ *
+ * The pseudonormal sign needs a closed surface; on an open one it reports inside for regions that are
+ * outside. UE signs its fields by a vote instead: rays in every direction over the band's reach, inside when
+ * more than k_sign_back_face_fraction of them hit the back of a triangle. An opening only loses the votes of
+ * the rays that leave through it, so a wall whose underside is open still bakes as a solid, and the sun
+ * cannot reach a point behind it by starting a ray past a zero-thickness sheet.
+ */
+class sdf_sign_vote
+{
+public:
+    void build(const sdf_source_geometry& geometry)
+    {
+        caster_.build(geometry);
+        mesh_ray::random_stream stream(0u);
+        directions_ = mesh_ray::generate_stratified_hemisphere_directions(k_sign_rays_per_hemisphere, stream);
+        std::vector<math::vec3> lower =
+            mesh_ray::generate_stratified_hemisphere_directions(k_sign_rays_per_hemisphere, stream);
+        for(math::vec3& direction : lower)
+        {
+            direction.z = -direction.z;
+            directions_.push_back(direction);
+        }
+    }
+
+    /// True when more than k_sign_back_face_fraction of the rays from @p p hit a back face within @p reach.
+    auto is_inside(const math::vec3& p, float reach) const -> bool
+    {
+        uint32_t hits = 0;
+        uint32_t back_hits = 0;
+        const float pullback = k_sign_ray_pullback * reach;
+        for(const math::vec3& direction : directions_)
+        {
+            const mesh_ray::ray_hit hit = caster_.intersect(p - direction * pullback,
+                                                            direction,
+                                                            0.0f,
+                                                            std::numeric_limits<uint32_t>::max(),
+                                                            reach + pullback);
+            if(!hit.is_hit)
+            {
+                continue;
+            }
+            ++hits;
+            if(math::dot(direction, caster_.get_normal(hit.triangle)) > 0.0f)
+            {
+                ++back_hits;
+            }
+        }
+        return hits > 0 && float(back_hits) > k_sign_back_face_fraction * float(directions_.size());
+    }
+
+private:
+    mesh_ray::triangle_ray_caster caster_;
+    std::vector<math::vec3> directions_;
+};
+
+/**
  * @brief Padding a field adds around its geometry, per side, for a given voxel.
  *
  * The band reaches @ref mesh_sdf::encode_range voxels, so the padding scales WITH the voxel. That
@@ -878,16 +1005,49 @@ auto compute_field_padding(const mesh_sdf_bake_settings& settings, bool use_unsi
     return mesh_sdf::encode_range * voxel + shell;
 }
 
+/// Whether the geometry is flat along @p axis at @p voxel (see k_flat_axis_voxels).
+auto is_flat_axis(const math::vec3& surface_extent, int axis, float voxel) -> bool
+{
+    return surface_extent[axis] < k_flat_axis_voxels * voxel;
+}
+
 /**
- * @brief Grid size in bricks for a given voxel, padding included.
+ * @brief The grid's minimum corner: @p padding below the bounds, except along a flat axis, where a sample layer
+ *        sits ON the sheet.
+ *
+ * UE samples voxel corners, and a plane's bounds land on them; here samples sit at voxel centres, and a sheet
+ * between two layers never reads below half a voxel in an unsigned field. A trace that registers a surface within
+ * half a global-SDF voxel then passes straight through a floor whose own voxel is coarser than that.
+ */
+auto compute_field_grid_min(const math::bbox& bounds, float padding, float voxel) -> math::vec3
+{
+    const math::vec3 surface_extent = bounds.get_dimensions();
+    const math::vec3 center = bounds.get_center();
+    math::vec3 grid_min = bounds.min - math::vec3(padding);
+    for(int axis = 0; axis < 3; ++axis)
+    {
+        if(is_flat_axis(surface_extent, axis, voxel))
+        {
+            grid_min[axis] = center[axis] - (std::ceil(padding / voxel) + 0.5f) * voxel;
+        }
+    }
+    return grid_min;
+}
+
+/**
+ * @brief Grid size in bricks for a given voxel, padding included (and the room a flat axis's centred sample layer
+ *        takes, see @ref compute_field_grid_min).
  */
 auto compute_field_brick_dim(const math::vec3& surface_extent,
                              const mesh_sdf_bake_settings& settings,
                              bool use_unsigned,
                              float voxel) -> math::uvec3
 {
-    const math::vec3 extent =
-        surface_extent + math::vec3(2.0f * compute_field_padding(settings, use_unsigned, voxel));
+    math::vec3 extent = surface_extent + math::vec3(2.0f * compute_field_padding(settings, use_unsigned, voxel));
+    for(int axis = 0; axis < 3; ++axis)
+    {
+        extent[axis] += is_flat_axis(surface_extent, axis, voxel) ? k_flat_axis_room_voxels * voxel : 0.0f;
+    }
     const auto axis_bricks = [&](float axis_extent) -> uint32_t
     {
         const uint32_t voxels = uint32_t(std::ceil(axis_extent / voxel));
@@ -903,7 +1063,9 @@ auto compute_field_brick_dim(const math::vec3& surface_extent,
 auto prepare_bake(const sdf_source_geometry& geometry,
                   const mesh_sdf_bake_settings& settings,
                   sdf_triangle_accelerator& accelerator,
-                  bool& use_unsigned) -> bool
+                  sdf_sign_vote& vote,
+                  bool& use_unsigned,
+                  bool& use_vote) -> bool
 {
     APP_SCOPE_PERF("GI/Bake/Prepare");
     if(!geometry.is_valid() || !geometry.bounds.is_populated() || geometry.bounds.is_degenerate())
@@ -933,17 +1095,18 @@ auto prepare_bake(const sdf_source_geometry& geometry,
     {
         return false;
     }
-    // An open surface has no meaningful inside, so bake it unsigned whether or not the asset
-    // asked for it. Keeping the signed path on an open mesh does not merely lose the interior:
-    // the pseudonormal test reports "inside" for regions that are outside, those bricks store a
-    // NEGATIVE distance, and the tracer reads any negative sample as a surface hit -- so the
-    // field's whole bounding box renders solid. Scanned props are frequently open, so this is
-    // the common case, not an edge case.
-    //
-    // Erring toward unsigned is deliberate. Treating a nearly-closed mesh as a shell only
-    // loses interior solidity (the shell still occludes); treating an open mesh as closed
-    // produces phantom geometry.
-    use_unsigned = settings.two_sided || !accelerator.is_closed();
+    // Only a two-sided surface bakes unsigned (a shell the global field composes as a zero-thickness
+    // sheet): one whose material is two-sided, or a doubled sheet. A one-sided surface is signed: a
+    // closed one by the nearest feature's pseudonormal, which is exact there, and an open one by UE's
+    // backface vote (sdf_sign_vote), because the pseudonormal test reports "inside" for regions outside
+    // an open surface and would render its bounding box solid. Scanned props and modular walls are
+    // frequently open, so this is the common case.
+    use_unsigned = settings.two_sided || accelerator.is_doubled_sheet();
+    use_vote = !use_unsigned && !accelerator.is_closed();
+    if(use_vote)
+    {
+        vote.build(geometry);
+    }
     return true;
 }
 
@@ -960,6 +1123,7 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
                                  const mesh_sdf_bake_settings& settings,
                                  const sdf_triangle_accelerator& accelerator,
                                  bool use_unsigned,
+                                 const sdf_sign_vote* vote,
                                  bool parallel_voxels,
                                  mesh_sdf& out) -> bool
 {
@@ -1086,7 +1250,7 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
     brick_dim = math::uvec3(math::min(brick_dim.x, max_bricks),
                             math::min(brick_dim.y, max_bricks),
                             math::min(brick_dim.z, max_bricks));
-    const math::vec3 padded_min = geometry.bounds.min - math::vec3(compute_padding(voxel_size));
+    const math::vec3 padded_min = compute_field_grid_min(geometry.bounds, compute_padding(voxel_size), voxel_size);
     const math::uvec3 grid_dim(brick_dim.x * mesh_sdf::brick_size,
                                brick_dim.y * mesh_sdf::brick_size,
                                brick_dim.z * mesh_sdf::brick_size);
@@ -1101,6 +1265,7 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
     out.bounds = math::bbox(padded_min,
                             padded_min + math::vec3(float(grid_dim.x), float(grid_dim.y), float(grid_dim.z)) *
                                              voxel_size);
+    out.surface_bounds = geometry.bounds;
     const uint32_t brick_count = brick_dim.x * brick_dim.y * brick_dim.z;
     out.indirection.assign(brick_count, 0u);
     // Pass 1: classify every brick from a single query at its centre. A brick needs voxel
@@ -1126,7 +1291,9 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
             const math::vec3 center =
                 padded_min + (math::vec3(float(bx), float(by), float(bz)) + math::vec3(0.5f)) *
                                  brick_world_size;
-            brick_center_distance[brick_index] = accelerator.signed_distance(center, use_unsigned);
+            // Under the vote a brick centre beyond the band is outside, as UE leaves every point it
+            // traces no rays from: only the band carries a sign.
+            brick_center_distance[brick_index] = accelerator.signed_distance(center, use_unsigned || vote != nullptr);
         });
     // Pass 2: assign storage slots to surface bricks, and give every other brick a
     // conservative distance valid for all points inside it.
@@ -1211,6 +1378,12 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
             const math::bbox stored_region(stored_min, stored_max);
             const float collect_reach =
                 mesh_sdf::encode_range * voxel_size + (use_unsigned ? out.two_sided_thickness : 0.0f);
+            // UE's LocalSpaceTraceDistance: the band in voxel diagonals, of the chain's finest level for a
+            // coarser one (mesh_sdf_bake_settings::sign_vote_voxel_size). The vote signs the voxels within
+            // it; the ones beyond stay positive.
+            const float vote_voxel = settings.sign_vote_voxel_size > 0.0f ? settings.sign_vote_voxel_size : voxel_size;
+            const float vote_reach = mesh_sdf::encode_range * vote_voxel * std::sqrt(3.0f);
+            const bool query_unsigned = use_unsigned || vote != nullptr;
             // Deliberately uninitialised: only entries below the returned count are ever read.
             std::array<uint32_t, k_max_brick_candidates> candidates;
             const uint32_t candidate_count = accelerator.collect_candidates(stored_region,
@@ -1283,7 +1456,7 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
                         if(use_candidates)
                         {
                             distance = accelerator.signed_distance_in_list(p,
-                                                                           use_unsigned,
+                                                                           query_unsigned,
                                                                            candidates.data(),
                                                                            candidate_count);
                             // At or beyond the reach the list was collected for, the list may not
@@ -1298,7 +1471,7 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
                             // at least `collect_reach` away -- four voxels at the narrowest. The
                             // neighbour's own sign was established the same way or measured directly,
                             // so the induction bottoms out at the brick's first voxel.
-                            if(!use_unsigned && std::abs(distance) >= collect_reach)
+                            if(!query_unsigned && std::abs(distance) >= collect_reach)
                             {
                                 distance = has_neighbour ? std::copysign(distance, neighbour)
                                                          : accelerator.signed_distance(p, false, hint);
@@ -1306,9 +1479,13 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
                         }
                         else
                         {
-                            distance = accelerator.signed_distance(p, use_unsigned, hint);
+                            distance = accelerator.signed_distance(p, query_unsigned, hint);
                         }
                         plane_distance[plane_index] = distance;
+                        if(vote != nullptr && distance < vote_reach && vote->is_inside(p, vote_reach))
+                        {
+                            distance = -distance;
+                        }
                         if(use_unsigned)
                         {
                             // Unsigned shell: the surface is treated as a slab of the
@@ -1335,8 +1512,10 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
     APP_SCOPE_PERF("GI/Bake/Mesh SDF");
     out = {};
     sdf_triangle_accelerator accelerator;
+    sdf_sign_vote vote;
     bool use_unsigned = false;
-    if(!prepare_bake(geometry, settings, accelerator, use_unsigned))
+    bool use_vote = false;
+    if(!prepare_bake(geometry, settings, accelerator, vote, use_unsigned, use_vote))
     {
         return false;
     }
@@ -1344,6 +1523,7 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
                                        settings,
                                        accelerator,
                                        use_unsigned,
+                                       use_vote ? &vote : nullptr,
                                        threading == sdf_bake_threading::parallel,
                                        out);
 }
@@ -1365,14 +1545,17 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
     // per level would make a three-level chain cost about twice a single bake rather than the
     // third extra its voxel work needs.
     sdf_triangle_accelerator accelerator;
+    sdf_sign_vote vote;
     bool use_unsigned = false;
-    if(!prepare_bake(geometry, settings, accelerator, use_unsigned))
+    bool use_vote = false;
+    if(!prepare_bake(geometry, settings, accelerator, vote, use_unsigned, use_vote))
     {
         return false;
     }
+    const sdf_sign_vote* sign_vote = use_vote ? &vote : nullptr;
     const bool parallel_voxels = (threading == sdf_bake_threading::parallel);
     mesh_sdf finest;
-    if(!bake_field_with_accelerator(geometry, settings, accelerator, use_unsigned, parallel_voxels, finest))
+    if(!bake_field_with_accelerator(geometry, settings, accelerator, use_unsigned, sign_vote, parallel_voxels, finest))
     {
         return false;
     }
@@ -1387,6 +1570,7 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
     {
         mesh_sdf_bake_settings coarse = settings;
         coarse.target_voxel_size = base_voxel * float(1u << mip);
+        coarse.sign_vote_voxel_size = base_voxel;
         // The clamps exist to stop a field being too FINE. A mip is deliberately coarse, so
         // leaving them in place would clamp it back onto the level above and the chain would be
         // three copies of the same field.
@@ -1413,7 +1597,7 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
             break;
         }
         mesh_sdf level;
-        if(!bake_field_with_accelerator(geometry, coarse, accelerator, use_unsigned, parallel_voxels, level))
+        if(!bake_field_with_accelerator(geometry, coarse, accelerator, use_unsigned, sign_vote, parallel_voxels, level))
         {
             break;
         }
@@ -1426,6 +1610,48 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
         out.push_back(std::move(level));
     }
     return true;
+}
+
+auto sample_mesh_sdf_sheet(const mesh_sdf& sdf, const math::vec3& local_position) -> float
+{
+    return sample_mesh_sdf(sdf, local_position) + (sdf.is_two_sided ? sdf.two_sided_thickness : 0.0f);
+}
+
+namespace
+{
+/// Signed distance from a point at the absolute per-axis @p offset from a box's centre to the box of half extent
+/// @p extent, each axis scaled by @p scale: exact in world units for a scaled, rotated box.
+auto scaled_box_distance(const math::vec3& offset, const math::vec3& extent, const math::vec3& scale) -> float
+{
+    const math::vec3 to_box = (offset - extent) * scale;
+    const float outside = math::length(math::max(to_box, math::vec3(0.0f)));
+    const float inside = std::min(std::max(to_box.x, std::max(to_box.y, to_box.z)), 0.0f);
+    return outside + inside;
+}
+} // namespace
+
+auto sample_instance_distance(const mesh_sdf& sdf,
+                              const math::vec3& local_position,
+                              const math::vec3& axis_scale,
+                              float min_scale,
+                              bool sheet) -> float
+{
+    // A shell (a two-sided field read as stored) reaches its thickness past the geometry; a sheet does not.
+    const math::bbox surface = sdf.get_surface_bounds();
+    const float shell = (sdf.is_two_sided && !sheet) ? sdf.two_sided_thickness : 0.0f;
+    const math::vec3 surface_extent = 0.5f * (surface.max - surface.min) + math::vec3(shell);
+    const math::vec3 surface_offset = math::abs(local_position - 0.5f * (surface.min + surface.max));
+    const float to_surface_box = scaled_box_distance(surface_offset, surface_extent, axis_scale);
+    const math::vec3 extent = 0.5f * math::vec3(sdf.grid_dim) * sdf.voxel_size;
+    const math::vec3 offset = math::abs(local_position - (sdf.bounds.min + extent));
+    const float to_bounds = scaled_box_distance(offset, extent, axis_scale);
+    const math::vec3 boundary = math::clamp(local_position, sdf.bounds.min, sdf.bounds.min + 2.0f * extent);
+    const float field = sheet ? sample_mesh_sdf_sheet(sdf, boundary) : sample_mesh_sdf(sdf, boundary);
+    if(to_bounds <= 0.0f && field < 0.0f)
+    {
+        return field * min_scale;
+    }
+    return std::max(field * min_scale - std::max(to_bounds, 0.0f), to_surface_box);
 }
 
 auto sample_mesh_sdf(const mesh_sdf& sdf, const math::vec3& local_position) -> float

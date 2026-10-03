@@ -261,6 +261,26 @@ private:
                               gfx::render_pass& scroll_place_pass,
                               gfx::render_pass& compose_pass);
 
+    /// One volume of a scroll-only recompose (the distance, or the coverage at its downsample): the level slab goes
+    /// out to @p scratch and the overlap comes back shifted.
+    struct scroll_volume
+    {
+        gfx::texture::ptr* scratch{};
+        const gfx::texture::ptr* volume{};
+        uint32_t downsample = 1;
+    };
+
+    /// Moves the overlap of a scroll-only recompose within @p target (scaled by its downsample). False when the scratch
+    /// could not be created: the level then composes in full.
+    static auto ensure_scroll_scratch(const scroll_volume& target, uint32_t resolution) -> bool;
+    static void blit_scroll_overlap(const scroll_volume& target,
+                                    uint32_t resolution,
+                                    uint32_t level,
+                                    const global_sdf_clipmap::voxel_box& overlap,
+                                    const math::ivec3& shift,
+                                    gfx::render_pass& copy_pass,
+                                    gfx::render_pass& place_pass);
+
     /// Dispatches the compose kernel over one voxel box of @p level.
     void dispatch_compose_box(gfx::render_pass& pass,
                               const global_sdf_clipmap& clipmap,
@@ -276,6 +296,10 @@ private:
     /// every dirty level's copy is issued in the same view before any placement (the stable
     /// view layout in run()), so two scrolling levels must not share a scratch.
     std::array<gfx::texture::ptr, global_sdf_clipmap::level_count> scroll_scratch_{};
+    /// The same for the coverage of distance-only clipmaps (global_sdf_clipmap_gpu::get_coverage_texture).
+    std::array<gfx::texture::ptr, global_sdf_clipmap::level_count> coverage_scroll_scratch_{};
+    /// Bound as the coverage image when the clipmap has none (the compose then writes no coverage).
+    gfx::texture::ptr coverage_dummy_;
 
     /// One-time diagnostics: captures flowing is the positive signal, helper shaders failing
     /// to compile is the silent-failure mode worth a loud line.

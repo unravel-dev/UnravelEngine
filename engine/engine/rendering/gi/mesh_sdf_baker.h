@@ -159,6 +159,12 @@ struct mesh_sdf_bake_settings
     ///< Deliberately far above normal authoring: a handful of parts side by side measures a few x,
     ///< while the cases that break tracing measure in the hundreds or thousands.
     float max_component_spread = 32.0f;
+    ///< The voxel whose band an open surface's backface vote reaches (UE LocalSpaceTraceDistance: encode_range
+    ///< voxel diagonals), or 0 for the level's own voxel. A chain's coarser levels vote with its finest level's
+    ///< voxel, so every level bakes the same solid: a coarser level's longer reach would sign the space behind a
+    ///< submesh's hidden back faces inside well past what the submesh encloses - through a floor slab another
+    ///< submesh holds, above the vault whose back faces voted.
+    float sign_vote_voxel_size = 0.0f;
 };
 
 /**
@@ -229,6 +235,37 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
  * The validation harness compares the two to catch CPU/GPU divergence.
  */
 auto sample_mesh_sdf(const mesh_sdf& sdf, const math::vec3& local_position) -> float;
+
+/**
+ * @brief Samples a baked field with a two-sided field read as its zero-thickness sheet.
+ *
+ * The bake stores two-sided fields as |distance| - @ref mesh_sdf::two_sided_thickness; this adds the
+ * half-thickness back. The global clipmap composes this distance (mirrors SdfSheetDistance).
+ */
+auto sample_mesh_sdf_sheet(const mesh_sdf& sdf, const math::vec3& local_position) -> float;
+
+/**
+ * @brief World distance from a placed field's surface at a LOCAL position, for the composed fields (the global
+ *        distance field and the Lumen object grid; UE DistanceToNearestSurfaceForObject,
+ *        MeshDistanceFieldCommon.ush). Mirrors SdfInstanceWorldDistance (sdf_common.sh).
+ *
+ * A local distance times one scale is exact only along that scale's axis. With the smallest axis (the conservative
+ * choice) a wall scaled (10, 3, 0.2) reads 50x too close past its ends, so stretched primitives swell along their
+ * long axes and close the gaps between them. Two per-axis lower bounds keep the result tight and conservative: the
+ * world distance to the box the surface lies in (@ref mesh_sdf::get_surface_bounds), and outside the bounds the
+ * field at the nearest boundary point less the world distance to it (1-Lipschitz). Inside the bounds the field is
+ * converted with the smallest axis scale, and a negative reading there stands as UE's volume-box term lets it: an
+ * open sheet signed by the bake's vote is solid beyond its own box (a plane is solid below it).
+ *
+ * @param axis_scale World length of each local axis (the placement's per-axis scale).
+ * @param min_scale  The smallest of @p axis_scale.
+ * @param sheet      Read a two-sided field as its zero-thickness sheet (@ref sample_mesh_sdf_sheet).
+ */
+auto sample_instance_distance(const mesh_sdf& sdf,
+                              const math::vec3& local_position,
+                              const math::vec3& axis_scale,
+                              float min_scale,
+                              bool sheet) -> float;
 
 /**
  * @brief The brick lookup behind @ref sample_mesh_sdf for a point INSIDE the field, addressed

@@ -52,6 +52,19 @@ auto create_4x4_cube_rgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> gfx::t
         copy_solid_rgba8<pixel_count>(r, g, b, a));
 }
 
+auto create_4x4x4_rgba8(uint8_t r, uint8_t g, uint8_t b, uint8_t a) -> gfx::texture::ptr
+{
+    constexpr std::size_t pixel_count = default_texture_size * default_texture_size * default_texture_size;
+    return std::make_shared<gfx::texture>(
+        default_texture_size,
+        default_texture_size,
+        default_texture_size,
+        false,
+        bgfx::TextureFormat::RGBA8,
+        BGFX_TEXTURE_NONE | BGFX_SAMPLER_NONE,
+        copy_solid_rgba8<pixel_count>(r, g, b, a));
+}
+
 } // namespace
 
 default_textures::default_textures() = default;
@@ -69,6 +82,8 @@ void default_textures::generate()
     missing_     = create_4x4_rgba8(255, 0, 255, 255);
     transparent_ = create_4x4_rgba8(0, 0, 0, 0);
     black_cube_  = create_4x4_cube_rgba8(0, 0, 0, 255);
+    transparent_3d_ = create_4x4x4_rgba8(0, 0, 0, 0);
+    white_3d_ = create_4x4x4_rgba8(255, 255, 255, 255);
 
     cloud_noise_.generate();
     specular_occlusion_.generate();
@@ -81,6 +96,8 @@ void default_textures::clear()
     missing_.reset();
     transparent_.reset();
     black_cube_.reset();
+    transparent_3d_.reset();
+    white_3d_.reset();
 
     cloud_noise_.clear();
     specular_occlusion_.clear();

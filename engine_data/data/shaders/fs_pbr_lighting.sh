@@ -63,7 +63,8 @@ uniform vec4 u_screen_ao;
 // when the transparent fallback does. The shader cannot derive it: an absent system and a
 // pixel the GI resolved nothing for both read (0,0,0,0). y = 1 when that source is SSIL, which
 // traced the screen-space visibility per pixel; 0 for the GI resolve, which resolves it only
-// at its probe lattice.
+// at its probe lattice. z = cap of the albedo the multi-bounce fit uses (Lumen's short-range AO:
+// UE's MaxMultibounceAlbedo), 0 = uncapped.
 uniform vec4 u_indirect_params;
 /// The GI resolve alpha above which a pixel counts as SERVED by the GI (pbr_indirect): served
 /// pixels read 0.996-1.0, unserved ones 0, and the bilateral upsample leaves fractions only
@@ -699,7 +700,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     GBufferData data = DecodeGBufferTexel(gbuf_texel, s_tex0, s_tex1, s_tex2, s_tex3, s_tex4);
     vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, data.depth, s_tex4);
     vec3 world_position = clipToWorld(u_invViewProj, clip);
-    float filtered_roughness = GeometricSpecularAA(data.world_normal, data.roughness);
+    float filtered_roughness = GeometricSpecularAA(data.world_normal, GetLightingRoughness(data.roughness));
     vec3 lobe_roughness = vec3(0.0f, filtered_roughness, 1.0f);
     vec3 light_color = u_light_color_intensity.xyz;
     float intensity = u_light_color_intensity.w;
@@ -808,9 +809,9 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     float visibility = material_ao * screen_ao;
     vec3 occlusion_axis = ScreenSpaceOcclusionAxis(screen_ao_sample, u_screen_ao_has_bent_normal, screen_ao, N);
     // The multi-bounce fit applies once, to the combined visibility, per channel of the diffuse
-    // albedo (uncapped, as UE's base pass, HDRP and Filament use it); the screen term stays plain
-    // when GTAO turns its multi-bounce off.
-    vec3 multi_bounce_albedo = data.diffuse_color;
+    // albedo (uncapped, as UE's base pass, HDRP and Filament use it; capped as UE's Lumen composite
+    // caps it for its short-range AO); the screen term stays plain when GTAO turns its multi-bounce off.
+    vec3 multi_bounce_albedo = MultiBounceAlbedo(data.diffuse_color, u_indirect_params.z);
     vec3 bounce_gain = MultiBounceAOGain(u_screen_ao_multi_bounce > 0.5 ? visibility : material_ao, multi_bounce_albedo);
 
     // Indirect diffuse is carried as E/pi, the cosine-weighted mean incoming radiance, so that
@@ -824,11 +825,8 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     vec3 ambient_sh = eval_irradiance_sh_cone(s_irradiance, diffuse_axis, visibility) * bounce_gain * (RECIP_PI * u_pre_exposure_value);
     vec4 gi_sample = texture2D(s_ssil, texcoord0);
     float gi_served = saturate(u_indirect_params.x) * step(PBR_GI_SERVED_ALPHA, gi_sample.a);
-    vec3 traced_diffuse_occlusion = visibility * bounce_gain;
-    if(u_indirect_params.y > 0.5)
-    {
-        traced_diffuse_occlusion = material_ao * MultiBounceAOGain(material_ao, multi_bounce_albedo);
-    }
+    vec3 traced_diffuse_occlusion =
+        IndirectDiffuseOcclusion(material_ao, screen_ao, u_screen_ao_multi_bounce, u_indirect_params.y > 0.5, multi_bounce_albedo);
     vec3 indirect_diffuse = mix(ambient_sh, gi_sample.rgb * traced_diffuse_occlusion, gi_served);
 
     // The specular cone always follows the bent normal: the directional part is what separates

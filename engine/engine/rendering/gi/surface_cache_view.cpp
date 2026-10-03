@@ -20,7 +20,9 @@ void surface_cache_view::update(const std::vector<global_sdf_instance>& instance
     if(!initialized_)
     {
         clipmap_.init(clipmap_settings);
-        if(!clipmap_gpu_.init(clipmap_settings.resolution, clipmap_settings.compose_on_gpu))
+        if(!clipmap_gpu_.init(clipmap_settings.resolution,
+                              clipmap_settings.compose_on_gpu,
+                              clipmap_settings.distance_only))
         {
             APPLOG_WARNING("[SurfaceCache] Clipmap initialisation failed for this view. Only "
                            "per-instance field tracing will be available, so distant and offscreen "
@@ -47,7 +49,9 @@ void surface_cache_view::update(const std::vector<global_sdf_instance>& instance
         }
         if(layout_changed || composer_changed)
         {
-            if(!clipmap_gpu_.init(clipmap_settings.resolution, clipmap_settings.compose_on_gpu))
+            if(!clipmap_gpu_.init(clipmap_settings.resolution,
+                                  clipmap_settings.compose_on_gpu,
+                                  clipmap_settings.distance_only))
             {
                 APPLOG_WARNING("[SurfaceCache] Clipmap resize to {} failed; the cascade is now "
                                "unavailable for this view.",

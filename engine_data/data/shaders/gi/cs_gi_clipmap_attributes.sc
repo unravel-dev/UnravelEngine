@@ -269,8 +269,7 @@ void main()
 						// half-thickness (zero for signed fields, so no branch) restores the
 						// unsigned sheet distance the contest should judge on.
 						float magnitude =
-						    abs((SdfSampleLocal(header, local_position) + header.two_sided_thickness) *
-						        inst.local_to_world_scale);
+						    abs(SdfSheetDistance(header, local_position) * inst.local_to_world_scale);
 						if(magnitude < best_magnitude ||
 						   (magnitude == best_magnitude && (best_index < 0 || index < best_index)))
 						{

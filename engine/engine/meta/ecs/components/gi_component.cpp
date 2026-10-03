@@ -349,6 +349,17 @@ REFLECT_INLINE(gi_resolve_pass::settings)
                             "result. Any tracked change resumes tracing from it. Changes the "
                             "renderer does not track, such as particles and animated materials, "
                             "are not picked up while paused."},
+        })
+        .data<&settings::enable_lumen_gather>("enable_lumen_gather"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "enable_lumen_gather"},
+            entt::attribute{"pretty_name", "Lumen Gather (Experiment)"},
+            entt::attribute{"group", "Experiment"},
+            entt::attribute{"tooltip",
+                            "Replaces the screen-probe gather with the Lumen port (stateless probes, "
+                            "probe-space filter, SH3, 10-frame per-pixel temporal, radiance "
+                            "cache). Intensity and Temporal still apply; the other gather settings "
+                            "do not (the Lumen gather always traces the screen first)."},
         });
 }
 
@@ -507,6 +518,7 @@ SAVE_INLINE(gi_resolve_pass::settings)
     try_save(ar, ser20::make_nvp("upsample_normal_power", obj.upsample_normal_power));
     try_save(ar, ser20::make_nvp("upsample_plane_tolerance", obj.upsample_plane_tolerance));
     try_save(ar, ser20::make_nvp("hold_at_rest", obj.hold_at_rest));
+    try_save(ar, ser20::make_nvp("enable_lumen_gather", obj.enable_lumen_gather));
 }
 SAVE_INSTANTIATE(gi_resolve_pass::settings, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(gi_resolve_pass::settings, ser20::oarchive_binary_t);
@@ -540,6 +552,7 @@ LOAD_INLINE(gi_resolve_pass::settings)
     try_load(ar, ser20::make_nvp("upsample_normal_power", obj.upsample_normal_power));
     try_load(ar, ser20::make_nvp("upsample_plane_tolerance", obj.upsample_plane_tolerance));
     try_load(ar, ser20::make_nvp("hold_at_rest", obj.hold_at_rest));
+    try_load(ar, ser20::make_nvp("enable_lumen_gather", obj.enable_lumen_gather));
 }
 LOAD_INSTANTIATE(gi_resolve_pass::settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(gi_resolve_pass::settings, ser20::iarchive_binary_t);

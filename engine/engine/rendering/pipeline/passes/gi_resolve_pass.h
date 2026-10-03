@@ -149,12 +149,18 @@ public:
         /// the held history. Changes the pipeline cannot see (particles, animated materials
         /// outside the light set) do not reach the image while held.
         bool hold_at_rest = false;
+        /// EXPERIMENT (tasks/lumen_transform): the Lumen screen probe gather (lumen_gather_pass)
+        /// replaces this pass's gather. The world structures, intensity and the temporal switch are
+        /// shared; the other settings here do not apply to it (it always traces the screen first).
+        bool enable_lumen_gather = false;
 
         auto operator==(const settings&) const -> bool = default;
     };
 
     struct run_params
     {
+        /// The Lumen surface cache, when the Lumen gather runs: its global-SDF hits read the cards.
+        const class lumen_surface_cache_pass* lumen_surface_cache = nullptr;
         gfx::frame_buffer::ptr g_buffer;
         /// Previous frame's depth, used to validate reprojected history. Null disables temporal
         /// accumulation for this frame rather than accepting history blindly.

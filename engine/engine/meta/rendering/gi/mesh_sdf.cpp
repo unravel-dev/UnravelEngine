@@ -20,6 +20,7 @@ SAVE(mesh_sdf)
     try_save(ar, ser20::make_nvp("two_sided_thickness", obj.two_sided_thickness));
     try_save(ar, ser20::make_nvp("indirection", obj.indirection));
     try_save(ar, ser20::make_nvp("brick_voxels", obj.brick_voxels));
+    try_save(ar, ser20::make_nvp("surface_bounds", obj.surface_bounds));
 }
 SAVE_INSTANTIATE(mesh_sdf, ser20::oarchive_binary_t);
 SAVE_INSTANTIATE(mesh_sdf, ser20::oarchive_associative_t);
@@ -34,6 +35,7 @@ LOAD(mesh_sdf)
     try_load(ar, ser20::make_nvp("two_sided_thickness", obj.two_sided_thickness));
     try_load(ar, ser20::make_nvp("indirection", obj.indirection));
     try_load(ar, ser20::make_nvp("brick_voxels", obj.brick_voxels));
+    try_load(ar, ser20::make_nvp("surface_bounds", obj.surface_bounds));
 }
 LOAD_INSTANTIATE(mesh_sdf, ser20::iarchive_binary_t);
 LOAD_INSTANTIATE(mesh_sdf, ser20::iarchive_associative_t);

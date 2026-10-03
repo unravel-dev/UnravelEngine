@@ -119,6 +119,21 @@ vec2 BlueNoise2D(vec2 pix_coord, float frame_idx)
     return fract(vec2(ign1, ign2) + t_offset);
 }
 
+/// The plastic constant's R2 increments (Roberts' additive recurrence).
+#define SAMPLING_R2_INCREMENT vec2(0.7548776662, 0.5698402910)
+/// Indices the R2 recurrence counts before restarting (keeps the products exact in 32-bit floats).
+#define SAMPLING_R2_PERIOD 4096.0
+
+/// Two noise values per point and index, spatially blue and stratified over indices: interleaved gradient noise on
+/// two independent lattices (the second transposed - two taps of one lattice are both functions of the same scalar
+/// and would put every 2D sample on one curve through the unit square), rotated by the R2 recurrence over @p index,
+/// so any run of consecutive indices spreads a point's samples evenly over the square.
+vec2 SpatioTemporalNoise2D(vec2 coord, float index)
+{
+    vec2 spatial = vec2(InterleavedGradientNoise(coord), InterleavedGradientNoise(coord.yx + vec2(17.0, 31.0)));
+    return fract(spatial + mod(index, SAMPLING_R2_PERIOD) * SAMPLING_R2_INCREMENT);
+}
+
 /// Hammersley with screen-space-stationary blue-noise scramble (`BlueNoise2D`). Drop-in
 /// for `Hammersley16` when per-pixel blue-noise distribution of the sample offsets is
 /// wanted AND the consuming pass temporally accumulates. The pixel coord drives

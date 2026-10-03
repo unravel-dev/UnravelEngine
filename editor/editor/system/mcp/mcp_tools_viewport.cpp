@@ -14,6 +14,7 @@
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/ecs/components/camera_component.h>
 #include <engine/rendering/gi/gi_constants.h>
+#include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/pipeline/passes/gi_quiescence_gate_pass.h>
 #include <engine/rendering/pipeline/pipeline.h>
@@ -579,6 +580,27 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .mutates_scene = false});
 
     registry.add(
+        {.name = "viewport_set_render_size",
+         .description = "Render the Scene panel camera at exactly width x height pixels (e.g. 1920 x 1080 for cost "
+                        "measurements independent of the panel size) and show it scaled into the panel; 0 x 0 "
+                        "follows the panel again. Picking and gizmos assume the panel size while it is forced.",
+         .input_schema_json = R"({"type":"object","properties":{"width":{"type":"integer","minimum":0,"maximum":8192},"height":{"type":"integer","minimum":0,"maximum":8192}},"required":["width","height"]})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             int64_t width = 0;
+             int64_t height = 0;
+             if(args["width"].get(width) || args["height"].get(height) || width < 0 || height < 0 || width > 8192 ||
+                height > 8192)
+             {
+                 return {.text = "width and height must be integers in 0..8192", .is_error = true};
+             }
+             resolve_scene_panel(ctx).set_forced_render_size(uint32_t(width), uint32_t(height));
+             return {.text = fmt::format(R"({{"ok":true,"width":{},"height":{}}})", width, height), .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
         {.name = "viewport_set_debug_view",
          .description = "Set the Scene panel debug visualization mode. Pass mode as a name string "
                         "(e.g. \"full\", \"base_color\", \"normals\", \"gi_light_voxels\") or as the "
@@ -669,9 +691,14 @@ void register_viewport_tools(mcp_tool_registry& registry)
              "\"degrees\":sweep} (the forward rotated about world up). Optional `save` (absolute file path) also "
              "writes the per-pixel planes as raw little-endian float32, rows from the top: the mean luminance, its "
              "std, the mean reprojected change (-1 where unmeasured) and the LAST measured frame's luminance - "
-             "frame-locked to the end of the measurement (and of the motion).",
+             "frame-locked to the end of the measurement (and of the motion). Optional `motion_frames` runs the "
+             "motion over the first motion_frames frames and holds its end pose for the rest. Optional `marks` "
+             "(1-based frame indices, at most 16, needs `save`) captures those frames whole into <save>.marks: "
+             "uint32 magic 'UPMK', version 1, count, then per mark uint32 frame, width, height, bgfx texture format, "
+             "colour byte count, the displayed image as rendered (rows from the top) and the AGE plane as float32 "
+             "(frames each pixel's surface had stayed visible within the measurement; 0 = revealed this frame).",
          .input_schema_json =
-             R"json({"type":"object","properties":{"frames":{"type":"integer","minimum":2,"maximum":4096},"timeout_ms":{"type":"integer","minimum":1000,"maximum":600000},"motion":{"type":"object"},"lowpass":{"type":"boolean"},"save":{"type":"string"}}})json",
+             R"json({"type":"object","properties":{"frames":{"type":"integer","minimum":2,"maximum":4096},"timeout_ms":{"type":"integer","minimum":1000,"maximum":600000},"motion":{"type":"object"},"motion_frames":{"type":"integer","minimum":1,"maximum":4096},"marks":{"type":"array","items":{"type":"integer","minimum":1,"maximum":4096}},"lowpass":{"type":"boolean"},"save":{"type":"string"}}})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -695,6 +722,29 @@ void register_viewport_tools(mcp_tool_registry& registry)
              }
              std::string save_path;
              read_string(args, "save", save_path);
+             int64_t motion_frames = frames;
+             if(args["motion_frames"].get(motion_frames))
+             {
+                 motion_frames = frames;
+             }
+             motion_frames = std::clamp<int64_t>(motion_frames, 1, frames);
+             std::vector<uint32_t> marks;
+             simdjson::dom::array marks_args;
+             if(!args["marks"].get(marks_args))
+             {
+                 for(auto element : marks_args)
+                 {
+                     int64_t mark = 0;
+                     if(!element.get(mark) && mark >= 1 && mark <= frames)
+                     {
+                         marks.push_back(uint32_t(mark));
+                     }
+                 }
+                 if(save_path.empty())
+                 {
+                     return {.text = "marks need a save path", .is_error = true};
+                 }
+             }
              struct motion_spec
              {
                  std::string type;
@@ -821,7 +871,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                      {
                          apply_pose(0.0f);
                      }
-                     pipeline->request_temporal_probe(uint32_t(frames), lowpass, !save_path.empty());
+                     pipeline->request_temporal_probe(uint32_t(frames), lowpass, !save_path.empty(), marks);
                      return true;
                  });
              if(!armed || !*armed)
@@ -839,6 +889,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              };
              const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
              std::vector<float> saved_images;
+             std::vector<temporal_probe_pass::mark_capture> saved_marks;
              uint32_t saved_width = 0;
              uint32_t saved_height = 0;
              while(std::chrono::steady_clock::now() < deadline)
@@ -854,7 +905,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          const auto& probe = pipeline->get_temporal_probe();
                          if(has_motion && probe.get_frames_done() < probe.get_frames_requested())
                          {
-                             apply_pose(float(probe.get_frames_done() + 1u) / float(probe.get_frames_requested()));
+                             apply_pose(std::min(float(probe.get_frames_done() + 1u) / float(motion_frames), 1.0f));
                          }
                          if(probe.is_busy() || !probe.get_result().valid)
                          {
@@ -864,6 +915,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          if(!save_path.empty())
                          {
                              saved_images = r.images;
+                             saved_marks = r.marks;
                              saved_width = r.width;
                              saved_height = r.height;
                          }
@@ -899,6 +951,42 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          {
                              return {.text = "short write to the save path", .is_error = true};
                          }
+                     }
+                     if(!marks.empty())
+                     {
+                         std::FILE* file = std::fopen((save_path + ".marks").c_str(), "wb");
+                         if(file == nullptr)
+                         {
+                             return {.text = "cannot open the marks file for writing", .is_error = true};
+                         }
+                         constexpr uint32_t marks_magic = 0x4B4D5055u;
+                         constexpr uint32_t marks_version = 1u;
+                         const uint32_t header[3] = {marks_magic, marks_version, uint32_t(saved_marks.size())};
+                         bool ok = std::fwrite(header, sizeof(uint32_t), 3, file) == 3;
+                         for(const auto& mark : saved_marks)
+                         {
+                             const uint32_t mark_header[5] = {mark.frame,
+                                                              mark.width,
+                                                              mark.height,
+                                                              uint32_t(mark.format),
+                                                              uint32_t(mark.color.size())};
+                             ok = ok && std::fwrite(mark_header, sizeof(uint32_t), 5, file) == 5;
+                             ok = ok && std::fwrite(mark.color.data(), 1, mark.color.size(), file) == mark.color.size();
+                             ok = ok && std::fwrite(mark.age.data(), sizeof(float), mark.age.size(), file) ==
+                                            mark.age.size();
+                         }
+                         std::fclose(file);
+                         if(!ok)
+                         {
+                             return {.text = "short write to the marks file", .is_error = true};
+                         }
+                         std::string marks_json = ",\"marks\":[";
+                         for(size_t i = 0; i < saved_marks.size(); ++i)
+                         {
+                             marks_json += fmt::format("{}{}", i == 0 ? "" : ",", saved_marks[i].frame);
+                         }
+                         marks_json += "]";
+                         polled->insert(polled->size() - 1u, marks_json);
                      }
                      return {.text = *polled, .is_error = false};
                  }
@@ -1183,6 +1271,112 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .requires_main_thread = false});
 
     registry.add(
+        {.name = "gi_sdf_probe",
+         .description =
+             "Diagnostic: every GI placement whose world bounds come within `radius` metres (default 1) of `position`, "
+             "with the world distance its traced field level and its chain's coarsest resident level report there "
+             "(sample_instance_distance, as the composed fields read a placement) and the coarse-first answer the "
+             "Lumen cascade composes (UE DistanceToMeshSurfaceStandalone), sorted by that answer.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number","minimum":0}},"required":["position"]})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             math::vec3 position(0.0f);
+             if(!read_vec3(args, "position", position))
+             {
+                 return {.text = "position must be [x, y, z]", .is_error = true};
+             }
+             double radius = 1.0;
+             read_double(args, "radius", radius);
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             auto result = mcp.invoke_on_main(
+                 [&]() -> std::string
+                 {
+                     struct probe_row
+                     {
+                         size_t index = 0;
+                         float traced = 0.0f;
+                         float coarse = 0.0f;
+                         float standalone = 0.0f;
+                         const global_sdf_instance* placement = nullptr;
+                     };
+                     const auto& placements = ctx.get_cached<surface_cache_system>().get_clipmap_instances();
+                     std::vector<probe_row> rows;
+                     for(size_t i = 0; i < placements.size(); ++i)
+                     {
+                         const auto& placement = placements[i];
+                         math::bbox reach = placement.world_bounds;
+                         reach.inflate(float(radius));
+                         if(placement.sdf == nullptr || !placement.sdf->is_sampleable() || !reach.contains_point(position))
+                         {
+                             continue;
+                         }
+                         const math::vec3 local(placement.world_to_local * math::vec4(position, 1.0f));
+                         probe_row row;
+                         row.index = i;
+                         row.placement = &placement;
+                         row.traced = sample_instance_distance(*placement.sdf,
+                                                               local,
+                                                               placement.axis_scale,
+                                                               placement.local_to_world_scale,
+                                                               true);
+                         row.coarse = row.traced;
+                         row.standalone = row.traced;
+                         if(placement.coarse_sdf != nullptr)
+                         {
+                             row.coarse = sample_instance_distance(*placement.coarse_sdf,
+                                                                   local,
+                                                                   placement.axis_scale,
+                                                                   placement.local_to_world_scale,
+                                                                   true);
+                             const float threshold = 0.25f * mesh_sdf::encode_range * placement.coarse_sdf->voxel_size *
+                                                     placement.local_to_world_scale;
+                             row.standalone = std::abs(row.coarse) > threshold ? row.coarse : row.traced;
+                         }
+                         rows.push_back(row);
+                     }
+                     std::sort(rows.begin(),
+                               rows.end(),
+                               [](const probe_row& a, const probe_row& b)
+                               {
+                                   return a.standalone < b.standalone;
+                               });
+                     std::string out = "[";
+                     for(const auto& row : rows)
+                     {
+                         const auto& p = *row.placement;
+                         const float coarse_voxel =
+                             p.coarse_sdf != nullptr ? p.coarse_sdf->voxel_size * p.local_to_world_scale : 0.0f;
+                         out += fmt::format(
+                             R"({}{{"instance":{},"traced":{:.4f},"coarse":{:.4f},"standalone":{:.4f},"traced_voxel":{:.4f},"coarse_voxel":{:.4f},"two_sided":{},"min":[{:.2f},{:.2f},{:.2f}],"max":[{:.2f},{:.2f},{:.2f}]}})",
+                             out.size() > 1 ? "," : "",
+                             row.index,
+                             row.traced,
+                             row.coarse,
+                             row.standalone,
+                             p.sdf->voxel_size * p.local_to_world_scale,
+                             coarse_voxel,
+                             p.sdf->is_two_sided ? "true" : "false",
+                             p.world_bounds.min.x,
+                             p.world_bounds.min.y,
+                             p.world_bounds.min.z,
+                             p.world_bounds.max.x,
+                             p.world_bounds.max.y,
+                             p.world_bounds.max.z);
+                     }
+                     return out + "]";
+                 });
+             if(!result)
+             {
+                 return {.text = "sdf probe failed on the main thread", .is_error = true};
+             }
+             return {.text = *result, .is_error = false};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
         {.name = "gi_set_experiment_flags",
          .description =
              "Runtime experiment flags every GI tracer reads (u_sdf_grid_params[2].x, sdf_common.sh "
@@ -1208,6 +1402,55 @@ void register_viewport_tools(mcp_tool_registry& registry)
              if(!result)
              {
                  return {.text = "experiment flags update failed on the main thread", .is_error = true};
+             }
+             return {.text = *result, .is_error = false};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
+        {.name = "viewport_set_overlays",
+         .description =
+             "Show or hide the Scene panel's editor overlays: the icon gizmos (camera, light and probe billboards and "
+             "gizmos), the grid and the selection outline. Omitted keys keep their state; the state is not saved. "
+             "viewport_measure_temporal reads the pipeline output and never includes them, viewport_capture_scene "
+             "does. Returns the resulting state.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"gizmos":{"type":"boolean"},"grid":{"type":"boolean"},"selection_outline":{"type":"boolean"}}})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             bool gizmos = false;
+             bool grid = false;
+             bool selection_outline = false;
+             const bool set_gizmos = args["gizmos"].get(gizmos) == simdjson::SUCCESS;
+             const bool set_grid = args["grid"].get(grid) == simdjson::SUCCESS;
+             const bool set_selection_outline = args["selection_outline"].get(selection_outline) == simdjson::SUCCESS;
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             auto result = mcp.invoke_on_main(
+                 [&]() -> std::string
+                 {
+                     auto& em = ctx.get_cached<editing_manager>();
+                     if(set_gizmos)
+                     {
+                         em.show_icon_gizmos = gizmos;
+                     }
+                     if(set_grid)
+                     {
+                         em.show_grid = grid;
+                     }
+                     if(set_selection_outline)
+                     {
+                         em.gizmos.show_selection_outline = selection_outline;
+                     }
+                     return fmt::format(R"({{"gizmos":{},"grid":{},"selection_outline":{}}})",
+                                        em.show_icon_gizmos,
+                                        em.show_grid,
+                                        em.gizmos.show_selection_outline);
+                 });
+             if(!result)
+             {
+                 return {.text = "overlay update failed on the main thread", .is_error = true};
              }
              return {.text = *result, .is_error = false};
          },

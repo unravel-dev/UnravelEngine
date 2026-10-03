@@ -45,6 +45,10 @@ public:
     /// Linear readback scale of the radiance-valued debug views (pipeline::set_debug_view_scale).
     void set_visualization_scale(float scale);
     auto get_visualization_scale() const -> float;
+    /// Renders the Scene camera at exactly @p width x @p height and shows it scaled into the panel (aspect kept);
+    /// 0 x 0 follows the panel again. A measurement aid: picking and gizmos assume the panel's own size.
+    void set_forced_render_size(uint32_t width, uint32_t height);
+    auto get_forced_render_size() const -> std::pair<uint32_t, uint32_t>;
 
     void on_project_opened();
 
@@ -113,6 +117,8 @@ private:
     int visualize_passes_{-1};
     float visualize_scale_{1.0f};
     int current_resolution_index_{0};
+    uint32_t forced_render_width_{0};
+    uint32_t forced_render_height_{0};
     scene panel_scene_{"scene_panel"};
 
     bool gizmo_at_center_{true};

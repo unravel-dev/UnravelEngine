@@ -4,6 +4,7 @@
 #include <engine/rendering/gi/gi_constants.h>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
 #include <engine/rendering/gi/global_sdf_clipmap_gpu.h>
+#include <engine/rendering/gi/lumen_card_library.h>
 #include <engine/rendering/gi/sdf_atlas.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
 // For material::sptr, which is a nested typedef and so needs the complete type.
@@ -54,10 +55,17 @@ public:
         math::bbox world_bounds{};
         ///< Index into the atlas header buffer.
         uint32_t header_index = sdf_atlas::invalid_index;
+        ///< The chain's coarsest level when it is resident beside a finer @ref header_index, else @ref header_index:
+        ///< the Lumen cascade reads distances beyond the finer level's band from it (UE's always-resident lowest
+        ///< mip, DistanceToMeshSurfaceStandalone).
+        uint32_t coarse_header_index = sdf_atlas::invalid_index;
         ///< Uniform scale factor applied to distances sampled in local space. Non-uniform
         ///< scale uses the smallest axis, which keeps the field conservative (a sphere trace
         ///< under-steps rather than overshooting through geometry).
         float local_to_world_scale = 1.0f;
+        ///< World length of each local axis: the composed fields bound a non-uniformly scaled
+        ///< placement per axis (sample_instance_distance) instead of by the smallest axis alone.
+        math::vec3 axis_scale{1.0f};
         ///< World displacement of the field's bounds centre since the placement's previous
         ///< frame (zero for a static placement or a first sighting). The gather's temporal
         ///< shortens a receiver's history by the fraction of its rays that hit MOVING
@@ -94,6 +102,29 @@ public:
         ///< without it a sign bounces its colour factor over its whole silhouette.
         uint32_t emissive_mean_slot = 0;
         bool emissive_mean_captured = false;
+        ///< The material renders both faces (cull none; UE bMostlyTwoSided): the Lumen global SDF's coverage leaves
+        ///< space near only such placements uncovered, which the march expands less and dithers through.
+        bool is_two_sided = false;
+        ///< The material emits (its emissive luminance reaches GI_EMISSIVE_NEE_MIN_LUMINANCE): UE's Emissive Light
+        ///< Source, derived here rather than authored. Lumen keeps its cards resident down to one texel and composes
+        ///< it into the global SDF however small.
+        bool is_emissive_light_source = false;
+    };
+
+    /// What the Lumen surface cache needs to capture one placement, parallel to the instance list
+    /// (the same index is the placement's GPU instance index).
+    struct lumen_source
+    {
+        ///< Stable across frames: entity, submesh and drawn instance.
+        uint64_t identity = 0;
+        ///< This frame's GI instance index (the GPU instance record).
+        uint32_t instance_index = 0;
+        std::shared_ptr<mesh> owner;
+        uint32_t submesh_index = 0;
+        material::sptr material;
+        math::mat4 local_to_world{1.0f};
+        ///< Null until the submesh's cards are built.
+        std::shared_ptr<const lumen_mesh_cards> cards;
     };
 
     /// One texture whose mean is waiting to be captured on the GPU.
@@ -241,9 +272,10 @@ public:
     static constexpr uint32_t emitter_vec4_stride = 2;
 
     /// vec4 elements per packed instance. Must match SDF_INSTANCE_STRIDE in gi/sdf_common.sh.
-    /// Two of the eleven carry the material; emission is HDR, so it gets its own vec4 rather
-    /// than being packed into a spare component; the eleventh is the instance velocity.
-    static constexpr uint32_t instance_vec4_stride = 11;
+    /// Two carry the material; emission is HDR, so it gets its own vec4 rather than being packed into a
+    /// spare component; the eleventh is the instance velocity, the twelfth the flags and axis scales, the
+    /// thirteenth the coarse header.
+    static constexpr uint32_t instance_vec4_stride = 13;
 
     /// Slot capacity of the mean buffer (16 KiB of vec4s). Overflow falls back to the white
     /// slot with a one-time warning rather than growing - a scene with a thousand distinct
@@ -287,6 +319,19 @@ public:
     auto get_content_revision() const -> uint64_t
     {
         return content_revision_;
+    }
+
+    /**
+     * @brief Hash of this frame's instance list IN ORDER (the placement identities).
+     *
+     * The instance indices the GPU buffers carry are positions in a list rebuilt every frame from a
+     * traversal with no guaranteed order, and the content fingerprints deliberately ignore order. A
+     * structure that stores instance indices across frames (the Lumen object grid) is valid only while
+     * this holds still.
+     */
+    auto get_instance_order_hash() const -> uint64_t
+    {
+        return instance_order_hash_;
     }
 
     /// The instance cull grid as the tracers bind it (sdf_common.sh stage 12): the CSR offsets
@@ -358,6 +403,11 @@ public:
         return instances_;
     }
 
+    auto get_lumen_sources() const -> const std::vector<lumen_source>&
+    {
+        return lumen_sources_;
+    }
+
     auto is_enabled() const -> bool
     {
         return supported_ && enabled_ && atlas_.is_valid();
@@ -384,6 +434,11 @@ private:
     struct mesh_residency
     {
         uint32_t header_index = sdf_atlas::invalid_index;
+        ///< The chain's coarsest level, resident beside a finer @ref header_index (see instance::coarse_header_index);
+        ///< invalid while @ref header_index is itself the coarsest or the upload has not happened yet.
+        uint32_t coarse_header_index = sdf_atlas::invalid_index;
+        ///< Atlas release generation at the last coarse upload attempt (as @ref attempt_generation).
+        uint32_t coarse_attempt_generation = never_attempted;
         ///< Level of the mip chain actually made resident. Everything downstream -- the instance
         ///< bounds, the level fingerprint -- has to describe the level the atlas took, not the
         ///< finest one the mesh owns, or the placement will not match what the tracer samples.
@@ -420,7 +475,14 @@ private:
     {
         uint32_t header_index = sdf_atlas::invalid_index;
         uint32_t mip_level = 0;
+        ///< The coarsest level resident beside it, or invalid (see mesh_residency::coarse_header_index).
+        uint32_t coarse_header_index = sdf_atlas::invalid_index;
+        uint32_t coarse_mip_level = 0;
     };
+
+    /// @ref acquire_field's answer for a record holding a level: also makes the chain's coarsest level resident
+    /// beside it when it is finer.
+    auto complete_acquired_field(mesh_residency& record, const mesh& m, uint32_t submesh_index) -> acquired_field;
 
     auto acquire_field(const hpp::uuid& mesh_uid,
                        const mesh& m,
@@ -506,6 +568,7 @@ private:
         bool has_pose = false;
         math::mat4 world_to_local{1.0f};
         float local_to_world_scale = 1.0f;
+        math::vec3 axis_scale{1.0f};
         /// The placement's transform as of the previous frame, for the instance velocity
         /// (the bounds centre's delta and the largest corner displacement).
         math::mat4 last_local_to_world{1.0f};
@@ -592,6 +655,8 @@ private:
         bool mean_captured = false;
         uint32_t emissive_mean_slot = 0;
         bool emissive_mean_captured = false;
+        /// The material culls no face (instance::is_two_sided).
+        bool is_two_sided = false;
     };
 
     /// The summary of @p mat for this frame, decoded on first sight (see material_summary).
@@ -601,9 +666,18 @@ private:
     /// places its field or, lacking one, registers its emissive bounds with the dirty tracker.
     void walk_scene(scene& scn);
 
+    /// A placement's resident field: the level traced and, when finer than its chain's coarsest, that coarsest
+    /// level too (null / invalid otherwise).
+    struct placed_field
+    {
+        uint32_t header_index = sdf_atlas::invalid_index;
+        const mesh_sdf* sdf = nullptr;
+        uint32_t coarse_header_index = sdf_atlas::invalid_index;
+        const mesh_sdf* coarse_sdf = nullptr;
+    };
+
     void add_instance(uint64_t identity,
-                      uint32_t header_index,
-                      const mesh_sdf& sdf,
+                      const placed_field& field,
                       const math::mat4& local_to_world,
                       const std::shared_ptr<mesh>& owner,
                       const material_summary& material);
@@ -688,6 +762,9 @@ private:
     uint32_t next_texture_mean_slot_ = 1;
     bool texture_mean_overflow_warned_ = false;
     std::vector<instance> instances_;
+    /// Lumen capture inputs, rebuilt each frame alongside @ref instances_ (same order).
+    std::vector<lumen_source> lumen_sources_;
+    lumen_card_library lumen_cards_;
     /// Clipmap composition input, rebuilt each frame alongside @ref instances_.
     std::vector<global_sdf_instance> clipmap_instances_;
     std::unordered_map<uint64_t, tracked_placement> tracked_placements_;
@@ -733,6 +810,8 @@ private:
     uint64_t instance_fingerprint_ = 0;
     /// See @ref get_content_revision. Starts at 1 so a zero can mean "no revision known".
     uint64_t content_revision_ = 1;
+    /// See @ref get_instance_order_hash.
+    uint64_t instance_order_hash_ = 0;
     /// The instance fingerprint the grid was last built and uploaded for.
     uint64_t grid_uploaded_fingerprint_ = 0;
     /// Broad-phase over @ref instances_, so a ray tests the instances near it rather than all of

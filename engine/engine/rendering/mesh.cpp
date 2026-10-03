@@ -28,6 +28,10 @@ namespace
 // Local Module Level Namespaces.
 //-----------------------------------------------------------------------------
 
+/// create_plane's sheets: the generator plane turned about X to face up (+Y) and down.
+constexpr float k_plane_upward_degrees = -90.0f;
+constexpr float k_plane_downward_degrees = 90.0f;
+
 auto hf_height_at(hpp::span<const float> heights, uint32_t vx, int32_t sx, int32_t sz, int32_t ix, int32_t iz) -> double
 {
     ix = std::clamp(ix, 0, sx);
@@ -202,6 +206,7 @@ void mesh::dispose()
     // Release mesh data memory
     checked_array_delete(system_vb_);
     checked_array_delete(system_ib_);
+    gi_source_geometry_.reset();
 
     // Clean up LOD data
     for(auto& lod : lods_)
@@ -899,16 +904,40 @@ auto mesh::create_plane(const bgfx::VertexLayout& format,
 
     using namespace generator;
     plane_mesh_t plane({width * 0.5f, height * 0.5f}, {width_segments, height_segments});
-    math::quat rot1(math::vec3(math::radians(-90.0f), 0.f, 0.0f));
-    math::quat rot2(math::vec3(math::radians(90.0f), 0.f, 0.0f));
+    math::quat rot1(math::vec3(math::radians(k_plane_upward_degrees), 0.f, 0.0f));
+    math::quat rot2(math::vec3(math::radians(k_plane_downward_degrees), 0.f, 0.0f));
 
     auto plane1 = rotate_mesh(plane, rot1);
     auto plane2 = rotate_mesh(plane, rot2);
     auto mesh = merge_mesh(plane1, plane2);
 
     create_mesh(vertex_format_, mesh, preparation_data_, bbox_);
+    gi_source_geometry_ = std::make_shared<const sdf_source_geometry>(
+        create_plane_gi_geometry(width, height, width_segments, height_segments));
     // Finish up
     return end_prepare_primitive(hardware_copy);
+}
+
+auto mesh::create_plane_gi_geometry(float width, float height, uint32_t width_segments, uint32_t height_segments)
+    -> sdf_source_geometry
+{
+    using namespace generator;
+    plane_mesh_t plane({width * 0.5f, height * 0.5f}, {width_segments, height_segments});
+    const any_mesh upward(rotate_mesh(plane, math::quat(math::vec3(math::radians(k_plane_upward_degrees), 0.f, 0.0f))));
+    sdf_source_geometry geometry;
+    for(const auto& v : upward.vertices())
+    {
+        const math::vec3 position = v.position;
+        geometry.positions.push_back(position);
+        geometry.bounds.add_point(position);
+    }
+    for(const auto& triangle : upward.triangles())
+    {
+        geometry.indices.push_back(uint32_t(triangle.vertices[0]));
+        geometry.indices.push_back(uint32_t(triangle.vertices[1]));
+        geometry.indices.push_back(uint32_t(triangle.vertices[2]));
+    }
+    return geometry;
 }
 
 auto mesh::create_heightfield(const bgfx::VertexLayout& format,
@@ -1622,19 +1651,26 @@ auto mesh::generate_sdf(const mesh_sdf_bake_settings& settings) -> bool
     submesh_sdfs_.clear();
     submesh_sdf_coarse_mips_.clear();
     sdf_source_geometry geometry;
-    if(!extract_sdf_source_geometry(system_vb_, vertex_count_, vertex_format_, system_ib_, face_count_, geometry))
+    if(gi_source_geometry_)
+    {
+        geometry = *gi_source_geometry_;
+    }
+    else if(!extract_sdf_source_geometry(system_vb_, vertex_count_, vertex_format_, system_ib_, face_count_, geometry))
     {
         return false;
     }
     // One field covering everything. This path serves procedurally created primitives, which are
     // a single submesh drawn at a single transform -- the per-submesh split exists for imported
-    // models, whose submeshes carry differing node transforms.
-    mesh_sdf field;
-    if(!bake_mesh_sdf(geometry, settings, field))
+    // models, whose submeshes carry differing node transforms. A chain like an imported mesh's: its
+    // coarsest level stays resident for the long-range distance queries (surface_cache_system).
+    std::vector<mesh_sdf> levels;
+    if(!bake_mesh_sdf_mips(geometry, settings, levels) || levels.empty())
     {
         return false;
     }
-    submesh_sdfs_.push_back(std::move(field));
+    submesh_sdfs_.push_back(std::move(levels.front()));
+    submesh_sdf_coarse_mips_.emplace_back(std::make_move_iterator(levels.begin() + 1),
+                                          std::make_move_iterator(levels.end()));
     return true;
 }
 
@@ -1653,6 +1689,11 @@ auto mesh::end_prepare_primitive(bool hardware_copy) -> bool
     // participate in global illumination.
     generate_sdf();
     return true;
+}
+
+auto mesh::get_gi_source_geometry() const -> const sdf_source_geometry*
+{
+    return gi_source_geometry_.get();
 }
 
 auto mesh::get_sdf(uint32_t submesh_index, uint32_t mip_level) const -> const mesh_sdf&

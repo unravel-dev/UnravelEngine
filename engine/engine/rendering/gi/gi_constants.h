@@ -689,14 +689,12 @@
       " scene, and black would punch a hole into a mirror floor under a floating object (its"      \
       " underside is culled toward the floor below it)")                                           \
     X(GI_REFLECTION_MIRROR_ROUGHNESS, 0.06f,                                                       \
-      "decoded G-buffer roughness", "derived: the G-buffer encoder clamps roughness to >= 0.05"    \
-      " at write (fs_deferred_geom.sc), so an AUTHORED mirror decodes at the floor - plus up to"   \
-      " one UNORM8 quantum (1/255) on the LDR G-buffer format. At or below this threshold the"     \
-      " VNDF branch collapses to the deterministic mirror ray. Any threshold on decoded"           \
-      " roughness must account for that floor: a gate on alpha = roughness^2 against 1e-4 never"   \
-      " fires for an authored mirror (the floor's alpha is 2.5e-3), so every authored mirror"      \
-      " would jitter stochastically, and pixels whose exact ray near-misses a small emissive"      \
-      " would hit it on tail samples as dancing fireflies")                                        \
+      "decoded G-buffer roughness", "derived: the G-buffer stores the authored roughness"          \
+      " (fs_deferred_geom.sc, UNORM8: one quantum is 1/255). At or below this threshold the VNDF"  \
+      " branch collapses to the deterministic mirror ray. Near-mirror lobes (alpha up to 3.6e-3)"  \
+      " still tilt a rare tail sample by a degree or more, so a gate on alpha = roughness^2"       \
+      " against 1e-4 would leave that band jittering stochastically, and pixels whose exact ray"   \
+      " near-misses a small emissive would hit it on tail samples as dancing fireflies")           \
     X(GI_REFLECTION_CLAMP_MOTION_TEXELS, 1.0f,                                                     \
       "trace-target texels of reprojection motion", "derived: below one texel the camera is"       \
       " still and reprojection is exact, so held history IS this pixel's own sample stream -"      \

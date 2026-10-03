@@ -482,6 +482,8 @@ auto sdf_atlas::upload(const mesh_sdf& sdf) -> uint32_t
     //   [1] xyz = brick dim (as float), w = indirection offset (as float)
     //   [2] x   = two-sided shell thickness (0 when the field is signed)
     //       yzw = grid dim (as float)
+    //   [3] xyz = local surface bounds min (mesh_sdf::get_surface_bounds)
+    //   [4] xyz = local surface bounds max
     float* header = header_data_.data() + size_t(header_index) * 4u * header_vec4_count;
     header[0] = sdf.bounds.min.x;
     header[1] = sdf.bounds.min.y;
@@ -495,6 +497,15 @@ auto sdf_atlas::upload(const mesh_sdf& sdf) -> uint32_t
     header[9] = float(sdf.grid_dim.x);
     header[10] = float(sdf.grid_dim.y);
     header[11] = float(sdf.grid_dim.z);
+    const math::bbox surface = sdf.get_surface_bounds();
+    header[12] = surface.min.x;
+    header[13] = surface.min.y;
+    header[14] = surface.min.z;
+    header[15] = 0.0f;
+    header[16] = surface.max.x;
+    header[17] = surface.max.y;
+    header[18] = surface.max.z;
+    header[19] = 0.0f;
     headers_dirty_ = true;
     // The indirection span was marked dirty by allocate_indirection; the writes above landed
     // inside that same span.

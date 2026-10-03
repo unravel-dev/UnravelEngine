@@ -118,8 +118,8 @@ struct GiReflectionRay
 
 /*
  * The ray one texel fires, and its density. `roughness` is the RAW authored value (the
- * mirror gate keys on the encoder floor - see the trace kernel), `view` points from the
- * surface to the camera, `xi` is the texel's jitter pair.
+ * mirror gate keys on it - see the trace kernel), `view` points from the surface to the
+ * camera, `xi` is the texel's jitter pair.
  *
  * At or below GI_REFLECTION_MIRROR_ROUGHNESS the ray is deterministic (the determinism
  * gate the temporal also keys on) and the density is the peak of a lobe floored at

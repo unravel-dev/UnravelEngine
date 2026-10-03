@@ -211,11 +211,51 @@ constexpr std::array<visualization_swatch, 6> k_legend_exposure = {{
     {{0.85f, 0.15f, 0.10f}, "The min / max EV100 clamps; the metered marker resting on one = held"},
 }};
 
+// Lumen views: engine_data/data/shaders/lumen/fs_lumen_scene_debug.sc and, for the dedicated reflection rays,
+// engine_data/data/shaders/gbuffer/fs_gbuffer_visualize.sc.
+
+constexpr std::array<visualization_swatch, 1> k_legend_lumen_scene = {{
+    {{0.0f, 0.0f, 0.0f}, "No card covers the hit: a ray that ends here finds nothing in the surface cache."},
+}};
+
+constexpr std::array<visualization_swatch, 2> k_legend_lumen_surface_cache = {{
+    {{1.0f, 0.0f, 1.0f}, "The objects at the hit have cards, but none of the cards covers this point."},
+    {{1.0f, 1.0f, 0.0f},
+     "None of the objects at the hit has cards: they were left out of the surface cache, for example "
+     "because they are too small for the card resolution at their distance."},
+}};
+
+constexpr std::array<visualization_swatch, 6> k_legend_lumen_object_grid = {{
+    {{0.0f, 1.0f, 0.0f}, "A card of a listed object covers the hit."},
+    {{1.0f, 0.0f, 1.0f}, "A card's page is captured, but the card's depth disagrees with the hit."},
+    {{0.0f, 1.0f, 1.0f}, "The hit lies inside a card's bounds, but the card's page is not captured yet."},
+    {{1.0f, 1.0f, 0.0f}, "A card faces the hit's normal, but the hit lies outside the card's bounds."},
+    {{1.0f, 0.0f, 0.0f}, "No card of the listed objects faces the hit's normal."},
+    {{0.3f, 0.3f, 0.3f}, "The object grid lists no object at this point."},
+}};
+
+constexpr std::array<visualization_swatch, 3> k_legend_lumen_reflection_rays = {{
+    {{1.0f, 0.0f, 0.0f}, "A perfectly smooth surface. It traces its own reflection rays."},
+    {{0.68f, 0.0f, 0.0f}, "A surface just below the traced-roughness limit. It still traces reflection rays."},
+    {{0.5f, 0.5f, 0.5f},
+     "A rougher surface, shaded in grey. It takes its specular reflection from the screen probes instead."},
+}};
+
+constexpr std::array<visualization_swatch, 7> k_legend_lumen_card_coverage = {{
+    {{0.0f, 1.0f, 0.0f}, "A captured card covers the hit and agrees with its depth."},
+    {{1.0f, 0.0f, 1.0f}, "A card's page is captured, but the card's depth disagrees with the hit."},
+    {{0.0f, 1.0f, 1.0f}, "The hit lies inside a card's bounds, but the card's page is not captured yet."},
+    {{1.0f, 1.0f, 0.0f}, "A card faces the hit's normal, but the hit lies outside the card's bounds."},
+    {{1.0f, 0.0f, 0.0f}, "None of the object's resident cards faces the hit's normal."},
+    {{0.0f, 0.0f, 1.0f}, "The object has no cards: none were built, or none survived the build."},
+    {{0.3f, 0.3f, 0.3f}, "The hit belongs to no object the surface cache tracks."},
+}};
+
 // -----------------------------------------------------------------------------
 // Groups
 // -----------------------------------------------------------------------------
 
-constexpr std::array<visualization_group_entry, 6> k_visualization_groups = {{
+constexpr std::array<visualization_group_entry, 7> k_visualization_groups = {{
     {visualization_group::surface,
      "surface",
      ICON_MDI_LAYERS,
@@ -253,6 +293,13 @@ constexpr std::array<visualization_group_entry, 6> k_visualization_groups = {{
      "Global Illumination",
      "The GI caches read at a traced hit, exactly as a gather ray reads them. Same trace and "
      "the same preconditions as the Distance Fields group."},
+    {visualization_group::lumen,
+     "lumen",
+     ICON_MDI_CARDS_OUTLINE,
+     "Lumen",
+     "Lumen's scene representation: the global distance field its rays march, and the surface cache of mesh "
+     "cards that shades their hits. These views need the Lumen gather enabled on the Global Illumination "
+     "volume, because the surface cache updates only while the gather runs."},
 }};
 
 // -----------------------------------------------------------------------------
@@ -369,24 +416,25 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      visualization_group::lighting,
      "indirect_diffuse",
      "Indirect Diffuse (GI / SSIL)",
-     "The buffer feeding the indirect diffuse slot - GI_RESOLVE when the surface cache runs, "
-     "SSIL otherwise - scaled by PI and its own replacement weight. Black = neither ran.",
+     "What the indirect diffuse adds to an 18% grey surface: the GI resolve (SSIL when no GI runs) times its "
+     "diffuse occlusion, at the frame's exposure through the tone mapper. Black = neither ran.",
      {}},
     {visualization_mode::reflections,
      visualization_group::lighting,
      "reflections",
      "Reflections",
      "The indirect specular radiance, ahead of the environment BRDF: the traced layers (SSR over "
-     "the GI reflection tier) plus the share they leave of the probe layer - completed with the "
-     "environment SH where no probe reaches - each under its specular occlusion. This is what "
-     "the indirect pass mixes in as specular.",
+     "the GI reflection tier; Lumen's reflections with the Lumen gather) plus the share they leave "
+     "of the probe layer (the probes; Lumen's rough specular) - completed with the environment SH "
+     "where nothing covers it - each under its specular occlusion. This is what the indirect pass "
+     "mixes in as specular.",
      {}},
     {visualization_mode::reflection_coverage,
      visualization_group::lighting,
      "reflection_coverage",
      "Reflection Coverage",
-     "The share of the specular the traced reflections (SSR, GI reflections) cover; the rest "
-     "comes from the probe layer. White = fully traced, black = probe layer only.",
+     "The share of the specular the traced reflections (SSR, GI reflections, or Lumen's) cover; "
+     "the rest comes from the probe layer. White = fully traced, black = probe layer only.",
      {}},
     {visualization_mode::exposure,
      visualization_group::lighting,
@@ -575,6 +623,73 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      "Explicit emitter sampling per traced screen probe: the aimed rays' share of the probe's "
      "energy (red), of its rays (green), and the emitters it selected (blue).",
      k_legend_gi_emitter_share},
+
+    // -- Lumen ----------------------------------------------------------------
+    {visualization_mode::lumen_scene,
+     visualization_group::lumen,
+     "lumen_scene",
+     "Lumen Scene",
+     "The scene as Lumen's rays see it. The global distance field is traced from the camera, and each hit is "
+     "shaded from the cards of the objects that the object grid lists there, exactly as the gather and "
+     "reflection rays shade their own hits.",
+     k_legend_lumen_scene},
+    {visualization_mode::lumen_scene_albedo,
+     visualization_group::lumen,
+     "lumen_scene_albedo",
+     "Lumen Scene Albedo",
+     "The albedo the surface cache stores at each Lumen Scene hit, in place of its lighting. Use it to check "
+     "that the cards captured each material's color.",
+     k_legend_lumen_scene},
+    {visualization_mode::lumen_surface_cache,
+     visualization_group::lumen,
+     "lumen_surface_cache",
+     "Surface Cache",
+     "The Lumen Scene lighting, with every hit the surface cache cannot shade marked in a solid color, so "
+     "that gaps in the card coverage stand out.",
+     k_legend_lumen_surface_cache},
+    {visualization_mode::lumen_object_grid,
+     visualization_group::lumen,
+     "lumen_object_grid",
+     "Object Grid",
+     "Each Lumen Scene hit, colored by how close the objects that the object grid lists there come to "
+     "covering it with their cards. A hit that Card Coverage shows as covered but this view does not points "
+     "to an object missing from the grid.",
+     k_legend_lumen_object_grid},
+    {visualization_mode::lumen_scene_direct,
+     visualization_group::lumen,
+     "lumen_scene_direct",
+     "Lumen Scene Direct",
+     "The direct lighting the surface cache cards hold at each Lumen Scene hit: the light that reaches the "
+     "surface straight from the sun and the local lights, with their shadows.",
+     k_legend_lumen_scene},
+    {visualization_mode::lumen_scene_indirect,
+     visualization_group::lumen,
+     "lumen_scene_indirect",
+     "Lumen Scene Indirect",
+     "The indirect lighting the surface cache cards hold at each Lumen Scene hit: the light that has bounced "
+     "between surfaces at least once.",
+     k_legend_lumen_scene},
+    {visualization_mode::lumen_reflection_rays,
+     visualization_group::lumen,
+     "lumen_reflection_rays",
+     "Dedicated Reflection Rays",
+     "Which surfaces trace their own reflection rays. Every surface smoother than the traced-roughness limit "
+     "(a roughness of 0.4) is drawn in red, brighter the smoother it is.",
+     k_legend_lumen_reflection_rays},
+    {visualization_mode::lumen_card_atlas,
+     visualization_group::lumen,
+     "lumen_card_atlas",
+     "Card Atlas",
+     "The surface cache's physical atlas, fitted to the viewport: the albedo of every resident card page as "
+     "it was captured.",
+     {}},
+    {visualization_mode::lumen_card_coverage,
+     visualization_group::lumen,
+     "lumen_card_coverage",
+     "Card Coverage",
+     "Each object's own mesh distance field, traced from the camera. Every hit is colored by how close that "
+     "object's cards come to covering it, which shows where and why the cards miss a surface.",
+     k_legend_lumen_card_coverage},
 });
 
 // Drift guards: the enum is the editor-side mirror of the engine's debug pass ids.
@@ -628,6 +743,31 @@ static_assert(static_cast<int>(visualization_mode::gi_emitter_share) ==
               "visualization_mode drifted from deferred::debug_pass_gi_emitter_share");
 static_assert(static_cast<int>(visualization_mode::exposure) == rendering::deferred::debug_pass_exposure,
               "visualization_mode drifted from deferred::debug_pass_exposure");
+static_assert(static_cast<int>(visualization_mode::lumen_scene) == rendering::deferred::debug_pass_lumen_scene,
+              "visualization_mode drifted from deferred::debug_pass_lumen_scene");
+static_assert(static_cast<int>(visualization_mode::lumen_card_atlas) ==
+                  rendering::deferred::debug_pass_lumen_card_atlas,
+              "visualization_mode drifted from deferred::debug_pass_lumen_card_atlas");
+static_assert(static_cast<int>(visualization_mode::lumen_card_coverage) ==
+                  rendering::deferred::debug_pass_lumen_card_coverage,
+              "visualization_mode drifted from deferred::debug_pass_lumen_card_coverage");
+static_assert(static_cast<int>(visualization_mode::lumen_scene_albedo) ==
+                  rendering::deferred::debug_pass_lumen_scene_albedo,
+              "visualization_mode drifted from deferred::debug_pass_lumen_scene_albedo");
+static_assert(static_cast<int>(visualization_mode::lumen_object_grid) == rendering::deferred::debug_pass_lumen_object_grid,
+              "visualization_mode drifted from deferred::debug_pass_lumen_object_grid");
+static_assert(static_cast<int>(visualization_mode::lumen_surface_cache) ==
+                  rendering::deferred::debug_pass_lumen_surface_cache,
+              "visualization_mode drifted from deferred::debug_pass_lumen_surface_cache");
+static_assert(static_cast<int>(visualization_mode::lumen_scene_direct) ==
+                  rendering::deferred::debug_pass_lumen_scene_direct,
+              "visualization_mode drifted from deferred::debug_pass_lumen_scene_direct");
+static_assert(static_cast<int>(visualization_mode::lumen_scene_indirect) ==
+                  rendering::deferred::debug_pass_lumen_scene_indirect,
+              "visualization_mode drifted from deferred::debug_pass_lumen_scene_indirect");
+static_assert(static_cast<int>(visualization_mode::lumen_reflection_rays) ==
+                  rendering::deferred::debug_pass_lumen_reflection_rays,
+              "visualization_mode drifted from deferred::debug_pass_lumen_reflection_rays");
 
 } // namespace
 

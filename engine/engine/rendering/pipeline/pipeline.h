@@ -28,6 +28,9 @@
 #include "passes/gi_world_probe_pass.h"
 #include "passes/gi_reflection_pass.h"
 #include "passes/gi_resolve_pass.h"
+#include "passes/lumen_gather_pass.h"
+#include "passes/lumen_reflection_pass.h"
+#include "passes/lumen_surface_cache_pass.h"
 #include "passes/scene_history_pass.h"
 #include "passes/ssil_pass.h"
 #include "passes/sdf_debug_pass.h"
@@ -248,9 +251,10 @@ public:
 
     virtual void set_debug_pass(int pass) = 0;
 
-    /// Linear readback scale for the radiance-valued debug views: the light-voxel, world-probe,
-    /// emissive-attribute, direct and indirect-diffuse views multiply their value by it before
-    /// the LDR store, so a capture reads linear radiance at any magnitude to 8-bit precision.
+    /// Readback scale for the radiance-valued debug views: the light-voxel, world-probe,
+    /// emissive-attribute and direct views multiply their linear value by it before the LDR store,
+    /// so a capture reads linear radiance at any magnitude to 8-bit precision; the indirect-diffuse
+    /// view (UE's, tone mapped) takes it as an exposure factor ahead of the tone map.
     /// An instrument for the editor's debug-view tooling (viewport_set_debug_view "scale");
     /// 1 = the views as shipped. The lit path never reads it.
     virtual void set_debug_view_scale(float scale)
@@ -281,9 +285,12 @@ public:
     /// frames and reads the reduced statistics once the single readback lands. Nothing is
     /// dispatched while no measurement is armed. @p is_lowpass selects the probe's low-pass lane
     /// (temporal_probe_pass::request).
-    void request_temporal_probe(uint32_t frames, bool is_lowpass = false, bool keeps_images = false)
+    void request_temporal_probe(uint32_t frames,
+                                bool is_lowpass = false,
+                                bool keeps_images = false,
+                                std::vector<uint32_t> marks = {})
     {
-        temporal_probe_pass_.request(frames, is_lowpass, keeps_images);
+        temporal_probe_pass_.request(frames, is_lowpass, keeps_images, std::move(marks));
     }
     auto get_temporal_probe() const -> const temporal_probe_pass&
     {
@@ -330,6 +337,9 @@ protected:
     gi_light_voxel_pass gi_light_voxel_pass_{};
     gi_world_probe_pass gi_world_probe_pass_{};
     gi_resolve_pass gi_resolve_pass_{};
+    lumen_gather_pass lumen_gather_pass_{}; ///< gi_resolve_pass::settings::enable_lumen_gather
+    lumen_surface_cache_pass lumen_surface_cache_pass_{}; ///< Lumen cards, atlases and captures
+    lumen_reflection_pass lumen_reflection_pass_{}; ///< Lumen's reflections, with the Lumen gather
     gi_reflection_pass gi_reflection_pass_{};
     scene_history_pass scene_history_pass_{}; ///< PREV_SCENE_HDR, view depth in alpha
     sdf_debug_pass sdf_debug_pass_{}; ///< Diagnostic only; see sdf_debug_pass.h

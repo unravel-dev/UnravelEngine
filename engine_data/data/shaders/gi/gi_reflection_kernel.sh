@@ -574,11 +574,11 @@ vec4 GiReflectionShade(vec2 uv, vec2 frag_coord)
 	// sampler lives in gi_reflection_sampling.sh because the temporal RESOLVE has to reproduce
 	// this exact ray, and its density, for every neighbouring texel it reuses.
 	//
-	// The determinism gate (inside GiReflectionMakeRay) is on DECODED roughness against the
-	// encoder floor, never on alpha against a small epsilon: the G-buffer write clamps
-	// roughness to >= 0.05, so an authored mirror decodes at the floor and its alpha (2.5e-3)
-	// clears any small alpha gate - every mirror pixel would jitter, and rays near-missing a
-	// small emissive would hit it on the VNDF tail as full-radiance fireflies.
+	// The determinism gate (inside GiReflectionMakeRay) is on DECODED roughness against
+	// GI_REFLECTION_MIRROR_ROUGHNESS, never on alpha against a small epsilon: a near-mirror
+	// lobe (roughness up to 0.06, alpha up to 3.6e-3) clears any small alpha gate, so its
+	// pixels would jitter and rays near-missing a small emissive would hit it on the VNDF tail
+	// as full-radiance fireflies.
 	//
 	// TWO independent noise channels for a true 2D point: deriving the second coordinate from
 	// the first puts every sample on a 1D curve through the unit square, so the azimuthal half

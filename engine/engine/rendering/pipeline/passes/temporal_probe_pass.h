@@ -34,6 +34,24 @@ class temporal_probe_pass
 public:
     /// Columns and rows of the screen grid the per-cell means are reported on.
     static constexpr uint32_t grid_size = 8u;
+    /// Most frames one measurement may capture whole (request's @p marks).
+    static constexpr uint32_t max_marks = 16u;
+
+    /// One frame captured whole at a requested mark.
+    struct mark_capture
+    {
+        /// 1-based index of the captured frame within the measurement.
+        uint32_t frame = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        /// Format of @p color: the displayed image's own format.
+        bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Unknown;
+        /// The displayed image as rendered, rows from the top of the image.
+        std::vector<uint8_t> color;
+        /// Frames each pixel's surface had stayed visible within the measurement (see cs_temporal_probe.sc), rows
+        /// from the top of the image.
+        std::vector<float> age;
+    };
 
     /// Statistics over the probed pixels, in 8-bit display levels (0-255).
     struct result
@@ -65,6 +83,8 @@ public:
         /// reprojected change (-1 where it was measured on under half of the frame pairs) and the
         /// LAST measured frame's luminance (frame-locked to the end of the measurement).
         std::vector<float> images;
+        /// The frames captured whole, in frame order (only when the request asked for marks).
+        std::vector<mark_capture> marks;
     };
 
     struct run_params
@@ -86,8 +106,12 @@ public:
     /// runs every statistic on a small box mean of the displayed luminance (cs_temporal_probe.sc,
     /// PROBE_LOWPASS_RADIUS): under camera motion the raw reprojected change is dominated by the sub-pixel
     /// resampling of textured detail, which the box removes while patch-scale flicker stays.
-    /// @p keeps_images also reads back the per-pixel planes (result::images).
-    void request(uint32_t frames, bool is_lowpass = false, bool keeps_images = false);
+    /// @p keeps_images also reads back the per-pixel planes (result::images). @p marks lists 1-based frame
+    /// indices whose displayed image and age plane are captured whole (result::marks, at most max_marks).
+    void request(uint32_t frames,
+                 bool is_lowpass = false,
+                 bool keeps_images = false,
+                 std::vector<uint32_t> marks = {});
 
     /// Frames folded in so far by the current or last measurement.
     auto get_frames_done() const -> uint32_t;
@@ -106,10 +130,23 @@ public:
     void run(const run_params& params);
 
 private:
+    /// A mark's GPU copies and the CPU buffers its readback lands in.
+    struct pending_mark
+    {
+        uint32_t frame = 0;
+        gfx::texture::ptr color;
+        gfx::texture::ptr age;
+        std::vector<uint8_t> color_data;
+        std::vector<float> age_data;
+        bgfx::TextureFormat::Enum format = bgfx::TextureFormat::Unknown;
+    };
+
     void allocate(uint16_t width, uint16_t height);
     void dispatch_frame(const run_params& params);
+    void capture_mark(const run_params& params);
     void issue_readback();
     void reduce_readback();
+    auto collect_marks() -> std::vector<mark_capture>;
 
     struct probe_program : uniforms_cache
     {
@@ -119,6 +156,7 @@ private:
         gfx::program::uniform_ptr s_depth;
         gfx::program::uniform_ptr s_prev_depth;
         gfx::program::uniform_ptr s_prev_luma;
+        gfx::program::uniform_ptr s_prev_age;
         gfx::program::uniform_ptr u_probe_params;
         gfx::program::uniform_ptr u_probe_params2;
 
@@ -129,6 +167,7 @@ private:
             cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_prev_depth, "s_prev_depth", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_prev_luma, "s_prev_luma", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_prev_age, "s_prev_age", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_probe_params, "u_probe_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_probe_params2, "u_probe_params2", bgfx::UniformType::Vec4);
         }
@@ -144,6 +183,13 @@ private:
     gfx::texture::ptr sums_;
     /// This frame's and last frame's displayed luminance, alternating.
     std::array<gfx::texture::ptr, 2> luma_{};
+    /// This frame's and last frame's age plane, alternating with luma_ (same write index).
+    std::array<gfx::texture::ptr, 2> age_{};
+    /// Requested mark frames, ascending, and the captures issued so far for the current measurement.
+    std::vector<uint32_t> marks_requested_;
+    std::vector<pending_mark> marks_pending_;
+    /// The captures of the readback in flight, moved out of marks_pending_ when it was issued.
+    std::vector<pending_mark> readback_marks_;
     gfx::texture::ptr readback_;
     std::vector<float> readback_data_;
     /// The last measured frame's luminance, read back when a request keeps images.

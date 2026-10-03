@@ -290,8 +290,9 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     }
     // Attributes compose AFTER every distance level is written: the attribute shader samples the
     // composed field (band + gradient gates), so its input must be this frame's voxels. Separate
-    // dispatches also give the backend its transition point from image-write to sampled-read.
-    if(attributes_program_.is_valid())
+    // dispatches also give the backend its transition point from image-write to sampled-read. A
+    // distance-only mirror has no attribute volumes to write.
+    if(attributes_program_.is_valid() && !clipmap_gpu.is_distance_only())
     {
         const uint32_t attr_resolution = clipmap_gpu.get_attr_resolution();
         const uint32_t attr_groups = (attr_resolution + compose_group_size - 1u) / compose_group_size;
@@ -396,7 +397,6 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
                                                    gfx::render_pass& scroll_place_pass,
                                                    gfx::render_pass& compose_pass)
 {
-    auto& scroll_scratch = scroll_scratch_[level];
     const auto& lvl = clipmap.get_level(level);
     const uint32_t resolution = clipmap.get_settings().resolution;
     global_sdf_clipmap::voxel_box overlap;
@@ -405,74 +405,35 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
     // SCROLL-ONLY (level::scroll_only): the overlap of the old and new windows holds exactly
     // the bytes a recompose would write, so it is moved - out to the scratch slab and back
     // in at its new position, two blits, since a blit cannot shift voxels within one
-    // texture - and only the exposed slabs are composed. A scratch that failed to allocate
-    // falls back to composing the whole level.
+    // texture - and only the exposed slabs are composed. The coverage moves the same way at
+    // its downsample (the window snaps by whole coverage texels). A scratch that failed to
+    // allocate falls back to composing the whole level.
+    const scroll_volume distance{&scroll_scratch_[level], &clipmap_gpu.get_texture(), 1u};
+    const scroll_volume coverage{&coverage_scroll_scratch_[level],
+                                 &clipmap_gpu.get_coverage_texture(),
+                                 global_sdf_clipmap_gpu::coverage_downsample};
+    const bool has_coverage = static_cast<bool>(clipmap_gpu.get_coverage_texture());
     if(lvl.scroll_only)
     {
         exposed_count = global_sdf_clipmap::compute_scroll_boxes(lvl.scroll_shift, resolution, overlap, exposed);
     }
-    if(exposed_count > 0)
+    if(exposed_count > 0 &&
+       (!ensure_scroll_scratch(distance, resolution) || (has_coverage && !ensure_scroll_scratch(coverage, resolution))))
     {
-        const bool scratch_stale = !scroll_scratch || !scroll_scratch->is_valid() ||
-                                   scroll_scratch->info.width != resolution ||
-                                   scroll_scratch->info.depth != resolution;
-        if(scratch_stale)
-        {
-            scroll_scratch = std::make_shared<gfx::texture>(static_cast<uint16_t>(resolution),
-                                                             static_cast<uint16_t>(resolution),
-                                                             static_cast<uint16_t>(resolution),
-                                                             false,
-                                                             bgfx::TextureFormat::R8,
-                                                             BGFX_TEXTURE_BLIT_DST);
-        }
-        if(!scroll_scratch || !scroll_scratch->is_valid())
-        {
-            exposed_count = 0;
-        }
+        exposed_count = 0;
     }
     if(exposed_count > 0)
     {
-        const auto res16 = static_cast<uint16_t>(resolution);
-        const auto slab_z = static_cast<uint16_t>(level * resolution);
+        blit_scroll_overlap(distance, resolution, level, overlap, lvl.scroll_shift, scroll_copy_pass, scroll_place_pass);
+        if(has_coverage)
         {
-            // Blits run at the start of their view, so the copy out and the placement back
-            // each take a view of their own, ahead of the compose dispatches.
-            gfx::render_pass& copy_pass = scroll_copy_pass;
-            bgfx::blit(copy_pass.id,
-                       bgfx::TextureRegion{.handle = scroll_scratch->native_handle(),
-                                           .width = res16,
-                                           .height = res16,
-                                           .depth = res16},
-                       bgfx::TextureRegion{.handle = clipmap_gpu.get_texture()->native_handle(),
-                                           .z = slab_z,
-                                           .width = res16,
-                                           .height = res16,
-                                           .depth = res16});
-        }
-        {
-            // New-window voxel v came from old-window voxel v + shift. Every overlap extent
-            // is at least one voxel (compute_scroll_boxes reports no scroll otherwise), which
-            // matters because a zero blit extent means "the rest of the mip".
-            const math::ivec3 source = overlap.min + lvl.scroll_shift;
-            const auto size_x = static_cast<uint16_t>(overlap.size.x);
-            const auto size_y = static_cast<uint16_t>(overlap.size.y);
-            const auto size_z = static_cast<uint16_t>(overlap.size.z);
-            gfx::render_pass& place_pass = scroll_place_pass;
-            bgfx::blit(place_pass.id,
-                       bgfx::TextureRegion{.handle = clipmap_gpu.get_texture()->native_handle(),
-                                           .x = static_cast<uint16_t>(overlap.min.x),
-                                           .y = static_cast<uint16_t>(overlap.min.y),
-                                           .z = static_cast<uint16_t>(slab_z + overlap.min.z),
-                                           .width = size_x,
-                                           .height = size_y,
-                                           .depth = size_z},
-                       bgfx::TextureRegion{.handle = scroll_scratch->native_handle(),
-                                           .x = static_cast<uint16_t>(source.x),
-                                           .y = static_cast<uint16_t>(source.y),
-                                           .z = static_cast<uint16_t>(source.z),
-                                           .width = size_x,
-                                           .height = size_y,
-                                           .depth = size_z});
+            blit_scroll_overlap(coverage,
+                                resolution,
+                                level,
+                                overlap,
+                                lvl.scroll_shift,
+                                scroll_copy_pass,
+                                scroll_place_pass);
         }
         for(uint32_t box = 0; box < exposed_count; ++box)
         {
@@ -484,6 +445,74 @@ void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& cli
     whole.min = math::ivec3(0);
     whole.size = math::ivec3(int(resolution));
     dispatch_compose_box(compose_pass, clipmap, clipmap_gpu, surface_cache, level, whole, true);
+}
+
+auto gi_clipmap_compose_pass::ensure_scroll_scratch(const scroll_volume& target, uint32_t resolution) -> bool
+{
+    const uint32_t size = resolution / target.downsample;
+    auto& scratch = *target.scratch;
+    const bool stale = !scratch || !scratch->is_valid() || scratch->info.width != size || scratch->info.depth != size;
+    if(stale)
+    {
+        scratch = std::make_shared<gfx::texture>(static_cast<uint16_t>(size),
+                                                 static_cast<uint16_t>(size),
+                                                 static_cast<uint16_t>(size),
+                                                 false,
+                                                 bgfx::TextureFormat::R8,
+                                                 BGFX_TEXTURE_BLIT_DST);
+    }
+    return scratch && scratch->is_valid();
+}
+
+void gi_clipmap_compose_pass::blit_scroll_overlap(const scroll_volume& target,
+                                                  uint32_t resolution,
+                                                  uint32_t level,
+                                                  const global_sdf_clipmap::voxel_box& overlap,
+                                                  const math::ivec3& shift,
+                                                  gfx::render_pass& copy_pass,
+                                                  gfx::render_pass& place_pass)
+{
+    const uint32_t downsample = target.downsample;
+    const auto size16 = static_cast<uint16_t>(resolution / downsample);
+    const auto slab_z = static_cast<uint16_t>(level * resolution / downsample);
+    const auto& scratch = *target.scratch;
+    const auto& volume = *target.volume;
+    // Blits run at the start of their view, so the copy out and the placement back each take a
+    // view of their own, ahead of the compose dispatches.
+    bgfx::blit(copy_pass.id,
+               bgfx::TextureRegion{.handle = scratch->native_handle(), .width = size16, .height = size16, .depth = size16},
+               bgfx::TextureRegion{.handle = volume->native_handle(),
+                                   .z = slab_z,
+                                   .width = size16,
+                                   .height = size16,
+                                   .depth = size16});
+    // New-window voxel v came from old-window voxel v + shift. Every overlap extent is at least one
+    // snap (compute_scroll_boxes reports no scroll otherwise), a whole number of texels at any
+    // downsample, which matters because a zero blit extent means "the rest of the mip".
+    // Component-wise: glm's SIMD integer vector division needs an intrinsic this toolchain lacks.
+    const auto scale_down = [downsample](const math::ivec3& v) -> math::ivec3
+    {
+        const int d = int(downsample);
+        return {v.x / d, v.y / d, v.z / d};
+    };
+    const math::ivec3 source = scale_down(overlap.min + shift);
+    const math::ivec3 destination = scale_down(overlap.min);
+    const math::ivec3 extent = scale_down(overlap.size);
+    bgfx::blit(place_pass.id,
+               bgfx::TextureRegion{.handle = volume->native_handle(),
+                                   .x = static_cast<uint16_t>(destination.x),
+                                   .y = static_cast<uint16_t>(destination.y),
+                                   .z = static_cast<uint16_t>(slab_z + destination.z),
+                                   .width = static_cast<uint16_t>(extent.x),
+                                   .height = static_cast<uint16_t>(extent.y),
+                                   .depth = static_cast<uint16_t>(extent.z)},
+               bgfx::TextureRegion{.handle = scratch->native_handle(),
+                                   .x = static_cast<uint16_t>(source.x),
+                                   .y = static_cast<uint16_t>(source.y),
+                                   .z = static_cast<uint16_t>(source.z),
+                                   .width = static_cast<uint16_t>(extent.x),
+                                   .height = static_cast<uint16_t>(extent.y),
+                                   .depth = static_cast<uint16_t>(extent.z)});
 }
 
 void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
@@ -509,6 +538,22 @@ void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
     // stage 4. Writing the level in place is what avoids a staging copy and the per-level
     // update_texture_3d the CPU path pays.
     gfx::set_image_3d(5, clipmap_gpu.get_texture()->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
+    // The coverage of a distance-only clipmap at stage 6, or a one-texel stand-in the kernel never writes.
+    const auto& coverage = clipmap_gpu.get_coverage_texture();
+    if(!coverage && !coverage_dummy_)
+    {
+        coverage_dummy_ = std::make_shared<gfx::texture>(uint16_t(1),
+                                                         uint16_t(1),
+                                                         uint16_t(1),
+                                                         false,
+                                                         bgfx::TextureFormat::R8,
+                                                         BGFX_TEXTURE_COMPUTE_WRITE);
+    }
+    gfx::set_image_3d(6,
+                      (coverage ? coverage : coverage_dummy_)->native_handle(),
+                      0,
+                      bgfx::Access::Write,
+                      bgfx::TextureFormat::R8);
     // The level's surface-list cursor resets in this dispatch (thread 0); the attribute
     // pass's sampled read of the distance volume is the transition that orders it - a
     // standalone reset dispatch would rely on submission order, which D3D12 does not
@@ -527,7 +572,7 @@ void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
     const float reach = clipmap_settings.encode_range * lvl.voxel_size;
     const float compose_params[4] = {float(level), float(resolution), lvl.voxel_size, reach};
     gfx::set_uniform(compose_program_.u_clipmap_compose_params, compose_params);
-    const float compose_origin[4] = {lvl.origin.x, lvl.origin.y, lvl.origin.z, 0.0f};
+    const float compose_origin[4] = {lvl.origin.x, lvl.origin.y, lvl.origin.z, coverage ? 1.0f : 0.0f};
     gfx::set_uniform(compose_program_.u_clipmap_compose_origin, compose_origin);
     const float range[4] = {float(box.min.x), float(box.min.y), float(box.min.z), reset_cursor ? 1.0f : 0.0f};
     gfx::set_uniform(compose_program_.u_clipmap_compose_range, range);

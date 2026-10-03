@@ -9,16 +9,18 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 namespace unravel
 {
 
-auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> bool
+auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu, bool distance_only) -> bool
 {
     shutdown();
     resolution_ = resolution;
     compose_on_gpu_ = compose_on_gpu;
+    distance_only_ = distance_only;
     const uint32_t depth = resolution * global_sdf_clipmap::level_count;
     if(depth > 2048u)
     {
@@ -54,6 +56,10 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
         texture_.reset();
         resolution_ = 0;
         return false;
+    }
+    if(distance_only_)
+    {
+        return init_distance_only(depth);
     }
     // Attribute voxels: albedo + emissive at half resolution, and the
     // surface-voxel list segments + cursors the light-voxel update consumes. Created alongside
@@ -233,9 +239,59 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution, bool compose_on_gpu) -> b
     return true;
 }
 
+auto global_sdf_clipmap_gpu::init_distance_only(uint32_t depth) -> bool
+{
+    // Covered (255) until the compose writes a level: a level not composed yet traces as the plain field.
+    const uint32_t coverage_resolution = resolution_ / coverage_downsample;
+    const uint32_t coverage_depth = depth / coverage_downsample;
+    const uint32_t coverage_bytes = coverage_resolution * coverage_resolution * coverage_depth;
+    const bgfx::Memory* covered = bgfx::alloc(coverage_bytes);
+    std::memset(covered->data, 0xFF, coverage_bytes);
+    coverage_texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(coverage_resolution),
+                                                       static_cast<uint16_t>(coverage_resolution),
+                                                       static_cast<uint16_t>(coverage_depth),
+                                                       false,
+                                                       bgfx::TextureFormat::R8,
+                                                       BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
+                                                           BGFX_SAMPLER_W_CLAMP | BGFX_TEXTURE_COMPUTE_WRITE |
+                                                           BGFX_TEXTURE_BLIT_DST,
+                                                       covered);
+    if(!coverage_texture_ || !coverage_texture_->is_valid())
+    {
+        APPLOG_ERROR("[SurfaceCache] Failed to create the clipmap coverage texture.");
+        shutdown();
+        return false;
+    }
+    // The compose dispatch resets its level's append cursor whatever the mirror holds, so the
+    // surface list keeps its per-level header; there are no entry segments to append to.
+    const uint64_t surface_flags =
+        (compose_on_gpu_ ? BGFX_BUFFER_COMPUTE_READ_WRITE : BGFX_BUFFER_COMPUTE_READ) | BGFX_BUFFER_INDEX32;
+    surface_list_ = bgfx::createDynamicIndexBuffer(global_sdf_clipmap::level_count, surface_flags);
+    if(!bgfx::isValid(surface_list_))
+    {
+        APPLOG_ERROR("[SurfaceCache] Failed to create the clipmap cursor header.");
+        shutdown();
+        return false;
+    }
+    needs_texture_clear_ = false;
+    // A GPU-owned header is zeroed by the compose pass's seed; a CPU-owned one right here.
+    needs_buffer_seed_ = compose_on_gpu_;
+    if(!compose_on_gpu_)
+    {
+        const std::array<uint32_t, global_sdf_clipmap::level_count> zero_counts{};
+        bgfx::update(surface_list_, 0, bgfx::copy(zero_counts.data(), sizeof(zero_counts)));
+    }
+    APPLOG_INFO("[SurfaceCache] Global SDF clipmap ready, distance only: {} levels of {}^3 ({} KB).",
+                global_sdf_clipmap::level_count,
+                resolution_,
+                size_t(resolution_) * resolution_ * depth / 1024);
+    return true;
+}
+
 void global_sdf_clipmap_gpu::shutdown()
 {
     texture_.reset();
+    coverage_texture_.reset();
     attr_albedo_texture_.reset();
     attr_emissive_texture_.reset();
     light_voxel_texture_.reset();
@@ -359,7 +415,7 @@ void global_sdf_clipmap_gpu::upload(global_sdf_clipmap& clipmap)
         // the same set of resources.
         const uint32_t attr_resolution = get_attr_resolution();
         const size_t attr_count = size_t(attr_resolution) * attr_resolution * attr_resolution;
-        if(lvl.attr_albedo.size() == attr_count && lvl.attr_emissive.size() == attr_count)
+        if(!distance_only_ && lvl.attr_albedo.size() == attr_count && lvl.attr_emissive.size() == attr_count)
         {
             bgfx::updateTexture3D(attr_albedo_texture_->native_handle(),
                                   0,

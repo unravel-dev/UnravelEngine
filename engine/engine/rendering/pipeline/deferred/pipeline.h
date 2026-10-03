@@ -144,9 +144,15 @@ public:
     auto run_tonemapping_pass(gfx::render_view& rview, const gfx::frame_buffer::ptr& input, const gfx::frame_buffer::ptr& output,
                               const run_params& rparams)
         -> gfx::frame_buffer::ptr;
+    /// The lit image's tone mapping operator, which the debug views that read like the frame go through (none
+    /// without HDR).
+    static auto get_debug_tonemapping(const run_params& rparams) -> tonemapping_method;
+    /// The G-buffer visualiser's views; @p tonemapping is the lit image's operator, which the indirect diffuse view
+    /// goes through as UE's does.
     void run_debug_visualization_pass(const camera& camera,
                                       gfx::render_view& rview,
-                                      const gfx::frame_buffer::ptr& output);
+                                      const gfx::frame_buffer::ptr& output,
+                                      tonemapping_method tonemapping);
 
     /// Debug pass ids at or above this one are handled by the distance field visualiser
     /// rather than by the G-buffer visualiser, whose shader only knows modes 0..14.
@@ -193,9 +199,28 @@ public:
     /// Visualize HDR). Dispatched by an exact match before the >= debug_pass_sdf_normals
     /// check, like velocity and GTAO - it is an overlay, not a replacement image.
     static constexpr int debug_pass_exposure = 41;
+    /// Lumen surface cache views (lumen_surface_cache_pass::run_debug): the global distance field traced from
+    /// the camera and shaded from the cards (UE's Lumen Scene and Surface Cache views), and the physical card atlas.
+    static constexpr int debug_pass_lumen_scene = 42;
+    static constexpr int debug_pass_lumen_card_atlas = 43;
+    static constexpr int debug_pass_lumen_card_coverage = 44;
+    static constexpr int debug_pass_lumen_scene_albedo = 45;
+    static constexpr int debug_pass_lumen_surface_cache = 46;
+    static constexpr int debug_pass_lumen_object_grid = 47;
+    static constexpr int debug_pass_lumen_scene_direct = 48;
+    static constexpr int debug_pass_lumen_scene_indirect = 49;
+    /// UE's Dedicated Reflection Rays view (r.Lumen.Visualize 7), drawn by the G-buffer visualizer:
+    /// the pixels Lumen traces reflections for. Dispatched by an exact match before the SDF check.
+    static constexpr int debug_pass_lumen_reflection_rays = 50;
     void run_exposure_debug_pass(gfx::render_view& rview,
                                  const gfx::frame_buffer::ptr& output,
                                  const run_params& rparams);
+    /// Lumen surface cache for this frame: card placement and resolution, captures rasterized with
+    /// the G-buffer program (one orthographic view per page), copied into the physical atlases, then
+    /// lit (direct lighting and the final combine).
+    void run_lumen_surface_cache(const camera& camera, gfx::render_view& rview, surface_cache_system& gi_scene);
+    /// Rasterizes this frame's card captures, one orthographic view per page.
+    void capture_lumen_cards(const camera& camera, const surface_cache_system& gi_scene);
     void run_sdf_debug_pass(const camera& camera,
                             gfx::render_view& rview,
                             const run_params& rparams,
@@ -240,6 +265,17 @@ public:
     /// GI reflections enabled.
     /// @return true when the traced tier ran this frame (the rough tier then follows the gather).
     auto run_gi_reflection_pass(const camera& camera, gfx::render_view& rview, const run_params& params) -> bool;
+
+    /// Whether Lumen's reflections own this view's reflection buffers: a camera run with the probe stack and
+    /// float buffers, the Lumen gather and GI reflections enabled. SSR, the GI reflection tier and the probes
+    /// then step aside (UE composites no other specular under Lumen's).
+    auto lumen_reflections_own_view(const run_params& rparams) -> bool;
+    /// True when the Lumen gather's short-range AO replaces the screen-space AO in this view (UE applies no
+    /// SSAO under Lumen GI while its short-range AO is on).
+    auto lumen_short_range_ao_owns_view(const run_params& rparams) -> bool;
+
+    /// Lumen's reflections into RBUFFER and PBUFFER after the Lumen gather of @p gather_params.
+    void run_lumen_reflection_pass(gfx::render_view& rview, const gi_resolve_pass::run_params& gather_params);
 
     /// The GI reflections' rough tier into PBUFFER, the probe layer: this frame's rough specular
     /// fading into the resolve, after the gather that produced both. No-op unless
@@ -570,12 +606,16 @@ private:
             cache_uniform(program.get(), s_tex[10], "s_tex10", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_screen_ao, "u_screen_ao", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_visualize_indirect, "u_visualize_indirect", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_params;
         /// Screen-space AO parameters for the occlusion views (get_screen_ao_inputs).
         gfx::program::uniform_ptr u_screen_ao;
+        /// The indirect diffuse view: x = tone mapping operator, y = multi-bounce albedo cap, z = 1 when the
+        /// indirect diffuse is SSIL's.
+        gfx::program::uniform_ptr u_visualize_indirect;
         /// 0-4 G-buffer, 5 RBUFFER, 6 environment SH, 7 GI / SSIL, 8 screen-space AO,
         /// 9 PBUFFER, 10 the GTSO table.
         std::array<gfx::program::uniform_ptr, 11> s_tex;
@@ -641,14 +681,18 @@ private:
 public:
 
 private:
-    /// The screen-space AO the lighting combines with the material AO: GTAO's texture, or
-    /// ASSAO's when GTAO is off (visibility in alpha either way), white when neither ran.
+    /// The screen-space AO the lighting combines with the material AO: Lumen's short-range AO in
+    /// Lumen views, else GTAO's texture, or ASSAO's when GTAO is off (visibility in alpha either
+    /// way), white when none ran.
     struct screen_ao_inputs
     {
         gfx::texture::ptr texture;
         /// u_screen_ao: x = intensity, y = bent normal strength (GTAO only), z = multi-bounce of
-        /// the screen term (GTAO's setting, on otherwise), w = 1 when the texture is GTAO's.
+        /// the screen term (GTAO's setting, on otherwise), w = 1 when the texture carries a bent normal.
         std::array<float, 4> params{};
+        /// Cap of the albedo the multi-bounce fit uses (UE's MaxMultibounceAlbedo for the short-range
+        /// AO); 0 leaves it uncapped.
+        float multi_bounce_albedo_cap = 0.0f;
     };
     auto get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_inputs;
 
@@ -667,6 +711,10 @@ private:
     int debug_pass_{-1};
     /// See pipeline::set_debug_view_scale.
     float debug_view_scale_{1.0f};
+    /// The position the global SDF clipmap centres on: the camera's, or the one it had when the
+    /// freeze experiment bit was set (has_frozen_clipmap_camera_).
+    math::vec3 clipmap_camera_{};
+    bool has_frozen_clipmap_camera_{false};
     /**
      * @brief UE FViewInfo::UpdatePreExposure: this run's scene-color scale. Camera runs with HDR
      * output use the manual exposure times the adapted exposure the GPU delivered a few frames

@@ -10,6 +10,11 @@
  * The change is NOT measured where it cannot be trusted: object motion (the velocity buffer's
  * object part), a reprojection off screen, a previous depth that disagrees with this pixel's,
  * or a depth edge in the cross neighbourhood (a bilinear previous sample there mixes surfaces).
+ *
+ * The AGE plane counts the frames each pixel's surface has stayed visible within the measurement: last frame's
+ * age at the reprojected position plus one, or 0 where the reprojection leaves the screen, lands on another
+ * surface or follows object motion. It is the ground truth of "revealed this frame" for reveal metrics, independent
+ * of any history the renderer keeps.
  */
 
 #include "../bgfx_compute.sh"
@@ -22,6 +27,8 @@ SAMPLER2D(s_prev_depth, 3);
 SAMPLER2D(s_prev_luma, 4);
 IMAGE2D_RW(s_sums, rgba32f, 5);
 IMAGE2D_WO(s_luma_out, r32f, 6);
+IMAGE2D_WO(s_age_out, r32f, 7);
+SAMPLER2D(s_prev_age, 8);
 
 /// x, y = image size in pixels; z = 1 when the velocity buffer is bound; w = 1 when last frame's
 /// luminance exists (0 on the first frame of a measurement, which also resets the sums).
@@ -85,6 +92,7 @@ void main()
 	float mean_new = mean_old + (luma - mean_old) / max(u_probe_params2.x, 1.0);
 	float change = 0.0;
 	float measured = 0.0;
+	float age = 0.0;
 	if(has_previous)
 	{
 		vec2 prev_uv = uv;
@@ -97,6 +105,17 @@ void main()
 		}
 		valid = valid && prev_uv.x >= 0.0 && prev_uv.y >= 0.0 && prev_uv.x <= 1.0 && prev_uv.y <= 1.0;
 		float depth = screenSpaceToViewSpaceDepth(texture2DLod(s_depth, uv, 0.0).x);
+		bool age_valid = valid;
+		if(u_probe_params2.y > 0.5)
+		{
+			float prev_depth_at = screenSpaceToViewSpaceDepth(texture2DLod(s_prev_depth, prev_uv, 0.0).x);
+			age_valid = age_valid && ProbeSameSurface(depth, prev_depth_at);
+		}
+		if(age_valid)
+		{
+			ivec2 prev_coord = ivec2(clamp(prev_uv * size, vec2_splat(0.0), size - vec2_splat(1.0)));
+			age = texelFetch(s_prev_age, prev_coord, 0).x + 1.0;
+		}
 		float depth_left = screenSpaceToViewSpaceDepth(texture2DLod(s_depth, uv - vec2(texel.x, 0.0), 0.0).x);
 		float depth_right = screenSpaceToViewSpaceDepth(texture2DLod(s_depth, uv + vec2(texel.x, 0.0), 0.0).x);
 		float depth_up = screenSpaceToViewSpaceDepth(texture2DLod(s_depth, uv - vec2(0.0, texel.y), 0.0).x);
@@ -117,4 +136,5 @@ void main()
 	imageStore(s_sums,
 	           coord,
 	           vec4(mean_new, sums.g + (luma - mean_old) * (luma - mean_new), sums.b + change, sums.a + measured));
+	imageStore(s_age_out, coord, vec4(age, 0.0, 0.0, 1.0));
 }

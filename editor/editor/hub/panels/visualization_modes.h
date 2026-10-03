@@ -24,7 +24,8 @@ enum class visualization_mode : int
     diffuse_color = 1,
     specular_color = 2,
     /// The indirect specular radiance: the traced layers in RBUFFER (SSR over the GI reflection
-    /// tier) plus their uncovered share of the probe layer in PBUFFER, each occluded.
+    /// tier, or Lumen's reflections) plus their uncovered share of the probe layer in PBUFFER, each
+    /// occluded.
     reflections = 3,
     irradiance = 4,
     ambient_occlusion = 5,
@@ -70,6 +71,18 @@ enum class visualization_mode : int
     /// Auto exposure's own state over the lit image: the adaptation trace and this frame's
     /// metering histogram (UE's Visualize HDR).
     exposure = 41,
+    /// Lumen surface cache: the global distance field traced from the camera and shaded from the cards
+    /// (UE's Lumen Scene and Surface Cache views), and the physical card atlas.
+    lumen_scene = 42,
+    lumen_card_atlas = 43,
+    lumen_card_coverage = 44,
+    lumen_scene_albedo = 45,
+    lumen_surface_cache = 46,
+    lumen_object_grid = 47,
+    lumen_scene_direct = 48,
+    lumen_scene_indirect = 49,
+    /// The pixels Lumen traces reflections for (UE's Dedicated Reflection Rays).
+    lumen_reflection_rays = 50,
 };
 
 /// Menu grouping. Ordering here is the order the groups appear in the viewport menu.
@@ -89,6 +102,8 @@ enum class visualization_group : int
     distance_field,
     /// Global illumination caches read at the traced hit.
     global_illumination,
+    /// The Lumen surface cache (cards and their atlas).
+    lumen,
     count,
 };
 
