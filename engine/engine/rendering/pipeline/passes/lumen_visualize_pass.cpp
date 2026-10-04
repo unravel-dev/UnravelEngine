@@ -44,9 +44,9 @@ constexpr uint64_t card_face_state = BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_
 constexpr std::array<std::array<uint32_t, 2>, 12> card_box_edges = {
     {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}}};
 constexpr std::array<uint32_t, 6> card_face_triangles = {4, 7, 5, 4, 6, 7};
-/// The radiosity probes: one slot per 4x4 texel cell of a 128 x 128 page (LUMEN_RADIOSITY_PROBE_SPACING), drawn
-/// as 36-vertex cubes (vs_lumen_visualize_probe.sc).
-constexpr uint32_t radiosity_probe_slots_per_page = (128u / 4u) * (128u / 4u);
+/// The radiosity probes: one slot per probe cell of a 128 x 128 page (the radiosity's probe spacing squared), drawn as
+/// 36-vertex cubes (vs_lumen_visualize_probe.sc).
+constexpr uint32_t radiosity_page_size = 128;
 constexpr uint32_t probe_cube_vertices = 36;
 /// vs_lumen_visualize_probe.sc's modes.
 constexpr float probe_mode_radiosity = 0.0f;
@@ -272,6 +272,7 @@ void lumen_visualize_pass::probe_program::cache_uniforms()
     cache_uniform(program.get(), u_lumen_visualize_probe, "u_lumen_visualize_probe", bgfx::UniformType::Vec4);
     cache_uniform(program.get(), u_lumen_visualize_probe2, "u_lumen_visualize_probe2", bgfx::UniformType::Vec4);
     cache_uniform(program.get(), u_lumen_surface_cache, "u_lumen_surface_cache", bgfx::UniformType::Vec4);
+    cache_uniform(program.get(), u_lumen_radiosity, "u_lumen_radiosity", bgfx::UniformType::Vec4);
     cache_uniform(program.get(), s_lumen_card_depth, "s_lumen_card_depth", bgfx::UniformType::Sampler);
     cache_uniform(program.get(), s_lumen_radiosity_sh_r, "s_lumen_radiosity_sh_r", bgfx::UniformType::Sampler);
     cache_uniform(program.get(), s_lumen_radiosity_sh_g, "s_lumen_radiosity_sh_g", bgfx::UniformType::Sampler);
@@ -313,6 +314,9 @@ void lumen_visualize_pass::placement_program::cache_uniforms()
 void lumen_visualize_pass::reflection_trace_program::cache_uniforms()
 {
     cache_uniform(program.get(), u_lumen_visualize_reflection, "u_lumen_visualize_reflection", bgfx::UniformType::Vec4);
+    cache_uniform(program.get(), u_lumen_frame, "u_lumen_frame", bgfx::UniformType::Vec4);
+    cache_uniform(program.get(), u_lumen_view, "u_lumen_view", bgfx::UniformType::Vec4);
+    cache_uniform(program.get(), u_lumen_reflection_quality, "u_lumen_reflection_quality", bgfx::UniformType::Vec4);
     cache_uniform(program.get(), s_lumen_reflection_ray, "s_lumen_reflection_ray", bgfx::UniformType::Sampler);
     cache_uniform(program.get(), s_lumen_reflection_hit, "s_lumen_reflection_hit", bgfx::UniformType::Sampler);
     cache_uniform(program.get(), s_lumen_reflection_radiance, "s_lumen_reflection_radiance", bgfx::UniformType::Sampler);
@@ -819,7 +823,7 @@ void lumen_visualize_pass::draw_screen_probe_traces(const overlay_params& params
     const auto traces = params.gather->get_visualized_traces();
     if(bgfx::isValid(traces))
     {
-        draw_lines(params, traces, lumen_gather_pass::visualized_trace_count, false);
+        draw_lines(params, traces, params.gather->get_visualized_trace_count(), false);
     }
 }
 
@@ -835,9 +839,12 @@ void lumen_visualize_pass::draw_reflection_trace(const overlay_params& params, u
     const auto ray = rview.tex_safe_get(lumen_reflection_pass::ray_texture);
     const auto hit = rview.tex_safe_get(lumen_reflection_pass::hit_texture);
     const auto radiance = rview.tex_safe_get(lumen_reflection_pass::radiance_texture);
-    const bool is_traced = rview.data_get(lumen_reflection_pass::traced_frame_key, 0u) == gfx::get_render_frame();
+    const uint32_t frame = gfx::get_render_frame();
+    const bool is_traced = rview.data_get(lumen_reflection_pass::traced_frame_key, 0u) == frame;
+    const uint32_t downsample = std::max(rview.data_get(lumen_reflection_pass::downsample_key, 1u), 1u);
+    const auto trace_size = lumen_reflection_pass::get_trace_size(size, downsample);
     if(!is_cursor_in_view || !is_traced || !ray || !hit || !radiance || !program.program ||
-       !program.program->is_valid() || ray->get_size() != size)
+       !program.program->is_valid() || !lumen_pass::has_view_size(ray, trace_size))
     {
         return;
     }
@@ -861,6 +868,12 @@ void lumen_visualize_pass::draw_reflection_trace(const overlay_params& params, u
         params.print->bind(reflection_trace_print_stage, size);
     }
     gfx::set_uniform(program.u_lumen_visualize_reflection, math::vec4(cursor.x, cursor.y, float(first_line), 0.0f));
+    // The reflection pass's values this frame: the traced pixel of a downsampled trace rotates with the frame.
+    const math::vec4 frame_values(float(frame), float(frame % lumen_reflection_pass::state_frame_period), 0.0f, 0.0f);
+    gfx::set_uniform(program.u_lumen_frame, frame_values);
+    const math::vec4 view(float(size.width), float(size.height), 1.0f / float(size.width), 1.0f / float(size.height));
+    gfx::set_uniform(program.u_lumen_view, view);
+    gfx::set_uniform(program.u_lumen_reflection_quality, math::vec4(float(downsample), 0.0f, 0.0f, 0.0f));
     bgfx::dispatch(pass.id, program.program->native_handle(), 1, 1, 1);
     program.program->end();
     draw_lines(params, reflection_lines_, reflection_trace_lines, true);
@@ -966,6 +979,8 @@ void lumen_visualize_pass::draw_radiosity_probes(const world_params& params, con
         return;
     }
     lumen_pass::upload_vec4_table(page_buffer_, visualized_pages_);
+    const uint32_t cells_per_row = radiosity_page_size / surface_cache->get_radiosity_layout().probe_spacing;
+    const uint32_t slots_per_page = cells_per_row * cells_per_row;
     gfx::render_pass pass("GI/Radiosity Probes");
     pass.bind(target.get());
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
@@ -974,8 +989,8 @@ void lumen_visualize_pass::draw_radiosity_probes(const world_params& params, con
                        math::vec4(probe_mode_radiosity,
                                   params.settings.radiosity_probe_radius,
                                   params.settings.radiosity_show_invalid ? 1.0f : 0.0f,
-                                  float(radiosity_probe_slots_per_page)));
-    bgfx::setVertexCount(page_count * radiosity_probe_slots_per_page * probe_cube_vertices);
+                                  float(slots_per_page)));
+    bgfx::setVertexCount(page_count * slots_per_page * probe_cube_vertices);
     // Depth written into the copy, so nearer spheres hide farther ones; both cube sides shade the same sphere.
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
     bgfx::submit(pass.id, program.program->native_handle());
@@ -1040,6 +1055,10 @@ void lumen_visualize_pass::bind_probe_program(const world_params& params, const 
     gfx::set_uniform(program.u_lumen_surface_cache, surface_cache->get_surface_cache_params());
     gfx::set_uniform(program.u_lumen_visualize_probe, probe);
     gfx::set_uniform(program.u_lumen_visualize_probe2, math::vec4(params.pre_exposure, 0.0f, 0.0f, 0.0f));
+    // The radiosity probes' layout (lumen_radiosity_common.sh u_lumen_radiosity: y = spacing, z = rays per axis).
+    const auto& layout = surface_cache->get_radiosity_layout();
+    gfx::set_uniform(program.u_lumen_radiosity,
+                     math::vec4(0.0f, float(layout.probe_spacing), float(layout.hemisphere_resolution), 0.0f));
 }
 
 void lumen_visualize_pass::draw_card_placement(const world_params& params, const gfx::frame_buffer::ptr& target)

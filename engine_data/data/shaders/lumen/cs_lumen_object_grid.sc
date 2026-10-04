@@ -17,7 +17,8 @@ IMAGE3D_WO(s_lumen_object_grid_out, rgba32f, 4);
 
 /// x = level, y = cells per axis, z = cell size, w = reach (cell half diagonal + 3 voxel extents).
 uniform vec4 u_lumen_object_grid;
-/// xyz = the level's origin (minimum corner).
+/// xyz = the level's origin (minimum corner), w = the scale of the smallest object the level keeps (the clipmap
+/// compose's: 1 / the scene detail).
 uniform vec4 u_lumen_object_grid_origin;
 
 NUM_THREADS(4, 4, 4)
@@ -65,8 +66,8 @@ void main()
 						// from one culled object list.
 						if(!SdfLumenCascadeKeepsInstance(inst,
 						                                 0.5 * cell_size,
-						                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS,
-						                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS_VOXELS))
+						                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS * u_lumen_object_grid_origin.w,
+						                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS_VOXELS * u_lumen_object_grid_origin.w))
 						{
 							continue;
 						}

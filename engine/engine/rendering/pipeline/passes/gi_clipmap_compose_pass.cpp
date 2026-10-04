@@ -251,7 +251,7 @@ void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
     // w = 1: Lumen's cascade, which writes the coverage and leaves small objects out.
     const float compose_origin[4] = {lvl.origin.x, lvl.origin.y, lvl.origin.z, 1.0f};
     gfx::set_uniform(compose_program_.u_clipmap_compose_origin, compose_origin);
-    const float range[4] = {float(box.min.x), float(box.min.y), float(box.min.z), 0.0f};
+    const float range[4] = {float(box.min.x), float(box.min.y), float(box.min.z), clipmap_settings.object_radius_scale};
     gfx::set_uniform(compose_program_.u_clipmap_compose_range, range);
     const float range_size[4] = {float(box.size.x), float(box.size.y), float(box.size.z), 0.0f};
     gfx::set_uniform(compose_program_.u_clipmap_compose_range_size, range_size);

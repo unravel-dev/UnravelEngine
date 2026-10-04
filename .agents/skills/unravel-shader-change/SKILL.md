@@ -90,6 +90,8 @@ When adding new uniforms:
 - Assuming the C++ build compiles shaders - it does not; only the editor import (or a
   manual shaderc run) does, so errors hide until runtime
 - Mismatched varying names between VS and FS
+- HLSL keywords as identifiers: `line`, `linear`, `point`, `sample`, `triangle`, `centroid`, `precise`, `shared`
+  compile on GLSL and fail only `s_5_0` / `s_6_0` - compile-check D3D before launching
 - Modifying `deps/3rdparty/bgfx` instead of engine shaders
 - On OpenGL: creating bgfx uniforms after programs, naming an image like a sampler, or
   binding an image at stage 8+ (`python tasks/scan_gl_image_names.py` checks the last two) -

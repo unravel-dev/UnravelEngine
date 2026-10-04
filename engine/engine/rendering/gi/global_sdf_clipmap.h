@@ -119,6 +119,10 @@ public:
         ///< hitch. Levels are considered finest first, which is also the order they go stale in
         ///< (level 0 has the smallest voxels, so its origin re-snaps most often).
         uint32_t max_levels_per_update = 1;
+        ///< Scale of the smallest object the GPU's Lumen composition keeps (cs_gi_clipmap_compose.sc,
+        ///< SdfLumenCascadeKeepsInstance): 1 / the scene detail (UE GlobalDistanceField.cpp:2456). It is part of
+        ///< every level's fingerprint, so a change recomposes the levels within the update budget.
+        float object_radius_scale = 1.0f;
     };
 
     struct level

@@ -20,6 +20,9 @@ struct gi_settings
     {
         /// Scale of the gathered indirect lighting (UE IndirectLightingIntensity). 1 is physically based.
         float intensity = 1.0f;
+        /// Scale of the final gather's quality (UE LumenFinalGatherQuality): the rays each screen probe traces
+        /// (lumen_pass::get_probe_trace_resolution), the full-resolution jitter and the probe spacing.
+        float quality = 1.0f;
         /// Rays march the depth buffer before the distance field (UE LumenFinalGatherScreenTraces).
         bool screen_traces = true;
         /// How fast lighting changes reach the gather (UE LumenFinalGatherLightingUpdateSpeed): the temporal
@@ -36,6 +39,9 @@ struct gi_settings
     {
         /// Lumen owns the view's reflections; off leaves them to the screen-space reflections and the probes.
         bool enabled = true;
+        /// Scale of the reflections' quality (UE LumenReflectionQuality): the rays the resolve reuses per pixel, and
+        /// one traced pixel in four at the lowest quality (lumen_pass::get_reflection_downsample_factor).
+        float quality = 1.0f;
         /// Rays march the depth buffer before the distance field (UE LumenReflectionsScreenTraces).
         bool screen_traces = true;
         /// Pixels below this roughness trace a ray (UE LumenMaxRoughnessToTraceReflections).
@@ -58,6 +64,12 @@ struct gi_settings
     /// The Lumen scene: the surface cache of cards every distance-field hit reads its lighting from.
     struct scene_settings
     {
+        /// Scale of the surface cache lighting's quality (UE LumenSceneLightingQuality): the rays and the spacing of
+        /// the radiosity probes (lumen_pass::get_radiosity_layout).
+        float lighting_quality = 1.0f;
+        /// Scale of the size of the objects the scene keeps (UE LumenSceneDetail): the cards' minimum resolution and
+        /// the smallest object the global distance field composes.
+        float detail = 1.0f;
         /// Cards farther than this from the camera leave the surface cache (UE LumenSceneViewDistance, 20000 cm by
         /// default). The fixed reach of the global distance field limits it, where UE adds clipmap levels instead.
         float view_distance = 200.0f;

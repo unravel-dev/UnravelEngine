@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <limits>
 #include <numeric>
 
@@ -182,8 +183,12 @@ auto global_sdf_clipmap::compute_level_fingerprint(const math::bbox& bounds,
         total += cached ? instance_entry_hashes_[i] : compute_instance_entry_hash(instance);
     }
     // Mixed with the count so an empty level cannot collide with a populated one whose entries
-    // happen to sum to zero.
-    return total ^ (count * 0x9e3779b97f4a7c15ull);
+    // happen to sum to zero, and with an object radius scale other than 1, which changes the objects the GPU composes
+    // (a scale of 1 adds nothing, so an empty level keeps fingerprint 0).
+    const float radius_scale = settings_.object_radius_scale;
+    const uint64_t radius_scale_term =
+        radius_scale == 1.0f ? 0u : uint64_t(std::bit_cast<uint32_t>(radius_scale)) * 0xc2b2ae3d27d4eb4full;
+    return total ^ (count * 0x9e3779b97f4a7c15ull) ^ radius_scale_term;
 }
 
 auto global_sdf_clipmap::get_stale_level_count() const -> uint32_t
@@ -210,6 +215,16 @@ auto global_sdf_clipmap::apply_settings(const settings& new_settings) -> bool
     {
         init(new_settings);
         return true;
+    }
+    // The objects the composition keeps changed: the fingerprints that include the scale are recomputed at the next
+    // update, and no level may scroll its old voxels into place.
+    if(new_settings.object_radius_scale != settings_.object_radius_scale)
+    {
+        cached_instances_revision_ = 0;
+        for(auto& lvl : levels_)
+        {
+            lvl.composed_revision = 0;
+        }
     }
     settings_ = new_settings;
     return false;

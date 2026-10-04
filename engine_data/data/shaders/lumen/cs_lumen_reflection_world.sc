@@ -1,7 +1,7 @@
 /*
  * Lumen reflections, the distance-field stage (UE 5.8 ReflectionTraceVoxelsCS / TraceVoxels,
- * LumenReflectionTracing.usf:711-902, Global Tracing). Runs for every traced pixel the screen trace did not
- * answer.
+ * LumenReflectionTracing.usf:711-902, Global Tracing). Runs for every trace texel the screen trace did not answer,
+ * from the pixel it traces (LumenReflectionTracePixel).
  *
  * The ray restarts from the pixel moved LUMEN_SURFACE_BIAS along itself, LUMEN_REFLECTION_SDF_PULLBACK_HALF_VOXELS
  * voxel extents (of the clipmap level where the screen trace ended) before the distance the screen vouched for,
@@ -102,21 +102,22 @@ vec3 LumenReflectionSkyRadiance(ivec2 pixel, vec3 direction)
 NUM_THREADS(8, 8, 1)
 void main()
 {
-	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if(pixel.x >= int(u_lumen_view_size.x) || pixel.y >= int(u_lumen_view_size.y))
+	ivec2 trace_coord = ivec2(gl_GlobalInvocationID.xy);
+	if(any(greaterThanEqual(trace_coord, LumenReflectionTraceSize())))
 	{
 		return;
 	}
-	vec4 ray = texelFetch(s_lumen_reflection_ray, pixel, 0);
+	vec4 ray = texelFetch(s_lumen_reflection_ray, trace_coord, 0);
 	if(ray.w <= 0.0)
 	{
 		return;
 	}
-	float screen = imageLoad(s_lumen_reflection_hit_rw, pixel).x;
+	float screen = imageLoad(s_lumen_reflection_hit_rw, trace_coord).x;
 	if(screen < 0.0)
 	{
 		return;
 	}
+	ivec2 pixel = LumenReflectionTracePixel(trace_coord);
 	vec3 direction = normalize(ray.xyz);
 	float depth01 = texelFetch(s_lumen_depth, pixel, 0).x;
 	vec3 position = LumenWorldFromDepth(LumenPixelUv(pixel), depth01);
@@ -167,6 +168,6 @@ void main()
 	{
 		radiance *= LUMEN_REFLECTION_MAX_RAY_INTENSITY / max_channel;
 	}
-	imageStore(s_lumen_reflection_radiance_out, pixel, vec4(radiance, 0.0));
-	imageStore(s_lumen_reflection_hit_rw, pixel, vec4(LumenEncodeRayDistance(hit_distance, hit.hit), 0.0, 0.0, 0.0));
+	imageStore(s_lumen_reflection_radiance_out, trace_coord, vec4(radiance, 0.0));
+	imageStore(s_lumen_reflection_hit_rw, trace_coord, vec4(LumenEncodeRayDistance(hit_distance, hit.hit), 0.0, 0.0, 0.0));
 }

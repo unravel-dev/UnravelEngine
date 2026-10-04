@@ -41,7 +41,7 @@ SHARED float s_frames;
 vec4 LumenProbeIrradiance(LumenCard card, vec4 uv_rect, vec4 page, ivec2 probe_cell_in_page, ivec2 jitter,
                           float weight, vec3 position, vec3 normal)
 {
-	ivec2 cell_origin = ivec2(page.xy) + probe_cell_in_page * LUMEN_RADIOSITY_PROBE_SPACING;
+	ivec2 cell_origin = ivec2(page.xy) + probe_cell_in_page * u_lumen_radiosity_spacing;
 	if(any(lessThan(probe_cell_in_page, ivec2(0, 0))) || any(greaterThanEqual(cell_origin, ivec2(page.xy + page.zw))))
 	{
 		return vec4_splat(0.0);
@@ -57,7 +57,7 @@ vec4 LumenProbeIrradiance(LumenCard card, vec4 uv_rect, vec4 page, ivec2 probe_c
 	{
 		return vec4_splat(0.0);
 	}
-	ivec2 probe_cell = cell_origin / LUMEN_RADIOSITY_PROBE_SPACING;
+	ivec2 probe_cell = cell_origin / u_lumen_radiosity_spacing;
 	vec4 transfer = LumenSH2DiffuseTransfer(normal);
 	vec3 irradiance = vec3(dot(texelFetch(s_lumen_radiosity_sh_r, probe_cell, 0), transfer),
 	                       dot(texelFetch(s_lumen_radiosity_sh_g, probe_cell, 0), transfer),
@@ -102,9 +102,10 @@ void main()
 	vec3 normal = decodeNormalOctahedron(texelFetch(s_lumen_card_normal, texel, 0).xy);
 	ivec2 jitter = LumenRadiosityJitter(t0.w);
 	// Expanded bilinear over the four nearest probes (UE BilinearExpand).
+	int spacing = u_lumen_radiosity_spacing;
 	ivec2 texel_in_page = max(texel - ivec2(page.xy) - jitter, ivec2(0, 0));
-	ivec2 p00 = texel_in_page / LUMEN_RADIOSITY_PROBE_SPACING;
-	vec2 f = (vec2(texel_in_page - p00 * LUMEN_RADIOSITY_PROBE_SPACING) + 1.0) / float(LUMEN_RADIOSITY_PROBE_SPACING + 2);
+	ivec2 p00 = texel_in_page / spacing;
+	vec2 f = (vec2(texel_in_page - p00 * spacing) + 1.0) / float(spacing + 2);
 	vec4 sum = LumenProbeIrradiance(card, uv_rect, page, p00, jitter, (1.0 - f.x) * (1.0 - f.y), position, normal);
 	sum += LumenProbeIrradiance(card, uv_rect, page, p00 + ivec2(1, 0), jitter, f.x * (1.0 - f.y), position, normal);
 	sum += LumenProbeIrradiance(card, uv_rect, page, p00 + ivec2(0, 1), jitter, (1.0 - f.x) * f.y, position, normal);

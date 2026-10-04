@@ -2,20 +2,30 @@
 #define __LUMEN_RADIOSITY_COMMON_SH__
 
 /*
- * Lumen surface cache radiosity, shared layout (UE 5.8 LumenRadiosity.ush / LumenRadiosity.usf, Epic):
- * probes every LUMEN_RADIOSITY_PROBE_SPACING card texels, each at its cell's texel offset by a jitter that
- * cycles over four updates of the page (a Latin square), tracing LUMEN_RADIOSITY_RAYS_PER_AXIS^2 stratified,
- * noise-jittered uniform hemisphere rays. With the spacing equal to the rays per axis, a probe's traces fill
- * exactly its own cell of an atlas the size of the physical atlas.
+ * Lumen surface cache radiosity, shared layout (UE 5.8 LumenRadiosity.ush / LumenRadiosity.usf, Epic): probes every
+ * u_lumen_radiosity_spacing card texels (4; 2 from the surface cache lighting quality 6), each at its cell's texel
+ * offset by a jitter that cycles over four updates of the page, tracing u_lumen_radiosity_resolution^2 stratified,
+ * noise-jittered uniform hemisphere rays (2 x 2 to 8 x 8 with the lighting quality, 4 x 4 at 1;
+ * lumen_pass::get_radiosity_layout). A probe's traces fill an R x R tile of the trace atlas at its cell coordinate x R
+ * (UE RadiosityProbeTracingAtlas, (atlas / spacing) x R per axis).
  *
- * Work is scheduled in card tiles of 8 x 8 texels (2 x 2 probes); a tile record is 3 vec4: (tile origin in
- * the atlas xy, card index, the page's update index), the page's card UV rectangle, (page atlas origin xy,
- * page size xy).
+ * Work is scheduled in card tiles of LUMEN_RADIOSITY_TILE_TEXELS^2 texels ((8 / spacing)^2 probes); a tile record is
+ * 3 vec4: (tile origin in the atlas xy, card index, the page's update index), the page's card UV rectangle, (page
+ * atlas origin xy, page size xy). The trace and the filter run groups of LUMEN_RADIOSITY_GROUP_THREADS over a tile's
+ * traces, probe-major.
  */
 
-#define LUMEN_RADIOSITY_PROBE_SPACING 4
-#define LUMEN_RADIOSITY_RAYS_PER_AXIS 4
-#define LUMEN_RADIOSITY_RAY_COUNT 16
+/// x = the ray clamp in cached units (MaxRayIntensity / the view's pre-exposure; the trace), y = the probe spacing in
+/// card texels, z = the rays per axis of a probe's hemisphere.
+uniform vec4 u_lumen_radiosity;
+
+#define u_lumen_radiosity_max_ray_intensity u_lumen_radiosity.x
+#define u_lumen_radiosity_spacing           int(u_lumen_radiosity.y)
+#define u_lumen_radiosity_resolution        int(u_lumen_radiosity.z)
+
+/// The card tile's edge in texels (the lighting kernels' 8 x 8 tiles) and the threads of a trace or filter group.
+#define LUMEN_RADIOSITY_TILE_TEXELS 8
+#define LUMEN_RADIOSITY_GROUP_THREADS 64
 #define LUMEN_RADIOSITY_TILE_STRIDE 3
 /// MaxFramesAccumulated with r.LumenScene.Radiosity.Temporal.
 #define LUMEN_RADIOSITY_MAX_FRAMES 4.0
@@ -32,24 +42,32 @@
 #define LUMEN_RADIOSITY_PLANE_MIN_REL 0.1
 #define LUMEN_TWO_PI 6.28318531
 
-/// The probe jitter of update @p index: Hammersley16(i % 4, 4, (0x4ae4, 0x9bdb)) x 4.
+/// The probe jitter of update @p index (UE GetProbeJitter): Hammersley16(i % 4, 4, (0x4ae4, 0x9bdb)) x the spacing,
+/// truncated - (1, 2), (2, 0), (3, 3), (0, 1) at a spacing of 4.
 ivec2 LumenRadiosityJitter(float index)
 {
-	int i = int(mod(index, 4.0));
-	ivec2 jitter = ivec2(0, 1);
-	if(i == 0)
-	{
-		jitter = ivec2(1, 2);
-	}
-	else if(i == 1)
-	{
-		jitter = ivec2(2, 0);
-	}
-	else if(i == 2)
-	{
-		jitter = ivec2(3, 3);
-	}
-	return jitter;
+	uint frame = uint(mod(index, LUMEN_RADIOSITY_MAX_FRAMES));
+	vec2 hammersley = Hammersley16(frame, uint(LUMEN_RADIOSITY_MAX_FRAMES), uvec2(0x4ae4u, 0x9bdbu));
+	return ivec2(hammersley * float(u_lumen_radiosity_spacing));
+}
+
+/// The probes along a card tile's axis.
+int LumenRadiosityProbesPerTileAxis()
+{
+	return LUMEN_RADIOSITY_TILE_TEXELS / u_lumen_radiosity_spacing;
+}
+
+/// The (x, y) of @p index in a row-major grid @p width wide.
+ivec2 LumenRadiosityGridCoord(int index, int width)
+{
+	int row = index / width;
+	return ivec2(index - row * width, row);
+}
+
+/// The trace atlas texel of trace @p trace_texel of the probe at card cell @p probe_cell.
+ivec2 LumenRadiosityTraceTexel(ivec2 probe_cell, ivec2 trace_texel)
+{
+	return probe_cell * u_lumen_radiosity_resolution + trace_texel;
 }
 
 /// UE UniformSampleHemisphere: z = cos theta uniform in [0, 1).
@@ -80,7 +98,7 @@ vec3 LumenTangentToWorld(vec3 n, vec3 v)
 vec3 LumenRadiosityRayDirection(vec3 normal, ivec2 probe_cell, ivec2 trace_texel, float index)
 {
 	vec2 noise = SpatioTemporalNoise2D(vec2(probe_cell), index);
-	vec2 e = (vec2(trace_texel) + noise) / float(LUMEN_RADIOSITY_RAYS_PER_AXIS);
+	vec2 e = (vec2(trace_texel) + noise) / float(u_lumen_radiosity_resolution);
 	return LumenTangentToWorld(normal, LumenUniformSampleHemisphere(e));
 }
 

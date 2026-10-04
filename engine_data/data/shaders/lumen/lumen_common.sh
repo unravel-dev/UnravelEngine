@@ -31,7 +31,8 @@ uniform vec4 u_lumen_view;
 /// (experiment toggles).
 uniform vec4 u_lumen_options;
 /// The view's GI settings (lumen_pass::make_settings_uniform): x = the farthest a ray travels in metres, y = the
-/// frames the gather's temporal accumulates at most, z = the roughness below which pixels trace reflection rays.
+/// frames the gather's temporal accumulates at most, z = the roughness below which pixels trace reflection rays,
+/// w = the integrate's full-resolution jitter in probe tiles.
 uniform vec4 u_lumen_settings;
 
 #define u_lumen_frame_index       u_lumen_frame.x
@@ -49,6 +50,7 @@ uniform vec4 u_lumen_settings;
 #define u_lumen_max_trace_distance     u_lumen_settings.x
 #define u_lumen_temporal_max_frames    u_lumen_settings.y
 #define u_lumen_max_roughness_to_trace u_lumen_settings.z
+#define u_lumen_full_res_jitter_width  u_lumen_settings.w
 
 /// Two noise values per pixel and frame in the role of UE's spatiotemporal blue noise (BlueNoiseVec2):
 /// SpatioTemporalNoise2D over the frame index, so any window of frames stratifies a pixel's samples.
@@ -198,8 +200,9 @@ vec3 LumenWorldFromDepth(vec2 uv, float depth01)
 	return clipToWorld(u_invViewProj, clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(depth01))));
 }
 
-/// One probe ray slot: the octahedral texel it traces and its level (1 = an 8x8 texel, 0 = a 16x16 texel,
-/// a quarter of an 8x8 one), packed as x | y << 6 | level << 12 (UE LumenScreenProbeTracingCommon.ush:67-78).
+/// One probe ray slot: the octahedral texel it traces and its level (1 = a texel of the probe's N x N map,
+/// N = LUMEN_PROBE_TRACE_RES; 0 = a texel of the 2N x 2N map, a quarter of one), packed as
+/// x | y << 6 | level << 12 (UE LumenScreenProbeTracingCommon.ush:67-78).
 uint LumenPackRay(ivec2 texel, int level)
 {
 	return uint(texel.x & 63) | (uint(texel.y & 63) << 6u) | (uint(level & 15) << 12u);
@@ -218,7 +221,7 @@ int LumenRayResolution(int level)
 }
 
 /// The ray slot @p slot of a probe traces: its importance-sampled assignment when the ray generator ran,
-/// else the slot's own 8x8 texel. @p ray_info is the generator's output value.
+/// else the slot's own texel. @p ray_info is the generator's output value.
 ivec3 LumenProbeRaySlot(ivec2 slot, float ray_info)
 {
 	return u_lumen_importance_sampling ? LumenUnpackRay(uint(ray_info)) : ivec3(slot, 1);

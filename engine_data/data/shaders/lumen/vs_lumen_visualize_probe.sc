@@ -4,10 +4,10 @@ $output v_sphere, v_world_position, v_probe
  * UE 5.8's probe visualizations as spheres, drawn without vertex buffers: 36 vertices of a cube around each probe
  * slot's sphere, which the pixel shader ray-casts.
  *  mode 0, the radiosity probes (r.LumenScene.Radiosity.VisualizeProbes: Radiosity/LumenVisualizeRadiosityProbes.usf
- *          BuildVisualizeProbesCS + VisualizeRadiosityProbesVS): a resident page has a slot per 4x4 cell
- *          (LUMEN_RADIOSITY_PROBE_SPACING) of its texels; the probe sits at the mean world position of the cell's four
- *          middle texels the cards captured. It is valid when the jittered texel its last radiosity update traced
- *          from holds a surface; invalid probes show only on request.
+ *          BuildVisualizeProbesCS + VisualizeRadiosityProbesVS): a resident page has a slot per cell of
+ *          u_lumen_radiosity_spacing^2 of its texels (lumen_radiosity_common.sh); the probe sits at the mean world
+ *          position of the cell's (up to) four middle texels the cards captured. It is valid when the jittered texel
+ *          its last radiosity update traced from holds a surface; invalid probes show only on request.
  *  mode 1, the radiance cache probes (r.Lumen.RadianceCache.Visualize 1: LumenVisualizeRadianceCache.usf
  *          BuildProbeVisualizeBufferCS + VisualizeRadianceCacheVS): a slot per cell of the clipmaps drawn; a cell
  *          holding a probe draws it at its lattice point, a sphere of the radius scale x the clipmap's cell size.
@@ -69,9 +69,10 @@ void main()
 	vec4 page = b_lumen_visualize_pages[page_index * LUMEN_VISUALIZE_PAGE_STRIDE + 0];
 	vec4 uv_rect = b_lumen_visualize_pages[page_index * LUMEN_VISUALIZE_PAGE_STRIDE + 1];
 	vec4 owner = b_lumen_visualize_pages[page_index * LUMEN_VISUALIZE_PAGE_STRIDE + 2];
-	int cells_per_row = int(LUMEN_PHYSICAL_PAGE_SIZE) / LUMEN_RADIOSITY_PROBE_SPACING;
+	int spacing = u_lumen_radiosity_spacing;
+	int cells_per_row = int(LUMEN_PHYSICAL_PAGE_SIZE) / spacing;
 	ivec2 cell = ivec2(probe - (probe / cells_per_row) * cells_per_row, probe / cells_per_row);
-	ivec2 cells = ivec2(page.zw) / LUMEN_RADIOSITY_PROBE_SPACING;
+	ivec2 cells = ivec2(page.zw) / spacing;
 	// A slot without a probe collapses (UE: OutPosition = 0). No early return: bgfx's vertex main returns its
 	// varyings.
 	vec4 position = vec4_splat(0.0);
@@ -104,8 +105,8 @@ void main()
 	else if(cell.x < cells.x && cell.y < cells.y)
 	{
 		LumenCard card = LumenLoadCard(int(owner.x));
-		ivec2 cell_origin = ivec2(page.xy) + cell * LUMEN_RADIOSITY_PROBE_SPACING;
-		ivec2 lower = cell_origin + (LUMEN_RADIOSITY_PROBE_SPACING - 1) / 2;
+		ivec2 cell_origin = ivec2(page.xy) + cell * spacing;
+		ivec2 lower = cell_origin + (spacing - 1) / 2;
 		vec3 position_sum = vec3_splat(0.0);
 		float valid_texels = 0.0;
 		for(int i = 0; i < 4; ++i)
@@ -127,7 +128,7 @@ void main()
 			world = center + cube * radius;
 			position = mul(u_viewProj, vec4(world, 1.0));
 			sphere = vec4(center, radius);
-			probe_data = vec4(vec2(cell_origin / LUMEN_RADIOSITY_PROBE_SPACING), is_valid ? 1.0 : 0.0, 0.0);
+			probe_data = vec4(vec2(cell_origin / spacing), is_valid ? 1.0 : 0.0, 0.0);
 		}
 	}
 	gl_Position = position;

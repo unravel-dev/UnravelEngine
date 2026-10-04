@@ -37,7 +37,7 @@ bool LumenIsCoveredByEarlierCandidates(ivec2 pixel, float depth01, int sample_in
 	for(int corner = 0; corner < 4; ++corner)
 	{
 		ivec2 corner_tile = base + ivec2(corner & 1, corner >> 1);
-		uint corner_mask = b_lumen_adaptive[LUMEN_ADAPTIVE_MASK + LumenAdaptiveTileIndex(corner_tile)];
+		uint corner_mask = b_lumen_adaptive[LumenAdaptiveMaskEntry(LumenAdaptiveTileIndex(corner_tile))];
 		float corner_weight = 0.0;
 		for(int other = 0; other < sample_index; ++other)
 		{
@@ -79,7 +79,7 @@ void main()
 	BRANCH
 	if(all(lessThan(tile, u_lumen_probe_count)))
 	{
-		uint mask = b_lumen_adaptive[LUMEN_ADAPTIVE_MASK + LumenAdaptiveTileIndex(tile)];
+		uint mask = b_lumen_adaptive[LumenAdaptiveMaskEntry(LumenAdaptiveTileIndex(tile))];
 		if((mask & (1u << uint(sample_index))) != 0u)
 		{
 			pixel = LumenAdaptiveSamplePixel(tile, sample_index);
@@ -103,8 +103,8 @@ void main()
 	{
 		int tile_index = LumenAdaptiveTileIndex(tile);
 		uint tile_slot = 0u;
-		atomicFetchAndAdd(b_lumen_adaptive[LUMEN_ADAPTIVE_HEADER + tile_index], 1u, tile_slot);
-		b_lumen_adaptive[LUMEN_ADAPTIVE_INDICES + tile_index * LUMEN_ADAPTIVE_SAMPLES + int(tile_slot)] = probe;
+		atomicFetchAndAdd(b_lumen_adaptive[LumenAdaptiveCountEntry(tile_index)], 1u, tile_slot);
+		b_lumen_adaptive[LumenAdaptiveProbeEntry(tile_index, int(tile_slot))] = probe;
 		vec3 normal = decodeNormalOctahedron(texelFetch(s_lumen_normal, pixel, 0).xy);
 		imageStore(i_lumen_probe_records,
 		           LumenAdaptiveAtlasTile(int(probe)),

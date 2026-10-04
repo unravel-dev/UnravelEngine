@@ -2,17 +2,18 @@
  * Lumen screen probe gather, structured importance sampling: UE 5.8 ScreenProbeGatherScreenDataCS
  * (LumenScreenProbeGatherScreenData.usf:77-310), ScreenProbeComputeLightingProbabilityDensityFunctionCS
  * (LumenScreenProbeImportanceSampling.usf:36-193) and ScreenProbeGenerateRaysCS (:306-495), fused into one
- * 8x8 group per probe (an adaptive probe's footprint is centred on its own pixel):
+ * group per probe of one thread per octahedral texel, N x N = LUMEN_PROBE_TRACE_RES^2 (an adaptive probe's
+ * footprint is centred on its own pixel):
  *  1. BRDF PDF: the mean cosine lobe (SH3) of the 8x8 footprint pixels around the probe that lie on its
  *     plane - the pixels that will read it - and the disocclusion flag: at least 40% of them have fewer than
- *     4 frames of history.
+ *     4 frames of history. The footprint is 8x8 at every resolution: each thread takes its share of it.
  *  2. Lighting PDF per octahedral texel: last frame's filtered radiance of the 2x2 history probes around
  *     the probe's reprojection that lie on its plane, completed from the radiance cache where history is
  *     missing.
- *  3. Rays: texel PDF = BRDF x lighting x 64; texels with a BRDF PDF of at least LUMEN_IS_MIN_PDF_TO_TRACE
- *     keep at least that. The 64 texels are rank-sorted; every three lowest below the threshold are given
- *     to the highest remaining texel, which then traces four rays at the 16x16 level instead of one.
- * Writes the probe's 64 ray slots (texel x | y << 6 | level << 12; level 1 = 8x8 texel, 0 = 16x16) and the
+ *  3. Rays: texel PDF = BRDF x lighting x N^2; texels with a BRDF PDF of at least LUMEN_IS_MIN_PDF_TO_TRACE
+ *     keep at least that. The N^2 texels are rank-sorted; every three lowest below the threshold are given
+ *     to the highest remaining texel, which then traces four rays at the 2N x 2N level instead of one.
+ * Writes the probe's N^2 ray slots (texel x | y << 6 | level << 12; level 1 = N x N texel, 0 = 2N x 2N) and the
  * probe's disocclusion flag.
  */
 
@@ -52,8 +53,11 @@ uniform mat4 u_lumen_prev_inv_view_proj;
 #define u_lumen_pixel_history (u_lumen_ray_gen.y > 0.0)
 #define u_lumen_cache_valid   (u_lumen_ray_gen.z > 0.0)
 
-#define LUMEN_PROBE_TEXELS 64
-/// Reduced per footprint sample: 9 SH3 coefficients, the sample count, the young-sample count.
+#define LUMEN_PROBE_TEXELS (LUMEN_PROBE_TRACE_RES * LUMEN_PROBE_TRACE_RES)
+/// The footprint's pixels per axis (UE gathers 64 pixels per probe whatever its tracing resolution).
+#define LUMEN_FOOTPRINT_EDGE 8
+#define LUMEN_FOOTPRINT_SAMPLES (LUMEN_FOOTPRINT_EDGE * LUMEN_FOOTPRINT_EDGE)
+/// Reduced per thread: 9 SH3 coefficients, the sample count, the young-sample count.
 #define LUMEN_REDUCE_STRIDE 11
 
 SHARED float s_reduce[LUMEN_PROBE_TEXELS * LUMEN_REDUCE_STRIDE];
@@ -81,12 +85,13 @@ void LumenStoreFootprint(int index, LumenSH3 sh, float count, float young)
 }
 
 /// One footprint sample's contribution (UE ScreenData): x = 1 when the pixel lies on the probe's plane
-/// (or is the probe's own), y = 1 when it is young, and its normal for the BRDF SH.
-vec4 LumenFootprintSample(ivec2 probe_pixel, vec3 probe_position, float probe_depth, ivec2 local)
+/// (or is the probe's own), y = 1 when it is young, and its normal for the BRDF SH. @p footprint_texel is the
+/// sample's place in the 8x8 footprint.
+vec4 LumenFootprintSample(ivec2 probe_pixel, vec3 probe_position, float probe_depth, ivec2 footprint_texel)
 {
-	bool center = local.x == 4 && local.y == 4;
+	bool center = footprint_texel.x == LUMEN_FOOTPRINT_EDGE / 2 && footprint_texel.y == LUMEN_FOOTPRINT_EDGE / 2;
 	vec2 offset = center ? vec2_splat(0.0)
-	                     : ((vec2(local) + 0.5) / 8.0 * 2.0 - 1.0) * u_lumen_downsample;
+	                     : ((vec2(footprint_texel) + 0.5) / float(LUMEN_FOOTPRINT_EDGE) * 2.0 - 1.0) * u_lumen_downsample;
 	ivec2 pixel = clamp(probe_pixel + ivec2(offset), ivec2(0, 0), ivec2(u_lumen_view_size) - ivec2(1, 1));
 	float depth01 = texelFetch(s_lumen_depth, pixel, 0).x;
 	if(depth01 >= 1.0)
@@ -181,7 +186,7 @@ void LumenReduceSum(int index)
 	}
 }
 
-NUM_THREADS(8, 8, 1)
+NUM_THREADS(LUMEN_PROBE_TRACE_RES, LUMEN_PROBE_TRACE_RES, 1)
 void main()
 {
 	ivec2 tile = ivec2(gl_WorkGroupID.xy);
@@ -194,12 +199,29 @@ void main()
 	float probe_depth = max(record.x, 1e-4);
 	vec3 probe_position = LumenWorldFromDepth(LumenPixelUv(probe_pixel), record.w);
 	vec3 probe_normal = LumenProbeNormal(record);
-	vec4 footprint = valid ? LumenFootprintSample(probe_pixel, probe_position, probe_depth, local) : vec4_splat(0.0);
-	LumenSH3 lobe = LumenDiffuseTransferSH3(decodeNormalOctahedron(footprint.zw));
-	lobe.v0 *= footprint.x;
-	lobe.v1 *= footprint.x;
-	lobe.v2 *= footprint.x;
-	LumenStoreFootprint(index, lobe, footprint.x, footprint.x * footprint.y);
+	// This thread's footprint samples: one at 8 x 8, four at 4 x 4, the first 64 threads' at 16 x 16.
+	LumenSH3 lobe;
+	lobe.v0 = vec4_splat(0.0);
+	lobe.v1 = vec4_splat(0.0);
+	lobe.v2 = 0.0;
+	float footprint_count = 0.0;
+	float footprint_young = 0.0;
+	BRANCH
+	if(valid)
+	{
+		for(int footprint_index = index; footprint_index < LUMEN_FOOTPRINT_SAMPLES; footprint_index += LUMEN_PROBE_TEXELS)
+		{
+			ivec2 footprint_texel = ivec2(footprint_index % LUMEN_FOOTPRINT_EDGE, footprint_index / LUMEN_FOOTPRINT_EDGE);
+			vec4 footprint = LumenFootprintSample(probe_pixel, probe_position, probe_depth, footprint_texel);
+			LumenSH3 sample_lobe = LumenDiffuseTransferSH3(decodeNormalOctahedron(footprint.zw));
+			lobe.v0 += sample_lobe.v0 * footprint.x;
+			lobe.v1 += sample_lobe.v1 * footprint.x;
+			lobe.v2 += sample_lobe.v2 * footprint.x;
+			footprint_count += footprint.x;
+			footprint_young += footprint.x * footprint.y;
+		}
+	}
+	LumenStoreFootprint(index, lobe, footprint_count, footprint_young);
 	barrier();
 	for(int stride = LUMEN_PROBE_TEXELS / 2; stride > 0; stride >>= 1)
 	{

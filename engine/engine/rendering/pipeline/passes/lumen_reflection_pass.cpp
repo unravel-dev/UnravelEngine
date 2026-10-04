@@ -24,9 +24,6 @@ using lumen_pass::divide_round_up;
 using lumen_pass::ensure_texture;
 using lumen_pass::group_edge;
 using lumen_pass::has_view_size;
-
-/// The noise sequences' frame period (UE ReflectionsStateFrameIndexMod8).
-constexpr uint32_t reflection_state_frame_period = 8;
 } // namespace
 
 void lumen_reflection_pass::uniforms::cache_uniforms()
@@ -34,6 +31,7 @@ void lumen_reflection_pass::uniforms::cache_uniforms()
     cache_uniform(nullptr, u_lumen_frame, "u_lumen_frame", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_view, "u_lumen_view", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_reflection, "u_lumen_reflection", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, u_lumen_reflection_quality, "u_lumen_reflection_quality", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_settings, "u_lumen_settings", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_prev_view_proj, "u_lumen_prev_view_proj", bgfx::UniformType::Mat4);
     cache_uniform(nullptr, u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
@@ -103,7 +101,13 @@ auto lumen_reflection_pass::get_max_roughness_to_trace(const gi_settings::reflec
     return lumen_pass::get_max_roughness_to_trace(settings);
 }
 
-auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview, const usize32_t& size) -> frame_targets
+auto lumen_reflection_pass::get_trace_size(const usize32_t& view_size, uint32_t downsample) -> usize32_t
+{
+    return {divide_round_up(view_size.width, downsample), divide_round_up(view_size.height, downsample)};
+}
+
+auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview, const usize32_t& size, const usize32_t& trace_size)
+    -> frame_targets
 {
     // The history ping-pong continues only from the frame right before this one (the previous depth it is
     // validated against is always that frame's).
@@ -117,9 +121,9 @@ auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview, const usize
     const std::string write_set = even_frame ? "_A" : "_B";
     const std::string read_set = even_frame ? "_B" : "_A";
     frame_targets targets;
-    targets.ray = ensure_texture(rview, ray_texture, size, bgfx::TextureFormat::RGBA16F);
-    targets.radiance = ensure_texture(rview, radiance_texture, size, bgfx::TextureFormat::RGBA16F);
-    targets.hit = ensure_texture(rview, hit_texture, size, bgfx::TextureFormat::R32F);
+    targets.ray = ensure_texture(rview, ray_texture, trace_size, bgfx::TextureFormat::RGBA16F);
+    targets.radiance = ensure_texture(rview, radiance_texture, trace_size, bgfx::TextureFormat::RGBA16F);
+    targets.hit = ensure_texture(rview, hit_texture, trace_size, bgfx::TextureFormat::R32F);
     targets.resolved = ensure_texture(rview, "LUMEN_REFLECTION_RESOLVED", size, bgfx::TextureFormat::RGBA16F);
     targets.history_write =
         ensure_texture(rview, "LUMEN_REFLECTION_HISTORY" + write_set, size, bgfx::TextureFormat::RGBA16F);
@@ -135,7 +139,7 @@ void lumen_reflection_pass::set_frame_uniforms(const run_params& params, const f
 {
     const auto& gather = *params.gather;
     const uint32_t frame = gfx::get_render_frame();
-    const float frame_values[4] = {float(frame), float(frame % reflection_state_frame_period), 0.0f, 0.0f};
+    const float frame_values[4] = {float(frame), float(frame % state_frame_period), 0.0f, 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_frame, frame_values);
     const float view[4] = {float(view_size_.width),
                            float(view_size_.height),
@@ -154,6 +158,11 @@ void lumen_reflection_pass::set_frame_uniforms(const run_params& params, const f
                                  get_max_roughness_to_trace(gather.settings.reflections),
                                  targets.has_history && gather.prev_depth ? 1.0f : 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_reflection, reflection);
+    const float quality[4] = {float(downsample_),
+                              float(lumen_pass::get_reflection_reconstruction_samples(gather.settings.reflections)),
+                              0.0f,
+                              0.0f};
+    gfx::set_uniform(uniforms_.u_lumen_reflection_quality, quality);
     gfx::set_uniform(uniforms_.u_lumen_settings, lumen_pass::make_settings_uniform(gather.settings).data());
     gfx::set_uniform(uniforms_.u_lumen_prev_view_proj, gather.cam->get_prev_view_projection_unjittered().get_matrix());
     gfx::set_uniform(uniforms_.u_pre_exposure, gather.pre_exposure.to_uniform().data());
@@ -180,8 +189,8 @@ void lumen_reflection_pass::run_screen(const run_params& params, const frame_tar
     set_frame_uniforms(params, targets);
     bgfx::dispatch(pass.id,
                    screen_program_->native_handle(),
-                   divide_round_up(view_size_.width, group_edge),
-                   divide_round_up(view_size_.height, group_edge),
+                   divide_round_up(trace_size_.width, group_edge),
+                   divide_round_up(trace_size_.height, group_edge),
                    1);
     screen_program_->end();
 }
@@ -211,8 +220,8 @@ void lumen_reflection_pass::run_world(const run_params& params, const frame_targ
     gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
     bgfx::dispatch(pass.id,
                    world_program_->native_handle(),
-                   divide_round_up(view_size_.width, group_edge),
-                   divide_round_up(view_size_.height, group_edge),
+                   divide_round_up(trace_size_.width, group_edge),
+                   divide_round_up(trace_size_.height, group_edge),
                    1);
     world_program_->end();
 }
@@ -307,7 +316,10 @@ auto lumen_reflection_pass::run(gfx::render_view& rview, const run_params& param
     {
         return false;
     }
-    const auto targets = acquire_targets(rview, view_size_);
+    downsample_ = lumen_pass::get_reflection_downsample_factor(gather->settings.reflections);
+    trace_size_ = get_trace_size(view_size_, downsample_);
+    rview.data_get_or_emplace(downsample_key, 1u) = downsample_;
+    const auto targets = acquire_targets(rview, view_size_, trace_size_);
     run_screen(params, targets);
     run_world(params, targets);
     run_resolve(params, targets);

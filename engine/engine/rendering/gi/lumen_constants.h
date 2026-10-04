@@ -292,14 +292,20 @@
       "frames", "r.Lumen.Reflections.Temporal.MaxFramesAccumulated"                                \
       " (R/LumenReflections.cpp:154)")                                                             \
     X(LUMEN_REFLECTION_TEMPORAL_MIRROR_FRAMES, 2.0f,                                               \
-      "frames", "mirror pixels accumulate lerp(this, max, roughness / 0.05) frames"                \
-      " (S/LumenReflectionDenoiserTemporal.usf:410-414)")                                          \
+      "frames", "mirror pixels accumulate lerp(this, max, roughness / 0.05) frames while the"      \
+      " traces run at full resolution (S/LumenReflectionDenoiserTemporal.usf:410-414)")            \
     X(LUMEN_REFLECTION_TEMPORAL_DISTANCE_THRESHOLD, 0.03f,                                         \
       "ratio", "r.Lumen.Reflections.Temporal.DistanceThreshold: surface history taps farther"      \
       " than this share of the depth are disoccluded (R/LumenReflections.cpp:171)")                \
     X(LUMEN_REFLECTION_NEIGHBORHOOD_CLAMP_SCALE, 1.0f,                                             \
       "sigma", "r.Lumen.Reflections.Temporal.NeighborhoodClampScale"                               \
       " (R/LumenReflections.cpp:160)")                                                             \
+    X(LUMEN_REFLECTION_RECONSTRUCTED_CLAMP_SCALE, 2.0f,                                            \
+      "", "pixels the downsampled traces skip widen the history clamp by this: their"              \
+      " neighbourhood has no traced centre (S/LumenReflectionDenoiserTemporal.usf:486-490)")       \
+    X(LUMEN_REFLECTION_RECONSTRUCTED_HISTORY_FRAMES, 4.0f,                                         \
+      "frames", "pixels the downsampled traces skip blend 1 / (N + this) of this frame, leaning"   \
+      " on the history (S/LumenReflectionDenoiserTemporal.usf:540-543)")                           \
     X(LUMEN_REFLECTION_SPATIAL_KERNEL_RADIUS, 8.0f,                                                \
       "px", "r.Lumen.Reflections.BilateralFilter.KernelRadius, x saturate(8 roughness)"            \
       " (R/LumenReflections.cpp:248)")                                                             \

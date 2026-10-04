@@ -5,6 +5,7 @@
 #include <engine/rendering/gi/gi_project_settings.h>
 #include <engine/rendering/gi/lumen_scene.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/passes/lumen_pass_common.h>
 #include <engine/rendering/pipeline/passes/tonemapping_pass.h>
 
 #include <base/basetypes.hpp>
@@ -199,6 +200,11 @@ public:
     {
         return channel == 0 ? radiosity_sh_r_ : channel == 1 ? radiosity_sh_g_ : radiosity_sh_b_;
     }
+    /// The radiosity probes' layout the SH atlases hold (the view's surface cache lighting quality).
+    auto get_radiosity_layout() const -> const lumen_pass::radiosity_layout&
+    {
+        return radiosity_layout_;
+    }
     /// lumen_scene::get_visualized_pages.
     void get_visualized_pages(std::vector<math::vec4>& out) const
     {
@@ -299,6 +305,8 @@ private:
     void update_object_grid(const surface_cache_system& gi_scene, const surface_cache_view& view_cache);
     void dispatch_direct(const lighting_inputs& inputs, uint32_t first, uint32_t count);
     void dispatch_radiosity(const lighting_inputs& inputs, uint32_t first, uint32_t count);
+    /// The radiosity's trace and SH atlases for @p layout: (atlas / spacing) x the rays per axis, atlas / spacing.
+    void ensure_radiosity_targets(const lumen_pass::radiosity_layout& layout);
 
     uniforms uniforms_;
     gpu_program::ptr copy_program_;
@@ -324,6 +332,8 @@ private:
     gfx::texture::ptr radiosity_sh_g_;
     gfx::texture::ptr radiosity_sh_b_;
     gfx::texture::ptr radiosity_frames_;
+    /// The probes the radiosity atlases are laid out for (ensure_radiosity_targets).
+    lumen_pass::radiosity_layout radiosity_layout_{};
     ///< Capture-atlas sized: the resampled direct and indirect lighting, and the update count per 8x8 tile.
     gfx::texture::ptr resample_direct_;
     gfx::texture::ptr resample_indirect_;

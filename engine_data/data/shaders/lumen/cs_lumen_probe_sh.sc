@@ -1,9 +1,9 @@
 /*
  * Lumen screen probe gather, SH3 projection (UE 5.8 ScreenProbeConvertToIrradianceCS,
- * LumenScreenProbeFiltering.usf:597-998, IrradianceFormat 0 at Epic). One 8x8 group per probe:
- * the 64 filtered radiance texels, at their texel-centre directions (equal solid angle each), project
- * onto the nine SH3 basis functions with uniform 1/64 weights - 1/(4 pi) of the true projection, which
- * the integrate's 4 pi undoes.
+ * LumenScreenProbeFiltering.usf:597-998, IrradianceFormat 0 at Epic). One group per probe of one thread per
+ * texel: the N^2 = LUMEN_PROBE_TRACE_RES^2 filtered radiance texels, at their texel-centre directions (equal solid
+ * angle each), project onto the nine SH3 basis functions with uniform 1/N^2 weights - 1/(4 pi) of the true
+ * projection, which the integrate's 4 pi undoes.
  *
  * Writes LUMEN_SH_TEXELS_PER_PROBE texels per probe along x: [0] = (c0 rgb, 0), then per colour
  * channel c: [1 + 2c] = (c1, c2, c3, c4), [2 + 2c] = (c5, c6, c7, c8). Unlit probes write zeros.
@@ -46,7 +46,7 @@ float LumenChannel(vec3 value, int channel)
 	return channel == 0 ? value.x : (channel == 1 ? value.y : value.z);
 }
 
-/// One channel's coefficient @p k projected over the 64 texels, with the uniform 1/64 weight.
+/// One channel's coefficient @p k projected over the probe's texels, with the uniform 1/N^2 weight.
 float LumenProjectCoefficient(int channel, int k)
 {
 	float sum = 0.0;
@@ -69,7 +69,7 @@ vec4 LumenPackShTexel(int slot)
 	return vec4(s_coefficients[first], s_coefficients[first + 1], s_coefficients[first + 2], s_coefficients[first + 3]);
 }
 
-NUM_THREADS(8, 8, 1)
+NUM_THREADS(LUMEN_PROBE_TRACE_RES, LUMEN_PROBE_TRACE_RES, 1)
 void main()
 {
 	ivec2 tile = ivec2(gl_WorkGroupID.xy);
@@ -82,9 +82,11 @@ void main()
 	s_radiance[index] = valid ? radiance : vec3_splat(0.0);
 	LumenStoreBasis(index, LumenEquiAreaSphericalMapping((vec2(texel) + 0.5) / float(LUMEN_PROBE_TRACE_RES)));
 	barrier();
-	if(index < LUMEN_SH3_CHANNEL_COEFFICIENTS)
+	// 27 coefficients: a 4 x 4 group projects up to two per thread.
+	for(int coefficient = index; coefficient < LUMEN_SH3_CHANNEL_COEFFICIENTS; coefficient += LUMEN_PROBE_TEXELS)
 	{
-		s_coefficients[index] = LumenProjectCoefficient(index / LUMEN_SH3_COEFFICIENTS, index % LUMEN_SH3_COEFFICIENTS);
+		s_coefficients[coefficient] =
+		    LumenProjectCoefficient(coefficient / LUMEN_SH3_COEFFICIENTS, coefficient % LUMEN_SH3_COEFFICIENTS);
 	}
 	barrier();
 	if(index < LUMEN_SH_TEXELS_PER_PROBE)

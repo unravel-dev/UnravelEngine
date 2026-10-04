@@ -44,7 +44,8 @@ uniform vec4 u_clipmap_compose_origin;
 /// The voxel box this dispatch composes: xyz = its minimum corner in level voxels. A full
 /// recompose is one box over the whole level; a SCROLL-ONLY recompose (the origin moved with
 /// the instance content unchanged - global_sdf_clipmap::level::scroll_only) blits the overlap
-/// of the old and new windows into place and dispatches only the exposed slabs.
+/// of the old and new windows into place and dispatches only the exposed slabs. w = the scale of the smallest object
+/// a Lumen cascade keeps (global_sdf_clipmap::settings::object_radius_scale, 1 / the scene detail).
 uniform vec4 u_clipmap_compose_range;
 /// xyz = the box's size in voxels.
 uniform vec4 u_clipmap_compose_range_size;
@@ -126,8 +127,8 @@ void main()
 						{
 							if(!SdfLumenCascadeKeepsInstance(inst,
 							                                 u_compose_voxel_size,
-							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS,
-							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS_VOXELS))
+							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS * u_clipmap_compose_range.w,
+							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS_VOXELS * u_clipmap_compose_range.w))
 							{
 								continue;
 							}

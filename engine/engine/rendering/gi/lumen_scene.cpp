@@ -45,6 +45,9 @@ constexpr float k_max_lighting_update_speed = 16.0f;
 /// The surface cache resolution's range (UE FPostProcessSettings::LumenSurfaceCacheResolution).
 constexpr float k_min_surface_cache_resolution = 0.5f;
 constexpr float k_max_surface_cache_resolution = 1.0f;
+/// The scene detail's range for the cards (R/LumenSceneRendering.cpp:2167).
+constexpr float k_min_scene_detail = 0.125f;
+constexpr float k_max_scene_detail = 8.0f;
 /// The largest minimum card resolution (LumenScene::GetCardMinResolution).
 constexpr uint32_t k_max_card_min_resolution = 1024;
 /// Placements per resolution task (UE r.LumenScene.MeshCardsPerTask is 128 mesh cards).
@@ -214,11 +217,14 @@ auto lumen_scene::get_resolution_rule() const -> resolution_rule
     const float scale = std::clamp(view_settings_.surface_cache_resolution,
                                    k_min_surface_cache_resolution,
                                    k_max_surface_cache_resolution);
+    // UE LumenScene::GetCardMinResolution: the project's minimum over the scene detail, at the cache's resolution.
+    const float detail = std::clamp(view_settings_.detail, k_min_scene_detail, k_max_scene_detail);
     resolution_rule rule;
     rule.texel_density_scale = settings_.texel_density_scale * scale;
     rule.max_resolution = uint32_t(std::max(1l, std::lround(float(settings_.card_max_resolution) * scale)));
-    rule.min_resolution = uint32_t(
-        std::clamp(std::lround(float(settings_.card_min_resolution) * scale), 1l, long(k_max_card_min_resolution)));
+    rule.min_resolution = uint32_t(std::clamp(std::lround(float(settings_.card_min_resolution) / detail * scale),
+                                              1l,
+                                              long(k_max_card_min_resolution)));
     return rule;
 }
 

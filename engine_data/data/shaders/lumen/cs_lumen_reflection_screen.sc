@@ -1,7 +1,8 @@
 /*
- * Lumen reflections, ray generation and screen trace, fused per full-resolution pixel (UE 5.8
- * ReflectionGenerateRaysCS, LumenReflections.usf:301-436, then ClearTraces and ReflectionTraceScreenTexturesCS,
- * LumenReflectionTracing.usf:34-229). Epic traces every pixel, so there is no downsampling or tile jitter.
+ * Lumen reflections, ray generation and screen trace, fused per trace texel (UE 5.8 ReflectionGenerateRaysCS,
+ * LumenReflections.usf:301-436, then ClearTraces and ReflectionTraceScreenTexturesCS, LumenReflectionTracing.usf
+ * :34-229). Epic traces every pixel; at the lowest reflection quality one pixel of each 2 x 2 block traces
+ * (LumenReflectionTracePixel), and the resolve reconstructs the others.
  *
  * A pixel traces when its traced weight (LumenReflectionFadeAlpha) is positive: the mirror direction below
  * LUMEN_REFLECTION_MIRROR_ROUGHNESS, otherwise one GGX visible-normal sample of spatiotemporal noise
@@ -72,26 +73,27 @@ vec3 LumenClampRayIntensity(vec3 color)
 NUM_THREADS(8, 8, 1)
 void main()
 {
-	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-	if(pixel.x >= int(u_lumen_view_size.x) || pixel.y >= int(u_lumen_view_size.y))
+	ivec2 trace_coord = ivec2(gl_GlobalInvocationID.xy);
+	if(any(greaterThanEqual(trace_coord, LumenReflectionTraceSize())))
 	{
 		return;
 	}
+	ivec2 pixel = LumenReflectionTracePixel(trace_coord);
 	float depth01 = texelFetch(s_lumen_depth, pixel, 0).x;
 	vec4 gbuffer1 = texelFetch(s_lumen_normal, pixel, 0);
 	float roughness = gbuffer1.w;
 	if(depth01 >= 1.0 || LumenReflectionFadeAlpha(roughness) <= 0.0)
 	{
-		imageStore(s_lumen_reflection_ray_out, pixel, vec4_splat(0.0));
-		imageStore(s_lumen_reflection_radiance_out, pixel, vec4_splat(0.0));
-		imageStore(s_lumen_reflection_hit_out, pixel, vec4_splat(0.0));
+		imageStore(s_lumen_reflection_ray_out, trace_coord, vec4_splat(0.0));
+		imageStore(s_lumen_reflection_radiance_out, trace_coord, vec4_splat(0.0));
+		imageStore(s_lumen_reflection_hit_out, trace_coord, vec4_splat(0.0));
 		return;
 	}
 	vec2 uv = LumenPixelUv(pixel);
 	vec3 position = LumenWorldFromDepth(uv, depth01);
 	vec3 normal = normalize(decodeNormalOctahedron(gbuffer1.xy));
 	vec4 ray = LumenReflectionRay(pixel, position, normal, roughness);
-	imageStore(s_lumen_reflection_ray_out, pixel, ray);
+	imageStore(s_lumen_reflection_ray_out, trace_coord, ray);
 	vec3 radiance = vec3_splat(0.0);
 	float hit_distance = 0.0;
 	bool hit = false;
@@ -128,6 +130,6 @@ void main()
 	{
 		radiance = vec3(0.5, 0.0, 0.0) * u_pre_exposure_value;
 	}
-	imageStore(s_lumen_reflection_radiance_out, pixel, vec4(hit ? radiance : vec3_splat(0.0), 0.0));
-	imageStore(s_lumen_reflection_hit_out, pixel, vec4(LumenEncodeRayDistance(hit_distance, hit), 0.0, 0.0, 0.0));
+	imageStore(s_lumen_reflection_radiance_out, trace_coord, vec4(hit ? radiance : vec3_splat(0.0), 0.0));
+	imageStore(s_lumen_reflection_hit_out, trace_coord, vec4(LumenEncodeRayDistance(hit_distance, hit), 0.0, 0.0, 0.0));
 }

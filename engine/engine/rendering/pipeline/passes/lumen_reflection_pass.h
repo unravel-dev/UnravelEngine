@@ -17,8 +17,9 @@ namespace unravel
  *
  * Runs after the Lumen gather, whose rough specular fills the untraced layer: the pass owns both reflection
  * buffers, in place of SSR and the reflection probes (UE composites no other specular under Lumen's). The
- * constants and their UE sources are in engine/rendering/gi/lumen_constants.h; the plan and the measurements in
- * tasks/lumen_transform.
+ * reflection quality (gi_settings::reflection_settings::quality) sets the rays the resolve reuses and, at its
+ * lowest, traces one pixel of each 2 x 2 block (lumen_pass_common.h). The constants and their UE sources are in
+ * engine/rendering/gi/lumen_constants.h; the plan and the measurements in tasks/lumen_transform.
  */
 class lumen_reflection_pass
 {
@@ -38,12 +39,19 @@ public:
         gfx::texture::ptr probe_output;
     };
 
-    /// The render view's trace targets (lumen_reflection_common.sh: the ray, the trace hit, the trace radiance) and
-    /// the render frame they were last traced on (data_get).
+    /// The render view's trace targets (lumen_reflection_common.sh: the ray, the trace hit, the trace radiance), the
+    /// render frame they were last traced on and that frame's trace downsample factor (data_get).
     static constexpr const char* ray_texture = "LUMEN_REFLECTION_RAY";
     static constexpr const char* hit_texture = "LUMEN_REFLECTION_HIT";
     static constexpr const char* radiance_texture = "LUMEN_REFLECTION_RADIANCE";
     static constexpr const char* traced_frame_key = "LUMEN_REFLECTION_FRAME";
+    static constexpr const char* downsample_key = "LUMEN_REFLECTION_DOWNSAMPLE";
+    /// The period of the noise sequences and of the downsampled traces' pixel rotation, in frames (UE
+    /// ReflectionsStateFrameIndexMod8; lumen_reflection_common.sh reads frame % this as u_lumen_frame.y).
+    static constexpr uint32_t state_frame_period = 8;
+
+    /// The trace targets' size for a @p view_size view at the trace downsample factor @p downsample.
+    static auto get_trace_size(const usize32_t& view_size, uint32_t downsample) -> usize32_t;
 
     /// Experiment toggles (surface_cache_system::get_experiment_flags), above the gather's bits: each one
     /// changes one stage for an in-session A/B. Zero in production.
@@ -75,6 +83,7 @@ private:
         gfx::program::uniform_ptr u_lumen_frame;
         gfx::program::uniform_ptr u_lumen_view;
         gfx::program::uniform_ptr u_lumen_reflection;
+        gfx::program::uniform_ptr u_lumen_reflection_quality;
         gfx::program::uniform_ptr u_lumen_settings;
         gfx::program::uniform_ptr u_lumen_prev_view_proj;
         gfx::program::uniform_ptr u_pre_exposure;
@@ -117,7 +126,9 @@ private:
         bool has_history{};
     };
 
-    static auto acquire_targets(gfx::render_view& rview, const usize32_t& size) -> frame_targets;
+    /// The targets: the traces at @p trace_size, the denoisers at the view's @p size.
+    static auto acquire_targets(gfx::render_view& rview, const usize32_t& size, const usize32_t& trace_size)
+        -> frame_targets;
     /// Sets the per-frame uniforms every reflection program reads (lumen_reflection_common.sh).
     void set_frame_uniforms(const run_params& params, const frame_targets& targets) const;
     void run_screen(const run_params& params, const frame_targets& targets) const;
@@ -134,8 +145,10 @@ private:
 
     /// This frame's experiment toggles (enum experiment).
     uint32_t experiments_ = 0;
-    /// The view size the dispatches cover.
+    /// The view size the per-pixel dispatches cover, and this frame's trace size and downsample factor.
     usize32_t view_size_{};
+    usize32_t trace_size_{};
+    uint32_t downsample_ = 1;
 };
 
 } // namespace unravel

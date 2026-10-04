@@ -1,15 +1,16 @@
 /*
  * UE 5.8 r.Lumen.Reflections.VisualizeTraces (LumenReflectionTracing.usf VisualizeReflectionTracesCS): the reflection
- * ray this frame traced from the pixel under the cursor, as lines (lumen_visualize.sh) - from the pixel out to the
- * trace's distance in the radiance it brought back, and a LUMEN_VISUALIZE_CROSS_SIZE cross in yellow at its end - and
- * UE's text: the pixel, then the trace's distance and radiance. A pixel that traces no ray (UE: no positive tracing
- * depth) writes no lines and only the pixel. The text starts at (0.1, 0.1) of the view as UE's does, below the
- * probe counts while they print there too.
+ * ray this frame traced for the pixel under the cursor - from the trace texel the pixel falls in, so from the pixel
+ * of its 2 x 2 block that traced at the lowest reflection quality - as lines (lumen_visualize.sh): from the traced
+ * pixel out to the trace's distance in the radiance it brought back, and a LUMEN_VISUALIZE_CROSS_SIZE cross in yellow
+ * at its end. UE's text: the trace texel ("Pixel", the pixel at full resolution), then the trace's distance and
+ * radiance. A trace texel without a ray (UE: no positive tracing depth) writes no lines and only the texel. The text
+ * starts at (0.1, 0.1) of the view as UE's does, below the probe counts while they print there too.
  */
 
 #include "bgfx_compute.sh"
 #include "../common.sh"
-#include "lumen/lumen_common.sh"
+#include "lumen/lumen_reflection_common.sh"
 #include "lumen/lumen_visualize.sh"
 
 /// The reflection pass's trace targets (lumen_reflection_common.sh) and the scene's device depth.
@@ -39,8 +40,9 @@ void LumenWriteLine(int segment, vec3 start, vec3 delta, vec3 color)
 NUM_THREADS(1, 1, 1)
 void main()
 {
-	ivec2 pixel = ivec2(u_lumen_visualize_reflection.xy);
-	vec4 ray = texelFetch(s_lumen_reflection_ray, pixel, 0);
+	ivec2 trace = ivec2(u_lumen_visualize_reflection.xy) / u_lumen_reflection_downsample;
+	ivec2 pixel = LumenReflectionTracePixel(trace);
+	vec4 ray = texelFetch(s_lumen_reflection_ray, trace, 0);
 	ShaderPrintContext text = ShaderPrintBegin(vec2(0.1, 0.1));
 	for(int skipped = 0; skipped < int(u_lumen_visualize_reflection.z); ++skipped)
 	{
@@ -48,8 +50,8 @@ void main()
 	}
 	text = ShaderPrintSymbols(text, ivec4(_P_, _i_, _x_, _e_));
 	text = ShaderPrintSymbols(text, ivec4(_l_, _COLON_, _SPC_, 0));
-	text = ShaderPrintInt(text, pixel.x);
-	text = ShaderPrintInt(text, pixel.y);
+	text = ShaderPrintInt(text, trace.x);
+	text = ShaderPrintInt(text, trace.y);
 	text = ShaderPrintNewline(text);
 	if(ray.w <= 0.0)
 	{
@@ -61,8 +63,8 @@ void main()
 	}
 	vec2 uv = (vec2(pixel) + 0.5) / vec2(textureSize(s_lumen_depth, 0));
 	vec3 position = LumenWorldFromDepth(uv, texelFetch(s_lumen_depth, pixel, 0).x);
-	float distance = abs(texelFetch(s_lumen_reflection_hit, pixel, 0).x);
-	vec3 radiance = texelFetch(s_lumen_reflection_radiance, pixel, 0).xyz;
+	float distance = abs(texelFetch(s_lumen_reflection_hit, trace, 0).x);
+	vec3 radiance = texelFetch(s_lumen_reflection_radiance, trace, 0).xyz;
 	vec3 hit = position + ray.xyz * distance;
 	text = ShaderPrintSymbols(text, ivec4(_D_, _i_, _s_, _t_));
 	text = ShaderPrintSymbols(text, ivec4(_a_, _n_, _c_, _e_));

@@ -46,6 +46,8 @@ public:
         uint32_t probes_y{};
         /// The adaptive probes this frame can hold (get_capacity).
         uint32_t capacity{};
+        /// Texels per axis of a probe's bordered radiance (args_border_threads).
+        uint32_t border_resolution{};
         const float* frame{};
         const float* probes{};
         const float* view{};
@@ -57,8 +59,9 @@ public:
 
     auto init(rtti::context& ctx) -> bool;
     auto has_programs() const -> bool;
-    /// Creates the state buffer and the dispatch arguments once; false when they could not be created.
-    auto ensure_resources() -> bool;
+    /// Creates the dispatch arguments once and the state buffer for @p uniform_tiles uniform probes, growing it when a
+    /// view needs more; false when they could not be created.
+    auto ensure_resources(uint32_t uniform_tiles) -> bool;
 
     /// Marks and spawns this frame's adaptive probes, then writes the per-probe dispatch arguments.
     void run(const frame_inputs& inputs) const;
@@ -94,6 +97,8 @@ private:
     gpu_program::ptr spawn_program_;
     gpu_program::ptr args_program_;
     bgfx::DynamicIndexBufferHandle state_{bgfx::kInvalidHandle};
+    /// The uniform tiles state_ has room for.
+    uint32_t state_tiles_ = 0;
     bgfx::IndirectBufferHandle args_{bgfx::kInvalidHandle};
 };
 

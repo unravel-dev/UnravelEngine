@@ -34,7 +34,7 @@ void main()
 		imageStore(i_lumen_probe_records, tile, vec4(0.0, 0.0, 0.0, 1.0));
 		return;
 	}
-	b_lumen_adaptive[LUMEN_ADAPTIVE_HEADER + LumenAdaptiveTileIndex(tile)] = 0u;
+	b_lumen_adaptive[LumenAdaptiveCountEntry(LumenAdaptiveTileIndex(tile))] = 0u;
 	if(tile.x == 0 && tile.y == 0)
 	{
 		b_lumen_adaptive[LUMEN_ADAPTIVE_COUNTER] = 0u;

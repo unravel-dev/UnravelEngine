@@ -4,6 +4,7 @@
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/pipeline/passes/lumen_run_params.h>
 #include <engine/rendering/pipeline/passes/lumen_adaptive_probes.h>
+#include <engine/rendering/pipeline/passes/lumen_pass_common.h>
 #include <engine/rendering/pipeline/passes/lumen_radiance_cache.h>
 #include <engine/rendering/pipeline/passes/lumen_short_range_ao_pass.h>
 
@@ -23,8 +24,10 @@ namespace unravel
  *
  * The view's indirect diffuse: rgb = E / pi in the view's pre-exposed space, alpha = served. Rays hand the far field
  * to the radiance cache (lumen_radiance_cache) past a near field the probes trace themselves, and global distance
- * field hits read the surface cache (lumen_surface_cache_pass). The constants and their UE sources are in
- * engine/rendering/gi/lumen_constants.h; the plan and the measurements in tasks/lumen_transform.
+ * field hits read the surface cache (lumen_surface_cache_pass). The final gather quality
+ * (gi_settings::diffuse_settings::quality) sets the rays per probe, the probe spacing and the full-resolution jitter
+ * (lumen_pass_common.h). The constants and their UE sources are in engine/rendering/gi/lumen_constants.h; the plan
+ * and the measurements in tasks/lumen_transform.
  */
 class lumen_gather_pass
 {
@@ -35,10 +38,11 @@ public:
     static constexpr const char* screen_ao_texture = "LUMEN_SCREEN_AO";
     static constexpr const char* screen_ao_frame = "LUMEN_SCREEN_AO_FRAME";
     static constexpr const char* screen_ao_intensity = "LUMEN_SCREEN_AO_INTENSITY";
-    /// UE LumenVisualizeTraces.ush: the visualized probe's rays, one per texel of its tracing octahedron, each
-    /// visualized_trace_stride vec4s (lumen_visualize.sh LUMEN_VISUALIZE_TRACE_STRIDE).
-    static constexpr uint32_t visualized_trace_count =
-        uint32_t(gi::lumen::LUMEN_PROBE_TRACE_RES * gi::lumen::LUMEN_PROBE_TRACE_RES);
+    /// UE LumenVisualizeTraces.ush: the visualized probe's rays, one per texel of its tracing octahedron (at most the
+    /// largest tracing resolution's), each visualized_trace_stride vec4s (lumen_visualize.sh
+    /// LUMEN_VISUALIZE_TRACE_STRIDE).
+    static constexpr uint32_t max_visualized_trace_count =
+        lumen_pass::max_probe_trace_resolution * lumen_pass::max_probe_trace_resolution;
     static constexpr uint32_t visualized_trace_stride = 3;
 
     lumen_gather_pass() = default;
@@ -103,7 +107,33 @@ public:
         return has_visualized_traces_ ? visualized_traces_ : bgfx::DynamicVertexBufferHandle{bgfx::kInvalidHandle};
     }
 
+    /// The rays get_visualized_traces holds: one per texel of the probe at the resolution it was traced at.
+    auto get_visualized_trace_count() const -> uint32_t
+    {
+        return visualized_trace_resolution_ * visualized_trace_resolution_;
+    }
+
 private:
+    /// The programs whose layout depends on the probes' tracing resolution, compiled once per resolution (UE's
+    /// THREADGROUP_SIZE permutations: cs_lumen_*.sc at 8 x 8 rays, the _res4 / _res16 wrappers at 4 x 4 / 16 x 16).
+    struct probe_programs
+    {
+        gpu_program::ptr generate_rays;
+        gpu_program::ptr trace;
+        gpu_program::ptr composite;
+        gpu_program::ptr filter;
+        gpu_program::ptr sh;
+        gpu_program::ptr border;
+        gpu_program::ptr integrate;
+        ///< cs_lumen_probe_trace_visualize.sc; the gather runs without it.
+        gpu_program::ptr trace_visualize;
+
+        auto is_valid() const -> bool;
+    };
+
+    /// The program set of tracing resolution @p trace_resolution (4, 8 or 16).
+    auto get_probe_programs(uint32_t trace_resolution) const -> const probe_programs&;
+
     /// Every uniform of the gather's programs. bgfx uniforms are name-global, so one set serves all.
     struct uniforms : uniforms_cache
     {
@@ -153,6 +183,9 @@ private:
     struct frame_layout
     {
         usize32_t view_size{};
+        /// Rays per axis of a probe (lumen_pass::get_probe_trace_resolution) and the probe spacing in pixels.
+        uint32_t trace_resolution{};
+        uint32_t downsample{};
         uint32_t probes_x{};
         uint32_t probes_y{};
         /// The adaptive probes the atlas holds below the uniform rows (lumen_adaptive_probes::get_capacity).
@@ -200,9 +233,9 @@ private:
     };
 
     auto has_programs() const -> bool;
-    /// The frame's layout; @p is_jitter_fixed holds the placement and ray jitter at UE's fixed index while the traces
-    /// are visualized.
-    static auto make_frame_layout(const usize32_t& view_size, bool is_jitter_fixed) -> frame_layout;
+    /// The frame's layout at the final gather quality @p quality; @p is_jitter_fixed holds the placement and ray jitter
+    /// at UE's fixed index while the traces are visualized.
+    static auto make_frame_layout(const usize32_t& view_size, float quality, bool is_jitter_fixed) -> frame_layout;
     auto acquire_probe_targets(gfx::render_view& rview, const frame_layout& layout) const -> probe_targets;
     /// The filter atlas the last of LUMEN_FILTER_PASSES writes.
     static auto final_filter_index() -> size_t;
@@ -247,7 +280,7 @@ private:
     void run_adaptive_probes(const lumen_run_params& params,
                              const frame_layout& layout,
                              const probe_targets& targets);
-    /// Structured importance sampling: each probe's 64 ray slots (cs_lumen_probe_generate_rays.sc).
+    /// Structured importance sampling: each probe's ray slots (cs_lumen_probe_generate_rays.sc).
     void run_generate_rays(const lumen_run_params& params,
                            const frame_layout& layout,
                            const probe_targets& targets,
@@ -291,24 +324,20 @@ private:
                             const history_targets& history);
 
     gpu_program::ptr place_program_;
-    gpu_program::ptr generate_rays_program_;
-    gpu_program::ptr trace_program_;
-    gpu_program::ptr composite_program_;
-    gpu_program::ptr filter_program_;
-    gpu_program::ptr sh_program_;
-    gpu_program::ptr border_program_;
-    gpu_program::ptr integrate_program_;
-    ///< cs_lumen_probe_trace_visualize.sc; the gather runs without it.
-    gpu_program::ptr trace_visualize_program_;
+    /// One program set per tracing resolution, 4 x 4, 8 x 8 and 16 x 16 rays (get_probe_programs).
+    std::array<probe_programs, 3> probe_programs_;
+    /// This frame's set (run).
+    const probe_programs* programs_ = nullptr;
 
     lumen_adaptive_probes adaptive_probes_;
     lumen_radiance_cache radiance_cache_;
     ///< The radiance cache updated this frame (see get_radiance_cache).
     bool is_radiance_cache_ready_ = false;
     lumen_short_range_ao_pass short_range_ao_;
-    ///< See get_visualized_traces.
+    ///< See get_visualized_traces and get_visualized_trace_count.
     bgfx::DynamicVertexBufferHandle visualized_traces_{bgfx::kInvalidHandle};
     bool has_visualized_traces_ = false;
+    uint32_t visualized_trace_resolution_ = 0;
     ///< See get_probe_placement.
     probe_placement probe_placement_{};
 

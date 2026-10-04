@@ -57,17 +57,19 @@ constexpr std::array<visualization_swatch, 6> k_legend_exposure = {{
 // Lumen views: engine_data/data/shaders/lumen/fs_lumen_scene_debug.sc (the scene views) and
 // engine_data/data/shaders/lumen/fs_lumen_visualize_screen.sc (the dedicated reflection rays, the screen probe
 // frames). The debug colours of the scene views go through the lit image's tone map as UE's do, so on screen they
-// read slightly darker than these swatches.
+// read slightly darker than these swatches. A colour the view's label in the viewport names
+// (lumen_visualize_pass.cpp get_view_label) leads its row with the label's words.
 
 constexpr std::array<visualization_swatch, 1> k_legend_lumen_scene = {{
     {{0.0f, 0.0f, 0.0f}, "No card covers the hit: a ray that ends here finds nothing in the surface cache."},
 }};
 
 constexpr std::array<visualization_swatch, 2> k_legend_lumen_surface_cache = {{
-    {{1.0f, 0.0f, 1.0f}, "The objects at the hit have cards, but none of the cards covers this point."},
+    {{1.0f, 0.0f, 1.0f},
+     "Missing Surface Cache coverage: the objects at the hit have cards, but none of the cards covers this point."},
     {{1.0f, 1.0f, 0.0f},
-     "None of the objects at the hit has cards: they were left out of the surface cache, for example "
-     "because they are too small for the card resolution at their distance."},
+     "Culled Surface Cache: none of the objects at the hit has cards. They were left out of the surface cache, for "
+     "example because they are too small for the card resolution at their distance."},
 }};
 
 constexpr std::array<visualization_swatch, 6> k_legend_lumen_object_grid = {{
@@ -80,10 +82,10 @@ constexpr std::array<visualization_swatch, 6> k_legend_lumen_object_grid = {{
 }};
 
 constexpr std::array<visualization_swatch, 3> k_legend_lumen_reflection_rays = {{
-    {{1.0f, 0.0f, 0.0f}, "A perfectly smooth surface. It traces its own reflection rays."},
-    {{0.68f, 0.0f, 0.0f}, "A surface just below the traced-roughness limit. It still traces reflection rays."},
+    {{1.0f, 0.0f, 0.0f}, "Traced: the pixel traces dedicated reflection rays. Full red on a perfectly smooth surface."},
+    {{0.68f, 0.0f, 0.0f}, "Traced, just below MaxRoughness: the red darkens as the roughness nears the limit."},
     {{0.5f, 0.5f, 0.5f},
-     "A rougher surface, shaded in grey. It takes its specular reflection from the screen probes instead."},
+     "Not traced: a rougher surface, shaded in grey. It takes its specular reflection from the screen probes."},
 }};
 
 constexpr std::array<visualization_swatch, 3> k_legend_lumen_direct_lighting_updates = {{
@@ -101,8 +103,8 @@ constexpr std::array<visualization_swatch, 3> k_legend_lumen_indirect_lighting_u
 constexpr std::array<visualization_swatch, 4> k_legend_lumen_radiosity_frames = {{
     {{1.0f, 1.0f, 1.0f}, "The tile's radiosity has accumulated 4 frames, the most it keeps."},
     {{0.0f, 0.0f, 0.0f}, "No frames yet, and the outline of every 8x8 tile."},
-    {{1.0f, 0.0f, 1.0f}, "The objects at the hit have cards, but none of the cards covers this point."},
-    {{1.0f, 1.0f, 0.0f}, "None of the objects at the hit has cards."},
+    {{1.0f, 0.0f, 1.0f}, "Missing Surface Cache coverage, as in the Surface Cache view."},
+    {{1.0f, 1.0f, 0.0f}, "Culled Surface Cache, as in the Surface Cache view."},
 }};
 
 constexpr std::array<visualization_swatch, 2> k_legend_lumen_screen_probe_frames = {{
@@ -311,7 +313,8 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      k_legend_velocity},
 
     // -- Lumen ----------------------------------------------------------------
-    // UE's Show > Visualize > Lumen menu first, then its console-only r.Lumen.Visualize modes, then ours.
+    // UE's Show > Visualize > Lumen menu first, then its console-only r.Lumen.Visualize modes, then ours. The
+    // overviews list the colours their tiles' labels name.
     {visualization_mode::lumen_overview,
      visualization_group::lumen,
      "lumen_overview",
@@ -319,13 +322,13 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      "The lit image with three global illumination views tiled along its top and named in each tile: Geometry "
      "Normals, "
      "Reflection View and Surface Cache.",
-     {}},
+     k_legend_lumen_surface_cache},
     {visualization_mode::lumen_performance_overview,
      visualization_group::lumen,
      "lumen_performance_overview",
      "Performance Overview",
      "The lit image with the Dedicated Reflection Rays view tiled in its top-left corner.",
-     {}},
+     k_legend_lumen_reflection_rays},
     {visualization_mode::lumen_scene,
      visualization_group::lumen,
      "lumen_scene",
@@ -360,21 +363,21 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      visualization_group::lumen,
      "lumen_reflection_rays",
      "Dedicated Reflection Rays",
-     "Which surfaces trace their own reflection rays. Every surface smoother than the traced-roughness limit "
-     "(the Global Illumination component's Max Roughness To Trace, 0.4 by default) is drawn in red, brighter "
-     "the smoother it is; the sky shows behind the scene.",
+     "Pixels tracing dedicated reflection rays: every surface smoother than MaxRoughness (the Global Illumination "
+     "component's Max Roughness To Trace, 0.4 by default) is drawn in red, brighter the smoother it is; the sky "
+     "shows behind the scene.",
      k_legend_lumen_reflection_rays},
     {visualization_mode::lumen_scene_albedo,
      visualization_group::lumen,
      "lumen_scene_albedo",
-     "Albedo",
+     "GI Scene Albedo",
      "The albedo the surface cache stores at each GI Scene hit, in place of its lighting. Use it to check "
      "that the cards captured each material's color.",
      k_legend_lumen_scene},
     {visualization_mode::lumen_scene_normals,
      visualization_group::lumen,
      "lumen_scene_normals",
-     "Normals",
+     "GI Scene Normals",
      "The normals the surface cache cards captured at each GI Scene hit, with x, y and z mapped from -1..1 "
      "to 0..1. Compare with Geometry Normals to see where a card's surface differs from the distance field's.",
      k_legend_lumen_scene},
@@ -429,7 +432,7 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
     {visualization_mode::lumen_radiosity_frames,
      visualization_group::lumen,
      "lumen_radiosity_frames",
-     "Radiosity Frames Accumulated",
+     "Radiosity Num Frames Accumulated",
      "How many frames the radiosity of each 8x8 tile of the cards has accumulated, from black (none) to white "
      "(4, the most), with every tile outlined.",
      k_legend_lumen_radiosity_frames},

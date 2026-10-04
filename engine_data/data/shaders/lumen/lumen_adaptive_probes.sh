@@ -9,31 +9,46 @@
  * the probe atlas at (i % probes_x, probes_y + i / probes_x) and is listed in its uniform tile; every per-probe pass
  * treats it as a probe at that atlas tile.
  *
- * The adaptive state buffer (uint), tile = y x probes_x + x over the uniform tiles:
- *  [LUMEN_ADAPTIVE_COUNTER] the probes spawned this frame (may pass the capacity: those past it are dropped);
- *  [LUMEN_ADAPTIVE_HEADER + tile] the tile's adaptive probes;
- *  [LUMEN_ADAPTIVE_INDICES + tile x LUMEN_ADAPTIVE_SAMPLES + k] the index of the tile's k-th adaptive probe;
- *  [LUMEN_ADAPTIVE_MASK + tile] the tile's candidates the uniform probes cannot interpolate (one bit each).
- * Sized for LUMEN_PROBE_PIXEL_STRIDE^2 views (lumen_adaptive_probes.cpp mirrors the layout).
+ * The adaptive state buffer (uint): [LUMEN_ADAPTIVE_COUNTER] the probes spawned this frame (may pass the capacity:
+ * those past it are dropped), then one record of LUMEN_ADAPTIVE_TILE_STRIDE per uniform tile (tile = y x probes_x +
+ * x): the tile's adaptive probe count, the indices of its adaptive probes (LUMEN_ADAPTIVE_SAMPLES at most) and the
+ * mask of its candidates the uniform probes cannot interpolate (one bit each). Sized for the view's uniform tiles
+ * (lumen_adaptive_probes.cpp mirrors the layout).
  *
  * The includer includes lumen_common.sh.
  */
 
-/// x = the adaptive probe capacity (trunc(uniform probes x LUMEN_ADAPTIVE_ALLOCATION_FRACTION)).
+/// x = the adaptive probe capacity (trunc(uniform probes x LUMEN_ADAPTIVE_ALLOCATION_FRACTION)), y = the texels per
+/// axis of a probe's bordered radiance (cs_lumen_adaptive_args.sc).
 uniform vec4 u_lumen_adaptive;
 
 #define u_lumen_adaptive_capacity uint(u_lumen_adaptive.x)
+#define u_lumen_adaptive_border_res uint(u_lumen_adaptive.y)
 
 #define LUMEN_ADAPTIVE_SAMPLES (LUMEN_ADAPTIVE_SAMPLES_X * LUMEN_ADAPTIVE_SAMPLES_Y)
-#define LUMEN_ADAPTIVE_MAX_TILES ((LUMEN_PROBE_PIXEL_STRIDE / LUMEN_PROBE_DOWNSAMPLE_FACTOR) * (LUMEN_PROBE_PIXEL_STRIDE / LUMEN_PROBE_DOWNSAMPLE_FACTOR))
 #define LUMEN_ADAPTIVE_COUNTER 0
-#define LUMEN_ADAPTIVE_HEADER 1
-#define LUMEN_ADAPTIVE_INDICES (LUMEN_ADAPTIVE_HEADER + LUMEN_ADAPTIVE_MAX_TILES)
-#define LUMEN_ADAPTIVE_MASK (LUMEN_ADAPTIVE_INDICES + LUMEN_ADAPTIVE_MAX_TILES * LUMEN_ADAPTIVE_SAMPLES)
+#define LUMEN_ADAPTIVE_TILE_STRIDE (LUMEN_ADAPTIVE_SAMPLES + 2)
 
 int LumenAdaptiveTileIndex(ivec2 tile)
 {
 	return tile.y * u_lumen_probe_count.x + tile.x;
+}
+
+/// The state entries of uniform tile @p tile_index: its adaptive probe count, the index of its @p k-th adaptive
+/// probe, its placement mask.
+int LumenAdaptiveCountEntry(int tile_index)
+{
+	return 1 + tile_index * LUMEN_ADAPTIVE_TILE_STRIDE;
+}
+
+int LumenAdaptiveProbeEntry(int tile_index, int k)
+{
+	return LumenAdaptiveCountEntry(tile_index) + 1 + k;
+}
+
+int LumenAdaptiveMaskEntry(int tile_index)
+{
+	return LumenAdaptiveCountEntry(tile_index) + 1 + LUMEN_ADAPTIVE_SAMPLES;
 }
 
 /// The atlas tile of adaptive probe @p index.

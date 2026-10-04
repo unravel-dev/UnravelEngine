@@ -3,12 +3,13 @@
 
 /*
  * Shared state of the Lumen reflection passes (lumen_reflection_pass; UE 5.8 LumenReflectionCommon.ush,
- * LumenReflectionDenoiserCommon.ush, LumenReflectionsCombine.ush), full resolution as at Epic:
+ * LumenReflectionDenoiserCommon.ush, LumenReflectionsCombine.ush). The traces run at full resolution as at Epic, or
+ * at the lowest reflection quality for one pixel of each 2 x 2 block (LumenReflectionTracePixel); per trace texel:
  *  - the ray buffer: xyz = the traced direction, w = its cone angle 1 / pdf, 0 where the pixel traces no ray;
  *  - the trace hit: the distance the trace ended at, negative for a hit (UE EncodeRayDistance), +0 where the
  *    pixel traces no ray;
  *  - the trace radiance: rgb pre-exposed, clamped to LUMEN_REFLECTION_MAX_RAY_INTENSITY.
- * The denoisers average in L / (1 + Y / LUMEN_REFLECTION_DENOISER_TONEMAP_RANGE).
+ * The resolve and the denoisers run per pixel; they average in L / (1 + Y / LUMEN_REFLECTION_DENOISER_TONEMAP_RANGE).
  */
 
 #include "lumen/lumen_common.sh"
@@ -25,6 +26,44 @@ uniform vec4 u_lumen_reflection;
 #define u_lumen_reflection_show_trace_types ((int(u_lumen_reflection.y) & 2) != 0)
 #define u_lumen_reflection_max_roughness   u_lumen_reflection.z
 #define u_lumen_reflection_has_history     (u_lumen_reflection.w > 0.0)
+
+/// The reflection quality's (lumen_pass::get_reflection_downsample_factor, get_reflection_reconstruction_samples):
+/// x = the trace downsample factor (1, or 2: one pixel of each 2 x 2 block traces), y = the neighbouring rays the
+/// resolve reuses per pixel.
+uniform vec4 u_lumen_reflection_quality;
+
+#define u_lumen_reflection_downsample             int(u_lumen_reflection_quality.x)
+#define u_lumen_reflection_reconstruction_samples int(u_lumen_reflection_quality.y)
+
+/// The trace buffers' size: the view over the downsample factor, rounded up.
+ivec2 LumenReflectionTraceSize()
+{
+	int factor = u_lumen_reflection_downsample;
+	return (ivec2(u_lumen_view_size) + ivec2(factor - 1, factor - 1)) / factor;
+}
+
+/// UE GetScreenTileJitter (LumenReflectionCommon.ush:48-69): the pixel of trace texel @p trace_coord's 2 x 2 block that
+/// traces, in a 4-rooks pattern that rotates every frame; (0, 0) at full resolution.
+ivec2 LumenReflectionTraceJitter(ivec2 trace_coord)
+{
+	if(u_lumen_reflection_downsample <= 1)
+	{
+		return ivec2(0, 0);
+	}
+	// The block's place among its 2 x 2 neighbours plus the frame, modulo 4 (every term is non-negative).
+	ivec2 cell = trace_coord - (trace_coord / 2) * 2;
+	int rotated = cell.x + cell.y * 2 + int(u_lumen_frame_mod);
+	int index = rotated - (rotated / 4) * 4;
+	// UE: x = index bit 1, y = the inverse of index bit 0.
+	return ivec2(index >= 2 ? 1 : 0, (index == 1 || index == 3) ? 0 : 1);
+}
+
+/// The pixel trace texel @p trace_coord traces (UE GetScreenUVFromReflectionTracingCoord), inside the view.
+ivec2 LumenReflectionTracePixel(ivec2 trace_coord)
+{
+	ivec2 pixel = trace_coord * u_lumen_reflection_downsample + LumenReflectionTraceJitter(trace_coord);
+	return min(pixel, ivec2(u_lumen_view_size) - ivec2(1, 1));
+}
 
 /// UE Luminance (Common.ush).
 float LumenReflectionLuminance(vec3 color)

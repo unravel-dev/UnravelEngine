@@ -29,6 +29,19 @@ REFLECT_INLINE(gi_settings::diffuse_settings)
                             "Multiplier on the indirect lighting gathered by the screen probes, including the "
                             "rough reflections they provide. 1 is physically based."},
         })
+        .data<&settings::quality>("quality"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "quality"},
+            entt::attribute{"pretty_name", "Quality"},
+            entt::attribute{"min", 0.25f},
+            entt::attribute{"max", 8.0f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"tooltip",
+                            "The final gather's quality: how many rays each screen probe traces - 4 x 4 below 0.39, "
+                            "8 x 8 up to 1.27 and 16 x 16 above. From 4 the interpolation between probes jitters "
+                            "less, and from 6 the probes are twice as dense. Higher values reduce noise in the "
+                            "indirect lighting at a much higher GPU cost and memory."},
+        })
         .data<&settings::screen_traces>("screen_traces"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "screen_traces"},
@@ -93,6 +106,20 @@ REFLECT_INLINE(gi_settings::reflection_settings)
                             "Traces a reflection ray for every smooth surface and fills rough surfaces from the "
                             "screen probes, in place of the screen-space reflections and the reflection probes. "
                             "When off, those provide the reflections."},
+        })
+        .data<&settings::quality>("quality"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "quality"},
+            entt::attribute{"pretty_name", "Quality"},
+            entt::attribute{"predicate", enabled_predicate},
+            entt::attribute{"min", 0.25f},
+            entt::attribute{"max", 2.0f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"tooltip",
+                            "The traced reflections' quality: above 1 each pixel reuses more of its neighbours' "
+                            "rays (5 at 1, 10 at 2), and at 0.25 only one pixel of each 2 x 2 block traces a ray, "
+                            "the others are reconstructed from it. Higher values reduce noise in glossy reflections "
+                            "at a higher GPU cost."},
         })
         .data<&settings::screen_traces>("screen_traces"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -169,6 +196,32 @@ REFLECT_INLINE(gi_settings::scene_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gi_settings::scene_settings"},
             entt::attribute{"pretty_name", "Surface Cache"},
+        })
+        .data<&settings::lighting_quality>("lighting_quality"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lighting_quality"},
+            entt::attribute{"pretty_name", "Lighting Quality"},
+            entt::attribute{"min", 0.25f},
+            entt::attribute{"max", 4.0f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"tooltip",
+                            "The quality of the cached surface lighting: how many rays each radiosity probe traces - "
+                            "from 2 x 2 at 0.5 or below to 8 x 8 at 4 (4 x 4 at 1) - and, from 6, probes twice as "
+                            "dense. Higher values reduce noise in the multi-bounce lighting, most visible in "
+                            "reflections, at a higher GPU cost and memory."},
+        })
+        .data<&settings::detail>("detail"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "detail"},
+            entt::attribute{"pretty_name", "Detail"},
+            entt::attribute{"min", 0.25f},
+            entt::attribute{"max", 4.0f},
+            entt::attribute{"step", 0.05f},
+            entt::attribute{"tooltip",
+                            "The size of the objects rays can see: higher values give smaller objects cards in the "
+                            "surface cache and keep smaller objects in the distance field, so they show in the "
+                            "indirect lighting and reflections, at a higher GPU cost. Lower values leave more small "
+                            "objects out."},
         })
         .data<&settings::view_distance>("view_distance"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -289,6 +342,7 @@ REFLECT_INLINE(gi_settings)
 SAVE_INLINE(gi_settings::diffuse_settings)
 {
     try_save(ar, ser20::make_nvp("intensity", obj.intensity));
+    try_save(ar, ser20::make_nvp("quality", obj.quality));
     try_save(ar, ser20::make_nvp("screen_traces", obj.screen_traces));
     try_save(ar, ser20::make_nvp("update_speed", obj.update_speed));
     try_save(ar, ser20::make_nvp("max_trace_distance", obj.max_trace_distance));
@@ -299,6 +353,7 @@ SAVE_INSTANTIATE(gi_settings::diffuse_settings, ser20::oarchive_binary_t);
 LOAD_INLINE(gi_settings::diffuse_settings)
 {
     try_load(ar, ser20::make_nvp("intensity", obj.intensity));
+    try_load(ar, ser20::make_nvp("quality", obj.quality));
     try_load(ar, ser20::make_nvp("screen_traces", obj.screen_traces));
     try_load(ar, ser20::make_nvp("update_speed", obj.update_speed));
     try_load(ar, ser20::make_nvp("max_trace_distance", obj.max_trace_distance));
@@ -309,6 +364,7 @@ LOAD_INSTANTIATE(gi_settings::diffuse_settings, ser20::iarchive_binary_t);
 SAVE_INLINE(gi_settings::reflection_settings)
 {
     try_save(ar, ser20::make_nvp("enabled", obj.enabled));
+    try_save(ar, ser20::make_nvp("quality", obj.quality));
     try_save(ar, ser20::make_nvp("screen_traces", obj.screen_traces));
     try_save(ar, ser20::make_nvp("max_roughness_to_trace", obj.max_roughness_to_trace));
 }
@@ -318,6 +374,7 @@ SAVE_INSTANTIATE(gi_settings::reflection_settings, ser20::oarchive_binary_t);
 LOAD_INLINE(gi_settings::reflection_settings)
 {
     try_load(ar, ser20::make_nvp("enabled", obj.enabled));
+    try_load(ar, ser20::make_nvp("quality", obj.quality));
     try_load(ar, ser20::make_nvp("screen_traces", obj.screen_traces));
     try_load(ar, ser20::make_nvp("max_roughness_to_trace", obj.max_roughness_to_trace));
 }
@@ -342,6 +399,8 @@ LOAD_INSTANTIATE(gi_settings::ambient_occlusion_settings, ser20::iarchive_binary
 
 SAVE_INLINE(gi_settings::scene_settings)
 {
+    try_save(ar, ser20::make_nvp("lighting_quality", obj.lighting_quality));
+    try_save(ar, ser20::make_nvp("detail", obj.detail));
     try_save(ar, ser20::make_nvp("view_distance", obj.view_distance));
     try_save(ar, ser20::make_nvp("lighting_update_speed", obj.lighting_update_speed));
     try_save(ar, ser20::make_nvp("surface_cache_resolution", obj.surface_cache_resolution));
@@ -351,6 +410,8 @@ SAVE_INSTANTIATE(gi_settings::scene_settings, ser20::oarchive_binary_t);
 
 LOAD_INLINE(gi_settings::scene_settings)
 {
+    try_load(ar, ser20::make_nvp("lighting_quality", obj.lighting_quality));
+    try_load(ar, ser20::make_nvp("detail", obj.detail));
     try_load(ar, ser20::make_nvp("view_distance", obj.view_distance));
     try_load(ar, ser20::make_nvp("lighting_update_speed", obj.lighting_update_speed));
     try_load(ar, ser20::make_nvp("surface_cache_resolution", obj.surface_cache_resolution));

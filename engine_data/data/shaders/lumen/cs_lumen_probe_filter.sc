@@ -1,7 +1,7 @@
 /*
  * Lumen screen probe gather, spatial filter (UE 5.8 ScreenProbeFilterGatherTracesCS,
  * LumenScreenProbeFiltering.usf:292-506), dispatched LUMEN_FILTER_PASSES times with ping-pong atlases.
- * One 8x8 group per probe, one thread per octahedral texel.
+ * One group per probe, one thread per octahedral texel (LUMEN_PROBE_TRACE_RES^2).
  *
  * Each texel averages itself with the same texel of the four uniform probes beside the probe's uniform tile (an
  * adaptive probe's: the tile it was spawned in; adaptive probes are never neighbours), weighted by
@@ -32,7 +32,7 @@ ivec2 LumenFilterNeighbourOffset(int index)
 	return index == 0 ? ivec2(-1, 0) : (index == 1 ? ivec2(1, 0) : (index == 2 ? ivec2(0, -1) : ivec2(0, 1)));
 }
 
-NUM_THREADS(8, 8, 1)
+NUM_THREADS(LUMEN_PROBE_TRACE_RES, LUMEN_PROBE_TRACE_RES, 1)
 void main()
 {
 	ivec2 tile = ivec2(gl_WorkGroupID.xy);

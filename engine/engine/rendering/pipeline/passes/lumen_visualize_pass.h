@@ -224,6 +224,7 @@ private:
         gfx::program::uniform_ptr u_lumen_visualize_probe;
         gfx::program::uniform_ptr u_lumen_visualize_probe2;
         gfx::program::uniform_ptr u_lumen_surface_cache;
+        gfx::program::uniform_ptr u_lumen_radiosity;
         gfx::program::uniform_ptr s_lumen_card_depth;
         gfx::program::uniform_ptr s_lumen_radiosity_sh_r;
         gfx::program::uniform_ptr s_lumen_radiosity_sh_g;
@@ -317,6 +318,11 @@ private:
         void cache_uniforms();
 
         gfx::program::uniform_ptr u_lumen_visualize_reflection;
+        /// The reflection pass's frame, view and trace downsample (lumen_reflection_common.sh), to find the pixel a
+        /// trace texel traced from.
+        gfx::program::uniform_ptr u_lumen_frame;
+        gfx::program::uniform_ptr u_lumen_view;
+        gfx::program::uniform_ptr u_lumen_reflection_quality;
         gfx::program::uniform_ptr s_lumen_reflection_ray;
         gfx::program::uniform_ptr s_lumen_reflection_hit;
         gfx::program::uniform_ptr s_lumen_reflection_radiance;

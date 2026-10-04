@@ -53,12 +53,15 @@ constexpr uint32_t reflection_traced_clear_rgba = 0x000000ff;
 constexpr uint32_t lumen_experiment_freeze_clipmap_origin = 1u << 27u;
 /// The global distance field's level scale in Lumen views: each level doubles the previous one's extent.
 constexpr float lumen_clipmap_level_scale = 2.0f;
+/// The scene detail's range for the distance field's object radius threshold (UE GlobalDistanceField.cpp:2456).
+constexpr float lumen_clipmap_min_detail = 0.01f;
+constexpr float lumen_clipmap_max_detail = 100.0f;
 
 /// The global distance field Lumen traces (its hits read the surface cache) in Lumen's layout (lumen_constants.h),
-/// with the view's rebuild budget and level blend.
-auto make_lumen_clipmap_settings(const gi_settings::distance_field_settings& field, bool compose_on_gpu)
-    -> global_sdf_clipmap::settings
+/// with the view's rebuild budget, level blend and the smallest object its scene detail keeps.
+auto make_lumen_clipmap_settings(const gi_settings& gi, bool compose_on_gpu) -> global_sdf_clipmap::settings
 {
+    const auto& field = gi.distance_field;
     global_sdf_clipmap::settings settings;
     settings.resolution = uint32_t(gi::lumen::LUMEN_GLOBAL_SDF_RESOLUTION);
     settings.base_extent = gi::lumen::LUMEN_GLOBAL_SDF_EXTENT;
@@ -66,6 +69,8 @@ auto make_lumen_clipmap_settings(const gi_settings::distance_field_settings& fie
     settings.compose_on_gpu = compose_on_gpu;
     settings.max_levels_per_update = std::clamp(field.levels_per_update, 1u, global_sdf_clipmap::level_count);
     settings.blend_voxels = std::max(field.level_blend_band, 0.0f);
+    settings.object_radius_scale =
+        1.0f / std::clamp(gi.scene.detail, lumen_clipmap_min_detail, lumen_clipmap_max_detail);
     return settings;
 }
 } // namespace ANONYMOUS
@@ -3014,7 +3019,7 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
     // The GPU composes the voxels when its program loaded; otherwise the CPU does, so the cascade is never left empty.
     view_cache.update(surface_cache.get_clipmap_instances(),
                       clipmap_camera_,
-                      ANONYMOUS::make_lumen_clipmap_settings(gi.distance_field, gi_clipmap_compose_pass_.is_valid()),
+                      ANONYMOUS::make_lumen_clipmap_settings(gi, gi_clipmap_compose_pass_.is_valid()),
                       surface_cache.get_content_revision());
     // The GPU composes the levels the update above marked dirty; without the program the CPU
     // composer already wrote and uploaded them.

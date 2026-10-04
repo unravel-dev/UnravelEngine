@@ -1,6 +1,6 @@
 /*
  * Lumen screen probe gather, composite (UE 5.8 ScreenProbeCompositeTracesWithScatterCS,
- * LumenScreenProbeFiltering.usf:30-186). One 8x8 group per probe, one thread per ray.
+ * LumenScreenProbeFiltering.usf:30-186). One group per probe, one thread per ray (LUMEN_PROBE_TRACE_RES^2).
  *
  * Each ray's radiance, its max channel clamped to LUMEN_MAX_RAY_INTENSITY (pre-exposed, stateless), is
  * re-binned to ONE of the 2x2 octahedral texels around its jittered direction by a blue-noise bilinear
@@ -23,8 +23,8 @@ IMAGE2D_WO(i_lumen_probe_radiance, rgba16f, 2);
 SAMPLER2D(s_lumen_ray_info, 3);
 
 #define LUMEN_PROBE_TEXELS (LUMEN_PROBE_TRACE_RES * LUMEN_PROBE_TRACE_RES)
-/// Fixed-point units per unit radiance: 64 rays at the clamp sum to exactly 2^32 - 1.
-#define LUMEN_COMPOSITE_FIXED_SCALE (4294967295.0 / (64.0 * LUMEN_MAX_RAY_INTENSITY))
+/// Fixed-point units per unit radiance: all of a probe's rays at the clamp sum to exactly 2^32 - 1.
+#define LUMEN_COMPOSITE_FIXED_SCALE (4294967295.0 / (float(LUMEN_PROBE_TEXELS) * LUMEN_MAX_RAY_INTENSITY))
 /// Bit pattern of a hit distance no ray reaches (f16 max, 65504).
 #define LUMEN_COMPOSITE_NO_HIT 0x477FE000u
 
@@ -34,9 +34,9 @@ SHARED uint s_acc_b[LUMEN_PROBE_TEXELS];
 SHARED uint s_acc_hit[LUMEN_PROBE_TEXELS];
 SHARED uint s_acc_rays[LUMEN_PROBE_TEXELS];
 
-/// The texel (0..7 per axis) a ray traced at @p texel + @p jitter of a @p resolution map lands in: floor or
-/// ceil of its continuous 8x8 position per axis, picked by @p dither against the fraction, wrapped across
-/// the octahedron's folds.
+/// The texel (0..LUMEN_PROBE_TRACE_RES - 1 per axis) a ray traced at @p texel + @p jitter of a @p resolution map
+/// lands in: floor or ceil of its continuous position in the probe's map per axis, picked by @p dither against the
+/// fraction, wrapped across the octahedron's folds.
 ivec2 LumenRebinTexel(ivec2 texel, int resolution, vec2 jitter, vec2 dither)
 {
 	vec2 position = (vec2(texel) + jitter) * (float(LUMEN_PROBE_TRACE_RES) / float(resolution)) - 0.5;
@@ -45,7 +45,7 @@ ivec2 LumenRebinTexel(ivec2 texel, int resolution, vec2 jitter, vec2 dither)
 	return LumenOctahedralMapWrapBorder(ivec2(target) + ivec2(1, 1), LUMEN_PROBE_TRACE_RES + 2, 1);
 }
 
-NUM_THREADS(8, 8, 1)
+NUM_THREADS(LUMEN_PROBE_TRACE_RES, LUMEN_PROBE_TRACE_RES, 1)
 void main()
 {
 	ivec2 tile = ivec2(gl_WorkGroupID.xy);
@@ -67,7 +67,7 @@ void main()
 		vec4 ray = texelFetch(s_lumen_trace_radiance, atlas_texel, 0);
 		ivec3 slot = LumenProbeRaySlot(texel, texelFetch(s_lumen_ray_info, atlas_texel, 0).x);
 		int resolution = LumenRayResolution(slot.z);
-		// A refined ray covers a quarter of an 8x8 texel's solid angle.
+		// A refined ray covers a quarter of a texel's solid angle.
 		float slot_weight = float(LUMEN_PROBE_TRACE_RES * LUMEN_PROBE_TRACE_RES) / float(resolution * resolution);
 		vec3 radiance = max(ray.xyz, vec3_splat(0.0)) * slot_weight;
 		float peak = max(radiance.x, max(radiance.y, radiance.z));

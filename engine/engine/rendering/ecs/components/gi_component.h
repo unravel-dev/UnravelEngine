@@ -43,6 +43,7 @@ private:
                               bool dominant)
     {
         result.intensity = std::lerp(result.intensity, from.intensity, contribution);
+        result.quality = std::lerp(result.quality, from.quality, contribution);
         result.screen_traces = dominant ? from.screen_traces : result.screen_traces;
         result.update_speed = std::lerp(result.update_speed, from.update_speed, contribution);
         result.max_trace_distance = std::lerp(result.max_trace_distance, from.max_trace_distance, contribution);
@@ -54,6 +55,7 @@ private:
                                   bool dominant)
     {
         result.enabled = dominant ? from.enabled : result.enabled;
+        result.quality = std::lerp(result.quality, from.quality, contribution);
         result.screen_traces = dominant ? from.screen_traces : result.screen_traces;
         result.max_roughness_to_trace =
             std::lerp(result.max_roughness_to_trace, from.max_roughness_to_trace, contribution);
@@ -72,6 +74,8 @@ private:
                             const gi_settings::scene_settings& from,
                             float contribution)
     {
+        result.lighting_quality = std::lerp(result.lighting_quality, from.lighting_quality, contribution);
+        result.detail = std::lerp(result.detail, from.detail, contribution);
         result.view_distance = std::lerp(result.view_distance, from.view_distance, contribution);
         result.lighting_update_speed =
             std::lerp(result.lighting_update_speed, from.lighting_update_speed, contribution);

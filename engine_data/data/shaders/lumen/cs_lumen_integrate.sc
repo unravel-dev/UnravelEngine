@@ -8,8 +8,8 @@
  * pixel's tangent plane relative to the pixel's depth: exp2(-LUMEN_INTERP_DEPTH_WEIGHT r^2). A corner whose
  * uniform probe weighs below LUMEN_INTERP_MIN_WEIGHT takes the best adaptive probe of its tile instead
  * (lumen_adaptive_probes.sh), and the looser LUMEN_INTERP_FALLBACK_DEPTH_WEIGHT serves when nothing passes. The
- * interpolation position is first jittered by up to one probe tile when the jittered pixel lies on the pixel's
- * plane, which turns the probe lattice into noise the temporal averages away.
+ * interpolation position is first jittered by up to one probe tile (half from the final gather quality 4) when the
+ * jittered pixel lies on the pixel's plane, which turns the probe lattice into noise the temporal averages away.
  *
  * Rough specular (LumenScreenProbeGather.usf:1502-1570): below LUMEN_MAX_ROUGHNESS_TO_EVALUATE_ROUGH_SPECULAR,
  * LUMEN_ROUGH_SPECULAR_SAMPLES GGX visible-normal samples of the pixel's lobe (roughness floored at
@@ -90,12 +90,12 @@ vec3 LumenProbeIrradianceOverPi(ivec2 tile, LumenSH3 transfer)
 	return result;
 }
 
-/// The pixel's interpolation offset: the blue-noise jitter of up to one probe tile (half beyond
-/// LUMEN_FULL_RES_JITTER_NEAR + RAMP), kept only when the jittered pixel lies on this pixel's plane.
+/// The pixel's interpolation offset: the blue-noise jitter of up to u_lumen_full_res_jitter_width probe tiles (half
+/// beyond LUMEN_FULL_RES_JITTER_NEAR + RAMP), kept only when the jittered pixel lies on this pixel's plane.
 vec2 LumenFullResJitter(ivec2 pixel, vec3 position, vec3 normal, float depth)
 {
 	vec2 noise = LumenSpatioTemporalNoise2D(vec2(pixel));
-	float width = LUMEN_FULL_RES_JITTER_WIDTH *
+	float width = u_lumen_full_res_jitter_width *
 	              mix(1.0, LUMEN_FULL_RES_JITTER_FAR_SCALE,
 	                  saturate((depth - LUMEN_FULL_RES_JITTER_NEAR) / LUMEN_FULL_RES_JITTER_RAMP));
 	vec2 jitter = (2.0 * noise - 1.0) * u_lumen_downsample * width;
@@ -131,10 +131,10 @@ LumenCorner LumenInterpolationCorner(ivec2 tile, float bilinear, ivec2 pixel, ve
 		return corner;
 	}
 	int tile_index = LumenAdaptiveTileIndex(tile);
-	int count = int(min(b_lumen_adaptive[LUMEN_ADAPTIVE_HEADER + tile_index], uint(LUMEN_ADAPTIVE_SAMPLES)));
+	int count = int(min(b_lumen_adaptive[LumenAdaptiveCountEntry(tile_index)], uint(LUMEN_ADAPTIVE_SAMPLES)));
 	for(int k = 0; k < count; ++k)
 	{
-		int index = int(b_lumen_adaptive[LUMEN_ADAPTIVE_INDICES + tile_index * LUMEN_ADAPTIVE_SAMPLES + k]);
+		int index = int(b_lumen_adaptive[LumenAdaptiveProbeEntry(tile_index, k)]);
 		ivec2 adaptive_tile = LumenAdaptiveAtlasTile(index);
 		vec4 record = texelFetch(s_lumen_probe_records, adaptive_tile, 0);
 		vec2 weights = LumenAdaptiveProbeWeights(pixel, position, normal, depth, LumenProbeRecordPixel(record), record.w);

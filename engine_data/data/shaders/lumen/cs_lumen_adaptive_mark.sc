@@ -77,6 +77,6 @@ void main()
 	barrier();
 	if(sample_index == 0 && inside)
 	{
-		b_lumen_adaptive[LUMEN_ADAPTIVE_MASK + LumenAdaptiveTileIndex(tile)] = s_mask[mask_slot];
+		b_lumen_adaptive[LumenAdaptiveMaskEntry(LumenAdaptiveTileIndex(tile))] = s_mask[mask_slot];
 	}
 }

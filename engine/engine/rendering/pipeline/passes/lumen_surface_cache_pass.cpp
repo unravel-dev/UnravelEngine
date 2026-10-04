@@ -28,10 +28,10 @@ constexpr uint32_t tile_size = 8;
 constexpr uint32_t copy_tile_stride = 4;
 /// float4s per lighting tile record (cs_lumen_card_lighting.sc, lumen_radiosity_common.sh).
 constexpr uint32_t light_tile_stride = 3;
-/// Radiosity probes every 4 texels (lumen_radiosity_common.sh), SH atlases at a quarter of the atlas.
-constexpr uint32_t radiosity_probe_spacing = 4;
 /// MaxRayIntensity of radiosity rays, in pre-exposed units.
 constexpr float radiosity_max_ray_intensity = 40.0f;
+/// Threads of a radiosity trace or filter group (lumen_radiosity_common.sh LUMEN_RADIOSITY_GROUP_THREADS).
+constexpr uint32_t radiosity_group_threads = 64;
 /// bgfx's per-dimension dispatch limit: larger tile lists go out in several dispatches.
 constexpr uint32_t max_groups_per_dispatch = 65535;
 /// The object grid: cells of 2 x 2 x 2 clipmap voxels, 4 x 4 x 4 threads per group.
@@ -221,10 +221,9 @@ void lumen_surface_cache_pass::create_targets()
     direct_atlas_ = make_atlas(s.atlas_size, bgfx::TextureFormat::RGBA16F);
     indirect_atlas_ = make_atlas(s.atlas_size, bgfx::TextureFormat::RGBA16F);
     final_atlas_ = make_atlas(s.atlas_size, bgfx::TextureFormat::RGBA16F);
-    radiosity_trace_atlas_ = make_atlas(s.atlas_size, bgfx::TextureFormat::RGBA16F);
-    radiosity_sh_r_ = make_atlas(s.atlas_size / radiosity_probe_spacing, bgfx::TextureFormat::RGBA16F);
-    radiosity_sh_g_ = make_atlas(s.atlas_size / radiosity_probe_spacing, bgfx::TextureFormat::RGBA16F);
-    radiosity_sh_b_ = make_atlas(s.atlas_size / radiosity_probe_spacing, bgfx::TextureFormat::RGBA16F);
+    // New radiosity atlases at the current layout.
+    radiosity_trace_atlas_.reset();
+    ensure_radiosity_targets(radiosity_layout_);
     radiosity_frames_ = make_atlas(s.atlas_size / tile_size, bgfx::TextureFormat::R32F);
     resample_direct_ = make_atlas(s.capture_atlas_size, bgfx::TextureFormat::RGBA16F);
     resample_indirect_ = make_atlas(s.capture_atlas_size, bgfx::TextureFormat::RGBA16F);
@@ -242,6 +241,21 @@ void lumen_surface_cache_pass::create_targets()
                                                         false,
                                                         bgfx::TextureFormat::RGBA32F,
                                                         BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+}
+
+void lumen_surface_cache_pass::ensure_radiosity_targets(const lumen_pass::radiosity_layout& layout)
+{
+    if(radiosity_trace_atlas_ && layout == radiosity_layout_)
+    {
+        return;
+    }
+    // A new layout starts its probes over; the indirect atlas keeps the lighting it accumulated.
+    radiosity_layout_ = layout;
+    const uint32_t probe_atlas_size = scene_.get_settings().atlas_size / layout.probe_spacing;
+    radiosity_trace_atlas_ = make_atlas(probe_atlas_size * layout.hemisphere_resolution, bgfx::TextureFormat::RGBA16F);
+    radiosity_sh_r_ = make_atlas(probe_atlas_size, bgfx::TextureFormat::RGBA16F);
+    radiosity_sh_g_ = make_atlas(probe_atlas_size, bgfx::TextureFormat::RGBA16F);
+    radiosity_sh_b_ = make_atlas(probe_atlas_size, bgfx::TextureFormat::RGBA16F);
 }
 
 auto lumen_surface_cache_pass::has_lighting() const -> bool
@@ -291,6 +305,7 @@ void lumen_surface_cache_pass::update(const surface_cache_system& gi_scene,
         create_targets();
         is_lit_ = false;
     }
+    ensure_radiosity_targets(lumen_pass::get_radiosity_layout(view_settings.lighting_quality));
     const auto& lumen_sources = gi_scene.get_lumen_sources();
     experiment_flags_ = gi_scene.get_experiment_flags();
     card_bias_scale_ = (experiment_flags_ & experiment_ue_card_tolerance) != 0u
@@ -604,7 +619,8 @@ void lumen_surface_cache_pass::update_object_grid(const surface_cache_system& gi
         gfx::set_image_3d(4, object_grid_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
         const math::vec4 params(float(level), float(resolution), cell_size, reach);
         gfx::set_uniform(uniforms_.u_lumen_object_grid, params);
-        const math::vec4 origin(lvl.origin, 0.0f);
+        // The objects the level's composition kept (global_sdf_clipmap::settings::object_radius_scale).
+        const math::vec4 origin(lvl.origin, clipmap.get_settings().object_radius_scale);
         gfx::set_uniform(uniforms_.u_lumen_object_grid_origin, origin);
         const uint32_t groups = (resolution + object_grid_group - 1u) / object_grid_group;
         bgfx::dispatch(pass.id, object_grid_program_->native_handle(), groups, groups, groups);
@@ -656,6 +672,20 @@ void lumen_surface_cache_pass::dispatch_radiosity(const lighting_inputs& inputs,
     const math::vec4 lighting(float(first), float(count), 0.0f, 0.0f);
     const auto& environment =
         inputs.environment_sh ? inputs.environment_sh : default_textures::get().black_texture();
+    // The probes' layout (lumen_radiosity_common.sh): a tile's rays in groups of radiosity_group_threads for the trace,
+    // as many whole probes per group as fit for the filter.
+    const auto& layout = radiosity_layout_;
+    const math::vec4 radiosity(radiosity_max_ray_intensity / std::max(inputs.view_exposure, 1e-6f),
+                               float(layout.probe_spacing),
+                               float(layout.hemisphere_resolution),
+                               0.0f);
+    const uint32_t probes_per_axis = tile_size / layout.probe_spacing;
+    const uint32_t probes_per_tile = probes_per_axis * probes_per_axis;
+    const uint32_t rays_per_probe = layout.hemisphere_resolution * layout.hemisphere_resolution;
+    const uint32_t trace_groups_per_tile =
+        lumen_pass::divide_round_up(probes_per_tile * rays_per_probe, radiosity_group_threads);
+    const uint32_t probes_per_filter_group = std::max(radiosity_group_threads / rays_per_probe, 1u);
+    const uint32_t filter_groups_per_tile = lumen_pass::divide_round_up(probes_per_tile, probes_per_filter_group);
     {
         gfx::render_pass pass("GI/Radiosity Trace");
         radiosity_trace_program_->begin();
@@ -675,9 +705,8 @@ void lumen_surface_cache_pass::dispatch_radiosity(const lighting_inputs& inputs,
         gfx::set_uniform(uniforms_.u_lumen_object_grid_levels, object_grid_levels_.data(), 4);
         gfx::set_uniform(uniforms_.u_lumen_object_grid_params, get_object_grid_params());
         gfx::set_uniform(uniforms_.u_lumen_card_lighting, lighting);
-        const math::vec4 radiosity(radiosity_max_ray_intensity / std::max(inputs.view_exposure, 1e-6f), 0.0f, 0.0f, 0.0f);
         gfx::set_uniform(uniforms_.u_lumen_radiosity, radiosity);
-        bgfx::dispatch(pass.id, radiosity_trace_program_->native_handle(), count, 1, 1);
+        bgfx::dispatch(pass.id, radiosity_trace_program_->native_handle(), count, trace_groups_per_tile, 1);
         radiosity_trace_program_->end();
     }
     {
@@ -693,7 +722,8 @@ void lumen_surface_cache_pass::dispatch_radiosity(const lighting_inputs& inputs,
         bgfx::setBuffer(7, scene_buffer_, bgfx::Access::Read);
         gfx::set_uniform(uniforms_.u_lumen_surface_cache, get_surface_cache_params());
         gfx::set_uniform(uniforms_.u_lumen_card_lighting, lighting);
-        bgfx::dispatch(pass.id, radiosity_sh_program_->native_handle(), count, 1, 1);
+        gfx::set_uniform(uniforms_.u_lumen_radiosity, radiosity);
+        bgfx::dispatch(pass.id, radiosity_sh_program_->native_handle(), count, filter_groups_per_tile, 1);
         radiosity_sh_program_->end();
     }
     {
@@ -714,6 +744,7 @@ void lumen_surface_cache_pass::dispatch_radiosity(const lighting_inputs& inputs,
         bgfx::setBuffer(12, scene_buffer_, bgfx::Access::Read);
         gfx::set_uniform(uniforms_.u_lumen_surface_cache, get_surface_cache_params());
         gfx::set_uniform(uniforms_.u_lumen_card_lighting, lighting);
+        gfx::set_uniform(uniforms_.u_lumen_radiosity, radiosity);
         bgfx::dispatch(pass.id, radiosity_integrate_program_->native_handle(), count, 1, 1);
         radiosity_integrate_program_->end();
     }

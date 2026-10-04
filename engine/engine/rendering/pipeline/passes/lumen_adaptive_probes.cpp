@@ -24,13 +24,10 @@ constexpr uint32_t adaptive_group_tiles_x = lumen_pass::group_edge / adaptive_sa
 constexpr uint32_t adaptive_group_tiles_y = lumen_pass::group_edge / adaptive_samples_y;
 static_assert(lumen_pass::group_edge % adaptive_samples_x == 0u && lumen_pass::group_edge % adaptive_samples_y == 0u,
               "a group holds whole uniform tiles of candidates");
-/// Mirror of LUMEN_ADAPTIVE_MAX_TILES: the uniform tiles of a LUMEN_PROBE_PIXEL_STRIDE^2 view.
-constexpr uint32_t adaptive_max_tiles_axis =
-    uint32_t(gi::lumen::LUMEN_PROBE_PIXEL_STRIDE) / uint32_t(gi::lumen::LUMEN_PROBE_DOWNSAMPLE_FACTOR);
-constexpr uint32_t adaptive_max_tiles = adaptive_max_tiles_axis * adaptive_max_tiles_axis;
-/// Mirror of lumen_adaptive_probes.sh's layout: the counter, the tile headers, the tile lists, the placement masks.
-constexpr uint32_t adaptive_state_size =
-    1u + adaptive_max_tiles + adaptive_max_tiles * adaptive_samples_x * adaptive_samples_y + adaptive_max_tiles;
+/// Mirror of lumen_adaptive_probes.sh's layout: the counter, then per uniform tile its probe count, its probe list and
+/// its placement mask (LUMEN_ADAPTIVE_TILE_STRIDE).
+constexpr uint32_t adaptive_counter_entries = 1;
+constexpr uint32_t adaptive_tile_stride = adaptive_samples_x * adaptive_samples_y + 2u;
 
 } // namespace
 
@@ -83,11 +80,14 @@ auto lumen_adaptive_probes::has_programs() const -> bool
     return true;
 }
 
-auto lumen_adaptive_probes::ensure_resources() -> bool
+auto lumen_adaptive_probes::ensure_resources(uint32_t uniform_tiles) -> bool
 {
-    if(!bgfx::isValid(state_))
+    // The placement clears the state it uses every frame, so a larger buffer starts empty.
+    if(!bgfx::isValid(state_) || uniform_tiles > state_tiles_)
     {
-        state_ = lumen_pass::make_uint_buffer(adaptive_state_size);
+        lumen_pass::destroy_handle(state_);
+        state_ = lumen_pass::make_uint_buffer(adaptive_counter_entries + uniform_tiles * adaptive_tile_stride);
+        state_tiles_ = bgfx::isValid(state_) ? uniform_tiles : 0u;
     }
     if(!bgfx::isValid(args_))
     {
@@ -116,7 +116,7 @@ void lumen_adaptive_probes::set_uniforms(const frame_inputs& inputs) const
     gfx::set_uniform(uniforms_.u_lumen_frame, inputs.frame);
     gfx::set_uniform(uniforms_.u_lumen_probes, inputs.probes);
     gfx::set_uniform(uniforms_.u_lumen_view, inputs.view);
-    const float adaptive[4] = {float(inputs.capacity), 0.0f, 0.0f, 0.0f};
+    const float adaptive[4] = {float(inputs.capacity), float(inputs.border_resolution), 0.0f, 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_adaptive, adaptive);
 }
 

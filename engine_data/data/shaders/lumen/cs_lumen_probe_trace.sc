@@ -1,7 +1,7 @@
 /*
  * Lumen screen probe gather, tracing (UE 5.8 Global Tracing: ScreenProbeTraceScreenTexturesCS and
- * ScreenProbeTraceVoxelsCS, LumenScreenProbeTracing.usf:54-366 and 712-891). One 8x8 group per uniform
- * probe, one ray per equal-area octahedral texel; the 64 directions shift together inside their texels
+ * ScreenProbeTraceVoxelsCS, LumenScreenProbeTracing.usf:54-366 and 712-891). One group per probe, one ray per
+ * equal-area octahedral texel (LUMEN_PROBE_TRACE_RES^2); the directions shift together inside their texels
  * by the probe tile's jitter of this frame (LumenProbeRayJitter).
  *
  * Each ray takes the first answer of these stages, each resuming LUMEN_TRACE_RESUME_PULLBACK before the
@@ -282,7 +282,7 @@ void LumenStoreVisualizedTrace(ivec2 texel, vec3 radiance, float filter_distance
 }
 #endif
 
-NUM_THREADS(8, 8, 1)
+NUM_THREADS(LUMEN_PROBE_TRACE_RES, LUMEN_PROBE_TRACE_RES, 1)
 void main()
 {
 #ifdef LUMEN_VISUALIZE_TRACES

@@ -14,8 +14,11 @@
  * 20% of the hit history; both are clamped to the neighbourhood mean +- LUMEN_REFLECTION_NEIGHBORHOOD_CLAMP_SCALE
  * standard deviations in YCoCg, and the clamp's distance lowers the confidence, which shortens the frame count:
  * N = min(N x (0.75 confidence + 0.25) + 1, max), max = LUMEN_REFLECTION_TEMPORAL_MAX_FRAMES (mirrors
- * LUMEN_REFLECTION_TEMPORAL_MIRROR_FRAMES, ramping in to roughness 0.05). Everything averages in the denoiser
- * space; the second moment of the luminance accumulates alongside for the spatial filter.
+ * LUMEN_REFLECTION_TEMPORAL_MIRROR_FRAMES while the traces run at full resolution, ramping in to roughness 0.05).
+ * A pixel the downsampled traces skip (its resolve interpolates the neighbouring traces) widens its clamp by
+ * LUMEN_REFLECTION_RECONSTRUCTED_CLAMP_SCALE and blends 1 / (N + LUMEN_REFLECTION_RECONSTRUCTED_HISTORY_FRAMES)
+ * of this frame, so over the frames the history converges to the upsampled result. Everything averages in the
+ * denoiser space; the second moment of the luminance accumulates alongside for the spatial filter.
  *
  * Writes rgb = the accumulated radiance (pre-exposed), a = its luminance second moment, and the frame count
  * (-1 marks a pixel without reflections, which later reads treat as invalid history).
@@ -199,11 +202,18 @@ void main()
 			from_hit = LumenReadReflectionHistory(virtual_point, false, position, normal, noise);
 		}
 		LumenReflectionHistory from_surface = LumenReadReflectionHistory(position, true, position, normal, noise);
-		float max_frames = mix(LUMEN_REFLECTION_TEMPORAL_MIRROR_FRAMES, LUMEN_REFLECTION_TEMPORAL_MAX_FRAMES,
-		                       saturate(roughness / 0.05));
+		// Mirrors keep few frames and leave their noise to TAA; downsampled traces need the history to converge.
+		float max_frames = LUMEN_REFLECTION_TEMPORAL_MAX_FRAMES;
+		if(u_lumen_reflection_downsample <= 1)
+		{
+			max_frames = mix(LUMEN_REFLECTION_TEMPORAL_MIRROR_FRAMES, LUMEN_REFLECTION_TEMPORAL_MAX_FRAMES,
+			                 saturate(roughness / 0.05));
+		}
 		BRANCH
 		if(from_surface.valid || from_hit.valid)
 		{
+			ivec2 traced_pixel = LumenReflectionTracePixel(pixel / u_lumen_reflection_downsample);
+			bool reconstructed = traced_pixel.x != pixel.x || traced_pixel.y != pixel.y;
 			vec3 sum = center.xyz;
 			vec3 square_sum = center.xyz * center.xyz;
 			float weight_sum = 1.0;
@@ -225,6 +235,8 @@ void main()
 			vec3 mean = sum / weight_sum;
 			vec3 deviation = sqrt(max(square_sum / weight_sum - mean * mean, vec3_splat(0.0)));
 			vec3 extent = LUMEN_REFLECTION_NEIGHBORHOOD_CLAMP_SCALE * deviation;
+			// Without a traced centre the neighbourhood is a looser estimate.
+			extent *= reconstructed ? LUMEN_REFLECTION_RECONSTRUCTED_CLAMP_SCALE : 1.0;
 			vec3 hit_ycocg = LumenRGBToYCoCg(from_hit.specular);
 			vec3 surface_ycocg = LumenRGBToYCoCg(from_surface.specular);
 			vec3 clamped_hit = clamp(hit_ycocg, mean - extent, mean + extent);
@@ -239,7 +251,7 @@ void main()
 			confidence = 0.75 * confidence + 0.25;
 			frames = surface_alpha > 0.5 ? from_surface.frames : from_hit.frames;
 			frames = min(frames * confidence + 1.0, max_frames);
-			float alpha = 1.0 / frames;
+			float alpha = 1.0 / (frames + (reconstructed ? LUMEN_REFLECTION_RECONSTRUCTED_HISTORY_FRAMES : 0.0));
 			specular = mix(LumenYCoCgToRGB(clamped_ycocg), specular, alpha);
 			second_moment = mix(mix(from_hit.second_moment, from_surface.second_moment, surface_alpha), second_moment, alpha);
 		}
