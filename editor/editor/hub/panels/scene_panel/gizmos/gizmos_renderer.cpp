@@ -29,27 +29,41 @@
 namespace unravel
 {
 
-void gizmos_renderer::draw_grid(uint32_t pass_id, const camera& cam, const editing_manager::grid& grid)
+void gizmos_renderer::draw_grid(const camera& cam,
+                                const gfx::frame_buffer::ptr& output,
+                                const gfx::texture::ptr& scene_depth,
+                                const editing_manager::grid& grid)
 {
-    grid_program_->begin();
-
-    float grid_height = 0.0f;
-    math::vec4 u_params(grid_height, cam.get_near_clip(), cam.get_far_clip(), grid.opacity);
-    grid_program_->set_uniform("u_params", u_params);
-
-    auto topology = gfx::clip_quad(1.0f);
-    auto state = topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA;
-
-    if(grid.depth_aware)
+    if(!output || !scene_depth)
     {
-        state |= BGFX_STATE_DEPTH_TEST_LEQUAL | BGFX_STATE_WRITE_Z;
+        return;
     }
-
-    bgfx::setState(state);
-    bgfx::submit(pass_id, grid_program_->native_handle());
+    // Drawn with the unjittered camera so the lines hold still under TAA. The depth test
+    // runs in the shader against the jittered scene depth (fs_grid.sc), and the translucent
+    // grid writes no depth, so it never occludes the gizmos drawn after it.
+    gfx::render_pass pass("Gizmos/Grid Pass");
+    pass.bind(output.get());
+    pass.set_view_proj(cam.get_view(), cam.get_projection_unjittered());
+    if(!grid_program_.program->begin())
+    {
+        return;
+    }
+    const float grid_height = 0.0f;
+    const float depth_test = grid.depth_aware ? 1.0f : 0.0f;
+    const auto depth_size = scene_depth->get_size();
+    gfx::set_uniform(grid_program_.u_params, math::vec4(grid_height, depth_test, cam.get_far_clip(), grid.opacity));
+    gfx::set_uniform(grid_program_.u_depth_size,
+                     math::vec4(float(depth_size.width), float(depth_size.height), 0.0f, 0.0f));
+    gfx::set_uniform(grid_program_.u_depth_view_proj, cam.get_view_projection().get_matrix());
+    gfx::set_texture(grid_program_.s_depth,
+                     0,
+                     scene_depth,
+                     BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT);
+    auto topology = gfx::clip_quad(1.0f);
+    bgfx::setState(topology | BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
+    bgfx::submit(pass.id, grid_program_.program->native_handle());
     bgfx::setState(BGFX_STATE_DEFAULT);
-
-    grid_program_->end();
+    grid_program_.program->end();
 }
 
 void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::handle camera_entity, dd_2d_raii& dd_2d)
@@ -75,6 +89,11 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
         selection_mask_drawn = draw_selection_mask_pass(ctx, camera, selection_mask_);
     }
 
+    if(em.show_grid)
+    {
+        draw_grid(camera, rview.fbo_get("OBUFFER"), rview.tex_get("DEPTH"), em.grid_data);
+    }
+
     {
         // Pass 2: Gizmos
         gfx::render_pass pass("Gizmos/Pass");
@@ -93,11 +112,6 @@ void gizmos_renderer::on_frame_render(rtti::context& ctx, scene& scn, entt::hand
         }
     
         draw_icon_gizmos(ctx, scn, camera, dd);
-    
-        if(em.show_grid)
-        {
-            draw_grid(pass.id, camera, em.grid_data);
-        }
     }
 
     if(em.gizmos.show_selection_wireframe)
@@ -130,7 +144,8 @@ auto gizmos_renderer::init(rtti::context& ctx) -> bool
     {
         auto vs = am.get_asset<gfx::shader>("editor:/data/shaders/vs_grid.sc");
         auto fs = am.get_asset<gfx::shader>("editor:/data/shaders/fs_grid.sc");
-        grid_program_ = std::make_unique<gpu_program>(vs, fs);
+        grid_program_.cache_uniforms();
+        grid_program_.program = std::make_unique<gpu_program>(vs, fs);
     }
 
     {
@@ -472,7 +487,7 @@ auto gizmos_renderer::deinit(rtti::context& ctx) -> bool
     outline_program_ = {};
     wireframe_program_ = {};
     wireframe_program_skinned_ = {};
-    grid_program_.reset();
+    grid_program_ = {};
     return true;
 }
 } // namespace unravel

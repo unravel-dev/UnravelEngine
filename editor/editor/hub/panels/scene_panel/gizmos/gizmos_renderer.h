@@ -20,7 +20,10 @@ public:
     void on_frame_render(rtti::context& ctx, scene& scn, entt::handle camera_entity, dd_2d_raii& dd_2d);
 
 private:
-    void draw_grid(uint32_t pass_id, const camera& cam, const editing_manager::grid& grid);
+    void draw_grid(const camera& cam,
+                   const gfx::frame_buffer::ptr& output,
+                   const gfx::texture::ptr& scene_depth,
+                   const editing_manager::grid& grid);
     void draw_selection_gizmos(rtti::context& ctx, const camera& camera, gfx::dd_raii& dd, dd_2d_raii& dd_2d);
     void draw_icon_gizmos(rtti::context& ctx, scene& scn, const camera& camera, gfx::dd_raii& dd);
     auto draw_selection_mask_pass(rtti::context& ctx, const camera& camera, const gfx::frame_buffer::ptr& selection_mask) -> bool;
@@ -39,7 +42,24 @@ private:
 
     } wireframe_program_, wireframe_program_skinned_;
 
-    std::unique_ptr<gpu_program> grid_program_;
+    struct grid_program : uniforms_cache
+    {
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), s_depth, "s_depth", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_params, "u_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_depth_size, "u_depth_size", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_depth_view_proj, "u_depth_view_proj", bgfx::UniformType::Mat4);
+        }
+
+        gfx::program::uniform_ptr s_depth;
+        gfx::program::uniform_ptr u_params;
+        gfx::program::uniform_ptr u_depth_size;
+        gfx::program::uniform_ptr u_depth_view_proj;
+
+        std::unique_ptr<gpu_program> program;
+
+    } grid_program_;
 
     struct flat_to_r_program : uniforms_cache
     {

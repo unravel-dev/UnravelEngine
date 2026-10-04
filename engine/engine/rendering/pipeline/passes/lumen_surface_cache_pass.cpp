@@ -334,7 +334,7 @@ void lumen_surface_cache_pass::update(const surface_cache_system& gi_scene,
     if((++update_count_ % stats_log_period) == 0u)
     {
         const auto& st = scene_.get_stats();
-        APPLOG_INFO("[GI] surface cache: {} cards, {} resident, pages {} / {}, desired texels {}, "
+        APPLOG_TRACE("[GI] surface cache: {} cards, {} resident, pages {} / {}, desired texels {}, "
                     "captures {}, downgraded {}, reallocated {} in {} frames, lit tiles {} direct (cut bucket {}) / "
                     "{} radiosity (cut bucket {})",
                     st.cards,
