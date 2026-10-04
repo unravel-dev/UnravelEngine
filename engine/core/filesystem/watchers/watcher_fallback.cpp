@@ -1,15 +1,19 @@
 #include "watcher_fallback.h"
+#include "change_trigger.h"
+
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
-#include <iostream>
+#include <functional>
+#include <iterator>
+#include <map>
 #include <mutex>
-#include <set>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+
 #include <base/platform/thread.hpp>
-#include <hpp/event.hpp>
+#include <hpp/optional.hpp>
 
 namespace fs
 {
@@ -17,697 +21,955 @@ using namespace std::literals;
 
 namespace
 {
+using clock_type = watcher::clock_t;
+using path_key = fs::path::string_type;
+using time_point = clock_type::time_point;
 
-void log_path(const fs::path& /*unused*/)
+/// Quiet time after the last reported change before a scan, so a burst of writes is scanned once.
+constexpr auto SETTLE_DELAY = 50ms;
+/// Held entries wait this fraction of the poll interval for their other half. A delete reaches the asset
+/// through three trees in turn (source, .meta, compiled), each holding it once, so the hold is kept short
+/// enough for that chain to stay below one and a half poll intervals.
+constexpr int HOLD_DIVISOR = 2;
+/// Re-check interval while every watch is paused.
+constexpr auto PAUSED_WAIT = 500ms;
+/// Longest single wait of the polling thread; any wake-up request ends it early.
+constexpr auto MAX_WAIT = 1h;
+
+/// Absolute, lexically normal, without a trailing separator: the one spelling listeners are keyed by.
+auto make_absolute(const fs::path& path) -> fs::path
 {
+    fs::error_code err;
+    fs::path result = fs::absolute(path, err);
+    if(err)
+    {
+        result = path;
+    }
+    result = result.lexically_normal();
+    if(!result.has_filename() && result.has_relative_path())
+    {
+        result = result.parent_path();
+    }
+    return result;
 }
 
-} // namespace
-
-class watcher_fallback::directory_listener
+auto has_same_extensions(const fs::path& lhs, const fs::path& rhs) -> bool
 {
-public:
-
-    struct observed_changes
+    bool same_extensions = true;
+    auto lhs_stem = lhs;
+    auto rhs_stem = rhs;
+    while(lhs_stem.has_extension() || rhs_stem.has_extension())
     {
-        std::vector<watcher::entry> entries;
-
-        std::vector<size_t> created;
-        std::vector<size_t> modified;
-
-        void append(const observed_changes& rhs)
-        {
-
-            for(const auto& e : rhs.entries)
-            {
-                entries.emplace_back(e);
-            }
-
-            auto created_sz_before = created.size();
-            for(auto idx : rhs.created)
-            {
-                created.emplace_back(created_sz_before + idx);
-            }
-
-            auto modified_sz_before = modified.size();
-            for(auto idx : rhs.modified)
-            {
-                modified.emplace_back(modified_sz_before + idx);
-            }
-        }
-
-        void append(observed_changes&& rhs)
-        {
-
-            for(auto& e : rhs.entries)
-            {
-                entries.emplace_back(std::move(e));
-            }
-
-            auto created_sz_before = created.size();
-            for(auto idx : rhs.created)
-            {
-                created.emplace_back(created_sz_before + idx);
-            }
-
-            auto modified_sz_before = modified.size();
-            for(auto idx : rhs.modified)
-            {
-                modified.emplace_back(modified_sz_before + idx);
-            }
-
-            rhs = {};
-        }
-    };
-    //-----------------------------------------------------------------------------
-    //  Name : impl ()
-    /// <summary>
-    ///
-    ///
-    ///
-    /// </summary>
-    //-----------------------------------------------------------------------------
-    directory_listener(const fs::path& path,
-                       bool recursive,
-                       watcher::clock_t::duration poll_interval)
-        : root_(path)
-        , poll_interval_(poll_interval)
-        , recursive_(recursive)
-        , init_time_timestamp_(std::chrono::system_clock::now())
-    {
-        observed_changes changes;
-        if(recursive_)
-        {
-            fs::error_code err;
-            for(auto& entry : fs::recursive_directory_iterator(root_, err))
-            {
-                poll_entry(entry, changes);
-            }
-        }
-        else
-        {
-            fs::error_code err;
-            for(auto& entry : fs::directory_iterator(root_, err))
-            {
-                poll_entry(entry, changes);
-            }
-        }
+        same_extensions &= lhs_stem.extension() == rhs_stem.extension();
+        lhs_stem = lhs_stem.stem();
+        rhs_stem = rhs_stem.stem();
     }
+    return same_extensions;
+}
 
-    void pause()
+/// The path new_path had before its ancestor renamed_path was renamed from old_path.
+auto get_original_path(const fs::path& old_path, const fs::path& renamed_path, const fs::path& new_path) -> fs::path
+{
+    return old_path / new_path.lexically_relative(renamed_path);
+}
+
+template<typename Iterator, typename Visitor>
+auto walk_with(const fs::path& root, Visitor& visit) -> bool
+{
+    fs::error_code err;
+    Iterator it(root, fs::directory_options::skip_permission_denied, err);
+    if(err)
     {
-        paused_ = true;
+        fs::error_code exists_err;
+        return !fs::exists(root, exists_err) && !exists_err;
     }
-
-    void resume()
+    const Iterator end;
+    while(it != end)
     {
-        paused_ = false;
-    }
-
-    void request_immediate_poll()
-    {
-        last_poll_ = watcher::clock_t::time_point{};
-    }
-
-    //-----------------------------------------------------------------------------
-    //  Name : watch ()
-    /// <summary>
-    ///
-    ///
-    ///
-    /// </summary>
-    //-----------------------------------------------------------------------------
-    void watch()
-    {
-        // const auto started = std::chrono::steady_clock::now();
-
-        observed_changes changes;
-        seen_keys_this_scan_.clear();
-        seen_keys_this_scan_.reserve(entries_.size());
-        if(!paused_.load())
-        {
-            if(!buffered_changes_.entries.empty())
-            {
-                std::swap(changes, buffered_changes_);
-            }
-        }
-        if(recursive_)
-        {
-            fs::error_code err;
-            for(auto& entry : fs::recursive_directory_iterator(root_, err))
-            {
-                poll_entry(entry, changes);
-            }
-        }
-        else
-        {
-            fs::error_code err;
-            for(auto& entry : fs::directory_iterator(root_, err))
-            {
-                poll_entry(entry, changes);
-            }
-        }
-        process_modifications(entries_, changes, seen_keys_this_scan_, root_);
-
-        
-        // const auto elapsed = std::chrono::steady_clock::now() - started;
-        // const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-        // std::cout << "process_modifications: " << elapsed_ms << " ms"
-        //           << " (" << changes.created.size() << " created, "
-        //           << entries_.size() << " cached, "
-        //           << changes.entries.size() << " events)"
-        //           << " root=" << root_.string() << std::endl;
-
-        if(paused_.load())
-        {
-            if(!changes.entries.empty())
-            {
-                buffered_changes_.append(std::move(changes));
-            }
-        }
-        else
-        {
-            if(!changes.entries.empty())
-            {
-                on_changes.emit(changes.entries);
-            }
-        }
-    }
-
-    static auto get_original_path(const fs::path& old_path, const fs::path& renamed_path, const fs::path& new_path) -> fs::path
-    {
-        fs::path relative_path = fs::relative(new_path, renamed_path);
-        fs::path original_path = old_path / relative_path;
-        return original_path;
-    }
-
-    static auto check_if_same_extension(const fs::path& p1, const fs::path& p2) -> bool
-    {
-        bool same_extensions = true;
-
-        auto ep = p1;
-        auto fp = p2;
-
-        while(ep.has_extension() || fp.has_extension())
-        {
-            same_extensions &= ep.extension() == fp.extension();
-            ep = ep.stem();
-            fp = fp.stem();
-        }
-
-        return same_extensions;
-    };
-
-    static auto check_if_parent_dir_was_renamed(const std::vector<size_t>& renamed_dirs, const std::vector<watcher::entry>& entries, watcher::entry& e) -> bool
-    {
-        //check if parent_dir was renamed
-        for(const auto& renamed_idx : renamed_dirs)
-        {
-            const auto& renamed_e = entries[renamed_idx];
-
-            if(fs::is_any_parent_path(renamed_e.path, e.path))
-            {
-                e.status = watcher::entry_status::renamed;
-                e.last_path = get_original_path(renamed_e.last_path, renamed_e.path, e.path);
-                e.event_time = std::chrono::system_clock::now();
-
-                return true;
-            }
-        }
-        return false;
-    };
-
-
-    static void remove_missing_candidate(const std::string& key,
-                                         uintmax_t size,
-                                         std::unordered_map<uintmax_t, std::vector<std::string>>& missing_by_size)
-    {
-        auto size_it = missing_by_size.find(size);
-        if(size_it == missing_by_size.end())
-        {
-            return;
-        }
-        auto& candidates = size_it->second;
-        for(std::size_t i = 0; i < candidates.size(); ++i)
-        {
-            if(candidates[i] != key)
-            {
-                continue;
-            }
-            candidates[i] = candidates.back();
-            candidates.pop_back();
-            if(candidates.empty())
-            {
-                missing_by_size.erase(size_it);
-            }
-            return;
-        }
-    }
-
-    template<typename Container>
-    static void collect_missing_entries(const Container& old_entries,
-                                        const std::unordered_set<std::string>& seen_keys,
-                                        std::unordered_map<uintmax_t, std::vector<std::string>>& missing_by_size)
-    {
-        for(const auto& kvp : old_entries)
-        {
-            if(seen_keys.find(kvp.first) == seen_keys.end())
-            {
-                missing_by_size[kvp.second.size].push_back(kvp.first);
-            }
-        }
-    }
-
-    template<typename Container>
-    static auto try_match_rename(watcher::entry& e,
-                                 Container& old_entries,
-                                 std::unordered_map<uintmax_t, std::vector<std::string>>& missing_by_size) -> bool
-    {
-        auto size_it = missing_by_size.find(e.size);
-        if(size_it == missing_by_size.end())
+        visit(*it);
+        it.increment(err);
+        if(err)
         {
             return false;
         }
+    }
+    return true;
+}
 
-        auto& candidates = size_it->second;
-        for(std::size_t i = 0; i < candidates.size(); ++i)
-        {
-            const auto& key = candidates[i];
-            auto entry_it = old_entries.find(key);
-            if(entry_it == old_entries.end())
-            {
-                continue;
-            }
+/**
+ * @brief Visits every entry under root.
+ * @return False when the walk stopped on an error before the end. A root that does not exist is a
+ * complete, empty walk.
+ */
+template<typename Visitor>
+auto walk_directory(const fs::path& root, bool recursive, Visitor&& visit) -> bool
+{
+    if(recursive)
+    {
+        return walk_with<fs::recursive_directory_iterator>(root, visit);
+    }
+    return walk_with<fs::directory_iterator>(root, visit);
+}
 
-            const auto& fi = entry_it->second;
-            auto diff = (e.last_mod_time - fi.last_mod_time);
-            auto d = std::chrono::duration_cast<std::chrono::milliseconds>(diff);
-            if(d > std::chrono::milliseconds(0))
-            {
-                continue;
-            }
-            if(!check_if_same_extension(e.path, fi.path))
-            {
-                continue;
-            }
+struct file_stat
+{
+    fs::file_time_type last_mod_time{};
+    std::uintmax_t size = 0;
+    fs::file_type type = fs::file_type::none;
 
-            e.status = watcher::entry_status::renamed;
-            e.last_path = fi.path;
-            e.event_time = std::chrono::system_clock::now();
-            old_entries.erase(entry_it);
+    auto operator==(const file_stat& rhs) const -> bool = default;
+};
 
-            candidates[i] = candidates.back();
-            candidates.pop_back();
-            if(candidates.empty())
-            {
-                missing_by_size.erase(size_it);
-            }
-            return true;
-        }
+auto read_stat(const fs::directory_entry& entry) -> file_stat
+{
+    fs::error_code err;
+    file_stat stat;
+    stat.last_mod_time = entry.last_write_time(err);
+    stat.size = entry.file_size(err);
+    stat.type = entry.status(err).type();
+    return stat;
+}
 
+auto get_stat(const watcher::entry& entry) -> file_stat
+{
+    return {entry.last_mod_time, entry.size, entry.type};
+}
+
+auto make_entry(const fs::path& path,
+                const file_stat& stat,
+                watcher::entry_status status,
+                std::chrono::system_clock::time_point event_time) -> watcher::entry
+{
+    watcher::entry entry;
+    entry.path = path;
+    entry.last_path = path;
+    entry.status = status;
+    entry.last_mod_time = stat.last_mod_time;
+    entry.size = stat.size;
+    entry.type = stat.type;
+    entry.event_time = event_time;
+    return entry;
+}
+
+/// The rename rule for files: same size and extension chain, and not newer than the missing entry.
+auto is_rename_of(const watcher::entry& created, const fs::path& old_path, const file_stat& old_stat) -> bool
+{
+    if(created.size != old_stat.size || created.type != old_stat.type)
+    {
         return false;
     }
+    const auto newer_by = std::chrono::duration_cast<std::chrono::milliseconds>(created.last_mod_time - old_stat.last_mod_time);
+    return newer_by <= 0ms && has_same_extensions(created.path, old_path);
+}
 
-    template<typename Container>
-    static void emit_remaining_removed(std::vector<watcher::entry>& entries,
-                                       Container& old_entries,
-                                       std::unordered_map<uintmax_t, std::vector<std::string>>& missing_by_size)
+/**
+ * @brief The cache of one watched tree and the diff of a scan against it.
+ *
+ * Every entry the fallback reports comes from here. A rename is a missing entry paired with a
+ * created one, so both halves have to be in one diff. Two holds make that independent of when a
+ * scan runs:
+ *   - a missing entry with no partner stays a rename candidate for the hold time before it is
+ *     reported removed (delete, then the new name appears);
+ *   - a new file that matches a file still present - same size, modification time and extension
+ *     chain, which is what a copy keeps - waits the hold time for the original to disappear
+ *     (copy, then delete the original).
+ * A missing entry that comes back while held was replaced, not removed: it is reported modified.
+ */
+class change_tracker
+{
+public:
+    explicit change_tracker(clock_type::duration hold_time)
+        : hold_time_(hold_time)
     {
-        for(auto& size_group : missing_by_size)
+    }
+
+    /// Fills the cache from a walk without reporting anything.
+    void reset(const fs::path& root, bool recursive)
+    {
+        const auto generation = ++generation_;
+        walk_directory(root,
+                       recursive,
+                       [&](const fs::directory_entry& entry) -> void
+                       {
+                           auto& cached = entries_[entry.path().native()];
+                           cached.path = entry.path();
+                           cached.stat = read_stat(entry);
+                           cached.seen_scan = generation;
+                       });
+    }
+
+    struct scan_result
+    {
+        std::uint64_t generation = 0;
+        bool is_complete = false;
+        /// Created, modified, or unmodified for a held missing entry that came back.
+        std::vector<watcher::entry> changes;
+    };
+
+    /// Walks the tree and records what differs from the cache, which stays as it is until commit().
+    auto scan(const fs::path& root, bool recursive) -> scan_result
+    {
+        scan_result result;
+        result.generation = ++generation_;
+        result.is_complete = walk_directory(root,
+                                            recursive,
+                                            [&](const fs::directory_entry& entry) -> void
+                                            {
+                                                record(entry, result);
+                                            });
+        return result;
+    }
+
+    /// Applies a scan to the cache and returns what to report, in scan order, removals last.
+    auto commit(scan_result& scan, time_point now) -> std::vector<watcher::entry>
+    {
+        std::vector<watcher::entry> reported;
+        reported.reserve(scan.changes.size());
+        std::vector<creation> creations;
+        apply_changes(scan, reported, creations);
+        auto missing = collect_missing(scan.generation, now);
+        forget_vanished_holds(scan.generation);
+        if(!missing.empty() && !creations.empty())
         {
-            for(const auto& key : size_group.second)
+            match_renames(reported, creations, missing);
+        }
+        std::vector<bool> is_held(reported.size(), false);
+        settle_creations(reported, creations, is_held, scan.generation, now);
+        auto removed = release_expired_removals(missing, now);
+        update_hold_deadline();
+        std::vector<watcher::entry> result;
+        result.reserve(reported.size() + removed.size());
+        for(std::size_t index = 0; index < reported.size(); ++index)
+        {
+            if(!is_held[index])
             {
-                auto it = old_entries.find(key);
-                if(it == old_entries.end())
+                result.push_back(std::move(reported[index]));
+            }
+        }
+        std::move(removed.begin(), removed.end(), std::back_inserter(result));
+        return result;
+    }
+
+    /// When the earliest held entry is due to be reported.
+    auto get_hold_deadline() const -> const hpp::optional<time_point>&
+    {
+        return hold_deadline_;
+    }
+
+private:
+    struct cached_entry
+    {
+        fs::path path;
+        file_stat stat;
+        std::uint64_t seen_scan = 0;
+        bool is_missing = false;
+        time_point missing_since{};
+    };
+
+    struct held_creation
+    {
+        time_point since{};
+        std::uint64_t seen_scan = 0;
+    };
+
+    /// A created entry of the scan being committed.
+    struct creation
+    {
+        std::size_t index = 0;
+        bool was_held = false;
+        time_point held_since{};
+    };
+
+    /// Missing entries still free to pair with a created one.
+    struct rename_candidates
+    {
+        std::unordered_set<path_key> unmatched;
+        std::map<std::uintmax_t, std::vector<path_key>> files_by_size;
+        std::vector<path_key> directories;
+        /// Names of the missing entries in each missing folder.
+        std::unordered_map<path_key, std::vector<path_key>> children;
+    };
+
+    void record(const fs::directory_entry& entry, scan_result& result)
+    {
+        const file_stat stat = read_stat(entry);
+        const auto it = entries_.find(entry.path().native());
+        if(it == entries_.end())
+        {
+            result.changes.push_back(make_entry(entry.path(), stat, watcher::entry_status::created, {}));
+            return;
+        }
+        auto& cached = it->second;
+        cached.seen_scan = result.generation;
+        if(cached.is_missing)
+        {
+            result.changes.push_back(make_entry(entry.path(), stat, watcher::entry_status::unmodified, {}));
+            return;
+        }
+        if(!(cached.stat == stat))
+        {
+            result.changes.push_back(make_entry(entry.path(), stat, watcher::entry_status::modified, {}));
+        }
+    }
+
+    void apply_changes(scan_result& scan, std::vector<watcher::entry>& reported, std::vector<creation>& creations)
+    {
+        const auto now_system = std::chrono::system_clock::now();
+        for(auto& change : scan.changes)
+        {
+            const auto& key = change.path.native();
+            if(change.status == watcher::entry_status::created)
+            {
+                creation created;
+                created.index = reported.size();
+                const auto held = held_creations_.find(key);
+                if(held != held_creations_.end())
+                {
+                    created.was_held = true;
+                    created.held_since = held->second.since;
+                    held->second.seen_scan = scan.generation;
+                }
+                change.event_time = now_system;
+                reported.push_back(std::move(change));
+                creations.push_back(created);
+                continue;
+            }
+            auto& cached = entries_.at(key);
+            const bool came_back = change.status == watcher::entry_status::unmodified;
+            if(came_back)
+            {
+                cached.is_missing = false;
+                if(cached.stat == get_stat(change))
                 {
                     continue;
                 }
-                auto fi = it->second;
-                fi.status = watcher::entry_status::removed;
-                fi.event_time = std::chrono::system_clock::now();
-                entries.push_back(std::move(fi));
-                old_entries.erase(it);
             }
+            cached.stat = get_stat(change);
+            change.status = watcher::entry_status::modified;
+            // A modification is timed by the file; a replacement is timed when it was seen.
+            change.event_time = came_back ? now_system : fs::filetime_to_system_clock(change.last_mod_time);
+            reported.push_back(std::move(change));
         }
     }
 
-    template<typename Container>
-    static void process_modifications(Container& old_entries,
-                                      observed_changes& changes,
-                                      const std::unordered_set<std::string>& seen_keys,
-                                      const fs::path& listener_root)
+    auto collect_missing(std::uint64_t generation, time_point now) -> std::vector<path_key>
     {
-
-        std::vector<size_t> renamed_dirs;
-        std::unordered_map<uintmax_t, std::vector<std::string>> missing_by_size;
-        collect_missing_entries(old_entries, seen_keys, missing_by_size);
-
-        for(auto idx : changes.created)
+        std::vector<path_key> missing;
+        for(auto& [key, cached] : entries_)
         {
-            auto& e = changes.entries[idx];
-
-            if(check_if_parent_dir_was_renamed(renamed_dirs, changes.entries, e))
+            if(cached.seen_scan == generation)
             {
-                const auto key = e.last_path.string();
-                auto old_it = old_entries.find(key);
-                if(old_it != old_entries.end())
-                {
-                    remove_missing_candidate(key, old_it->second.size, missing_by_size);
-                    old_entries.erase(old_it);
-                }
                 continue;
             }
-
-            if(!missing_by_size.empty() && try_match_rename(e, old_entries, missing_by_size))
+            if(!cached.is_missing)
             {
-                if(e.type == fs::file_type::directory)
-                {
-                    renamed_dirs.emplace_back(idx);
-                }
+                cached.is_missing = true;
+                cached.missing_since = now;
             }
+            missing.push_back(key);
         }
-
-        emit_remaining_removed(changes.entries, old_entries, missing_by_size);
+        std::sort(missing.begin(), missing.end());
+        return missing;
     }
-  
-    //-----------------------------------------------------------------------------
-    //  Name : poll_entry ()
-    /// <summary>
-    ///
-    ///
-    ///
-    /// </summary>
-    //-----------------------------------------------------------------------------
-    void poll_entry(const fs::directory_entry& entry,
-                    observed_changes& changes)
+
+    void forget_vanished_holds(std::uint64_t generation)
     {
-        // get the last modification time
-        fs::error_code err;
-        auto time = entry.last_write_time( err);
-        auto size = entry.file_size( err);
-        fs::file_status status = entry.status( err);
-        std::string key = entry.path().string();
-        seen_keys_this_scan_.insert(key);
-        auto it = entries_.find(key);
-        if(it != entries_.end())
+        for(auto it = held_creations_.begin(); it != held_creations_.end();)
         {
-            auto& fi = it->second;
+            it = it->second.seen_scan == generation ? std::next(it) : held_creations_.erase(it);
+        }
+    }
 
-            if(fi.last_mod_time != time || fi.size != size || fi.type != status.type())
+    auto make_candidates(const std::vector<path_key>& missing) const -> rename_candidates
+    {
+        rename_candidates candidates;
+        candidates.unmatched.insert(missing.begin(), missing.end());
+        for(const auto& key : missing)
+        {
+            const auto& cached = entries_.at(key);
+            if(cached.stat.type == fs::file_type::directory)
             {
-                fi.size = size;
-                fi.last_mod_time = time;
-                fi.status = watcher::entry_status::modified;
-                fi.type = status.type();
-                
-                // on modify set the event time to the last modification time.
-                // since modifications are always observed while watching, we can use the last modification time.
-                auto last_mod_time = fs::filetime_to_system_clock(time);
-                fi.event_time = last_mod_time;
-
-                changes.entries.push_back(fi);
-                changes.modified.push_back(changes.entries.size() - 1);
+                candidates.directories.push_back(key);
             }
             else
             {
-                fi.status = watcher::entry_status::unmodified;
-                fi.type = status.type();
+                candidates.files_by_size[cached.stat.size].push_back(key);
             }
+            candidates.children[cached.path.parent_path().native()].push_back(cached.path.filename().native());
         }
-        else
+        for(auto& [parent, names] : candidates.children)
         {
-            // or compare with an older one
-            auto& fi = entries_[key];
-            fi.path = entry.path();
-            fi.last_path = entry.path();
-            fi.last_mod_time = time;
-            fi.status = watcher::entry_status::created;
-            fi.size = size;
-            fi.type = status.type();
+            std::sort(names.begin(), names.end());
+        }
+        return candidates;
+    }
 
-            // on create set the event time to the current time
-            fi.event_time = std::chrono::system_clock::now();
-            changes.entries.push_back(fi);
-            changes.created.push_back(changes.entries.size() - 1);
+    static auto index_created_children(const std::vector<watcher::entry>& reported, const std::vector<creation>& creations)
+        -> std::unordered_map<path_key, std::vector<path_key>>
+    {
+        std::unordered_map<path_key, std::vector<path_key>> children;
+        for(const auto& created : creations)
+        {
+            const auto& path = reported[created.index].path;
+            children[path.parent_path().native()].push_back(path.filename().native());
+        }
+        for(auto& [parent, names] : children)
+        {
+            std::sort(names.begin(), names.end());
+        }
+        return children;
+    }
+
+    void match_renames(std::vector<watcher::entry>& reported,
+                       const std::vector<creation>& creations,
+                       const std::vector<path_key>& missing)
+    {
+        auto candidates = make_candidates(missing);
+        const auto created_children = index_created_children(reported, creations);
+        const auto created_empty_directories = std::count_if(creations.begin(),
+                                                             creations.end(),
+                                                             [&](const creation& created) -> bool
+                                                             {
+                                                                 const auto& entry = reported[created.index];
+                                                                 return entry.type == fs::file_type::directory &&
+                                                                        created_children.count(entry.path.native()) == 0;
+                                                             });
+        std::vector<std::size_t> renamed_directories;
+        for(const auto& created : creations)
+        {
+            auto& entry = reported[created.index];
+            if(match_renamed_parent(entry, reported, renamed_directories, candidates))
+            {
+                continue;
+            }
+            const bool is_directory = entry.type == fs::file_type::directory;
+            const auto old_key = is_directory
+                                     ? find_renamed_directory(entry, candidates, created_children, created_empty_directories)
+                                     : find_renamed_file(entry, candidates);
+            if(!old_key)
+            {
+                continue;
+            }
+            mark_renamed(entry, *old_key, candidates);
+            if(is_directory)
+            {
+                renamed_directories.push_back(created.index);
+            }
         }
     }
 
-    /// Event that emits changes to all connected impls
-    hpp::event<void(const std::vector<watcher::entry>&)> on_changes;
-    
+    /// An entry under a renamed folder was renamed with it, when its old path is missing.
+    auto match_renamed_parent(watcher::entry& entry,
+                              const std::vector<watcher::entry>& reported,
+                              const std::vector<std::size_t>& renamed_directories,
+                              rename_candidates& candidates) -> bool
+    {
+        for(const auto index : renamed_directories)
+        {
+            const auto& directory = reported[index];
+            if(!fs::is_any_parent_path(directory.path, entry.path))
+            {
+                continue;
+            }
+            const fs::path old_path = get_original_path(directory.last_path, directory.path, entry.path);
+            if(candidates.unmatched.count(old_path.native()) == 0)
+            {
+                return false;
+            }
+            mark_renamed(entry, old_path.native(), candidates);
+            return true;
+        }
+        return false;
+    }
+
+    auto find_renamed_file(const watcher::entry& entry, const rename_candidates& candidates) const -> hpp::optional<path_key>
+    {
+        const auto bucket = candidates.files_by_size.find(entry.size);
+        if(bucket == candidates.files_by_size.end())
+        {
+            return hpp::nullopt;
+        }
+        for(const auto& key : bucket->second)
+        {
+            if(candidates.unmatched.count(key) == 0)
+            {
+                continue;
+            }
+            const auto& old = entries_.at(key);
+            if(is_rename_of(entry, old.path, old.stat))
+            {
+                return key;
+            }
+        }
+        return hpp::nullopt;
+    }
+
+    /**
+     * @brief Pairs a new folder with a missing one.
+     *
+     * A folder's timestamp from a directory listing can be stale until the folder is renamed, so a
+     * renamed folder may look newer than its cached self; its children move with it unchanged, so
+     * the folders are compared by the names under them first. Empty folders pair only when exactly
+     * one of each is in the diff; the timestamp rule of files is the last resort.
+     */
+    auto find_renamed_directory(const watcher::entry& entry,
+                                const rename_candidates& candidates,
+                                const std::unordered_map<path_key, std::vector<path_key>>& created_children,
+                                std::ptrdiff_t created_empty_directories) const -> hpp::optional<path_key>
+    {
+        static const std::vector<path_key> no_children;
+        const auto lookup = [](const auto& index, const path_key& parent) -> const std::vector<path_key>&
+        {
+            const auto it = index.find(parent);
+            return it == index.end() ? no_children : it->second;
+        };
+        const auto& new_children = lookup(created_children, entry.path.native());
+        std::vector<path_key> empty_matches;
+        for(const auto& key : candidates.directories)
+        {
+            if(candidates.unmatched.count(key) == 0)
+            {
+                continue;
+            }
+            const auto& old = entries_.at(key);
+            if(!has_same_extensions(entry.path, old.path))
+            {
+                continue;
+            }
+            const auto& old_children = lookup(candidates.children, key);
+            if(!new_children.empty() && new_children == old_children)
+            {
+                return key;
+            }
+            if(new_children.empty() && old_children.empty())
+            {
+                empty_matches.push_back(key);
+            }
+        }
+        if(empty_matches.size() == 1 && created_empty_directories == 1)
+        {
+            return empty_matches.front();
+        }
+        for(const auto& key : candidates.directories)
+        {
+            if(candidates.unmatched.count(key) == 0)
+            {
+                continue;
+            }
+            const auto& old = entries_.at(key);
+            if(is_rename_of(entry, old.path, old.stat))
+            {
+                return key;
+            }
+        }
+        return hpp::nullopt;
+    }
+
+    void mark_renamed(watcher::entry& entry, const path_key& old_key, rename_candidates& candidates)
+    {
+        const auto old = entries_.find(old_key);
+        entry.status = watcher::entry_status::renamed;
+        entry.last_path = old->second.path;
+        entry.event_time = std::chrono::system_clock::now();
+        entries_.erase(old);
+        candidates.unmatched.erase(old_key);
+    }
+
+    void settle_creations(const std::vector<watcher::entry>& reported,
+                          const std::vector<creation>& creations,
+                          std::vector<bool>& is_held,
+                          std::uint64_t generation,
+                          time_point now)
+    {
+        std::unordered_map<std::uintmax_t, std::vector<const cached_entry*>> present_files;
+        bool is_indexed = false;
+        for(const auto& created : creations)
+        {
+            const auto& entry = reported[created.index];
+            const auto& key = entry.path.native();
+            const bool is_hold_over = created.was_held && now - created.held_since >= hold_time_;
+            if(entry.status == watcher::entry_status::created && !is_hold_over && entry.type == fs::file_type::regular)
+            {
+                if(!is_indexed)
+                {
+                    index_present_files(present_files);
+                    is_indexed = true;
+                }
+                if(has_present_original(entry, present_files))
+                {
+                    auto& held = held_creations_[key];
+                    held.since = created.was_held ? created.held_since : now;
+                    held.seen_scan = generation;
+                    is_held[created.index] = true;
+                    continue;
+                }
+            }
+            auto& cached = entries_[key];
+            cached.path = entry.path;
+            cached.stat = get_stat(entry);
+            cached.seen_scan = generation;
+            cached.is_missing = false;
+            held_creations_.erase(key);
+        }
+    }
+
+    void index_present_files(std::unordered_map<std::uintmax_t, std::vector<const cached_entry*>>& present_files) const
+    {
+        for(const auto& [key, cached] : entries_)
+        {
+            if(!cached.is_missing && cached.stat.type == fs::file_type::regular)
+            {
+                present_files[cached.stat.size].push_back(&cached);
+            }
+        }
+    }
+
+    /// A file still present that this one could be a copy of: a copy keeps size and modification time.
+    static auto has_present_original(const watcher::entry& entry,
+                                     const std::unordered_map<std::uintmax_t, std::vector<const cached_entry*>>& present_files)
+        -> bool
+    {
+        const auto bucket = present_files.find(entry.size);
+        if(bucket == present_files.end())
+        {
+            return false;
+        }
+        return std::any_of(bucket->second.begin(),
+                           bucket->second.end(),
+                           [&entry](const cached_entry* original) -> bool
+                           {
+                               return original->stat.last_mod_time == entry.last_mod_time &&
+                                      has_same_extensions(original->path, entry.path);
+                           });
+    }
+
+    auto release_expired_removals(const std::vector<path_key>& missing, time_point now) -> std::vector<watcher::entry>
+    {
+        std::vector<watcher::entry> removed;
+        const auto now_system = std::chrono::system_clock::now();
+        for(const auto& key : missing)
+        {
+            const auto it = entries_.find(key);
+            if(it == entries_.end() || !it->second.is_missing || now - it->second.missing_since < hold_time_)
+            {
+                continue;
+            }
+            removed.push_back(make_entry(it->second.path, it->second.stat, watcher::entry_status::removed, now_system));
+            entries_.erase(it);
+        }
+        return removed;
+    }
+
+    void update_hold_deadline()
+    {
+        hold_deadline_ = hpp::nullopt;
+        const auto consider = [this](time_point since) -> void
+        {
+            const auto due = since + hold_time_;
+            hold_deadline_ = hold_deadline_ ? std::min(*hold_deadline_, due) : due;
+        };
+        for(const auto& [key, cached] : entries_)
+        {
+            if(cached.is_missing)
+            {
+                consider(cached.missing_since);
+            }
+        }
+        for(const auto& [key, held] : held_creations_)
+        {
+            consider(held.since);
+        }
+    }
+
+    clock_type::duration hold_time_;
+    std::unordered_map<path_key, cached_entry> entries_;
+    std::unordered_map<path_key, held_creation> held_creations_;
+    std::uint64_t generation_ = 0;
+    hpp::optional<time_point> hold_deadline_;
+};
+
+} // namespace
+
+/**
+ * @brief Scans one watched root and decides when.
+ *
+ * A scan runs SETTLE_DELAY after the OS last reported a change, at the latest one poll interval
+ * after the first unscanned one, when a held entry is due, and otherwise once per poll interval.
+ * A change reported while a scan runs leaves the listener waiting for another scan; the result is
+ * still reported, as the holds of change_tracker pair a rename the scan saw only half of. That
+ * matters because a listing refreshes stale folder timestamps, which NTFS reports as a change.
+ * A walk that stopped on an error is thrown away and repeated once the tree is quiet, unless the
+ * listener has waited a whole poll interval already.
+ * Everything except the atomics is touched by the polling thread only, after construction.
+ */
+class watcher_fallback::directory_listener
+{
+public:
+    directory_listener(const fs::path& root,
+                       bool recursive,
+                       clock_type::duration poll_interval,
+                       std::function<void()> wake)
+        : root_(root)
+        , recursive_(recursive)
+        , poll_interval_(poll_interval)
+        , wake_(std::move(wake))
+        , tracker_(poll_interval / HOLD_DIVISOR)
+    {
+        start_trigger();
+        scanned_counter_ = change_counter_.load();
+        last_scan_ = clock_type::now();
+        tracker_.reset(root_, recursive_);
+    }
+
+    ~directory_listener()
+    {
+        trigger_.stop();
+    }
+
+    directory_listener(const directory_listener&) = delete;
+    auto operator=(const directory_listener&) -> directory_listener& = delete;
+
     auto get_path() const -> const fs::path&
     {
         return root_;
     }
-    
-    auto get_recursive() const -> bool
+
+    auto is_recursive() const -> bool
     {
         return recursive_;
     }
 
+    void pause()
+    {
+        is_paused_ = true;
+    }
+
+    void resume()
+    {
+        is_paused_ = false;
+    }
+
+    void request_immediate_scan()
+    {
+        is_scan_requested_ = true;
+    }
+
+    auto get_due_time(time_point now) -> time_point
+    {
+        if(is_scan_requested_.load())
+        {
+            return now;
+        }
+        time_point due = last_scan_ + poll_interval_;
+        const bool is_notified = change_counter_.load() != scanned_counter_;
+        if(is_notified || needs_retry_)
+        {
+            if(!waiting_since_)
+            {
+                waiting_since_ = now;
+            }
+            const auto last_change = time_point(clock_type::duration(last_change_ticks_.load()));
+            const auto quiet_at = std::max(last_change, last_scan_) + SETTLE_DELAY;
+            due = std::min(quiet_at, *waiting_since_ + poll_interval_);
+        }
+        const auto& hold_deadline = tracker_.get_hold_deadline();
+        return hold_deadline ? std::min(due, *hold_deadline) : due;
+    }
+
+    /// Scans and returns what to report; empty while paused or when the scan was thrown away.
+    auto poll(time_point now) -> std::vector<watcher::entry>
+    {
+        is_scan_requested_ = false;
+        if(!trigger_.is_active())
+        {
+            start_trigger();
+        }
+        const auto counter_before = change_counter_.load();
+        auto scan = tracker_.scan(root_, recursive_);
+        const bool changed_during_scan = change_counter_.load() != counter_before;
+        last_scan_ = now;
+        const bool is_overdue = waiting_since_ && now - *waiting_since_ >= poll_interval_;
+        if(!scan.is_complete && !is_overdue)
+        {
+            needs_retry_ = true;
+            if(!waiting_since_)
+            {
+                waiting_since_ = now;
+            }
+            return release_or_buffer({});
+        }
+        scanned_counter_ = counter_before;
+        needs_retry_ = false;
+        waiting_since_ = changed_during_scan ? hpp::optional<time_point>(now) : hpp::nullopt;
+        return release_or_buffer(tracker_.commit(scan, clock_type::now()));
+    }
+
 private:
-    friend class watcher_fallback;
+    void start_trigger()
+    {
+        trigger_.start(root_,
+                       recursive_,
+                       [this]() -> void
+                       {
+                           last_change_ticks_ = clock_type::now().time_since_epoch().count();
+                           ++change_counter_;
+                           wake_();
+                       });
+    }
 
-    /// Path to watch
+    /// Holds results back while paused and hands them out with the first result after.
+    auto release_or_buffer(std::vector<watcher::entry> changes) -> std::vector<watcher::entry>
+    {
+        if(is_paused_.load())
+        {
+            std::move(changes.begin(), changes.end(), std::back_inserter(buffered_));
+            return {};
+        }
+        if(buffered_.empty())
+        {
+            return changes;
+        }
+        std::vector<watcher::entry> released;
+        released.swap(buffered_);
+        std::move(changes.begin(), changes.end(), std::back_inserter(released));
+        return released;
+    }
+
     fs::path root_;
-    /// Cache watched files
-    std::map<std::string, watcher::entry> entries_;
-
-    std::chrono::system_clock::time_point init_time_timestamp_;
-    ///
-    watcher::clock_t::duration poll_interval_ = 500ms;
-
-    watcher::clock_t::time_point last_poll_ = watcher::clock_t::now();
-    ///
     bool recursive_ = false;
+    clock_type::duration poll_interval_;
+    std::function<void()> wake_;
+    change_tracker tracker_;
+    std::vector<watcher::entry> buffered_;
 
-    std::atomic<bool> paused_ = {false};
+    time_point last_scan_{};
+    std::uint64_t scanned_counter_ = 0;
+    /// Since when a scan has been owed; a scan is never thrown away after a whole poll interval.
+    hpp::optional<time_point> waiting_since_;
+    bool needs_retry_ = false;
 
-    std::unordered_set<std::string> seen_keys_this_scan_;
+    std::atomic<bool> is_paused_{false};
+    std::atomic<bool> is_scan_requested_{false};
+    std::atomic<std::uint64_t> change_counter_{0};
+    std::atomic<clock_type::rep> last_change_ticks_{0};
 
-    observed_changes buffered_changes_;
+    /// Declared last so it stops first: its callback touches the members above.
+    change_trigger trigger_;
 };
 
+/**
+ * @brief One watch: filters what its listener reports and calls back.
+ */
 class watcher_fallback::impl
 {
 public:
     impl(const fs::path& path,
+         const fs::path& watch_root,
          const pattern_filter& filter,
          bool recursive,
          bool initial_list,
-         watcher::clock_t::duration poll_interval,
          watcher::notify_callback callback,
          std::shared_ptr<directory_listener> listener,
          const std::string& watcher_name)
         : path_(path)
+        , watch_root_(watch_root)
         , filter_(filter)
         , recursive_(recursive)
         , callback_(std::move(callback))
         , listener_(std::move(listener))
+        , is_listener_root_(watch_root_ == listener_->get_path())
         , init_time_timestamp_(std::chrono::system_clock::now())
         , watcher_name_(watcher_name)
     {
-        // Initialize entries cache and optionally emit initial list
-        initialize_entries(initial_list);
-        
-        // Connect to the listener's changes
-        slot_key_ = listener_->on_changes.connect([this](const std::vector<watcher::entry>& changes) -> void
+        if(initial_list)
         {
-            handle_changes(changes);
-        });
-    }
-    
-    ~impl()
-    {
-        if(listener_)
-        {
-            listener_->on_changes.disconnect(slot_key_);
+            emit_initial_list();
         }
     }
-    
-    void pause()
-    {
-        paused_ = true;
-    }
-    
-    void resume()
-    {
-        paused_ = false;
-    }
-    
-    auto get_path() const -> const fs::path&
-    {
-        return path_;
-    }
-    
-    auto get_listener() const -> std::shared_ptr<directory_listener>
+
+    impl(const impl&) = delete;
+    auto operator=(const impl&) -> impl& = delete;
+
+    auto get_listener() const -> const std::shared_ptr<directory_listener>&
     {
         return listener_;
     }
 
-private:
-    void poll_entry(const fs::directory_entry& entry, std::vector<watcher::entry>& initial_entries, bool emit_initial_list)
+    void deliver(const std::vector<watcher::entry>& changes)
     {
-        bool filter_passed = filter_.should_include(entry.path());
-        fs::error_code err2;
-        fs::file_status file_status = entry.status(err2);
-
-        auto file_type = file_status.type();
-        if(filter_passed || (file_type == fs::file_type::directory))
+        std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
+        if(!is_active_)
         {
-            watcher::entry e;
-            e.path = entry.path();
-            e.last_path = entry.path();
-            e.status = watcher::entry_status::created;
-            
-            fs::error_code err3;
-            e.last_mod_time = entry.last_write_time(err3);
-            e.size = entry.file_size(err3);
-            e.type = file_type;
-            
-            // on create set the event time to the current time
-            e.event_time = std::chrono::system_clock::now();
-            
-            // Add to cache
-            std::string key = e.path.string();
-            
-            if(emit_initial_list && filter_passed)
-            {
-                initial_entries.push_back(e);
-            }
+            return;
         }
-
+        std::vector<watcher::entry> filtered;
+        for(const auto& entry : changes)
+        {
+            if(!filter_.should_include(entry.path) || !is_path_under_watch(entry.path))
+            {
+                continue;
+            }
+            if(entry.event_time < init_time_timestamp_)
+            {
+                continue;
+            }
+            filtered.push_back(entry);
+        }
+        if(!filtered.empty())
+        {
+            callback_(filtered, false);
+        }
     }
 
-    void initialize_entries(bool emit_initial_list)
+    /// No callback starts after this returns; waits for a running one unless called from inside it.
+    void deactivate()
     {
-        // Iterate through the directory and populate entries_ cache
-        fs::error_code err;
+        std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
+        is_active_ = false;
+    }
+
+private:
+    void emit_initial_list()
+    {
         std::vector<watcher::entry> initial_entries;
-        
-        if(recursive_)
-        {
-            for(auto& entry : fs::recursive_directory_iterator(path_, err))
-            {
-                poll_entry(entry, initial_entries, emit_initial_list); 
-            }
-        }
-        else
-        {
-            for(auto& entry : fs::directory_iterator(path_, err))
-            {
-                poll_entry(entry, initial_entries, emit_initial_list);
-            }
-        }
-        
-        // Emit initial list if requested
-        if(emit_initial_list && !initial_entries.empty() && callback_)
+        walk_directory(path_,
+                       recursive_,
+                       [&](const fs::directory_entry& entry) -> void
+                       {
+                           if(!filter_.should_include(entry.path()))
+                           {
+                               return;
+                           }
+                           auto initial = make_entry(entry.path(),
+                                                     read_stat(entry),
+                                                     watcher::entry_status::created,
+                                                     std::chrono::system_clock::now());
+                           initial_entries.push_back(std::move(initial));
+                       });
+        if(!initial_entries.empty())
         {
             callback_(initial_entries, true);
         }
     }
 
-    auto get_system_timestamp(const watcher::entry& entry) -> std::chrono::system_clock::time_point
-    {
-        // if(entry.status == watcher::entry_status::renamed || entry.status == watcher::entry_status::removed)
-        {
-            return entry.event_time;
-        }
-        // return fs::filetime_to_system_clock(entry.last_mod_time);
-
-    }
-    
-    void handle_changes(const std::vector<watcher::entry>& changes)
-    {
-        // Filter changes according to this impl's filter and path
-        std::vector<watcher::entry> filtered_changes;
-        
-        for(const auto& entry : changes)
-        {
-            // Check if event is under our watched path (for parent listener reuse)
-            if(!is_path_under_watch(entry.path))
-            {
-                continue;
-            }
-            
-            // Check filter
-            if(!filter_.should_include(entry.path))
-            {
-                continue;
-            }
-            
-            // Check timestamp
-            auto system_timestamp = get_system_timestamp(entry);
-            
-            if(system_timestamp < init_time_timestamp_)
-            {
-                continue;
-            }
-            
-            filtered_changes.push_back(entry);
-        }
-        
-        if(filtered_changes.empty())
-        {
-            return;
-        }
-        
-        // Check if paused
-        if(paused_)
-        {
-            // Buffer changes when paused
-            buffered_changes_.insert(buffered_changes_.end(), filtered_changes.begin(), filtered_changes.end());
-            return;
-        }
-        
-        // Call callback
-        if(callback_)
-        {
-            callback_(filtered_changes, false);
-        }
-    }
-    
+    /// Lexical: entries are spelled from the listener root, which is this root or an ancestor of it.
     auto is_path_under_watch(const fs::path& event_path) const -> bool
     {
-        fs::error_code ec;
-        fs::path watch_path = fs::weakly_canonical(path_, ec);
-        if(ec)
-        {
-            watch_path = fs::absolute(path_, ec);
-            if(ec)
-            {
-                watch_path = path_;
-            }
-            watch_path = watch_path.lexically_normal();
-        }
-        fs::path resolved_event_path = fs::weakly_canonical(event_path, ec);
-        if(ec)
-        {
-            resolved_event_path = fs::absolute(event_path, ec);
-            if(ec)
-            {
-                resolved_event_path = event_path;
-            }
-            resolved_event_path = resolved_event_path.lexically_normal();
-        }
-        if(resolved_event_path == watch_path)
-        {
-            return true;
-        }
-        return fs::is_any_parent_path(watch_path, resolved_event_path);
+        return is_listener_root_ || event_path == watch_root_ || fs::is_any_parent_path(watch_root_, event_path);
     }
-    
+
     fs::path path_;
+    fs::path watch_root_;
     pattern_filter filter_;
-    bool recursive_;
+    bool recursive_ = false;
     watcher::notify_callback callback_;
     std::shared_ptr<directory_listener> listener_;
-    
+    bool is_listener_root_ = false;
     std::chrono::system_clock::time_point init_time_timestamp_;
-    uint64_t slot_key_ = 0;
-    std::atomic<bool> paused_ = false;
-    std::vector<watcher::entry> buffered_changes_;
     std::string watcher_name_;
+
+    std::recursive_mutex callback_mutex_;
+    bool is_active_ = true;
 };
 
 watcher_fallback::~watcher_fallback()
@@ -718,14 +980,13 @@ watcher_fallback::~watcher_fallback()
 void watcher_fallback::pause()
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    globally_paused_ = true;
-    for(auto& kvp : directory_listeners_)
+    if(pause_depth_++ > 0)
     {
-        kvp.second->pause();
+        return;
     }
-    for(auto& kvp : watchers_)
+    for(const auto& listener : directory_listeners_)
     {
-        kvp.second->pause();
+        listener->pause();
     }
 }
 
@@ -733,32 +994,30 @@ void watcher_fallback::resume()
 {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        globally_paused_ = false;
-        for(auto& kvp : directory_listeners_)
+        if(pause_depth_ == 0 || --pause_depth_ > 0)
         {
-            kvp.second->resume();
-            kvp.second->request_immediate_poll();
+            return;
         }
-        for(auto& kvp : watchers_)
+        for(const auto& listener : directory_listeners_)
         {
-            kvp.second->resume();
+            listener->resume();
+            listener->request_immediate_scan();
         }
     }
-    cv_.notify_all();
+    wake();
 }
 
 void watcher_fallback::wait_all(watcher::clock_t::duration duration)
 {
-    cv_.notify_all();
+    wake();
     std::this_thread::sleep_for(duration);
 }
+
 void watcher_fallback::close()
 {
-    // stop the thread
     watching_ = false;
-    // remove all watchers
     unwatch_all_impl();
-    
+    wake();
     if(thread_.joinable())
     {
         thread_.join();
@@ -767,168 +1026,223 @@ void watcher_fallback::close()
 
 void watcher_fallback::start()
 {
-    watching_ = true;
+    bool expected = false;
+    if(!watching_.compare_exchange_strong(expected, true))
+    {
+        return;
+    }
     thread_ = std::thread(
         [this]() -> void
         {
             platform::set_thread_name("fs::watcher");
-            // keep watching for modifications every ms milliseconds
-            using namespace std::literals;
-            while(watching_)
-            {
-                if(globally_paused_.load())
-                {
-                    std::unique_lock<std::mutex> lock(mutex_);
-                    cv_.wait_for(lock, 500ms);
-                    continue;
-                }
-
-                watcher::clock_t::duration sleep_time = 99999h;
-
-                // iterate through each directory listener and check for modification
-                std::map<fs::path, std::shared_ptr<directory_listener>> listeners;
-                {
-                    std::unique_lock<std::mutex> lock(mutex_);
-                    prune_stale_listeners();
-                    listeners = directory_listeners_;
-                }
-
-                for(auto& pair : listeners)
-                {
-                    auto listener = pair.second;
-
-                    auto now = watcher::clock_t::now();
-
-                    auto diff = (listener->last_poll_ + listener->poll_interval_) - now;
-                    if(diff <= watcher::clock_t::duration(0))
-                    {
-                        listener->watch();
-                        listener->last_poll_ = now;
-
-                        sleep_time = std::min(sleep_time, listener->poll_interval_);
-                    }
-                    else
-                    {
-                        sleep_time = std::min(sleep_time, diff);
-                    }
-                }
-
-                std::unique_lock<std::mutex> lock(mutex_);
-                cv_.wait_for(lock, sleep_time);
-            }
+            run();
         });
 }
 
+void watcher_fallback::run()
+{
+    while(watching_)
+    {
+        std::vector<std::shared_ptr<directory_listener>> listeners;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if(pause_depth_ == 0)
+            {
+                listeners = directory_listeners_;
+            }
+        }
+        if(listeners.empty())
+        {
+            // Paused, or nothing to watch: watch(), resume() and close() wake the thread.
+            wait_for_wake(clock_type::now() + PAUSED_WAIT);
+            continue;
+        }
+        auto wake_at = clock_type::now() + MAX_WAIT;
+        for(const auto& listener : listeners)
+        {
+            const auto now = clock_type::now();
+            if(listener->get_due_time(now) <= now)
+            {
+                const auto changes = listener->poll(now);
+                if(!changes.empty())
+                {
+                    deliver(listener, changes);
+                }
+            }
+            wake_at = std::min(wake_at, listener->get_due_time(clock_type::now()));
+        }
+        wait_for_wake(wake_at);
+    }
+}
+
+void watcher_fallback::wake()
+{
+    {
+        std::lock_guard<std::mutex> lock(wake_mutex_);
+        wake_pending_ = true;
+    }
+    wake_cv_.notify_one();
+}
+
+void watcher_fallback::wait_for_wake(watcher::clock_t::time_point deadline)
+{
+    std::unique_lock<std::mutex> lock(wake_mutex_);
+    wake_cv_.wait_until(lock,
+                        deadline,
+                        [this]() -> bool
+                        {
+                            return wake_pending_ || !watching_;
+                        });
+    wake_pending_ = false;
+}
+
+void watcher_fallback::deliver(const std::shared_ptr<directory_listener>& listener,
+                               const std::vector<watcher::entry>& changes)
+{
+    std::vector<std::shared_ptr<impl>> targets;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for(const auto& [key, watch] : watchers_)
+        {
+            if(watch->get_listener() == listener)
+            {
+                targets.push_back(watch);
+            }
+        }
+    }
+    for(const auto& target : targets)
+    {
+        target->deliver(changes);
+    }
+}
+
+auto watcher_fallback::find_listener(const fs::path& root, bool recursive) const -> std::shared_ptr<directory_listener>
+{
+    for(const auto& listener : directory_listeners_)
+    {
+        if(listener->get_path() == root && (listener->is_recursive() || !recursive))
+        {
+            return listener;
+        }
+    }
+    for(const auto& listener : directory_listeners_)
+    {
+        if(listener->is_recursive() && fs::is_any_parent_path(listener->get_path(), root))
+        {
+            return listener;
+        }
+    }
+    return nullptr;
+}
+
+auto watcher_fallback::take_stale_listeners() -> std::vector<std::shared_ptr<directory_listener>>
+{
+    std::vector<std::shared_ptr<directory_listener>> stale;
+    const auto is_unused = [this](const std::shared_ptr<directory_listener>& listener) -> bool
+    {
+        return std::none_of(watchers_.begin(),
+                            watchers_.end(),
+                            [&listener](const auto& kvp) -> bool
+                            {
+                                return kvp.second->get_listener() == listener;
+                            });
+    };
+    const auto first_stale = std::stable_partition(directory_listeners_.begin(),
+                                                   directory_listeners_.end(),
+                                                   [&](const auto& listener) -> bool
+                                                   {
+                                                       return !is_unused(listener);
+                                                   });
+    std::move(first_stale, directory_listeners_.end(), std::back_inserter(stale));
+    directory_listeners_.erase(first_stale, directory_listeners_.end());
+    return stale;
+}
+
 auto watcher_fallback::watch_impl(const fs::path& path,
-                              const pattern_filter& filter,
-                              bool recursive,
-                              bool initial_list,
-                              watcher::clock_t::duration poll_interval,
-                              watcher::notify_callback callback,
-                              const std::string& watcher_name
-                            ) -> std::uint64_t
+                                  const pattern_filter& filter,
+                                  bool recursive,
+                                  bool initial_list,
+                                  watcher::clock_t::duration poll_interval,
+                                  watcher::notify_callback callback,
+                                  const std::string& watcher_name) -> std::uint64_t
 {
     if(!callback)
     {
         return 0;
     }
-
+    const fs::path root = make_absolute(path);
     std::shared_ptr<directory_listener> listener;
-    fs::error_code err;
-    fs::path abs_path = fs::absolute(path, err);
-    if(!err)
-    {
-        abs_path = abs_path.lexically_normal();
-    }
-    bool is_new_listener = false;
-
     {
         std::lock_guard<std::mutex> lock(mutex_);
-       
-        auto it = directory_listeners_.find(abs_path);
-        if(it != directory_listeners_.end())
-        {
-            listener = it->second;
-        }
-        else
-        {
-            for(auto& [watched_path, existing_listener] : directory_listeners_)
-            {
-                if(existing_listener->get_recursive() && fs::is_any_parent_path(watched_path, abs_path))
-                {
-                    listener = existing_listener;
-
-                    break;
-                }
-            }
-            if(!listener)
-            {
-                listener = std::make_shared<directory_listener>(abs_path, recursive, poll_interval);
-                
-                is_new_listener = true;
-            }
-        }
+        listener = find_listener(root, recursive);
+    }
+    const bool is_new_listener = !listener;
+    if(is_new_listener)
+    {
+        // Built outside the lock: it walks the whole tree.
+        listener = std::make_shared<directory_listener>(root,
+                                                        recursive,
+                                                        poll_interval,
+                                                        [this]() -> void
+                                                        {
+                                                            wake();
+                                                        });
     }
     static std::atomic<std::uint64_t> free_id = {1};
-    auto key = free_id++;
-    auto impl = std::make_shared<watcher_fallback::impl>(path, filter, recursive, initial_list, poll_interval, std::move(callback), listener, watcher_name);
+    const auto key = free_id++;
+    auto watch =
+        std::make_shared<impl>(path, root, filter, recursive, initial_list, std::move(callback), listener, watcher_name);
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        watchers_[key] = impl;
         if(is_new_listener)
         {
-            directory_listeners_[abs_path] = listener;
+            if(pause_depth_ > 0)
+            {
+                listener->pause();
+            }
+            directory_listeners_.push_back(listener);
         }
+        watchers_[key] = std::move(watch);
     }
-    if(globally_paused_)
-    {
-        listener->pause();
-        impl->pause();
-    }
-    cv_.notify_all();
+    wake();
     return key;
-}
-
-void watcher_fallback::prune_stale_listeners()
-{
-    for(auto it = directory_listeners_.begin(); it != directory_listeners_.end();)
-    {
-        const auto& listener = it->second;
-        const bool referenced = std::any_of(watchers_.begin(),
-                                              watchers_.end(),
-                                              [&listener](const auto& kvp) -> bool
-                                              {
-                                                  return kvp.second && kvp.second->get_listener() == listener;
-                                              });
-        if(!referenced)
-        {
-            it = directory_listeners_.erase(it);
-        }
-        else
-        {
-            ++it;
-        }
-    }
 }
 
 void watcher_fallback::unwatch_impl(std::uint64_t key)
 {
+    std::shared_ptr<impl> removed;
+    std::vector<std::shared_ptr<directory_listener>> stale;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        watchers_.erase(key);
-        prune_stale_listeners();
+        const auto it = watchers_.find(key);
+        if(it != watchers_.end())
+        {
+            removed = std::move(it->second);
+            watchers_.erase(it);
+        }
+        stale = take_stale_listeners();
     }
-    cv_.notify_all();
+    if(removed)
+    {
+        removed->deactivate();
+    }
+    wake();
 }
 
 void watcher_fallback::unwatch_all_impl()
 {
+    std::map<std::uint64_t, std::shared_ptr<impl>> removed;
+    std::vector<std::shared_ptr<directory_listener>> listeners;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        watchers_.clear();
-        directory_listeners_.clear();
+        removed.swap(watchers_);
+        listeners.swap(directory_listeners_);
     }
-    cv_.notify_all();
+    for(const auto& [key, watch] : removed)
+    {
+        watch->deactivate();
+    }
+    wake();
 }
 
 } // namespace fs
