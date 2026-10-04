@@ -465,7 +465,10 @@ auto lumen_surface_cache_pass::compute_capture_view(const lumen_scene::capture& 
     const float scale_y = y_sign * tile_height / atlas_height;
     const float offset_x = (2.0f * tile_left + tile_width) / atlas_width - 1.0f;
     const float offset_y = y_sign * (1.0f - (2.0f * tile_top + tile_height) / atlas_height);
-    const bool is_homogeneous_depth = gfx::is_homogeneous_depth();
+    // The backend's own clip depth range, not gfx::is_homogeneous_depth(): that is the engine's projection convention
+    // (zero to one everywhere; shaders reading a camera depth undo the backend's mapping), while the capture must clip
+    // at the card's front plane and the copy reads its depth raw.
+    const bool is_homogeneous_depth = bgfx::getCaps()->homogeneousDepth;
     const float z_scale = is_homogeneous_depth ? 2.0f : 1.0f;
     const float z_offset = is_homogeneous_depth ? -1.0f : 0.0f;
     const math::vec3 row_x = axis_x / hx * scale_x;

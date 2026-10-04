@@ -77,6 +77,14 @@ Use `unravel-shader-change` for step-by-step shader edits.
   texel (`texelFetch` / `imageLoad` at pixel coordinates) must mirror its rect or scissor and
   flip y (and map depth) in its projection on GL - see
   `lumen_surface_cache_pass::compute_capture_view`. Screen passes sampled by UV need nothing.
+- **GL depth range is not `gfx::is_homogeneous_depth()`:** that function is the engine's
+  projection convention and always returns false - every projection is zero-to-one, so on GL
+  a depth buffer holds 0.5 + 0.5 z and nothing in front of z = -w is clipped; shaders that
+  read a camera depth undo this with `toClipSpaceDepth`. A projection whose depth is read raw,
+  or that must clip at its near plane, takes the range from `bgfx::getCaps()->homogeneousDepth`.
+  The card capture once keyed off the engine flag: GL card depths shifted toward the card's
+  back, the lighting started its shadow and radiosity rays inside walls, and the GL GI scene
+  read about half as bright as D3D11 (the lit image 13% darker).
 - **Verify on GL:** after adding or renaming shader resources, or adding a pass that
   rasterizes into an atlas, run the sandbox with `--renderer=opengl` and compare the debug
   views with D3D11 (G-buffer views first, then lighting). `tasks/validate_gl.py` checks only
