@@ -187,6 +187,13 @@ auto get_meta_key(const fs::path& path) -> std::string
 
 auto check_files_integrity(const std::string& key, const fs::path& entry_path) -> bool
 {
+    // A key that is not a protocol path means the compiled file could not be mapped back to its source. It is
+    // not known to be an orphan, so it is neither deleted nor used.
+    if(!fs::has_known_protocol(key))
+    {
+        APPLOG_ERROR("{} does not map to a source asset (key {}). Leaving it in place.", entry_path.string(), key);
+        return false;
+    }
     fs::error_code ec;
     auto key_path = fs::resolve_protocol(key);
 
@@ -859,6 +866,10 @@ void asset_watcher::watch_assets(rtti::context& ctx,
                                  const on_wait_progress_t& on_progress)
 {
     auto start_time = std::chrono::steady_clock::now();
+    // A write that never reached its rename (editor killed or crashed, or a
+    // compiler process outliving it) leaves its temp file behind; clear those
+    // before this root is scanned and recompiled.
+    asset_writer::cleanup_stale_temp_files(fs::resolve_protocol(protocol), true);
     auto& w = watched_protocols_[protocol];
 
     auto data_protocol = ex::get_data_directory_no_slash(protocol);

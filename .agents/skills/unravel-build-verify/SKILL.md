@@ -83,6 +83,8 @@ build/Debug/bin/unravel-tests.exe --suite serialization        # substring match
 | `animation` | Blend spaces, root motion, replay | Animation |
 | `gi constants / reference oracle` | GI constants parity (C++ vs shader mirror), reference tracer | GI code or GI shaders |
 | `gi bake / sdf / clipmap` | Bake pipeline; also **compiles every GI shader via shaderc** | GI shaders / SDF |
+| `fs protocols` | `convert_to_protocol` with a root in another letter case, `..` / trailing-separator roots, whole-folder matching, longest root | `engine/core/filesystem/filesystem.cpp`, asset keys |
+| `ui system lifecycle` | Releasing UI resources while RmlUi is not initialised (failed editor start-up) | `ui_system`, RmlUi backend |
 | `fs watcher` | Created / modified / removed / renamed reporting, non-atomic moves and safe saves pairing up, pause / resume, unwatch during a callback, per-format filters on one listener (`--bench` adds latency and fan-out timings; ~50 s) | `engine/core/filesystem/watchers/`, syncer, asset watcher |
 
 Suites self-register (`REGISTER_TEST_SUITE` in `tests/tests/suites/`); adding one is

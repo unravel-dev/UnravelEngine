@@ -48,23 +48,6 @@ bool is_indirect_parent_path(const path& parent, const path& child)
     return !rel.empty() && rel.begin()->string() != "." && rel.begin()->string() != "..";
 }
 
-bool begins_with(const std::string& str, const std::string& value)
-{
-    // Validate requirements
-    if(str.length() < value.length())
-    {
-        return false;
-    }
-    if(str.empty() || value.empty())
-    {
-        return false;
-    }
-
-    // Do the submeshes match?
-    auto s1 = str.substr(0, value.length());
-
-    return s1.compare(value) == 0;
-}
 static std::string replace_seq(const std::string& str, const std::string& old_sequence, const std::string& new_sequence)
 {
     std::string s = str;
@@ -98,6 +81,62 @@ std::string to_lower(const std::string& str)
     std::string s(str);
     std::transform(s.begin(), s.end(), s.begin(), tolower);
     return s;
+}
+
+/// ASCII-only case fold: path strings are compared byte by byte, so other bytes stay as they are.
+auto fold_ascii_case(char c) -> char
+{
+    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c - 'A' + 'a') : c;
+}
+
+/// Whether root names the folder path_string is, or one of its ancestors. Letter case is ignored on a
+/// case-insensitive filesystem, where a root registered from an executable path launched in another case
+/// still names the folder on disk.
+auto is_root_of(const std::string& root, const std::string& path_string) -> bool
+{
+    if(root.empty() || path_string.size() < root.size())
+    {
+        return false;
+    }
+    const bool ignore_case = is_case_insensitive();
+    const auto chars_match = [ignore_case](char lhs, char rhs) -> bool
+    {
+        return ignore_case ? fold_ascii_case(lhs) == fold_ascii_case(rhs) : lhs == rhs;
+    };
+    if(!std::equal(root.begin(), root.end(), path_string.begin(), chars_match))
+    {
+        return false;
+    }
+    if(path_string.size() == root.size())
+    {
+        return true;
+    }
+    const auto is_separator = [](char c) -> bool
+    {
+        return c == '\\' || c == '/';
+    };
+    return is_separator(root.back()) || is_separator(path_string[root.size()]);
+}
+
+/**
+ * @brief The spelling a protocol root is stored in.
+ *
+ * Absolute, lexically normal, as it is on disk where the folder exists (letter case, short names, links
+ * resolved) and without a trailing separator - the form convert_to_protocol compares its canonical input to.
+ */
+auto normalize_protocol_root(const path& dir) -> path
+{
+    fs::error_code err;
+    path root = fs::weakly_canonical(dir, err);
+    if(err || root.empty())
+    {
+        root = dir.lexically_normal();
+    }
+    if(!root.has_filename() && root.has_relative_path())
+    {
+        root = root.parent_path();
+    }
+    return root.make_preferred();
 }
 
 template<typename Container = std::string, typename CharT = char, typename Traits = std::char_traits<char>>
@@ -186,7 +225,7 @@ bool add_path_protocol(const std::string& protocol, const path& dir)
 
     auto& protocols = get_path_protocols();
     // Add to the list
-    protocols[protocol_lower] = fs::path(dir).make_preferred().string();
+    protocols[protocol_lower] = detail::normalize_protocol_root(dir).string();
 
     // Success!
     return true;
@@ -267,6 +306,10 @@ path convert_to_protocol(const path& _path)
 {
     fs::error_code ec;
     auto canonical_path = fs::weakly_canonical(_path, ec);
+    if(ec || canonical_path.empty())
+    {
+        canonical_path = _path.lexically_normal();
+    }
     const auto string_path = fs::path(canonical_path).make_preferred().string();
 
     const auto& protocols = get_path_protocols();
@@ -274,35 +317,27 @@ path convert_to_protocol(const path& _path)
     const protocols_t::value_type* best_protocol{};
     for(const auto& protocol_pair : protocols)
     {
-        //        const auto& protocol = protocol_pair.first;
         const auto& resolved_protocol = protocol_pair.second;
-
-        if(detail::begins_with(string_path, resolved_protocol))
+        if(!detail::is_root_of(resolved_protocol, string_path))
         {
-            if(best_protocol)
-            {
-                if(best_protocol->second.size() < resolved_protocol.size())
-                {
-                    best_protocol = &protocol_pair;
-                }
-            }
-            else
-            {
-                best_protocol = &protocol_pair;
-            }
+            continue;
+        }
+        if(!best_protocol || best_protocol->second.size() < resolved_protocol.size())
+        {
+            best_protocol = &protocol_pair;
         }
     }
-    if(best_protocol)
+    if(!best_protocol)
     {
-        const auto& protocol = best_protocol->first;
-        const auto& resolved_protocol = best_protocol->second;
-
-        auto arg1 = path(string_path).generic_string();
-        auto arg2 = path(resolved_protocol).generic_string();
-
-        return replace(arg1, arg2, protocol + ":").generic_string();
+        return _path;
     }
-    return _path;
+    // The matched root is replaced by length: it may differ from the path in letter case.
+    auto relative = path(string_path.substr(best_protocol->second.size())).generic_string();
+    if(!relative.empty() && relative.front() != '/')
+    {
+        relative.insert(relative.begin(), '/');
+    }
+    return path(best_protocol->first + ":" + relative);
 }
 
 path replace(const path& _path, const path& _sequence, const path& _new_sequence)

@@ -645,7 +645,12 @@ auto compile_texture_to_file(const fs::path& input_path,
         if(!compiled)
         {
             APPLOG_ERROR("Failed compilation of {0} with error: {1}", str_input, error);
-            fs::remove(str_output);
+            fs::error_code remove_err;
+            fs::remove(str_output, remove_err);
+            if(using_temp_input)
+            {
+                fs::remove(temp_baked_path, remove_err);
+            }
             return false;
         }
     }

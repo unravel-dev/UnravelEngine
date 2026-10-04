@@ -67,18 +67,89 @@ std::string generate_random_string(size_t len)
     return str;
 }
 
+constexpr std::size_t temp_uuid_length = 36;
+constexpr const char temp_extension[] = ".temp";
+constexpr std::size_t temp_extension_length = sizeof(temp_extension) - 1;
+
+auto is_hex_digit(fs::path::value_type c) noexcept -> bool
+{
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+}
+
 //------------------------------------------------------------------------------
-// Recognise our temp-file pattern: a hidden file named `.<UUID>.temp` (the
-// leading dot is what hides it in most file browsers).
+// Recognise exactly the name make_temp_path produces: `.<uuid>.temp` with the
+// 8-4-4-4-12 hex layout (the leading dot hides it in most file browsers). The
+// stale sweep deletes whatever this accepts, so it must not match a user's own
+// dot-files. Reads the native name, so no code-page conversion can throw.
 //------------------------------------------------------------------------------
 auto looks_like_temp_file(const fs::path& p) noexcept -> bool
 {
-    const auto name = p.filename().string();
-    if(name.size() < 2 || name.front() != '.')
+    const fs::path filename = p.filename();
+    const fs::path::string_type& name = filename.native();
+    if(name.size() != 1 + temp_uuid_length + temp_extension_length || name.front() != '.')
     {
         return false;
     }
-    return p.extension() == ".temp";
+    for(std::size_t i = 0; i < temp_extension_length; ++i)
+    {
+        if(name[1 + temp_uuid_length + i] != static_cast<fs::path::value_type>(temp_extension[i]))
+        {
+            return false;
+        }
+    }
+    for(std::size_t i = 0; i < temp_uuid_length; ++i)
+    {
+        const fs::path::value_type c = name[1 + i];
+        const bool is_dash_position = (i == 8 || i == 13 || i == 18 || i == 23);
+        if(is_dash_position ? c != '-' : !is_hex_digit(c))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+//------------------------------------------------------------------------------
+// Path text for logs from noexcept code: the narrow conversion throws for
+// characters the code page cannot represent.
+//------------------------------------------------------------------------------
+auto describe_path(const fs::path& p) noexcept -> std::string
+{
+    try
+    {
+        const auto utf8 = p.generic_u8string();
+        return std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+    }
+    catch(...)
+    {
+        return "<unprintable path>";
+    }
+}
+
+//------------------------------------------------------------------------------
+// Runs a write callback inside the noexcept writers. An escaping exception
+// would terminate the process with the temp file still on disk; instead the
+// write fails and the temp guard removes the file.
+//------------------------------------------------------------------------------
+auto invoke_write_callback(const std::function<void(const fs::path&)>& callback,
+                           const fs::path& temp,
+                           fs::error_code& ec) noexcept -> bool
+{
+    try
+    {
+        callback(temp);
+        return true;
+    }
+    catch(const std::exception& e)
+    {
+        APPLOG_ERROR("asset_writer: Writing {} failed: {}", describe_path(temp), e.what());
+    }
+    catch(...)
+    {
+        APPLOG_ERROR("asset_writer: Writing {} failed with an unknown exception", describe_path(temp));
+    }
+    ec = std::make_error_code(std::errc::io_error);
+    return false;
 }
 
 // Forward declaration; used by the cleanup function below.
@@ -119,12 +190,12 @@ void try_remove_stale_temp(const fs::path& p,
     if(remove_temp_with_retry(p, 5, 10, &diagnostic))
     {
         ++removed_counter;
-        APPLOG_INFO("asset_writer: Removed stale temp file: {}", p.generic_string());
+        APPLOG_INFO("asset_writer: Removed stale temp file: {}", describe_path(p));
     }
     else
     {
         APPLOG_WARNING("asset_writer: Could not remove stale temp file: {} ({})",
-                       p.generic_string(),
+                       describe_path(p),
                        diagnostic);
     }
 }
@@ -293,7 +364,12 @@ auto remove_temp_with_retry(const fs::path& temp,
     for(int i = 0; i < max_retries; ++i)
     {
         fs::remove(temp, remove_ec);
-        if(!remove_ec || !fs::exists(temp, remove_ec))
+        if(!remove_ec)
+        {
+            return true;
+        }
+        fs::error_code exists_ec;
+        if(!fs::exists(temp, exists_ec) && !exists_ec)
         {
             return true;
         }
@@ -429,12 +505,9 @@ void drain_deferred_cleanup() noexcept
 
 //------------------------------------------------------------------------------
 // RAII guard for a temp file. Removes the file on destruction unless commit()
-// has been called. This makes cleanup automatic on every exit path including
-// exceptions thrown from the callback in atomic_write_file (we are noexcept,
-// so an unwinding exception would terminate — but the destructor still runs).
-//
-// Always logs at WARNING when the file existed but couldn't be removed; that's
-// the case the user was hitting (silent leak when AV holds the file briefly).
+// has been called, so every early return cleans up. A file another process
+// still holds is queued for deferred cleanup; one that outlives the process
+// is removed by cleanup_stale_temp_files when its directory is next watched.
 //------------------------------------------------------------------------------
 class temp_file_guard
 {
@@ -609,7 +682,10 @@ void atomic_write_file(const fs::path& dst,
 
     temp_file_guard guard(temp);
 
-    callback(temp);
+    if(!invoke_write_callback(callback, temp, ec))
+    {
+        return;
+    }
 
     if(!fs::exists(temp, ec) || ec)
     {
@@ -675,27 +751,31 @@ auto cleanup_stale_temp_files(const fs::path& dir,
     const auto now = fs::file_time_type::clock::now();
     std::size_t removed = 0;
 
-    auto walk = [&](const auto& begin, const auto& end) -> void
+    // Non-throwing iteration only: operator++ throws on a directory that vanishes
+    // or denies access mid-walk, which would terminate this noexcept function.
+    auto walk = [&](auto it) -> void
     {
-        for(auto it = begin; it != end; ++it)
+        const decltype(it) end;
+        fs::error_code step_ec;
+        for(; it != end && !step_ec; it.increment(step_ec))
         {
-            const auto& entry = *it;
             fs::error_code is_file_ec;
-            if(entry.is_regular_file(is_file_ec) && !is_file_ec)
+            if(it->is_regular_file(is_file_ec) && !is_file_ec)
             {
-                try_remove_stale_temp(entry.path(), now, min_age, removed);
+                try_remove_stale_temp(it->path(), now, min_age, removed);
             }
         }
     };
 
+    constexpr auto options = fs::directory_options::skip_permission_denied;
     fs::error_code iter_ec;
     if(recursive)
     {
-        walk(fs::recursive_directory_iterator(dir, iter_ec), fs::recursive_directory_iterator{});
+        walk(fs::recursive_directory_iterator(dir, options, iter_ec));
     }
     else
     {
-        walk(fs::directory_iterator(dir, iter_ec), fs::directory_iterator{});
+        walk(fs::directory_iterator(dir, options, iter_ec));
     }
 
     return removed;

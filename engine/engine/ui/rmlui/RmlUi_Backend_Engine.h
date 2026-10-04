@@ -65,6 +65,11 @@ auto initialize(rtti::context& ctx, const char* window_name = "RmlUi", int width
 void shutdown();
 
 /**
+ * @brief Whether RmlUi is initialised: between a successful initialize() and shutdown()
+ */
+auto is_initialized() -> bool;
+
+/**
  * @brief Get the system interface for RmlUi
  * @return Pointer to the custom system interface
  */

@@ -564,6 +564,12 @@ void ui_system::register_component_callbacks(rtti::context& ctx)
 
 void ui_system::release_resources()
 {
+    // Closing a project also runs when the editor's start-up failed before RmlUi was initialised, or after it
+    // was shut down; RmlUi's release functions dereference its core data unchecked.
+    if(!RmlUi_Backend_Engine::is_initialized())
+    {
+        return;
+    }
     Rml::ReleaseFontResources();
     Rml::ReleaseRenderManagers();
     Rml::ReleaseTextures();

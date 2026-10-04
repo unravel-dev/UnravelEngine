@@ -154,6 +154,11 @@ void shutdown()
     data.reset();
 }
 
+auto is_initialized() -> bool
+{
+    return data && data->initialized;
+}
+
 auto get_system_interface() -> Rml::SystemInterface*
 {
     if (!data)

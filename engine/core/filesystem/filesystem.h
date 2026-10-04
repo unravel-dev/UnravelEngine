@@ -48,7 +48,8 @@ struct stream_buffer
 /// Allows us to map a protocol to a specific directory. A path protocol
 /// gives the caller the ability to prepend an identifier to their file
 /// name i.e. "engine_data://textures/tex.png" and have it return the
-/// relevant mapped path.
+/// relevant mapped path. The directory is stored as it is spelled on disk
+/// (absolute, letter case and links resolved, no trailing separator).
 /// </summary>
 //-----------------------------------------------------------------------------
 auto add_path_protocol(const std::string& protocol, const path& directory) -> bool;
@@ -87,7 +88,9 @@ auto resolve_protocol(const path& _path) -> path;
 //  Name : convert_to_protocol()
 /// <summary>
 /// Oposite of the resolve_protocol this function tries to convert to protocol
-/// path from an absolute one.
+/// path from an absolute one. The longest registered root that is the path or
+/// one of its ancestor folders wins; letter case is ignored on case-insensitive
+/// filesystems. Returns the path unchanged when no root matches.
 /// </summary>
 //-----------------------------------------------------------------------------
 auto convert_to_protocol(const path& _path) -> path;
