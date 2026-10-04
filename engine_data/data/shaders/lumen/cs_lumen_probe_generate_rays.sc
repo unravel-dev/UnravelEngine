@@ -22,8 +22,8 @@
 #include "lumen/lumen_radiance_cache_common.sh"
 #include "gi/gi_pre_exposure.sh"
 
-IMAGE2D_WO(s_lumen_ray_info, r32f, 0);
-IMAGE2D_WO(s_lumen_screen_data, rgba16f, 1);
+IMAGE2D_WO(i_lumen_ray_info, r32f, 0);
+IMAGE2D_WO(i_lumen_screen_data, rgba16f, 1);
 SAMPLER2D(s_lumen_depth, 2);
 SAMPLER2D(s_lumen_normal, 3);
 SAMPLER2D(s_lumen_probe_records, 4);
@@ -220,7 +220,7 @@ void main()
 	if(index == 0)
 	{
 		float disoccluded = s_reduce[10] >= s_reduce[9] * LUMEN_IS_DISOCCLUSION_FRACTION && s_reduce[9] > 0.0 ? 1.0 : 0.0;
-		imageStore(s_lumen_screen_data, tile, vec4(disoccluded, 0.0, 0.0, 0.0));
+		imageStore(i_lumen_screen_data, tile, vec4(disoccluded, 0.0, 0.0, 0.0));
 	}
 	vec3 texel_direction = LumenEquiAreaSphericalMapping((vec2(local) + 0.5) / float(LUMEN_PROBE_TRACE_RES));
 	float brdf_pdf = max(LumenDotSH3(brdf, LumenSHBasis3(texel_direction)), 0.0);
@@ -281,5 +281,5 @@ void main()
 		s_sorted_ray[LUMEN_PROBE_TEXELS - 1 - index] = LumenPackRay(parent.xy * 2, parent.z - 1);
 	}
 	barrier();
-	imageStore(s_lumen_ray_info, tile * LUMEN_PROBE_TRACE_RES + local, vec4(float(s_sorted_ray[index]), 0.0, 0.0, 0.0));
+	imageStore(i_lumen_ray_info, tile * LUMEN_PROBE_TRACE_RES + local, vec4(float(s_sorted_ray[index]), 0.0, 0.0, 0.0));
 }

@@ -1840,6 +1840,36 @@ auto scene_panel::get_visualization_mode() const -> int
     return visualize_passes_;
 }
 
+void scene_panel::set_lumen_visualize(const lumen_visualize_pass::world_settings& settings)
+{
+    visualization_menu_state_.lumen = settings;
+}
+
+auto scene_panel::get_lumen_visualize() const -> const lumen_visualize_pass::world_settings&
+{
+    return visualization_menu_state_.lumen;
+}
+
+void scene_panel::set_lumen_cursor_override(const std::optional<math::vec2>& cursor)
+{
+    visualization_menu_state_.lumen_cursor_override = cursor;
+}
+
+auto scene_panel::get_lumen_cursor_override() const -> const std::optional<math::vec2>&
+{
+    return visualization_menu_state_.lumen_cursor_override;
+}
+
+void scene_panel::request_debug_popover(bool is_open, visualization_menu::popover_tab tab)
+{
+    visualization_menu_state_.request = is_open ? visualization_menu::popover_request::open
+                                                : visualization_menu::popover_request::close;
+    if(is_open)
+    {
+        visualization_menu_state_.tab = tab;
+    }
+}
+
 void scene_panel::set_visualization_scale(float scale)
 {
     visualize_scale_ = scale > 0.0f ? scale : 1.0f;
@@ -2121,6 +2151,8 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
     {
         ImGui::Dummy(size);
     }
+    const auto lumen_visualize =
+        visualization_menu::make_lumen_visualize(visualization_menu_state_, pos, pos + size, camera.get_viewport_size());
 
     if(em.is_prefab_mode())
     {
@@ -2186,6 +2218,7 @@ void scene_panel::draw_scene_viewport(rtti::context& ctx, const ImVec2& size, co
 
     camera_comp.get_pipeline_data().get_pipeline()->set_debug_pass(visualize_passes_);
     camera_comp.get_pipeline_data().get_pipeline()->set_debug_view_scale(visualize_scale_);
+    camera_comp.get_pipeline_data().get_pipeline()->set_lumen_visualize_settings(lumen_visualize);
 
     auto window = ImGui::GetCurrentWindow();
     auto draw_list = window->DrawList;
@@ -2276,7 +2309,13 @@ void scene_panel::draw_ui(rtti::context& ctx)
     // After the image: the shadows of the bars go into this window's draw list, on top of it.
     draw_toolbar(ctx, toolbar_area);
 
-    const auto& pstats = camera_comp.get_pipeline_data().get_pipeline()->get_stats();
+    const auto& pipeline = camera_comp.get_pipeline_data().get_pipeline();
+    visualization_menu::draw_view_labels(visualize_passes_,
+                                         visualization_menu_state_,
+                                         pipeline->get_debug_view_labels(),
+                                         view_pos,
+                                         view_pos + view_size);
+    const auto& pstats = pipeline->get_stats();
     viewport_stats_overlay::draw(ctx, pstats, stats_overlay_state_, "scene", toolbar_extent_);
     visualization_menu::draw_legend_overlay(visualize_passes_, visualization_menu_state_, "scene");
 

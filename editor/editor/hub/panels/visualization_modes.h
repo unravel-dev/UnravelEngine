@@ -45,8 +45,8 @@ enum class visualization_mode : int
     /// Auto exposure's own state over the lit image: the adaptation trace and this frame's
     /// metering histogram (UE's Visualize HDR).
     exposure = 41,
-    /// Lumen surface cache: the global distance field traced from the camera and shaded from the cards
-    /// (UE's Lumen Scene and Surface Cache views), and the physical card atlas.
+    /// Lumen's debug views (lumen_visualize_pass): UE's r.Lumen.Visualize modes, and the physical card atlas, the
+    /// card coverage and the object grid.
     lumen_scene = 42,
     lumen_card_atlas = 43,
     lumen_card_coverage = 44,
@@ -55,8 +55,18 @@ enum class visualization_mode : int
     lumen_object_grid = 47,
     lumen_scene_direct = 48,
     lumen_scene_indirect = 49,
-    /// The pixels Lumen traces reflections for (UE's Dedicated Reflection Rays).
     lumen_reflection_rays = 50,
+    lumen_reflection_view = 51,
+    lumen_geometry_normals = 52,
+    lumen_scene_normals = 53,
+    lumen_scene_emissive = 54,
+    lumen_card_weights = 55,
+    lumen_direct_lighting_updates = 56,
+    lumen_indirect_lighting_updates = 57,
+    lumen_radiosity_frames = 58,
+    lumen_screen_probe_frames = 59,
+    lumen_overview = 60,
+    lumen_performance_overview = 61,
 };
 
 /// Menu grouping. Ordering here is the order the groups appear in the viewport menu.

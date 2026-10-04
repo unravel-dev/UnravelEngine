@@ -45,6 +45,15 @@ public:
     /// Linear readback scale of the radiance-valued debug views (pipeline::set_debug_view_scale).
     void set_visualization_scale(float scale);
     auto get_visualization_scale() const -> float;
+    /// UE's world-space Lumen visualizations the panel drives into the scene camera's pipeline every frame.
+    void set_lumen_visualize(const lumen_visualize_pass::world_settings& settings);
+    auto get_lumen_visualize() const -> const lumen_visualize_pass::world_settings&;
+    /// A cursor the Lumen visualizations use instead of the mouse's (negative: the view's centre); empty follows the
+    /// mouse again. An MCP hook for repeatable captures.
+    void set_lumen_cursor_override(const std::optional<math::vec2>& cursor);
+    auto get_lumen_cursor_override() const -> const std::optional<math::vec2>&;
+    /// Opens the debug view popover on @p tab, or closes it, on the next frame. An MCP hook for screenshots.
+    void request_debug_popover(bool is_open, visualization_menu::popover_tab tab);
     /// Renders the Scene camera at exactly @p width x @p height and shows it scaled into the panel (aspect kept);
     /// 0 x 0 follows the panel again. A measurement aid: picking and gizmos assume the panel's own size.
     void set_forced_render_size(uint32_t width, uint32_t height);

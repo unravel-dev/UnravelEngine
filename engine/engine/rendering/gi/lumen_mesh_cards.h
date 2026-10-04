@@ -47,6 +47,50 @@ struct lumen_mesh_cards
 };
 
 /**
+ * @brief What a card build saw (UE FLumenCardBuildDebugData, recorded when UE's card build runs in debug mode), for
+ *        r.Lumen.Visualize.CardGenerationSurfels and CardGenerationCluster. Mesh local space.
+ */
+struct lumen_card_build_debug
+{
+    enum class surfel_type : uint8_t
+    {
+        ///< A surfel candidate the build kept, and one it dropped as inside geometry.
+        valid,
+        invalid,
+        ///< In a card's cluster: the card's own surfels, the side's surfels an earlier card took, the rest.
+        cluster,
+        used,
+        idle,
+    };
+
+    struct surfel
+    {
+        math::vec3 position{0.0f};
+        math::vec3 normal{0.0f};
+        surfel_type type = surfel_type::valid;
+    };
+
+    struct ray
+    {
+        math::vec3 start{0.0f};
+        math::vec3 end{0.0f};
+        bool is_hit = false;
+    };
+
+    struct cluster
+    {
+        std::vector<surfel> surfels;
+        ///< From each of the card's surfels seen from a deeper near plane to that plane.
+        std::vector<ray> rays;
+    };
+
+    ///< Every side's surfel candidates, side by side.
+    std::vector<surfel> surfels;
+    ///< One per card, in card order.
+    std::vector<cluster> clusters;
+};
+
+/**
  * @brief Builds a submesh's cards by surfel clustering, a port of UE 5.8's
  *        MeshCardRepresentationUtilities (GenerateCardRepresentationData).
  *
@@ -62,11 +106,13 @@ struct lumen_mesh_cards
  * @param geometry  The submesh's triangles (the same soup the SDF bake reads).
  * @param two_sided True when the submesh's material is two-sided: back faces count as front faces.
  * @param max_cards Card budget (Lumen's default MaxLumenMeshCards is 12).
+ * @param debug     When set, receives what the build saw (UE's debug mode); the cards are the same either way.
  * @return false when the geometry has no triangles.
  */
 auto build_lumen_mesh_cards(const sdf_source_geometry& geometry,
                             bool two_sided,
                             uint32_t max_cards,
-                            lumen_mesh_cards& out) -> bool;
+                            lumen_mesh_cards& out,
+                            lumen_card_build_debug* debug = nullptr) -> bool;
 
 } // namespace unravel

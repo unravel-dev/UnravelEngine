@@ -24,8 +24,8 @@ BUFFER_RO(b_lumen_rc_traces, uint, 0);
 BUFFER_RO(b_lumen_rc_tiles, uint, 1);
 /// The environment SH (9 texels), absolute radiance.
 SAMPLER2D(s_lumen_env_sh, 3);
-IMAGE2D_WO(s_lumen_rc_radiance, rgba16f, 5);
-IMAGE2D_WO(s_lumen_rc_depth, r16f, 6);
+IMAGE2D_WO(i_lumen_rc_radiance, rgba16f, 5);
+IMAGE2D_WO(i_lumen_rc_depth, r16f, 6);
 
 /// The surface cache (lumen_surface_cache.sh): global-SDF hits read the cards' final lighting through the
 /// object grid when u_lumen_hit_lighting.x > 0.5 (the cache is lit), black otherwise.
@@ -89,8 +89,8 @@ void main()
 		for(int x = 0; x < scale; ++x)
 		{
 			ivec2 target = origin + texel * scale + ivec2(x, y);
-			imageStore(s_lumen_rc_radiance, target, vec4(ray.xyz, 1.0));
-			imageStore(s_lumen_rc_depth, target, vec4_splat(ray.w));
+			imageStore(i_lumen_rc_radiance, target, vec4(ray.xyz, 1.0));
+			imageStore(i_lumen_rc_depth, target, vec4_splat(ray.w));
 		}
 	}
 }

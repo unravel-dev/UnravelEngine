@@ -237,6 +237,46 @@ REFLECT(mesh_importer_meta)
             entt::attribute{"step", 0.005f},
         });
 
+    // Register mesh_importer_meta::cards_meta with entt
+    entt::meta_factory<mesh_importer_meta::cards_meta>{}
+        .type("cards_meta"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cards_meta"},
+            entt::attribute{"pretty_name", "Surface Cache Cards"},
+        })
+        .data<&mesh_importer_meta::cards_meta::generate_cards>("generate_cards"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "generate_cards"},
+            entt::attribute{"pretty_name", "Generate Cards"},
+            entt::attribute{"tooltip",
+                            "Build the surface cache cards at compile time, next to the distance field.\n"
+                            "Cards are the oriented boxes the surface cache captures each submesh through: the\n"
+                            "GI lights its distance field from them. Off: the mesh still occludes indirect\n"
+                            "light, but reads unlit wherever a ray hits it."},
+        })
+        .data<&mesh_importer_meta::cards_meta::max_cards>("max_cards"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_cards"},
+            entt::attribute{"pretty_name", "Max Cards"},
+            entt::attribute{"tooltip",
+                            "The most cards one submesh gets. More cards cover concave and layered shapes better,\n"
+                            "and cost more to capture and to light each frame."},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", 32},
+        })
+        .data<&mesh_importer_meta::cards_meta::lod_index>("lod_index"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "lod_index"},
+            entt::attribute{"pretty_name", "Build From LOD"},
+            entt::attribute{"tooltip",
+                            "LOD the cards are built from. 0 is full detail. A card is a box fitted to the\n"
+                            "surface, so LOD 1 usually gives the same cards from far fewer triangles, and the\n"
+                            "build traces fewer of them. Levels that were not generated fall back to the\n"
+                            "coarsest one available."},
+            entt::attribute{"min", 0},
+            entt::attribute{"max", 5},
+        });
+
     // Register mesh_importer_meta::rig_meta with entt
     entt::meta_factory<mesh_importer_meta::rig_meta>{}
         .type("rig_meta"_hs)
@@ -363,6 +403,24 @@ LOAD(mesh_importer_meta::sdf_meta)
 LOAD_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(mesh_importer_meta::sdf_meta, ser20::iarchive_binary_t);
 
+SAVE(mesh_importer_meta::cards_meta)
+{
+    try_save(ar, ser20::make_nvp("generate_cards", obj.generate_cards));
+    try_save(ar, ser20::make_nvp("max_cards", obj.max_cards));
+    try_save(ar, ser20::make_nvp("lod_index", obj.lod_index));
+}
+SAVE_INSTANTIATE(mesh_importer_meta::cards_meta, ser20::oarchive_associative_t);
+SAVE_INSTANTIATE(mesh_importer_meta::cards_meta, ser20::oarchive_binary_t);
+
+LOAD(mesh_importer_meta::cards_meta)
+{
+    try_load(ar, ser20::make_nvp("generate_cards", obj.generate_cards));
+    try_load(ar, ser20::make_nvp("max_cards", obj.max_cards));
+    try_load(ar, ser20::make_nvp("lod_index", obj.lod_index));
+}
+LOAD_INSTANTIATE(mesh_importer_meta::cards_meta, ser20::iarchive_associative_t);
+LOAD_INSTANTIATE(mesh_importer_meta::cards_meta, ser20::iarchive_binary_t);
+
 SAVE(mesh_importer_meta::rig_meta)
 {
 }
@@ -410,6 +468,7 @@ SAVE(mesh_importer_meta)
     try_save(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_save(ar, ser20::make_nvp("model", obj.model));
     try_save(ar, ser20::make_nvp("sdf", obj.sdf));
+    try_save(ar, ser20::make_nvp("cards", obj.cards));
     try_save(ar, ser20::make_nvp("rig", obj.rig));
     try_save(ar, ser20::make_nvp("animations", obj.animations));
     try_save(ar, ser20::make_nvp("materials", obj.materials));
@@ -422,6 +481,7 @@ LOAD(mesh_importer_meta)
     try_load(ar, ser20::make_nvp("base_type", ser20::base_class<asset_importer_meta>(&obj)));
     try_load(ar, ser20::make_nvp("model", obj.model));
     try_load(ar, ser20::make_nvp("sdf", obj.sdf));
+    try_load(ar, ser20::make_nvp("cards", obj.cards));
     try_load(ar, ser20::make_nvp("rig", obj.rig));
     try_load(ar, ser20::make_nvp("animations", obj.animations));
     try_load(ar, ser20::make_nvp("materials", obj.materials));

@@ -1,6 +1,7 @@
 #pragma once
 #include <engine/engine_export.h>
 #include <engine/assets/asset_handle.h>
+#include <engine/rendering/gi/lumen_mesh_cards.h>
 #include <engine/rendering/gi/mesh_sdf.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/material.h>
@@ -12,6 +13,7 @@
 
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace gfx
@@ -372,6 +374,36 @@ public:
         uint32_t data_groups = 0;
         ///< Information about each LOD level.
         std::vector<lod_info> lods;
+        ///< CPU memory of the vertex data, and of the index data of every LOD.
+        std::string vertex_memory;
+        std::string index_memory;
+    };
+
+    /// What global illumination keeps for this mesh: its distance fields and its Lumen cards.
+    struct gi_info
+    {
+        ///< Submeshes with a distance field.
+        uint32_t fields = 0;
+        ///< Fields baked as unsigned shells (two-sided).
+        uint32_t two_sided_fields = 0;
+        ///< Surface bricks of the finest levels (8^3 voxels each).
+        uint32_t surface_bricks = 0;
+        ///< The finest and the coarsest voxel edge over the finest levels, in local units.
+        float min_voxel_size = 0.0f;
+        float max_voxel_size = 0.0f;
+        ///< Every level of every field, as loaded; and the finest levels alone, which is what the GI atlas holds when
+        ///< every field is resident at full detail.
+        std::string field_memory;
+        std::string finest_field_memory;
+        ///< Where the cards come from: compiled with the asset, built at runtime, or disabled.
+        std::string card_source;
+        ///< Submeshes with a compiled card set, their cards, and the most one submesh has.
+        uint32_t card_sets = 0;
+        uint32_t cards = 0;
+        uint32_t max_cards_per_submesh = 0;
+        ///< The compiled cards, as loaded; and the card table one placement of the whole mesh takes on the GPU.
+        std::string card_memory;
+        std::string card_table_memory;
     };
 
     /**
@@ -505,6 +537,15 @@ public:
         ///< submesh out of global illumination entirely. Each doubles the voxel, so it holds
         ///< about a quarter of the bricks.
         std::vector<std::vector<mesh_sdf>> submesh_sdf_coarse_mips;
+
+        ///< Lumen card sets built at compile time (UE's FCardRepresentationData), ONE PER SUBMESH and in submesh order,
+        ///< each for the submesh's imported material sidedness; a submesh without a field holds an empty set. Empty
+        ///< when the asset was compiled without cards, which leaves them to the runtime card library.
+        std::vector<lumen_mesh_cards> submesh_cards;
+        ///< The import settings turned card generation off: no submesh gets cards, compiled or at runtime.
+        bool are_cards_disabled = false;
+        ///< The LOD the cards are built from, compiled and at runtime (clamped to the generated levels).
+        uint32_t cards_lod_index = 1;
     };
 
     /**
@@ -928,6 +969,23 @@ public:
     auto get_sdf_count() const -> uint32_t;
 
     /**
+     * @brief The Lumen card set compiled for a submesh, built for its imported material's sidedness.
+     *
+     * @return The set, or null when the asset carries none (compiled without cards, or a procedurally created mesh):
+     *         the runtime card library builds those.
+     */
+    auto get_lumen_cards(uint32_t submesh_index) const -> std::shared_ptr<const lumen_mesh_cards>;
+
+    /// @brief Whether the import settings turned card generation off for this mesh.
+    auto are_lumen_cards_disabled() const -> bool;
+
+    /// @brief The LOD the cards are built from: the asset's setting (1 when it has none), clamped to the LODs held.
+    auto get_lumen_cards_lod() const -> uint32_t;
+
+    /// @brief What global illumination keeps for this mesh (memory, fields, cards); see gi_info.
+    auto get_gi_info() const -> gi_info;
+
+    /**
      * @brief Retrieves the underlying vertex data from the mesh.
      *
      * @return uint8_t* The vertex data.
@@ -940,6 +998,14 @@ public:
      * @return uint32_t* The index data.
      */
     auto get_system_ib() -> uint32_t*;
+
+    /**
+     * @brief The index data of one LOD, which its LOD submeshes' face ranges index (get_submesh).
+     *
+     * @param lod_index 0 for the base topology.
+     * @return The indices, or null for a LOD the mesh does not hold.
+     */
+    auto get_system_ib(uint32_t lod_index) const -> const uint32_t*;
 
     /**
      * @brief Retrieves the format of the underlying mesh vertex data.
@@ -1410,6 +1476,12 @@ protected:
     std::vector<mesh_sdf> submesh_sdfs_;
     ///< Coarser levels per submesh; see load_data::submesh_sdf_coarse_mips.
     std::vector<std::vector<mesh_sdf>> submesh_sdf_coarse_mips_;
+    ///< Compiled card sets per submesh, shared with the card library; see load_data::submesh_cards.
+    std::vector<std::shared_ptr<const lumen_mesh_cards>> submesh_cards_;
+    ///< See are_lumen_cards_disabled.
+    bool are_cards_disabled_ = false;
+    ///< See get_lumen_cards_lod.
+    uint32_t cards_lod_index_ = 1;
     ///< See get_gi_source_geometry.
     std::shared_ptr<const sdf_source_geometry> gi_source_geometry_;
     ///< Total number of faces in the prepared mesh.

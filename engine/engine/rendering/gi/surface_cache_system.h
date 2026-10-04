@@ -213,6 +213,19 @@ public:
         return lumen_sources_;
     }
 
+    /// The recorded build of @p source's card set (lumen_card_library::acquire_build_debug), null while it runs.
+    auto acquire_lumen_card_build_debug(const lumen_source& source) -> std::shared_ptr<const lumen_card_build_debug>
+    {
+        const bool two_sided = source.material && source.material->get_cull_type() == cull_type::none;
+        return lumen_cards_.acquire_build_debug(source.owner, source.submesh_index, two_sided);
+    }
+
+    /// Drops the recorded card builds (lumen_card_library::release_build_debug).
+    void release_lumen_card_build_debug()
+    {
+        lumen_cards_.release_build_debug();
+    }
+
     /// The backend runs compute (checked at init) and the atlas exists.
     auto is_enabled() const -> bool
     {

@@ -15,7 +15,7 @@
 
 SAMPLER2D(s_lumen_probe_filtered, 0);
 SAMPLER2D(s_lumen_probe_records, 1);
-IMAGE2D_WO(s_lumen_probe_sh, rgba16f, 2);
+IMAGE2D_WO(i_lumen_probe_sh, rgba16f, 2);
 
 #define LUMEN_PROBE_TEXELS (LUMEN_PROBE_TRACE_RES * LUMEN_PROBE_TRACE_RES)
 #define LUMEN_SH3_COEFFICIENTS 9
@@ -89,6 +89,6 @@ void main()
 	barrier();
 	if(index < LUMEN_SH_TEXELS_PER_PROBE)
 	{
-		imageStore(s_lumen_probe_sh, ivec2(tile.x * LUMEN_SH_TEXELS_PER_PROBE + index, tile.y), LumenPackShTexel(index));
+		imageStore(i_lumen_probe_sh, ivec2(tile.x * LUMEN_SH_TEXELS_PER_PROBE + index, tile.y), LumenPackShTexel(index));
 	}
 }

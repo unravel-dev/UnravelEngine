@@ -233,6 +233,14 @@ struct editor_actions
                               bool add = false,
                               std::string* error = nullptr) -> bool;
     static void clear_selection(rtti::context& ctx);
+    /// Selects the asset at @p key as a content browser click does, so the inspector shows it. Textures,
+    /// materials, meshes, prefabs and scenes.
+    static auto select_asset(rtti::context& ctx, const std::string& key, std::string* error = nullptr) -> bool;
+    /// Opens the Project Settings window at the category named @p category (its sidebar label); another name keeps the
+    /// current page.
+    static auto open_project_settings(rtti::context& ctx,
+                                      const std::string& category,
+                                      std::string* error = nullptr) -> bool;
 
     // Console log history
     static auto get_recent_logs(rtti::context& ctx,

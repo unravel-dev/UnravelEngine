@@ -66,7 +66,7 @@ auto lumen_adaptive_probes::init(rtti::context& ctx) -> bool
     args_program_ = load("cs_lumen_adaptive_args");
     if(!has_programs())
     {
-        APPLOG_WARNING("[Lumen] Adaptive probe programs failed to load; the Lumen gather cannot run.");
+        APPLOG_WARNING("[GI] Adaptive probe programs failed to load; the screen probe gather cannot run.");
     }
     return has_programs();
 }
@@ -123,7 +123,7 @@ void lumen_adaptive_probes::set_uniforms(const frame_inputs& inputs) const
 void lumen_adaptive_probes::run_mark(const frame_inputs& inputs) const
 {
     const auto& params = *inputs.params;
-    gfx::render_pass pass("GI/Lumen Adaptive Probes Mark");
+    gfx::render_pass pass("GI/Adaptive Probes Mark");
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     mark_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_depth, 0, params.g_buffer->get_texture(4));
@@ -142,7 +142,7 @@ void lumen_adaptive_probes::run_mark(const frame_inputs& inputs) const
 void lumen_adaptive_probes::run_spawn(const frame_inputs& inputs) const
 {
     const auto& params = *inputs.params;
-    gfx::render_pass pass("GI/Lumen Adaptive Probes Spawn");
+    gfx::render_pass pass("GI/Adaptive Probes Spawn");
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     spawn_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_depth, 0, params.g_buffer->get_texture(4));
@@ -160,7 +160,7 @@ void lumen_adaptive_probes::run_spawn(const frame_inputs& inputs) const
 
 void lumen_adaptive_probes::run_args(const frame_inputs& inputs) const
 {
-    gfx::render_pass pass("GI/Lumen Probe Dispatch Args");
+    gfx::render_pass pass("GI/Probe Dispatch Args");
     args_program_->begin();
     bind_state(0, bgfx::Access::ReadWrite);
     bgfx::setBuffer(1, args_, bgfx::Access::ReadWrite);
@@ -171,7 +171,7 @@ void lumen_adaptive_probes::run_args(const frame_inputs& inputs) const
 
 void lumen_adaptive_probes::run(const frame_inputs& inputs) const
 {
-    APP_SCOPE_PERF("Rendering/GI/Lumen Adaptive Probes");
+    APP_SCOPE_PERF("Rendering/GI/Adaptive Probes");
     if(inputs.place)
     {
         run_mark(inputs);

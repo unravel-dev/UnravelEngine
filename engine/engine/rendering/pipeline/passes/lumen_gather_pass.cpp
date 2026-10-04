@@ -33,6 +33,11 @@ constexpr uint32_t probe_downsample = uint32_t(LUMEN_PROBE_DOWNSAMPLE_FACTOR);
 constexpr uint64_t bilinear_texture_flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
 /// Texels per side of a bordered probe (cs_lumen_probe_border.sc).
 constexpr uint32_t probe_border_res = uint32_t(LUMEN_PROBE_TRACE_RES + 2 * LUMEN_PROBE_RADIANCE_BORDER);
+/// UE's fixed jitter index while the traces are visualized (LumenScreenProbeGather.cpp FixedJitterIndex 6): the
+/// placement and the rays hold still, and so do the lines.
+constexpr uint32_t visualize_traces_jitter_index = 6;
+/// The trace programs' output stage: the trace radiance, or the visualize variant's rays.
+constexpr uint8_t trace_output_stage = 5;
 
 /// Hammersley16(index, count, 0) of UE MonteCarlo.ush: (index / count, 16-bit radical inverse of index).
 auto hammersley16(uint32_t index, uint32_t count) -> std::array<float, 2>
@@ -90,6 +95,12 @@ void lumen_gather_pass::uniforms::cache_uniforms()
     cache_uniform(nullptr, s_lumen_history_radiance, "s_lumen_history_radiance", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_rough_history, "s_lumen_rough_history", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_probe_border, "s_lumen_probe_border", bgfx::UniformType::Sampler);
+    cache_uniform(nullptr, u_lumen_visualize_traces, "u_lumen_visualize_traces", bgfx::UniformType::Vec4);
+}
+
+lumen_gather_pass::~lumen_gather_pass()
+{
+    lumen_pass::destroy_handle(visualized_traces_);
 }
 
 auto lumen_gather_pass::init(rtti::context& ctx) -> bool
@@ -110,12 +121,13 @@ auto lumen_gather_pass::init(rtti::context& ctx) -> bool
     sh_program_ = load("cs_lumen_probe_sh");
     border_program_ = load("cs_lumen_probe_border");
     integrate_program_ = load("cs_lumen_integrate");
+    trace_visualize_program_ = load("cs_lumen_probe_trace_visualize");
     adaptive_probes_.init(ctx);
     radiance_cache_.init(ctx);
     short_range_ao_.init(ctx);
     if(!has_programs())
     {
-        APPLOG_WARNING("[Lumen] Screen probe gather programs failed to load; the Lumen gather is "
+        APPLOG_WARNING("[GI] Screen probe gather programs failed to load; the screen probe gather is "
                        "unavailable for this run.");
     }
     return has_programs();
@@ -142,7 +154,7 @@ auto lumen_gather_pass::has_short_range_ao() const -> bool
     return short_range_ao_.has_programs();
 }
 
-auto lumen_gather_pass::make_frame_layout(const usize32_t& view_size) -> frame_layout
+auto lumen_gather_pass::make_frame_layout(const usize32_t& view_size, bool is_jitter_fixed) -> frame_layout
 {
     frame_layout layout;
     layout.view_size = view_size;
@@ -152,10 +164,14 @@ auto lumen_gather_pass::make_frame_layout(const usize32_t& view_size) -> frame_l
     // Rows for every adaptive probe the capacity allows (UE's trunc(rows x fraction) can fall one row short).
     layout.atlas_rows = layout.probes_y + divide_round_up(layout.adaptive_capacity, layout.probes_x);
     const uint32_t frame = gfx::get_render_frame();
-    const uint32_t frame_mod = frame % uint32_t(LUMEN_PROBE_JITTER_PERIOD);
+    const uint32_t view_frame_mod = frame % uint32_t(LUMEN_PROBE_JITTER_PERIOD);
+    const uint32_t frame_mod =
+        is_jitter_fixed ? visualize_traces_jitter_index % uint32_t(LUMEN_PROBE_JITTER_PERIOD) : view_frame_mod;
     // One screen-wide placement offset per frame, period 8 (UE LumenScreenProbeCommon.ush:67-76).
     const auto offset = hammersley16(frame_mod, uint32_t(LUMEN_PROBE_JITTER_PERIOD));
-    const uint32_t prev_frame_mod = (frame + uint32_t(LUMEN_PROBE_JITTER_PERIOD) - 1u) % uint32_t(LUMEN_PROBE_JITTER_PERIOD);
+    const uint32_t prev_frame_mod =
+        is_jitter_fixed ? frame_mod
+                        : (frame + uint32_t(LUMEN_PROBE_JITTER_PERIOD) - 1u) % uint32_t(LUMEN_PROBE_JITTER_PERIOD);
     const auto prev_offset = hammersley16(prev_frame_mod, uint32_t(LUMEN_PROBE_JITTER_PERIOD));
     layout.prev_probe = {float(uint32_t(prev_offset[0] * float(probe_downsample))),
                          float(uint32_t(prev_offset[1] * float(probe_downsample))),
@@ -165,6 +181,11 @@ auto lumen_gather_pass::make_frame_layout(const usize32_t& view_size) -> frame_l
                     float(frame_mod),
                     float(uint32_t(offset[0] * float(probe_downsample))),
                     float(uint32_t(offset[1] * float(probe_downsample)))};
+    const auto view_offset = hammersley16(view_frame_mod, uint32_t(LUMEN_PROBE_JITTER_PERIOD));
+    layout.view_frame = {float(frame),
+                         float(view_frame_mod),
+                         float(uint32_t(view_offset[0] * float(probe_downsample))),
+                         float(uint32_t(view_offset[1] * float(probe_downsample)))};
     layout.probes = {float(layout.probes_x), float(layout.probes_y), float(probe_downsample), float(layout.atlas_rows)};
     layout.view = {float(view_size.width),
                    float(view_size.height),
@@ -216,6 +237,18 @@ auto lumen_gather_pass::final_filter_index() -> size_t
     return size_t(uint32_t(LUMEN_FILTER_PASSES - 1) & 1u);
 }
 
+auto lumen_gather_pass::get_current_history(gfx::render_view& rview) -> gfx::texture::ptr
+{
+    const uint32_t parity = rview.data_get("LUMEN_HISTORY_PARITY");
+    if(parity == 0u || rview.data_get("LUMEN_HISTORY_FRAME") != gfx::get_render_frame())
+    {
+        return nullptr;
+    }
+    // acquire_history advanced the parity past the half it wrote.
+    const bool wrote_even = ((parity - 1u) & 1u) == 0u;
+    return rview.tex_safe_get(wrote_even ? "LUMEN_HISTORY_A" : "LUMEN_HISTORY_B");
+}
+
 auto lumen_gather_pass::acquire_history(gfx::render_view& rview,
                                         const lumen_run_params& params,
                                         const usize32_t& size) -> history_targets
@@ -249,7 +282,7 @@ auto lumen_gather_pass::acquire_history(gfx::render_view& rview,
     }
     else if(++frames_without_history_ == history_warning_frames)
     {
-        APPLOG_WARNING("[Lumen] The gather has had no temporal history for {} frames (read target {}, "
+        APPLOG_WARNING("[GI] The gather has had no temporal history for {} frames (read target {}, "
                        "previous depth {}, continuity {}).",
                        history_warning_frames,
                        history.read ? "present" : "MISSING",
@@ -303,7 +336,7 @@ void lumen_gather_pass::run_generate_rays(const lumen_run_params& params,
                                           bool radiance_cache_ready)
 {
     const auto& black = default_textures::get().black_texture();
-    gfx::render_pass pass("GI/Lumen Probe Generate Rays");
+    gfx::render_pass pass("GI/Probe Generate Rays");
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     generate_rays_program_->begin();
     bind_image(0, targets.ray_info, bgfx::Access::Write, bgfx::TextureFormat::R32F);
@@ -335,7 +368,7 @@ void lumen_gather_pass::run_place(const lumen_run_params& params,
                                   const frame_layout& layout,
                                   const probe_targets& targets)
 {
-    gfx::render_pass pass("GI/Lumen Probe Place");
+    gfx::render_pass pass("GI/Probe Place");
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     place_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_depth, 0, params.g_buffer->get_texture(4));
@@ -373,20 +406,59 @@ void lumen_gather_pass::run_trace(const lumen_run_params& params,
                                   const probe_targets& targets,
                                   bool radiance_cache_ready)
 {
+    gfx::render_pass pass("GI/Probe Trace");
+    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
+    trace_program_->begin();
+    bind_trace_inputs(params, layout, targets, radiance_cache_ready);
+    bind_image(trace_output_stage, targets.trace_radiance, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
+    adaptive_probes_.dispatch(pass.id, *trace_program_, lumen_adaptive_probes::args_group_per_probe);
+    trace_program_->end();
+}
+
+void lumen_gather_pass::run_visualize_traces(const lumen_run_params& params,
+                                             const frame_layout& layout,
+                                             const probe_targets& targets,
+                                             bool radiance_cache_ready)
+{
+    if(!trace_visualize_program_ || !trace_visualize_program_->is_valid())
+    {
+        return;
+    }
+    if(!bgfx::isValid(visualized_traces_))
+    {
+        visualized_traces_ = bgfx::createDynamicVertexBuffer(visualized_trace_count * visualized_trace_stride,
+                                                             lumen_pass::get_vec4_layout(),
+                                                             BGFX_BUFFER_COMPUTE_READ_WRITE);
+    }
+    gfx::render_pass pass("GI/Visualize Traces");
+    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
+    trace_visualize_program_->begin();
+    bind_trace_inputs(params, layout, targets, radiance_cache_ready);
+    bgfx::setBuffer(trace_output_stage, visualized_traces_, bgfx::Access::Write);
+    const auto& cursor = params.visualize_traces.cursor;
+    const math::vec4 query(cursor.x, cursor.y, 0.0f, 0.0f);
+    gfx::set_uniform(uniforms_.u_lumen_visualize_traces, query);
+    // One group: the probe's rays.
+    bgfx::dispatch(pass.id, trace_visualize_program_->native_handle(), 1, 1, 1);
+    trace_visualize_program_->end();
+    has_visualized_traces_ = true;
+}
+
+void lumen_gather_pass::bind_trace_inputs(const lumen_run_params& params,
+                                          const frame_layout& layout,
+                                          const probe_targets& targets,
+                                          bool radiance_cache_ready)
+{
     const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();
     const auto& black = default_textures::get().black_texture();
     const bool has_hiz = params.hiz && params.hiz->is_valid();
     const bool has_prev_color = params.prev_color && params.prev_color->is_valid();
     const bool screen_traces = has_hiz && has_prev_color && params.prev_depth && params.settings.diffuse.screen_traces;
-    gfx::render_pass pass("GI/Lumen Probe Trace");
-    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
-    trace_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_probe_records, 0, targets.records);
     gfx::set_texture(uniforms_.s_lumen_hiz, 1, has_hiz ? params.hiz : params.g_buffer->get_texture(4));
     gfx::set_texture(uniforms_.s_lumen_prev_color, 2, has_prev_color ? params.prev_color : black);
     gfx::set_texture(uniforms_.s_lumen_env_sh, 3, params.irradiance_sh ? params.irradiance_sh : black);
     gfx::set_texture(uniforms_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
-    bind_image(5, targets.trace_radiance, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
     gfx::set_texture(uniforms_.s_lumen_prev_depth, 6, params.prev_depth ? params.prev_depth : black);
     gfx::set_texture(uniforms_.s_sdf_clipmap_coverage, 10, lumen_pass::get_sdf_coverage(clipmap_gpu, experiments_));
     bind_radiance_cache(radiance_cache_ready);
@@ -409,13 +481,11 @@ void lumen_gather_pass::run_trace(const lumen_run_params& params,
     gfx::set_uniform(uniforms_.u_pre_exposure, params.pre_exposure.to_uniform().data());
     gfx::set_uniform(uniforms_.u_sdf_clipmap_levels, clipmap_gpu.get_level_params(), global_sdf_clipmap::level_count);
     gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
-    adaptive_probes_.dispatch(pass.id, *trace_program_, lumen_adaptive_probes::args_group_per_probe);
-    trace_program_->end();
 }
 
 void lumen_gather_pass::run_composite(const frame_layout& layout, const probe_targets& targets)
 {
-    gfx::render_pass pass("GI/Lumen Probe Composite");
+    gfx::render_pass pass("GI/Probe Composite");
     composite_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_trace_radiance, 0, targets.trace_radiance);
     gfx::set_texture(uniforms_.s_lumen_probe_records, 1, targets.records);
@@ -434,7 +504,7 @@ auto lumen_gather_pass::run_filter(const lumen_run_params& params,
     for(int filter_pass = 0; filter_pass < int(LUMEN_FILTER_PASSES); ++filter_pass)
     {
         const auto& target = targets.filtered[size_t(filter_pass & 1)];
-        gfx::render_pass pass("GI/Lumen Probe Filter");
+        gfx::render_pass pass("GI/Probe Filter");
         pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
         filter_program_->begin();
         gfx::set_texture(uniforms_.s_lumen_probe_radiance, 0, source);
@@ -451,7 +521,7 @@ auto lumen_gather_pass::run_filter(const lumen_run_params& params,
 
 void lumen_gather_pass::run_sh(const frame_layout& layout, const probe_targets& targets, const gfx::texture::ptr& filtered)
 {
-    gfx::render_pass pass("GI/Lumen Probe SH");
+    gfx::render_pass pass("GI/Probe SH");
     sh_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_probe_filtered, 0, filtered);
     gfx::set_texture(uniforms_.s_lumen_probe_records, 1, targets.records);
@@ -465,7 +535,7 @@ void lumen_gather_pass::run_border(const frame_layout& layout,
                                    const probe_targets& targets,
                                    const gfx::texture::ptr& filtered)
 {
-    gfx::render_pass pass("GI/Lumen Probe Border");
+    gfx::render_pass pass("GI/Probe Border");
     border_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_probe_filtered, 0, filtered);
     gfx::set_texture(uniforms_.s_lumen_probe_records, 1, targets.records);
@@ -483,7 +553,7 @@ void lumen_gather_pass::run_integrate(const lumen_run_params& params,
                                       const gfx::texture::ptr& rough_specular)
 {
     const auto& black = default_textures::get().black_texture();
-    gfx::render_pass pass("GI/Lumen Integrate+Temporal");
+    gfx::render_pass pass("GI/Integrate+Temporal");
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
     integrate_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_depth, 0, params.g_buffer->get_texture(4));
@@ -525,7 +595,7 @@ void lumen_gather_pass::run_short_range_ao(gfx::render_view& rview,
     ao_params.gather = &params;
     ao_params.gather_history = history.read;
     ao_params.has_gather_history = history.has_history;
-    ao_params.frame = layout.frame.data();
+    ao_params.frame = layout.view_frame.data();
     ao_params.probes = layout.probes.data();
     ao_params.view = layout.view.data();
     ao_params.r2_noise = (experiments_ & experiment_short_range_ao_hash_noise) == 0u;
@@ -542,7 +612,7 @@ void lumen_gather_pass::run_short_range_ao(gfx::render_view& rview,
 
 auto lumen_gather_pass::run(gfx::render_view& rview, const lumen_run_params& params) -> gfx::texture::ptr
 {
-    APP_SCOPE_PERF("Rendering/GI/Lumen Gather");
+    APP_SCOPE_PERF("Rendering/GI/Gather");
     rview.tex_remove("GI_ROUGH_SPECULAR");
     if(!has_programs() || !params.g_buffer || !params.cam || !params.view_cache || !adaptive_probes_.ensure_resources())
     {
@@ -555,7 +625,7 @@ auto lumen_gather_pass::run(gfx::render_view& rview, const lumen_run_params& par
     }
     experiments_ = params.surface_cache ? params.surface_cache->get_experiment_flags() : 0u;
     settings_uniform_ = lumen_pass::make_settings_uniform(params.settings);
-    const auto layout = make_frame_layout(params.g_buffer->get_size());
+    const auto layout = make_frame_layout(params.g_buffer->get_size(), params.visualize_traces.enabled);
     // The expanded bilinear interpolation reads a 2x2 probe neighbourhood; probe records pack their pixel below
     // LUMEN_PROBE_PIXEL_STRIDE per axis.
     const auto max_view_extent = uint32_t(LUMEN_PROBE_PIXEL_STRIDE);
@@ -565,6 +635,12 @@ auto lumen_gather_pass::run(gfx::render_view& rview, const lumen_run_params& par
         return {};
     }
     const auto targets = acquire_probe_targets(rview, layout);
+    probe_placement_ = {targets.records,
+                        layout.frame,
+                        layout.probes,
+                        layout.view,
+                        layout.adaptive_capacity,
+                        gfx::get_render_frame()};
     const auto history = acquire_history(rview, params, layout.view_size);
     const auto resolve = ensure_texture(rview, "LUMEN_RESOLVE", layout.view_size, bgfx::TextureFormat::RGBA16F);
     const auto rough_specular =
@@ -576,16 +652,23 @@ auto lumen_gather_pass::run(gfx::render_view& rview, const lumen_run_params& par
     cache_inputs.probe_records = targets.records;
     cache_inputs.probes_x = layout.probes_x;
     cache_inputs.probe_rows = layout.atlas_rows;
-    cache_inputs.frame = layout.frame.data();
+    cache_inputs.frame = layout.view_frame.data();
     cache_inputs.probes = layout.probes.data();
     cache_inputs.view = layout.view.data();
     const bool radiance_cache_ready =
         (experiments_ & experiment_no_radiance_cache) == 0u && radiance_cache_.update(cache_inputs);
+    is_radiance_cache_ready_ = radiance_cache_ready;
     if((experiments_ & experiment_uniform_rays) == 0u)
     {
         run_generate_rays(params, layout, targets, history, radiance_cache_ready);
     }
     run_trace(params, layout, targets, radiance_cache_ready);
+    // UE keeps the recorded rays while frozen, unless none were recorded yet.
+    const auto& visualize_traces = params.visualize_traces;
+    if(visualize_traces.enabled && (!visualize_traces.freeze || !has_visualized_traces_))
+    {
+        run_visualize_traces(params, layout, targets, radiance_cache_ready);
+    }
     run_composite(layout, targets);
     const auto filtered = (experiments_ & experiment_no_spatial_filter) != 0u ? targets.probe_radiance
                                                                               : run_filter(params, layout, targets);

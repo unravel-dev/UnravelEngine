@@ -21,6 +21,12 @@
  * Writes rgb = pre-exposed radiance, a = the distance the spatial filter's angle weight sees: the screen
  * hit's distance, the trace length for distance-field hits, the cache probes' hit distance for the
  * hand-off, the maximum trace distance for the sky.
+ *
+ * cs_lumen_probe_trace_visualize.sc compiles this file with LUMEN_VISUALIZE_TRACES for UE's
+ * r.Lumen.ScreenProbeGather.VisualizeTraces (ScreenProbeSetupVisualizeTraces, LumenScreenProbeTracing.usf:893-1060):
+ * one group traces again, with this frame's inputs, the probe nearest the visualized pixel - its rays are the
+ * gather's own - and writes each ray as a line instead (lumen_visualize.sh), knowing which rays a screen or
+ * distance-field hit answered.
  */
 
 #include "bgfx_compute.sh"
@@ -42,7 +48,12 @@ SAMPLER2D(s_lumen_hiz, 1);
 SAMPLER2D(s_lumen_prev_color, 2);
 /// The environment SH (9 texels), absolute radiance.
 SAMPLER2D(s_lumen_env_sh, 3);
-IMAGE2D_WO(s_lumen_trace_radiance, rgba16f, 5);
+#ifdef LUMEN_VISUALIZE_TRACES
+/// The visualized probe's rays (lumen_visualize.sh), written in place of the trace radiance.
+BUFFER_RW(b_lumen_visualize_traces, vec4, 5);
+#else
+IMAGE2D_WO(i_lumen_trace_radiance, rgba16f, 5);
+#endif
 /// Last frame's device depth.
 SAMPLER2D(s_lumen_prev_depth, 6);
 /// The radiance cache: this frame's indirection, the bordered final atlas and the probes' hit distances.
@@ -194,16 +205,102 @@ vec4 LumenTraceDistanceField(vec3 position, vec3 normal, vec3 direction, float t
 	return vec4(radiance, 1.0);
 }
 
+#ifdef LUMEN_VISUALIZE_TRACES
+#include "lumen/lumen_adaptive_probes.sh"
+#include "lumen/lumen_visualize.sh"
+
+/// x, y = the full-resolution pixel whose probe the traces show (UE View.CursorPosition); x < 0 for the view's centre.
+uniform vec4 u_lumen_visualize_traces;
+
+/// UE shows a hit closer than LUMEN_VISUALIZE_SELF_HIT_DISTANCE as a self-intersection, LUMEN_VISUALIZE_SELF_HIT_LENGTH
+/// long and red (1 cm and 5 cm).
+#define LUMEN_VISUALIZE_SELF_HIT_DISTANCE 0.01
+#define LUMEN_VISUALIZE_SELF_HIT_LENGTH 0.05
+#define LUMEN_VISUALIZE_GROUP_THREADS (LUMEN_PROBE_TRACE_RES * LUMEN_PROBE_TRACE_RES)
+
+SHARED float s_lumen_visualize_distance[LUMEN_VISUALIZE_GROUP_THREADS];
+SHARED int s_lumen_visualize_index[LUMEN_VISUALIZE_GROUP_THREADS];
+
+/// The probe UE ScreenProbeSetupVisualizeTraces shows: the uniform probe of the screen tile under the query pixel, or
+/// the tile's adaptive probe nearer to the query. The distances are UE's, of unsigned pixel differences (a probe right
+/// of or below the query lies far away). The group's threads share the search of the adaptive records for the tile's
+/// probes; every thread calls this and gets the probe's atlas tile.
+ivec2 LumenVisualizeTracesProbe(int thread)
+{
+	uvec2 query = u_lumen_visualize_traces.x >= 0.0 ? uvec2(u_lumen_visualize_traces.xy)
+	                                                : uvec2(u_lumen_probe_count / 2) * uint(u_lumen_downsample);
+	uvec2 screen_tile = min((query - uvec2(u_lumen_placement_jitter)) / uint(u_lumen_downsample),
+	                        uvec2(u_lumen_probe_count) - uvec2(1, 1));
+	float best_distance = length(vec2(query - uvec2(LumenProbePixel(ivec2(screen_tile)))));
+	int best_index = -1;
+	int adaptive_slots = (u_lumen_atlas_rows - u_lumen_probe_count.y) * u_lumen_probe_count.x;
+	for(int index = thread; index < adaptive_slots; index += LUMEN_VISUALIZE_GROUP_THREADS)
+	{
+		ivec2 atlas_tile = LumenAdaptiveAtlasTile(index);
+		vec4 record = texelFetch(s_lumen_probe_records, atlas_tile, 0);
+		if(record.x > 0.0 && all(equal(LumenProbeScreenTile(atlas_tile, record), ivec2(screen_tile))))
+		{
+			float distance = length(vec2(query - uvec2(LumenProbeRecordPixel(record))));
+			if(distance < best_distance)
+			{
+				best_distance = distance;
+				best_index = index;
+			}
+		}
+	}
+	s_lumen_visualize_distance[thread] = best_distance;
+	s_lumen_visualize_index[thread] = best_index;
+	barrier();
+	// The nearest of the threads' choices, the lower probe index on a tie (UE walks the tile's list in order).
+	for(int other = 0; other < LUMEN_VISUALIZE_GROUP_THREADS; ++other)
+	{
+		float distance = s_lumen_visualize_distance[other];
+		int index = s_lumen_visualize_index[other];
+		if(distance < best_distance || (distance == best_distance && index < best_index))
+		{
+			best_distance = distance;
+			best_index = index;
+		}
+	}
+	return best_index >= 0 ? LumenAdaptiveAtlasTile(best_index) : ivec2(screen_tile);
+}
+
+/// UE WriteTraceForVisualization: the ray of probe texel @p texel as a line from the probe at @p position along
+/// @p direction over the filter's distance; a @p hit closer than LUMEN_VISUALIZE_SELF_HIT_DISTANCE shows red.
+void LumenStoreVisualizedTrace(ivec2 texel, vec3 radiance, float filter_distance, vec3 position, vec3 direction,
+                               bool hit)
+{
+	if(hit && filter_distance < LUMEN_VISUALIZE_SELF_HIT_DISTANCE)
+	{
+		filter_distance = LUMEN_VISUALIZE_SELF_HIT_LENGTH;
+		radiance = vec3(1.0, 0.0, 0.0);
+	}
+	int index = (texel.y * LUMEN_PROBE_TRACE_RES + texel.x) * LUMEN_VISUALIZE_TRACE_STRIDE;
+	b_lumen_visualize_traces[index] = vec4(position, 0.0);
+	b_lumen_visualize_traces[index + 1] = vec4(direction * filter_distance, 0.0);
+	b_lumen_visualize_traces[index + 2] = vec4(radiance, 0.0);
+}
+#endif
+
 NUM_THREADS(8, 8, 1)
 void main()
 {
+#ifdef LUMEN_VISUALIZE_TRACES
+	ivec2 tile = LumenVisualizeTracesProbe(int(gl_LocalInvocationIndex));
+#else
 	ivec2 tile = ivec2(gl_WorkGroupID.xy);
+#endif
 	ivec2 texel = ivec2(gl_LocalInvocationID.xy);
 	ivec2 trace_texel = tile * LUMEN_PROBE_TRACE_RES + texel;
 	vec4 record = texelFetch(s_lumen_probe_records, tile, 0);
 	if(record.x <= 0.0)
 	{
-		imageStore(s_lumen_trace_radiance, trace_texel, vec4(0.0, 0.0, 0.0, u_lumen_max_trace_distance));
+#ifdef LUMEN_VISUALIZE_TRACES
+		LumenStoreVisualizedTrace(texel, vec3_splat(0.0), u_lumen_max_trace_distance, vec3_splat(0.0),
+		                          vec3_splat(0.0), false);
+#else
+		imageStore(i_lumen_trace_radiance, trace_texel, vec4(0.0, 0.0, 0.0, u_lumen_max_trace_distance));
+#endif
 		return;
 	}
 	ivec2 pixel = LumenProbeRecordPixel(record);
@@ -256,6 +353,10 @@ void main()
 		source.y = answered ? 1.0 : 0.0;
 		sdf_start = vec3(saturate(t_start / max(near_field, 1e-4)), source.y, 0.0);
 	}
+#ifdef LUMEN_VISUALIZE_TRACES
+	/// A screen or distance-field hit answered the ray (UE bHit).
+	bool hit = answered;
+#endif
 	BRANCH
 	if(!answered)
 	{
@@ -293,5 +394,9 @@ void main()
 		float at_origin = SdfSampleClipmap(position + LUMEN_SURFACE_BIAS * normal);
 		radiance = vec3(max(at_surface, 0.0), max(-at_surface, 0.0), max(at_origin, 0.0)) * 20.0;
 	}
-	imageStore(s_lumen_trace_radiance, trace_texel, vec4(radiance, filter_distance));
+#ifdef LUMEN_VISUALIZE_TRACES
+	LumenStoreVisualizedTrace(texel, radiance, filter_distance, position, direction, hit);
+#else
+	imageStore(i_lumen_trace_radiance, trace_texel, vec4(radiance, filter_distance));
+#endif
 }

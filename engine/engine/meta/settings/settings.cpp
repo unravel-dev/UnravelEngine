@@ -327,6 +327,187 @@ LOAD_INLINE(settings::graphics_settings)
     try_load(ar, ser20::make_nvp("eviction", obj.eviction));
 }
 
+REFLECT_INLINE(gi_project_settings::atlas_size)
+{
+    entt::meta_factory<gi_project_settings::atlas_size>{}
+        .type("gi_atlas_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "gi_atlas_size"},
+            entt::attribute{"pretty_name", "Atlas Size"},
+        })
+        .data<gi_project_settings::atlas_size::size_1024>("size_1024"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "size_1024"},
+            entt::attribute{"pretty_name", "1024 (about 54 MB)"},
+        })
+        .data<gi_project_settings::atlas_size::size_2048>("size_2048"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "size_2048"},
+            entt::attribute{"pretty_name", "2048 (about 214 MB)"},
+        })
+        .data<gi_project_settings::atlas_size::size_4096>("size_4096"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "size_4096"},
+            entt::attribute{"pretty_name", "4096 (about 857 MB)"},
+        });
+}
+
+REFLECT_INLINE(gi_project_settings::capture_atlas_size)
+{
+    entt::meta_factory<gi_project_settings::capture_atlas_size>{}
+        .type("gi_capture_atlas_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "gi_capture_atlas_size"},
+            entt::attribute{"pretty_name", "Capture Atlas Size"},
+        })
+        .data<gi_project_settings::capture_atlas_size::size_512>("size_512"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "size_512"},
+            entt::attribute{"pretty_name", "512"},
+        })
+        .data<gi_project_settings::capture_atlas_size::size_1024>("size_1024"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "size_1024"},
+            entt::attribute{"pretty_name", "1024"},
+        })
+        .data<gi_project_settings::capture_atlas_size::size_2048>("size_2048"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "size_2048"},
+            entt::attribute{"pretty_name", "2048"},
+        });
+}
+
+REFLECT_INLINE(gi_project_settings)
+{
+    entt::meta_factory<gi_project_settings>{}
+        .type("gi_project_settings"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "gi_project_settings"},
+            entt::attribute{"pretty_name", "Global Illumination"},
+        })
+        .data<&gi_project_settings::surface_cache_atlas_size>("surface_cache_atlas_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "surface_cache_atlas_size"},
+            entt::attribute{"pretty_name", "Surface Cache Atlas"},
+            entt::attribute{"group", "Surface Cache"},
+            entt::attribute{"tooltip",
+                            "Edge of the surface cache atlas, in texels: how much card detail stays resident.\n"
+                            "Every texel holds the captured material and the card lighting, about 54 bytes.\n"
+                            "A scene that wants more texels than this keeps its farthest cards at lower\n"
+                            "resolution or none. Changing it recaptures the whole surface cache."},
+        })
+        .data<&gi_project_settings::card_captures_per_frame>("card_captures_per_frame"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_captures_per_frame"},
+            entt::attribute{"pretty_name", "Card Captures Per Frame"},
+            entt::attribute{"group", "Card Capture"},
+            entt::attribute{"tooltip",
+                            "Card pages captured per frame at most. Higher fills the surface cache faster when the\n"
+                            "view moves, at more CPU and GPU cost per frame."},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", 4096},
+        })
+        .data<&gi_project_settings::card_capture_atlas_size>("card_capture_atlas_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_capture_atlas_size"},
+            entt::attribute{"pretty_name", "Capture Atlas"},
+            entt::attribute{"group", "Card Capture"},
+            entt::attribute{"tooltip",
+                            "Edge of the atlas the cards are captured into each frame, in texels: the most\n"
+                            "texels captured per frame."},
+        })
+        .data<&gi_project_settings::card_capture_refresh_fraction>("card_capture_refresh_fraction"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_capture_refresh_fraction"},
+            entt::attribute{"pretty_name", "Refresh Fraction"},
+            entt::attribute{"group", "Card Capture"},
+            entt::attribute{"tooltip",
+                            "The share of the capture budget spent capturing resident card pages again, oldest\n"
+                            "first, so material changes (color, emissive, textures) reach the GI. 0 disables:\n"
+                            "a card then keeps what it captured until it is reallocated."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"max", 1.0f},
+            entt::attribute{"step", 0.005f},
+        })
+        .data<&gi_project_settings::card_texel_density_scale>("card_texel_density_scale"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_texel_density_scale"},
+            entt::attribute{"pretty_name", "Texel Density Scale"},
+            entt::attribute{"group", "Card Resolution"},
+            entt::attribute{"tooltip",
+                            "A card's resolution: this many texels per unit of half extent over its distance to\n"
+                            "the viewer, rounded up to a power of two."},
+            entt::attribute{"min", 1.0f},
+            entt::attribute{"step", 1.0f},
+        })
+        .data<&gi_project_settings::card_max_texel_density>("card_max_texel_density"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_max_texel_density"},
+            entt::attribute{"pretty_name", "Max Texel Density"},
+            entt::attribute{"group", "Card Resolution"},
+            entt::attribute{"tooltip", "The most texels per metre a card gets, however close the viewer is."},
+            entt::attribute{"min", 1.0f},
+            entt::attribute{"step", 1.0f},
+        })
+        .data<&gi_project_settings::card_max_resolution>("card_max_resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_max_resolution"},
+            entt::attribute{"pretty_name", "Max Card Resolution"},
+            entt::attribute{"group", "Card Resolution"},
+            entt::attribute{"tooltip", "The most texels a card gets along its longer side."},
+            entt::attribute{"min", 8},
+            entt::attribute{"max", 2048},
+        })
+        .data<&gi_project_settings::card_min_resolution>("card_min_resolution"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_min_resolution"},
+            entt::attribute{"pretty_name", "Min Card Resolution"},
+            entt::attribute{"group", "Card Resolution"},
+            entt::attribute{"tooltip",
+                            "A card that would get fewer texels than this is not resident: far and small cards\n"
+                            "leave the surface cache. Emissive light sources stay down to one texel."},
+            entt::attribute{"min", 1},
+            entt::attribute{"max", 1024},
+        })
+        .data<&gi_project_settings::mesh_cards_min_size>("mesh_cards_min_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "mesh_cards_min_size"},
+            entt::attribute{"pretty_name", "Min Card Size"},
+            entt::attribute{"group", "Card Resolution"},
+            entt::attribute{"tooltip",
+                            "A card face smaller than this squared, in metres, is not resident (a fifth of it for\n"
+                            "emissive light sources)."},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.01f},
+        });
+}
+
+SAVE_INLINE(gi_project_settings)
+{
+    try_save(ar, ser20::make_nvp("surface_cache_atlas_size", obj.surface_cache_atlas_size));
+    try_save(ar, ser20::make_nvp("card_captures_per_frame", obj.card_captures_per_frame));
+    try_save(ar, ser20::make_nvp("card_capture_atlas_size", obj.card_capture_atlas_size));
+    try_save(ar, ser20::make_nvp("card_capture_refresh_fraction", obj.card_capture_refresh_fraction));
+    try_save(ar, ser20::make_nvp("card_texel_density_scale", obj.card_texel_density_scale));
+    try_save(ar, ser20::make_nvp("card_max_texel_density", obj.card_max_texel_density));
+    try_save(ar, ser20::make_nvp("card_max_resolution", obj.card_max_resolution));
+    try_save(ar, ser20::make_nvp("card_min_resolution", obj.card_min_resolution));
+    try_save(ar, ser20::make_nvp("mesh_cards_min_size", obj.mesh_cards_min_size));
+}
+
+LOAD_INLINE(gi_project_settings)
+{
+    try_load(ar, ser20::make_nvp("surface_cache_atlas_size", obj.surface_cache_atlas_size));
+    try_load(ar, ser20::make_nvp("card_captures_per_frame", obj.card_captures_per_frame));
+    try_load(ar, ser20::make_nvp("card_capture_atlas_size", obj.card_capture_atlas_size));
+    try_load(ar, ser20::make_nvp("card_capture_refresh_fraction", obj.card_capture_refresh_fraction));
+    try_load(ar, ser20::make_nvp("card_texel_density_scale", obj.card_texel_density_scale));
+    try_load(ar, ser20::make_nvp("card_max_texel_density", obj.card_max_texel_density));
+    try_load(ar, ser20::make_nvp("card_max_resolution", obj.card_max_resolution));
+    try_load(ar, ser20::make_nvp("card_min_resolution", obj.card_min_resolution));
+    try_load(ar, ser20::make_nvp("mesh_cards_min_size", obj.mesh_cards_min_size));
+}
+
 REFLECT_INLINE(settings::splash_logo_entry)
 {
     entt::meta_factory<settings::splash_logo_entry>{}
@@ -683,6 +864,12 @@ REFLECT(settings)
             entt::attribute{"pretty_name", "Graphics"},
             entt::attribute{"tooltip", "Missing..."},
         })
+        .data<&settings::global_illumination>("global_illumination"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "global_illumination"},
+            entt::attribute{"pretty_name", "Global Illumination"},
+            entt::attribute{"tooltip", "Project-wide budgets and card resolution of the surface cache."},
+        })
         .data<&settings::splash>("splash"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "splash"},
@@ -714,6 +901,7 @@ SAVE(settings)
     try_save(ar, ser20::make_nvp("app", obj.app));
     try_save(ar, ser20::make_nvp("assets", obj.assets));
     try_save(ar, ser20::make_nvp("graphics", obj.graphics));
+    try_save(ar, ser20::make_nvp("global_illumination", obj.global_illumination));
     try_save(ar, ser20::make_nvp("splash", obj.splash));
     try_save(ar, ser20::make_nvp("standalone", obj.standalone));
     try_save(ar, ser20::make_nvp("layer", obj.layer));
@@ -729,6 +917,7 @@ LOAD(settings)
     try_load(ar, ser20::make_nvp("app", obj.app));
     try_load(ar, ser20::make_nvp("assets", obj.assets));
     try_load(ar, ser20::make_nvp("graphics", obj.graphics));
+    try_load(ar, ser20::make_nvp("global_illumination", obj.global_illumination));
     try_load(ar, ser20::make_nvp("splash", obj.splash));
     try_load(ar, ser20::make_nvp("standalone", obj.standalone));
     try_load(ar, ser20::make_nvp("layer", obj.layer));

@@ -15,7 +15,7 @@
 
 IMAGE2D_RW(s_lumen_indirect, rgba16f, 0);
 IMAGE2D_WO(s_lumen_final_out, rgba16f, 1);
-IMAGE2D_RW(s_lumen_radiosity_frames, r32f, 2);
+IMAGE2D_RW(i_lumen_radiosity_frames, r32f, 2);
 SAMPLER2D(s_lumen_card_depth, 3);
 SAMPLER2D(s_lumen_card_normal, 4);
 SAMPLER2D(s_lumen_card_albedo, 5);
@@ -36,12 +36,6 @@ BUFFER_RO(b_lumen_scene, vec4, 12);
 uniform vec4 u_lumen_card_lighting;
 
 SHARED float s_frames;
-
-vec3 LumenTexelPosition(LumenCard card, vec4 uv_rect, vec4 page, ivec2 texel, float depth)
-{
-	vec2 card_uv = mix(uv_rect.xy, uv_rect.zw, (vec2(texel) - page.xy + 0.5) / page.zw);
-	return LumenCardWorldPosition(card, LumenCardLocalPosition(card, card_uv, depth));
-}
 
 /// One probe's contribution: rgb = weighted irradiance, a = weight.
 vec4 LumenProbeIrradiance(LumenCard card, vec4 uv_rect, vec4 page, ivec2 probe_cell_in_page, ivec2 jitter,
@@ -83,11 +77,11 @@ void main()
 	if(gl_LocalInvocationIndex == 0u)
 	{
 		// The tile's update count, advanced once per update and capped.
-		float frames = is_tile_active ? min(imageLoad(s_lumen_radiosity_frames, frames_texel).x + 1.0, LUMEN_RADIOSITY_MAX_FRAMES) : 0.0;
+		float frames = is_tile_active ? min(imageLoad(i_lumen_radiosity_frames, frames_texel).x + 1.0, LUMEN_RADIOSITY_MAX_FRAMES) : 0.0;
 		s_frames = frames;
 		if(is_tile_active)
 		{
-			imageStore(s_lumen_radiosity_frames, frames_texel, vec4(frames, 0.0, 0.0, 0.0));
+			imageStore(i_lumen_radiosity_frames, frames_texel, vec4(frames, 0.0, 0.0, 0.0));
 		}
 	}
 	barrier();

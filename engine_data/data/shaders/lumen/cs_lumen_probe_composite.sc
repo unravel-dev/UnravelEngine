@@ -18,7 +18,7 @@
 
 SAMPLER2D(s_lumen_trace_radiance, 0);
 SAMPLER2D(s_lumen_probe_records, 1);
-IMAGE2D_WO(s_lumen_probe_radiance, rgba16f, 2);
+IMAGE2D_WO(i_lumen_probe_radiance, rgba16f, 2);
 /// The probes' importance-sampled ray slots (cs_lumen_probe_generate_rays.sc).
 SAMPLER2D(s_lumen_ray_info, 3);
 
@@ -90,5 +90,5 @@ void main()
 	vec3 sum = vec3(float(s_acc_r[index]), float(s_acc_g[index]), float(s_acc_b[index])) *
 	           (1.0 / LUMEN_COMPOSITE_FIXED_SCALE);
 	float hit_distance = s_acc_rays[index] > 0u ? uintBitsToFloat(s_acc_hit[index]) : -1.0;
-	imageStore(s_lumen_probe_radiance, atlas_texel, vec4(sum, hit_distance));
+	imageStore(i_lumen_probe_radiance, atlas_texel, vec4(sum, hit_distance));
 }

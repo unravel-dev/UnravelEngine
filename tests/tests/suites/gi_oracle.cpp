@@ -191,12 +191,27 @@ void test_gi_shaders_compile_sm50()
         return;
     }
     const fs::path include_dir = GI_TESTS_SHADER_DIR;
-    const fs::path varying = include_dir / "gi" / "varying.def.io";
+    // The varyings the engine's compiler gives a shader (asset_compiler.cpp): its own <name>.io, else its folder's
+    // varying.def.io, else varying.def.sc.
+    const auto get_varying = [](const fs::path& shader) -> fs::path
+    {
+        const fs::path dir = shader.parent_path();
+        fs::path varying = dir / (shader.stem().string() + ".io");
+        if(!fs::exists(varying))
+        {
+            varying = dir / "varying.def.io";
+        }
+        if(!fs::exists(varying))
+        {
+            varying = dir / "varying.def.sc";
+        }
+        return varying;
+    };
     const fs::path out_dir = fs::temp_directory_path() / "gi_shader_compile_test";
     fs::create_directories(out_dir);
     size_t compiled = 0;
     std::vector<fs::directory_entry> entries;
-    for(const char* folder : {"gi", "lumen"})
+    for(const char* folder : {"gi", "lumen", "shader_print"})
     {
         const fs::path shader_dir = include_dir / folder;
         if(fs::exists(shader_dir))
@@ -213,10 +228,12 @@ void test_gi_shaders_compile_sm50()
         }
         const bool compute = name.rfind("cs_", 0) == 0;
         const bool fragment = name.rfind("fs_", 0) == 0;
-        if(!compute && !fragment)
+        const bool vertex = name.rfind("vs_", 0) == 0;
+        if(!compute && !fragment && !vertex)
         {
             continue;
         }
+        const fs::path varying = get_varying(entry.path());
         // The D3D floor AND the OpenGL profile: the backends disagree on real things -
         // GLSL reserves `packed`, rejects expressions in local_size, lacks scalar
         // equal()/notEqual() and legacy *Lod entry points - and every one of those shipped
@@ -243,7 +260,7 @@ void test_gi_shaders_compile_sm50()
             std::string command = "\"\"" + shaderc.string() + "\" -f \"" + entry.path().string() +
                                   "\" -o \"" + out_bin.string() + "\" -i \"" + include_dir.string() +
                                   "\" --varyingdef \"" + varying.string() +
-                                  "\" --type " + (compute ? "compute" : "fragment") +
+                                  "\" --type " + (compute ? "compute" : (vertex ? "vertex" : "fragment")) +
                                   " --define BGFX_CONFIG_MAX_BONES=64 --platform " + profile.platform +
                                   " -p " + profile.profile + " > \"" + out_log.string() + "\" 2>&1\"";
             const int exit_code = std::system(command.c_str());

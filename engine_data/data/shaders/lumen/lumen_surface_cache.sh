@@ -83,12 +83,23 @@ vec3 LumenCardWorldPosition(LumenCard card, vec3 local)
 	return card.origin + card.axis_x * local.x + card.axis_y * local.y + card.axis_z * local.z;
 }
 
+/// The world position of atlas texel @p texel of a page at @p page (atlas origin xy, size xy) covering the card UV
+/// rectangle @p uv_rect, at the card depth @p depth.
+vec3 LumenTexelPosition(LumenCard card, vec4 uv_rect, vec4 page, ivec2 texel, float depth)
+{
+	vec2 card_uv = mix(uv_rect.xy, uv_rect.zw, (vec2(texel) - page.xy + 0.5) / page.zw);
+	return LumenCardWorldPosition(card, LumenCardLocalPosition(card, card_uv, depth));
+}
+
 /// One bilinear footprint in the physical atlas: the top-left texel and the four weights
-/// (x = top-left, y = top-right, z = bottom-left, w = bottom-right).
+/// (x = top-left, y = top-right, z = bottom-left, w = bottom-right), the sample's atlas position in texels and
+/// its page (index into b_lumen_scene).
 struct LumenCardSample
 {
 	ivec2 texel;
 	vec4 weights;
+	vec2 atlas_coord;
+	int page_index;
 	bool valid;
 };
 
@@ -98,6 +109,8 @@ LumenCardSample LumenComputeCardSample(LumenCard card, vec2 local_xy)
 	LumenCardSample result;
 	result.texel = ivec2(0, 0);
 	result.weights = vec4_splat(0.0);
+	result.atlas_coord = vec2_splat(0.0);
+	result.page_index = 0;
 	result.valid = false;
 	vec2 card_uv = min(saturate(vec2(0.5, -0.5) * (local_xy / card.extent.xy) + 0.5), vec2_splat(0.999999));
 	vec2 page_coord = floor(card_uv * card.size_in_pages);
@@ -125,6 +138,8 @@ LumenCardSample LumenComputeCardSample(LumenCard card, vec2 local_xy)
 	vec2 f = fract(atlas_coord + 0.5 + sub_texel_bias);
 	result.texel = ivec2(floor(atlas_coord - 0.5 + sub_texel_bias));
 	result.weights = vec4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+	result.atlas_coord = atlas_coord;
+	result.page_index = page_index;
 	result.valid = true;
 	return result;
 }

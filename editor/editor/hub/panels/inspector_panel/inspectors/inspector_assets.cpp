@@ -729,6 +729,13 @@ auto inspector_asset_handle_mesh::inspect(rtti::context& ctx,
                         ImGui::EndTabItem();
                     }
 
+                    if(ImGui::BeginTabItem("Cards"))
+                    {
+                        result |= ::unravel::inspect(ctx, importer_->cards);
+
+                        ImGui::EndTabItem();
+                    }
+
                     if(ImGui::BeginTabItem("Rig"))
                     {
                         result |= ::unravel::inspect(ctx, importer_->rig);

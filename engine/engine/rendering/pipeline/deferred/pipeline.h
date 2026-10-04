@@ -153,6 +153,17 @@ public:
                                       gfx::render_view& rview,
                                       const gfx::frame_buffer::ptr& output,
                                       const run_params& rparams);
+    /// Lumen's debug views (lumen_visualize_pass), over the finished image; their labels into debug_view_labels_.
+    void run_lumen_visualize_pass(const camera& camera,
+                                  gfx::render_view& rview,
+                                  const gfx::frame_buffer::ptr& output,
+                                  const run_params& rparams);
+    /// UE's ShaderPrint visualizations of Lumen (lumen_visualize_pass::draw_overlays) over the finished image,
+    /// whatever the debug view.
+    void run_lumen_visualize_overlays(const camera& camera,
+                                      gfx::render_view& rview,
+                                      const gfx::frame_buffer::ptr& output,
+                                      const run_params& rparams);
 
     /// Debug pass ids below this one are the G-buffer visualizer shader's own modes; every view with a larger id is
     /// dispatched by an exact match.
@@ -165,8 +176,8 @@ public:
     /// Auto exposure's own state, drawn as a blended panel OVER the finished image (UE's
     /// Visualize HDR): an overlay, not a replacement image.
     static constexpr int debug_pass_exposure = 41;
-    /// Lumen surface cache views (lumen_surface_cache_pass::run_debug): the global distance field traced from
-    /// the camera and shaded from the cards (UE's Lumen Scene and Surface Cache views), and the physical card atlas.
+    /// Lumen's debug views, ids debug_pass_lumen_scene + lumen_visualize_pass::view (lumen_visualize_pass): UE's
+    /// r.Lumen.Visualize modes, the physical card atlas, the card coverage and the object grid.
     static constexpr int debug_pass_lumen_scene = 42;
     static constexpr int debug_pass_lumen_card_atlas = 43;
     static constexpr int debug_pass_lumen_card_coverage = 44;
@@ -175,9 +186,18 @@ public:
     static constexpr int debug_pass_lumen_object_grid = 47;
     static constexpr int debug_pass_lumen_scene_direct = 48;
     static constexpr int debug_pass_lumen_scene_indirect = 49;
-    /// UE's Dedicated Reflection Rays view (r.Lumen.Visualize 7), drawn by the G-buffer visualizer:
-    /// the pixels Lumen traces reflections for.
     static constexpr int debug_pass_lumen_reflection_rays = 50;
+    static constexpr int debug_pass_lumen_reflection_view = 51;
+    static constexpr int debug_pass_lumen_geometry_normals = 52;
+    static constexpr int debug_pass_lumen_scene_normals = 53;
+    static constexpr int debug_pass_lumen_scene_emissive = 54;
+    static constexpr int debug_pass_lumen_card_weights = 55;
+    static constexpr int debug_pass_lumen_direct_lighting_updates = 56;
+    static constexpr int debug_pass_lumen_indirect_lighting_updates = 57;
+    static constexpr int debug_pass_lumen_radiosity_frames = 58;
+    static constexpr int debug_pass_lumen_screen_probe_frames = 59;
+    static constexpr int debug_pass_lumen_overview = 60;
+    static constexpr int debug_pass_lumen_performance_overview = 61;
     void run_exposure_debug_pass(gfx::render_view& rview,
                                  const gfx::frame_buffer::ptr& output,
                                  const run_params& rparams);
@@ -320,9 +340,23 @@ private:
         std::unique_ptr<gpu_program> program;
     };
 
+    /// The geometry program of the surface cache card captures: each draw brings its own world -> clip transform, so
+    /// one pass draws every capture into its tile of the capture atlas (vs_deferred_geom_card_capture.sc).
+    struct card_capture_program : geom_program
+    {
+        void cache_uniforms()
+        {
+            geom_program::cache_uniforms();
+            cache_uniform(program.get(), u_card_capture_view_proj, "u_card_capture_view_proj", bgfx::UniformType::Mat4);
+        }
+
+        gfx::program::uniform_ptr u_card_capture_view_proj;
+    };
+
     geom_program geom_program_;
     geom_program geom_program_skinned_;
     geom_program geom_program_instanced_;
+    card_capture_program card_capture_program_;
 
     struct velocity_geom_program : uniforms_cache
     {

@@ -78,6 +78,8 @@ auto pipeline::init(rtti::context& ctx) -> bool
     temporal_probe_pass_.init(ctx);
     lumen_gather_pass_.init(ctx);
     lumen_surface_cache_pass_.init(ctx);
+    lumen_visualize_pass_.init(ctx);
+    shader_print_.init(ctx);
     lumen_reflection_pass_.init(ctx);
     scene_history_pass_.init(ctx);
 

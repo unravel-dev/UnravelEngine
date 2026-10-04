@@ -19,7 +19,7 @@ SAMPLER2D(s_lumen_rc_radiance, 0);
 SAMPLER2D(s_lumen_rc_depth, 1);
 BUFFER_RO(b_lumen_rc_indirection, uint, 2);
 BUFFER_RO(b_lumen_rc_traces, uint, 3);
-IMAGE2D_WO(s_lumen_rc_final, rgba16f, 5);
+IMAGE2D_WO(i_lumen_rc_final, rgba16f, 5);
 
 /// The probe-map texel (nearest) a direction falls in.
 ivec2 LumenRcDirectionTexel(vec3 direction)
@@ -95,5 +95,5 @@ void main()
 		weight_sum += weight;
 	}
 	ivec2 final_origin = LumenRcProbeTileOrigin(probe, LUMEN_RC_FINAL_RES);
-	imageStore(s_lumen_rc_final, final_origin + final_texel, vec4(sum / weight_sum, 1.0));
+	imageStore(i_lumen_rc_final, final_origin + final_texel, vec4(sum / weight_sum, 1.0));
 }

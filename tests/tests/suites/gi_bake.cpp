@@ -13,6 +13,7 @@
 
 #include "../tests.h"
 
+#include <engine/meta/rendering/gi/lumen_mesh_cards.hpp>
 #include <engine/meta/rendering/gi/mesh_sdf.hpp>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
 #include <engine/rendering/gi/gi_constants.h>
@@ -39,6 +40,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <map>
 #include <numeric>
 #include <sstream>
 #include <string>
@@ -5099,6 +5101,38 @@ void test_lumen_cards_interior_layers()
     check(same, "the card build is deterministic");
 }
 
+/// Cards are compiled into the mesh asset and read back at load time (UE FCardRepresentationData): every card and
+/// the sidedness they were built for survive the round trip.
+void test_lumen_cards_serialization_round_trip()
+{
+    std::printf("test_lumen_cards_serialization_round_trip\n");
+    lumen_mesh_cards original;
+    check(build_lumen_mesh_cards(make_box(math::vec3(0.5f, 1.0f, 2.0f)), true, 12, original), "box cards build");
+    original.is_mostly_two_sided = true;
+    std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+    {
+        ser20::oarchive_binary_t archive(stream);
+        try_save(archive, ser20::make_nvp("cards", original));
+    }
+    lumen_mesh_cards restored;
+    {
+        ser20::iarchive_binary_t archive(stream);
+        try_load(archive, ser20::make_nvp("cards", restored));
+    }
+    check(restored.cards.size() == original.cards.size() && !restored.cards.empty(), "every card survives");
+    bool are_cards_equal = restored.cards.size() == original.cards.size();
+    for(size_t i = 0; are_cards_equal && i < original.cards.size(); ++i)
+    {
+        const lumen_card& a = original.cards[i];
+        const lumen_card& b = restored.cards[i];
+        are_cards_equal = a.origin == b.origin && a.extent == b.extent && a.axis_x == b.axis_x &&
+                          a.axis_y == b.axis_y && a.axis_z == b.axis_z && a.direction == b.direction;
+    }
+    check(are_cards_equal, "with its box, axes and direction");
+    check(restored.bounds.min == original.bounds.min && restored.bounds.max == original.bounds.max, "bounds survive");
+    check(restored.is_mostly_two_sided, "the sidedness the cards were built for survives");
+}
+
 /// A placement of one wall-sized card (16 m x 16 m face) for the surface cache scene tests.
 auto make_wall_card_source() -> lumen_scene::source
 {
@@ -5111,6 +5145,21 @@ auto make_wall_card_source() -> lumen_scene::source
     source.instance_index = 0;
     source.cards = cards;
     return source;
+}
+
+/// Wall cards stacked 4 m apart along -z, one placement each, the first 1 m in front of a viewer at (0, 0, 1).
+auto make_wall_card_stack(uint32_t card_count) -> std::vector<lumen_scene::source>
+{
+    std::vector<lumen_scene::source> sources;
+    for(uint32_t i = 0; i < card_count; ++i)
+    {
+        lumen_scene::source source = make_wall_card_source();
+        source.identity = i + 1u;
+        source.instance_index = i;
+        source.local_to_world = math::translate(math::mat4(1.0f), math::vec3(0.0f, 0.0f, -4.0f * float(i)));
+        sources.push_back(source);
+    }
+    return sources;
 }
 
 /// UE maps a card's new mip only with physical room beside everything resident and room for every page in this
@@ -5164,7 +5213,10 @@ void test_lumen_scene_reallocation_lists_the_previous_mip()
                       }),
           "every page of a resident card is mapped");
     scene.update(sources, 1, near_view);
-    check(scene.get_captures().empty() && scene.get_resample_table().empty(), "a settled card is not reallocated");
+    // Settled, the card keeps its mip; its only captures are the refresh's (test_lumen_scene_refresh...).
+    check(scene.get_stats().reallocated == 0 && scene.get_card_table()[4] == second_mip,
+          "a settled card is not reallocated");
+    check(scene.get_stats().refreshed == scene.get_captures().size(), "its only captures are the refresh's");
     // A capture atlas of one page cannot take the near mip's pages: the card keeps its far allocation and waits.
     lumen_scene::settings small_capture;
     small_capture.capture_atlas_size = lumen_scene::physical_page_size;
@@ -5172,8 +5224,138 @@ void test_lumen_scene_reallocation_lists_the_previous_mip()
     waiting.init(small_capture);
     waiting.update(sources, 1, far_view);
     waiting.update(sources, 1, near_view);
-    check(waiting.get_captures().empty(), "a mip the capture atlas cannot take is not mapped");
+    check(waiting.get_stats().refreshed == waiting.get_captures().size(),
+          "a mip the capture atlas cannot take is not mapped");
     check(waiting.get_card_table()[4] == first_mip, "the card keeps its previous allocation meanwhile");
+}
+
+/// UE captures resident pages again, the longest-uncaptured first, within CardCaptureRefreshFraction of the frame's
+/// page and texel budgets, so material changes reach the surface cache; a recaptured page resamples its own card's
+/// lighting in place and the tables stay as they are (LumenSceneRendering.cpp SceneCardCaptureRefresh,
+/// RecaptureCardPage, GetCardCaptureRefreshNumPages / NumTexels).
+void test_lumen_scene_refresh_recaptures_the_oldest_pages()
+{
+    std::printf("test_lumen_scene_refresh_recaptures_the_oldest_pages\n");
+    constexpr uint32_t card_count = 12;
+    constexpr uint32_t settle_frames = 16;
+    using page_key = std::pair<uint32_t, uint32_t>;
+    const std::vector<lumen_scene::source> sources = make_wall_card_stack(card_count);
+    const math::vec3 view(0.0f, 0.0f, 1.0f);
+    lumen_scene scene;
+    scene.init(lumen_scene::settings{});
+    // Every capture since the first frame, allocations included: the frame each atlas position was last captured.
+    std::map<page_key, uint32_t> last_capture;
+    uint32_t frame = 0;
+    const auto update = [&]()
+    {
+        scene.update(sources, card_count, view);
+        ++frame;
+    };
+    const auto record_captures = [&]()
+    {
+        for(const auto& cap : scene.get_captures())
+        {
+            last_capture[{cap.atlas_offset.x, cap.atlas_offset.y}] = frame;
+        }
+    };
+    for(uint32_t i = 0; i < settle_frames; ++i)
+    {
+        update();
+        record_captures();
+    }
+    const lumen_scene::settings& s = scene.get_settings();
+    const uint32_t budget_pages = std::clamp(uint32_t(float(s.max_captures_per_frame) * s.card_capture_refresh_fraction),
+                                             1u,
+                                             s.max_captures_per_frame);
+    const uint64_t budget_texels =
+        std::max(uint64_t(float(s.capture_atlas_size) * float(s.capture_atlas_size) * s.card_capture_refresh_fraction),
+                 uint64_t(lumen_scene::physical_page_size) * lumen_scene::physical_page_size);
+    const size_t page_count = scene.get_resident_pages().size();
+    const uint64_t revision = scene.get_tables_revision();
+    // The settled pages by atlas position: how often each is refreshed.
+    std::map<page_key, uint32_t> refreshes;
+    for(const auto& page : scene.get_resident_pages())
+    {
+        refreshes[{page.atlas_offset.x, page.atlas_offset.y}] = 0;
+    }
+    bool are_all_refreshes = true;
+    bool is_within_budget = true;
+    bool resamples_its_own_card = true;
+    bool is_oldest_first = true;
+    size_t most_in_a_frame = 0;
+    uint32_t frames = 0;
+    uint32_t refreshed = 0;
+    std::vector<page_key> captured;
+    // Every page twice over.
+    while(refreshed < 2u * page_count && frames < 4096u)
+    {
+        update();
+        ++frames;
+        const auto& captures = scene.get_captures();
+        are_all_refreshes = are_all_refreshes && scene.get_stats().refreshed == captures.size() && !captures.empty();
+        uint64_t texels = 0;
+        uint32_t newest_refreshed = 0;
+        captured.clear();
+        for(const auto& cap : captures)
+        {
+            texels += uint64_t(cap.size.x) * cap.size.y;
+            const auto& resample = scene.get_resample_table();
+            const size_t entry = size_t(std::max(cap.resample_card, 0)) * lumen_scene::card_stride + 4u;
+            resamples_its_own_card = resamples_its_own_card && cap.resample_card >= 0 && entry < resample.size() &&
+                                     resample[entry] == scene.get_card_table()[cap.card_index * lumen_scene::card_stride + 4u];
+            const page_key key{cap.atlas_offset.x, cap.atlas_offset.y};
+            captured.push_back(key);
+            auto it = refreshes.find(key);
+            is_oldest_first = is_oldest_first && it != refreshes.end();
+            if(it != refreshes.end())
+            {
+                ++it->second;
+            }
+            newest_refreshed = std::max(newest_refreshed, last_capture[key]);
+        }
+        // Oldest first: no page left waiting was captured longer ago than a page refreshed now (ties in any order,
+        // as UE's heap takes them).
+        for(const auto& entry : refreshes)
+        {
+            const bool was_refreshed = std::find(captured.begin(), captured.end(), entry.first) != captured.end();
+            is_oldest_first = is_oldest_first && (was_refreshed || last_capture[entry.first] >= newest_refreshed);
+        }
+        record_captures();
+        refreshed += uint32_t(captures.size());
+        most_in_a_frame = std::max(most_in_a_frame, captures.size());
+        is_within_budget = is_within_budget && captures.size() <= budget_pages && texels <= budget_texels;
+    }
+    const uint32_t never = uint32_t(std::count_if(refreshes.begin(),
+                                                  refreshes.end(),
+                                                  [](const auto& entry)
+                                                  {
+                                                      return entry.second == 0u;
+                                                  }));
+    std::printf("  %zu resident pages, budget %u pages / %llu texels a frame: %u refreshed in %u frames, at most %zu "
+                "in one\n",
+                page_count,
+                budget_pages,
+                static_cast<unsigned long long>(budget_texels),
+                refreshed,
+                frames,
+                most_in_a_frame);
+    check(most_in_a_frame < page_count, "a frame refreshes only part of the scene's pages");
+    check(are_all_refreshes, "a settled scene captures only refreshes, every frame");
+    check(is_within_budget, "within the refresh's share of the page and texel budgets");
+    check(never == 0u, "every resident page is captured again");
+    check(is_oldest_first, "the longest-uncaptured first");
+    check(resamples_its_own_card, "a refreshed page resamples its own card's allocation");
+    check(scene.get_tables_revision() == revision, "and the tables stay as they are");
+    // Fraction 0 turns the refresh off (UE returns no pages and no texels).
+    lumen_scene::settings no_refresh;
+    no_refresh.card_capture_refresh_fraction = 0.0f;
+    lumen_scene still;
+    still.init(no_refresh);
+    for(uint32_t i = 0; i < settle_frames; ++i)
+    {
+        still.update(sources, card_count, view);
+    }
+    check(still.get_captures().empty() && still.get_stats().refreshed == 0u, "a fraction of 0 captures nothing settled");
 }
 
 /// UE's card lighting scheduler: the per-frame tile budgets, the priority buckets, and a scene with more resident
@@ -5193,15 +5375,7 @@ void test_lumen_scene_lighting_schedule()
     // Twelve wall cards stacked away from the viewer: the near ones take 2 x 2 pages, far more tiles than a frame's
     // budget. The frustum is far away, so only distance sets the speeds.
     constexpr uint32_t card_count = 12;
-    std::vector<lumen_scene::source> sources;
-    for(uint32_t i = 0; i < card_count; ++i)
-    {
-        lumen_scene::source source = make_wall_card_source();
-        source.identity = i + 1u;
-        source.instance_index = i;
-        source.local_to_world = math::translate(math::mat4(1.0f), math::vec3(0.0f, 0.0f, -4.0f * float(i)));
-        sources.push_back(source);
-    }
+    const std::vector<lumen_scene::source> sources = make_wall_card_stack(card_count);
     const math::vec3 view(0.0f, 0.0f, 1.0f);
     const math::frustum far_frustum(math::bbox(math::vec3(1000.0f), math::vec3(1001.0f)));
     lumen_scene scene;
@@ -5355,7 +5529,9 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_lumen_cards_sheet();
     test_lumen_cards_doubled_sheet();
     test_lumen_cards_interior_layers();
+    test_lumen_cards_serialization_round_trip();
     test_lumen_scene_reallocation_lists_the_previous_mip();
+    test_lumen_scene_refresh_recaptures_the_oldest_pages();
     test_lumen_scene_lighting_schedule();
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;

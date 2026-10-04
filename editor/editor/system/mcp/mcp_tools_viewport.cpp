@@ -599,6 +599,203 @@ void register_viewport_tools(mcp_tool_registry& registry)
          .mutates_scene = false});
 
     registry.add(
+        {.name = "viewport_set_debug_overlays",
+         .description = "Set the Scene panel's debug overlays: the world-space visualizations of the global "
+                        "illumination, drawn over whichever debug view is active (the Overlays tab of the debug view "
+                        "popover). Every field is optional and keeps its value when left out: card_placement (every "
+                        "card's box, the face it captures from shaded), card_placement_distance (metres), "
+                        "card_placement_index (-1 = every card), radiosity_probes, radiosity_probe_radius (metres), "
+                        "radiosity_show_invalid, radiance_cache_probes, radiance_cache_radius_scale, "
+                        "radiance_cache_clipmap (-1 = all), screen_probe_traces (the rays of the screen probe under "
+                        "the mouse, else the view's centre), screen_probe_traces_freeze, reflection_traces (the "
+                        "reflection ray of the pixel under the cursor), screen_probe_gather_debug (the probe counts as "
+                        "text), screen_probe_placement (0 counts only, 1 uniform + adaptive, 2 adaptive, 3 normals), "
+                        "card_generation_surfels, card_generation_cluster, card_generation_surfel_scale, "
+                        "card_generation_max_surfel (-1 = all), card_placement_direction (-1 = all, 0-5 = -X +X -Y +Y "
+                        "-Z +Z), cursor ([x, y] render pixels the visualizations use in place of the mouse's, negative "
+                        "for the view's centre; \"mouse\" follows the mouse again). "
+                        "Returns the settings in effect.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"card_placement":{"type":"boolean"},"card_placement_distance":{"type":"number","minimum":0},"card_placement_index":{"type":"integer","minimum":-1},"radiosity_probes":{"type":"boolean"},"radiosity_probe_radius":{"type":"number","minimum":0},"radiosity_show_invalid":{"type":"boolean"},"radiance_cache_probes":{"type":"boolean"},"radiance_cache_radius_scale":{"type":"number","minimum":0},"radiance_cache_clipmap":{"type":"integer","minimum":-1},"screen_probe_traces":{"type":"boolean"},"screen_probe_traces_freeze":{"type":"boolean"},"reflection_traces":{"type":"boolean"},"screen_probe_gather_debug":{"type":"boolean"},"screen_probe_placement":{"type":"integer","minimum":0,"maximum":3},"card_generation_surfels":{"type":"boolean"},"card_generation_cluster":{"type":"boolean"},"card_generation_surfel_scale":{"type":"number","minimum":0},"card_generation_max_surfel":{"type":"integer","minimum":-1},"card_placement_direction":{"type":"integer","minimum":-1,"maximum":5},"cursor":{"description":"[x, y] or \"mouse\""}}})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& panel = resolve_scene_panel(ctx);
+             auto settings = panel.get_lumen_visualize();
+             bool card_placement = settings.card_placement;
+             if(args["card_placement"].get(card_placement) == simdjson::SUCCESS)
+             {
+                 settings.card_placement = card_placement;
+             }
+             double distance = 0.0;
+             if(args["card_placement_distance"].get(distance) == simdjson::SUCCESS && distance > 0.0)
+             {
+                 settings.card_placement_distance = static_cast<float>(distance);
+             }
+             int64_t index = 0;
+             if(args["card_placement_index"].get(index) == simdjson::SUCCESS)
+             {
+                 settings.card_placement_index = static_cast<int>(std::max<int64_t>(index, -1));
+             }
+             bool radiosity_probes = settings.radiosity_probes;
+             if(args["radiosity_probes"].get(radiosity_probes) == simdjson::SUCCESS)
+             {
+                 settings.radiosity_probes = radiosity_probes;
+             }
+             double radius = 0.0;
+             if(args["radiosity_probe_radius"].get(radius) == simdjson::SUCCESS && radius > 0.0)
+             {
+                 settings.radiosity_probe_radius = static_cast<float>(radius);
+             }
+             bool show_invalid = settings.radiosity_show_invalid;
+             if(args["radiosity_show_invalid"].get(show_invalid) == simdjson::SUCCESS)
+             {
+                 settings.radiosity_show_invalid = show_invalid;
+             }
+             bool radiance_cache_probes = settings.radiance_cache_probes;
+             if(args["radiance_cache_probes"].get(radiance_cache_probes) == simdjson::SUCCESS)
+             {
+                 settings.radiance_cache_probes = radiance_cache_probes;
+             }
+             double radius_scale = 0.0;
+             if(args["radiance_cache_radius_scale"].get(radius_scale) == simdjson::SUCCESS && radius_scale > 0.0)
+             {
+                 settings.radiance_cache_radius_scale = static_cast<float>(radius_scale);
+             }
+             int64_t clipmap = 0;
+             if(args["radiance_cache_clipmap"].get(clipmap) == simdjson::SUCCESS)
+             {
+                 settings.radiance_cache_clipmap = static_cast<int>(std::max<int64_t>(clipmap, -1));
+             }
+             bool screen_probe_traces = settings.screen_probe_traces;
+             if(args["screen_probe_traces"].get(screen_probe_traces) == simdjson::SUCCESS)
+             {
+                 settings.screen_probe_traces = screen_probe_traces;
+             }
+             bool traces_freeze = settings.screen_probe_traces_freeze;
+             if(args["screen_probe_traces_freeze"].get(traces_freeze) == simdjson::SUCCESS)
+             {
+                 settings.screen_probe_traces_freeze = traces_freeze;
+             }
+             bool reflection_traces = settings.reflection_traces;
+             if(args["reflection_traces"].get(reflection_traces) == simdjson::SUCCESS)
+             {
+                 settings.reflection_traces = reflection_traces;
+             }
+             bool gather_debug = settings.screen_probe_gather_debug;
+             if(args["screen_probe_gather_debug"].get(gather_debug) == simdjson::SUCCESS)
+             {
+                 settings.screen_probe_gather_debug = gather_debug;
+             }
+             int64_t placement = 0;
+             if(args["screen_probe_placement"].get(placement) == simdjson::SUCCESS)
+             {
+                 settings.screen_probe_placement = static_cast<int>(std::clamp<int64_t>(placement, 0, 3));
+             }
+             bool card_surfels = settings.card_generation_surfels;
+             if(args["card_generation_surfels"].get(card_surfels) == simdjson::SUCCESS)
+             {
+                 settings.card_generation_surfels = card_surfels;
+             }
+             bool card_cluster = settings.card_generation_cluster;
+             if(args["card_generation_cluster"].get(card_cluster) == simdjson::SUCCESS)
+             {
+                 settings.card_generation_cluster = card_cluster;
+             }
+             double surfel_scale = 0.0;
+             if(args["card_generation_surfel_scale"].get(surfel_scale) == simdjson::SUCCESS && surfel_scale > 0.0)
+             {
+                 settings.card_generation_surfel_scale = static_cast<float>(surfel_scale);
+             }
+             int64_t max_surfel = 0;
+             if(args["card_generation_max_surfel"].get(max_surfel) == simdjson::SUCCESS)
+             {
+                 settings.card_generation_max_surfel = static_cast<int>(std::max<int64_t>(max_surfel, -1));
+             }
+             int64_t card_direction = 0;
+             if(args["card_placement_direction"].get(card_direction) == simdjson::SUCCESS)
+             {
+                 settings.card_placement_direction = static_cast<int>(std::clamp<int64_t>(card_direction, -1, 5));
+             }
+             panel.set_lumen_visualize(settings);
+             simdjson::dom::array cursor_args;
+             std::string_view cursor_mode;
+             if(args["cursor"].get(cursor_args) == simdjson::SUCCESS && cursor_args.size() == 2)
+             {
+                 double x = -1.0;
+                 double y = -1.0;
+                 if(cursor_args.at(0).get(x) == simdjson::SUCCESS && cursor_args.at(1).get(y) == simdjson::SUCCESS)
+                 {
+                     panel.set_lumen_cursor_override(math::vec2(static_cast<float>(x), static_cast<float>(y)));
+                 }
+             }
+             else if(args["cursor"].get(cursor_mode) == simdjson::SUCCESS && cursor_mode == "mouse")
+             {
+                 panel.set_lumen_cursor_override(std::nullopt);
+             }
+             const auto& cursor = panel.get_lumen_cursor_override();
+             const std::string cursor_text =
+                 cursor ? fmt::format("[{},{}]", cursor->x, cursor->y) : std::string(R"("mouse")");
+             return {.text = fmt::format(
+                         R"({{"card_placement":{},"card_placement_distance":{},"card_placement_index":{},)"
+                         R"("radiosity_probes":{},"radiosity_probe_radius":{},"radiosity_show_invalid":{},)"
+                         R"("radiance_cache_probes":{},"radiance_cache_radius_scale":{},"radiance_cache_clipmap":{},)"
+                         R"("screen_probe_traces":{},"screen_probe_traces_freeze":{},"reflection_traces":{},)"
+                         R"("screen_probe_gather_debug":{},"screen_probe_placement":{},)"
+                         R"("card_generation_surfels":{},"card_generation_cluster":{},)"
+                         R"("card_generation_surfel_scale":{},"card_generation_max_surfel":{},)"
+                         R"("card_placement_direction":{},"cursor":{}}})",
+                         settings.card_placement ? "true" : "false",
+                         settings.card_placement_distance,
+                         settings.card_placement_index,
+                         settings.radiosity_probes ? "true" : "false",
+                         settings.radiosity_probe_radius,
+                         settings.radiosity_show_invalid ? "true" : "false",
+                         settings.radiance_cache_probes ? "true" : "false",
+                         settings.radiance_cache_radius_scale,
+                         settings.radiance_cache_clipmap,
+                         settings.screen_probe_traces ? "true" : "false",
+                         settings.screen_probe_traces_freeze ? "true" : "false",
+                         settings.reflection_traces ? "true" : "false",
+                         settings.screen_probe_gather_debug ? "true" : "false",
+                         settings.screen_probe_placement,
+                         settings.card_generation_surfels ? "true" : "false",
+                         settings.card_generation_cluster ? "true" : "false",
+                         settings.card_generation_surfel_scale,
+                         settings.card_generation_max_surfel,
+                         settings.card_placement_direction,
+                         cursor_text),
+                     .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "viewport_open_debug_popover",
+         .description = "Open the Scene panel's debug view popover (the toolbar's debug view button) on a tab, "
+                        "\"views\" (default) or \"overlays\", or close it with open false. For screenshots of the "
+                        "popover: a click anywhere else closes it too. Applies on the next frame.",
+         .input_schema_json =
+             R"({"type":"object","properties":{"open":{"type":"boolean"},"tab":{"type":"string","enum":["views","overlays"]}}})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             bool is_open = true;
+             (void)args["open"].get(is_open);
+             std::string_view tab_name = "views";
+             (void)args["tab"].get(tab_name);
+             if(tab_name != "views" && tab_name != "overlays")
+             {
+                 return {.text = R"(tab must be "views" or "overlays")", .is_error = true};
+             }
+             const auto tab = tab_name == "overlays" ? visualization_menu::popover_tab::overlays
+                                                     : visualization_menu::popover_tab::views;
+             resolve_scene_panel(ctx).request_debug_popover(is_open, tab);
+             return {.text = fmt::format(R"({{"open":{},"tab":"{}"}})", is_open ? "true" : "false", tab_name),
+                     .is_error = false};
+         },
+         .mutates_scene = false});
+
+    registry.add(
         {.name = "viewport_set_debug_view",
          .description = "Set the Scene panel debug visualization mode. Pass mode as a name string "
                         "(e.g. \"full\", \"base_color\", \"normals\", \"lumen_scene\") or as the "
@@ -1091,7 +1288,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
              "Diagnostic: every GI placement whose world bounds come within `radius` metres (default 1) of `position`, "
              "with the world distance its traced field level and its chain's coarsest resident level report there "
              "(sample_instance_distance, as the composed fields read a placement) and the coarse-first answer the "
-             "Lumen cascade composes (UE DistanceToMeshSurfaceStandalone), sorted by that answer.",
+             "cascade composes, sorted by that answer.",
          .input_schema_json =
              R"({"type":"object","properties":{"position":{"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3},"radius":{"type":"number","minimum":0}},"required":["position"]})",
          .handler =
@@ -1194,7 +1391,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "gi_set_experiment_flags",
          .description =
-             "Runtime experiment flags of the Lumen passes (surface_cache_system::get_experiment_flags): each bit "
+             "Runtime experiment flags of the global illumination passes (surface_cache_system::get_experiment_flags): each bit "
              "switches one stage for an in-session A/B - the gather's bits are listed in lumen_gather_pass.h, the "
              "reflections' in lumen_reflection_pass.h, the surface cache's in lumen_surface_cache_pass.h, the global "
              "distance field's in lumen_pass_common.h and the deferred pipeline. 0 is production. Returns the new and "

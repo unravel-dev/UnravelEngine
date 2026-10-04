@@ -1,6 +1,7 @@
 #include "mesh.h"
 
 #include <engine/profiler/profiler.h>
+#include <engine/rendering/gi/lumen_scene.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include "camera.h"
 #include "generator/generator.hpp"
@@ -15,6 +16,7 @@
 
 #include <engine/engine.h>
 #include <engine/assets/asset_manager.h>
+#include <bx/string.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -253,6 +255,22 @@ void mesh::dispose()
     bbox_.reset();
 }
 
+namespace
+{
+/// A byte count as text in binary units (KiB, MiB, ...), as the texture info reports memory.
+auto format_memory(uint64_t bytes) -> std::string
+{
+    constexpr int32_t fraction_digits = 2;
+    return bx::toHuman<32>(bytes, bx::Units::KibiByte, fraction_digits).getCPtr();
+}
+
+/// The memory one field level holds: its brick indirection and its surface bricks.
+auto get_field_memory(const mesh_sdf& field) -> uint64_t
+{
+    return uint64_t(field.indirection.size()) * sizeof(uint32_t) + uint64_t(field.brick_voxels.size());
+}
+} // namespace
+
 auto mesh::get_info() const -> info
 {
     info result{
@@ -262,7 +280,9 @@ auto mesh::get_info() const -> info
         .data_groups = uint32_t(data_groups_.size()),
         .lods = {}
     };
-
+    // Every LOD keeps its own 32-bit index list beside the base one.
+    constexpr uint64_t index_bytes_per_face = 3u * sizeof(uint32_t);
+    uint64_t index_bytes = uint64_t(face_count_) * index_bytes_per_face;
     // Add simplified LODs
     for(size_t i = 0; i < lods_.size(); ++i)
     {
@@ -271,8 +291,10 @@ auto mesh::get_info() const -> info
             .triangles = lod.face_count_,
             .percent = (static_cast<float>(lod.face_count_) / static_cast<float>(face_count_)) * 100.0f,
         });
+        index_bytes += uint64_t(lod.face_count_) * index_bytes_per_face;
     }
-
+    result.vertex_memory = format_memory(uint64_t(vertex_count_) * vertex_format_.getStride());
+    result.index_memory = format_memory(index_bytes);
     return result;
 }
 auto mesh::prepare_mesh(const bgfx::VertexLayout& format) -> bool
@@ -841,6 +863,15 @@ auto mesh::load_mesh(load_data&& data) -> bool
     default_material_uids_ = std::move(data.default_material_uids);
     submesh_sdfs_ = std::move(data.submesh_sdfs);
     submesh_sdf_coarse_mips_ = std::move(data.submesh_sdf_coarse_mips);
+    // Shared, so the card library hands a placement the compiled set itself.
+    submesh_cards_.clear();
+    submesh_cards_.reserve(data.submesh_cards.size());
+    for(auto& cards : data.submesh_cards)
+    {
+        submesh_cards_.push_back(std::make_shared<const lumen_mesh_cards>(std::move(cards)));
+    }
+    are_cards_disabled_ = data.are_cards_disabled;
+    cards_lod_index_ = data.cards_lod_index;
 
     const bool has_skin_data = data.skin_data.has_bones();
     const bool skin_is_prepared = data.skin_is_prepared;
@@ -1742,6 +1773,64 @@ auto mesh::get_sdf_count() const -> uint32_t
     return uint32_t(submesh_sdfs_.size());
 }
 
+auto mesh::get_lumen_cards(uint32_t submesh_index) const -> std::shared_ptr<const lumen_mesh_cards>
+{
+    return submesh_index < submesh_cards_.size() ? submesh_cards_[submesh_index] : nullptr;
+}
+
+auto mesh::are_lumen_cards_disabled() const -> bool
+{
+    return are_cards_disabled_;
+}
+
+auto mesh::get_lumen_cards_lod() const -> uint32_t
+{
+    return math::min<uint32_t>(cards_lod_index_, uint32_t(lods_.size()));
+}
+
+auto mesh::get_gi_info() const -> gi_info
+{
+    gi_info result;
+    uint64_t field_bytes = 0;
+    uint64_t finest_field_bytes = 0;
+    for(uint32_t submesh = 0; submesh < uint32_t(submesh_sdfs_.size()); ++submesh)
+    {
+        const mesh_sdf& field = submesh_sdfs_[submesh];
+        if(!field.is_sampleable())
+        {
+            continue;
+        }
+        result.min_voxel_size = result.fields == 0 ? field.voxel_size : math::min(result.min_voxel_size, field.voxel_size);
+        result.max_voxel_size = math::max(result.max_voxel_size, field.voxel_size);
+        ++result.fields;
+        result.two_sided_fields += field.is_two_sided ? 1u : 0u;
+        result.surface_bricks += field.get_surface_brick_count();
+        finest_field_bytes += get_field_memory(field);
+        field_bytes += get_field_memory(field);
+        if(submesh < submesh_sdf_coarse_mips_.size())
+        {
+            for(const mesh_sdf& level : submesh_sdf_coarse_mips_[submesh])
+            {
+                field_bytes += get_field_memory(level);
+            }
+        }
+    }
+    for(const auto& cards : submesh_cards_)
+    {
+        const uint32_t count = cards ? uint32_t(cards->cards.size()) : 0u;
+        result.card_sets += count > 0 ? 1u : 0u;
+        result.cards += count;
+        result.max_cards_per_submesh = math::max(result.max_cards_per_submesh, count);
+    }
+    result.field_memory = format_memory(field_bytes);
+    result.finest_field_memory = format_memory(finest_field_bytes);
+    result.card_source = are_cards_disabled_ ? "Disabled" : submesh_cards_.empty() ? "Built at runtime" : "Compiled";
+    result.card_memory = format_memory(uint64_t(result.cards) * sizeof(lumen_card));
+    result.card_table_memory =
+        format_memory(uint64_t(result.cards) * lumen_scene::card_stride * sizeof(math::vec4));
+    return result;
+}
+
 auto mesh::get_system_vb() -> uint8_t*
 {
     return system_vb_;
@@ -1750,6 +1839,15 @@ auto mesh::get_system_vb() -> uint8_t*
 auto mesh::get_system_ib() -> uint32_t*
 {
     return system_ib_;
+}
+
+auto mesh::get_system_ib(uint32_t lod_index) const -> const uint32_t*
+{
+    if(lod_index == 0)
+    {
+        return system_ib_;
+    }
+    return lod_index <= lods_.size() ? lods_[lod_index - 1].system_ib_ : nullptr;
 }
 
 auto mesh::get_vertex_format() const -> const bgfx::VertexLayout&

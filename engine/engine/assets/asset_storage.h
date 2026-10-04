@@ -141,6 +141,19 @@ struct mesh_importer_meta : crtp_meta_type<mesh_importer_meta, asset_importer_me
         float max_component_spread{32.0f};
     } sdf;
 
+    ///< Lumen surface cache cards, built at compile time next to the distance field (UE's card representation).
+    struct cards_meta
+    {
+        ///< Build the cards at compile time. Off: no submesh of this mesh gets cards, so the surface cache has nothing
+        ///< to light it with and its distance field reads unlit to the GI.
+        bool generate_cards{true};
+        ///< The most cards one submesh gets (UE MaxLumenMeshCards).
+        uint32_t max_cards{12};
+        ///< LOD the cards are built from. 0 is the full-detail topology; LOD 1 keeps the shape at a fraction of the
+        ///< triangles, and a level beyond the last one generated is clamped to the coarsest available.
+        uint32_t lod_index{1};
+    } cards;
+
     struct rig_meta
     {
 

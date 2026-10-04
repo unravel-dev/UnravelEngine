@@ -222,6 +222,47 @@ void register_editor_tools(mcp_tool_registry& registry)
          .mutates_scene = false});
 
     registry.add(
+        {.name = "selection_set_asset",
+         .description = "Select an asset by key (e.g. app:/data/Model.fbx), as a click in the Content Browser does, so "
+                        "the Inspector shows its details and import settings. Textures, materials, meshes, prefabs "
+                        "and scenes.",
+         .input_schema_json = R"({"type":"object","properties":{"key":{"type":"string"}},"required":["key"]})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             {
+                 std::string key;
+                 if(!read_string(args, "key", key) || key.empty())
+                 {
+                     return {.text = "Missing key", .is_error = true};
+                 }
+                 std::string error;
+                 if(!editor_actions::select_asset(ctx, key, &error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 return {.text = fmt::format(R"({{"selected":{}}})", make_json_string(key)), .is_error = false};
+             },
+         .mutates_scene = false});
+
+    registry.add(
+        {.name = "editor_open_project_settings",
+         .description = "Open the Project Settings window, optionally at a category (e.g. \"Global Illumination\").",
+         .input_schema_json = R"({"type":"object","properties":{"category":{"type":"string"}}})",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             {
+                 std::string category;
+                 read_string(args, "category", category);
+                 std::string error;
+                 if(!editor_actions::open_project_settings(ctx, category, &error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 return {.text = R"({"opened":true})", .is_error = false};
+             },
+         .mutates_scene = false});
+
+    registry.add(
         {.name = "selection_clear",
          .description = "Clear the editor selection.",
          .input_schema_json = empty_object_schema(),

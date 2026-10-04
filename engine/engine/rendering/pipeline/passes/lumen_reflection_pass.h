@@ -38,6 +38,13 @@ public:
         gfx::texture::ptr probe_output;
     };
 
+    /// The render view's trace targets (lumen_reflection_common.sh: the ray, the trace hit, the trace radiance) and
+    /// the render frame they were last traced on (data_get).
+    static constexpr const char* ray_texture = "LUMEN_REFLECTION_RAY";
+    static constexpr const char* hit_texture = "LUMEN_REFLECTION_HIT";
+    static constexpr const char* radiance_texture = "LUMEN_REFLECTION_RADIANCE";
+    static constexpr const char* traced_frame_key = "LUMEN_REFLECTION_FRAME";
+
     /// Experiment toggles (surface_cache_system::get_experiment_flags), above the gather's bits: each one
     /// changes one stage for an in-session A/B. Zero in production.
     enum experiment : uint32_t

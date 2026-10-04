@@ -724,6 +724,11 @@ void draw_graphics_settings(rtti::context& ctx)
     }
 }
 
+void draw_global_illumination_settings(rtti::context& ctx)
+{
+    inspect_and_save(ctx, ctx.get_cached<project_manager>().get_settings().global_illumination);
+}
+
 void draw_splash_settings(rtti::context& ctx)
 {
     inspect_and_save(ctx, ctx.get_cached<project_manager>().get_settings().splash);
@@ -774,6 +779,11 @@ auto make_project_settings_categories() -> std::vector<settings_category>
          "renderer backend directx vulkan opengl metal static mesh batching instancing draw calls gpu memory eviction "
          "paging budget",
          &draw_graphics_settings},
+        {"Global Illumination",
+         ICON_MDI_WHITE_BALANCE_SUNNY,
+         "The surface cache: its atlas, the card capture budget and refresh, and the card resolution rule.",
+         "gi lumen surface cache atlas cards capture refresh budget texel density resolution",
+         &draw_global_illumination_settings},
         {"Splash Screen",
          ICON_MDI_IMAGE_OUTLINE,
          "What the game shows while it starts.",

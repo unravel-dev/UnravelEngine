@@ -9,6 +9,7 @@ namespace unravel
 {
 REFLECT_EXTERN(mesh::info::lod_info);
 REFLECT_EXTERN(mesh::info);
+REFLECT_EXTERN(mesh::gi_info);
 REFLECT_EXTERN(mesh);
 
 SAVE_EXTERN(mesh::triangle);

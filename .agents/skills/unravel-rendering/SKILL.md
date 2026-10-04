@@ -64,8 +64,23 @@ Use `unravel-shader-change` for step-by-step shader edits.
 - **GL image names:** never name an image (`IMAGE*`) like any sampler uniform - use `i_`
   names. The GL backend uploads every registered uniform a program declares, so the image
   is rebound to that sampler's last stage (unit 0 if never set) and reads / writes another
-  texture. Symptom: the auto exposure history ring wrote into the irradiance SH through
-  unit 0 (GL-only blue SSIL flash every 256 frames).
+  texture. It happened twice: the auto exposure history ring wrote into the irradiance SH
+  through unit 0 (GL-only blue SSIL flash every 256 frames), and the GI gather / radiance
+  cache images (`s_lumen_*`, sampled under the same names by the next pass) turned the
+  gather and the reflections to garbage, so the GL lit image went black.
+  `python tasks/scan_gl_image_names.py` finds these and the next trap.
+- **GL image units:** images bind at stages 0-7 only. Stage 8+ compiles offline and fails
+  at runtime on GL; samplers and buffers may go higher.
+- **GL rows and depth:** bgfx runs GL with `originBottomLeft` and homogeneous depth
+  (`BGFX_CONFIG_GL_NORMALIZE_NDC_CONVENTIONS` is 0): view rects and scissors count rows from
+  the bottom, and clip depth spans -1..1. A pass that rasterizes tiles and reads them back by
+  texel (`texelFetch` / `imageLoad` at pixel coordinates) must mirror its rect or scissor and
+  flip y (and map depth) in its projection on GL - see
+  `lumen_surface_cache_pass::compute_capture_view`. Screen passes sampled by UV need nothing.
+- **Verify on GL:** after adding or renaming shader resources, or adding a pass that
+  rasterizes into an atlas, run the sandbox with `--renderer=opengl` and compare the debug
+  views with D3D11 (G-buffer views first, then lighting). `tasks/validate_gl.py` checks only
+  the compiled GLSL's syntax, not runtime bindings.
 - **D3D12:** allocates per texture update - batch updates into boxes. PSOs compile at
   first use - the disk cache is wired via `gfx::set_cache_directory`.
 - **Vulkan:** scratch buffer is 32MB/frame - large per-frame uploads can exhaust it.

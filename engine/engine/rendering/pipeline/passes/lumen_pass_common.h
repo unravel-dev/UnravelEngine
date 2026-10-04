@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 /**
  * @file lumen_pass_common.h
@@ -76,6 +77,37 @@ inline auto make_settings_uniform(const gi_settings& settings) -> std::array<flo
             get_max_roughness_to_trace(settings.reflections),
             0.0f};
 }
+/// The layout of the vec4 tables the Lumen passes upload as buffers (a vertex buffer is read as vec4 by the shaders).
+inline auto get_vec4_layout() -> const bgfx::VertexLayout&
+{
+    static const bgfx::VertexLayout layout = []()
+    {
+        bgfx::VertexLayout decl;
+        decl.begin().add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float).end();
+        return decl;
+    }();
+    return layout;
+}
+
+/// Uploads a vec4 table, growing the buffer when needed; an empty table keeps one zero element.
+inline void upload_vec4_table(bgfx::DynamicVertexBufferHandle& buffer, const std::vector<math::vec4>& data)
+{
+    const uint32_t count = std::max(uint32_t(data.size()), 1u);
+    if(!bgfx::isValid(buffer))
+    {
+        buffer = bgfx::createDynamicVertexBuffer(count,
+                                                 get_vec4_layout(),
+                                                 BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_ALLOW_RESIZE);
+    }
+    if(data.empty())
+    {
+        const math::vec4 zero(0.0f);
+        bgfx::update(buffer, 0, bgfx::copy(&zero, sizeof(zero)));
+        return;
+    }
+    bgfx::update(buffer, 0, bgfx::copy(data.data(), uint32_t(data.size() * sizeof(math::vec4))));
+}
+
 /// A Lumen texture read with texelFetch and written as an image.
 inline constexpr uint64_t compute_texture_flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP |
                                                   BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_POINT |

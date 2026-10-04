@@ -30,8 +30,6 @@ uniform vec4 u_screen_ao;
 uniform vec4 u_visualize_indirect;
 
 #define u_mode int(u_params.x)
-/// The roughness below which Lumen traces reflection rays (UE r.Lumen.Reflections.MaxRoughnessToTrace).
-#define u_max_roughness_to_trace u_params.z
 
 #define BASE_COLOR 0
 #define DIFFUSE_COLOR 1
@@ -49,7 +47,6 @@ uniform vec4 u_visualize_indirect;
 #define RADIANCE_ALPHA 13
 #define SPECULAR_OCCLUSION 14
 #define AO_BENT_NORMALS 15
-#define LUMEN_REFLECTION_RAYS 16
 
 /// The grey albedo the indirect diffuse view lights (UE DiffuseIndirectComposite.usf:565).
 #define VISUALIZE_DIFFUSE_ALBEDO 0.18
@@ -75,21 +72,6 @@ vec3 indirect_diffuse_view(GBufferData data, vec2 texcoord0)
     float scale = u_params.y > 0.0 ? u_params.y : 1.0;
     vec3 radiance = VISUALIZE_DIFFUSE_ALBEDO * indirect.rgb * indirect.a * occlusion * energy * scale;
     return apply_tonemapping(radiance, int(u_visualize_indirect.x), 1.0);
-}
-
-/// UE's Dedicated Reflection Rays view (LumenVisualize.ush:49-74, r.Lumen.Visualize 7): the albedo's luminance
-/// lit from one direction, and in red, brighter the smoother, every pixel whose roughness Lumen traces
-/// reflections for (LumenCombineReflectionsAlpha: below the max roughness to trace, fading over 0.1).
-vec3 lumen_reflection_rays(GBufferData data)
-{
-    vec3 light_direction = vec3(-0.707, 0.707, 0.0);
-    float lighting = 0.5 * dot(light_direction, normalize(data.world_normal)) + 0.5;
-    vec3 color = vec3_splat(sqrt(dot(data.diffuse_color, vec3(0.3, 0.59, 0.11)) * lighting * 1.5));
-    if(saturate((u_max_roughness_to_trace - data.roughness) / 0.1) > 0.0)
-    {
-        color = vec3(1.0, 0.0, 0.0) * ((1.0 - data.roughness) * 0.8 + 0.2);
-    }
-    return color;
 }
 
 /// The indirect specular of pbr_indirect, ahead of the environment BRDF: the two reflection
@@ -192,10 +174,6 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     {
         // White when the screen-space AO carries no bent normal (ASSAO, or no pass).
         color = u_screen_ao.w > 0.5 ? texture2D(s_tex8, texcoord0).rgb : vec3_splat(1.0);
-    }
-    else if(u_mode == LUMEN_REFLECTION_RAYS)
-    {
-        color = lumen_reflection_rays(data);
     }
 
     // The decode helpers now return LINEAR base color (and colors derived from

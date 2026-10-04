@@ -251,11 +251,13 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     // 24: a chain's coarser levels sign open surfaces with the finest level's vote reach. Each level's own reach
     //     (four voxel diagonals) signed a 1.6 m layer behind a vault's back faces inside at 0.4 m voxels, which
     //     the Lumen cascade's coarse-first distance composed above the floor slab another submesh holds.
+    // 25: Lumen mesh cards are built at compile time, one set per submesh for its imported material's sidedness
+    //     (UE's FCardRepresentationData), from LOD 1 by default, instead of on first use at runtime.
     //
     // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
     // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing
-    // projects silently keep the field produced by the previous code.
-    return 24;
+    // projects silently keep the field produced by the previous code. The same holds for the card builder.
+    return 25;
 }
 
 template<>

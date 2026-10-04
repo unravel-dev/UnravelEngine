@@ -63,6 +63,8 @@ constexpr int SHADOW_RING_ALPHA = 22;
 
 constexpr const char* CENTER_GROUP_WIDTH_ID = "##center_group_width";
 constexpr const char* RIGHT_GROUP_WIDTH_ID = "##right_group_width";
+/// The popup of a dropdown, under the id of its button.
+constexpr const char* DROPDOWN_POPUP_NAME = "##dropdown";
 
 constexpr int BAR_STYLE_VARS = 4;
 constexpr int BAR_STYLE_COLORS = 2;
@@ -873,7 +875,7 @@ auto begin_dropdown(const char* id, const char* text, const char* tooltip, ImU32
     context.NextWindowData = popup_window_data;
     const ImGuiID item_id = ImGui::GetID(id);
     ImGui::PushID(id);
-    const char* popup_name = "##dropdown";
+    const char* popup_name = DROPDOWN_POPUP_NAME;
     // A dropdown opens on a press and on nothing else. The press on the button of the open one
     // stays blocked: that click closes it.
     const bool is_closed = !ImGui::IsPopupOpen(popup_name);
@@ -900,6 +902,13 @@ void end_dropdown()
 {
     ImGui::EndPopup();
     ImGui::PopStyleVar(POPUP_STYLE_VARS);
+    ImGui::PopID();
+}
+
+void open_dropdown(const char* id)
+{
+    ImGui::PushID(id);
+    ImGui::OpenPopup(DROPDOWN_POPUP_NAME);
     ImGui::PopID();
 }
 

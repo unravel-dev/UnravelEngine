@@ -21,7 +21,7 @@
 
 SAMPLER2D(s_lumen_probe_radiance, 0);
 SAMPLER2D(s_lumen_probe_records, 1);
-IMAGE2D_WO(s_lumen_probe_filtered, rgba16f, 2);
+IMAGE2D_WO(i_lumen_probe_filtered, rgba16f, 2);
 /// x > 0.5 when the probe is disoccluded (cs_lumen_probe_generate_rays.sc): its neighbours count without
 /// the angle test, blurring revealed content more while it has no history.
 SAMPLER2D(s_lumen_screen_data, 3);
@@ -42,7 +42,7 @@ void main()
 	vec4 own = texelFetch(s_lumen_probe_radiance, atlas_texel, 0);
 	if(record.x <= 0.0)
 	{
-		imageStore(s_lumen_probe_filtered, atlas_texel, vec4(0.0, 0.0, 0.0, -1.0));
+		imageStore(i_lumen_probe_filtered, atlas_texel, vec4(0.0, 0.0, 0.0, -1.0));
 		return;
 	}
 	float depth = record.x;
@@ -92,5 +92,5 @@ void main()
 		weight_sum += weight;
 	}
 	vec3 filtered = weight_sum > 0.0 ? sum / weight_sum : vec3_splat(0.0);
-	imageStore(s_lumen_probe_filtered, atlas_texel, vec4(filtered, own_hit));
+	imageStore(i_lumen_probe_filtered, atlas_texel, vec4(filtered, own_hit));
 }

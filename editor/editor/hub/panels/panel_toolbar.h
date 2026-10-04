@@ -261,4 +261,8 @@ auto begin_dropdown(const char* id,
                     const char* width_text = nullptr) -> bool;
 void end_dropdown();
 
+/// Opens the popup of the dropdown with this id as a press on its button would, for a host that
+/// opens it from code (an MCP tool). Call from the bar, right before begin_dropdown().
+void open_dropdown(const char* id);
+
 } // namespace unravel::panel_toolbar

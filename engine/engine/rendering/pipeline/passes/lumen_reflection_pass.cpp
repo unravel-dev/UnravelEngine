@@ -83,7 +83,7 @@ auto lumen_reflection_pass::init(rtti::context& ctx) -> bool
     spatial_program_ = load("cs_lumen_reflection_spatial");
     if(!has_programs())
     {
-        APPLOG_WARNING("[Lumen] Reflection programs failed to load; Lumen reflections are unavailable for this run.");
+        APPLOG_WARNING("[GI] Reflection programs failed to load; traced reflections are unavailable for this run.");
     }
     return has_programs();
 }
@@ -110,16 +110,16 @@ auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview, const usize
     auto& parity = rview.data_get_or_emplace("LUMEN_REFLECTION_PARITY", 0u);
     const bool even_frame = (parity & 1u) == 0u;
     ++parity;
-    auto& written_frame = rview.data_get_or_emplace("LUMEN_REFLECTION_FRAME", 0u);
+    auto& written_frame = rview.data_get_or_emplace(traced_frame_key, 0u);
     const uint32_t render_frame = gfx::get_render_frame();
     const bool continuous = written_frame != 0u && render_frame == written_frame + 1u;
     written_frame = render_frame;
     const std::string write_set = even_frame ? "_A" : "_B";
     const std::string read_set = even_frame ? "_B" : "_A";
     frame_targets targets;
-    targets.ray = ensure_texture(rview, "LUMEN_REFLECTION_RAY", size, bgfx::TextureFormat::RGBA16F);
-    targets.radiance = ensure_texture(rview, "LUMEN_REFLECTION_RADIANCE", size, bgfx::TextureFormat::RGBA16F);
-    targets.hit = ensure_texture(rview, "LUMEN_REFLECTION_HIT", size, bgfx::TextureFormat::R32F);
+    targets.ray = ensure_texture(rview, ray_texture, size, bgfx::TextureFormat::RGBA16F);
+    targets.radiance = ensure_texture(rview, radiance_texture, size, bgfx::TextureFormat::RGBA16F);
+    targets.hit = ensure_texture(rview, hit_texture, size, bgfx::TextureFormat::R32F);
     targets.resolved = ensure_texture(rview, "LUMEN_REFLECTION_RESOLVED", size, bgfx::TextureFormat::RGBA16F);
     targets.history_write =
         ensure_texture(rview, "LUMEN_REFLECTION_HISTORY" + write_set, size, bgfx::TextureFormat::RGBA16F);
@@ -166,7 +166,7 @@ void lumen_reflection_pass::run_screen(const run_params& params, const frame_tar
     const auto& depth = gather.g_buffer->get_texture(4);
     const bool has_hiz = gather.hiz && gather.hiz->is_valid();
     const bool has_prev_color = gather.prev_color && gather.prev_color->is_valid();
-    gfx::render_pass pass("GI/Lumen Reflections Screen Trace");
+    gfx::render_pass pass("GI/Reflections Screen Trace");
     pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
     screen_program_->begin();
     bind_image(0, targets.ray, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
@@ -192,7 +192,7 @@ void lumen_reflection_pass::run_world(const run_params& params, const frame_targ
     const auto& black = default_textures::get().black_texture();
     const auto& clipmap_gpu = gather.view_cache->get_clipmap_gpu();
     const bool has_prev_color = gather.prev_color && gather.prev_color->is_valid();
-    gfx::render_pass pass("GI/Lumen Reflections Distance Field");
+    gfx::render_pass pass("GI/Reflections Distance Field");
     pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
     world_program_->begin();
     bind_image(0, targets.radiance, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
@@ -220,7 +220,7 @@ void lumen_reflection_pass::run_world(const run_params& params, const frame_targ
 void lumen_reflection_pass::run_resolve(const run_params& params, const frame_targets& targets) const
 {
     const auto& gather = *params.gather;
-    gfx::render_pass pass("GI/Lumen Reflections Resolve");
+    gfx::render_pass pass("GI/Reflections Resolve");
     pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
     resolve_program_->begin();
     bind_image(0, targets.resolved, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
@@ -242,7 +242,7 @@ void lumen_reflection_pass::run_temporal(const run_params& params, const frame_t
 {
     const auto& gather = *params.gather;
     const auto& black = default_textures::get().black_texture();
-    gfx::render_pass pass("GI/Lumen Reflections Temporal");
+    gfx::render_pass pass("GI/Reflections Temporal");
     pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
     temporal_program_->begin();
     bind_image(0, targets.history_write, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
@@ -265,7 +265,7 @@ void lumen_reflection_pass::run_temporal(const run_params& params, const frame_t
 void lumen_reflection_pass::run_spatial(const run_params& params, const frame_targets& targets) const
 {
     const auto& gather = *params.gather;
-    gfx::render_pass pass("GI/Lumen Reflections Spatial+Composite");
+    gfx::render_pass pass("GI/Reflections Spatial+Composite");
     pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
     spatial_program_->begin();
     bind_image(0, params.traced_output, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
@@ -289,7 +289,7 @@ void lumen_reflection_pass::run_spatial(const run_params& params, const frame_ta
 
 auto lumen_reflection_pass::run(gfx::render_view& rview, const run_params& params) -> bool
 {
-    APP_SCOPE_PERF("Rendering/GI/Lumen Reflections");
+    APP_SCOPE_PERF("Rendering/GI/Reflections");
     const auto* gather = params.gather;
     if(!has_programs() || gather == nullptr || !gather->g_buffer || !gather->cam || !gather->view_cache ||
        gather->lumen_surface_cache == nullptr || !params.traced_output || !params.probe_output)

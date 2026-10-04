@@ -26,6 +26,7 @@
 #include "passes/lumen_gather_pass.h"
 #include "passes/lumen_reflection_pass.h"
 #include "passes/lumen_surface_cache_pass.h"
+#include "passes/lumen_visualize_pass.h"
 #include "passes/scene_history_pass.h"
 #include "passes/ssil_pass.h"
 #include "passes/bloom_pass.h"
@@ -242,6 +243,12 @@ public:
 
     virtual void set_debug_pass(int pass) = 0;
 
+    /// UE's world-space Lumen visualizations to draw over the view, whatever the debug pass (the card placement).
+    void set_lumen_visualize_settings(const lumen_visualize_pass::world_settings& settings)
+    {
+        lumen_visualize_settings_ = settings;
+    }
+
     /// Readback scale for the radiance-valued debug views: the indirect-diffuse view (UE's, tone
     /// mapped) takes it as an exposure factor ahead of the tone map.
     /// An instrument for the editor's debug-view tooling (viewport_set_debug_view "scale");
@@ -293,6 +300,13 @@ public:
         return stats_;
     }
 
+    /// The text the last frame's debug view puts on the image (UE's visualize labels: the overview tiles' names),
+    /// for the viewport to draw over it.
+    auto get_debug_view_labels() const -> const std::vector<debug_view_label>&
+    {
+        return debug_view_labels_;
+    }
+
 protected:
     prefilter_pass prefilter_pass_{};
     blit_pass blit_pass_{};
@@ -313,6 +327,8 @@ protected:
     lumen_gather_pass lumen_gather_pass_{}; ///< Lumen's screen probe gather: the indirect diffuse
     lumen_surface_cache_pass lumen_surface_cache_pass_{}; ///< Lumen cards, atlases and captures
     lumen_reflection_pass lumen_reflection_pass_{}; ///< Lumen's reflections, with the Lumen gather
+    lumen_visualize_pass lumen_visualize_pass_{}; ///< Lumen's debug views
+    shader_print shader_print_{};                 ///< The view's ShaderPrint text
     scene_history_pass scene_history_pass_{}; ///< PREV_SCENE_HDR, view depth in alpha
 
     std::unique_ptr<gpu_program> particle_program_instanced_{};
@@ -322,6 +338,10 @@ protected:
     std::unique_ptr<gpu_program> world_quad_program_{};
 
     pipeline_stats stats_{};
+    ///< See get_debug_view_labels.
+    std::vector<debug_view_label> debug_view_labels_;
+    ///< See set_lumen_visualize_settings.
+    lumen_visualize_pass::world_settings lumen_visualize_settings_{};
 
 
     entt::registry cache_registry_;

@@ -5,10 +5,19 @@ $output v_wpos, v_pos, v_wnormal, v_wtangent, v_wbitangent, v_texcoord0, v_lod_p
 
 uniform vec4 u_lod_params;
 
+#if DEFERRED_GEOM_CARD_CAPTURE
+/// The surface cache card capture (vs_deferred_geom_card_capture.sc): each draw's own world -> clip transform, which
+/// places the capture in its tile of the capture atlas, so one pass draws every capture.
+uniform mat4 u_card_capture_view_proj;
+#define DEFERRED_GEOM_VIEW_PROJ u_card_capture_view_proj
+#else
+#define DEFERRED_GEOM_VIEW_PROJ u_viewProj
+#endif
+
 void main()
 {
     vec4 wpos = mul(u_world[0], vec4(a_position, 1.0) );
-    gl_Position = mul(u_viewProj, wpos );
+    gl_Position = mul(DEFERRED_GEOM_VIEW_PROJ, wpos );
 
 	vec4 normal = a_normal * 2.0 - 1.0;
 	vec4 tangent = a_tangent * 2.0 - 1.0;

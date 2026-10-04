@@ -107,7 +107,7 @@ auto lumen_radiance_cache::init(rtti::context& ctx) -> bool
     filter_program_ = load("cs_lumen_rc_filter");
     if(!has_programs())
     {
-        APPLOG_WARNING("[Lumen] Radiance cache programs failed to load; the gather traces without it.");
+        APPLOG_WARNING("[GI] Radiance cache programs failed to load; the gather traces without it.");
     }
     return has_programs();
 }
@@ -212,7 +212,7 @@ void lumen_radiance_cache::set_cache_uniforms(bookkeeping mode) const
 
 void lumen_radiance_cache::run_bookkeeping(bookkeeping mode) const
 {
-    gfx::render_pass pass("GI/Lumen Cache Bookkeeping");
+    gfx::render_pass pass("GI/Cache Bookkeeping");
     bookkeeping_program_->begin();
     bgfx::setBuffer(0, counters_, bgfx::Access::ReadWrite);
     bgfx::setBuffer(1, args_, bgfx::Access::ReadWrite);
@@ -248,7 +248,7 @@ void lumen_radiance_cache::run_over_indirection(gpu_program& program, const char
 
 void lumen_radiance_cache::run_mark(const frame_inputs& inputs) const
 {
-    gfx::render_pass pass("GI/Lumen Cache Mark");
+    gfx::render_pass pass("GI/Cache Mark");
     pass.set_view_proj(inputs.params->cam->get_view(), inputs.params->cam->get_projection_unjittered());
     mark_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_probe_records, 0, inputs.probe_records);
@@ -266,7 +266,7 @@ void lumen_radiance_cache::run_trace(const frame_inputs& inputs) const
     const auto& params = *inputs.params;
     const auto& clipmap_gpu = params.view_cache->get_clipmap_gpu();
     {
-        gfx::render_pass pass("GI/Lumen Cache Tiles");
+        gfx::render_pass pass("GI/Cache Tiles");
         tiles_program_->begin();
         bgfx::setBuffer(0, counters_, bgfx::Access::ReadWrite);
         bgfx::setBuffer(1, traces_, bgfx::Access::Read);
@@ -276,7 +276,7 @@ void lumen_radiance_cache::run_trace(const frame_inputs& inputs) const
         tiles_program_->end();
     }
     run_bookkeeping(bookkeeping::trace_args);
-    gfx::render_pass pass("GI/Lumen Cache Trace");
+    gfx::render_pass pass("GI/Cache Trace");
     trace_program_->begin();
     bgfx::setBuffer(0, traces_, bgfx::Access::Read);
     bgfx::setBuffer(1, tiles_, bgfx::Access::Read);
@@ -309,7 +309,7 @@ void lumen_radiance_cache::run_trace(const frame_inputs& inputs) const
 
 void lumen_radiance_cache::run_filter() const
 {
-    gfx::render_pass pass("GI/Lumen Cache Filter");
+    gfx::render_pass pass("GI/Cache Filter");
     filter_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_rc_radiance, 0, radiance_atlas_);
     gfx::set_texture(uniforms_.s_lumen_rc_depth, 1, depth_atlas_);
@@ -323,7 +323,7 @@ void lumen_radiance_cache::run_filter() const
 
 auto lumen_radiance_cache::update(const frame_inputs& inputs) -> bool
 {
-    APP_SCOPE_PERF("Rendering/GI/Lumen Radiance Cache");
+    APP_SCOPE_PERF("Rendering/GI/Radiance Cache");
     if(!has_programs() || !inputs.params || !inputs.params->cam || !inputs.params->view_cache || !inputs.probe_records)
     {
         return false;
@@ -344,17 +344,17 @@ auto lumen_radiance_cache::update(const frame_inputs& inputs) -> bool
     }
     const auto camera = inputs.params->cam->get_position();
     camera_ = {camera.x, camera.y, camera.z, 0.0f};
-    run_over_indirection(*clear_program_, "GI/Lumen Cache Clear");
+    run_over_indirection(*clear_program_, "GI/Cache Clear");
     if(!persistent_)
     {
         run_bookkeeping(bookkeeping::reset);
     }
     run_mark(inputs);
-    run_over_indirection(*update_program_, "GI/Lumen Cache Update");
+    run_over_indirection(*update_program_, "GI/Cache Update");
     run_bookkeeping(bookkeeping::frame_start);
-    run_over_indirection(*allocate_program_, "GI/Lumen Cache Allocate");
+    run_over_indirection(*allocate_program_, "GI/Cache Allocate");
     run_bookkeeping(bookkeeping::budget);
-    run_over_indirection(*select_program_, "GI/Lumen Cache Select");
+    run_over_indirection(*select_program_, "GI/Cache Select");
     run_bookkeeping(bookkeeping::trace_list);
     run_trace(inputs);
     run_filter();

@@ -18,6 +18,7 @@
 #include <engine/assets/impl/asset_writer.h>
 #include <engine/defaults/defaults.h>
 #include <engine/ecs/ecs.h>
+#include <engine/ecs/prefab.h>
 #include <engine/engine.h>
 #include <engine/events.h>
 #include <engine/play_mode.h>
@@ -25,6 +26,7 @@
 #include <engine/meta/assets/asset_importer_meta.hpp>
 #include <engine/meta/ecs/entity.hpp>
 #include <engine/rendering/material.h>
+#include <engine/rendering/mesh.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/rendering/ecs/systems/reflection_probe_system.h>
 #include <engine/rendering/ecs/components/reflection_probe_component.h>
@@ -2672,6 +2674,51 @@ auto editor_actions::set_selection(rtti::context& ctx,
 void editor_actions::clear_selection(rtti::context& ctx)
 {
     ctx.get_cached<editing_manager>().unselect();
+}
+
+auto editor_actions::select_asset(rtti::context& ctx, const std::string& key, std::string* error) -> bool
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    auto& em = ctx.get_cached<editing_manager>();
+    const std::string extension = fs::path(key).extension().string();
+    const std::string name = fs::path(key).stem().string();
+    bool is_selected = false;
+    hpp::for_each_type<gfx::texture, material, mesh, prefab, scene_prefab>(
+        [&](auto tag)
+        {
+            using asset_t = typename std::decay_t<decltype(tag)>::type;
+            if(is_selected || !ex::is_format<asset_t>(extension))
+            {
+                return;
+            }
+            const auto handle = am.find_asset<asset_t>(key);
+            if(!handle)
+            {
+                return;
+            }
+            em.select(handle, editing_manager::select_mode::normal, name);
+            is_selected = true;
+        });
+    if(!is_selected && error)
+    {
+        *error = "No texture, material, mesh, prefab or scene asset at " + key;
+    }
+    return is_selected;
+}
+
+auto editor_actions::open_project_settings(rtti::context& ctx, const std::string& category, std::string* error)
+    -> bool
+{
+    if(!ctx.has<hub>() || !ctx.get_cached<project_manager>().has_open_project())
+    {
+        if(error)
+        {
+            *error = "No open project";
+        }
+        return false;
+    }
+    ctx.get_cached<hub>().open_project_settings(ctx, category);
+    return true;
 }
 
 auto editor_actions::get_recent_logs(rtti::context& ctx,

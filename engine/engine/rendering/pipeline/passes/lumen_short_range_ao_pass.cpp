@@ -67,7 +67,7 @@ auto lumen_short_range_ao_pass::init(rtti::context& ctx) -> bool
     temporal_program_ = load("cs_lumen_short_range_ao_temporal");
     if(!has_programs())
     {
-        APPLOG_WARNING("[Lumen] Short-range AO programs failed to load; Lumen views keep the screen-space AO.");
+        APPLOG_WARNING("[GI] Short-range AO programs failed to load; the views keep the screen-space AO.");
     }
     return has_programs();
 }
@@ -120,7 +120,7 @@ void lumen_short_range_ao_pass::run_search(const run_params& params,
                                            const usize32_t& size) const
 {
     const auto& gather = *params.gather;
-    gfx::render_pass pass("GI/Lumen Short Range AO");
+    gfx::render_pass pass("GI/Short Range AO");
     pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
     search_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_depth, 0, gather.g_buffer->get_texture(4));
@@ -144,7 +144,7 @@ void lumen_short_range_ao_pass::run_temporal(const run_params& params,
     const auto& black = default_textures::get().black_texture();
     const bool has_history = targets.has_history && params.has_gather_history && params.gather_history &&
                              gather.prev_depth;
-    gfx::render_pass pass("GI/Lumen Short Range AO Temporal");
+    gfx::render_pass pass("GI/Short Range AO Temporal");
     pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
     temporal_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_depth, 0, gather.g_buffer->get_texture(4));
@@ -166,7 +166,7 @@ void lumen_short_range_ao_pass::run_temporal(const run_params& params,
 
 auto lumen_short_range_ao_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::texture::ptr
 {
-    APP_SCOPE_PERF("Rendering/GI/Lumen Short Range AO");
+    APP_SCOPE_PERF("Rendering/GI/Short Range AO");
     if(!has_programs() || params.gather == nullptr || !params.gather->g_buffer || params.gather->cam == nullptr ||
        params.frame == nullptr || params.probes == nullptr || params.view == nullptr)
     {

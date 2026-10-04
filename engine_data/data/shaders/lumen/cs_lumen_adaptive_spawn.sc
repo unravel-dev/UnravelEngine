@@ -16,7 +16,7 @@ SAMPLER2D(s_lumen_depth, 0);
 /// G-buffer target 1: octahedral normal, metalness, roughness.
 SAMPLER2D(s_lumen_normal, 1);
 BUFFER_RW(b_lumen_adaptive, uint, 2);
-IMAGE2D_WO(s_lumen_probe_records, rgba32f, 3);
+IMAGE2D_WO(i_lumen_probe_records, rgba32f, 3);
 
 #define LUMEN_ADAPTIVE_GROUP_TILES_X (8 / LUMEN_ADAPTIVE_SAMPLES_X)
 #define LUMEN_ADAPTIVE_GROUP_TILES_Y (8 / LUMEN_ADAPTIVE_SAMPLES_Y)
@@ -106,7 +106,7 @@ void main()
 		atomicFetchAndAdd(b_lumen_adaptive[LUMEN_ADAPTIVE_HEADER + tile_index], 1u, tile_slot);
 		b_lumen_adaptive[LUMEN_ADAPTIVE_INDICES + tile_index * LUMEN_ADAPTIVE_SAMPLES + int(tile_slot)] = probe;
 		vec3 normal = decodeNormalOctahedron(texelFetch(s_lumen_normal, pixel, 0).xy);
-		imageStore(s_lumen_probe_records,
+		imageStore(i_lumen_probe_records,
 		           LumenAdaptiveAtlasTile(int(probe)),
 		           LumenPackProbe(LumenLinearDepth(depth01), normal, pixel, depth01));
 	}

@@ -35,12 +35,16 @@
 
 #include <engine/meta/scripting/script.hpp>
 
+#include <engine/rendering/gi/lumen_mesh_cards.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <engine/profiler/profiler.h>
 
 #include <concurrency/parallel.h>
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <numeric>
 #include <set>
@@ -881,6 +885,89 @@ auto write_minified_file(const fs::path& input_path, const fs::path& output_path
 
 }
 
+/**
+ * @brief Builds the Lumen cards of every submesh that has a distance field (UE's card representation), from LOD
+ *        @p lod_index and for the sidedness of the material the submesh imported with.
+ *
+ * Only a submesh with a field takes part in the GI, so the others get an empty set. A placement whose material
+ * changes the sidedness gets the other variant from the runtime card library. @p lod_index is clamped to the
+ * generated levels, as the distance field's is.
+ */
+void build_submesh_lumen_cards(mesh::load_data& data,
+                               const std::vector<importer::imported_material>& materials,
+                               uint32_t max_cards,
+                               uint32_t lod_index,
+                               const std::string& source_name)
+{
+    APP_SCOPE_PERF("Build Surface Cache Cards");
+    const auto start = std::chrono::steady_clock::now();
+    data.submesh_cards.assign(data.submeshes.size(), lumen_mesh_cards{});
+    const uint32_t lod = math::min<uint32_t>(lod_index, uint32_t(data.lods.size()));
+    data.cards_lod_index = lod;
+    std::atomic<uint64_t> card_count{0};
+    const auto build_submesh = [&](size_t i)
+    {
+        const uint32_t data_group = data.submeshes[i].data_group_id;
+        const auto& mat = data_group < materials.size() ? materials[data_group].mat : nullptr;
+        const bool two_sided = mat && mat->get_cull_type() == cull_type::none;
+        lumen_mesh_cards& cards = data.submesh_cards[i];
+        cards.is_mostly_two_sided = two_sided;
+        if(i >= data.submesh_sdfs.size() || !data.submesh_sdfs[i].is_sampleable())
+        {
+            return;
+        }
+        sdf_source_geometry geometry;
+        if(!extract_sdf_source_geometry(data, lod, i, geometry))
+        {
+            return;
+        }
+        build_lumen_mesh_cards(geometry, two_sided, max_cards, cards);
+        card_count += cards.cards.size();
+    };
+    // A submesh's build takes from milliseconds to tens of seconds, and poolstl hands each worker one contiguous
+    // run of the range, so the expensive submeshes, which sit together in the source order, would all queue on one
+    // worker. Each worker pulls the next submesh instead, the most triangles first, so the longest builds start
+    // early. Each build runs serially.
+    const size_t submesh_count = data.submeshes.size();
+    const auto get_face_count = [&](size_t i) -> size_t
+    {
+        if(lod == 0)
+        {
+            return size_t(data.submeshes[i].face_count);
+        }
+        const auto& lod_submeshes = data.lods[lod - 1].submeshes;
+        return i < lod_submeshes.size() ? size_t(lod_submeshes[i].face_count) : 0;
+    };
+    std::vector<size_t> order(submesh_count);
+    std::iota(order.begin(), order.end(), size_t(0));
+    std::stable_sort(order.begin(),
+                     order.end(),
+                     [&](size_t a, size_t b)
+                     {
+                         return get_face_count(a) > get_face_count(b);
+                     });
+    std::atomic<size_t> next{0};
+    const size_t worker_count =
+        math::min<size_t>(math::max<size_t>(std::thread::hardware_concurrency(), 1u), submesh_count);
+    poolstl::for_each_par_if(worker_count > 1,
+                             poolstl::iota_iter<size_t>(0),
+                             poolstl::iota_iter<size_t>(worker_count),
+                             [&](size_t)
+                             {
+                                 for(size_t k = next.fetch_add(1); k < submesh_count; k = next.fetch_add(1))
+                                 {
+                                     build_submesh(order[k]);
+                                 }
+                             });
+    const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start);
+    APPLOG_INFO("Built {0} surface cache cards for {1} ({2} submeshes, LOD {3}) in {4:.1f} ms",
+                card_count.load(),
+                source_name,
+                data.submeshes.size(),
+                lod,
+                elapsed.count());
+}
+
 } // namespace
 
 template<>
@@ -1621,6 +1708,15 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                            "a higher SDF resolution or the Two Sided flag.",
                            str_input);
         }
+    }
+    // The cards go with the fields: a submesh without one takes no part in the GI.
+    if(!importer->cards.generate_cards)
+    {
+        data.are_cards_disabled = true;
+    }
+    else if(!data.submesh_sdfs.empty())
+    {
+        build_submesh_lumen_cards(data, materials, importer->cards.max_cards, importer->cards.lod_index, str_input);
     }
     // Save materials and register their UIDs before writing the mesh binary
     data.default_material_uids.reserve(materials.size());

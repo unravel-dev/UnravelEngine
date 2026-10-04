@@ -18,7 +18,7 @@
 
 SAMPLER2D(s_lumen_depth, 0);
 SAMPLER2D(s_lumen_normal, 1);
-IMAGE2D_WO(s_lumen_probe_records, rgba32f, 2);
+IMAGE2D_WO(i_lumen_probe_records, rgba32f, 2);
 BUFFER_RW(b_lumen_adaptive, uint, 3);
 
 NUM_THREADS(8, 8, 1)
@@ -31,7 +31,7 @@ void main()
 	}
 	if(tile.y >= u_lumen_probe_count.y)
 	{
-		imageStore(s_lumen_probe_records, tile, vec4(0.0, 0.0, 0.0, 1.0));
+		imageStore(i_lumen_probe_records, tile, vec4(0.0, 0.0, 0.0, 1.0));
 		return;
 	}
 	b_lumen_adaptive[LUMEN_ADAPTIVE_HEADER + LumenAdaptiveTileIndex(tile)] = 0u;
@@ -43,9 +43,9 @@ void main()
 	float depth01 = texelFetch(s_lumen_depth, pixel, 0).x;
 	if(depth01 >= 1.0)
 	{
-		imageStore(s_lumen_probe_records, tile, vec4(0.0, 0.0, 0.0, 1.0));
+		imageStore(i_lumen_probe_records, tile, vec4(0.0, 0.0, 0.0, 1.0));
 		return;
 	}
 	vec3 normal = decodeNormalOctahedron(texelFetch(s_lumen_normal, pixel, 0).xy);
-	imageStore(s_lumen_probe_records, tile, LumenPackProbe(LumenLinearDepth(depth01), normal, pixel, depth01));
+	imageStore(i_lumen_probe_records, tile, LumenPackProbe(LumenLinearDepth(depth01), normal, pixel, depth01));
 }

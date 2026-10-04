@@ -4,6 +4,7 @@
 #include <engine/meta/core/math/quaternion.hpp>
 #include <engine/meta/core/math/transform.hpp>
 #include <engine/meta/core/math/bbox.hpp>
+#include <engine/meta/rendering/gi/lumen_mesh_cards.hpp>
 #include <engine/meta/rendering/gi/mesh_sdf.hpp>
 
 #include <fstream>
@@ -97,6 +98,118 @@ REFLECT(mesh::info)
             entt::attribute{"name", "lods"},
             entt::attribute{"pretty_name", "LODs"},
             entt::attribute{"tooltip", "Information about each LOD level."},
+        })
+        .data<nullptr, &mesh::info::vertex_memory>("vertex_memory"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "vertex_memory"},
+            entt::attribute{"pretty_name", "Vertex Memory"},
+            entt::attribute{"tooltip", "CPU memory of the vertex data."},
+        })
+        .data<nullptr, &mesh::info::index_memory>("index_memory"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "index_memory"},
+            entt::attribute{"pretty_name", "Index Memory"},
+            entt::attribute{"tooltip", "CPU memory of the index data of every LOD."},
+        });
+}
+
+REFLECT(mesh::gi_info)
+{
+    entt::meta_factory<mesh::gi_info>{}
+        .type("gi_info"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "gi_info"},
+        })
+        .data<nullptr, &mesh::gi_info::fields>("fields"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "fields"},
+            entt::attribute{"pretty_name", "Distance Fields"},
+            entt::attribute{"tooltip",
+                            "Submeshes with a distance field. A submesh without one (skinned, alpha blended, or\n"
+                            "refused by the bake) neither occludes nor bounces indirect light."},
+        })
+        .data<nullptr, &mesh::gi_info::two_sided_fields>("two_sided_fields"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "two_sided_fields"},
+            entt::attribute{"pretty_name", "Two Sided Fields"},
+            entt::attribute{"tooltip", "Fields baked as unsigned shells: open or two-sided surfaces."},
+        })
+        .data<nullptr, &mesh::gi_info::surface_bricks>("surface_bricks"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "surface_bricks"},
+            entt::attribute{"pretty_name", "Surface Bricks"},
+            entt::attribute{"tooltip", "Bricks of 8x8x8 voxels near the surface, over the finest levels."},
+        })
+        .data<nullptr, &mesh::gi_info::min_voxel_size>("min_voxel_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "min_voxel_size"},
+            entt::attribute{"pretty_name", "Finest Voxel"},
+            entt::attribute{"tooltip", "The smallest voxel edge over the fields' finest levels, in local units."},
+        })
+        .data<nullptr, &mesh::gi_info::max_voxel_size>("max_voxel_size"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_voxel_size"},
+            entt::attribute{"pretty_name", "Coarsest Voxel"},
+            entt::attribute{"tooltip", "The largest voxel edge over the fields' finest levels, in local units."},
+        })
+        .data<nullptr, &mesh::gi_info::field_memory>("field_memory"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "field_memory"},
+            entt::attribute{"pretty_name", "Field Memory"},
+            entt::attribute{"tooltip",
+                            "CPU memory of every level of every field. Each field keeps coarser levels the GI\n"
+                            "falls back to when its atlas is full, about a quarter of the level above each."},
+        })
+        .data<nullptr, &mesh::gi_info::finest_field_memory>("finest_field_memory"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "finest_field_memory"},
+            entt::attribute{"pretty_name", "Finest Level Memory"},
+            entt::attribute{"tooltip",
+                            "The finest levels alone: what the GI distance field atlas holds for one placement\n"
+                            "of this mesh when every field is resident at full detail."},
+        })
+        .data<nullptr, &mesh::gi_info::card_source>("card_source"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_source"},
+            entt::attribute{"pretty_name", "Surface Cache Cards"},
+            entt::attribute{"tooltip",
+                            "Compiled: built with the asset (Import > Cards).\n"
+                            "Built at runtime: the asset carries none, so they are built on first use.\n"
+                            "Disabled: the import settings turned them off."},
+        })
+        .data<nullptr, &mesh::gi_info::card_sets>("card_sets"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_sets"},
+            entt::attribute{"pretty_name", "Submeshes With Cards"},
+            entt::attribute{"tooltip", "Submeshes with at least one compiled card."},
+        })
+        .data<nullptr, &mesh::gi_info::cards>("cards"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "cards"},
+            entt::attribute{"pretty_name", "Cards"},
+            entt::attribute{"tooltip",
+                            "Compiled cards over every submesh. The surface cache captures and lights each one,\n"
+                            "so more cards means better coverage and more runtime work."},
+        })
+        .data<nullptr, &mesh::gi_info::max_cards_per_submesh>("max_cards_per_submesh"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "max_cards_per_submesh"},
+            entt::attribute{"pretty_name", "Most Cards In A Submesh"},
+            entt::attribute{"tooltip", "The most cards any one submesh has (the import settings' Max Cards caps it)."},
+        })
+        .data<nullptr, &mesh::gi_info::card_memory>("card_memory"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_memory"},
+            entt::attribute{"pretty_name", "Card Memory"},
+            entt::attribute{"tooltip", "CPU memory of the compiled cards."},
+        })
+        .data<nullptr, &mesh::gi_info::card_table_memory>("card_table_memory"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "card_table_memory"},
+            entt::attribute{"pretty_name", "Card Table Per Placement"},
+            entt::attribute{"tooltip",
+                            "GPU memory one placement of the whole mesh takes in the surface cache's card table.\n"
+                            "The captured texels come on top, from the shared surface cache atlas."},
         });
 }
 
@@ -112,6 +225,12 @@ REFLECT(mesh)
             entt::attribute{"name", "info"},
             entt::attribute{"pretty_name", "Info"},
             entt::attribute{"tooltip", "Info about the mesh."},
+        })
+        .data<nullptr, &mesh::get_gi_info>("gi_info"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "gi_info"},
+            entt::attribute{"pretty_name", "Global Illumination"},
+            entt::attribute{"tooltip", "The mesh's distance fields and surface cache cards, and their memory."},
         })
         .data<nullptr, &mesh::get_imported_materials>("imported_materials"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -276,6 +395,9 @@ SAVE(mesh::load_data)
     try_save(ar, ser20::make_nvp("default_material_uids", obj.default_material_uids));
     try_save(ar, ser20::make_nvp("submesh_sdfs", obj.submesh_sdfs));
     try_save(ar, ser20::make_nvp("submesh_sdf_coarse_mips", obj.submesh_sdf_coarse_mips));
+    try_save(ar, ser20::make_nvp("submesh_cards", obj.submesh_cards));
+    try_save(ar, ser20::make_nvp("are_cards_disabled", obj.are_cards_disabled));
+    try_save(ar, ser20::make_nvp("cards_lod_index", obj.cards_lod_index));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }
@@ -300,6 +422,9 @@ LOAD(mesh::load_data)
     try_load(ar, ser20::make_nvp("default_material_uids", obj.default_material_uids));
     try_load(ar, ser20::make_nvp("submesh_sdfs", obj.submesh_sdfs));
     try_load(ar, ser20::make_nvp("submesh_sdf_coarse_mips", obj.submesh_sdf_coarse_mips));
+    try_load(ar, ser20::make_nvp("submesh_cards", obj.submesh_cards));
+    try_load(ar, ser20::make_nvp("are_cards_disabled", obj.are_cards_disabled));
+    try_load(ar, ser20::make_nvp("cards_lod_index", obj.cards_lod_index));
 
     // Changes here should be reflected in ex::get_format_version<mesh>() in asset_extensions.h
 }

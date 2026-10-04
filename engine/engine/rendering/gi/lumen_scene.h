@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace unravel
@@ -33,8 +34,10 @@ class material;
  * this frame's capture atlas, so every page it maps is captured in the frame it is allocated; a reallocated
  * card's previous allocation is listed in the resample table, whose lighting the new pages inherit.
  *
- * The packed tables are rebuilt every frame (cards and page table are small); physical allocations
- * persist, so captured content survives until its card changes resolution or leaves.
+ * The packed tables are rebuilt every frame; physical allocations persist, so captured content survives until its
+ * card changes resolution or leaves. A placement's cards are placed once per transform, the per-card resolution
+ * pass runs across the pool (UE r.LumenScene.ParallelUpdate), and the allocator answers space queries in constant
+ * time from free counts (UE FLumenSurfaceCacheAllocator), so a full atlas costs nothing per request.
  *
  * schedule_lighting() picks the pages the card lighting updates each frame as Lumen does: per page and per
  * context (direct lighting, radiosity) a priority bucket from the frames since its last update and its speed
@@ -66,6 +69,11 @@ public:
         ///< r.LumenScene.SurfaceCache.MeshCardsMinSize, in metres: a card whose placed face is smaller than this
         ///< squared is never resident.
         float mesh_cards_min_size = 0.1f;
+        ///< r.LumenScene.SurfaceCache.CardCaptureRefreshFraction: the share of the capture budget spent capturing
+        ///< resident pages again, oldest first, so material changes reach the surface cache. 0 disables.
+        float card_capture_refresh_fraction = 0.125f;
+
+        friend auto operator==(const settings& lhs, const settings& rhs) -> bool = default;
     };
 
     /// One placement's input: its cards (mesh space) and transform.
@@ -128,6 +136,38 @@ public:
         math::uvec2 size{0u};
     };
 
+    /// A card's box placed in the world: unit axes and world half extents.
+    struct placed_card
+    {
+        math::vec3 origin{0.0f};
+        math::vec3 axis_x{1.0f, 0.0f, 0.0f};
+        math::vec3 axis_y{0.0f, 1.0f, 0.0f};
+        math::vec3 axis_z{0.0f, 0.0f, 1.0f};
+        math::vec3 extent{0.0f};
+    };
+
+    /// A resident card as UE's card placement view draws it (LumenVisualize.cpp VisualizeCardPlacement).
+    struct visualized_card
+    {
+        placed_card box;
+        ///< The card's index among its mesh's cards (UE IndexInMeshCards).
+        uint32_t index_in_mesh = 0;
+        ///< UE's colour key: a hash of the card's mesh-space box and its index in the card table.
+        uint32_t hash = 0;
+        ///< The placement it belongs to (index into the update's sources).
+        uint32_t source_index = 0;
+        ///< The side of the mesh it faces (lumen_card::direction, UE AxisAlignedDirectionIndex).
+        uint32_t direction = 0;
+    };
+
+    /// Whether a placement's cards (@p local_bounds at @p local_to_world) come within @p distance of @p view_origin and
+    /// touch @p view_frustum: UE's visualize filters over a primitive group's world bounds.
+    static auto is_visualized(const math::bbox& local_bounds,
+                              const math::mat4& local_to_world,
+                              const math::vec3& view_origin,
+                              float distance,
+                              const math::frustum& view_frustum) -> bool;
+
     /// Lumen::PhysicalPageSize.
     static constexpr uint32_t physical_page_size = 128;
     /// Lumen::MinResLevel / MaxResLevel / SubAllocationResLevel.
@@ -141,6 +181,12 @@ public:
 
     void init(const settings& s);
     void reset();
+
+    /**
+     * @brief Applies new settings: in place when the atlases keep their sizes, otherwise by starting over.
+     * @return Whether the scene started over, so every atlas has to be created again at the new sizes.
+     */
+    auto apply_settings(const settings& s) -> bool;
 
     /**
      * @brief Places this frame's cards, chooses resolutions, (re)allocates and queues captures.
@@ -215,6 +261,30 @@ public:
     }
 
     /// Per virtual page: (atlas bias x, y in texels, res level x, y); res level 0 = unmapped.
+    /**
+     * @brief Per page-table entry, in get_page_table's order: x = the frames since its direct lighting was last
+     *        updated, y = since its indirect lighting was (UE FLumenCardPageData Last*LightingUpdateFrameIndex against
+     *        the surface cache's update frame), for the lighting updates views. A page never lit counts every frame.
+     */
+    void get_page_lighting_ages(std::vector<math::vec4>& out) const;
+
+    /**
+     * @brief Per resident page, 3 vec4: (atlas origin xy, size xy), the card UV rectangle it covers, (card index, the
+     *        index of its last radiosity update, 0, 0) - the radiosity probe visualization's input.
+     */
+    void get_visualized_pages(std::vector<math::vec4>& out) const;
+
+    /**
+     * @brief The resident cards of the placements whose world bounds come within @p distance of @p view_origin and
+     *        touch @p view_frustum (UE VisualizeCardPlacement's culling).
+     * @param sources The sources of the last update().
+     */
+    void get_visualized_cards(const std::vector<source>& sources,
+                              const math::vec3& view_origin,
+                              float distance,
+                              const math::frustum& view_frustum,
+                              std::vector<visualized_card>& out) const;
+
     auto get_page_table() const -> const std::vector<math::vec4>&
     {
         return page_table_;
@@ -250,6 +320,13 @@ public:
         return uint32_t(card_table_.size() / card_stride);
     }
 
+    /// Bumped whenever the card, page and instance tables and the resident page list change: they are rebuilt only
+    /// when a placement, the active set or an allocation changed, so a still scene keeps them (and their upload).
+    auto get_tables_revision() const -> uint64_t
+    {
+        return tables_revision_;
+    }
+
     struct stats
     {
         uint32_t cards = 0;
@@ -261,6 +338,8 @@ public:
         uint32_t downgraded = 0;
         ///< Resident cards given a new resolution this frame.
         uint32_t reallocated = 0;
+        ///< Resident pages captured again this frame (the refresh), included in captures.
+        uint32_t refreshed = 0;
         ///< Card tiles each lighting context updates this frame, and the bucket its budget ran out in (16 = none).
         std::array<uint32_t, lighting_context_count> lit_tiles{};
         std::array<uint32_t, lighting_context_count> cut_bucket{};
@@ -290,6 +369,8 @@ private:
         ///< Per lighting context: the frame of the page's last update (0 = never lit) and its update count.
         std::array<uint64_t, lighting_context_count> lit_frame{};
         std::array<uint32_t, lighting_context_count> update_count{};
+        ///< The frame the page was last captured, by its allocation or by the refresh.
+        uint64_t captured_frame = 0;
     };
 
     struct card_state
@@ -308,16 +389,50 @@ private:
     {
         std::shared_ptr<const lumen_mesh_cards> cards;
         std::vector<card_state> card_states;
+        ///< The cards placed at placed_transform, reused while the placement's transform holds still.
+        std::vector<placed_card> placed;
+        math::mat4 placed_transform{0.0f};
+        bool has_placed = false;
         uint64_t last_seen = 0;
     };
 
     struct sub_allocation_bin
     {
         math::uvec2 element_size{0u};
-        ///< Pages owned by this bin and their used-slot masks (bit per slot, at most 256 slots).
+        ///< Slots per page (at most 256).
+        uint32_t slot_count = 0;
+        ///< Free slots over every page of the bin.
+        uint32_t free_slots = 0;
+        ///< Pages owned by this bin, their used-slot masks (bit per slot; bits past slot_count stay set) and free slots.
         std::vector<uint32_t> pages;
         std::vector<std::vector<uint64_t>> used;
+        std::vector<uint32_t> free_counts;
     };
+
+    /// A card whose resolution moved: it asks for an allocation.
+    struct request
+    {
+        ///< Index into the update's sources.
+        uint32_t source = 0;
+        uint32_t card = 0;
+        ///< Distance bucket, nearest first.
+        uint32_t bin = 0;
+    };
+
+    /// One parallel task's share of the resolution pass (choose_resolutions).
+    struct resolution_chunk
+    {
+        std::vector<request> requests;
+        ///< Resident cards that left the view: freed after the pass, in this order (source, card).
+        std::vector<math::uvec2> frees;
+        uint32_t cards = 0;
+        uint32_t texels_desired = 0;
+        ///< A placement of the chunk moved (its card boxes were placed again).
+        bool has_moved = false;
+    };
+
+    /// Sub-allocated element sizes: 8 to 128 texels per axis.
+    static constexpr uint32_t sub_allocation_levels = sub_allocation_res_level - min_res_level + 1u;
 
     /// A card's resolution rule at the view's surface cache resolution (UE GetCardTexelDensity, GetCardMaxResolution,
     /// GetCardMinResolution at a Lumen scene detail of 1).
@@ -334,21 +449,79 @@ private:
     static auto compute_page_uv_rect(const mip_desc& mip, uint32_t page) -> math::vec4;
     auto allocate(card_state& card, uint32_t res_level) -> bool;
     void free_card(card_state& card);
-    /// Whether @p mip fits the physical atlas as it is now (UE IsPhysicalSpaceAvailable).
+    /// Whether @p mip fits the physical atlas as it is now (UE IsPhysicalSpaceAvailable), in constant time.
     auto has_physical_space(const mip_desc& mip) const -> bool;
+    /// The bin of a sub-allocated element size, or null when none was created yet.
+    auto find_bin(const math::uvec2& element_size) const -> const sub_allocation_bin*;
     auto allocate_slot(const math::uvec2& element_size, physical_slot& out) -> bool;
     void free_slot(const physical_slot& slot, const mip_desc& mip);
     auto get_page_origin(uint32_t page) const -> math::uvec2;
     /// Lists a resident card's allocation in the resample table; returns its card index there.
-    auto append_resample_source(const card_state& card, const lumen_card& card_desc, const math::mat4& local_to_world)
-        -> int32_t;
+    auto append_resample_source(const card_state& card, const placed_card& placed) -> int32_t;
+
+    /// update(): the placement per source (created, refreshed when its card set changed), and the unseen ones dropped.
+    /// @return Whether every source has its own placement (no identity repeated this frame).
+    auto refresh_placements(const std::vector<source>& sources) -> bool;
+    /// update(): the sources served this frame (built cards, valid instance) and their first card in the card table.
+    /// @return Whether the active set (placements, their order and instances) differs from the previous frame's.
+    auto collect_active(const std::vector<source>& sources, uint32_t instance_count) -> bool;
+    /// update(): every active card's resolution from its distance to @p view_origin, and a request for every card whose
+    /// resolution moved; @p parallel spreads the placements over the pool.
+    void choose_resolutions(const std::vector<source>& sources, const math::vec3& view_origin, bool parallel);
+    /// choose_resolutions() for the active placements [@p begin, @p end).
+    void choose_chunk_resolutions(const std::vector<source>& sources,
+                                  const math::vec3& view_origin,
+                                  uint32_t begin,
+                                  uint32_t end,
+                                  resolution_chunk& chunk);
+    /// Places this frame's captures in the capture atlas (shelves of equal page heights).
+    class capture_packer;
+    /// update(): the requests, nearest first, allocated and queued for capture within the frame's budgets.
+    void allocate_requests(const std::vector<source>& sources, capture_packer& packer);
+    /// update(): the packed card, page and instance tables and the resident page list.
+    void build_tables(const std::vector<source>& sources, uint32_t instance_count);
+    /// update(): resident pages captured again, oldest first, within the refresh's share of the capture budget (UE
+    /// SceneCardCaptureRefresh). A refreshed page keeps its lighting: its card is its own resample source.
+    void refresh_captures(const std::vector<source>& sources, capture_packer& packer);
+    /// schedule_lighting(): every resident page's tiles, speed and bucket per lighting context, across the pool.
+    void compute_page_priorities(const math::vec3& view_origin, const math::frustum& view_frustum);
 
     settings settings_{};
     gi_settings::scene_settings view_settings_{};
     uint32_t pages_per_side_ = 0;
     std::vector<uint32_t> free_pages_;
     std::vector<sub_allocation_bin> bins_;
+    ///< bins_ index per sub-allocated element size (x level, y level from min_res_level), -1 for none.
+    std::array<int32_t, sub_allocation_levels * sub_allocation_levels> bin_lookup_ = []()
+    {
+        std::array<int32_t, sub_allocation_levels * sub_allocation_levels> lookup{};
+        lookup.fill(-1);
+        return lookup;
+    }();
     std::unordered_map<uint64_t, placement> placements_;
+    ///< This frame's placement per source (refresh_placements).
+    std::vector<placement*> source_placements_;
+    ///< This frame's active sources and each one's first card in the card table (collect_active).
+    std::vector<uint32_t> active_;
+    std::vector<uint32_t> first_card_;
+    ///< The previous frame's active set: (identity, instance index) per active source, and the instance count.
+    std::vector<std::pair<uint64_t, uint32_t>> active_keys_;
+    uint32_t active_instance_count_ = 0;
+    std::vector<resolution_chunk> resolution_chunks_;
+    std::vector<request> requests_;
+    ///< The tables no longer describe the scene: rebuilt by this frame's build_tables().
+    bool are_tables_dirty_ = true;
+    uint64_t tables_revision_ = 0;
+    ///< Resident cards in the current tables.
+    uint32_t resident_cards_ = 0;
+    ///< Per resident page: its placement (index into active_) and its card there, for the refresh.
+    std::vector<math::uvec2> resident_page_owners_;
+    ///< refresh_captures() scratch: the resident pages it may capture, and each refreshed card's resample entry.
+    std::vector<uint32_t> refresh_candidates_;
+    std::vector<std::pair<uint32_t, int32_t>> refresh_resamples_;
+    ///< schedule_lighting() scratch, per resident page: tiles, and bucket per lighting context.
+    std::vector<uint32_t> page_tiles_;
+    std::array<std::vector<uint32_t>, lighting_context_count> page_buckets_;
     uint64_t frame_ = 0;
     std::vector<capture> captures_;
     std::vector<math::vec4> card_table_;

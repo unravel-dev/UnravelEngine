@@ -1,5 +1,6 @@
 #pragma once
 
+#include <engine/rendering/gi/lumen_constants.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/pipeline/passes/lumen_run_params.h>
 #include <engine/rendering/pipeline/passes/lumen_adaptive_probes.h>
@@ -34,6 +35,16 @@ public:
     static constexpr const char* screen_ao_texture = "LUMEN_SCREEN_AO";
     static constexpr const char* screen_ao_frame = "LUMEN_SCREEN_AO_FRAME";
     static constexpr const char* screen_ao_intensity = "LUMEN_SCREEN_AO_INTENSITY";
+    /// UE LumenVisualizeTraces.ush: the visualized probe's rays, one per texel of its tracing octahedron, each
+    /// visualized_trace_stride vec4s (lumen_visualize.sh LUMEN_VISUALIZE_TRACE_STRIDE).
+    static constexpr uint32_t visualized_trace_count =
+        uint32_t(gi::lumen::LUMEN_PROBE_TRACE_RES * gi::lumen::LUMEN_PROBE_TRACE_RES);
+    static constexpr uint32_t visualized_trace_stride = 3;
+
+    lumen_gather_pass() = default;
+    ~lumen_gather_pass();
+    lumen_gather_pass(const lumen_gather_pass&) = delete;
+    auto operator=(const lumen_gather_pass&) -> lumen_gather_pass& = delete;
 
     auto init(rtti::context& ctx) -> bool;
 
@@ -47,6 +58,50 @@ public:
     /// UseShortRangeAmbientOcclusion).
     static auto uses_short_range_ao(const gi_settings::ambient_occlusion_settings& settings) -> bool;
     auto has_short_range_ao() const -> bool;
+
+    /// The diffuse history the gather wrote for @p rview this frame (rgb = the result, a = the frames it accumulates,
+    /// quantized to multiples of the maximum / 15: UE's 4-bit count); null when the gather did not run this frame.
+    static auto get_current_history(gfx::render_view& rview) -> gfx::texture::ptr;
+
+    /// The radiance cache this frame's gather updated, or null when it did not run.
+    auto get_radiance_cache() const -> const lumen_radiance_cache*
+    {
+        return is_radiance_cache_ready_ ? &radiance_cache_ : nullptr;
+    }
+
+    /// The probe atlas a gather placed (UE r.Lumen.ScreenProbeGather.Debug.ProbePlacement draws it).
+    struct probe_placement
+    {
+        ///< The probe records (lumen_common.sh LumenPackProbe), one texel per atlas tile.
+        gfx::texture::ptr records;
+        ///< The layout uniforms the records unpack with (lumen_common.sh u_lumen_frame, u_lumen_probes, u_lumen_view).
+        std::array<float, 4> frame{};
+        std::array<float, 4> probes{};
+        std::array<float, 4> view{};
+        ///< The adaptive probes the atlas holds (lumen_adaptive_probes::get_capacity).
+        uint32_t adaptive_capacity = 0;
+        ///< The render frame of the placement.
+        uint32_t render_frame = 0;
+    };
+
+    /// The placement of the last frame the gather ran.
+    auto get_probe_placement() const -> const probe_placement&
+    {
+        return probe_placement_;
+    }
+
+    /// Binds the placement's adaptive probe state (lumen_adaptive_probes.sh) at @p stage, read only.
+    void bind_adaptive_state(uint8_t stage) const
+    {
+        adaptive_probes_.bind_state(stage, bgfx::Access::Read);
+    }
+
+    /// The rays r.Lumen.ScreenProbeGather.VisualizeTraces draws (cs_lumen_probe_trace_visualize.sc), or an invalid
+    /// handle before a frame recorded any.
+    auto get_visualized_traces() const -> bgfx::DynamicVertexBufferHandle
+    {
+        return has_visualized_traces_ ? visualized_traces_ : bgfx::DynamicVertexBufferHandle{bgfx::kInvalidHandle};
+    }
 
 private:
     /// Every uniform of the gather's programs. bgfx uniforms are name-global, so one set serves all.
@@ -89,6 +144,7 @@ private:
         gfx::program::uniform_ptr s_lumen_history_radiance;
         gfx::program::uniform_ptr s_lumen_rough_history;
         gfx::program::uniform_ptr s_lumen_probe_border;
+        gfx::program::uniform_ptr u_lumen_visualize_traces;
 
         void cache_uniforms();
     } uniforms_;
@@ -104,6 +160,9 @@ private:
         /// Rows of the probe atlas: the uniform probes' and the adaptive capacity's.
         uint32_t atlas_rows{};
         std::array<float, 4> frame{};
+        /// frame without the visualized traces' fixed jitter: the radiance cache and the short-range AO keep the
+        /// view's frame (UE View.StateFrameIndex).
+        std::array<float, 4> view_frame{};
         std::array<float, 4> probes{};
         std::array<float, 4> view{};
         /// xy = last frame's probe placement jitter in pixels.
@@ -141,7 +200,9 @@ private:
     };
 
     auto has_programs() const -> bool;
-    static auto make_frame_layout(const usize32_t& view_size) -> frame_layout;
+    /// The frame's layout; @p is_jitter_fixed holds the placement and ray jitter at UE's fixed index while the traces
+    /// are visualized.
+    static auto make_frame_layout(const usize32_t& view_size, bool is_jitter_fixed) -> frame_layout;
     auto acquire_probe_targets(gfx::render_view& rview, const frame_layout& layout) const -> probe_targets;
     /// The filter atlas the last of LUMEN_FILTER_PASSES writes.
     static auto final_filter_index() -> size_t;
@@ -196,6 +257,16 @@ private:
                    const frame_layout& layout,
                    const probe_targets& targets,
                    bool radiance_cache_ready);
+    /// The trace programs' inputs: every stage but the output (5) and the uniforms.
+    void bind_trace_inputs(const lumen_run_params& params,
+                           const frame_layout& layout,
+                           const probe_targets& targets,
+                           bool radiance_cache_ready);
+    /// UE ScreenProbeSetupVisualizeTraces: the rays of the probe params.visualize_traces shows, traced again.
+    void run_visualize_traces(const lumen_run_params& params,
+                              const frame_layout& layout,
+                              const probe_targets& targets,
+                              bool radiance_cache_ready);
     void run_composite(const frame_layout& layout, const probe_targets& targets);
     /// Binds the radiance cache for the hand-off read at stages 7-9, or neutral textures without it.
     void bind_radiance_cache(bool radiance_cache_ready) const;
@@ -227,10 +298,19 @@ private:
     gpu_program::ptr sh_program_;
     gpu_program::ptr border_program_;
     gpu_program::ptr integrate_program_;
+    ///< cs_lumen_probe_trace_visualize.sc; the gather runs without it.
+    gpu_program::ptr trace_visualize_program_;
 
     lumen_adaptive_probes adaptive_probes_;
     lumen_radiance_cache radiance_cache_;
+    ///< The radiance cache updated this frame (see get_radiance_cache).
+    bool is_radiance_cache_ready_ = false;
     lumen_short_range_ao_pass short_range_ao_;
+    ///< See get_visualized_traces.
+    bgfx::DynamicVertexBufferHandle visualized_traces_{bgfx::kInvalidHandle};
+    bool has_visualized_traces_ = false;
+    ///< See get_probe_placement.
+    probe_placement probe_placement_{};
 
     /// This frame's experiment toggles (enum experiment).
     uint32_t experiments_ = 0;

@@ -168,7 +168,7 @@ REFLECT_INLINE(gi_settings::scene_settings)
         .type("gi_settings::scene_settings"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "gi_settings::scene_settings"},
-            entt::attribute{"pretty_name", "Lumen Scene"},
+            entt::attribute{"pretty_name", "Surface Cache"},
         })
         .data<&settings::view_distance>("view_distance"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -273,7 +273,7 @@ REFLECT_INLINE(gi_settings)
         .data<&gi_settings::scene>("scene"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "scene"},
-            entt::attribute{"pretty_name", "Lumen Scene"},
+            entt::attribute{"pretty_name", "Surface Cache"},
             entt::attribute{"tooltip",
                             "The surface cache: the cached lighting of the scene's surfaces that rays read where "
                             "they hit the distance field."},

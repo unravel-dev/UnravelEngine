@@ -207,6 +207,13 @@ struct build_context
     bool two_sided = false;
 };
 
+/// UE FAxisAlignedDirectionBasis::TransformSurfel: the mesh position of cell @p coord's surfel, centred in-plane on
+/// the cell's front face.
+auto get_surfel_position(const direction_basis& basis, const math::ivec3& coord) -> math::vec3
+{
+    return basis.to_mesh(math::vec3(float(coord.x) + 0.5f, float(coord.y) + 0.5f, float(coord.z)));
+}
+
 void init_clustering_params(const math::bbox& bounds, int max_voxels, clustering_params& params)
 {
     const math::vec3 size = bounds.get_dimensions();
@@ -384,9 +391,14 @@ void trace_cell(const build_context& context,
 
 void generate_surfels_for_direction(const build_context& context,
                                     const direction_basis& basis,
-                                    std::vector<surfel>& out)
+                                    std::vector<surfel>& out,
+                                    std::vector<lumen_card_build_debug::surfel>* debug_surfels)
 {
     out.clear();
+    if(debug_surfels != nullptr)
+    {
+        debug_surfels->clear();
+    }
     std::vector<surfel_sample> samples;
     std::vector<uint32_t> cell_count(size_t(basis.volume_size.z));
     std::vector<uint32_t> cell_offset(size_t(basis.volume_size.z));
@@ -453,6 +465,13 @@ void generate_surfels_for_direction(const build_context& context,
                         s.coverage = float(run_size) / float(k_rays_per_cell);
                         s.weighted_coverage = s.coverage * (visibility.visibility + 1.0f);
                         out.push_back(s);
+                    }
+                    if(debug_surfels != nullptr)
+                    {
+                        debug_surfels->push_back({get_surfel_position(basis, math::ivec3(x, y, z)),
+                                                  -basis.axis_z,
+                                                  visibility.is_valid ? lumen_card_build_debug::surfel_type::valid
+                                                                      : lumen_card_build_debug::surfel_type::invalid});
                     }
                     run_begin += run_size;
                 }
@@ -607,13 +626,56 @@ auto make_card(const surfel_cluster& cluster,
     return card;
 }
 
+/// UE SerializeLOD's debug cluster of a card: the cluster's surfels with a ray down to the near plane each is seen
+/// from, then the side's other surfels, used when an earlier card of the side took them (@p is_in_any_cluster, which
+/// gains this cluster's surfels).
+void append_cluster_debug(const surfel_cluster& cluster,
+                          const std::vector<surfel>& surfels,
+                          const direction_basis& basis,
+                          int direction,
+                          std::vector<bool>& is_in_any_cluster,
+                          lumen_card_build_debug& debug)
+{
+    using surfel_type = lumen_card_build_debug::surfel_type;
+    auto& entry = debug.clusters.emplace_back();
+    const math::vec3 normal = get_direction_normal(direction);
+    std::vector<bool> is_in_cluster(surfels.size(), false);
+    for(uint32_t index : cluster.surfels)
+    {
+        const surfel& s = surfels[index];
+        const math::vec3 position = get_surfel_position(basis, s.coord);
+        entry.surfels.push_back({position, normal, surfel_type::cluster});
+        if(s.min_ray_z > 0)
+        {
+            const math::ivec3 near_coord(s.coord.x, s.coord.y, s.min_ray_z);
+            entry.rays.push_back({position, get_surfel_position(basis, near_coord), false});
+        }
+        is_in_any_cluster[index] = true;
+        is_in_cluster[index] = true;
+    }
+    for(uint32_t index = 0; index < uint32_t(surfels.size()); ++index)
+    {
+        if(!is_in_cluster[index])
+        {
+            entry.surfels.push_back({get_surfel_position(basis, surfels[index].coord),
+                                     normal,
+                                     is_in_any_cluster[index] ? surfel_type::used : surfel_type::idle});
+        }
+    }
+}
+
 } // namespace
 
 auto build_lumen_mesh_cards(const sdf_source_geometry& geometry,
                             bool two_sided,
                             uint32_t max_cards,
-                            lumen_mesh_cards& out) -> bool
+                            lumen_mesh_cards& out,
+                            lumen_card_build_debug* debug) -> bool
 {
+    if(debug != nullptr)
+    {
+        *debug = lumen_card_build_debug{};
+    }
     out = lumen_mesh_cards{};
     out.is_mostly_two_sided = two_sided;
     if(!geometry.is_valid() || max_cards == 0)
@@ -630,6 +692,8 @@ auto build_lumen_mesh_cards(const sdf_source_geometry& geometry,
     const build_context context{caster, hemisphere, two_sided};
     clustering_params params;
     std::array<std::vector<surfel>, k_direction_count> surfels;
+    // The last attempt's candidates per side (UE keeps the debug surfels of the grid it settles on).
+    std::array<std::vector<lumen_card_build_debug::surfel>, k_direction_count> debug_surfels;
     // Dense two-sided meshes make far more surfels than walls; coarsen the grid until the count
     // is affordable.
     int max_voxels = k_max_voxels;
@@ -640,11 +704,21 @@ auto build_lumen_mesh_cards(const sdf_source_geometry& geometry,
         surfel_count = 0;
         for(int direction = 0; direction < k_direction_count; ++direction)
         {
-            generate_surfels_for_direction(context, params.basis[size_t(direction)], surfels[size_t(direction)]);
+            generate_surfels_for_direction(context,
+                                           params.basis[size_t(direction)],
+                                           surfels[size_t(direction)],
+                                           debug != nullptr ? &debug_surfels[size_t(direction)] : nullptr);
             surfel_count += surfels[size_t(direction)].size();
         }
         max_voxels /= 2;
     } while(surfel_count > size_t(k_target_surfel_count) && max_voxels > 1);
+    if(debug != nullptr)
+    {
+        for(const auto& side : debug_surfels)
+        {
+            debug->surfels.insert(debug->surfels.end(), side.begin(), side.end());
+        }
+    }
     std::array<std::vector<surfel_cluster>, k_direction_count> clusters;
     for(int direction = 0; direction < k_direction_count; ++direction)
     {
@@ -657,9 +731,15 @@ auto build_lumen_mesh_cards(const sdf_source_geometry& geometry,
     limit_clusters(max_cards, clusters);
     for(int direction = 0; direction < k_direction_count; ++direction)
     {
+        const auto& basis = params.basis[size_t(direction)];
+        std::vector<bool> is_in_any_cluster(surfels[size_t(direction)].size(), false);
         for(const surfel_cluster& cluster : clusters[size_t(direction)])
         {
-            out.cards.push_back(make_card(cluster, params.basis[size_t(direction)], out.bounds, direction));
+            out.cards.push_back(make_card(cluster, basis, out.bounds, direction));
+            if(debug != nullptr)
+            {
+                append_cluster_debug(cluster, surfels[size_t(direction)], basis, direction, is_in_any_cluster, *debug);
+            }
         }
     }
     return true;

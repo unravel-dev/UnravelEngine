@@ -9,6 +9,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/physics/physics_types.h>
 #include <engine/rendering/eviction_settings.h>
+#include <engine/rendering/gi/gi_project_settings.h>
 #include <engine/settings/boot_config.h>
 #include <graphics/texture.h>
 
@@ -90,6 +91,10 @@ struct settings
 
         friend auto operator==(const graphics_settings& lhs, const graphics_settings& rhs) -> bool = default;
     } graphics;
+
+    /// Project-wide global illumination: the Lumen surface cache's budgets and card resolution rule. The renderer
+    /// applies them every frame; the per-volume settings live on the Global Illumination component.
+    gi_project_settings global_illumination;
 
     struct resolution_settings
     {
