@@ -293,7 +293,9 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
 
         if(!changed.empty() || !removed.empty())
         {
-            tpp::invoke(tpp::main_thread::get_id(),
+            // On-process: a prefab update re-syncs its instances (destroys and recreates entities), which a wait of
+            // the main thread in a render pass or a scene load would otherwise run in the middle of that work.
+            tpp::invoke_on_process(tpp::main_thread::get_id(),
                         [&tm, &em, &am, changed, removed, removed_dependents]()
                         {
                             // A change in any of these types can visually

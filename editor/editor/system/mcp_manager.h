@@ -69,7 +69,8 @@ public:
     auto snapshot_activity() const -> std::vector<mcp_activity_entry>;
     void clear_activity();
 
-    /// Run `fn` on the editor main thread and wait. Safe from MCP HTTP workers.
+    /// Run `fn` on the editor main thread and wait. Safe from MCP HTTP workers. `fn` runs from the main thread's
+    /// task processing at the frame start (tpp::async_on_process), never from a wait in the middle of a frame.
     /// `fn` must return a value (use bool for success/fail). Returns nullopt on timeout / exception.
     template<typename Fn>
     auto invoke_on_main(Fn&& fn, std::chrono::milliseconds timeout = std::chrono::milliseconds(5000))
@@ -79,7 +80,7 @@ public:
         static_assert(!std::is_void_v<result_t>, "invoke_on_main requires a non-void return type");
 
         tpp::this_thread::register_this_thread();
-        auto future = tpp::async(tpp::main_thread::get_id(), std::forward<Fn>(fn));
+        auto future = tpp::async_on_process(tpp::main_thread::get_id(), std::forward<Fn>(fn));
         if(future.wait_for(timeout) != std::future_status::ready)
         {
             error_count_.fetch_add(1);

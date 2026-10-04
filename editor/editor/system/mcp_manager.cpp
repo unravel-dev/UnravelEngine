@@ -219,7 +219,9 @@ void mcp_manager::log_activity(std::string category, std::string message, bool i
 auto mcp_manager::run_on_main_thread(job_fn work, std::chrono::milliseconds timeout) -> std::string
 {
     tpp::this_thread::register_this_thread();
-    auto future = tpp::async(tpp::main_thread::get_id(), std::move(work));
+    // On-process: a tool that changes the scene (opens it, destroys entities) must not run from a wait of the main
+    // thread, such as a render pass blocked on an asset, which would free what that pass is still using.
+    auto future = tpp::async_on_process(tpp::main_thread::get_id(), std::move(work));
     if(future.wait_for(timeout) != std::future_status::ready)
     {
         error_count_.fetch_add(1);
