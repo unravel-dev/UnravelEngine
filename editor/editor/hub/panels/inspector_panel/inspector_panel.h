@@ -7,6 +7,8 @@
 
 namespace unravel
 {
+struct inspector_context;
+
 class inspector_panel : public entity_panel
 {
 public:
@@ -19,9 +21,12 @@ public:
     auto get_window_flags() const -> ImGuiWindowFlags override;
 
 private:
-    void draw_toolbar(const entt::meta_any& selected);
+    void draw_toolbar(const entt::meta_any& selected, inspector_context& inspector_ctx);
     /// Pins the inspector to the object it shows, or lets it follow the selection again.
     void draw_lock_toggle(const entt::meta_any& selected);
+    /// Expand all and collapse all of the component headers, each enabled while some header is
+    /// not in its state yet.
+    void draw_fold_buttons(inspector_context& inspector_ctx);
     void draw_debug_toggle();
     /// The locked object, else the selection: inspected when it is one object, summed up
     /// when it is several.

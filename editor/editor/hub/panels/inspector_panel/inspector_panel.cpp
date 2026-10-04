@@ -105,13 +105,16 @@ void inspector_panel::draw_ui(rtti::context& ctx)
 {
     auto& em = ctx.get_cached<editing_manager>();
     auto& selected = em.get_active_selection();
-    draw_toolbar(selected);
+    auto& inspector_ctx = ctx.get_cached<inspector_context>();
+    draw_toolbar(selected, inspector_ctx);
     if(debug_)
     {
         push_debug_view();
     }
     em.push_undo_stack_enabled(true);
+    inspector_ctx.component_headers = {};
     draw_inspected_object(ctx, selected, em.get_selections().size());
+    inspector_ctx.component_headers_open_request.reset();
     em.pop_undo_stack_enabled();
     if(debug_)
     {
@@ -119,12 +122,14 @@ void inspector_panel::draw_ui(rtti::context& ctx)
     }
 }
 
-void inspector_panel::draw_toolbar(const entt::meta_any& selected)
+void inspector_panel::draw_toolbar(const entt::meta_any& selected, inspector_context& inspector_ctx)
 {
     if(panel_toolbar::begin_strip("##inspector_toolbar"))
     {
         draw_lock_toggle(selected);
         panel_toolbar::align_right();
+        draw_fold_buttons(inspector_ctx);
+        panel_toolbar::separator();
         draw_debug_toggle();
     }
     panel_toolbar::end_strip();
@@ -142,6 +147,25 @@ void inspector_panel::draw_lock_toggle(const entt::meta_any& selected)
         return;
     }
     locked_object_ = is_locked ? entt::meta_any{} : selected;
+}
+
+void inspector_panel::draw_fold_buttons(inspector_context& inspector_ctx)
+{
+    const component_header_counts& headers = inspector_ctx.component_headers;
+    panel_toolbar::begin_segment();
+    ImGui::BeginDisabled(headers.folded == 0);
+    if(panel_toolbar::button("##expand_all", ICON_MDI_UNFOLD_MORE_HORIZONTAL, "Expand all components"))
+    {
+        inspector_ctx.component_headers_open_request = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(headers.open == 0);
+    if(panel_toolbar::button("##collapse_all", ICON_MDI_UNFOLD_LESS_HORIZONTAL, "Collapse all components"))
+    {
+        inspector_ctx.component_headers_open_request = false;
+    }
+    ImGui::EndDisabled();
+    panel_toolbar::end_segment();
 }
 
 void inspector_panel::draw_debug_toggle()

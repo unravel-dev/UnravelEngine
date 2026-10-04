@@ -84,9 +84,27 @@ struct prefab_property_override
     }
 };
 
+/// Component headers drawn in one frame, by the state they show.
+struct component_header_counts
+{
+    int open{};
+    int folded{};
+
+    void count(bool is_open)
+    {
+        (is_open ? open : folded)++;
+    }
+};
+
 struct inspector_context
 {
     entt::registry* inspected_registry{};
+    /// Open state every component header drawn in this frame takes: expand and collapse all of
+    /// the inspector toolbar. The inspector panel drops it once it drew the inspected object.
+    hpp::optional<bool> component_headers_open_request;
+    /// Component headers of the inspected object. The inspector panel restarts the count before
+    /// it draws the object, so its toolbar, drawn first, reads what the last frame showed.
+    component_header_counts component_headers;
 };
 
 /**

@@ -245,11 +245,21 @@ auto draw_component_header_settings_button(const ImRect& header_rect) -> bool
     return is_pressed;
 }
 
-/// The bar on top of a component: fold arrow, icon, name, and the settings button.
-auto draw_component_header(const std::string& name, const std::string& icon) -> component_header_state
+/// The bar on top of a component: fold arrow, icon, name, and the settings button. Takes the
+/// open state the inspector toolbar requests, and counts itself for the toolbar.
+auto draw_component_header(inspector_context& inspector_ctx, const std::string& name, const std::string& icon)
+    -> component_header_state
 {
     component_header_state header{};
-    ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
+    const hpp::optional<bool>& open_request = inspector_ctx.component_headers_open_request;
+    if(open_request)
+    {
+        ImGui::SetNextItemOpen(*open_request, ImGuiCond_Always);
+    }
+    else
+    {
+        ImGui::SetNextItemOpen(true, ImGuiCond_FirstUseEver);
+    }
     // The header takes the look of a frame: a collapsing header in the selection color would
     // make every component read as selected.
     ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetColorU32(ImGuiCol_FrameBg));
@@ -259,6 +269,7 @@ auto draw_component_header(const std::string& name, const std::string& icon) -> 
     header.is_open = ImGui::CollapsingHeader("##component_header", nullptr, ImGuiTreeNodeFlags_AllowOverlap);
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(3);
+    inspector_ctx.component_headers.count(header.is_open);
     header.wants_settings = ImGui::IsItemClicked(ImGuiMouseButton_Right);
     const ImRect header_rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     draw_component_header_title(header_rect, name, icon);
@@ -266,7 +277,8 @@ auto draw_component_header(const std::string& name, const std::string& icon) -> 
     return header;
 }
 
-auto inspect_component(const std::string& name, const inspect_callbacks& callbacks) -> inspect_result
+auto inspect_component(inspector_context& inspector_ctx, const std::string& name, const inspect_callbacks& callbacks)
+    -> inspect_result
 {
     inspect_result result{};
 
@@ -280,7 +292,7 @@ auto inspect_component(const std::string& name, const inspect_callbacks& callbac
     bool open = true;
     if(!callbacks.can_merge())
     {
-        const component_header_state header = draw_component_header(name, callbacks.icon);
+        const component_header_state header = draw_component_header(inspector_ctx, name, callbacks.icon);
         open = header.is_open;
         open_popup = header.wants_settings;
     }
@@ -1017,6 +1029,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
         }
 
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
+        auto& inspector_ctx = ctx.get_cached<inspector_context>();
 
         // Render Unity-style entity header (active checkbox, icon, name, tag)
         result |= render_entity_header(ctx, data, override_ctx);
@@ -1181,7 +1194,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 
                 callbacks.icon = get_component_icon<ctype>();
                 
-                result |= inspect_component(pretty_name, callbacks);
+                result |= inspect_component(inspector_ctx, pretty_name, callbacks);
             });
 
         auto script_comp = data.try_get<script_component>();
@@ -1327,7 +1340,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 std::string pretty_segment = fmt::format("Scripts[{}]/{}", i, pretty_name);
                 override_ctx.push_segment(segment, pretty_segment);
 
-                result |= inspect_component(pretty_name, callbacks);
+                result |= inspect_component(inspector_ctx, pretty_name, callbacks);
 
                 override_ctx.pop_segment();
 
