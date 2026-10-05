@@ -314,6 +314,8 @@ private:
 
     void apply_changes(scan_result& scan, std::vector<watcher::entry>& reported, std::vector<creation>& creations)
     {
+        // Entries are timed when a scan saw them, never by the file: a write is stamped with the clock as of the
+        // last timer tick, up to a tick before it happened, and a copy keeps the older time of its source.
         const auto now_system = std::chrono::system_clock::now();
         for(auto& change : scan.changes)
         {
@@ -346,8 +348,7 @@ private:
             }
             cached.stat = get_stat(change);
             change.status = watcher::entry_status::modified;
-            // A modification is timed by the file; a replacement is timed when it was seen.
-            change.event_time = came_back ? now_system : fs::filetime_to_system_clock(change.last_mod_time);
+            change.event_time = now_system;
             reported.push_back(std::move(change));
         }
     }
@@ -909,6 +910,7 @@ public:
             {
                 continue;
             }
+            // Seen by a scan before this watch started (held back while paused): part of the state it began with.
             if(entry.event_time < init_time_timestamp_)
             {
                 continue;

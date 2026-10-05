@@ -14,6 +14,7 @@
  *   - non-atomic moves (copy then delete, delete then move in) pair up for gaps shorter than the hold (half the
  *     poll interval);
  *   - a safe save (delete, then rename a temp file over the name) is a modification, never removed + created;
+ *   - a file replaced by an older copy (a restored backup keeps its modification time) is a modification;
  *   - a plain copy is still reported as created;
  *   - pause buffers and resume delivers every change once;
  *   - unwatch returns only after a running callback finished, and works from inside the callback;
@@ -72,6 +73,8 @@ constexpr auto MAX_PAIRED_GAP = POLL_INTERVAL / 2 - 30ms;
 constexpr int STEP_ATTEMPTS = 10;
 constexpr auto STEP_RETRY_DELAY = 10ms;
 constexpr std::chrono::milliseconds SAFE_SAVE_GAPS[] = {0ms, 200ms};
+/// How much older than the watch a restored copy is; any time before the watch started would do.
+constexpr auto OLDER_COPY_AGE = 1h;
 constexpr auto CALLBACK_BLOCK = 400ms;
 constexpr int PAUSED_FILE_COUNT = 20;
 constexpr int LATENCY_TRIALS = 16;
@@ -607,6 +610,38 @@ void test_safe_save()
     fs::watcher::unwatch(id);
 }
 
+void test_replace_with_older_copy()
+{
+    std::printf("test_replace_with_older_copy\n");
+    const auto tree = make_tree("replace_with_older_copy");
+    const fs::path document = tree.root / "document.dat";
+    const fs::path older = tree.staging / "document.dat";
+    write_file(document, "current version");
+    write_file(older, "older, longer version");
+    fs::error_code err;
+    fs::last_write_time(older, fs::now() - OLDER_COPY_AGE, err);
+    check(!err, "the older copy keeps an old modification time");
+    recorder rec;
+    const auto id = watch_tree(tree.root, rec);
+    const auto mark = rec.mark();
+    const auto replace_err = run_step(
+        [&](fs::error_code& step_err) -> void
+        {
+            fs::rename(older, document, step_err);
+        });
+    check(!replace_err, "the replacement itself succeeded");
+    const bool modified = rec.wait_for(mark, is_status(document, entry_status::modified));
+    std::this_thread::sleep_for(QUIET_CHECK);
+    const auto entries = rec.entries_since(mark);
+    const bool only_modified = modified && count_touching(entries, document) == 1;
+    check(only_modified, "a file replaced by an older copy is one modification");
+    if(!only_modified)
+    {
+        dump_entries(entries);
+    }
+    fs::watcher::unwatch(id);
+}
+
 void test_copy_is_created()
 {
     std::printf("test_copy_is_created\n");
@@ -966,6 +1001,7 @@ auto run_fs_watcher_suite(rtti::context& /*ctx*/) -> int
         test_copy_then_delete();
         test_delete_then_move_in();
         test_safe_save();
+        test_replace_with_older_copy();
         test_copy_is_created();
         test_pause_resume();
         test_filters_on_shared_listener();
