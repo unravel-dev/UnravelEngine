@@ -300,763 +300,297 @@ void process_drag_drop_target(const fs::path& absolute_path)
     }
 }
 
-// Formats a raw byte count as a compact, human friendly string (e.g. "1.4 MB").
-auto format_file_size(std::uintmax_t bytes) -> std::string
+// Unity builds merge the anonymous namespaces of the editor's sources; the grid entry helpers' own
+// namespace keeps their generic names from clashing.
+namespace browser_entry
 {
-    constexpr std::array<const char*, 5> units{"B", "KB", "MB", "GB", "TB"};
-    auto value = static_cast<double>(bytes);
-    int unit = 0;
-    while(value >= 1024.0 && unit < 4)
-    {
-        value /= 1024.0;
-        ++unit;
-    }
-    if(unit == 0)
-    {
-        return fmt::format("{} {}", bytes, units[0]);
-    }
-    return fmt::format("{:.1f} {}", value, units[unit]);
-}
+/// A second press this soon after a double click on the same entry is not a click.
+constexpr float DOUBLE_CLICK_TIMEOUT = 0.5f;
+constexpr float RENAME_FIELD_WIDTH = 150.0f;
+constexpr size_t RENAME_BUFFER_SIZE = 64;
 
-namespace
+using name_buffer_t = std::array<char, RENAME_BUFFER_SIZE>;
+
+/// What the user did to a grid entry this frame.
+enum class entry_action
 {
-
-struct asset_tooltip_style_scope
-{
-    static constexpr int k_style_var_count = 4;
-    static constexpr int k_style_color_count = 2;
-
-    asset_tooltip_style_scope()
-    {
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 10.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f, 12.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 5.0f));
-
-        ImVec4 window_bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
-        window_bg.x = std::min(window_bg.x + 0.035f, 1.0f);
-        window_bg.y = std::min(window_bg.y + 0.035f, 1.0f);
-        window_bg.z = std::min(window_bg.z + 0.035f, 1.0f);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, window_bg);
-
-        ImVec4 border = ImGui::GetStyleColorVec4(ImGuiCol_Border);
-        border.w = std::min(border.w * 1.35f, 1.0f);
-        ImGui::PushStyleColor(ImGuiCol_Border, border);
-    }
-
-    ~asset_tooltip_style_scope()
-    {
-        ImGui::PopStyleColor(k_style_color_count);
-        ImGui::PopStyleVar(k_style_var_count);
-    }
-
-    asset_tooltip_style_scope(const asset_tooltip_style_scope&) = delete;
-    asset_tooltip_style_scope& operator=(const asset_tooltip_style_scope&) = delete;
+    none,
+    clicked,
+    double_clicked,
+    renamed,
+    deleted,
+    canceled,
+    duplicate,
 };
 
-auto draw_asset_tooltip_thumbnail(const ImGui::ContentItem& citem, ImVec2 texture_size, float thumb_side) -> void
+/// What happened to one grid entry while it was drawn, acted on once it is through.
+struct entry_interaction
 {
-    constexpr float thumb_rounding = 8.0f;
-    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, thumb_rounding);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 52));
-    if(ImGui::BeginChild("asset_tooltip_thumb",
-                         ImVec2(thumb_side, thumb_side),
-                         ImGuiChildFlags_None,
-                         ImGuiWindowFlags_NoScrollbar))
-    {
-        ImGui::ImageWithAspect(citem.texId, texture_size, ImVec2(thumb_side, thumb_side), ImVec2(0.5f, 0.5f));
-    }
-    ImGui::EndChild();
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar(2);
+    entry_action action{entry_action::none};
+    bool open_rename_menu{};
+    bool is_popup_opened{};
+};
+
+/// The label an entry is selected with, e.g. "crate (Mesh)".
+auto get_selection_label(const content_browser_item& item) -> std::string
+{
+    return fmt::format("{} ({})", item.entry.stem, item.type);
 }
 
-auto draw_asset_tooltip_detail_row(const char* label,
-                                   float label_width,
-                                   float wrap_width,
-                                   const std::string& value) -> void
+/// Copies the entry next to itself under the first free "name (n)" file name.
+void duplicate_entry(const fs::directory_cache::cache_entry& entry)
 {
-    if(value.empty())
-    {
-        return;
-    }
-
-    ImGui::AlignTextToFramePadding();
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextUnformatted(label);
-    ImGui::PopStyleColor();
-    ImGui::SameLine(label_width);
-    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width);
-    ImGui::TextUnformatted(value.c_str());
-    ImGui::PopTextWrapPos();
+    fs::error_code err;
+    const auto& absolute_path = entry.entry.path();
+    const auto available = get_new_file(absolute_path.parent_path(), entry.stem, entry.extension);
+    fs::copy(absolute_path, available, fs::copy_options::overwrite_existing, err);
 }
 
-} // namespace
-
-// Near-white, theme-independent caption color shared by the card type label and the tooltip type label
-// so they stay consistent and never pick up an off-palette tint.
-constexpr ImU32 content_caption_color = IM_COL32(224, 226, 231, 255);
-
-// Returns a distinct accent color per asset type so cards read at a glance, similar to the colored
-// type bar Unreal shows beneath each asset thumbnail.
-auto asset_type_accent(const char* type) -> ImU32
+/// The rename, delete and duplicate shortcuts of the selected entry, and the rename a just created
+/// entry starts with.
+void read_entry_shortcuts(const content_browser_item& item,
+                          bool is_editing_label_after_create,
+                          entry_interaction& interaction)
 {
-    constexpr ImU32 fallback = IM_COL32(150, 150, 158, 255);
-    if(type == nullptr || type[0] == '\0')
-    {
-        return fallback;
-    }
-
-    struct type_color
-    {
-        const char* name;
-        ImU32 color;
-    };
-    static constexpr std::array<type_color, 13> table{{
-        {"Texture", IM_COL32(226, 96, 92, 255)},
-        {"Material", IM_COL32(86, 180, 168, 255)},
-        {"Physics Material", IM_COL32(214, 124, 72, 255)},
-        {"Mesh", IM_COL32(234, 138, 64, 255)},
-        {"Shader", IM_COL32(156, 116, 222, 255)},
-        {"Prefab", IM_COL32(82, 179, 222, 255)},
-        {"Scene", IM_COL32(232, 168, 70, 255)},
-        {"Animation Clip", IM_COL32(124, 200, 96, 255)},
-        {"Audio Clip", IM_COL32(220, 112, 178, 255)},
-        {"Script", IM_COL32(94, 172, 206, 255)},
-        {"Font", IM_COL32(186, 186, 196, 255)},
-        {"UI Tree", IM_COL32(126, 138, 224, 255)},
-        {"Style Sheet", IM_COL32(170, 134, 224, 255)},
-    }};
-
-    for(const auto& entry : table)
-    {
-        if(std::strcmp(type, entry.name) == 0)
-        {
-            return entry.color;
-        }
-    }
-    return fallback;
-}
-
-// Draws a clean, professional asset card: the thumbnail centered on top (aspect preserved), a colored
-// type-accent bar beneath it, then the asset name with a subtle type caption. The card has no hard
-// outline; it uses a faint tile that brightens on hover/active and the theme selection color when
-// selected, so the look stays consistent across editor themes. Registers a single ImGui item so all
-// surrounding interaction (selection, focus, drag-drop, context menu) keeps working unchanged.
-auto draw_content_card(const ImGui::ContentItem& item, bool selected) -> bool
-{
-    ImGuiWindow* window = ImGui::GetCurrentWindow();
-    if(window->SkipItems)
-    {
-        return false;
-    }
-
-    ImDrawList* draw_list = window->DrawList;
-    const ImGuiID id = window->GetID(item.name);
-
-    constexpr float rounding = 6.0f;
-    const ImVec2 inner_pad(6.0f, 6.0f);
-    const float card_w = item.image_size.x > 0.0f ? item.image_size.x : ImGui::GetFrameHeight() * 4.0f;
-    const float content_w = card_w - inner_pad.x * 2.0f;
-    const float thumb_h = content_w; // Square thumbnail region.
-
-    const bool has_name = (item.name != nullptr) && (item.name[0] != '\0') && (item.name[0] != '#');
-    const bool has_type = (item.type != nullptr) && (item.type[0] != '\0') && (item.type[0] != '#');
-    const bool is_folder = has_type && (std::strcmp(item.type, "Folder") == 0);
-    const bool show_accent = has_type && !is_folder;
-
-    // Keep the type caption clearly secondary to the name. The type uses a heavy font, so size it
-    // relative to the name (not its own native size) to guarantee it stays smaller and reads as a caption.
-    const float base_font_size = ImGui::GetFontSize();
-    const float name_font_size = item.name_font != nullptr ? item.name_font->LegacySize : base_font_size;
-    const float type_font_size = name_font_size * 0.8f;
-
-    const auto line_height = [](ImFont* font, float size) -> float
-    {
-        if(font == nullptr)
-        {
-            return ImGui::GetTextLineHeight();
-        }
-        ImGui::PushFont(font, size);
-        const float height = ImGui::GetTextLineHeight();
-        ImGui::PopFont();
-        return height;
-    };
-
-    // Reserve the name and caption rows (and the accent strip) unconditionally so every card is the same
-    // height and the grid rows stay aligned, even for folders and unknown file types.
-    const float name_h = line_height(item.name_font, name_font_size);
-    const float type_h = line_height(item.type_font, type_font_size);
-
-    const float accent_h = ImGui::GetStyle().SeparatorSize + 1;
-    constexpr float pad_thumb_to_accent = 4.0f;
-    constexpr float pad_accent_to_name = 4.0f;
-    constexpr float pad_name_to_type = 1.0f;
-
-    const float card_h = inner_pad.y + thumb_h + pad_thumb_to_accent + accent_h + pad_accent_to_name + name_h +
-                         pad_name_to_type + type_h + inner_pad.y;
-
-    const ImVec2 card_min = window->DC.CursorPos;
-    const ImVec2 card_max = card_min + ImVec2(card_w, card_h);
-    const ImRect bb(card_min, card_max);
-
-    ImGui::ItemSize(bb);
-    if(!ImGui::ItemAdd(bb, id))
-    {
-        return false;
-    }
-
-    bool hovered = false;
-    bool held = false;
-    const bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held);
-
-    // Faint tile background, no hard outline. Brighten on hover/active; use the theme selection color
-    // (plus a thin accent ring) when selected so it matches whatever editor theme is active.
-    if(selected)
-    {
-        draw_list->AddRectFilled(card_min, card_max, ImGui::GetColorU32(ImGuiCol_Header), rounding);
-        draw_list->AddRect(card_min, card_max, ImGui::GetColorU32(ImGuiCol_NavCursor), rounding, 0, 1.5f);
-    }
-    else if(!is_folder || hovered || held)
-    {
-        // Folders blend into the panel when idle (no tile, no border); everything else keeps a faint tile.
-        ImU32 tile = IM_COL32(255, 255, 255, 10);
-        if(held)
-        {
-            tile = IM_COL32(255, 255, 255, 32);
-        }
-        else if(hovered)
-        {
-            tile = IM_COL32(255, 255, 255, 20);
-        }
-        draw_list->AddRectFilled(card_min, card_max, tile, rounding);
-    }
-
-    // Thumbnail image, aspect preserved and centered.
-    const ImVec2 thumb_min = card_min + inner_pad;
-    const ImVec2 thumb_max = thumb_min + ImVec2(content_w, thumb_h);
-    if(item.texId)
-    {
-        ImVec2 img = item.texture_size;
-        if(img.x > 0.0f && img.y > 0.0f)
-        {
-            const float scale = ImMin(content_w / img.x, thumb_h / img.y);
-            img.x *= scale;
-            img.y *= scale;
-            const ImVec2 img_min(thumb_min.x + (content_w - img.x) * 0.5f, thumb_min.y + (thumb_h - img.y) * 0.5f);
-            const ImVec2 img_max = img_min + img;
-            draw_list->AddImageRounded(item.texId,
-                                       img_min,
-                                       img_max,
-                                       item.uv0,
-                                       item.uv1,
-                                       ImGui::GetColorU32(item.tint_col),
-                                       rounding * 0.5f);
-        }
-    }
-
-    // Colored type-accent bar beneath the thumbnail (skipped for folders / unknown types).
-    float cursor_y = thumb_max.y + pad_thumb_to_accent;
-    if(show_accent)
-    {
-        draw_list->AddRectFilled(ImVec2(thumb_min.x, cursor_y),
-                                 ImVec2(thumb_max.x, cursor_y + accent_h),
-                                 asset_type_accent(item.type),
-                                 accent_h * 0.5f);
-    }
-    cursor_y += accent_h + pad_accent_to_name;
-
-    // Draws a single line of text centered within the card content width, ellipsized when too wide.
-    const auto draw_centered_label = [&](const char* text, ImFont* font, float font_size, ImU32 color) -> void
-    {
-        if(font != nullptr)
-        {
-            ImGui::PushFont(font, font_size);
-        }
-        ImVec2 ts = ImGui::CalcTextSize(text, nullptr, true);
-        ImVec2 start(thumb_min.x, cursor_y);
-        const float region_w = thumb_max.x - thumb_min.x;
-        if(region_w > ts.x)
-        {
-            start.x += (region_w - ts.x) * 0.5f;
-        }
-        ImGui::PushStyleColor(ImGuiCol_Text, color);
-        ImGui::RenderTextEllipsis(draw_list,
-                                  start,
-                                  ImVec2(thumb_max.x, cursor_y + ts.y),
-                                  thumb_max.x,
-                                  text,
-                                  nullptr,
-                                  &ts);
-        ImGui::PopStyleColor();
-        if(font != nullptr)
-        {
-            ImGui::PopFont();
-        }
-    };
-
-    if(has_name)
-    {
-        draw_centered_label(item.name, item.name_font, name_font_size, ImGui::GetColorU32(ImGuiCol_Text));
-    }
-    cursor_y += name_h + pad_name_to_type;
-
-    if(has_type && show_accent)
-    {
-        draw_centered_label(item.type, item.type_font, type_font_size, content_caption_color);
-    }
-
-    return pressed;
-}
-
-auto draw_item(const content_browser_item& item)
-{
-    bool is_directory = item.entry.entry.is_directory();
-    const auto& absolute_path = item.entry.entry.path();
-    const auto& name = item.entry.stem;
-    const auto& filename = item.entry.filename;
-    const auto& file_ext = item.entry.extension;
-    const auto& file_type = ex::get_type(file_ext, is_directory);
-    auto description = item.description;
-    enum class entry_action
-    {
-        none,
-        clicked,
-        double_clicked,
-        renamed,
-        deleted,
-        canceled,
-        duplicate,
-    };
-
-    auto duplicate_entry = [&]()
-    {
-        fs::error_code err;
-        const auto available = get_new_file(absolute_path.parent_path(), name, file_ext);
-        fs::copy(absolute_path, available, fs::copy_options::overwrite_existing, err);
-    };
-
-    bool is_popup_opened = false;
-    entry_action action = entry_action::none;
-
-    bool open_rename_menu = false;
-
-    ImGui::PushID(name.c_str());
     if(item.is_selected && !ImGui::IsAnyItemActive() && ImGui::IsWindowFocused())
     {
         if(ImGui::IsKeyPressed(shortcuts::rename_item))
         {
-            open_rename_menu = true;
+            interaction.open_rename_menu = true;
         }
-
         if(ImGui::IsKeyPressed(shortcuts::delete_item))
         {
-            action = entry_action::deleted;
+            interaction.action = entry_action::deleted;
         }
-
         if(ImGui::IsItemCombinationKeyPressed(shortcuts::duplicate_item))
         {
-            action = entry_action::duplicate;
+            interaction.action = entry_action::duplicate;
         }
     }
-
-    bool is_editing_label_after_create = pending_rename == absolute_path;
     if(is_editing_label_after_create)
     {
-        open_rename_menu = true;
+        interaction.open_rename_menu = true;
     }
+}
 
-    ImVec2 item_size = {item.size, item.size};
-    ImVec2 texture_size = ImGui::GetSize(item.icon, item_size);
-
-    auto pos = ImGui::GetCursorScreenPos();
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
-
-    auto file_type_font = ImGui::GetFont(ImGui::Font::Black);
-
-    ImGui::ContentItem citem{};
-    citem.texId = ImGui::ToId(item.icon);
-    citem.name = name.c_str();
-    citem.description = description.c_str();
-    citem.type = file_type.c_str();
-    citem.type_font = file_type_font;
-    citem.texture_size = texture_size;
-    citem.image_size = item_size;
-
-    // Track double-click state across frames
+/// Turns presses on the card drawn last, double clicks and keyboard navigation into the entry's
+/// action.
+void read_entry_clicks(const content_browser_item& item, bool is_card_pressed, entry_interaction& interaction)
+{
+    // The release of a double click's second press also reports a press; it is ignored for a
+    // moment so the double click's action is not followed by a click.
     static ImGuiID last_double_clicked_id = 0;
     static float last_double_click_time = -1.0f;
-    const float double_click_timeout = 0.5f; // seconds
-    
-    ImGuiID current_id = ImGui::GetID(name.c_str());
-    float current_time = ImGui::GetTime();
-    
-    bool button_clicked = false;
-
-    if(!item.is_loading)
-    {
-        button_clicked = draw_content_card(citem, item.is_selected);
-        // The card renders its own hover/selection visuals, so keep only the active (click/keyboard)
-        // highlight and drop the inactive/hovered outlines that otherwise box every item (notably the
-        // now-transparent idle folders).
-        ImGui::DrawItemActivityOutline(ImGui::OutlineFlags_WhenActive | ImGui::OutlineFlags_HighlightActive);
-
-    }
-    else
-    {
-        auto spinner_size = item_size.x;
-        ImSpinner::Spinner<ImSpinner::SpinnerTypeT::e_st_eclipse>("spinner", 
-            ImSpinner::Radius{spinner_size * 0.5f},
-            ImSpinner::Thickness{6.0f},
-            ImSpinner::Color{ImSpinner::white},
-            ImSpinner::Speed{6.0f});
-    }
-
-    pos.y += ImGui::GetItemRectSize().y;
-
-    ImGui::PopStyleVar();
-
-    // Check for double-click
-    bool is_double_clicked = ImGui::IsItemDoubleClicked(ImGuiMouseButton_Left);
-    if(is_double_clicked)
+    const ImGuiID current_id = ImGui::GetID(item.entry.stem.c_str());
+    const auto current_time = float(ImGui::GetTime());
+    const bool was_just_double_clicked = last_double_clicked_id == current_id &&
+                                         current_time - last_double_click_time < DOUBLE_CLICK_TIMEOUT;
+    if(ImGui::IsItemDoubleClicked(ImGuiMouseButton_Left))
     {
         last_double_clicked_id = current_id;
         last_double_click_time = current_time;
-        action = entry_action::double_clicked;
+        interaction.action = entry_action::double_clicked;
     }
-    // Only handle regular click if it's not a double-click and not recently double-clicked
-    else if(button_clicked && 
-           !(last_double_clicked_id == current_id && 
-             current_time - last_double_click_time < double_click_timeout))
+    else if(is_card_pressed && !was_just_double_clicked)
     {
-        action = entry_action::clicked;
+        interaction.action = entry_action::clicked;
     }
-
-    // Check if this item just received focus through keyboard navigation
-    if(ImGui::IsItemFocused())
+    if(!ImGui::IsItemFocused())
     {
-        // Use the new IsItemFocusChanged function to detect navigation focus changes
-        if(ImGui::IsItemFocusChanged() && !item.is_selected)
-        {
-            APPLOG_INFO("Focus Changed");
-
-            // Only trigger click when the item wasn't previously selected
-            action = entry_action::clicked;
-        }
-        
-        if(ImGui::IsKeyPressed(shortcuts::item_action) || ImGui::IsKeyPressed(shortcuts::item_action_alt))
-        {
-            action = entry_action::double_clicked;
-        }
-
-        if(ImGui::IsKeyPressed(shortcuts::item_cancel))
-        {
-            action = entry_action::none;
-        }
+        return;
     }
-
-    if(ImGui::IsItemHovered())
+    // Keyboard navigation selects the entry it lands on.
+    if(ImGui::IsItemFocusChanged() && !item.is_selected)
     {
-        if(item.on_double_click)
-        {
-            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        }
+        interaction.action = entry_action::clicked;
     }
-
-    const bool show_shift_preview_tooltip =
-        ImGui::IsItemHovered() && !item.is_loading && ImGui::GetIO().KeyShift;
-    if(show_shift_preview_tooltip)
+    if(ImGui::IsKeyPressed(shortcuts::item_action) || ImGui::IsKeyPressed(shortcuts::item_action_alt))
     {
-        ImGui::SetNextWindowViewportToCurrent();
-        ImGui::SetNextWindowPos(ImGui::GetIO().MousePos, ImGuiCond_None, ImVec2(0.5f, 1.0f));
-        asset_tooltip_style_scope tooltip_style;
-
-        if(ImGui::BeginTooltipEx(ImGuiTooltipFlags_None, ImGuiWindowFlags_None))
-        {
-            constexpr float preview_scale = 2.75f;
-            constexpr float preview_max_side = 384.0f;
-            const float preview_side = ImClamp(item.size * preview_scale, item.size + 16.0f, preview_max_side);
-            ImGui::PushID("shift_thumbnail_preview");
-            ImGui::ContentItem preview_item = citem;
-            preview_item.image_size = ImVec2(preview_side, preview_side);
-            ImGui::ContentButtonItem(preview_item);
-            ImGui::PopID();
-            ImGui::EndTooltip();
-        }
+        interaction.action = entry_action::double_clicked;
     }
-    else if(!item.is_loading && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+    if(ImGui::IsKeyPressed(shortcuts::item_cancel))
     {
-        constexpr float thumb_side = 72.0f;
-        constexpr float wrap_width = 360.0f;
-        ImGui::SetNextWindowViewportToCurrent();
-        asset_tooltip_style_scope tooltip_style;
-        if(ImGui::BeginTooltipEx(ImGuiTooltipFlags_None, ImGuiWindowFlags_None))
-        {
-            // Header: rounded thumbnail well next to the name and type.
-            draw_asset_tooltip_thumbnail(citem, texture_size, thumb_side);
-            ImGui::SameLine();
-            ImGui::BeginGroup();
-            {
-                auto name_font = ImGui::GetFont(ImGui::Font::Bold);
-                ImGui::PushFont(name_font, name_font->LegacySize);
-                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap_width - thumb_side - ImGui::GetStyle().ItemSpacing.x);
-                ImGui::TextUnformatted(name.c_str());
-                ImGui::PopTextWrapPos();
-                ImGui::PopFont();
-
-                if(!file_type.empty())
-                {
-                    ImGui::PushFont(file_type_font, file_type_font->LegacySize * 0.9f);
-                    ImGui::PushStyleColor(ImGuiCol_Text, content_caption_color);
-                    ImGui::TextUnformatted(file_type.c_str());
-                    ImGui::PopStyleColor();
-                    ImGui::PopFont();
-                }
-            }
-            ImGui::EndGroup();
-
-            ImGui::Spacing();
-            ImGui::PushStyleColor(ImGuiCol_Separator, asset_type_accent(file_type.c_str()));
-            ImGui::Separator();
-            ImGui::PopStyleColor();
-            ImGui::Spacing();
-
-            const float label_width = 130.0f;
-
-            draw_asset_tooltip_detail_row("Name", label_width, wrap_width, filename);
-            draw_asset_tooltip_detail_row("Path", label_width, wrap_width, item.entry.protocol_path);
-
-            if(!is_directory)
-            {
-                fs::error_code ec;
-                const auto bytes = fs::file_size(absolute_path, ec);
-                if(!ec)
-                {
-                    draw_asset_tooltip_detail_row("Disk Size", label_width, wrap_width, format_file_size(bytes));
-                }
-
-                const auto compiled_path =
-                    asset_reader::resolve_compiled_asset_path(item.entry.protocol_path, file_ext);
-                if(!compiled_path.empty())
-                {
-                    ec.clear();
-                    if(fs::exists(compiled_path, ec))
-                    {
-                        const auto compiled_bytes = fs::file_size(compiled_path, ec);
-                        if(!ec)
-                        {
-                            draw_asset_tooltip_detail_row("Compiled Disk Size",
-                                                          label_width,
-                                                          wrap_width,
-                                                          format_file_size(compiled_bytes));
-                        }
-                    }
-                }
-            }
-
-            if(!is_directory)
-            {
-                draw_asset_tooltip_detail_row("UID", label_width, wrap_width, description);
-            }
-            ImGui::EndTooltip();
-        }
+        interaction.action = entry_action::none;
     }
+}
 
-    auto input_buff = ImGui::CreateInputTextBuffer(name);
-
-    if(ImGui::BeginPopupContextItem("ENTRY_CONTEXT_MENU"))
+/// The entry's right-click menu: show in the explorer, copy the path, reimport, rename, duplicate
+/// and delete.
+void draw_entry_context_menu(const fs::path& absolute_path, entry_interaction& interaction)
+{
+    if(!ImGui::BeginPopupContextItem("ENTRY_CONTEXT_MENU"))
     {
-        is_popup_opened = true;
-        {
-            ImGui::ContextMenuStyleScope style_scope;
-
-            if(ImGui::MenuItemIcon(ICON_MDI_FOLDER_OPEN, "Open in Explorer"))
-            {
-                fs::show_in_graphical_env(absolute_path);
-            }
-
-            if(ImGui::MenuItemIcon(ICON_MDI_LINK, "Copy Path"))
-            {
-                const std::string protocol_path =
-                    fs::convert_to_protocol(absolute_path).generic_string();
-                ImGui::SetClipboardText(protocol_path.c_str());
-            }
-
-            const bool can_reimport_file = asset_actions::can_reimport(absolute_path);
-            if(ImGui::MenuItemIcon(ICON_MDI_REFRESH, "Reimport", nullptr, can_reimport_file))
-            {
-                asset_actions::reimport_path(absolute_path);
-            }
-
-            ImGui::Separator();
-
-            if(ImGui::MenuItemIcon(ICON_MDI_PENCIL, "Rename", ImGui::GetKeyName(shortcuts::rename_item)))
-            {
-                open_rename_menu = true;
-                ImGui::CloseCurrentPopup();
-            }
-
-            if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_COPY,
-                                   "Duplicate",
-                                   ImGui::GetKeyCombinationName(shortcuts::duplicate_item).c_str()))
-            {
-                action = entry_action::duplicate;
-                ImGui::CloseCurrentPopup();
-            }
-
-            if(ImGui::MenuItemIcon(ICON_MDI_DELETE, "Delete", ImGui::GetKeyName(shortcuts::delete_item)))
-            {
-                action = entry_action::deleted;
-                ImGui::CloseCurrentPopup();
-            }
-        }
-        ImGui::EndPopup();
+        return;
     }
-
-    const float rename_field_width = 150.0f;
-    if(open_rename_menu)
+    interaction.is_popup_opened = true;
     {
-        ImGui::OpenPopup("ENTRY_RENAME_MENU");
-
-        const auto& style = ImGui::GetStyle();
-        float rename_field_with_padding = rename_field_width + style.WindowPadding.x * 2.0f;
-        if(item.size < rename_field_with_padding)
+        ImGui::ContextMenuStyleScope style_scope;
+        if(ImGui::MenuItemIcon(ICON_MDI_FOLDER_OPEN, "Open in Explorer"))
         {
-            auto diff = rename_field_with_padding - item.size;
-            pos.x -= diff * 0.5f;
+            fs::show_in_graphical_env(absolute_path);
         }
-
-        ImGui::SetNextWindowPos(pos);
-    }
-
-    if(ImGui::BeginPopup("ENTRY_RENAME_MENU"))
-    {
-        is_popup_opened = true;
-        if(open_rename_menu)
+        if(ImGui::MenuItemIcon(ICON_MDI_LINK, "Copy Path"))
         {
-            ImGui::SetKeyboardFocusHere();
+            const std::string protocol_path = fs::convert_to_protocol(absolute_path).generic_string();
+            ImGui::SetClipboardText(protocol_path.c_str());
         }
-        ImGui::PushItemWidth(rename_field_width);
-
-        if(ImGui::InputTextWidget("##NAME",
-                                  input_buff,
-                                  false,
-                                  ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
+        const bool can_reimport_file = asset_actions::can_reimport(absolute_path);
+        if(ImGui::MenuItemIcon(ICON_MDI_REFRESH, "Reimport", nullptr, can_reimport_file))
         {
-            action = entry_action::renamed;
+            asset_actions::reimport_path(absolute_path);
+        }
+        ImGui::Separator();
+        if(ImGui::MenuItemIcon(ICON_MDI_PENCIL, "Rename", ImGui::GetKeyName(shortcuts::rename_item)))
+        {
+            interaction.open_rename_menu = true;
             ImGui::CloseCurrentPopup();
         }
-
-        if(open_rename_menu)
+        if(ImGui::MenuItemIcon(ICON_MDI_CONTENT_COPY,
+                               "Duplicate",
+                               ImGui::GetKeyCombinationName(shortcuts::duplicate_item).c_str()))
         {
-            ImGui::ActivateItemByID(ImGui::GetItemID());
+            interaction.action = entry_action::duplicate;
+            ImGui::CloseCurrentPopup();
         }
-
-        if(is_editing_label_after_create && ImGui::IsItemKeyPressed(shortcuts::item_cancel))
+        if(ImGui::MenuItemIcon(ICON_MDI_DELETE, "Delete", ImGui::GetKeyName(shortcuts::delete_item)))
         {
-            action = entry_action::canceled;
-        }
-
-        ImGui::PopItemWidth();
-        ImGui::EndPopup();
-    }
-    if(item.is_selected)
-    {
-        ImGui::SetItemFocusFrame();
-    }
-
-    if(item.is_focused)
-    {
-        ImGui::SetItemFocusFrame(ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 0.0f, 1.0f)));
-    }
-
-    if(item.is_loading)
-    {
-        action = entry_action::none;
-    }
-
-    if(open_rename_menu)
-    {
-        if(item.on_click)
-        {
-            item.on_click();
+            interaction.action = entry_action::deleted;
+            ImGui::CloseCurrentPopup();
         }
     }
+    ImGui::EndPopup();
+}
+
+/// The rename field, opened at popup_pos (under the card) and centered on it when wider; Enter
+/// renames, and Escape on a just created entry cancels its creation.
+void draw_entry_rename_popup(const content_browser_item& item,
+                             ImVec2 popup_pos,
+                             bool is_editing_label_after_create,
+                             name_buffer_t& name_buffer,
+                             entry_interaction& interaction)
+{
+    if(interaction.open_rename_menu)
+    {
+        ImGui::OpenPopup("ENTRY_RENAME_MENU");
+        const float field_with_padding = RENAME_FIELD_WIDTH + ImGui::GetStyle().WindowPadding.x * 2.0f;
+        if(item.size < field_with_padding)
+        {
+            popup_pos.x -= (field_with_padding - item.size) * 0.5f;
+        }
+        ImGui::SetNextWindowPos(popup_pos);
+    }
+    if(!ImGui::BeginPopup("ENTRY_RENAME_MENU"))
+    {
+        return;
+    }
+    interaction.is_popup_opened = true;
+    if(interaction.open_rename_menu)
+    {
+        ImGui::SetKeyboardFocusHere();
+    }
+    ImGui::PushItemWidth(RENAME_FIELD_WIDTH);
+    if(ImGui::InputTextWidget("##NAME",
+                              name_buffer,
+                              false,
+                              ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll))
+    {
+        interaction.action = entry_action::renamed;
+        ImGui::CloseCurrentPopup();
+    }
+    if(interaction.open_rename_menu)
+    {
+        ImGui::ActivateItemByID(ImGui::GetItemID());
+    }
+    if(is_editing_label_after_create && ImGui::IsItemKeyPressed(shortcuts::item_cancel))
+    {
+        interaction.action = entry_action::canceled;
+    }
+    ImGui::PopItemWidth();
+    ImGui::EndPopup();
+}
+
+/// Runs the entry's action once its card, menu and popups are drawn.
+void apply_entry_action(const content_browser_item& item, entry_action action, const std::string& typed_name)
+{
+    if(action != entry_action::none)
+    {
+        pending_rename.clear();
+    }
+    const auto run = [](const content_browser_item::on_action_t& callback)
+    {
+        if(callback)
+        {
+            callback();
+        }
+    };
     switch(action)
     {
         case entry_action::clicked:
-        {
-            pending_rename.clear();
-            if(item.on_click)
-            {
-                item.on_click();
-            }
-        }
-        break;
+            run(item.on_click);
+            break;
         case entry_action::double_clicked:
-        {
-            pending_rename.clear();
-
-            if(item.on_double_click)
-            {
-                item.on_double_click();
-            }
-        }
-        break;
+            run(item.on_double_click);
+            break;
         case entry_action::renamed:
-        {
-            pending_rename.clear();
-
-            const std::string new_name = std::string(input_buff.data());
-            if(new_name != name && !new_name.empty())
+            if(item.on_rename && !typed_name.empty() && typed_name != item.entry.stem)
             {
-                if(item.on_rename)
-                {
-                    item.on_rename(new_name);
-                }
+                item.on_rename(typed_name);
             }
-        }
-        break;
+            break;
         case entry_action::deleted:
-        {
-            pending_rename.clear();
-
-            if(item.on_delete)
-            {
-                item.on_delete();
-            }
-        }
-        break;
-
+            run(item.on_delete);
+            break;
         case entry_action::duplicate:
-        {
-            pending_rename.clear();
-            duplicate_entry();
-        }
-        break;
-
+            duplicate_entry(item.entry);
+            break;
         case entry_action::canceled:
-        {
-            pending_rename.clear();
-            if(item.on_cancel)
-            {
-                item.on_cancel();
-            }
-        }
-        break;
+            run(item.on_cancel);
+            break;
         default:
             break;
     }
+}
 
+/// Draws one grid entry and acts on what the user did to it; returns true while one of its
+/// popups is open.
+auto draw_item(const content_browser_item& item) -> bool
+{
+    const auto& absolute_path = item.entry.entry.path();
+    entry_interaction interaction;
+    ImGui::PushID(item.entry.stem.c_str());
+    const bool is_editing_label_after_create = pending_rename == absolute_path;
+    read_entry_shortcuts(item, is_editing_label_after_create, interaction);
+    const ImVec2 card_pos = ImGui::GetCursorScreenPos();
+    const bool is_card_pressed = draw_content_card(item);
+    const ImVec2 rename_pos(card_pos.x, card_pos.y + ImGui::GetItemRectSize().y);
+    // The card draws its own hover and selection, so the outline only highlights the active card.
+    ImGui::DrawItemActivityOutline(ImGui::OutlineFlags_WhenActive | ImGui::OutlineFlags_HighlightActive);
+    read_entry_clicks(item, is_card_pressed, interaction);
+    if(item.on_double_click && ImGui::IsItemHovered())
+    {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+    draw_content_tooltip(item);
+    draw_entry_context_menu(absolute_path, interaction);
+    auto name_buffer = ImGui::CreateInputTextBuffer<RENAME_BUFFER_SIZE>(item.entry.stem);
+    draw_entry_rename_popup(item, rename_pos, is_editing_label_after_create, name_buffer, interaction);
+    if(item.is_loading)
+    {
+        interaction.action = entry_action::none;
+    }
+    if(interaction.open_rename_menu && item.on_click)
+    {
+        item.on_click();
+    }
+    apply_entry_action(item, interaction.action, std::string(name_buffer.data()));
     if(!process_drag_drop_source(item.icon, absolute_path))
     {
         process_drag_drop_target(absolute_path);
     }
-
     ImGui::PopID();
-    return is_popup_opened;
+    return interaction.is_popup_opened;
 }
+} // namespace browser_entry
 
 } // namespace
 content_browser_panel::content_browser_panel(imgui_panels* parent, const char* name) : panel_base(name), parent_(parent)
@@ -1483,18 +1017,19 @@ auto content_browser_panel::draw_cache_entry(rtti::context& ctx,
                                              float item_size,
                                              fs::path& current_path) -> bool
 {
-    auto& em = ctx.get_cached<editing_manager>();
-    auto& tm = ctx.get_cached<thumbnail_manager>();
-    const auto& absolute_path = cache_entry.entry.path();
-    const auto& relative = cache_entry.protocol_path;
-    const auto& file_ext = cache_entry.extension;
-
     content_browser_item item(cache_entry);
     item.size = item_size;
-    setup_rename_handler(item, absolute_path, file_ext);
+    setup_rename_handler(item);
+    if(!setup_known_asset_item(ctx, item))
+    {
+        setup_path_item(ctx, item, current_path);
+    }
+    return browser_entry::draw_item(item);
+}
 
+auto content_browser_panel::setup_known_asset_item(rtti::context& ctx, content_browser_item& item) -> bool
+{
     bool is_known_asset = false;
-    bool is_popup_opened = false;
     hpp::for_each_type<gfx::texture,
                        gfx::shader,
                        scene_prefab,
@@ -1510,49 +1045,37 @@ auto content_browser_panel::draw_cache_entry(rtti::context& ctx,
                        script>(
         [&](auto tag)
         {
-            if(is_known_asset)
-            {
-                return;
-            }
-
             using asset_t = typename std::decay_t<decltype(tag)>::type;
-
-            if(ex::is_format<asset_t>(file_ext))
+            if(!is_known_asset && ex::is_format<asset_t>(item.entry.extension))
             {
                 is_known_asset = true;
-                setup_asset_item<asset_t>(ctx, item, absolute_path, relative, file_ext);
-                is_popup_opened = draw_item(item);
+                setup_asset_item<asset_t>(ctx, item);
             }
         });
-    if(is_known_asset)
-    {
-        return is_popup_opened;
-    }
+    return is_known_asset;
+}
 
-    // A folder, or a file of no asset type.
-    using entry_t = fs::path;
-    const entry_t& entry = absolute_path;
+void content_browser_panel::setup_path_item(rtti::context& ctx, content_browser_item& item, fs::path& current_path)
+{
+    auto& em = ctx.get_cached<editing_manager>();
+    auto& tm = ctx.get_cached<thumbnail_manager>();
+    const fs::path& entry = item.entry.entry.path();
     item.icon = tm.get_thumbnail(entry);
     item.is_selected = em.is_selected(entry);
     item.is_focused = em.is_focused(entry);
     item.on_click = [&em, entry, &item]()
     {
-        bool is_directory = item.entry.entry.is_directory();
-        const auto& file_ext = item.entry.extension;
-        const auto& file_type = ex::get_type(file_ext, is_directory);
-        const auto& name = item.entry.stem;
-        em.select(entry, em.get_select_mode(), name + " (" + file_type + ")");
+        em.select(entry, em.get_select_mode(), browser_entry::get_selection_label(item));
     };
-    setup_delete_handler(item, relative, absolute_path, entry, ctx);
-    if(fs::is_directory(cache_entry.entry.status()))
+    setup_delete_handler(item, entry, ctx);
+    if(item.is_folder())
     {
         item.on_double_click = [&current_path, &em, entry]()
         {
             current_path = entry;
-            em.try_unselect<entry_t>();
+            em.try_unselect<fs::path>();
         };
     }
-    return draw_item(item);
 }
 
 void content_browser_panel::draw_status_bar(size_t shown_count)
@@ -1815,11 +1338,11 @@ void content_browser_panel::prompt_delete_asset(const std::string& name, const s
 }
 
 template<typename EntryType>
-void content_browser_panel::setup_delete_handler(content_browser_item& item, const std::string& relative, 
-                                                const fs::path& absolute_path, const EntryType& entry, rtti::context& ctx)
+void content_browser_panel::setup_delete_handler(content_browser_item& item, const EntryType& entry, rtti::context& ctx)
 {
     auto& em = ctx.get_cached<editing_manager>();
-    
+    const std::string& relative = item.entry.protocol_path;
+    const fs::path& absolute_path = item.entry.entry.path();
     item.on_delete = [this, relative, absolute_path, &em, entry]()
     {
         auto delete_impl = [&em, absolute_path, entry]()
@@ -1828,11 +1351,9 @@ void content_browser_panel::setup_delete_handler(content_browser_item& item, con
             fs::remove_all(absolute_path, err);
             em.unselect(entry);  // Works for both asset handles and fs::path
         };
-        
         this->prompt_delete_asset(relative, delete_impl);
     };
-
-    item.on_cancel = [this, relative, absolute_path, &em, entry]()
+    item.on_cancel = [absolute_path, &em, entry]()
     {
         fs::error_code err;
         fs::remove_all(absolute_path, err);
@@ -1840,9 +1361,10 @@ void content_browser_panel::setup_delete_handler(content_browser_item& item, con
     };
 }
 
-void content_browser_panel::setup_rename_handler(content_browser_item& item, const fs::path& absolute_path,
-                                                const std::string& file_ext)
+void content_browser_panel::setup_rename_handler(content_browser_item& item)
 {
+    const fs::path& absolute_path = item.entry.entry.path();
+    const std::string& file_ext = item.entry.extension;
     item.on_rename = [absolute_path, file_ext](const std::string& new_name)
     {
         fs::path new_absolute_path = absolute_path;
@@ -1850,7 +1372,6 @@ void content_browser_panel::setup_rename_handler(content_browser_item& item, con
         new_absolute_path /= new_name + file_ext;
         fs::error_code err;
         fs::rename(absolute_path, new_absolute_path, err);
-
         if(!err && file_ext == ex::get_format<script>())
         {
             sync_script_class_name(new_absolute_path, absolute_path.stem().string(), new_name);
@@ -1859,42 +1380,27 @@ void content_browser_panel::setup_rename_handler(content_browser_item& item, con
 }
 
 template<typename AssetType>
-void content_browser_panel::setup_asset_item(rtti::context& ctx, content_browser_item& item, 
-                                            const fs::path& absolute_path, 
-                                            const std::string& relative,
-                                            const std::string& file_ext)
+void content_browser_panel::setup_asset_item(rtti::context& ctx, content_browser_item& item)
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto& em = ctx.get_cached<editing_manager>();
     auto& tm = ctx.get_cached<thumbnail_manager>();
-    
-    using entry_t = asset_handle<AssetType>;
-    const auto& entry = am.find_asset<AssetType>(relative);
-
-    item.description = entry.uid().to_string();
+    const auto& entry = am.find_asset<AssetType>(item.entry.protocol_path);
+    item.uid = entry.uid();
     item.icon = tm.get_thumbnail(entry);
     item.is_selected = em.is_selected(entry);
     item.is_focused = em.is_focused(entry);
     item.is_loading = !entry.is_ready();
-    
-    // Simple click handler
+    item.summary = get_asset_summary(entry);
+    item.collect_details = [entry](content_item_sections& sections)
+    {
+        collect_asset_details(entry, sections);
+    };
     item.on_click = [&em, entry, &item]()
     {
-        bool is_directory = item.entry.entry.is_directory();
-        const auto& file_ext = item.entry.extension;
-        const auto& file_type = ex::get_type(file_ext, is_directory);
-        const auto& name = item.entry.stem;
-
-        em.select(entry, em.get_select_mode(), name + " (" + file_type + ")");
+        em.select(entry, em.get_select_mode(), browser_entry::get_selection_label(item));
     };
-
-    // Use reusable template delete handler
-    setup_delete_handler(item, relative, absolute_path, entry, ctx);
-
-    // Use reusable rename handler
-    setup_rename_handler(item, absolute_path, file_ext);
-
-    // Set up double-click handlers based on asset type
+    setup_delete_handler(item, entry, ctx);
     if constexpr(std::is_same_v<AssetType, scene_prefab>)
     {
         item.on_double_click = [&ctx, entry]()
@@ -1908,22 +1414,21 @@ void content_browser_panel::setup_asset_item(rtti::context& ctx, content_browser
         {
             auto& em_local = ctx.get_cached<editing_manager>();
             auto& scene_panel = parent_->get_scene_panel();
-            
             bool auto_save = scene_panel.get_auto_save_prefab();
             em_local.enter_prefab_mode(ctx, entry, auto_save);
         };
     }
-    else if constexpr(std::is_same_v<AssetType, script> || 
+    else if constexpr(std::is_same_v<AssetType, script> ||
                       std::is_same_v<AssetType, gfx::shader> ||
                       std::is_same_v<AssetType, style_sheet> ||
                       std::is_same_v<AssetType, ui_tree>)
     {
-        item.on_double_click = [absolute_path]()
+        item.on_double_click = [absolute_path = item.entry.entry.path()]()
         {
             editor_actions::open_workspace_on_file(absolute_path);
         };
     }
-    // For other asset types, no double-click action for now
+    // Other asset types have no double-click action.
 }
 
 } // namespace unravel

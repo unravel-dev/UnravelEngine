@@ -46,6 +46,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <numeric>
 #include <set>
 #include <thread>
@@ -1150,8 +1151,6 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
 
     std::string str_input = absolute_path.string();
 
-    fs::error_code err;
-
     fs::path file = absolute_path.stem();
     fs::path dir = absolute_path.parent_path();
 
@@ -1724,6 +1723,20 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
     {
         build_submesh_lumen_cards(data, materials, importer->cards.max_cards, importer->cards.lod_index, str_input);
     }
+    // Every write is checked on its own: atomic_write_file clears the error it is given, so one
+    // error_code shared by all writes only remembered the last of them.
+    bool has_write_error = false;
+    const auto write_output = [&](const fs::path& path, const std::function<void(const fs::path&)>& write)
+    {
+        fs::error_code write_err;
+        asset_writer::atomic_write_file(path, write, write_err);
+        if(write_err)
+        {
+            APPLOG_ERROR("Failed to write {0} for {1}: {2}", path.string(), str_input, write_err.message());
+            has_write_error = true;
+        }
+    };
+
     // Save materials and register their UIDs before writing the mesh binary
     data.default_material_uids.reserve(materials.size());
     APPLOG_INFO("Adding default material UIDs for {0}", str_input);
@@ -1740,15 +1753,15 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         }
         auto uid = am.add_asset_for_path(mat_output, false);
         data.default_material_uids.push_back(uid);
-        asset_writer::atomic_write_file(mat_output, [&](const fs::path& temp) -> void
+        write_output(mat_output, [&](const fs::path& temp) -> void
         {
             save_to_file(temp.string(), material.mat);
-        }, err);
+        });
     }
-    asset_writer::atomic_write_file(output, [&](const fs::path& temp) -> void
+    write_output(output, [&](const fs::path& temp) -> void
     {
         save_to_file_bin(temp.string(), data);
-    }, err);
+    });
 
     {
         APP_SCOPE_PERF("Write Animations");
@@ -1764,17 +1777,16 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                anim_output = dir / (animation.name + ".anim");
            }
 
-           asset_writer::atomic_write_file(anim_output, [&](const fs::path& temp) -> void
+           write_output(anim_output, [&](const fs::path& temp) -> void
            {
                 save_to_file(temp.string(), animation);
-           }, err);
+           });
         }
     }
 
-    if(err)
+    if(has_write_error)
     {
-        APPLOG_ERROR("Failed compilation of {0} -> {1} with error: {2}", 
-            str_input, output.filename().string(), err.message());
+        APPLOG_ERROR("Failed compilation of {0} -> {1}", str_input, output.filename().string());
         return false;
     }
 

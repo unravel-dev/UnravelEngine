@@ -963,7 +963,7 @@ void remove_unreferenced_files(const fs::path& root)
 
             for(const auto& type : ex::get_suported_formats<script>())
             {
-                auto ext = fs::reduce_trailing_extensions(current_path).extension().generic_string();
+                auto ext = ex::get_source_path_from_compiled(current_path).extension().generic_string();
                 if(ext == type)
                 {
                     APPLOG_TRACE("Removing Script {}", current_path.generic_string());

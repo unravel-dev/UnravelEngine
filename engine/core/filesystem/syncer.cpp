@@ -124,6 +124,30 @@ auto syncer::get_mapping(const std::string& ext) -> mapping
     return {};
 }
 
+auto syncer::find_mapping_key_locked(const fs::path& path) const -> std::string
+{
+    const std::string chain = extract_entry_extension(path);
+    for(size_t pos = 0; pos != std::string::npos && pos < chain.size(); pos = chain.find('.', pos + 1))
+    {
+        std::string candidate = chain.substr(pos);
+        if(mapping_.count(candidate) > 0)
+        {
+            return candidate;
+        }
+    }
+    return chain;
+}
+
+auto syncer::get_mapping_key(const fs::path& path, bool is_directory) -> std::string
+{
+    if(is_directory)
+    {
+        return {};
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    return find_mapping_key_locked(path);
+}
+
 auto syncer::get_on_created_callback(const std::string& ext) -> on_entry_created_t
 {
     return get_mapping(ext).on_entry_created;
@@ -163,7 +187,7 @@ void syncer::sync(const fs::path& reference_dir, const fs::path& synced_dir, con
         const auto process_entry = [this, is_initial_listing](const watcher::entry& entry)
         {
             const bool is_directory = (entry.type == fs::file_type::directory);
-            const std::string entry_extension = extract_entry_extension(entry.path);
+            const std::string entry_extension = this->get_mapping_key(entry.path, is_directory);
 
             switch(entry.status)
             {
@@ -427,18 +451,9 @@ auto syncer::get_synced_entries(const fs::path& path, bool is_directory) -> std:
     }
     else
     {
-        auto entry_path = path;
-        std::string entry_extension;
-        while(entry_path.has_extension())
-        {
-            auto ext = entry_path.extension().string() + entry_extension;
-            entry_extension = ext;
-            entry_path.replace_extension();
-        }
-
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            auto it = mapping_.find(entry_extension);
+            auto it = mapping_.find(find_mapping_key_locked(path));
             if(it != mapping_.end())
             {
                 const auto& mapping = it->second;

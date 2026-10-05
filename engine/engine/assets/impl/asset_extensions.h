@@ -3,6 +3,7 @@
 #include <engine/engine_export.h>
 #include <filesystem/filesystem.h>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace gfx
@@ -394,6 +395,31 @@ inline auto is_embedded_key(const std::string& key) noexcept -> bool
 /**
  * @brief True when @p key should be used as-is (has an extension or is embedded).
  */
+/**
+ * @brief Source path a compiled artifact was built from: drops the ".asset" suffix and the renderer
+ * extension a shader variant appends after it ("a.001_b.png.asset" -> "a.001_b.png",
+ * "x.sc.asset.dxbc" -> "x.sc"). Every '.' of the source name is kept, which
+ * fs::reduce_trailing_extensions cannot do: it cut "a.001_b.png.asset" down to "a.001_b". A path
+ * without the compiled suffix is reduced the old way.
+ */
+inline auto get_source_path_from_compiled(const fs::path& compiled) -> fs::path
+{
+    constexpr std::string_view compiled_suffix = ".asset";
+    const std::string name = compiled.filename().string();
+    const size_t suffix_pos = name.rfind(compiled_suffix);
+    if(suffix_pos != std::string::npos && suffix_pos > 0)
+    {
+        const std::string_view rest = std::string_view(name).substr(suffix_pos + compiled_suffix.size());
+        const bool is_compiled_suffix =
+            rest.empty() || (rest.front() == '.' && rest.find('.', 1) == std::string_view::npos);
+        if(is_compiled_suffix)
+        {
+            return compiled.parent_path() / name.substr(0, suffix_pos);
+        }
+    }
+    return fs::reduce_trailing_extensions(compiled);
+}
+
 inline auto should_keep_key_as_is(const std::string& key) noexcept -> bool
 {
     return has_filename_extension(key) || is_embedded_key(key);

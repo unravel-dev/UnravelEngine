@@ -593,6 +593,27 @@ void calc_bounds_global_impl(math::bbox& bounds, entt::handle entity, int depth)
         }
     }
 }
+
+/// Below the default volume priority, so a global volume the previewed prefab carries overrides the preview's
+/// disabled effects instead of being overridden by them.
+constexpr int PREVIEW_VOLUME_PRIORITY = -1;
+
+/// Switches one post-process effect of a volume on or off; a volume without the effect is left as it is.
+template<typename Effect>
+void set_volume_effect_enabled(entt::handle volume, bool enabled)
+{
+    if(auto* effect = volume.try_get<Effect>())
+    {
+        effect->enabled = enabled;
+    }
+}
+
+/// Emplaces every post-process effect a volume can carry, each one disabled.
+template<typename... Effects>
+void emplace_disabled_volume_effects(entt::handle volume)
+{
+    ((volume.emplace<Effects>().enabled = false), ...);
+}
 } // namespace
 
 auto defaults::init(rtti::context& ctx) -> bool
@@ -972,31 +993,28 @@ auto defaults::create_volume_entity(rtti::context& ctx, scene& scn, const std::s
     auto object = scn.create_entity(name);
     auto& volume_comp = object.emplace<volume_component>();
     volume_comp.mode = mode;
-
-    object.emplace<gtao_component>();
-    object.emplace<auto_exposure_component>();
-    object.emplace<bloom_component>();
-    object.emplace<tonemapping_component>();
-    object.emplace<fxaa_component>();
-    object.emplace<taa_component>();
-    object.emplace<ssr_component>();
-    object.emplace<ssil_component>().enabled = false;
-    // Present-but-disabled, like SSIL: discoverable in the inspector on every volume, and the
-    // quality presets flip it on from `high` up.
-    object.emplace<gi_component>().enabled = false;
+    emplace_disabled_volume_effects<tonemapping_component,
+                                    fxaa_component,
+                                    taa_component,
+                                    auto_exposure_component,
+                                    bloom_component,
+                                    gtao_component,
+                                    assao_component,
+                                    ssr_component,
+                                    ssil_component,
+                                    gi_component>(object);
     return object;
 }
 
 auto defaults::create_default_volume_entity_for_preview(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode) -> entt::handle
 {
-    auto object = scn.create_entity(name);
-    auto& volume_comp = object.emplace<volume_component>();
-    volume_comp.mode = mode;
-
-    object.emplace<tonemapping_component>();
-    object.emplace<fxaa_component>();
-    object.emplace<bloom_component>();
-
+    auto object = create_volume_entity(ctx, scn, name, mode);
+    object.get<volume_component>().priority = PREVIEW_VOLUME_PRIORITY;
+    // Tonemapping maps the HDR frame to the thumbnail, FXAA smooths its edges and bloom lets emissive
+    // surfaces read as emissive.
+    set_volume_effect_enabled<tonemapping_component>(object, true);
+    set_volume_effect_enabled<fxaa_component>(object, true);
+    set_volume_effect_enabled<bloom_component>(object, true);
     return object;
 }
 
@@ -1146,66 +1164,35 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
 
     {
         auto volume = create_volume_entity(ctx, scn, "Volume Global", volume_mode::global);
+        apply_volume_preset(volume, preset);
+    }
+}
 
-        if(preset == scene_preset::low)
-        {
-            if(auto* comp = volume.try_get<gtao_component>())
-                comp->enabled = false;
-            if(auto* comp = volume.try_get<bloom_component>())
-                comp->enabled = false;
-            if(auto* comp = volume.try_get<ssr_component>())
-                comp->enabled = false;
-            if(auto* comp = volume.try_get<ssil_component>())
-                comp->enabled = false;
-            if(auto* comp = volume.try_get<auto_exposure_component>())
-                comp->enabled = false;
-            if(auto* comp = volume.try_get<bloom_component>())
-                comp->enabled = false;
-        }
-        else if(preset == scene_preset::medium)
-        {
-            // The middle tier keeps the screen-space stack lean: SSR + TAA, ambient from the
-            // environment term alone - no SSIL, no world GI. (SSIL stays a manual opt-in; it
-            // must never run TOGETHER with the GI - screen-space indirect re-samples the
-            // GI-lit frame and double-counts it.)
-            if(auto* comp = volume.try_get<ssr_component>())
-            {
-                comp->settings.fidelityfx.max_rays = 4;
-                comp->settings.fidelityfx.resolution = trace_resolution::half;
-            }
-            if(auto* comp = volume.try_get<taa_component>())
-                comp->enabled = true;
-        }
-        else if(preset == scene_preset::high)
-        {
-            if(auto* comp = volume.try_get<auto_exposure_component>())
-                comp->enabled = true;
-            if(auto* comp = volume.try_get<bloom_component>())
-                comp->enabled = true;
-            // Lumen GI owns the indirect diffuse, the reflections and the short-range AO; SSIL
-            // stays off with it (see the medium preset note). SSR serves views where Lumen's
-            // reflections are off.
-            if(auto* comp = volume.try_get<gi_component>())
-                comp->enabled = true;
-            if(auto* comp = volume.try_get<ssr_component>())
-                comp->settings.fidelityfx.resolution = trace_resolution::half;
-            if(auto* comp = volume.try_get<taa_component>())
-                comp->enabled = true;
-        }
-        else if(preset == scene_preset::showcase)
-        {
-            if(auto* comp = volume.try_get<auto_exposure_component>())
-                comp->enabled = true;
-            if(auto* comp = volume.try_get<bloom_component>())
-                comp->enabled = true;
-            // As `high`, with SSR at full resolution where Lumen's reflections are off.
-            if(auto* comp = volume.try_get<gi_component>())
-                comp->enabled = true;
-            if(auto* comp = volume.try_get<ssr_component>())
-                comp->settings.fidelityfx.resolution = trace_resolution::full;
-            if(auto* comp = volume.try_get<taa_component>())
-                comp->enabled = true;
-        }
+void defaults::apply_volume_preset(entt::handle volume, scene_preset preset)
+{
+    const bool is_low = preset == scene_preset::low;
+    const bool has_world_gi = preset == scene_preset::high || preset == scene_preset::showcase;
+    // Tonemapping and FXAA are the floor of every preset (FXAA steps aside while TAA runs); the
+    // low preset stops there.
+    set_volume_effect_enabled<tonemapping_component>(volume, true);
+    set_volume_effect_enabled<fxaa_component>(volume, true);
+    set_volume_effect_enabled<taa_component>(volume, !is_low);
+    set_volume_effect_enabled<auto_exposure_component>(volume, !is_low);
+    set_volume_effect_enabled<bloom_component>(volume, !is_low);
+    set_volume_effect_enabled<gtao_component>(volume, !is_low);
+    set_volume_effect_enabled<ssr_component>(volume, !is_low);
+    // Lumen GI owns the indirect diffuse, the reflections and the short-range AO from `high` up;
+    // below it the ambient comes from the environment term alone. SSR serves views where Lumen's
+    // reflections are off. SSIL stays a manual opt-in: it must never run together with the GI,
+    // since screen-space indirect re-samples the GI-lit frame and double-counts it. ASSAO is the
+    // manual alternative to GTAO.
+    set_volume_effect_enabled<gi_component>(volume, has_world_gi);
+    set_volume_effect_enabled<ssil_component>(volume, false);
+    set_volume_effect_enabled<assao_component>(volume, false);
+    if(auto* ssr = volume.try_get<ssr_component>())
+    {
+        ssr->settings.fidelityfx.resolution =
+            preset == scene_preset::showcase ? trace_resolution::full : trace_resolution::half;
     }
 }
 
@@ -1213,6 +1200,7 @@ void defaults::create_default_3d_scene_for_editing(rtti::context& ctx, scene& sc
 {
     {
         auto object = create_volume_entity(ctx, scn, "Volume Global", volume_mode::global);
+        apply_volume_preset(object, scene_preset::medium);
     }
     {
         auto object = create_light_entity(ctx, scn, light_type::directional, "Sky & Directional");

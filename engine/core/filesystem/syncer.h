@@ -75,6 +75,16 @@ public:
 
 private:
     auto get_mapping(const std::string& ext) -> mapping;
+    //-----------------------------------------------------------------------------
+    //  Name : get_mapping_key ()
+    /// <summary>
+    /// The mapping an entry is handled by: the directory mapping for a directory; for a file the
+    /// longest registered suffix of its extension chain, so "a.001_b.png.meta" is handled as
+    /// ".png.meta". A file nothing matches keeps its whole chain, which names no mapping.
+    /// </summary>
+    //-----------------------------------------------------------------------------
+    auto get_mapping_key(const fs::path& path, bool is_directory) -> std::string;
+    auto find_mapping_key_locked(const fs::path& path) const -> std::string;
     auto get_on_created_callback(const std::string& ext) -> on_entry_created_t;
     auto get_on_modified_callback(const std::string& ext) -> on_entry_modified_t;
     auto get_on_removed_callback(const std::string& ext) -> on_entry_removed_t;
