@@ -1,5 +1,6 @@
 #pragma once
 #include "../panel_base.h"
+#include "content_browser_item.h"
 #include <editor/imgui/integration/imgui.h>
 #include <filesystem/cache.hpp>
 
@@ -10,33 +11,6 @@ namespace unravel
 {
 class imgui_panels;
 class asset_manager;
-
-struct content_browser_item
-{
-    using on_action_t = std::function<void()>;
-    using on_rename_t = std::function<void(const std::string&)>;
-
-    content_browser_item(const fs::directory_cache::cache_entry& e)
-        : entry(e)
-    {
-
-    }
-
-    const fs::directory_cache::cache_entry& entry;
-    on_action_t on_click;
-    on_action_t on_double_click;
-    on_action_t on_delete;
-    on_action_t on_cancel;
-    on_rename_t on_rename;
-
-    gfx::texture::ptr icon;
-    std::string description;
-    bool is_loading{};
-    bool is_selected{};
-    bool is_focused{};
-    float size{};
-};
-
 
 class content_browser_panel : public panel_base
 {
@@ -73,6 +47,12 @@ private:
                           const fs::directory_cache::cache_entry& cache_entry,
                           float item_size,
                           fs::path& current_path) -> bool;
+    /// Sets the item up as the asset its extension names; returns false for folders and files
+    /// of no asset type.
+    auto setup_known_asset_item(rtti::context& ctx, content_browser_item& item) -> bool;
+    /// Sets a folder or a file of no asset type up; a double click on a folder writes it to
+    /// current_path.
+    void setup_path_item(rtti::context& ctx, content_browser_item& item, fs::path& current_path);
     void draw_status_bar(size_t shown_count);
     /// Indices into the cache of the entries that pass the search, all of them without one.
     auto collect_shown_entries(asset_manager& am) const -> std::vector<size_t>;
@@ -91,19 +71,17 @@ private:
     void handle_window_empty_click(rtti::context& ctx) const;
     void draw_external_drop_overlay() const;
     
-    // Helper method to avoid MSVC ICE with complex template lambdas
+    /// Sets the item up as an asset of AssetType: thumbnail, state, type-specific summary and
+    /// details, and its actions. A member template rather than a generic lambda to avoid an MSVC ICE.
     template<typename AssetType>
-    void setup_asset_item(rtti::context& ctx, content_browser_item& item, 
-                         const fs::path& absolute_path,
-                         const std::string& relative,
-                         const std::string& file_ext);
-    
-    // Reusable member functions for consistent behavior
+    void setup_asset_item(rtti::context& ctx, content_browser_item& item);
+
+    /// Deleting asks for confirmation and unselects entry; canceling a just created entry
+    /// removes it without asking.
     template<typename EntryType>
-    void setup_delete_handler(content_browser_item& item, const std::string& relative, 
-                             const fs::path& absolute_path, const EntryType& entry, rtti::context& ctx);
-    void setup_rename_handler(content_browser_item& item, const fs::path& absolute_path, 
-                             const std::string& file_ext);
+    void setup_delete_handler(content_browser_item& item, const EntryType& entry, rtti::context& ctx);
+    /// Renaming keeps the extension, and the class name of a C# script in step with its file.
+    void setup_rename_handler(content_browser_item& item);
     void prompt_delete_asset(const std::string& name, const std::function<void()>& on_delete);
 
     fs::directory_cache cache_;

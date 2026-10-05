@@ -165,10 +165,14 @@ struct defaults
     static auto create_camera_entity(rtti::context& ctx, scene& scn, const std::string& name) -> entt::handle;
 
     /**
-     * @brief Creates a post process volume entity.
+     * @brief Creates a post process volume entity carrying every post-process effect, all of them disabled.
+     *
+     * The effects are present so they are discoverable in the inspector; turn them on with
+     * @ref apply_volume_preset or one by one.
      * @param ctx The context for creation.
      * @param scn The scene to create the entity in.
      * @param name The name of the post process volume entity.
+     * @param mode Whether the volume affects the camera everywhere or only inside its bounds.
      * @return A handle to the created entity.
      */
     static auto create_volume_entity(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode = volume_mode::local) -> entt::handle;
@@ -227,6 +231,16 @@ struct defaults
 
     /// Stable string for logging / MCP / UI ("low", "medium", "high", "showcase").
     static auto scene_preset_to_string(scene_preset preset) -> const char*;
+
+    /**
+     * @brief Sets which post-process effects of a volume run, and their quality, for a preset.
+     *
+     * Every effect the volume carries is switched on or off explicitly, so the result does not depend on the
+     * volume's previous state. Effects the volume does not carry are not added.
+     * @param volume A volume entity, typically from @ref create_volume_entity.
+     * @param preset The quality preset to apply.
+     */
+    static void apply_volume_preset(entt::handle volume, scene_preset preset);
 
     /**
      * @brief Creates a default 3D scene.
@@ -333,6 +347,17 @@ private:
     static auto create_default_3d_scene_for_preview(rtti::context& ctx, scene& scn, const usize32_t& size)
         -> entt::handle;
 
+    /**
+     * @brief Creates the post process volume of an asset preview scene, with only the effects a preview needs on.
+     *
+     * Previews render a couple of frames, so temporal effects (TAA, auto exposure, GI) never converge; only effects
+     * that resolve within one frame are enabled.
+     * @param ctx The context for creation.
+     * @param scn The preview scene.
+     * @param name The name of the volume entity.
+     * @param mode Whether the volume affects the camera everywhere or only inside its bounds.
+     * @return A handle to the created entity.
+     */
     static auto create_default_volume_entity_for_preview(rtti::context& ctx, scene& scn, const std::string& name, volume_mode mode) -> entt::handle;
 
 };
