@@ -169,7 +169,7 @@ void unwatch(std::vector<uint64_t>& watchers)
 
 auto get_asset_key(const fs::path& path) -> std::string
 {
-    auto p = fs::reduce_trailing_extensions(path);
+    auto p = ex::get_source_path_from_compiled(path);
     auto data_key = fs::convert_to_protocol(p);
     auto key =
         fs::replace(data_key.generic_string(), ex::get_compiled_directory(), ex::get_data_directory()).generic_string();
@@ -178,7 +178,7 @@ auto get_asset_key(const fs::path& path) -> std::string
 
 auto get_meta_key(const fs::path& path) -> std::string
 {
-    auto p = fs::reduce_trailing_extensions(path);
+    auto p = ex::get_source_path_from_compiled(path);
     auto data_key = fs::convert_to_protocol(p);
     auto key =
         fs::replace(data_key.generic_string(), ex::get_compiled_directory(), ex::get_meta_directory()).generic_string();

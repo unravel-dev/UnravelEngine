@@ -666,7 +666,11 @@ bimg::ImageContainer* imageLoad(const bx::FilePath& _filePath, bgfx::TextureForm
         return nullptr;
     }
 
-    return bimg::imageParse(entry::getAllocator(), data, size, bimg::TextureFormat::Enum(_dstFormat));
+    // imageParse copies what it decodes into a container of its own; the file bytes are ours to free.
+    bimg::ImageContainer* image =
+        bimg::imageParse(entry::getAllocator(), data, size, bimg::TextureFormat::Enum(_dstFormat));
+    bx::free(entry::getAllocator(), data);
+    return image;
 }
 
 bool imageParseInfo(const void* _data, uint32_t _size, bimg::ImageContainer& _info, bx::Error* _err)
