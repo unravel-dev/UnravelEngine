@@ -11,8 +11,9 @@ target_include_directories(${target_name}
 )
 
 # parallel.h is the engine's only entry point to the parallel algorithms, so poolSTL is reached
-# through this target rather than linked at each consumer.
-target_link_libraries(${target_name} INTERFACE poolSTL::poolSTL)
+# through this target rather than linked at each consumer. base supplies the thread priority the
+# background pool runs at.
+target_link_libraries(${target_name} INTERFACE poolSTL::poolSTL base)
 
 # set_target_properties(${target_name} PROPERTIES
 #     CXX_STANDARD 20

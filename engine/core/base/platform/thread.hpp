@@ -60,6 +60,12 @@ inline void set_thread_name(const char* threadName)
     set_thread_name(threadId, threadName);
 }
 
+/// Drops the calling thread below normal priority, for background work that should yield the cores to the frame.
+inline void set_thread_background_priority()
+{
+    ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+}
+
 #if UNRAVEL_CPU_X86
 /// The time stamp counter and the performance counter, read as close together as two calls allow.
 struct clock_sample
@@ -138,12 +144,23 @@ inline auto get_thread_cpu_time_ns() -> int64_t
 } // namespace platform
 #elif UNRAVEL_PLATFORM_LINUX
 #include <pthread.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
 #include <time.h>
+#include <unistd.h>
 namespace platform
 {
 inline void set_thread_name(const char* threadName)
 {
     pthread_setname_np(pthread_self(), threadName);
+}
+
+/// Drops the calling thread below normal priority, for background work that should yield the cores to the frame.
+/// Linux schedules each thread as a task of its own, so the thread's nice value is its priority.
+inline void set_thread_background_priority()
+{
+    constexpr int BACKGROUND_NICE = 10;
+    setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), BACKGROUND_NICE);
 }
 
 inline auto get_thread_cpu_time_ns() -> int64_t
@@ -158,12 +175,19 @@ inline auto get_thread_cpu_time_ns() -> int64_t
 } // namespace platform
 #elif UNRAVEL_PLATFORM_OSX
 #include <pthread.h>
+#include <pthread/qos.h>
 #include <time.h>
 namespace platform
 {
 inline void set_thread_name(const char* threadName)
 {
     pthread_setname_np(threadName);
+}
+
+/// Drops the calling thread below normal priority, for background work that should yield the cores to the frame.
+inline void set_thread_background_priority()
+{
+    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
 }
 
 inline auto get_thread_cpu_time_ns() -> int64_t
@@ -180,6 +204,10 @@ inline auto get_thread_cpu_time_ns() -> int64_t
 namespace platform
 {
 inline void set_thread_name(const char* threadName)
+{
+}
+
+inline void set_thread_background_priority()
 {
 }
 

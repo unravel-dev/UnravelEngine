@@ -30,6 +30,7 @@
 #include <editor/editing/thumbnail_invalidation.h>
 #include <editor/editing/thumbnail_manager.h>
 
+#include <concurrency/parallel.h>
 #include <filesystem/watcher.h>
 #include <graphics/graphics.h>
 #include <logging/logging.h>
@@ -450,6 +451,10 @@ static void add_to_syncer(rtti::context& ctx,
                                               [&am, ref_path, output, job_name]()
                                               {
                                                   APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", job_name, output.string()));
+                                                  // A compile can hold every thread it parallelises over for minutes
+                                                  // (a mesh's distance-field bake), so it runs its loops on the
+                                                  // background pool, never on the one the frame's loops wait for.
+                                                  const poolstl::background_scope background;
                                                   asset_compiler::compile<T>(am, ref_path, output);
                                               });
             }
@@ -524,6 +529,7 @@ void add_to_syncer<gfx::shader>(rtti::context& ctx,
                                               [&am, ref_path, output, job_name]()
                                               {
                                                 //   APPLOG_TRACE_PERF_NAMED_ALLOC(std::chrono::milliseconds, fmt::format("{} - {}", job_name, output.string()));
+                                                  const poolstl::background_scope background;
                                                   asset_compiler::compile<gfx::shader>(am, ref_path, output);
                                               });
             }
