@@ -12,7 +12,7 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
+#include <cstring>
 #include <limits>
 #include <numeric>
 
@@ -218,8 +218,10 @@ auto global_sdf_clipmap::compute_entries_fingerprint(const std::vector<composed_
     // (a scale of 1 adds nothing, so an empty level keeps fingerprint 0).
     const uint64_t count = entries.size();
     const float radius_scale = settings_.object_radius_scale;
-    const uint64_t radius_scale_term =
-        radius_scale == 1.0f ? 0u : uint64_t(std::bit_cast<uint32_t>(radius_scale)) * 0xc2b2ae3d27d4eb4full;
+    // The float's bits through memcpy: std::bit_cast needs libstdc++ 11, older than some supported toolchains.
+    uint32_t radius_scale_bits = 0;
+    std::memcpy(&radius_scale_bits, &radius_scale, sizeof(radius_scale_bits));
+    const uint64_t radius_scale_term = radius_scale == 1.0f ? 0u : uint64_t(radius_scale_bits) * 0xc2b2ae3d27d4eb4full;
     return total ^ (count * 0x9e3779b97f4a7c15ull) ^ radius_scale_term;
 }
 
