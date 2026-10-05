@@ -14,6 +14,13 @@ struct engine
     static auto init_core(const cmd_line::parser& parser) -> bool;
     static auto init_systems(const cmd_line::parser& parser) -> bool;
 
+    /**
+     * @brief Applies the --raytracing option: the ray tracer the offline bakes build their scenes with.
+     *
+     * init_core does this. A headless host that skips init_core, such as the test runner, calls it itself.
+     */
+    static void select_raytracing_backend(const cmd_line::parser& parser);
+
     static auto interrupt() -> bool;
 
     /**

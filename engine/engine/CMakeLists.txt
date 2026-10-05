@@ -28,6 +28,7 @@ target_link_libraries (${target_name}
     logging
     cmd_line
     concurrency
+    raytracing
     memory
     ospp
     audiopp

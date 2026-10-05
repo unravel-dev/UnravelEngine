@@ -38,6 +38,7 @@
 #include <simulation/simulation.h>
 
 #include <filesystem/filesystem.h>
+#include <raytracing/backend.h>
 namespace unravel
 {
 namespace
@@ -201,14 +202,43 @@ auto engine::create(rtti::context& ctx, cmd_line::parser& parser) -> bool
     ctx.add<ui_system>();
 
     parser.set_optional<std::string>("B", "physics", "auto", "Select preferred physics backend.");
+    // Empty by default, so that without the flag the raytracing library's own default stands.
+    parser.set_optional<std::string>("",
+                                     "raytracing",
+                                     "",
+                                     "Ray tracer of the offline bakes: native, or embree in a build that has it.");
 
     return true;
+}
+
+void engine::select_raytracing_backend(const cmd_line::parser& parser)
+{
+    std::string name;
+    if(parser.try_get("raytracing", name) && !name.empty())
+    {
+        const hpp::optional<raytracing::backend> selected = raytracing::parse_backend(name);
+        if(!selected)
+        {
+            APPLOG_WARNING("Unknown ray tracer '{}', keeping {}",
+                           name,
+                           raytracing::to_string(raytracing::get_default_backend()));
+        }
+        else if(!raytracing::set_default_backend(*selected))
+        {
+            APPLOG_WARNING("Ray tracer '{}' is not part of this build, keeping {}",
+                           name,
+                           raytracing::to_string(raytracing::get_default_backend()));
+        }
+    }
+    APPLOG_INFO("Ray tracer for bakes: {}", raytracing::to_string(raytracing::get_default_backend()));
 }
 
 auto engine::init_core(const cmd_line::parser& parser) -> bool
 {
     auto& ctx = engine::context();
     auto& ls = ctx.get_cached<loading_screen>();
+
+    select_raytracing_backend(parser);
 
     ls.begin_module("Threading");
     if(!ls.check(ctx.get_cached<threader>().init(ctx)))

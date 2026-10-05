@@ -20,6 +20,7 @@
 #include <engine/rendering/gi/lumen_constants.h>
 #include <engine/rendering/gi/lumen_mesh_cards.h>
 #include <engine/rendering/gi/lumen_scene.h>
+#include <engine/rendering/gi/mesh_ray_tracing.h>
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
@@ -1597,6 +1598,349 @@ void test_determinism()
     check(a.indirection == b.indirection, "indirection is deterministic");
     check(a.brick_voxels == b.brick_voxels, "voxels are deterministic");
     check(a.voxel_size == b.voxel_size, "voxel size is deterministic");
+}
+
+/// Calls @p visit(brick, brick origin, the brick's stored voxels, local coordinate) for every stored voxel of every
+/// surface brick of @p sdf.
+template<typename Visitor>
+void for_each_stored_voxel(const mesh_sdf& sdf, Visitor&& visit)
+{
+    const float brick_world_size = float(mesh_sdf::brick_size) * sdf.voxel_size;
+    for(uint32_t brick_index = 0; brick_index < uint32_t(sdf.indirection.size()); ++brick_index)
+    {
+        const uint32_t entry = sdf.indirection[brick_index];
+        if(is_sdf_empty_entry(entry))
+        {
+            continue;
+        }
+        const math::uvec3 brick(brick_index % sdf.brick_dim.x,
+                                (brick_index / sdf.brick_dim.x) % sdf.brick_dim.y,
+                                brick_index / (sdf.brick_dim.x * sdf.brick_dim.y));
+        const math::vec3 origin = sdf.bounds.min + math::vec3(brick) * brick_world_size;
+        const uint8_t* voxels = sdf.brick_voxels.data() + size_t(entry) * mesh_sdf::brick_voxel_count;
+        for(uint32_t lz = 0; lz < mesh_sdf::brick_stride; ++lz)
+        {
+            for(uint32_t ly = 0; ly < mesh_sdf::brick_stride; ++ly)
+            {
+                for(uint32_t lx = 0; lx < mesh_sdf::brick_stride; ++lx)
+                {
+                    visit(brick, origin, voxels, math::uvec3(lx, ly, lz));
+                }
+            }
+        }
+    }
+}
+
+/// Offset of stored voxel @p local within its brick's storage.
+auto get_stored_voxel_offset(const math::uvec3& local) -> uint32_t
+{
+    return local.x + local.y * mesh_sdf::brick_stride + local.z * mesh_sdf::brick_stride * mesh_sdf::brick_stride;
+}
+
+/// @p geometry moved by @p offset.
+auto translate_geometry(sdf_source_geometry geometry, const math::vec3& offset) -> sdf_source_geometry
+{
+    for(math::vec3& position : geometry.positions)
+    {
+        position += offset;
+    }
+    recompute_bounds(geometry);
+    return geometry;
+}
+
+/**
+ * @brief A brick's filter border holds exactly what its neighbouring surface bricks hold at the same positions.
+ *
+ * The border makes trilinear filtering seamless only if it replicates the neighbour exactly: one evaluated on its own
+ * can round to the other side of a quantisation step or a sign from it, which puts a step in the field at the seam.
+ * Checked on the three kinds of field: signed by pseudonormals, signed by the vote, and an unsigned shell. The
+ * fixtures sit far from their local origin, as a merged level's submeshes do, where the two bricks' rounding of a
+ * shared position differs the most.
+ */
+void test_brick_borders_replicate_neighbours()
+{
+    std::printf("test_brick_borders_replicate_neighbours\n");
+    struct fixture
+    {
+        const char* name = "";
+        sdf_source_geometry geometry;
+        bool two_sided = false;
+    };
+    const math::vec3 far_offset(310.0f, -170.0f, 230.0f);
+    const std::array<fixture, 3> fixtures = {{
+        {"closed sphere", translate_geometry(make_sphere(0.8f, 24, 32), far_offset), false},
+        {"open box", translate_geometry(make_open_box(math::vec3(0.5f, 0.4f, 0.6f)), far_offset), false},
+        {"two-sided open box", translate_geometry(make_open_box(math::vec3(0.5f, 0.4f, 0.6f)), far_offset), true},
+    }};
+    // Along one axis: which side of its brick a stored coordinate lies on (-1, 0 inside, +1), and the same position's
+    // coordinate in the brick on that side.
+    const auto get_side = [](uint32_t local) -> int
+    {
+        if(local < mesh_sdf::brick_border)
+        {
+            return -1;
+        }
+        return local < mesh_sdf::brick_border + mesh_sdf::brick_size ? 0 : 1;
+    };
+    const auto get_neighbour_local = [&](uint32_t local) -> uint32_t
+    {
+        return uint32_t(int(local) - get_side(local) * int(mesh_sdf::brick_size));
+    };
+    for(const fixture& f : fixtures)
+    {
+        mesh_sdf_bake_settings settings;
+        settings.resolution = 40;
+        settings.min_voxel_size = 0.001f;
+        settings.two_sided = f.two_sided;
+        mesh_sdf sdf;
+        check(bake_mesh_sdf(f.geometry, settings, sdf), std::string(f.name) + " bake succeeds");
+        uint64_t shared = 0;
+        uint64_t differing = 0;
+        const auto compare_border = [&](const math::uvec3& brick,
+                                        const math::vec3& /*origin*/,
+                                        const uint8_t* voxels,
+                                        const math::uvec3& local)
+        {
+            const math::ivec3 side(get_side(local.x), get_side(local.y), get_side(local.z));
+            if(side == math::ivec3(0))
+            {
+                return;
+            }
+            const math::ivec3 neighbour = math::ivec3(brick) + side;
+            if(math::any(math::lessThan(neighbour, math::ivec3(0))) ||
+               math::any(math::greaterThanEqual(neighbour, math::ivec3(sdf.brick_dim))))
+            {
+                return;
+            }
+            const uint32_t entry = sdf.indirection[uint32_t(neighbour.x) + uint32_t(neighbour.y) * sdf.brick_dim.x +
+                                                   uint32_t(neighbour.z) * sdf.brick_dim.x * sdf.brick_dim.y];
+            if(is_sdf_empty_entry(entry))
+            {
+                return;
+            }
+            const uint8_t* other = sdf.brick_voxels.data() + size_t(entry) * mesh_sdf::brick_voxel_count;
+            const math::uvec3 other_local(get_neighbour_local(local.x),
+                                          get_neighbour_local(local.y),
+                                          get_neighbour_local(local.z));
+            ++shared;
+            differing +=
+                voxels[get_stored_voxel_offset(local)] != other[get_stored_voxel_offset(other_local)] ? 1u : 0u;
+        };
+        for_each_stored_voxel(sdf, compare_border);
+        std::printf("  %s: %llu border voxels shared with a surface brick, %llu differ\n",
+                    f.name,
+                    (unsigned long long)shared,
+                    (unsigned long long)differing);
+        check(shared > 1000, std::string(f.name) + ": the borders are meaningfully shared");
+        check(differing == 0, std::string(f.name) + ": every shared border voxel replicates its neighbour");
+    }
+}
+
+/// One vote ray against a soup, traced in double precision; ambiguous where rounding could change the outcome.
+struct reference_vote_ray
+{
+    bool is_back_hit = false;
+    bool is_ambiguous = false;
+};
+
+/**
+ * @brief The closest hit of a ray against every triangle of @p geometry, classified against the triangle's winding.
+ *
+ * A hit, or a near miss, within a small band of an edge, of either end of the ray or at a grazing angle is ambiguous:
+ * the bake's float tracer may round it the other way. So is a pair of hits too close together in t to order.
+ */
+auto trace_reference_vote_ray(const sdf_source_geometry& geometry,
+                              const math::dvec3& origin,
+                              const math::dvec3& direction,
+                              double t_far) -> reference_vote_ray
+{
+    constexpr double barycentric_band = 1e-5;
+    constexpr double grazing_cosine = 1e-5;
+    const double t_band = 1e-5 * t_far;
+    reference_vote_ray result;
+    double closest = std::numeric_limits<double>::max();
+    double runner_up = std::numeric_limits<double>::max();
+    bool closest_is_back = false;
+    bool runner_up_is_back = false;
+    for(size_t i = 0; i + 2 < geometry.indices.size(); i += 3)
+    {
+        const math::dvec3 a(geometry.positions[geometry.indices[i + 0]]);
+        const math::dvec3 b(geometry.positions[geometry.indices[i + 1]]);
+        const math::dvec3 c(geometry.positions[geometry.indices[i + 2]]);
+        const math::dvec3 e1 = b - a;
+        const math::dvec3 e2 = c - a;
+        const math::dvec3 normal = math::normalize(math::cross(e1, e2));
+        const math::dvec3 p = math::cross(direction, e2);
+        const double det = math::dot(e1, p);
+        if(det == 0.0)
+        {
+            continue;
+        }
+        const math::dvec3 s = origin - a;
+        const double u = math::dot(s, p) / det;
+        const math::dvec3 q = math::cross(s, e1);
+        const double v = math::dot(direction, q) / det;
+        const double t = math::dot(e2, q) / det;
+        const double w = 1.0 - u - v;
+        const bool near_triangle = u > -barycentric_band && v > -barycentric_band && w > -barycentric_band &&
+                                   t > -t_band && t < t_far + t_band;
+        if(!near_triangle)
+        {
+            continue;
+        }
+        const bool clear_hit = u > barycentric_band && v > barycentric_band && w > barycentric_band && t > t_band &&
+                               t < t_far - t_band && std::abs(math::dot(direction, normal)) > grazing_cosine;
+        if(!clear_hit)
+        {
+            result.is_ambiguous = true;
+            continue;
+        }
+        const bool is_back = math::dot(direction, normal) > 0.0;
+        if(t < closest)
+        {
+            runner_up = closest;
+            runner_up_is_back = closest_is_back;
+            closest = t;
+            closest_is_back = is_back;
+        }
+        else if(t < runner_up)
+        {
+            runner_up = t;
+            runner_up_is_back = is_back;
+        }
+    }
+    if(runner_up - closest < t_band && runner_up_is_back != closest_is_back)
+    {
+        result.is_ambiguous = true;
+    }
+    result.is_back_hit = closest < std::numeric_limits<double>::max() && closest_is_back;
+    return result;
+}
+
+/**
+ * @brief An open surface's field carries the sign UE's vote gives each voxel: tracing all of its rays against every
+ *        triangle.
+ *
+ * The bake settles a vote as soon as the count is decided, skips the rays of a point that cannot score a back hit,
+ * traces in packets and copies borders from the brick that evaluated them; none of that may change a sign. The
+ * reference traces the vote's rays in double precision. Voxels with a ray the two tracers could round differently are
+ * left out, and so are voxels too close to the surface for the stored byte to carry a sign.
+ */
+void test_sign_vote_matches_reference_rays()
+{
+    std::printf("test_sign_vote_matches_reference_rays\n");
+    // UE's vote as the baker runs it: 7 x 7 stratified rays per hemisphere, inside above a quarter back hits, rays
+    // over four voxel diagonals, pulled back by a fraction of that.
+    constexpr uint32_t rays_per_hemisphere = 49;
+    constexpr float back_face_fraction = 0.25f;
+    constexpr double pullback_fraction = 1.0e-4;
+    // Enough voxels per fixture to cover every case the vote meets, few enough for a brute-force tracer.
+    constexpr uint64_t max_compared_voxels = 3000;
+    mesh_ray::random_stream stream(0u);
+    std::vector<math::vec3> directions =
+        mesh_ray::generate_stratified_hemisphere_directions(rays_per_hemisphere, stream);
+    for(math::vec3 direction : mesh_ray::generate_stratified_hemisphere_directions(rays_per_hemisphere, stream))
+    {
+        direction.z = -direction.z;
+        directions.push_back(direction);
+    }
+    const uint32_t required_back_hits = uint32_t(std::floor(back_face_fraction * float(directions.size()))) + 1u;
+    // A bowl: a sphere without its top cap, whose inside sees anything from no back faces to all of them.
+    sdf_source_geometry bowl;
+    {
+        const sdf_source_geometry sphere = make_sphere(0.6f, 10, 14);
+        bowl.positions = sphere.positions;
+        for(size_t i = 0; i + 2 < sphere.indices.size(); i += 3)
+        {
+            const float top = math::max(sphere.positions[sphere.indices[i]].y,
+                                        math::max(sphere.positions[sphere.indices[i + 1]].y,
+                                                  sphere.positions[sphere.indices[i + 2]].y));
+            if(top < 0.4f)
+            {
+                bowl.indices.push_back(sphere.indices[i]);
+                bowl.indices.push_back(sphere.indices[i + 1]);
+                bowl.indices.push_back(sphere.indices[i + 2]);
+            }
+        }
+        recompute_bounds(bowl);
+    }
+    struct fixture
+    {
+        const char* name = "";
+        sdf_source_geometry geometry;
+    };
+    const std::array<fixture, 2> fixtures = {{
+        {"open box", make_open_box(math::vec3(0.5f, 0.4f, 0.6f))},
+        {"bowl", bowl},
+    }};
+    for(const fixture& f : fixtures)
+    {
+        mesh_sdf_bake_settings settings;
+        settings.resolution = 24;
+        settings.min_voxel_size = 0.001f;
+        mesh_sdf sdf;
+        check(bake_mesh_sdf(f.geometry, settings, sdf), std::string(f.name) + " bake succeeds");
+        check(!sdf.is_two_sided, std::string(f.name) + " is open and one-sided, so the vote signs it");
+        const double voxel = double(sdf.voxel_size);
+        const double reach = double(mesh_sdf::encode_range * sdf.voxel_size * std::sqrt(3.0f));
+        const double pullback = pullback_fraction * reach;
+        // Where the stored byte carries a sign, and the bake measured the distance exactly and so voted.
+        const double nearest = 0.05 * voxel;
+        const double farthest = (double(mesh_sdf::encode_range) - 0.5) * voxel;
+        // Each voxel position with whether the field stores it inside.
+        std::vector<std::pair<math::vec3, bool>> candidates;
+        const auto collect_candidate = [&](const math::uvec3& /*brick*/,
+                                           const math::vec3& origin,
+                                           const uint8_t* voxels,
+                                           const math::uvec3& local)
+        {
+            const math::vec3 offset = math::vec3(local) - math::vec3(float(mesh_sdf::brick_border)) + math::vec3(0.5f);
+            const math::vec3 p = origin + offset * sdf.voxel_size;
+            const double distance = double(soup_distance(f.geometry, p));
+            if(distance > nearest && distance < farthest)
+            {
+                candidates.emplace_back(p, voxels[get_stored_voxel_offset(local)] < 128u);
+            }
+        };
+        for_each_stored_voxel(sdf, collect_candidate);
+        const size_t step = math::max<size_t>(1, candidates.size() / max_compared_voxels);
+        uint64_t compared = 0;
+        uint64_t ambiguous = 0;
+        uint64_t inside = 0;
+        uint64_t mismatched = 0;
+        for(size_t i = 0; i < candidates.size(); i += step)
+        {
+            const math::dvec3 p(candidates[i].first);
+            uint32_t back_hits = 0;
+            bool is_ambiguous = false;
+            for(const math::vec3& direction : directions)
+            {
+                const math::dvec3 d(direction);
+                const reference_vote_ray ray =
+                    trace_reference_vote_ray(f.geometry, p - d * pullback, d, reach + pullback);
+                is_ambiguous = is_ambiguous || ray.is_ambiguous;
+                back_hits += ray.is_back_hit ? 1u : 0u;
+            }
+            if(is_ambiguous)
+            {
+                ++ambiguous;
+                continue;
+            }
+            const bool expected_inside = back_hits >= required_back_hits;
+            ++compared;
+            inside += expected_inside ? 1u : 0u;
+            mismatched += expected_inside != candidates[i].second ? 1u : 0u;
+        }
+        std::printf("  %s: %llu voxels compared (%llu inside), %llu ambiguous skipped, %llu signed differently\n",
+                    f.name,
+                    (unsigned long long)compared,
+                    (unsigned long long)inside,
+                    (unsigned long long)ambiguous,
+                    (unsigned long long)mismatched);
+        check(compared > 1000, std::string(f.name) + ": enough voxels compared");
+        check(inside > 100 && compared - inside > 100, std::string(f.name) + ": both outcomes of the vote are covered");
+        check(mismatched == 0, std::string(f.name) + ": every voxel carries the reference vote's sign");
+    }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -5750,6 +6094,8 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_serialization_round_trip();
     test_invalid_field_is_rejected();
     test_determinism();
+    test_brick_borders_replicate_neighbours();
+    test_sign_vote_matches_reference_rays();
     test_sampling_cost_does_not_scale_with_field_size();
     test_clipmap_is_conservative();
     test_gpu_composed_clipmap_keeps_no_cpu_copy();

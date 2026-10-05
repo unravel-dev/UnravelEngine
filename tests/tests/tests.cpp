@@ -90,6 +90,7 @@ auto tests::init(const cmd_line::parser& parser) -> bool
         switches[option] = value;
     }
     parser.try_get("suite", suite_filter);
+    engine::select_raytracing_backend(parser);
 
     auto& ctx = engine::context();
 

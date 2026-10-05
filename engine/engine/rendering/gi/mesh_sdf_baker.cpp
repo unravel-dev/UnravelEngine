@@ -63,6 +63,11 @@ constexpr float k_sign_back_face_fraction = 0.25f;
 /// Vote rays start pulled back by this fraction of their reach, so a point lying exactly on a triangle
 /// still hits it.
 constexpr float k_sign_ray_pullback = 1.0e-4f;
+/// Most triangles a brick's vote shortcut tests (sdf_sign_vote::vote_planes). Bricks near more geometry than this
+/// rarely sit in front of all of it, so their votes just trace.
+constexpr uint32_t k_max_vote_planes = 128;
+/// Safety factor over the first-order rounding bound in compute_front_margin.
+constexpr float k_front_margin_safety = 4.0f;
 
 /// An axis along which the geometry spans less than this many voxels is flat: the grid centres a sample layer on it
 /// (compute_field_grid_min).
@@ -934,6 +939,28 @@ auto find_root(std::vector<uint32_t>& parent, uint32_t node) -> uint32_t
 
 
 /**
+ * @brief How far in front of a triangle's plane a vote must start for none of its rays to hit the triangle's back.
+ *
+ * In exact arithmetic the pullback is enough: a ray that starts in front of the plane and moves away from it never
+ * crosses it. In float the ray origin, the normal that classifies the hit and the plane the ray tracer intersects all
+ * carry rounding error, growing with the coordinates, the distances involved and, for the normals, with how much of a
+ * sliver the triangle is. The margin adds a first-order bound on that error times a safety factor. A degenerate
+ * triangle gets an infinite one: it can always be reached from behind.
+ */
+auto compute_front_margin(float pullback, float reach, float coordinate_scale, float longest_edge, float height)
+    -> float
+{
+    if(!(height > 0.0f))
+    {
+        return std::numeric_limits<float>::infinity();
+    }
+    const float span = reach + longest_edge;
+    const float rounding =
+        2.0f * coordinate_scale + 8.0f * span + span * (4.0f * reach + 10.0f * longest_edge) / height;
+    return pullback + k_front_margin_safety * std::numeric_limits<float>::epsilon() * rounding;
+}
+
+/**
  * @brief UE's sign for an open, one-sided surface: the share of rays from a point that hit a back face.
  *
  * The pseudonormal sign needs a closed surface; on an open one it reports inside for regions that are
@@ -941,53 +968,218 @@ auto find_root(std::vector<uint32_t>& parent, uint32_t node) -> uint32_t
  * more than k_sign_back_face_fraction of them hit the back of a triangle. An opening only loses the votes of
  * the rays that leave through it, so a wall whose underside is open still bakes as a solid, and the sun
  * cannot reach a point behind it by starting a ray past a zero-thickness sheet.
+ *
+ * Only the count of back hits decides, so a vote stops tracing as soon as the count is settled either way, and
+ * a point that no ray of its vote can score a back hit from is outside without tracing at all (@ref vote_planes).
+ * Both give exactly the answer of all rays traced.
  */
 class sdf_sign_vote
 {
 public:
+    /**
+     * @brief The triangles the votes of one region can hit, as the planes of its front-of-planes shortcut.
+     *
+     * A ray hits the back of a triangle only by starting behind its plane, and a vote's rays start within their
+     * pullback of the voting point. A point further in front of every triangle its rays can reach than that (and a
+     * rounding margin) scores no back hit at all, so it is outside without tracing.
+     */
+    struct vote_planes
+    {
+        struct plane
+        {
+            math::vec3 point;
+            math::vec3 normal;
+            math::vec3 bounds_min;
+            math::vec3 bounds_max;
+            ///< How far in front of the plane a voting point must be (compute_front_margin).
+            float margin;
+        };
+        ///< Deliberately uninitialised: only entries below @ref count are read.
+        std::array<plane, k_max_vote_planes> planes;
+        uint32_t count = 0;
+        ///< False when the region reaches more triangles than @ref planes holds: its votes all trace.
+        bool is_complete = false;
+        ///< The plane that last ruled the shortcut out. Tested first: neighbouring points tend to share it.
+        uint32_t last_blocker = 0;
+        ///< How far from its voting point a ray can hit anything, rounding included.
+        float ray_extent = 0.0f;
+    };
+
     void build(const sdf_source_geometry& geometry)
     {
         caster_.build(geometry);
         mesh_ray::random_stream stream(0u);
-        directions_ = mesh_ray::generate_stratified_hemisphere_directions(k_sign_rays_per_hemisphere, stream);
+        const std::vector<math::vec3> upper =
+            mesh_ray::generate_stratified_hemisphere_directions(k_sign_rays_per_hemisphere, stream);
         std::vector<math::vec3> lower =
             mesh_ray::generate_stratified_hemisphere_directions(k_sign_rays_per_hemisphere, stream);
         for(math::vec3& direction : lower)
         {
             direction.z = -direction.z;
-            directions_.push_back(direction);
         }
+        // Packet-sized runs of the two hemispheres in turn. A run is neighbouring strata, which trace well as one
+        // packet, and taking turns settles the count sooner wherever the back faces all lie to one side.
+        directions_.clear();
+        directions_.reserve(upper.size() + lower.size());
+        const size_t run = mesh_ray::triangle_ray_caster::packet_size;
+        for(size_t first = 0; first < upper.size(); first += run)
+        {
+            const std::ptrdiff_t begin = std::ptrdiff_t(first);
+            const std::ptrdiff_t end = std::ptrdiff_t(math::min(first + run, upper.size()));
+            directions_.insert(directions_.end(), upper.begin() + begin, upper.begin() + end);
+            directions_.insert(directions_.end(), lower.begin() + begin, lower.begin() + end);
+        }
+        // The first count of back hits above the fraction, so "inside" is a plain comparison against it.
+        required_back_hits_ = uint32_t(std::floor(k_sign_back_face_fraction * float(directions_.size()))) + 1u;
+        build_shapes(geometry);
     }
 
-    /// True when more than k_sign_back_face_fraction of the rays from @p p hit a back face within @p reach.
-    auto is_inside(const math::vec3& p, float reach) const -> bool
+    /// Gathers the planes the votes of points in @p region, with rays of @p reach, need for their shortcut.
+    void gather_planes(const math::bbox& region, float reach, vote_planes& out) const
     {
-        uint32_t hits = 0;
-        uint32_t back_hits = 0;
-        const float pullback = k_sign_ray_pullback * reach;
-        for(const math::vec3& direction : directions_)
+        const math::vec3 extreme = math::max(math::abs(region.min), math::abs(region.max));
+        const float coordinate_scale = math::max(extreme.x, math::max(extreme.y, extreme.z));
+        // A vote ray never gets further than its reach from the point it votes for; the slack covers the rounding of
+        // the points and of the distance tests.
+        const float slack = 4.0f * std::numeric_limits<float>::epsilon() * (coordinate_scale + reach);
+        out.ray_extent = reach * (1.0f + 2.0f * k_sign_ray_pullback) + slack;
+        std::array<uint32_t, k_max_vote_planes> triangles;
+        const uint32_t found = caster_.collect_triangles(region, out.ray_extent, triangles);
+        out.count = 0;
+        out.last_blocker = 0;
+        out.is_complete = found <= triangles.size();
+        if(!out.is_complete)
         {
-            const mesh_ray::ray_hit hit = caster_.intersect(p - direction * pullback,
-                                                            direction,
-                                                            0.0f,
-                                                            std::numeric_limits<uint32_t>::max(),
-                                                            reach + pullback);
-            if(!hit.is_hit)
-            {
-                continue;
-            }
-            ++hits;
-            if(math::dot(direction, caster_.get_normal(hit.triangle)) > 0.0f)
-            {
-                ++back_hits;
-            }
+            return;
         }
-        return hits > 0 && float(back_hits) > k_sign_back_face_fraction * float(directions_.size());
+        const float pullback = k_sign_ray_pullback * reach;
+        for(uint32_t i = 0; i < found; ++i)
+        {
+            const triangle_shape& shape = shapes_[triangles[i]];
+            vote_planes::plane& plane = out.planes[i];
+            plane.point = shape.point;
+            plane.normal = caster_.get_normal(triangles[i]);
+            plane.bounds_min = shape.bounds_min;
+            plane.bounds_max = shape.bounds_max;
+            plane.margin = compute_front_margin(pullback, reach, coordinate_scale, shape.longest_edge, shape.height);
+        }
+        out.count = found;
+    }
+
+    /**
+     * @brief True when more than k_sign_back_face_fraction of the rays from @p p hit a back face within @p reach.
+     * @param planes Gathered for a region holding @p p, with the same reach.
+     */
+    auto is_inside(const math::vec3& p, float reach, vote_planes& planes) const -> bool
+    {
+        if(!can_score_back_hit(p, planes))
+        {
+            return false;
+        }
+        const float pullback = k_sign_ray_pullback * reach;
+        const uint32_t ray_count = uint32_t(directions_.size());
+        std::array<mesh_ray::ray, mesh_ray::triangle_ray_caster::packet_size> rays;
+        std::array<mesh_ray::ray_hit, mesh_ray::triangle_ray_caster::packet_size> hits;
+        uint32_t back_hits = 0;
+        uint32_t traced = 0;
+        while(true)
+        {
+            if(back_hits >= required_back_hits_)
+            {
+                return true;
+            }
+            const uint32_t remaining = ray_count - traced;
+            if(back_hits + remaining < required_back_hits_)
+            {
+                return false;
+            }
+            // No more rays at once than the fewest that could settle the count, so a vote never traces a ray the
+            // ray-by-ray count would not have.
+            const uint32_t to_inside = required_back_hits_ - back_hits;
+            const uint32_t to_outside = remaining - to_inside + 1u;
+            const uint32_t count = math::min(uint32_t(rays.size()), math::min(to_inside, to_outside));
+            for(uint32_t i = 0; i < count; ++i)
+            {
+                const math::vec3& direction = directions_[traced + i];
+                rays[i] = {p - direction * pullback, direction, 0.0f, reach + pullback};
+            }
+            caster_.intersect(hpp::span<const mesh_ray::ray>(rays.data(), count),
+                              hpp::span<mesh_ray::ray_hit>(hits.data(), count));
+            for(uint32_t i = 0; i < count; ++i)
+            {
+                if(hits[i].is_hit && math::dot(directions_[traced + i], caster_.get_normal(hits[i].triangle)) > 0.0f)
+                {
+                    ++back_hits;
+                }
+            }
+            traced += count;
+        }
     }
 
 private:
+    /// What gather_planes needs of each triangle, indexed like the caster's.
+    struct triangle_shape
+    {
+        math::vec3 point{};
+        math::vec3 bounds_min{};
+        math::vec3 bounds_max{};
+        float longest_edge = 0.0f;
+        ///< Twice the area over the longest edge: the triangle's smallest height, zero when degenerate.
+        float height = 0.0f;
+    };
+
+    void build_shapes(const sdf_source_geometry& geometry)
+    {
+        const uint32_t triangle_count = geometry.get_triangle_count();
+        shapes_.resize(triangle_count);
+        for(uint32_t t = 0; t < triangle_count; ++t)
+        {
+            const math::vec3& a = geometry.positions[geometry.indices[t * 3 + 0]];
+            const math::vec3& b = geometry.positions[geometry.indices[t * 3 + 1]];
+            const math::vec3& c = geometry.positions[geometry.indices[t * 3 + 2]];
+            triangle_shape& shape = shapes_[t];
+            shape.point = a;
+            shape.bounds_min = math::min(a, math::min(b, c));
+            shape.bounds_max = math::max(a, math::max(b, c));
+            shape.longest_edge = math::max(math::length(b - a), math::max(math::length(c - b), math::length(a - c)));
+            const float double_area = math::length(math::cross(b - a, c - a));
+            shape.height = shape.longest_edge > 0.0f ? double_area / shape.longest_edge : 0.0f;
+        }
+    }
+
+    /// False when no ray of the vote at @p p can hit a back face: @p p is in front of every plane it can reach.
+    static auto can_score_back_hit(const math::vec3& p, vote_planes& planes) -> bool
+    {
+        if(!planes.is_complete)
+        {
+            return true;
+        }
+        const float ray_extent_squared = planes.ray_extent * planes.ray_extent;
+        for(uint32_t i = 0; i < planes.count; ++i)
+        {
+            uint32_t index = planes.last_blocker + i;
+            index = index < planes.count ? index : index - planes.count;
+            const vote_planes::plane& plane = planes.planes[index];
+            if(math::dot(p - plane.point, plane.normal) > plane.margin)
+            {
+                continue;
+            }
+            const math::vec3 delta = p - math::clamp(p, plane.bounds_min, plane.bounds_max);
+            if(math::dot(delta, delta) > ray_extent_squared)
+            {
+                continue;
+            }
+            planes.last_blocker = index;
+            return true;
+        }
+        return false;
+    }
+
     mesh_ray::triangle_ray_caster caster_;
     std::vector<math::vec3> directions_;
+    std::vector<triangle_shape> shapes_;
+    ///< The fewest back hits that make a point inside.
+    uint32_t required_back_hits_ = 0;
 };
 
 /**
@@ -1235,6 +1427,75 @@ auto prepare_bake(const sdf_source_geometry& geometry,
     return true;
 }
 
+/// Bricks in the 3 x 3 x 3 block centred on a brick, the brick included.
+constexpr uint32_t k_neighbourhood_bricks = 27;
+/// The centre brick's index in that block.
+constexpr uint32_t k_neighbourhood_self = 13;
+/// A neighbourhood entry without voxel storage: the brick itself, an empty brick, or one past the grid.
+constexpr uint32_t k_no_neighbour_slot = 0xFFFFFFFFu;
+
+/// Offset of a stored voxel within its brick's storage.
+constexpr auto get_brick_voxel_index(uint32_t lx, uint32_t ly, uint32_t lz) -> uint32_t
+{
+    return lx + ly * mesh_sdf::brick_stride + lz * mesh_sdf::brick_stride * mesh_sdf::brick_stride;
+}
+
+/// Where a stored coordinate lies along one axis of its brick: 0 in the low border, 1 inside, 2 in the high border.
+constexpr auto get_border_side(uint32_t local) -> uint32_t
+{
+    if(local < mesh_sdf::brick_border)
+    {
+        return 0u;
+    }
+    return local < mesh_sdf::brick_border + mesh_sdf::brick_size ? 1u : 2u;
+}
+
+/// The same position's stored coordinate, along one axis, in the brick on the side get_border_side names.
+constexpr auto get_neighbour_local(uint32_t local) -> uint32_t
+{
+    if(local < mesh_sdf::brick_border)
+    {
+        return local + mesh_sdf::brick_size;
+    }
+    return local < mesh_sdf::brick_border + mesh_sdf::brick_size ? local : local - mesh_sdf::brick_size;
+}
+
+/// The neighbourhood entry (gather_surface_neighbours) of the brick whose interior holds a stored voxel's position.
+constexpr auto get_owner_index(uint32_t lx, uint32_t ly, uint32_t lz) -> uint32_t
+{
+    return get_border_side(lx) + 3u * get_border_side(ly) + 9u * get_border_side(lz);
+}
+
+/**
+ * @brief The storage slot of each surface brick around brick (@p bx, @p by, @p bz), indexed
+ *        (dx + 1) + 3 (dy + 1) + 9 (dz + 1), and k_no_neighbour_slot wherever no other brick stores voxels.
+ *
+ * A neighbour's interior voxels next to the brick are, position for position, the brick's border voxels on that side.
+ */
+auto gather_surface_neighbours(const mesh_sdf& field, uint32_t bx, uint32_t by, uint32_t bz)
+    -> std::array<uint32_t, k_neighbourhood_bricks>
+{
+    std::array<uint32_t, k_neighbourhood_bricks> slots;
+    slots.fill(k_no_neighbour_slot);
+    for(uint32_t index = 0; index < k_neighbourhood_bricks; ++index)
+    {
+        // Unsigned wrap-around puts the brick before the first past the end of the grid, so one test covers both edges.
+        const uint32_t x = bx + index % 3u - 1u;
+        const uint32_t y = by + (index / 3u) % 3u - 1u;
+        const uint32_t z = bz + index / 9u - 1u;
+        if(index == k_neighbourhood_self || x >= field.brick_dim.x || y >= field.brick_dim.y || z >= field.brick_dim.z)
+        {
+            continue;
+        }
+        const uint32_t entry = field.indirection[x + y * field.brick_dim.x + z * field.brick_dim.x * field.brick_dim.y];
+        if(!is_sdf_empty_entry(entry))
+        {
+            slots[index] = entry;
+        }
+    }
+    return slots;
+}
+
 
 /**
  * @brief Everything a bake does once its accelerator exists: sizing, classification, fill.
@@ -1353,7 +1614,11 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
         // stores no field rather than an all-empty one that silently occludes nothing.
         return false;
     }
-    // Pass 3: fill the surface bricks, including their filter borders.
+    // Pass 3: fill the surface bricks, including the filter borders no other surface brick holds.
+    //
+    // A border voxel replicates its neighbour's interior voxel at the same position. Where that neighbour is a
+    // surface brick it evaluates the position as one of its own and pass 4 copies the result across, so every
+    // position is evaluated once and a border always equals the voxel it stands in for.
     out.brick_voxels.assign(size_t(surface_bricks.size()) * mesh_sdf::brick_voxel_count, 0u);
     poolstl::for_each_par_if(
         parallel_voxels,
@@ -1414,19 +1679,29 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
             // An over-full list is slower to scan than the traversal, and an empty one carries no
             // sign at all. Both fall back to the per-voxel query.
             const bool use_candidates = candidate_count > 0 && candidate_count <= candidates.size();
+            const std::array<uint32_t, k_neighbourhood_bricks> neighbours = gather_surface_neighbours(out, bx, by, bz);
+            // Gathered at the brick's first vote; a surface brick need not have a voxel within the vote's reach.
+            sdf_sign_vote::vote_planes vote_planes;
+            bool has_vote_planes = false;
             for(uint32_t lz = 0; lz < mesh_sdf::brick_stride; ++lz)
             {
                 for(uint32_t ly = 0; ly < mesh_sdf::brick_stride; ++ly)
                 {
                     for(uint32_t lx = 0; lx < mesh_sdf::brick_stride; ++lx)
                     {
+                        const uint32_t plane_index = lx + ly * mesh_sdf::brick_stride;
+                        if(neighbours[get_owner_index(lx, ly, lz)] != k_no_neighbour_slot)
+                        {
+                            // Evaluated by the neighbour, so there is no distance here to bound a query with.
+                            plane_distance[plane_index] = std::numeric_limits<float>::max();
+                            continue;
+                        }
                         // Local 0 is the border voxel, so interior voxel i sits at
                         // i + brick_border and samples at the voxel centre.
                         const math::vec3 voxel_offset(float(lx) - float(mesh_sdf::brick_border) + 0.5f,
                                                       float(ly) - float(mesh_sdf::brick_border) + 0.5f,
                                                       float(lz) - float(mesh_sdf::brick_border) + 0.5f);
                         const math::vec3 p = brick_origin + voxel_offset * voxel_size;
-                        const uint32_t plane_index = lx + ly * mesh_sdf::brick_stride;
                         // The nearest already-computed voxel, one voxel away in whichever axis is
                         // available. It supplies two things: an upper bound for the query, and --
                         // when this voxel turns out to be beyond the band -- its sign.
@@ -1503,9 +1778,17 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
                             distance = accelerator.signed_distance(p, query_unsigned, hint);
                         }
                         plane_distance[plane_index] = distance;
-                        if(vote != nullptr && distance < vote_reach && vote->is_inside(p, vote_reach))
+                        if(vote != nullptr && distance < vote_reach)
                         {
-                            distance = -distance;
+                            if(!has_vote_planes)
+                            {
+                                vote->gather_planes(stored_region, vote_reach, vote_planes);
+                                has_vote_planes = true;
+                            }
+                            if(vote->is_inside(p, vote_reach, vote_planes))
+                            {
+                                distance = -distance;
+                            }
                         }
                         if(use_unsigned)
                         {
@@ -1513,10 +1796,39 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
                             // authored thickness so a single-quad leaf still occludes.
                             distance -= out.two_sided_thickness;
                         }
-                        const uint32_t local =
-                            lx + ly * mesh_sdf::brick_stride +
-                            lz * mesh_sdf::brick_stride * mesh_sdf::brick_stride;
-                        dst[local] = encode_sdf_distance(distance / voxel_size);
+                        dst[get_brick_voxel_index(lx, ly, lz)] = encode_sdf_distance(distance / voxel_size);
+                    }
+                }
+            }
+        });
+    // Pass 4: copy into each border the voxels its neighbouring surface bricks evaluated as their own. Reads only
+    // interior voxels and writes only border ones, so the bricks fill in parallel.
+    poolstl::for_each_par_if(
+        parallel_voxels,
+        surface_bricks.begin(),
+        surface_bricks.end(),
+        [&](uint32_t brick_index)
+        {
+            const uint32_t bx = brick_index % brick_dim.x;
+            const uint32_t by = (brick_index / brick_dim.x) % brick_dim.y;
+            const uint32_t bz = brick_index / (brick_dim.x * brick_dim.y);
+            const std::array<uint32_t, k_neighbourhood_bricks> neighbours = gather_surface_neighbours(out, bx, by, bz);
+            uint8_t* dst = out.brick_voxels.data() + size_t(out.indirection[brick_index]) * mesh_sdf::brick_voxel_count;
+            for(uint32_t lz = 0; lz < mesh_sdf::brick_stride; ++lz)
+            {
+                for(uint32_t ly = 0; ly < mesh_sdf::brick_stride; ++ly)
+                {
+                    for(uint32_t lx = 0; lx < mesh_sdf::brick_stride; ++lx)
+                    {
+                        const uint32_t slot = neighbours[get_owner_index(lx, ly, lz)];
+                        if(slot == k_no_neighbour_slot)
+                        {
+                            continue;
+                        }
+                        const uint8_t* src = out.brick_voxels.data() + size_t(slot) * mesh_sdf::brick_voxel_count;
+                        dst[get_brick_voxel_index(lx, ly, lz)] = src[get_brick_voxel_index(get_neighbour_local(lx),
+                                                                                           get_neighbour_local(ly),
+                                                                                           get_neighbour_local(lz))];
                     }
                 }
             }
