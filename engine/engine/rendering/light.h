@@ -208,6 +208,9 @@ struct light
     math::color color = math::color(255, 255, 255, 255);
     /// The intensity of the light.
     float intensity = 5.0f;
+    /// The light's scale in the global illumination (UE IndirectLightingIntensity): the surface cache is lit with
+    /// intensity x this, so what the light bounces scales with it; 0 leaves the light out of the GI.
+    float indirect_intensity = 1.0f;
 
     /// Whether the light casts shadows.
     bool casts_shadows{true};

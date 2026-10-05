@@ -61,6 +61,12 @@ public:
         return clipmap_;
     }
 
+    /// See global_sdf_clipmap_gpu::set_march_experiments; applied by the next update.
+    void set_march_experiments(uint32_t bits)
+    {
+        clipmap_gpu_.set_march_experiments(bits);
+    }
+
     auto get_clipmap_gpu() const -> const global_sdf_clipmap_gpu&
     {
         return clipmap_gpu_;

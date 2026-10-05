@@ -10,6 +10,7 @@
 
 #include "bgfx_compute.sh"
 #include "../common.sh"
+#define LUMEN_REFLECTION_TILES_STAGE 8
 #include "lumen/lumen_reflection_common.sh"
 #include "lumen/lumen_visualize.sh"
 
@@ -42,7 +43,7 @@ void main()
 {
 	ivec2 trace = ivec2(u_lumen_visualize_reflection.xy) / u_lumen_reflection_downsample;
 	ivec2 pixel = LumenReflectionTracePixel(trace);
-	vec4 ray = texelFetch(s_lumen_reflection_ray, trace, 0);
+	vec4 ray = LumenReflectionTraceRay(s_lumen_reflection_ray, trace);
 	ShaderPrintContext text = ShaderPrintBegin(vec2(0.1, 0.1));
 	for(int skipped = 0; skipped < int(u_lumen_visualize_reflection.z); ++skipped)
 	{

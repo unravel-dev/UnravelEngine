@@ -3,6 +3,7 @@ $input v_texcoord0
 #include "../common.sh"
 #include "../lighting.sh"
 #include "../pre_exposure.sh"
+#include "../velocity/velocity_encoding.sh"
 
 SAMPLER2D(s_curr, 0);
 SAMPLER2D(s_history, 1);
@@ -171,7 +172,7 @@ void main()
         }
         vec4 vel4 = texelFetch(s_velocity, src_t, 0);
         vec2 vel = vel4.xy;
-        // BA of the velocity buffer is the OBJECT-ONLY component, split inside the
+        // B of the velocity buffer is the OBJECT-ONLY motion, split inside the
         // velocity pass itself with one consistent matrix set (fs_velocity.sc). It is
         // exactly zero for every camera-derived pixel, so the static world takes the
         // legacy path below unconditionally - no matrices are re-derived here, and no
@@ -179,7 +180,7 @@ void main()
         // camera getter did NOT return the same previous view-projection to the velocity
         // pass and to this pass within one frame; classification through a recomputed
         // camera velocity therefore misfired screen-wide).
-        float object_px = length(vel4.zw * ddimf);
+        float object_px = VelocityObjectMotionPixels(vel4);
         object_motion_w = smoothstep(0.5, 1.5, object_px);
         // Genuine object motion reprojects through the dilated velocity (silhouette
         // band included). Camera-only pixels keep the center-depth camera reprojection:

@@ -68,6 +68,25 @@ void internal_m2n_light_set_intensity(entt::entity id, float intensity)
     }
 }
 
+auto internal_m2n_light_get_indirect_intensity(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<light_component>(id))
+    {
+        return comp->get_light().indirect_intensity;
+    }
+    return 0.0f;
+}
+
+void internal_m2n_light_set_indirect_intensity(entt::entity id, float indirect_intensity)
+{
+    if(auto comp = safe_get_component<light_component>(id))
+    {
+        auto l = comp->get_light();
+        l.indirect_intensity = indirect_intensity;
+        comp->set_light(l);
+    }
+}
+
 auto internal_m2n_light_get_casts_shadows(entt::entity id) -> bool
 {
     if(auto comp = safe_get_component<light_component>(id))
@@ -181,6 +200,10 @@ void register_light_component_script_bindings()
     reg.add_internal_call("internal_m2n_light_set_type", dotnet_internal_call(internal_m2n_light_set_type));
     reg.add_internal_call("internal_m2n_light_get_intensity", dotnet_internal_call(internal_m2n_light_get_intensity));
     reg.add_internal_call("internal_m2n_light_set_intensity", dotnet_internal_call(internal_m2n_light_set_intensity));
+    reg.add_internal_call("internal_m2n_light_get_indirect_intensity",
+                          dotnet_internal_call(internal_m2n_light_get_indirect_intensity));
+    reg.add_internal_call("internal_m2n_light_set_indirect_intensity",
+                          dotnet_internal_call(internal_m2n_light_set_indirect_intensity));
     reg.add_internal_call("internal_m2n_light_get_casts_shadows",
                           dotnet_internal_call(internal_m2n_light_get_casts_shadows));
     reg.add_internal_call("internal_m2n_light_set_casts_shadows",

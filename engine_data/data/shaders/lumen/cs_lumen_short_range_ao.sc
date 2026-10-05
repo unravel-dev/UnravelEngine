@@ -29,38 +29,38 @@ SAMPLER2D(s_lumen_depth, 0);
 SAMPLER2D(s_lumen_normal, 1);
 IMAGE2D_WO(s_lumen_short_range_ao_out, rgba16f, 2);
 
-/// Raises @p horizon_cos to the sample at @p sample_uv (UE UpdateOccludedHorizonForStep): the cosine between the
+/// @p horizon_cos raised to the sample at @p sample_uv (UE UpdateOccludedHorizonForStep): the cosine between the
 /// view vector and the direction to the sample, faded toward @p low_horizon_cos as the sample lies further in front.
-void LumenUpdateHorizon(vec2 sample_uv,
-                        vec3 position,
-                        vec3 view_vector,
-                        float scene_depth,
-                        float inv_foreground_distance,
-                        float low_horizon_cos,
-                        inout float horizon_cos)
+float LumenUpdateHorizon(vec2 sample_uv,
+                         vec3 position,
+                         vec3 view_vector,
+                         float scene_depth,
+                         float inv_foreground_distance,
+                         float low_horizon_cos,
+                         float horizon_cos)
 {
 	if(any(lessThan(sample_uv, vec2_splat(0.0))) || any(greaterThanEqual(sample_uv, vec2_splat(1.0))))
 	{
-		return;
+		return horizon_cos;
 	}
 	ivec2 texel = min(ivec2(sample_uv * u_lumen_view_size), ivec2(u_lumen_view_size) - ivec2(1, 1));
 	float sample_depth01 = texelFetch(s_lumen_depth, texel, 0).x;
 	if(sample_depth01 >= 1.0)
 	{
-		return;
+		return horizon_cos;
 	}
 	vec3 delta = LumenWorldFromDepth(sample_uv, sample_depth01) - position;
 	float sample_distance = length(delta);
 	if(sample_distance <= 0.0)
 	{
-		return;
+		return horizon_cos;
 	}
 	float new_cos = dot(delta / sample_distance, view_vector);
 	float depth_delta = abs(LumenLinearDepth(sample_depth01) - scene_depth);
 	new_cos = mix(new_cos,
 	              low_horizon_cos,
 	              saturate(pow(depth_delta * inv_foreground_distance, LUMEN_SHORT_RANGE_AO_FOREGROUND_REJECT_POWER)));
-	horizon_cos = max(horizon_cos, new_cos);
+	return max(horizon_cos, new_cos);
 }
 
 NUM_THREADS(8, 8, 1)
@@ -124,10 +124,10 @@ void main()
 			float fraction = (float(step) + noise.y) / float(LUMEN_SHORT_RANGE_AO_STEPS_PER_SLICE);
 			// More samples near the pixel; one pixel of offset keeps the pixel from occluding itself.
 			vec2 offset = direction * (fraction * fraction * radius_pixels + 1.0) * u_lumen_view_texel;
-			LumenUpdateHorizon(uv + offset, position, view_vector, scene_depth, inv_foreground_distance,
-			                   low_horizon_cos0, horizon_cos0);
-			LumenUpdateHorizon(uv - offset, position, view_vector, scene_depth, inv_foreground_distance,
-			                   low_horizon_cos1, horizon_cos1);
+			horizon_cos0 = LumenUpdateHorizon(uv + offset, position, view_vector, scene_depth, inv_foreground_distance,
+			                                  low_horizon_cos0, horizon_cos0);
+			horizon_cos1 = LumenUpdateHorizon(uv - offset, position, view_vector, scene_depth, inv_foreground_distance,
+			                                  low_horizon_cos1, horizon_cos1);
 		}
 		float h0 = -acos(clamp(horizon_cos1, -1.0, 1.0));
 		float h1 = acos(clamp(horizon_cos0, -1.0, 1.0));

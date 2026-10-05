@@ -45,7 +45,15 @@ public:
 
     /// Binds the cache for the hand-off read (lumen_radiance_cache_sample.sh) at the given stages and sets
     /// the clipmap uniforms.
-    void bind_for_sampling(uint8_t indirection_stage, uint8_t final_stage, uint8_t depth_stage) const;
+    void bind_for_sampling(uint8_t indirection_stage, uint8_t final_stage) const;
+
+    /// Frees the probe atlases and buffers; the next update allocates them again and rebuilds the cache.
+    void release_resources();
+
+    /// Binds this frame's update counters (lumen_radiance_cache_common.sh LUMEN_RC_COUNTER_*) for reading at @p stage.
+    void bind_counters(uint8_t stage) const;
+    /// This frame's trace cost budget (u_lumen_rc_params.y; a rebuild's is unlimited).
+    auto get_trace_cost_budget() const -> float;
 
 private:
     struct uniforms : uniforms_cache
@@ -64,10 +72,10 @@ private:
         gfx::program::uniform_ptr s_lumen_probe_records;
         gfx::program::uniform_ptr s_lumen_env_sh;
         gfx::program::uniform_ptr s_lumen_rc_radiance;
-        gfx::program::uniform_ptr s_lumen_rc_depth;
         gfx::program::uniform_ptr s_lumen_rc_final;
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_sdf_clipmap_coverage;
+        gfx::program::uniform_ptr s_sdf_clipmap_mip;
 
         void cache_uniforms();
     } uniforms_;
@@ -84,7 +92,6 @@ private:
 
     auto has_programs() const -> bool;
     auto ensure_resources() -> bool;
-    void release_resources();
     /// Snaps the clipmaps around the camera (double precision) and keeps last frame's for the carry-over.
     void place_clipmaps(const math::vec3& camera);
     /// Sets the cache uniforms every pass reads, with @p mode for the bookkeeping pass.
@@ -115,7 +122,6 @@ private:
     bgfx::DynamicIndexBufferHandle tiles_{bgfx::kInvalidHandle};
     bgfx::IndirectBufferHandle args_{bgfx::kInvalidHandle};
     gfx::texture::ptr radiance_atlas_;
-    gfx::texture::ptr depth_atlas_;
     gfx::texture::ptr final_atlas_;
 
     /// Per clipmap: xyz = corner of cell (0, 0, 0), w = cell size; this frame's and last frame's.

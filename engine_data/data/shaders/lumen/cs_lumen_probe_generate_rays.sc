@@ -8,8 +8,8 @@
  *     plane - the pixels that will read it - and the disocclusion flag: at least 40% of them have fewer than
  *     4 frames of history. The footprint is 8x8 at every resolution: each thread takes its share of it.
  *  2. Lighting PDF per octahedral texel: last frame's filtered radiance of the 2x2 history probes around
- *     the probe's reprojection that lie on its plane, completed from the radiance cache where history is
- *     missing.
+ *     the probe's reprojection (a moving surface's from where it was, lumen_motion.sh) that lie on its plane,
+ *     completed from the radiance cache where history is missing.
  *  3. Rays: texel PDF = BRDF x lighting x N^2; texels with a BRDF PDF of at least LUMEN_IS_MIN_PDF_TO_TRACE
  *     keep at least that. The N^2 texels are rank-sorted; every three lowest below the threshold are given
  *     to the highest remaining texel, which then traces four rays at the 2N x 2N level instead of one.
@@ -33,11 +33,12 @@ SAMPLER2D(s_lumen_history_records, 5);
 SAMPLER2D(s_lumen_history_radiance, 6);
 BUFFER_RO(b_lumen_rc_indirection, uint, 7);
 SAMPLER2D(s_lumen_rc_final, 8);
-SAMPLER2D(s_lumen_rc_depth, 9);
 /// Last frame's per-pixel history and device depth (the disocclusion test).
 SAMPLER2D(s_lumen_history, 10);
 SAMPLER2D(s_lumen_prev_depth, 11);
 
+/// This frame's velocity buffer (where moving surfaces were last frame).
+#define LUMEN_VELOCITY_STAGE 9
 #include "lumen/lumen_history.sh"
 #include "lumen/lumen_radiance_cache_sample.sh"
 
@@ -46,8 +47,6 @@ SAMPLER2D(s_lumen_prev_depth, 11);
 uniform vec4 u_lumen_ray_gen;
 /// xy = last frame's probe placement jitter in pixels.
 uniform vec4 u_lumen_prev_probe;
-/// Last frame's TAA-unjittered inverse view projection (history probe positions).
-uniform mat4 u_lumen_prev_inv_view_proj;
 
 #define u_lumen_probe_history (u_lumen_ray_gen.x > 0.0)
 #define u_lumen_pixel_history (u_lumen_ray_gen.y > 0.0)
@@ -120,12 +119,14 @@ vec3 LumenHistoryProbePosition(vec4 record)
 	return clipToWorld(u_lumen_prev_inv_view_proj, clipTransform(vec3(uv * 2.0 - 1.0, toClipSpaceDepth(record.w))));
 }
 
-/// The incoming radiance the lighting PDF uses for one texel (pre-exposed).
-vec3 LumenLightingPrior(ivec2 texel, vec3 position, vec3 normal, float depth, vec3 direction)
+/// The incoming radiance the lighting PDF uses for one texel (pre-exposed), for a probe at @p position this frame
+/// and @p prev_position last frame, completed from the radiance cache @p clipmap where history is missing.
+vec3 LumenLightingPrior(ivec2 texel, vec3 position, vec3 prev_position, vec3 normal, float depth, vec3 direction,
+                        int clipmap)
 {
 	vec3 lighting = vec3_splat(0.0);
 	float transparency = 1.0;
-	vec4 prev_clip = mul(u_lumen_prev_view_proj, vec4(position, 1.0));
+	vec4 prev_clip = mul(u_lumen_prev_view_proj, vec4(prev_position, 1.0));
 	BRANCH
 	if(u_lumen_probe_history && prev_clip.w > 0.0)
 	{
@@ -144,7 +145,7 @@ vec3 LumenLightingPrior(ivec2 texel, vec3 position, vec3 normal, float depth, ve
 				{
 					continue;
 				}
-				float plane_distance = abs(dot(LumenHistoryProbePosition(record) - position, normal)) / depth;
+				float plane_distance = abs(dot(LumenHistoryProbePosition(record) - prev_position, normal)) / depth;
 				if(exp2(-LUMEN_INTERP_DEPTH_WEIGHT * plane_distance * plane_distance) > LUMEN_IS_HISTORY_MIN_WEIGHT)
 				{
 					sum += texelFetch(s_lumen_history_radiance, tile * LUMEN_PROBE_TRACE_RES + texel, 0).xyz;
@@ -160,7 +161,6 @@ vec3 LumenLightingPrior(ivec2 texel, vec3 position, vec3 normal, float depth, ve
 	}
 	if(transparency > 0.0)
 	{
-		int clipmap = u_lumen_cache_valid ? LumenRcClipmapOf(position) : LUMEN_RADIANCE_CACHE_CLIPMAPS;
 		if(clipmap < LUMEN_RADIANCE_CACHE_CLIPMAPS)
 		{
 			lighting += GiCachedToView(LumenRcSampleInterpolated(position, direction, clipmap).radiance) * transparency;
@@ -252,7 +252,10 @@ void main()
 	BRANCH
 	if(valid)
 	{
-		vec3 prior = LumenLightingPrior(local, probe_position, probe_normal, probe_depth, ray_direction);
+		int cache_clipmap = u_lumen_cache_valid ? LumenRcClipmapOf(probe_position) : LUMEN_RADIANCE_CACHE_CLIPMAPS;
+		vec3 prev_probe_position = LumenPrevWorldPosition(LumenPixelUv(probe_pixel), probe_position);
+		vec3 prior = LumenLightingPrior(local, probe_position, prev_probe_position, probe_normal, probe_depth,
+		                                ray_direction, cache_clipmap);
 		lighting = dot(prior, vec3(0.2126, 0.7152, 0.0722));
 	}
 	s_sum[index] = lighting;

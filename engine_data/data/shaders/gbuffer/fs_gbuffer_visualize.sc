@@ -26,7 +26,8 @@ uniform vec4 u_params;
 /// texture is GTAO's (bent normal); y unused here.
 uniform vec4 u_screen_ao;
 /// The indirect diffuse view: x = the lit image's tone mapping operator (tonemapping.sh), y = the multi-bounce
-/// albedo cap (0 = none), z = 1 when s_tex7 is SSIL (it resolved its own screen-space visibility).
+/// albedo cap (0 = none), z = 1 when s_tex7 is SSIL (it resolved its own screen-space visibility; alpha = coverage),
+/// w = the GI resolve's scale otherwise (the resolve is the gather's history, zero on the sky).
 uniform vec4 u_visualize_indirect;
 
 #define u_mode int(u_params.x)
@@ -70,7 +71,8 @@ vec3 indirect_diffuse_view(GBufferData data, vec2 texcoord0)
                                               MultiBounceAlbedo(data.diffuse_color, u_visualize_indirect.y));
     float energy = IndirectDiffuseEnergyPreservation(data.specular_color, GeometricSpecularAA(N, data.roughness), V, N);
     float scale = u_params.y > 0.0 ? u_params.y : 1.0;
-    vec3 radiance = VISUALIZE_DIFFUSE_ALBEDO * indirect.rgb * indirect.a * occlusion * energy * scale;
+    float coverage = u_visualize_indirect.z > 0.5 ? indirect.a : u_visualize_indirect.w;
+    vec3 radiance = VISUALIZE_DIFFUSE_ALBEDO * indirect.rgb * coverage * occlusion * energy * scale;
     return apply_tonemapping(radiance, int(u_visualize_indirect.x), 1.0);
 }
 

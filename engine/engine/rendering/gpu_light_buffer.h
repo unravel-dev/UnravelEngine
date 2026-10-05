@@ -64,6 +64,12 @@ public:
         return light_count_;
     }
 
+    /// The records last uploaded, light_vec4_stride vec4s per light (gi/gpu_lights.sh layout).
+    auto get_light_data() const -> const std::vector<float>&
+    {
+        return data_;
+    }
+
 private:
     void ensure_capacity(uint32_t required_vec4);
 

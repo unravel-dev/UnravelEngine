@@ -423,6 +423,28 @@ auto atmospheric_pass_perez::run_cloud_shadow_pass(const camera& camera,
 
     result.map = tex;
     result.valid = true;
+    // FNV-1a over the uniforms the map renders from and its placement.
+    const auto hash_floats = [](uint64_t hash, const float* values, size_t count)
+    {
+        for(size_t i = 0; i < count; ++i)
+        {
+            uint32_t bits = 0;
+            std::memcpy(&bits, &values[i], sizeof(bits));
+            hash = (hash ^ uint64_t(bits)) * 0x100000001b3ull;
+        }
+        return hash;
+    };
+    const float placement[7] = {result.origin.x,
+                                result.origin.y,
+                                result.extent,
+                                result.base_world_y,
+                                result.opacity,
+                                result.apply_to_lights ? 1.0f : 0.0f,
+                                float(cloud_shadow_resolution)};
+    uint64_t signature = hash_floats(0xcbf29ce484222325ull, placement, std::size(placement));
+    signature = hash_floats(signature, &perez.sun_direction.x, 3);
+    signature = hash_floats(signature, &uniforms.exposition[0], sizeof(uniforms) / sizeof(float));
+    result.signature = signature;
     return result;
 }
 

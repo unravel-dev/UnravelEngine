@@ -24,6 +24,9 @@ using lumen_pass::divide_round_up;
 using lumen_pass::ensure_texture;
 using lumen_pass::group_edge;
 using lumen_pass::has_view_size;
+
+/// The pixels per reflection tile side (lumen_reflection_common.sh LUMEN_REFLECTION_TILE_PIXELS).
+constexpr uint32_t reflection_tile_pixels = 8;
 } // namespace
 
 void lumen_reflection_pass::uniforms::cache_uniforms()
@@ -50,6 +53,7 @@ void lumen_reflection_pass::uniforms::cache_uniforms()
     cache_uniform(nullptr, s_lumen_probe_layer, "s_lumen_probe_layer", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_sdf_clipmap_coverage, "s_sdf_clipmap_coverage", bgfx::UniformType::Sampler);
+    cache_uniform(nullptr, s_sdf_clipmap_mip, "s_sdf_clipmap_mip", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_reflection_ray, "s_lumen_reflection_ray", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_reflection_radiance, "s_lumen_reflection_radiance", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_reflection_hit, "s_lumen_reflection_hit", bgfx::UniformType::Sampler);
@@ -62,6 +66,12 @@ void lumen_reflection_pass::uniforms::cache_uniforms()
     cache_uniform(nullptr, s_lumen_reflection_specular, "s_lumen_reflection_specular", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_reflection_frames, "s_lumen_reflection_frames", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_rough_specular, "s_lumen_rough_specular", bgfx::UniformType::Sampler);
+    cache_uniform(nullptr, s_lumen_reflection_tiles, "s_lumen_reflection_tiles", bgfx::UniformType::Sampler);
+    cache_uniform(nullptr,
+                  s_lumen_reflection_tiles_history,
+                  "s_lumen_reflection_tiles_history",
+                  bgfx::UniformType::Sampler);
+    motion.cache_uniforms();
 }
 
 auto lumen_reflection_pass::init(rtti::context& ctx) -> bool
@@ -106,8 +116,10 @@ auto lumen_reflection_pass::get_trace_size(const usize32_t& view_size, uint32_t 
     return {divide_round_up(view_size.width, downsample), divide_round_up(view_size.height, downsample)};
 }
 
-auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview, const usize32_t& size, const usize32_t& trace_size)
-    -> frame_targets
+auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview,
+                                            const usize32_t& size,
+                                            const usize32_t& trace_size,
+                                            bool camera_cut) -> frame_targets
 {
     // The history ping-pong continues only from the frame right before this one (the previous depth it is
     // validated against is always that frame's).
@@ -124,14 +136,19 @@ auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview, const usize
     targets.ray = ensure_texture(rview, ray_texture, trace_size, bgfx::TextureFormat::RGBA16F);
     targets.radiance = ensure_texture(rview, radiance_texture, trace_size, bgfx::TextureFormat::RGBA16F);
     targets.hit = ensure_texture(rview, hit_texture, trace_size, bgfx::TextureFormat::R32F);
-    targets.resolved = ensure_texture(rview, "LUMEN_REFLECTION_RESOLVED", size, bgfx::TextureFormat::RGBA16F);
+    targets.resolved = ensure_texture(rview, lumen_pass::view_scratch_rgba16f, size, bgfx::TextureFormat::RGBA16F);
     targets.history_write =
         ensure_texture(rview, "LUMEN_REFLECTION_HISTORY" + write_set, size, bgfx::TextureFormat::RGBA16F);
     targets.frames_write = ensure_texture(rview, "LUMEN_REFLECTION_FRAMES" + write_set, size, bgfx::TextureFormat::R32F);
     targets.history_read = rview.tex_safe_get("LUMEN_REFLECTION_HISTORY" + read_set);
     targets.frames_read = rview.tex_safe_get("LUMEN_REFLECTION_FRAMES" + read_set);
-    targets.has_history =
-        continuous && has_view_size(targets.history_read, size) && has_view_size(targets.frames_read, size);
+    const usize32_t tile_count = {divide_round_up(size.width, reflection_tile_pixels),
+                                  divide_round_up(size.height, reflection_tile_pixels)};
+    targets.tiles_write =
+        ensure_texture(rview, "LUMEN_REFLECTION_TILES" + write_set, tile_count, bgfx::TextureFormat::R8);
+    targets.tiles_read = rview.tex_safe_get("LUMEN_REFLECTION_TILES" + read_set);
+    targets.has_history = continuous && !camera_cut && has_view_size(targets.history_read, size) &&
+                          has_view_size(targets.frames_read, size) && has_view_size(targets.tiles_read, tile_count);
     return targets;
 }
 
@@ -139,7 +156,7 @@ void lumen_reflection_pass::set_frame_uniforms(const run_params& params, const f
 {
     const auto& gather = *params.gather;
     const uint32_t frame = gfx::get_render_frame();
-    const float frame_values[4] = {float(frame), float(frame % state_frame_period), 0.0f, 0.0f};
+    const float frame_values[4] = {lumen_pass::get_frame_index(frame), float(frame % state_frame_period), 0.0f, 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_frame, frame_values);
     const float view[4] = {float(view_size_.width),
                            float(view_size_.height),
@@ -151,8 +168,9 @@ void lumen_reflection_pass::set_frame_uniforms(const run_params& params, const f
     // The screen trace needs last frame's colour and depth beside this frame's Hi-Z.
     const bool screen_traces =
         has_hiz && has_prev_color && gather.prev_depth && gather.settings.reflections.screen_traces;
-    const uint32_t reflection_flags =
-        (screen_traces ? 1u : 0u) | ((experiments_ & experiment_show_trace_types) != 0u ? 2u : 0u);
+    const uint32_t reflection_flags = (screen_traces ? 1u : 0u) |
+                                      ((experiments_ & experiment_show_trace_types) != 0u ? 2u : 0u) |
+                                      ((experiments_ & lumen_pass::experiment_all_reflection_tiles) != 0u ? 4u : 0u);
     const float reflection[4] = {has_hiz ? float(gather.hiz->info.numMips) : 1.0f,
                                  float(reflection_flags),
                                  get_max_roughness_to_trace(gather.settings.reflections),
@@ -160,10 +178,11 @@ void lumen_reflection_pass::set_frame_uniforms(const run_params& params, const f
     gfx::set_uniform(uniforms_.u_lumen_reflection, reflection);
     const float quality[4] = {float(downsample_),
                               float(lumen_pass::get_reflection_reconstruction_samples(gather.settings.reflections)),
-                              0.0f,
-                              0.0f};
+                              params.rough_specular_scale,
+                              params.rough_specular ? 1.0f : 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_reflection_quality, quality);
-    gfx::set_uniform(uniforms_.u_lumen_settings, lumen_pass::make_settings_uniform(gather.settings).data());
+    gfx::set_uniform(uniforms_.u_lumen_settings,
+                     lumen_pass::make_settings_uniform(gather.settings, gather.is_being_edited).data());
     gfx::set_uniform(uniforms_.u_lumen_prev_view_proj, gather.cam->get_prev_view_projection_unjittered().get_matrix());
     gfx::set_uniform(uniforms_.u_pre_exposure, gather.pre_exposure.to_uniform().data());
 }
@@ -181,12 +200,17 @@ void lumen_reflection_pass::run_screen(const run_params& params, const frame_tar
     bind_image(0, targets.ray, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
     bind_image(1, targets.radiance, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
     bind_image(2, targets.hit, bgfx::Access::Write, bgfx::TextureFormat::R32F);
+    bind_image(3, targets.tiles_write, bgfx::Access::Write, bgfx::TextureFormat::R8);
     gfx::set_texture(uniforms_.s_lumen_depth, 8, depth);
     gfx::set_texture(uniforms_.s_lumen_normal, 9, gather.g_buffer->get_texture(1));
     gfx::set_texture(uniforms_.s_lumen_hiz, 10, has_hiz ? gather.hiz : depth);
     gfx::set_texture(uniforms_.s_lumen_prev_color, 11, has_prev_color ? gather.prev_color : black);
     gfx::set_texture(uniforms_.s_lumen_prev_depth, 12, gather.prev_depth ? gather.prev_depth : black);
     set_frame_uniforms(params, targets);
+    uniforms_.motion.bind(13,
+                          gather.velocity,
+                          gather.cam->get_prev_view_projection_unjittered().get_matrix(),
+                          experiments_);
     bgfx::dispatch(pass.id,
                    screen_program_->native_handle(),
                    divide_round_up(trace_size_.width, group_edge),
@@ -210,12 +234,18 @@ void lumen_reflection_pass::run_world(const run_params& params, const frame_targ
     gfx::set_texture(uniforms_.s_lumen_depth, 3, gather.g_buffer->get_texture(4));
     gfx::set_texture(uniforms_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
     gfx::set_texture(uniforms_.s_sdf_clipmap_coverage, 10, lumen_pass::get_sdf_coverage(clipmap_gpu, experiments_));
+    gfx::set_texture(uniforms_.s_sdf_clipmap_mip, 9, clipmap_gpu.get_mip_texture());
     gfx::set_texture(uniforms_.s_lumen_prev_color, 5, has_prev_color ? gather.prev_color : black);
     gfx::set_texture(uniforms_.s_lumen_prev_depth, 6, gather.prev_depth ? gather.prev_depth : black);
     gfx::set_texture(uniforms_.s_lumen_env_sh, 7, gather.irradiance_sh ? gather.irradiance_sh : black);
     gfx::set_texture(uniforms_.s_lumen_probe_layer, 8, params.probe_output);
+    gfx::set_texture(uniforms_.s_lumen_reflection_tiles, 12, targets.tiles_write);
     gather.lumen_surface_cache->bind_for_sampling(13, 14, 15, true);
     set_frame_uniforms(params, targets);
+    uniforms_.motion.bind(11,
+                          gather.velocity,
+                          gather.cam->get_prev_view_projection_unjittered().get_matrix(),
+                          experiments_);
     gfx::set_uniform(uniforms_.u_sdf_clipmap_levels, clipmap_gpu.get_level_params(), global_sdf_clipmap::level_count);
     gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
     bgfx::dispatch(pass.id,
@@ -238,6 +268,7 @@ void lumen_reflection_pass::run_resolve(const run_params& params, const frame_ta
     gfx::set_texture(uniforms_.s_lumen_reflection_ray, 10, targets.ray);
     gfx::set_texture(uniforms_.s_lumen_depth, 11, gather.g_buffer->get_texture(4));
     gfx::set_texture(uniforms_.s_lumen_normal, 12, gather.g_buffer->get_texture(1));
+    gfx::set_texture(uniforms_.s_lumen_reflection_tiles, 13, targets.tiles_write);
     set_frame_uniforms(params, targets);
     bgfx::dispatch(pass.id,
                    resolve_program_->native_handle(),
@@ -259,10 +290,16 @@ void lumen_reflection_pass::run_temporal(const run_params& params, const frame_t
     gfx::set_texture(uniforms_.s_lumen_reflection_resolved, 8, targets.resolved);
     gfx::set_texture(uniforms_.s_lumen_reflection_history, 9, targets.has_history ? targets.history_read : black);
     gfx::set_texture(uniforms_.s_lumen_reflection_frames_history, 10, targets.has_history ? targets.frames_read : black);
+    gfx::set_texture(uniforms_.s_lumen_reflection_tiles_history, 2, targets.has_history ? targets.tiles_read : black);
+    gfx::set_texture(uniforms_.s_lumen_reflection_tiles, 15, targets.tiles_write);
     gfx::set_texture(uniforms_.s_lumen_prev_depth, 11, gather.prev_depth ? gather.prev_depth : black);
     gfx::set_texture(uniforms_.s_lumen_depth, 12, gather.g_buffer->get_texture(4));
     gfx::set_texture(uniforms_.s_lumen_normal, 13, gather.g_buffer->get_texture(1));
     set_frame_uniforms(params, targets);
+    uniforms_.motion.bind(14,
+                          gather.velocity,
+                          gather.cam->get_prev_view_projection_unjittered().get_matrix(),
+                          experiments_);
     bgfx::dispatch(pass.id,
                    temporal_program_->native_handle(),
                    divide_round_up(view_size_.width, group_edge),
@@ -286,7 +323,8 @@ void lumen_reflection_pass::run_spatial(const run_params& params, const frame_ta
     // Without the gather's rough specular the untraced layer is left uncovered: the environment fills it.
     gfx::set_texture(uniforms_.s_lumen_rough_specular,
                      12,
-                     params.rough_specular ? params.rough_specular : default_textures::get().transparent_texture());
+                     params.rough_specular ? params.rough_specular : default_textures::get().black_texture());
+    gfx::set_texture(uniforms_.s_lumen_reflection_tiles, 13, targets.tiles_write);
     set_frame_uniforms(params, targets);
     bgfx::dispatch(pass.id,
                    spatial_program_->native_handle(),
@@ -319,7 +357,8 @@ auto lumen_reflection_pass::run(gfx::render_view& rview, const run_params& param
     downsample_ = lumen_pass::get_reflection_downsample_factor(gather->settings.reflections);
     trace_size_ = get_trace_size(view_size_, downsample_);
     rview.data_get_or_emplace(downsample_key, 1u) = downsample_;
-    const auto targets = acquire_targets(rview, view_size_, trace_size_);
+    const auto targets = acquire_targets(rview, view_size_, trace_size_, gather->camera_cut);
+    rview.tex_get_or_emplace(tiles_texture) = targets.tiles_write;
     run_screen(params, targets);
     run_world(params, targets);
     run_resolve(params, targets);

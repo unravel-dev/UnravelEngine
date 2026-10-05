@@ -25,7 +25,7 @@ namespace
 /// Threads per group edge of the copy, lighting and radiosity kernels (NUM_THREADS(8, 8, 1)), also their tile.
 constexpr uint32_t tile_size = 8;
 /// float4s per copy tile record (lumen_surface_cache_lighting.sh LUMEN_CARD_COPY_TILE_STRIDE).
-constexpr uint32_t copy_tile_stride = 4;
+constexpr uint32_t copy_tile_stride = 6;
 /// float4s per lighting tile record (cs_lumen_card_lighting.sc, lumen_radiosity_common.sh).
 constexpr uint32_t light_tile_stride = 3;
 /// MaxRayIntensity of radiosity rays, in pre-exposed units.
@@ -34,14 +34,30 @@ constexpr float radiosity_max_ray_intensity = 40.0f;
 constexpr uint32_t radiosity_group_threads = 64;
 /// bgfx's per-dimension dispatch limit: larger tile lists go out in several dispatches.
 constexpr uint32_t max_groups_per_dispatch = 65535;
+/// Mixes a material's address into its card capture key (lumen_scene::source::material_key) before its revision.
+constexpr uint64_t material_key_multiplier = 0x9E3779B97F4A7C15ull;
+/// Copy tiles per dispatch row (lumen_surface_cache_lighting.sh LUMEN_CARD_COPY_DISPATCH_WIDTH).
+constexpr uint32_t copy_dispatch_width = 256;
+
+/// Groups (x, y) of a copy / resample dispatch over @p tiles tiles, in rows of copy_dispatch_width.
+auto get_copy_dispatch(uint32_t tiles) -> math::uvec2
+{
+    return {std::min(tiles, copy_dispatch_width), (tiles + copy_dispatch_width - 1u) / copy_dispatch_width};
+}
 /// The object grid: cells of 2 x 2 x 2 clipmap voxels, 4 x 4 x 4 threads per group.
 constexpr uint32_t object_grid_downsample = 2;
 constexpr uint32_t object_grid_group = 4;
 /// Object grid reach: the cell's half diagonal (1.44 x its half extent) plus 3 voxel extents.
 constexpr float object_grid_diagonal = 1.44f;
 constexpr float object_grid_range_voxel_extents = 3.0f;
-/// Levels whose object grid is rebuilt per frame at most.
+/// Instances changed in one update beyond which the direct lighting relights every page instead of placing them, and
+/// the occluder-light tests per page beyond which it does the same.
+constexpr size_t max_direct_occluder_changes = 256;
+constexpr size_t max_direct_occluder_tests = 4096;
+/// Levels whose object grid is rebuilt in full per frame at most.
 constexpr uint32_t object_grid_levels_per_frame = 2;
+/// Groups per row of an object grid brick dispatch: below the 65535 groups an axis takes.
+constexpr uint32_t object_grid_max_bricks_per_row = 32768u;
 /// The capture camera for the G-buffer shader's distance dither sits this far in front of the card.
 constexpr float capture_far_eye_distance = 1.0e5f;
 /// The debug views' mesh distance-field march (the coverage view): its step count and surface bias.
@@ -120,10 +136,14 @@ void lumen_surface_cache_pass::uniforms::cache_uniforms()
 {
     cache_uniform(nullptr, u_lumen_card_copy, "u_lumen_card_copy", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_card_lighting, "u_lumen_card_lighting", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, s_cloudShadow, "s_cloudShadow", bgfx::UniformType::Sampler);
+    cache_uniform(nullptr, u_cloudShadow, "u_cloudShadow", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, u_cloudShadow2, "u_cloudShadow2", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_radiosity, "u_lumen_radiosity", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_surface_cache, "u_lumen_surface_cache", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_object_grid, "u_lumen_object_grid", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_object_grid_origin, "u_lumen_object_grid_origin", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, u_brick_dispatch, "u_brick_dispatch", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_object_grid_levels, "u_lumen_object_grid_levels", bgfx::UniformType::Vec4, 4);
     cache_uniform(nullptr, u_lumen_object_grid_params, "u_lumen_object_grid_params", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_hit_lighting, "u_lumen_hit_lighting", bgfx::UniformType::Vec4);
@@ -155,7 +175,7 @@ void lumen_surface_cache_pass::uniforms::cache_uniforms()
     cache_uniform(nullptr, s_lumen_radiosity_frames, "s_lumen_radiosity_frames", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_resample_direct, "s_lumen_resample_direct", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_resample_indirect, "s_lumen_resample_indirect", bgfx::UniformType::Sampler);
-    cache_uniform(nullptr, s_lumen_resample_frames, "s_lumen_resample_frames", bgfx::UniformType::Sampler);
+    cache_uniform(nullptr, s_lumen_capture_rt3, "s_lumen_capture_rt3", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_card_final, "s_lumen_card_final", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_object_grid, "s_lumen_object_grid", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_env_sh, "s_lumen_env_sh", bgfx::UniformType::Sampler);
@@ -168,6 +188,17 @@ void lumen_surface_cache_pass::uniforms::cache_uniforms()
     cache_uniform(nullptr, s_sdf_atlas, "s_sdf_atlas", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_sdf_clipmap_coverage, "s_sdf_clipmap_coverage", bgfx::UniformType::Sampler);
+    cache_uniform(nullptr, s_sdf_clipmap_mip, "s_sdf_clipmap_mip", bgfx::UniformType::Sampler);
+}
+
+lumen_surface_cache_pass::~lumen_surface_cache_pass()
+{
+    lumen_pass::destroy_handle(scene_buffer_);
+    lumen_pass::destroy_handle(copy_tile_buffer_);
+    lumen_pass::destroy_handle(resample_table_buffer_);
+    lumen_pass::destroy_handle(object_grid_boxes_);
+    lumen_pass::destroy_handle(page_ages_buffer_);
+    lumen_pass::destroy_handle(light_tile_buffer_);
 }
 
 auto lumen_surface_cache_pass::init(rtti::context& ctx) -> bool
@@ -190,8 +221,14 @@ auto lumen_surface_cache_pass::init(rtti::context& ctx) -> bool
     auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
     auto fs_debug = am.get_asset<gfx::shader>("engine:/data/shaders/lumen/fs_lumen_scene_debug.sc");
     debug_program_ = std::make_unique<gpu_program>(vs_clip_quad, fs_debug);
+    // The atlases come with the first update (has_targets); the object grid's stand-in is bound before then too.
     scene_.init(lumen_scene::settings{});
-    create_targets();
+    object_grid_dummy_ = std::make_shared<gfx::texture>(uint16_t(1),
+                                                        uint16_t(1),
+                                                        uint16_t(1),
+                                                        false,
+                                                        bgfx::TextureFormat::RGBA32F,
+                                                        BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
     if(!is_ready())
     {
         APPLOG_WARNING("[GI] Surface cache programs failed to load; the surface cache is unavailable.");
@@ -227,7 +264,6 @@ void lumen_surface_cache_pass::create_targets()
     radiosity_frames_ = make_atlas(s.atlas_size / tile_size, bgfx::TextureFormat::R32F);
     resample_direct_ = make_atlas(s.capture_atlas_size, bgfx::TextureFormat::RGBA16F);
     resample_indirect_ = make_atlas(s.capture_atlas_size, bgfx::TextureFormat::RGBA16F);
-    resample_frames_ = make_atlas(s.capture_atlas_size / tile_size, bgfx::TextureFormat::R32F);
     // The G-buffer program's four targets, in its formats, plus depth.
     std::vector<gfx::texture::ptr> targets = {make_capture_texture(s.capture_atlas_size, bgfx::TextureFormat::RGBA8),
                                               make_capture_texture(s.capture_atlas_size, bgfx::TextureFormat::RGBA16F),
@@ -235,12 +271,25 @@ void lumen_surface_cache_pass::create_targets()
                                               make_capture_texture(s.capture_atlas_size, bgfx::TextureFormat::RGBA8),
                                               make_capture_texture(s.capture_atlas_size, bgfx::TextureFormat::D32F)};
     capture_target_ = std::make_shared<gfx::frame_buffer>(targets);
-    object_grid_dummy_ = std::make_shared<gfx::texture>(uint16_t(1),
-                                                        uint16_t(1),
-                                                        uint16_t(1),
-                                                        false,
-                                                        bgfx::TextureFormat::RGBA32F,
-                                                        BGFX_SAMPLER_POINT | BGFX_SAMPLER_UVW_CLAMP);
+}
+
+void lumen_surface_cache_pass::release_targets()
+{
+    if(!has_targets())
+    {
+        return;
+    }
+    for(auto* texture : {&albedo_atlas_, &normal_atlas_, &emissive_atlas_, &depth_atlas_, &direct_atlas_, &indirect_atlas_,
+                         &final_atlas_, &radiosity_trace_atlas_, &radiosity_sh_r_, &radiosity_sh_g_, &radiosity_sh_b_,
+                         &radiosity_frames_, &resample_direct_, &resample_indirect_, &object_grid_})
+    {
+        texture->reset();
+    }
+    capture_target_.reset();
+    object_grid_resolution_ = 0;
+    object_grid_built_ = {};
+    scene_.init(scene_.get_settings());
+    is_lit_ = false;
 }
 
 void lumen_surface_cache_pass::ensure_radiosity_targets(const lumen_pass::radiosity_layout& layout)
@@ -260,7 +309,7 @@ void lumen_surface_cache_pass::ensure_radiosity_targets(const lumen_pass::radios
 
 auto lumen_surface_cache_pass::has_lighting() const -> bool
 {
-    return is_lit_ && object_grid_ != nullptr;
+    return is_lit_ && object_grid_ != nullptr && has_targets();
 }
 
 void lumen_surface_cache_pass::bind_for_sampling(uint8_t scene_stage,
@@ -268,9 +317,11 @@ void lumen_surface_cache_pass::bind_for_sampling(uint8_t scene_stage,
                                                  uint8_t grid_stage,
                                                  bool enabled) const
 {
-    const bool use = enabled && has_lighting();
+    const bool use = enabled && has_lighting() && has_targets();
     bgfx::setBuffer(scene_stage, scene_buffer_, bgfx::Access::Read);
-    gfx::set_texture(uniforms_.s_lumen_card_final, final_stage, final_atlas_);
+    gfx::set_texture(uniforms_.s_lumen_card_final,
+                     final_stage,
+                     final_atlas_ ? final_atlas_ : default_textures::get().black_texture());
     gfx::set_texture(uniforms_.s_lumen_object_grid, grid_stage, object_grid_ ? object_grid_ : object_grid_dummy_);
     gfx::set_uniform(uniforms_.u_lumen_surface_cache, get_surface_cache_params());
     gfx::set_uniform(uniforms_.u_lumen_object_grid_levels, object_grid_levels_.data(), 4);
@@ -292,16 +343,112 @@ auto lumen_surface_cache_pass::get_object_grid_params() const -> math::vec4
     return {float(object_grid_resolution_), card_bias_scale_, 0.0f, 0.0f};
 }
 
+auto lumen_surface_cache_pass::collect_direct_lighting_changes(const surface_cache_system& gi_scene,
+                                                               const global_sdf_clipmap* clipmap)
+    -> lumen_scene::direct_lighting_changes
+{
+    lumen_scene::direct_lighting_changes changes;
+    changes.all = !has_previous_lighting_inputs_ || gi_scene.has_global_lighting_change() ||
+                  (experiment_flags_ & lumen_pass::experiment_no_direct_page_skip) != 0u;
+    // The lights: a changed directional light or light count relights everything, a changed local light its reach
+    // before and after.
+    const auto& light_buffer = gi_scene.get_light_buffer();
+    const std::vector<float>& lights = light_buffer.get_light_data();
+    const size_t record = size_t(gpu_light_buffer::light_vec4_stride) * 4u;
+    const auto is_directional = [](const float* light)
+    {
+        return uint32_t(light[3]) == uint32_t(gpu_light_buffer::gpu_light_type::directional);
+    };
+    const auto reach_box = [](const float* light)
+    {
+        const math::vec3 position(light[0], light[1], light[2]);
+        const math::vec3 range(light[7]);
+        return math::bbox(position - range, position + range);
+    };
+    changes.all = changes.all || lights.size() != previous_lights_.size();
+    for(size_t base = 0; base + record <= lights.size() && !changes.all; base += record)
+    {
+        const float* light = lights.data() + base;
+        const float* previous = previous_lights_.data() + base;
+        if(std::equal(light, light + record, previous))
+        {
+            continue;
+        }
+        if(is_directional(light) || is_directional(previous))
+        {
+            changes.all = true;
+            break;
+        }
+        changes.regions.push_back(reach_box(previous));
+        changes.regions.push_back(reach_box(light));
+    }
+    for(size_t base = 0; base + record <= lights.size(); base += record)
+    {
+        const float* light = lights.data() + base;
+        lumen_scene::light_reach reach;
+        reach.is_directional = is_directional(light);
+        reach.direction = -math::vec3(light[4], light[5], light[6]);
+        reach.position = math::vec3(light[0], light[1], light[2]);
+        reach.range = light[7];
+        changes.lights.push_back(reach);
+    }
+    previous_lights_ = lights;
+    // The sun's cloud shadow: a new map relights every page a directional light reaches.
+    const bool has_directional = std::any_of(changes.lights.begin(),
+                                             changes.lights.end(),
+                                             [](const lumen_scene::light_reach& reach)
+                                             {
+                                                 return reach.is_directional;
+                                             });
+    changes.all = changes.all || (has_directional && cloud_shadow_.signature != previous_cloud_signature_);
+    previous_cloud_signature_ = cloud_shadow_.signature;
+    // The distance field: what each level recomposed since the last update. A partial recompose rewrote its boxes
+    // (each changed instance's reach), a full one or a moved level every voxel.
+    if(clipmap != nullptr)
+    {
+        for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
+        {
+            const auto& lvl = clipmap->get_level(level);
+            const uint64_t serial = lvl.compose_serial;
+            const uint64_t previous_serial = previous_compose_serials_[level];
+            previous_compose_serials_[level] = serial;
+            if(serial == previous_serial)
+            {
+                continue;
+            }
+            // Only the last recompose's boxes are known: two since the last update leave the first one's unseen.
+            const bool is_single_partial =
+                lvl.is_partial && lvl.scroll_shift == math::ivec3(0) && serial == previous_serial + 1u;
+            changes.all = changes.all || !is_single_partial;
+            for(const auto& box : lvl.partial_boxes)
+            {
+                const math::vec3 box_min = lvl.origin + math::vec3(box.min) * lvl.voxel_size;
+                changes.occluders.emplace_back(box_min, box_min + math::vec3(box.size) * lvl.voxel_size);
+            }
+        }
+    }
+    changes.all = changes.all || changes.occluders.size() > max_direct_occluder_changes ||
+                  changes.occluders.size() * changes.lights.size() > max_direct_occluder_tests;
+    has_previous_lighting_inputs_ = true;
+    if(changes.all)
+    {
+        changes.regions.clear();
+        changes.occluders.clear();
+    }
+    return changes;
+}
+
 void lumen_surface_cache_pass::update(const surface_cache_system& gi_scene,
+                                      const global_sdf_clipmap* clipmap,
                                       const math::vec3& view_origin,
                                       const math::frustum& view_frustum,
                                       const gi_settings::scene_settings& view_settings,
                                       const gi_project_settings& project_settings)
 {
     APP_SCOPE_PERF("GI/Surface Cache Update");
-    if(scene_.apply_settings(make_scene_settings(project_settings)))
+    if(scene_.apply_settings(make_scene_settings(project_settings)) || !has_targets())
     {
-        // The scene started over: new, unlit atlases at the new sizes.
+        // The first update, or the scene started over: new, unlit atlases at the current sizes.
         create_targets();
         is_lit_ = false;
     }
@@ -316,15 +463,21 @@ void lumen_surface_cache_pass::update(const surface_cache_system& gi_scene,
     const auto& instances = gi_scene.get_instances();
     for(const auto& src : lumen_sources)
     {
+        const uint64_t material_identity = uint64_t(reinterpret_cast<uintptr_t>(src.material.get()));
+        const uint64_t material_key =
+            src.material ? (material_identity * material_key_multiplier) ^ src.material->get_revision() : 0u;
         sources_.push_back({src.identity,
                             src.instance_index,
                             src.cards,
                             src.local_to_world,
-                            instances[src.instance_index].is_emissive_light_source});
+                            instances[src.instance_index].is_emissive_light_source,
+                            material_key});
     }
     scene_.set_hold_resident_resolutions((experiment_flags_ & experiment_hold_card_resolution) != 0u);
+    scene_.set_card_residency_without_group_gate((experiment_flags_ & experiment_card_residency_without_group_gate) != 0u);
     scene_.set_view_settings(view_settings);
     scene_.update(sources_, uint32_t(gi_scene.get_instances().size()), view_origin);
+    scene_.invalidate_direct_lighting(collect_direct_lighting_changes(gi_scene, clipmap));
     scene_.schedule_lighting(view_origin, view_frustum);
     upload_scene_table();
     upload_vec4_table(resample_table_buffer_, scene_.get_resample_table());
@@ -335,7 +488,7 @@ void lumen_surface_cache_pass::update(const surface_cache_system& gi_scene,
     {
         const auto& st = scene_.get_stats();
         APPLOG_TRACE("[GI] surface cache: {} cards, {} resident, pages {} / {}, desired texels {}, "
-                    "captures {}, downgraded {}, reallocated {} in {} frames, lit tiles {} direct (cut bucket {}) / "
+                    "captures {}, downgraded {}, reallocated {} in {} frames, lit tiles {} direct (cut bucket {}, {} pages due) / "
                     "{} radiosity (cut bucket {})",
                     st.cards,
                     st.resident_cards,
@@ -348,6 +501,7 @@ void lumen_surface_cache_pass::update(const surface_cache_system& gi_scene,
                     stats_log_period,
                     st.lit_tiles[lumen_scene::lighting_direct],
                     st.cut_bucket[lumen_scene::lighting_direct],
+                    st.direct_dirty_pages,
                     st.lit_tiles[lumen_scene::lighting_radiosity],
                     st.cut_bucket[lumen_scene::lighting_radiosity]);
         reallocated_since_log_ = 0;
@@ -383,10 +537,17 @@ void lumen_surface_cache_pass::build_copy_tiles()
     std::vector<math::vec4> tiles;
     const bool resamples = (experiment_flags_ & experiment_no_lighting_resample) == 0u;
     has_resample_ = false;
+    const auto& cards = scene_.get_card_table();
     for(const auto& cap : scene_.get_captures())
     {
         const int32_t resample_card = resamples ? cap.resample_card : -1;
         has_resample_ = has_resample_ || resample_card >= 0;
+        // The card's world axes (the card table's rows 1-3, lumen_surface_cache.sh LumenLoadCard): the copy stores
+        // normals in them.
+        const size_t card_row = size_t(cap.card_index) * lumen_scene::card_stride;
+        const math::vec3 axis_x(cards[card_row + 1]);
+        const math::vec3 axis_y(cards[card_row + 2]);
+        const math::vec3 axis_z(cards[card_row + 3]);
         for(uint32_t y = 0; y < cap.size.y; y += tile_size)
         {
             for(uint32_t x = 0; x < cap.size.x; x += tile_size)
@@ -397,7 +558,9 @@ void lumen_surface_cache_pass::build_copy_tiles()
                                    float(cap.atlas_offset.y + y));
                 tiles.push_back(cap.card_uv_rect);
                 tiles.emplace_back(float(x), float(y), float(cap.size.x), float(cap.size.y));
-                tiles.emplace_back(float(resample_card), 0.0f, 0.0f, 0.0f);
+                tiles.emplace_back(float(resample_card), axis_x.x, axis_x.y, axis_x.z);
+                tiles.emplace_back(axis_y, cap.keeps_lighting && resample_card >= 0 ? 1.0f : 0.0f);
+                tiles.emplace_back(axis_z, 0.0f);
             }
         }
     }
@@ -502,7 +665,7 @@ auto lumen_surface_cache_pass::compute_capture_view(const lumen_scene::capture& 
 
 void lumen_surface_cache_pass::copy_captures()
 {
-    if(copy_tile_count_ == 0 || !is_ready())
+    if(copy_tile_count_ == 0 || !is_ready() || !has_targets())
     {
         return;
     }
@@ -527,11 +690,12 @@ void lumen_surface_cache_pass::copy_captures()
     gfx::set_texture(uniforms_.s_lumen_capture_depth, 11, capture_target_->get_texture(4));
     gfx::set_texture(uniforms_.s_lumen_resample_direct, 12, resample_direct_);
     gfx::set_texture(uniforms_.s_lumen_resample_indirect, 13, resample_indirect_);
-    gfx::set_texture(uniforms_.s_lumen_resample_frames, 14, resample_frames_);
+    gfx::set_texture(uniforms_.s_lumen_capture_rt3, 14, capture_target_->get_texture(3));
     bgfx::setBuffer(15, copy_tile_buffer_, bgfx::Access::Read);
     const math::vec4 params(float(copy_tile_count_), 0.0f, 0.0f, 0.0f);
     gfx::set_uniform(uniforms_.u_lumen_card_copy, params);
-    bgfx::dispatch(pass.id, copy_program_->native_handle(), copy_tile_count_, 1, 1);
+    const math::uvec2 groups = get_copy_dispatch(copy_tile_count_);
+    bgfx::dispatch(pass.id, copy_program_->native_handle(), groups.x, groups.y, 1);
     copy_program_->end();
 }
 
@@ -541,7 +705,6 @@ void lumen_surface_cache_pass::resample_lighting()
     resample_program_->begin();
     bind_atlas_image(0, resample_direct_, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
     bind_atlas_image(1, resample_indirect_, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
-    bind_atlas_image(2, resample_frames_, bgfx::Access::Write, bgfx::TextureFormat::R32F);
     gfx::set_texture(uniforms_.s_lumen_card_direct, 3, direct_atlas_);
     gfx::set_texture(uniforms_.s_lumen_card_indirect, 4, indirect_atlas_);
     gfx::set_texture(uniforms_.s_lumen_radiosity_frames, 5, radiosity_frames_);
@@ -555,7 +718,8 @@ void lumen_surface_cache_pass::resample_lighting()
     gfx::set_uniform(uniforms_.u_lumen_surface_cache, surface_cache);
     const math::vec4 params(float(copy_tile_count_), 0.0f, 0.0f, 0.0f);
     gfx::set_uniform(uniforms_.u_lumen_card_copy, params);
-    bgfx::dispatch(pass.id, resample_program_->native_handle(), copy_tile_count_, 1, 1);
+    const math::uvec2 groups = get_copy_dispatch(copy_tile_count_);
+    bgfx::dispatch(pass.id, resample_program_->native_handle(), groups.x, groups.y, 1);
     resample_program_->end();
 }
 
@@ -580,6 +744,13 @@ void lumen_surface_cache_pass::update_object_grid(const surface_cache_system& gi
 {
     const auto& clipmap = view_cache.get_clipmap();
     const uint32_t resolution = view_cache.get_clipmap_gpu().get_resolution() / object_grid_downsample;
+    if(gi_scene.get_instances().size() >= size_t(gi::lumen::LUMEN_OBJECT_GRID_MAX_ID) && !has_warned_object_grid_ids_)
+    {
+        APPLOG_WARNING("[GI] {} GI instances: the object grid names {} at most; hits on the others read no cards.",
+                       gi_scene.get_instances().size(),
+                       gi::lumen::LUMEN_OBJECT_GRID_MAX_ID - 1);
+        has_warned_object_grid_ids_ = true;
+    }
     if(resolution != object_grid_resolution_ || !object_grid_)
     {
         object_grid_resolution_ = resolution;
@@ -587,7 +758,7 @@ void lumen_surface_cache_pass::update_object_grid(const surface_cache_system& gi
                                                       uint16_t(resolution),
                                                       uint16_t(resolution * global_sdf_clipmap::level_count),
                                                       false,
-                                                      bgfx::TextureFormat::RGBA32F,
+                                                      bgfx::TextureFormat::RGBA16,
                                                       BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_POINT |
                                                           BGFX_SAMPLER_UVW_CLAMP);
         object_grid_built_ = {};
@@ -604,33 +775,98 @@ void lumen_surface_cache_pass::update_object_grid(const surface_cache_system& gi
                                          });
     const uint32_t budget = order_moved ? global_sdf_clipmap::level_count : object_grid_levels_per_frame;
     uint32_t rebuilt = 0;
-    for(uint32_t level = 0; level < global_sdf_clipmap::level_count && rebuilt < budget; ++level)
+    // Every rebuilt level's cell boxes go in one brick table, one dispatch per level.
+    struct level_bricks
+    {
+        uint32_t level = 0;
+        uint32_t first_box = 0;
+        uint32_t box_count = 0;
+        uint32_t bricks = 0;
+    };
+    std::vector<math::vec4> table;
+    std::vector<level_bricks> levels;
+    for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
     {
         const auto& lvl = clipmap.get_level(level);
         auto& built = object_grid_built_[level];
-        if(lvl.voxel_size <= 0.0f || (built.is_built && built.origin == lvl.origin &&
-                                      built.content_fingerprint == lvl.content_fingerprint &&
-                                      built.voxel_size == lvl.voxel_size && built.instance_order == instance_order))
+        const bool is_same_layout = built.is_built && built.origin == lvl.origin && built.voxel_size == lvl.voxel_size &&
+                                    built.instance_order == instance_order;
+        if(lvl.voxel_size <= 0.0f || (is_same_layout && built.compose_serial == lvl.compose_serial))
         {
             continue;
         }
+        // A level the clipmap recomposed partially in place since this grid mirrored it changed only in its boxes
+        // (global_sdf_clipmap::level::partial_boxes): the cells within reach of an instance are inside them, as the
+        // grid's reach is below the clipmap's. Those cells are rebuilt alone, outside the budget.
+        const bool is_partial = is_same_layout && lvl.is_partial && lvl.scroll_shift == math::ivec3(0) &&
+                                built.compose_serial + 1u == lvl.compose_serial;
+        if(!is_partial && rebuilt >= budget)
+        {
+            continue;
+        }
+        std::vector<global_sdf_clipmap::voxel_box> cells;
+        if(is_partial)
+        {
+            // Component-wise: glm's SIMD integer vector division needs an intrinsic this toolchain lacks.
+            const int downsample = int(object_grid_downsample);
+            const auto to_cells = [downsample](const math::ivec3& voxels, int round_up) -> math::ivec3
+            {
+                return {(voxels.x + round_up) / downsample,
+                        (voxels.y + round_up) / downsample,
+                        (voxels.z + round_up) / downsample};
+            };
+            for(const auto& box : lvl.partial_boxes)
+            {
+                cells.push_back({to_cells(box.min, 0), to_cells(box.size, downsample - 1)});
+            }
+        }
+        else
+        {
+            cells.push_back({math::ivec3(0), math::ivec3(int(resolution))});
+        }
+        level_bricks entry;
+        entry.level = level;
+        entry.first_box = uint32_t(table.size() / 2u);
+        entry.bricks = global_sdf_clipmap::append_brick_boxes(cells, int(object_grid_group), 0u, table);
+        entry.box_count = uint32_t(table.size() / 2u) - entry.first_box;
+        levels.push_back(entry);
+        built = {lvl.origin, lvl.voxel_size, lvl.compose_serial, instance_order, true};
+        object_grid_levels_[level] = math::vec4(lvl.origin, lvl.voxel_size * float(object_grid_downsample));
+        rebuilt += is_partial ? 0u : 1u;
+    }
+    if(levels.empty())
+    {
+        return;
+    }
+    lumen_pass::upload_vec4_table(object_grid_boxes_, table);
+    for(const auto& entry : levels)
+    {
+        if(entry.bricks == 0u)
+        {
+            continue;
+        }
+        const auto& lvl = clipmap.get_level(entry.level);
         const float cell_size = lvl.voxel_size * float(object_grid_downsample);
         const float voxel_extent = 0.5f * lvl.voxel_size;
         const float reach = object_grid_diagonal * 0.5f * cell_size + object_grid_range_voxel_extents * voxel_extent;
         object_grid_program_->begin();
         bind_sdf_instances(gi_scene);
-        gfx::set_image_3d(4, object_grid_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
-        const math::vec4 params(float(level), float(resolution), cell_size, reach);
+        // The level just composed: cells far from every surface skip their instance walk.
+        const auto& clipmap_gpu = view_cache.get_clipmap_gpu();
+        gfx::set_texture(uniforms_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+        gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+        gfx::set_image_3d(5, object_grid_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16);
+        bgfx::setBuffer(7, object_grid_boxes_, bgfx::Access::Read);
+        const math::vec4 params(float(entry.level), float(resolution), cell_size, reach);
         gfx::set_uniform(uniforms_.u_lumen_object_grid, params);
         // The objects the level's composition kept (global_sdf_clipmap::settings::object_radius_scale).
         const math::vec4 origin(lvl.origin, clipmap.get_settings().object_radius_scale);
         gfx::set_uniform(uniforms_.u_lumen_object_grid_origin, origin);
-        const uint32_t groups = (resolution + object_grid_group - 1u) / object_grid_group;
-        bgfx::dispatch(pass.id, object_grid_program_->native_handle(), groups, groups, groups);
+        const uint32_t row = std::min(entry.bricks, object_grid_max_bricks_per_row);
+        const math::vec4 dispatch(float(entry.first_box), float(entry.box_count), float(entry.bricks), float(row));
+        gfx::set_uniform(uniforms_.u_brick_dispatch, dispatch);
+        bgfx::dispatch(pass.id, object_grid_program_->native_handle(), row, (entry.bricks + row - 1u) / row, 1);
         object_grid_program_->end();
-        built = {lvl.origin, lvl.voxel_size, lvl.content_fingerprint, instance_order, true};
-        object_grid_levels_[level] = math::vec4(lvl.origin, cell_size);
-        ++rebuilt;
     }
 }
 
@@ -648,6 +884,7 @@ void lumen_surface_cache_pass::dispatch_direct(const lighting_inputs& inputs, ui
     gfx::set_texture(uniforms_.s_lumen_card_normal, 3, normal_atlas_);
     gfx::set_texture(uniforms_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
     gfx::set_texture(uniforms_.s_sdf_clipmap_coverage, 10, lumen_pass::get_sdf_coverage(clipmap_gpu, experiment_flags_));
+    gfx::set_texture(uniforms_.s_sdf_clipmap_mip, 14, clipmap_gpu.get_mip_texture());
     if(light_buffer.is_valid())
     {
         bgfx::setBuffer(5, light_buffer.get_buffer(), bgfx::Access::Read);
@@ -658,6 +895,11 @@ void lumen_surface_cache_pass::dispatch_direct(const lighting_inputs& inputs, ui
                                   0.0f);
     gfx::set_uniform(uniforms_.u_gpu_light_params, light_params);
     gfx::set_texture(uniforms_.s_lumen_card_depth, 7, depth_atlas_);
+    gfx::set_texture(uniforms_.s_cloudShadow,
+                     2,
+                     cloud_shadow_.map ? cloud_shadow_.map : default_textures::get().white_texture());
+    gfx::set_uniform(uniforms_.u_cloudShadow, cloud_shadow_.placement);
+    gfx::set_uniform(uniforms_.u_cloudShadow2, cloud_shadow_.layer);
     bgfx::setBuffer(8, light_tile_buffer_, bgfx::Access::Read);
     bgfx::setBuffer(9, scene_buffer_, bgfx::Access::Read);
     gfx::set_uniform(uniforms_.u_sdf_clipmap_levels, clipmap_gpu.get_level_params(), global_sdf_clipmap::level_count);
@@ -698,6 +940,7 @@ void lumen_surface_cache_pass::dispatch_radiosity(const lighting_inputs& inputs,
         gfx::set_texture(uniforms_.s_lumen_env_sh, 3, environment);
         gfx::set_texture(uniforms_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
         gfx::set_texture(uniforms_.s_sdf_clipmap_coverage, 10, lumen_pass::get_sdf_coverage(clipmap_gpu, experiment_flags_));
+        gfx::set_texture(uniforms_.s_sdf_clipmap_mip, 9, clipmap_gpu.get_mip_texture());
         bgfx::setBuffer(5, light_tile_buffer_, bgfx::Access::Read);
         bgfx::setBuffer(6, scene_buffer_, bgfx::Access::Read);
         gfx::set_texture(uniforms_.s_lumen_card_final, 7, final_atlas_);
@@ -755,7 +998,7 @@ void lumen_surface_cache_pass::dispatch_radiosity(const lighting_inputs& inputs,
 
 void lumen_surface_cache_pass::light(const lighting_inputs& inputs)
 {
-    if(!is_ready() || inputs.gi_scene == nullptr || inputs.view_cache == nullptr ||
+    if(!is_ready() || !has_targets() || inputs.gi_scene == nullptr || inputs.view_cache == nullptr ||
        !inputs.view_cache->get_clipmap_gpu().is_valid())
     {
         return;
@@ -799,7 +1042,7 @@ auto lumen_surface_cache_pass::get_debug_values(debug_mode mode) const -> const 
 auto lumen_surface_cache_pass::run_debug(const debug_params& params) -> bool
 {
     APP_SCOPE_PERF("GI/Surface Cache Debug");
-    if(!is_ready() || params.output == nullptr || params.cam == nullptr || params.gi_scene == nullptr)
+    if(!is_ready() || !has_targets() || params.output == nullptr || params.cam == nullptr || params.gi_scene == nullptr)
     {
         return false;
     }

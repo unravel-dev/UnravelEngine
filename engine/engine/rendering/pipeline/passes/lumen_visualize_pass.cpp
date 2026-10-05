@@ -57,7 +57,6 @@ constexpr float radiance_cache_radius_cells = 0.05f;
 /// shader; the depth atlas the binding also sets goes unread).
 constexpr uint8_t radiance_cache_indirection_stage = 6;
 constexpr uint8_t radiance_cache_final_stage = 7;
-constexpr uint8_t radiance_cache_depth_stage = 8;
 /// UE DrawSurfels: discs of 2 cm (times CardGenerationSurfelScale), their fan corners (0, k, k + 1) for k = 1-4 as
 /// positions with the corner in x.
 constexpr float surfel_radius = 0.02f;
@@ -86,6 +85,11 @@ constexpr uint32_t line_vertices = 2;
 constexpr uint8_t reflection_trace_print_stage = 5;
 constexpr uint8_t counts_adaptive_stage = 0;
 constexpr uint8_t counts_print_stage = 1;
+/// The radiance cache stats' counters and print buffer (cs_lumen_visualize_rc_stats.sc).
+constexpr uint8_t rc_stats_counters_stage = 0;
+constexpr uint8_t rc_stats_print_stage = 1;
+/// The lines the reflection trace's text takes, with a blank one: the cache stats start below it.
+constexpr uint32_t reflection_text_lines = 4;
 /// The reflection trace: its ray and the three lines of the cross at its hit.
 constexpr uint32_t reflection_trace_lines = 4;
 /// Both texts start in the view's top left, away from the editor's navigation cube in the top right: the reflection
@@ -296,6 +300,11 @@ void lumen_visualize_pass::lines_program::cache_uniforms()
     cache_uniform(program.get(), s_scene_depth, "s_scene_depth", bgfx::UniformType::Sampler);
 }
 
+void lumen_visualize_pass::rc_stats_program::cache_uniforms()
+{
+    cache_uniform(program.get(), u_lumen_rc_stats, "u_lumen_rc_stats", bgfx::UniformType::Vec4);
+}
+
 void lumen_visualize_pass::counts_program::cache_uniforms()
 {
     cache_uniform(program.get(), u_lumen_visualize_counts, "u_lumen_visualize_counts", bgfx::UniformType::Vec4);
@@ -320,6 +329,7 @@ void lumen_visualize_pass::reflection_trace_program::cache_uniforms()
     cache_uniform(program.get(), s_lumen_reflection_ray, "s_lumen_reflection_ray", bgfx::UniformType::Sampler);
     cache_uniform(program.get(), s_lumen_reflection_hit, "s_lumen_reflection_hit", bgfx::UniformType::Sampler);
     cache_uniform(program.get(), s_lumen_reflection_radiance, "s_lumen_reflection_radiance", bgfx::UniformType::Sampler);
+    cache_uniform(program.get(), s_lumen_reflection_tiles, "s_lumen_reflection_tiles", bgfx::UniformType::Sampler);
     cache_uniform(program.get(), s_lumen_depth, "s_lumen_depth", bgfx::UniformType::Sampler);
 }
 
@@ -377,13 +387,17 @@ auto lumen_visualize_pass::init(rtti::context& ctx) -> bool
     counts_program_.cache_uniforms();
     auto cs_counts = am.get_asset<gfx::shader>("engine:/data/shaders/lumen/cs_lumen_visualize_probe_counts.sc");
     counts_program_.program = std::make_unique<gpu_program>(cs_counts);
+    rc_stats_program_.cache_uniforms();
+    auto cs_rc_stats = am.get_asset<gfx::shader>("engine:/data/shaders/lumen/cs_lumen_visualize_rc_stats.sc");
+    rc_stats_program_.program = std::make_unique<gpu_program>(cs_rc_stats);
     surfel_program_.cache_uniforms();
     auto vs_surfel = am.get_asset<gfx::shader>("engine:/data/shaders/lumen/vs_lumen_visualize_surfel.sc");
     surfel_program_.program = std::make_unique<gpu_program>(vs_surfel, fs_primitive);
     return screen_program_.program->is_valid() && primitive_program_.program->is_valid() &&
            probe_program_.program->is_valid() && lines_program_.program->is_valid() &&
            placement_program_.program->is_valid() && reflection_trace_program_.program->is_valid() &&
-           surfel_program_.program->is_valid() && counts_program_.program->is_valid();
+           surfel_program_.program->is_valid() && counts_program_.program->is_valid() &&
+           rc_stats_program_.program->is_valid();
 }
 
 void lumen_visualize_pass::run(const run_params& params, std::vector<debug_view_label>& labels)
@@ -796,6 +810,30 @@ void lumen_visualize_pass::draw_overlays(const overlay_params& params)
     {
         print_probe_counts(params);
     }
+    if(settings.radiance_cache_stats)
+    {
+        const uint32_t first_line = (settings.screen_probe_gather_debug ? reflection_text_line_below_probe_counts : 0u) +
+                                    (settings.reflection_traces ? reflection_text_lines : 0u);
+        print_radiance_cache_stats(params, first_line);
+    }
+}
+
+void lumen_visualize_pass::print_radiance_cache_stats(const overlay_params& params, uint32_t first_line)
+{
+    auto& program = rc_stats_program_;
+    const auto* radiance_cache = params.gather->get_radiance_cache();
+    if(params.print == nullptr || radiance_cache == nullptr || !program.program || !program.program->is_valid())
+    {
+        return;
+    }
+    gfx::render_pass pass("GI/Visualize Radiance Cache Stats");
+    program.program->begin();
+    radiance_cache->bind_counters(rc_stats_counters_stage);
+    params.print->bind(rc_stats_print_stage, params.scene_depth->get_size());
+    gfx::set_uniform(program.u_lumen_rc_stats,
+                     math::vec4(radiance_cache->get_trace_cost_budget(), 0.0f, float(first_line), 0.0f));
+    bgfx::dispatch(pass.id, program.program->native_handle(), 1, 1, 1);
+    program.program->end();
 }
 
 void lumen_visualize_pass::print_probe_counts(const overlay_params& params)
@@ -839,11 +877,12 @@ void lumen_visualize_pass::draw_reflection_trace(const overlay_params& params, u
     const auto ray = rview.tex_safe_get(lumen_reflection_pass::ray_texture);
     const auto hit = rview.tex_safe_get(lumen_reflection_pass::hit_texture);
     const auto radiance = rview.tex_safe_get(lumen_reflection_pass::radiance_texture);
+    const auto tiles = rview.tex_safe_get(lumen_reflection_pass::tiles_texture);
     const uint32_t frame = gfx::get_render_frame();
     const bool is_traced = rview.data_get(lumen_reflection_pass::traced_frame_key, 0u) == frame;
     const uint32_t downsample = std::max(rview.data_get(lumen_reflection_pass::downsample_key, 1u), 1u);
     const auto trace_size = lumen_reflection_pass::get_trace_size(size, downsample);
-    if(!is_cursor_in_view || !is_traced || !ray || !hit || !radiance || !program.program ||
+    if(!is_cursor_in_view || !is_traced || !ray || !hit || !radiance || !tiles || !program.program ||
        !program.program->is_valid() || !lumen_pass::has_view_size(ray, trace_size))
     {
         return;
@@ -863,13 +902,17 @@ void lumen_visualize_pass::draw_reflection_trace(const overlay_params& params, u
     gfx::set_texture(program.s_lumen_reflection_radiance, 2, radiance);
     gfx::set_texture(program.s_lumen_depth, 3, params.scene_depth);
     bgfx::setBuffer(4, reflection_lines_, bgfx::Access::Write);
+    gfx::set_texture(program.s_lumen_reflection_tiles, 8, tiles);
     if(params.print != nullptr)
     {
         params.print->bind(reflection_trace_print_stage, size);
     }
     gfx::set_uniform(program.u_lumen_visualize_reflection, math::vec4(cursor.x, cursor.y, float(first_line), 0.0f));
     // The reflection pass's values this frame: the traced pixel of a downsampled trace rotates with the frame.
-    const math::vec4 frame_values(float(frame), float(frame % lumen_reflection_pass::state_frame_period), 0.0f, 0.0f);
+    const math::vec4 frame_values(lumen_pass::get_frame_index(frame),
+                                  float(frame % lumen_reflection_pass::state_frame_period),
+                                  0.0f,
+                                  0.0f);
     gfx::set_uniform(program.u_lumen_frame, frame_values);
     const math::vec4 view(float(size.width), float(size.height), 1.0f / float(size.width), 1.0f / float(size.height));
     gfx::set_uniform(program.u_lumen_view, view);
@@ -1028,9 +1071,7 @@ void lumen_visualize_pass::draw_radiance_cache_probes(const world_params& params
                                   radiance_cache_radius_cells * params.settings.radiance_cache_radius_scale,
                                   float(first_clipmap),
                                   0.0f));
-    params.radiance_cache->bind_for_sampling(radiance_cache_indirection_stage,
-                                             radiance_cache_final_stage,
-                                             radiance_cache_depth_stage);
+    params.radiance_cache->bind_for_sampling(radiance_cache_indirection_stage, radiance_cache_final_stage);
     bgfx::setVertexCount(drawn_clipmaps * cells_per_clipmap * probe_cube_vertices);
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS);
     bgfx::submit(pass.id, program.program->native_handle());
@@ -1048,10 +1089,15 @@ void lumen_visualize_pass::bind_probe_program(const world_params& params, const 
     }
     bgfx::setBuffer(0, surface_cache->get_scene_buffer(), bgfx::Access::Read);
     bgfx::setBuffer(1, page_buffer_, bgfx::Access::Read);
-    gfx::set_texture(program.s_lumen_card_depth, 2, surface_cache->get_depth_atlas());
-    gfx::set_texture(program.s_lumen_radiosity_sh_r, 3, surface_cache->get_radiosity_sh(0));
-    gfx::set_texture(program.s_lumen_radiosity_sh_g, 4, surface_cache->get_radiosity_sh(1));
-    gfx::set_texture(program.s_lumen_radiosity_sh_b, 5, surface_cache->get_radiosity_sh(2));
+    // The surface cache allocates its atlases on its first update; until then the probes read black.
+    const auto existing = [](const gfx::texture::ptr& texture) -> gfx::texture::ptr
+    {
+        return texture ? texture : default_textures::get().black_texture();
+    };
+    gfx::set_texture(program.s_lumen_card_depth, 2, existing(surface_cache->get_depth_atlas()));
+    gfx::set_texture(program.s_lumen_radiosity_sh_r, 3, existing(surface_cache->get_radiosity_sh(0)));
+    gfx::set_texture(program.s_lumen_radiosity_sh_g, 4, existing(surface_cache->get_radiosity_sh(1)));
+    gfx::set_texture(program.s_lumen_radiosity_sh_b, 5, existing(surface_cache->get_radiosity_sh(2)));
     gfx::set_uniform(program.u_lumen_surface_cache, surface_cache->get_surface_cache_params());
     gfx::set_uniform(program.u_lumen_visualize_probe, probe);
     gfx::set_uniform(program.u_lumen_visualize_probe2, math::vec4(params.pre_exposure, 0.0f, 0.0f, 0.0f));

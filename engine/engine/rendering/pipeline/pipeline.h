@@ -148,6 +148,10 @@ public:
         /// Deferred pipeline only: bitmask of enabled passes (@c deferred::pipeline_steps).
         pipeline_flags pflags = 0xFFFFFFFFu;
 
+        /// The user is editing the scene in this view (a gizmo or a property being dragged in the editor; UE
+        /// FSceneViewFamily::bCurrentlyBeingEdited): GI shortens its histories and traces more of its cache.
+        bool is_being_edited = false;
+
         /// Forces RGBA16F G/L/R buffers even when @c fill_hdr_params is unset.
         /// Reflection probe captures strip the post stack (including tonemapping)
         /// but must still light in HDR: their result feeds an RGBA16F cubemap and

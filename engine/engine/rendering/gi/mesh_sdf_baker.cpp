@@ -1056,6 +1056,131 @@ auto compute_field_brick_dim(const math::vec3& surface_extent,
     return math::uvec3(axis_bricks(extent.x), axis_bricks(extent.y), axis_bricks(extent.z));
 }
 
+/// Voxels in a dense grid of @p bricks.
+auto count_grid_voxels(const math::uvec3& bricks) -> uint64_t
+{
+    constexpr uint64_t voxels_per_brick = uint64_t(mesh_sdf::brick_size) * mesh_sdf::brick_size * mesh_sdf::brick_size;
+    return uint64_t(bricks.x) * bricks.y * bricks.z * voxels_per_brick;
+}
+
+/// A field's voxel and its grid in bricks, padding included.
+struct field_sizing
+{
+    float voxel_size = 0.0f;
+    math::uvec3 brick_dim{1u};
+};
+
+/**
+ * @brief Sizes a field over geometry spanning @p surface_extent: the requested voxel, coarsened until both caps hold.
+ *
+ * The bake's own sizing, and what @ref estimate_mesh_sdf_bake_cost predicts a bake's grid from.
+ */
+auto compute_field_sizing(const math::vec3& surface_extent, const mesh_sdf_bake_settings& settings, bool use_unsigned)
+    -> field_sizing
+{
+    const float longest_axis = math::max(surface_extent.x, math::max(surface_extent.y, surface_extent.z));
+    // The size the author asked for, in local units, or derived from the bounds when they left it
+    // on Auto.
+    //
+    // Asking in world units is the direct question -- the voxel is what decides the detail the
+    // field resolves, the reach of its narrow band (encode_range voxels), the size of a brick
+    // (brick_size voxels) and its memory (a surface is 2D, so cost goes as the inverse square).
+    // Auto answers it with the longest BOUNDS axis over @ref resolution, which is a poor proxy:
+    // a 10 m wall and a 1 m prop at the same resolution differ tenfold in the size they
+    // actually resolve, and walls and floors are the surfaces light leaks through.
+    const float requested_voxel_size =
+        settings.target_voxel_size > 0.0f ? settings.target_voxel_size
+                                          : longest_axis / float(math::max(settings.resolution, 1u));
+    float voxel_size = math::clamp(requested_voxel_size, settings.min_voxel_size, settings.max_voxel_size);
+    // Thin-geometry escalation: the shell floor is one voxel, so a voxel derived from LARGE
+    // bounds wraps thin geometry in a shell many times fatter than the author intended - at
+    // material-merged scales (a 3 cm parapet rope spanning 30 m bakes metre voxels) the result
+    // is not a coarse field but a PHANTOM: a metre-thick blob that occludes rays and steals GI
+    // attribution over a whole neighbourhood. REQUEST a voxel the authored thickness can
+    // justify and let the caps below arbitrate: the grow loop reclaims whatever the per-axis
+    // and total budgets cannot afford, so volume-filling meshes end up where the budgets alone
+    // put them, while long-thin bounds - the pathological case - fit easily and bake
+    // representable shells. This is also what makes Max Total Voxels an effective lever for
+    // thin shells: without it, Resolution would pin the voxel and a raised budget could not
+    // reach anything finer.
+    if(use_unsigned)
+    {
+        const float shell_target = k_max_shell_floor_ratio *
+                                   math::max(settings.two_sided_thickness, settings.min_voxel_size);
+        if(voxel_size > shell_target)
+        {
+            voxel_size = math::max(shell_target, settings.min_voxel_size);
+        }
+    }
+    // Grid sizing. The voxel size only ever GROWS from here: every cap is satisfied by making
+    // voxels coarser, never by cropping the grid, because a cropped field would let rays pass
+    // straight through the uncovered part of the geometry.
+    const auto compute_brick_dim = [&](float voxel) -> math::uvec3
+    {
+        return compute_field_brick_dim(surface_extent, settings, use_unsigned, voxel);
+    };
+    const uint32_t max_bricks = math::max(1u, settings.max_resolution / mesh_sdf::brick_size);
+    const uint64_t max_total_voxels = math::max<uint64_t>(settings.max_total_voxels, 1ull);
+    math::uvec3 brick_dim = compute_brick_dim(voxel_size);
+    // Two caps, both enforced by growing the voxel.
+    //
+    // The per-axis one alone is not a budget: it permits max_resolution^3 voxels PER FIELD, and
+    // voxel count is cubic, so one submesh may legitimately ask for 16M voxels while the atlas
+    // holds a few hundred thousand bricks for the entire scene. On a model split into thousands
+    // of submeshes that overruns the atlas by an order of magnitude -- and since bake time is
+    // proportional to voxel count, it is simultaneously the reason the bake takes minutes. The
+    // total cap is what makes the cost of a field bounded rather than merely shaped.
+    //
+    // The dense grid is admittedly the wrong SHAPE for a cost measure: a surface is
+    // two-dimensional, so it charges a hollow or flat mesh for space it never stores. Budgeting
+    // the bricks actually stored instead would, without somewhere to spend the difference, only
+    // loosen this cap, and loosening it is what the note below rules out. A stored-brick budget
+    // would replace this cap rather than join it -- one budget.
+    //
+    // The voxel size only ever GROWS from here; leftover budget is never spent on a FINER voxel.
+    // The band is mesh_sdf::encode_range voxels WIDE, so its reach in world units is
+    // proportional to the voxel. Halving the voxel doubles surface detail and halves the
+    // distance over which the field can report anything at all, and every consumer that reads a
+    // DISTANCE rather than a hit degrades with it -- the clipmap composition, sphere-trace step
+    // lengths, the soft-shadow penumbra term. With too short a band, grazing sun rays through
+    // narrow gaps read as shadowed (test_shadow_through_colonnade exercises this). The sizes
+    // this produces are already close to the shortest band the composition tolerates, so finer
+    // fields need a wider encode_range first -- a storage-format change shared with the tracing
+    // shaders, not a sizing change.
+    //
+    // Iterated because each correction changes the padding, which changes the grid. Growth is
+    // monotone, so this converges in a couple of rounds; the bound is a guard, not a limit.
+    constexpr int max_sizing_iterations = 8;
+    for(int iteration = 0; iteration < max_sizing_iterations; ++iteration)
+    {
+        float scale = 1.0f;
+        const uint32_t largest = math::max(brick_dim.x, math::max(brick_dim.y, brick_dim.z));
+        if(largest > max_bricks)
+        {
+            scale = float(largest) / float(max_bricks);
+        }
+        const uint64_t grid_voxels = count_grid_voxels(brick_dim);
+        if(grid_voxels > max_total_voxels)
+        {
+            // Cube root: the budget is a volume and the voxel size scales all three axes.
+            const float volume_scale = float(std::cbrt(double(grid_voxels) / double(max_total_voxels)));
+            scale = math::max(scale, volume_scale);
+        }
+        if(scale <= 1.0f)
+        {
+            break;
+        }
+        voxel_size *= scale;
+        brick_dim = compute_brick_dim(voxel_size);
+    }
+    // Belt and braces: the loop above should already satisfy the per-axis cap, and clamping here
+    // can only crop, so it must never be the thing that actually enforces it.
+    brick_dim = math::uvec3(math::min(brick_dim.x, max_bricks),
+                            math::min(brick_dim.y, max_bricks),
+                            math::min(brick_dim.z, max_bricks));
+    return {voxel_size, brick_dim};
+}
+
 /**
  * @brief The per-GEOMETRY half of a bake: the refusals, the accelerator, and whether the surface
  *        has a usable inside. Independent of the voxel size, so a mip chain does it once.
@@ -1129,41 +1254,9 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
 {
     out = {};
 
-    const math::vec3 surface_extent = geometry.bounds.get_dimensions();
-    const float longest_axis = math::max(surface_extent.x, math::max(surface_extent.y, surface_extent.z));
-    // The size the author asked for, in local units, or derived from the bounds when they left it
-    // on Auto.
-    //
-    // Asking in world units is the direct question -- the voxel is what decides the detail the
-    // field resolves, the reach of its narrow band (encode_range voxels), the size of a brick
-    // (brick_size voxels) and its memory (a surface is 2D, so cost goes as the inverse square).
-    // Auto answers it with the longest BOUNDS axis over @ref resolution, which is a poor proxy:
-    // a 10 m wall and a 1 m prop at the same resolution differ tenfold in the size they
-    // actually resolve, and walls and floors are the surfaces light leaks through.
-    const float requested_voxel_size =
-        settings.target_voxel_size > 0.0f ? settings.target_voxel_size
-                                          : longest_axis / float(math::max(settings.resolution, 1u));
-    float voxel_size = math::clamp(requested_voxel_size, settings.min_voxel_size, settings.max_voxel_size);
-    // Thin-geometry escalation: the shell floor is one voxel, so a voxel derived from LARGE
-    // bounds wraps thin geometry in a shell many times fatter than the author intended - at
-    // material-merged scales (a 3 cm parapet rope spanning 30 m bakes metre voxels) the result
-    // is not a coarse field but a PHANTOM: a metre-thick blob that occludes rays and steals GI
-    // attribution over a whole neighbourhood. REQUEST a voxel the authored thickness can
-    // justify and let the caps below arbitrate: the grow loop reclaims whatever the per-axis
-    // and total budgets cannot afford, so volume-filling meshes end up where the budgets alone
-    // put them, while long-thin bounds - the pathological case - fit easily and bake
-    // representable shells. This is also what makes Max Total Voxels an effective lever for
-    // thin shells: without it, Resolution would pin the voxel and a raised budget could not
-    // reach anything finer.
-    if(use_unsigned)
-    {
-        const float shell_target = k_max_shell_floor_ratio *
-                                   math::max(settings.two_sided_thickness, settings.min_voxel_size);
-        if(voxel_size > shell_target)
-        {
-            voxel_size = math::max(shell_target, settings.min_voxel_size);
-        }
-    }
+    const field_sizing sizing = compute_field_sizing(geometry.bounds.get_dimensions(), settings, use_unsigned);
+    const float voxel_size = sizing.voxel_size;
+    const math::uvec3 brick_dim = sizing.brick_dim;
     // Pad by the encode range so the field carries useful distances just outside the surface,
     // which is where sphere tracing spends most of its steps.
     //
@@ -1178,78 +1271,6 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
     {
         return compute_field_padding(settings, use_unsigned, voxels);
     };
-    // Grid sizing. The voxel size only ever GROWS from here: every cap is satisfied by making
-    // voxels coarser, never by cropping the grid, because a cropped field would let rays pass
-    // straight through the uncovered part of the geometry.
-    const auto compute_brick_dim = [&](float voxel) -> math::uvec3
-    {
-        return compute_field_brick_dim(surface_extent, settings, use_unsigned, voxel);
-    };
-    const auto count_grid_voxels = [](const math::uvec3& bricks) -> uint64_t
-    {
-        constexpr uint64_t voxels_per_brick = uint64_t(mesh_sdf::brick_size) * mesh_sdf::brick_size *
-                                              mesh_sdf::brick_size;
-        return uint64_t(bricks.x) * bricks.y * bricks.z * voxels_per_brick;
-    };
-    const uint32_t max_bricks = math::max(1u, settings.max_resolution / mesh_sdf::brick_size);
-    const uint64_t max_total_voxels = math::max<uint64_t>(settings.max_total_voxels, 1ull);
-    math::uvec3 brick_dim = compute_brick_dim(voxel_size);
-    // Two caps, both enforced by growing the voxel.
-    //
-    // The per-axis one alone is not a budget: it permits max_resolution^3 voxels PER FIELD, and
-    // voxel count is cubic, so one submesh may legitimately ask for 16M voxels while the atlas
-    // holds a few hundred thousand bricks for the entire scene. On a model split into thousands
-    // of submeshes that overruns the atlas by an order of magnitude -- and since bake time is
-    // proportional to voxel count, it is simultaneously the reason the bake takes minutes. The
-    // total cap is what makes the cost of a field bounded rather than merely shaped.
-    //
-    // The dense grid is admittedly the wrong SHAPE for a cost measure: a surface is
-    // two-dimensional, so it charges a hollow or flat mesh for space it never stores. Budgeting
-    // the bricks actually stored instead would, without somewhere to spend the difference, only
-    // loosen this cap, and loosening it is what the note below rules out. A stored-brick budget
-    // would replace this cap rather than join it -- one budget.
-    //
-    // The voxel size only ever GROWS from here; leftover budget is never spent on a FINER voxel.
-    // The band is mesh_sdf::encode_range voxels WIDE, so its reach in world units is
-    // proportional to the voxel. Halving the voxel doubles surface detail and halves the
-    // distance over which the field can report anything at all, and every consumer that reads a
-    // DISTANCE rather than a hit degrades with it -- the clipmap composition, sphere-trace step
-    // lengths, the soft-shadow penumbra term. With too short a band, grazing sun rays through
-    // narrow gaps read as shadowed (test_shadow_through_colonnade exercises this). The sizes
-    // this produces are already close to the shortest band the composition tolerates, so finer
-    // fields need a wider encode_range first -- a storage-format change shared with the tracing
-    // shaders, not a sizing change.
-    //
-    // Iterated because each correction changes the padding, which changes the grid. Growth is
-    // monotone, so this converges in a couple of rounds; the bound is a guard, not a limit.
-    constexpr int max_sizing_iterations = 8;
-    for(int iteration = 0; iteration < max_sizing_iterations; ++iteration)
-    {
-        float scale = 1.0f;
-        const uint32_t largest = math::max(brick_dim.x, math::max(brick_dim.y, brick_dim.z));
-        if(largest > max_bricks)
-        {
-            scale = float(largest) / float(max_bricks);
-        }
-        const uint64_t grid_voxels = count_grid_voxels(brick_dim);
-        if(grid_voxels > max_total_voxels)
-        {
-            // Cube root: the budget is a volume and the voxel size scales all three axes.
-            const float volume_scale = float(std::cbrt(double(grid_voxels) / double(max_total_voxels)));
-            scale = math::max(scale, volume_scale);
-        }
-        if(scale <= 1.0f)
-        {
-            break;
-        }
-        voxel_size *= scale;
-        brick_dim = compute_brick_dim(voxel_size);
-    }
-    // Belt and braces: the loop above should already satisfy the per-axis cap, and clamping here
-    // can only crop, so it must never be the thing that actually enforces it.
-    brick_dim = math::uvec3(math::min(brick_dim.x, max_bricks),
-                            math::min(brick_dim.y, max_bricks),
-                            math::min(brick_dim.z, max_bricks));
     const math::vec3 padded_min = compute_field_grid_min(geometry.bounds, compute_padding(voxel_size), voxel_size);
     const math::uvec3 grid_dim(brick_dim.x * mesh_sdf::brick_size,
                                brick_dim.y * mesh_sdf::brick_size,
@@ -1610,6 +1631,18 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
         out.push_back(std::move(level));
     }
     return true;
+}
+
+auto estimate_mesh_sdf_bake_cost(const math::bbox& bounds,
+                                 uint32_t triangle_count,
+                                 const mesh_sdf_bake_settings& settings) -> double
+{
+    if(triangle_count == 0 || !bounds.is_populated() || bounds.is_degenerate())
+    {
+        return 0.0;
+    }
+    const field_sizing sizing = compute_field_sizing(bounds.get_dimensions(), settings, settings.two_sided);
+    return double(count_grid_voxels(sizing.brick_dim)) * std::sqrt(double(triangle_count));
 }
 
 auto sample_mesh_sdf_sheet(const mesh_sdf& sdf, const math::vec3& local_position) -> float

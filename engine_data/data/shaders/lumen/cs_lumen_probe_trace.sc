@@ -1,16 +1,19 @@
 /*
- * Lumen screen probe gather, tracing (UE 5.8 Global Tracing: ScreenProbeTraceScreenTexturesCS and
- * ScreenProbeTraceVoxelsCS, LumenScreenProbeTracing.usf:54-366 and 712-891). One group per probe, one ray per
- * equal-area octahedral texel (LUMEN_PROBE_TRACE_RES^2); the directions shift together inside their texels
- * by the probe tile's jitter of this frame (LumenProbeRayJitter).
+ * Lumen screen probe gather, tracing (UE 5.8 Global Tracing: ScreenProbeTraceScreenTexturesCS, CompactTraces and
+ * ScreenProbeTraceVoxelsCS, LumenScreenProbeTracing.usf:54-499 and 712-891). One ray per equal-area octahedral texel of
+ * every probe (LUMEN_PROBE_TRACE_RES^2); the directions shift together inside their texels by the probe tile's jitter
+ * of this frame (LumenProbeRayJitter).
  *
  * Each ray takes the first answer of these stages, each resuming LUMEN_TRACE_RESUME_PULLBACK before the
  * distance the previous one vouched for. Where the radiance cache covers the probe, the near stages stop at
  * the hand-off distance (TMin + the cell diagonal of the probe's clipmap, 3.6 m at clipmap 0):
  *  1. Hi-Z screen trace from the probe lifted off its surface by two projected half pixels along the
- *     normal. A hit is lit from last frame's scene colour at its reprojection, unless it falls in the
- *     outer screen band (stochastic vignette) or last frame's depth there disagrees (occluded or newly
- *     revealed); a rejected hit hands the distance field its crossing.
+ *     normal. A hit is lit from last frame's scene colour at its reprojection (where the hit surface was last
+ *     frame, lumen_motion.sh), unless it falls in the outer screen band (stochastic vignette) or last frame's
+ *     depth there disagrees (occluded or newly revealed); a rejected hit hands the distance field its crossing.
+ *     A lit hit whose surface moved against the probe by more than LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED of the
+ *     probe's depth this frame marks the ray moving (UE IsTraceMoving): the probe's lighting is changing, and the
+ *     filter and the temporal shorten its history (UE's fast update).
  *  2. Global distance field from the probe lifted LUMEN_SURFACE_BIAS along the ray and the normal, with dithered
  *     transparency where only two-sided meshes are near (lumen_global_sdf.sh; UE LumenScreenProbeTracing.usf:768). A
  *     hit reads the surface cache through the object grid, faded to black within one voxel of the origin against
@@ -18,54 +21,99 @@
  *  3. The radiance cache, interpolated at the probe's position (lumen_radiance_cache_sample.sh); beyond
  *     the cache's reach the distance field runs to the maximum trace distance and a miss reads the sky.
  *
+ * Three passes: compiled plain, the SCREEN pass (one group per probe) answers what stage 1 can and appends every
+ * other ray, with the distance the screen vouched for, to b_lumen_trace_rays; compiled with LUMEN_TRACE_FAR_FIELD,
+ * the FAR-FIELD pass (cs_lumen_probe_trace_far_field.sc, an indirect dispatch sized by
+ * cs_lumen_trace_far_field_args.sc) runs stages 2 and 3 over that dense list, so no distance-field march holds a
+ * wave whose other rays the screen answered (UE's CompactTraces). It stores a distance-field hit's march state in the
+ * ray's slot instead of its radiance; compiled with LUMEN_TRACE_HIT_SHADE, the HIT pass
+ * (cs_lumen_probe_trace_hit_shade.sc, the same dispatch) reads the surface cache at those hits. The card lookup needs
+ * as many registers as the march, and in one kernel the march ran at the occupancy of both.
+ *
  * Writes rgb = pre-exposed radiance, a = the distance the spatial filter's angle weight sees: the screen
  * hit's distance, the trace length for distance-field hits, the cache probes' hit distance for the
- * hand-off, the maximum trace distance for the sky.
+ * hand-off, the maximum trace distance for the sky; encoded with the moving flag (LumenEncodeTraceDistance).
  *
  * cs_lumen_probe_trace_visualize.sc compiles this file with LUMEN_VISUALIZE_TRACES for UE's
  * r.Lumen.ScreenProbeGather.VisualizeTraces (ScreenProbeSetupVisualizeTraces, LumenScreenProbeTracing.usf:893-1060):
- * one group traces again, with this frame's inputs, the probe nearest the visualized pixel - its rays are the
- * gather's own - and writes each ray as a line instead (lumen_visualize.sh), knowing which rays a screen or
+ * one group traces every stage of the probe nearest the visualized pixel again, with this frame's inputs - its rays
+ * are the gather's own - and writes each ray as a line instead (lumen_visualize.sh), knowing which rays a screen or
  * distance-field hit answered.
  */
+
+#if defined(LUMEN_VISUALIZE_TRACES)
+#define LUMEN_TRACE_SCREEN_STAGE 1
+#define LUMEN_TRACE_FAR_STAGES 1
+#elif defined(LUMEN_TRACE_FAR_FIELD) || defined(LUMEN_TRACE_HIT_SHADE)
+#define LUMEN_TRACE_FAR_STAGES 1
+#else
+#define LUMEN_TRACE_SCREEN_STAGE 1
+#endif
 
 #include "bgfx_compute.sh"
 #include "../common.sh"
 // eval_radiance_sh.
 #include "../lighting.sh"
 #include "lumen/lumen_common.sh"
+#ifdef LUMEN_TRACE_SCREEN_STAGE
 #include "lumen/lumen_screen_trace.sh"
+/// This frame's velocity buffer (where moving hit surfaces were last frame).
+#define LUMEN_VELOCITY_STAGE 12
+#include "lumen/lumen_motion.sh"
+#endif
+/// The distance-field hits compute their gradient where they are shaded (LumenShadeFieldSurface).
+#define LUMEN_GLOBAL_SDF_DEFER_HIT_NORMAL 1
 /// The global SDF's coverage (gi/sdf_clipmap.sh).
 #define SDF_CLIPMAP_COVERAGE_STAGE 10
+#define SDF_CLIPMAP_MIP_STAGE 9
 #include "lumen/lumen_global_sdf.sh"
 #include "lumen/lumen_radiance_cache_common.sh"
 #include "gi/gi_constants.sh"
 #include "gi/gi_pre_exposure.sh"
 
 SAMPLER2D(s_lumen_probe_records, 0);
-SAMPLER2D(s_lumen_hiz, 1);
-/// Last frame's scene colour, in last frame's pre-exposed space.
-SAMPLER2D(s_lumen_prev_color, 2);
-/// The environment SH (9 texels), absolute radiance.
-SAMPLER2D(s_lumen_env_sh, 3);
+/// The probes' importance-sampled ray slots (cs_lumen_probe_generate_rays.sc).
+SAMPLER2D(s_lumen_ray_info, 11);
 #ifdef LUMEN_VISUALIZE_TRACES
 /// The visualized probe's rays (lumen_visualize.sh), written in place of the trace radiance.
 BUFFER_RW(b_lumen_visualize_traces, vec4, 5);
 #else
 IMAGE2D_WO(i_lumen_trace_radiance, rgba16f, 5);
 #endif
+#ifdef LUMEN_TRACE_SCREEN_STAGE
+SAMPLER2D(s_lumen_hiz, 1);
+/// Last frame's scene colour, in last frame's pre-exposed space.
+SAMPLER2D(s_lumen_prev_color, 2);
 /// Last frame's device depth.
 SAMPLER2D(s_lumen_prev_depth, 6);
-/// The radiance cache: this frame's indirection, the bordered final atlas and the probes' hit distances.
+#endif
+#ifdef LUMEN_TRACE_FAR_STAGES
+/// The environment SH (9 texels), absolute radiance.
+SAMPLER2D(s_lumen_env_sh, 3);
+/// The radiance cache: this frame's indirection and the bordered final atlas (radiance, hit distance in alpha).
 BUFFER_RO(b_lumen_rc_indirection, uint, 7);
 SAMPLER2D(s_lumen_rc_final, 8);
-SAMPLER2D(s_lumen_rc_depth, 9);
-/// The probes' importance-sampled ray slots (cs_lumen_probe_generate_rays.sc).
-SAMPLER2D(s_lumen_ray_info, 11);
-/// The G-buffer normal (screen hits shaded from the surface cache, an experiment toggle).
-SAMPLER2D(s_lumen_normal, 12);
-
 #include "lumen/lumen_radiance_cache_sample.sh"
+#endif
+#if !defined(LUMEN_VISUALIZE_TRACES)
+/// The rays the screen pass leaves to the far-field pass: [0] = their count, then LUMEN_TRACE_RAY_STRIDE uints per ray
+/// - its trace texel (x | y << 16) and the distance the screen vouched for (float bits); the far-field pass replaces
+/// the distance with a distance-field hit's march state for the hit pass (LumenStoreFieldHit), or -1 without one.
+#define LUMEN_TRACE_RAY_STRIDE 4
+#if defined(LUMEN_TRACE_SCREEN_STAGE)
+BUFFER_RW(b_lumen_trace_rays, uint, 3);
+#elif defined(LUMEN_TRACE_FAR_FIELD)
+BUFFER_RW(b_lumen_trace_rays, uint, 1);
+#else
+BUFFER_RO(b_lumen_trace_rays, uint, 1);
+#endif
+
+/// The first uint of far ray @p index in b_lumen_trace_rays.
+uint LumenTraceRaySlot(uint index)
+{
+	return 1u + uint(LUMEN_TRACE_RAY_STRIDE) * index;
+}
+#endif
 
 /// The surface cache (lumen_surface_cache.sh): global-SDF hits read the cards' final lighting through the
 /// object grid when u_lumen_hit_lighting.x > 0.5 (the cache is lit), black otherwise.
@@ -82,8 +130,6 @@ uniform vec4 u_lumen_hit_lighting;
 /// stage 0.5 m out, bit 2 returns the global SDF at the probe instead of radiance (red outside / green inside at the
 /// surface point, blue outside at the distance-field origin, 1.0 per 5 cm).
 uniform vec4 u_lumen_trace;
-/// Last frame's TAA-unjittered view projection.
-uniform mat4 u_lumen_prev_view_proj;
 
 #define u_lumen_hiz_mip_count  int(u_lumen_trace.x)
 #define u_lumen_screen_traces  (u_lumen_trace.y > 0.0)
@@ -98,6 +144,7 @@ uniform mat4 u_lumen_prev_view_proj;
 /// Diagnostic: rays reaching the distance-field stage paint (start / near field, hit, 0), the others nothing.
 #define u_lumen_show_sdf_start ((uint(u_lumen_trace.w) & 128u) != 0u)
 
+#ifdef LUMEN_TRACE_SCREEN_STAGE
 /// One ray's screen stage.
 struct LumenScreenRay
 {
@@ -108,16 +155,20 @@ struct LumenScreenRay
 	/// The hit's distance when answered; otherwise how far from the probe the screen vouched for the ray
 	/// (proven free, or crossed by a hit it could not light).
 	float distance;
+	/// The answering hit's surface moved against the probe this frame (UE bFastMoving).
+	bool moving;
 };
 
-/// One ray's screen stage over at most @p max_distance.
+/// One ray's screen stage over at most @p max_distance, from a probe at view depth @p probe_depth whose surface moved
+/// @p probe_speed metres since last frame.
 LumenScreenRay LumenTraceScreenRay(vec3 position, vec3 normal, vec2 uv, float depth01, vec3 direction, float noise,
-                                   float max_distance)
+                                   float max_distance, float probe_speed, float probe_depth)
 {
 	LumenScreenRay result;
 	result.radiance = vec3_splat(0.0);
 	result.answered = false;
 	result.distance = 0.0;
+	result.moving = false;
 	vec3 origin = LumenScreenTraceOrigin(position, normal, uv, depth01);
 	LumenScreenRaySegment segment = LumenScreenSegment(origin, direction, max_distance);
 	if(!segment.valid)
@@ -143,10 +194,15 @@ LumenScreenRay LumenTraceScreenRay(vec3 position, vec3 normal, vec2 uv, float de
 			return result;
 		}
 	}
-	vec4 lit = LumenScreenHistoryRadiance(s_lumen_prev_color, s_lumen_prev_depth, u_lumen_prev_view_proj, trace_world,
+	vec3 prev_hit = LumenPrevWorldPosition(trace.position.xy, trace_world);
+	vec4 lit = LumenScreenHistoryRadiance(s_lumen_prev_color, s_lumen_prev_depth, u_lumen_prev_view_proj, prev_hit,
 	                                      trace.position.xy, noise, LUMEN_SCREEN_TRACE_HISTORY_DEPTH_TEST);
 	result.answered = lit.w > 0.5;
 	result.radiance = lit.xyz;
+	float hit_speed = length(trace_world - prev_hit);
+	result.moving = result.answered && u_lumen_fast_update &&
+	                abs(probe_speed - hit_speed) / max(probe_depth, LUMEN_TEMPORAL_MOVING_MIN_DEPTH) >
+	                    LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED;
 	if(!result.answered && u_lumen_rejected_hits_vouch_nothing)
 	{
 		result.distance = 0.0;
@@ -155,17 +211,15 @@ LumenScreenRay LumenTraceScreenRay(vec3 position, vec3 normal, vec2 uv, float de
 	if(u_lumen_voxel_screen_hits)
 	{
 		// Experiment: every screen hit answered (no vignette or history rejection) and shaded from the
-		// distance-field hits' store instead of last frame's colour.
+		// distance-field hits' store instead of last frame's colour, facing the field's gradient.
 		result.answered = true;
-		ivec2 normal_size = textureSize(s_lumen_normal, 0);
-		ivec2 normal_texel = min(ivec2(trace.position.xy * vec2(normal_size)), normal_size - ivec2(1, 1));
-		vec3 hit_normal = decodeNormalOctahedron(texelFetch(s_lumen_normal, normal_texel, 0).xy);
+		result.moving = false;
 		result.radiance = vec3_splat(0.0);
 		BRANCH
 		if(u_lumen_hits_read_surface_cache)
 		{
-			float voxel;
-			SdfSampleClipmapEx(trace_world, voxel);
+			float voxel = SdfSampleClipmapLevels(trace_world).voxel_size;
+			vec3 hit_normal = LumenGlobalSdfNormal(trace_world, voxel, -direction);
 			vec4 cards = LumenSampleGlobalSdfHit(trace_world, hit_normal, 0.5 * voxel, s_lumen_card_final);
 			if(cards.w > 0.0)
 			{
@@ -175,35 +229,69 @@ LumenScreenRay LumenTraceScreenRay(vec3 position, vec3 normal, vec2 uv, float de
 	}
 	return result;
 }
+#endif
 
-/// The distance-field stage over [@p t_start, @p t_end]: rgb = the surface cache at the hit, faded against
-/// self-lighting, a = 1; a = 0 on a miss. A hit no card covers is black, as in Lumen.
-vec4 LumenTraceDistanceField(vec3 position, vec3 normal, vec3 direction, float t_start, float t_end, LumenSdfDither dither)
+#ifdef LUMEN_TRACE_FAR_STAGES
+/// A distance-field hit's march state: enough to shade it later (LumenShadeFieldSurface), from the ray's origin and
+/// direction.
+struct LumenFieldSurface
 {
-	vec3 origin = position + LUMEN_SURFACE_BIAS * direction + LUMEN_SURFACE_BIAS * normal;
-	LumenSdfHit hit = LumenTraceGlobalSdfDithered(origin, direction, t_start, t_end, true, 0.0, 0.0, 1.0, dither);
-	if(!hit.hit)
-	{
-		return vec4_splat(0.0);
-	}
-	// The march stops short of the surface by its expansion; the surface cache is a surface store.
-	vec3 surface = origin + direction * (hit.t + hit.hit_field);
-	vec3 surface_normal = dot(hit.normal, direction) > 0.0 ? -hit.normal : hit.normal;
-	float self_lighting = smoothstep(LUMEN_SDF_SELF_LIGHTING_FADE_START * hit.voxel,
-	                                 LUMEN_SDF_SELF_LIGHTING_FADE_END * hit.voxel,
-	                                 hit.t);
+	bool hit;
+	vec3 origin;
+	vec3 direction;
+	/// LumenSdfHit's t, hit_field and voxel.
+	float t;
+	float hit_field;
+	float voxel;
+};
+
+/// The distance-field march's origin for a ray from @p position (normal @p normal) along @p direction.
+vec3 LumenFieldOrigin(vec3 position, vec3 normal, vec3 direction)
+{
+	return position + LUMEN_SURFACE_BIAS * direction + LUMEN_SURFACE_BIAS * normal;
+}
+
+/// The distance-field stage's march over [@p t_start, @p t_end], without the shading.
+LumenFieldSurface LumenMarchDistanceField(vec3 position, vec3 normal, vec3 direction, float t_start, float t_end,
+                                          LumenSdfDither dither)
+{
+	LumenFieldSurface surface;
+	surface.origin = LumenFieldOrigin(position, normal, direction);
+	surface.direction = direction;
+	LumenSdfHit hit =
+	    LumenTraceGlobalSdfDithered(surface.origin, direction, t_start, t_end, true, 0.0, 0.0, 1.0, dither);
+	surface.hit = hit.hit;
+	surface.t = hit.t;
+	surface.hit_field = hit.hit_field;
+	surface.voxel = hit.voxel;
+	return surface;
+}
+
+/// The surface cache at a distance-field hit, faded against self-lighting; a hit no card covers is black, as in
+/// Lumen. The march stops short of the surface by its expansion and the surface cache is a surface store, so the hit
+/// moves onto the surface; its normal is the field's gradient where the march stopped (LumenTraceGlobalSdfDithered's).
+vec3 LumenShadeFieldSurface(LumenFieldSurface surface)
+{
 	vec3 radiance = vec3_splat(0.0);
 	BRANCH
 	if(u_lumen_hits_read_surface_cache)
 	{
-		vec4 cards = LumenSampleGlobalSdfHit(surface, surface_normal, 0.5 * hit.voxel, s_lumen_card_final);
+		vec3 gradient = LumenGlobalSdfNormal(surface.origin + surface.direction * surface.t, surface.voxel,
+		                                     -surface.direction);
+		vec3 normal = dot(gradient, surface.direction) > 0.0 ? -gradient : gradient;
+		vec3 position = surface.origin + surface.direction * (surface.t + surface.hit_field);
+		vec4 cards = LumenSampleGlobalSdfHit(position, normal, 0.5 * surface.voxel, s_lumen_card_final);
 		if(cards.w > 0.0)
 		{
+			float self_lighting = smoothstep(LUMEN_SDF_SELF_LIGHTING_FADE_START * surface.voxel,
+			                                 LUMEN_SDF_SELF_LIGHTING_FADE_END * surface.voxel,
+			                                 surface.t);
 			radiance = GiCachedToView(cards.xyz / cards.w) * self_lighting;
 		}
 	}
-	return vec4(radiance, 1.0);
+	return radiance;
 }
+#endif
 
 #ifdef LUMEN_VISUALIZE_TRACES
 #include "lumen/lumen_adaptive_probes.sh"
@@ -282,121 +370,361 @@ void LumenStoreVisualizedTrace(ivec2 texel, vec3 radiance, float filter_distance
 }
 #endif
 
-NUM_THREADS(LUMEN_PROBE_TRACE_RES, LUMEN_PROBE_TRACE_RES, 1)
-void main()
+/// One probe ray: its probe (record, position, normal, screen tile) and direction, and how far its near stages run.
+struct LumenProbeRay
 {
-#ifdef LUMEN_VISUALIZE_TRACES
-	ivec2 tile = LumenVisualizeTracesProbe(int(gl_LocalInvocationIndex));
-#else
-	ivec2 tile = ivec2(gl_WorkGroupID.xy);
-#endif
-	ivec2 texel = ivec2(gl_LocalInvocationID.xy);
-	ivec2 trace_texel = tile * LUMEN_PROBE_TRACE_RES + texel;
-	vec4 record = texelFetch(s_lumen_probe_records, tile, 0);
-	if(record.x <= 0.0)
-	{
-#ifdef LUMEN_VISUALIZE_TRACES
-		LumenStoreVisualizedTrace(texel, vec3_splat(0.0), u_lumen_max_trace_distance, vec3_splat(0.0),
-		                          vec3_splat(0.0), false);
-#else
-		imageStore(i_lumen_trace_radiance, trace_texel, vec4(0.0, 0.0, 0.0, u_lumen_max_trace_distance));
-#endif
-		return;
-	}
-	ivec2 pixel = LumenProbeRecordPixel(record);
-	vec2 uv = LumenPixelUv(pixel);
-	float depth01 = record.w;
-	vec3 position = LumenWorldFromDepth(uv, depth01);
-	vec3 normal = LumenProbeNormal(record);
-	ivec2 screen_tile = LumenProbeScreenTile(tile, record);
-	vec2 jitter = LumenProbeRayJitter(screen_tile, u_lumen_frame_mod);
-	ivec3 ray = LumenProbeRaySlot(texel, texelFetch(s_lumen_ray_info, trace_texel, 0).x);
-	vec3 direction = LumenEquiAreaSphericalMapping((vec2(ray.xy) + jitter) / float(LumenRayResolution(ray.z)));
-	int cache_clipmap = u_lumen_radiance_cache ? LumenRcClipmapOf(position) : LUMEN_RADIANCE_CACHE_CLIPMAPS;
-	bool cached_far_field = cache_clipmap < LUMEN_RADIANCE_CACHE_CLIPMAPS;
-	float near_field = cached_far_field ? LumenRcHandOffDistance(cache_clipmap) : u_lumen_max_trace_distance;
-	vec3 radiance = vec3_splat(0.0);
-	float filter_distance = near_field;
-	float vouched = 0.0;
-	bool answered = false;
-	/// Which stage answered (the ray-source diagnostic): x screen, y distance field, z radiance cache.
-	vec3 source = vec3_splat(0.0);
-	/// The distance-field stage's start over the near field and whether it hit (the start diagnostic).
-	vec3 sdf_start = vec3_splat(0.0);
+	bool valid;
+	ivec2 texel;
+	ivec2 trace_texel;
+	ivec2 screen_tile;
+	vec4 record;
+	vec2 uv;
+	float depth01;
+	vec3 position;
+	vec3 normal;
+	vec3 direction;
+	/// The radiance cache clipmap holding the probe, or LUMEN_RADIANCE_CACHE_CLIPMAPS without one.
+	int cache_clipmap;
+	/// The hand-off distance where the cache covers the probe, the maximum trace distance otherwise.
+	float near_field;
+};
+
+/// The ray of texel @p texel of the probe at atlas tile @p tile.
+LumenProbeRay LumenMakeProbeRay(ivec2 tile, ivec2 texel)
+{
+	LumenProbeRay ray;
+	ray.texel = texel;
+	ray.trace_texel = tile * LUMEN_PROBE_TRACE_RES + texel;
+	ray.record = texelFetch(s_lumen_probe_records, tile, 0);
+	ray.valid = ray.record.x > 0.0;
+	ray.uv = LumenPixelUv(LumenProbeRecordPixel(ray.record));
+	ray.depth01 = ray.record.w;
+	ray.position = LumenWorldFromDepth(ray.uv, ray.depth01);
+	ray.normal = LumenProbeNormal(ray.record);
+	ray.screen_tile = LumenProbeScreenTile(tile, ray.record);
+	vec2 jitter = LumenProbeRayJitter(ray.screen_tile, u_lumen_frame_mod);
+	ivec3 slot = LumenProbeRaySlot(texel, texelFetch(s_lumen_ray_info, ray.trace_texel, 0).x);
+	ray.direction = LumenEquiAreaSphericalMapping((vec2(slot.xy) + jitter) / float(LumenRayResolution(slot.z)));
+	ray.cache_clipmap =
+	    (ray.valid && u_lumen_radiance_cache) ? LumenRcClipmapOf(ray.position) : LUMEN_RADIANCE_CACHE_CLIPMAPS;
+	ray.near_field = ray.cache_clipmap < LUMEN_RADIANCE_CACHE_CLIPMAPS ? LumenRcHandOffDistance(ray.cache_clipmap)
+	                                                                    : u_lumen_max_trace_distance;
+	return ray;
+}
+
+/// What a ray found: its radiance, the filter's distance, the moving flag, whether a screen or distance-field hit
+/// answered (UE bHit), which stage answered (the ray-source diagnostic: x screen, y distance field, z radiance cache)
+/// and the distance-field stage's start over the near field and whether it hit (the start diagnostic).
+struct LumenRayResult
+{
+	vec3 radiance;
+	float filter_distance;
+	bool moving;
+	bool hit;
+	vec3 source;
+	vec3 sdf_start;
+};
+
+#ifdef LUMEN_TRACE_SCREEN_STAGE
+/// Stage 1 for @p ray (no answer without screen traces).
+LumenScreenRay LumenTraceProbeScreen(LumenProbeRay ray)
+{
+	LumenScreenRay screen;
+	screen.radiance = vec3_splat(0.0);
+	screen.answered = false;
+	screen.distance = 0.0;
+	screen.moving = false;
 	BRANCH
 	if(u_lumen_screen_traces)
 	{
-		float noise = InterleavedGradientNoise(vec2(trace_texel) + 0.5, u_lumen_frame_mod);
-		LumenScreenRay screen = LumenTraceScreenRay(position, normal, uv, depth01, direction, noise, near_field);
-		answered = screen.answered;
-		radiance = screen.radiance;
-		vouched = screen.distance;
-		source.x = answered ? 1.0 : 0.0;
-		if(answered)
+		float noise = InterleavedGradientNoise(vec2(ray.trace_texel) + 0.5, u_lumen_frame_mod);
+		float probe_speed = 0.0;
+		BRANCH
+		if(u_lumen_fast_update)
 		{
-			filter_distance = screen.distance;
+			probe_speed = length(ray.position - LumenPrevWorldPosition(ray.uv, ray.position));
 		}
+		screen = LumenTraceScreenRay(ray.position, ray.normal, ray.uv, ray.depth01, ray.direction, noise, ray.near_field,
+		                             probe_speed, ray.record.x);
 	}
-	BRANCH
-	if(!answered)
-	{
-		float t_start = max(LUMEN_MIN_TRACE_DISTANCE, vouched - LUMEN_TRACE_RESUME_PULLBACK);
-		if(u_lumen_skip_near_field)
-		{
-			t_start = max(t_start, 0.5);
-		}
-		// UE DitherScreenCoord: the probe's uniform tile x the tracing resolution + the ray's texel.
-		LumenSdfDither dither = LumenSdfMakeDither(vec2(screen_tile * LUMEN_PROBE_TRACE_RES + texel), u_lumen_frame_mod);
-		vec4 field = LumenTraceDistanceField(position, normal, direction, t_start, near_field, dither);
-		answered = field.w > 0.5;
-		radiance = field.xyz;
-		source.y = answered ? 1.0 : 0.0;
-		sdf_start = vec3(saturate(t_start / max(near_field, 1e-4)), source.y, 0.0);
-	}
-#ifdef LUMEN_VISUALIZE_TRACES
-	/// A screen or distance-field hit answered the ray (UE bHit).
-	bool hit = answered;
+	return screen;
+}
+
+/// The result of a ray the screen answered.
+LumenRayResult LumenScreenResult(LumenScreenRay screen)
+{
+	LumenRayResult result;
+	result.radiance = screen.radiance;
+	result.filter_distance = screen.distance;
+	result.moving = screen.moving;
+	result.hit = true;
+	result.source = vec3(1.0, 0.0, 0.0);
+	result.sdf_start = vec3_splat(0.0);
+	return result;
+}
 #endif
-	BRANCH
-	if(!answered)
+
+#ifdef LUMEN_TRACE_FAR_STAGES
+/// What the far-field stages found before the distance field's shading: a hit leaves its radiance black and its
+/// surface to LumenShadeFieldSurface.
+struct LumenFarFieldTrace
+{
+	LumenRayResult result;
+	LumenFieldSurface surface;
+};
+
+/// Stages 2 and 3 for @p ray, resuming before the distance @p vouched the screen vouched for, unshaded.
+LumenFarFieldTrace LumenTraceFarFieldUnshaded(LumenProbeRay ray, float vouched)
+{
+	LumenRayResult result;
+	result.radiance = vec3_splat(0.0);
+	result.filter_distance = ray.near_field;
+	result.moving = false;
+	result.source = vec3_splat(0.0);
+	float t_start = max(LUMEN_MIN_TRACE_DISTANCE, vouched - LUMEN_TRACE_RESUME_PULLBACK);
+	if(u_lumen_skip_near_field)
 	{
-		if(cached_far_field)
+		t_start = max(t_start, 0.5);
+	}
+	// UE DitherScreenCoord: the probe's uniform tile x the tracing resolution + the ray's texel.
+	LumenSdfDither dither =
+	    LumenSdfMakeDither(vec2(ray.screen_tile * LUMEN_PROBE_TRACE_RES + ray.texel), u_lumen_frame_mod);
+	LumenFarFieldTrace trace;
+	trace.surface = LumenMarchDistanceField(ray.position, ray.normal, ray.direction, t_start, ray.near_field, dither);
+	result.hit = trace.surface.hit;
+	result.source.y = result.hit ? 1.0 : 0.0;
+	result.sdf_start = vec3(saturate(t_start / max(ray.near_field, 1e-4)), result.source.y, 0.0);
+	BRANCH
+	if(!result.hit)
+	{
+		if(ray.cache_clipmap < LUMEN_RADIANCE_CACHE_CLIPMAPS)
 		{
-			LumenRcSample far_field = LumenRcSampleInterpolated(position, direction, cache_clipmap);
-			radiance = GiCachedToView(far_field.radiance);
-			filter_distance = far_field.hit_distance;
-			source.z = 1.0;
+			LumenRcSample far_field = LumenRcSampleInterpolated(ray.position, ray.direction, ray.cache_clipmap);
+			result.radiance = GiCachedToView(far_field.radiance);
+			result.filter_distance = far_field.hit_distance;
+			result.source.z = 1.0;
 		}
 		else
 		{
-			radiance = eval_radiance_sh(s_lumen_env_sh, direction) * u_pre_exposure_value;
-			filter_distance = u_lumen_max_trace_distance;
+			result.radiance = eval_radiance_sh(s_lumen_env_sh, ray.direction) * u_pre_exposure_value;
+			result.filter_distance = u_lumen_max_trace_distance;
 		}
 	}
+	trace.result = result;
+	return trace;
+}
+
+/// Stages 2 and 3 for @p ray, shaded.
+LumenRayResult LumenTraceFarField(LumenProbeRay ray, float vouched)
+{
+	LumenFarFieldTrace trace = LumenTraceFarFieldUnshaded(ray, vouched);
+	BRANCH
+	if(trace.surface.hit)
+	{
+		trace.result.radiance = LumenShadeFieldSurface(trace.surface);
+	}
+	return trace.result;
+}
+#endif
+
+/// What a ray stores in place of its radiance, decided before any shading: the radiance x keep, or a diagnostic's
+/// override.
+struct LumenTraceOutput
+{
+	float keep;
+	bool is_override;
+	vec3 override_radiance;
+};
+
+LumenTraceOutput LumenMakeTraceOutput(LumenProbeRay ray, LumenRayResult result)
+{
+	LumenTraceOutput trace_output;
+	trace_output.keep = 1.0;
+	trace_output.is_override = false;
+	trace_output.override_radiance = vec3_splat(0.0);
 	BRANCH
 	if(u_lumen_keep_stage > 0)
 	{
-		float keep = u_lumen_keep_stage == 1 ? source.x : (u_lumen_keep_stage == 2 ? source.y : source.z);
-		radiance *= keep;
+		trace_output.keep = u_lumen_keep_stage == 1 ? result.source.x
+		                                            : (u_lumen_keep_stage == 2 ? result.source.y : result.source.z);
 	}
 	if(u_lumen_show_sdf_start)
 	{
-		radiance = sdf_start * (0.1 * u_pre_exposure_value);
+		trace_output.override_radiance = result.sdf_start * (0.1 * u_pre_exposure_value);
+		trace_output.is_override = true;
 	}
 	if(u_lumen_show_ray_sources)
 	{
 		// Each ray's answering stage as a unit radiance: the gather then shows each stage's share.
-		radiance = source * (0.1 * u_pre_exposure_value);
+		trace_output.override_radiance = result.source * (0.1 * u_pre_exposure_value);
+		trace_output.is_override = true;
 	}
+	// A diagnostic's samples stay out of the production path: fxc flattens an unguarded if.
+	BRANCH
 	if(u_lumen_show_sdf_bias)
 	{
-		float at_surface = SdfSampleClipmap(position);
-		float at_origin = SdfSampleClipmap(position + LUMEN_SURFACE_BIAS * normal);
-		radiance = vec3(max(at_surface, 0.0), max(-at_surface, 0.0), max(at_origin, 0.0)) * 20.0;
+		float at_surface = SdfSampleClipmap(ray.position);
+		float at_origin = SdfSampleClipmap(ray.position + LUMEN_SURFACE_BIAS * ray.normal);
+		trace_output.override_radiance = vec3(max(at_surface, 0.0), max(-at_surface, 0.0), max(at_origin, 0.0)) * 20.0;
+		trace_output.is_override = true;
 	}
-#ifdef LUMEN_VISUALIZE_TRACES
-	LumenStoreVisualizedTrace(texel, radiance, filter_distance, position, direction, hit);
+	return trace_output;
+}
+
+vec3 LumenApplyTraceOutput(LumenTraceOutput trace_output, vec3 radiance)
+{
+	return trace_output.is_override ? trace_output.override_radiance : radiance * trace_output.keep;
+}
+
+/// The radiance a ray stores: its result's, or a diagnostic's.
+vec3 LumenTraceOutputRadiance(LumenProbeRay ray, LumenRayResult result)
+{
+	return LumenApplyTraceOutput(LumenMakeTraceOutput(ray, result), result.radiance);
+}
+
+#if defined(LUMEN_VISUALIZE_TRACES)
+NUM_THREADS(LUMEN_PROBE_TRACE_RES, LUMEN_PROBE_TRACE_RES, 1)
+void main()
+{
+	ivec2 texel = ivec2(gl_LocalInvocationID.xy);
+	LumenProbeRay ray = LumenMakeProbeRay(LumenVisualizeTracesProbe(int(gl_LocalInvocationIndex)), texel);
+	if(!ray.valid)
+	{
+		LumenStoreVisualizedTrace(texel, vec3_splat(0.0), u_lumen_max_trace_distance, vec3_splat(0.0),
+		                          vec3_splat(0.0), false);
+		return;
+	}
+	LumenScreenRay screen = LumenTraceProbeScreen(ray);
+	LumenRayResult result;
+	BRANCH
+	if(screen.answered)
+	{
+		result = LumenScreenResult(screen);
+	}
+	else
+	{
+		result = LumenTraceFarField(ray, screen.distance);
+	}
+	LumenStoreVisualizedTrace(texel, LumenTraceOutputRadiance(ray, result), result.filter_distance, ray.position,
+	                          ray.direction, result.hit);
+}
+#elif defined(LUMEN_TRACE_FAR_FIELD) || defined(LUMEN_TRACE_HIT_SHADE)
+/// The far ray a thread takes (the far-field and hit passes share their dispatch).
+uint LumenFarRayIndex(uvec3 group, uint local)
+{
+	return (group.y * uint(LUMEN_TRACE_FAR_FIELD_ROW_GROUPS) + group.x) * uint(LUMEN_TRACE_FAR_FIELD_GROUP) + local;
+}
+
+/// The ray of far ray slot @p slot.
+LumenProbeRay LumenFarRay(uint slot)
+{
+	uint packed_texel = b_lumen_trace_rays[slot];
+	ivec2 trace_texel = ivec2(int(packed_texel & 0xFFFFu), int(packed_texel >> 16u));
+	ivec2 tile = trace_texel / LUMEN_PROBE_TRACE_RES;
+	return LumenMakeProbeRay(tile, trace_texel - tile * LUMEN_PROBE_TRACE_RES);
+}
+
+NUM_THREADS(LUMEN_TRACE_FAR_FIELD_GROUP, 1, 1)
+void main()
+{
+	uint index = LumenFarRayIndex(gl_WorkGroupID, gl_LocalInvocationIndex);
+	if(index >= b_lumen_trace_rays[0])
+	{
+		return;
+	}
+	uint slot = LumenTraceRaySlot(index);
+#if defined(LUMEN_TRACE_FAR_FIELD)
+	float vouched = uintBitsToFloat(b_lumen_trace_rays[slot + 1u]);
+	LumenProbeRay ray = LumenFarRay(slot);
+	LumenFarFieldTrace trace = LumenTraceFarFieldUnshaded(ray, vouched);
+	LumenTraceOutput trace_output = LumenMakeTraceOutput(ray, trace.result);
+	// A hit the output keeps is shaded by the hit pass, from its march state.
+	bool is_deferred = trace.surface.hit && !trace_output.is_override;
+	b_lumen_trace_rays[slot + 1u] = floatBitsToUint(is_deferred ? trace.surface.t : -1.0);
+	if(is_deferred)
+	{
+		b_lumen_trace_rays[slot + 2u] = floatBitsToUint(trace.surface.hit_field);
+		b_lumen_trace_rays[slot + 3u] = floatBitsToUint(trace.surface.voxel);
+		return;
+	}
+	imageStore(i_lumen_trace_radiance, ray.trace_texel,
+	           vec4(LumenApplyTraceOutput(trace_output, trace.result.radiance),
+	                LumenEncodeTraceDistance(trace.result.filter_distance, false)));
 #else
-	imageStore(i_lumen_trace_radiance, trace_texel, vec4(radiance, filter_distance));
+	float t = uintBitsToFloat(b_lumen_trace_rays[slot + 1u]);
+	if(t < 0.0)
+	{
+		return;
+	}
+	LumenProbeRay ray = LumenFarRay(slot);
+	LumenFieldSurface surface;
+	surface.hit = true;
+	surface.origin = LumenFieldOrigin(ray.position, ray.normal, ray.direction);
+	surface.direction = ray.direction;
+	surface.t = t;
+	surface.hit_field = uintBitsToFloat(b_lumen_trace_rays[slot + 2u]);
+	surface.voxel = uintBitsToFloat(b_lumen_trace_rays[slot + 3u]);
+	// A distance-field hit keeps the near field as its filter distance (LumenTraceFarFieldUnshaded).
+	float keep = u_lumen_keep_stage == 0 || u_lumen_keep_stage == 2 ? 1.0 : 0.0;
+	imageStore(i_lumen_trace_radiance, ray.trace_texel,
+	           vec4(LumenShadeFieldSurface(surface) * keep, LumenEncodeTraceDistance(ray.near_field, false)));
 #endif
 }
+#else
+/// The group's rays left to the far-field pass and their first slot in b_lumen_trace_rays.
+SHARED uint s_lumen_far_rays;
+SHARED uint s_lumen_far_base;
+
+NUM_THREADS(LUMEN_PROBE_TRACE_RES, LUMEN_PROBE_TRACE_RES, 1)
+void main()
+{
+	ivec2 texel = ivec2(gl_LocalInvocationID.xy);
+	int index = texel.y * LUMEN_PROBE_TRACE_RES + texel.x;
+	if(index == 0)
+	{
+		s_lumen_far_rays = 0u;
+	}
+	barrier();
+	LumenProbeRay ray = LumenMakeProbeRay(ivec2(gl_WorkGroupID.xy), texel);
+	LumenScreenRay screen;
+	screen.radiance = vec3_splat(0.0);
+	screen.answered = false;
+	screen.distance = 0.0;
+	screen.moving = false;
+	BRANCH
+	if(ray.valid)
+	{
+		screen = LumenTraceProbeScreen(ray);
+	}
+	// The unanswered rays take one slot each, the group one global add (the barriers stay in uniform flow control).
+	bool is_far = ray.valid && !screen.answered;
+	uint far_index = 0u;
+	if(is_far)
+	{
+		atomicFetchAndAdd(s_lumen_far_rays, 1u, far_index);
+	}
+	barrier();
+	if(index == 0)
+	{
+		uint base = 0u;
+		atomicFetchAndAdd(b_lumen_trace_rays[0], s_lumen_far_rays, base);
+		s_lumen_far_base = base;
+	}
+	barrier();
+	if(!ray.valid)
+	{
+		imageStore(i_lumen_trace_radiance, ray.trace_texel, vec4(0.0, 0.0, 0.0, u_lumen_max_trace_distance));
+		return;
+	}
+	if(is_far)
+	{
+		uint slot = LumenTraceRaySlot(s_lumen_far_base + far_index);
+		b_lumen_trace_rays[slot] = uint(ray.trace_texel.x) | (uint(ray.trace_texel.y) << 16u);
+		b_lumen_trace_rays[slot + 1u] = floatBitsToUint(screen.distance);
+		return;
+	}
+	LumenRayResult result = LumenScreenResult(screen);
+	imageStore(i_lumen_trace_radiance, ray.trace_texel,
+	           vec4(LumenTraceOutputRadiance(ray, result), LumenEncodeTraceDistance(result.filter_distance, result.moving)));
+}
+#endif

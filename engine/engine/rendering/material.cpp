@@ -48,6 +48,7 @@ auto material::get_cull_type() const -> cull_type
 void material::set_cull_type(cull_type val)
 {
     cull_type_ = val;
+    mark_changed();
 }
 
 auto material::get_render_states(bool apply_cull, bool depth_write, bool depth_test) const -> uint64_t
@@ -92,6 +93,7 @@ void pbr_material::set_alpha_mode(alpha_mode mode)
 {
     alpha_mode_ = mode;
     sync_surface_alpha_channel();
+    mark_changed();
 }
 
 void pbr_material::set_alpha_cutoff(float cutoff)
@@ -102,6 +104,7 @@ void pbr_material::set_alpha_cutoff(float cutoff)
         alpha_cutoff_ = 0.5f;
     }
     sync_surface_alpha_channel();
+    mark_changed();
 }
 
 void pbr_material::sync_surface_alpha_channel()

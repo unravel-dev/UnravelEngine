@@ -217,6 +217,9 @@ public:
         bool valid{false};
         /// Whether the directional light should apply it (the component checkbox).
         bool apply_to_lights{false};
+        /// A hash of everything the map and its placement depend on this frame (0 without a map): equal signatures
+        /// render the same shadow.
+        uint64_t signature{0};
     };
 
     auto init(rtti::context& ctx) -> bool;

@@ -98,8 +98,18 @@ public:
     auto run_direct_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_shadows, delta_t dt)
         -> gfx::frame_buffer::ptr;
 
-    auto run_indirect_lighting_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_reflection, delta_t dt)
-        -> gfx::frame_buffer::ptr;
+    /// The sky's irradiance SH (run_irradiance_pass): its texture and the flat ambient colour.
+    struct irradiance_pass_result
+    {
+        gfx::texture::ptr irradiance_tex;
+        math::vec3 global_color = {1.0f, 1.0f, 1.0f};
+        float global_intensity = 0.0f;
+    };
+    auto run_indirect_lighting_pass(const camera& camera,
+                                    gfx::render_view& rview,
+                                    const irradiance_pass_result& irradiance,
+                                    bool apply_reflection,
+                                    delta_t dt) -> gfx::frame_buffer::ptr;
 
     void run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_probes, delta_t dt);
 
@@ -114,7 +124,8 @@ public:
 
     void run_ssr_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
 
-    void run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams);
+    /// @p gi_active: the GI published this frame's indirect diffuse, which the indirect pass takes over SSIL's.
+    void run_ssil_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams, bool gi_active);
     /// The screen-space AO of the frame, right after the G-buffer: GTAO when its volume is
     /// enabled, otherwise ASSAO - never both.
     void run_screen_ao_pass(const camera& camera, gfx::render_view& rview, delta_t dt, const run_params& rparams);
@@ -234,6 +245,10 @@ public:
     /// @return true when the gather produced a result, which also means it needs PREV_DEPTH
     ///         snapshotted this frame for its temporal accumulation.
     auto run_lumen_gi_pass(const camera& camera, gfx::render_view& rview, const run_params& rparams) -> bool;
+
+    /// The render view's scale of GI_RESOLVE and GI_ROUGH_SPECULAR (the gather's histories): the GI intensity.
+    static constexpr const char* gi_resolve_scale = "GI_RESOLVE_SCALE";
+    static auto get_gi_resolve_scale(gfx::render_view& rview) -> float;
 
     /// This view's inputs to the Lumen passes under @p gi.
     auto make_lumen_run_params(const camera& camera, gfx::render_view& rview, const gi_settings& gi)
@@ -576,12 +591,6 @@ private:
 
     } debug_visualization_program_;
 
-    struct irradiance_pass_result
-    {
-        gfx::texture::ptr irradiance_tex;
-        math::vec3 global_color = {1.0f, 1.0f, 1.0f};
-        float global_intensity = 0.0f;
-    };
     auto run_irradiance_pass(scene& scn, gfx::render_view& rview) -> irradiance_pass_result;
 
     auto get_light_program(const light& l) const -> const color_lighting&;

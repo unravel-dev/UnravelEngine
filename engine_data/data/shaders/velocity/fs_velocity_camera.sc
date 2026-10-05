@@ -32,7 +32,8 @@ void main()
     vec3 prev_clip = clipTransform(prev_clip4.xyz / prev_clip4.w);
     vec2 prev_uv = prev_clip.xy * 0.5 + 0.5;
 
-    // RG = total velocity; BA = object-only component, exactly zero for camera-derived
-    // pixels so consumers take their static/legacy path here unconditionally.
-    gl_FragColor = vec4(uv - prev_uv, 0.0, 0.0);
+    // RG = total velocity; B = object-only motion, exactly zero for camera-derived pixels so
+    // consumers take their static/legacy path here unconditionally; A = last frame's view
+    // depth (velocity_encoding.sh).
+    gl_FragColor = vec4(uv - prev_uv, 0.0, prev_clip4.w);
 }

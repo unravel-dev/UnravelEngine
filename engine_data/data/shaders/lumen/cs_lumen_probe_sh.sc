@@ -5,8 +5,10 @@
  * angle each), project onto the nine SH3 basis functions with uniform 1/N^2 weights - 1/(4 pi) of the true
  * projection, which the integrate's 4 pi undoes.
  *
- * Writes LUMEN_SH_TEXELS_PER_PROBE texels per probe along x: [0] = (c0 rgb, 0), then per colour
- * channel c: [1 + 2c] = (c1, c2, c3, c4), [2 + 2c] = (c5, c6, c7, c8). Unlit probes write zeros.
+ * Writes LUMEN_SH_TEXELS_PER_PROBE texels per probe along x: [0] = (c0 rgb, the probe's moving fraction), then per
+ * colour channel c: [1 + 2c] = (c1, c2, c3, c4), [2 + 2c] = (c5, c6, c7, c8). Unlit probes write zero coefficients.
+ * The moving fraction (cs_lumen_probe_composite.sc) rides along for the integrate, which reads the four texels [0] of
+ * its probes anyway.
  */
 
 #include "bgfx_compute.sh"
@@ -16,6 +18,8 @@
 SAMPLER2D(s_lumen_probe_filtered, 0);
 SAMPLER2D(s_lumen_probe_records, 1);
 IMAGE2D_WO(i_lumen_probe_sh, rgba16f, 2);
+/// One texel per probe: the fraction of its rays that hit a moving surface.
+SAMPLER2D(s_lumen_probe_moving, 3);
 
 #define LUMEN_PROBE_TEXELS (LUMEN_PROBE_TRACE_RES * LUMEN_PROBE_TRACE_RES)
 #define LUMEN_SH3_COEFFICIENTS 9
@@ -57,12 +61,15 @@ float LumenProjectCoefficient(int channel, int k)
 	return sum * (1.0 / float(LUMEN_PROBE_TEXELS));
 }
 
-/// Storage texel @p slot of the probe (see the header for the layout).
-vec4 LumenPackShTexel(int slot)
+/// Storage texel @p slot of the probe at @p tile (see the header for the layout).
+vec4 LumenPackShTexel(int slot, ivec2 tile)
 {
 	if(slot == 0)
 	{
-		return vec4(s_coefficients[0], s_coefficients[LUMEN_SH3_COEFFICIENTS], s_coefficients[2 * LUMEN_SH3_COEFFICIENTS], 0.0);
+		return vec4(s_coefficients[0],
+		            s_coefficients[LUMEN_SH3_COEFFICIENTS],
+		            s_coefficients[2 * LUMEN_SH3_COEFFICIENTS],
+		            texelFetch(s_lumen_probe_moving, tile, 0).x);
 	}
 	int channel = (slot - 1) / 2;
 	int first = channel * LUMEN_SH3_COEFFICIENTS + ((slot - 1) % 2 == 0 ? 1 : 5);
@@ -91,6 +98,6 @@ void main()
 	barrier();
 	if(index < LUMEN_SH_TEXELS_PER_PROBE)
 	{
-		imageStore(i_lumen_probe_sh, ivec2(tile.x * LUMEN_SH_TEXELS_PER_PROBE + index, tile.y), LumenPackShTexel(index));
+		imageStore(i_lumen_probe_sh, ivec2(tile.x * LUMEN_SH_TEXELS_PER_PROBE + index, tile.y), LumenPackShTexel(index, tile));
 	}
 }

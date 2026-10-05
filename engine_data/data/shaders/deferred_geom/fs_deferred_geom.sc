@@ -30,6 +30,8 @@ uniform vec4 u_dither_threshold; //.x = alpha threshold .y = distance threshold
 #define u_surface_alpha_test_value u_surface_data.w
 #define u_surface_metalness_roughness_combined u_surface_data2.x
 #define u_surface_normal_reconstruct_z u_surface_data2.y
+#define u_surface_two_sided (u_surface_data2.z > 0.5f)
+#define u_surface_alpha_cutout (u_surface_data2.w > 0.5f)
 
 #define u_camear_near u_camera_clip_planes.x
 #define u_camear_far u_camera_clip_planes.y
@@ -69,8 +71,24 @@ void main()
 	vec3 view_direction = u_camera_wpos.xyz - v_wpos;
 	vec3 tangent_space_normal = getTangentSpaceNormal( s_tex_normal, texcoords, bumpiness, u_surface_normal_reconstruct_z );
 
+	// A two-sided material's back face turns its normal toward the viewer (UE TwoSidedSign on the tangent frame's
+	// normal axis). The triangle's normal from the position derivatives tells which side the viewer is on and which
+	// side the vertex normals face; both products use it, so each backend's screen-axis convention cancels. A card
+	// capture places u_camera_wpos far along its capture direction, which makes the same test hold there.
+	// A uniform branch: fxc evaluates both sides of &&, which put the derivatives on every material's pixels.
+	vec3 vertex_normal = v_wnormal;
+	BRANCH
+	if(u_surface_two_sided)
+	{
+		vec3 face_normal = cross(dFdx(v_wpos), dFdy(v_wpos));
+		if(dot(face_normal, view_direction) * dot(face_normal, v_wnormal) < 0.0f)
+		{
+			vertex_normal = -v_wnormal;
+		}
+	}
+
 	//mat3 tangent_to_world_space = computeTangentToWorldSpaceMatrix(normalize(v_wnormal), normalize(view_direction), texcoords.xy);
-	mat3 tangent_to_world_space = constructTangentToWorldSpaceMatrix(normalize(v_wtangent), normalize(v_wbitangent), normalize(v_wnormal));
+	mat3 tangent_to_world_space = constructTangentToWorldSpaceMatrix(normalize(v_wtangent), normalize(v_wbitangent), normalize(vertex_normal));
 
 	vec3 wnormal = normalize( mul( tangent_to_world_space, tangent_space_normal ).xyz );
 	vec4 albedo_color = texture2D(s_tex_color, texcoords) * u_base_color;
@@ -89,9 +107,13 @@ void main()
 	float threshold = mix(1.0f - abs_param, abs_param, is_positive);  // Positive: abs_param, Negative: 1-abs_param
 	bool lod_discard = (dither - threshold) * sign(lod_param) > 0.0f;
 
-	if((albedo_color.a + 0.01f + (dither * (1.0f - alpha_test_value)) < 1.0f) ||
-	(distance_factor + dither < 1.0f) ||
-	lod_discard)
+	bool alpha_discard = albedo_color.a + 0.01f + (dither * (1.0f - alpha_test_value)) < 1.0f;
+#ifdef DEFERRED_GEOM_CARD_CAPTURE
+	// A card capture keeps every texel of a masked material (fs_deferred_geom_card_capture.sc); an opaque material's
+	// dithered alpha covers what the view shows.
+	alpha_discard = alpha_discard && !u_surface_alpha_cutout;
+#endif
+	if(alpha_discard || (distance_factor + dither < 1.0f) || lod_discard)
 	{
 		discard;
 	}

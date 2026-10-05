@@ -43,6 +43,23 @@ namespace ANONYMOUS
 {
 /// Border fade of the cloud shadow map in map space (fraction of the half extent).
 constexpr float cloud_shadow_border_fade = 0.08f;
+
+/// The cloud_shadow.sh uniforms of @p shadow (u_cloudShadow, u_cloudShadow2) and whether the lights apply it.
+struct cloud_shadow_uniforms
+{
+    math::vec4 placement{0.0f};
+    math::vec4 layer{0.0f};
+    bool is_applied = false;
+};
+
+auto make_cloud_shadow_uniforms(const atmospheric_pass_perez::cloud_shadow_result& shadow) -> cloud_shadow_uniforms
+{
+    cloud_shadow_uniforms uniforms;
+    uniforms.is_applied = shadow.valid && shadow.apply_to_lights && shadow.map;
+    uniforms.placement = math::vec4(shadow.origin.x, shadow.origin.y, 1.0f / std::max(shadow.extent, 1.0f), shadow.opacity);
+    uniforms.layer = math::vec4(uniforms.is_applied ? 1.0f : 0.0f, shadow.base_world_y, cloud_shadow_border_fade, 0.0f);
+    return uniforms;
+}
 /// Period of the contact-shadow dither's temporal offset (frames); TAA integrates it.
 constexpr int contact_shadow_dither_frames = 16;
 /// RBUFFER's clear, packed RGBA8 (bgfx converts it for float targets): black with alpha 1 - no
@@ -58,8 +75,10 @@ constexpr float lumen_clipmap_min_detail = 0.01f;
 constexpr float lumen_clipmap_max_detail = 100.0f;
 
 /// The global distance field Lumen traces (its hits read the surface cache) in Lumen's layout (lumen_constants.h),
-/// with the view's rebuild budget, level blend and the smallest object its scene detail keeps.
-auto make_lumen_clipmap_settings(const gi_settings& gi, bool compose_on_gpu) -> global_sdf_clipmap::settings
+/// with the view's rebuild budget, level blend and the smallest object its scene detail keeps, partially updated
+/// unless @p experiments holds lumen_pass::experiment_no_sdf_partial_updates.
+auto make_lumen_clipmap_settings(const gi_settings& gi, bool compose_on_gpu, uint64_t experiments)
+    -> global_sdf_clipmap::settings
 {
     const auto& field = gi.distance_field;
     global_sdf_clipmap::settings settings;
@@ -71,6 +90,7 @@ auto make_lumen_clipmap_settings(const gi_settings& gi, bool compose_on_gpu) -> 
     settings.blend_voxels = std::max(field.level_blend_band, 0.0f);
     settings.object_radius_scale =
         1.0f / std::clamp(gi.scene.detail, lumen_clipmap_min_detail, lumen_clipmap_max_detail);
+    settings.partial_updates = (experiments & lumen_pass::experiment_no_sdf_partial_updates) == 0u;
     return settings;
 }
 } // namespace ANONYMOUS
@@ -951,6 +971,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // read it.
     run_cloud_shadow_pass(scn, camera, rview);
 
+    // The sky's irradiance SH, before GI: the radiance cache, the screen probes and the card radiosity read this
+    // frame's sky on their misses (a view's first frame included), and the indirect pass composites it.
+    const irradiance_pass_result irradiance = run_irradiance_pass(scn, rview);
+
     // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
     target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, dt);
 
@@ -963,10 +987,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     }
 
     // SSIL pass
-    run_ssil_pass(camera, rview, params);
+    run_ssil_pass(camera, rview, params, gi_active);
 
     // Indirect lighting after SSIL so it can use the result.
-    target = run_indirect_lighting_pass(scn, camera, rview, build_reflection_probes, dt);
+    target = run_indirect_lighting_pass(camera, rview, irradiance, build_reflection_probes, dt);
 
     if(stages & pipeline_steps::atmospheric)
     {
@@ -1812,6 +1836,14 @@ namespace
 /// its linear colour): the one knob the sun-relative Perez sky follows (perez_luminance.h).
 /// The strongest active directional light wins; 0 when the scene has none, which keeps the
 /// fixed conversion.
+/// The camera moved further than auto_exposure_pass::camera_cut_distance since last frame: a cut, not a move.
+auto is_camera_cut(const camera& cam) -> bool
+{
+    // The camera recorded last frame's matrices before this frame's passes ran.
+    const math::vec3 previous_position = math::inverse(cam.get_prev_view()).get_position();
+    return math::distance(cam.get_position(), previous_position) > auto_exposure_pass::camera_cut_distance;
+}
+
 auto find_sun_luminous_intensity(scene& scn) -> float
 {
     float strongest = 0.0f;
@@ -2201,20 +2233,12 @@ auto deferred::run_direct_lighting_pass(scene& scn,
             {
                 // Cloud shadow map at slot 11 (after the 4 cascades). A white fallback keeps the
                 // sampler bound when there is no layer; the enable flag skips the read.
-                const bool use_cloud_shadow = cloud_shadow_.valid && cloud_shadow_.apply_to_lights && cloud_shadow_.map;
-                const float cloud_shadow[4] = {cloud_shadow_.origin.x,
-                                               cloud_shadow_.origin.y,
-                                               1.0f / std::max(cloud_shadow_.extent, 1.0f),
-                                               cloud_shadow_.opacity};
-                const float cloud_shadow2[4] = {use_cloud_shadow ? 1.0f : 0.0f,
-                                                cloud_shadow_.base_world_y,
-                                                ANONYMOUS::cloud_shadow_border_fade,
-                                                0.0f};
-                gfx::set_uniform(lprogram.u_cloudShadow, cloud_shadow);
-                gfx::set_uniform(lprogram.u_cloudShadow2, cloud_shadow2);
+                const auto cloud_shadow = ANONYMOUS::make_cloud_shadow_uniforms(cloud_shadow_);
+                gfx::set_uniform(lprogram.u_cloudShadow, cloud_shadow.placement);
+                gfx::set_uniform(lprogram.u_cloudShadow2, cloud_shadow.layer);
                 gfx::set_texture(lprogram.s_cloudShadow,
                                  11,
-                                 use_cloud_shadow ? cloud_shadow_.map : default_textures::get().white_texture());
+                                 cloud_shadow.is_applied ? cloud_shadow_.map : default_textures::get().white_texture());
             }
             bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
             auto topology = gfx::clip_quad(1.0f);
@@ -2230,9 +2254,9 @@ auto deferred::run_direct_lighting_pass(scene& scn,
     return lbuffer;
 }
 
-auto deferred::run_indirect_lighting_pass(scene& scn,
-                                          const camera& camera,
+auto deferred::run_indirect_lighting_pass(const camera& camera,
                                           gfx::render_view& rview,
+                                          const irradiance_pass_result& irradiance_result,
                                           bool apply_reflection,
                                           delta_t dt) -> gfx::frame_buffer::ptr
 {
@@ -2246,8 +2270,6 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
     const auto& pbuffer = rview.fbo_safe_get("PBUFFER");
     const auto& lbuffer = rview.fbo_get("LBUFFER");
-
-    const auto irradiance_result = run_irradiance_pass(scn, rview);
 
     gfx::render_pass pass("Indirect Lighting/Pass");
     pass.bind(lbuffer.get());
@@ -2298,7 +2320,7 @@ auto deferred::run_indirect_lighting_pass(scene& scn,
     const float indirect_params[4] = {indirect_diffuse_tex ? 1.0f : 0.0f,
                                       indirect_diffuse_is_ssil ? 1.0f : 0.0f,
                                       screen_ao.multi_bounce_albedo_cap,
-                                      0.0f};
+                                      get_gi_resolve_scale(rview)};
     gfx::set_uniform(iprogram.u_indirect_params, indirect_params);
     gfx::set_texture(iprogram.s_screen_ao, 9, screen_ao.texture);
     gfx::set_uniform(iprogram.u_screen_ao, screen_ao.params.data());
@@ -2741,9 +2763,11 @@ auto deferred::get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_
 
 void deferred::run_ssil_pass(const camera& camera,
                              gfx::render_view& rview,
-                             const run_params& rparams)
+                             const run_params& rparams,
+                             bool gi_active)
 {
-    if(!reflection_screen_stack_enabled(rparams) || !rparams.fill_ssil_params)
+    // Under GI the indirect pass reads GI_RESOLVE, never SSIL: nothing would consume the result.
+    if(gi_active || !reflection_screen_stack_enabled(rparams) || !rparams.fill_ssil_params)
     {
         ssil_pass_.release_resources(rview);
         rview.tex_remove("SSIL");
@@ -2907,9 +2931,7 @@ void deferred::run_auto_exposure_pass(gfx::render_view& rview,
     auto_exposure_pass::run_params params;
     params.input = input;
     params.delta_time = dt.count();
-    // The camera recorded last frame's matrices before this frame's passes ran.
-    const math::vec3 previous_position = math::inverse(camera.get_prev_view()).get_position();
-    params.camera_cut = math::distance(camera.get_position(), previous_position) > auto_exposure_pass::camera_cut_distance;
+    params.camera_cut = is_camera_cut(camera);
     params.pre_exposure = get_pre_exposure(rview).value;
     rparams.fill_auto_exposure_params(params);
     auto_exposure_pass_.run(rview, params);
@@ -3016,10 +3038,13 @@ void deferred::run_gi_scene_passes(scene& scn, const camera& camera, gfx::render
         clipmap_camera_ = camera.get_position();
         has_frozen_clipmap_camera_ = freeze_origin;
     }
+    view_cache.set_march_experiments(lumen_pass::get_sdf_march_experiments(surface_cache.get_experiment_flags()));
     // The GPU composes the voxels when its program loaded; otherwise the CPU does, so the cascade is never left empty.
     view_cache.update(surface_cache.get_clipmap_instances(),
                       clipmap_camera_,
-                      ANONYMOUS::make_lumen_clipmap_settings(gi, gi_clipmap_compose_pass_.is_valid()),
+                      ANONYMOUS::make_lumen_clipmap_settings(gi,
+                                                             gi_clipmap_compose_pass_.is_valid(),
+                                                             surface_cache.get_experiment_flags()),
                       surface_cache.get_content_revision());
     // The GPU composes the levels the update above marked dirty; without the program the CPU
     // composer already wrote and uploaded them.
@@ -3064,9 +3089,16 @@ void deferred::run_lumen_reflection_pass(gfx::render_view& rview, const lumen_ru
     lumen_reflection_pass::run_params params;
     params.gather = &gather_params;
     params.rough_specular = rview.tex_safe_get("GI_ROUGH_SPECULAR");
+    params.rough_specular_scale = get_gi_resolve_scale(rview);
     params.traced_output = rbuffer->get_texture(0);
     params.probe_output = pbuffer->get_texture(0);
     lumen_reflection_pass_.run(rview, params);
+}
+
+auto deferred::get_gi_resolve_scale(gfx::render_view& rview) -> float
+{
+    const auto* scale = rview.data().try_get<float>(gi_resolve_scale);
+    return scale ? *scale : 1.0f;
 }
 
 auto deferred::resolve_gi_settings(const run_params& rparams, gi_settings& gi) -> bool
@@ -3088,18 +3120,28 @@ auto deferred::run_lumen_gi_pass(const camera& camera, gfx::render_view& rview, 
     if(resolve_gi_settings(rparams, gi))
     {
         auto params = make_lumen_run_params(camera, rview, gi);
+        params.is_being_edited = rparams.is_being_edited;
         const auto& visualize = lumen_visualize_settings_;
         params.visualize_traces.enabled = visualize.screen_probe_traces;
         params.visualize_traces.freeze = visualize.screen_probe_traces_freeze;
         params.visualize_traces.cursor = visualize.cursor;
         run_lumen_surface_cache(camera, rview, *params.surface_cache, gi.scene);
         result = lumen_gather_pass_.run(rview, params);
+        rview.data().get_or_emplace<float>(gi_resolve_scale, 1.0f) = std::max(gi.diffuse.intensity, 0.0f);
         // Lumen's reflections follow its gather (UE: the screen probe gather, then the reflections), whose
         // rough specular they composite under the traced layer.
         if(result && lumen_reflections_own_view(rparams))
         {
             run_lumen_reflection_pass(rview, params);
         }
+    }
+    else
+    {
+        // GI is off for this camera: its surface cache, radiance cache and global distance field go (GTAO, ASSAO and
+        // SSIL release theirs the same way). They are rebuilt when GI comes back.
+        lumen_surface_cache_pass_.release_targets();
+        lumen_gather_pass_.release_resources();
+        rview.data().remove(surface_cache_view::view_key);
     }
     if(result)
     {
@@ -3126,19 +3168,29 @@ auto deferred::make_lumen_run_params(const camera& camera, gfx::render_view& rvi
     // Still the PREVIOUS frame's depth at this point: the snapshot happens later in the
     // frame, which is exactly what temporal reprojection needs to validate history.
     params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
-    // Last frame's environment SH (the irradiance pass runs later in the frame), the sky of the
-    // rays that leave the scene. Null on the first frame.
+    // This frame's environment SH (the irradiance pass runs before GI), the sky of the rays that leave the scene.
     params.irradiance_sh = rview.tex_safe_get("IRRADIANCE_SH");
     // This frame's Hi-Z pyramid (built earlier in the frame) for the screen traces.
     params.hiz = rview.tex_safe_get("HIZBUFFER");
     // Last frame's post-TAA linear scene color, the radiance of screen trace hits.
     params.prev_color = rview.tex_safe_get("PREV_SCENE_HDR");
+    // This frame's velocity buffer while the velocity pass drew movers this frame or the last (the gather history
+    // carries their fast update one frame): moving surfaces reproject from where they were. Without movers every
+    // surface is static and the GI passes skip the velocity reads; a buffer from an earlier frame would move them by
+    // stale motion.
+    constexpr uint64_t lumen_mover_frames = 1;
+    const uint64_t render_frame = gfx::get_render_frame();
+    const bool has_recent_movers = velocity_movers_frame_ != ~0ull && render_frame >= velocity_movers_frame_ &&
+                                   render_frame - velocity_movers_frame_ <= lumen_mover_frames;
+    params.velocity = velocity_run_active_ && has_recent_movers ? rview.tex_safe_get("VELOCITY") : nullptr;
     params.cam = &camera;
     // Every Lumen target, its history included, is in this run's pre-exposed space.
     params.pre_exposure = get_pre_exposure(rview);
     params.surface_cache = &engine::context().get_cached<surface_cache_system>();
     params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
     params.lumen_surface_cache = &lumen_surface_cache_pass_;
+    params.camera_cut = is_camera_cut(camera);
+    params.global_lighting_change = params.surface_cache->has_global_lighting_change();
     return params;
 }
 
@@ -3151,7 +3203,17 @@ void deferred::run_lumen_surface_cache(const camera& camera,
     const auto& ctx = engine::context();
     const gi_project_settings project_settings =
         ctx.has<settings>() ? ctx.get<settings>().global_illumination : gi_project_settings{};
+    const auto* view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+    // The cards' sunlight takes this run's cloud shadow as the deferred directional light does.
+    const auto cloud_uniforms = ANONYMOUS::make_cloud_shadow_uniforms(cloud_shadow_);
+    lumen_surface_cache_pass::cloud_shadow card_cloud_shadow;
+    card_cloud_shadow.map = cloud_uniforms.is_applied ? cloud_shadow_.map : nullptr;
+    card_cloud_shadow.placement = cloud_uniforms.placement;
+    card_cloud_shadow.layer = cloud_uniforms.layer;
+    card_cloud_shadow.signature = cloud_uniforms.is_applied ? cloud_shadow_.signature : 0u;
+    lumen_surface_cache_pass_.set_cloud_shadow(card_cloud_shadow);
     lumen_surface_cache_pass_.update(gi_scene,
+                                     view_cache != nullptr ? &view_cache->get_clipmap() : nullptr,
                                      camera.get_position(),
                                      camera.get_frustum(),
                                      scene_settings,
@@ -3160,7 +3222,7 @@ void deferred::run_lumen_surface_cache(const camera& camera,
     lumen_surface_cache_pass_.copy_captures();
     lumen_surface_cache_pass::lighting_inputs inputs;
     inputs.gi_scene = &gi_scene;
-    inputs.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
+    inputs.view_cache = view_cache;
     // Last frame's environment SH: the irradiance pass runs later in the frame.
     inputs.environment_sh = rview.tex_safe_get("IRRADIANCE_SH");
     inputs.view_exposure = get_pre_exposure(rview).value;
@@ -3184,14 +3246,23 @@ void deferred::capture_lumen_cards(const camera& camera, const surface_cache_sys
     const math::vec3 lod_params(0.0f, -1.0f, 1.0f);
     // One pass draws every capture: each draw's clip transform places it in its tile of the capture atlas and its
     // scissor keeps it there. The atlas holds this frame's captures only (the copy reads them next), so one clear of
-    // the whole atlas serves them all.
+    // the whole atlas serves them all - of its depth alone: the copy keeps a texel's colours only where the depth says
+    // a surface was drawn.
     gfx::render_pass pass("GI/Card Capture");
     pass.bind(lumen_surface_cache_pass_.get_capture_target().get());
-    pass.clear(BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x00000000, 1.0f, 0);
+    pass.clear(BGFX_CLEAR_DEPTH, 0x00000000, 1.0f, 0);
     for(const auto& cap : captures)
     {
         const auto& src = sources[cap.source_index];
-        const auto* submesh = src.owner ? src.owner->get_submesh(src.submesh_index) : nullptr;
+        // The LOD the cards were built from (UE captures a reduced LOD too, r.LumenScene.SurfaceCache.
+        // MeshTargetScreenSize): the card planes sit on that surface, and it costs a fraction of LOD 0.
+        uint32_t capture_lod = src.owner ? src.owner->get_lumen_cards_lod() : 0u;
+        const auto* submesh = src.owner ? src.owner->get_submesh(src.submesh_index, capture_lod) : nullptr;
+        if(submesh == nullptr && src.owner)
+        {
+            capture_lod = 0;
+            submesh = src.owner->get_submesh(src.submesh_index);
+        }
         if(submesh == nullptr || !src.material || !src.material->is<pbr_material>())
         {
             continue;
@@ -3204,7 +3275,7 @@ void deferred::capture_lumen_cards(const camera& camera, const surface_cache_sys
         gfx::set_uniform(program.u_camera_clip_planes, clip_planes);
         gfx::set_uniform(program.u_lod_params, lod_params);
         gfx::set_world_transform(&src.local_to_world);
-        src.owner->bind_render_buffers_for_submesh(submesh, 0);
+        src.owner->bind_render_buffers_for_submesh(submesh, capture_lod);
         const auto& pbr = static_cast<const pbr_material&>(*src.material);
         submit_pbr_material(program, pbr);
         // A card basis of the opposite orientation winds triangles the other way: flip culling.
@@ -3284,7 +3355,7 @@ void deferred::run_debug_visualization_pass(const camera& camera,
     const float visualize_indirect[4] = {float(tonemapping),
                                          screen_ao.multi_bounce_albedo_cap,
                                          indirect_diffuse_is_ssil ? 1.0f : 0.0f,
-                                         0.0f};
+                                         get_gi_resolve_scale(rview)};
     gfx::set_uniform(debug_visualization_program_.u_visualize_indirect, visualize_indirect);
     // The reflection views compose the two reflection buffers the way the indirect pass does.
     gfx::set_texture(debug_visualization_program_.s_tex[9], 9, pbuffer);
@@ -3424,7 +3495,7 @@ auto deferred::init(rtti::context& ctx) -> bool
 
     card_capture_program_.cache_uniforms();
     card_capture_program_.program =
-        load_program("deferred_geom/vs_deferred_geom_card_capture", "deferred_geom/fs_deferred_geom");
+        load_program("deferred_geom/vs_deferred_geom_card_capture", "deferred_geom/fs_deferred_geom_card_capture");
 
     velocity_program_.cache_uniforms();
     velocity_program_.program = load_program("velocity/vs_velocity", "velocity/fs_velocity");

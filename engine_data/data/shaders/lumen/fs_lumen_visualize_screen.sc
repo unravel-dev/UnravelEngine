@@ -15,6 +15,7 @@ $input v_texcoord0
 #include "../common.sh"
 #include "../lighting.sh"
 #include "../tonemapping/tonemapping.sh"
+#include "lumen/lumen_common.sh"
 #include "lumen/lumen_visualize.sh"
 
 /// The G-buffer's colour and normal targets and its depth.
@@ -23,7 +24,8 @@ SAMPLER2D(s_gbuffer1, 1);
 SAMPLER2D(s_gbuffer_depth, 2);
 /// The environment's radiance SH (9 texels, absolute radiance).
 SAMPLER2D(s_lumen_env_sh, 3);
-/// This frame's gather history: a = the frames accumulated, quantized to multiples of the maximum / 15.
+/// This frame's gather history: a = LumenEncodeHistoryAlpha (the frames accumulated, quantized to multiples of the
+/// maximum / 15, and the fast update amount).
 SAMPLER2D(s_lumen_history, 4);
 /// A copy of the finished image.
 SAMPLER2D(s_scene_color, 5);
@@ -75,7 +77,7 @@ vec3 LumenScreenProbeFramesAccumulated(vec2 uv)
 	float grey = dot(scene, vec3_splat(1.0)) / 3.0;
 	ivec2 size = textureSize(s_lumen_history, 0);
 	ivec2 texel = min(ivec2(uv * vec2(size)), size - ivec2(1, 1));
-	float frames = texelFetch(s_lumen_history, texel, 0).w;
+	float frames = LumenHistoryAlphaFrames(texelFetch(s_lumen_history, texel, 0).w, max(u_lumen_visualize_tile.z, 1.0));
 	float bits = floor(saturate(frames / max(u_lumen_visualize_tile.z, 1.0)) * LUMEN_HISTORY_FRAME_LEVELS + 0.5);
 	float amount = saturate(bits / LUMEN_HISTORY_FRAME_LEVELS);
 	return mix(vec3_splat(grey), vec3(amount, 0.0, 0.0), LUMEN_VISUALIZE_OVERLAY_OPACITY);

@@ -30,7 +30,6 @@ constexpr uint32_t atlas_probes_y = max_probes / atlas_probes_x;
 constexpr uint32_t probe_res = uint32_t(LUMEN_RADIANCE_CACHE_PROBE_RES);
 /// Mirror of LUMEN_RC_FINAL_RES: the probe map plus a one-texel octahedral border.
 constexpr uint32_t final_res = probe_res + 2u;
-constexpr uint32_t max_traces = uint32_t(LUMEN_RADIANCE_CACHE_MAX_TRACES);
 /// Mirror of LUMEN_RC_MAX_TILES_PER_PROBE.
 constexpr uint32_t max_tiles_per_probe = 16u;
 /// Mirror of LUMEN_RC_COUNTER_COUNT.
@@ -43,6 +42,9 @@ constexpr uint32_t probe_state_arrays = 3u;
 constexpr uint16_t indirect_slots = 3;
 /// A trace budget no frame reaches: a frame that does not continue the cache traces every probe.
 constexpr float unlimited_budget = 1.0e9f;
+/// The cache's frame counter travels as a float (u_lumen_rc_params.x): it restarts below 2^24, where floats stop
+/// holding every integer, and the cache rebuilds then (its probes' frame stamps would not compare across the restart).
+constexpr uint32_t frame_counter_limit = 1u << 24u;
 constexpr uint64_t storage_flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP |
                                    BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT;
 /// The final atlas is read bilinearly; its octahedral border makes the filtering seamless.
@@ -76,10 +78,10 @@ void lumen_radiance_cache::uniforms::cache_uniforms()
     cache_uniform(nullptr, s_lumen_probe_records, "s_lumen_probe_records", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_env_sh, "s_lumen_env_sh", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_rc_radiance, "s_lumen_rc_radiance", bgfx::UniformType::Sampler);
-    cache_uniform(nullptr, s_lumen_rc_depth, "s_lumen_rc_depth", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_lumen_rc_final, "s_lumen_rc_final", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
     cache_uniform(nullptr, s_sdf_clipmap_coverage, "s_sdf_clipmap_coverage", bgfx::UniformType::Sampler);
+    cache_uniform(nullptr, s_sdf_clipmap_mip, "s_sdf_clipmap_mip", bgfx::UniformType::Sampler);
 }
 
 lumen_radiance_cache::~lumen_radiance_cache()
@@ -142,8 +144,9 @@ auto lumen_radiance_cache::ensure_resources() -> bool
     indirection_[1] = make_uint_buffer(indirection_size);
     probe_state_ = make_uint_buffer(probe_state_arrays * max_probes);
     counters_ = make_uint_buffer(counter_count);
-    traces_ = make_uint_buffer(2u * max_traces);
-    tiles_ = make_uint_buffer(2u * max_traces * max_tiles_per_probe);
+    // Sized for a rebuild, which traces every probe of the pool (u_lumen_rc_trace_cap).
+    traces_ = make_uint_buffer(2u * max_probes);
+    tiles_ = make_uint_buffer(2u * max_probes * max_tiles_per_probe);
     args_ = bgfx::createIndirectBuffer(indirect_slots);
     radiance_atlas_ = std::make_shared<gfx::texture>(uint16_t(atlas_probes_x * probe_res),
                                                      uint16_t(atlas_probes_y * probe_res),
@@ -151,12 +154,6 @@ auto lumen_radiance_cache::ensure_resources() -> bool
                                                      1,
                                                      bgfx::TextureFormat::RGBA16F,
                                                      storage_flags);
-    depth_atlas_ = std::make_shared<gfx::texture>(uint16_t(atlas_probes_x * probe_res),
-                                                  uint16_t(atlas_probes_y * probe_res),
-                                                  false,
-                                                  1,
-                                                  bgfx::TextureFormat::R16F,
-                                                  storage_flags);
     final_atlas_ = std::make_shared<gfx::texture>(uint16_t(atlas_probes_x * final_res),
                                                   uint16_t(atlas_probes_y * final_res),
                                                   false,
@@ -177,7 +174,6 @@ void lumen_radiance_cache::release_resources()
     destroy_handle(tiles_);
     destroy_handle(args_);
     radiance_atlas_.reset();
-    depth_atlas_.reset();
     final_atlas_.reset();
 }
 
@@ -199,12 +195,21 @@ void lumen_radiance_cache::place_clipmaps(const math::vec3& camera)
     }
 }
 
+void lumen_radiance_cache::bind_counters(uint8_t stage) const
+{
+    bgfx::setBuffer(stage, counters_, bgfx::Access::Read);
+}
+
+auto lumen_radiance_cache::get_trace_cost_budget() const -> float
+{
+    return persistent_ ? float(trace_budget_ * uint32_t(LUMEN_RADIANCE_CACHE_COST_NORMAL)) : unlimited_budget;
+}
+
 void lumen_radiance_cache::set_cache_uniforms(bookkeeping mode) const
 {
     gfx::set_uniform(uniforms_.u_lumen_rc_clipmaps, clipmaps_.data(), uint16_t(clipmaps));
     gfx::set_uniform(uniforms_.u_lumen_rc_prev_clipmaps, prev_clipmaps_.data(), uint16_t(clipmaps));
-    const float budget = persistent_ ? float(trace_budget_ * uint32_t(LUMEN_RADIANCE_CACHE_COST_NORMAL))
-                                     : unlimited_budget;
+    const float budget = get_trace_cost_budget();
     const float params[4] = {float(frame_), budget, persistent_ ? 1.0f : 0.0f, float(int(mode))};
     gfx::set_uniform(uniforms_.u_lumen_rc_params, params);
     gfx::set_uniform(uniforms_.u_lumen_rc_camera, camera_.data());
@@ -280,14 +285,15 @@ void lumen_radiance_cache::run_trace(const frame_inputs& inputs) const
     trace_program_->begin();
     bgfx::setBuffer(0, traces_, bgfx::Access::Read);
     bgfx::setBuffer(1, tiles_, bgfx::Access::Read);
+    bgfx::setBuffer(2, counters_, bgfx::Access::Read);
     gfx::set_texture(uniforms_.s_lumen_env_sh,
                      3,
                      params.irradiance_sh ? params.irradiance_sh : default_textures::get().black_texture());
     gfx::set_texture(uniforms_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
     bgfx::setImage(5, radiance_atlas_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
-    bgfx::setImage(6, depth_atlas_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R16F);
-    const uint32_t experiments = params.surface_cache ? params.surface_cache->get_experiment_flags() : 0u;
+    const uint64_t experiments = params.surface_cache ? params.surface_cache->get_experiment_flags() : 0u;
     gfx::set_texture(uniforms_.s_sdf_clipmap_coverage, 10, lumen_pass::get_sdf_coverage(clipmap_gpu, experiments));
+    gfx::set_texture(uniforms_.s_sdf_clipmap_mip, 9, clipmap_gpu.get_mip_texture());
     if(params.lumen_surface_cache != nullptr)
     {
         params.lumen_surface_cache->bind_for_sampling(13, 14, 15, true);
@@ -300,7 +306,8 @@ void lumen_radiance_cache::run_trace(const frame_inputs& inputs) const
     set_cache_uniforms(bookkeeping::frame_start);
     // The trace's dithered transparency reads the frame (u_lumen_frame.y), its length the maximum trace distance.
     gfx::set_uniform(uniforms_.u_lumen_frame, inputs.frame);
-    gfx::set_uniform(uniforms_.u_lumen_settings, lumen_pass::make_settings_uniform(inputs.params->settings).data());
+    gfx::set_uniform(uniforms_.u_lumen_settings,
+                     lumen_pass::make_settings_uniform(inputs.params->settings, inputs.params->is_being_edited).data());
     gfx::set_uniform(uniforms_.u_sdf_clipmap_levels, clipmap_gpu.get_level_params(), global_sdf_clipmap::level_count);
     gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
     bgfx::dispatch(pass.id, trace_program_->native_handle(), args_, 1, 1);
@@ -312,7 +319,6 @@ void lumen_radiance_cache::run_filter() const
     gfx::render_pass pass("GI/Cache Filter");
     filter_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_rc_radiance, 0, radiance_atlas_);
-    gfx::set_texture(uniforms_.s_lumen_rc_depth, 1, depth_atlas_);
     bgfx::setBuffer(2, indirection_[current_], bgfx::Access::Read);
     bgfx::setBuffer(3, traces_, bgfx::Access::Read);
     bgfx::setImage(5, final_atlas_->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
@@ -333,9 +339,18 @@ auto lumen_radiance_cache::update(const frame_inputs& inputs) -> bool
     {
         return false;
     }
+    if(inputs.params->global_lighting_change)
+    {
+        persistent_ = false;
+    }
     current_ ^= 1u;
-    ++frame_;
-    trace_budget_ = lumen_pass::get_radiance_cache_trace_budget(inputs.params->settings.diffuse.update_speed);
+    if(++frame_ >= frame_counter_limit)
+    {
+        frame_ = 1;
+        persistent_ = false;
+    }
+    trace_budget_ = lumen_pass::get_radiance_cache_trace_budget(inputs.params->settings.diffuse.update_speed,
+                                                                inputs.params->is_being_edited);
     place_clipmaps(inputs.params->cam->get_position());
     if(!persistent_)
     {
@@ -362,11 +377,10 @@ auto lumen_radiance_cache::update(const frame_inputs& inputs) -> bool
     return true;
 }
 
-void lumen_radiance_cache::bind_for_sampling(uint8_t indirection_stage, uint8_t final_stage, uint8_t depth_stage) const
+void lumen_radiance_cache::bind_for_sampling(uint8_t indirection_stage, uint8_t final_stage) const
 {
     bgfx::setBuffer(indirection_stage, indirection_[current_], bgfx::Access::Read);
     gfx::set_texture(uniforms_.s_lumen_rc_final, final_stage, final_atlas_);
-    gfx::set_texture(uniforms_.s_lumen_rc_depth, depth_stage, depth_atlas_);
     gfx::set_uniform(uniforms_.u_lumen_rc_clipmaps, clipmaps_.data(), uint16_t(clipmaps));
 }
 

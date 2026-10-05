@@ -44,8 +44,8 @@ struct GpuLight
 	float cos_inner;
 	float cos_outer;
 	float falloff_exponent;
-	/// Index into the shadow atlas, or -1 when the light casts no resident shadow.
-	float shadow_slot;
+	/// The light casts shadows (light::casts_shadows): an unshadowed light reaches every point in its range.
+	bool casts_shadows;
 };
 
 GpuLight GpuLoadLight(int index)
@@ -65,7 +65,7 @@ GpuLight GpuLoadLight(int index)
 	light.cos_inner = l3.x;
 	light.cos_outer = l3.y;
 	light.falloff_exponent = l3.z;
-	light.shadow_slot = l3.w;
+	light.casts_shadows = l3.w > 0.0;
 	return light;
 }
 

@@ -17,6 +17,7 @@
 
 #include "bgfx_compute.sh"
 #include "../common.sh"
+#define LUMEN_REFLECTION_TILES_STAGE 13
 #include "lumen/lumen_reflection_common.sh"
 #include "gi/gi_reflection_sampling.sh"
 
@@ -49,7 +50,7 @@ struct LumenResolveCenter
 LumenResolveSum LumenResolveNeighbour(LumenResolveSum sum, ivec2 trace, vec3 position, vec3 normal, vec3 view,
                                       float alpha, float center_hit)
 {
-	vec4 ray = texelFetch(s_lumen_reflection_ray, trace, 0);
+	vec4 ray = LumenReflectionTraceRay(s_lumen_reflection_ray, trace);
 	if(ray.w <= 0.0)
 	{
 		return sum;
@@ -102,7 +103,7 @@ LumenResolveCenter LumenResolveUpsampledTraces(ivec2 pixel)
 	{
 		ivec2 corner_offset = ivec2(corner - (corner / 2) * 2, corner / 2);
 		ivec2 trace = base + corner_offset;
-		if(any(greaterThanEqual(trace, trace_size)) || texelFetch(s_lumen_reflection_ray, trace, 0).w <= 0.0)
+		if(any(greaterThanEqual(trace, trace_size)) || LumenReflectionTraceRay(s_lumen_reflection_ray, trace).w <= 0.0)
 		{
 			continue;
 		}
@@ -131,7 +132,8 @@ void main()
 {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
 	ivec2 view_size = ivec2(u_lumen_view_size);
-	if(pixel.x >= view_size.x || pixel.y >= view_size.y)
+	// A tile that traces nothing resolves nothing (the group is the tile at full resolution).
+	if(pixel.x >= view_size.x || pixel.y >= view_size.y || !LumenReflectionTileTraces(pixel))
 	{
 		return;
 	}

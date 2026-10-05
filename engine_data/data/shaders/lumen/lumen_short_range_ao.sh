@@ -3,10 +3,9 @@
 
 /*
  * The short-range AO's layout at LUMEN_SHORT_RANGE_AO_DOWNSAMPLE_FACTOR (1 at Epic: one texel per pixel; 2: half
- * resolution), which cs_lumen_short_range_ao.sc writes and
- * cs_lumen_short_range_ao_temporal.sc reconstructs from: each half-resolution texel holds the search of one
- * full-resolution pixel of its 2x2 block, the block's four pixels taken in turn over four frames and neighbouring blocks
- * out of phase (a 4-rooks pattern; UE GetDownsampleJitter2x2, StochasticLightingUpsample.ush:16-27, and
+ * resolution), which cs_lumen_short_range_ao.sc writes and the gather's temporal reconstructs from
+ * (lumen_short_range_ao_temporal.sh): each half-resolution texel holds the search of one full-resolution pixel of its
+ * 2x2 block, the block's four pixels taken in turn over four frames and neighbouring blocks out of phase (a 4-rooks pattern; UE GetDownsampleJitter2x2, StochasticLightingUpsample.ush:16-27, and
  * GetDownsampledCoordJitter, LumenMaterial.ush:87-101).
  *
  * The includer includes lumen_common.sh (u_lumen_frame, u_lumen_view).

@@ -19,6 +19,7 @@
 
 #include "../bgfx_compute.sh"
 #include "../shaderlib.sh"
+#include "../velocity/velocity_encoding.sh"
 
 SAMPLER2D(s_color, 0);
 SAMPLER2D(s_velocity, 1);
@@ -100,7 +101,7 @@ void main()
 		if(u_probe_params.z > 0.5)
 		{
 			vec4 velocity = texture2DLod(s_velocity, uv, 0.0);
-			valid = length(velocity.ba * size) <= PROBE_OBJECT_MOTION_PIXELS;
+			valid = VelocityObjectMotionPixels(velocity) <= PROBE_OBJECT_MOTION_PIXELS;
 			prev_uv = uv - velocity.rg;
 		}
 		valid = valid && prev_uv.x >= 0.0 && prev_uv.y >= 0.0 && prev_uv.x <= 1.0 && prev_uv.y <= 1.0;

@@ -10,6 +10,7 @@ $input v_texcoord0
 #include "../common.sh"
 #include "../lighting.sh"
 #include "../hiz_trace.sh"
+#include "../velocity/velocity_encoding.sh"
 #include "../pre_exposure.sh"
 
 SAMPLER2D(s_ssil_curr, 0);
@@ -184,8 +185,7 @@ void main()
     if(u_velocity_available > 0.5)
     {
         vec4 vel4 = texture2DLod(s_velocity, full_uv, 0.0);
-        vec2 vel_dim = vec2(textureSize(s_velocity, 0));
-        float object_w = smoothstep(0.5, 1.5, length(vel4.zw * vel_dim));
+        float object_w = smoothstep(0.5, 1.5, VelocityObjectMotionPixels(vel4));
         prev_uv = mix(prev_uv, full_uv - vel4.xy, object_w);
     }
 

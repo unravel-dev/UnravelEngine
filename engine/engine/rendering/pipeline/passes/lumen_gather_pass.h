@@ -54,7 +54,9 @@ public:
 
     /**
      * @brief Gathers indirect diffuse for every visible surface, and the short-range AO below the probe lattice.
-     * @return The resolve texture (full resolution), or null when the pass could not run this frame.
+     * @return The diffuse history this frame wrote (full resolution; rgb = E / pi pre-exposed, to be scaled by the GI
+     *         intensity; zero on the sky), or null when the pass could not run this frame. Its rough specular is
+     *         published as GI_ROUGH_SPECULAR (same scale).
      */
     auto run(gfx::render_view& rview, const lumen_run_params& params) -> gfx::texture::ptr;
 
@@ -62,6 +64,13 @@ public:
     /// UseShortRangeAmbientOcclusion).
     static auto uses_short_range_ao(const gi_settings::ambient_occlusion_settings& settings) -> bool;
     auto has_short_range_ao() const -> bool;
+
+    /// Frees what the gather keeps across views (the radiance cache) when GI turns off for its camera; the per-view
+    /// targets go with the render view's idle collection.
+    void release_resources()
+    {
+        radiance_cache_.release_resources();
+    }
 
     /// The diffuse history the gather wrote for @p rview this frame (rgb = the result, a = the frames it accumulates,
     /// quantized to multiples of the maximum / 15: UE's 4-bit count); null when the gather did not run this frame.
@@ -119,12 +128,19 @@ private:
     struct probe_programs
     {
         gpu_program::ptr generate_rays;
+        ///< The trace's screen pass (cs_lumen_probe_trace.sc) and its far-field pass over the rays the screen left
+        ///< (cs_lumen_probe_trace_far_field.sc), then its hit pass over the same rays
+        ///< (cs_lumen_probe_trace_hit_shade.sc).
         gpu_program::ptr trace;
+        gpu_program::ptr trace_far_field;
+        gpu_program::ptr trace_hit_shade;
         gpu_program::ptr composite;
         gpu_program::ptr filter;
         gpu_program::ptr sh;
         gpu_program::ptr border;
         gpu_program::ptr integrate;
+        ///< cs_lumen_integrate_ao.sc: the integrate with the short-range AO's accumulation.
+        gpu_program::ptr integrate_short_range_ao;
         ///< cs_lumen_probe_trace_visualize.sc; the gather runs without it.
         gpu_program::ptr trace_visualize;
 
@@ -142,7 +158,6 @@ private:
         gfx::program::uniform_ptr u_lumen_view;
         gfx::program::uniform_ptr u_lumen_trace;
         gfx::program::uniform_ptr u_lumen_temporal;
-        gfx::program::uniform_ptr u_lumen_prev_view_proj;
         gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_sdf_clipmap_levels;
         gfx::program::uniform_ptr u_sdf_clipmap_params;
@@ -162,12 +177,11 @@ private:
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_sdf_clipmap_coverage;
         gfx::program::uniform_ptr s_lumen_rc_final;
-        gfx::program::uniform_ptr s_lumen_rc_depth;
+        gfx::program::uniform_ptr s_sdf_clipmap_mip;
         gfx::program::uniform_ptr u_lumen_options;
         gfx::program::uniform_ptr u_lumen_settings;
         gfx::program::uniform_ptr u_lumen_ray_gen;
         gfx::program::uniform_ptr u_lumen_prev_probe;
-        gfx::program::uniform_ptr u_lumen_prev_inv_view_proj;
         gfx::program::uniform_ptr s_lumen_ray_info;
         gfx::program::uniform_ptr s_lumen_screen_data;
         gfx::program::uniform_ptr s_lumen_history_records;
@@ -175,6 +189,9 @@ private:
         gfx::program::uniform_ptr s_lumen_rough_history;
         gfx::program::uniform_ptr s_lumen_probe_border;
         gfx::program::uniform_ptr u_lumen_visualize_traces;
+        gfx::program::uniform_ptr s_lumen_probe_moving;
+        /// Last frame's view projection and the velocity buffer (lumen_motion.sh).
+        lumen_pass::motion_uniforms motion;
 
         void cache_uniforms();
     } uniforms_;
@@ -202,19 +219,22 @@ private:
         std::array<float, 4> prev_probe{};
     };
 
-    /// The frame's probe textures, owned by the render view. Records and the filter's atlases alternate
-    /// per frame: last frame's records and final filtered radiance are the importance sampler's history.
+    /// The frame's probe textures, owned by the render view. Records and the filtered radiance alternate per frame:
+    /// last frame's records and filtered radiance are the importance sampler's history. The filter passes before the
+    /// last alternate with the trace radiance, which the composite has consumed.
     struct probe_targets
     {
         gfx::texture::ptr records;
         gfx::texture::ptr trace_radiance;
         gfx::texture::ptr probe_radiance;
-        std::array<gfx::texture::ptr, 2> filtered;
+        gfx::texture::ptr filtered;
         gfx::texture::ptr sh;
         ///< The final filtered radiance with its octahedral border, bilinear (cs_lumen_probe_border.sc).
         gfx::texture::ptr probe_border;
         gfx::texture::ptr ray_info;
         gfx::texture::ptr screen_data;
+        ///< One texel per probe: the fraction of its rays that hit a moving surface (cs_lumen_probe_composite.sc).
+        gfx::texture::ptr probe_moving;
         gfx::texture::ptr history_records;
         gfx::texture::ptr history_radiance;
         /// Last frame wrote the history textures with this frame's layout.
@@ -237,8 +257,6 @@ private:
     /// at UE's fixed index while the traces are visualized.
     static auto make_frame_layout(const usize32_t& view_size, float quality, bool is_jitter_fixed) -> frame_layout;
     auto acquire_probe_targets(gfx::render_view& rview, const frame_layout& layout) const -> probe_targets;
-    /// The filter atlas the last of LUMEN_FILTER_PASSES writes.
-    static auto final_filter_index() -> size_t;
     auto acquire_history(gfx::render_view& rview, const lumen_run_params& params, const usize32_t& size)
         -> history_targets;
 
@@ -249,6 +267,9 @@ private:
     {
         experiment_no_spatial_filter = 1u << 0u,
         experiment_uniform_rays = 1u << 1u,
+        ///< The composite re-bins with a second slice of the ray jitter (a constant offset of it) instead of
+        ///< LumenProbeRebinDither.
+        experiment_jitter_slice_dither = 1u << 3u,
         ///< Rays reaching the distance-field stage paint (start / near field, hit, 0) instead of radiance.
         experiment_show_sdf_start = 1u << 7u,
         experiment_no_radiance_cache = 1u << 2u,
@@ -263,7 +284,7 @@ private:
         ///< Keep one tracing stage's radiance: low = screen, high = distance field, both = radiance cache.
         experiment_keep_stage_low = 1u << 14u,
         experiment_keep_stage_high = 1u << 15u,
-        ///< The resolve paints the pixels the uniform probes cannot interpolate (cs_lumen_integrate.sc).
+        ///< The diffuse paints the pixels the uniform probes cannot interpolate (cs_lumen_integrate.sc).
         experiment_show_interpolation_fallback = 1u << 22u,
         ///< The short-range AO's noise rotates by a per-frame hash instead of the R2 sequence over frames.
         experiment_short_range_ao_hash_noise = 1u << 23u,
@@ -290,6 +311,9 @@ private:
                    const frame_layout& layout,
                    const probe_targets& targets,
                    bool radiance_cache_ready);
+    /// The rays the trace's screen pass can leave to its far-field pass this frame (cs_lumen_probe_trace.sc
+    /// b_lumen_trace_rays: a count, then trace_ray_stride uints per ray), grown to @p rays when smaller.
+    void ensure_trace_rays(uint32_t rays);
     /// The trace programs' inputs: every stage but the output (5) and the uniforms.
     void bind_trace_inputs(const lumen_run_params& params,
                            const frame_layout& layout,
@@ -301,6 +325,8 @@ private:
                               const probe_targets& targets,
                               bool radiance_cache_ready);
     void run_composite(const frame_layout& layout, const probe_targets& targets);
+    /// Binds the velocity buffer at @p velocity_stage with last frame's view projection (lumen_motion.sh).
+    void bind_motion(const lumen_run_params& params, uint8_t velocity_stage) const;
     /// Binds the radiance cache for the hand-off read at stages 7-9, or neutral textures without it.
     void bind_radiance_cache(bool radiance_cache_ready) const;
     /// Binds the surface cache for global-SDF hits at stages 13-15 (hits shade black without it).
@@ -311,19 +337,28 @@ private:
     void run_sh(const frame_layout& layout, const probe_targets& targets, const gfx::texture::ptr& filtered);
     /// The final filtered radiance with its octahedral border, for the rough specular's bilinear lookups.
     void run_border(const frame_layout& layout, const probe_targets& targets, const gfx::texture::ptr& filtered);
+    /// The per-pixel integrate and temporal; with @p short_range_ao's search, the AO accumulates beside the diffuse.
     void run_integrate(const lumen_run_params& params,
                        const frame_layout& layout,
                        const probe_targets& targets,
                        const history_targets& history,
-                       const gfx::texture::ptr& resolve,
-                       const gfx::texture::ptr& rough_specular);
-    /// The short-range AO over this frame's history taps, published as screen_ao_texture.
-    void run_short_range_ao(gfx::render_view& rview,
-                            const lumen_run_params& params,
-                            const frame_layout& layout,
-                            const history_targets& history);
+                       const lumen_short_range_ao_pass::run_params& short_range_ao_params,
+                       const lumen_short_range_ao_pass::frame_targets& short_range_ao);
+    /// The short-range AO pass's inputs this frame.
+    auto make_short_range_ao_params(const lumen_run_params& params, const frame_layout& layout) const
+        -> lumen_short_range_ao_pass::run_params;
+    /// Publishes this frame's screen AO (screen_ao_texture) for the lighting composite.
+    static void publish_short_range_ao(gfx::render_view& rview,
+                                       const lumen_run_params& params,
+                                       const lumen_short_range_ao_pass::frame_targets& short_range_ao);
 
     gpu_program::ptr place_program_;
+    /// cs_lumen_trace_far_field_args.sc: the far-field pass's dispatch arguments.
+    gpu_program::ptr far_field_args_program_;
+    /// See ensure_trace_rays, and the far-field pass's indirect dispatch arguments.
+    bgfx::DynamicIndexBufferHandle trace_rays_{bgfx::kInvalidHandle};
+    uint32_t trace_rays_capacity_ = 0;
+    bgfx::IndirectBufferHandle far_field_args_{bgfx::kInvalidHandle};
     /// One program set per tracing resolution, 4 x 4, 8 x 8 and 16 x 16 rays (get_probe_programs).
     std::array<probe_programs, 3> probe_programs_;
     /// This frame's set (run).
@@ -342,7 +377,11 @@ private:
     probe_placement probe_placement_{};
 
     /// This frame's experiment toggles (enum experiment).
-    uint32_t experiments_ = 0;
+    uint64_t experiments_ = 0;
+    /// This frame drops every gather history (a camera cut or a global lighting change).
+    bool starts_history_over_ = false;
+    /// A view above LUMEN_PROBE_MAX_VIEW_EXTENT has been reported (once per pass).
+    bool has_logged_view_too_large_ = false;
     /// This frame's u_lumen_settings (lumen_pass::make_settings_uniform), set with the layout uniforms.
     std::array<float, 4> settings_uniform_{};
     /// Consecutive frames without a usable history; reported once when it persists.

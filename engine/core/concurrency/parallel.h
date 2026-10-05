@@ -17,6 +17,11 @@
 #include <poolstl/poolstl.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <numeric>
+#include <thread>
+#include <vector>
 
 // Extends poolSTL's own namespace: this is an extension of that library rather than a wrapper
 // hiding it.
@@ -42,6 +47,45 @@ void for_each_par_if(bool parallel, Iterator first, Iterator last, Function func
     }
 
     std::for_each(first, last, func);
+}
+
+/// @brief Calls @a func(index) once for every index of @a costs, the most expensive first, each pool worker
+///        pulling the next index as soon as it finishes the last.
+///
+/// For ranges whose items differ wildly in cost. for_each_par_if hands each pool thread one contiguous run of
+/// the range, so expensive items that sit together all queue on a few threads while the rest of the pool idles.
+/// Pulling them in descending cost starts the longest items first and lets the short ones fill in behind them.
+///
+/// Every index runs exactly once, so an output slot per index written only by @a func needs no synchronisation.
+///
+/// @param parallel When false every index runs inline on the calling thread, in the same order; see
+///        for_each_par_if for why a caller already inside a parallel range must pass false.
+/// @param costs    Estimated cost per index. Only the order matters; equal costs keep index order.
+template<typename Cost, typename Function>
+void for_each_costliest_first_par_if(bool parallel, const std::vector<Cost>& costs, Function func)
+{
+    const std::size_t count = costs.size();
+    std::vector<std::size_t> order(count);
+    std::iota(order.begin(), order.end(), std::size_t(0));
+    std::stable_sort(order.begin(),
+                     order.end(),
+                     [&](std::size_t lhs, std::size_t rhs)
+                     {
+                         return costs[rhs] < costs[lhs];
+                     });
+    const std::size_t hardware_threads = std::max(std::thread::hardware_concurrency(), 1u);
+    const std::size_t worker_count = parallel ? std::min(hardware_threads, count) : std::size_t(1);
+    std::atomic<std::size_t> next{0};
+    for_each_par_if(worker_count > 1,
+                    iota_iter<std::size_t>(0),
+                    iota_iter<std::size_t>(worker_count),
+                    [&](std::size_t)
+                    {
+                        for(std::size_t k = next.fetch_add(1); k < count; k = next.fetch_add(1))
+                        {
+                            func(order[k]);
+                        }
+                    });
 }
 
 

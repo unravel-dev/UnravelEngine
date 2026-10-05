@@ -25,6 +25,8 @@
 IMAGE2D_WO(s_lumen_reflection_ray_out, rgba16f, 0);
 IMAGE2D_WO(s_lumen_reflection_radiance_out, rgba16f, 1);
 IMAGE2D_WO(s_lumen_reflection_hit_out, r32f, 2);
+/// The reflection tiles (lumen_reflection_common.sh).
+IMAGE2D_WO(s_lumen_reflection_tiles_out, r8, 3);
 SAMPLER2D(s_lumen_depth, 8);
 /// G-buffer target 1: octahedral normal, metalness, roughness.
 SAMPLER2D(s_lumen_normal, 9);
@@ -34,8 +36,9 @@ SAMPLER2D(s_lumen_prev_color, 11);
 /// Last frame's device depth.
 SAMPLER2D(s_lumen_prev_depth, 12);
 
-/// Last frame's TAA-unjittered view projection.
-uniform mat4 u_lumen_prev_view_proj;
+/// This frame's velocity buffer (where moving hit surfaces were last frame).
+#define LUMEN_VELOCITY_STAGE 13
+#include "lumen/lumen_motion.sh"
 
 /// The ray of a pixel: xyz = direction, w = cone angle (1 / pdf).
 vec4 LumenReflectionRay(ivec2 pixel, vec3 position, vec3 normal, float roughness)
@@ -70,19 +73,60 @@ vec3 LumenClampRayIntensity(vec3 color)
 	                                                         : color;
 }
 
+/// Whether any trace texel of the group traces.
+SHARED uint s_lumen_group_traces;
+
+/// Marks the reflection tiles group @p group covers from its thread @p index: one tile at full resolution, where
+/// @p group_traces decides; every one it touches at the trace downsample.
+void LumenWriteReflectionTiles(ivec2 group, int index, bool group_traces)
+{
+	int span = u_lumen_reflection_downsample;
+	ivec2 tile = group * span + ivec2(index - (index / span) * span, index / span);
+	int round_up = LUMEN_REFLECTION_TILE_PIXELS - 1;
+	ivec2 tile_count = (ivec2(u_lumen_view_size) + ivec2(round_up, round_up)) / LUMEN_REFLECTION_TILE_PIXELS;
+	if(index < span * span && all(lessThan(tile, tile_count)))
+	{
+		imageStore(s_lumen_reflection_tiles_out, tile, vec4(group_traces || span > 1 ? 1.0 : 0.0, 0.0, 0.0, 0.0));
+	}
+}
+
 NUM_THREADS(8, 8, 1)
 void main()
 {
 	ivec2 trace_coord = ivec2(gl_GlobalInvocationID.xy);
-	if(any(greaterThanEqual(trace_coord, LumenReflectionTraceSize())))
+	bool is_inside = all(lessThan(trace_coord, LumenReflectionTraceSize()));
+	ivec2 pixel = LumenReflectionTracePixel(min(trace_coord, LumenReflectionTraceSize() - ivec2(1, 1)));
+	vec4 gbuffer1 = texelFetch(s_lumen_normal, pixel, 0);
+	float roughness = gbuffer1.w;
+	bool traces = is_inside && LumenReflectionFadeAlpha(roughness) > 0.0;
+	// Most pixels are too rough to trace: only the others read their depth.
+	float depth01 = 1.0;
+	BRANCH
+	if(traces)
+	{
+		depth01 = texelFetch(s_lumen_depth, pixel, 0).x;
+		traces = depth01 < 1.0;
+	}
+	// The tile classification: barriers in uniform control flow, then a group that traces nothing writes nothing.
+	if(gl_LocalInvocationID.x == 0u && gl_LocalInvocationID.y == 0u)
+	{
+		s_lumen_group_traces = u_lumen_reflection_all_tiles ? 1u : 0u;
+	}
+	barrier();
+	if(traces)
+	{
+		atomicOr(s_lumen_group_traces, 1u);
+	}
+	barrier();
+	bool group_traces = s_lumen_group_traces != 0u;
+	LumenWriteReflectionTiles(ivec2(gl_WorkGroupID.xy),
+	                          int(gl_LocalInvocationID.y) * 8 + int(gl_LocalInvocationID.x),
+	                          group_traces);
+	if(!is_inside || !(group_traces || u_lumen_reflection_downsample > 1))
 	{
 		return;
 	}
-	ivec2 pixel = LumenReflectionTracePixel(trace_coord);
-	float depth01 = texelFetch(s_lumen_depth, pixel, 0).x;
-	vec4 gbuffer1 = texelFetch(s_lumen_normal, pixel, 0);
-	float roughness = gbuffer1.w;
-	if(depth01 >= 1.0 || LumenReflectionFadeAlpha(roughness) <= 0.0)
+	if(!traces)
 	{
 		imageStore(s_lumen_reflection_ray_out, trace_coord, vec4_splat(0.0));
 		imageStore(s_lumen_reflection_radiance_out, trace_coord, vec4_splat(0.0));
@@ -115,8 +159,8 @@ void main()
 				float noise = InterleavedGradientNoise(vec2(pixel) + 0.5, u_lumen_frame_mod);
 				vec3 surface = LumenWorldFromDepth(trace.position.xy, trace.surface_z);
 				vec4 lit = LumenScreenHistoryRadiance(s_lumen_prev_color, s_lumen_prev_depth, u_lumen_prev_view_proj,
-				                                      surface, trace.position.xy, noise,
-				                                      LUMEN_REFLECTION_HISTORY_DEPTH_TEST);
+				                                      LumenPrevWorldPosition(trace.position.xy, surface),
+				                                      trace.position.xy, noise, LUMEN_REFLECTION_HISTORY_DEPTH_TEST);
 				hit = lit.w > 0.5;
 				radiance = LumenClampRayIntensity(lit.xyz);
 				end_point = hit ? trace.position : trace.last_visible;

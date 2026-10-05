@@ -1,6 +1,7 @@
 #pragma once
 
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/passes/lumen_pass_common.h>
 #include <engine/rendering/pipeline/passes/lumen_run_params.h>
 
 #include <graphics/render_view.h>
@@ -30,8 +31,11 @@ public:
         /// environment SH, the camera, the pre-exposure, the global SDF clipmap, the surface cache and the
         /// settings (gi_settings::reflections).
         const lumen_run_params* gather{};
-        /// The gather's rough specular (full resolution; rgb pre-exposed, a = 0 where it holds no estimate).
+        /// The gather's rough specular history (full resolution; rgb pre-exposed, before rough_specular_scale); null
+        /// = none.
         gfx::texture::ptr rough_specular;
+        /// The rough specular history's scale (the GI intensity).
+        float rough_specular_scale = 1.0f;
         /// The traced and untraced reflection layers the indirect pass reads (RBUFFER and PBUFFER), RGBA16F and
         /// compute writable. The probe pass has drawn this frame's reflection probes into probe_output when the
         /// pass runs: its misses read them as the sky before the composite replaces them.
@@ -44,6 +48,8 @@ public:
     static constexpr const char* ray_texture = "LUMEN_REFLECTION_RAY";
     static constexpr const char* hit_texture = "LUMEN_REFLECTION_HIT";
     static constexpr const char* radiance_texture = "LUMEN_REFLECTION_RADIANCE";
+    /// This frame's reflection tiles (lumen_reflection_common.sh): a skipped tile's trace texels hold no ray.
+    static constexpr const char* tiles_texture = "LUMEN_REFLECTION_TILES";
     static constexpr const char* traced_frame_key = "LUMEN_REFLECTION_FRAME";
     static constexpr const char* downsample_key = "LUMEN_REFLECTION_DOWNSAMPLE";
     /// The period of the noise sequences and of the downsampled traces' pixel rotation, in frames (UE
@@ -98,6 +104,7 @@ private:
         gfx::program::uniform_ptr s_lumen_probe_layer;
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_sdf_clipmap_coverage;
+        gfx::program::uniform_ptr s_sdf_clipmap_mip;
         gfx::program::uniform_ptr s_lumen_reflection_ray;
         gfx::program::uniform_ptr s_lumen_reflection_radiance;
         gfx::program::uniform_ptr s_lumen_reflection_hit;
@@ -107,6 +114,10 @@ private:
         gfx::program::uniform_ptr s_lumen_reflection_specular;
         gfx::program::uniform_ptr s_lumen_reflection_frames;
         gfx::program::uniform_ptr s_lumen_rough_specular;
+        gfx::program::uniform_ptr s_lumen_reflection_tiles;
+        gfx::program::uniform_ptr s_lumen_reflection_tiles_history;
+        /// The velocity buffer for the screen trace and the temporal (lumen_motion.sh).
+        lumen_pass::motion_uniforms motion;
 
         void cache_uniforms();
     } uniforms_;
@@ -122,13 +133,18 @@ private:
         gfx::texture::ptr frames_write;
         gfx::texture::ptr history_read;
         gfx::texture::ptr frames_read;
+        /// The reflection tiles: this frame's and last frame's (whose skipped tiles hold no history).
+        gfx::texture::ptr tiles_write;
+        gfx::texture::ptr tiles_read;
         /// The read halves hold last frame at this size.
         bool has_history{};
     };
 
-    /// The targets: the traces at @p trace_size, the denoisers at the view's @p size.
-    static auto acquire_targets(gfx::render_view& rview, const usize32_t& size, const usize32_t& trace_size)
-        -> frame_targets;
+    /// The targets: the traces at @p trace_size, the denoisers at the view's @p size; no history after a @p camera_cut.
+    static auto acquire_targets(gfx::render_view& rview,
+                                const usize32_t& size,
+                                const usize32_t& trace_size,
+                                bool camera_cut) -> frame_targets;
     /// Sets the per-frame uniforms every reflection program reads (lumen_reflection_common.sh).
     void set_frame_uniforms(const run_params& params, const frame_targets& targets) const;
     void run_screen(const run_params& params, const frame_targets& targets) const;
@@ -144,7 +160,7 @@ private:
     gpu_program::ptr spatial_program_;
 
     /// This frame's experiment toggles (enum experiment).
-    uint32_t experiments_ = 0;
+    uint64_t experiments_ = 0;
     /// The view size the per-pixel dispatches cover, and this frame's trace size and downsample factor.
     usize32_t view_size_{};
     usize32_t trace_size_{};

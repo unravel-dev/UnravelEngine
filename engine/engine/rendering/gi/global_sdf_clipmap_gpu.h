@@ -64,6 +64,43 @@ public:
         return coverage_texture_;
     }
 
+    /// Level voxels per coarse-mip texel along each axis (UE r.AOGlobalDistanceField.MipFactor). Mirror of
+    /// SDF_CLIPMAP_MIP_FACTOR in gi/sdf_clipmap.sh.
+    static constexpr uint32_t mip_factor = 4;
+
+    /**
+     * @brief The coarse mip of every level (UE GlobalDistanceFieldMipTexture): R8, one texel per mip_factor^3 voxels,
+     *        levels stacked along Z like the distance, each texel the distance from its centre to the level's own
+     *        surfaces over mip_factor times the level's encode range. Built from each level right after it composes
+     *        (gi_clipmap_compose_pass, cs_gi_clipmap_mip.sc); the global SDF march steps through empty space by it
+     *        (gi/sdf_clipmap.sh SdfSampleClipmapMip). Zero (the most negative distance, no skip) until built.
+     */
+    auto get_mip_texture() const -> const gfx::texture::ptr&
+    {
+        return mip_texture_;
+    }
+
+    /// One level's worth of mip texels, the other half of the mip build's propagation ping-pong.
+    auto get_mip_scratch() const -> const gfx::texture::ptr&
+    {
+        return mip_scratch_;
+    }
+
+    /// Mip texels per level axis: ceil(resolution / mip_factor).
+    auto get_mip_resolution() const -> uint32_t
+    {
+        return (resolution_ + mip_factor - 1u) / mip_factor;
+    }
+
+    /**
+     * @brief Experiment bits the global SDF march reads from `u_sdf_clipmap_params.w` (gi/sdf_clipmap.sh
+     *        u_sdf_clipmap_experiments): two code paths in one build for an in-session A/B. Zero in production.
+     */
+    void set_march_experiments(uint32_t bits)
+    {
+        march_experiments_ = bits;
+    }
+
     /**
      * @brief Per-level parameters for the tracer, as `level_param_count` vec4s.
      * xyz = level origin in world space, w = level voxel size.
@@ -81,8 +118,8 @@ public:
     /**
      * @brief The vec4 every clipmap consumer binds as `u_sdf_clipmap_params`.
      *
-     * x = resolution, y = blend band width in voxels, z = encode range, w = non-zero when the
-     * cascade is resident and worth consulting.
+     * x = resolution, y = blend band width in voxels, z = encode range, w = 1 + the march experiment bits when
+     * the cascade is resident and worth consulting, 0 otherwise.
      *
      * Built here rather than at each call site because every pass that samples the cascade must
      * derive the same function from it: a pass with a different blend width would resolve surfaces
@@ -100,6 +137,9 @@ public:
 private:
     gfx::texture::ptr texture_;
     gfx::texture::ptr coverage_texture_;
+    gfx::texture::ptr mip_texture_;
+    gfx::texture::ptr mip_scratch_;
+    uint32_t march_experiments_ = 0;
     uint32_t resolution_ = 0;
     std::array<float, size_t(level_param_count) * 4> level_params_{};
     std::array<float, 4> sampling_params_{};

@@ -6,7 +6,8 @@
  * only when each probe sees the other's ray point at 2 TMin (no wall between them), weighted by
  * 1 - angle / LUMEN_RADIANCE_CACHE_FILTER_MAX_ANGLE between this probe's direction and the direction from
  * this probe to the neighbour's hit (its hit distance clamped to this probe's own, keeping contact
- * occlusion): only the angularly consistent far field is shared. Neighbours are read as last traced.
+ * occlusion): only the angularly consistent far field is shared. Neighbours are read as last traced. The
+ * alpha carries the source texel's own hit distance, which the hand-off reads from the tile it samples.
  * Dispatch: (ceil(FINAL_RES / 8), ceil(FINAL_RES / 8), traces).
  */
 
@@ -15,8 +16,8 @@
 #include "lumen/lumen_common.sh"
 #include "lumen/lumen_radiance_cache_common.sh"
 
+/// The traced probes: rgb = radiance, a = hit distance.
 SAMPLER2D(s_lumen_rc_radiance, 0);
-SAMPLER2D(s_lumen_rc_depth, 1);
 BUFFER_RO(b_lumen_rc_indirection, uint, 2);
 BUFFER_RO(b_lumen_rc_traces, uint, 3);
 IMAGE2D_WO(i_lumen_rc_final, rgba16f, 5);
@@ -32,7 +33,7 @@ ivec2 LumenRcDirectionTexel(vec3 direction)
 bool LumenRcSees(ivec2 depth_origin, vec3 offset)
 {
 	float distance_to_point = length(offset);
-	float depth = texelFetch(s_lumen_rc_depth, depth_origin + LumenRcDirectionTexel(offset / max(distance_to_point, 1e-6)), 0).x;
+	float depth = texelFetch(s_lumen_rc_radiance, depth_origin + LumenRcDirectionTexel(offset / max(distance_to_point, 1e-6)), 0).w;
 	return depth >= distance_to_point;
 }
 
@@ -57,8 +58,9 @@ void main()
 	int clipmap = cell.w;
 	ivec2 texel = LumenOctahedralMapWrapBorder(final_texel, LUMEN_RC_FINAL_RES, 1);
 	ivec2 origin = LumenRcProbeTileOrigin(probe, LUMEN_RADIANCE_CACHE_PROBE_RES);
-	vec3 sum = texelFetch(s_lumen_rc_radiance, origin + texel, 0).xyz;
-	float own_depth = texelFetch(s_lumen_rc_depth, origin + texel, 0).x;
+	vec4 own = texelFetch(s_lumen_rc_radiance, origin + texel, 0);
+	vec3 sum = own.xyz;
+	float own_depth = own.w;
 	float weight_sum = 1.0;
 	vec3 direction = LumenEquiAreaSphericalMapping((vec2(texel) + 0.5) / float(LUMEN_RADIANCE_CACHE_PROBE_RES));
 	vec3 position = LumenRcProbePosition(cell.xyz, clipmap);
@@ -83,7 +85,8 @@ void main()
 		{
 			continue;
 		}
-		float neighbour_depth = texelFetch(s_lumen_rc_depth, neighbour_origin + texel, 0).x;
+		vec4 neighbour_ray = texelFetch(s_lumen_rc_radiance, neighbour_origin + texel, 0);
+		float neighbour_depth = neighbour_ray.w;
 		if(neighbour_depth < LUMEN_RADIANCE_CACHE_NO_HIT)
 		{
 			neighbour_depth = min(neighbour_depth, own_depth);
@@ -91,9 +94,13 @@ void main()
 		vec3 to_hit = neighbour_position + direction * neighbour_depth - position;
 		float cos_angle = dot(to_hit, direction) / max(length(to_hit), 1e-6);
 		float weight = 1.0 - saturate(acos(clamp(cos_angle, -1.0, 1.0)) / LUMEN_RADIANCE_CACHE_FILTER_MAX_ANGLE);
-		sum += weight * texelFetch(s_lumen_rc_radiance, neighbour_origin + texel, 0).xyz;
-		weight_sum += weight;
+		BRANCH
+		if(weight > 0.0)
+		{
+			sum += weight * neighbour_ray.xyz;
+			weight_sum += weight;
+		}
 	}
 	ivec2 final_origin = LumenRcProbeTileOrigin(probe, LUMEN_RC_FINAL_RES);
-	imageStore(i_lumen_rc_final, final_origin + final_texel, vec4(sum / weight_sum, 1.0));
+	imageStore(i_lumen_rc_final, final_origin + final_texel, vec4(sum / weight_sum, own_depth));
 }

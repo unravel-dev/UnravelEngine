@@ -100,7 +100,7 @@ auto rendering_system::release_pipeline_resources(scene& scn) -> bool
 }
 
 auto rendering_system::render_scene(entt::handle camera_ent, camera_component& camera_comp, scene& scn, delta_t dt,
-                                    bool render_screen_space) -> gfx::frame_buffer::ptr
+                                    bool render_screen_space, bool is_being_edited) -> gfx::frame_buffer::ptr
 {
     APP_SCOPE_PERF("Rendering/Render Scene Camera");
     auto& ctx = engine::context();
@@ -117,6 +117,7 @@ auto rendering_system::render_scene(entt::handle camera_ent, camera_component& c
     ui.render_world_space(ctx, camera_ent, scn, dt);
 
     auto params = pipeline->create_run_params(camera_ent, &scn, &camera);
+    params.is_being_edited = is_being_edited;
     auto result = pipeline->run_pipeline(scn, camera, rview, dt, params, camera_comp.get_render_mask());
     render_debug(camera_ent);
     if(render_screen_space)
@@ -131,8 +132,9 @@ auto rendering_system::render_scene(scene& scn, delta_t dt) -> gfx::frame_buffer
     APP_SCOPE_PERF("Rendering/Render Scene");
     auto& ctx = engine::context();
     gfx::frame_buffer::ptr output{};
-    scn.registry->view<camera_component>().each(
-        [&](auto e, auto&& camera_comp)
+    // Active cameras only: an inactive camera entity renders nothing (each camera runs a whole pipeline).
+    scn.registry->view<camera_component, active_component>().each(
+        [&](auto e, auto&& camera_comp, auto&& /*active*/)
         {
             auto handle = scn.create_handle(e);
             output = render_scene(handle, camera_comp, scn, dt, true);
@@ -175,8 +177,8 @@ void rendering_system::render_scene(const gfx::frame_buffer::ptr& output, scene&
 {
     APP_SCOPE_PERF("Rendering/Render Scene");
     auto& ctx = engine::context();
-    scn.registry->view<camera_component>().each(
-        [&](auto e, auto&& camera_comp)
+    scn.registry->view<camera_component, active_component>().each(
+        [&](auto e, auto&& camera_comp, auto&& /*active*/)
         {
             auto handle = scn.create_handle(e);
             render_scene(output, handle, camera_comp, scn, dt, true);

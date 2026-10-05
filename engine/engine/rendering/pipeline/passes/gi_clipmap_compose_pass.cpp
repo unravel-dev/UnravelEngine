@@ -1,5 +1,7 @@
 #include "gi_clipmap_compose_pass.h"
 
+#include "lumen_pass_common.h"
+
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/gi/gi_constants.h>
@@ -12,9 +14,21 @@ namespace unravel
 {
 namespace
 {
-/// Must match NUM_THREADS in cs_gi_clipmap_compose.sc.
+/// Must match NUM_THREADS in cs_gi_clipmap_compose.sc (gi/brick_dispatch.sh BRICK_DISPATCH_EDGE).
 constexpr uint32_t compose_group_size = 4u;
+/// Groups per row of a brick dispatch: below the 65535 groups an axis takes.
+constexpr uint32_t max_bricks_per_row = 32768u;
+/// Must match NUM_THREADS in cs_gi_clipmap_mip.sc.
+constexpr uint32_t mip_group_size = 4u;
+/// Passes of a level's coarse mip, the first reading the level (UE NumPropagationSteps): the distance travels this
+/// many mip texels from the level's surfaces. Odd, so the last pass writes the level's slab.
+constexpr uint32_t mip_propagation_passes = 5u;
 } // namespace
+
+gi_clipmap_compose_pass::~gi_clipmap_compose_pass()
+{
+    lumen_pass::destroy_handle(brick_boxes_);
+}
 
 auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
 {
@@ -22,6 +36,14 @@ auto gi_clipmap_compose_pass::init(rtti::context& ctx) -> bool
     auto cs_compose = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_compose.sc");
     compose_program_.cache_uniforms();
     compose_program_.program = std::make_unique<gpu_program>(cs_compose);
+    auto cs_mip = am.get_asset<gfx::shader>("engine:/data/shaders/gi/cs_gi_clipmap_mip.sc");
+    mip_program_.cache_uniforms();
+    mip_program_.program = std::make_unique<gpu_program>(cs_mip);
+    if(!mip_program_.is_valid())
+    {
+        APPLOG_WARNING("[GI] The global distance field mip program failed to load; rays step through empty space by "
+                       "each level alone.");
+    }
     return compose_program_.is_valid();
 }
 
@@ -66,6 +88,7 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     gfx::render_pass scroll_copy_pass("GI/Clipmap Scroll Copy");
     gfx::render_pass scroll_place_pass("GI/Clipmap Scroll Place");
     gfx::render_pass compose_pass("GI/Clipmap Compose");
+    gfx::render_pass mip_pass("GI/Clipmap Mip");
     const uint32_t dirty = clipmap.get_dirty_levels();
     if(dirty == 0)
     {
@@ -76,7 +99,8 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     // An empty instance list means the whole scene left GI. The levels still have to be REWRITTEN
     // rather than left alone, or they keep occluding with geometry that is gone; the dispatch does
     // that correctly, writing the saturated "nothing reached this voxel" value everywhere.
-    uint32_t composed = 0;
+    std::vector<math::vec4> table;
+    std::vector<level_bricks> levels;
     for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
     {
         if((dirty & (1u << level)) == 0u)
@@ -88,7 +112,23 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
         {
             continue;
         }
-        compose_level_voxels(clipmap, clipmap_gpu, surface_cache, level, scroll_copy_pass, scroll_place_pass, compose_pass);
+        const auto boxes = get_level_compose_boxes(clipmap, clipmap_gpu, level, scroll_copy_pass, scroll_place_pass);
+        level_bricks entry;
+        entry.level = level;
+        entry.first_box = uint32_t(table.size() / 2u);
+        entry.bricks = global_sdf_clipmap::append_brick_boxes(boxes, int(compose_group_size), 0u, table);
+        entry.box_count = uint32_t(table.size() / 2u) - entry.first_box;
+        levels.push_back(entry);
+    }
+    lumen_pass::upload_vec4_table(brick_boxes_, table);
+    uint32_t composed = 0;
+    for(const auto& entry : levels)
+    {
+        if(entry.bricks > 0u)
+        {
+            dispatch_compose_bricks(compose_pass, clipmap, clipmap_gpu, surface_cache, entry);
+        }
+        build_level_mip(clipmap_gpu, entry.level, mip_pass);
         ++composed;
     }
     // Consumed here rather than by the uploader: in GPU mode the uploader has no voxels to send, so
@@ -97,51 +137,52 @@ auto gi_clipmap_compose_pass::run(gfx::render_view& rview, const run_params& par
     return composed > 0;
 }
 
-void gi_clipmap_compose_pass::compose_level_voxels(const global_sdf_clipmap& clipmap,
-                                                   const global_sdf_clipmap_gpu& clipmap_gpu,
-                                                   surface_cache_system& surface_cache,
-                                                   uint32_t level,
-                                                   gfx::render_pass& scroll_copy_pass,
-                                                   gfx::render_pass& scroll_place_pass,
-                                                   gfx::render_pass& compose_pass)
+auto gi_clipmap_compose_pass::get_level_compose_boxes(const global_sdf_clipmap& clipmap,
+                                                      const global_sdf_clipmap_gpu& clipmap_gpu,
+                                                      uint32_t level,
+                                                      gfx::render_pass& scroll_copy_pass,
+                                                      gfx::render_pass& scroll_place_pass)
+    -> std::vector<global_sdf_clipmap::voxel_box>
 {
     const auto& lvl = clipmap.get_level(level);
     const uint32_t resolution = clipmap.get_settings().resolution;
     global_sdf_clipmap::voxel_box overlap;
     std::array<global_sdf_clipmap::voxel_box, 3> exposed;
     uint32_t exposed_count = 0;
-    // SCROLL-ONLY (level::scroll_only): the overlap of the old and new windows holds exactly
-    // the bytes a recompose would write, so it is moved - out to the scratch slab and back
-    // in at its new position, two blits, since a blit cannot shift voxels within one
-    // texture - and only the exposed slabs are composed. The coverage moves the same way at
-    // its downsample (the window snaps by whole coverage texels). A scratch that failed to
-    // allocate falls back to composing the whole level.
+    // PARTIAL (level::is_partial): the old window's overlap with the new one holds the bytes a
+    // recompose would write outside the changed instances' boxes. A re-snapped origin moves it -
+    // out to the scratch slab and back in at its new position, two blits, since a blit cannot shift
+    // voxels within one texture - and composes the exposed slabs; the boxes are composed in place.
+    // The coverage moves the same way at its downsample (the window snaps by whole coverage
+    // texels). A scratch that failed to allocate falls back to composing the whole level.
     const scroll_volume distance{&scroll_scratch_[level], &clipmap_gpu.get_texture(), 1u};
     const scroll_volume coverage{&coverage_scroll_scratch_[level],
                                  &clipmap_gpu.get_coverage_texture(),
                                  global_sdf_clipmap_gpu::coverage_downsample};
-    if(lvl.scroll_only)
+    bool is_partial = lvl.is_partial;
+    if(is_partial)
     {
         exposed_count = global_sdf_clipmap::compute_scroll_boxes(lvl.scroll_shift, resolution, overlap, exposed);
     }
     if(exposed_count > 0 && (!ensure_scroll_scratch(distance, resolution) || !ensure_scroll_scratch(coverage, resolution)))
     {
-        exposed_count = 0;
+        is_partial = false;
     }
-    if(exposed_count > 0)
+    if(is_partial)
     {
-        blit_scroll_overlap(distance, resolution, level, overlap, lvl.scroll_shift, scroll_copy_pass, scroll_place_pass);
-        blit_scroll_overlap(coverage, resolution, level, overlap, lvl.scroll_shift, scroll_copy_pass, scroll_place_pass);
-        for(uint32_t box = 0; box < exposed_count; ++box)
+        if(exposed_count > 0)
         {
-            dispatch_compose_box(compose_pass, clipmap, clipmap_gpu, surface_cache, level, exposed[box]);
+            blit_scroll_overlap(distance, resolution, level, overlap, lvl.scroll_shift, scroll_copy_pass, scroll_place_pass);
+            blit_scroll_overlap(coverage, resolution, level, overlap, lvl.scroll_shift, scroll_copy_pass, scroll_place_pass);
         }
-        return;
+        std::vector<global_sdf_clipmap::voxel_box> boxes(exposed.begin(), exposed.begin() + exposed_count);
+        boxes.insert(boxes.end(), lvl.partial_boxes.begin(), lvl.partial_boxes.end());
+        return boxes;
     }
     global_sdf_clipmap::voxel_box whole;
     whole.min = math::ivec3(0);
     whole.size = math::ivec3(int(resolution));
-    dispatch_compose_box(compose_pass, clipmap, clipmap_gpu, surface_cache, level, whole);
+    return {whole};
 }
 
 auto gi_clipmap_compose_pass::ensure_scroll_scratch(const scroll_volume& target, uint32_t resolution) -> bool
@@ -212,13 +253,46 @@ void gi_clipmap_compose_pass::blit_scroll_overlap(const scroll_volume& target,
                                    .depth = static_cast<uint16_t>(extent.z)});
 }
 
-void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
-                                                   const global_sdf_clipmap& clipmap,
-                                                   const global_sdf_clipmap_gpu& clipmap_gpu,
-                                                   surface_cache_system& surface_cache,
-                                                   uint32_t level,
-                                                   const global_sdf_clipmap::voxel_box& box)
+void gi_clipmap_compose_pass::build_level_mip(const global_sdf_clipmap_gpu& clipmap_gpu,
+                                              uint32_t level,
+                                              gfx::render_pass& pass)
 {
+    const auto& mip = clipmap_gpu.get_mip_texture();
+    const auto& scratch = clipmap_gpu.get_mip_scratch();
+    if(!mip_program_.is_valid() || !mip || !scratch)
+    {
+        return;
+    }
+    const uint32_t mip_resolution = clipmap_gpu.get_mip_resolution();
+    const uint32_t groups = (mip_resolution + mip_group_size - 1u) / mip_group_size;
+    const float slab_z = float(level * mip_resolution);
+    for(uint32_t step = 0; step < mip_propagation_passes; ++step)
+    {
+        // Even passes write the level's slab, odd ones the scratch; each reads what the previous one wrote.
+        const bool writes_slab = (step % 2u) == 0u;
+        const auto& source = writes_slab ? scratch : mip;
+        const auto& destination = writes_slab ? mip : scratch;
+        mip_program_.program->begin();
+        gfx::set_texture(mip_program_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+        gfx::set_texture(mip_program_.s_clipmap_mip_prev, 1, source);
+        gfx::set_image_3d(2, destination->native_handle(), 0, bgfx::Access::Write, bgfx::TextureFormat::R8);
+        gfx::set_uniform(mip_program_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+        const float params[4] = {float(level), float(mip_resolution), writes_slab ? 0.0f : slab_z, writes_slab ? slab_z : 0.0f};
+        gfx::set_uniform(mip_program_.u_clipmap_mip_params, params);
+        const math::vec4 mode(step == 0u ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+        gfx::set_uniform(mip_program_.u_clipmap_mip_mode, mode);
+        bgfx::dispatch(pass.id, mip_program_.program->native_handle(), groups, groups, groups);
+        mip_program_.program->end();
+    }
+}
+
+void gi_clipmap_compose_pass::dispatch_compose_bricks(gfx::render_pass& pass,
+                                                      const global_sdf_clipmap& clipmap,
+                                                      const global_sdf_clipmap_gpu& clipmap_gpu,
+                                                      surface_cache_system& surface_cache,
+                                                      const level_bricks& bricks)
+{
+    const uint32_t level = bricks.level;
     const auto& lvl = clipmap.get_level(level);
     const auto& clipmap_settings = clipmap.get_settings();
     const uint32_t resolution = clipmap_settings.resolution;
@@ -251,19 +325,13 @@ void gi_clipmap_compose_pass::dispatch_compose_box(gfx::render_pass& pass,
     // w = 1: Lumen's cascade, which writes the coverage and leaves small objects out.
     const float compose_origin[4] = {lvl.origin.x, lvl.origin.y, lvl.origin.z, 1.0f};
     gfx::set_uniform(compose_program_.u_clipmap_compose_origin, compose_origin);
-    const float range[4] = {float(box.min.x), float(box.min.y), float(box.min.z), clipmap_settings.object_radius_scale};
-    gfx::set_uniform(compose_program_.u_clipmap_compose_range, range);
-    const float range_size[4] = {float(box.size.x), float(box.size.y), float(box.size.z), 0.0f};
-    gfx::set_uniform(compose_program_.u_clipmap_compose_range_size, range_size);
-    const auto groups = [](int extent)
-    {
-        return (uint32_t(math::max(extent, 0)) + compose_group_size - 1u) / compose_group_size;
-    };
-    bgfx::dispatch(pass.id,
-                   compose_program_.program->native_handle(),
-                   groups(box.size.x),
-                   groups(box.size.y),
-                   groups(box.size.z));
+    const math::vec4 scale(clipmap_settings.object_radius_scale, 0.0f, 0.0f, 0.0f);
+    gfx::set_uniform(compose_program_.u_clipmap_compose_scale, scale);
+    bgfx::setBuffer(7, brick_boxes_, bgfx::Access::Read);
+    const uint32_t row = std::min(bricks.bricks, max_bricks_per_row);
+    const math::vec4 dispatch(float(bricks.first_box), float(bricks.box_count), float(bricks.bricks), float(row));
+    gfx::set_uniform(compose_program_.u_brick_dispatch, dispatch);
+    bgfx::dispatch(pass.id, compose_program_.program->native_handle(), row, (bricks.bricks + row - 1u) / row, 1);
     compose_program_.program->end();
 }
 

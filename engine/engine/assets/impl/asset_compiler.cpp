@@ -891,6 +891,20 @@ auto write_minified_file(const fs::path& input_path, const fs::path& output_path
 }
 
 /**
+ * @brief Triangles submesh @p submesh_index has at @p lod, which is 0 for the base topology and at most the number of
+ *        generated levels. A submesh the level holds no entry for has none.
+ */
+auto get_submesh_face_count(const mesh::load_data& data, uint32_t lod, size_t submesh_index) -> uint32_t
+{
+    if(lod == 0)
+    {
+        return data.submeshes[submesh_index].face_count;
+    }
+    const auto& lod_submeshes = data.lods[lod - 1].submeshes;
+    return submesh_index < lod_submeshes.size() ? lod_submeshes[submesh_index].face_count : 0u;
+}
+
+/**
  * @brief Builds the Lumen cards of every submesh that has a distance field (UE's card representation), from LOD
  *        @p lod_index and for the sidedness of the material the submesh imported with.
  *
@@ -929,41 +943,14 @@ void build_submesh_lumen_cards(mesh::load_data& data,
         build_lumen_mesh_cards(geometry, two_sided, max_cards, cards);
         card_count += cards.cards.size();
     };
-    // A submesh's build takes from milliseconds to tens of seconds, and poolstl hands each worker one contiguous
-    // run of the range, so the expensive submeshes, which sit together in the source order, would all queue on one
-    // worker. Each worker pulls the next submesh instead, the most triangles first, so the longest builds start
-    // early. Each build runs serially.
-    const size_t submesh_count = data.submeshes.size();
-    const auto get_face_count = [&](size_t i) -> size_t
+    // A submesh's build takes from milliseconds to tens of seconds, the most triangles the longest, so the builds
+    // start in that order, each pool worker pulling the next. Each build runs serially.
+    std::vector<uint32_t> face_counts(data.submeshes.size());
+    for(size_t i = 0; i < face_counts.size(); ++i)
     {
-        if(lod == 0)
-        {
-            return size_t(data.submeshes[i].face_count);
-        }
-        const auto& lod_submeshes = data.lods[lod - 1].submeshes;
-        return i < lod_submeshes.size() ? size_t(lod_submeshes[i].face_count) : 0;
-    };
-    std::vector<size_t> order(submesh_count);
-    std::iota(order.begin(), order.end(), size_t(0));
-    std::stable_sort(order.begin(),
-                     order.end(),
-                     [&](size_t a, size_t b)
-                     {
-                         return get_face_count(a) > get_face_count(b);
-                     });
-    std::atomic<size_t> next{0};
-    const size_t worker_count =
-        math::min<size_t>(math::max<size_t>(std::thread::hardware_concurrency(), 1u), submesh_count);
-    poolstl::for_each_par_if(worker_count > 1,
-                             poolstl::iota_iter<size_t>(0),
-                             poolstl::iota_iter<size_t>(worker_count),
-                             [&](size_t)
-                             {
-                                 for(size_t k = next.fetch_add(1); k < submesh_count; k = next.fetch_add(1))
-                                 {
-                                     build_submesh(order[k]);
-                                 }
-                             });
+        face_counts[i] = get_submesh_face_count(data, lod, i);
+    }
+    poolstl::for_each_costliest_first_par_if(true, face_counts, build_submesh);
     const auto elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start);
     APPLOG_INFO("Built {0} surface cache cards for {1} ({2} submeshes, LOD {3}) in {4:.1f} ms",
                 card_count.load(),
@@ -1284,6 +1271,13 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
             const auto pbr = std::dynamic_pointer_cast<pbr_material>(mat);
             material_traits[m].is_translucent = pbr && pbr->get_alpha_mode() == alpha_mode::blend;
         }
+        // A data group with no entry in the table (a mesh whose materials failed to import) falls
+        // through to the asset-level settings.
+        const auto get_material_traits = [&](size_t submesh_index) -> sdf_material_traits
+        {
+            const uint32_t data_group = data.submeshes[submesh_index].data_group_id;
+            return data_group < material_traits.size() ? material_traits[data_group] : sdf_material_traits{};
+        };
         // Counted for the summary: a submesh that vanishes from GI has to say why, or the only
         // symptom is light behaving oddly somewhere else in the level.
         std::atomic<uint64_t> translucent_submesh_count{0};
@@ -1306,10 +1300,21 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         // Whether each submesh ASKED for a two-sided field (asset setting or material), so a shell the
         // bake chose on its own can be told apart from one that was requested. One slot per task.
         std::vector<uint8_t> requested_two_sided(data.submeshes.size(), 0u);
-        poolstl::for_each_par_if(
+        // A bake takes from milliseconds to tens of seconds, so the bakes start costliest first and,
+        // across submeshes, each pool worker pulls the next. The baker estimates the cost from the grid
+        // the submesh's bounds get under its sidedness and from its triangles at the baked LOD.
+        std::vector<double> bake_costs(data.submeshes.size());
+        for(size_t i = 0; i < bake_costs.size(); ++i)
+        {
+            mesh_sdf_bake_settings submesh_settings = sdf_settings;
+            submesh_settings.two_sided = submesh_settings.two_sided || get_material_traits(i).is_two_sided;
+            bake_costs[i] = estimate_mesh_sdf_bake_cost(data.submeshes[i].bbox,
+                                                        get_submesh_face_count(data, lod_index, i),
+                                                        submesh_settings);
+        }
+        poolstl::for_each_costliest_first_par_if(
             parallel_submeshes,
-            poolstl::iota_iter<size_t>(0),
-            poolstl::iota_iter<size_t>(data.submeshes.size()),
+            bake_costs,
             [&](size_t i)
             {
                 // Skinned submeshes are refused a field. The bake reads bind-pose
@@ -1326,12 +1331,8 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
                 }
                 // The material this submesh is drawn with decides two things about its field, and
                 // both are properties of the SURFACE rather than of the mesh, so neither is
-                // recoverable from the triangles. A data group with no entry in the table (a mesh
-                // whose materials failed to import) falls through to the asset-level settings.
-                const uint32_t data_group = data.submeshes[i].data_group_id;
-                const sdf_material_traits traits =
-                    data_group < material_traits.size() ? material_traits[data_group]
-                                                        : sdf_material_traits{};
+                // recoverable from the triangles.
+                const sdf_material_traits traits = get_material_traits(i);
                 if(traits.is_translucent)
                 {
                     // No field at all. A blended surface that occludes is worse than one that is

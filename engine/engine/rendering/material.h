@@ -52,6 +52,13 @@ public:
     material() = default;
     virtual ~material() = default;
 
+    /// Counts the edits made through the setters: a cache of what the material looked like (the GI surface cache's
+    /// card captures) compares it to notice a change.
+    auto get_revision() const -> uint64_t
+    {
+        return revision_;
+    }
+
 
     /**
      * @brief Submits the material properties to the GPU program.
@@ -100,8 +107,17 @@ public:
     virtual auto clone() const -> material::sptr;
 
 protected:
+    /// Every setter calls this (get_revision).
+    void mark_changed()
+    {
+        ++revision_;
+    }
+
     ///< The culling type for this material.
     cull_type cull_type_ = cull_type::counter_clockwise;
+
+private:
+    uint64_t revision_ = 0;
 };
 
 /**
@@ -131,6 +147,7 @@ public:
     void set_base_color(const math::color& val)
     {
         base_color_ = val;
+        mark_changed();
     }
 
     /**
@@ -149,6 +166,7 @@ public:
     void set_subsurface_color(const math::color& val)
     {
         subsurface_color_ = val;
+        mark_changed();
     }
 
     /**
@@ -167,6 +185,7 @@ public:
     void set_emissive_color(const math::color& val)
     {
         emissive_color_ = val;
+        mark_changed();
     }
 
     auto get_emissive_intensity() const -> float
@@ -177,6 +196,7 @@ public:
     void set_emissive_intensity(float val)
     {
         emissive_intensity_ = val;
+        mark_changed();
     }
 
     /**
@@ -195,6 +215,7 @@ public:
     void set_roughness(float roughness)
     {
         surface_data_.x = roughness;
+        mark_changed();
     }
 
     /**
@@ -213,6 +234,7 @@ public:
     void set_metalness(float metalness)
     {
         surface_data_.y = metalness;
+        mark_changed();
     }
 
     /**
@@ -231,6 +253,7 @@ public:
     void set_bumpiness(float bumpiness)
     {
         surface_data_.z = bumpiness;
+        mark_changed();
     }
 
     /**
@@ -293,6 +316,11 @@ public:
         const auto normal_texture = normal_map.get();
         surface_data2[1] =
             normal_texture && gfx::normal_map_needs_z_reconstruction(normal_texture->info.format) ? 1.0f : 0.0f;
+        // Two-sided (no culling): back faces shade with their normal turned toward the viewer.
+        surface_data2[2] = get_cull_type() == cull_type::none ? 1.0f : 0.0f;
+        // Alpha cutout (alpha_mode::mask): the surface cache's card capture keeps the cut-out texels (UE never clips
+        // a masked material's cards).
+        surface_data2[3] = uses_alpha_cutout() ? 1.0f : 0.0f;
 
         return surface_data2;
     }
@@ -318,6 +346,7 @@ public:
     void set_tiling(const math::vec2& tiling)
     {
         tiling_ = tiling;
+        mark_changed();
     }
 
     /**
@@ -336,6 +365,7 @@ public:
     void set_dither_threshold(const math::vec2& threshold)
     {
         dither_threshold_ = threshold;
+        mark_changed();
     }
 
     /**
@@ -354,6 +384,7 @@ public:
     void set_color_map(const asset_handle<gfx::texture>& val)
     {
         color_map_ = val;
+        mark_changed();
     }
 
     /**
@@ -372,6 +403,7 @@ public:
     void set_normal_map(const asset_handle<gfx::texture>& val)
     {
         normal_map_ = val;
+        mark_changed();
     }
 
     /**
@@ -390,6 +422,7 @@ public:
     void set_roughness_map(const asset_handle<gfx::texture>& val)
     {
         roughness_map_ = val;
+        mark_changed();
     }
 
     /**
@@ -408,6 +441,7 @@ public:
     void set_metalness_map(const asset_handle<gfx::texture>& val)
     {
         metalness_map_ = val;
+        mark_changed();
     }
 
     /**
@@ -426,6 +460,7 @@ public:
     void set_ao_map(const asset_handle<gfx::texture>& val)
     {
         ao_map_ = val;
+        mark_changed();
     }
 
     /**
@@ -444,6 +479,7 @@ public:
     void set_emissive_map(const asset_handle<gfx::texture>& val)
     {
         emissive_map_ = val;
+        mark_changed();
     }
 
 private:

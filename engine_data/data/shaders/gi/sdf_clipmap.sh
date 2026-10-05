@@ -21,6 +21,15 @@ SAMPLER3D(s_sdf_clipmap, 4);
 /// Voxels per coverage texel along each axis. Mirror of global_sdf_clipmap_gpu::coverage_downsample.
 #define SDF_CLIPMAP_COVERAGE_DOWNSAMPLE 2
 
+/// Level voxels per coarse-mip texel along each axis. Mirror of global_sdf_clipmap_gpu::mip_factor.
+#define SDF_CLIPMAP_MIP_FACTOR 4
+
+#ifdef SDF_CLIPMAP_MIP_STAGE
+/// Every level's coarse mip (global_sdf_clipmap_gpu::get_mip_texture), stacked like the distance: the distance from
+/// each mip texel's centre to the level's own surfaces over SDF_CLIPMAP_MIP_FACTOR x the encode range.
+SAMPLER3D(s_sdf_clipmap_mip, SDF_CLIPMAP_MIP_STAGE);
+#endif
+
 #ifdef SDF_CLIPMAP_COVERAGE_STAGE
 /// The Lumen coverage of the distance-only clipmap (global_sdf_clipmap_gpu::get_coverage_texture), stacked like the
 /// distance: 0 where only two-sided meshes lie within LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS of a voxel, 1 elsewhere
@@ -31,7 +40,7 @@ SAMPLER3D(s_sdf_clipmap_coverage, SDF_CLIPMAP_COVERAGE_STAGE);
 /// Per cascade: xyz = world-space origin, w = voxel size. Zero w means the level is absent.
 uniform vec4 u_sdf_clipmap_levels[SDF_CLIPMAP_LEVEL_COUNT];
 /// x = voxels per axis in a level, y = cross-fade band width in voxels,
-/// z = encode range in voxels, w = 1 when the clipmap is usable.
+/// z = encode range in voxels, w = 1 + the march experiment bits when the clipmap is usable, 0 otherwise.
 ///
 /// Filled by global_sdf_clipmap_gpu::get_sampling_params, which is the single owner: three
 /// passes sample this cascade and any disagreement between them makes their resolved surface
@@ -41,6 +50,9 @@ uniform vec4 u_sdf_clipmap_params;
 #define u_sdf_clipmap_blend_voxels u_sdf_clipmap_params.y
 #define u_sdf_clipmap_encode_range u_sdf_clipmap_params.z
 #define u_sdf_clipmap_enabled      (u_sdf_clipmap_params.w > 0.0)
+/// global_sdf_clipmap_gpu::set_march_experiments: 1 = the empty-space step reads the coarsest covering level instead of
+/// the answering level's mip, 2 = one step budget for the whole ray instead of one per level.
+#define u_sdf_clipmap_experiments  (int(u_sdf_clipmap_params.w) - 1)
 /// The levels are stacked along Z in one volume, which this file's texel addressing already
 /// assumes, so the total depth is derived rather than uploaded -- one less value to disagree.
 #define u_sdf_clipmap_depth        (u_sdf_clipmap_resolution * float(SDF_CLIPMAP_LEVEL_COUNT))
@@ -77,16 +89,28 @@ float SdfSampleClipmapLevel(int index, vec3 world_position)
 	return (encoded - 0.5) * (2.0 * u_sdf_clipmap_encode_range) * voxel_size;
 }
 
+/// The finest level covering a position (SdfFindClipmapLevel).
+struct SdfClipmapLevelHit
+{
+	/// The level, SDF_CLIPMAP_LEVEL_COUNT where none covers the position.
+	int index;
+	/// How far into the level's cross-fade band toward index + 1 the position lies.
+	float blend;
+	/// The level's voxel size (level 0's where none covers the position).
+	float voxel_size;
+};
+
 /**
  * Finest level covering a world position, plus how far into its cross-fade band it lies.
  *
- * Transcription of global_sdf_clipmap::find_level. Returns SDF_CLIPMAP_LEVEL_COUNT when no level
- * covers the position.
+ * Transcription of global_sdf_clipmap::find_level.
  */
-int SdfFindClipmapLevel(vec3 world_position, out float out_blend, out float out_voxel_size)
+SdfClipmapLevelHit SdfFindClipmapLevel(vec3 world_position)
 {
-	out_blend = 0.0;
-	out_voxel_size = max(u_sdf_clipmap_levels[0].w, 1e-6);
+	SdfClipmapLevelHit found;
+	found.index = SDF_CLIPMAP_LEVEL_COUNT;
+	found.blend = 0.0;
+	found.voxel_size = max(u_sdf_clipmap_levels[0].w, 1e-6);
 	float resolution = u_sdf_clipmap_resolution;
 	for(int i = 0; i < SDF_CLIPMAP_LEVEL_COUNT; ++i)
 	{
@@ -101,7 +125,8 @@ int SdfFindClipmapLevel(vec3 world_position, out float out_blend, out float out_
 		{
 			continue;
 		}
-		out_voxel_size = voxel_size;
+		found.index = i;
+		found.voxel_size = voxel_size;
 		// Distance to the nearest FACE of this level's addressable box, in its own voxels, so the
 		// fade follows the box the coverage test above actually uses rather than a radius.
 		vec3 to_low = grid - vec3_splat(0.5);
@@ -119,11 +144,11 @@ int SdfFindClipmapLevel(vec3 world_position, out float out_blend, out float out_
 		// whatever is out there.
 		if(has_next && u_sdf_clipmap_blend_voxels > 0.0)
 		{
-			out_blend = 1.0 - clamp(edge_distance / u_sdf_clipmap_blend_voxels, 0.0, 1.0);
+			found.blend = 1.0 - clamp(edge_distance / u_sdf_clipmap_blend_voxels, 0.0, 1.0);
 		}
-		return i;
+		return found;
 	}
-	return SDF_CLIPMAP_LEVEL_COUNT;
+	return found;
 }
 
 /**
@@ -170,9 +195,10 @@ SdfClipmapSample SdfSampleClipmapLevels(vec3 world_position)
 	{
 		return s;
 	}
-	float blend;
-	float voxel_size;
-	int index = SdfFindClipmapLevel(world_position, blend, voxel_size);
+	SdfClipmapLevelHit found = SdfFindClipmapLevel(world_position);
+	int index = found.index;
+	float blend = found.blend;
+	float voxel_size = found.voxel_size;
 	s.voxel_size = voxel_size;
 	s.index = index;
 	if(index >= SDF_CLIPMAP_LEVEL_COUNT)
@@ -199,18 +225,41 @@ SdfClipmapSample SdfSampleClipmapLevels(vec3 world_position)
 	return s;
 }
 
-float SdfSampleClipmapEx(vec3 world_position, out float out_voxel_size)
-{
-	SdfClipmapSample s = SdfSampleClipmapLevels(world_position);
-	out_voxel_size = s.voxel_size;
-	return s.distance;
-}
-
 float SdfSampleClipmap(vec3 world_position)
 {
-	float ignored_voxel_size;
-	return SdfSampleClipmapEx(world_position, ignored_voxel_size);
+	return SdfSampleClipmapLevels(world_position).distance;
 }
+
+/// Ray parameter at which a ray from @p ray_origin along a direction with reciprocal @p inverse_direction leaves
+/// level @p index's addressable box (the half-voxel margin SdfSampleClipmapLevel keeps).
+float SdfClipmapLevelExit(int index, vec3 ray_origin, vec3 inverse_direction)
+{
+	vec4 level = u_sdf_clipmap_levels[index];
+	vec3 low = level.xyz + vec3_splat(0.5 * level.w);
+	vec3 high = level.xyz + vec3_splat((u_sdf_clipmap_resolution - 0.5) * level.w);
+	vec3 far_side = max((low - ray_origin) * inverse_direction, (high - ray_origin) * inverse_direction);
+	return min(far_side.x, min(far_side.y, far_side.z));
+}
+
+#ifdef SDF_CLIPMAP_MIP_STAGE
+/// Level @p index's coarse mip at a WORLD position the level covers: a world distance that undershoots the level's
+/// own surfaces (UE GlobalDistanceFieldMipTexture). A position whose trilinear taps would leave the level's slab is
+/// read at the nearest safe point, less the distance moved.
+float SdfSampleClipmapMip(int index, vec3 world_position)
+{
+	vec4 level = u_sdf_clipmap_levels[index];
+	float mip_voxel = level.w * float(SDF_CLIPMAP_MIP_FACTOR);
+	float mip_resolution = ceil(u_sdf_clipmap_resolution / float(SDF_CLIPMAP_MIP_FACTOR));
+	vec3 mip_coordinate = (world_position - level.xyz) / mip_voxel;
+	vec3 safe = clamp(mip_coordinate, vec3_splat(0.5), vec3_splat(mip_resolution - 0.5));
+	vec3 uvw = vec3(safe.x / mip_resolution,
+	                safe.y / mip_resolution,
+	                (safe.z + float(index) * mip_resolution) / (mip_resolution * float(SDF_CLIPMAP_LEVEL_COUNT)));
+	float encoded = texture3DLod(s_sdf_clipmap_mip, uvw, 0.0).x;
+	float mip_range = u_sdf_clipmap_encode_range * float(SDF_CLIPMAP_MIP_FACTOR) * level.w;
+	return (encoded - 0.5) * 2.0 * mip_range - length(mip_coordinate - safe) * mip_voxel;
+}
+#endif
 
 #ifdef SDF_CLIPMAP_COVERAGE_STAGE
 /// One level's coverage at a WORLD position, trilinear within its slab (1 where the level does not cover it).
@@ -254,12 +303,12 @@ float SdfSampleClipmapCoverageAt(SdfClipmapSample s, vec3 world_position)
 	return mix(fine, SdfSampleClipmapCoverageLevel(s.index + 1, world_position), s.blend);
 }
 
-/// The coverage at a WORLD position from the levels SdfSampleClipmapEx reads, cross-faded the same way.
+/// The coverage at a WORLD position from the levels SdfSampleClipmapLevels reads, cross-faded the same way.
 float SdfSampleClipmapCoverage(vec3 world_position)
 {
-	float blend;
-	float voxel_size;
-	int index = SdfFindClipmapLevel(world_position, blend, voxel_size);
+	SdfClipmapLevelHit found = SdfFindClipmapLevel(world_position);
+	int index = found.index;
+	float blend = found.blend;
 	if(index >= SDF_CLIPMAP_LEVEL_COUNT)
 	{
 		return 1.0;

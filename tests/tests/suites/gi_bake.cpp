@@ -23,6 +23,7 @@
 #include <engine/rendering/gi/mesh_sdf_baker.h>
 #include <engine/rendering/gi/mesh_sdf_source.h>
 #include <engine/rendering/gi/sdf_instance_grid.h>
+#include <engine/rendering/pipeline/passes/lumen_pass_common.h>
 // The generator templates mesh::create_plane builds primitives from, so the plane test bakes the
 // exact geometry the embedded plane asset carries.
 #include <engine/rendering/generator/generator.hpp>
@@ -37,6 +38,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -2158,18 +2160,73 @@ void test_engine_plane_composes_a_hittable_sheet()
     check(worst_below < 0.0f, "the composed floor is solid below, as UE's plane is");
 }
 
-void test_clipmap_recomposes_moved_geometry_within_budget()
+/// The cascade a fresh clipmap composes in full for @p instances around @p camera: the reference every partial update
+/// must reproduce byte for byte.
+auto compose_reference_clipmap(const std::vector<global_sdf_instance>& instances,
+                               const math::vec3& camera,
+                               global_sdf_clipmap::settings settings) -> global_sdf_clipmap
 {
-    std::printf("test_clipmap_recomposes_moved_geometry_within_budget\n");
-    // Two properties in tension, which is why they are asserted together.
-    //
-    // A moved instance MUST eventually be recomposed: the cascade is what every other stage asks
-    // "what is there", so an object that leaves its geometry behind goes on occluding and
-    // lighting from where it used to be, and nothing downstream can recover.
-    //
-    // But recomposition must stay BUDGETED. Composing a level is expensive enough to be a visible
-    // hitch, and the previous rule -- any change recomposes every level immediately -- meant one
-    // moving object cost four levels in a single frame, every frame it moved.
+    settings.max_levels_per_update = global_sdf_clipmap::level_count;
+    global_sdf_clipmap reference;
+    reference.init(settings);
+    reference.update(instances, camera);
+    return reference;
+}
+
+/// Levels whose voxels differ from @p reference's, as a bit per level (each reported with its differing voxels).
+auto get_mismatched_levels(const global_sdf_clipmap& clipmap, const global_sdf_clipmap& reference) -> uint32_t
+{
+    uint32_t mismatched = 0;
+    for(uint32_t i = 0; i < global_sdf_clipmap::level_count; ++i)
+    {
+        const auto& lvl = clipmap.get_level(i);
+        const auto& expected = reference.get_level(i);
+        const bool same = lvl.origin == expected.origin && lvl.voxels == expected.voxels;
+        if(same)
+        {
+            continue;
+        }
+        mismatched |= 1u << i;
+        size_t differing = 0;
+        for(size_t v = 0; v < lvl.voxels.size() && v < expected.voxels.size(); ++v)
+        {
+            differing += lvl.voxels[v] != expected.voxels[v] ? 1u : 0u;
+        }
+        std::printf("  level %u differs from a fresh composition: %zu voxels, origin %s, last recompose %s\n",
+                    i,
+                    differing,
+                    lvl.origin == expected.origin ? "equal" : "DIFFERENT",
+                    lvl.is_partial ? "partial" : "full");
+    }
+    return mismatched;
+}
+
+/// Updates until nothing composes (at most @p limit updates); returns the updates that composed.
+auto settle_clipmap(global_sdf_clipmap& clipmap,
+                    const std::vector<global_sdf_instance>& instances,
+                    const math::vec3& camera,
+                    uint32_t limit = 32) -> uint32_t
+{
+    uint32_t updates = 0;
+    while(clipmap.update(instances, camera) > 0 && updates < limit)
+    {
+        ++updates;
+    }
+    return updates;
+}
+
+/**
+ * @brief A moved instance updates the cascade PARTIALLY (UE GlobalDistanceField.cpp:1196-1265): only the voxels within
+ * reach of its old and new bounds, on each level's staggered cadence (UE ShouldUpdateClipmapThisFrame: the first level
+ * every update, the others every 2 / 4 / 4), and the result is byte-identical to composing the cascade afresh.
+ *
+ * Both halves matter. A moved instance MUST land - an object that leaves its geometry behind goes on occluding and
+ * lighting from where it used to be - and it must land without a full recompose, whose cost made the old cascade lag
+ * movers by up to eight frames per level.
+ */
+void test_clipmap_partial_update_follows_moved_geometry()
+{
+    std::printf("test_clipmap_partial_update_follows_moved_geometry\n");
     const float radius = 0.8f;
     const auto geometry = make_sphere(radius, 20, 28);
     mesh_sdf_bake_settings bake;
@@ -2181,41 +2238,66 @@ void test_clipmap_recomposes_moved_geometry_within_budget()
                                                make_clipmap_instance(sdf, math::vec3(3.0f, 0.0f, 0.0f))};
     global_sdf_clipmap clipmap;
     global_sdf_clipmap::settings clipmap_settings;
-    clipmap_settings.resolution = 32;
+    clipmap_settings.resolution = 64;
     clipmap_settings.base_extent = 12.0f;
     clipmap.init(clipmap_settings);
     const math::vec3 camera(0.0f);
     // Settle: repeated updates with nothing changing must converge to composing nothing, or the
     // cascade would be rebuilding itself forever.
-    uint32_t settle_updates = 0;
-    while(clipmap.update(instances, camera) > 0 && settle_updates < 32)
-    {
-        ++settle_updates;
-    }
+    const uint32_t settle_updates = settle_clipmap(clipmap, instances, camera);
     check(settle_updates < 32, "the cascade settles when nothing changes");
     check(clipmap.update(instances, camera) == 0, "and stays settled");
     check(clipmap.get_stale_level_count() == 0, "with no level left stale");
-    std::printf("  settled after %u updates\n", settle_updates);
-    // Move one instance. Every level contains it, so all four are stale -- and the budget must
-    // still hold, which is the whole point.
-    instances[1] = make_clipmap_instance(sdf, math::vec3(3.0f, 4.0f, 1.0f));
-    const uint32_t composed_now = clipmap.update(instances, camera);
-    check(composed_now <= clipmap_settings.max_levels_per_update,
-          "a move does not blow through the per-update budget");
-    check(composed_now > 0, "but does start recomposing immediately");
-    // And it must finish. Bounded staleness is the trade; unbounded staleness is the old bug.
-    uint32_t catch_up = 1;
-    while(clipmap.update(instances, camera) > 0 && catch_up < 32)
+    std::array<uint64_t, global_sdf_clipmap::level_count> serials{};
+    for(uint32_t i = 0; i < global_sdf_clipmap::level_count; ++i)
     {
-        ++catch_up;
+        serials[i] = clipmap.get_level(i).compose_serial;
     }
-    check(catch_up < 32, "and catches up within a bounded number of updates");
-    check(clipmap.get_stale_level_count() == 0, "leaving no level stale");
-    std::printf("  a move composed %u level(s) that update, fully caught up after %u\n",
-                composed_now,
-                catch_up);
-    // The recomposed cascade must actually reflect the new position: sampling where the instance
-    // used to be must no longer report a surface there.
+    // Move one instance. Every level contains it.
+    instances[1] = make_clipmap_instance(sdf, math::vec3(3.0f, 4.0f, 1.0f));
+    const uint32_t res = clipmap_settings.resolution;
+    const double level_voxels = double(res) * res * res;
+    uint32_t max_per_update = 0;
+    bool every_update_partial = true;
+    bool first_level_at_once = false;
+    for(uint32_t update = 0; update < 4u; ++update)
+    {
+        const uint32_t composed = clipmap.update(instances, camera);
+        max_per_update = std::max(max_per_update, composed);
+        for(uint32_t i = 0; i < global_sdf_clipmap::level_count; ++i)
+        {
+            const auto& lvl = clipmap.get_level(i);
+            if(lvl.compose_serial == serials[i])
+            {
+                continue;
+            }
+            serials[i] = lvl.compose_serial;
+            first_level_at_once = first_level_at_once || (i == 0u && update == 0u);
+            double voxels = 0.0;
+            for(const auto& box : lvl.partial_boxes)
+            {
+                voxels += double(box.size.x) * box.size.y * box.size.z;
+            }
+            const bool small_partial = lvl.is_partial && !lvl.partial_boxes.empty() &&
+                                       voxels <= double(gi::GI_CLIPMAP_MAX_PARTIAL_FRACTION) * level_voxels;
+            every_update_partial = every_update_partial && small_partial;
+            std::printf("  update %u level %u: %s, %zu box(es), %.0f of %.0f voxels\n",
+                        update,
+                        i,
+                        lvl.is_partial ? "partial" : "FULL",
+                        lvl.partial_boxes.size(),
+                        voxels,
+                        level_voxels);
+        }
+    }
+    check(first_level_at_once, "the first level takes the move on the update it happens");
+    check(max_per_update <= uint32_t(gi::GI_CLIPMAP_PARTIAL_UPDATES_PER_FRAME),
+          "at most GI_CLIPMAP_PARTIAL_UPDATES_PER_FRAME levels update together");
+    check(every_update_partial, "every level takes the move as a partial update of the instance's reach");
+    check(clipmap.get_stale_level_count() == 0, "and every level has it within four updates");
+    const auto reference = compose_reference_clipmap(instances, camera, clipmap_settings);
+    check(get_mismatched_levels(clipmap, reference) == 0u,
+          "the partially updated cascade is byte-identical to a fresh composition");
     const float at_old_position = clipmap.sample(math::vec3(3.0f, 0.0f, 0.0f));
     const float at_new_position = clipmap.sample(math::vec3(3.0f, 4.0f, 1.0f));
     std::printf("  old position reads %.3f, new position reads %.3f\n", at_old_position, at_new_position);
@@ -2224,18 +2306,12 @@ void test_clipmap_recomposes_moved_geometry_within_budget()
 }
 
 /**
- * @brief Continuous edits coalesce to the throttle cadence; the final state still lands.
- *
- * A dragged instance re-fingerprints its levels EVERY frame; without the leading-edge
- * throttle (GI_CLIPMAP_EDIT_THROTTLE_FRAMES) that is one full recompose per frame for as long
- * as the drag lasts. The contract:
- * the FIRST edit after a quiet stretch composes immediately (the pinned editor behaviour of
- * the test above), a continuous stream composes at the window cadence rather than per frame,
- * and the final position always lands once the stream ends.
+ * @brief A continuous edit (a mover, an editor drag) updates partially on every due update: no full recompose, the
+ * moved instance's reach alone, and the final state equals a fresh composition.
  */
-void test_clipmap_edit_coalescing()
+void test_clipmap_continuous_edits_update_partially()
 {
-    std::printf("test_clipmap_edit_coalescing\n");
+    std::printf("test_clipmap_continuous_edits_update_partially\n");
     const float radius = 0.8f;
     const auto geometry = make_sphere(radius, 20, 28);
     mesh_sdf_bake_settings bake;
@@ -2247,43 +2323,102 @@ void test_clipmap_edit_coalescing()
                                                make_clipmap_instance(sdf, math::vec3(3.0f, 0.0f, 0.0f))};
     global_sdf_clipmap clipmap;
     global_sdf_clipmap::settings clipmap_settings;
-    clipmap_settings.resolution = 32;
+    clipmap_settings.resolution = 64;
     clipmap_settings.base_extent = 12.0f;
     clipmap.init(clipmap_settings);
     const math::vec3 camera(0.0f);
-    uint32_t settle_updates = 0;
-    while(clipmap.update(instances, camera) > 0 && settle_updates < 32)
-    {
-        ++settle_updates;
-    }
-    check(settle_updates < 32, "the cascade settles before the drag");
-    // A simulated drag: a new transform every update. Uncoalesced, every level is stale on
-    // every frame and the budget (1) composes on ALL of them; coalesced, each level re-arms
-    // only once per window, so a strict majority of drag frames compose nothing.
+    check(settle_clipmap(clipmap, instances, camera) < 32, "the cascade settles before the drag");
     const uint32_t drag_frames = 32;
-    uint32_t composed_during_drag = 0;
-    uint32_t compose_frames = 0;
-    for(uint32_t i = 0; i < drag_frames; ++i)
+    uint32_t first_level_updates = 0;
+    uint32_t full_recomposes = 0;
+    std::array<uint64_t, global_sdf_clipmap::level_count> serials{};
+    for(uint32_t i = 0; i < global_sdf_clipmap::level_count; ++i)
     {
-        instances[1] =
-            make_clipmap_instance(sdf, math::vec3(3.0f, 4.0f + 0.05f * float(i + 1), 1.0f));
-        const uint32_t composed = clipmap.update(instances, camera);
-        composed_during_drag += composed;
-        compose_frames += composed > 0 ? 1u : 0u;
+        serials[i] = clipmap.get_level(i).compose_serial;
     }
-    std::printf("  drag: %u composes over %u frames (%u frames composed)\n",
-                composed_during_drag,
+    for(uint32_t frame = 0; frame < drag_frames; ++frame)
+    {
+        instances[1] = make_clipmap_instance(sdf, math::vec3(3.0f, 4.0f + 0.05f * float(frame + 1), 1.0f));
+        clipmap.update(instances, camera);
+        for(uint32_t i = 0; i < global_sdf_clipmap::level_count; ++i)
+        {
+            const auto& lvl = clipmap.get_level(i);
+            if(lvl.compose_serial == serials[i])
+            {
+                continue;
+            }
+            serials[i] = lvl.compose_serial;
+            first_level_updates += i == 0u ? 1u : 0u;
+            full_recomposes += lvl.is_partial ? 0u : 1u;
+        }
+    }
+    std::printf("  drag: level 0 updated on %u of %u frames, %u full recomposes\n",
+                first_level_updates,
                 drag_frames,
-                compose_frames);
-    check(composed_during_drag > 0, "a drag still composes");
-    check(composed_during_drag <= (drag_frames * 3u) / 4u,
-          "continuous edits coalesce below one compose per frame (got " +
-              std::to_string(composed_during_drag) + " over " + std::to_string(drag_frames) + ")");
-    // The stream has ended but the last coalesced diff is still pending: it must land within
-    // one throttle window plus the budget catch-up, never linger.
+                full_recomposes);
+    check(first_level_updates == drag_frames, "the first level follows the drag on every frame");
+    check(full_recomposes == 0u, "and no level recomposes in full");
+    for(uint32_t update = 0; update < 4u; ++update)
+    {
+        clipmap.update(instances, camera);
+    }
+    check(clipmap.get_stale_level_count() == 0, "the drag's end lands within four updates");
+    const auto reference = compose_reference_clipmap(instances, camera, clipmap_settings);
+    check(get_mismatched_levels(clipmap, reference) == 0u,
+          "the cascade after the drag is byte-identical to a fresh composition");
+}
+
+/**
+ * @brief Continuous edits too large for a partial update coalesce to the throttle cadence; the final state still
+ * lands.
+ *
+ * An instance whose reach covers more than GI_CLIPMAP_MAX_PARTIAL_FRACTION of a level recomposes that level in full,
+ * a full non-toroidal distance volume; dragged, that is one full recompose per frame without the leading-edge throttle
+ * (GI_CLIPMAP_EDIT_THROTTLE_FRAMES). The FIRST edit after a quiet stretch composes immediately, a continuous stream
+ * composes at the window cadence rather than per frame, and the final position lands once the stream ends.
+ */
+void test_clipmap_full_edit_coalescing()
+{
+    std::printf("test_clipmap_full_edit_coalescing\n");
+    const float radius = 0.8f;
+    const auto geometry = make_sphere(radius, 20, 28);
+    mesh_sdf_bake_settings bake;
+    bake.resolution = 24;
+    bake.min_voxel_size = 0.001f;
+    mesh_sdf sdf;
+    check(bake_mesh_sdf(geometry, bake, sdf), "bake succeeds");
+    // Radius 4.8 m in a 12 m first level: the sphere's reach covers most of it.
+    const float scale = 6.0f;
+    std::vector<global_sdf_instance> instances{make_clipmap_instance(sdf, math::vec3(0.0f, -3.0f, 0.0f)),
+                                               make_scaled_clipmap_instance(sdf, math::vec3(0.5f, 0.0f, 0.0f), scale)};
+    global_sdf_clipmap clipmap;
+    global_sdf_clipmap::settings clipmap_settings;
+    clipmap_settings.resolution = 64;
+    clipmap_settings.base_extent = 12.0f;
+    clipmap.init(clipmap_settings);
+    const math::vec3 camera(0.0f);
+    check(settle_clipmap(clipmap, instances, camera) < 32, "the cascade settles before the drag");
+    const uint32_t drag_frames = 32;
+    uint32_t full_first_level = 0;
+    uint64_t serial = clipmap.get_level(0).compose_serial;
+    for(uint32_t frame = 0; frame < drag_frames; ++frame)
+    {
+        instances[1] = make_scaled_clipmap_instance(sdf, math::vec3(0.5f + 0.05f * float(frame + 1), 0.0f, 0.0f), scale);
+        clipmap.update(instances, camera);
+        const auto& lvl = clipmap.get_level(0);
+        if(lvl.compose_serial != serial)
+        {
+            serial = lvl.compose_serial;
+            full_first_level += lvl.is_partial ? 0u : 1u;
+        }
+    }
+    std::printf("  drag: %u full recomposes of level 0 over %u frames\n", full_first_level, drag_frames);
+    check(full_first_level > 0, "a drag too large for a partial update still composes");
+    check(full_first_level <= (drag_frames * 3u) / 4u,
+          "continuous full recomposes coalesce below one per frame (got " + std::to_string(full_first_level) + ")");
     uint32_t catch_up = 0;
     const uint32_t catch_up_bound = uint32_t(gi::GI_CLIPMAP_EDIT_THROTTLE_FRAMES) +
-                                    global_sdf_clipmap::level_count + 2u;
+                                    global_sdf_clipmap::level_count + 4u;
     while(catch_up <= catch_up_bound)
     {
         const uint32_t composed = clipmap.update(instances, camera);
@@ -2294,9 +2429,51 @@ void test_clipmap_edit_coalescing()
         }
     }
     check(catch_up <= catch_up_bound, "the final edit lands within one window of release");
-    const float at_final = clipmap.sample(math::vec3(3.0f, 4.0f + 0.05f * float(drag_frames), 1.0f));
-    std::printf("  final position reads %.3f after %u catch-up updates\n", at_final, catch_up);
-    check(at_final < radius, "the drag's final position is present in the cascade");
+    const auto reference = compose_reference_clipmap(instances, camera, clipmap_settings);
+    check(get_mismatched_levels(clipmap, reference) == 0u,
+          "the cascade after the drag is byte-identical to a fresh composition");
+}
+
+/// UE GetMaxFramesAccumulated and NumProbesToTraceBudget while the view is being edited: half the history, ten times
+/// the radiance cache's trace budget.
+void test_editing_scales_history_and_trace_budget()
+{
+    std::printf("test_editing_scales_history_and_trace_budget\n");
+    const float max_frames = float(gi::lumen::LUMEN_TEMPORAL_MAX_FRAMES);
+    check(lumen_pass::get_temporal_max_frames(1.0f) == max_frames, "the default speed keeps every frame");
+    check(lumen_pass::get_temporal_max_frames(1.0f, true) == std::round(max_frames * 0.5f), "editing halves them");
+    check(lumen_pass::get_temporal_max_frames(4.0f, true) == std::round(max_frames / 2.0f * 0.5f),
+          "after the update speed's square root, rounded as UE rounds");
+    const uint32_t budget = lumen_pass::get_radiance_cache_trace_budget(1.0f);
+    check(lumen_pass::get_radiance_cache_trace_budget(1.0f, true) == budget * 10u, "editing traces ten times the probes");
+}
+
+/**
+ * @brief The staggered cadence of partial updates is UE's (GlobalDistanceField.cpp:712-753 with two updates per frame):
+ * the first level every update, the second every other, the third and fourth every fourth on distinct phases.
+ */
+void test_clipmap_partial_cadence_is_staggered()
+{
+    std::printf("test_clipmap_partial_cadence_is_staggered\n");
+    std::array<uint32_t, global_sdf_clipmap::level_count> updates{};
+    uint32_t max_together = 0;
+    const uint32_t frames = 64;
+    for(uint64_t frame = 0; frame < frames; ++frame)
+    {
+        uint32_t together = 0;
+        for(uint32_t i = 0; i < global_sdf_clipmap::level_count; ++i)
+        {
+            const bool due = global_sdf_clipmap::is_partial_update_due(i, frame);
+            updates[i] += due ? 1u : 0u;
+            together += due ? 1u : 0u;
+        }
+        max_together = std::max(max_together, together);
+    }
+    check(updates[0] == frames, "the first level updates every frame");
+    check(updates[1] == frames / 2u, "the second every other frame");
+    check(updates[2] == frames / 4u && updates[3] == frames / 4u, "the third and fourth every fourth");
+    check(max_together == uint32_t(gi::GI_CLIPMAP_PARTIAL_UPDATES_PER_FRAME),
+          "and never more than two levels in one frame");
 }
 
 /**
@@ -3456,10 +3633,10 @@ void test_clipmap_is_world_stable()
     check(recomposed == 0, "an unchanged camera recomposes no levels");
 }
 
-/// SCROLL-ONLY recompose (global_sdf_clipmap::level::scroll_only): a level whose origin moved
-/// by whole snap cells while the instance content held still holds, in the overlap of its
-/// old and new windows, exactly the bytes a recompose writes - the premise on which the GPU
-/// composer copies the overlap and composes only the exposed slabs. Pinned on the CPU
+/// SCROLL recompose (global_sdf_clipmap::level::is_partial with a scroll shift): a level whose origin moved
+/// by whole snap cells holds, in the overlap of its old and new windows, exactly the bytes a recompose
+/// writes outside the reach of instances that changed - the premise on which the GPU composer copies
+/// the overlap and composes only the exposed slabs and the changed instances' boxes. Pinned on the CPU
 /// reference composer for the distance voxels, together with the slab decomposition the pass
 /// dispatches.
 void test_clipmap_scroll_copy_matches_recompose()
@@ -3500,11 +3677,12 @@ void test_clipmap_scroll_copy_matches_recompose()
         const std::string level_tag = "level " + std::to_string(i) + ": ";
         if(after.origin == before[i].origin)
         {
-            check(!after.scroll_only, level_tag + "an unmoved level reports no scroll");
+            check(after.scroll_shift == math::ivec3(0), level_tag + "an unmoved level reports no scroll");
             check(after.voxels == before[i].voxels, level_tag + "an unmoved level keeps its voxels");
             continue;
         }
-        check(after.scroll_only, level_tag + "a moved level with unchanged content is scroll-only");
+        check(after.is_partial && after.partial_boxes.empty(),
+              level_tag + "a moved level with unchanged content scrolls without composing boxes");
         const math::vec3 shift_f = (after.origin - before[i].origin) / after.voxel_size;
         const math::ivec3 shift(int(std::lround(shift_f.x)), int(std::lround(shift_f.y)), int(std::lround(shift_f.z)));
         check(after.scroll_shift == shift, level_tag + "the recorded shift is the origin's move in voxels");
@@ -3559,12 +3737,33 @@ void test_clipmap_scroll_copy_matches_recompose()
               level_tag + "every overlap voxel is byte-identical to its old-window source (" +
                   std::to_string(mismatched) + " of " + std::to_string(compared) + " differ)");
     }
-    // A content change between the two updates must NOT be a scroll: the revision moves.
+    check(get_mismatched_levels(clipmap, compose_reference_clipmap(instances, camera_b, clipmap_settings)) == 0u,
+          "the scrolled cascade is byte-identical to a fresh composition");
+    // A content revision that moved without changing what the levels hold still scrolls: the set, not the
+    // revision, decides.
+    global_sdf_clipmap revised;
+    revised.init(clipmap_settings);
+    revised.update(instances, math::vec3(0.0f), revision);
+    revised.update(instances, camera_b, revision + 1);
+    check(revised.get_level(0).is_partial && revised.get_level(0).partial_boxes.empty(),
+          "a moved origin under a moved revision with the same instances scrolls");
+    // An instance that moved during the scroll: the slabs and the instance's boxes, and the bytes of a fresh
+    // composition.
     global_sdf_clipmap edited;
     edited.init(clipmap_settings);
     edited.update(instances, math::vec3(0.0f), revision);
-    edited.update(instances, camera_b, revision + 1);
-    check(!edited.get_level(0).scroll_only, "a moved origin with a moved revision composes in full");
+    auto moved = instances;
+    moved[0] = make_clipmap_instance(sdf, math::vec3(1.0f, 0.6f, -0.2f));
+    edited.update(moved, camera_b, revision + 1);
+    check(edited.get_level(0).is_partial && !edited.get_level(0).partial_boxes.empty(),
+          "a moved origin with a moved instance scrolls and composes the instance's boxes");
+    // The coarser levels take the move on their staggered cadence: four updates bring every level current.
+    for(uint32_t update = 0; update < 4u; ++update)
+    {
+        edited.update(moved, camera_b, revision + 1);
+    }
+    check(get_mismatched_levels(edited, compose_reference_clipmap(moved, camera_b, clipmap_settings)) == 0u,
+          "the scrolled and edited cascade is byte-identical to a fresh composition");
     // The decomposition's edge cases: no shift, and a shift past the window.
     global_sdf_clipmap::voxel_box overlap;
     std::array<global_sdf_clipmap::voxel_box, 3> exposed;
@@ -4909,28 +5108,86 @@ void test_bake_cost_is_dominated_by_voxels_not_triangles()
     check(ratio < 0.5 * triangle_ratio, "bake time is sublinear in triangle count");
 }
 
+void test_bake_cost_estimate_reads_the_baked_grid()
+{
+    std::printf("test_bake_cost_estimate_reads_the_baked_grid\n");
+    // The asset compiler starts its bakes in the order of this estimate, taken before any geometry is
+    // extracted: from the bounds and the triangle count alone. Its voxel term has to be the grid the
+    // bake itself sizes, through every rule that sizes one -- the voxel clamps, both caps, and the
+    // thinner voxel a shell asks for.
+    struct estimate_case
+    {
+        const char* name = "";
+        sdf_source_geometry geometry;
+        mesh_sdf_bake_settings settings;
+    };
+    std::vector<estimate_case> cases(5);
+    cases[0].name = "sphere at the total cap";
+    cases[0].geometry = make_sphere(1.0f, 16, 24);
+    cases[1].name = "box at the voxel floor";
+    cases[1].geometry = make_box(math::vec3(0.05f));
+    cases[2].name = "long box past the per-axis cap";
+    cases[2].geometry = make_box(math::vec3(5.0f, 0.1f, 0.1f));
+    cases[2].settings.target_voxel_size = 0.02f;
+    cases[3].name = "shell with a thinner voxel";
+    cases[3].geometry = make_box(math::vec3(8.0f, 0.5f, 8.0f));
+    cases[3].settings.two_sided = true;
+    cases[4].name = "box under a tight budget";
+    cases[4].geometry = make_box(math::vec3(2.0f, 1.0f, 0.5f));
+    cases[4].settings.max_total_voxels = 16384;
+    for(const estimate_case& entry : cases)
+    {
+        mesh_sdf field;
+        const bool baked = bake_mesh_sdf(entry.geometry, entry.settings, field, sdf_bake_threading::serial);
+        check(baked, std::string(entry.name) + " bakes");
+        const uint32_t triangles = entry.geometry.get_triangle_count();
+        const double grid_voxels = double(field.grid_dim.x) * double(field.grid_dim.y) * double(field.grid_dim.z);
+        const double expected = grid_voxels * std::sqrt(double(triangles));
+        const double estimate = estimate_mesh_sdf_bake_cost(entry.geometry.bounds, triangles, entry.settings);
+        std::printf("  %-32s grid %ux%ux%u, estimate %.0f\n",
+                    entry.name,
+                    field.grid_dim.x,
+                    field.grid_dim.y,
+                    field.grid_dim.z,
+                    estimate);
+        check(estimate == expected, std::string(entry.name) + ": the estimate reads the grid the bake sized");
+    }
+    check(estimate_mesh_sdf_bake_cost(make_box(math::vec3(1.0f)).bounds, 0u, mesh_sdf_bake_settings{}) == 0.0,
+          "geometry without triangles costs nothing");
+}
+
 void test_parallel_submesh_bake_matches_serial()
 {
     std::printf("test_parallel_submesh_bake_matches_serial\n");
-    // Mirrors the loop the asset compiler runs: submeshes in parallel, each individual bake
-    // serial. That nesting rule is invisible in the output -- breaking it deadlocks the whole
-    // pool rather than producing a wrong field -- so it is worth pinning here, where it runs in
-    // milliseconds, instead of discovering it on a model with thousands of parts.
+    // Mirrors the loop the asset compiler runs: submeshes in parallel, each pool worker pulling the
+    // costliest submesh left, each individual bake serial. That nesting rule is invisible in the
+    // output -- breaking it deadlocks the whole pool rather than producing a wrong field -- so it is
+    // worth pinning here, where it runs in milliseconds, instead of discovering it on a model with
+    // thousands of parts.
     constexpr uint32_t submesh_count = 128;
     const auto data = make_multi_submesh_load_data(submesh_count, 4);
     mesh_sdf_bake_settings settings;
     settings.resolution = 16;
+    // Scrambled costs, so the bakes run in an order unrelated to their slots and a slot filled by the
+    // wrong submesh, or by none, shows below. 37 is coprime with the count, so this is a permutation.
+    constexpr uint32_t cost_stride = 37;
+    std::vector<uint32_t> costs(submesh_count);
+    for(uint32_t s = 0; s < submesh_count; ++s)
+    {
+        costs[s] = (s * cost_stride) % submesh_count;
+    }
     const auto bake_all = [&](const char* label, bool parallel_submeshes, sdf_bake_threading threading)
         -> std::vector<mesh_sdf>
     {
         std::vector<mesh_sdf> fields(submesh_count);
+        std::vector<std::atomic<uint32_t>> runs(submesh_count);
         const auto start = std::chrono::steady_clock::now();
-        poolstl::for_each_par_if(
+        poolstl::for_each_costliest_first_par_if(
             parallel_submeshes,
-            poolstl::iota_iter<size_t>(0),
-            poolstl::iota_iter<size_t>(submesh_count),
+            costs,
             [&](size_t i)
             {
+                ++runs[i];
                 sdf_source_geometry g;
                 if(!extract_sdf_source_geometry(data, data.submeshes[i], g))
                 {
@@ -4946,6 +5203,13 @@ void test_parallel_submesh_bake_matches_serial()
         std::printf("  %-34s %7.1f ms\n",
                     label,
                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+        const bool ran_each_once = std::all_of(runs.begin(),
+                                               runs.end(),
+                                               [](const std::atomic<uint32_t>& count)
+                                               {
+                                                   return count.load() == 1u;
+                                               });
+        check(ran_each_once, std::string(label) + " runs every submesh exactly once");
         return fields;
     };
     // Three ways to spend the same work. The first is the reference; the other two are the two
@@ -5497,8 +5761,11 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_instance_grid_cell_clamping_covers_every_instance();
     test_instance_grid_walk_stops_past_the_nearest_hit();
     test_instance_grid_handles_degenerate_input();
-    test_clipmap_recomposes_moved_geometry_within_budget();
-    test_clipmap_edit_coalescing();
+    test_clipmap_partial_update_follows_moved_geometry();
+    test_clipmap_continuous_edits_update_partially();
+    test_clipmap_full_edit_coalescing();
+    test_clipmap_partial_cadence_is_staggered();
+    test_editing_scales_history_and_trace_budget();
     test_clipmap_compose_shader_transcription_matches_cpu();
     test_clipmap_culled_composition_matches_brute_force();
     test_clipmap_transition_is_continuous();
@@ -5523,6 +5790,7 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_scattered_parts_are_detected_and_cannot_be_resolved();
     test_surface_test_keeps_ordinary_tessellation();
     test_bake_cost_is_dominated_by_voxels_not_triangles();
+    test_bake_cost_estimate_reads_the_baked_grid();
     test_parallel_submesh_bake_matches_serial();
     test_degenerate_inputs();
     test_lumen_cards_box();

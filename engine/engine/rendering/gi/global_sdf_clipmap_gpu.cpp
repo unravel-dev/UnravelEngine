@@ -30,9 +30,9 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
     // without it the image binding silently produces no writes rather than an error.
     const uint64_t flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_W_CLAMP |
                            BGFX_TEXTURE_COMPUTE_WRITE;
-    // BLIT_DST as well: a scroll-only recompose (level::scroll_only) places the overlap of
+    // BLIT_DST as well: a scrolled partial recompose (level::is_partial) places the overlap of
     // the old and new windows back into the level slab with a blit, composing only the
-    // exposed slabs.
+    // exposed slabs and the changed instances' boxes.
     texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(resolution),
                                               static_cast<uint16_t>(resolution),
                                               static_cast<uint16_t>(depth),
@@ -68,6 +68,30 @@ auto global_sdf_clipmap_gpu::init(uint32_t resolution) -> bool
         shutdown();
         return false;
     }
+    // Zero (the most negative distance) until a level's mip is built: the march then takes no coarse step there.
+    const uint32_t mip_resolution = get_mip_resolution();
+    const uint32_t mip_bytes = mip_resolution * mip_resolution * mip_resolution * global_sdf_clipmap::level_count;
+    const bgfx::Memory* unbuilt = bgfx::alloc(mip_bytes);
+    std::memset(unbuilt->data, 0, mip_bytes);
+    mip_texture_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(mip_resolution),
+                                                  static_cast<uint16_t>(mip_resolution),
+                                                  static_cast<uint16_t>(mip_resolution * global_sdf_clipmap::level_count),
+                                                  false,
+                                                  bgfx::TextureFormat::R8,
+                                                  flags,
+                                                  unbuilt);
+    mip_scratch_ = std::make_shared<gfx::texture>(static_cast<uint16_t>(mip_resolution),
+                                                  static_cast<uint16_t>(mip_resolution),
+                                                  static_cast<uint16_t>(mip_resolution),
+                                                  false,
+                                                  bgfx::TextureFormat::R8,
+                                                  flags);
+    if(!mip_texture_ || !mip_texture_->is_valid() || !mip_scratch_ || !mip_scratch_->is_valid())
+    {
+        APPLOG_ERROR("[SurfaceCache] Failed to create the clipmap mip textures.");
+        shutdown();
+        return false;
+    }
     APPLOG_INFO("[SurfaceCache] Global SDF clipmap ready: {} levels of {}^3 ({} KB).",
                 global_sdf_clipmap::level_count,
                 resolution_,
@@ -79,6 +103,8 @@ void global_sdf_clipmap_gpu::shutdown()
 {
     texture_.reset();
     coverage_texture_.reset();
+    mip_texture_.reset();
+    mip_scratch_.reset();
     resolution_ = 0;
     level_params_.fill(0.0f);
     // Zeroing this clears the "cascade is resident" flag in w, which is what stops a consumer
@@ -112,7 +138,7 @@ void global_sdf_clipmap_gpu::upload(global_sdf_clipmap& clipmap)
     sampling_params_[0] = float(resolution_);
     sampling_params_[1] = clipmap_settings.blend_voxels;
     sampling_params_[2] = clipmap_settings.encode_range;
-    sampling_params_[3] = 1.0f;
+    sampling_params_[3] = 1.0f + float(march_experiments_);
     // When the voxels are composed by a dispatch there is nothing to send, and the dirty mask is
     // NOT ours to clear -- gi_clipmap_compose_pass consumes it to decide which levels to compose.
     // Clearing it here would leave the levels marked clean and never composed at all: a cascade

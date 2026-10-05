@@ -15,6 +15,7 @@
 #include "lumen/lumen_constants.sh"
 /// The global SDF's coverage (gi/sdf_clipmap.sh).
 #define SDF_CLIPMAP_COVERAGE_STAGE 10
+#define SDF_CLIPMAP_MIP_STAGE 9
 #include "lumen/lumen_global_sdf.sh"
 
 IMAGE2D_WO(s_lumen_radiosity_trace_out, rgba16f, 0);
@@ -28,6 +29,7 @@ SAMPLER3D(s_lumen_object_grid, 8);
 
 #define LUMEN_SURFACE_CACHE_OBJECT_GRID
 #include "lumen/lumen_surface_cache.sh"
+#include "lumen/lumen_surface_cache_lighting.sh"
 #include "lumen/lumen_radiosity_common.sh"
 
 /// x = first tile of this dispatch, y = tile count.
@@ -68,7 +70,8 @@ void main()
 	LumenCard card = LumenLoadCard(int(t0.z));
 	vec2 card_uv = mix(uv_rect.xy, uv_rect.zw, (vec2(probe_texel) - page.xy + 0.5) / page.zw);
 	vec3 position = LumenCardWorldPosition(card, LumenCardLocalPosition(card, card_uv, depth));
-	vec3 normal = decodeNormalOctahedron(texelFetch(s_lumen_card_normal, probe_texel, 0).xy);
+	vec3 normal =
+	    LumenDecodeCardNormal(texelFetch(s_lumen_card_normal, probe_texel, 0).xy, card.axis_x, card.axis_y, card.axis_z);
 	vec3 direction = LumenRadiosityRayDirection(normal, cell_origin / spacing, trace_texel, t0.w);
 	vec3 origin = position + normal * LUMEN_RADIOSITY_SURFACE_BIAS + direction * LUMEN_RADIOSITY_SURFACE_BIAS;
 	LumenSdfHit hit = LumenTraceGlobalSdf(origin, direction, LUMEN_RADIOSITY_MIN_TRACE_DISTANCE,

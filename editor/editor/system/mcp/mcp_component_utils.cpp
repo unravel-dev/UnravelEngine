@@ -398,6 +398,10 @@ auto light_to_json(const light_component& comp, const std::unordered_set<std::st
     {
         append_prop(json, first, "color", color_to_json(l.color));
     }
+    if(wants_key(filter, "indirect_intensity"))
+    {
+        append_prop(json, first, "indirect_intensity", fmt::format("{:.6g}", l.indirect_intensity));
+    }
     if(wants_key(filter, "casts_shadows"))
     {
         append_prop(json, first, "casts_shadows", l.casts_shadows ? "true" : "false");
@@ -544,6 +548,16 @@ auto apply_light_properties(light_component& comp, const simdjson::dom::object& 
         else if(key == "color")
         {
             if(!parse_color(value, light.color, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "indirect_intensity")
+        {
+            if(!parse_number(value, light.indirect_intensity, error))
             {
                 result.ok = false;
                 result.errors.push_back(key + ": " + error);
@@ -3694,6 +3708,7 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Light", "type", "string", R"("enum":["spot","point","directional"])");
     add("Light", "intensity", "number");
     add("Light", "color", "array", R"("items":"number","minItems":3,"maxItems":4)");
+    add("Light", "indirect_intensity", "number");
     add("Light", "casts_shadows", "boolean");
     add("Light", "range", "number");
     add("Light", "exponent_falloff", "number");

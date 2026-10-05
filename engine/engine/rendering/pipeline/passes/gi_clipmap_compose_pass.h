@@ -28,6 +28,11 @@ namespace unravel
 class gi_clipmap_compose_pass
 {
 public:
+    gi_clipmap_compose_pass() = default;
+    ~gi_clipmap_compose_pass();
+    gi_clipmap_compose_pass(const gi_clipmap_compose_pass&) = delete;
+    auto operator=(const gi_clipmap_compose_pass&) -> gi_clipmap_compose_pass& = delete;
+
     struct run_params
     {
         surface_cache_system* surface_cache = nullptr;
@@ -54,10 +59,9 @@ private:
         gpu_program::ptr program;
         gfx::program::uniform_ptr u_clipmap_compose_params;
         gfx::program::uniform_ptr u_clipmap_compose_origin;
-        /// The voxel box one dispatch composes (a scroll-only recompose composes the exposed
-        /// slabs, a full one the whole level): xyz = min corner; size in xyz of the second.
-        gfx::program::uniform_ptr u_clipmap_compose_range;
-        gfx::program::uniform_ptr u_clipmap_compose_range_size;
+        gfx::program::uniform_ptr u_clipmap_compose_scale;
+        /// The dispatch's boxes in the brick table (gi/brick_dispatch.sh).
+        gfx::program::uniform_ptr u_brick_dispatch;
         gfx::program::uniform_ptr u_sdf_params;
         gfx::program::uniform_ptr u_sdf_grid_params;
         gfx::program::uniform_ptr u_sdf_clipmap_params;
@@ -73,14 +77,8 @@ private:
                           u_clipmap_compose_origin,
                           "u_clipmap_compose_origin",
                           bgfx::UniformType::Vec4);
-            cache_uniform(program.get(),
-                          u_clipmap_compose_range,
-                          "u_clipmap_compose_range",
-                          bgfx::UniformType::Vec4);
-            cache_uniform(program.get(),
-                          u_clipmap_compose_range_size,
-                          "u_clipmap_compose_range_size",
-                          bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_clipmap_compose_scale, "u_clipmap_compose_scale", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_brick_dispatch, "u_brick_dispatch", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_sdf_params, "u_sdf_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_sdf_grid_params, "u_sdf_grid_params", bgfx::UniformType::Vec4, gi::GI_SDF_GRID_PARAMS_VEC4);
             cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", bgfx::UniformType::Vec4);
@@ -93,18 +91,48 @@ private:
         }
     } compose_program_;
 
+    /// cs_gi_clipmap_mip: one propagation pass of a level's coarse mip.
+    struct mip_program : uniforms_cache
+    {
+        gpu_program::ptr program;
+        gfx::program::uniform_ptr u_clipmap_mip_params;
+        gfx::program::uniform_ptr u_clipmap_mip_mode;
+        gfx::program::uniform_ptr u_sdf_clipmap_params;
+        gfx::program::uniform_ptr s_sdf_clipmap;
+        gfx::program::uniform_ptr s_clipmap_mip_prev;
+
+        void cache_uniforms()
+        {
+            cache_uniform(program.get(), u_clipmap_mip_params, "u_clipmap_mip_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_clipmap_mip_mode, "u_clipmap_mip_mode", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_sdf_clipmap_params, "u_sdf_clipmap_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), s_sdf_clipmap, "s_sdf_clipmap", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_clipmap_mip_prev, "s_clipmap_mip_prev", bgfx::UniformType::Sampler);
+        }
+
+        auto is_valid() const -> bool
+        {
+            return program && program->is_valid();
+        }
+    } mip_program_;
+
     /**
-     * @brief Composes one dirty level's distance voxels: a scroll-only recompose copies the
-     *        overlap of the old and new windows through @ref scroll_scratch_ and composes the
-     *        exposed slabs; anything else composes the whole level.
+     * @brief Rebuilds @p level's coarse mip from the level just composed (UE's Coarse Clipmap passes,
+     *        GlobalDistanceField.cpp:3106-3178): the first pass reads the level, the rest propagate the distance
+     *        through the level's mip slab and the scratch, ending in the slab.
      */
-    void compose_level_voxels(const global_sdf_clipmap& clipmap,
-                              const global_sdf_clipmap_gpu& clipmap_gpu,
-                              surface_cache_system& surface_cache,
-                              uint32_t level,
-                              gfx::render_pass& scroll_copy_pass,
-                              gfx::render_pass& scroll_place_pass,
-                              gfx::render_pass& compose_pass);
+    void build_level_mip(const global_sdf_clipmap_gpu& clipmap_gpu, uint32_t level, gfx::render_pass& pass);
+
+    /**
+     * @brief The voxel boxes one dirty level composes: a partial recompose copies the overlap of the old and new windows
+     *        through @ref scroll_scratch_ when its origin moved and composes the exposed slabs and its partial boxes;
+     *        anything else composes the whole level.
+     */
+    auto get_level_compose_boxes(const global_sdf_clipmap& clipmap,
+                                 const global_sdf_clipmap_gpu& clipmap_gpu,
+                                 uint32_t level,
+                                 gfx::render_pass& scroll_copy_pass,
+                                 gfx::render_pass& scroll_place_pass) -> std::vector<global_sdf_clipmap::voxel_box>;
 
     /// One volume of a scroll-only recompose (the distance, or the coverage at its downsample): the level slab goes
     /// out to @p scratch and the overlap comes back shifted.
@@ -126,13 +154,25 @@ private:
                                     gfx::render_pass& copy_pass,
                                     gfx::render_pass& place_pass);
 
-    /// Dispatches the compose kernel over one voxel box of @p level.
-    void dispatch_compose_box(gfx::render_pass& pass,
-                              const global_sdf_clipmap& clipmap,
-                              const global_sdf_clipmap_gpu& clipmap_gpu,
-                              surface_cache_system& surface_cache,
-                              uint32_t level,
-                              const global_sdf_clipmap::voxel_box& box);
+    /// One level's share of the frame's brick table (@ref brick_boxes_).
+    struct level_bricks
+    {
+        uint32_t level = 0;
+        uint32_t first_box = 0;
+        uint32_t box_count = 0;
+        uint32_t bricks = 0;
+    };
+
+    /// Dispatches the compose kernel over the bricks of one level's boxes.
+    void dispatch_compose_bricks(gfx::render_pass& pass,
+                                 const global_sdf_clipmap& clipmap,
+                                 const global_sdf_clipmap_gpu& clipmap_gpu,
+                                 surface_cache_system& surface_cache,
+                                 const level_bricks& bricks);
+
+    /// The frame's brick table (global_sdf_clipmap::append_brick_boxes), every dirty level's boxes in one upload: bgfx
+    /// applies buffer updates before the frame's dispatches, so one buffer cannot change between them.
+    bgfx::DynamicVertexBufferHandle brick_boxes_{bgfx::kInvalidHandle};
 
     /// The staging copy of one level slab for a scroll-only recompose (R8, resolution^3): a
     /// blit cannot move voxels within one texture, so the slab goes out and the overlap

@@ -56,7 +56,7 @@ void main()
 	atomicAdd(b_lumen_rc_counters[LUMEN_RC_COUNTER_SPENT], cost);
 	uint trace;
 	atomicFetchAndAdd(b_lumen_rc_counters[LUMEN_RC_COUNTER_TRACES], 1u, trace);
-	if(trace < uint(LUMEN_RADIANCE_CACHE_MAX_TRACES))
+	if(trace < u_lumen_rc_trace_cap)
 	{
 		b_lumen_rc_traces[2u * trace] = LumenRcPackTrace(cell.xyz, cell.w, force_downsample);
 		b_lumen_rc_traces[2u * trace + 1u] = probe;

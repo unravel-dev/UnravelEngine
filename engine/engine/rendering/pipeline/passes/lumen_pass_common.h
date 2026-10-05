@@ -4,7 +4,9 @@
 #include <engine/rendering/gi/gi_settings.h>
 #include <engine/rendering/gi/global_sdf_clipmap_gpu.h>
 #include <engine/rendering/gi/lumen_constants.h>
+#include <engine/rendering/gpu_program.h>
 
+#include <graphics/graphics.h>
 #include <graphics/render_view.h>
 #include <graphics/texture.h>
 
@@ -34,6 +36,11 @@ inline constexpr uint32_t group_edge = 8;
 inline constexpr float min_update_speed = 0.5f;
 inline constexpr float max_temporal_update_speed = 8.0f;
 inline constexpr float max_budget_update_speed = 4.0f;
+/// While the user edits the scene in the view (UE FSceneViewFamily::bCurrentlyBeingEdited: a gizmo or a property being
+/// dragged), the gather's temporal keeps this share of its frames and the radiance cache traces this many times its
+/// probe budget, so the edit shows up sooner.
+inline constexpr float editing_history_scale = 0.5f;
+inline constexpr float editing_trace_budget_scale = 10.0f;
 /// The maximum trace distance's range in metres: UE's 0.01 cm floor and Lumen::MaxTraceDistance
 /// (half UE_OLD_WORLD_MAX, R/LumenDiffuseIndirect.cpp:230).
 inline constexpr float min_trace_distance = 0.0001f;
@@ -67,20 +74,22 @@ inline auto get_max_trace_distance(float setting) -> float
 }
 
 /// The frames the gather's temporal accumulates at most at the final gather update speed @p update_speed: the
-/// default over the square root of the speed, rounded (UE LumenScreenProbeGather GetMaxFramesAccumulated, without
-/// its editing scale).
-inline auto get_temporal_max_frames(float update_speed) -> float
+/// default over the square root of the speed, halved while @p is_being_edited, rounded (UE LumenScreenProbeGather
+/// GetMaxFramesAccumulated).
+inline auto get_temporal_max_frames(float update_speed, bool is_being_edited = false) -> float
 {
     const float speed = std::clamp(update_speed, min_update_speed, max_temporal_update_speed);
-    return std::round(float(gi::lumen::LUMEN_TEMPORAL_MAX_FRAMES) / std::sqrt(speed));
+    const float editing = is_being_edited ? editing_history_scale : 1.0f;
+    return std::round(float(gi::lumen::LUMEN_TEMPORAL_MAX_FRAMES) / std::sqrt(speed) * editing);
 }
 
 /// The radiance cache probes re-traced per frame beyond the new ones at the final gather update speed
-/// @p update_speed (UE NumProbesToTraceBudget, without its editing scale).
-inline auto get_radiance_cache_trace_budget(float update_speed) -> uint32_t
+/// @p update_speed, ten times as many while @p is_being_edited (UE NumProbesToTraceBudget).
+inline auto get_radiance_cache_trace_budget(float update_speed, bool is_being_edited = false) -> uint32_t
 {
     const float speed = std::clamp(update_speed, min_update_speed, max_budget_update_speed);
-    return uint32_t(std::lround(float(gi::lumen::LUMEN_RADIANCE_CACHE_TRACE_BUDGET) * speed));
+    const float editing = is_being_edited ? editing_trace_budget_scale : 1.0f;
+    return uint32_t(std::lround(float(gi::lumen::LUMEN_RADIANCE_CACHE_TRACE_BUDGET) * speed * editing));
 }
 
 /// The roughness below which pixels trace reflection rays under @p settings (UE LumenMaxRoughnessToTraceReflections,
@@ -169,12 +178,12 @@ inline auto get_radiosity_layout(float lighting_quality) -> radiosity_layout
 }
 
 /// The u_lumen_settings values of @p settings (lumen_common.sh): x = the maximum trace distance, y = the temporal's
-/// maximum frame count, z = the roughness below which pixels trace reflection rays, w = the integrate's
-/// full-resolution jitter.
-inline auto make_settings_uniform(const gi_settings& settings) -> std::array<float, 4>
+/// maximum frame count (get_temporal_max_frames with @p is_being_edited), z = the roughness below which pixels trace
+/// reflection rays, w = the integrate's full-resolution jitter.
+inline auto make_settings_uniform(const gi_settings& settings, bool is_being_edited) -> std::array<float, 4>
 {
     return {get_max_trace_distance(settings.diffuse.max_trace_distance),
-            get_temporal_max_frames(settings.diffuse.update_speed),
+            get_temporal_max_frames(settings.diffuse.update_speed, is_being_edited),
             get_max_roughness_to_trace(settings.reflections),
             get_full_res_jitter_width(settings.diffuse.quality)};
 }
@@ -230,15 +239,85 @@ inline void bind_image(uint8_t stage,
 /// Experiment toggle (gi_set_experiment_flags) every Lumen tracer honours: the global SDF reads as covered everywhere,
 /// two-sided meshes as opaque as one-sided ones (the A/B of UE's coverage).
 inline constexpr uint32_t experiment_no_sdf_coverage = 1u << 25u;
+/// Experiment toggles (gi_set_experiment_flags) of the global SDF march, through the clipmap's sampling uniform
+/// (global_sdf_clipmap_gpu::set_march_experiments): the empty-space step reads the coarsest covering level instead of
+/// the answering level's coarse mip, and one step budget serves the whole ray instead of one per level.
+inline constexpr uint32_t experiment_cross_level_sdf_skip = 1u << 17u;
+inline constexpr uint32_t experiment_ray_sdf_step_budget = 1u << 18u;
+
+/// Frames the shaders' frame index (u_lumen_frame.x) counts before it restarts: every reader takes it modulo a divisor
+/// of this (8, 64, the R2 sequence's 4096 - sampling.sh SAMPLING_R2_PERIOD), and a float holds it exactly forever.
+inline constexpr uint32_t frame_index_period = 4096u;
+
+/// The frame index the shaders read for render frame @p frame.
+inline auto get_frame_index(uint32_t frame) -> float
+{
+    return float(frame % frame_index_period);
+}
+
+/// The march experiment bits of @p experiments (u_sdf_clipmap_experiments in gi/sdf_clipmap.sh).
+inline auto get_sdf_march_experiments(uint64_t experiments) -> uint32_t
+{
+    return ((experiments & experiment_cross_level_sdf_skip) != 0u ? 1u : 0u) |
+           ((experiments & experiment_ray_sdf_step_budget) != 0u ? 2u : 0u);
+}
 
 /// The global SDF coverage a Lumen tracer binds at its SDF_CLIPMAP_COVERAGE_STAGE (gi/sdf_clipmap.sh): the clipmap's,
 /// or everything covered when it has none or under experiment_no_sdf_coverage.
-inline auto get_sdf_coverage(const global_sdf_clipmap_gpu& clipmap, uint32_t experiments) -> gfx::texture::ptr
+inline auto get_sdf_coverage(const global_sdf_clipmap_gpu& clipmap, uint64_t experiments) -> gfx::texture::ptr
 {
     const auto& coverage = clipmap.get_coverage_texture();
     const bool use_coverage = coverage && (experiments & experiment_no_sdf_coverage) == 0u;
     return use_coverage ? coverage : default_textures::get().white_texture_3d();
 }
+
+/// Experiment toggles (gi_set_experiment_flags) of the motion the reprojecting Lumen shaders read (lumen_motion.sh):
+/// every surface reprojects as static (the velocity buffer unread), and no screen hit counts as moving (no fast
+/// update).
+inline constexpr uint64_t experiment_no_velocity = 1ull << 21u;
+inline constexpr uint64_t experiment_no_fast_update = 1ull << 32u;
+/// Experiment toggle (gi_set_experiment_flags, UE r.AOGlobalDistanceFieldPartialUpdates 0): every change to the global
+/// distance field recomposes whole levels, under the level budget and the edit throttle.
+inline constexpr uint64_t experiment_no_sdf_partial_updates = 1ull << 33u;
+/// Experiment toggle (gi_set_experiment_flags): the card direct lighting relights pages whose inputs did not change
+/// (lumen_scene::invalidate_direct_lighting marks every page every frame), as Lumen does.
+inline constexpr uint64_t experiment_no_direct_page_skip = 1ull << 34u;
+/// Experiment toggle (gi_set_experiment_flags): every reflection tile counts as tracing, so no pass skips one
+/// (lumen_reflection_common.sh, the reflection tiles).
+inline constexpr uint64_t experiment_all_reflection_tiles = 1ull << 35u;
+
+/// What lumen_motion.sh reads: last frame's view projection and its inverse, the velocity buffer and u_lumen_motion.
+struct motion_uniforms : uniforms_cache
+{
+    gfx::program::uniform_ptr u_lumen_prev_view_proj;
+    gfx::program::uniform_ptr u_lumen_prev_inv_view_proj;
+    gfx::program::uniform_ptr u_lumen_motion;
+    gfx::program::uniform_ptr s_lumen_velocity;
+
+    void cache_uniforms()
+    {
+        cache_uniform(nullptr, u_lumen_prev_view_proj, "u_lumen_prev_view_proj", bgfx::UniformType::Mat4);
+        cache_uniform(nullptr, u_lumen_prev_inv_view_proj, "u_lumen_prev_inv_view_proj", bgfx::UniformType::Mat4);
+        cache_uniform(nullptr, u_lumen_motion, "u_lumen_motion", bgfx::UniformType::Vec4);
+        cache_uniform(nullptr, s_lumen_velocity, "s_lumen_velocity", bgfx::UniformType::Sampler);
+    }
+
+    /// Binds @p velocity at @p stage (black without one or under experiment_no_velocity, which every surface then
+    /// reads as static) and last frame's TAA-unjittered view projection @p prev_view_proj.
+    void bind(uint8_t stage,
+              const gfx::texture::ptr& velocity,
+              const math::mat4& prev_view_proj,
+              uint64_t experiments) const
+    {
+        const bool has_velocity = velocity && velocity->is_valid() && (experiments & experiment_no_velocity) == 0u;
+        const bool has_fast_update = has_velocity && (experiments & experiment_no_fast_update) == 0u;
+        const math::vec4 motion(has_velocity ? 1.0f : 0.0f, has_fast_update ? 1.0f : 0.0f, 0.0f, 0.0f);
+        gfx::set_texture(s_lumen_velocity, stage, has_velocity ? velocity : default_textures::get().black_texture());
+        gfx::set_uniform(u_lumen_motion, motion);
+        gfx::set_uniform(u_lumen_prev_view_proj, prev_view_proj);
+        gfx::set_uniform(u_lumen_prev_inv_view_proj, glm::inverse(prev_view_proj));
+    }
+};
 
 /// True when @p tex exists at exactly @p size.
 inline auto has_view_size(const gfx::texture::ptr& tex, const usize32_t& size) -> bool
@@ -264,6 +343,11 @@ void destroy_handle(Handle& handle)
 }
 
 /// The render view's texture @p name, recreated at @p size when it is missing or sized differently.
+/// A full-resolution RGBA16F scratch texture of the render view that passes share within a frame: the short-range AO
+/// search writes it and the gather's integrate reads it, then the reflections' resolve writes it and their temporal
+/// reads it. Nothing reads it across frames or between those pairs.
+inline constexpr const char* view_scratch_rgba16f = "LUMEN_VIEW_SCRATCH_RGBA16F";
+
 inline auto ensure_texture(gfx::render_view& rview,
                            const std::string& name,
                            const usize32_t& size,

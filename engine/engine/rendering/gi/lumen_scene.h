@@ -42,7 +42,9 @@ class material;
  * schedule_lighting() picks the pages the card lighting updates each frame as Lumen does: per page and per
  * context (direct lighting, radiosity) a priority bucket from the frames since its last update and its speed
  * (distance and frustum), spent bucket by bucket against a tile budget per context that grows with the view's
- * lighting update speed.
+ * lighting update speed. Direct lighting keeps no history and is a function of the page's capture, placement, the
+ * lights and the occluders between them: a page lit once is skipped until one of those changes
+ * (invalidate_direct_lighting), so the direct budget goes to the pages whose lighting changed.
  */
 class lumen_scene
 {
@@ -88,6 +90,9 @@ public:
         ///< UE's Emissive Light Source (surface_cache_system::instance::is_emissive_light_source): its cards stay
         ///< resident down to one texel and down to a fifth of the minimum face area.
         bool is_emissive_light_source = false;
+        ///< The material as captured (its identity and material::get_revision): a change queues the placement's pages
+        ///< ahead of the refresh (UE recaptures a primitive whose render state changed).
+        uint64_t material_key = 0;
     };
 
     /// One page to rasterize this frame.
@@ -106,6 +111,9 @@ public:
         ///< The card's previous allocation in the resample table (get_resample_table), whose lighting the page
         ///< inherits (UE bResampleLastLighting), or -1 when the card was not resident.
         int32_t resample_card = -1;
+        ///< A refresh of the page in place: it keeps its lighting texel for texel rather than resampling it, so the
+        ///< direct lighting, which a clean page does not relight, stays exact.
+        bool keeps_lighting = false;
     };
 
     /// The two card lighting contexts, scheduled apart (UE's direct lighting and radiosity).
@@ -114,6 +122,30 @@ public:
         lighting_direct = 0,
         lighting_radiosity = 1,
         lighting_context_count = 2,
+    };
+
+    /// A light the occluder changes of invalidate_direct_lighting() are tested against.
+    struct light_reach
+    {
+        ///< A directional light: @ref direction points toward it and it reaches everywhere.
+        bool is_directional = false;
+        math::vec3 direction{0.0f, 1.0f, 0.0f};
+        ///< A local light: its position and range.
+        math::vec3 position{0.0f};
+        float range = 0.0f;
+    };
+
+    /// What changed the card direct lighting since the last frame (lumen_surface_cache_pass collects it).
+    struct direct_lighting_changes
+    {
+        ///< Every page's direct lighting may have changed (a directional light, the sky or sun, the global distance
+        ///< field's levels moved, more changes than are worth placing).
+        bool all = false;
+        ///< World boxes in which the lighting changed (a local light's reach before and after it changed).
+        std::vector<math::bbox> regions;
+        ///< Occluders that moved, appeared or left: a page sees one that lies between it and one of @ref lights.
+        std::vector<math::bbox> occluders;
+        std::vector<light_reach> lights;
     };
 
     /// A page the card lighting updates this frame.
@@ -208,6 +240,13 @@ public:
      */
     void schedule_lighting(const math::vec3& view_origin, const math::frustum& view_frustum);
 
+    /**
+     * @brief Marks the resident pages whose direct lighting @p changes reach for relighting, after update() and before
+     *        schedule_lighting(). A page is also marked when it is captured or its placement moves; a page lit since
+     *        it was last marked is skipped by the direct lighting, which keeps no history.
+     */
+    void invalidate_direct_lighting(const direct_lighting_changes& changes);
+
     /// The pages schedule_lighting() picked for @p context this frame.
     auto get_lit_pages(lighting_context context) const -> const std::vector<lit_page>&
     {
@@ -222,6 +261,13 @@ public:
     static auto compute_lighting_bucket(uint32_t frames_since_update, float speed) -> uint32_t;
 
     /// Diagnostic: resident cards keep their resolution instead of following the viewer's distance.
+    /// Experiment: a card below one texel drops out and no placement-level gate applies (the residency before UE's
+    /// RoundUpToPowerOfTwo(0) = 1 and primitive-group rules).
+    void set_card_residency_without_group_gate(bool enabled)
+    {
+        card_residency_without_group_gate_ = enabled;
+    }
+
     void set_hold_resident_resolutions(bool hold)
     {
         hold_resident_resolutions_ = hold;
@@ -343,6 +389,8 @@ public:
         ///< Card tiles each lighting context updates this frame, and the bucket its budget ran out in (16 = none).
         std::array<uint32_t, lighting_context_count> lit_tiles{};
         std::array<uint32_t, lighting_context_count> cut_bucket{};
+        ///< Resident pages whose direct lighting is due (never lit, or marked since it was).
+        uint32_t direct_dirty_pages = 0;
     };
 
     auto get_stats() const -> const stats&
@@ -371,6 +419,9 @@ private:
         std::array<uint32_t, lighting_context_count> update_count{};
         ///< The frame the page was last captured, by its allocation or by the refresh.
         uint64_t captured_frame = 0;
+        ///< The page's direct lighting changed since it was last lit (its capture, its placement's transform, a
+        ///< light reaching it, an occluder between it and a light): the direct lighting does not skip it.
+        bool is_direct_dirty = true;
     };
 
     struct card_state
@@ -391,9 +442,14 @@ private:
         std::vector<card_state> card_states;
         ///< The cards placed at placed_transform, reused while the placement's transform holds still.
         std::vector<placed_card> placed;
+        ///< The world box around the placed cards (centre, half size): the residency gate of the whole placement.
+        math::vec3 bounds_center{0.0f};
+        math::vec3 bounds_extent{0.0f};
         math::mat4 placed_transform{0.0f};
         bool has_placed = false;
         uint64_t last_seen = 0;
+        ///< source::material_key at the last capture request.
+        uint64_t material_key = 0;
     };
 
     struct sub_allocation_bin
@@ -483,8 +539,11 @@ private:
     /// update(): resident pages captured again, oldest first, within the refresh's share of the capture budget (UE
     /// SceneCardCaptureRefresh). A refreshed page keeps its lighting: its card is its own resample source.
     void refresh_captures(const std::vector<source>& sources, capture_packer& packer);
-    /// schedule_lighting(): every resident page's tiles, speed and bucket per lighting context, across the pool.
+    /// schedule_lighting(): every resident page's tiles, speed and bucket per lighting context, across the pool; a
+    /// direct-lit page that is not dirty takes k_skip_bucket.
     void compute_page_priorities(const math::vec3& view_origin, const math::frustum& view_frustum);
+    /// The world box of resident page @p page (its card-space box across the card's depth).
+    auto compute_page_bounds(uint32_t page) const -> math::bbox;
 
     settings settings_{};
     gi_settings::scene_settings view_settings_{};
@@ -537,6 +596,7 @@ private:
     uint32_t resample_page_base_ = 0;
     stats stats_{};
     bool hold_resident_resolutions_ = false;
+    bool card_residency_without_group_gate_ = false;
 };
 
 } // namespace unravel

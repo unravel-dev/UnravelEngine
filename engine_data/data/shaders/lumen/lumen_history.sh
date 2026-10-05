@@ -6,14 +6,15 @@
  * history validity from StochasticLightingTileClassification.usf:884-1085): last frame's result at a
  * point's reprojection, over the 2x2 bilinear taps whose stored depth agrees with the reprojected depth.
  * The diffuse and the rough specular histories share the taps, as UE's temporal reprojects both with one
- * set of weights.
+ * set of weights. A surface the velocity buffer marks as moving reprojects from where it was last frame
+ * (lumen_motion.sh), so its history follows it and its depth test holds.
  *
- * The includer declares s_lumen_history (rgb = E / pi, a = stored frame count) and s_lumen_prev_depth (last
- * frame's device depth) and includes lumen_common.sh and pre_exposure.sh.
+ * The includer declares s_lumen_history (rgb = E / pi, a = LumenEncodeHistoryAlpha) and s_lumen_prev_depth (last
+ * frame's device depth), defines LUMEN_VELOCITY_STAGE for moving surfaces, and includes lumen_common.sh and
+ * pre_exposure.sh.
  */
 
-/// Last frame's TAA-unjittered view projection.
-uniform mat4 u_lumen_prev_view_proj;
+#include "lumen/lumen_motion.sh"
 
 /// A point's 2x2 history taps: the top-left texel and each tap's weight (bilinear, 0 where the stored depth
 /// disagrees); all weights 0 when the point reprojects outside last frame's view.
@@ -28,7 +29,8 @@ LumenHistoryTaps LumenHistoryReprojection(ivec2 pixel, vec3 position, vec3 norma
 	LumenHistoryTaps taps;
 	taps.origin = ivec2(0, 0);
 	taps.weights = vec4_splat(0.0);
-	vec4 prev_clip = mul(u_lumen_prev_view_proj, vec4(position, 1.0));
+	vec3 prev_position = LumenPrevWorldPosition(LumenPixelUv(pixel), position);
+	vec4 prev_clip = mul(u_lumen_prev_view_proj, vec4(prev_position, 1.0));
 	if(prev_clip.w <= 0.0)
 	{
 		return taps;
@@ -98,10 +100,27 @@ vec4 LumenReadHistoryTaps(LumenHistoryTaps taps)
 		float weight = LumenHistoryTapWeight(taps, tap);
 		vec4 history = texelFetch(s_lumen_history, LumenHistoryTapTexel(taps, tap), 0);
 		color += weight * history.xyz;
-		count += weight * (history.w + 1.0);
+		count += weight * (LumenHistoryAlphaFrames(history.w, u_lumen_temporal_max_frames) + 1.0);
 	}
 	float frames = min(count / max(weight_sum, 1e-5), u_lumen_temporal_max_frames);
 	return vec4(color / max(weight_sum, 1e-5) * u_history_pre_exposure_correction, frames);
+}
+
+/// Last frame's fast update amount over the taps (UE FastUpdateModeHistoryValue); 0 when no tap is valid.
+float LumenReadHistoryFastUpdate(LumenHistoryTaps taps)
+{
+	float weight_sum = dot(taps.weights, vec4_splat(1.0));
+	if(weight_sum <= 0.0)
+	{
+		return 0.0;
+	}
+	float amount = 0.0;
+	for(int tap = 0; tap < 4; ++tap)
+	{
+		float alpha = texelFetch(s_lumen_history, LumenHistoryTapTexel(taps, tap), 0).w;
+		amount += LumenHistoryTapWeight(taps, tap) * LumenHistoryAlphaFastUpdate(alpha);
+	}
+	return amount / weight_sum;
 }
 
 /// LumenReadHistoryTaps at the pixel's own reprojection.

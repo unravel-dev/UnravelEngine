@@ -197,6 +197,18 @@ void draw_radiance_cache_options(state& menu_state)
                      settings.radiance_cache_clipmap < 0 ? "All" : "%d");
 }
 
+// -- Radiance cache stats -------------------------------------------------------
+
+auto is_radiance_cache_stats_on(const state& menu_state) -> bool
+{
+    return menu_state.lumen.radiance_cache_stats;
+}
+
+void set_radiance_cache_stats_on(state& menu_state, bool is_on)
+{
+    menu_state.lumen.radiance_cache_stats = is_on;
+}
+
 // -- Screen probes --------------------------------------------------------------
 
 auto is_screen_probes_on(const state& menu_state) -> bool
@@ -274,7 +286,7 @@ constexpr std::array<overlay_entry, 2> surface_cache_overlays = {{
      draw_card_generation_options},
 }};
 
-constexpr std::array<overlay_entry, 3> probe_overlays = {{
+constexpr std::array<overlay_entry, 4> probe_overlays = {{
     {"Radiosity Probes",
      "Every radiosity probe of the surface cache as a sphere lit by the irradiance it gathered, one probe per 4 x 4 "
      "card texels.",
@@ -286,6 +298,13 @@ constexpr std::array<overlay_entry, 3> probe_overlays = {{
      is_radiance_cache_probes_on,
      set_radiance_cache_probes_on,
      draw_radiance_cache_options},
+    {"Radiance Cache Stats",
+     "The radiance cache's update as text in the top left of the view: the trace cost in each priority bucket, the "
+     "bucket the budget ran out in, what the update traced, and how full the probe atlas is (red when full: new probes "
+     "then go without one).",
+     is_radiance_cache_stats_on,
+     set_radiance_cache_stats_on,
+     nullptr},
     {"Screen Probes",
      "The screen probe counts as text in the top left of the view, and where the probes sit.",
      is_screen_probes_on,

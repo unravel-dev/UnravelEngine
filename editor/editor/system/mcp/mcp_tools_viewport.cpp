@@ -609,14 +609,15 @@ void register_viewport_tools(mcp_tool_registry& registry)
                         "radiance_cache_clipmap (-1 = all), screen_probe_traces (the rays of the screen probe under "
                         "the mouse, else the view's centre), screen_probe_traces_freeze, reflection_traces (the "
                         "reflection ray of the pixel under the cursor), screen_probe_gather_debug (the probe counts as "
-                        "text), screen_probe_placement (0 counts only, 1 uniform + adaptive, 2 adaptive, 3 normals), "
+                        "text), radiance_cache_stats (the radiance cache's update counters as text), "
+                        "screen_probe_placement (0 counts only, 1 uniform + adaptive, 2 adaptive, 3 normals), "
                         "card_generation_surfels, card_generation_cluster, card_generation_surfel_scale, "
                         "card_generation_max_surfel (-1 = all), card_placement_direction (-1 = all, 0-5 = -X +X -Y +Y "
                         "-Z +Z), cursor ([x, y] render pixels the visualizations use in place of the mouse's, negative "
                         "for the view's centre; \"mouse\" follows the mouse again). "
                         "Returns the settings in effect.",
          .input_schema_json =
-             R"({"type":"object","properties":{"card_placement":{"type":"boolean"},"card_placement_distance":{"type":"number","minimum":0},"card_placement_index":{"type":"integer","minimum":-1},"radiosity_probes":{"type":"boolean"},"radiosity_probe_radius":{"type":"number","minimum":0},"radiosity_show_invalid":{"type":"boolean"},"radiance_cache_probes":{"type":"boolean"},"radiance_cache_radius_scale":{"type":"number","minimum":0},"radiance_cache_clipmap":{"type":"integer","minimum":-1},"screen_probe_traces":{"type":"boolean"},"screen_probe_traces_freeze":{"type":"boolean"},"reflection_traces":{"type":"boolean"},"screen_probe_gather_debug":{"type":"boolean"},"screen_probe_placement":{"type":"integer","minimum":0,"maximum":3},"card_generation_surfels":{"type":"boolean"},"card_generation_cluster":{"type":"boolean"},"card_generation_surfel_scale":{"type":"number","minimum":0},"card_generation_max_surfel":{"type":"integer","minimum":-1},"card_placement_direction":{"type":"integer","minimum":-1,"maximum":5},"cursor":{"description":"[x, y] or \"mouse\""}}})",
+             R"({"type":"object","properties":{"card_placement":{"type":"boolean"},"card_placement_distance":{"type":"number","minimum":0},"card_placement_index":{"type":"integer","minimum":-1},"radiosity_probes":{"type":"boolean"},"radiosity_probe_radius":{"type":"number","minimum":0},"radiosity_show_invalid":{"type":"boolean"},"radiance_cache_probes":{"type":"boolean"},"radiance_cache_radius_scale":{"type":"number","minimum":0},"radiance_cache_clipmap":{"type":"integer","minimum":-1},"screen_probe_traces":{"type":"boolean"},"screen_probe_traces_freeze":{"type":"boolean"},"reflection_traces":{"type":"boolean"},"screen_probe_gather_debug":{"type":"boolean"},"radiance_cache_stats":{"type":"boolean"},"screen_probe_placement":{"type":"integer","minimum":0,"maximum":3},"card_generation_surfels":{"type":"boolean"},"card_generation_cluster":{"type":"boolean"},"card_generation_surfel_scale":{"type":"number","minimum":0},"card_generation_max_surfel":{"type":"integer","minimum":-1},"card_placement_direction":{"type":"integer","minimum":-1,"maximum":5},"cursor":{"description":"[x, y] or \"mouse\""}}})",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -687,6 +688,11 @@ void register_viewport_tools(mcp_tool_registry& registry)
              {
                  settings.screen_probe_gather_debug = gather_debug;
              }
+             bool radiance_cache_stats = settings.radiance_cache_stats;
+             if(args["radiance_cache_stats"].get(radiance_cache_stats) == simdjson::SUCCESS)
+             {
+                 settings.radiance_cache_stats = radiance_cache_stats;
+             }
              int64_t placement = 0;
              if(args["screen_probe_placement"].get(placement) == simdjson::SUCCESS)
              {
@@ -741,7 +747,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          R"("radiosity_probes":{},"radiosity_probe_radius":{},"radiosity_show_invalid":{},)"
                          R"("radiance_cache_probes":{},"radiance_cache_radius_scale":{},"radiance_cache_clipmap":{},)"
                          R"("screen_probe_traces":{},"screen_probe_traces_freeze":{},"reflection_traces":{},)"
-                         R"("screen_probe_gather_debug":{},"screen_probe_placement":{},)"
+                         R"("screen_probe_gather_debug":{},"radiance_cache_stats":{},"screen_probe_placement":{},)"
                          R"("card_generation_surfels":{},"card_generation_cluster":{},)"
                          R"("card_generation_surfel_scale":{},"card_generation_max_surfel":{},)"
                          R"("card_placement_direction":{},"cursor":{}}})",
@@ -758,6 +764,7 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          settings.screen_probe_traces_freeze ? "true" : "false",
                          settings.reflection_traces ? "true" : "false",
                          settings.screen_probe_gather_debug ? "true" : "false",
+                         settings.radiance_cache_stats ? "true" : "false",
                          settings.screen_probe_placement,
                          settings.card_generation_surfels ? "true" : "false",
                          settings.card_generation_cluster ? "true" : "false",
@@ -1408,8 +1415,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
                  [&]() -> std::string
                  {
                      auto& surface_cache = ctx.get_cached<surface_cache_system>();
-                     const uint32_t previous = surface_cache.get_experiment_flags();
-                     surface_cache.set_experiment_flags(uint32_t(math::max(flags, 0.0)));
+                     const uint64_t previous = surface_cache.get_experiment_flags();
+                     surface_cache.set_experiment_flags(uint64_t(math::max(flags, 0.0)));
                      return fmt::format(R"({{"flags":{},"previous":{}}})", surface_cache.get_experiment_flags(), previous);
                  });
              if(!result)

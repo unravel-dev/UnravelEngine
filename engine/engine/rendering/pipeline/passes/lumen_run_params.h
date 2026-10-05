@@ -44,6 +44,10 @@ struct lumen_run_params
     /// Last frame's linear scene colour (PREV_SCENE_HDR), the radiance of screen trace hits. Null on the first
     /// frame.
     gfx::texture::ptr prev_color;
+    /// This frame's velocity buffer (velocity_encoding.sh): moving surfaces reproject from where they were last frame
+    /// and screen hits on them shorten the gather's history. Null when the velocity pass did not run: every surface
+    /// reprojects as static.
+    gfx::texture::ptr velocity;
     const camera* cam{};
     /// The GI scene: its instances, distance fields and lights.
     surface_cache_system* surface_cache{};
@@ -54,6 +58,13 @@ struct lumen_run_params
     gi_settings settings{};
     /// The screen probe traces the view visualizes.
     lumen_visualize_traces visualize_traces{};
+    /// The camera jumped this frame (UE bCameraCut): the screen-space histories start over.
+    bool camera_cut = false;
+    /// The user is editing the scene in this view (pipeline::run_params::is_being_edited).
+    bool is_being_edited = false;
+    /// The lighting changed globally this frame (surface_cache_system::has_global_lighting_change): the radiance cache
+    /// rebuilds and the gather history starts over (UE bPropagateGlobalLightingChange).
+    bool global_lighting_change = false;
 };
 
 } // namespace unravel

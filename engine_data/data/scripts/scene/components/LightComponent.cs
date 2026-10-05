@@ -49,6 +49,15 @@ namespace Unravel.Core
         }
 
         /// <summary>
+        /// Scale of the light in the global illumination (what it bounces); 0 leaves it out.
+        /// </summary>
+        public float indirectIntensity
+        {
+            get => internal_m2n_light_get_indirect_intensity(owner);
+            set => internal_m2n_light_set_indirect_intensity(owner, value);
+        }
+
+        /// <summary>
         /// Whether the light casts shadows.
         /// </summary>
         public bool castsShadows
@@ -110,6 +119,12 @@ namespace Unravel.Core
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern void internal_m2n_light_set_intensity(Entity eid, float intensity);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_light_get_indirect_intensity(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_light_set_indirect_intensity(Entity eid, float indirectIntensity);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
         private static extern bool internal_m2n_light_get_casts_shadows(Entity eid);

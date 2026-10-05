@@ -24,6 +24,7 @@ BUFFER_RO(b_lumen_scene, vec4, 7);
 
 #define LUMEN_SURFACE_CACHE_TABLES_ONLY
 #include "lumen/lumen_surface_cache.sh"
+#include "lumen/lumen_surface_cache_lighting.sh"
 #include "lumen/lumen_radiosity_common.sh"
 
 /// x = first tile of this dispatch, y = tile count.
@@ -46,7 +47,8 @@ LumenRadiosityProbe LumenLoadRadiosityProbe(LumenCard card, vec4 uv_rect, vec4 p
 	probe.valid = depth < 1.0;
 	vec2 card_uv = mix(uv_rect.xy, uv_rect.zw, (vec2(probe_texel) - page.xy + 0.5) / page.zw);
 	probe.position = LumenCardWorldPosition(card, LumenCardLocalPosition(card, card_uv, min(depth, 1.0)));
-	probe.normal = decodeNormalOctahedron(texelFetch(s_lumen_card_normal, probe_texel, 0).xy);
+	probe.normal =
+	    LumenDecodeCardNormal(texelFetch(s_lumen_card_normal, probe_texel, 0).xy, card.axis_x, card.axis_y, card.axis_z);
 	return probe;
 }
 

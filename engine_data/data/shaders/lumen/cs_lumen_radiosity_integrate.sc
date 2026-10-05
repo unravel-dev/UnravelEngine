@@ -99,7 +99,7 @@ void main()
 	}
 	LumenCard card = LumenLoadCard(int(t0.z));
 	vec3 position = LumenTexelPosition(card, uv_rect, page, texel, depth);
-	vec3 normal = decodeNormalOctahedron(texelFetch(s_lumen_card_normal, texel, 0).xy);
+	vec3 normal = LumenDecodeCardNormal(texelFetch(s_lumen_card_normal, texel, 0).xy, card.axis_x, card.axis_y, card.axis_z);
 	ivec2 jitter = LumenRadiosityJitter(t0.w);
 	// Expanded bilinear over the four nearest probes (UE BilinearExpand).
 	int spacing = u_lumen_radiosity_spacing;

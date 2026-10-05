@@ -10,8 +10,14 @@
  * LUMEN_GLOBAL_SDF_EXPAND_RAMP_VOXELS of either the ray's travel from its biased start (diffuse rays: errs
  * toward occlusion) or the largest distance the ray has kept from any surface (the radiance cache's probe
  * rays: no expansion until the ray has left the surfaces around its origin). A sample under the expansion
- * is a hit; running out of steps is a miss. The hit is pulled back by the expansion and hit_field carries the distance from
- * there to the surface estimate, so a reader of a surface store can step onto the surface.
+ * is a hit. The hit is pulled back by the expansion and hit_field carries the distance from there to the surface
+ * estimate, so a reader of a surface store can step onto the surface.
+ *
+ * Each level has a budget of LUMEN_GLOBAL_SDF_MAX_STEPS: a ray that spends it in one level continues from where it
+ * leaves that level (UE's per-clipmap loop, GlobalDistanceFieldUtils.ush:104-191); past the last level it is a miss.
+ * Where the answering level reads saturated, the ray steps by that level's coarse mip (SDF_CLIPMAP_MIP_STAGE, UE
+ * GlobalDistanceFieldMipTexture), which holds the level's own objects, so a step never passes one the level shows;
+ * an includer without the mip steps by the level alone.
  *
  * Coverage (UE GLOBALSDF_USE_COVERAGE_BASED_EXPAND, GlobalDistanceFieldUtils.ush:141-190): where only two-sided meshes are
  * near (coverage 0, gi/sdf_clipmap.sh), the expansion shrinks to LUMEN_GLOBAL_SDF_NOT_COVERED_EXPAND_SCALE, the min step
@@ -74,7 +80,8 @@ struct LumenSdfHit
 	float t;
 	/// Distance from the pulled-back hit to the surface estimate along the ray.
 	float hit_field;
-	/// Field gradient at the hit (unit length).
+	/// Field gradient at the hit (unit length); left at +y under LUMEN_GLOBAL_SDF_DEFER_HIT_NORMAL, whose includer
+	/// computes it (LumenGlobalSdfNormal at origin + direction t) where it shades the hit.
 	vec3 normal;
 	/// Voxel size of the clipmap level that answered the hit.
 	float voxel;
@@ -94,8 +101,8 @@ vec3 LumenGlobalSdfNormal(vec3 p, float voxel, vec3 fallback)
 	return len > LUMEN_GLOBAL_SDF_FLAT_GRADIENT ? n / len : fallback;
 }
 
-/// The coarsest covering level's distance, for a long step through empty space: the finest level
-/// saturates at its encode range.
+/// The coarsest covering level's distance (the empty-space step of the u_sdf_clipmap_experiments bit 1 A/B: that level
+/// leaves out objects the finer ones hold, so the step can pass them).
 float LumenGlobalSdfCoarseDistance(vec3 p, float fine_distance)
 {
 	float step_distance = fine_distance;
@@ -109,6 +116,20 @@ float LumenGlobalSdfCoarseDistance(vec3 p, float fine_distance)
 		}
 	}
 	return step_distance;
+}
+
+/// The distance a march sample at @p p may step when its level (@p field) reads saturated.
+float LumenGlobalSdfEmptySpaceStep(SdfClipmapSample field, vec3 p)
+{
+	if((u_sdf_clipmap_experiments & 1) != 0)
+	{
+		return LumenGlobalSdfCoarseDistance(p, field.distance);
+	}
+#ifdef SDF_CLIPMAP_MIP_STAGE
+	return max(field.distance, SdfSampleClipmapMip(field.index, p));
+#else
+	return field.distance;
+#endif
 }
 
 /**
@@ -142,15 +163,25 @@ LumenSdfHit LumenTraceGlobalSdfDithered(vec3 origin,
 	float t = t_min;
 	float max_distance = 0.0;
 	float trace_noise = InterleavedGradientNoise(dither.coord, dither.frame_mod);
+	bool has_ray_budget = (u_sdf_clipmap_experiments & 2) != 0;
+	vec3 inverse_direction = vec3_splat(1.0) / (sign(direction) * max(abs(direction), vec3_splat(1e-8)) +
+	                                            vec3(equal(direction, vec3_splat(0.0))) * 1e-8);
+	int level = -1;
+	int level_steps = 0;
 	LOOP
-	for(int step = 0; step < LUMEN_GLOBAL_SDF_MAX_STEPS; ++step)
+	for(int step = 0; step < LUMEN_GLOBAL_SDF_MAX_STEPS * SDF_CLIPMAP_LEVEL_COUNT; ++step)
 	{
-		if(t > t_max)
+		if(t > t_max || (has_ray_budget && step >= LUMEN_GLOBAL_SDF_MAX_STEPS))
 		{
 			return result;
 		}
 		vec3 p = origin + direction * t;
 		SdfClipmapSample field = SdfSampleClipmapLevels(p);
+		if(field.index != level)
+		{
+			level = field.index;
+			level_steps = 0;
+		}
 		float d = field.distance;
 		float voxel = field.voxel_size;
 		float ray_bias = voxel_relative_bias * 0.5 * voxel;
@@ -180,7 +211,7 @@ LumenSdfHit LumenTraceGlobalSdfDithered(vec3 origin,
 		if(dither.enabled && coverage < 1.0)
 		{
 			float step_noise =
-			    InterleavedGradientNoise(dither.coord, dither.frame_mod * float(LUMEN_GLOBAL_SDF_MAX_STEPS) + float(step));
+			    InterleavedGradientNoise(dither.coord, dither.frame_mod * float(LUMEN_GLOBAL_SDF_MAX_STEPS) + float(level_steps));
 			solid = step_noise * (1.0 - coverage) <= LUMEN_GLOBAL_SDF_DITHER_STEP_THRESHOLD &&
 			        trace_noise * (1.0 - coverage) <= LUMEN_GLOBAL_SDF_DITHER_TRACE_THRESHOLD;
 		}
@@ -189,18 +220,28 @@ LumenSdfHit LumenTraceGlobalSdfDithered(vec3 origin,
 			result.hit = true;
 			result.t = max(t + d - expand, 0.0);
 			result.hit_field = max(t + d - result.t, 0.0);
+#ifndef LUMEN_GLOBAL_SDF_DEFER_HIT_NORMAL
 			result.normal = LumenGlobalSdfNormal(origin + direction * result.t, voxel, -direction);
+#endif
 			result.voxel = voxel;
 			return result;
 		}
 		float step_distance = d;
+		BRANCH
 		if(d >= (u_sdf_clipmap_encode_range - 0.5) * voxel)
 		{
-			step_distance = LumenGlobalSdfCoarseDistance(p, d);
+			step_distance = LumenGlobalSdfEmptySpaceStep(field, p);
 		}
 		float min_step = LUMEN_GLOBAL_SDF_MIN_STEP_VOXELS * voxel *
 		                 mix(LUMEN_GLOBAL_SDF_NOT_COVERED_MIN_STEP_SCALE, 1.0, coverage);
 		t += max(step_distance * step_factor, min_step);
+		++level_steps;
+		if(level_steps >= LUMEN_GLOBAL_SDF_MAX_STEPS && level < SDF_CLIPMAP_LEVEL_COUNT)
+		{
+			// The level's budget is spent: continue where the ray leaves it, in the next level.
+			t = max(t, SdfClipmapLevelExit(level, origin, inverse_direction) + LUMEN_GLOBAL_SDF_LEVEL_EXIT_VOXELS * voxel);
+			level_steps = 0;
+		}
 	}
 	return result;
 }

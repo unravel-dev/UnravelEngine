@@ -140,16 +140,25 @@ ShaderPrintContext ShaderPrintSymbol(ShaderPrintContext ctx, int code)
 	return ctx;
 }
 
-/// Up to four symbols; a code of 0 prints nothing.
+/// Up to four symbols; a code of 0 prints nothing. Straight-line: fxc unrolls a loop around the symbol's atomic, and
+/// gives up in a shader printing many lines.
 ShaderPrintContext ShaderPrintSymbols(ShaderPrintContext ctx, ivec4 codes)
 {
-	for(int i = 0; i < 4; ++i)
+	if(codes.x > 0)
 	{
-		int code = i == 0 ? codes.x : (i == 1 ? codes.y : (i == 2 ? codes.z : codes.w));
-		if(code > 0)
-		{
-			ctx = ShaderPrintSymbol(ctx, code);
-		}
+		ctx = ShaderPrintSymbol(ctx, codes.x);
+	}
+	if(codes.y > 0)
+	{
+		ctx = ShaderPrintSymbol(ctx, codes.y);
+	}
+	if(codes.z > 0)
+	{
+		ctx = ShaderPrintSymbol(ctx, codes.z);
+	}
+	if(codes.w > 0)
+	{
+		ctx = ShaderPrintSymbol(ctx, codes.w);
 	}
 	return ctx;
 }

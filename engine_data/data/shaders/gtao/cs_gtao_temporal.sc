@@ -10,10 +10,11 @@
 #include "../bgfx_compute.sh"
 #include "../common.sh"
 #include "gtao_common.sh"
+#include "../velocity/velocity_encoding.sh"
 
 SAMPLER2D(s_gtao_current, 0);
 SAMPLER2D(s_gtao_history, 1);
-/// Full-resolution velocity (RG = motion in uv, BA = object-only motion, the mover gate).
+/// Full-resolution velocity (velocity_encoding.sh: RG = motion in uv, B = object-only motion, the mover gate).
 SAMPLER2D(s_gtao_velocity, 2);
 SAMPLER2D(s_gtao_depth_mips, 3);
 /// Full-resolution device depth of the previous frame.
@@ -68,7 +69,7 @@ void main()
 	if(u_gtao_velocity_bound > 0.5)
 	{
 		vec4 velocity = texture2DLod(s_gtao_velocity, pixel_uv, 0.0);
-		mover = smoothstep(0.5, 1.5, length(velocity.zw * u_gtao_full_size.xy));
+		mover = smoothstep(0.5, 1.5, VelocityObjectMotionPixels(velocity));
 		prev_uv = mix(prev_uv, pixel_uv - velocity.xy, mover);
 	}
 	if(any(lessThan(prev_uv, vec2_splat(0.0))) || any(greaterThan(prev_uv, vec2_splat(1.0))))

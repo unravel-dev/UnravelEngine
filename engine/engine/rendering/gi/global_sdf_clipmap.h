@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace unravel
@@ -123,6 +124,23 @@ public:
         ///< SdfLumenCascadeKeepsInstance): 1 / the scene detail (UE GlobalDistanceField.cpp:2456). It is part of
         ///< every level's fingerprint, so a change recomposes the levels within the update budget.
         float object_radius_scale = 1.0f;
+        ///< Levels that were composed before update PARTIALLY (level::is_partial; UE r.AOGlobalDistanceFieldPartialUpdates).
+        ///< False recomposes whole levels for every change, under the level budget and the edit throttle.
+        bool partial_updates = true;
+    };
+
+    /// A box of one level's voxels: [min, min + size) per axis, in level voxel coordinates.
+    struct voxel_box
+    {
+        math::ivec3 min{0};
+        math::ivec3 size{0};
+    };
+
+    /// One instance a level was composed from: its entry hash (placement and identity) and its world bounds.
+    struct composed_entry
+    {
+        uint64_t hash = 0;
+        math::bbox bounds{};
     };
 
     struct level
@@ -143,19 +161,27 @@ public:
         ///< re-snaps the finest level almost every frame, and a strictly finest-first policy
         ///< would then never recompose the coarse ones at all.
         uint32_t stale_updates = 0;
-        ///< The instance content revision this level was last composed under (0 = never).
-        uint64_t composed_revision = 0;
-        ///< SCROLL-ONLY recompose: set when the level was recomposed because its origin moved
-        ///< while the instance content revision held still. The composed value of a voxel is
-        ///< a function of its world centre and the instance set alone, and the origin moves
-        ///< by whole snap cells, so every voxel of the old window that lies in the new one
-        ///< holds exactly the byte a recompose would write: the GPU composer copies the
-        ///< overlap and composes only the exposed slabs (see compute_scroll_boxes). The CPU
-        ///< reference composer ignores it and recomposes in full.
-        bool scroll_only = false;
-        ///< The origin's move for a scroll-only recompose, in this level's voxels: the new
-        ///< window's voxel v holds what the old window held at v + scroll_shift.
+        ///< The instances the voxels were composed from, sorted by hash; valid while @ref has_composed_entries (after
+        ///< a compose, until a setting changes what is composed). A later update composes only where this set and
+        ///< the current one differ (UE's partial updates, GlobalDistanceField.cpp:1196-1265).
+        std::vector<composed_entry> composed_entries;
+        bool has_composed_entries = false;
+        ///< PARTIAL recompose: the last recompose rewrote only part of the window. The composed value of a voxel
+        ///< is a function of its world centre and the instances within reach alone, and the origin moves by whole
+        ///< snap cells, so the old window's overlap with the new one, moved by @ref scroll_shift, holds the bytes a
+        ///< recompose writes except within reach of an instance that moved, appeared or left: those voxels are
+        ///< @ref partial_boxes, composed together with the slabs a scroll exposes (compute_scroll_boxes). False for
+        ///< a full recompose.
+        bool is_partial = false;
+        ///< The origin's move of a partial recompose, in this level's voxels: the new window's voxel v holds what
+        ///< the old window held at v + scroll_shift. Zero when the origin held still.
         math::ivec3 scroll_shift{0};
+        ///< The voxels of a partial recompose within reach of a changed instance, in the new window's voxels,
+        ///< aligned to GI_CLIPMAP_PARTIAL_BOX_ALIGNMENT.
+        std::vector<voxel_box> partial_boxes;
+        ///< Counts this level's recomposes: a consumer that mirrored recompose n can mirror a partial recompose n + 1
+        ///< by its boxes alone.
+        uint64_t compose_serial = 0;
 
         /// The level exists: its planning (snapping, fingerprints, the recompose budget) runs whichever composer
         /// fills it.
@@ -194,11 +220,12 @@ public:
      * instances reaching it changed. Both are detected here, per level -- the caller does not
      * have to tell the cascade that something moved, and could not tell it WHICH levels care.
      *
-     * Recomposition is BUDGETED even when instances moved. Composing a level is expensive enough
-     * to be a visible hitch, and doing all four in the frame something moved would make any
-     * animation in the scene stutter. The cost of budgeting is that a moved object keeps
-     * occluding from its old position for a few frames rather than one; that is bounded and
-     * eventually consistent. Staleness age drives the order, so no level can starve.
+     * A level that was composed before updates PARTIALLY (level::is_partial): only the voxels within reach of an
+     * instance that moved, appeared or left, and the slabs a re-snapped origin exposes, on the level's staggered
+     * cadence (is_partial_update_due; UE's partial updates). A level with no composed set, a move past its window,
+     * or changes beyond GI_CLIPMAP_MAX_PARTIAL_INSTANCES or GI_CLIPMAP_MAX_PARTIAL_FRACTION of its voxels
+     * recomposes in full, and full recomposes are BUDGETED: composing a level is expensive enough to be a visible
+     * hitch. Staleness age drives their order, so no level can starve.
      *
      * @param instances Every resident field placement in the world, NOT only visible ones.
      * @param camera_position Centre of the cascade.
@@ -288,15 +315,26 @@ public:
     /// World-space extent covered by a level.
     auto get_level_extent(uint32_t index) const -> float;
 
-    /// A box of one level's voxels: [min, min + size) per axis, in level voxel coordinates.
-    struct voxel_box
-    {
-        math::ivec3 min{0};
-        math::ivec3 size{0};
-    };
+    /**
+     * @brief Appends @p boxes to a dispatch's brick list, the unit of the compose and object grid dispatches: one
+     *        group per brick of @p brick_edge^3 voxels (or cells), the bricks of a box x fastest, boxes in order.
+     *
+     * Two vec4s per box: xyz = its first voxel and w = its first brick counted from the first box of @p table; xyz = its
+     * size in voxels. @p first_brick is where the appended boxes' bricks start.
+     * @return The bricks of the appended boxes.
+     */
+    static auto append_brick_boxes(const std::vector<voxel_box>& boxes,
+                                   int brick_edge,
+                                   uint32_t first_brick,
+                                   std::vector<math::vec4>& table) -> uint32_t;
+
+    /// True when level @p index takes its partial updates on update @p update_index (UE ShouldUpdateClipmapThisFrame
+    /// with GI_CLIPMAP_PARTIAL_UPDATES_PER_FRAME): the first levels every update, the others at halving frequencies
+    /// with distinct phases.
+    static auto is_partial_update_due(uint32_t index, uint64_t update_index) -> bool;
 
     /**
-     * @brief The decomposition of a scroll-only recompose (see level::scroll_only).
+     * @brief The decomposition of a scrolled partial recompose (see level::is_partial).
      *
      * @param shift The origin's move in voxels (level::scroll_shift).
      * @param resolution Voxels per axis.
@@ -322,9 +360,40 @@ public:
     auto get_memory_usage() const -> size_t;
 
 private:
-    /// Composes one level's voxels from the instances reaching it.
-    void compose_level(uint32_t index, const std::vector<global_sdf_instance>& instances);
+    /// What an update does to one level.
+    struct level_plan
+    {
+        bool is_partial = false;
+        math::ivec3 scroll_shift{0};
+        std::vector<voxel_box> partial_boxes;
+    };
 
+    /// Composes the voxels of @p boxes of one level (the whole level when empty) from the instances reaching it.
+    void compose_level(uint32_t index,
+                       const std::vector<global_sdf_instance>& instances,
+                       const std::vector<voxel_box>& boxes = {});
+
+    /// Merges every two boxes whose bounding box holds no more voxels than the two do apart (an instance's old and
+    /// new reach, mostly): fewer, larger boxes for the same voxels.
+    static void merge_overlapping_boxes(std::vector<voxel_box>& boxes);
+
+    /// The CPU composer's half of a partial recompose: moves the old window's overlap into place.
+    void scroll_level_voxels(uint32_t index, const math::ivec3& shift);
+
+    /// Recomposes level @p index for @p target_origin under @p plan (CPU voxels unless compose_on_gpu) and records
+    /// the instance set @p entries it was composed from.
+    void apply_level_plan(uint32_t index,
+                          const level_plan& plan,
+                          const math::vec3& target_origin,
+                          uint64_t target_fingerprint,
+                          const std::vector<composed_entry>& entries,
+                          const std::vector<global_sdf_instance>& instances);
+
+    /// The partial recompose that brings level @p index from its composed set to @p entries at @p target_origin, or
+    /// none (full recompose) when the level has no composed set, the move leaves no overlap, or the changes exceed the
+    /// partial limits.
+    auto plan_partial_update(uint32_t index, const math::vec3& target_origin, const std::vector<composed_entry>& entries)
+        const -> std::optional<level_plan>;
 
     /// World-space region a level covers, given its origin.
     auto compute_level_bounds(uint32_t index, const math::vec3& origin) const -> math::bbox;
@@ -332,12 +401,19 @@ private:
     /// Distance beyond a level's bounds at which an instance can still write into it.
     auto compute_level_reach(uint32_t index) const -> float;
 
-    /// Order-independent hash of the instances that would compose a level covering @p bounds.
-    /// Must select exactly the set compose_level does, or a change that alters the composition
-    /// could leave the fingerprint equal and the level would never be rebuilt.
-    auto compute_level_fingerprint(const math::bbox& bounds,
-                                   float reach,
-                                   const std::vector<global_sdf_instance>& instances) const -> uint64_t;
+    /// Distance beyond an instance's bounds within which it can change a level's voxels or coverage: the larger of
+    /// the encode range and Lumen's coverage band, in the level's voxels.
+    auto compute_level_influence(uint32_t index) const -> float;
+
+    /// The instances that compose a level covering @p bounds, sorted by entry hash: sampleable, with bounds within
+    /// @p reach of the level. Must select exactly the set compose_level does, or a change that alters the
+    /// composition could leave the fingerprint equal and the level would never be rebuilt.
+    auto collect_level_entries(const math::bbox& bounds,
+                               float reach,
+                               const std::vector<global_sdf_instance>& instances) const -> std::vector<composed_entry>;
+
+    /// Order-independent hash of a level's instance set (collect_level_entries).
+    auto compute_entries_fingerprint(const std::vector<composed_entry>& entries) const -> uint64_t;
 
     /// One instance's contribution to a level fingerprint: placement and identity.
     static auto compute_instance_entry_hash(const global_sdf_instance& instance) -> uint64_t;
@@ -352,6 +428,7 @@ private:
     /// level's target origin moved. Revision 0 = nothing cached.
     std::array<math::vec3, level_count> cached_target_origin_{};
     std::array<uint64_t, level_count> cached_target_fingerprint_{};
+    std::array<std::vector<composed_entry>, level_count> cached_target_entries_{};
     uint64_t cached_instances_revision_ = 0;
     /// Per-instance entry hashes (compute_instance_entry_hash) for the instance list of
     /// @ref instance_entry_hash_revision_, parallel to that list; the level fingerprints sum

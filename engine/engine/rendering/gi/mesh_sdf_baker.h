@@ -229,6 +229,26 @@ auto bake_mesh_sdf_mips(const sdf_source_geometry& geometry,
                         sdf_bake_threading threading = sdf_bake_threading::parallel) -> bool;
 
 /**
+ * @brief Estimates the relative cost of a bake from what is known before its geometry is extracted, so a caller
+ *        running many bakes can start the expensive ones first.
+ *
+ * A bake is a distance query per voxel, so the estimate is the voxel count of the finest level's grid - the bake's
+ * own sizing, applied to @p bounds - times the square root of @p triangle_count, the cost of one closest-point query
+ * (see extract_sdf_source_geometry). Neither term ranks bakes on its own: Max Total Voxels caps most large fields at
+ * the same grid, and the size of a field does not follow from its triangle count.
+ *
+ * Comparable only with other estimates; it is not a time. What only the bake itself finds out is not in it: a
+ * doubled sheet baking unsigned unasked, and the sign vote an open surface pays per voxel.
+ *
+ * @param bounds         Local-space bounds of the geometry the bake will read.
+ * @param triangle_count Triangles the bake will read.
+ * @return 0 for geometry the bake refuses outright: no triangles or unusable bounds.
+ */
+auto estimate_mesh_sdf_bake_cost(const math::bbox& bounds,
+                                 uint32_t triangle_count,
+                                 const mesh_sdf_bake_settings& settings) -> double;
+
+/**
  * @brief Samples a baked field at a local-space point, in local units.
  *
  * Reference implementation of the addressing and decoding the tracing shader performs.

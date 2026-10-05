@@ -18,15 +18,22 @@
  * into E / pi over LUMEN_ROUGH_SPECULAR_FADE_LENGTH. Pixels the traced reflections own fully (roughness
  * below the traced roughness limit - LUMEN_ROUGHNESS_FADE_LENGTH) keep E / pi.
  *
- * Temporal: last frame's result at the pixel's reprojection, from the 2x2 history taps whose stored
- * depth agrees with the reprojected depth (1% x U(0.5, 1.5) / lerp(0.1, 1, NoV) of it), blended with
- * weight 1 / (1 + N), N = the taps' frame count + 1, up to u_lumen_temporal_max_frames; the rough specular
- * history shares the taps and the weight. No neighbourhood clamp: camera motion never shortens the
- * history.
+ * Temporal: last frame's result at the pixel's reprojection (a moving surface's from where it was, lumen_motion.sh),
+ * from the 2x2 history taps whose stored depth agrees with the reprojected depth (1% x U(0.5, 1.5) / lerp(0.1, 1,
+ * NoV) of it), blended with weight 1 / (1 + N), N = the taps' frame count + 1, up to u_lumen_temporal_max_frames;
+ * the rough specular history shares the taps and the weight. No neighbourhood clamp: camera motion never shortens
+ * the history. Moving lighting does (UE fast update, LumenScreenProbeGatherTemporal.usf:486-499): the probes'
+ * moving fractions interpolated like their lighting give the fast update amount saturate((moving /
+ * LUMEN_TEMPORAL_FAST_UPDATE_MOVING_FRACTION - 0.2) / 0.8), at most LUMEN_TEMPORAL_FAST_UPDATE_MAX_AMOUNT, held at
+ * least at last frame's amount where it was, and N is cut to (1 - amount) x the maximum.
  *
- * Writes the histories (rgb = E / pi and the rough specular, pre-exposed; a = the stored frame count), the
- * resolve the lighting consumes (rgb = E / pi x intensity, a = 1 on geometry, 0 on the sky) and the rough
- * specular (rgb = radiance x intensity, pre-exposed; a = the frame count + 1, 0 on the sky).
+ * Short-range AO (LUMEN_INTEGRATE_SHORT_RANGE_AO): the AO accumulates over the same taps with the same history length
+ * (lumen_short_range_ao_temporal.sh), as UE's temporal accumulates it beside the diffuse.
+ *
+ * Writes the histories (rgb = E / pi and the rough specular, pre-exposed; a = LumenEncodeHistoryAlpha for the
+ * diffuse, the stored frame count for the rough specular; zero on the sky), which are also this frame's results: the
+ * indirect lighting reads the diffuse and the reflections the rough specular, both times the GI intensity. With the
+ * AO, its history (bent normal, visibility) and the composite's screen AO.
  */
 
 #include "bgfx_compute.sh"
@@ -39,11 +46,17 @@ SAMPLER2D(s_lumen_depth, 0);
 /// G-buffer target 1: octahedral normal, metalness, roughness.
 SAMPLER2D(s_lumen_normal, 1);
 SAMPLER2D(s_lumen_probe_records, 2);
+/// The probes' SH3 (cs_lumen_probe_sh.sc; texel 0's alpha = the probe's moving fraction).
 SAMPLER2D(s_lumen_probe_sh, 3);
 IMAGE2D_WO(s_lumen_rough_history_out, rgba16f, 4);
-IMAGE2D_WO(s_lumen_rough_out, rgba16f, 5);
 IMAGE2D_WO(s_lumen_history_out, rgba16f, 6);
-IMAGE2D_WO(s_lumen_resolve_out, rgba16f, 7);
+#ifdef LUMEN_INTEGRATE_SHORT_RANGE_AO
+IMAGE2D_WO(s_lumen_short_range_ao_history_out, rgba16f, 5);
+IMAGE2D_WO(s_lumen_short_range_ao_screen_out, rgba8, 7);
+/// This frame's AO search (cs_lumen_short_range_ao.sc) and last frame's accumulation.
+SAMPLER2D(s_lumen_short_range_ao, 14);
+SAMPLER2D(s_lumen_short_range_ao_history, 15);
+#endif
 SAMPLER2D(s_lumen_history, 8);
 /// Last frame's device depth.
 SAMPLER2D(s_lumen_prev_depth, 9);
@@ -53,16 +66,21 @@ SAMPLER2D(s_lumen_probe_border, 11);
 /// The adaptive probes' tile lists (lumen_adaptive_probes.sh).
 BUFFER_RO(b_lumen_adaptive, uint, 12);
 
+/// This frame's velocity buffer (where moving surfaces were last frame).
+#define LUMEN_VELOCITY_STAGE 13
 #include "lumen/lumen_history.sh"
 #include "lumen/lumen_adaptive_probes.sh"
+#ifdef LUMEN_INTEGRATE_SHORT_RANGE_AO
+#include "lumen/lumen_short_range_ao_temporal.sh"
+#endif
 
-/// x > 0 when the histories and s_lumen_prev_depth hold last frame, y = GI intensity, z > 0 computes the rough
-/// specular, w > 0 paints the pixels the uniform probes cannot interpolate (diagnostic: red = the fallback depth
-/// weights served them, the pixels UE places adaptive probes for; magenta = not even those).
+/// x > 0 when the histories and s_lumen_prev_depth hold last frame, y unused, z > 0 computes the rough specular, w > 0
+/// paints the pixels the uniform probes cannot interpolate into the diffuse history (diagnostic, stored as a fresh
+/// history: red = the fallback depth weights served them, the pixels UE places adaptive probes for; magenta = not even
+/// those).
 uniform vec4 u_lumen_temporal;
 
 #define u_lumen_has_history (u_lumen_temporal.x > 0.0)
-#define u_lumen_intensity   u_lumen_temporal.y
 #define u_lumen_rough_specular (u_lumen_temporal.z > 0.0)
 #define u_lumen_show_interpolation_fallback (u_lumen_temporal.w > 0.0)
 
@@ -196,6 +214,30 @@ vec3 LumenInterpolateIrradianceOverPi(LumenProbeSample probes, vec3 normal)
 	       probes.weights.w * LumenProbeIrradianceOverPi(probes.tiles23.zw, transfer);
 }
 
+/// One probe's moving fraction (the alpha of its SH texel 0).
+float LumenProbeMoving(ivec2 tile)
+{
+	return texelFetch(s_lumen_probe_sh, ivec2(tile.x * LUMEN_SH_TEXELS_PER_PROBE, tile.y), 0).w;
+}
+
+/// The interpolated moving fraction of the probes' lighting (UE LightingIsMoving).
+float LumenInterpolateMoving(LumenProbeSample probes)
+{
+	vec4 moving = vec4(LumenProbeMoving(probes.tiles01.xy),
+	                   LumenProbeMoving(probes.tiles01.zw),
+	                   LumenProbeMoving(probes.tiles23.xy),
+	                   LumenProbeMoving(probes.tiles23.zw));
+	return dot(probes.weights, moving);
+}
+
+/// This frame's fast update amount from the moving fraction of the pixel's lighting (UE FastUpdateModeAmount).
+float LumenFastUpdateAmount(float moving)
+{
+	float amount = saturate(moving / LUMEN_TEMPORAL_FAST_UPDATE_MOVING_FRACTION);
+	return saturate(min((amount - LUMEN_TEMPORAL_FAST_UPDATE_THRESHOLD) / (1.0 - LUMEN_TEMPORAL_FAST_UPDATE_THRESHOLD),
+	                    LUMEN_TEMPORAL_FAST_UPDATE_MAX_AMOUNT));
+}
+
 /// One probe's bordered radiance along @p direction, bilinear (UE InterpolateFromScreenProbes, mip 0).
 vec3 LumenProbeRadiance(ivec2 tile, vec2 probe_uv, vec2 inv_atlas_size)
 {
@@ -289,9 +331,11 @@ void main()
 	if(depth01 >= 1.0)
 	{
 		imageStore(s_lumen_history_out, pixel, vec4_splat(0.0));
-		imageStore(s_lumen_resolve_out, pixel, vec4_splat(0.0));
 		imageStore(s_lumen_rough_history_out, pixel, vec4_splat(0.0));
-		imageStore(s_lumen_rough_out, pixel, vec4_splat(0.0));
+#ifdef LUMEN_INTEGRATE_SHORT_RANGE_AO
+		imageStore(s_lumen_short_range_ao_history_out, pixel, vec4(0.0, 0.0, 0.0, 1.0));
+		imageStore(s_lumen_short_range_ao_screen_out, pixel, vec4(0.5, 0.5, 0.5, 1.0));
+#endif
 		return;
 	}
 	vec3 position = LumenWorldFromDepth(LumenPixelUv(pixel), depth01);
@@ -331,6 +375,15 @@ void main()
 		rough_history = LumenReadRoughHistory(taps);
 	}
 	float frames = history_sample.w;
+	float fast_update = 0.0;
+	BRANCH
+	if(u_lumen_fast_update)
+	{
+		fast_update = probes.valid ? LumenFastUpdateAmount(LumenInterpolateMoving(probes)) : 0.0;
+		float held_fast_update =
+		    max(fast_update, min(LumenReadHistoryFastUpdate(taps), LUMEN_TEMPORAL_FAST_UPDATE_MAX_AMOUNT));
+		frames = min(frames, (1.0 - held_fast_update) * u_lumen_temporal_max_frames);
+	}
 	float blend = 1.0 / (1.0 + frames);
 	if(!probes.valid && frames >= 1.0)
 	{
@@ -338,15 +391,18 @@ void main()
 	}
 	vec3 result = max(mix(history_sample.xyz, current, blend), vec3_splat(0.0));
 	vec3 rough_result = max(mix(rough_history, rough_current, blend), vec3_splat(0.0));
-	float stored_frames = LumenQuantizeFrames(frames);
-	imageStore(s_lumen_history_out, pixel, vec4(result, stored_frames));
-	vec3 resolve = result * u_lumen_intensity;
+	float history_alpha = LumenEncodeHistoryAlpha(frames, fast_update, u_lumen_temporal_max_frames);
 	BRANCH
 	if(u_lumen_show_interpolation_fallback && probes.fallback)
 	{
-		resolve = probes.valid ? vec3(1.0, 0.0, 0.0) : vec3(1.0, 0.0, 1.0);
+		result = probes.valid ? vec3(1.0, 0.0, 0.0) : vec3(1.0, 0.0, 1.0);
+		history_alpha = 0.0;
 	}
-	imageStore(s_lumen_resolve_out, pixel, vec4(resolve, 1.0));
-	imageStore(s_lumen_rough_history_out, pixel, vec4(rough_result, stored_frames));
-	imageStore(s_lumen_rough_out, pixel, vec4(rough_result * u_lumen_intensity, frames + 1.0));
+	imageStore(s_lumen_history_out, pixel, vec4(result, history_alpha));
+	imageStore(s_lumen_rough_history_out, pixel, vec4(rough_result, LumenQuantizeFrames(frames)));
+#ifdef LUMEN_INTEGRATE_SHORT_RANGE_AO
+	vec4 ao = LumenAccumulateShortRangeAO(pixel, position, normal, depth, taps, frames);
+	imageStore(s_lumen_short_range_ao_history_out, pixel, ao);
+	imageStore(s_lumen_short_range_ao_screen_out, pixel, LumenShortRangeAOScreen(ao, normal));
+#endif
 }

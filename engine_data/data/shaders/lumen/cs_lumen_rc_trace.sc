@@ -16,16 +16,18 @@
 #include "lumen/lumen_common.sh"
 /// The global SDF's coverage (gi/sdf_clipmap.sh).
 #define SDF_CLIPMAP_COVERAGE_STAGE 10
+#define SDF_CLIPMAP_MIP_STAGE 9
 #include "lumen/lumen_global_sdf.sh"
 #include "lumen/lumen_radiance_cache_common.sh"
 #include "gi/gi_constants.sh"
 
 BUFFER_RO(b_lumen_rc_traces, uint, 0);
 BUFFER_RO(b_lumen_rc_tiles, uint, 1);
+/// The frame's counters: the tile count bounds the last dispatch row.
+BUFFER_RO(b_lumen_rc_counters, uint, 2);
 /// The environment SH (9 texels), absolute radiance.
 SAMPLER2D(s_lumen_env_sh, 3);
 IMAGE2D_WO(i_lumen_rc_radiance, rgba16f, 5);
-IMAGE2D_WO(i_lumen_rc_depth, r16f, 6);
 
 /// The surface cache (lumen_surface_cache.sh): global-SDF hits read the cards' final lighting through the
 /// object grid when u_lumen_hit_lighting.x > 0.5 (the cache is lit), black otherwise.
@@ -69,7 +71,11 @@ vec4 LumenRcTraceRay(vec3 origin, vec3 direction, float t_min, LumenSdfDither di
 NUM_THREADS(8, 8, 1)
 void main()
 {
-	uint tile_index = gl_WorkGroupID.x;
+	uint tile_index = gl_WorkGroupID.y * LUMEN_RC_TRACE_DISPATCH_WIDTH + gl_WorkGroupID.x;
+	if(tile_index >= b_lumen_rc_counters[LUMEN_RC_COUNTER_TILES])
+	{
+		return;
+	}
 	uint tile_word = b_lumen_rc_tiles[2u * tile_index];
 	uint trace = b_lumen_rc_tiles[2u * tile_index + 1u];
 	ivec2 tile = ivec2(int(tile_word & 255u), int((tile_word >> 8u) & 255u));
@@ -89,8 +95,8 @@ void main()
 		for(int x = 0; x < scale; ++x)
 		{
 			ivec2 target = origin + texel * scale + ivec2(x, y);
-			imageStore(i_lumen_rc_radiance, target, vec4(ray.xyz, 1.0));
-			imageStore(i_lumen_rc_depth, target, vec4_splat(ray.w));
+			// rgb = radiance, a = hit distance (the filter's visibility test and the final atlas's alpha).
+			imageStore(i_lumen_rc_radiance, target, vec4(LumenToFloat16Range(ray.xyz), ray.w));
 		}
 	}
 }

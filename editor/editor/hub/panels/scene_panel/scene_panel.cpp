@@ -1473,7 +1473,9 @@ void scene_panel::draw_scene(rtti::context& ctx, delta_t dt)
 
     if(target_scene)
     {
-        path.render_scene(handle, camera_comp, *target_scene, dt, false);
+        // A gizmo or a widget being dragged edits the scene: the GI follows the edit sooner while it lasts.
+        const bool is_being_edited = ImGuizmo::IsUsing() || ImGui::IsAnyItemActive();
+        path.render_scene(handle, camera_comp, *target_scene, dt, false, is_being_edited);
         gizmos_.on_frame_render(ctx, *target_scene, handle, dd_2d_);
     }
 }

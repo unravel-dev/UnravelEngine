@@ -4,6 +4,7 @@ $input v_texcoord0
 #include "../lighting.sh"
 #include "../hiz_trace.sh"
 #include "../pre_exposure.sh"
+#include "../velocity/velocity_encoding.sh"
 
 // Current frame SSR result (rgb = color, a = confidence)
 SAMPLER2D(s_ssr_curr, 0);
@@ -13,8 +14,8 @@ SAMPLER2D(s_ssr_history, 1);
 SAMPLER2D(s_normal, 2);
 // Depth buffer for validity checks
 SAMPLER2D(s_depth, 3);
-// Velocity buffer: RG = total uv-delta (uv_curr - uv_prev, unjittered prev), BA = the
-// object-only component. Produced by the deferred velocity pass; authoritative when bound.
+// Velocity buffer (velocity_encoding.sh): RG = total uv-delta (uv_curr - uv_prev, unjittered
+// prev), B = the object-only motion. Produced by the deferred velocity pass; authoritative when bound.
 SAMPLER2D(s_velocity, 4);
 // The trace's confidence-weighted mean hit distance THIS frame (view-space metres,
 // 0 = no confident hit), and its accumulated history. Together they carry the per-pixel
@@ -150,8 +151,7 @@ SsrTemporalResult ApplyTemporalAccumulation(
     if (u_velocity_available > 0.5)
     {
         vec4 vel4 = texture2DLod(s_velocity, uv, 0.0);
-        vec2 vel_dim = vec2(textureSize(s_velocity, 0));
-        float object_w = smoothstep(0.5, 1.5, length(vel4.zw * vel_dim));
+        float object_w = smoothstep(0.5, 1.5, VelocityObjectMotionPixels(vel4));
         prev_uv = mix(prev_uv, uv - vel4.xy, object_w);
     }
     BRANCH
@@ -283,8 +283,7 @@ SsrTemporalResult ApplyTemporalAccumulation(
                all(lessThanEqual(hit_uv, vec2_splat(1.0))))
             {
                 vec4 hit_vel = texture2DLod(s_velocity, hit_uv, 0.0);
-                vec2 vel_dim = vec2(textureSize(s_velocity, 0));
-                float hit_motion = smoothstep(0.5, 1.5, length(hit_vel.zw * vel_dim));
+                float hit_motion = smoothstep(0.5, 1.5, VelocityObjectMotionPixels(hit_vel));
                 still = min(still, 1.0 - hit_motion);
             }
         }

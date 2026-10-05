@@ -41,24 +41,24 @@ uniform vec4 u_clipmap_compose_params;
 uniform vec4 u_clipmap_compose_origin;
 #define u_compose_lumen (u_clipmap_compose_origin.w > 0.5)
 
-/// The voxel box this dispatch composes: xyz = its minimum corner in level voxels. A full
-/// recompose is one box over the whole level; a SCROLL-ONLY recompose (the origin moved with
-/// the instance content unchanged - global_sdf_clipmap::level::scroll_only) blits the overlap
-/// of the old and new windows into place and dispatches only the exposed slabs. w = the scale of the smallest object
-/// a Lumen cascade keeps (global_sdf_clipmap::settings::object_radius_scale, 1 / the scene detail).
-uniform vec4 u_clipmap_compose_range;
-/// xyz = the box's size in voxels.
-uniform vec4 u_clipmap_compose_range_size;
+/// The voxel boxes this dispatch composes (gi/brick_dispatch.sh): a full recompose is one box over the whole level; a
+/// PARTIAL recompose (global_sdf_clipmap::level::is_partial) blits the overlap of the old and new windows into place
+/// and composes the exposed slabs and the boxes within reach of the changed instances.
+#define BRICK_DISPATCH_STAGE 7
+#include "gi/brick_dispatch.sh"
+/// x = the scale of the smallest object a Lumen cascade keeps (global_sdf_clipmap::settings::object_radius_scale,
+/// 1 / the scene detail); yzw unused.
+uniform vec4 u_clipmap_compose_scale;
 
 NUM_THREADS(4, 4, 4)
 void main()
 {
-	ivec3 local = ivec3(gl_GlobalInvocationID.xyz);
-	if(any(greaterThanEqual(local, ivec3(u_clipmap_compose_range_size.xyz))))
+	BrickDispatchVoxel target = BrickDispatchFindVoxel(gl_WorkGroupID, gl_LocalInvocationID);
+	if(!target.valid)
 	{
 		return;
 	}
-	ivec3 voxel = ivec3(u_clipmap_compose_range.xyz) + local;
+	ivec3 voxel = target.voxel;
 	int resolution = int(u_compose_resolution);
 	if(voxel.x >= resolution || voxel.y >= resolution || voxel.z >= resolution)
 	{
@@ -127,8 +127,8 @@ void main()
 						{
 							if(!SdfLumenCascadeKeepsInstance(inst,
 							                                 u_compose_voxel_size,
-							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS * u_clipmap_compose_range.w,
-							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS_VOXELS * u_clipmap_compose_range.w))
+							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS * u_clipmap_compose_scale.x,
+							                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS_VOXELS * u_clipmap_compose_scale.x))
 							{
 								continue;
 							}

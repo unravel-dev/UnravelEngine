@@ -38,6 +38,11 @@ class surface_cache_view;
 class lumen_surface_cache_pass
 {
 public:
+    lumen_surface_cache_pass() = default;
+    ~lumen_surface_cache_pass();
+    lumen_surface_cache_pass(const lumen_surface_cache_pass&) = delete;
+    auto operator=(const lumen_surface_cache_pass&) -> lumen_surface_cache_pass& = delete;
+
     /// Experiment toggles (surface_cache_system::get_experiment_flags), above the gather's and the reflections'
     /// bits: each one changes one stage for an in-session A/B. Zero in production.
     enum experiment : uint32_t
@@ -51,6 +56,8 @@ public:
         experiment_show_sdf_coverage = 1u << 26u,
         ///< Resident cards keep their resolution while the viewer moves (diagnostic).
         experiment_hold_card_resolution = 1u << 28u,
+        ///< lumen_scene::set_card_residency_without_group_gate.
+        experiment_card_residency_without_group_gate = 1u << 19u,
         ///< The card lighting stops updating: no direct lighting or radiosity dispatches (diagnostic).
         experiment_freeze_card_lighting = 1u << 30u,
     };
@@ -68,6 +75,23 @@ public:
         ///< The draw's scissor in bgfx's terms: the capture's tile.
         irect32_t scissor{};
     };
+
+    /// The sun's cloud shadow the card direct lighting applies to directional lights (cloud_shadow.sh): the map
+    /// (null = none), u_cloudShadow, u_cloudShadow2 and the map's signature (atmospheric_pass_perez::cloud_shadow_result;
+    /// a new one relights every page a directional light reaches).
+    struct cloud_shadow
+    {
+        gfx::texture::ptr map;
+        math::vec4 placement{0.0f};
+        math::vec4 layer{0.0f};
+        uint64_t signature = 0;
+    };
+
+    /// This frame's cloud shadow, before update().
+    void set_cloud_shadow(const cloud_shadow& shadow)
+    {
+        cloud_shadow_ = shadow;
+    }
 
     struct lighting_inputs
     {
@@ -141,7 +165,9 @@ public:
     /// CPU update from this frame's GI instances, the view the lighting is scheduled for, its Lumen scene settings
     /// and the project's; uploads the scene table. Other atlas sizes in the project settings start the surface cache
     /// over at those sizes.
+    /// @param clipmap The view's global distance field: its levels moving changes every card's shadows (null: none).
     void update(const surface_cache_system& gi_scene,
+                const global_sdf_clipmap* clipmap,
                 const math::vec3& view_origin,
                 const math::frustum& view_frustum,
                 const gi_settings::scene_settings& view_settings,
@@ -179,6 +205,16 @@ public:
     auto run_debug(const debug_params& params) -> bool;
 
     auto is_ready() const -> bool;
+
+    /// The atlases exist: created by the first update, so a camera that never runs GI allocates none of them.
+    auto has_targets() const -> bool
+    {
+        return albedo_atlas_ != nullptr;
+    }
+
+    /// Frees the atlases, the capture target and the object grid, and starts the card scene over (its pages lived in
+    /// the atlases): a camera whose GI turned off holds nothing. The next update allocates them again.
+    void release_targets();
 
     /// The resources a surface cache sampler binds (lumen_surface_cache.sh) and its uniform values.
     auto get_scene_buffer() const -> bgfx::DynamicVertexBufferHandle
@@ -239,10 +275,14 @@ private:
 
         gfx::program::uniform_ptr u_lumen_card_copy;
         gfx::program::uniform_ptr u_lumen_card_lighting;
+        gfx::program::uniform_ptr s_cloudShadow;
+        gfx::program::uniform_ptr u_cloudShadow;
+        gfx::program::uniform_ptr u_cloudShadow2;
         gfx::program::uniform_ptr u_lumen_radiosity;
         gfx::program::uniform_ptr u_lumen_surface_cache;
         gfx::program::uniform_ptr u_lumen_object_grid;
         gfx::program::uniform_ptr u_lumen_object_grid_origin;
+        gfx::program::uniform_ptr u_brick_dispatch;
         gfx::program::uniform_ptr u_lumen_object_grid_levels;
         gfx::program::uniform_ptr u_lumen_object_grid_params;
         gfx::program::uniform_ptr u_lumen_hit_lighting;
@@ -274,11 +314,12 @@ private:
         gfx::program::uniform_ptr s_sdf_atlas;
         gfx::program::uniform_ptr s_sdf_clipmap;
         gfx::program::uniform_ptr s_sdf_clipmap_coverage;
+        gfx::program::uniform_ptr s_sdf_clipmap_mip;
         gfx::program::uniform_ptr s_lumen_card_indirect;
         gfx::program::uniform_ptr s_lumen_radiosity_frames;
         gfx::program::uniform_ptr s_lumen_resample_direct;
         gfx::program::uniform_ptr s_lumen_resample_indirect;
-        gfx::program::uniform_ptr s_lumen_resample_frames;
+        gfx::program::uniform_ptr s_lumen_capture_rt3;
     };
 
     /// The object grid's state for one clipmap level: built for this origin and content.
@@ -286,11 +327,21 @@ private:
     {
         math::vec3 origin{0.0f};
         float voxel_size = 0.0f;
-        uint64_t content_fingerprint = 0;
+        /// The clipmap level's global_sdf_clipmap::level::compose_serial when built.
+        uint64_t compose_serial = 0;
         /// surface_cache_system::get_instance_order_hash when built: the cells store instance indices.
         uint64_t instance_order = 0;
         bool is_built = false;
     };
+
+    /**
+     * @brief What changed the card direct lighting since the last update (lumen_scene::invalidate_direct_lighting):
+     *        the lights' records and the global distance field the shadow rays march - a level's partial recompose its
+     *        boxes, a full one or a moved level everything. The field, not the instance list, decides: a level takes
+     *        an instance's move on its own cadence, and a page relit before that would keep the old shadow.
+     */
+    auto collect_direct_lighting_changes(const surface_cache_system& gi_scene, const global_sdf_clipmap* clipmap)
+        -> lumen_scene::direct_lighting_changes;
 
     void create_targets();
     void upload_scene_table();
@@ -337,22 +388,33 @@ private:
     ///< Capture-atlas sized: the resampled direct and indirect lighting, and the update count per 8x8 tile.
     gfx::texture::ptr resample_direct_;
     gfx::texture::ptr resample_indirect_;
-    gfx::texture::ptr resample_frames_;
     gfx::texture::ptr object_grid_;
     ///< A 1x1x1 stand-in bound while no object grid exists (a 3D stage must stay 3D).
     gfx::texture::ptr object_grid_dummy_;
     bool is_lit_ = false;
+    ///< The object grid's id range has been reported as too small for the scene (once).
+    bool has_warned_object_grid_ids_ = false;
     uint32_t object_grid_resolution_ = 0;
     ///< Scale of the global-SDF hits' card sampling bias (u_lumen_object_grid_params.y; 1 = UE's rule on this layout).
     float card_bias_scale_ = 1.0f;
     /// This frame's experiment toggles (surface_cache_system::get_experiment_flags).
-    uint32_t experiment_flags_ = 0;
+    uint64_t experiment_flags_ = 0;
+    /// The previous update's lights and clipmap level recomposes, for collect_direct_lighting_changes; false before
+    /// the first update.
+    std::vector<float> previous_lights_;
+    std::array<uint64_t, global_sdf_clipmap::level_count> previous_compose_serials_{};
+    uint64_t previous_cloud_signature_ = 0;
+    bool has_previous_lighting_inputs_ = false;
+    /// This frame's cloud shadow (set_cloud_shadow).
+    cloud_shadow cloud_shadow_{};
     std::array<object_grid_level, 4> object_grid_built_{};
     std::array<math::vec4, 4> object_grid_levels_{};
     bgfx::DynamicVertexBufferHandle scene_buffer_{bgfx::kInvalidHandle};
     bgfx::DynamicVertexBufferHandle copy_tile_buffer_{bgfx::kInvalidHandle};
     ///< lumen_scene::get_resample_table, read as a scene table by the resample.
     bgfx::DynamicVertexBufferHandle resample_table_buffer_{bgfx::kInvalidHandle};
+    /// The object grid's brick table of the frame (global_sdf_clipmap::append_brick_boxes, in cells).
+    bgfx::DynamicVertexBufferHandle object_grid_boxes_{bgfx::kInvalidHandle};
     ///< lumen_scene::get_page_lighting_ages for the lighting updates views, and its scratch.
     bgfx::DynamicVertexBufferHandle page_ages_buffer_{bgfx::kInvalidHandle};
     std::vector<math::vec4> page_ages_;

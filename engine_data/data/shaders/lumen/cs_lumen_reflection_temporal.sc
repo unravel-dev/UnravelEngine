@@ -10,6 +10,8 @@
  *  - the surface history: the surface point reprojected, each tap kept only when last frame's depth there is
  *    within LUMEN_REFLECTION_TEMPORAL_DISTANCE_THRESHOLD x U(0.5, 1.5) of the reprojected depth, relaxed by
  *    1 / clamp(NoV, 0.1, 1) against TAA jitter at grazing angles.
+ * On a moving surface both points move with it first: back by the surface's motion since last frame
+ * (lumen_motion.sh; UE adds the velocity's object part to both reprojections).
  * The one closer to the mean of the 5x5 neighbourhood (corners skipped) of this frame's resolve wins, keeping
  * 20% of the hit history; both are clamped to the neighbourhood mean +- LUMEN_REFLECTION_NEIGHBORHOOD_CLAMP_SCALE
  * standard deviations in YCoCg, and the clamp's distance lowers the confidence, which shortens the frame count:
@@ -27,6 +29,7 @@
 #include "bgfx_compute.sh"
 #include "../common.sh"
 #include "../pre_exposure.sh"
+#define LUMEN_REFLECTION_TILES_STAGE 15
 #include "lumen/lumen_reflection_common.sh"
 
 IMAGE2D_WO(s_lumen_reflection_history_out, rgba16f, 0);
@@ -35,14 +38,17 @@ IMAGE2D_WO(s_lumen_reflection_frames_out, r32f, 1);
 SAMPLER2D(s_lumen_reflection_resolved, 8);
 SAMPLER2D(s_lumen_reflection_history, 9);
 SAMPLER2D(s_lumen_reflection_frames_history, 10);
+/// Last frame's reflection tiles: its skipped tiles hold no history.
+SAMPLER2D(s_lumen_reflection_tiles_history, 2);
 /// Last frame's device depth.
 SAMPLER2D(s_lumen_prev_depth, 11);
 SAMPLER2D(s_lumen_depth, 12);
 /// G-buffer target 1: octahedral normal, metalness, roughness.
 SAMPLER2D(s_lumen_normal, 13);
 
-/// Last frame's TAA-unjittered view projection.
-uniform mat4 u_lumen_prev_view_proj;
+/// This frame's velocity buffer (where moving surfaces were last frame).
+#define LUMEN_VELOCITY_STAGE 14
+#include "lumen/lumen_motion.sh"
 
 #define LUMEN_REFLECTION_TILE_BORDER 2
 #define LUMEN_REFLECTION_TILE_SIZE 12
@@ -103,7 +109,8 @@ LumenReflectionHistory LumenReadReflectionHistory(vec3 world_point, bool depth_t
 			float tap_depth = LumenLinearDepth(texelFetch(s_lumen_prev_depth, texel, 0).x);
 			weight = abs(tap_depth - reprojected_depth) >= reprojected_depth * threshold ? 0.0 : weight;
 		}
-		float tap_frames = texelFetch(s_lumen_reflection_frames_history, texel, 0).x;
+		bool tap_traced = texelFetch(s_lumen_reflection_tiles_history, texel / LUMEN_REFLECTION_TILE_PIXELS, 0).x > 0.5;
+		float tap_frames = tap_traced ? texelFetch(s_lumen_reflection_frames_history, texel, 0).x : -1.0;
 		weight = tap_frames < 0.0 ? 0.0 : weight;
 		if(weight > 0.0)
 		{
@@ -133,6 +140,10 @@ vec4 LumenLoadTileEntry(ivec2 coord)
 	{
 		return vec4_splat(0.0);
 	}
+	if(!LumenReflectionTileTraces(coord))
+	{
+		return vec4_splat(0.0);
+	}
 	vec4 resolved = texelFetch(s_lumen_reflection_resolved, coord, 0);
 	if(resolved.w < 0.0)
 	{
@@ -146,6 +157,11 @@ void main()
 {
 	ivec2 group_origin = ivec2(gl_WorkGroupID.xy) * 8;
 	ivec2 local = ivec2(gl_LocalInvocationID.xy);
+	// A tile that traces nothing keeps no history (the whole group returns, before its barrier).
+	if(!LumenReflectionTileTraces(group_origin))
+	{
+		return;
+	}
 	for(int y = local.y; y < LUMEN_REFLECTION_TILE_SIZE; y += 8)
 	{
 		for(int x = local.x; x < LUMEN_REFLECTION_TILE_SIZE; x += 8)
@@ -185,6 +201,7 @@ void main()
 		float roughness = gbuffer1.w;
 		vec3 normal = normalize(decodeNormalOctahedron(gbuffer1.xy));
 		vec3 position = LumenWorldFromDepth(LumenPixelUv(pixel), depth01);
+		vec3 motion = position - LumenPrevWorldPosition(LumenPixelUv(pixel), position);
 		float noise = InterleavedGradientNoise(vec2(pixel), u_lumen_frame_mod);
 		LumenReflectionHistory from_hit;
 		from_hit.valid = false;
@@ -199,9 +216,10 @@ void main()
 			float hit_distance = texelFetch(s_lumen_reflection_resolved, pixel, 0).w;
 			vec3 camera = LumenReflectionCamera();
 			vec3 virtual_point = camera + (position - camera) * ((scene_depth + hit_distance) / max(scene_depth, 1e-5));
-			from_hit = LumenReadReflectionHistory(virtual_point, false, position, normal, noise);
+			from_hit = LumenReadReflectionHistory(virtual_point - motion, false, position, normal, noise);
 		}
-		LumenReflectionHistory from_surface = LumenReadReflectionHistory(position, true, position, normal, noise);
+		LumenReflectionHistory from_surface = LumenReadReflectionHistory(position - motion, true, position, normal,
+		                                                                 noise);
 		// Mirrors keep few frames and leave their noise to TAA; downsampled traces need the history to converge.
 		float max_frames = LUMEN_REFLECTION_TEMPORAL_MAX_FRAMES;
 		if(u_lumen_reflection_downsample <= 1)
@@ -258,6 +276,7 @@ void main()
 	}
 	specular = max(specular, vec3_splat(0.0));
 	imageStore(s_lumen_reflection_history_out, pixel,
-	           vec4(LumenReflectionFromDenoiserSpace(specular), max(second_moment, 0.0)));
+	           vec4(LumenToFloat16Range(LumenReflectionFromDenoiserSpace(specular)),
+	                min(max(LumenMakeFinite(second_moment), 0.0), LUMEN_FLOAT16_MAX)));
 	imageStore(s_lumen_reflection_frames_out, pixel, vec4(frames, 0.0, 0.0, 0.0));
 }

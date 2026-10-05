@@ -16,10 +16,12 @@
 #include "../common.sh"
 // eval_radiance_sh.
 #include "../lighting.sh"
+#define LUMEN_REFLECTION_TILES_STAGE 12
 #include "lumen/lumen_reflection_common.sh"
 #include "lumen/lumen_screen_trace.sh"
 /// The global SDF's coverage (gi/sdf_clipmap.sh).
 #define SDF_CLIPMAP_COVERAGE_STAGE 10
+#define SDF_CLIPMAP_MIP_STAGE 9
 #include "lumen/lumen_global_sdf.sh"
 #include "gi/gi_pre_exposure.sh"
 
@@ -47,8 +49,9 @@ SAMPLER3D(s_lumen_object_grid, 15);
 
 /// x > 0.5 when the surface cache holds lighting.
 uniform vec4 u_lumen_hit_lighting;
-/// Last frame's TAA-unjittered view projection.
-uniform mat4 u_lumen_prev_view_proj;
+/// This frame's velocity buffer (where a moving hit surface was last frame).
+#define LUMEN_VELOCITY_STAGE 11
+#include "lumen/lumen_motion.sh"
 
 /// UE SampleSceneColorAtHit (LumenScreenTracing.ush:78-137): last frame's colour at a distance-field hit (rgb,
 /// a = 1) when the hit projects on screen within LUMEN_REFLECTION_SCENE_COLOR_RELATIVE_DEPTH of the depth buffer,
@@ -79,7 +82,8 @@ vec4 LumenReflectionSceneColorAtHit(ivec2 pixel, vec3 hit_world, vec3 hit_normal
 	}
 	float noise = InterleavedGradientNoise(vec2(pixel) + 0.5, u_lumen_frame_mod);
 	vec3 surface = LumenWorldFromDepth(uv, scene_depth01);
-	return LumenScreenHistoryRadiance(s_lumen_prev_color, s_lumen_prev_depth, u_lumen_prev_view_proj, surface, uv, noise,
+	return LumenScreenHistoryRadiance(s_lumen_prev_color, s_lumen_prev_depth, u_lumen_prev_view_proj,
+	                                  LumenPrevWorldPosition(uv, surface), uv, noise,
 	                                  LUMEN_REFLECTION_SCENE_COLOR_RELATIVE_DEPTH);
 }
 
@@ -107,7 +111,7 @@ void main()
 	{
 		return;
 	}
-	vec4 ray = texelFetch(s_lumen_reflection_ray, trace_coord, 0);
+	vec4 ray = LumenReflectionTraceRay(s_lumen_reflection_ray, trace_coord);
 	if(ray.w <= 0.0)
 	{
 		return;
@@ -122,8 +126,7 @@ void main()
 	float depth01 = texelFetch(s_lumen_depth, pixel, 0).x;
 	vec3 position = LumenWorldFromDepth(LumenPixelUv(pixel), depth01);
 	vec3 origin = position + LUMEN_SURFACE_BIAS * direction;
-	float resume_voxel;
-	SdfSampleClipmapEx(position + screen * direction, resume_voxel);
+	float resume_voxel = SdfSampleClipmapLevels(position + screen * direction).voxel_size;
 	float t_start = max(screen - LUMEN_REFLECTION_SDF_PULLBACK_HALF_VOXELS * 0.5 * resume_voxel, 0.0);
 	float step_noise = mix(LUMEN_REFLECTION_SDF_STEP_DITHER, 1.0 / LUMEN_REFLECTION_SDF_STEP_DITHER,
 	                       InterleavedGradientNoise(vec2(pixel), u_lumen_frame_mod));
@@ -137,21 +140,17 @@ void main()
 	{
 		hit_distance = hit.t;
 		vec3 surface_normal = dot(hit.normal, direction) > 0.0 ? -hit.normal : hit.normal;
+		// The on-screen colour answers the hit when it can be trusted; only then are the cards, the expensive lookup,
+		// skipped (the order changes no result).
+		vec4 scene_color = LumenReflectionSceneColorAtHit(pixel, origin + direction * hit.t, surface_normal);
+		radiance = scene_color.xyz;
 		BRANCH
-		if(u_lumen_hit_lighting.x > 0.5)
+		if(scene_color.w <= 0.5 && u_lumen_hit_lighting.x > 0.5)
 		{
 			// The march stops short of the surface by its expansion; the cards are a surface store.
 			vec3 surface = origin + direction * (hit.t + hit.hit_field);
 			vec4 cards = LumenSampleGlobalSdfHit(surface, surface_normal, 0.5 * hit.voxel, s_lumen_card_final);
-			if(cards.w > 0.0)
-			{
-				radiance = GiCachedToView(cards.xyz / cards.w);
-			}
-		}
-		vec4 scene_color = LumenReflectionSceneColorAtHit(pixel, origin + direction * hit.t, surface_normal);
-		if(scene_color.w > 0.5)
-		{
-			radiance = scene_color.xyz;
+			radiance = cards.w > 0.0 ? GiCachedToView(cards.xyz / cards.w) : vec3_splat(0.0);
 		}
 		if(u_lumen_reflection_show_trace_types)
 		{

@@ -7,7 +7,8 @@
  *    the remainder (SelectMaxPriorityBucketCS, :393-429);
  *  3 trace list: the allocators clamp back into range and the tile pass's dispatch is written
  *    (SetupProbeIndirectArgsCS, LumenRadianceCache.usf:85-135);
- *  4 tiles: the trace and filter dispatches are written (SetupTraceFromProbesCS, :657-692).
+ *  4 tiles: the trace (rows of LUMEN_RC_TRACE_DISPATCH_WIDTH tiles) and filter dispatches are written
+ *    (SetupTraceFromProbesCS, :657-692).
  */
 
 #include "bgfx_compute.sh"
@@ -46,7 +47,7 @@ void LumenRcClampAllocators()
 	b_lumen_rc_counters[LUMEN_RC_COUNTER_FREE_LIST] = uint(clamp(free_list, 0, LUMEN_RADIANCE_CACHE_MAX_PROBES));
 	b_lumen_rc_counters[LUMEN_RC_COUNTER_PROBES] =
 	    min(b_lumen_rc_counters[LUMEN_RC_COUNTER_PROBES], uint(LUMEN_RADIANCE_CACHE_MAX_PROBES));
-	uint traces = min(b_lumen_rc_counters[LUMEN_RC_COUNTER_TRACES], uint(LUMEN_RADIANCE_CACHE_MAX_TRACES));
+	uint traces = min(b_lumen_rc_counters[LUMEN_RC_COUNTER_TRACES], u_lumen_rc_trace_cap);
 	b_lumen_rc_counters[LUMEN_RC_COUNTER_TRACE_COUNT] = traces;
 	dispatchIndirect(b_lumen_rc_args, 0u, (traces + uint(LUMEN_RC_TILE_PASS_GROUP) - 1u) / uint(LUMEN_RC_TILE_PASS_GROUP), 1u, 1u);
 }
@@ -56,7 +57,8 @@ void LumenRcWriteTraceArgs()
 	uint tiles = b_lumen_rc_counters[LUMEN_RC_COUNTER_TILES];
 	uint traces = b_lumen_rc_counters[LUMEN_RC_COUNTER_TRACE_COUNT];
 	uint filter_groups = (uint(LUMEN_RC_FINAL_RES) + 7u) / 8u;
-	dispatchIndirect(b_lumen_rc_args, 1u, tiles, 1u, 1u);
+	uint rows = (tiles + LUMEN_RC_TRACE_DISPATCH_WIDTH - 1u) / LUMEN_RC_TRACE_DISPATCH_WIDTH;
+	dispatchIndirect(b_lumen_rc_args, 1u, min(tiles, LUMEN_RC_TRACE_DISPATCH_WIDTH), rows, 1u);
 	dispatchIndirect(b_lumen_rc_args, 2u, filter_groups, filter_groups, traces);
 }
 

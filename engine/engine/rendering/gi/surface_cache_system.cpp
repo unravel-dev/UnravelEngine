@@ -10,6 +10,7 @@
 #include <engine/ecs/ecs.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/ecs/components/camera_component.h>
+#include <engine/rendering/ecs/components/light_component.h>
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/mesh.h>
 #include <engine/rendering/model.h>
@@ -928,6 +929,32 @@ void surface_cache_system::walk_scene(scene& scn)
         });
 }
 
+void surface_cache_system::update_global_lighting_state(scene& scn)
+{
+    float sun = 0.0f;
+    scn.registry->view<light_component, active_component>().each(
+        [&](auto /*entity*/, auto&& light_comp, auto&& /*active*/)
+        {
+            const auto& light = light_comp.get_light();
+            if(light.type == light_type::directional && sun <= 0.0f)
+            {
+                const auto color = light.color.to_linear();
+                sun = light.intensity * math::max(color.value.r, math::max(color.value.g, color.value.b));
+            }
+        });
+    float sky = 0.0f;
+    scn.registry->view<skylight_component, active_component>().each(
+        [&](auto /*entity*/, auto&& skylight, auto&& /*active*/) { sky += math::max(skylight.get_irradiance_intensity(), 0.0f); });
+    const auto is_global_change = [](float before, float now)
+    {
+        const float ratio = math::max(before, global_lighting_epsilon) / math::max(now, global_lighting_epsilon);
+        return ratio > global_lighting_change_ratio || ratio < 1.0f / global_lighting_change_ratio;
+    };
+    has_global_lighting_change_ = is_global_change(global_sun_, sun) || is_global_change(global_sky_, sky);
+    global_sun_ = sun;
+    global_sky_ = sky;
+}
+
 void surface_cache_system::update_world(scene& scn)
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Update World");
@@ -955,8 +982,8 @@ void surface_cache_system::update_world(scene& scn)
     if((experiment_flags_ & experiment_freeze_residency) == 0u || camera_positions_.empty())
     {
         camera_positions_.clear();
-        scn.registry->view<transform_component, camera_component>().each(
-            [&](auto /*entity*/, auto&& camera_transform, auto&& /*camera*/)
+        scn.registry->view<transform_component, camera_component, active_component>().each(
+            [&](auto /*entity*/, auto&& camera_transform, auto&& /*camera*/, auto&& /*active*/)
             {
                 camera_positions_.push_back(camera_transform.get_transform_global().get_position());
             });
@@ -979,6 +1006,7 @@ void surface_cache_system::update_world(scene& scn)
     sweep_tracked_placements();
     // The lights the surface cache's direct lighting reads.
     light_buffer_.update(scn);
+    update_global_lighting_state(scn);
     atlas_.flush();
     upload_instances();
     upload_instance_grid();

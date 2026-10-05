@@ -21,9 +21,9 @@
     X(LUMEN_PROBE_JITTER_PERIOD, 8,                                                                \
       "frames", "placement Hammersley16(frame % 8) and ray-direction blue noise slice frame % 8"   \
       " (S/LumenScreenProbeCommon.ush:67-76, LumenScreenProbeTracingCommon.ush:8-22)")              \
-    X(LUMEN_PROBE_PIXEL_STRIDE, 4096,                                                              \
-      "px", "probe records pack their pixel as x + y x stride, exact in a float below 2^24, so"    \
-      " Lumen views need both axes at most this (UE packs x | y << 16 in a uint)")                 \
+    X(LUMEN_PROBE_MAX_VIEW_EXTENT, 16384,                                                          \
+      "px", "largest view axis the gather serves: probe records carry their pixel as the bits"     \
+      " x | y << 15 | 1 << 30 of a normal float (UE packs x | y << 16 in a uint)")                 \
     X(LUMEN_ADAPTIVE_SAMPLES_X, 4,                                                                 \
       "samples", "adaptive placement candidates per uniform probe along x: NumAdaptiveProbes"      \
       " 8 at Epic (INI GI@3) -> 4 x 2 (R/LumenScreenProbeGather.cpp:554-568)")                     \
@@ -59,6 +59,9 @@
       "", "exp2(-scale (dz / z)^2) position weight (S/LumenScreenProbeFiltering.usf:292-297)")     \
     X(LUMEN_FILTER_MAX_HIT_ANGLE_DEGREES, 10.0f,                                                   \
       "deg", "SpatialFilterMaxRadianceHitAngle (S/LumenScreenProbeFiltering.usf:413-450)")         \
+    X(LUMEN_FILTER_MOVING_THRESHOLD, 0.01f,                                                        \
+      "", "a probe whose moving fraction exceeds it filters with 8 more neighbours and no angle"   \
+      " weight (S/LumenScreenProbeFiltering.usf:423-483)")                                         \
     X(LUMEN_INTERP_DEPTH_WEIGHT, 10000.0f,                                                         \
       "", "exp2(-w r^2), r = plane distance / depth (S/LumenScreenProbeGather.usf:147-210)")        \
     X(LUMEN_INTERP_FALLBACK_DEPTH_WEIGHT, 1000.0f,                                                 \
@@ -91,7 +94,10 @@
     X(LUMEN_GLOBAL_SDF_MIN_STEP_VOXELS, 0.5f,                                                      \
       "voxels", "step floor: MinStepFactor 1 x ClipmapVoxelExtent (same file)")                    \
     X(LUMEN_GLOBAL_SDF_MAX_STEPS, 256,                                                             \
-      "steps", "march budget per ray (Lumen: 256 per clipmap, same file)")                         \
+      "steps", "march budget per clipmap level; a ray that spends it continues where it leaves the level" \
+      " (GlobalDistanceFieldUtils.ush:104-191)")                                                   \
+    X(LUMEN_GLOBAL_SDF_LEVEL_EXIT_VOXELS, 0.05f,                                                   \
+      "voxels", "a ray that spent a level's budget resumes this far past the level's box, in the next level") \
     X(LUMEN_GLOBAL_SDF_COVERED_EXPAND_SCALE, 1.0f,                                                 \
       "", "r.LumenScene.GlobalSDF.CoveredExpandSurfaceScale: the expansion where a one-sided"      \
       " mesh is near (R/GlobalDistanceField.cpp:258-264)")                                         \
@@ -140,7 +146,7 @@
     X(LUMEN_SCREEN_TRACE_HISTORY_NOISE_MAX, 2.0f,                                                  \
       "ratio", "upper end of that scale")                                                          \
     X(LUMEN_COMPOSITE_DITHER_SLICE_OFFSET, 31,                                                     \
-      "slices", "the re-binning dither reads blue noise slice frame % 8 + 31 (S/LumenScreenProbeFiltering.usf:100)") \
+      "slices", "experiment_jitter_slice_dither: the composite re-bins with ray-jitter slice frame % 8 + 31") \
     X(LUMEN_SH_TEXELS_PER_PROBE, 7,                                                                \
       "texels", "SH3 storage: c0 RGB, then (c1..c4), (c5..c8) per colour channel"                  \
       " (S/LumenScreenProbeFiltering.usf:866-910)")                                                \
@@ -165,6 +171,21 @@
       " (S/LumenScreenProbeGatherTemporal.usf:288-583)")                                           \
     X(LUMEN_TEMPORAL_HISTORY_GUARD, 0.53125f,                                                      \
       "px", "history taps are clamped 0.5 + 1/32 px inside last frame's view (StochasticLighting.cpp:1095-1111)") \
+    X(LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED, 0.005f,                                                \
+      "ratio", "a screen hit is moving when |probe speed - hit speed| per frame over max(probe depth, 1 m)" \
+      " exceeds it (r.Lumen.ScreenProbeGather.Temporal.RelativeSpeedDifferenceToConsiderLightingMoving," \
+      " R/LumenScreenProbeGather.cpp:219; S/LumenScreenProbeTracingCommon.ush:28-46)")              \
+    X(LUMEN_TEMPORAL_MOVING_MIN_DEPTH, 1.0f,                                                       \
+      "m", "the probe depth floor of that ratio (100 cm, same file)")                              \
+    X(LUMEN_TEMPORAL_FAST_UPDATE_MOVING_FRACTION, 0.1f,                                            \
+      "", "fraction of a pixel's probe lighting that is moving for the full fast update"           \
+      " (r.Lumen.ScreenProbeGather.Temporal.FractionOfLightingMovingForFastUpdateMode, R/LumenScreenProbeGather.cpp:188)") \
+    X(LUMEN_TEMPORAL_FAST_UPDATE_THRESHOLD, 0.2f,                                                  \
+      "", "fast update amount = saturate((moving / fraction - 0.2) / 0.8)"                         \
+      " (S/LumenScreenProbeGatherTemporal.usf:488-489)")                                           \
+    X(LUMEN_TEMPORAL_FAST_UPDATE_MAX_AMOUNT, 0.9f,                                                 \
+      "", "fast update cap: the frame count is limited to (1 - amount) x the maximum"              \
+      " (r.Lumen.ScreenProbeGather.Temporal.MaxFastUpdateModeAmount, R/LumenScreenProbeGather.cpp:196)") \
     X(LUMEN_RADIANCE_CACHE_CLIPMAPS, 4,                                                            \
       "clipmaps", "radiance cache clipmaps, camera-centred, each twice the previous"               \
       " (r.Lumen.ScreenProbeGather.RadianceCache.NumClipmaps, R/LumenScreenProbeGather.cpp:602-608)") \
@@ -183,7 +204,8 @@
       "probes", "probes re-traced per frame beyond the new ones, Epic (NumProbesToTraceBudget,"    \
       " BaseScalability.ini:435), times the final gather update speed (R/LumenScreenProbeGather.cpp:741-744)") \
     X(LUMEN_RADIANCE_CACHE_MAX_TRACES, 2752,                                                       \
-      "probes", "per-frame trace cap (temp atlas capacity, R/LumenRadianceCache.cpp:1625-1650)")   \
+      "probes", "per-frame trace cap while the cache continues (temp atlas capacity,"              \
+      " R/LumenRadianceCache.cpp:1625-1650); a rebuild traces the whole pool (:1641-1673)")          \
     X(LUMEN_RADIANCE_CACHE_KEEP_FRAMES, 8,                                                         \
       "frames", "an unmarked probe survives this long (NumFramesToKeepCachedProbes, R/LumenScreenProbeGather.cpp:671-676)") \
     X(LUMEN_RADIANCE_CACHE_DOWNSAMPLE_DISTANCE, 40.0f,                                             \
@@ -201,6 +223,10 @@
       "rad", "probe neighbour filter angle weight 1 - angle / 0.2 rad (LumenRadianceCache.usf:1055-1090)") \
     X(LUMEN_RADIANCE_CACHE_NO_HIT, 65504.0f,                                                       \
       "m", "probe depth of a ray that left the scene (f16 max; Lumen decodes 65503 cm)")           \
+    X(LUMEN_FLOAT16_MAX, 65504.0f,                                                                 \
+      "", "largest finite float16: radiance stored in RGBA16F is clamped below it")                \
+    X(LUMEN_OBJECT_GRID_MAX_ID, 65535,                                                             \
+      "", "object grid cells hold instance index + 1 as 16-bit unorm: ids up to this are exact")   \
     X(LUMEN_IS_MIN_PDF_TO_TRACE, 0.1f,                                                             \
       "", "texels whose BRDF PDF reaches this keep at least it; texels below it are recycled into 4x refinement of" \
       " the brightest (r.Lumen.ScreenProbeGather.ImportanceSample.MinPDFToTrace, R/LumenScreenProbeImportanceSampling.cpp:52-58)") \
@@ -251,9 +277,9 @@
       "roughness", "below it the ray is the mirror direction (S/LumenReflections.usf:366)")        \
     X(LUMEN_REFLECTION_MIN_PDF, 0.0001f,                                                           \
       "", "cone angle = 1 / max(pdf, this) (S/LumenReflections.usf:387)")                          \
-    X(LUMEN_REFLECTION_MIN_CONE_ANGLE, 0.00001f,                                                   \
-      "rad", "MinReflectionConeAngle: a mirror ray keeps a positive cone"                          \
-      " (S/LumenReflectionCommon.ush)")                                                            \
+    X(LUMEN_REFLECTION_MIN_CONE_ANGLE, 0.0001f,                                                    \
+      "rad", "MinReflectionConeAngle: a mirror ray keeps a positive cone (UE 1e-5, S/LumenReflectionCommon.ush);" \
+      " raised to a normal float16 so the RGBA16F ray texture never flushes it to the untraced 0")  \
     X(LUMEN_REFLECTION_SCREEN_TRACE_RELATIVE_THICKNESS, 0.005f,                                    \
       "ratio", "r.Lumen.Reflections.HierarchicalScreenTraces.RelativeDepthThickness"               \
       " (R/LumenReflectionTracing.cpp:54)")                                                        \

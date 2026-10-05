@@ -28,12 +28,27 @@
       " probes find on their own rays")                                                            \
     /* --- global distance field --- */                                                            \
     X(GI_CLIPMAP_EDIT_THROTTLE_FRAMES, 8,                                                          \
-      "frames", "derived: a continuously edited instance (an editor drag) re-fingerprints its"     \
-      " levels EVERY frame, and each recompose is a full non-toroidal distance volume, so an"      \
-      " unthrottled drag frame costs far more than a camera move. Content-driven recomposes"       \
-      " therefore coalesce to one per this many frames per level (the pending fingerprint diff"    \
-      " persists, so the final state lands within one window of release; origin re-snaps stay"    \
-      " immediate): the cascade lags a dragged object by at most ~130 ms at 60 fps")               \
+      "frames", "derived: a content change too large for a partial update recomposes the whole"    \
+      " level, a full non-toroidal distance volume, so a continuous stream of them (an editor"     \
+      " drag of many instances) coalesces to one per this many frames per level (the pending"     \
+      " fingerprint diff persists, so the final state lands within one window of release; origin" \
+      " re-snaps and partial updates stay immediate)")                                             \
+    X(GI_CLIPMAP_PARTIAL_UPDATES_PER_FRAME, 2,                                                     \
+      "levels", "published: r.AOGlobalDistanceFieldClipmapUpdatesPerFrame (GlobalDistanceField.cpp" \
+      ":130): the first level takes its partial updates every frame, the others staggered so"     \
+      " about this many update per frame (GetUpdateFrequencyForClipmap, :712-747)")               \
+    X(GI_CLIPMAP_MAX_PARTIAL_INSTANCES, 1024,                                                      \
+      "instances", "published: a level whose instance set changed in more places than this"        \
+      " recomposes in full (GlobalDistanceField.cpp:1258, NumCulledPrimitiveModifiedBounds)")      \
+    X(GI_CLIPMAP_MAX_PARTIAL_BOXES, 64,                                                            \
+      "boxes", "derived: a partial update dispatches one compose per box; beyond this many the"    \
+      " boxes merge into their bounds, which costs voxels rather than dispatches")                \
+    X(GI_CLIPMAP_PARTIAL_BOX_ALIGNMENT, 4,                                                         \
+      "voxels", "derived: partial boxes start and end on multiples of the compose group edge, a"   \
+      " multiple of the coverage downsample and of the object grid cell (2 voxels each)")          \
+    X(GI_CLIPMAP_MAX_PARTIAL_FRACTION, 0.25f,                                                      \
+      "share of a level", "derived: partial boxes over this share of a level's voxels cost about"  \
+      " a full recompose, which then takes the per-update level budget instead of bypassing it")   \
     /* --- exposure --- */                                                                         \
     X(GI_CACHED_LIGHTING_PRE_EXPOSURE, 1.0f,                                                       \
       "scale", "derived: the scale the PERSISTENT stores (the surface cache's lighting atlases,"   \

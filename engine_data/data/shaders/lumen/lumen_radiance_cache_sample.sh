@@ -9,8 +9,8 @@
  * (parallax), scaled by T^2 / (R^2 cos) so the blend stays energy-preserving to second order. An
  * unallocated probe contributes black at its weight; there is no visibility test and no renormalisation.
  *
- * The includer declares b_lumen_rc_indirection (uint), s_lumen_rc_final (bordered radiance atlas, bilinear)
- * and s_lumen_rc_depth (hit distances) and includes lumen_common.sh and lumen_radiance_cache_common.sh.
+ * The includer declares b_lumen_rc_indirection (uint) and s_lumen_rc_final (bordered radiance atlas, bilinear; alpha =
+ * the source texel's hit distance) and includes lumen_common.sh and lumen_radiance_cache_common.sh.
  */
 
 struct LumenRcSample
@@ -21,11 +21,70 @@ struct LumenRcSample
 	float hit_distance;
 };
 
-/// The screen ray's hand-off distance for a probe in @p clipmap: TMin plus the cell diagonal, so every probe
-/// a lookup interpolates has its unsampled ball inside the part of the ray the screen probe traced itself.
-float LumenRcHandOffDistance(int clipmap)
+/// One of the eight lattice probes a lookup from @p origin interpolates (the half of the lookup that does not depend on
+/// the direction): xyz = origin - the probe's position, w = its trilinear weight (0: skipped - no weight, or no
+/// allocated probe); the second vec4's xy = its bordered tile's first interior texel in s_lumen_rc_final.
+struct LumenRcCorner
 {
-	return LumenRcTMin(clipmap) + 1.7320508 * LumenRcCellSize(clipmap);
+	vec4 offset_weight;
+	vec4 tile;
+};
+
+LumenRcCorner LumenRcInterpolationCorner(vec3 origin, int clipmap, int corner)
+{
+	LumenRcCorner result;
+	result.offset_weight = vec4_splat(0.0);
+	result.tile = vec4_splat(0.0);
+	vec4 clip = u_lumen_rc_clipmaps[clipmap];
+	vec3 lattice = (origin - clip.xyz) / clip.w - 0.5;
+	vec3 base_float = floor(lattice);
+	vec3 fraction = lattice - base_float;
+	ivec3 step_xyz = ivec3(corner & 1, (corner >> 1) & 1, corner >> 2);
+	vec3 axis_weight = mix(vec3_splat(1.0) - fraction, fraction, vec3(step_xyz));
+	float weight = axis_weight.x * axis_weight.y * axis_weight.z;
+	ivec3 cell = ivec3(base_float) + step_xyz;
+	uint probe = b_lumen_rc_indirection[LumenRcIndirectionIndex(cell, clipmap)];
+	if(weight <= 0.0 || probe == LUMEN_RC_INVALID || probe == LUMEN_RC_USED)
+	{
+		return result;
+	}
+	result.offset_weight = vec4(origin - LumenRcProbePosition(cell, clipmap), weight);
+	result.tile = vec4(vec2(LumenRcProbeTileOrigin(probe, LUMEN_RC_FINAL_RES) + ivec2(1, 1)), 0.0, 0.0);
+	return result;
+}
+
+/// One corner's contribution along @p direction: its probe read where the ray leaves the parallax sphere of
+/// @p radius around it, at its weight.
+LumenRcSample LumenRcShadeCorner(LumenRcCorner corner, vec3 direction, float radius, vec2 final_size)
+{
+	LumenRcSample result;
+	result.radiance = vec3_splat(0.0);
+	result.hit_distance = 0.0;
+	float weight = corner.offset_weight.w;
+	if(weight <= 0.0)
+	{
+		return result;
+	}
+	vec3 to_origin = corner.offset_weight.xyz;
+	float b = dot(to_origin, direction);
+	float c = dot(to_origin, to_origin) - radius * radius;
+	float exit_t = -b + sqrt(max(b * b - c, 0.0));
+	vec3 lookup = to_origin + direction * exit_t;
+	float parallax = exit_t * exit_t / (radius * max(dot(lookup, direction), 1e-4));
+	vec2 uv = LumenInverseEquiAreaSphericalMapping(lookup);
+	ivec2 final_origin = ivec2(corner.tile.xy);
+	vec2 final_texel = vec2(final_origin) + uv * float(LUMEN_RADIANCE_CACHE_PROBE_RES);
+	result.radiance = weight * parallax * texture2DLod(s_lumen_rc_final, final_texel / final_size, 0.0).xyz;
+	ivec2 depth_texel = final_origin + min(ivec2(uv * float(LUMEN_RADIANCE_CACHE_PROBE_RES)),
+	                                       ivec2(LUMEN_RADIANCE_CACHE_PROBE_RES - 1, LUMEN_RADIANCE_CACHE_PROBE_RES - 1));
+	result.hit_distance = weight * texelFetch(s_lumen_rc_final, depth_texel, 0).w;
+	return result;
+}
+
+/// The parallax sphere radius of a lookup in @p clipmap.
+float LumenRcReprojectionRadius(int clipmap)
+{
+	return LUMEN_RADIANCE_CACHE_REPROJECTION_RADIUS * LumenRcTMin(clipmap);
 }
 
 LumenRcSample LumenRcSampleInterpolated(vec3 origin, vec3 direction, int clipmap)
@@ -33,38 +92,14 @@ LumenRcSample LumenRcSampleInterpolated(vec3 origin, vec3 direction, int clipmap
 	LumenRcSample result;
 	result.radiance = vec3_splat(0.0);
 	result.hit_distance = 0.0;
-	vec4 clip = u_lumen_rc_clipmaps[clipmap];
-	vec3 lattice = (origin - clip.xyz) / clip.w - 0.5;
-	vec3 base_float = floor(lattice);
-	ivec3 base = ivec3(base_float);
-	vec3 fraction = lattice - base_float;
-	float radius = LUMEN_RADIANCE_CACHE_REPROJECTION_RADIUS * LumenRcTMin(clipmap);
+	float radius = LumenRcReprojectionRadius(clipmap);
 	vec2 final_size = vec2(textureSize(s_lumen_rc_final, 0));
 	for(int corner = 0; corner < 8; ++corner)
 	{
-		ivec3 step_xyz = ivec3(corner & 1, (corner >> 1) & 1, corner >> 2);
-		vec3 axis_weight = mix(vec3_splat(1.0) - fraction, fraction, vec3(step_xyz));
-		float weight = axis_weight.x * axis_weight.y * axis_weight.z;
-		ivec3 cell = base + step_xyz;
-		uint probe = b_lumen_rc_indirection[LumenRcIndirectionIndex(cell, clipmap)];
-		if(probe == LUMEN_RC_INVALID || probe == LUMEN_RC_USED)
-		{
-			continue;
-		}
-		vec3 to_origin = origin - LumenRcProbePosition(cell, clipmap);
-		float b = dot(to_origin, direction);
-		float c = dot(to_origin, to_origin) - radius * radius;
-		float exit_t = -b + sqrt(max(b * b - c, 0.0));
-		vec3 lookup = to_origin + direction * exit_t;
-		float parallax = exit_t * exit_t / (radius * max(dot(lookup, direction), 1e-4));
-		vec2 uv = LumenInverseEquiAreaSphericalMapping(lookup);
-		vec2 final_texel = vec2(LumenRcProbeTileOrigin(probe, LUMEN_RC_FINAL_RES)) + 1.0 +
-		                   uv * float(LUMEN_RADIANCE_CACHE_PROBE_RES);
-		result.radiance += weight * parallax * texture2DLod(s_lumen_rc_final, final_texel / final_size, 0.0).xyz;
-		ivec2 depth_texel = LumenRcProbeTileOrigin(probe, LUMEN_RADIANCE_CACHE_PROBE_RES) +
-		                    min(ivec2(uv * float(LUMEN_RADIANCE_CACHE_PROBE_RES)),
-		                        ivec2(LUMEN_RADIANCE_CACHE_PROBE_RES - 1, LUMEN_RADIANCE_CACHE_PROBE_RES - 1));
-		result.hit_distance += weight * texelFetch(s_lumen_rc_depth, depth_texel, 0).x;
+		LumenRcSample shaded =
+		    LumenRcShadeCorner(LumenRcInterpolationCorner(origin, clipmap, corner), direction, radius, final_size);
+		result.radiance += shaded.radiance;
+		result.hit_distance += shaded.hit_distance;
 	}
 	return result;
 }

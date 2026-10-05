@@ -193,14 +193,25 @@ public:
      *        alternated inside ONE editor launch for A/B comparisons - the variance between launches
      *        hides small effects. Zero in production; set by the editor MCP tool gi_set_experiment_flags.
      */
-    void set_experiment_flags(uint32_t flags)
+    void set_experiment_flags(uint64_t flags)
     {
         experiment_flags_ = flags;
     }
 
-    auto get_experiment_flags() const -> uint32_t
+    auto get_experiment_flags() const -> uint64_t
     {
         return experiment_flags_;
+    }
+
+    /**
+     * @brief This frame's lighting changed globally (UE UpdateGlobalLightingState, LumenSceneRendering.cpp:2471-2540):
+     *        the first directional light's or the sky's brightest channel moved more than
+     *        global_lighting_change_ratio either way since the last world update. Lumen then rebuilds its radiance
+     *        cache and starts its gather history over instead of converging at the budgeted rates.
+     */
+    auto has_global_lighting_change() const -> bool
+    {
+        return has_global_lighting_change_;
     }
 
     auto get_instances() const -> const std::vector<instance>&
@@ -502,7 +513,17 @@ private:
     /// The offsets and instance indices concatenated for the one-buffer upload.
     std::vector<uint32_t> grid_upload_;
     std::array<float, 4u * gi::GI_SDF_GRID_PARAMS_VEC4> grid_params_{};
-    uint32_t experiment_flags_ = 0;
+    uint64_t experiment_flags_ = 0;
+
+    /// UE's threshold: a change of the sun or sky by more than this factor either way is global.
+    static constexpr float global_lighting_change_ratio = 4.0f;
+    /// The floor of the ratio's terms, so a light switching on or off counts as a change.
+    static constexpr float global_lighting_epsilon = 1e-5f;
+    /// See has_global_lighting_change.
+    void update_global_lighting_state(scene& scn);
+    float global_sun_ = 0.0f;
+    float global_sky_ = 0.0f;
+    bool has_global_lighting_change_ = false;
     /// Backend capability, decided once at init: without compute shaders nothing here can run.
     bool supported_ = false;
     /// Frame the world state was last rebuilt in, so several cameras in one frame share one

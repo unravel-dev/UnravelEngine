@@ -14,9 +14,10 @@
 
 #include "lumen/lumen_common.sh"
 
-/// x = Hi-Z mip count, y = flags (1: the screen traces run, 2: the traces paint their type instead of radiance),
-/// z = the roughness the traced reflections end at (UE LumenMaxRoughnessToTraceReflections, the gi_component's
-/// Max Roughness To Trace), w > 0 when the denoiser histories hold last frame.
+/// x = Hi-Z mip count, y = flags (1: the screen traces run, 2: the traces paint their type instead of radiance, 4: the
+/// screen pass marks every tile as tracing), z = the roughness the traced reflections end at (UE
+/// LumenMaxRoughnessToTraceReflections, the gi_component's Max Roughness To Trace), w > 0 when the denoiser histories
+/// hold last frame.
 uniform vec4 u_lumen_reflection;
 
 #define u_lumen_reflection_hiz_mip_count   int(u_lumen_reflection.x)
@@ -24,16 +25,20 @@ uniform vec4 u_lumen_reflection;
 /// UE DEBUG_VISUALIZE_TRACE_TYPES: screen hits red, distance-field hits green (yellow when lit by last frame's
 /// scene colour), misses blue.
 #define u_lumen_reflection_show_trace_types ((int(u_lumen_reflection.y) & 2) != 0)
+#define u_lumen_reflection_all_tiles        ((int(u_lumen_reflection.y) & 4) != 0)
 #define u_lumen_reflection_max_roughness   u_lumen_reflection.z
 #define u_lumen_reflection_has_history     (u_lumen_reflection.w > 0.0)
 
 /// The reflection quality's (lumen_pass::get_reflection_downsample_factor, get_reflection_reconstruction_samples):
 /// x = the trace downsample factor (1, or 2: one pixel of each 2 x 2 block traces), y = the neighbouring rays the
-/// resolve reuses per pixel.
+/// resolve reuses per pixel; and the composite's: z = the scale of the gather's rough specular history (the GI
+/// intensity), w > 0 when that history is bound.
 uniform vec4 u_lumen_reflection_quality;
 
 #define u_lumen_reflection_downsample             int(u_lumen_reflection_quality.x)
 #define u_lumen_reflection_reconstruction_samples int(u_lumen_reflection_quality.y)
+#define u_lumen_reflection_rough_specular_scale   u_lumen_reflection_quality.z
+#define u_lumen_reflection_has_rough_specular     (u_lumen_reflection_quality.w > 0.0)
 
 /// The trace buffers' size: the view over the downsample factor, rounded up.
 ivec2 LumenReflectionTraceSize()
@@ -64,6 +69,33 @@ ivec2 LumenReflectionTracePixel(ivec2 trace_coord)
 	ivec2 pixel = trace_coord * u_lumen_reflection_downsample + LumenReflectionTraceJitter(trace_coord);
 	return min(pixel, ivec2(u_lumen_view_size) - ivec2(1, 1));
 }
+
+/*
+ * Reflection tiles (UE ReflectionTileClassificationMarkCS, LumenReflections.usf): one texel per
+ * LUMEN_REFLECTION_TILE_PIXELS x LUMEN_REFLECTION_TILE_PIXELS pixels, 1 where any pixel of the tile traces (the screen
+ * pass writes it; every tile at the 2 x 2 trace downsample, whose trace groups span several tiles). The trace,
+ * resolve and temporal passes skip the other tiles and write nothing there; a reader takes such a tile's texels as
+ * the empty values a traced-nothing pixel writes (no ray, no resolve, no history). An includer defining
+ * LUMEN_REFLECTION_TILES_STAGE gets this frame's tiles there.
+ */
+#define LUMEN_REFLECTION_TILE_PIXELS 8
+
+#ifdef LUMEN_REFLECTION_TILES_STAGE
+SAMPLER2D(s_lumen_reflection_tiles, LUMEN_REFLECTION_TILES_STAGE);
+
+/// Whether the tile of @p pixel traces this frame.
+bool LumenReflectionTileTraces(ivec2 pixel)
+{
+	return texelFetch(s_lumen_reflection_tiles, pixel / LUMEN_REFLECTION_TILE_PIXELS, 0).x > 0.5;
+}
+
+/// The ray of trace texel @p trace_coord (xyz = direction, w = cone angle, 0 = no ray), no ray in a skipped tile.
+vec4 LumenReflectionTraceRay(sampler2D rays, ivec2 trace_coord)
+{
+	return LumenReflectionTileTraces(LumenReflectionTracePixel(trace_coord)) ? texelFetch(rays, trace_coord, 0)
+	                                                                          : vec4_splat(0.0);
+}
+#endif
 
 /// UE Luminance (Common.ush).
 float LumenReflectionLuminance(vec3 color)

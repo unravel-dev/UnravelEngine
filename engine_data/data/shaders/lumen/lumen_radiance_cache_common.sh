@@ -63,6 +63,13 @@ uniform vec4 u_lumen_rc_camera;
 #define u_lumen_rc_persistent  (u_lumen_rc_params.z > 0.0)
 #define u_lumen_rc_mode        int(u_lumen_rc_params.w)
 
+/// Probes one frame may trace: LUMEN_RADIANCE_CACHE_MAX_TRACES while the cache continues; every probe of the pool on a
+/// frame that rebuilds it (UE sizes the trace to the whole atlas on a full update, LumenRadianceCache.cpp:1641-1673).
+#define u_lumen_rc_trace_cap (u_lumen_rc_persistent ? uint(LUMEN_RADIANCE_CACHE_MAX_TRACES) : uint(LUMEN_RADIANCE_CACHE_MAX_PROBES))
+/// Groups per row of the trace dispatch (UE's 128-wide layout, LumenRadianceCache.usf:671-677): a rebuild traces up to
+/// LUMEN_RADIANCE_CACHE_MAX_PROBES x 16 tiles, past one dispatch dimension's limit.
+#define LUMEN_RC_TRACE_DISPATCH_WIDTH 128u
+
 float LumenRcCellSize(int clipmap)
 {
 	return u_lumen_rc_clipmaps[clipmap].w;
@@ -72,6 +79,13 @@ float LumenRcCellSize(int clipmap)
 float LumenRcTMin(int clipmap)
 {
 	return 1.7320508 * LumenRcCellSize(clipmap);
+}
+
+/// The screen ray's hand-off distance for a probe in @p clipmap: TMin plus the cell diagonal, so every probe
+/// a lookup interpolates has its unsampled ball inside the part of the ray the screen probe traced itself.
+float LumenRcHandOffDistance(int clipmap)
+{
+	return LumenRcTMin(clipmap) + 1.7320508 * LumenRcCellSize(clipmap);
 }
 
 vec3 LumenRcProbePosition(ivec3 cell, int clipmap)

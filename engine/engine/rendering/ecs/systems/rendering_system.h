@@ -81,10 +81,11 @@ public:
      * @param scn The scene to render.
      * @param dt The delta time.
      * @param render_screen_space If true, render screen-space UI to output; if false, only world-space UI
+     * @param is_being_edited The user is editing the scene in this view (pipeline::run_params::is_being_edited).
      * @return A shared pointer to the frame buffer containing the rendered scene.
      */
     auto render_scene(entt::handle camera_ent, camera_component& comp, scene& scn, delta_t dt,
-                     bool render_screen_space = true) -> gfx::frame_buffer::ptr;
+                     bool render_screen_space = true, bool is_being_edited = false) -> gfx::frame_buffer::ptr;
 
     /**
      * @brief Renders the scene to the specified output.

@@ -23,13 +23,8 @@ uniform vec4 u_contact_shadow;
 uniform vec4 u_camera_position;
 
 #if DIRECTIONAL_LIGHT
-// Cloud shadow map (atmospherics/fs_cloud_shadow.sc): sun transmittance of the cloud layer,
-// one texel per entry point of the sun ray at the layer base. xy = map origin (world xz),
-// z = 1 / extent, w = opacity.
-uniform vec4 u_cloudShadow;
-// x = enabled, y = layer base world y, z = border fade width (map space), w = unused.
-uniform vec4 u_cloudShadow2;
 SAMPLER2D(s_cloudShadow, 11);
+#include "cloud_shadow.sh"
 #endif
 
 #if PBR_INDIRECT
@@ -64,11 +59,12 @@ uniform vec4 u_screen_ao;
 // pixel the GI resolved nothing for both read (0,0,0,0). y = 1 when that source is SSIL, which
 // traced the screen-space visibility per pixel; 0 for the GI resolve, which resolves it only
 // at its probe lattice. z = cap of the albedo the multi-bounce fit uses (Lumen's short-range AO:
-// UE's MaxMultibounceAlbedo), 0 = uncapped.
+// UE's MaxMultibounceAlbedo), 0 = uncapped. w = the GI resolve's scale (the GI intensity): the
+// resolve is the gather's history, E/pi before the intensity, and serves every geometry pixel.
 uniform vec4 u_indirect_params;
-/// The GI resolve alpha above which a pixel counts as SERVED by the GI (pbr_indirect): served
-/// pixels read 0.996-1.0, unserved ones 0, and the bilateral upsample leaves fractions only
-/// along sky silhouettes - the midpoint splits them by their majority neighbour.
+/// The SSIL alpha above which a pixel counts as SERVED by it (pbr_indirect): served pixels read
+/// 0.996-1.0, unserved ones 0, and the bilateral upsample leaves fractions only along sky
+/// silhouettes - the midpoint splits them by their majority neighbour.
 #define PBR_GI_SERVED_ALPHA 0.5
 uniform vec4 u_params0;
 uniform vec4 u_params1;
@@ -670,30 +666,6 @@ float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_
     return 1.0 - occlusion;
 }
 
-#if DIRECTIONAL_LIGHT
-/// Sun transmittance through the cloud layer above world_position (L points toward the sun):
-/// the surface point is projected up the sun direction to the layer base and the shadow map is
-/// read there. Fades to unshadowed toward the map border.
-float CloudShadow(vec3 world_position, vec3 L)
-{
-    if(u_cloudShadow2.x < 0.5 || L.y < 0.05)
-    {
-        return 1.0;
-    }
-    float t = (u_cloudShadow2.y - world_position.y) / L.y;
-    if(t <= 0.0)
-    {
-        return 1.0;
-    }
-    vec3 entry = world_position + L * t;
-    vec2 map_pos = (entry.xz - u_cloudShadow.xy) * u_cloudShadow.z + 0.5;
-    float transmittance = texture2D(s_cloudShadow, clipToUv(map_pos)).r;
-    vec2 d = abs(map_pos - vec2_splat(0.5));
-    float border = saturate((0.5 - max(d.x, d.y)) / max(u_cloudShadow2.z, 1e-4));
-    return mix(1.0, transmittance, u_cloudShadow.w * border);
-}
-#endif
-
 vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 {
     ivec2 gbuf_texel = GBufferTexelFromFragCoord(fragCoord, s_tex4);
@@ -824,10 +796,13 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     vec3 diffuse_axis = normalize(mix(N, occlusion_axis, u_screen_ao_bent_strength));
     vec3 ambient_sh = eval_irradiance_sh_cone(s_irradiance, diffuse_axis, visibility) * bounce_gain * (RECIP_PI * u_pre_exposure_value);
     vec4 gi_sample = texture2D(s_ssil, texcoord0);
-    float gi_served = saturate(u_indirect_params.x) * step(PBR_GI_SERVED_ALPHA, gi_sample.a);
+    bool gi_is_ssil = u_indirect_params.y > 0.5;
+    float gi_coverage = gi_is_ssil ? step(PBR_GI_SERVED_ALPHA, gi_sample.a) : (data.depth < 1.0 ? 1.0 : 0.0);
+    float gi_served = saturate(u_indirect_params.x) * gi_coverage;
+    vec3 gi_diffuse = gi_is_ssil ? gi_sample.rgb : gi_sample.rgb * u_indirect_params.w;
     vec3 traced_diffuse_occlusion =
-        IndirectDiffuseOcclusion(material_ao, screen_ao, u_screen_ao_multi_bounce, u_indirect_params.y > 0.5, multi_bounce_albedo);
-    vec3 indirect_diffuse = mix(ambient_sh, gi_sample.rgb * traced_diffuse_occlusion, gi_served);
+        IndirectDiffuseOcclusion(material_ao, screen_ao, u_screen_ao_multi_bounce, gi_is_ssil, multi_bounce_albedo);
+    vec3 indirect_diffuse = mix(ambient_sh, gi_diffuse * traced_diffuse_occlusion, gi_served);
 
     // The specular cone always follows the bent normal: the directional part is what separates
     // a reflection into the open side from one into the occluder. Where no probe covers the

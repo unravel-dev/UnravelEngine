@@ -117,6 +117,9 @@ public:
         bool reflection_traces = false;
         ///< r.Lumen.ScreenProbeGather.Debug: the gather's probe counts as text, and the probe placement.
         bool screen_probe_gather_debug = false;
+        ///< r.Lumen.RadianceCache.Stats: the radiance cache's update counters as text (its priority histogram, what it
+        ///< traced, the probe atlas's occupancy).
+        bool radiance_cache_stats = false;
         ///< r.Lumen.ScreenProbeGather.Debug.ProbePlacement (with the gather debug on): 0 off; 1 every screen probe as a
         ///< point, the uniform ones yellow, the adaptive ones magenta; 2 the adaptive probes; 3 every probe as a cross
         ///< with its normal.
@@ -154,7 +157,7 @@ public:
         /// Whether a visualization drawn over the finished image (UE's ShaderPrint ones) is on.
         auto is_any_overlay() const -> bool
         {
-            return screen_probe_traces || reflection_traces || screen_probe_gather_debug;
+            return screen_probe_traces || reflection_traces || screen_probe_gather_debug || radiance_cache_stats;
         }
     };
 
@@ -300,6 +303,15 @@ private:
         std::unique_ptr<gpu_program> program;
     };
 
+    /// cs_lumen_visualize_rc_stats.sc.
+    struct rc_stats_program : uniforms_cache
+    {
+        void cache_uniforms();
+
+        gfx::program::uniform_ptr u_lumen_rc_stats;
+        std::unique_ptr<gpu_program> program;
+    };
+
     struct placement_program : uniforms_cache
     {
         void cache_uniforms();
@@ -326,6 +338,7 @@ private:
         gfx::program::uniform_ptr s_lumen_reflection_ray;
         gfx::program::uniform_ptr s_lumen_reflection_hit;
         gfx::program::uniform_ptr s_lumen_reflection_radiance;
+        gfx::program::uniform_ptr s_lumen_reflection_tiles;
         gfx::program::uniform_ptr s_lumen_depth;
         std::unique_ptr<gpu_program> program;
     };
@@ -404,6 +417,8 @@ private:
     void draw_probe_placement(const overlay_params& params);
     /// UE r.Lumen.ScreenProbeGather.Debug's text (ScreenProbeGatherDebugCS): the probe counts.
     void print_probe_counts(const overlay_params& params);
+    /// UE r.Lumen.RadianceCache.Stats, from text line @p first_line.
+    void print_radiance_cache_stats(const overlay_params& params, uint32_t first_line);
     /// Submits @p vertices with the primitive program: lines (opaque) or triangles (additive, both sides).
     void draw_primitives(const world_params& params,
                          const std::vector<primitive_vertex>& vertices,
@@ -422,6 +437,7 @@ private:
     bool has_card_generation_requests_ = false;
     placement_program placement_program_;
     counts_program counts_program_;
+    rc_stats_program rc_stats_program_;
     reflection_trace_program reflection_trace_program_;
     bgfx::DynamicVertexBufferHandle page_buffer_{bgfx::kInvalidHandle};
     ///< The reflection trace's lines (cs_lumen_visualize_reflection_trace.sc).

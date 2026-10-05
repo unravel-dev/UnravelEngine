@@ -61,6 +61,7 @@ SAMPLER2D(s_lumen_env_sh, 15);
 
 #define LUMEN_SURFACE_CACHE_OBJECT_GRID
 #include "lumen/lumen_surface_cache.sh"
+#include "lumen/lumen_surface_cache_lighting.sh"
 #include "lumen/lumen_constants.sh"
 #include "lumen/lumen_global_sdf.sh"
 #include "lumen/lumen_visualize.sh"
@@ -284,12 +285,20 @@ vec3 LumenCardDebugValue(int mode, int card_index, LumenCardTap tap)
 	}
 	else if(mode == LUMEN_DEBUG_NORMALS)
 	{
-		// The atlas holds world-space octahedral normals, whose encodings do not blend across the octahedron's fold
-		// (UE's card-space ones stay near its centre), so each texel is decoded before the blend.
-		vec3 normal = decodeNormalOctahedron(texelFetch(s_lumen_debug_values, tap.s.texel, 0).xy) * tap.weights.x +
-		              decodeNormalOctahedron(texelFetch(s_lumen_debug_values, tap.s.texel + ivec2(1, 0), 0).xy) * tap.weights.y +
-		              decodeNormalOctahedron(texelFetch(s_lumen_debug_values, tap.s.texel + ivec2(0, 1), 0).xy) * tap.weights.z +
-		              decodeNormalOctahedron(texelFetch(s_lumen_debug_values, tap.s.texel + ivec2(1, 1), 0).xy) * tap.weights.w;
+		// The atlas holds card-space normals; each texel is turned into world space before the blend.
+		LumenCard card = LumenLoadCard(card_index);
+		vec3 normal =
+		    LumenDecodeCardNormal(texelFetch(s_lumen_debug_values, tap.s.texel, 0).xy, card.axis_x, card.axis_y, card.axis_z) *
+		        tap.weights.x +
+		    LumenDecodeCardNormal(texelFetch(s_lumen_debug_values, tap.s.texel + ivec2(1, 0), 0).xy, card.axis_x, card.axis_y,
+		                          card.axis_z) *
+		        tap.weights.y +
+		    LumenDecodeCardNormal(texelFetch(s_lumen_debug_values, tap.s.texel + ivec2(0, 1), 0).xy, card.axis_x, card.axis_y,
+		                          card.axis_z) *
+		        tap.weights.z +
+		    LumenDecodeCardNormal(texelFetch(s_lumen_debug_values, tap.s.texel + ivec2(1, 1), 0).xy, card.axis_x, card.axis_y,
+		                          card.axis_z) *
+		        tap.weights.w;
 		return normal / max(length(normal), 1e-6) * 0.5 + 0.5;
 	}
 	else if(mode == LUMEN_DEBUG_EMISSIVE)

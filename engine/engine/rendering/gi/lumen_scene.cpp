@@ -6,6 +6,7 @@
 #include <concurrency/parallel.h>
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -26,6 +27,9 @@ constexpr float k_emissive_min_card_area_scale = 0.2f;
 constexpr uint32_t k_distance_bins = 16;
 /// The viewer distance floor of the resolution rule (100 cm).
 constexpr float k_min_viewer_distance = 1.0f;
+/// UE's floor of a primitive group's distance in the residency gate (1 cm) and the texels added to its projection.
+constexpr float k_min_group_distance = 0.01f;
+constexpr float k_group_resolution_bias = 0.01f;
 /// GetMeshCardDistanceBin: bins start 10 m out, log2 of centimetres.
 constexpr float k_distance_bin_offset = 10.0f;
 /// A reallocation ranks as if this much farther away than a new card when its level moves by one.
@@ -37,6 +41,8 @@ constexpr uint32_t k_slot_word_bits = 64;
 constexpr uint32_t k_lighting_tile_size = 8;
 /// Priority buckets of the lighting scheduler.
 constexpr uint32_t k_lighting_buckets = 16;
+/// The bucket of a page the direct lighting skips (lit, not dirty): past every real bucket, never admitted.
+constexpr uint32_t k_skip_bucket = k_lighting_buckets;
 /// The frustum planes the lighting priority tests: left, right, top, bottom and near (not far).
 constexpr uint32_t k_priority_frustum_planes = 5;
 /// The lighting update speed's range (R/LumenSceneLighting.cpp:565).
@@ -54,6 +60,50 @@ constexpr uint32_t k_max_card_min_resolution = 1024;
 constexpr uint32_t k_placements_per_task = 128;
 /// Resident pages below which the lighting schedule's per-page pass stays on the calling thread.
 constexpr uint32_t k_parallel_schedule_pages = 1024;
+
+/// The range of box (@p center, @p half) along @p axis: x = min, y = max.
+auto project_box(const math::vec3& center, const math::vec3& half, const math::vec3& axis) -> math::vec2
+{
+    const float middle = math::dot(center, axis);
+    const float reach = math::dot(half, math::abs(axis));
+    return {middle - reach, middle + reach};
+}
+
+/// Whether @p occluder can lie between a point of @p page and @p light. A directional light: their ranges across the
+/// light's direction overlap on both axes and the occluder reaches toward the light past the page's lowest point. A
+/// local light: the page is in range and the occluder meets the box around the page and the light's position.
+auto is_between(const math::bbox& occluder, const math::bbox& page, const lumen_scene::light_reach& light) -> bool
+{
+    if(light.is_directional)
+    {
+        const math::vec3 toward = math::normalize(light.direction);
+        const math::vec3 helper = std::abs(toward.y) < 0.9f ? math::vec3(0.0f, 1.0f, 0.0f) : math::vec3(1.0f, 0.0f, 0.0f);
+        const math::vec3 across_u = math::normalize(math::cross(toward, helper));
+        const math::vec3 across_v = math::cross(toward, across_u);
+        const math::vec3 occluder_center = occluder.get_center();
+        const math::vec3 occluder_half = occluder.get_extents();
+        const math::vec3 page_center = page.get_center();
+        const math::vec3 page_half = page.get_extents();
+        const auto overlaps = [&](const math::vec3& axis)
+        {
+            const math::vec2 a = project_box(occluder_center, occluder_half, axis);
+            const math::vec2 b = project_box(page_center, page_half, axis);
+            return a.y >= b.x && a.x <= b.y;
+        };
+        const math::vec2 occluder_height = project_box(occluder_center, occluder_half, toward);
+        const math::vec2 page_height = project_box(page_center, page_half, toward);
+        return overlaps(across_u) && overlaps(across_v) && occluder_height.y >= page_height.x;
+    }
+    const math::vec3 range(light.range);
+    const math::bbox reach(light.position - range, light.position + range);
+    if(!reach.intersect(page))
+    {
+        return false;
+    }
+    math::bbox hull = page;
+    hull.add_point(light.position);
+    return hull.intersect(occluder);
+}
 
 auto floor_log2(uint32_t value) -> uint32_t
 {
@@ -103,6 +153,12 @@ auto distance_to_card(const lumen_scene::placed_card& card, const math::vec3& po
     const math::vec3 d = point - card.origin;
     const math::vec3 local(math::dot(d, card.axis_x), math::dot(d, card.axis_y), math::dot(d, card.axis_z));
     return math::length(math::max(math::abs(local) - card.extent, math::vec3(0.0f)));
+}
+
+/// Distance from @p point to the axis-aligned box (@p center, @p extent).
+auto distance_to_box(const math::vec3& center, const math::vec3& extent, const math::vec3& point) -> float
+{
+    return math::length(math::max(math::abs(point - center) - extent, math::vec3(0.0f)));
 }
 
 auto is_same_transform(const math::mat4& a, const math::mat4& b) -> bool
@@ -541,6 +597,18 @@ auto lumen_scene::refresh_placements(const std::vector<source>& sources) -> bool
             entry.card_states.assign(src.cards ? src.cards->cards.size() : 0u, card_state{});
             entry.has_placed = false;
         }
+        if(entry.material_key != src.material_key)
+        {
+            // The material changed: its resident pages read as never captured, so the refresh takes them first.
+            entry.material_key = src.material_key;
+            for(auto& card : entry.card_states)
+            {
+                for(auto& slot : card.slots)
+                {
+                    slot.captured_frame = 0;
+                }
+            }
+        }
         is_unique = is_unique && entry.last_seen != frame_;
         entry.last_seen = frame_;
         source_placements_[s] = &entry;
@@ -649,14 +717,41 @@ void lumen_scene::choose_chunk_resolutions(const std::vector<source>& sources,
         if(!entry.has_placed || !is_same_transform(entry.placed_transform, src.local_to_world))
         {
             entry.placed.resize(entry.card_states.size());
+            math::vec3 bounds_min(std::numeric_limits<float>::max());
+            math::vec3 bounds_max(-std::numeric_limits<float>::max());
             for(size_t c = 0; c < entry.placed.size(); ++c)
             {
-                entry.placed[c] = place_card(entry.cards->cards[c], src.local_to_world);
+                const placed_card placed = place_card(entry.cards->cards[c], src.local_to_world);
+                entry.placed[c] = placed;
+                const math::vec3 half = math::abs(placed.axis_x) * placed.extent.x + math::abs(placed.axis_y) * placed.extent.y +
+                                        math::abs(placed.axis_z) * placed.extent.z;
+                bounds_min = math::min(bounds_min, placed.origin - half);
+                bounds_max = math::max(bounds_max, placed.origin + half);
             }
+            const bool has_cards = !entry.placed.empty();
+            entry.bounds_center = has_cards ? 0.5f * (bounds_min + bounds_max) : math::vec3(0.0f);
+            entry.bounds_extent = has_cards ? 0.5f * (bounds_max - bounds_min) : math::vec3(0.0f);
             entry.placed_transform = src.local_to_world;
             entry.has_placed = true;
             chunk.has_moved = true;
+            // The cards moved with the placement: their pages' direct lighting is due.
+            for(auto& state : entry.card_states)
+            {
+                for(auto& slot : state.slots)
+                {
+                    slot.is_direct_dirty = true;
+                }
+            }
         }
+        // The placement's own gate (UE's primitive-group residency, LumenSceneRendering.cpp:501-514): its largest
+        // extent must project to the minimum card resolution (one texel for an emissive light source) at its distance.
+        const float group_distance = std::max(distance_to_box(entry.bounds_center, entry.bounds_extent, view_origin),
+                                              k_min_group_distance);
+        const float group_extent = std::max(entry.bounds_extent.x, std::max(entry.bounds_extent.y, entry.bounds_extent.z));
+        const float group_resolution = rule.texel_density_scale * group_extent / group_distance + k_group_resolution_bias;
+        const bool is_group_resident =
+            card_residency_without_group_gate_ ||
+            group_resolution >= float(src.is_emissive_light_source ? k_emissive_min_card_resolution : rule.min_resolution);
         for(uint32_t c = 0; c < uint32_t(entry.card_states.size()); ++c)
         {
             card_state& state = entry.card_states[c];
@@ -666,13 +761,17 @@ void lumen_scene::choose_chunk_resolutions(const std::vector<source>& sources,
             const float projected = std::min(rule.texel_density_scale * max_extent / distance,
                                              settings_.max_texel_density * max_extent);
             const uint32_t truncated = std::min(uint32_t(std::max(projected, 0.0f)), rule.max_resolution);
-            const uint32_t snapped = truncated == 0 ? 0u : round_up_power_of_two(truncated);
+            // UE RoundUpToPowerOfTwo: 0 rounds up to 1, so a card below one texel stays at the minimum resolution
+            // wherever its minimum is 1 (an emissive light source, while its placement is in range).
+            const uint32_t snapped =
+                truncated == 0 ? (card_residency_without_group_gate_ ? 0u : 1u) : round_up_power_of_two(truncated);
             const uint32_t min_resolution =
                 src.is_emissive_light_source ? k_emissive_min_card_resolution : rule.min_resolution;
             const float min_area = settings_.mesh_cards_min_size * settings_.mesh_cards_min_size *
                                    (src.is_emissive_light_source ? k_emissive_min_card_area_scale : 1.0f);
             const bool is_large_enough = 4.0f * placed.extent.x * placed.extent.y > min_area;
-            const bool visible = is_large_enough && distance < max_card_distance && snapped >= min_resolution;
+            const bool visible =
+                is_group_resident && is_large_enough && distance < max_card_distance && snapped >= min_resolution;
             const uint32_t res_level = floor_log2(std::max(snapped, k_min_card_resolution));
             // Texels stay roughly square: the shorter axis drops a level per doubling of the aspect.
             const float aspect = placed.extent.x / std::max(placed.extent.y, 1e-6f);
@@ -774,6 +873,7 @@ void lumen_scene::allocate_requests(const std::vector<source>& sources, capture_
         for(auto& slot : state.slots)
         {
             slot.captured_frame = frame_;
+            slot.is_direct_dirty = true;
         }
         // Recorded even when downgraded, so a card that only fits lower is not re-requested.
         state.res_level_on_last_alloc = state.desired_res_level;
@@ -1033,7 +1133,11 @@ void lumen_scene::refresh_captures(const std::vector<source>& sources, capture_p
         cap.atlas_offset = page.atlas_offset;
         cap.size = page.size;
         cap.resample_card = resample->second;
+        cap.keeps_lighting = true;
         captures_.push_back(cap);
+        // A periodic refresh captures the same geometry (its lighting is resampled in place) and the direct lighting
+        // reads only the capture's normal and depth; a forced one (a material change, captured_frame 0) may change them.
+        resident_slots_[i]->is_direct_dirty = resident_slots_[i]->is_direct_dirty || resident_slots_[i]->captured_frame == 0;
         resident_slots_[i]->captured_frame = frame_;
         ++stats_.refreshed;
     }
@@ -1053,6 +1157,64 @@ auto lumen_scene::compute_lighting_bucket(uint32_t frames_since_update, float sp
 {
     const float urgency = std::max(4.0f * float(frames_since_update) * speed, 1.0f);
     return uint32_t(float(k_lighting_buckets - 1u) - std::clamp(std::log2(urgency), 0.0f, float(k_lighting_buckets - 1u)));
+}
+
+auto lumen_scene::compute_page_bounds(uint32_t page_index) const -> math::bbox
+{
+    const resident_page& page = resident_pages_[page_index];
+    const size_t base = size_t(page.card_index) * card_stride;
+    const math::vec3 origin(card_table_[base + 0]);
+    const math::vec3 axis_x(card_table_[base + 1]);
+    const math::vec3 axis_y(card_table_[base + 2]);
+    const math::vec3 axis_z(card_table_[base + 3]);
+    const math::vec3 extent(card_table_[base + 1].w, card_table_[base + 2].w, card_table_[base + 3].w);
+    // The page's box in card space: its UV rectangle across the card's face (v runs down -axis_y), full depth.
+    const math::vec2 corner_min((2.0f * page.card_uv_rect.x - 1.0f) * extent.x,
+                                (1.0f - 2.0f * page.card_uv_rect.w) * extent.y);
+    const math::vec2 corner_max((2.0f * page.card_uv_rect.z - 1.0f) * extent.x,
+                                (1.0f - 2.0f * page.card_uv_rect.y) * extent.y);
+    const math::vec2 center = 0.5f * (corner_min + corner_max);
+    const math::vec3 half(0.5f * (corner_max - corner_min), extent.z);
+    const math::vec3 world_center = origin + axis_x * center.x + axis_y * center.y;
+    const math::vec3 world_half =
+        math::abs(axis_x) * half.x + math::abs(axis_y) * half.y + math::abs(axis_z) * half.z;
+    return math::bbox(world_center - world_half, world_center + world_half);
+}
+
+void lumen_scene::invalidate_direct_lighting(const direct_lighting_changes& changes)
+{
+    APP_SCOPE_PERF("GI/Lighting Invalidate");
+    const uint32_t page_count = uint32_t(resident_pages_.size());
+    const bool has_changes = changes.all || !changes.regions.empty() || !changes.occluders.empty();
+    if(!has_changes)
+    {
+        return;
+    }
+    poolstl::for_each_par_if(
+        page_count >= k_parallel_schedule_pages,
+        poolstl::iota_iter<uint32_t>(0),
+        poolstl::iota_iter<uint32_t>(page_count),
+        [&](uint32_t i)
+        {
+            physical_slot& slot = *resident_slots_[i];
+            if(!slot.is_direct_dirty)
+            {
+                const math::bbox bounds = compute_page_bounds(i);
+                bool is_changed = changes.all;
+                for(size_t r = 0; r < changes.regions.size() && !is_changed; ++r)
+                {
+                    is_changed = changes.regions[r].intersect(bounds);
+                }
+                for(size_t o = 0; o < changes.occluders.size() && !is_changed; ++o)
+                {
+                    for(size_t l = 0; l < changes.lights.size() && !is_changed; ++l)
+                    {
+                        is_changed = is_between(changes.occluders[o], bounds, changes.lights[l]);
+                    }
+                }
+                slot.is_direct_dirty = is_changed;
+            }
+        });
 }
 
 void lumen_scene::compute_page_priorities(const math::vec3& view_origin, const math::frustum& view_frustum)
@@ -1105,10 +1267,12 @@ void lumen_scene::compute_page_priorities(const math::vec3& view_origin, const m
             page_tiles_[i] = (page.size.x / k_lighting_tile_size) * (page.size.y / k_lighting_tile_size);
             for(uint32_t context = 0; context < lighting_context_count; ++context)
             {
-                const uint64_t lit_frame = resident_slots_[i]->lit_frame[context];
+                const physical_slot& slot = *resident_slots_[i];
+                const uint64_t lit_frame = slot.lit_frame[context];
                 const uint32_t age = lit_frame == 0 ? uint32_t(gi::lumen::LUMEN_SCENE_LIGHTING_NEVER_LIT_FRAMES)
                                                     : uint32_t(std::min<uint64_t>(frame_ - lit_frame, UINT32_MAX));
-                page_buckets_[context][i] = compute_lighting_bucket(age, page_speed);
+                const bool is_skipped = context == lighting_direct && lit_frame != 0 && !slot.is_direct_dirty;
+                page_buckets_[context][i] = is_skipped ? k_skip_bucket : compute_lighting_bucket(age, page_speed);
             }
         });
 }
@@ -1126,9 +1290,18 @@ void lumen_scene::schedule_lighting(const math::vec3& view_origin, const math::f
     {
         const auto& buckets = page_buckets_[context];
         std::array<uint32_t, k_lighting_buckets> histogram{};
+        uint32_t due_pages = 0;
         for(uint32_t i = 0; i < page_count; ++i)
         {
-            histogram[buckets[i]] += page_tiles_[i];
+            if(buckets[i] != k_skip_bucket)
+            {
+                histogram[buckets[i]] += page_tiles_[i];
+                ++due_pages;
+            }
+        }
+        if(context == lighting_direct)
+        {
+            stats_.direct_dirty_pages = due_pages;
         }
         // The bucket the budget runs out in: every page in a more urgent one fits, this one only partly.
         const uint32_t budget = budgets[context];
@@ -1151,7 +1324,7 @@ void lumen_scene::schedule_lighting(const math::vec3& view_origin, const math::f
         uint32_t allocated = 0;
         for(uint32_t i = 0; i < page_count; ++i)
         {
-            bool admit = buckets[i] <= cut_bucket;
+            bool admit = buckets[i] != k_skip_bucket && buckets[i] <= cut_bucket;
             if(admit && buckets[i] == cut_bucket)
             {
                 admit = cut_allocated + page_tiles_[i] <= cut_tiles;
@@ -1169,6 +1342,7 @@ void lumen_scene::schedule_lighting(const math::vec3& view_origin, const math::f
             physical_slot& slot = *resident_slots_[i];
             lit.push_back({i, slot.update_count[context]});
             slot.lit_frame[context] = frame_;
+            slot.is_direct_dirty = slot.is_direct_dirty && context != lighting_direct;
             ++slot.update_count[context];
             stats_.lit_tiles[context] += page_tiles_[i];
         }

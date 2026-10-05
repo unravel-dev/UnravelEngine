@@ -13,11 +13,12 @@
  * Composite: the reflection buffers the indirect pass reads (ComposeIndirectSpecular) take Lumen's one specular
  * signal - the traced layer (RBUFFER) holds the reflections x F, F = the traced weight of the pixel's roughness,
  * with 1 - F left to the untraced layer, and the untraced layer (PBUFFER) holds the screen probe gather's rough
- * specular with full coverage. Lumen does not composite reflection captures or sky specular under its own.
+ * specular (its history times the GI intensity) with full coverage. Lumen does not composite reflection captures or sky specular under its own.
  */
 
 #include "bgfx_compute.sh"
 #include "../common.sh"
+#define LUMEN_REFLECTION_TILES_STAGE 13
 #include "lumen/lumen_reflection_common.sh"
 
 IMAGE2D_WO(s_lumen_reflection_traced_out, rgba16f, 0);
@@ -29,7 +30,7 @@ SAMPLER2D(s_lumen_reflection_frames, 9);
 SAMPLER2D(s_lumen_depth, 10);
 /// G-buffer target 1: octahedral normal, metalness, roughness.
 SAMPLER2D(s_lumen_normal, 11);
-/// The screen probe gather's rough specular: rgb pre-exposed, a = 0 where it holds no estimate.
+/// The screen probe gather's rough specular history: rgb pre-exposed, before the GI intensity.
 SAMPLER2D(s_lumen_rough_specular, 12);
 
 /// UE TonemapLighting: heavier with @p disocclusion against fireflies in revealed areas.
@@ -79,7 +80,7 @@ vec3 LumenFilterReflection(ivec2 pixel, vec4 accumulated, float frames)
 			{
 				continue;
 			}
-			if(texelFetch(s_lumen_reflection_frames, q, 0).x < 0.0)
+			if(!LumenReflectionTileTraces(q) || texelFetch(s_lumen_reflection_frames, q, 0).x < 0.0)
 			{
 				continue;
 			}
@@ -118,7 +119,7 @@ void main()
 	}
 	float roughness = texelFetch(s_lumen_normal, pixel, 0).w;
 	float traced_weight = LumenReflectionFadeAlpha(roughness);
-	float frames = texelFetch(s_lumen_reflection_frames, pixel, 0).x;
+	float frames = LumenReflectionTileTraces(pixel) ? texelFetch(s_lumen_reflection_frames, pixel, 0).x : -1.0;
 	vec4 traced = vec4(0.0, 0.0, 0.0, 1.0);
 	BRANCH
 	if(traced_weight > 0.0 && frames >= 0.0)
@@ -126,7 +127,9 @@ void main()
 		vec4 accumulated = texelFetch(s_lumen_reflection_specular, pixel, 0);
 		traced = vec4(LumenFilterReflection(pixel, accumulated, frames) * traced_weight, 1.0 - traced_weight);
 	}
-	vec4 rough = texelFetch(s_lumen_rough_specular, pixel, 0);
+	vec3 rough = texelFetch(s_lumen_rough_specular, pixel, 0).xyz * u_lumen_reflection_rough_specular_scale;
 	imageStore(s_lumen_reflection_traced_out, pixel, traced);
-	imageStore(s_lumen_reflection_probe_out, pixel, rough.w > 0.0 ? vec4(rough.xyz, 1.0) : vec4_splat(0.0));
+	imageStore(s_lumen_reflection_probe_out,
+	           pixel,
+	           u_lumen_reflection_has_rough_specular ? vec4(rough, 1.0) : vec4_splat(0.0));
 }

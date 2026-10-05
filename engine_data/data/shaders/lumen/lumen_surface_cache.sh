@@ -19,6 +19,8 @@
  * defined it gets the card tables and the atlas footprints alone and needs no sampler.
  */
 
+#include "lumen/lumen_constants.sh"
+
 /// x = physical atlas size in texels, y = page table base, z = instance table base, w = instance count.
 uniform vec4 u_lumen_surface_cache;
 
@@ -162,17 +164,16 @@ float LumenCardTexelVisibility(float texel_depth, float hit_depth, float thresho
 /// One card's contribution to a hit: rgb = weighted value sum, a = weight sum.
 vec4 LumenSampleCard(int card_index, vec3 position, vec3 normal, float bias, sampler2D values)
 {
+	// The card's projection angle first: only cards facing the normal's side, by its squared cosine. Its axis z and
+	// residency rows decide that, so a card facing away or not resident costs two loads, not the whole record.
+	int base = card_index * LUMEN_CARD_STRIDE;
+	float facing = dot(normal, b_lumen_scene[base + 3].xyz);
+	BRANCH
+	if(facing <= 0.0 || b_lumen_scene[base + 4].z <= 0.0)
+	{
+		return vec4_splat(0.0);
+	}
 	LumenCard card = LumenLoadCard(card_index);
-	if(card.res_level.x <= 0.0)
-	{
-		return vec4_splat(0.0);
-	}
-	// The card's projection angle: only cards facing the normal's side, by its squared cosine.
-	float facing = dot(normal, card.axis_z);
-	if(facing <= 0.0)
-	{
-		return vec4_splat(0.0);
-	}
 	vec3 d = position - card.origin;
 	vec3 local = vec3(dot(d, card.axis_x), dot(d, card.axis_y), dot(d, card.axis_z));
 	if(any(greaterThan(abs(local), card.extent + vec3_splat(0.5 * bias))))
@@ -227,7 +228,8 @@ vec4 LumenSampleInstanceCards(int instance, vec3 position, vec3 normal, float bi
  * Global-SDF hits through the object grid (UE 5.8 EvaluateGlobalDistanceFieldHit, LumenSoftwareRayTracing.ush:
  * 637-763): the grid cell one voxel extent off the surface lists up to four nearby instances, nearest first;
  * their cards are sampled with a 3 voxel extent depth tolerance until the accumulated weight reaches 0.9. The
- * includer declares s_lumen_object_grid (SAMPLER3D, rgba32f ids + 1) and binds the two uniforms below.
+ * includer declares s_lumen_object_grid (SAMPLER3D, rgba16 unorm ids + 1 over LUMEN_OBJECT_GRID_MAX_ID) and binds the
+ * two uniforms below.
  */
 
 /// Per clipmap level: xyz = the grid's origin, w = its cell size (0 = no grid for the level).
@@ -255,7 +257,9 @@ vec4 LumenObjectGridInstances(vec3 p)
 		if(!found && info.w > 0.0 && all(greaterThanEqual(cell, vec3_splat(0.0))) &&
 		   all(lessThan(cell, vec3_splat(resolution))))
 		{
-			ids = texelFetch(s_lumen_object_grid, ivec3(cell.x, cell.y, cell.z + float(level) * resolution), 0);
+			ids = floor(texelFetch(s_lumen_object_grid, ivec3(cell.x, cell.y, cell.z + float(level) * resolution), 0) *
+			            float(LUMEN_OBJECT_GRID_MAX_ID) +
+			            0.5);
 			found = true;
 		}
 	}

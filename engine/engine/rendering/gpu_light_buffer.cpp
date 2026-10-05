@@ -96,6 +96,11 @@ void gpu_light_buffer::update(scene& scn)
         [&](auto /*entity*/, auto&& transform_comp, auto&& light_comp, auto&& /*active*/)
         {
             const auto& light = light_comp.get_light();
+            // A light the GI leaves out takes no record (UE skips lights whose indirect intensity is 0).
+            if(light.indirect_intensity <= 0.0f)
+            {
+                return;
+            }
             // Scale must not leak into a light's transform: only its position and orientation
             // are meaningful, and a scaled parent would otherwise skew the direction axis.
             auto world_transform = transform_comp.get_transform_global();
@@ -136,13 +141,12 @@ void gpu_light_buffer::update(scene& scn)
             dst[8] = light_color_linear.value.r;
             dst[9] = light_color_linear.value.g;
             dst[10] = light_color_linear.value.b;
-            dst[11] = light.intensity;
+            dst[11] = light.intensity * light.indirect_intensity;
             dst[12] = cos_inner;
             dst[13] = cos_outer;
             dst[14] = falloff_exponent;
-            // Reserved for the shadow atlas slot, once shadows are resident. -1 means the
-            // light casts no resident shadow and must be treated as unshadowed.
-            dst[15] = -1.0f;
+            // 1 when the light casts shadows: GI traces their visibility, as the direct lighting pass shadows them.
+            dst[15] = light.casts_shadows ? 1.0f : 0.0f;
             ++light_count_;
         });
     if(data_.empty())
