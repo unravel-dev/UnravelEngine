@@ -298,25 +298,18 @@ void content_item_section::add(std::string label, std::string value)
     details.push_back({std::move(label), std::move(value)});
 }
 
-void collect_file_details(const fs::directory_cache::cache_entry& entry,
-                          const hpp::uuid& uid,
-                          content_item_sections& sections)
+void collect_file_details(const fs::directory_cache::cache_entry& entry, content_item_sections& sections)
 {
-    content_item_section section;
-    section.add("Name", entry.filename);
-    section.add("Path", entry.protocol_path);
-    if(!entry.entry.is_directory())
+    if(entry.entry.is_directory())
     {
-        section.add("Disk Size", item_details::get_file_size_text(entry.entry.path()));
-        const auto compiled_path = asset_reader::resolve_compiled_asset_path(entry.protocol_path, entry.extension);
-        if(!compiled_path.empty())
-        {
-            section.add("Compiled Size", item_details::get_file_size_text(compiled_path));
-        }
-        if(!uid.is_nil())
-        {
-            section.add("UID", uid.to_string());
-        }
+        return;
+    }
+    content_item_section section{"File"};
+    section.add("Disk Size", item_details::get_file_size_text(entry.entry.path()));
+    const auto compiled_path = asset_reader::resolve_compiled_asset_path(entry.protocol_path, entry.extension);
+    if(!compiled_path.empty())
+    {
+        section.add("Compiled Size", item_details::get_file_size_text(compiled_path));
     }
     sections.push_back(std::move(section));
 }

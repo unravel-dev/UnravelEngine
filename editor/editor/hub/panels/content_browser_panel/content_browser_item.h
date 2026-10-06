@@ -57,8 +57,8 @@ struct content_browser_item
  * @brief Draws the card of an item as a single ImGui item.
  *
  * The card shows the thumbnail in a well with the summary badged in its corner, a strip in the type's accent color,
- * the name, and the type as a caption. A loading item shows a spinner in place of its thumbnail; selection and focus
- * draw rings around the card.
+ * the name centered on up to two lines, and the type in bold on a centered pill of the accent color. A loading item
+ * shows a spinner in place of its thumbnail; selection and focus draw rings around the card.
  * @param item The item to draw.
  * @return True when the card was pressed.
  */

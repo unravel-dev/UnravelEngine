@@ -26,8 +26,8 @@ struct content_item_detail
     std::string value;
 };
 
-/// A titled group of tooltip details, such as the "Mesh" or "Global Illumination" facts of a mesh. The
-/// file facts every entry has form a section without a title.
+/// A titled group of tooltip details, such as the "Mesh" or "Global Illumination" facts of a mesh, or the "File"
+/// facts every file has.
 struct content_item_section
 {
     std::string title;
@@ -44,14 +44,12 @@ struct content_item_section
 using content_item_sections = std::vector<content_item_section>;
 
 /**
- * @brief Collects the facts every entry has: file name, path, size on disk, compiled size and uid.
+ * @brief Collects the facts every file has: its size on disk and its compiled size. The tooltip shows the name,
+ * path and uid in its header and footer.
  * @param entry The directory cache entry of the item.
- * @param uid The asset's uid; nil for folders and files of no asset type.
- * @param sections Receives one untitled section.
+ * @param sections Receives a "File" section; nothing for a folder.
  */
-void collect_file_details(const fs::directory_cache::cache_entry& entry,
-                          const hpp::uuid& uid,
-                          content_item_sections& sections);
+void collect_file_details(const fs::directory_cache::cache_entry& entry, content_item_sections& sections);
 
 /**
  * @brief A short type-specific fact badged on the card's thumbnail, such as a triangle count.
