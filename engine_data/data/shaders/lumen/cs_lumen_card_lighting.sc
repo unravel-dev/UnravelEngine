@@ -16,6 +16,7 @@
  */
 
 #include "bgfx_compute.sh"
+#include "lumen/lumen_image_formats.sh"
 #include "../common.sh"
 #include "lumen/lumen_constants.sh"
 /// The global SDF's coverage (gi/sdf_clipmap.sh).
@@ -24,13 +25,15 @@
 #include "lumen/lumen_global_sdf.sh"
 #include "gi/gpu_lights.sh"
 
-IMAGE2D_WO(s_lumen_direct_out, rgba16f, 0);
+IMAGE2D_WO(s_lumen_direct_out, rg11b10f, 0);
 IMAGE2D_WO(s_lumen_final_out, rgba16f, 1);
 SAMPLER2D(s_lumen_card_normal, 3);
 SAMPLER2D(s_lumen_card_depth, 7);
 /// Per tile, 3 vec4: (top-left atlas texel xy, card index, the page's update count), the page's card UV rectangle,
 /// (the page's atlas origin xy, the page size in texels xy).
 BUFFER_RO(b_lumen_light_tiles, vec4, 8);
+#define LUMEN_TILE_RECORDS_LIGHT_TILES
+#include "lumen/lumen_tile_records.sh"
 BUFFER_RO(b_lumen_scene, vec4, 9);
 SAMPLER2D(s_lumen_card_albedo, 11);
 SAMPLER2D(s_lumen_card_emissive, 12);
@@ -43,7 +46,7 @@ SAMPLER2D(s_cloudShadow, 2);
 #include "lumen/lumen_surface_cache.sh"
 #include "lumen/lumen_surface_cache_lighting.sh"
 
-/// x = first tile of this dispatch, y = tile count.
+/// x = first tile of this dispatch, y = tile count, z = the float4 the tile words start at, w = the frame index.
 uniform vec4 u_lumen_card_lighting;
 
 /// Lights at or below which a tile skips the culling (its cost is not repaid).
@@ -61,7 +64,6 @@ SHARED uint s_tile_lights[LUMEN_CARD_CULL_WORDS];
 #define LUMEN_GLOBAL_SDF_SHADOW_RAY_BIAS 1.0
 /// The shadow ray length of directional lights (Lumen's MaxTraceDistance, 200 m).
 #define LUMEN_DIRECTIONAL_SHADOW_DISTANCE 200.0
-#define LUMEN_LIGHT_TILE_STRIDE 3
 
 /// GetCardBiasForShadowing, in voxel extents.
 float LumenShadowRayBias(vec3 normal, vec3 to_light)
@@ -134,9 +136,10 @@ void main()
 	{
 		return;
 	}
-	vec4 t0 = b_lumen_light_tiles[tile_index * LUMEN_LIGHT_TILE_STRIDE + 0];
-	vec4 uv_rect = b_lumen_light_tiles[tile_index * LUMEN_LIGHT_TILE_STRIDE + 1];
-	vec4 page = b_lumen_light_tiles[tile_index * LUMEN_LIGHT_TILE_STRIDE + 2];
+	LumenLightTile light_tile = LumenLoadLightTile(tile_index, int(u_lumen_card_lighting.z));
+	vec4 t0 = light_tile.t0;
+	vec4 uv_rect = light_tile.uv_rect;
+	vec4 page = light_tile.page;
 	ivec2 texel = ivec2(t0.xy) + ivec2(gl_LocalInvocationID.xy);
 	float depth = texelFetch(s_lumen_card_depth, texel, 0).x;
 	bool covered = depth < 1.0;
@@ -194,7 +197,7 @@ void main()
 			direct += LumenCardLightIrradiance(GpuLoadLight(i), position, normal);
 		}
 	}
-	imageStore(s_lumen_direct_out, texel, vec4(direct, 0.0));
+	imageStore(s_lumen_direct_out, texel, vec4(LumenQuantizeCardLighting(direct, texel, u_lumen_card_lighting.w), 0.0));
 	vec3 final_lighting = LumenCombineFinalLighting(texelFetch(s_lumen_card_albedo, texel, 0).xyz,
 	                                                texelFetch(s_lumen_card_emissive, texel, 0).xyz,
 	                                                direct,

@@ -16,10 +16,10 @@ namespace unravel
  *        normal and a visibility per pixel.
  *
  * Lumen views composite it in place of the screen-space AO: UE applies no SSAO to Lumen GI while the short-range AO
- * is on (LumenDiffuseIndirect.cpp ShouldRenderAOWithLumenGI). A horizon search at LUMEN_SHORT_RANGE_AO_DOWNSAMPLE_FACTOR
- * (every pixel at Epic) here, then the gather's integrate accumulates it at full resolution over its own reprojection
- * taps and history length (cs_lumen_integrate_ao.sc), as UE's temporal does. The constants and their UE sources are
- * in engine/rendering/gi/lumen_constants.h; the measurements in tasks/lumen_transform.
+ * is on (LumenDiffuseIndirect.cpp ShouldRenderAOWithLumenGI). A horizon search at the tier's downsample factor (every
+ * pixel at Epic, half resolution at High) here, then the gather's integrate accumulates it at full resolution over its
+ * own reprojection taps and history length (cs_lumen_integrate_ao.sc), as UE's temporal does. The constants and their
+ * UE sources are in engine/rendering/gi/lumen_constants.h; the measurements in tasks/lumen_transform.
  */
 class lumen_short_range_ao_pass
 {
@@ -34,6 +34,8 @@ public:
         const float* view{};
         /// The noise follows the R2 sequence over frames (lumen_short_range_ao.sh); false = a per-frame hash.
         bool r2_noise = true;
+        /// The search's resolution and horizon fade (the GI quality tier's).
+        lumen_pass::short_range_ao_layout layout;
     };
 
     /// This frame's search, the AO history ping-pong the integrate accumulates into and the composite's screen AO
@@ -80,8 +82,10 @@ private:
         void cache_uniforms();
     } uniforms_;
 
-    static auto acquire_targets(gfx::render_view& rview, const usize32_t& size) -> frame_targets;
-    /// Sets u_lumen_short_range_ao: x = @p has_history, y = the R2 noise.
+    static auto acquire_targets(gfx::render_view& rview, const usize32_t& size, uint32_t downsample_factor)
+        -> frame_targets;
+    /// Sets u_lumen_short_range_ao: x = @p has_history, y = the R2 noise, z = the downsample factor, w = the foreground
+    /// reject power.
     void set_short_range_ao_uniform(const run_params& params, bool has_history) const;
 
     gpu_program::ptr search_program_;

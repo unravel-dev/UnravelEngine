@@ -11,8 +11,10 @@
 #include "../bgfx_compute.sh"
 #include "../common.sh"
 
-// Input Hi-Z buffer (previous mip level - set via gfx::set_image with mip-1)
-IMAGE2D_RO(s_hiz_input, r32f, 0);
+// Input Hi-Z buffer (previous mip level - set via gfx::set_image with mip-1). Read-write although only read:
+// bound read-only beside the write of another mip of the same texture, D3D12 would transition the whole
+// resource between the two views; hiz_pass binds it bgfx::Access::ReadWrite.
+IMAGE2D_RW(s_hiz_input, r32f, 0);
 
 // Output Hi-Z buffer (current mip level - set via gfx::set_image with mip)
 IMAGE2D_WO(s_hiz_output, r32f, 1);

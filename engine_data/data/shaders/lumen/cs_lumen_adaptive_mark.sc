@@ -1,6 +1,6 @@
 /*
  * Lumen adaptive screen probes, marking (UE 5.8 ScreenProbeAdaptivePlacementMarkCS, LumenScreenProbeGather.usf
- * :1731-1806). One thread per candidate pixel, the LUMEN_ADAPTIVE_SAMPLES candidates of a uniform tile adjacent in the
+ * :1731-1806). One thread per candidate pixel, the u_lumen_adaptive_samples candidates of a uniform tile adjacent in the
  * group: a candidate on geometry inside the view whose uniform-probe interpolation weights (this frame's records, no
  * full-resolution jitter) sum below LUMEN_INTERP_MIN_WEIGHT sets its bit in the tile's placement mask
  * (lumen_adaptive_probes.sh).
@@ -17,10 +17,7 @@ SAMPLER2D(s_lumen_normal, 1);
 SAMPLER2D(s_lumen_probe_records, 2);
 BUFFER_RW(b_lumen_adaptive, uint, 3);
 
-#define LUMEN_ADAPTIVE_GROUP_TILES_X (8 / LUMEN_ADAPTIVE_SAMPLES_X)
-#define LUMEN_ADAPTIVE_GROUP_TILES_Y (8 / LUMEN_ADAPTIVE_SAMPLES_Y)
-
-SHARED uint s_mask[LUMEN_ADAPTIVE_GROUP_TILES_X * LUMEN_ADAPTIVE_GROUP_TILES_Y];
+SHARED uint s_mask[LUMEN_ADAPTIVE_MAX_GROUP_TILES];
 
 /// Whether the uniform probes cannot interpolate @p pixel (UE: dot(Weights, 1) < MIN_PROBE_INTERPOLATION_WEIGHT).
 bool LumenNeedsAdaptiveProbe(ivec2 pixel)
@@ -51,12 +48,13 @@ NUM_THREADS(8, 8, 1)
 void main()
 {
 	ivec2 local = ivec2(gl_LocalInvocationID.xy);
-	ivec2 samples = ivec2(LUMEN_ADAPTIVE_SAMPLES_X, LUMEN_ADAPTIVE_SAMPLES_Y);
+	ivec2 samples = ivec2(u_lumen_adaptive_samples_x, u_lumen_adaptive_samples_y);
+	ivec2 group_tiles = ivec2(8, 8) / samples;
 	ivec2 local_tile = local / samples;
 	ivec2 sample2d = local - local_tile * samples;
-	int sample_index = sample2d.x + LUMEN_ADAPTIVE_SAMPLES_X * sample2d.y;
-	int mask_slot = local_tile.y * LUMEN_ADAPTIVE_GROUP_TILES_X + local_tile.x;
-	ivec2 tile = ivec2(gl_WorkGroupID.xy) * ivec2(LUMEN_ADAPTIVE_GROUP_TILES_X, LUMEN_ADAPTIVE_GROUP_TILES_Y) + local_tile;
+	int sample_index = sample2d.x + samples.x * sample2d.y;
+	int mask_slot = local_tile.y * group_tiles.x + local_tile.x;
+	ivec2 tile = ivec2(gl_WorkGroupID.xy) * group_tiles + local_tile;
 	bool inside = all(lessThan(tile, u_lumen_probe_count));
 	if(sample_index == 0)
 	{

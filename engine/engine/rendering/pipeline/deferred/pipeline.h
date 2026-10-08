@@ -113,6 +113,10 @@ public:
 
     void run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_probes, delta_t dt);
 
+    /// Clears RBUFFER to no traced radiance (the whole pixel left to the probe layer), for a view whose traced
+    /// reflections do not write every pixel this frame.
+    void clear_traced_reflections(gfx::render_view& rview);
+
     auto run_atmospherics_pass(gfx::frame_buffer::ptr input,
                                scene& scn,
                                const camera& camera,
@@ -237,8 +241,9 @@ public:
     /// (UE applies no SSAO under Lumen GI, r.Lumen.DiffuseIndirect.SSAO 0).
     auto lumen_short_range_ao_owns_view(const run_params& rparams) -> bool;
 
-    /// Lumen's reflections into RBUFFER and PBUFFER after the Lumen gather of @p gather_params.
-    void run_lumen_reflection_pass(gfx::render_view& rview, const lumen_run_params& gather_params);
+    /// Lumen's reflections into RBUFFER and PBUFFER after the Lumen gather of @p gather_params; true when they wrote
+    /// both, every pixel.
+    auto run_lumen_reflection_pass(gfx::render_view& rview, const lumen_run_params& gather_params) -> bool;
 
     /// Lumen GI for a camera run that asks for it: the surface cache, the screen probe gather (published as
     /// GI_RESOLVE, its rough specular as GI_ROUGH_SPECULAR) and the reflections.
@@ -530,6 +535,7 @@ private:
             cache_uniform(program.get(), s_specular_occlusion, "s_specular_occlusion", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), u_screen_ao, "u_screen_ao", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_indirect_params, "u_indirect_params", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_probe_layer_params, "u_probe_layer_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
         }
         gfx::program::uniform_ptr u_pre_exposure;
@@ -541,8 +547,10 @@ private:
         /// Screen-space AO texture and parameters (get_screen_ao_inputs).
         gfx::program::uniform_ptr s_screen_ao;
         gfx::program::uniform_ptr u_screen_ao;
-        /// PBUFFER, the untraced reflection layer; s_tex[5] is RBUFFER, the traced layers.
+        /// The untraced reflection layer (get_probe_layer_inputs); s_tex[5] is RBUFFER, the traced layers.
         gfx::program::uniform_ptr s_probe_layer;
+        /// What s_probe_layer holds (probe_layer_inputs::params).
+        gfx::program::uniform_ptr u_probe_layer_params;
         /// The GTSO table (default_textures::specular_occlusion).
         gfx::program::uniform_ptr s_specular_occlusion;
         /// x = 1 when a real GI resolve / SSIL texture feeds s_ssil, 0 when the transparent
@@ -574,17 +582,20 @@ private:
             cache_uniform(program.get(), u_pre_exposure, "u_pre_exposure", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_screen_ao, "u_screen_ao", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_visualize_indirect, "u_visualize_indirect", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_probe_layer_params, "u_probe_layer_params", bgfx::UniformType::Vec4);
         }
 
         gfx::program::uniform_ptr u_pre_exposure;
         gfx::program::uniform_ptr u_params;
+        /// What s_tex[9] holds (probe_layer_inputs::params).
+        gfx::program::uniform_ptr u_probe_layer_params;
         /// Screen-space AO parameters for the occlusion views (get_screen_ao_inputs).
         gfx::program::uniform_ptr u_screen_ao;
         /// The indirect diffuse view: x = tone mapping operator, y = multi-bounce albedo cap, z = 1 when the
         /// indirect diffuse is SSIL's.
         gfx::program::uniform_ptr u_visualize_indirect;
         /// 0-4 G-buffer, 5 RBUFFER, 6 environment SH, 7 GI / SSIL, 8 screen-space AO,
-        /// 9 PBUFFER, 10 the GTSO table.
+        /// 9 the untraced reflection layer (get_probe_layer_inputs), 10 the GTSO table.
         std::array<gfx::program::uniform_ptr, 11> s_tex;
 
         std::unique_ptr<gpu_program> program;
@@ -652,6 +663,18 @@ private:
     };
     auto get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_inputs;
 
+    /// The untraced reflection layer the lighting and the reflection debug views read: the GI's rough specular
+    /// history where Lumen's reflections wrote this run (they composite nothing else under their traced layer),
+    /// else @p pbuffer as the probe pass drew it.
+    struct probe_layer_inputs
+    {
+        gfx::texture::ptr texture;
+        /// u_probe_layer_params (fs_pbr_lighting.sh): x = 1 for the rough specular history, y = its scale (the GI
+        /// intensity), z = 1 when it exists.
+        std::array<float, 4> params{};
+    };
+    auto get_probe_layer_inputs(gfx::render_view& rview, const gfx::texture::ptr& pbuffer) const -> probe_layer_inputs;
+
     /// After SSIL/SSR; copies G-buffer depth into @c PREV_DEPTH for next-frame reprojection.
     void snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size);
 
@@ -685,6 +708,8 @@ private:
     /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
     /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).
     bool velocity_run_active_{false};
+    /// Lumen's reflections wrote RBUFFER and PBUFFER in this run (run_lumen_gi_pass), so RBUFFER needs no clear.
+    bool lumen_reflections_written_{false};
     /// Render frame of the last velocity pass that drew ANY mover (individual or batched),
     /// stamped inside run_velocity_pass's own visibility walk - the CPU-side signal for SSR's
     /// mover gate, held one temporal window by the consumer. Riding the owning pass's loop keeps

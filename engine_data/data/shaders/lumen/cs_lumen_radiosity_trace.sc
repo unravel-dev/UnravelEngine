@@ -9,6 +9,7 @@
  */
 
 #include "bgfx_compute.sh"
+#include "lumen/lumen_image_formats.sh"
 #include "../common.sh"
 #include "../lighting.sh"
 #include "../sampling.sh"
@@ -18,11 +19,13 @@
 #define SDF_CLIPMAP_MIP_STAGE 9
 #include "lumen/lumen_global_sdf.sh"
 
-IMAGE2D_WO(s_lumen_radiosity_trace_out, rgba16f, 0);
+IMAGE2D_WO(s_lumen_radiosity_trace_out, rg11b10f, 0);
 SAMPLER2D(s_lumen_card_depth, 1);
 SAMPLER2D(s_lumen_card_normal, 2);
 SAMPLER2D(s_lumen_env_sh, 3);
 BUFFER_RO(b_lumen_light_tiles, vec4, 5);
+#define LUMEN_TILE_RECORDS_LIGHT_TILES
+#include "lumen/lumen_tile_records.sh"
 BUFFER_RO(b_lumen_scene, vec4, 6);
 SAMPLER2D(s_lumen_card_final, 7);
 SAMPLER3D(s_lumen_object_grid, 8);
@@ -32,7 +35,7 @@ SAMPLER3D(s_lumen_object_grid, 8);
 #include "lumen/lumen_surface_cache_lighting.sh"
 #include "lumen/lumen_radiosity_common.sh"
 
-/// x = first tile of this dispatch, y = tile count.
+/// x = first tile of this dispatch, y = tile count, z = the float4 the tile words start at, w = the frame index.
 uniform vec4 u_lumen_card_lighting;
 
 NUM_THREADS(LUMEN_RADIOSITY_GROUP_THREADS, 1, 1)
@@ -54,9 +57,10 @@ void main()
 	}
 	int probe = ray / rays_per_probe;
 	ivec2 trace_texel = LumenRadiosityGridCoord(ray - probe * rays_per_probe, resolution);
-	vec4 t0 = b_lumen_light_tiles[tile_index * LUMEN_RADIOSITY_TILE_STRIDE + 0];
-	vec4 uv_rect = b_lumen_light_tiles[tile_index * LUMEN_RADIOSITY_TILE_STRIDE + 1];
-	vec4 page = b_lumen_light_tiles[tile_index * LUMEN_RADIOSITY_TILE_STRIDE + 2];
+	LumenLightTile light_tile = LumenLoadLightTile(tile_index, int(u_lumen_card_lighting.z));
+	vec4 t0 = light_tile.t0;
+	vec4 uv_rect = light_tile.uv_rect;
+	vec4 page = light_tile.page;
 	ivec2 cell_origin = ivec2(t0.xy) + LumenRadiosityGridCoord(probe, probes_per_axis) * spacing;
 	ivec2 probe_texel = cell_origin + LumenRadiosityJitter(t0.w);
 	ivec2 out_texel = LumenRadiosityTraceTexel(cell_origin / spacing, trace_texel);
@@ -98,5 +102,5 @@ void main()
 	{
 		radiance *= u_lumen_radiosity_max_ray_intensity / brightest;
 	}
-	imageStore(s_lumen_radiosity_trace_out, out_texel, vec4(radiance, 0.0));
+	imageStore(s_lumen_radiosity_trace_out, out_texel, vec4(LumenQuantizeCardLighting(radiance, out_texel, u_lumen_card_lighting.w), 0.0));
 }

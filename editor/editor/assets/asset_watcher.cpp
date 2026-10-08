@@ -312,7 +312,7 @@ auto watch_assets(rtti::context& ctx, const fs::path& dir, const fs::pattern_fil
                             // model_component, animation on a prefab).
                             // Because prefabs are stored as opaque serialized
                             // buffers we don't walk them for explicit
-                            // references — instead the cascade conservatively
+                            // references - instead the cascade conservatively
                             // marks every loaded prefab thumbnail dirty when
                             // one of these renderable types changes.
 

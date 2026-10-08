@@ -17,17 +17,18 @@ namespace unravel
 namespace
 {
 
-constexpr uint32_t adaptive_samples_x = uint32_t(gi::lumen::LUMEN_ADAPTIVE_SAMPLES_X);
-constexpr uint32_t adaptive_samples_y = uint32_t(gi::lumen::LUMEN_ADAPTIVE_SAMPLES_Y);
-/// Uniform tiles per 8x8 group of the marking and spawning passes (one thread per candidate).
-constexpr uint32_t adaptive_group_tiles_x = lumen_pass::group_edge / adaptive_samples_x;
-constexpr uint32_t adaptive_group_tiles_y = lumen_pass::group_edge / adaptive_samples_y;
-static_assert(lumen_pass::group_edge % adaptive_samples_x == 0u && lumen_pass::group_edge % adaptive_samples_y == 0u,
-              "a group holds whole uniform tiles of candidates");
+/// Mirror of LUMEN_ADAPTIVE_MAX_SAMPLES: the most candidates per uniform probe (4 x 4).
+constexpr uint32_t max_adaptive_samples = 16u;
 /// Mirror of lumen_adaptive_probes.sh's layout: the counter, then per uniform tile its probe count, its probe list and
 /// its placement mask (LUMEN_ADAPTIVE_TILE_STRIDE).
 constexpr uint32_t adaptive_counter_entries = 1;
-constexpr uint32_t adaptive_tile_stride = adaptive_samples_x * adaptive_samples_y + 2u;
+constexpr uint32_t adaptive_tile_stride = max_adaptive_samples + 2u;
+
+/// Uniform tiles per 8x8 group of the marking and spawning passes (one thread per candidate) under @p layout.
+auto get_group_tiles(const lumen_pass::adaptive_probe_layout& layout) -> usize32_t
+{
+    return {lumen_pass::group_edge / layout.samples_x, lumen_pass::group_edge / layout.samples_y};
+}
 
 } // namespace
 
@@ -116,7 +117,10 @@ void lumen_adaptive_probes::set_uniforms(const frame_inputs& inputs) const
     gfx::set_uniform(uniforms_.u_lumen_frame, inputs.frame);
     gfx::set_uniform(uniforms_.u_lumen_probes, inputs.probes);
     gfx::set_uniform(uniforms_.u_lumen_view, inputs.view);
-    const float adaptive[4] = {float(inputs.capacity), float(inputs.border_resolution), 0.0f, 0.0f};
+    const float adaptive[4] = {float(inputs.capacity),
+                               float(inputs.border_resolution),
+                               float(inputs.layout.samples_x),
+                               float(inputs.layout.samples_y)};
     gfx::set_uniform(uniforms_.u_lumen_adaptive, adaptive);
 }
 
@@ -131,10 +135,11 @@ void lumen_adaptive_probes::run_mark(const frame_inputs& inputs) const
     gfx::set_texture(uniforms_.s_lumen_probe_records, 2, inputs.probe_records);
     bind_state(3, bgfx::Access::ReadWrite);
     set_uniforms(inputs);
+    const auto group_tiles = get_group_tiles(inputs.layout);
     bgfx::dispatch(pass.id,
                    mark_program_->native_handle(),
-                   lumen_pass::divide_round_up(inputs.probes_x, adaptive_group_tiles_x),
-                   lumen_pass::divide_round_up(inputs.probes_y, adaptive_group_tiles_y),
+                   lumen_pass::divide_round_up(inputs.probes_x, group_tiles.width),
+                   lumen_pass::divide_round_up(inputs.probes_y, group_tiles.height),
                    1);
     mark_program_->end();
 }
@@ -150,10 +155,11 @@ void lumen_adaptive_probes::run_spawn(const frame_inputs& inputs) const
     bind_state(2, bgfx::Access::ReadWrite);
     lumen_pass::bind_image(3, inputs.probe_records, bgfx::Access::Write, bgfx::TextureFormat::RGBA32F);
     set_uniforms(inputs);
+    const auto group_tiles = get_group_tiles(inputs.layout);
     bgfx::dispatch(pass.id,
                    spawn_program_->native_handle(),
-                   lumen_pass::divide_round_up(inputs.probes_x, adaptive_group_tiles_x),
-                   lumen_pass::divide_round_up(inputs.probes_y, adaptive_group_tiles_y),
+                   lumen_pass::divide_round_up(inputs.probes_x, group_tiles.width),
+                   lumen_pass::divide_round_up(inputs.probes_y, group_tiles.height),
                    1);
     spawn_program_->end();
 }

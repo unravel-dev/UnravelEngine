@@ -3,20 +3,21 @@
  * LumenScreenSpaceBentNormal.usf:280-481 CalculateAOHorizonSearch, :643-704): the occlusion detail below the screen
  * probe lattice, which the probes cannot resolve.
  *
- * One thread per texel of the LUMEN_SHORT_RANGE_AO_DOWNSAMPLE_FACTOR layout (lumen_short_range_ao.sh: every pixel at
- * Epic) searches from its pixel. Along LUMEN_SHORT_RANGE_AO_SLICE_COUNT screen slices it finds the highest
+ * One thread per texel of the tier's layout (lumen_short_range_ao.sh: every pixel at Epic, half resolution at High)
+ * searches from its pixel. Along LUMEN_SHORT_RANGE_AO_SLICE_COUNT screen slices it finds the highest
  * occluding horizon on both sides within LUMEN_SHORT_RANGE_AO_RADIUS_PROBE_TILES probe tiles, from
  * LUMEN_SHORT_RANGE_AO_STEPS_PER_SLICE depth samples spaced quadratically; a sample further in front of the pixel
- * than LUMEN_SHORT_RANGE_AO_FOREGROUND_REJECT_DISTANCE of its depth fades out of the horizon. The cosine-weighted
- * visibility between the horizons and the bent normal are integrated analytically ("Practical Real-Time Strategies
- * for Accurate Indirect Occlusion", Jimenez et al. 2016, Algorithms 1 and 2), normalized by the projected normal's
- * full-visibility integral.
+ * than LUMEN_SHORT_RANGE_AO_FOREGROUND_REJECT_DISTANCE of its depth fades out of the horizon, shaped by the tier's
+ * reject power. The cosine-weighted visibility between the horizons and the bent normal are integrated analytically
+ * ("Practical Real-Time Strategies for Accurate Indirect Occlusion", Jimenez et al. 2016, Algorithms 1 and 2),
+ * normalized by the projected normal's full-visibility integral.
  *
  * Everything is in world space: a slice's direction is toward the point one pixel along it at the pixel's depth,
  * made orthogonal to the view vector, so the horizon math matches the screen samples whatever the view
  * convention. Depth comes from the full-resolution depth buffer (UE's HORIZON_SEARCH_USE_HZB 0 permutation).
  *
- * Writes rgba16f: xyz = the unit bent normal (world), w = the visibility; the sky writes (0, 0, 0, 1).
+ * Writes the unit bent normal (world) and the visibility packed in one uint (LumenPackShortRangeAO); the sky writes
+ * +z at visibility 1.
  */
 
 #include "bgfx_compute.sh"
@@ -27,7 +28,8 @@
 SAMPLER2D(s_lumen_depth, 0);
 /// G-buffer target 1: octahedral normal, metalness, roughness.
 SAMPLER2D(s_lumen_normal, 1);
-IMAGE2D_WO(s_lumen_short_range_ao_out, rgba16f, 2);
+/// The search, packed (LumenPackShortRangeAO).
+UIMAGE2D_WO(s_lumen_short_range_ao_out, r32ui, 2);
 
 /// @p horizon_cos raised to the sample at @p sample_uv (UE UpdateOccludedHorizonForStep): the cosine between the
 /// view vector and the direction to the sample, faded toward @p low_horizon_cos as the sample lies further in front.
@@ -59,7 +61,7 @@ float LumenUpdateHorizon(vec2 sample_uv,
 	float depth_delta = abs(LumenLinearDepth(sample_depth01) - scene_depth);
 	new_cos = mix(new_cos,
 	              low_horizon_cos,
-	              saturate(pow(depth_delta * inv_foreground_distance, LUMEN_SHORT_RANGE_AO_FOREGROUND_REJECT_POWER)));
+	              saturate(pow(depth_delta * inv_foreground_distance, u_lumen_short_range_ao_reject_power)));
 	return max(horizon_cos, new_cos);
 }
 
@@ -67,9 +69,9 @@ NUM_THREADS(8, 8, 1)
 void main()
 {
 	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
-	ivec2 half_size = (ivec2(u_lumen_view_size) + ivec2(LUMEN_SHORT_RANGE_AO_DOWNSAMPLE_FACTOR - 1, LUMEN_SHORT_RANGE_AO_DOWNSAMPLE_FACTOR - 1)) /
-	                  LUMEN_SHORT_RANGE_AO_DOWNSAMPLE_FACTOR;
-	if(texel.x >= half_size.x || texel.y >= half_size.y)
+	int factor = u_lumen_short_range_ao_downsample_factor;
+	ivec2 search_size = (ivec2(u_lumen_view_size) + ivec2(factor - 1, factor - 1)) / factor;
+	if(texel.x >= search_size.x || texel.y >= search_size.y)
 	{
 		return;
 	}
@@ -77,7 +79,7 @@ void main()
 	float depth01 = texelFetch(s_lumen_depth, pixel, 0).x;
 	if(depth01 >= 1.0)
 	{
-		imageStore(s_lumen_short_range_ao_out, texel, vec4(0.0, 0.0, 0.0, 1.0));
+		imageStore(s_lumen_short_range_ao_out, texel, uvec4(LumenPackShortRangeAO(vec4(0.0, 0.0, 1.0, 1.0)), 0u, 0u, 0u));
 		return;
 	}
 	vec2 uv = LumenPixelUv(pixel);
@@ -147,5 +149,5 @@ void main()
 	visibility = correction > 0.0 ? max(visibility / correction, LUMEN_SHORT_RANGE_AO_MIN_VISIBILITY) : 1.0;
 	float bent_length = length(bent_normal);
 	vec3 bent = bent_length > 1e-6 ? bent_normal / bent_length : normal;
-	imageStore(s_lumen_short_range_ao_out, texel, vec4(bent, visibility));
+	imageStore(s_lumen_short_range_ao_out, texel, uvec4(LumenPackShortRangeAO(vec4(bent, visibility)), 0u, 0u, 0u));
 }

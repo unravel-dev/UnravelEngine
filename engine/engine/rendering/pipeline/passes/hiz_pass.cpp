@@ -58,7 +58,7 @@ void hiz_pass::run(gfx::render_view& rview, const run_params& params)
         gfx::set_texture(hiz_generate_.s_depth, 0, depth_buffer);
 
         // Set output Hi-Z mip 0 as image
-        bgfx::setImage(1, output_hiz->native_handle(), 0, bgfx::Access::Write);
+        bgfx::setImage(1, output_hiz->native_handle(), 0, bgfx::Access::ReadWrite);
 
         // Set parameters for the compute shader
         math::vec4 hiz_params(float(hiz_width), float(hiz_height), 0.0f, 0.0f);

@@ -70,8 +70,9 @@ struct gi_settings
         /// Scale of the size of the objects the scene keeps (UE LumenSceneDetail): the cards' minimum resolution and
         /// the smallest object the global distance field composes.
         float detail = 1.0f;
-        /// Cards farther than this from the camera leave the surface cache (UE LumenSceneViewDistance, 20000 cm by
-        /// default). The fixed reach of the global distance field limits it, where UE adds clipmap levels instead.
+        /// How far the Lumen scene reaches (UE LumenSceneViewDistance, 20000 cm by default). UE adds global distance
+        /// field levels beyond 200 m and keeps cards out to the last level; our distance field has a fixed 200 m
+        /// reach, so the cards always cover it and smaller values change nothing.
         float view_distance = 200.0f;
         /// How fast lighting changes reach the cards (UE LumenSceneLightingUpdateSpeed): the share of the atlas
         /// the direct lighting and the radiosity relight per frame.

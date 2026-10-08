@@ -12,6 +12,7 @@
  */
 
 #include "lumen/lumen_constants.sh"
+#include "lumen/lumen_finite.sh"
 #include "sampling.sh"
 
 #define LUMEN_PI 3.14159265359
@@ -206,6 +207,13 @@ float LumenLinearDepth(float depth01)
 	return screenSpaceToViewSpaceDepth(depth01);
 }
 
+/// acos of @p x in [-1, 1] by Eberly's degree-1 polynomial, within 0.01 rad (UE acosFast, FastMathThirdParty.ush:108).
+float LumenAcosFast(float x)
+{
+	float result = (-0.156583 * abs(x) + 0.5 * LUMEN_PI) * sqrt(1.0 - abs(x));
+	return x >= 0.0 ? result : LUMEN_PI - result;
+}
+
 /// The gather history's alpha (UE PackFastUpdateModeAmountAndNumFramesAccumulated, LumenScreenProbeGatherTemporal.ush:
 /// 72-91): the frame count in LUMEN_TEMPORAL_COUNT_LEVELS steps of @p max_frames, plus (levels + 1) x the fast update
 /// amount in as many steps rounded up, so only "not moving" stores 0. An integer below 256, exact in float16.
@@ -306,17 +314,6 @@ vec4 LumenPackProbe(float view_depth, vec3 normal, ivec2 pixel, float depth01)
 	            octahedral.x + octahedral.y * LUMEN_PROBE_NORMAL_LEVELS,
 	            uintBitsToFloat(packed_pixel),
 	            depth01);
-}
-
-/// @p v, or 0 when it is NaN or infinite (UE MakeFinite: an exponent test, which no float optimisation removes).
-float LumenMakeFinite(float v)
-{
-	return (floatBitsToUint(v) & 0x7F800000u) == 0x7F800000u ? 0.0 : v;
-}
-
-vec3 LumenMakeFinite3(vec3 v)
-{
-	return vec3(LumenMakeFinite(v.x), LumenMakeFinite(v.y), LumenMakeFinite(v.z));
 }
 
 /// @p v made finite and clamped to what a float16 store keeps finite (LUMEN_FLOAT16_MAX).

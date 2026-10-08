@@ -231,10 +231,9 @@ REFLECT_INLINE(gi_settings::scene_settings)
             entt::attribute{"max", 20000.0f},
             entt::attribute{"step", 1.0f},
             entt::attribute{"tooltip",
-                            "Distance from the camera, in metres, within which surfaces keep their cached lighting "
-                            "for rays to read. Larger values extend indirect lighting and reflections to distant "
-                            "geometry at a higher GPU and memory cost. The reach of the global distance field "
-                            "(200 m) limits it."},
+                            "How far, in metres, the scene the indirect lighting and reflections trace reaches. The "
+                            "global distance field reaches a fixed 200 m and surfaces keep their cached lighting out "
+                            "to it, so values up to 200 m change nothing."},
         })
         .data<&settings::lighting_update_speed>("lighting_update_speed"_hs)
         .custom<entt::attributes>(entt::attributes{

@@ -13,20 +13,26 @@
  * 3 vec4: (tile origin in the atlas xy, card index, the page's update index), the page's card UV rectangle, (page
  * atlas origin xy, page size xy). The trace and the filter run groups of LUMEN_RADIOSITY_GROUP_THREADS over a tile's
  * traces, probe-major.
+ *
+ * A card larger than one physical page spreads its probes over pages anywhere in the atlas. The filter's neighbours
+ * and the integrate's bilinear probes past a page edge are read in the card's neighbouring page, through its page
+ * table, with that page's jitter (LumenResolveRadiosityCell, UE LumenRadiosity.usf:184-247, 405-465): the lighting
+ * does not step at page edges.
  */
 
 /// x = the ray clamp in cached units (MaxRayIntensity / the view's pre-exposure; the trace), y = the probe spacing in
-/// card texels, z = the rays per axis of a probe's hemisphere.
+/// card texels, z = the rays per axis of a probe's hemisphere, w = the float4 of b_lumen_light_tiles the per-page
+/// update indices start at (lumen_scene::get_page_radiosity_indices), negative when the probes stop at page edges.
 uniform vec4 u_lumen_radiosity;
 
 #define u_lumen_radiosity_max_ray_intensity u_lumen_radiosity.x
 #define u_lumen_radiosity_spacing           int(u_lumen_radiosity.y)
 #define u_lumen_radiosity_resolution        int(u_lumen_radiosity.z)
+#define u_lumen_radiosity_page_words        u_lumen_radiosity.w
 
 /// The card tile's edge in texels (the lighting kernels' 8 x 8 tiles) and the threads of a trace or filter group.
 #define LUMEN_RADIOSITY_TILE_TEXELS 8
 #define LUMEN_RADIOSITY_GROUP_THREADS 64
-#define LUMEN_RADIOSITY_TILE_STRIDE 3
 /// MaxFramesAccumulated with r.LumenScene.Radiosity.Temporal.
 #define LUMEN_RADIOSITY_MAX_FRAMES 4.0
 /// Ray start offsets: SurfaceBias 5 cm along the normal and the ray, MinTraceDistance 10 cm.
@@ -50,6 +56,78 @@ ivec2 LumenRadiosityJitter(float index)
 	vec2 hammersley = Hammersley16(frame, uint(LUMEN_RADIOSITY_MAX_FRAMES), uvec2(0x4ae4u, 0x9bdbu));
 	return ivec2(hammersley * float(u_lumen_radiosity_spacing));
 }
+
+#ifdef LUMEN_TILE_RECORDS_LIGHT_TILES
+/// A probe cell of a card, resolved to the physical page holding it (the card passes: lumen_tile_records.sh's light
+/// tiles and the card tables of lumen_surface_cache.sh).
+struct LumenRadiosityCell
+{
+	/// False outside the card, on an unmapped page, or on a page the radiosity has not updated since it was mapped.
+	bool valid;
+	/// The cell's first texel in the atlas (its probe sits there plus its page's jitter).
+	ivec2 atlas_origin;
+	/// The cell's page: atlas origin xy, size xy.
+	vec4 page;
+	/// The card UV rectangle of the cell's page.
+	vec4 uv_rect;
+	/// The update index of the page's last radiosity update (its probes' jitter and ray directions).
+	float update_index;
+};
+
+/// The (x, y) of a page in its card's grid of @p size_in_pages, from the card UV rectangle @p uv_rect it covers.
+ivec2 LumenRadiosityPageCoord(vec4 uv_rect, vec2 size_in_pages)
+{
+	return ivec2(floor(0.5 * (uv_rect.xy + uv_rect.zw) * size_in_pages));
+}
+
+/// The card UV rectangle of the page at @p coord of a card of @p size_in_pages pages (lumen_scene compute_page_uv_rect):
+/// half a texel of border on interior page edges.
+vec4 LumenRadiosityPageUvRect(ivec2 coord, vec2 size_in_pages)
+{
+	vec2 low = vec2(coord) / size_in_pages;
+	vec2 high = vec2(coord + ivec2(1, 1)) / size_in_pages;
+	vec2 border = 0.5 / (size_in_pages * LUMEN_PHYSICAL_PAGE_SIZE);
+	low -= vec2(coord.x > 0 ? border.x : 0.0, coord.y > 0 ? border.y : 0.0);
+	high += vec2(float(coord.x + 1) < size_in_pages.x ? border.x : 0.0, float(coord.y + 1) < size_in_pages.y ? border.y : 0.0);
+	return vec4(low, high);
+}
+
+/// Probe cell @p cell_in_page (in cells from the page's origin; negative or past the page's edge for its neighbours) of
+/// the page at @p page (atlas origin xy, size xy) covering @p uv_rect of @p card, whose last update was @p update_index.
+LumenRadiosityCell LumenResolveRadiosityCell(LumenCard card, vec4 uv_rect, vec4 page, float update_index, ivec2 cell_in_page)
+{
+	LumenRadiosityCell cell;
+	ivec2 page_size = ivec2(page.zw);
+	ivec2 cell_texel = cell_in_page * u_lumen_radiosity_spacing;
+	cell.valid = all(greaterThanEqual(cell_texel, ivec2(0, 0))) && all(lessThan(cell_texel, page_size));
+	cell.atlas_origin = ivec2(page.xy) + cell_texel;
+	cell.page = page;
+	cell.uv_rect = uv_rect;
+	cell.update_index = update_index;
+	BRANCH
+	if(cell.valid || u_lumen_radiosity_page_words < 0.0)
+	{
+		return cell;
+	}
+	ivec2 card_texel = LumenRadiosityPageCoord(uv_rect, card.size_in_pages) * page_size + cell_texel;
+	ivec2 card_size = ivec2(card.size_in_pages) * page_size;
+	if(any(lessThan(card_texel, ivec2(0, 0))) || any(greaterThanEqual(card_texel, card_size)))
+	{
+		return cell;
+	}
+	ivec2 other = card_texel / page_size;
+	int entry = int(card.page_table_offset) + other.x + other.y * int(card.size_in_pages.x);
+	vec4 mapping = b_lumen_scene[int(u_lumen_surface_cache.y) + entry];
+	float other_index =
+	    LumenTileWord(b_lumen_light_tiles[int(u_lumen_radiosity_page_words) + entry / LUMEN_TILE_WORDS_PER_VEC4], entry);
+	cell.valid = mapping.z > 0.0 && other_index >= 0.0;
+	cell.atlas_origin = ivec2(mapping.xy) + card_texel - other * page_size;
+	cell.page = vec4(mapping.xy, page.zw);
+	cell.uv_rect = LumenRadiosityPageUvRect(other, card.size_in_pages);
+	cell.update_index = other_index;
+	return cell;
+}
+#endif
 
 /// The probes along a card tile's axis.
 int LumenRadiosityProbesPerTileAxis()

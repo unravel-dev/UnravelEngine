@@ -27,6 +27,8 @@ using lumen_pass::has_view_size;
 
 /// The pixels per reflection tile side (lumen_reflection_common.sh LUMEN_REFLECTION_TILE_PIXELS).
 constexpr uint32_t reflection_tile_pixels = 8;
+/// Trace texels per surface cache feedback tile side (cs_lumen_reflection_feedback.sc LUMEN_FEEDBACK_TILE).
+constexpr uint32_t feedback_tile_texels = 16;
 } // namespace
 
 void lumen_reflection_pass::uniforms::cache_uniforms()
@@ -71,6 +73,8 @@ void lumen_reflection_pass::uniforms::cache_uniforms()
                   s_lumen_reflection_tiles_history,
                   "s_lumen_reflection_tiles_history",
                   bgfx::UniformType::Sampler);
+    cache_uniform(nullptr, u_lumen_feedback, "u_lumen_feedback", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, u_lumen_reflection_resolve, "u_lumen_reflection_resolve", bgfx::UniformType::Vec4);
     motion.cache_uniforms();
 }
 
@@ -85,6 +89,8 @@ auto lumen_reflection_pass::init(rtti::context& ctx) -> bool
         return std::make_shared<gpu_program>(shader);
     };
     screen_program_ = load("cs_lumen_reflection_screen");
+    // Optional: without it the reflections read every card's locked mip.
+    feedback_program_ = load("cs_lumen_reflection_feedback");
     world_program_ = load("cs_lumen_reflection_world");
     resolve_program_ = load("cs_lumen_reflection_resolve");
     temporal_program_ = load("cs_lumen_reflection_temporal");
@@ -168,19 +174,29 @@ void lumen_reflection_pass::set_frame_uniforms(const run_params& params, const f
     // The screen trace needs last frame's colour and depth beside this frame's Hi-Z.
     const bool screen_traces =
         has_hiz && has_prev_color && gather.prev_depth && gather.settings.reflections.screen_traces;
+    // The distant screen traces follow the screen traces (UE LumenReflections::UseDistantScreenTraces).
+    const bool distant_screen_traces =
+        screen_traces && (experiments_ & lumen_pass::experiment_no_distant_screen_traces) == 0u;
     const uint32_t reflection_flags = (screen_traces ? 1u : 0u) |
                                       ((experiments_ & experiment_show_trace_types) != 0u ? 2u : 0u) |
-                                      ((experiments_ & lumen_pass::experiment_all_reflection_tiles) != 0u ? 4u : 0u);
+                                      ((experiments_ & lumen_pass::experiment_all_reflection_tiles) != 0u ? 4u : 0u) |
+                                      (distant_screen_traces ? 8u : 0u);
     const float reflection[4] = {has_hiz ? float(gather.hiz->info.numMips) : 1.0f,
                                  float(reflection_flags),
                                  get_max_roughness_to_trace(gather.settings.reflections),
                                  targets.has_history && gather.prev_depth ? 1.0f : 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_reflection, reflection);
-    const float quality[4] = {float(downsample_),
-                              float(lumen_pass::get_reflection_reconstruction_samples(gather.settings.reflections)),
-                              params.rough_specular_scale,
-                              params.rough_specular ? 1.0f : 0.0f};
+    const float quality[4] = {
+        float(downsample_),
+        float(lumen_pass::get_reflection_reconstruction_samples(gather.settings.reflections, gather.reflection_quality)),
+        params.rough_specular_scale,
+        params.rough_specular ? 1.0f : 0.0f};
     gfx::set_uniform(uniforms_.u_lumen_reflection_quality, quality);
+    const float resolve[4] = {lumen_pass::get_reflection_reconstruction_min_weight(gather.reflection_quality),
+                              0.0f,
+                              0.0f,
+                              0.0f};
+    gfx::set_uniform(uniforms_.u_lumen_reflection_resolve, resolve);
     gfx::set_uniform(uniforms_.u_lumen_settings,
                      lumen_pass::make_settings_uniform(gather.settings, gather.is_being_edited).data());
     gfx::set_uniform(uniforms_.u_lumen_prev_view_proj, gather.cam->get_prev_view_projection_unjittered().get_matrix());
@@ -217,6 +233,49 @@ void lumen_reflection_pass::run_screen(const run_params& params, const frame_tar
                    divide_round_up(trace_size_.height, group_edge),
                    1);
     screen_program_->end();
+}
+
+void lumen_reflection_pass::run_feedback(const run_params& params, const frame_targets& targets) const
+{
+    const auto& gather = *params.gather;
+    auto* feedback = gather.surface_cache_feedback;
+    if(feedback == nullptr || !feedback_program_ || !feedback_program_->is_valid())
+    {
+        return;
+    }
+    const auto& clipmap_gpu = gather.view_cache->get_clipmap_gpu();
+    gfx::render_pass pass("GI/Reflections Feedback");
+    pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
+    feedback->begin_frame(pass.id, gather.lumen_surface_cache->get_card_index_revision());
+    feedback_program_->begin();
+    gfx::set_texture(uniforms_.s_lumen_reflection_ray, 0, targets.ray);
+    gfx::set_texture(uniforms_.s_lumen_reflection_hit, 1, targets.hit);
+    gfx::set_texture(uniforms_.s_lumen_depth, 2, gather.g_buffer->get_texture(4));
+    feedback->bind(3, 5);
+    gfx::set_texture(uniforms_.s_lumen_reflection_radiance, 6, targets.radiance);
+    gfx::set_texture(uniforms_.s_sdf_clipmap, 4, clipmap_gpu.get_texture());
+    gfx::set_texture(uniforms_.s_sdf_clipmap_mip, 9, clipmap_gpu.get_mip_texture());
+    gfx::set_texture(uniforms_.s_sdf_clipmap_coverage, 10, lumen_pass::get_sdf_coverage(clipmap_gpu, experiments_));
+    gfx::set_texture(uniforms_.s_lumen_reflection_tiles, 12, targets.tiles_write);
+    gather.lumen_surface_cache->bind_for_sampling(13, 14, 15, true);
+    set_frame_uniforms(params, targets);
+    gfx::set_uniform(uniforms_.u_sdf_clipmap_levels, clipmap_gpu.get_level_params(), global_sdf_clipmap::level_count);
+    gfx::set_uniform(uniforms_.u_sdf_clipmap_params, clipmap_gpu.get_sampling_params());
+    const math::uvec2 jitter = lumen_surface_cache_feedback::get_tile_jitter(gfx::get_render_frame());
+    const math::vec4 feedback_params(float(jitter.x),
+                                     float(jitter.y),
+                                     float(lumen_surface_cache_feedback::hash_slots - 1u),
+                                     0.0f);
+    gfx::set_uniform(uniforms_.u_lumen_feedback, feedback_params);
+    const uint32_t tiles_x = divide_round_up(trace_size_.width, feedback_tile_texels);
+    const uint32_t tiles_y = divide_round_up(trace_size_.height, feedback_tile_texels);
+    bgfx::dispatch(pass.id,
+                   feedback_program_->native_handle(),
+                   divide_round_up(tiles_x, group_edge),
+                   divide_round_up(tiles_y, group_edge),
+                   1);
+    feedback_program_->end();
+    feedback->end_frame(pass.id, tiles_x * tiles_y);
 }
 
 void lumen_reflection_pass::run_world(const run_params& params, const frame_targets& targets) const
@@ -315,15 +374,10 @@ void lumen_reflection_pass::run_spatial(const run_params& params, const frame_ta
     pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
     spatial_program_->begin();
     bind_image(0, params.traced_output, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
-    bind_image(1, params.probe_output, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
     gfx::set_texture(uniforms_.s_lumen_reflection_specular, 8, targets.history_write);
     gfx::set_texture(uniforms_.s_lumen_reflection_frames, 9, targets.frames_write);
     gfx::set_texture(uniforms_.s_lumen_depth, 10, gather.g_buffer->get_texture(4));
     gfx::set_texture(uniforms_.s_lumen_normal, 11, gather.g_buffer->get_texture(1));
-    // Without the gather's rough specular the untraced layer is left uncovered: the environment fills it.
-    gfx::set_texture(uniforms_.s_lumen_rough_specular,
-                     12,
-                     params.rough_specular ? params.rough_specular : default_textures::get().black_texture());
     gfx::set_texture(uniforms_.s_lumen_reflection_tiles, 13, targets.tiles_write);
     set_frame_uniforms(params, targets);
     bgfx::dispatch(pass.id,
@@ -354,13 +408,14 @@ auto lumen_reflection_pass::run(gfx::render_view& rview, const run_params& param
     {
         return false;
     }
-    downsample_ = lumen_pass::get_reflection_downsample_factor(gather->settings.reflections);
+    downsample_ = lumen_pass::get_reflection_downsample_factor(gather->settings.reflections, gather->reflection_quality);
     trace_size_ = get_trace_size(view_size_, downsample_);
     rview.data_get_or_emplace(downsample_key, 1u) = downsample_;
     const auto targets = acquire_targets(rview, view_size_, trace_size_, gather->camera_cut);
     rview.tex_get_or_emplace(tiles_texture) = targets.tiles_write;
     run_screen(params, targets);
     run_world(params, targets);
+    run_feedback(params, targets);
     run_resolve(params, targets);
     run_temporal(params, targets);
     run_spatial(params, targets);

@@ -116,6 +116,10 @@ private:
         gfx::program::uniform_ptr s_lumen_rough_specular;
         gfx::program::uniform_ptr s_lumen_reflection_tiles;
         gfx::program::uniform_ptr s_lumen_reflection_tiles_history;
+        /// The surface cache feedback (cs_lumen_reflection_feedback.sc): the tile jitter and the table's mask.
+        gfx::program::uniform_ptr u_lumen_feedback;
+        /// The resolve's minimum neighbour weight (cs_lumen_reflection_resolve.sc).
+        gfx::program::uniform_ptr u_lumen_reflection_resolve;
         /// The velocity buffer for the screen trace and the temporal (lumen_motion.sh).
         lumen_pass::motion_uniforms motion;
 
@@ -149,11 +153,15 @@ private:
     void set_frame_uniforms(const run_params& params, const frame_targets& targets) const;
     void run_screen(const run_params& params, const frame_targets& targets) const;
     void run_world(const run_params& params, const frame_targets& targets) const;
+    /// The surface cache feedback of the distance-field stage's hits (lumen_surface_cache_feedback), when the run has
+    /// one: the cards' hi-res pages its rays want.
+    void run_feedback(const run_params& params, const frame_targets& targets) const;
     void run_resolve(const run_params& params, const frame_targets& targets) const;
     void run_temporal(const run_params& params, const frame_targets& targets) const;
     void run_spatial(const run_params& params, const frame_targets& targets) const;
 
     gpu_program::ptr screen_program_;
+    gpu_program::ptr feedback_program_;
     gpu_program::ptr world_program_;
     gpu_program::ptr resolve_program_;
     gpu_program::ptr temporal_program_;

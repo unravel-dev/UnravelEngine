@@ -55,8 +55,8 @@ void main()
 	{
 		uint probe = uint(v_probe.x + 0.5);
 		vec2 uv = LumenInverseEquiAreaSphericalMapping(normal);
-		vec2 final_texel = vec2(LumenRcProbeTileOrigin(probe, LUMEN_RC_FINAL_RES)) + 1.0 +
-		                   uv * float(LUMEN_RADIANCE_CACHE_PROBE_RES);
+		vec2 final_texel = vec2(LumenRcProbeTileOrigin(probe, u_lumen_rc_final_res)) + 1.0 +
+		                   uv * float(u_lumen_rc_probe_res);
 		// Cached lighting is absolute radiance here (GI_CACHED_LIGHTING_PRE_EXPOSURE 1).
 		lighting = texture2DLod(s_lumen_rc_final, final_texel / vec2(textureSize(s_lumen_rc_final, 0)), 0.0).xyz;
 	}

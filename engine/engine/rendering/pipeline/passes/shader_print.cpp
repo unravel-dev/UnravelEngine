@@ -6,7 +6,6 @@
 #include <graphics/graphics.h>
 #include <graphics/render_pass.h>
 
-#include <array>
 #include <vector>
 
 namespace unravel
@@ -76,26 +75,35 @@ auto shader_print::init(rtti::context& ctx) -> bool
     auto vs = am.get_asset<gfx::shader>("engine:/data/shaders/shader_print/vs_shader_print.sc");
     auto fs = am.get_asset<gfx::shader>("engine:/data/shaders/shader_print/fs_shader_print.sc");
     draw_program_.program = std::make_unique<gpu_program>(vs, fs);
-    return draw_program_.program->is_valid();
+    const bool has_clear = header_clear_.init(ctx);
+    return draw_program_.program->is_valid() && has_clear;
 }
 
-void shader_print::bind(uint8_t stage, const usize32_t& view_size)
+void shader_print::ensure_buffer()
 {
     if(!bgfx::isValid(buffer_))
     {
         buffer_ = bgfx::createDynamicIndexBuffer(header_words + max_symbols * symbol_words,
                                                  BGFX_BUFFER_COMPUTE_READ_WRITE | BGFX_BUFFER_INDEX32);
     }
-    const uint32_t frame = gfx::get_render_frame();
-    if(!has_bound_ || bound_frame_ != frame)
-    {
-        // Updates run before the frame's views: every print of the frame lands in the emptied buffer.
-        const std::array<uint32_t, header_words> header{};
-        bgfx::update(buffer_, 0, bgfx::copy(header.data(), uint32_t(sizeof(header))));
-        bound_frame_ = frame;
-        has_bound_ = true;
-        view_size_ = view_size;
-    }
+}
+
+void shader_print::begin_frame()
+{
+    ensure_buffer();
+    // Its own view, ahead of the printers' views: every print of the frame lands in the emptied buffer.
+    gfx::render_pass pass("Shader Print Clear");
+    header_clear_.dispatch(pass.id, buffer_, 0, header_words);
+    cleared_frame_ = gfx::get_render_frame();
+    has_cleared_ = header_clear_.is_ready();
+}
+
+void shader_print::bind(uint8_t stage, const usize32_t& view_size)
+{
+    ensure_buffer();
+    bound_frame_ = gfx::get_render_frame();
+    has_bound_ = true;
+    view_size_ = view_size;
     bgfx::setBuffer(stage, buffer_, bgfx::Access::ReadWrite);
     const math::vec4 print(float(view_size.width), float(view_size.height), float(max_symbols), 0.0f);
     gfx::set_uniform(draw_program_.u_shader_print, print);
@@ -104,8 +112,9 @@ void shader_print::bind(uint8_t stage, const usize32_t& view_size)
 void shader_print::draw(const gfx::frame_buffer::ptr& output)
 {
     auto& program = draw_program_;
-    if(!has_bound_ || bound_frame_ != gfx::get_render_frame() || !output || !program.program ||
-       !program.program->is_valid())
+    const uint32_t frame = gfx::get_render_frame();
+    const bool has_prints = has_bound_ && bound_frame_ == frame && has_cleared_ && cleared_frame_ == frame;
+    if(!has_prints || !output || !program.program || !program.program->is_valid())
     {
         return;
     }

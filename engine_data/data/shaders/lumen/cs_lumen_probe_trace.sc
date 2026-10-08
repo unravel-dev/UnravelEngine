@@ -26,9 +26,10 @@
  * the FAR-FIELD pass (cs_lumen_probe_trace_far_field.sc, an indirect dispatch sized by
  * cs_lumen_trace_far_field_args.sc) runs stages 2 and 3 over that dense list, so no distance-field march holds a
  * wave whose other rays the screen answered (UE's CompactTraces). It stores a distance-field hit's march state in the
- * ray's slot instead of its radiance; compiled with LUMEN_TRACE_HIT_SHADE, the HIT pass
- * (cs_lumen_probe_trace_hit_shade.sc, the same dispatch) reads the surface cache at those hits. The card lookup needs
- * as many registers as the march, and in one kernel the march ran at the occupancy of both.
+ * ray's slot instead of its radiance and appends the slot to b_lumen_trace_hits; compiled with LUMEN_TRACE_HIT_SHADE,
+ * the HIT pass (cs_lumen_probe_trace_hit_shade.sc, an indirect dispatch over that list) reads the surface cache at
+ * those hits. The card lookup needs as many registers as the march, and in one kernel the march ran at the occupancy
+ * of both.
  *
  * Writes rgb = pre-exposed radiance, a = the distance the spatial filter's angle weight sees: the screen
  * hit's distance, the trace length for distance-field hits, the cache probes' hit distance for the
@@ -113,6 +114,14 @@ uint LumenTraceRaySlot(uint index)
 {
 	return 1u + uint(LUMEN_TRACE_RAY_STRIDE) * index;
 }
+
+/// The far rays whose distance-field hit the hit pass shades, compacted by the far-field pass: [0] = their count,
+/// then each one's slot in b_lumen_trace_rays.
+#if defined(LUMEN_TRACE_FAR_FIELD)
+BUFFER_RW(b_lumen_trace_hits, uint, 2);
+#elif defined(LUMEN_TRACE_HIT_SHADE)
+BUFFER_RO(b_lumen_trace_hits, uint, 2);
+#endif
 #endif
 
 /// The surface cache (lumen_surface_cache.sh): global-SDF hits read the cards' final lighting through the
@@ -624,38 +633,71 @@ LumenProbeRay LumenFarRay(uint slot)
 	return LumenMakeProbeRay(tile, trace_texel - tile * LUMEN_PROBE_TRACE_RES);
 }
 
+#if defined(LUMEN_TRACE_FAR_FIELD)
+/// The group's hits for the hit pass and their first entry in b_lumen_trace_hits.
+SHARED uint s_lumen_hits;
+SHARED uint s_lumen_hits_base;
+
 NUM_THREADS(LUMEN_TRACE_FAR_FIELD_GROUP, 1, 1)
 void main()
 {
 	uint index = LumenFarRayIndex(gl_WorkGroupID, gl_LocalInvocationIndex);
-	if(index >= b_lumen_trace_rays[0])
+	if(gl_LocalInvocationIndex == 0u)
 	{
-		return;
+		s_lumen_hits = 0u;
 	}
-	uint slot = LumenTraceRaySlot(index);
-#if defined(LUMEN_TRACE_FAR_FIELD)
-	float vouched = uintBitsToFloat(b_lumen_trace_rays[slot + 1u]);
-	LumenProbeRay ray = LumenFarRay(slot);
-	LumenFarFieldTrace trace = LumenTraceFarFieldUnshaded(ray, vouched);
-	LumenTraceOutput trace_output = LumenMakeTraceOutput(ray, trace.result);
-	// A hit the output keeps is shaded by the hit pass, from its march state.
-	bool is_deferred = trace.surface.hit && !trace_output.is_override;
-	b_lumen_trace_rays[slot + 1u] = floatBitsToUint(is_deferred ? trace.surface.t : -1.0);
+	barrier();
+	// The hits are compacted for the hit pass, so no thread leaves before the group's barriers.
+	bool is_active = index < b_lumen_trace_rays[0];
+	uint slot = LumenTraceRaySlot(is_active ? index : 0u);
+	bool is_deferred = false;
+	uint hit_index = 0u;
+	BRANCH
+	if(is_active)
+	{
+		float vouched = uintBitsToFloat(b_lumen_trace_rays[slot + 1u]);
+		LumenProbeRay ray = LumenFarRay(slot);
+		LumenFarFieldTrace trace = LumenTraceFarFieldUnshaded(ray, vouched);
+		LumenTraceOutput trace_output = LumenMakeTraceOutput(ray, trace.result);
+		// A hit the output keeps is shaded by the hit pass, from its march state.
+		is_deferred = trace.surface.hit && !trace_output.is_override;
+		b_lumen_trace_rays[slot + 1u] = floatBitsToUint(is_deferred ? trace.surface.t : -1.0);
+		BRANCH
+		if(is_deferred)
+		{
+			b_lumen_trace_rays[slot + 2u] = floatBitsToUint(trace.surface.hit_field);
+			b_lumen_trace_rays[slot + 3u] = floatBitsToUint(trace.surface.voxel);
+			atomicFetchAndAdd(s_lumen_hits, 1u, hit_index);
+		}
+		else
+		{
+			imageStore(i_lumen_trace_radiance, ray.trace_texel,
+			           vec4(LumenApplyTraceOutput(trace_output, trace.result.radiance),
+			                LumenEncodeTraceDistance(trace.result.filter_distance, false)));
+		}
+	}
+	barrier();
+	if(gl_LocalInvocationIndex == 0u && s_lumen_hits > 0u)
+	{
+		atomicFetchAndAdd(b_lumen_trace_hits[0], s_lumen_hits, s_lumen_hits_base);
+	}
+	barrier();
 	if(is_deferred)
 	{
-		b_lumen_trace_rays[slot + 2u] = floatBitsToUint(trace.surface.hit_field);
-		b_lumen_trace_rays[slot + 3u] = floatBitsToUint(trace.surface.voxel);
-		return;
+		b_lumen_trace_hits[1u + s_lumen_hits_base + hit_index] = slot;
 	}
-	imageStore(i_lumen_trace_radiance, ray.trace_texel,
-	           vec4(LumenApplyTraceOutput(trace_output, trace.result.radiance),
-	                LumenEncodeTraceDistance(trace.result.filter_distance, false)));
+}
 #else
-	float t = uintBitsToFloat(b_lumen_trace_rays[slot + 1u]);
-	if(t < 0.0)
+NUM_THREADS(LUMEN_TRACE_FAR_FIELD_GROUP, 1, 1)
+void main()
+{
+	uint index = LumenFarRayIndex(gl_WorkGroupID, gl_LocalInvocationIndex);
+	if(index >= b_lumen_trace_hits[0])
 	{
 		return;
 	}
+	uint slot = b_lumen_trace_hits[1u + index];
+	float t = uintBitsToFloat(b_lumen_trace_rays[slot + 1u]);
 	LumenProbeRay ray = LumenFarRay(slot);
 	LumenFieldSurface surface;
 	surface.hit = true;
@@ -668,8 +710,8 @@ void main()
 	float keep = u_lumen_keep_stage == 0 || u_lumen_keep_stage == 2 ? 1.0 : 0.0;
 	imageStore(i_lumen_trace_radiance, ray.trace_texel,
 	           vec4(LumenShadeFieldSurface(surface) * keep, LumenEncodeTraceDistance(ray.near_field, false)));
-#endif
 }
+#endif
 #else
 /// The group's rays left to the far-field pass and their first slot in b_lumen_trace_rays.
 SHARED uint s_lumen_far_rays;

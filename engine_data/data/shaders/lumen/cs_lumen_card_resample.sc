@@ -6,9 +6,9 @@
  * table, lumen_scene::get_resample_table, bound as the scene table). Each texel maps its page's card UV onto the
  * previous mip, the card's extent being unchanged, and samples its direct and indirect lighting bilinearly; the tile
  * takes the average radiosity update count of its 64 texels (0 where the previous mip held nothing), rounded to a
- * whole count as UE's 8-bit store rounds it, stored in every texel's direct alpha. A page refreshed in place (the tile
- * record's flag) copies its own texels instead, exactly. The copy (cs_lumen_card_copy.sc) moves them into the new
- * pages. Tiles of cards without a previous allocation are left alone.
+ * whole count as UE's 8-bit store rounds it, stored in every texel's direct alpha. The copy (cs_lumen_card_copy.sc)
+ * moves them into the new pages. Tiles of cards without a previous allocation, and pages refreshed in place (the tile
+ * record's flag: the copy keeps their lighting where it is), are left alone.
  */
 
 #include "bgfx_compute.sh"
@@ -26,8 +26,10 @@ BUFFER_RO(b_lumen_scene, vec4, 7);
 #define LUMEN_SURFACE_CACHE_TABLES_ONLY
 #include "lumen/lumen_surface_cache.sh"
 #include "lumen/lumen_surface_cache_lighting.sh"
+#define LUMEN_TILE_RECORDS_COPY_TILES
+#include "lumen/lumen_tile_records.sh"
 
-/// x = tile count.
+/// x = tile count, y = the float4 the tile words start at (lumen_tile_records.sh).
 uniform vec4 u_lumen_card_copy;
 
 #define LUMEN_CARD_TILE_TEXELS 64
@@ -38,27 +40,21 @@ NUM_THREADS(8, 8, 1)
 void main()
 {
 	int tile_index = LumenCopyTileIndex(ivec2(gl_WorkGroupID.xy));
-	int record = tile_index * LUMEN_CARD_COPY_TILE_STRIDE;
-	vec4 texels = b_lumen_copy_tiles[record + 0];
-	vec4 uv_rect = b_lumen_copy_tiles[record + 1];
-	vec4 page = b_lumen_copy_tiles[record + 2];
-	float previous_card = b_lumen_copy_tiles[record + 3].x;
-	bool resamples = float(tile_index) < u_lumen_card_copy.x && previous_card >= 0.0;
-	bool keeps_lighting = b_lumen_copy_tiles[record + 4].w > 0.5;
+	// The last row's groups past the list run to the barrier on the list's last tile.
+	int tile_count = int(u_lumen_card_copy.x);
+	LumenCopyTile copy_tile = LumenLoadCopyTile(min(tile_index, max(tile_count - 1, 0)), int(u_lumen_card_copy.y));
+	vec4 texels = copy_tile.texels;
+	vec4 uv_rect = copy_tile.uv_rect;
+	vec4 page = copy_tile.page;
+	float previous_card = copy_tile.card.x;
+	bool keeps_lighting = copy_tile.axis_y.w > 0.5;
+	bool resamples = tile_index < tile_count && previous_card >= 0.0 && !keeps_lighting;
 	ivec2 local = ivec2(gl_LocalInvocationID.xy);
 	float frames = 0.0;
 	vec3 direct = vec3_splat(0.0);
 	vec3 indirect = vec3_splat(0.0);
 	BRANCH
-	if(resamples && keeps_lighting)
-	{
-		// The page in place: its own texels, the atlas still holding them until the copy.
-		ivec2 atlas_texel = ivec2(texels.zw) + local;
-		direct = texelFetch(s_lumen_card_direct, atlas_texel, 0).xyz;
-		indirect = texelFetch(s_lumen_card_indirect, atlas_texel, 0).xyz;
-		frames = texelFetch(s_lumen_radiosity_frames, atlas_texel / LUMEN_CARD_TILE_SIZE, 0).x;
-	}
-	else if(resamples)
+	if(resamples)
 	{
 		vec2 card_uv = mix(uv_rect.xy, uv_rect.zw, (page.xy + vec2(local) + 0.5) / page.zw);
 		LumenCard card = LumenLoadCard(int(previous_card));

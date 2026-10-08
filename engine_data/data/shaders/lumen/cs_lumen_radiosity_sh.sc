@@ -3,9 +3,9 @@
  * groups of LUMEN_RADIOSITY_GROUP_THREADS holding the rays of as many whole probes as fit (lumen_radiosity_common.sh),
  * one thread per ray, the group's y the block of the tile's probes.
  *
- * Filter: each trace is averaged with the same trace of the four neighbouring probes of the page (centre
- * weight 2), a neighbour counting only when its probe is a valid texel within ~15 degrees of this probe's
- * tangent plane. SH: each probe projects its filtered traces onto two SH bands (the uniform hemisphere pdf
+ * Filter: each trace is averaged with the same trace of the four neighbouring probes of the card (centre
+ * weight 2; past a page edge in the card's neighbouring page, LumenResolveRadiosityCell), a neighbour counting only
+ * when its probe is a valid texel within ~15 degrees of this probe's tangent plane. SH: each probe projects its filtered traces onto two SH bands (the uniform hemisphere pdf
  * folded in) and stores them per colour channel at its probe cell.
  */
 
@@ -20,6 +20,8 @@ SAMPLER2D(s_lumen_radiosity_trace, 3);
 SAMPLER2D(s_lumen_card_depth, 4);
 SAMPLER2D(s_lumen_card_normal, 5);
 BUFFER_RO(b_lumen_light_tiles, vec4, 6);
+#define LUMEN_TILE_RECORDS_LIGHT_TILES
+#include "lumen/lumen_tile_records.sh"
 BUFFER_RO(b_lumen_scene, vec4, 7);
 
 #define LUMEN_SURFACE_CACHE_TABLES_ONLY
@@ -52,24 +54,23 @@ LumenRadiosityProbe LumenLoadRadiosityProbe(LumenCard card, vec4 uv_rect, vec4 p
 	return probe;
 }
 
-/// Adds the same trace of the neighbouring probe at cell offset @p offset (in cells) when it qualifies.
-vec4 LumenAddNeighbour(vec4 accumulated, LumenCard card, vec4 uv_rect, vec4 page, ivec2 cell_origin, ivec2 offset,
-                       ivec2 jitter, ivec2 trace_texel, LumenRadiosityProbe self_probe)
+/// Adds the same trace of the neighbouring probe at cell @p cell_in_page of the page (atlas origin xy, size xy)
+/// @p page, updated last with @p update_index, when it qualifies.
+vec4 LumenAddNeighbour(vec4 accumulated, LumenCard card, vec4 uv_rect, vec4 page, float update_index,
+                       ivec2 cell_in_page, ivec2 trace_texel, LumenRadiosityProbe self_probe)
 {
-	int spacing = u_lumen_radiosity_spacing;
-	ivec2 neighbour_origin = cell_origin + offset * spacing;
-	ivec2 page_min = ivec2(page.xy);
-	ivec2 page_max = page_min + ivec2(page.zw);
-	if(any(lessThan(neighbour_origin, page_min)) || any(greaterThanEqual(neighbour_origin, page_max)))
+	LumenRadiosityCell cell = LumenResolveRadiosityCell(card, uv_rect, page, update_index, cell_in_page);
+	if(!cell.valid)
 	{
 		return accumulated;
 	}
-	LumenRadiosityProbe neighbour = LumenLoadRadiosityProbe(card, uv_rect, page, neighbour_origin + jitter);
+	LumenRadiosityProbe neighbour =
+	    LumenLoadRadiosityProbe(card, cell.uv_rect, cell.page, cell.atlas_origin + LumenRadiosityJitter(cell.update_index));
 	if(!neighbour.valid || !LumenRadiosityPlaneTest(self_probe.position, self_probe.normal, neighbour.position))
 	{
 		return accumulated;
 	}
-	ivec2 trace = LumenRadiosityTraceTexel(neighbour_origin / spacing, trace_texel);
+	ivec2 trace = LumenRadiosityTraceTexel(cell.atlas_origin / u_lumen_radiosity_spacing, trace_texel);
 	vec3 radiance = texelFetch(s_lumen_radiosity_trace, trace, 0).xyz;
 	return accumulated + vec4(radiance, 1.0);
 }
@@ -79,9 +80,10 @@ void main()
 {
 	int tile_index = int(u_lumen_card_lighting.x) + int(gl_WorkGroupID.x);
 	bool is_tile_active = float(gl_WorkGroupID.x) < u_lumen_card_lighting.y;
-	vec4 t0 = b_lumen_light_tiles[tile_index * LUMEN_RADIOSITY_TILE_STRIDE + 0];
-	vec4 uv_rect = b_lumen_light_tiles[tile_index * LUMEN_RADIOSITY_TILE_STRIDE + 1];
-	vec4 page = b_lumen_light_tiles[tile_index * LUMEN_RADIOSITY_TILE_STRIDE + 2];
+	LumenLightTile light_tile = LumenLoadLightTile(is_tile_active ? tile_index : int(u_lumen_card_lighting.x), int(u_lumen_card_lighting.z));
+	vec4 t0 = light_tile.t0;
+	vec4 uv_rect = light_tile.uv_rect;
+	vec4 page = light_tile.page;
 	int spacing = u_lumen_radiosity_spacing;
 	int resolution = u_lumen_radiosity_resolution;
 	int probes_per_axis = LumenRadiosityProbesPerTileAxis();
@@ -98,16 +100,20 @@ void main()
 	ivec2 cell_origin = ivec2(t0.xy) + LumenRadiosityGridCoord(probe, probes_per_axis) * spacing;
 	ivec2 jitter = LumenRadiosityJitter(t0.w);
 	LumenCard card = LumenLoadCard(int(t0.z));
+	// The page's own mip (locked or hi-res) is the one whose neighbouring pages the filter reads.
+	card.page_table_offset = light_tile.mip.x;
+	card.size_in_pages = light_tile.mip.yz;
 	LumenRadiosityProbe self_probe = LumenLoadRadiosityProbe(card, uv_rect, page, cell_origin + jitter);
 	vec3 filtered = vec3_splat(0.0);
 	if(is_probe_active && self_probe.valid)
 	{
 		ivec2 trace = LumenRadiosityTraceTexel(cell_origin / spacing, trace_texel);
 		vec4 accumulated = vec4(2.0 * texelFetch(s_lumen_radiosity_trace, trace, 0).xyz, 2.0);
-		accumulated = LumenAddNeighbour(accumulated, card, uv_rect, page, cell_origin, ivec2(0, 1), jitter, trace_texel, self_probe);
-		accumulated = LumenAddNeighbour(accumulated, card, uv_rect, page, cell_origin, ivec2(1, 0), jitter, trace_texel, self_probe);
-		accumulated = LumenAddNeighbour(accumulated, card, uv_rect, page, cell_origin, ivec2(0, -1), jitter, trace_texel, self_probe);
-		accumulated = LumenAddNeighbour(accumulated, card, uv_rect, page, cell_origin, ivec2(-1, 0), jitter, trace_texel, self_probe);
+		ivec2 cell_in_page = (cell_origin - ivec2(page.xy)) / spacing;
+		accumulated = LumenAddNeighbour(accumulated, card, uv_rect, page, t0.w, cell_in_page + ivec2(0, 1), trace_texel, self_probe);
+		accumulated = LumenAddNeighbour(accumulated, card, uv_rect, page, t0.w, cell_in_page + ivec2(1, 0), trace_texel, self_probe);
+		accumulated = LumenAddNeighbour(accumulated, card, uv_rect, page, t0.w, cell_in_page + ivec2(0, -1), trace_texel, self_probe);
+		accumulated = LumenAddNeighbour(accumulated, card, uv_rect, page, t0.w, cell_in_page + ivec2(-1, 0), trace_texel, self_probe);
 		filtered = accumulated.xyz / accumulated.w;
 	}
 	s_filtered[local] = filtered;

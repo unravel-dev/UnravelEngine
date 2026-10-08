@@ -56,7 +56,7 @@ void LumenRcWriteTraceArgs()
 {
 	uint tiles = b_lumen_rc_counters[LUMEN_RC_COUNTER_TILES];
 	uint traces = b_lumen_rc_counters[LUMEN_RC_COUNTER_TRACE_COUNT];
-	uint filter_groups = (uint(LUMEN_RC_FINAL_RES) + 7u) / 8u;
+	uint filter_groups = (uint(u_lumen_rc_final_res) + 7u) / 8u;
 	uint rows = (tiles + LUMEN_RC_TRACE_DISPATCH_WIDTH - 1u) / LUMEN_RC_TRACE_DISPATCH_WIDTH;
 	dispatchIndirect(b_lumen_rc_args, 1u, min(tiles, LUMEN_RC_TRACE_DISPATCH_WIDTH), rows, 1u);
 	dispatchIndirect(b_lumen_rc_args, 2u, filter_groups, filter_groups, traces);

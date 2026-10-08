@@ -45,6 +45,13 @@ class material;
  * lighting update speed. Direct lighting keeps no history and is a function of the page's capture, placement, the
  * lights and the occluders between them: a page lit once is skipped until one of those changes
  * (invalidate_direct_lighting), so the direct budget goes to the pages whose lighting changed.
+ *
+ * Beside its locked mip a resident card may map pages of one finer mip on demand (UE's unlocked hi-res pages,
+ * LumenSceneRendering.cpp:1050-1135): the reflections' surface cache feedback (set_feedback) asks for the pages their
+ * rays hit, ranked behind every locked request; a new hi-res page inherits the locked mip's lighting and is lit like
+ * any page. Hi-res pages give way to locked allocations once idle for two frames and to other hi-res pages once idle
+ * for 256 (UE EvictOldestAllocation). The reflections read a card through its row 5 page table, whose unmapped hi-res
+ * pages fall back to the locked pages covering them; every other reader uses the locked mip.
  */
 class lumen_scene
 {
@@ -52,9 +59,9 @@ public:
     struct settings
     {
         ///< Physical atlas edge in texels (a multiple of the page size).
-        uint32_t atlas_size = 2048;
+        uint32_t atlas_size = 4096;
         ///< Capture atlas edge in texels: the most texels captured per frame.
-        uint32_t capture_atlas_size = 1024;
+        uint32_t capture_atlas_size = 512;
         ///< r.LumenScene.SurfaceCache.CardCapturesPerFrame.
         uint32_t max_captures_per_frame = 300;
         ///< Cards farther than this are never resident, whatever the view distance: the reach of the global distance
@@ -74,6 +81,8 @@ public:
         ///< r.LumenScene.SurfaceCache.CardCaptureRefreshFraction: the share of the capture budget spent capturing
         ///< resident pages again, oldest first, so material changes reach the surface cache. 0 disables.
         float card_capture_refresh_fraction = 0.125f;
+        ///< The scalability tier's scale on both card lighting update factors (UE High doubles Epic's).
+        uint32_t lighting_update_factor_scale = 1;
 
         friend auto operator==(const settings& lhs, const settings& rhs) -> bool = default;
     };
@@ -155,6 +164,10 @@ public:
         uint32_t resident_page = 0;
         ///< The page's update count in the context (UE's per-page temporal index): the radiosity probes' jitter.
         uint32_t update_index = 0;
+        ///< The nearest viewer's index in schedule_lighting()'s list: the camera whose distance field lights the page.
+        uint32_t viewer = 0;
+        ///< The frame the page was lit in before this schedule (revoke_lighting restores it).
+        uint64_t previous_lit_frame = 0;
     };
 
     /// A captured page of a resident card: what the lighting passes need to light its texels.
@@ -166,6 +179,22 @@ public:
         math::vec4 card_uv_rect{0.0f};
         math::uvec2 atlas_offset{0u};
         math::uvec2 size{0u};
+        ///< The page's mip in the page table (the locked mip's or the hi-res mip's): its span's first entry and the
+        ///< mip's size in pages, through which the radiosity finds neighbouring pages.
+        uint32_t mip_page_table_offset = 0;
+        math::uvec2 mip_size_in_pages{1u};
+    };
+
+    /// One element of the reflections' surface cache feedback (UE FLumenSurfaceCacheFeedback, decoded): a card of the
+    /// card table at the feedback's card index revision, the res level its hits want, the page they land on at that
+    /// level (on the card's page grid without its aspect bias: 2^(level - 7) pages across from level 8, one below),
+    /// and how many feedback samples landed there.
+    struct feedback_element
+    {
+        uint32_t card_index = 0;
+        uint32_t res_level = 0;
+        math::uvec2 page{0u};
+        uint32_t hits = 0;
     };
 
     /// A card's box placed in the world: unit axes and world half extents.
@@ -207,7 +236,7 @@ public:
     static constexpr uint32_t max_res_level = 11;
     static constexpr uint32_t sub_allocation_res_level = 7;
     /// float4s per card record, page-table entry and instance record in the packed tables.
-    static constexpr uint32_t card_stride = 5;
+    static constexpr uint32_t card_stride = 6;
     static constexpr uint32_t page_stride = 1;
     static constexpr uint32_t instance_stride = 1;
 
@@ -220,25 +249,41 @@ public:
      */
     auto apply_settings(const settings& s) -> bool;
 
+    /// A camera the cards serve: a card's distance is to the nearest viewer, a page near any viewer's frustum lights
+    /// faster.
+    struct viewer
+    {
+        math::vec3 origin{0.0f};
+        math::frustum frustum{};
+    };
+
     /**
      * @brief Places this frame's cards, chooses resolutions, (re)allocates and queues captures.
      *
      * @param sources        Placements with built cards (any order; identity keys the history).
      * @param instance_count This frame's GI instance count (the instance table's size).
-     * @param view_origin    The viewer the resolutions are chosen for.
+     * @param viewers        The viewers the resolutions are chosen for (at least one).
      */
+    void update(const std::vector<source>& sources, uint32_t instance_count, const std::vector<viewer>& viewers);
+    /// update() for one viewer at @p view_origin.
     void update(const std::vector<source>& sources, uint32_t instance_count, const math::vec3& view_origin);
 
     /**
      * @brief Picks this frame's pages for each lighting context (UE LumenSceneLighting.usf:105-366), after update().
      *
-     * A page's speed is 1 / (1 + its distance to @p view_origin / LUMEN_SCENE_LIGHTING_PRIORITY_DISTANCE), doubled
-     * within LUMEN_SCENE_LIGHTING_FRUSTUM_MARGIN of @p view_frustum; its bucket 15 - ceil(log2(4 x frames since its
-     * last update x speed)), a never-lit page ranking as LUMEN_SCENE_LIGHTING_NEVER_LIT_FRAMES old. Buckets are
-     * admitted most urgent first, whole pages, until the context's tile budget (compute_lighting_tile_budget) is
+     * A page's speed is 1 / (1 + its distance to the nearest of @p viewers / LUMEN_SCENE_LIGHTING_PRIORITY_DISTANCE),
+     * doubled within LUMEN_SCENE_LIGHTING_FRUSTUM_MARGIN of any viewer's frustum; its bucket 15 - ceil(log2(4 x frames
+     * since its last update x speed)), a never-lit page ranking as LUMEN_SCENE_LIGHTING_NEVER_LIT_FRAMES old. Buckets
+     * are admitted most urgent first, whole pages, until the context's tile budget (compute_lighting_tile_budget) is
      * spent; the pages taken are stamped with this frame.
      */
+    void schedule_lighting(const std::vector<viewer>& viewers);
+    /// schedule_lighting() for one viewer.
     void schedule_lighting(const math::vec3& view_origin, const math::frustum& view_frustum);
+
+    /// The last schedule_lighting()'s pages for @p viewer were not lit (its camera stopped rendering): they take back
+    /// their previous lighting frame, and their direct lighting is due again. Before the next update().
+    void revoke_lighting(uint32_t viewer);
 
     /**
      * @brief Marks the resident pages whose direct lighting @p changes reach for relighting, after update() and before
@@ -246,6 +291,32 @@ public:
      *        it was last marked is skipped by the direct lighting, which keeps no history.
      */
     void invalidate_direct_lighting(const direct_lighting_changes& changes);
+
+    /**
+     * @brief Takes the reflections' surface cache feedback gathered while the card indices were at
+     *        @p card_index_revision (UE FLumenSceneData::UpdateSurfaceCacheFeedback); feedback from other card indices
+     *        is dropped. An element hit more than @p min_hits times keeps its card's hi-res page in use, or asks for it
+     *        when the level it wants is above the card's locked level: the next update() maps it, ranked behind every
+     *        locked request by 25 m plus 25 m x (1 - hits / @p sample_count).
+     */
+    void set_feedback(const std::vector<feedback_element>& elements,
+                      uint64_t card_index_revision,
+                      uint32_t min_hits,
+                      uint32_t sample_count);
+
+    /// Whether the cards map hi-res pages (on by default, UE r.LumenScene.SurfaceCache.Feedback); turned off, the next
+    /// update() frees every hi-res page and set_feedback() is ignored.
+    void set_hi_res_pages_enabled(bool enabled)
+    {
+        are_hi_res_pages_enabled_ = enabled;
+    }
+
+    /// Bumped whenever a card's index in the card table may change (the active placements or their card sets): the
+    /// card indices of feedback gathered at one revision hold until the next.
+    auto get_card_index_revision() const -> uint64_t
+    {
+        return card_index_revision_;
+    }
 
     /// The pages schedule_lighting() picked for @p context this frame.
     auto get_lit_pages(lighting_context context) const -> const std::vector<lit_page>&
@@ -280,8 +351,8 @@ public:
         view_settings_ = view_settings;
     }
 
-    /// The distance from the viewer within which cards are resident: the view distance, at most
-    /// settings::max_card_distance.
+    /// The distance from the viewer within which cards are resident: settings::max_card_distance, the reach of the
+    /// global distance field.
     auto get_max_card_distance() const -> float;
 
     /// A lighting context's update factor at the view's lighting update speed (R/LumenSceneLighting.cpp:561-584): the
@@ -300,7 +371,8 @@ public:
     }
 
     /// Per card: origin + page-table offset, axis_x + extent x, axis_y + extent y, axis_z + extent z,
-    /// (size in pages x, y, res level x, y) - res level 0 = not resident.
+    /// (size in pages x, y, res level x, y) - res level 0 = not resident, and the reflections' page table (offset, size
+    /// in pages x, y, 1 for the hi-res mip's or 0 for the locked mip's own).
     auto get_card_table() const -> const std::vector<math::vec4>&
     {
         return card_table_;
@@ -313,6 +385,14 @@ public:
      *        the surface cache's update frame), for the lighting updates views. A page never lit counts every frame.
      */
     void get_page_lighting_ages(std::vector<math::vec4>& out) const;
+
+    /**
+     * @brief Per page-table entry, in get_page_table's order: the update index of the page's last radiosity update
+     *        (lit_page::update_index, this frame's for a page scheduled this frame), -1 while the radiosity has not
+     *        updated the page since it was mapped. The radiosity probes of a neighbouring page read its traces and SH
+     *        with that update's jitter (UE FLumenCardPageData IndirectLightingTemporalIndex).
+     */
+    void get_page_radiosity_indices(std::vector<float>& out) const;
 
     /**
      * @brief Per resident page, 3 vec4: (atlas origin xy, size xy), the card UV rectangle it covers, (card index, the
@@ -391,6 +471,9 @@ public:
         std::array<uint32_t, lighting_context_count> cut_bucket{};
         ///< Resident pages whose direct lighting is due (never lit, or marked since it was).
         uint32_t direct_dirty_pages = 0;
+        ///< Hi-res pages mapped, and the hi-res pages the feedback asked for this frame.
+        uint32_t hi_res_pages = 0;
+        uint32_t hi_res_requests = 0;
     };
 
     auto get_stats() const -> const stats&
@@ -424,6 +507,19 @@ private:
         bool is_direct_dirty = true;
     };
 
+    /// A card's on-demand mip above its locked one: any of its pages mapped as the feedback asks for them.
+    struct hi_res_mip
+    {
+        ///< The mip's res level, 0 when the card has none.
+        uint32_t res_level = 0;
+        mip_desc mip{};
+        ///< One per virtual page; is_mapped says which hold a physical page.
+        std::vector<physical_slot> slots;
+        std::vector<uint8_t> is_mapped;
+        ///< Per virtual page: the frame the feedback last asked for it (UE UnlockedAllocationHeap's key).
+        std::vector<uint64_t> last_used;
+    };
+
     struct card_state
     {
         ///< The resident (locked) res level, 0 when not resident.
@@ -434,6 +530,7 @@ private:
         ///< One per virtual page of the resident mip (one for a sub-allocation), all captured.
         std::vector<physical_slot> slots;
         math::uvec2 res_level_bias{0u};
+        hi_res_mip hi_res;
     };
 
     struct placement
@@ -450,6 +547,8 @@ private:
         uint64_t last_seen = 0;
         ///< source::material_key at the last capture request.
         uint64_t material_key = 0;
+        ///< The source that last showed this placement (index into the update's sources).
+        uint32_t source_index = 0;
     };
 
     struct sub_allocation_bin
@@ -465,7 +564,7 @@ private:
         std::vector<uint32_t> free_counts;
     };
 
-    /// A card whose resolution moved: it asks for an allocation.
+    /// A card whose resolution moved asks for an allocation of its locked mip; the feedback asks for a hi-res page.
     struct request
     {
         ///< Index into the update's sources.
@@ -473,6 +572,29 @@ private:
         uint32_t card = 0;
         ///< Distance bucket, nearest first.
         uint32_t bin = 0;
+        ///< A hi-res request: the level asked for and its page there (feedback_element::page).
+        bool is_hi_res = false;
+        uint32_t hi_res_level = 0;
+        math::uvec2 hi_res_page{0u};
+    };
+
+    /// A hi-res page set_feedback() asked for, ranked and allocated by the next update().
+    struct hi_res_request
+    {
+        uint64_t identity = 0;
+        uint32_t card = 0;
+        uint32_t res_level = 0;
+        math::uvec2 page{0u};
+        ///< Added to the card's distance when the request is ranked.
+        float distance_bias = 0.0f;
+    };
+
+    /// A mapped hi-res page (placement identity, card, virtual page): the eviction's candidates.
+    struct hi_res_page_key
+    {
+        uint64_t identity = 0;
+        uint32_t card = 0;
+        uint32_t page = 0;
     };
 
     /// One parallel task's share of the resolution pass (choose_resolutions).
@@ -505,6 +627,18 @@ private:
     static auto compute_page_uv_rect(const mip_desc& mip, uint32_t page) -> math::vec4;
     auto allocate(card_state& card, uint32_t res_level) -> bool;
     void free_card(card_state& card);
+    /// Frees @p card's hi-res mip and its mapped pages.
+    void free_hi_res(card_state& card);
+    /// The virtual page of @p mip under the centre of a feedback element's page @p page at @p res_level
+    /// (feedback_element::page).
+    static auto get_feedback_page(const mip_desc& mip, const math::uvec2& page, uint32_t res_level) -> uint32_t;
+    /// Whether one page of @p mip fits the physical atlas as it is now.
+    auto has_page_space(const mip_desc& mip) const -> bool;
+    /// Frees the hi-res page whose feedback is oldest when it has been idle for @p min_idle_frames or more (UE
+    /// EvictOldestAllocation); returns whether one was freed.
+    auto evict_oldest_hi_res_page(uint64_t min_idle_frames) -> bool;
+    /// update(): the requests set_feedback() left, ranked by the card's distance to @p view_origin.
+    void add_hi_res_requests(const std::vector<viewer>& viewers);
     /// Whether @p mip fits the physical atlas as it is now (UE IsPhysicalSpaceAvailable), in constant time.
     auto has_physical_space(const mip_desc& mip) const -> bool;
     /// The bin of a sub-allocated element size, or null when none was created yet.
@@ -523,10 +657,10 @@ private:
     auto collect_active(const std::vector<source>& sources, uint32_t instance_count) -> bool;
     /// update(): every active card's resolution from its distance to @p view_origin, and a request for every card whose
     /// resolution moved; @p parallel spreads the placements over the pool.
-    void choose_resolutions(const std::vector<source>& sources, const math::vec3& view_origin, bool parallel);
+    void choose_resolutions(const std::vector<source>& sources, const std::vector<viewer>& viewers, bool parallel);
     /// choose_resolutions() for the active placements [@p begin, @p end).
     void choose_chunk_resolutions(const std::vector<source>& sources,
-                                  const math::vec3& view_origin,
+                                  const std::vector<viewer>& viewers,
                                   uint32_t begin,
                                   uint32_t end,
                                   resolution_chunk& chunk);
@@ -534,6 +668,9 @@ private:
     class capture_packer;
     /// update(): the requests, nearest first, allocated and queued for capture within the frame's budgets.
     void allocate_requests(const std::vector<source>& sources, capture_packer& packer);
+    /// allocate_requests(): maps the hi-res page @p req asks for and queues its capture; returns the pages captured.
+    auto allocate_hi_res_page(const std::vector<source>& sources, const request& req, capture_packer& packer)
+        -> uint32_t;
     /// update(): the packed card, page and instance tables and the resident page list.
     void build_tables(const std::vector<source>& sources, uint32_t instance_count);
     /// update(): resident pages captured again, oldest first, within the refresh's share of the capture budget (UE
@@ -541,7 +678,17 @@ private:
     void refresh_captures(const std::vector<source>& sources, capture_packer& packer);
     /// schedule_lighting(): every resident page's tiles, speed and bucket per lighting context, across the pool; a
     /// direct-lit page that is not dirty takes k_skip_bucket.
-    void compute_page_priorities(const math::vec3& view_origin, const math::frustum& view_frustum);
+    void compute_page_priorities(const std::vector<viewer>& viewers);
+    /// Per resident page: its lighting speed (UE's 1 / (1 + distance / priority distance), doubled near a frustum),
+    /// its nearest viewer's index and its 8 x 8 tile count.
+    void compute_page_speeds(const std::vector<viewer>& viewers);
+    /// Per resident page, the index of its nearest viewer (compute_page_speeds).
+    std::vector<uint32_t> page_viewers_;
+    /// Per resident page, its lighting speed (compute_page_speeds), kept while the tables and the viewers are the
+    /// ones it was computed for.
+    std::vector<float> page_speeds_;
+    std::vector<viewer> priority_viewers_;
+    uint64_t priority_tables_revision_ = ~0ull;
     /// The world box of resident page @p page (its card-space box across the card's depth).
     auto compute_page_bounds(uint32_t page) const -> math::bbox;
 
@@ -575,6 +722,19 @@ private:
     uint32_t resident_cards_ = 0;
     ///< Per resident page: its placement (index into active_) and its card there, for the refresh.
     std::vector<math::uvec2> resident_page_owners_;
+    ///< Per page-table entry: the physical slot it maps, null for a hi-res entry falling back to a locked page.
+    std::vector<const physical_slot*> page_entry_slots_;
+    ///< Per card of the card table: its placement's identity and its card there (the feedback's card indices).
+    std::vector<std::pair<uint64_t, uint32_t>> card_owner_keys_;
+    uint64_t card_index_revision_ = 0;
+    ///< The feedback's requests for the next update(), and the mapped hi-res pages (stale keys dropped as met).
+    std::vector<hi_res_request> hi_res_requests_;
+    std::vector<hi_res_page_key> hi_res_pages_;
+    ///< Hi-res pages mapped in the current tables.
+    uint32_t hi_res_page_count_ = 0;
+    bool are_hi_res_pages_enabled_ = true;
+    ///< This frame's active sources (collect_active), per source.
+    std::vector<uint8_t> is_source_active_;
     ///< refresh_captures() scratch: the resident pages it may capture, and each refreshed card's resample entry.
     std::vector<uint32_t> refresh_candidates_;
     std::vector<std::pair<uint32_t, int32_t>> refresh_resamples_;

@@ -10,10 +10,11 @@
  * the luminance stop and tonemaps hard against fireflies in the revealed area. The result does not feed the
  * history.
  *
- * Composite: the reflection buffers the indirect pass reads (ComposeIndirectSpecular) take Lumen's one specular
- * signal - the traced layer (RBUFFER) holds the reflections x F, F = the traced weight of the pixel's roughness,
- * with 1 - F left to the untraced layer, and the untraced layer (PBUFFER) holds the screen probe gather's rough
- * specular (its history times the GI intensity) with full coverage. Lumen does not composite reflection captures or sky specular under its own.
+ * Composite: the traced layer the indirect pass reads (RBUFFER, ComposeIndirectSpecular) holds the reflections x F,
+ * F = the traced weight of the pixel's roughness, with 1 - F left to the untraced layer. The indirect pass takes the
+ * untraced layer straight from the screen probe gather's rough specular history (its history times the GI intensity,
+ * full coverage; fs_pbr_lighting.sh u_probe_layer_params): Lumen does not composite reflection captures or sky
+ * specular under its own (UE DiffuseIndirectComposite.usf:220-259).
  */
 
 #include "bgfx_compute.sh"
@@ -22,7 +23,6 @@
 #include "lumen/lumen_reflection_common.sh"
 
 IMAGE2D_WO(s_lumen_reflection_traced_out, rgba16f, 0);
-IMAGE2D_WO(s_lumen_reflection_probe_out, rgba16f, 1);
 /// The temporal accumulation: rgb = radiance, a = luminance second moment.
 SAMPLER2D(s_lumen_reflection_specular, 8);
 /// The accumulated frame count, -1 = no reflection.
@@ -30,8 +30,6 @@ SAMPLER2D(s_lumen_reflection_frames, 9);
 SAMPLER2D(s_lumen_depth, 10);
 /// G-buffer target 1: octahedral normal, metalness, roughness.
 SAMPLER2D(s_lumen_normal, 11);
-/// The screen probe gather's rough specular history: rgb pre-exposed, before the GI intensity.
-SAMPLER2D(s_lumen_rough_specular, 12);
 
 /// UE TonemapLighting: heavier with @p disocclusion against fireflies in revealed areas.
 vec3 LumenSpatialTonemap(vec3 color, float disocclusion)
@@ -114,7 +112,6 @@ void main()
 	{
 		// Sky: no traced layer and no probe coverage.
 		imageStore(s_lumen_reflection_traced_out, pixel, vec4(0.0, 0.0, 0.0, 1.0));
-		imageStore(s_lumen_reflection_probe_out, pixel, vec4_splat(0.0));
 		return;
 	}
 	float roughness = texelFetch(s_lumen_normal, pixel, 0).w;
@@ -127,9 +124,5 @@ void main()
 		vec4 accumulated = texelFetch(s_lumen_reflection_specular, pixel, 0);
 		traced = vec4(LumenFilterReflection(pixel, accumulated, frames) * traced_weight, 1.0 - traced_weight);
 	}
-	vec3 rough = texelFetch(s_lumen_rough_specular, pixel, 0).xyz * u_lumen_reflection_rough_specular_scale;
 	imageStore(s_lumen_reflection_traced_out, pixel, traced);
-	imageStore(s_lumen_reflection_probe_out,
-	           pixel,
-	           u_lumen_reflection_has_rough_specular ? vec4(rough, 1.0) : vec4_splat(0.0));
 }

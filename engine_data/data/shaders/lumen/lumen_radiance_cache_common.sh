@@ -6,7 +6,7 @@
  * world-space radiance probes on LUMEN_RADIANCE_CACHE_CLIPMAPS camera-centred clipmaps of
  * LUMEN_RADIANCE_CACHE_GRID^3 cells, cell 0 = 2 x LUMEN_RADIANCE_CACHE_EXTENT / GRID, doubling per clipmap.
  * A probe sits at its cell's lattice point (a multiple of the cell size, world-locked) and holds an
- * equal-area octahedral radiance map of LUMEN_RADIANCE_CACHE_PROBE_RES^2 texels plus their hit distances.
+ * equal-area octahedral radiance map of u_lumen_rc_probe_res^2 texels plus their hit distances.
  *
  * Buffers (uint everywhere, no float bit patterns that a typed store could flush):
  *  - indirection: one entry per cell of every clipmap, x-major with the clipmaps side by side along x:
@@ -24,11 +24,9 @@
 #define LUMEN_RC_USED    0xFFFFFFFEu
 #define LUMEN_RC_INDIRECTION_X (LUMEN_RADIANCE_CACHE_GRID * LUMEN_RADIANCE_CACHE_CLIPMAPS)
 #define LUMEN_RC_INDIRECTION_SIZE (LUMEN_RC_INDIRECTION_X * LUMEN_RADIANCE_CACHE_GRID * LUMEN_RADIANCE_CACHE_GRID)
-/// Texels of a probe tile in the final atlas: the radiance map plus a one-texel octahedral border.
-#define LUMEN_RC_FINAL_RES (LUMEN_RADIANCE_CACHE_PROBE_RES + 2)
 /// Directions per trace tile edge (one 8x8 group per tile).
 #define LUMEN_RC_TILE_RES 8
-/// Trace tiles per probe at the normal level: (R / 2) << 1 directions per axis.
+/// Trace tiles per probe at the normal level of the largest probe resolution (32): (R / 2) << 1 directions per axis.
 #define LUMEN_RC_MAX_TILES_PER_PROBE 16
 
 #define LUMEN_RC_COUNTER_FREE_LIST        0
@@ -57,11 +55,18 @@ uniform vec4 u_lumen_rc_prev_clipmaps[LUMEN_RADIANCE_CACHE_CLIPMAPS];
 uniform vec4 u_lumen_rc_params;
 /// xyz = camera position.
 uniform vec4 u_lumen_rc_camera;
+/// x = the probes' radiance map resolution in texels per axis, the quality tier's (UE
+/// r.Lumen.ScreenProbeGather.RadianceCache.ProbeResolution: LUMEN_RADIANCE_CACHE_PROBE_RES at Epic, 16 at High; a
+/// multiple of 2 x LUMEN_RC_TILE_RES).
+uniform vec4 u_lumen_rc_layout;
 
 #define u_lumen_rc_frame       uint(u_lumen_rc_params.x)
 #define u_lumen_rc_budget      uint(u_lumen_rc_params.y)
 #define u_lumen_rc_persistent  (u_lumen_rc_params.z > 0.0)
 #define u_lumen_rc_mode        int(u_lumen_rc_params.w)
+#define u_lumen_rc_probe_res   int(u_lumen_rc_layout.x)
+/// Texels of a probe tile in the final atlas: the radiance map plus a one-texel octahedral border.
+#define u_lumen_rc_final_res   (u_lumen_rc_probe_res + 2)
 
 /// Probes one frame may trace: LUMEN_RADIANCE_CACHE_MAX_TRACES while the cache continues; every probe of the pool on a
 /// frame that rebuilds it (UE sizes the trace to the whole atlas on a full update, LumenRadianceCache.cpp:1641-1673).

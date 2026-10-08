@@ -5837,6 +5837,49 @@ void test_lumen_scene_reallocation_lists_the_previous_mip()
     check(waiting.get_card_table()[4] == first_mip, "the card keeps its previous allocation meanwhile");
 }
 
+/// A reset (GI off releases the surface cache) leaves nothing a card visualization can read: the placements and the
+/// list of active ones go together, so a reader between the reset and the next update finds no cards.
+void test_lumen_scene_reset_leaves_no_cards()
+{
+    std::printf("test_lumen_scene_reset_leaves_no_cards\n");
+    const std::vector<lumen_scene::source> sources{make_wall_card_source()};
+    const math::vec3 view(0.0f, 0.0f, 1.0f);
+    const math::frustum everything(math::bbox(math::vec3(-1000.0f), math::vec3(1000.0f)));
+    lumen_scene scene;
+    scene.init(lumen_scene::settings{});
+    scene.update(sources, 1, view);
+    std::vector<lumen_scene::visualized_card> cards;
+    scene.get_visualized_cards(sources, view, 100.0f, everything, cards);
+    check(cards.size() == 1, "the resident card is visualized");
+    scene.init(scene.get_settings());
+    scene.get_visualized_cards(sources, view, 100.0f, everything, cards);
+    check(cards.empty(), "after a reset no card is visualized");
+    check(scene.get_resident_pages().empty(), "and no page is resident");
+}
+
+/// UE keeps cards out to the global distance field's reach whatever the view distance (LumenScene::GetCardMaxDistance:
+/// the last clipmap's extent; LumenSceneViewDistance only adds clipmaps): a ray that hits a surface within the field
+/// must find its cards.
+void test_lumen_scene_cards_reach_the_distance_field()
+{
+    std::printf("test_lumen_scene_cards_reach_the_distance_field\n");
+    lumen_scene::source source = make_wall_card_source();
+    source.local_to_world = math::translate(math::mat4(1.0f), math::vec3(0.0f, 0.0f, -150.0f));
+    const std::vector<lumen_scene::source> sources{source};
+    gi_settings::scene_settings view_settings;
+    view_settings.view_distance = 50.0f;
+    lumen_scene scene;
+    scene.init(lumen_scene::settings{});
+    scene.set_view_settings(view_settings);
+    scene.update(sources, 1, math::vec3(0.0f));
+    check(scene.get_max_card_distance() == scene.get_settings().max_card_distance,
+          "the card distance is the distance field's reach");
+    check(scene.get_stats().resident_cards == 1, "a card 150 m away is resident under a 50 m view distance");
+    source.local_to_world = math::translate(math::mat4(1.0f), math::vec3(0.0f, 0.0f, -250.0f));
+    scene.update({source}, 1, math::vec3(0.0f));
+    check(scene.get_stats().resident_cards == 0, "a card beyond the distance field's reach is not");
+}
+
 /// UE captures resident pages again, the longest-uncaptured first, within CardCaptureRefreshFraction of the frame's
 /// page and texel budgets, so material changes reach the surface cache; a recaptured page resamples its own card's
 /// lighting in place and the tables stay as they are (LumenSceneRendering.cpp SceneCardCaptureRefresh,
@@ -5980,14 +6023,18 @@ void test_lumen_scene_lighting_schedule()
     check(lumen_scene::compute_lighting_bucket(1, 2.0f) == 12, "a page lit last frame in the frustum ranks 12");
     check(lumen_scene::compute_lighting_bucket(64, 2.0f) == 6, "64 frames later 6");
     check(lumen_scene::compute_lighting_bucket(100000, 1.0f) == 0, "the most urgent bucket is 0");
-    // Twelve wall cards stacked away from the viewer: the near ones take 2 x 2 pages, far more tiles than a frame's
-    // budget. The frustum is far away, so only distance sets the speeds.
+    // Twelve wall cards stacked away from the viewer: the near ones take 2 x 2 pages, more tiles than a frame's budget
+    // in UE Medium's 2048 atlas (Epic's 4096 relights this scene whole every frame). The frustum is far away, so only
+    // distance sets the speeds.
     constexpr uint32_t card_count = 12;
+    constexpr uint32_t medium_atlas_size = 2048;
     const std::vector<lumen_scene::source> sources = make_wall_card_stack(card_count);
     const math::vec3 view(0.0f, 0.0f, 1.0f);
     const math::frustum far_frustum(math::bbox(math::vec3(1000.0f), math::vec3(1001.0f)));
+    lumen_scene::settings medium;
+    medium.atlas_size = medium_atlas_size;
     lumen_scene scene;
-    scene.init(lumen_scene::settings{});
+    scene.init(medium);
     const uint32_t budget_direct = lumen_scene::compute_lighting_tile_budget(scene.get_settings().atlas_size, 32);
     const uint32_t budget_radiosity = lumen_scene::compute_lighting_tile_budget(scene.get_settings().atlas_size, 64);
     constexpr uint32_t frame_count = 120;
@@ -6049,6 +6096,168 @@ void test_lumen_scene_lighting_schedule()
     };
     check(std::all_of(updates.begin(), updates.end(), [](uint32_t n) { return n > 0u; }), "every card is relit");
     check(rate(0) > rate(card_count - 1u), "a page near the viewer is relit more often than a far one");
+}
+
+/// The radiosity's per-page update indices, which a neighbouring page's probes read (UE FLumenCardPageData
+/// IndirectLightingTemporalIndex): -1 until the page's first radiosity update, then its last update's index, in the
+/// page table's order.
+void test_lumen_scene_page_radiosity_indices()
+{
+    std::printf("test_lumen_scene_page_radiosity_indices\n");
+    // The scheduler test's stack in a 2048 atlas: more tiles than one frame's radiosity budget.
+    constexpr uint32_t card_count = 12;
+    constexpr uint32_t medium_atlas_size = 2048;
+    const std::vector<lumen_scene::source> sources = make_wall_card_stack(card_count);
+    const math::vec3 view(0.0f, 0.0f, 1.0f);
+    const math::frustum far_frustum(math::bbox(math::vec3(1000.0f), math::vec3(1001.0f)));
+    lumen_scene::settings medium;
+    medium.atlas_size = medium_atlas_size;
+    lumen_scene scene;
+    scene.init(medium);
+    scene.update(sources, card_count, view);
+    std::vector<float> indices;
+    scene.get_page_radiosity_indices(indices);
+    check(indices.size() == scene.get_page_table().size(), "one index per page-table entry");
+    check(std::all_of(indices.begin(), indices.end(), [](float index) { return index == -1.0f; }),
+          "no page has a radiosity update before the first schedule");
+    scene.schedule_lighting(view, far_frustum);
+    scene.get_page_radiosity_indices(indices);
+    const auto& lit_pages = scene.get_lit_pages(lumen_scene::lighting_radiosity);
+    const bool reads_this_frame = std::all_of(lit_pages.begin(),
+                                              lit_pages.end(),
+                                              [&](const lumen_scene::lit_page& lit)
+                                              { return indices[lit.resident_page] == float(lit.update_index); });
+    check(!lit_pages.empty() && reads_this_frame, "a page updated this frame reads this frame's update index");
+    check(std::count(indices.begin(), indices.end(), -1.0f) == std::ptrdiff_t(indices.size() - lit_pages.size()),
+          "a page not updated yet stays -1");
+}
+
+/// The captures of an update that map new pages (not the refresh's recaptures in place).
+auto get_new_page_captures(const lumen_scene& scene) -> std::vector<lumen_scene::capture>
+{
+    std::vector<lumen_scene::capture> out;
+    for(const auto& cap : scene.get_captures())
+    {
+        if(!cap.keeps_lighting)
+        {
+            out.push_back(cap);
+        }
+    }
+    return out;
+}
+
+/// UE's unlocked hi-res pages (LumenSurfaceCacheFeedback.cpp UpdateSurfaceCacheFeedback, LumenSceneRendering.cpp
+/// 1050-1135): the reflections' feedback maps one page of a finer mip, which inherits the locked mip's lighting; the
+/// reflections' page table points every unmapped page of that mip at the locked page covering it.
+void test_lumen_scene_hi_res_pages()
+{
+    std::printf("test_lumen_scene_hi_res_pages\n");
+    constexpr uint32_t min_hits = 16;
+    constexpr uint32_t sample_count = 8160;
+    constexpr uint32_t hi_res_level = 10;
+    const std::vector<lumen_scene::source> sources{make_wall_card_source()};
+    const math::vec3 view(0.0f, 0.0f, 1.0f);
+    lumen_scene scene;
+    scene.init(lumen_scene::settings{});
+    scene.update(sources, 1, view);
+    const math::vec4 locked_mip = scene.get_card_table()[4];
+    check(locked_mip == math::vec4(2.0f, 2.0f, 8.0f, 8.0f), "the wall's locked mip is 2 x 2 pages at level 8");
+    check(scene.get_card_table()[5] == math::vec4(0.0f, 2.0f, 2.0f, 0.0f),
+          "without hi-res pages the reflections read the locked mip");
+    // Page (2, 4) of the 8 x 8 pages of level 10.
+    lumen_scene::feedback_element element{0u, hi_res_level, math::uvec2(2u, 4u), 100u};
+    scene.set_feedback({element}, scene.get_card_index_revision() + 1u, min_hits, sample_count);
+    scene.update(sources, 1, view);
+    check(get_new_page_captures(scene).empty(), "feedback from other card indices is dropped");
+    element.hits = min_hits;
+    scene.set_feedback({element}, scene.get_card_index_revision(), min_hits, sample_count);
+    scene.update(sources, 1, view);
+    check(get_new_page_captures(scene).empty(), "a page hit no more than the minimum is not asked for");
+    lumen_scene::feedback_element coarse = element;
+    coarse.hits = 100u;
+    coarse.res_level = 8u;
+    scene.set_feedback({coarse}, scene.get_card_index_revision(), min_hits, sample_count);
+    scene.update(sources, 1, view);
+    check(get_new_page_captures(scene).empty(), "nor one at the locked level");
+    element.hits = 100u;
+    scene.set_feedback({element}, scene.get_card_index_revision(), min_hits, sample_count);
+    scene.update(sources, 1, view);
+    const std::vector<lumen_scene::capture> mapped = get_new_page_captures(scene);
+    check(mapped.size() == 1u, "a page hit often enough is mapped and captured");
+    if(mapped.size() != 1u)
+    {
+        return;
+    }
+    const lumen_scene::capture& cap = mapped.front();
+    const float border = 0.5f / 8.0f / float(lumen_scene::physical_page_size);
+    const math::vec4 expected_rect(2.0f / 8.0f - border, 4.0f / 8.0f - border, 3.0f / 8.0f + border, 5.0f / 8.0f + border);
+    check(cap.size == math::uvec2(lumen_scene::physical_page_size) && math::all(math::epsilonEqual(cap.card_uv_rect,
+                                                                                                    expected_rect,
+                                                                                                    1e-6f)),
+          "the page the feedback names, one full page");
+    check(cap.resample_card >= 0, "and it inherits the locked mip's lighting");
+    const math::vec4 reflection_table = scene.get_card_table()[5];
+    check(reflection_table == math::vec4(4.0f, 8.0f, 8.0f, 1.0f), "the reflections read the hi-res span after the locked one");
+    const auto& table = scene.get_page_table();
+    const auto entry = [&](uint32_t page)
+    {
+        return table[4u + page];
+    };
+    check(table.size() == 4u + 64u, "one entry per page of either mip");
+    check(entry(2u + 4u * 8u) == math::vec4(float(cap.atlas_offset.x), float(cap.atlas_offset.y), 10.0f, 10.0f),
+          "the mapped page's entry holds its own atlas position and level");
+    check(entry(0u) == table[0] && entry(7u + 7u * 8u) == table[3] && entry(5u + 1u * 8u) == table[1],
+          "an unmapped page falls back to the locked page covering it");
+    const auto& pages = scene.get_resident_pages();
+    const bool lists_page = std::any_of(pages.begin(),
+                                        pages.end(),
+                                        [&](const lumen_scene::resident_page& page)
+                                        {
+                                            return page.atlas_offset == cap.atlas_offset && page.mip_page_table_offset == 4u &&
+                                                   page.mip_size_in_pages == math::uvec2(8u);
+                                        });
+    check(pages.size() == 5u && lists_page, "the hi-res page is lit like any resident page, in its mip's span");
+    check(scene.get_stats().hi_res_pages == 1u, "one hi-res page mapped");
+    std::vector<float> indices;
+    scene.get_page_radiosity_indices(indices);
+    check(indices.size() == table.size() && indices[4u] == -1.0f,
+          "a fallback entry is no page of the hi-res mip for the radiosity");
+    scene.set_feedback({element}, scene.get_card_index_revision(), min_hits, sample_count);
+    scene.update(sources, 1, view);
+    check(get_new_page_captures(scene).empty() && scene.get_stats().hi_res_pages == 1u,
+          "a mapped page asked for again stays as it is");
+}
+
+/// UE EvictOldestAllocation: a locked allocation without room takes the place of hi-res pages the feedback has not
+/// asked for in two frames, before it drops a level; a page asked for more recently stays.
+void test_lumen_scene_hi_res_pages_give_way_to_locked_mips()
+{
+    std::printf("test_lumen_scene_hi_res_pages_give_way_to_locked_mips\n");
+    constexpr uint32_t small_atlas_size = 256;
+    const std::vector<lumen_scene::source> sources{make_wall_card_source()};
+    const math::vec3 near_view(0.0f, 0.0f, 1.0f);
+    const math::vec3 far_view(0.0f, 0.0f, 12.0f);
+    const lumen_scene::feedback_element element{0u, 10u, math::uvec2(2u, 4u), 100u};
+    const auto run = [&](uint32_t idle_frames) -> uint32_t
+    {
+        lumen_scene::settings settings;
+        settings.atlas_size = small_atlas_size;
+        lumen_scene scene;
+        scene.init(settings);
+        // Far, the wall takes one sub-allocated page of the atlas's four; the hi-res page takes another.
+        scene.update(sources, 1, far_view);
+        scene.set_feedback({element}, scene.get_card_index_revision(), 16u, 8160u);
+        scene.update(sources, 1, far_view);
+        for(uint32_t i = 0; i < idle_frames; ++i)
+        {
+            scene.update(sources, 1, far_view);
+        }
+        // Near, the wall's locked mip wants all four pages.
+        scene.update(sources, 1, near_view);
+        return scene.get_stats().hi_res_pages;
+    };
+    check(run(0u) == 1u, "a hi-res page asked for a frame ago stays");
+    check(run(2u) == 0u, "one idle for two frames gives way to the locked mip");
 }
 
 void test_degenerate_inputs()
@@ -6145,8 +6354,13 @@ auto run_gi_bake_suite(rtti::context& /*ctx*/) -> int
     test_lumen_cards_interior_layers();
     test_lumen_cards_serialization_round_trip();
     test_lumen_scene_reallocation_lists_the_previous_mip();
+    test_lumen_scene_reset_leaves_no_cards();
+    test_lumen_scene_cards_reach_the_distance_field();
     test_lumen_scene_refresh_recaptures_the_oldest_pages();
     test_lumen_scene_lighting_schedule();
+    test_lumen_scene_page_radiosity_indices();
+    test_lumen_scene_hi_res_pages();
+    test_lumen_scene_hi_res_pages_give_way_to_locked_mips();
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures;
 }

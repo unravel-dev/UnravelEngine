@@ -15,6 +15,9 @@
  *
  * Each level has a budget of LUMEN_GLOBAL_SDF_MAX_STEPS: a ray that spends it in one level continues from where it
  * leaves that level (UE's per-clipmap loop, GlobalDistanceFieldUtils.ush:104-191); past the last level it is a miss.
+ * Like UE's loop, which fixes the clipmap per iteration, the march keeps the stretch of the ray one level answers
+ * unblended (LumenGlobalSdfLevelSpanEnd) and samples that level there without searching for it; the samples are the
+ * searched ones exactly, the search and the cross-fade run only at level edges.
  * Where the answering level reads saturated, the ray steps by that level's coarse mip (SDF_CLIPMAP_MIP_STAGE, UE
  * GlobalDistanceFieldMipTexture), which holds the level's own objects, so a step never passes one the level shows;
  * an includer without the mip steps by the level alone.
@@ -35,6 +38,10 @@
 
 /// The distance below which a sample's coverage can change the march: the largest min step it may take.
 #define LUMEN_GLOBAL_SDF_COVERAGE_REACH_VOXELS (LUMEN_GLOBAL_SDF_MIN_STEP_VOXELS * LUMEN_GLOBAL_SDF_NOT_COVERED_MIN_STEP_SCALE)
+
+/// The margin, in voxels of each box's level, a level span keeps from the box edges it is cut at: far above the
+/// rounding of a march position, so every sample inside the span reads the level search's answer.
+#define LUMEN_GLOBAL_SDF_SPAN_MARGIN_VOXELS 0.05
 
 /// A trace's dithered transparency in uncovered space (UE bDitheredTransparency): its noise coordinate (UE
 /// DitherScreenCoord) and frame % 8, or disabled.
@@ -87,6 +94,49 @@ struct LumenSdfHit
 	float voxel;
 };
 
+/// The one level every sample within @p reach of @p p reads, unblended (UE samples a hit's gradient in the hit's
+/// clipmap alone, GlobalDistanceFieldShared.ush:291-314), or SDF_CLIPMAP_LEVEL_COUNT when a sample there could read
+/// another level or a cross-fade: @p p's finest level holds it deeper than its cross-fade band plus @p reach, and
+/// every finer level's box lies more than @p reach away along some axis. SdfSampleClipmap at those samples is then
+/// SdfSampleClipmapLevel of this level, exactly.
+int LumenGlobalSdfSingleLevel(vec3 p, float reach)
+{
+	BRANCH
+	if((u_sdf_clipmap_experiments & 4) != 0)
+	{
+		return SDF_CLIPMAP_LEVEL_COUNT;
+	}
+	SdfClipmapLevelHit found = SdfFindClipmapLevel(p);
+	int index = found.index;
+	if(index >= SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		return SDF_CLIPMAP_LEVEL_COUNT;
+	}
+	float resolution = u_sdf_clipmap_resolution;
+	vec4 level = u_sdf_clipmap_levels[index];
+	vec3 grid = (p - level.xyz) / level.w;
+	vec3 nearest_face = min(grid - vec3_splat(0.5), vec3_splat(resolution - 0.5) - grid);
+	float edge_voxels = min(nearest_face.x, min(nearest_face.y, nearest_face.z)) - reach / level.w;
+	bool has_next = index + 1 < SDF_CLIPMAP_LEVEL_COUNT;
+	if(has_next)
+	{
+		has_next = u_sdf_clipmap_levels[index + 1].w > 0.0 && u_sdf_clipmap_blend_voxels > 0.0;
+	}
+	bool is_single = edge_voxels >= (has_next ? u_sdf_clipmap_blend_voxels : 0.0);
+	for(int finer = 0; finer < SDF_CLIPMAP_LEVEL_COUNT; ++finer)
+	{
+		vec4 finer_level = u_sdf_clipmap_levels[finer];
+		if(finer < index && finer_level.w > 0.0)
+		{
+			vec3 low = finer_level.xyz + vec3_splat(0.5 * finer_level.w);
+			vec3 high = finer_level.xyz + vec3_splat((resolution - 0.5) * finer_level.w);
+			vec3 outside = max(low - p, p - high);
+			is_single = is_single && max(outside.x, max(outside.y, outside.z)) > reach;
+		}
+	}
+	return is_single ? index : SDF_CLIPMAP_LEVEL_COUNT;
+}
+
 /// The unit field gradient at @p p (UE ComputeGlobalDistanceFieldNormal / GlobalDistanceFieldPageCentralDiff,
 /// GlobalDistanceFieldShared.ush:291-312): central differences half a voxel of @p voxel either side along each axis,
 /// @p fallback where the field is flat. A wider stencil blends a floor's and a wall's gradients a voxel or more from
@@ -94,11 +144,88 @@ struct LumenSdfHit
 vec3 LumenGlobalSdfNormal(vec3 p, float voxel, vec3 fallback)
 {
 	float h = 0.5 * voxel;
-	vec3 n = vec3(SdfSampleClipmap(p + vec3(h, 0.0, 0.0)) - SdfSampleClipmap(p - vec3(h, 0.0, 0.0)),
-	              SdfSampleClipmap(p + vec3(0.0, h, 0.0)) - SdfSampleClipmap(p - vec3(0.0, h, 0.0)),
-	              SdfSampleClipmap(p + vec3(0.0, 0.0, h)) - SdfSampleClipmap(p - vec3(0.0, 0.0, h)));
+	vec3 n;
+	int level = LumenGlobalSdfSingleLevel(p, h);
+	BRANCH
+	if(level < SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		n = vec3(SdfSampleClipmapLevel(level, p + vec3(h, 0.0, 0.0)) - SdfSampleClipmapLevel(level, p - vec3(h, 0.0, 0.0)),
+		         SdfSampleClipmapLevel(level, p + vec3(0.0, h, 0.0)) - SdfSampleClipmapLevel(level, p - vec3(0.0, h, 0.0)),
+		         SdfSampleClipmapLevel(level, p + vec3(0.0, 0.0, h)) - SdfSampleClipmapLevel(level, p - vec3(0.0, 0.0, h)));
+	}
+	else
+	{
+		n = vec3(SdfSampleClipmap(p + vec3(h, 0.0, 0.0)) - SdfSampleClipmap(p - vec3(h, 0.0, 0.0)),
+		         SdfSampleClipmap(p + vec3(0.0, h, 0.0)) - SdfSampleClipmap(p - vec3(0.0, h, 0.0)),
+		         SdfSampleClipmap(p + vec3(0.0, 0.0, h)) - SdfSampleClipmap(p - vec3(0.0, 0.0, h)));
+	}
 	float len = length(n);
 	return len > LUMEN_GLOBAL_SDF_FLAT_GRADIENT ? n / len : fallback;
+}
+
+/// The ray parameters at which a ray from @p origin along a direction with reciprocal @p inverse_direction enters (x)
+/// and leaves (y) the box [@p low, @p high]; x > y where it misses the box.
+vec2 LumenGlobalSdfBoxInterval(vec3 low, vec3 high, vec3 origin, vec3 inverse_direction)
+{
+	vec3 to_low = (low - origin) * inverse_direction;
+	vec3 to_high = (high - origin) * inverse_direction;
+	vec3 near_side = min(to_low, to_high);
+	vec3 far_side = max(to_low, to_high);
+	return vec2(max(near_side.x, max(near_side.y, near_side.z)), min(far_side.x, min(far_side.y, far_side.z)));
+}
+
+/// How far from @p t the ray keeps sampling level @p index alone, unblended: up to where it leaves the level's box less
+/// its cross-fade band, or enters a finer level's box, each by LUMEN_GLOBAL_SDF_SPAN_MARGIN_VOXELS. Within that span
+/// SdfSampleClipmapLevels answers SdfSampleClipmapLevelCovered(index) with no blend. -1 when @p t is not in such a span.
+float LumenGlobalSdfLevelSpanEnd(int index, vec3 origin, vec3 inverse_direction, float t)
+{
+	float resolution = u_sdf_clipmap_resolution;
+	vec4 level = u_sdf_clipmap_levels[index];
+	bool has_next = index + 1 < SDF_CLIPMAP_LEVEL_COUNT;
+	if(has_next)
+	{
+		has_next = u_sdf_clipmap_levels[index + 1].w > 0.0 && u_sdf_clipmap_blend_voxels > 0.0;
+	}
+	float inset = 0.5 + (has_next ? u_sdf_clipmap_blend_voxels : 0.0) + LUMEN_GLOBAL_SDF_SPAN_MARGIN_VOXELS;
+	vec2 span = LumenGlobalSdfBoxInterval(level.xyz + vec3_splat(inset * level.w),
+	                                      level.xyz + vec3_splat((resolution - inset) * level.w), origin,
+	                                      inverse_direction);
+	float outset = 0.5 - LUMEN_GLOBAL_SDF_SPAN_MARGIN_VOXELS;
+	for(int finer = 0; finer < SDF_CLIPMAP_LEVEL_COUNT; ++finer)
+	{
+		vec4 finer_level = u_sdf_clipmap_levels[finer];
+		if(finer < index && finer_level.w > 0.0)
+		{
+			vec2 finer_span = LumenGlobalSdfBoxInterval(finer_level.xyz + vec3_splat(outset * finer_level.w),
+			                                            finer_level.xyz + vec3_splat((resolution - outset) * finer_level.w),
+			                                            origin, inverse_direction);
+			if(finer_span.x <= finer_span.y && finer_span.y >= t)
+			{
+				span.y = min(span.y, finer_span.x);
+			}
+		}
+	}
+	return t >= span.x && t <= span.y ? span.y : -1.0;
+}
+
+/// The march sample at @p p: level @p span_level's alone while the ray parameter @p t is inside its span (up to
+/// @p span_end), else the searched, cross-faded one.
+SdfClipmapSample LumenGlobalSdfMarchSample(vec3 p, float t, int span_level, float span_end)
+{
+	SdfClipmapSample field;
+	BRANCH
+	if(t <= span_end)
+	{
+		field.distance = SdfSampleClipmapLevelCovered(span_level, p);
+		field.voxel_size = u_sdf_clipmap_levels[span_level].w;
+		field.index = span_level;
+		field.blend = 0.0;
+	}
+	else
+	{
+		field = SdfSampleClipmapLevels(p);
+	}
+	return field;
 }
 
 /// The coarsest covering level's distance (the empty-space step of the u_sdf_clipmap_experiments bit 1 A/B: that level
@@ -118,9 +245,15 @@ float LumenGlobalSdfCoarseDistance(vec3 p, float fine_distance)
 	return step_distance;
 }
 
-/// The distance a march sample at @p p may step when its level (@p field) reads saturated.
+/// The distance a march sample at @p p may step when its level (@p field) reads saturated. Outside every level the
+/// sample's own distance (SDF_CLIPMAP_OUTSIDE) already ends the ray, and there is no level mip to read.
 float LumenGlobalSdfEmptySpaceStep(SdfClipmapSample field, vec3 p)
 {
+	BRANCH
+	if(field.index >= SDF_CLIPMAP_LEVEL_COUNT)
+	{
+		return field.distance;
+	}
 	if((u_sdf_clipmap_experiments & 1) != 0)
 	{
 		return LumenGlobalSdfCoarseDistance(p, field.distance);
@@ -164,10 +297,14 @@ LumenSdfHit LumenTraceGlobalSdfDithered(vec3 origin,
 	float max_distance = 0.0;
 	float trace_noise = InterleavedGradientNoise(dither.coord, dither.frame_mod);
 	bool has_ray_budget = (u_sdf_clipmap_experiments & 2) != 0;
+	bool has_level_spans = (u_sdf_clipmap_experiments & 8) == 0;
 	vec3 inverse_direction = vec3_splat(1.0) / (sign(direction) * max(abs(direction), vec3_splat(1e-8)) +
 	                                            vec3(equal(direction, vec3_splat(0.0))) * 1e-8);
 	int level = -1;
 	int level_steps = 0;
+	// The march only moves forward, so a span holds from the step it is found at to its end.
+	int span_level = 0;
+	float span_end = -1.0;
 	LOOP
 	for(int step = 0; step < LUMEN_GLOBAL_SDF_MAX_STEPS * SDF_CLIPMAP_LEVEL_COUNT; ++step)
 	{
@@ -176,7 +313,13 @@ LumenSdfHit LumenTraceGlobalSdfDithered(vec3 origin,
 			return result;
 		}
 		vec3 p = origin + direction * t;
-		SdfClipmapSample field = SdfSampleClipmapLevels(p);
+		SdfClipmapSample field = LumenGlobalSdfMarchSample(p, t, span_level, span_end);
+		BRANCH
+		if(has_level_spans && t > span_end && field.index < SDF_CLIPMAP_LEVEL_COUNT && field.blend <= 0.0)
+		{
+			span_level = field.index;
+			span_end = LumenGlobalSdfLevelSpanEnd(field.index, origin, inverse_direction, t);
+		}
 		if(field.index != level)
 		{
 			level = field.index;

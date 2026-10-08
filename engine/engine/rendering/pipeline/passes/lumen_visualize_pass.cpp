@@ -281,6 +281,7 @@ void lumen_visualize_pass::probe_program::cache_uniforms()
     cache_uniform(program.get(), s_lumen_radiosity_sh_r, "s_lumen_radiosity_sh_r", bgfx::UniformType::Sampler);
     cache_uniform(program.get(), s_lumen_radiosity_sh_g, "s_lumen_radiosity_sh_g", bgfx::UniformType::Sampler);
     cache_uniform(program.get(), s_lumen_radiosity_sh_b, "s_lumen_radiosity_sh_b", bgfx::UniformType::Sampler);
+    cache_uniform(program.get(), s_lumen_rc_final, "s_lumen_rc_final", bgfx::UniformType::Sampler);
 }
 
 void lumen_visualize_pass::primitive_program::cache_uniforms()
@@ -1098,6 +1099,8 @@ void lumen_visualize_pass::bind_probe_program(const world_params& params, const 
     gfx::set_texture(program.s_lumen_radiosity_sh_r, 3, existing(surface_cache->get_radiosity_sh(0)));
     gfx::set_texture(program.s_lumen_radiosity_sh_g, 4, existing(surface_cache->get_radiosity_sh(1)));
     gfx::set_texture(program.s_lumen_radiosity_sh_b, 5, existing(surface_cache->get_radiosity_sh(2)));
+    // Every declared stage bound: the radiance cache probes put the cache's atlas over this stand-in.
+    gfx::set_texture(program.s_lumen_rc_final, radiance_cache_final_stage, default_textures::get().black_texture());
     gfx::set_uniform(program.u_lumen_surface_cache, surface_cache->get_surface_cache_params());
     gfx::set_uniform(program.u_lumen_visualize_probe, probe);
     gfx::set_uniform(program.u_lumen_visualize_probe2, math::vec4(params.pre_exposure, 0.0f, 0.0f, 0.0f));

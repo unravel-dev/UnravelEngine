@@ -18,9 +18,6 @@ SAMPLER2D(s_lumen_normal, 1);
 BUFFER_RW(b_lumen_adaptive, uint, 2);
 IMAGE2D_WO(i_lumen_probe_records, rgba32f, 3);
 
-#define LUMEN_ADAPTIVE_GROUP_TILES_X (8 / LUMEN_ADAPTIVE_SAMPLES_X)
-#define LUMEN_ADAPTIVE_GROUP_TILES_Y (8 / LUMEN_ADAPTIVE_SAMPLES_Y)
-
 SHARED uint s_probes_to_allocate;
 SHARED uint s_probe_base;
 
@@ -68,11 +65,11 @@ void main()
 		s_probes_to_allocate = 0u;
 	}
 	barrier();
-	ivec2 samples = ivec2(LUMEN_ADAPTIVE_SAMPLES_X, LUMEN_ADAPTIVE_SAMPLES_Y);
+	ivec2 samples = ivec2(u_lumen_adaptive_samples_x, u_lumen_adaptive_samples_y);
 	ivec2 local_tile = local / samples;
 	ivec2 sample2d = local - local_tile * samples;
-	int sample_index = sample2d.x + LUMEN_ADAPTIVE_SAMPLES_X * sample2d.y;
-	ivec2 tile = ivec2(gl_WorkGroupID.xy) * ivec2(LUMEN_ADAPTIVE_GROUP_TILES_X, LUMEN_ADAPTIVE_GROUP_TILES_Y) + local_tile;
+	int sample_index = sample2d.x + samples.x * sample2d.y;
+	ivec2 tile = ivec2(gl_WorkGroupID.xy) * (ivec2(8, 8) / samples) + local_tile;
 	ivec2 pixel = ivec2(0, 0);
 	float depth01 = 1.0;
 	bool place = false;

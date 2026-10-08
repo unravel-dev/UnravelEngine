@@ -1,6 +1,7 @@
 #pragma once
 
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/passes/lumen_pass_common.h>
 #include <engine/rendering/pipeline/passes/lumen_run_params.h>
 
 #include <graphics/texture.h>
@@ -53,6 +54,8 @@ public:
         const float* view{};
         /// False places none (an A/B): run() only writes the dispatch arguments over the uniform probes.
         bool place = true;
+        /// The candidates per uniform probe (the GI quality tier's).
+        lumen_pass::adaptive_probe_layout layout;
     };
 
     ~lumen_adaptive_probes();

@@ -85,8 +85,9 @@ uniform vec4 u_lumen_debug3;
 /// The lighting updates views reach blue this many frames after a page's update (UE VisScale).
 #define LUMEN_DEBUG_DIRECT_UPDATES_SCALE 8.0
 #define LUMEN_DEBUG_INDIRECT_UPDATES_SCALE 16.0
-/// The radiosity frames view shows the update count over this (UE's radiosity accumulates at most 4 frames).
-#define LUMEN_DEBUG_RADIOSITY_FRAMES_SCALE 4.0
+/// The radiosity frames view shows the update count over this: the count's steady value (cs_lumen_radiosity_integrate.sc
+/// LUMEN_RADIOSITY_ACCUMULATED_UPDATES; UE's runs to 4), white once a tile has settled.
+#define LUMEN_DEBUG_RADIOSITY_FRAMES_SCALE 5.0
 /// The card views' atlas grid: one cell per 8x8 tile of the lighting.
 #define LUMEN_DEBUG_CARD_TILE_SIZE 8.0
 

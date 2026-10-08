@@ -127,6 +127,9 @@ LumenResolveCenter LumenResolveUpsampledTraces(ivec2 pixel)
 	return center;
 }
 
+/// x = the minimum weight of the neighbouring rays over the pixel's own (lumen_pass::get_reflection_reconstruction_min_weight).
+uniform vec4 u_lumen_reflection_resolve;
+
 NUM_THREADS(8, 8, 1)
 void main()
 {
@@ -192,6 +195,14 @@ void main()
 			{
 				neighbours = LumenResolveNeighbour(neighbours, q / downsample, position, normal, view, alpha, center_hit);
 			}
+		}
+		// The neighbours weigh at least the tier's minimum share of the pixel's own ray (UE
+		// ScreenSpaceReconstruction.MinWeight: 0 at Epic, 1 at High).
+		float min_weight = u_lumen_reflection_resolve.x * sum.weight;
+		if(neighbours.weight > 1e-6 && min_weight > neighbours.weight)
+		{
+			neighbours.radiance *= min_weight / neighbours.weight;
+			neighbours.weight = min_weight;
 		}
 		sum.radiance += neighbours.radiance;
 		sum.weight += neighbours.weight;

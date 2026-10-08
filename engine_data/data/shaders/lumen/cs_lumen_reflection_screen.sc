@@ -76,8 +76,8 @@ vec3 LumenClampRayIntensity(vec3 color)
 /// Whether any trace texel of the group traces.
 SHARED uint s_lumen_group_traces;
 
-/// Marks the reflection tiles group @p group covers from its thread @p index: one tile at full resolution, where
-/// @p group_traces decides; every one it touches at the trace downsample.
+/// Marks the reflection tiles group @p group covers from its thread @p index, as @p group_traces decides: one tile at
+/// full resolution, the span x span tiles of its pixels at the trace downsample.
 void LumenWriteReflectionTiles(ivec2 group, int index, bool group_traces)
 {
 	int span = u_lumen_reflection_downsample;
@@ -86,8 +86,26 @@ void LumenWriteReflectionTiles(ivec2 group, int index, bool group_traces)
 	ivec2 tile_count = (ivec2(u_lumen_view_size) + ivec2(round_up, round_up)) / LUMEN_REFLECTION_TILE_PIXELS;
 	if(index < span * span && all(lessThan(tile, tile_count)))
 	{
-		imageStore(s_lumen_reflection_tiles_out, tile, vec4(group_traces || span > 1 ? 1.0 : 0.0, 0.0, 0.0, 0.0));
+		imageStore(s_lumen_reflection_tiles_out, tile, vec4(group_traces ? 1.0 : 0.0, 0.0, 0.0, 0.0));
 	}
+}
+
+/// Whether a pixel of trace texel @p trace_coord's block wants traced reflections (inside the view, smooth enough, not
+/// the sky).
+bool LumenReflectionBlockResolves(ivec2 trace_coord)
+{
+	int span = u_lumen_reflection_downsample;
+	ivec2 view_size = ivec2(u_lumen_view_size);
+	bool resolves = false;
+	for(int i = 0; i < span * span; ++i)
+	{
+		ivec2 p = trace_coord * span + ivec2(i - (i / span) * span, i / span);
+		if(all(lessThan(p, view_size)) && LumenReflectionFadeAlpha(texelFetch(s_lumen_normal, p, 0).w) > 0.0)
+		{
+			resolves = resolves || texelFetch(s_lumen_depth, p, 0).x < 1.0;
+		}
+	}
+	return resolves;
 }
 
 NUM_THREADS(8, 8, 1)
@@ -107,13 +125,21 @@ void main()
 		depth01 = texelFetch(s_lumen_depth, pixel, 0).x;
 		traces = depth01 < 1.0;
 	}
+	// At the downsample a tile resolves wherever a pixel of a traced block wants reflections, whether or not the
+	// block's traced pixel does: the resolve serves it from the traces around.
+	bool resolves = traces;
+	BRANCH
+	if(u_lumen_reflection_downsample > 1 && is_inside && !traces)
+	{
+		resolves = LumenReflectionBlockResolves(trace_coord);
+	}
 	// The tile classification: barriers in uniform control flow, then a group that traces nothing writes nothing.
 	if(gl_LocalInvocationID.x == 0u && gl_LocalInvocationID.y == 0u)
 	{
 		s_lumen_group_traces = u_lumen_reflection_all_tiles ? 1u : 0u;
 	}
 	barrier();
-	if(traces)
+	if(resolves)
 	{
 		atomicOr(s_lumen_group_traces, 1u);
 	}
@@ -122,7 +148,7 @@ void main()
 	LumenWriteReflectionTiles(ivec2(gl_WorkGroupID.xy),
 	                          int(gl_LocalInvocationID.y) * 8 + int(gl_LocalInvocationID.x),
 	                          group_traces);
-	if(!is_inside || !(group_traces || u_lumen_reflection_downsample > 1))
+	if(!is_inside || !group_traces)
 	{
 		return;
 	}

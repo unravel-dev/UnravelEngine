@@ -2,12 +2,14 @@
 
 #include <engine/rendering/gi/lumen_constants.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/passes/buffer_clear.h>
 #include <engine/rendering/pipeline/passes/lumen_run_params.h>
 #include <engine/rendering/pipeline/passes/lumen_adaptive_probes.h>
 #include <engine/rendering/pipeline/passes/lumen_pass_common.h>
 #include <engine/rendering/pipeline/passes/lumen_radiance_cache.h>
 #include <engine/rendering/pipeline/passes/lumen_short_range_ao_pass.h>
 
+#include <graphics/graphics.h>
 #include <graphics/render_view.h>
 #include <graphics/texture.h>
 
@@ -70,16 +72,20 @@ public:
     void release_resources()
     {
         radiance_cache_.release_resources();
+        // Its buffers are gone: no reader binds them until a gather updates the cache again.
+        is_radiance_cache_ready_ = false;
     }
 
     /// The diffuse history the gather wrote for @p rview this frame (rgb = the result, a = the frames it accumulates,
     /// quantized to multiples of the maximum / 15: UE's 4-bit count); null when the gather did not run this frame.
     static auto get_current_history(gfx::render_view& rview) -> gfx::texture::ptr;
 
-    /// The radiance cache this frame's gather updated, or null when it did not run.
+    /// The radiance cache this frame's gather updated, or null when it did not run this frame (GI off releases the
+    /// cache's buffers).
     auto get_radiance_cache() const -> const lumen_radiance_cache*
     {
-        return is_radiance_cache_ready_ ? &radiance_cache_ : nullptr;
+        const bool is_current = is_radiance_cache_ready_ && radiance_cache_frame_ == gfx::get_render_frame();
+        return is_current ? &radiance_cache_ : nullptr;
     }
 
     /// The probe atlas a gather placed (UE r.Lumen.ScreenProbeGather.Debug.ProbePlacement draws it).
@@ -217,6 +223,8 @@ private:
         std::array<float, 4> view{};
         /// xy = last frame's probe placement jitter in pixels.
         std::array<float, 4> prev_probe{};
+        /// The integrate draws one probe per pixel (the tier's, then the experiment toggle).
+        bool is_interpolation_stochastic{};
     };
 
     /// The frame's probe textures, owned by the render view. Records and the filtered radiance alternate per frame:
@@ -255,7 +263,10 @@ private:
     auto has_programs() const -> bool;
     /// The frame's layout at the final gather quality @p quality; @p is_jitter_fixed holds the placement and ray jitter
     /// at UE's fixed index while the traces are visualized.
-    static auto make_frame_layout(const usize32_t& view_size, float quality, bool is_jitter_fixed) -> frame_layout;
+    static auto make_frame_layout(const usize32_t& view_size,
+                                  float quality,
+                                  gi_project_settings::quality_level tier,
+                                  bool is_jitter_fixed) -> frame_layout;
     auto acquire_probe_targets(gfx::render_view& rview, const frame_layout& layout) const -> probe_targets;
     auto acquire_history(gfx::render_view& rview, const lumen_run_params& params, const usize32_t& size)
         -> history_targets;
@@ -312,8 +323,13 @@ private:
                    const probe_targets& targets,
                    bool radiance_cache_ready);
     /// The rays the trace's screen pass can leave to its far-field pass this frame (cs_lumen_probe_trace.sc
-    /// b_lumen_trace_rays: a count, then trace_ray_stride uints per ray), grown to @p rays when smaller.
+    /// b_lumen_trace_rays: a count, then trace_ray_stride uints per ray) and the far-field hits it leaves to the hit
+    /// pass (b_lumen_trace_hits: a count, then one ray slot per hit), grown to @p rays when smaller.
     void ensure_trace_rays(uint32_t rays);
+    /// Writes the indirect arguments of a pass with one thread per entry of @p rays (its first uint counts them).
+    void dispatch_trace_args(uint16_t view_id,
+                             bgfx::DynamicIndexBufferHandle rays,
+                             bgfx::IndirectBufferHandle args) const;
     /// The trace programs' inputs: every stage but the output (5) and the uniforms.
     void bind_trace_inputs(const lumen_run_params& params,
                            const frame_layout& layout,
@@ -353,12 +369,17 @@ private:
                                        const lumen_short_range_ao_pass::frame_targets& short_range_ao);
 
     gpu_program::ptr place_program_;
-    /// cs_lumen_trace_far_field_args.sc: the far-field pass's dispatch arguments.
+    /// cs_lumen_trace_far_field_args.sc: the far-field and hit passes' dispatch arguments.
     gpu_program::ptr far_field_args_program_;
-    /// See ensure_trace_rays, and the far-field pass's indirect dispatch arguments.
+    /// See ensure_trace_rays, and the far-field and hit passes' indirect dispatch arguments.
     bgfx::DynamicIndexBufferHandle trace_rays_{bgfx::kInvalidHandle};
+    bgfx::DynamicIndexBufferHandle trace_hits_{bgfx::kInvalidHandle};
     uint32_t trace_rays_capacity_ = 0;
     bgfx::IndirectBufferHandle far_field_args_{bgfx::kInvalidHandle};
+    bgfx::IndirectBufferHandle hit_args_{bgfx::kInvalidHandle};
+    /// Zeroes the ray and hit counts ahead of the passes that append to them (the GPU writes those buffers, so no CPU
+    /// update may).
+    buffer_clear ray_count_clear_;
     /// One program set per tracing resolution, 4 x 4, 8 x 8 and 16 x 16 rays (get_probe_programs).
     std::array<probe_programs, 3> probe_programs_;
     /// This frame's set (run).
@@ -366,8 +387,9 @@ private:
 
     lumen_adaptive_probes adaptive_probes_;
     lumen_radiance_cache radiance_cache_;
-    ///< The radiance cache updated this frame (see get_radiance_cache).
+    ///< The radiance cache was updated on the render frame radiance_cache_frame_ (see get_radiance_cache).
     bool is_radiance_cache_ready_ = false;
+    uint32_t radiance_cache_frame_ = 0;
     lumen_short_range_ao_pass short_range_ao_;
     ///< See get_visualized_traces and get_visualized_trace_count.
     bgfx::DynamicVertexBufferHandle visualized_traces_{bgfx::kInvalidHandle};

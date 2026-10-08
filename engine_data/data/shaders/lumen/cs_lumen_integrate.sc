@@ -41,6 +41,7 @@
 #include "../pre_exposure.sh"
 #include "lumen/lumen_common.sh"
 #include "gi/gi_reflection_sampling.sh"
+#include "lumen/lumen_image_formats.sh"
 
 SAMPLER2D(s_lumen_depth, 0);
 /// G-buffer target 1: octahedral normal, metalness, roughness.
@@ -48,14 +49,16 @@ SAMPLER2D(s_lumen_normal, 1);
 SAMPLER2D(s_lumen_probe_records, 2);
 /// The probes' SH3 (cs_lumen_probe_sh.sc; texel 0's alpha = the probe's moving fraction).
 SAMPLER2D(s_lumen_probe_sh, 3);
-IMAGE2D_WO(s_lumen_rough_history_out, rgba16f, 4);
+/// The rough specular history: R11G11B10 float, as UE stores its lighting (no reader takes an alpha).
+IMAGE2D_WO(s_lumen_rough_history_out, rg11b10f, 4);
 IMAGE2D_WO(s_lumen_history_out, rgba16f, 6);
 #ifdef LUMEN_INTEGRATE_SHORT_RANGE_AO
-IMAGE2D_WO(s_lumen_short_range_ao_history_out, rgba16f, 5);
+/// The accumulated AO, packed (LumenPackShortRangeAO).
+UIMAGE2D_WO(s_lumen_short_range_ao_history_out, r32ui, 5);
 IMAGE2D_WO(s_lumen_short_range_ao_screen_out, rgba8, 7);
 /// This frame's AO search (cs_lumen_short_range_ao.sc) and last frame's accumulation.
-SAMPLER2D(s_lumen_short_range_ao, 14);
-SAMPLER2D(s_lumen_short_range_ao_history, 15);
+USAMPLER2D(s_lumen_short_range_ao, 14);
+USAMPLER2D(s_lumen_short_range_ao_history, 15);
 #endif
 SAMPLER2D(s_lumen_history, 8);
 /// Last frame's device depth.
@@ -74,17 +77,20 @@ BUFFER_RO(b_lumen_adaptive, uint, 12);
 #include "lumen/lumen_short_range_ao_temporal.sh"
 #endif
 
-/// x > 0 when the histories and s_lumen_prev_depth hold last frame, y unused, z > 0 computes the rough specular, w > 0
-/// paints the pixels the uniform probes cannot interpolate into the diffuse history (diagnostic, stored as a fresh
-/// history: red = the fallback depth weights served them, the pixels UE places adaptive probes for; magenta = not even
-/// those).
+/// x > 0 when the histories and s_lumen_prev_depth hold last frame, y > 0 draws one probe per pixel instead of blending
+/// the four (UE StochasticInterpolation, on at High), z > 0 computes the rough specular, w > 0 paints the pixels the
+/// uniform probes cannot interpolate into the diffuse history (diagnostic, stored as a fresh history: red = the fallback
+/// depth weights served them, the pixels UE places adaptive probes for; magenta = not even those).
 uniform vec4 u_lumen_temporal;
 
 #define u_lumen_has_history (u_lumen_temporal.x > 0.0)
+#define u_lumen_stochastic_interpolation (u_lumen_temporal.y > 0.0)
 #define u_lumen_rough_specular (u_lumen_temporal.z > 0.0)
 #define u_lumen_show_interpolation_fallback (u_lumen_temporal.w > 0.0)
 
 #define LUMEN_PROBE_BORDER_RES (LUMEN_PROBE_TRACE_RES + 2 * LUMEN_PROBE_RADIANCE_BORDER)
+/// The probe draw's rotation over frames: the golden ratio (a rank-1 lattice, any window of frames stratified).
+#define LUMEN_PROBE_DRAW_FRAME_INCREMENT 0.61803398875
 
 /// E / pi of one probe's SH3 along @p normal: 4 pi x <SH / (4 pi), cosine transfer> / pi.
 vec3 LumenProbeIrradianceOverPi(ivec2 tile, LumenSH3 transfer)
@@ -106,6 +112,14 @@ vec3 LumenProbeIrradianceOverPi(ivec2 tile, LumenSH3 transfer)
 		result.z = channel == 2 ? value : result.z;
 	}
 	return result;
+}
+
+/// The probe draw's random number per pixel and frame (UE BlueNoiseScalar): interleaved gradient noise along an axis
+/// independent of the full-resolution jitter's two (LumenSpatioTemporalNoise2D), rotated over frames.
+float LumenProbeDrawNoise(ivec2 pixel)
+{
+	float spatial = InterleavedGradientNoise(vec2(float(pixel.x), -float(pixel.y)) + vec2(37.0, 11.0));
+	return fract(spatial + u_lumen_frame_index * LUMEN_PROBE_DRAW_FRAME_INCREMENT);
 }
 
 /// The pixel's interpolation offset: the blue-noise jitter of up to u_lumen_full_res_jitter_width probe tiles (half
@@ -149,7 +163,7 @@ LumenCorner LumenInterpolationCorner(ivec2 tile, float bilinear, ivec2 pixel, ve
 		return corner;
 	}
 	int tile_index = LumenAdaptiveTileIndex(tile);
-	int count = int(min(b_lumen_adaptive[LumenAdaptiveCountEntry(tile_index)], uint(LUMEN_ADAPTIVE_SAMPLES)));
+	int count = int(min(b_lumen_adaptive[LumenAdaptiveCountEntry(tile_index)], uint(LUMEN_ADAPTIVE_MAX_SAMPLES)));
 	for(int k = 0; k < count; ++k)
 	{
 		int index = int(b_lumen_adaptive[LumenAdaptiveProbeEntry(tile_index, k)]);
@@ -204,14 +218,44 @@ LumenProbeSample LumenInterpolationProbes(ivec2 pixel, vec3 position, vec3 norma
 	return probes;
 }
 
-/// The interpolated E / pi along @p normal.
+/// One of @p probes' four probes drawn in proportion to its weight (UE STOCHASTIC_PROBE_INTERPOLATION,
+/// LumenScreenProbeGather.usf:1229-1263): every tile becomes the drawn probe's, its weight 1 (0 when none is valid).
+LumenProbeSample LumenDrawProbe(LumenProbeSample probes, ivec2 pixel)
+{
+	vec4 weights = probes.weights;
+	float random = min(LumenProbeDrawNoise(pixel), 0.99) * dot(weights, vec4_splat(1.0));
+	ivec2 tile = probes.tiles01.xy;
+	if(random >= weights.x + weights.y + weights.z)
+	{
+		tile = probes.tiles23.zw;
+	}
+	else if(random >= weights.x + weights.y)
+	{
+		tile = probes.tiles23.xy;
+	}
+	else if(random >= weights.x)
+	{
+		tile = probes.tiles01.zw;
+	}
+	probes.tiles01 = ivec4(tile, tile);
+	probes.tiles23 = ivec4(tile, tile);
+	probes.weights = vec4(probes.valid ? 1.0 : 0.0, 0.0, 0.0, 0.0);
+	return probes;
+}
+
+/// The interpolated E / pi along @p normal; the drawn probe alone when the interpolation is stochastic.
 vec3 LumenInterpolateIrradianceOverPi(LumenProbeSample probes, vec3 normal)
 {
 	LumenSH3 transfer = LumenDiffuseTransferSH3(normal);
-	return probes.weights.x * LumenProbeIrradianceOverPi(probes.tiles01.xy, transfer) +
-	       probes.weights.y * LumenProbeIrradianceOverPi(probes.tiles01.zw, transfer) +
-	       probes.weights.z * LumenProbeIrradianceOverPi(probes.tiles23.xy, transfer) +
-	       probes.weights.w * LumenProbeIrradianceOverPi(probes.tiles23.zw, transfer);
+	vec3 irradiance = probes.weights.x * LumenProbeIrradianceOverPi(probes.tiles01.xy, transfer);
+	BRANCH
+	if(!u_lumen_stochastic_interpolation)
+	{
+		irradiance += probes.weights.y * LumenProbeIrradianceOverPi(probes.tiles01.zw, transfer) +
+		              probes.weights.z * LumenProbeIrradianceOverPi(probes.tiles23.xy, transfer) +
+		              probes.weights.w * LumenProbeIrradianceOverPi(probes.tiles23.zw, transfer);
+	}
+	return irradiance;
 }
 
 /// One probe's moving fraction (the alpha of its SH texel 0).
@@ -223,6 +267,11 @@ float LumenProbeMoving(ivec2 tile)
 /// The interpolated moving fraction of the probes' lighting (UE LightingIsMoving).
 float LumenInterpolateMoving(LumenProbeSample probes)
 {
+	BRANCH
+	if(u_lumen_stochastic_interpolation)
+	{
+		return probes.weights.x * LumenProbeMoving(probes.tiles01.xy);
+	}
 	vec4 moving = vec4(LumenProbeMoving(probes.tiles01.xy),
 	                   LumenProbeMoving(probes.tiles01.zw),
 	                   LumenProbeMoving(probes.tiles23.xy),
@@ -250,10 +299,15 @@ vec3 LumenInterpolateRadiance(LumenProbeSample probes, vec3 direction)
 {
 	vec2 probe_uv = LumenInverseEquiAreaSphericalMapping(direction);
 	vec2 inv_atlas_size = vec2_splat(1.0) / vec2(textureSize(s_lumen_probe_border, 0));
-	return probes.weights.x * LumenProbeRadiance(probes.tiles01.xy, probe_uv, inv_atlas_size) +
-	       probes.weights.y * LumenProbeRadiance(probes.tiles01.zw, probe_uv, inv_atlas_size) +
-	       probes.weights.z * LumenProbeRadiance(probes.tiles23.xy, probe_uv, inv_atlas_size) +
-	       probes.weights.w * LumenProbeRadiance(probes.tiles23.zw, probe_uv, inv_atlas_size);
+	vec3 radiance = probes.weights.x * LumenProbeRadiance(probes.tiles01.xy, probe_uv, inv_atlas_size);
+	BRANCH
+	if(!u_lumen_stochastic_interpolation)
+	{
+		radiance += probes.weights.y * LumenProbeRadiance(probes.tiles01.zw, probe_uv, inv_atlas_size) +
+		            probes.weights.z * LumenProbeRadiance(probes.tiles23.xy, probe_uv, inv_atlas_size) +
+		            probes.weights.w * LumenProbeRadiance(probes.tiles23.zw, probe_uv, inv_atlas_size);
+	}
+	return radiance;
 }
 
 /// UE RoughReflectionsDiffuseLerp: 1 = the rough specular is E / pi (the traced reflections own the pixel,
@@ -314,7 +368,8 @@ vec3 LumenReadRoughHistory(LumenHistoryTaps taps)
 	vec3 color = vec3_splat(0.0);
 	for(int tap = 0; tap < 4; ++tap)
 	{
-		color += LumenHistoryTapWeight(taps, tap) * texelFetch(s_lumen_rough_history, LumenHistoryTapTexel(taps, tap), 0).xyz;
+		color += LumenWeightedHistoryTap(LumenHistoryTapWeight(taps, tap),
+		                                 texelFetch(s_lumen_rough_history, LumenHistoryTapTexel(taps, tap), 0)).xyz;
 	}
 	return color / max(weight_sum, 1e-5) * u_history_pre_exposure_correction;
 }
@@ -323,19 +378,21 @@ NUM_THREADS(8, 8, 1)
 void main()
 {
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+	ivec2 group_origin = ivec2(gl_WorkGroupID.xy) * 8;
+#if defined(LUMEN_INTEGRATE_SHORT_RANGE_AO)
+	// The AO clamp's neighbourhoods of a full-resolution search, before any thread returns.
+	LumenLoadShortRangeAOTile(group_origin, int(gl_LocalInvocationIndex));
+	barrier();
+#endif
 	if(pixel.x >= int(u_lumen_view_size.x) || pixel.y >= int(u_lumen_view_size.y))
 	{
 		return;
 	}
 	float depth01 = texelFetch(s_lumen_depth, pixel, 0).x;
+	// Sky: nothing is written. Every reader masks the sky by depth (the composite, the debug views) or by the history
+	// taps' depth test, whose weight-0 taps are selected out (LumenWeightedHistoryTap).
 	if(depth01 >= 1.0)
 	{
-		imageStore(s_lumen_history_out, pixel, vec4_splat(0.0));
-		imageStore(s_lumen_rough_history_out, pixel, vec4_splat(0.0));
-#ifdef LUMEN_INTEGRATE_SHORT_RANGE_AO
-		imageStore(s_lumen_short_range_ao_history_out, pixel, vec4(0.0, 0.0, 0.0, 1.0));
-		imageStore(s_lumen_short_range_ao_screen_out, pixel, vec4(0.5, 0.5, 0.5, 1.0));
-#endif
 		return;
 	}
 	vec3 position = LumenWorldFromDepth(LumenPixelUv(pixel), depth01);
@@ -344,12 +401,19 @@ void main()
 	float roughness = gbuffer1.w;
 	float depth = LumenLinearDepth(depth01);
 	LumenProbeSample probes = LumenInterpolationProbes(pixel, position, normal, depth);
+	BRANCH
+	if(u_lumen_stochastic_interpolation)
+	{
+		probes = LumenDrawProbe(probes, pixel);
+	}
 	vec3 current = vec3_splat(0.0);
 	vec3 rough_current = vec3_splat(0.0);
 	BRANCH
 	if(probes.valid)
 	{
-		current = LumenInterpolateIrradianceOverPi(probes, normal);
+		// UE EvaluateSHIrradiance clamps the interpolated SH's irradiance at zero (SHCommon.ush:340): where it rings
+		// negative the temporal would otherwise average the dip in.
+		current = max(LumenInterpolateIrradianceOverPi(probes, normal), vec3_splat(0.0));
 		rough_current = current;
 		float diffuse_lerp = LumenRoughDiffuseLerp(roughness);
 		BRANCH
@@ -367,7 +431,8 @@ void main()
 	{
 		taps = LumenHistoryReprojection(pixel, position, normal);
 	}
-	vec4 history_sample = LumenReadHistoryTaps(taps);
+	LumenHistorySample history_read = LumenReadHistorySample(taps);
+	vec4 history_sample = history_read.color_frames;
 	vec3 rough_history = vec3_splat(0.0);
 	BRANCH
 	if(u_lumen_rough_specular)
@@ -381,7 +446,7 @@ void main()
 	{
 		fast_update = probes.valid ? LumenFastUpdateAmount(LumenInterpolateMoving(probes)) : 0.0;
 		float held_fast_update =
-		    max(fast_update, min(LumenReadHistoryFastUpdate(taps), LUMEN_TEMPORAL_FAST_UPDATE_MAX_AMOUNT));
+		    max(fast_update, min(history_read.fast_update, LUMEN_TEMPORAL_FAST_UPDATE_MAX_AMOUNT));
 		frames = min(frames, (1.0 - held_fast_update) * u_lumen_temporal_max_frames);
 	}
 	float blend = 1.0 / (1.0 + frames);
@@ -399,10 +464,12 @@ void main()
 		history_alpha = 0.0;
 	}
 	imageStore(s_lumen_history_out, pixel, vec4(result, history_alpha));
-	imageStore(s_lumen_rough_history_out, pixel, vec4(rough_result, LumenQuantizeFrames(frames)));
+	// UE's temporal quantizes its histories with a per-pixel noise scalar (LumenScreenProbeGatherTemporal.usf:355, 572).
+	float quantize_noise = InterleavedGradientNoise(vec2(pixel), mod(u_lumen_frame_index, 8.0));
+	imageStore(s_lumen_rough_history_out, pixel, vec4(LumenQuantizeForRg11b10f(rough_result, quantize_noise), 1.0));
 #ifdef LUMEN_INTEGRATE_SHORT_RANGE_AO
-	vec4 ao = LumenAccumulateShortRangeAO(pixel, position, normal, depth, taps, frames);
-	imageStore(s_lumen_short_range_ao_history_out, pixel, ao);
+	vec4 ao = LumenAccumulateShortRangeAO(pixel, position, normal, depth, taps, frames, group_origin);
+	imageStore(s_lumen_short_range_ao_history_out, pixel, uvec4(LumenPackShortRangeAO(ao), 0u, 0u, 0u));
 	imageStore(s_lumen_short_range_ao_screen_out, pixel, LumenShortRangeAOScreen(ao, normal));
 #endif
 }

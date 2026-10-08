@@ -1,5 +1,6 @@
 #pragma once
 
+#include <engine/rendering/gi/lumen_constants.h>
 #include <engine/rendering/gpu_program.h>
 #include <engine/rendering/pipeline/passes/lumen_run_params.h>
 
@@ -34,6 +35,8 @@ public:
         const float* frame{};
         const float* probes{};
         const float* view{};
+        /// The probes' radiance texels per axis (lumen_pass::get_radiance_cache_probe_resolution, a multiple of 16).
+        uint32_t probe_resolution = uint32_t(gi::lumen::LUMEN_RADIANCE_CACHE_PROBE_RES);
     };
 
     ~lumen_radiance_cache();
@@ -44,7 +47,7 @@ public:
     auto update(const frame_inputs& inputs) -> bool;
 
     /// Binds the cache for the hand-off read (lumen_radiance_cache_sample.sh) at the given stages and sets
-    /// the clipmap uniforms.
+    /// the clipmap and layout uniforms.
     void bind_for_sampling(uint8_t indirection_stage, uint8_t final_stage) const;
 
     /// Frees the probe atlases and buffers; the next update allocates them again and rebuilds the cache.
@@ -62,6 +65,7 @@ private:
         gfx::program::uniform_ptr u_lumen_rc_prev_clipmaps;
         gfx::program::uniform_ptr u_lumen_rc_params;
         gfx::program::uniform_ptr u_lumen_rc_camera;
+        gfx::program::uniform_ptr u_lumen_rc_layout;
         gfx::program::uniform_ptr u_lumen_frame;
         gfx::program::uniform_ptr u_lumen_probes;
         gfx::program::uniform_ptr u_lumen_view;
@@ -91,11 +95,15 @@ private:
     };
 
     auto has_programs() const -> bool;
-    auto ensure_resources() -> bool;
+    /// Creates the buffers once and the atlases at @p probe_res radiance texels per probe axis; new atlases rebuild
+    /// the cache.
+    auto ensure_resources(uint32_t probe_res) -> bool;
     /// Snaps the clipmaps around the camera (double precision) and keeps last frame's for the carry-over.
     void place_clipmaps(const math::vec3& camera);
     /// Sets the cache uniforms every pass reads, with @p mode for the bookkeeping pass.
     void set_cache_uniforms(bookkeeping mode) const;
+    /// Sets u_lumen_rc_layout (lumen_radiance_cache_common.sh): x = the probe resolution.
+    void set_layout_uniform() const;
     void run_bookkeeping(bookkeeping mode) const;
     /// One dispatch over every indirection entry.
     void run_over_indirection(gpu_program& program, const char* name) const;
@@ -135,6 +143,8 @@ private:
     uint32_t frame_ = 0;
     /// The probes re-traced per frame beyond the new ones (lumen_pass::get_radiance_cache_trace_budget).
     uint32_t trace_budget_ = 0;
+    /// The atlases' radiance texels per probe axis (lumen_pass::get_radiance_cache_probe_resolution).
+    uint32_t probe_res_ = 0;
     /// False until a frame has run with these resources: the next frame then starts from scratch.
     bool persistent_ = false;
 };

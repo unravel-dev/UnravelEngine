@@ -1698,9 +1698,18 @@ IndirectSpecularOcclusion ComputeIndirectSpecularOcclusion(sampler3D Table, vec3
     return Result;
 }
 
-/// The untraced reflection layer, completed where it does not cover the pixel: PBUFFER holds the
-/// probes and the GI rough tier premultiplied, their union coverage in alpha, and the rest of
-/// the lobe sees the environment - UE fills its capture weight with the sky light the same way
+/// The untraced reflection layer as a texel of its source: PBUFFER as the probe pass drew it
+/// (@p Params.x = 0), or the GI's rough specular history (@p Params.x = 1), which covers the pixel
+/// in full at @p Params.y times its value - none at all when it does not exist (@p Params.z = 0).
+vec4 ResolveProbeLayer(vec4 Texel, vec4 Params)
+{
+    vec4 Rough = Params.z > 0.5 ? vec4(Texel.xyz * Params.y, 1.0) : vec4(0.0, 0.0, 0.0, 0.0);
+    return Params.x > 0.5 ? Rough : Texel;
+}
+
+/// The untraced reflection layer, completed where it does not cover the pixel: the probes (or the
+/// GI rough tier) premultiplied, their union coverage in alpha, and the rest of the lobe sees the
+/// environment - UE fills its capture weight with the sky light the same way
 /// (ReflectionEnvironmentComposite.ush). @p EnvironmentRadiance: eval_radiance_sh_lobe, in the
 /// buffers' pre-exposed space.
 vec3 CompleteProbeLayer(vec4 ProbeLayer, vec3 EnvironmentRadiance)

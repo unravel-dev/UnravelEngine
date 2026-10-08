@@ -58,8 +58,19 @@ constexpr float k_max_scene_detail = 8.0f;
 constexpr uint32_t k_max_card_min_resolution = 1024;
 /// Placements per resolution task (UE r.LumenScene.MeshCardsPerTask is 128 mesh cards).
 constexpr uint32_t k_placements_per_task = 128;
-/// Resident pages below which the lighting schedule's per-page pass stays on the calling thread.
-constexpr uint32_t k_parallel_schedule_pages = 1024;
+/// Resident pages from which a per-page lighting pass runs on the pool: below them the dispatch costs more than the
+/// loop (~0.05 ms). The direct-lighting invalidation tests every change per page, the page speeds walk the viewers and
+/// their frusta, the per-frame buckets take an age and a log2.
+constexpr uint32_t k_parallel_invalidation_pages = 1024;
+constexpr uint32_t k_parallel_speed_pages = 4096;
+constexpr uint32_t k_parallel_bucket_pages = 8192;
+/// A hi-res request ranks this much farther than its card, plus as much again scaled by the share of the feedback
+/// samples it did not get (LumenSurfaceCacheFeedback.cpp:362-364).
+constexpr float k_hi_res_distance_bias = 25.0f;
+/// Frames a hi-res page stays unasked for before a locked allocation, and before another hi-res page, may take its
+/// place (LumenSceneRendering.cpp:947, 1063: two, and the 16 x 16 feedback tile's pixels).
+constexpr uint64_t k_hi_res_idle_frames_for_locked = 2;
+constexpr uint64_t k_hi_res_idle_frames_for_hi_res = 256;
 
 /// The range of box (@p center, @p half) along @p axis: x = min, y = max.
 auto project_box(const math::vec3& center, const math::vec3& half, const math::vec3& axis) -> math::vec2
@@ -161,23 +172,50 @@ auto distance_to_box(const math::vec3& center, const math::vec3& extent, const m
     return math::length(math::max(math::abs(point - center) - extent, math::vec3(0.0f)));
 }
 
+/// Distance from the nearest of @p viewers to @p card.
+auto nearest_distance_to_card(const lumen_scene::placed_card& card, const std::vector<lumen_scene::viewer>& viewers)
+    -> float
+{
+    float nearest = std::numeric_limits<float>::max();
+    for(const auto& viewer : viewers)
+    {
+        nearest = std::min(nearest, distance_to_card(card, viewer.origin));
+    }
+    return nearest;
+}
+
+/// Distance from the nearest of @p viewers to the axis-aligned box (@p center, @p extent).
+auto nearest_distance_to_box(const math::vec3& center,
+                             const math::vec3& extent,
+                             const std::vector<lumen_scene::viewer>& viewers) -> float
+{
+    float nearest = std::numeric_limits<float>::max();
+    for(const auto& viewer : viewers)
+    {
+        nearest = std::min(nearest, distance_to_box(center, extent, viewer.origin));
+    }
+    return nearest;
+}
+
 auto is_same_transform(const math::mat4& a, const math::mat4& b) -> bool
 {
     return std::memcmp(&a, &b, sizeof(math::mat4)) == 0;
 }
 
 /// Appends a placed card's record (lumen_scene::get_card_table): its box, then @p mip_entry = (size in pages x, y,
-/// res level x, y).
+/// res level x, y), then @p reflection_table = the reflections' page table (offset, size in pages x, y, hi-res flag).
 void append_card_record(std::vector<math::vec4>& table,
                         const lumen_scene::placed_card& placed,
                         uint32_t page_offset,
-                        const math::vec4& mip_entry)
+                        const math::vec4& mip_entry,
+                        const math::vec4& reflection_table)
 {
     table.push_back(math::vec4(placed.origin, float(page_offset)));
     table.push_back(math::vec4(placed.axis_x, placed.extent.x));
     table.push_back(math::vec4(placed.axis_y, placed.extent.y));
     table.push_back(math::vec4(placed.axis_z, placed.extent.z));
     table.push_back(mip_entry);
+    table.push_back(reflection_table);
 }
 
 /// The bin_lookup_ index of a sub-allocated element size (8 to 128 texels per axis).
@@ -256,15 +294,18 @@ auto lumen_scene::apply_settings(const settings& s) -> bool
 
 auto lumen_scene::get_max_card_distance() const -> float
 {
-    return std::clamp(view_settings_.view_distance, 0.0f, settings_.max_card_distance);
+    // The reach of the global distance field whatever the view distance (UE LumenScene::GetCardMaxDistance): a ray
+    // that hits a surface there must find its cards, or its bounce is black.
+    return settings_.max_card_distance;
 }
 
 auto lumen_scene::get_lighting_update_factor(lighting_context context) const -> uint32_t
 {
     const float speed =
         std::clamp(view_settings_.lighting_update_speed, k_min_lighting_update_speed, k_max_lighting_update_speed);
-    const float factor = context == lighting_direct ? float(gi::lumen::LUMEN_SCENE_DIRECT_UPDATE_FACTOR)
-                                                    : float(gi::lumen::LUMEN_SCENE_RADIOSITY_UPDATE_FACTOR);
+    const float factor = float(settings_.lighting_update_factor_scale) *
+                         (context == lighting_direct ? float(gi::lumen::LUMEN_SCENE_DIRECT_UPDATE_FACTOR)
+                                                     : float(gi::lumen::LUMEN_SCENE_RADIOSITY_UPDATE_FACTOR));
     return uint32_t(std::lround(factor / speed));
 }
 
@@ -298,6 +339,10 @@ void lumen_scene::reset()
     bin_lookup_.fill(-1);
     placements_.clear();
     source_placements_.clear();
+    // The active list indexes source_placements_ and the resident pages pair with resident_slots_ by index: a reader
+    // between this reset and the next update (the card visualizations) must find them empty too.
+    active_.clear();
+    first_card_.clear();
     active_keys_.clear();
     active_instance_count_ = 0;
     are_tables_dirty_ = true;
@@ -311,11 +356,19 @@ void lumen_scene::reset()
     resample_pages_.clear();
     resample_table_.clear();
     resample_page_base_ = 0;
+    resident_pages_.clear();
     resident_slots_.clear();
+    page_entry_slots_.clear();
+    card_owner_keys_.clear();
+    hi_res_requests_.clear();
+    hi_res_pages_.clear();
+    is_source_active_.clear();
+    ++card_index_revision_;
     for(auto& pages : lit_pages_)
     {
         pages.clear();
     }
+    priority_tables_revision_ = ~0ull;
     stats_ = {};
 }
 
@@ -496,6 +549,82 @@ void lumen_scene::free_card(card_state& card)
     }
     card.slots.clear();
     card.res_level = 0;
+    free_hi_res(card);
+}
+
+void lumen_scene::free_hi_res(card_state& card)
+{
+    hi_res_mip& hi = card.hi_res;
+    for(size_t page = 0; page < hi.slots.size(); ++page)
+    {
+        if(hi.is_mapped[page] != 0)
+        {
+            free_slot(hi.slots[page], hi.mip);
+        }
+    }
+    // Its keys in hi_res_pages_ go stale and are dropped when the eviction meets them.
+    hi = hi_res_mip{};
+}
+
+auto lumen_scene::get_feedback_page(const mip_desc& mip, const math::uvec2& page, uint32_t res_level) -> uint32_t
+{
+    // The element's page grid at its level, without the aspect bias, and the centre of its page on the card.
+    const float grid = float(1u << (std::max(res_level, sub_allocation_res_level) - sub_allocation_res_level));
+    const math::vec2 center = (math::vec2(page) + 0.5f) / grid;
+    const math::uvec2 pages = mip.size_in_pages;
+    const uint32_t x = std::min(uint32_t(center.x * float(pages.x)), pages.x - 1u);
+    const uint32_t y = std::min(uint32_t(center.y * float(pages.y)), pages.y - 1u);
+    return x + y * pages.x;
+}
+
+auto lumen_scene::has_page_space(const mip_desc& mip) const -> bool
+{
+    return mip.is_sub_allocation ? has_physical_space(mip) : !free_pages_.empty();
+}
+
+auto lumen_scene::evict_oldest_hi_res_page(uint64_t min_idle_frames) -> bool
+{
+    const auto find_mip = [this](const hi_res_page_key& key) -> hi_res_mip*
+    {
+        const auto it = placements_.find(key.identity);
+        if(it == placements_.end() || key.card >= it->second.card_states.size())
+        {
+            return nullptr;
+        }
+        hi_res_mip& hi = it->second.card_states[key.card].hi_res;
+        return key.page < hi.is_mapped.size() && hi.is_mapped[key.page] != 0 ? &hi : nullptr;
+    };
+    hi_res_pages_.erase(std::remove_if(hi_res_pages_.begin(),
+                                       hi_res_pages_.end(),
+                                       [&](const hi_res_page_key& key)
+                                       {
+                                           return find_mip(key) == nullptr;
+                                       }),
+                        hi_res_pages_.end());
+    size_t oldest = hi_res_pages_.size();
+    uint64_t oldest_frame = std::numeric_limits<uint64_t>::max();
+    for(size_t k = 0; k < hi_res_pages_.size(); ++k)
+    {
+        const uint64_t last_used = find_mip(hi_res_pages_[k])->last_used[hi_res_pages_[k].page];
+        if(last_used < oldest_frame)
+        {
+            oldest_frame = last_used;
+            oldest = k;
+        }
+    }
+    if(oldest == hi_res_pages_.size() || oldest_frame + min_idle_frames > frame_)
+    {
+        return false;
+    }
+    const hi_res_page_key key = hi_res_pages_[oldest];
+    hi_res_mip& hi = *find_mip(key);
+    free_slot(hi.slots[key.page], hi.mip);
+    hi.slots[key.page] = physical_slot{};
+    hi.is_mapped[key.page] = 0;
+    hi_res_pages_[oldest] = hi_res_pages_.back();
+    hi_res_pages_.pop_back();
+    are_tables_dirty_ = true;
+    return true;
 }
 
 auto lumen_scene::append_resample_source(const card_state& card, const placed_card& placed) -> int32_t
@@ -509,7 +638,11 @@ auto lumen_scene::append_resample_source(const card_state& card, const placed_ca
                        math::vec4(float(card.mip.size_in_pages.x),
                                   float(card.mip.size_in_pages.y),
                                   float(card.mip.res_level.x),
-                                  float(card.mip.res_level.y)));
+                                  float(card.mip.res_level.y)),
+                       math::vec4(float(resample_pages_.size()),
+                                  float(card.mip.size_in_pages.x),
+                                  float(card.mip.size_in_pages.y),
+                                  0.0f));
     for(const auto& slot : card.slots)
     {
         resample_pages_.push_back(math::vec4(float(slot.atlas_offset.x),
@@ -553,17 +686,40 @@ auto lumen_scene::allocate(card_state& card, uint32_t res_level) -> bool
 
 void lumen_scene::update(const std::vector<source>& sources, uint32_t instance_count, const math::vec3& view_origin)
 {
+    viewer single;
+    single.origin = view_origin;
+    update(sources, instance_count, std::vector<viewer>{single});
+}
+
+void lumen_scene::update(const std::vector<source>& sources,
+                         uint32_t instance_count,
+                         const std::vector<viewer>& viewers)
+{
     APP_SCOPE_PERF("GI/Scene Update");
     ++frame_;
     stats_ = {};
     const bool has_unique_placements = refresh_placements(sources);
     are_tables_dirty_ = collect_active(sources, instance_count) || are_tables_dirty_;
     // A placement repeated within the frame is shared by two sources, so its cards must be visited in order.
-    choose_resolutions(sources, view_origin, has_unique_placements);
+    choose_resolutions(sources, viewers, has_unique_placements);
+    if(!are_hi_res_pages_enabled_ && hi_res_page_count_ != 0)
+    {
+        for(auto& [identity, entry] : placements_)
+        {
+            for(auto& state : entry.card_states)
+            {
+                free_hi_res(state);
+            }
+        }
+        hi_res_pages_.clear();
+        hi_res_requests_.clear();
+        are_tables_dirty_ = true;
+    }
     capture_packer packer(settings_.capture_atlas_size);
     captures_.clear();
     resample_cards_.clear();
     resample_pages_.clear();
+    add_hi_res_requests(viewers);
     allocate_requests(sources, packer);
     build_tables(sources, instance_count);
     refresh_captures(sources, packer);
@@ -574,6 +730,7 @@ void lumen_scene::update(const std::vector<source>& sources, uint32_t instance_c
     stats_.pages_total = pages_per_side_ * pages_per_side_;
     stats_.pages_used = stats_.pages_total - uint32_t(free_pages_.size());
     stats_.captures = uint32_t(captures_.size());
+    stats_.hi_res_pages = hi_res_page_count_;
 }
 
 auto lumen_scene::refresh_placements(const std::vector<source>& sources) -> bool
@@ -587,8 +744,11 @@ auto lumen_scene::refresh_placements(const std::vector<source>& sources) -> bool
         auto [it, is_new] = placements_.try_emplace(src.identity);
         placement& entry = it->second;
         are_tables_dirty_ = are_tables_dirty_ || is_new || entry.cards != src.cards;
+        entry.source_index = uint32_t(s);
         if(entry.cards != src.cards)
         {
+            // Another card set moves the card indices of every placement after this one.
+            ++card_index_revision_;
             for(auto& card : entry.card_states)
             {
                 free_card(card);
@@ -636,6 +796,7 @@ auto lumen_scene::collect_active(const std::vector<source>& sources, uint32_t in
     // Every pass below walks this list, so card indices agree between the captures and the packed table.
     active_.clear();
     first_card_.assign(sources.size(), 0u);
+    is_source_active_.assign(sources.size(), 0u);
     bool has_changed = instance_count != active_instance_count_;
     uint32_t card_total = 0;
     for(uint32_t s = 0; s < uint32_t(sources.size()); ++s)
@@ -645,6 +806,7 @@ auto lumen_scene::collect_active(const std::vector<source>& sources, uint32_t in
             const std::pair<uint64_t, uint32_t> key(sources[s].identity, sources[s].instance_index);
             has_changed = has_changed || active_.size() >= active_keys_.size() || active_keys_[active_.size()] != key;
             active_.push_back(s);
+            is_source_active_[s] = 1u;
             first_card_[s] = card_total;
             card_total += uint32_t(source_placements_[s]->card_states.size());
         }
@@ -658,11 +820,14 @@ auto lumen_scene::collect_active(const std::vector<source>& sources, uint32_t in
             active_keys_[a] = {sources[active_[a]].identity, sources[active_[a]].instance_index};
         }
         active_instance_count_ = instance_count;
+        ++card_index_revision_;
     }
     return has_changed;
 }
 
-void lumen_scene::choose_resolutions(const std::vector<source>& sources, const math::vec3& view_origin, bool parallel)
+void lumen_scene::choose_resolutions(const std::vector<source>& sources,
+                                     const std::vector<viewer>& viewers,
+                                     bool parallel)
 {
     APP_SCOPE_PERF("GI/Scene Update/Resolutions");
     const uint32_t active_count = uint32_t(active_.size());
@@ -677,7 +842,11 @@ void lumen_scene::choose_resolutions(const std::vector<source>& sources, const m
                                  const uint32_t begin = chunk_count > 1u ? chunk_index * k_placements_per_task : 0u;
                                  const uint32_t end =
                                      chunk_count > 1u ? std::min(begin + k_placements_per_task, active_count) : active_count;
-                                 choose_chunk_resolutions(sources, view_origin, begin, end, resolution_chunks_[chunk_index]);
+                                 choose_chunk_resolutions(sources,
+                                                          viewers,
+                                                          begin,
+                                                          end,
+                                                          resolution_chunks_[chunk_index]);
                              });
     // In placement order, so the frees and the requests come out as one pass over the placements makes them. Nothing
     // in the pass reads the allocator's state, so the frees can follow it.
@@ -696,7 +865,7 @@ void lumen_scene::choose_resolutions(const std::vector<source>& sources, const m
 }
 
 void lumen_scene::choose_chunk_resolutions(const std::vector<source>& sources,
-                                           const math::vec3& view_origin,
+                                           const std::vector<viewer>& viewers,
                                            uint32_t begin,
                                            uint32_t end,
                                            resolution_chunk& chunk)
@@ -745,8 +914,8 @@ void lumen_scene::choose_chunk_resolutions(const std::vector<source>& sources,
         }
         // The placement's own gate (UE's primitive-group residency, LumenSceneRendering.cpp:501-514): its largest
         // extent must project to the minimum card resolution (one texel for an emissive light source) at its distance.
-        const float group_distance = std::max(distance_to_box(entry.bounds_center, entry.bounds_extent, view_origin),
-                                              k_min_group_distance);
+        const float group_distance =
+            std::max(nearest_distance_to_box(entry.bounds_center, entry.bounds_extent, viewers), k_min_group_distance);
         const float group_extent = std::max(entry.bounds_extent.x, std::max(entry.bounds_extent.y, entry.bounds_extent.z));
         const float group_resolution = rule.texel_density_scale * group_extent / group_distance + k_group_resolution_bias;
         const bool is_group_resident =
@@ -756,7 +925,7 @@ void lumen_scene::choose_chunk_resolutions(const std::vector<source>& sources,
         {
             card_state& state = entry.card_states[c];
             const placed_card& placed = entry.placed[c];
-            const float distance = std::max(distance_to_card(placed, view_origin), k_min_viewer_distance);
+            const float distance = std::max(nearest_distance_to_card(placed, viewers), k_min_viewer_distance);
             const float max_extent = std::max(placed.extent.x, placed.extent.y);
             const float projected = std::min(rule.texel_density_scale * max_extent / distance,
                                              settings_.max_texel_density * max_extent);
@@ -808,6 +977,165 @@ void lumen_scene::choose_chunk_resolutions(const std::vector<source>& sources,
     }
 }
 
+void lumen_scene::add_hi_res_requests(const std::vector<viewer>& viewers)
+{
+    stats_.hi_res_requests = uint32_t(hi_res_requests_.size());
+    for(const hi_res_request& asked : hi_res_requests_)
+    {
+        const auto it = placements_.find(asked.identity);
+        if(it == placements_.end())
+        {
+            continue;
+        }
+        const placement& entry = it->second;
+        const bool is_shown = entry.last_seen == frame_ && entry.has_placed &&
+                              entry.source_index < is_source_active_.size() &&
+                              is_source_active_[entry.source_index] != 0u && asked.card < entry.card_states.size();
+        if(!is_shown)
+        {
+            continue;
+        }
+        const card_state& state = entry.card_states[asked.card];
+        if(state.res_level == 0 || asked.res_level <= state.res_level)
+        {
+            continue;
+        }
+        const float distance = nearest_distance_to_card(entry.placed[asked.card], viewers) + asked.distance_bias;
+        requests_.push_back({entry.source_index, asked.card, compute_distance_bin(distance), true, asked.res_level,
+                             asked.page});
+    }
+    hi_res_requests_.clear();
+}
+
+void lumen_scene::set_feedback(const std::vector<feedback_element>& elements,
+                               uint64_t card_index_revision,
+                               uint32_t min_hits,
+                               uint32_t sample_count)
+{
+    hi_res_requests_.clear();
+    if(!are_hi_res_pages_enabled_ || card_index_revision != card_index_revision_)
+    {
+        return;
+    }
+    for(const feedback_element& element : elements)
+    {
+        if(element.hits <= min_hits || element.card_index >= card_owner_keys_.size())
+        {
+            continue;
+        }
+        const auto& owner = card_owner_keys_[element.card_index];
+        const auto it = placements_.find(owner.first);
+        if(it == placements_.end() || owner.second >= it->second.card_states.size())
+        {
+            continue;
+        }
+        card_state& state = it->second.card_states[owner.second];
+        const uint32_t level = std::clamp(element.res_level, min_res_level, max_res_level);
+        // Only a page above the locked level (UE: Request.ResLevel > Card.MinAllocatedResLevel).
+        if(state.res_level == 0 || level <= state.res_level)
+        {
+            continue;
+        }
+        hi_res_mip& hi = state.hi_res;
+        if(level <= hi.res_level)
+        {
+            const uint32_t page = get_feedback_page(hi.mip, element.page, level);
+            if(hi.is_mapped[page] != 0)
+            {
+                // A mapped page the feedback still reads stays (UE UnlockedAllocationHeap.Update).
+                hi.last_used[page] = frame_;
+                continue;
+            }
+        }
+        const float share = float(element.hits) / float(std::max(sample_count, 1u));
+        hi_res_requests_.push_back({owner.first,
+                                    owner.second,
+                                    level,
+                                    element.page,
+                                    k_hi_res_distance_bias + k_hi_res_distance_bias * (1.0f - std::min(share, 1.0f))});
+    }
+}
+
+auto lumen_scene::allocate_hi_res_page(const std::vector<source>& sources, const request& req, capture_packer& packer)
+    -> uint32_t
+{
+    placement& entry = *source_placements_[req.source];
+    card_state& state = entry.card_states[req.card];
+    if(state.res_level == 0 || req.hi_res_level <= state.res_level)
+    {
+        return 0;
+    }
+    hi_res_mip& hi = state.hi_res;
+    // One hi-res mip per card, the finest any request asked for.
+    const uint32_t level = std::max(req.hi_res_level, hi.res_level);
+    if(level != hi.res_level)
+    {
+        const mip_desc mip = compute_mip_desc(level, state.res_level_bias);
+        if(mip.res_level == state.mip.res_level)
+        {
+            // Both axes stay at their locked levels: nothing finer to map.
+            return 0;
+        }
+        free_hi_res(state);
+        const size_t page_count = size_t(mip.size_in_pages.x) * size_t(mip.size_in_pages.y);
+        hi.res_level = level;
+        hi.mip = mip;
+        hi.slots.assign(page_count, physical_slot{});
+        hi.is_mapped.assign(page_count, 0u);
+        hi.last_used.assign(page_count, 0u);
+        are_tables_dirty_ = true;
+    }
+    const uint32_t page = get_feedback_page(hi.mip, req.hi_res_page, req.hi_res_level);
+    if(hi.is_mapped[page] != 0)
+    {
+        hi.last_used[page] = frame_;
+        return 0;
+    }
+    while(!has_page_space(hi.mip) && evict_oldest_hi_res_page(k_hi_res_idle_frames_for_hi_res))
+    {
+    }
+    math::uvec2 capture_offset(0u);
+    if(!has_page_space(hi.mip) || !packer.place(hi.mip.page_resolution, capture_offset))
+    {
+        return 0;
+    }
+    physical_slot& slot = hi.slots[page];
+    slot = physical_slot{};
+    if(hi.mip.is_sub_allocation)
+    {
+        allocate_slot(hi.mip.page_resolution, slot);
+    }
+    else
+    {
+        slot.page = free_pages_.back();
+        free_pages_.pop_back();
+        slot.atlas_offset = get_page_origin(slot.page);
+    }
+    slot.captured_frame = frame_;
+    slot.is_direct_dirty = true;
+    hi.is_mapped[page] = 1u;
+    hi.last_used[page] = frame_;
+    const source& src = sources[req.source];
+    hi_res_pages_.push_back({src.identity, req.card, page});
+    // The page starts from the locked mip's lighting (UE bResampleLastLighting), not dark.
+    const int32_t resample_card =
+        append_resample_source(state,
+                               entry.has_placed && is_same_transform(entry.placed_transform, src.local_to_world)
+                                   ? entry.placed[req.card]
+                                   : place_card(entry.cards->cards[req.card], src.local_to_world));
+    capture cap;
+    cap.card_index = first_card_[req.source] + req.card;
+    cap.source_index = req.source;
+    cap.card_uv_rect = compute_page_uv_rect(hi.mip, page);
+    cap.capture_offset = capture_offset;
+    cap.atlas_offset = slot.atlas_offset;
+    cap.size = hi.mip.page_resolution;
+    cap.resample_card = resample_card;
+    captures_.push_back(cap);
+    are_tables_dirty_ = true;
+    return 1;
+}
+
 void lumen_scene::allocate_requests(const std::vector<source>& sources, capture_packer& packer)
 {
     APP_SCOPE_PERF("GI/Scene Update/Allocate");
@@ -820,18 +1148,28 @@ void lumen_scene::allocate_requests(const std::vector<source>& sources, capture_
                      });
     uint32_t pages_requested = 0;
     std::vector<math::uvec2> capture_offsets;
+    // The hi-res requests within the budget, mapped after every locked one (UE HiResPagesToMap).
+    std::vector<const request*> hi_res;
     for(const auto& req : requests_)
     {
-        if(pages_requested >= settings_.max_captures_per_frame)
+        if(pages_requested + uint32_t(hi_res.size()) >= settings_.max_captures_per_frame)
         {
             break;
+        }
+        if(req.is_hi_res)
+        {
+            hi_res.push_back(&req);
+            continue;
         }
         placement& entry = *source_placements_[req.source];
         card_state& state = entry.card_states[req.card];
         // The level that fits the physical atlas beside everything resident, the card's own allocation included: a
-        // locked mip never evicts another and drops levels instead.
+        // locked mip never evicts another and drops levels instead, once the hi-res pages idle for two frames are gone.
         uint32_t level = state.desired_res_level;
         mip_desc mip = compute_mip_desc(level, state.res_level_bias);
+        while(!has_physical_space(mip) && evict_oldest_hi_res_page(k_hi_res_idle_frames_for_locked))
+        {
+        }
         while(!has_physical_space(mip) && level > min_res_level)
         {
             --level;
@@ -868,8 +1206,17 @@ void lumen_scene::allocate_requests(const std::vector<source>& sources, capture_
                                                        ? entry.placed[req.card]
                                                        : place_card(entry.cards->cards[req.card], src.local_to_world));
         }
-        free_card(state);
+        // The locked mip alone: a hi-res mip above the new level keeps its pages.
+        for(const auto& slot : state.slots)
+        {
+            free_slot(slot, state.mip);
+        }
+        state.slots.clear();
         allocate(state, level);
+        if(state.hi_res.res_level != 0 && state.hi_res.res_level <= state.res_level)
+        {
+            free_hi_res(state);
+        }
         for(auto& slot : state.slots)
         {
             slot.captured_frame = frame_;
@@ -891,6 +1238,14 @@ void lumen_scene::allocate_requests(const std::vector<source>& sources, capture_
         }
         pages_requested += page_count;
     }
+    for(const request* req : hi_res)
+    {
+        if(pages_requested >= settings_.max_captures_per_frame)
+        {
+            break;
+        }
+        pages_requested += allocate_hi_res_page(sources, *req, packer);
+    }
     // Only allocations change the tables; the refresh after them captures pages in place.
     are_tables_dirty_ = are_tables_dirty_ || !captures_.empty();
 }
@@ -909,9 +1264,12 @@ void lumen_scene::build_tables(const std::vector<source>& sources, uint32_t inst
     // Packed tables: cards, the page table (rebuilt from the physical allocations) and the per-instance card ranges.
     card_table_.clear();
     page_table_.clear();
+    page_entry_slots_.clear();
+    card_owner_keys_.clear();
     resident_pages_.clear();
     resident_slots_.clear();
     resident_page_owners_.clear();
+    hi_res_page_count_ = 0;
     instance_table_.assign(size_t(instance_count) * instance_stride, math::vec4(0.0f));
     for(uint32_t a = 0; a < uint32_t(active_.size()); ++a)
     {
@@ -928,31 +1286,88 @@ void lumen_scene::build_tables(const std::vector<source>& sources, uint32_t inst
         {
             card_state& state = entry.card_states[c];
             const bool resident = state.res_level != 0;
+            const bool has_hi_res = resident && state.hi_res.res_level != 0;
+            const auto locked_offset = uint32_t(page_table_.size());
+            const auto locked_pages = uint32_t(state.slots.size());
+            const math::uvec2 locked_size = resident ? state.mip.size_in_pages : math::uvec2(1u);
+            // The reflections' table: the hi-res span after the locked one, or the locked span itself.
+            const math::vec4 reflection_table =
+                has_hi_res ? math::vec4(float(locked_offset + locked_pages),
+                                        float(state.hi_res.mip.size_in_pages.x),
+                                        float(state.hi_res.mip.size_in_pages.y),
+                                        1.0f)
+                           : math::vec4(float(locked_offset), float(locked_size.x), float(locked_size.y), 0.0f);
             append_card_record(card_table_,
                                is_placed ? entry.placed[c] : place_card(entry.cards->cards[c], src.local_to_world),
-                               uint32_t(page_table_.size()),
+                               locked_offset,
                                resident ? math::vec4(float(state.mip.size_in_pages.x),
                                                      float(state.mip.size_in_pages.y),
                                                      float(state.mip.res_level.x),
                                                      float(state.mip.res_level.y))
-                                        : math::vec4(1.0f, 1.0f, 0.0f, 0.0f));
+                                        : math::vec4(1.0f, 1.0f, 0.0f, 0.0f),
+                               reflection_table);
+            card_owner_keys_.emplace_back(src.identity, c);
             if(!resident)
             {
                 continue;
             }
             ++resident_cards_;
             const uint32_t card_index = uint32_t(card_table_.size() / card_stride) - 1u;
-            for(uint32_t page = 0; page < uint32_t(state.slots.size()); ++page)
+            for(uint32_t page = 0; page < locked_pages; ++page)
             {
                 auto& slot = state.slots[page];
-                resident_pages_.push_back(
-                    {card_index, compute_page_uv_rect(state.mip, page), slot.atlas_offset, state.mip.page_resolution});
+                resident_pages_.push_back({card_index,
+                                           compute_page_uv_rect(state.mip, page),
+                                           slot.atlas_offset,
+                                           state.mip.page_resolution,
+                                           locked_offset,
+                                           state.mip.size_in_pages});
                 resident_slots_.push_back(&slot);
                 resident_page_owners_.push_back(math::uvec2(a, c));
                 page_table_.push_back(math::vec4(float(slot.atlas_offset.x),
                                                  float(slot.atlas_offset.y),
                                                  float(state.mip.res_level.x),
                                                  float(state.mip.res_level.y)));
+                page_entry_slots_.push_back(&slot);
+            }
+            if(!has_hi_res)
+            {
+                continue;
+            }
+            hi_res_mip& hi = state.hi_res;
+            const auto hi_offset = uint32_t(page_table_.size());
+            const math::uvec2 hi_size = hi.mip.size_in_pages;
+            for(uint32_t page = 0; page < uint32_t(hi.slots.size()); ++page)
+            {
+                if(hi.is_mapped[page] != 0)
+                {
+                    auto& slot = hi.slots[page];
+                    resident_pages_.push_back({card_index,
+                                               compute_page_uv_rect(hi.mip, page),
+                                               slot.atlas_offset,
+                                               hi.mip.page_resolution,
+                                               hi_offset,
+                                               hi_size});
+                    resident_slots_.push_back(&slot);
+                    resident_page_owners_.push_back(math::uvec2(a, c));
+                    page_table_.push_back(math::vec4(float(slot.atlas_offset.x),
+                                                     float(slot.atlas_offset.y),
+                                                     float(hi.mip.res_level.x),
+                                                     float(hi.mip.res_level.y)));
+                    page_entry_slots_.push_back(&slot);
+                    ++hi_res_page_count_;
+                    continue;
+                }
+                // An unmapped page reads the locked page covering it, in that page's own level (UE's page entries
+                // may point at another mip; LumenSurfaceCacheSampling.ush recomputes the page from the entry).
+                const math::uvec2 coord(page % hi_size.x, page / hi_size.x);
+                const math::uvec2 locked_coord = coord * locked_size / hi_size;
+                const auto& locked_slot = state.slots[locked_coord.x + locked_coord.y * locked_size.x];
+                page_table_.push_back(math::vec4(float(locked_slot.atlas_offset.x),
+                                                 float(locked_slot.atlas_offset.y),
+                                                 float(state.mip.res_level.x),
+                                                 float(state.mip.res_level.y)));
+                page_entry_slots_.push_back(nullptr);
             }
         }
     }
@@ -960,15 +1375,25 @@ void lumen_scene::build_tables(const std::vector<source>& sources, uint32_t inst
 
 void lumen_scene::get_page_lighting_ages(std::vector<math::vec4>& out) const
 {
-    // The page table holds the resident pages, in resident_slots_' order.
-    out.resize(resident_slots_.size());
-    for(size_t i = 0; i < resident_slots_.size(); ++i)
+    out.resize(page_entry_slots_.size());
+    for(size_t i = 0; i < page_entry_slots_.size(); ++i)
     {
-        const physical_slot& slot = *resident_slots_[i];
-        out[i] = math::vec4(float(frame_ - slot.lit_frame[lighting_direct]),
-                            float(frame_ - slot.lit_frame[lighting_radiosity]),
-                            0.0f,
-                            0.0f);
+        // A hi-res entry falling back to a locked page has no lighting of its own: it reads as never lit.
+        const physical_slot* slot = page_entry_slots_[i];
+        const uint64_t direct = slot != nullptr ? slot->lit_frame[lighting_direct] : 0u;
+        const uint64_t indirect = slot != nullptr ? slot->lit_frame[lighting_radiosity] : 0u;
+        out[i] = math::vec4(float(frame_ - direct), float(frame_ - indirect), 0.0f, 0.0f);
+    }
+}
+
+void lumen_scene::get_page_radiosity_indices(std::vector<float>& out) const
+{
+    out.resize(page_entry_slots_.size());
+    for(size_t i = 0; i < page_entry_slots_.size(); ++i)
+    {
+        // A slot counts its updates from its mapping; a fallback entry lies in another mip's probe grid.
+        const physical_slot* slot = page_entry_slots_[i];
+        out[i] = slot != nullptr ? float(slot->update_count[lighting_radiosity]) - 1.0f : -1.0f;
     }
 }
 
@@ -1191,7 +1616,7 @@ void lumen_scene::invalidate_direct_lighting(const direct_lighting_changes& chan
         return;
     }
     poolstl::for_each_par_if(
-        page_count >= k_parallel_schedule_pages,
+        page_count >= k_parallel_invalidation_pages,
         poolstl::iota_iter<uint32_t>(0),
         poolstl::iota_iter<uint32_t>(page_count),
         [&](uint32_t i)
@@ -1217,18 +1642,58 @@ void lumen_scene::invalidate_direct_lighting(const direct_lighting_changes& chan
         });
 }
 
-void lumen_scene::compute_page_priorities(const math::vec3& view_origin, const math::frustum& view_frustum)
+void lumen_scene::compute_page_priorities(const std::vector<viewer>& viewers)
 {
     const uint32_t page_count = uint32_t(resident_pages_.size());
-    page_tiles_.resize(page_count);
     for(auto& buckets : page_buckets_)
     {
         buckets.resize(page_count);
     }
-    // A page reads only its own card and slot: the pages spread over the pool. The buckets of both contexts are taken
-    // before either admits a page, which stamps only its own context's frame.
+    // A page's speed and nearest viewer are functions of its box (the tables) and the viewers alone: a still view of
+    // still cards keeps them, and only the pages' ages move their buckets.
+    const bool are_speeds_current = priority_tables_revision_ == tables_revision_ &&
+                                    page_speeds_.size() == page_count && priority_viewers_.size() == viewers.size() &&
+                                    std::equal(viewers.begin(),
+                                               viewers.end(),
+                                               priority_viewers_.begin(),
+                                               [](const viewer& a, const viewer& b)
+                                               {
+                                                   return a.origin == b.origin && a.frustum == b.frustum;
+                                               });
+    if(!are_speeds_current)
+    {
+        compute_page_speeds(viewers);
+    }
+    // A page reads only its own slot: the pages spread over the pool. The buckets of both contexts are taken before
+    // either admits a page, which stamps only its own context's frame.
     poolstl::for_each_par_if(
-        page_count >= k_parallel_schedule_pages,
+        page_count >= k_parallel_bucket_pages,
+        poolstl::iota_iter<uint32_t>(0),
+        poolstl::iota_iter<uint32_t>(page_count),
+        [&](uint32_t i)
+        {
+            const float page_speed = page_speeds_[i];
+            for(uint32_t context = 0; context < lighting_context_count; ++context)
+            {
+                const physical_slot& slot = *resident_slots_[i];
+                const uint64_t lit_frame = slot.lit_frame[context];
+                const uint32_t age = lit_frame == 0 ? uint32_t(gi::lumen::LUMEN_SCENE_LIGHTING_NEVER_LIT_FRAMES)
+                                                    : uint32_t(std::min<uint64_t>(frame_ - lit_frame, UINT32_MAX));
+                const bool is_skipped = context == lighting_direct && lit_frame != 0 && !slot.is_direct_dirty;
+                page_buckets_[context][i] = is_skipped ? k_skip_bucket : compute_lighting_bucket(age, page_speed);
+            }
+        });
+}
+
+void lumen_scene::compute_page_speeds(const std::vector<viewer>& viewers)
+{
+    const uint32_t page_count = uint32_t(resident_pages_.size());
+    page_tiles_.resize(page_count);
+    page_viewers_.resize(page_count);
+    page_speeds_.resize(page_count);
+    // A page reads only its own card: the pages spread over the pool.
+    poolstl::for_each_par_if(
+        page_count >= k_parallel_speed_pages,
         poolstl::iota_iter<uint32_t>(0),
         poolstl::iota_iter<uint32_t>(page_count),
         [&](uint32_t i)
@@ -1247,40 +1712,72 @@ void lumen_scene::compute_page_priorities(const math::vec3& view_origin, const m
                                         (1.0f - 2.0f * page.card_uv_rect.y) * extent.y);
             const math::vec3 center(0.5f * (corner_min + corner_max), 0.0f);
             const math::vec3 half(0.5f * (corner_max - corner_min), extent.z);
-            const math::vec3 to_view = view_origin - origin;
-            const math::vec3 local(math::dot(to_view, axis_x), math::dot(to_view, axis_y), math::dot(to_view, axis_z));
-            const float distance = math::length(math::max(math::abs(local - center) - half, math::vec3(0.0f)));
-            const float speed = 1.0f / (1.0f + distance / gi::lumen::LUMEN_SCENE_LIGHTING_PRIORITY_DISTANCE);
             const math::vec3 world_center = origin + axis_x * center.x + axis_y * center.y;
-            bool is_near_frustum = true;
-            for(uint32_t p = 0; p < k_priority_frustum_planes; ++p)
+            float distance = std::numeric_limits<float>::max();
+            uint32_t nearest_viewer = 0;
+            bool is_near_frustum = false;
+            for(uint32_t v = 0; v < uint32_t(viewers.size()); ++v)
             {
-                const math::plane& plane = view_frustum.planes[p];
-                const math::vec3 normal(plane.data);
-                const float radius = std::abs(math::dot(axis_x, normal)) * half.x +
-                                     std::abs(math::dot(axis_y, normal)) * half.y +
-                                     std::abs(math::dot(axis_z, normal)) * half.z;
-                is_near_frustum = is_near_frustum && math::plane::dot_coord(plane, world_center) <=
-                                                         radius + gi::lumen::LUMEN_SCENE_LIGHTING_FRUSTUM_MARGIN;
+                const viewer& viewer = viewers[v];
+                const math::vec3 to_view = viewer.origin - origin;
+                const math::vec3 local(math::dot(to_view, axis_x),
+                                       math::dot(to_view, axis_y),
+                                       math::dot(to_view, axis_z));
+                const math::vec3 outside = math::max(math::abs(local - center) - half, math::vec3(0.0f));
+                const float viewer_distance = math::length(outside);
+                nearest_viewer = viewer_distance < distance ? v : nearest_viewer;
+                distance = std::min(distance, viewer_distance);
+                bool is_near_this = true;
+                for(uint32_t p = 0; p < k_priority_frustum_planes; ++p)
+                {
+                    const math::plane& plane = viewer.frustum.planes[p];
+                    const math::vec3 normal(plane.data);
+                    const float radius = std::abs(math::dot(axis_x, normal)) * half.x +
+                                         std::abs(math::dot(axis_y, normal)) * half.y +
+                                         std::abs(math::dot(axis_z, normal)) * half.z;
+                    is_near_this = is_near_this && math::plane::dot_coord(plane, world_center) <=
+                                                       radius + gi::lumen::LUMEN_SCENE_LIGHTING_FRUSTUM_MARGIN;
+                }
+                is_near_frustum = is_near_frustum || is_near_this;
             }
-            const float page_speed = is_near_frustum ? 2.0f * speed : speed;
+            page_viewers_[i] = nearest_viewer;
+            const float speed = 1.0f / (1.0f + distance / gi::lumen::LUMEN_SCENE_LIGHTING_PRIORITY_DISTANCE);
+            page_speeds_[i] = is_near_frustum ? 2.0f * speed : speed;
             page_tiles_[i] = (page.size.x / k_lighting_tile_size) * (page.size.y / k_lighting_tile_size);
-            for(uint32_t context = 0; context < lighting_context_count; ++context)
-            {
-                const physical_slot& slot = *resident_slots_[i];
-                const uint64_t lit_frame = slot.lit_frame[context];
-                const uint32_t age = lit_frame == 0 ? uint32_t(gi::lumen::LUMEN_SCENE_LIGHTING_NEVER_LIT_FRAMES)
-                                                    : uint32_t(std::min<uint64_t>(frame_ - lit_frame, UINT32_MAX));
-                const bool is_skipped = context == lighting_direct && lit_frame != 0 && !slot.is_direct_dirty;
-                page_buckets_[context][i] = is_skipped ? k_skip_bucket : compute_lighting_bucket(age, page_speed);
-            }
         });
+    priority_tables_revision_ = tables_revision_;
+    priority_viewers_ = viewers;
 }
 
 void lumen_scene::schedule_lighting(const math::vec3& view_origin, const math::frustum& view_frustum)
 {
+    viewer single;
+    single.origin = view_origin;
+    single.frustum = view_frustum;
+    schedule_lighting(std::vector<viewer>{single});
+}
+
+void lumen_scene::revoke_lighting(uint32_t viewer)
+{
+    for(uint32_t context = 0; context < lighting_context_count; ++context)
+    {
+        for(const lit_page& lit : lit_pages_[context])
+        {
+            if(lit.viewer != viewer || lit.resident_page >= resident_slots_.size())
+            {
+                continue;
+            }
+            physical_slot& slot = *resident_slots_[lit.resident_page];
+            slot.lit_frame[context] = lit.previous_lit_frame;
+            slot.is_direct_dirty = slot.is_direct_dirty || context == lighting_direct;
+        }
+    }
+}
+
+void lumen_scene::schedule_lighting(const std::vector<viewer>& viewers)
+{
     APP_SCOPE_PERF("GI/Lighting Schedule");
-    compute_page_priorities(view_origin, view_frustum);
+    compute_page_priorities(viewers);
     const uint32_t page_count = uint32_t(resident_pages_.size());
     const uint32_t atlas_size = settings_.atlas_size;
     const std::array<uint32_t, lighting_context_count> budgets{
@@ -1340,7 +1837,7 @@ void lumen_scene::schedule_lighting(const math::vec3& view_origin, const math::f
                 continue;
             }
             physical_slot& slot = *resident_slots_[i];
-            lit.push_back({i, slot.update_count[context]});
+            lit.push_back({i, slot.update_count[context], page_viewers_[i], slot.lit_frame[context]});
             slot.lit_frame[context] = frame_;
             slot.is_direct_dirty = slot.is_direct_dirty && context != lighting_direct;
             ++slot.update_count[context];

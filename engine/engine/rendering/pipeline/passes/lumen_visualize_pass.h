@@ -232,6 +232,9 @@ private:
         gfx::program::uniform_ptr s_lumen_radiosity_sh_r;
         gfx::program::uniform_ptr s_lumen_radiosity_sh_g;
         gfx::program::uniform_ptr s_lumen_radiosity_sh_b;
+        ///< The radiance cache's atlas (fs_lumen_visualize_probe.sc stage 7): a black stand-in for the radiosity
+        ///< probes, which do not read it.
+        gfx::program::uniform_ptr s_lumen_rc_final;
         std::unique_ptr<gpu_program> program;
     };
 

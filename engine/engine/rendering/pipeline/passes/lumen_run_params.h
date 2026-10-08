@@ -1,6 +1,7 @@
 #pragma once
 
 #include <engine/rendering/camera.h>
+#include <engine/rendering/gi/gi_project_settings.h>
 #include <engine/rendering/gi/gi_settings.h>
 #include <engine/rendering/gi/surface_cache_system.h>
 #include <engine/rendering/gi/surface_cache_view.h>
@@ -13,6 +14,7 @@ namespace unravel
 {
 
 class lumen_surface_cache_pass;
+class lumen_surface_cache_feedback;
 
 /// UE r.Lumen.ScreenProbeGather.VisualizeTraces for one view (lumen_gather_pass::get_visualized_traces).
 struct lumen_visualize_traces
@@ -33,6 +35,8 @@ struct lumen_run_params
 {
     /// The surface cache: global distance field hits read its cards.
     const lumen_surface_cache_pass* lumen_surface_cache = nullptr;
+    /// Its feedback, which the reflections fill (lumen_surface_cache_pass::get_feedback); null runs none.
+    lumen_surface_cache_feedback* surface_cache_feedback = nullptr;
     gfx::frame_buffer::ptr g_buffer;
     /// Last frame's depth, which validates reprojected history. Null starts every history over.
     gfx::texture::ptr prev_depth;
@@ -56,6 +60,12 @@ struct lumen_run_params
     /// The view's scene-colour pre-exposure: every Lumen target is in pre-exposed space.
     pre_exposure_state pre_exposure{};
     gi_settings settings{};
+    /// The project's scalability tiers (gi_project_settings).
+    gi_project_settings::quality_level gi_quality = gi_project_settings::quality_level::epic;
+    gi_project_settings::quality_level reflection_quality = gi_project_settings::quality_level::epic;
+    /// Lumen's reflections follow the gather this frame and read its rough specular; without them nothing does, and
+    /// the gather skips it.
+    bool has_traced_reflections = true;
     /// The screen probe traces the view visualizes.
     lumen_visualize_traces visualize_traces{};
     /// The camera jumped this frame (UE bCameraCut): the screen-space histories start over.

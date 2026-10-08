@@ -33,8 +33,9 @@ SAMPLER2D(s_ssil, 8);
 // Screen-space AO (GTAO, or ASSAO when GTAO is off): a = visibility; rgb = GTAO bent
 // normal * 0.5 + 0.5.
 SAMPLER2D(s_screen_ao, 9);
-// PBUFFER, the untraced reflection layer (probes, sky, the GI rough tier). s_tex5 is RBUFFER,
-// the traced layers (ComposeIndirectSpecular).
+// The untraced reflection layer (u_probe_layer_params): PBUFFER (probes, sky), or the GI's rough
+// specular history where the GI's reflections own the view. s_tex5 is RBUFFER, the traced
+// layers (ComposeIndirectSpecular).
 SAMPLER2D(s_probe_layer, 10);
 // The GTSO specular occlusion table (specular_occlusion_lut). Stage 11 is the directional
 // light's cloud shadow sampler.
@@ -62,10 +63,17 @@ uniform vec4 u_screen_ao;
 // UE's MaxMultibounceAlbedo), 0 = uncapped. w = the GI resolve's scale (the GI intensity): the
 // resolve is the gather's history, E/pi before the intensity, and serves every geometry pixel.
 uniform vec4 u_indirect_params;
+// What s_probe_layer holds: x = 1 for the GI's rough specular history (UpdateProbeLayer), y = its
+// scale (the GI intensity), z = 1 when that history exists (without it the environment fills the
+// layer); x = 0 for PBUFFER as the probe pass drew it.
+uniform vec4 u_probe_layer_params;
 /// The SSIL alpha above which a pixel counts as SERVED by it (pbr_indirect): served pixels read
 /// 0.996-1.0, unserved ones 0, and the bilateral upsample leaves fractions only along sky
 /// silhouettes - the midpoint splits them by their majority neighbour.
 #define PBR_GI_SERVED_ALPHA 0.5
+/// The share of the screen-space AO the GI resolve takes on a pixel with a subsurface colour: light scattered
+/// through the material reaches what the screen-space occluders block (UE's foliage occlusion strength).
+#define PBR_SUBSURFACE_SCREEN_AO_STRENGTH 0.7
 uniform vec4 u_params0;
 uniform vec4 u_params1;
 // u_params2 (texel size, coverage) is declared by shadowmaps/common_shadow.sh.
@@ -775,7 +783,9 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // SSIL traced the screen-space visibility per pixel and takes the material AO alone, and
     // traced reflections only the material AO's cavities, which no tracer's geometry holds.
     // Direct light takes none.
-    vec4 screen_ao_sample = texture2D(s_screen_ao, texcoord0);
+    // Sky pixels read no occlusion and no GI: Lumen's gather leaves them unwritten (selected, not multiplied away).
+    bool is_surface = data.depth < 1.0;
+    vec4 screen_ao_sample = is_surface ? texture2D(s_screen_ao, texcoord0) : vec4(0.5, 0.5, 0.5, 1.0);
     float material_ao = data.ambient_occlusion;
     float screen_ao = ScreenSpaceAO(screen_ao_sample.a, u_screen_ao_intensity);
     float visibility = material_ao * screen_ao;
@@ -795,13 +805,15 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // axis that follows the bent normal as far as the bent normal strength allows.
     vec3 diffuse_axis = normalize(mix(N, occlusion_axis, u_screen_ao_bent_strength));
     vec3 ambient_sh = eval_irradiance_sh_cone(s_irradiance, diffuse_axis, visibility) * bounce_gain * (RECIP_PI * u_pre_exposure_value);
-    vec4 gi_sample = texture2D(s_ssil, texcoord0);
     bool gi_is_ssil = u_indirect_params.y > 0.5;
-    float gi_coverage = gi_is_ssil ? step(PBR_GI_SERVED_ALPHA, gi_sample.a) : (data.depth < 1.0 ? 1.0 : 0.0);
+    vec4 gi_sample = gi_is_ssil || is_surface ? texture2D(s_ssil, texcoord0) : vec4_splat(0.0);
+    float gi_coverage = gi_is_ssil ? step(PBR_GI_SERVED_ALPHA, gi_sample.a) : (is_surface ? 1.0 : 0.0);
     float gi_served = saturate(u_indirect_params.x) * gi_coverage;
     vec3 gi_diffuse = gi_is_ssil ? gi_sample.rgb : gi_sample.rgb * u_indirect_params.w;
+    bool has_subsurface = max(data.subsurface_color.x, max(data.subsurface_color.y, data.subsurface_color.z)) > 0.0;
+    float traced_screen_ao = has_subsurface ? mix(1.0, screen_ao, PBR_SUBSURFACE_SCREEN_AO_STRENGTH) : screen_ao;
     vec3 traced_diffuse_occlusion =
-        IndirectDiffuseOcclusion(material_ao, screen_ao, u_screen_ao_multi_bounce, gi_is_ssil, multi_bounce_albedo);
+        IndirectDiffuseOcclusion(material_ao, traced_screen_ao, u_screen_ao_multi_bounce, gi_is_ssil, multi_bounce_albedo);
     vec3 indirect_diffuse = mix(ambient_sh, gi_diffuse * traced_diffuse_occlusion, gi_served);
 
     // The specular cone always follows the bent normal: the directional part is what separates
@@ -813,10 +825,14 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
         ComputeIndirectSpecularOcclusion(s_specular_occlusion, N, dominant_dir, indirect_filtered_roughness, data.specular_color,
                                          material_ao, visibility, occlusion_axis, u_screen_ao_multi_bounce);
     vec3 environment_specular = eval_radiance_sh_lobe(s_irradiance, dominant_dir, indirect_filtered_roughness) * u_pre_exposure_value;
-    vec3 probe_layer = CompleteProbeLayer(texture2D(s_probe_layer, texcoord0), environment_specular);
+    vec3 probe_layer = CompleteProbeLayer(ResolveProbeLayer(texture2D(s_probe_layer, texcoord0), u_probe_layer_params),
+                                          environment_specular);
     vec3 indirect_specular = ComposeIndirectSpecular(texture2D(s_tex5, texcoord0), probe_layer, specular_occlusion);
 
-    vec3 indirect_lighting = StandardShadingIndirect(data.diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, V, N);
+    // The subsurface colour joins the diffuse lobe for indirect light (black without one), as the surface cache's
+    // albedo carries it for the light other surfaces bounce off this one.
+    vec3 indirect_diffuse_color = data.diffuse_color + data.subsurface_color;
+    vec3 indirect_lighting = StandardShadingIndirect(indirect_diffuse_color, indirect_diffuse, data.specular_color, indirect_specular, s_tex6, indirect_filtered_roughness, V, N);
     return vec4(indirect_lighting + data.emissive_color * u_pre_exposure_value, 1.0f);
 }
 #endif

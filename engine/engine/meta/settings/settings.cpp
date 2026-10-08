@@ -338,17 +338,37 @@ REFLECT_INLINE(gi_project_settings::atlas_size)
         .data<gi_project_settings::atlas_size::size_1024>("size_1024"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "size_1024"},
-            entt::attribute{"pretty_name", "1024 (about 54 MB)"},
+            entt::attribute{"pretty_name", "1024 (about 34 MB)"},
         })
         .data<gi_project_settings::atlas_size::size_2048>("size_2048"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "size_2048"},
-            entt::attribute{"pretty_name", "2048 (about 214 MB)"},
+            entt::attribute{"pretty_name", "2048 (about 134 MB)"},
         })
         .data<gi_project_settings::atlas_size::size_4096>("size_4096"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "size_4096"},
-            entt::attribute{"pretty_name", "4096 (about 857 MB)"},
+            entt::attribute{"pretty_name", "4096 (about 538 MB)"},
+        });
+}
+
+REFLECT_INLINE(gi_project_settings::quality_level)
+{
+    entt::meta_factory<gi_project_settings::quality_level>{}
+        .type("gi_quality_level"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "gi_quality_level"},
+            entt::attribute{"pretty_name", "Quality Level"},
+        })
+        .data<gi_project_settings::quality_level::high>("high"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "high"},
+            entt::attribute{"pretty_name", "High"},
+        })
+        .data<gi_project_settings::quality_level::epic>("epic"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "epic"},
+            entt::attribute{"pretty_name", "Epic"},
         });
 }
 
@@ -385,6 +405,28 @@ REFLECT_INLINE(gi_project_settings)
             entt::attribute{"name", "gi_project_settings"},
             entt::attribute{"pretty_name", "Global Illumination"},
         })
+        .data<&gi_project_settings::global_illumination_quality>("global_illumination_quality"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "global_illumination_quality"},
+            entt::attribute{"pretty_name", "Global Illumination Quality"},
+            entt::attribute{"group", "Scalability"},
+            entt::attribute{"tooltip",
+                            "High: screen probes every 32 pixels instead of 16, each pixel lit from one of its four\n"
+                            "probes in turn, the short-range AO searched at half resolution, coarser radiance cache\n"
+                            "probes and fewer of them traced again per frame, the cards relit half as often, their\n"
+                            "bounce light from sparser, cheaper probes and none smaller than 4 texels. Faster,\n"
+                            "softer, noisier and slower to react. Epic: the full quality."},
+        })
+        .data<&gi_project_settings::reflection_quality>("reflection_quality"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "reflection_quality"},
+            entt::attribute{"pretty_name", "Reflection Quality"},
+            entt::attribute{"group", "Scalability"},
+            entt::attribute{"tooltip",
+                            "High: one pixel of every 2 x 2 traces a reflection ray, and each pixel is resolved\n"
+                            "from 3 neighbouring rays. Faster, blurrier on rough surfaces. Epic: every pixel\n"
+                            "traces, 5 neighbouring rays."},
+        })
         .data<&gi_project_settings::surface_cache_atlas_size>("surface_cache_atlas_size"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "surface_cache_atlas_size"},
@@ -392,9 +434,20 @@ REFLECT_INLINE(gi_project_settings)
             entt::attribute{"group", "Surface Cache"},
             entt::attribute{"tooltip",
                             "Edge of the surface cache atlas, in texels: how much card detail stays resident.\n"
-                            "Every texel holds the captured material and the card lighting, about 54 bytes.\n"
+                            "Every texel holds the captured material and the card lighting, about 34 bytes.\n"
                             "A scene that wants more texels than this keeps its farthest cards at lower\n"
                             "resolution or none. Changing it recaptures the whole surface cache."},
+        })
+        .data<&gi_project_settings::hi_res_reflection_pages>("hi_res_reflection_pages"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "hi_res_reflection_pages"},
+            entt::attribute{"pretty_name", "Hi-Res Reflection Pages"},
+            entt::attribute{"group", "Surface Cache"},
+            entt::attribute{"tooltip",
+                            "Smooth reflections of surfaces off screen ask for finer card pages where they hit,\n"
+                            "kept while the reflections still read them: sharper mirror-like reflections when the\n"
+                            "atlas has room. The request reaches the CPU through a readback that waits for the GPU\n"
+                            "once every 16 frames, a hitch on GPU-heavy frames."},
         })
         .data<&gi_project_settings::card_captures_per_frame>("card_captures_per_frame"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -484,7 +537,10 @@ REFLECT_INLINE(gi_project_settings)
 
 SAVE_INLINE(gi_project_settings)
 {
+    try_save(ar, ser20::make_nvp("global_illumination_quality", obj.global_illumination_quality));
+    try_save(ar, ser20::make_nvp("reflection_quality", obj.reflection_quality));
     try_save(ar, ser20::make_nvp("surface_cache_atlas_size", obj.surface_cache_atlas_size));
+    try_save(ar, ser20::make_nvp("hi_res_reflection_pages", obj.hi_res_reflection_pages));
     try_save(ar, ser20::make_nvp("card_captures_per_frame", obj.card_captures_per_frame));
     try_save(ar, ser20::make_nvp("card_capture_atlas_size", obj.card_capture_atlas_size));
     try_save(ar, ser20::make_nvp("card_capture_refresh_fraction", obj.card_capture_refresh_fraction));
@@ -497,7 +553,10 @@ SAVE_INLINE(gi_project_settings)
 
 LOAD_INLINE(gi_project_settings)
 {
+    try_load(ar, ser20::make_nvp("global_illumination_quality", obj.global_illumination_quality));
+    try_load(ar, ser20::make_nvp("reflection_quality", obj.reflection_quality));
     try_load(ar, ser20::make_nvp("surface_cache_atlas_size", obj.surface_cache_atlas_size));
+    try_load(ar, ser20::make_nvp("hi_res_reflection_pages", obj.hi_res_reflection_pages));
     try_load(ar, ser20::make_nvp("card_captures_per_frame", obj.card_captures_per_frame));
     try_load(ar, ser20::make_nvp("card_capture_atlas_size", obj.card_capture_atlas_size));
     try_load(ar, ser20::make_nvp("card_capture_refresh_fraction", obj.card_capture_refresh_fraction));

@@ -51,7 +51,8 @@ uniform vec4 u_sdf_clipmap_params;
 #define u_sdf_clipmap_encode_range u_sdf_clipmap_params.z
 #define u_sdf_clipmap_enabled      (u_sdf_clipmap_params.w > 0.0)
 /// global_sdf_clipmap_gpu::set_march_experiments: 1 = the empty-space step reads the coarsest covering level instead of
-/// the answering level's mip, 2 = one step budget for the whole ray instead of one per level.
+/// the answering level's mip, 2 = one step budget for the whole ray instead of one per level, 4 = every hit-normal tap
+/// searches its level, 8 = every march step searches its level.
 #define u_sdf_clipmap_experiments  (int(u_sdf_clipmap_params.w) - 1)
 /// The levels are stacked along Z in one volume, which this file's texel addressing already
 /// assumes, so the total depth is derived rather than uploaded -- one less value to disagree.
@@ -68,6 +69,20 @@ uniform vec4 u_sdf_clipmap_params;
  * keeps a half-voxel margin on every side, so the trilinear taps of an accepted sample stay
  * inside this level's slab and cannot reach into the neighbouring cascade stacked behind it in Z.
  */
+/// SdfSampleClipmapLevel at a position the caller knows level @p index covers (present, inside its margin).
+float SdfSampleClipmapLevelCovered(int index, vec3 world_position)
+{
+	vec4 level = u_sdf_clipmap_levels[index];
+	float voxel_size = level.w;
+	float resolution = u_sdf_clipmap_resolution;
+	vec3 grid = (world_position - level.xyz) / voxel_size;
+	// Continuous texel coordinate within the level, then offset into the level's slab.
+	vec3 texel = vec3(grid.x, grid.y, grid.z + float(index) * resolution);
+	vec3 uvw = vec3(texel.x / resolution, texel.y / resolution, texel.z / u_sdf_clipmap_depth);
+	float encoded = texture3DLod(s_sdf_clipmap, uvw, 0.0).x;
+	return (encoded - 0.5) * (2.0 * u_sdf_clipmap_encode_range) * voxel_size;
+}
+
 float SdfSampleClipmapLevel(int index, vec3 world_position)
 {
 	vec4 level = u_sdf_clipmap_levels[index];
@@ -82,11 +97,7 @@ float SdfSampleClipmapLevel(int index, vec3 world_position)
 	{
 		return SDF_CLIPMAP_OUTSIDE;
 	}
-	// Continuous texel coordinate within the level, then offset into the level's slab.
-	vec3 texel = vec3(grid.x, grid.y, grid.z + float(index) * resolution);
-	vec3 uvw = vec3(texel.x / resolution, texel.y / resolution, texel.z / u_sdf_clipmap_depth);
-	float encoded = texture3DLod(s_sdf_clipmap, uvw, 0.0).x;
-	return (encoded - 0.5) * (2.0 * u_sdf_clipmap_encode_range) * voxel_size;
+	return SdfSampleClipmapLevelCovered(index, world_position);
 }
 
 /// The finest level covering a position (SdfFindClipmapLevel).

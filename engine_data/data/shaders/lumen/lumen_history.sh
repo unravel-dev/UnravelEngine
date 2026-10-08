@@ -84,43 +84,57 @@ float LumenHistoryTapWeight(LumenHistoryTaps taps, int tap)
 	return dot(taps.weights, vec4(tap == 0 ? 1.0 : 0.0, tap == 1 ? 1.0 : 0.0, tap == 2 ? 1.0 : 0.0, tap == 3 ? 1.0 : 0.0));
 }
 
-/// Last frame's result over the taps, corrected into this frame's pre-exposure (rgb), and the frame count it
-/// continues (a; 0 when no tap is valid).
-vec4 LumenReadHistoryTaps(LumenHistoryTaps taps)
+/// @p value weighted by @p weight, selected rather than multiplied: a tap of weight 0 can be a texel the gather never
+/// wrote (it skips sky pixels), whose content must not reach the sum even as 0 x NaN.
+vec4 LumenWeightedHistoryTap(float weight, vec4 value)
 {
+	return weight > 0.0 ? weight * value : vec4_splat(0.0);
+}
+
+/// Last frame's history over the taps, from one fetch per tap.
+struct LumenHistorySample
+{
+	/// rgb = the result corrected into this frame's pre-exposure, a = the frame count it continues (0 when no tap is
+	/// valid).
+	vec4 color_frames;
+	/// The fast update amount it carries (UE FastUpdateModeHistoryValue); 0 when no tap is valid.
+	float fast_update;
+};
+
+LumenHistorySample LumenReadHistorySample(LumenHistoryTaps taps)
+{
+	LumenHistorySample result;
+	result.color_frames = vec4_splat(0.0);
+	result.fast_update = 0.0;
 	float weight_sum = dot(taps.weights, vec4_splat(1.0));
 	if(weight_sum <= 0.0)
 	{
-		return vec4_splat(0.0);
+		return result;
 	}
 	vec3 color = vec3_splat(0.0);
 	float count = 0.0;
+	float fast_update = 0.0;
 	for(int tap = 0; tap < 4; ++tap)
 	{
 		float weight = LumenHistoryTapWeight(taps, tap);
 		vec4 history = texelFetch(s_lumen_history, LumenHistoryTapTexel(taps, tap), 0);
-		color += weight * history.xyz;
-		count += weight * (LumenHistoryAlphaFrames(history.w, u_lumen_temporal_max_frames) + 1.0);
+		vec4 tap_frames = vec4(history.xyz, LumenHistoryAlphaFrames(history.w, u_lumen_temporal_max_frames) + 1.0);
+		vec4 weighted = LumenWeightedHistoryTap(weight, tap_frames);
+		color += weighted.xyz;
+		count += weighted.w;
+		fast_update += LumenWeightedHistoryTap(weight, vec4_splat(LumenHistoryAlphaFastUpdate(history.w))).x;
 	}
 	float frames = min(count / max(weight_sum, 1e-5), u_lumen_temporal_max_frames);
-	return vec4(color / max(weight_sum, 1e-5) * u_history_pre_exposure_correction, frames);
+	result.color_frames = vec4(color / max(weight_sum, 1e-5) * u_history_pre_exposure_correction, frames);
+	result.fast_update = fast_update / weight_sum;
+	return result;
 }
 
-/// Last frame's fast update amount over the taps (UE FastUpdateModeHistoryValue); 0 when no tap is valid.
-float LumenReadHistoryFastUpdate(LumenHistoryTaps taps)
+/// Last frame's result over the taps, corrected into this frame's pre-exposure (rgb), and the frame count it
+/// continues (a; 0 when no tap is valid).
+vec4 LumenReadHistoryTaps(LumenHistoryTaps taps)
 {
-	float weight_sum = dot(taps.weights, vec4_splat(1.0));
-	if(weight_sum <= 0.0)
-	{
-		return 0.0;
-	}
-	float amount = 0.0;
-	for(int tap = 0; tap < 4; ++tap)
-	{
-		float alpha = texelFetch(s_lumen_history, LumenHistoryTapTexel(taps, tap), 0).w;
-		amount += LumenHistoryTapWeight(taps, tap) * LumenHistoryAlphaFastUpdate(alpha);
-	}
-	return amount / weight_sum;
+	return LumenReadHistorySample(taps).color_frames;
 }
 
 /// LumenReadHistoryTaps at the pixel's own reprojection.

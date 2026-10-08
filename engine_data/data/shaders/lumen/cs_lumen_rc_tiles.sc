@@ -26,7 +26,7 @@ void main()
 	float downsample_distance = LUMEN_RADIANCE_CACHE_DOWNSAMPLE_DISTANCE;
 	bool far = dot(to_camera, to_camera) >= downsample_distance * downsample_distance;
 	uint level = (far || LumenRcTraceForceDownsample(packed)) ? 0u : 1u;
-	uint tiles_per_side = (uint(LUMEN_RADIANCE_CACHE_PROBE_RES) / uint(2 * LUMEN_RC_TILE_RES)) << level;
+	uint tiles_per_side = (uint(u_lumen_rc_probe_res) / uint(2 * LUMEN_RC_TILE_RES)) << level;
 	uint tile_count = tiles_per_side * tiles_per_side;
 	uint first;
 	atomicFetchAndAdd(b_lumen_rc_counters[LUMEN_RC_COUNTER_TILES], tile_count, first);

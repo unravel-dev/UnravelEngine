@@ -15,17 +15,18 @@
 #include "lumen/lumen_common.sh"
 
 /// x = Hi-Z mip count, y = flags (1: the screen traces run, 2: the traces paint their type instead of radiance, 4: the
-/// screen pass marks every tile as tracing), z = the roughness the traced reflections end at (UE
-/// LumenMaxRoughnessToTraceReflections, the gi_component's Max Roughness To Trace), w > 0 when the denoiser histories
-/// hold last frame.
+/// screen pass marks every tile as tracing, 8: the distance-field pass's misses trace the screen again from where the
+/// distance field ends), z = the roughness the traced reflections end at (UE LumenMaxRoughnessToTraceReflections, the
+/// gi_component's Max Roughness To Trace), w > 0 when the denoiser histories hold last frame.
 uniform vec4 u_lumen_reflection;
 
 #define u_lumen_reflection_hiz_mip_count   int(u_lumen_reflection.x)
 #define u_lumen_reflection_screen_traces   ((int(u_lumen_reflection.y) & 1) != 0)
 /// UE DEBUG_VISUALIZE_TRACE_TYPES: screen hits red, distance-field hits green (yellow when lit by last frame's
-/// scene colour), misses blue.
+/// scene colour), distant screen hits magenta, misses blue.
 #define u_lumen_reflection_show_trace_types ((int(u_lumen_reflection.y) & 2) != 0)
 #define u_lumen_reflection_all_tiles        ((int(u_lumen_reflection.y) & 4) != 0)
+#define u_lumen_reflection_distant_traces   ((int(u_lumen_reflection.y) & 8) != 0)
 #define u_lumen_reflection_max_roughness   u_lumen_reflection.z
 #define u_lumen_reflection_has_history     (u_lumen_reflection.w > 0.0)
 

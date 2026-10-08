@@ -16,7 +16,7 @@ SAMPLER2D(s_tex7, 7);
 // Screen-space AO (GTAO, or ASSAO when GTAO is off): a = visibility; rgb = GTAO bent
 // normal * 0.5 + 0.5.
 SAMPLER2D(s_tex8, 8);
-// PBUFFER, the untraced reflection layer; s_tex5 is RBUFFER, the traced layers.
+// The untraced reflection layer (u_probe_layer_params, as the lighting reads it); s_tex5 is RBUFFER, the traced layers.
 SAMPLER2D(s_tex9, 9);
 // The GTSO specular occlusion table (specular_occlusion_lut).
 SAMPLER3D(s_tex10, 10);
@@ -29,6 +29,8 @@ uniform vec4 u_screen_ao;
 /// albedo cap (0 = none), z = 1 when s_tex7 is SSIL (it resolved its own screen-space visibility; alpha = coverage),
 /// w = the GI resolve's scale otherwise (the resolve is the gather's history, zero on the sky).
 uniform vec4 u_visualize_indirect;
+/// What s_tex9 holds (fs_pbr_lighting.sh u_probe_layer_params, ResolveProbeLayer).
+uniform vec4 u_probe_layer_params;
 
 #define u_mode int(u_params.x)
 
@@ -52,18 +54,25 @@ uniform vec4 u_visualize_indirect;
 /// The grey albedo the indirect diffuse view lights (UE DiffuseIndirectComposite.usf:565).
 #define VISUALIZE_DIFFUSE_ALBEDO 0.18
 
+/// The screen AO texel at a pixel (s_tex8): no occlusion on the sky, which Lumen's gather leaves unwritten.
+vec4 visualize_screen_ao(GBufferData data, vec2 texcoord0)
+{
+    return data.depth < 1.0 ? texture2D(s_tex8, texcoord0) : vec4(0.5, 0.5, 0.5, 1.0);
+}
+
 /// UE's indirect diffuse view (r.Lumen.Visualize.IndirectDiffuse, DiffuseIndirectComposite.usf:565): what the indirect
 /// diffuse adds to an 18% grey surface - the GI resolve's (or SSIL's) E / pi times VISUALIZE_DIFFUSE_ALBEDO, the
 /// diffuse occlusion pbr_indirect gives it and the energy the specular layer leaves - at the frame's exposure times
 /// u_params.y (0 = 1), through the lit image's tone mapping operator. Black where neither ran.
 vec3 indirect_diffuse_view(GBufferData data, vec2 texcoord0)
 {
-    vec4 indirect = texture2D(s_tex7, texcoord0);
+    // Black on the sky, which Lumen's gather leaves unwritten (SSIL's coverage is 0 there).
+    vec4 indirect = data.depth < 1.0 ? texture2D(s_tex7, texcoord0) : vec4_splat(0.0);
     vec3 clip = clipTransform(vec3(texcoord0 * 2.0 - 1.0, data.depth));
     vec3 world_position = clipToWorld(u_invViewProj, clip);
     vec3 N = normalize(data.world_normal);
     vec3 V = normalize(mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz - world_position);
-    float screen_ao = ScreenSpaceAO(texture2D(s_tex8, texcoord0).a, u_screen_ao.x);
+    float screen_ao = ScreenSpaceAO(visualize_screen_ao(data, texcoord0).a, u_screen_ao.x);
     vec3 occlusion = IndirectDiffuseOcclusion(data.ambient_occlusion,
                                               screen_ao,
                                               u_screen_ao.z,
@@ -85,7 +94,7 @@ vec3 indirect_specular_radiance(GBufferData data, vec2 texcoord0, out vec3 untra
     vec3 world_position = clipToWorld(u_invViewProj, clip);
     vec3 N = normalize(data.world_normal);
     vec3 V = normalize(mul(u_invView, vec4(0.0, 0.0, 0.0, 1.0)).xyz - world_position);
-    vec4 screen_ao_sample = texture2D(s_tex8, texcoord0);
+    vec4 screen_ao_sample = visualize_screen_ao(data, texcoord0);
     float screen_ao = ScreenSpaceAO(screen_ao_sample.a, u_screen_ao.x);
     vec3 axis = ScreenSpaceOcclusionAxis(screen_ao_sample, u_screen_ao.w, screen_ao, N);
     float roughness = GeometricSpecularAA(N, data.roughness);
@@ -95,7 +104,7 @@ vec3 indirect_specular_radiance(GBufferData data, vec2 texcoord0, out vec3 untra
                                          data.ambient_occlusion, data.ambient_occlusion * screen_ao, axis, u_screen_ao.z);
     untraced_occlusion = occlusion.untraced;
     vec3 environment = eval_radiance_sh_lobe(s_tex6, dominant_dir, roughness) * u_pre_exposure_value;
-    vec3 probe_layer = CompleteProbeLayer(texture2D(s_tex9, texcoord0), environment);
+    vec3 probe_layer = CompleteProbeLayer(ResolveProbeLayer(texture2D(s_tex9, texcoord0), u_probe_layer_params), environment);
     return ComposeIndirectSpecular(texture2D(s_tex5, texcoord0), probe_layer, occlusion);
 }
 
@@ -130,7 +139,7 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     }
     else if(u_mode == AMBIENT_OCCLUSION)
     {
-        color = vec3_splat(data.ambient_occlusion * ScreenSpaceAO(texture2D(s_tex8, texcoord0).a, u_screen_ao.x));
+        color = vec3_splat(data.ambient_occlusion * ScreenSpaceAO(visualize_screen_ao(data, texcoord0).a, u_screen_ao.x));
     }
     else if(u_mode == WORLD_NORMAL)
     {
@@ -175,7 +184,7 @@ vec4 gbuffer_visualize(vec2 texcoord0)
     else if(u_mode == AO_BENT_NORMALS)
     {
         // White when the screen-space AO carries no bent normal (ASSAO, or no pass).
-        color = u_screen_ao.w > 0.5 ? texture2D(s_tex8, texcoord0).rgb : vec3_splat(1.0);
+        color = u_screen_ao.w > 0.5 ? visualize_screen_ao(data, texcoord0).rgb : vec3_splat(1.0);
     }
 
     // The decode helpers now return LINEAR base color (and colors derived from

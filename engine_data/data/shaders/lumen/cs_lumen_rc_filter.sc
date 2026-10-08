@@ -26,7 +26,8 @@ IMAGE2D_WO(i_lumen_rc_final, rgba16f, 5);
 ivec2 LumenRcDirectionTexel(vec3 direction)
 {
 	vec2 uv = LumenInverseEquiAreaSphericalMapping(direction);
-	return min(ivec2(uv * float(LUMEN_RADIANCE_CACHE_PROBE_RES)), ivec2(LUMEN_RADIANCE_CACHE_PROBE_RES - 1, LUMEN_RADIANCE_CACHE_PROBE_RES - 1));
+	int last = u_lumen_rc_probe_res - 1;
+	return min(ivec2(uv * float(u_lumen_rc_probe_res)), ivec2(last, last));
 }
 
 /// Whether the probe whose depth tile starts at @p depth_origin sees the point @p offset away from it.
@@ -48,7 +49,7 @@ NUM_THREADS(8, 8, 1)
 void main()
 {
 	ivec2 final_texel = ivec2(gl_GlobalInvocationID.xy);
-	if(final_texel.x >= LUMEN_RC_FINAL_RES || final_texel.y >= LUMEN_RC_FINAL_RES)
+	if(final_texel.x >= u_lumen_rc_final_res || final_texel.y >= u_lumen_rc_final_res)
 	{
 		return;
 	}
@@ -56,13 +57,13 @@ void main()
 	ivec4 cell = LumenRcUnpackTrace(b_lumen_rc_traces[2u * trace]);
 	uint probe = b_lumen_rc_traces[2u * trace + 1u];
 	int clipmap = cell.w;
-	ivec2 texel = LumenOctahedralMapWrapBorder(final_texel, LUMEN_RC_FINAL_RES, 1);
-	ivec2 origin = LumenRcProbeTileOrigin(probe, LUMEN_RADIANCE_CACHE_PROBE_RES);
+	ivec2 texel = LumenOctahedralMapWrapBorder(final_texel, u_lumen_rc_final_res, 1);
+	ivec2 origin = LumenRcProbeTileOrigin(probe, u_lumen_rc_probe_res);
 	vec4 own = texelFetch(s_lumen_rc_radiance, origin + texel, 0);
 	vec3 sum = own.xyz;
 	float own_depth = own.w;
 	float weight_sum = 1.0;
-	vec3 direction = LumenEquiAreaSphericalMapping((vec2(texel) + 0.5) / float(LUMEN_RADIANCE_CACHE_PROBE_RES));
+	vec3 direction = LumenEquiAreaSphericalMapping((vec2(texel) + 0.5) / float(u_lumen_rc_probe_res));
 	vec3 position = LumenRcProbePosition(cell.xyz, clipmap);
 	float test_offset = 2.0 * LumenRcTMin(clipmap);
 	for(int i = 0; i < 6; ++i)
@@ -78,7 +79,7 @@ void main()
 		{
 			continue;
 		}
-		ivec2 neighbour_origin = LumenRcProbeTileOrigin(neighbour, LUMEN_RADIANCE_CACHE_PROBE_RES);
+		ivec2 neighbour_origin = LumenRcProbeTileOrigin(neighbour, u_lumen_rc_probe_res);
 		vec3 neighbour_position = LumenRcProbePosition(neighbour_cell, clipmap);
 		if(!LumenRcSees(origin, neighbour_position + test_offset * direction - position) ||
 		   !LumenRcSees(neighbour_origin, position + test_offset * direction - neighbour_position))
@@ -101,6 +102,6 @@ void main()
 			weight_sum += weight;
 		}
 	}
-	ivec2 final_origin = LumenRcProbeTileOrigin(probe, LUMEN_RC_FINAL_RES);
+	ivec2 final_origin = LumenRcProbeTileOrigin(probe, u_lumen_rc_final_res);
 	imageStore(i_lumen_rc_final, final_origin + final_texel, vec4(sum / weight_sum, own_depth));
 }

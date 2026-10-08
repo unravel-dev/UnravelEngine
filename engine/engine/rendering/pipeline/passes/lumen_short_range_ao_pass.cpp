@@ -5,7 +5,6 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/profiler/profiler.h>
 #include <engine/rendering/camera.h>
-#include <engine/rendering/default_textures.h>
 #include <engine/rendering/gi/lumen_constants.h>
 
 #include <graphics/graphics.h>
@@ -24,11 +23,14 @@ using lumen_pass::ensure_texture;
 using lumen_pass::group_edge;
 using lumen_pass::has_view_size;
 
-/// The half-resolution search grid of a view.
-auto get_search_size(const usize32_t& view_size) -> usize32_t
+/// The search's and the accumulation's format: one uint per texel, the AO packed as UE packs it
+/// (lumen_short_range_ao.sh LumenPackShortRangeAO).
+constexpr bgfx::TextureFormat::Enum packed_ao_format = bgfx::TextureFormat::R32U;
+
+/// The search grid of a view at @p downsample_factor.
+auto get_search_size(const usize32_t& view_size, uint32_t downsample_factor) -> usize32_t
 {
-    const auto factor = uint32_t(gi::lumen::LUMEN_SHORT_RANGE_AO_DOWNSAMPLE_FACTOR);
-    return {divide_round_up(view_size.width, factor), divide_round_up(view_size.height, factor)};
+    return {divide_round_up(view_size.width, downsample_factor), divide_round_up(view_size.height, downsample_factor)};
 }
 
 } // namespace
@@ -72,7 +74,9 @@ auto lumen_short_range_ao_pass::has_programs() const -> bool
     return search_program_ && search_program_->is_valid();
 }
 
-auto lumen_short_range_ao_pass::acquire_targets(gfx::render_view& rview, const usize32_t& size) -> frame_targets
+auto lumen_short_range_ao_pass::acquire_targets(gfx::render_view& rview,
+                                                const usize32_t& size,
+                                                uint32_t downsample_factor) -> frame_targets
 {
     // The history ping-pong continues only from the frame right before this one (the previous depth it is
     // validated against is always that frame's).
@@ -84,17 +88,15 @@ auto lumen_short_range_ao_pass::acquire_targets(gfx::render_view& rview, const u
     const bool continuous = written_frame != 0u && render_frame == written_frame + 1u;
     written_frame = render_frame;
     frame_targets targets;
-    // At full resolution the search is the view's shared scratch texture (consumed by the integrate before the
-    // reflections reuse it).
-    const bool is_full_resolution = gi::lumen::LUMEN_SHORT_RANGE_AO_DOWNSAMPLE_FACTOR == 1;
+    // The search and the accumulation hold the AO packed in one uint (lumen_short_range_ao.sh).
     targets.search = ensure_texture(rview,
-                                    is_full_resolution ? lumen_pass::view_scratch_rgba16f : "LUMEN_SHORT_RANGE_AO_SEARCH",
-                                    get_search_size(size),
-                                    bgfx::TextureFormat::RGBA16F);
+                                    "LUMEN_SHORT_RANGE_AO_SEARCH",
+                                    get_search_size(size, downsample_factor),
+                                    packed_ao_format);
     targets.history_write = ensure_texture(rview,
                                            even_frame ? "LUMEN_SHORT_RANGE_AO_HISTORY_A" : "LUMEN_SHORT_RANGE_AO_HISTORY_B",
                                            size,
-                                           bgfx::TextureFormat::RGBA16F);
+                                           packed_ao_format);
     targets.history_read =
         rview.tex_safe_get(even_frame ? "LUMEN_SHORT_RANGE_AO_HISTORY_B" : "LUMEN_SHORT_RANGE_AO_HISTORY_A");
     targets.screen = ensure_texture(rview, "LUMEN_SHORT_RANGE_AO_SCREEN", size, bgfx::TextureFormat::RGBA8);
@@ -104,7 +106,10 @@ auto lumen_short_range_ao_pass::acquire_targets(gfx::render_view& rview, const u
 
 void lumen_short_range_ao_pass::set_short_range_ao_uniform(const run_params& params, bool has_history) const
 {
-    const float short_range_ao[4] = {has_history ? 1.0f : 0.0f, params.r2_noise ? 1.0f : 0.0f, 0.0f, 0.0f};
+    const float short_range_ao[4] = {has_history ? 1.0f : 0.0f,
+                                     params.r2_noise ? 1.0f : 0.0f,
+                                     float(params.layout.downsample_factor),
+                                     params.layout.foreground_reject_power};
     gfx::set_uniform(uniforms_.u_lumen_short_range_ao, short_range_ao);
 }
 
@@ -118,20 +123,20 @@ auto lumen_short_range_ao_pass::run_search(gfx::render_view& rview, const run_pa
     }
     const auto& gather = *params.gather;
     const auto size = gather.g_buffer->get_size();
-    const auto targets = acquire_targets(rview, size);
+    const auto targets = acquire_targets(rview, size, params.layout.downsample_factor);
     gfx::render_pass pass("GI/Short Range AO");
     pass.set_view_proj(gather.cam->get_view(), gather.cam->get_projection_unjittered());
     search_program_->begin();
     gfx::set_texture(uniforms_.s_lumen_depth, 0, gather.g_buffer->get_texture(4));
     gfx::set_texture(uniforms_.s_lumen_normal, 1, gather.g_buffer->get_texture(1));
-    bind_image(2, targets.search, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
+    bind_image(2, targets.search, bgfx::Access::Write, packed_ao_format);
     gfx::set_uniform(uniforms_.u_lumen_frame, params.frame);
     gfx::set_uniform(uniforms_.u_lumen_probes, params.probes);
     gfx::set_uniform(uniforms_.u_lumen_view, params.view);
     gfx::set_uniform(uniforms_.u_lumen_settings,
                      lumen_pass::make_settings_uniform(gather.settings, gather.is_being_edited).data());
     set_short_range_ao_uniform(params, false);
-    const auto search_size = get_search_size(size);
+    const auto search_size = get_search_size(size, params.layout.downsample_factor);
     bgfx::dispatch(pass.id,
                    search_program_->native_handle(),
                    divide_round_up(search_size.width, group_edge),
@@ -146,12 +151,13 @@ void lumen_short_range_ao_pass::bind_accumulation(const frame_targets& targets,
                                                   bool has_gather_history) const
 {
     const bool has_history = targets.has_history && has_gather_history;
-    bind_image(5, targets.history_write, bgfx::Access::Write, bgfx::TextureFormat::RGBA16F);
+    bind_image(5, targets.history_write, bgfx::Access::Write, packed_ao_format);
     bind_image(7, targets.screen, bgfx::Access::Write, bgfx::TextureFormat::RGBA8);
     gfx::set_texture(uniforms_.s_lumen_short_range_ao, 14, targets.search);
     gfx::set_texture(uniforms_.s_lumen_short_range_ao_history,
                      15,
-                     has_history ? targets.history_read : default_textures::get().black_texture());
+                     // Without a history the accumulation reads none; a uint texture stands in for the uint sampler.
+                     has_history ? targets.history_read : targets.search);
     set_short_range_ao_uniform(params, has_history);
 }
 

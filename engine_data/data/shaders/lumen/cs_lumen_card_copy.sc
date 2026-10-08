@@ -10,27 +10,30 @@
  *  - albedo: sqrt of the diffuse colour, BaseColor (1 - Metallic) + 0.45 x lerp(0.04, BaseColor, Metallic)
  *    (EnvBRDFApproxFullyRough) + the subsurface colour (black without one: UE adds it for the subsurface, skin,
  *    foliage and cloth models, LumenCardBasePass.ush:121-129), a = 1 where the card sees a surface;
- *  - normal: the octahedral normal in the card's axes (LumenEncodeCardNormal), a = covered;
+ *  - normal: the octahedral normal in the card's axes (LumenEncodeCardNormal);
  *  - emissive: linear emissive radiance;
  *  - depth: the card depth, 1 where nothing was captured;
  *  - lighting: a reallocated card's pages take the lighting resampled from its previous allocation
  *    (cs_lumen_card_resample.sc): direct, indirect, the radiosity update count and the final lighting combined
- *    from them with the new material; a card that was not resident starts unlit (direct and indirect 0, update
- *    count 0, final lighting = its emissive). The final lighting carries the depth in alpha for the samplers.
+ *    from them with the new material; a page refreshed in place (the tile record's flag) keeps its direct and
+ *    indirect lighting and update count where they are and only recombines the final lighting with the new
+ *    material; a card that was not resident starts unlit (direct and indirect 0, update count 0, final lighting = its
+ *    emissive). The final lighting carries the depth in alpha for the samplers.
  */
 
 #include "bgfx_compute.sh"
+#include "lumen/lumen_image_formats.sh"
 #include "../common.sh"
 #include "../lighting.sh"
 
 IMAGE2D_WO(s_lumen_albedo_out, rgba8, 0);
-IMAGE2D_WO(s_lumen_normal_out, rgba8, 1);
-IMAGE2D_WO(s_lumen_emissive_out, rgba16f, 2);
-IMAGE2D_WO(s_lumen_depth_out, r32f, 3);
+IMAGE2D_WO(s_lumen_normal_out, rg8, 1);
+IMAGE2D_WO(s_lumen_emissive_out, rg11b10f, 2);
+IMAGE2D_WO(s_lumen_depth_out, r16, 3);
 IMAGE2D_WO(s_lumen_final_out, rgba16f, 4);
-IMAGE2D_WO(s_lumen_indirect_out, rgba16f, 5);
+IMAGE2D_RW(s_lumen_indirect_out, rg11b10f, 5);
 IMAGE2D_WO(s_lumen_radiosity_frames_out, r32f, 6);
-IMAGE2D_WO(s_lumen_direct_out, rgba16f, 7);
+IMAGE2D_RW(s_lumen_direct_out, rg11b10f, 7);
 SAMPLER2D(s_lumen_capture_rt0, 8);
 SAMPLER2D(s_lumen_capture_rt1, 9);
 SAMPLER2D(s_lumen_capture_rt2, 10);
@@ -42,8 +45,10 @@ SAMPLER2D(s_lumen_capture_rt3, 14);
 BUFFER_RO(b_lumen_copy_tiles, vec4, 15);
 
 #include "lumen/lumen_surface_cache_lighting.sh"
+#define LUMEN_TILE_RECORDS_COPY_TILES
+#include "lumen/lumen_tile_records.sh"
 
-/// x = tile count.
+/// x = tile count, y = the float4 the tile words start at (lumen_tile_records.sh), z = the frame index.
 uniform vec4 u_lumen_card_copy;
 
 /// UE's default Specular (0.5) as F0: 0.08 x 0.5.
@@ -59,12 +64,13 @@ void main()
 	{
 		return;
 	}
-	vec4 tile = b_lumen_copy_tiles[tile_index * LUMEN_CARD_COPY_TILE_STRIDE + 0];
-	vec4 card_record = b_lumen_copy_tiles[tile_index * LUMEN_CARD_COPY_TILE_STRIDE + 3];
-	float previous_card = card_record.x;
-	vec3 axis_x = card_record.yzw;
-	vec3 axis_y = b_lumen_copy_tiles[tile_index * LUMEN_CARD_COPY_TILE_STRIDE + 4].xyz;
-	vec3 axis_z = b_lumen_copy_tiles[tile_index * LUMEN_CARD_COPY_TILE_STRIDE + 5].xyz;
+	LumenCopyTile copy_tile = LumenLoadCopyTile(tile_index, int(u_lumen_card_copy.y));
+	vec4 tile = copy_tile.texels;
+	float previous_card = copy_tile.card.x;
+	vec3 axis_x = copy_tile.card.yzw;
+	vec3 axis_y = copy_tile.axis_y.xyz;
+	bool keeps_lighting = copy_tile.axis_y.w > 0.5;
+	vec3 axis_z = copy_tile.axis_z.xyz;
 	ivec2 local = ivec2(gl_LocalInvocationID.xy);
 	ivec2 capture_texel = ivec2(tile.xy) + local;
 	ivec2 atlas_texel = ivec2(tile.zw) + local;
@@ -87,7 +93,14 @@ void main()
 	vec3 direct = vec3_splat(0.0);
 	vec3 indirect = vec3_splat(0.0);
 	float frames = 0.0;
-	if(previous_card >= 0.0)
+	BRANCH
+	if(keeps_lighting)
+	{
+		// The page in place: its lighting stays where it is.
+		direct = imageLoad(s_lumen_direct_out, atlas_texel).xyz;
+		indirect = imageLoad(s_lumen_indirect_out, atlas_texel).xyz;
+	}
+	else if(previous_card >= 0.0)
 	{
 		vec4 resampled_direct = texelFetch(s_lumen_resample_direct, capture_texel, 0);
 		direct = resampled_direct.xyz;
@@ -96,16 +109,20 @@ void main()
 	}
 	imageStore(s_lumen_albedo_out, atlas_texel, vec4(albedo_encoded, coverage));
 	vec2 card_normal = covered ? LumenEncodeCardNormal(decodeNormalOctahedron(rt1.xy), axis_x, axis_y, axis_z) : vec2_splat(0.0);
-	imageStore(s_lumen_normal_out, atlas_texel, vec4(card_normal, 0.0, coverage));
-	imageStore(s_lumen_emissive_out, atlas_texel, vec4(emissive, 0.0));
+	imageStore(s_lumen_normal_out, atlas_texel, vec4(card_normal, 0.0, 0.0));
+	imageStore(s_lumen_emissive_out, atlas_texel, vec4(LumenQuantizeCardLighting(emissive, atlas_texel, u_lumen_card_copy.z), 0.0));
 	imageStore(s_lumen_depth_out, atlas_texel, vec4(card_depth, 0.0, 0.0, 0.0));
-	imageStore(s_lumen_direct_out, atlas_texel, vec4(direct, 0.0));
-	imageStore(s_lumen_indirect_out, atlas_texel, vec4(indirect, 0.0));
 	imageStore(s_lumen_final_out,
 	           atlas_texel,
 	           vec4(LumenCombineFinalLighting(albedo_encoded, emissive, direct, indirect), card_depth));
-	if(local.x == 0 && local.y == 0)
+	BRANCH
+	if(!keeps_lighting)
 	{
-		imageStore(s_lumen_radiosity_frames_out, ivec2(tile.zw) / LUMEN_CARD_TILE_SIZE, vec4(frames, 0.0, 0.0, 0.0));
+		imageStore(s_lumen_direct_out, atlas_texel, vec4(LumenQuantizeCardLighting(direct, atlas_texel, u_lumen_card_copy.z), 0.0));
+		imageStore(s_lumen_indirect_out, atlas_texel, vec4(LumenQuantizeCardLighting(indirect, atlas_texel, u_lumen_card_copy.z), 0.0));
+		if(local.x == 0 && local.y == 0)
+		{
+			imageStore(s_lumen_radiosity_frames_out, ivec2(tile.zw) / LUMEN_CARD_TILE_SIZE, vec4(frames, 0.0, 0.0, 0.0));
+		}
 	}
 }

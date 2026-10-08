@@ -49,7 +49,7 @@ LumenRcCorner LumenRcInterpolationCorner(vec3 origin, int clipmap, int corner)
 		return result;
 	}
 	result.offset_weight = vec4(origin - LumenRcProbePosition(cell, clipmap), weight);
-	result.tile = vec4(vec2(LumenRcProbeTileOrigin(probe, LUMEN_RC_FINAL_RES) + ivec2(1, 1)), 0.0, 0.0);
+	result.tile = vec4(vec2(LumenRcProbeTileOrigin(probe, u_lumen_rc_final_res) + ivec2(1, 1)), 0.0, 0.0);
 	return result;
 }
 
@@ -73,10 +73,10 @@ LumenRcSample LumenRcShadeCorner(LumenRcCorner corner, vec3 direction, float rad
 	float parallax = exit_t * exit_t / (radius * max(dot(lookup, direction), 1e-4));
 	vec2 uv = LumenInverseEquiAreaSphericalMapping(lookup);
 	ivec2 final_origin = ivec2(corner.tile.xy);
-	vec2 final_texel = vec2(final_origin) + uv * float(LUMEN_RADIANCE_CACHE_PROBE_RES);
+	vec2 final_texel = vec2(final_origin) + uv * float(u_lumen_rc_probe_res);
 	result.radiance = weight * parallax * texture2DLod(s_lumen_rc_final, final_texel / final_size, 0.0).xyz;
-	ivec2 depth_texel = final_origin + min(ivec2(uv * float(LUMEN_RADIANCE_CACHE_PROBE_RES)),
-	                                       ivec2(LUMEN_RADIANCE_CACHE_PROBE_RES - 1, LUMEN_RADIANCE_CACHE_PROBE_RES - 1));
+	ivec2 depth_texel = final_origin + min(ivec2(uv * float(u_lumen_rc_probe_res)),
+	                                       ivec2(u_lumen_rc_probe_res - 1, u_lumen_rc_probe_res - 1));
 	result.hit_distance = weight * texelFetch(s_lumen_rc_final, depth_texel, 0).w;
 	return result;
 }

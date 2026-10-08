@@ -957,6 +957,13 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_screen_ao_pass(camera, rview, dt, params);
 
+    // Lumen's reflections write every pixel of RBUFFER when they run, so only other views start it cleared.
+    const bool lumen_owns_reflections = is_camera_run && lumen_reflections_own_view(params);
+    lumen_reflections_written_ = false;
+    if(build_reflection_probes && !lumen_owns_reflections)
+    {
+        clear_traced_reflections(rview);
+    }
     run_reflection_probe_pass(scn, camera, rview, build_reflection_probes, dt);
 
     const bool hiz_active = run_hiz_pass(camera, rview, params, viewport_size, dt);
@@ -984,6 +991,10 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     if(is_camera_run)
     {
         gi_active = run_lumen_gi_pass(camera, rview, params);
+    }
+    if(build_reflection_probes && lumen_owns_reflections && !lumen_reflections_written_)
+    {
+        clear_traced_reflections(rview);
     }
 
     // SSIL pass
@@ -2324,9 +2335,11 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     gfx::set_uniform(iprogram.u_indirect_params, indirect_params);
     gfx::set_texture(iprogram.s_screen_ao, 9, screen_ao.texture);
     gfx::set_uniform(iprogram.u_screen_ao, screen_ao.params.data());
+    const auto probe_layer = get_probe_layer_inputs(rview, apply_reflection && pbuffer ? pbuffer->get_texture(0) : nullptr);
     gfx::set_texture(iprogram.s_probe_layer,
                      10,
-                     apply_reflection && pbuffer ? pbuffer->get_texture(0) : default_textures::get().black_texture());
+                     probe_layer.texture ? probe_layer.texture : default_textures::get().black_texture());
+    gfx::set_uniform(iprogram.u_probe_layer_params, probe_layer.params.data());
     gfx::set_texture(iprogram.s_specular_occlusion, 12, default_textures::get().specular_occlusion().texture.get());
     gfx::set_uniform(iprogram.u_pre_exposure, get_pre_exposure(rview).to_uniform().data());
     
@@ -2341,6 +2354,20 @@ auto deferred::run_indirect_lighting_pass(const camera& camera,
     bgfx::discard();
 
     return lbuffer;
+}
+
+void deferred::clear_traced_reflections(gfx::render_view& rview)
+{
+    const auto& rbuffer = rview.fbo_safe_get("RBUFFER");
+    if(!rbuffer)
+    {
+        return;
+    }
+    // The traced layers composite into RBUFFER from (0, 0, 0, 1): no traced radiance yet, and
+    // the whole pixel left to the probe layer.
+    gfx::render_pass traced_clear_pass("Reflections/Traced Clear");
+    traced_clear_pass.bind(rbuffer.get());
+    traced_clear_pass.clear(BGFX_CLEAR_COLOR, ANONYMOUS::reflection_traced_clear_rgba, 0.0f, 0);
 }
 
 void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::render_view& rview, bool apply_probes, delta_t dt)
@@ -2358,16 +2385,9 @@ void deferred::run_reflection_probe_pass(scene& scn, const camera& camera, gfx::
 
     const auto& viewport_size = camera.get_viewport_size();
     const auto& gbuffer = rview.fbo_get("GBUFFER");
-    const auto& rbuffer = rview.fbo_get("RBUFFER");
     const auto& pbuffer = rview.fbo_get("PBUFFER");
 
     const auto buffer_size = pbuffer->get_size();
-
-    // The traced layers composite into RBUFFER from (0, 0, 0, 1): no traced radiance yet, and
-    // the whole pixel left to the probe layer.
-    gfx::render_pass traced_clear_pass("Reflections/Traced Clear");
-    traced_clear_pass.bind(rbuffer.get());
-    traced_clear_pass.clear(BGFX_CLEAR_COLOR, ANONYMOUS::reflection_traced_clear_rgba, 0.0f, 0);
 
     gfx::render_pass pass("Reflections/Buffer Pass");
     pass.bind(pbuffer.get());
@@ -2725,6 +2745,23 @@ auto deferred::run_gtao_pass(const camera& camera, gfx::render_view& rview, cons
     return true;
 }
 
+auto deferred::get_probe_layer_inputs(gfx::render_view& rview, const gfx::texture::ptr& pbuffer) const
+    -> probe_layer_inputs
+{
+    probe_layer_inputs inputs;
+    inputs.texture = pbuffer;
+    if(!lumen_reflections_written_ || !pbuffer)
+    {
+        return inputs;
+    }
+    // Lumen's reflections own the view: the gather's rough specular is the whole untraced layer (UE composites no
+    // reflection captures or sky specular under Lumen's), read straight from its history.
+    const auto rough_specular = rview.tex_safe_get("GI_ROUGH_SPECULAR");
+    inputs.texture = rough_specular ? rough_specular : default_textures::get().black_texture();
+    inputs.params = {1.0f, get_gi_resolve_scale(rview), rough_specular ? 1.0f : 0.0f, 0.0f};
+    return inputs;
+}
+
 auto deferred::get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_inputs
 {
     screen_ao_inputs inputs;
@@ -3078,13 +3115,13 @@ auto deferred::lumen_reflections_own_view(const run_params& rparams) -> bool
     return resolve_gi_settings(rparams, gi) && gi.reflections.enabled;
 }
 
-void deferred::run_lumen_reflection_pass(gfx::render_view& rview, const lumen_run_params& gather_params)
+auto deferred::run_lumen_reflection_pass(gfx::render_view& rview, const lumen_run_params& gather_params) -> bool
 {
     const auto rbuffer = rview.fbo_safe_get("RBUFFER");
     const auto pbuffer = rview.fbo_safe_get("PBUFFER");
     if(!rbuffer || !pbuffer)
     {
-        return;
+        return false;
     }
     lumen_reflection_pass::run_params params;
     params.gather = &gather_params;
@@ -3092,7 +3129,7 @@ void deferred::run_lumen_reflection_pass(gfx::render_view& rview, const lumen_ru
     params.rough_specular_scale = get_gi_resolve_scale(rview);
     params.traced_output = rbuffer->get_texture(0);
     params.probe_output = pbuffer->get_texture(0);
-    lumen_reflection_pass_.run(rview, params);
+    return lumen_reflection_pass_.run(rview, params);
 }
 
 auto deferred::get_gi_resolve_scale(gfx::render_view& rview) -> float
@@ -3125,14 +3162,15 @@ auto deferred::run_lumen_gi_pass(const camera& camera, gfx::render_view& rview, 
         params.visualize_traces.enabled = visualize.screen_probe_traces;
         params.visualize_traces.freeze = visualize.screen_probe_traces_freeze;
         params.visualize_traces.cursor = visualize.cursor;
+        params.has_traced_reflections = lumen_reflections_own_view(rparams);
         run_lumen_surface_cache(camera, rview, *params.surface_cache, gi.scene);
         result = lumen_gather_pass_.run(rview, params);
         rview.data().get_or_emplace<float>(gi_resolve_scale, 1.0f) = std::max(gi.diffuse.intensity, 0.0f);
         // Lumen's reflections follow its gather (UE: the screen probe gather, then the reflections), whose
         // rough specular they composite under the traced layer.
-        if(result && lumen_reflections_own_view(rparams))
+        if(result && params.has_traced_reflections)
         {
-            run_lumen_reflection_pass(rview, params);
+            lumen_reflections_written_ = run_lumen_reflection_pass(rview, params);
         }
     }
     else
@@ -3189,6 +3227,13 @@ auto deferred::make_lumen_run_params(const camera& camera, gfx::render_view& rvi
     params.surface_cache = &engine::context().get_cached<surface_cache_system>();
     params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
     params.lumen_surface_cache = &lumen_surface_cache_pass_;
+    params.surface_cache_feedback = lumen_surface_cache_pass_.get_feedback();
+    const auto& ctx = engine::context();
+    if(ctx.has<settings>())
+    {
+        params.gi_quality = ctx.get<settings>().global_illumination.global_illumination_quality;
+        params.reflection_quality = ctx.get<settings>().global_illumination.reflection_quality;
+    }
     params.camera_cut = is_camera_cut(camera);
     params.global_lighting_change = params.surface_cache->has_global_lighting_change();
     return params;
@@ -3212,14 +3257,24 @@ void deferred::run_lumen_surface_cache(const camera& camera,
     card_cloud_shadow.layer = cloud_uniforms.layer;
     card_cloud_shadow.signature = cloud_uniforms.is_applied ? cloud_shadow_.signature : 0u;
     lumen_surface_cache_pass_.set_cloud_shadow(card_cloud_shadow);
-    lumen_surface_cache_pass_.update(gi_scene,
-                                     view_cache != nullptr ? &view_cache->get_clipmap() : nullptr,
-                                     camera.get_position(),
-                                     camera.get_frustum(),
-                                     scene_settings,
-                                     project_settings);
-    capture_lumen_cards(camera, gi_scene);
-    lumen_surface_cache_pass_.copy_captures();
+    // The surface cache is shared by every camera: the frame's first one updates it and captures the cards; each one
+    // keeps its object grid on its own distance field and lights the pages nearest to it.
+    const bool is_updating_camera =
+        lumen_surface_cache_pass_.update(gi_scene,
+                                         view_cache != nullptr ? &view_cache->get_clipmap() : nullptr,
+                                         camera.get_position(),
+                                         camera.get_frustum(),
+                                         scene_settings,
+                                         project_settings);
+    if(view_cache != nullptr)
+    {
+        lumen_surface_cache_pass_.update_object_grid(gi_scene, *view_cache);
+    }
+    if(is_updating_camera)
+    {
+        capture_lumen_cards(camera, gi_scene);
+        lumen_surface_cache_pass_.copy_captures();
+    }
     lumen_surface_cache_pass::lighting_inputs inputs;
     inputs.gi_scene = &gi_scene;
     inputs.view_cache = view_cache;
@@ -3357,8 +3412,12 @@ void deferred::run_debug_visualization_pass(const camera& camera,
                                          indirect_diffuse_is_ssil ? 1.0f : 0.0f,
                                          get_gi_resolve_scale(rview)};
     gfx::set_uniform(debug_visualization_program_.u_visualize_indirect, visualize_indirect);
-    // The reflection views compose the two reflection buffers the way the indirect pass does.
-    gfx::set_texture(debug_visualization_program_.s_tex[9], 9, pbuffer);
+    // The reflection views compose the two reflection layers the way the indirect pass does.
+    const auto probe_layer = get_probe_layer_inputs(rview, pbuffer ? pbuffer->get_texture(0) : nullptr);
+    gfx::set_texture(debug_visualization_program_.s_tex[9],
+                     9,
+                     probe_layer.texture ? probe_layer.texture : default_textures::get().black_texture());
+    gfx::set_uniform(debug_visualization_program_.u_probe_layer_params, probe_layer.params.data());
     gfx::set_texture(debug_visualization_program_.s_tex[10], 10, default_textures::get().specular_occlusion().texture.get());
 
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
@@ -3413,6 +3472,8 @@ void deferred::run_lumen_visualize_overlays(const camera& camera,
     params.print = &shader_print_;
     params.settings = lumen_visualize_settings_;
     params.tonemapping = get_debug_tonemapping(rparams);
+    // The overlays are the frame's printers: the buffer empties in a view ahead of theirs.
+    shader_print_.begin_frame();
     lumen_visualize_pass_.draw_overlays(params);
 }
 

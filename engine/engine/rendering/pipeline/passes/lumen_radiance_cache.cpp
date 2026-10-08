@@ -27,10 +27,9 @@ constexpr uint32_t indirection_size = grid * clipmaps * grid * grid;
 constexpr uint32_t max_probes = uint32_t(LUMEN_RADIANCE_CACHE_MAX_PROBES);
 constexpr uint32_t atlas_probes_x = uint32_t(LUMEN_RADIANCE_CACHE_ATLAS_PROBES_X);
 constexpr uint32_t atlas_probes_y = max_probes / atlas_probes_x;
-constexpr uint32_t probe_res = uint32_t(LUMEN_RADIANCE_CACHE_PROBE_RES);
-/// Mirror of LUMEN_RC_FINAL_RES: the probe map plus a one-texel octahedral border.
-constexpr uint32_t final_res = probe_res + 2u;
-/// Mirror of LUMEN_RC_MAX_TILES_PER_PROBE.
+/// Mirror of u_lumen_rc_final_res: a final atlas tile is the probe map plus a one-texel octahedral border.
+constexpr uint32_t final_border_texels = 2u;
+/// Mirror of LUMEN_RC_MAX_TILES_PER_PROBE (the largest probe resolution's).
 constexpr uint32_t max_tiles_per_probe = 16u;
 /// Mirror of LUMEN_RC_COUNTER_COUNT.
 constexpr uint32_t counter_count = 32u;
@@ -64,6 +63,7 @@ void lumen_radiance_cache::uniforms::cache_uniforms()
                   uint16_t(clipmaps));
     cache_uniform(nullptr, u_lumen_rc_params, "u_lumen_rc_params", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_rc_camera, "u_lumen_rc_camera", bgfx::UniformType::Vec4);
+    cache_uniform(nullptr, u_lumen_rc_layout, "u_lumen_rc_layout", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_frame, "u_lumen_frame", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_probes, "u_lumen_probes", bgfx::UniformType::Vec4);
     cache_uniform(nullptr, u_lumen_view, "u_lumen_view", bgfx::UniformType::Vec4);
@@ -134,20 +134,26 @@ auto lumen_radiance_cache::has_programs() const -> bool
     return true;
 }
 
-auto lumen_radiance_cache::ensure_resources() -> bool
+auto lumen_radiance_cache::ensure_resources(uint32_t probe_res) -> bool
 {
-    if(final_atlas_)
+    if(final_atlas_ && probe_res == probe_res_)
     {
         return true;
     }
-    indirection_[0] = make_uint_buffer(indirection_size);
-    indirection_[1] = make_uint_buffer(indirection_size);
-    probe_state_ = make_uint_buffer(probe_state_arrays * max_probes);
-    counters_ = make_uint_buffer(counter_count);
-    // Sized for a rebuild, which traces every probe of the pool (u_lumen_rc_trace_cap).
-    traces_ = make_uint_buffer(2u * max_probes);
-    tiles_ = make_uint_buffer(2u * max_probes * max_tiles_per_probe);
-    args_ = bgfx::createIndirectBuffer(indirect_slots);
+    if(!bgfx::isValid(counters_))
+    {
+        indirection_[0] = make_uint_buffer(indirection_size);
+        indirection_[1] = make_uint_buffer(indirection_size);
+        probe_state_ = make_uint_buffer(probe_state_arrays * max_probes);
+        counters_ = make_uint_buffer(counter_count);
+        // Sized for a rebuild, which traces every probe of the pool (u_lumen_rc_trace_cap).
+        traces_ = make_uint_buffer(2u * max_probes);
+        tiles_ = make_uint_buffer(2u * max_probes * max_tiles_per_probe);
+        args_ = bgfx::createIndirectBuffer(indirect_slots);
+    }
+    // New atlases at another resolution start the cache over: no probe carries over.
+    probe_res_ = probe_res;
+    const uint32_t final_res = probe_res + final_border_texels;
     radiance_atlas_ = std::make_shared<gfx::texture>(uint16_t(atlas_probes_x * probe_res),
                                                      uint16_t(atlas_probes_y * probe_res),
                                                      false,
@@ -213,6 +219,13 @@ void lumen_radiance_cache::set_cache_uniforms(bookkeeping mode) const
     const float params[4] = {float(frame_), budget, persistent_ ? 1.0f : 0.0f, float(int(mode))};
     gfx::set_uniform(uniforms_.u_lumen_rc_params, params);
     gfx::set_uniform(uniforms_.u_lumen_rc_camera, camera_.data());
+    set_layout_uniform();
+}
+
+void lumen_radiance_cache::set_layout_uniform() const
+{
+    const math::vec4 layout(float(probe_res_), 0.0f, 0.0f, 0.0f);
+    gfx::set_uniform(uniforms_.u_lumen_rc_layout, layout);
 }
 
 void lumen_radiance_cache::run_bookkeeping(bookkeeping mode) const
@@ -335,7 +348,7 @@ auto lumen_radiance_cache::update(const frame_inputs& inputs) -> bool
         return false;
     }
     const auto& clipmap_gpu = inputs.params->view_cache->get_clipmap_gpu();
-    if(!clipmap_gpu.is_valid() || !ensure_resources())
+    if(!clipmap_gpu.is_valid() || !ensure_resources(inputs.probe_resolution))
     {
         return false;
     }
@@ -350,7 +363,8 @@ auto lumen_radiance_cache::update(const frame_inputs& inputs) -> bool
         persistent_ = false;
     }
     trace_budget_ = lumen_pass::get_radiance_cache_trace_budget(inputs.params->settings.diffuse.update_speed,
-                                                                inputs.params->is_being_edited);
+                                                                inputs.params->is_being_edited,
+                                                                inputs.params->gi_quality);
     place_clipmaps(inputs.params->cam->get_position());
     if(!persistent_)
     {
@@ -382,6 +396,7 @@ void lumen_radiance_cache::bind_for_sampling(uint8_t indirection_stage, uint8_t 
     bgfx::setBuffer(indirection_stage, indirection_[current_], bgfx::Access::Read);
     gfx::set_texture(uniforms_.s_lumen_rc_final, final_stage, final_atlas_);
     gfx::set_uniform(uniforms_.u_lumen_rc_clipmaps, clipmaps_.data(), uint16_t(clipmaps));
+    set_layout_uniform();
 }
 
 } // namespace unravel

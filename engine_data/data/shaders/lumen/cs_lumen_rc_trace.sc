@@ -82,11 +82,11 @@ void main()
 	uint level = (tile_word >> 16u) & 255u;
 	ivec4 cell = LumenRcUnpackTrace(b_lumen_rc_traces[2u * trace]);
 	uint probe = b_lumen_rc_traces[2u * trace + 1u];
-	int directions = (LUMEN_RADIANCE_CACHE_PROBE_RES / 2) << int(level);
+	int directions = (u_lumen_rc_probe_res / 2) << int(level);
 	ivec2 texel = tile * LUMEN_RC_TILE_RES + ivec2(gl_LocalInvocationID.xy);
 	vec3 direction = LumenEquiAreaSphericalMapping((vec2(texel) + 0.5) / float(directions));
-	ivec2 origin = LumenRcProbeTileOrigin(probe, LUMEN_RADIANCE_CACHE_PROBE_RES);
-	int scale = LUMEN_RADIANCE_CACHE_PROBE_RES / directions;
+	ivec2 origin = LumenRcProbeTileOrigin(probe, u_lumen_rc_probe_res);
+	int scale = u_lumen_rc_probe_res / directions;
 	// UE DitherScreenCoord: the probe's atlas tile x its resolution + the ray's texel.
 	LumenSdfDither dither = LumenSdfMakeDither(vec2(origin + texel * scale), u_lumen_frame_mod);
 	vec4 ray = LumenRcTraceRay(LumenRcProbePosition(cell.xyz, cell.w), direction, LumenRcTMin(cell.w), dither);
