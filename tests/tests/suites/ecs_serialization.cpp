@@ -38,6 +38,7 @@
 #include <engine/engine.h>
 #include <engine/threading/threader.h>
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/meta/rendering/light.hpp>
 
 #include <logging/logging.h>
 #include <serialization/associative_archive.h>
@@ -1021,6 +1022,50 @@ void test_failed_load_leaves_siblings_readable()
     check(!try_load(ar, ser20::make_nvp("c", c)), "try_load reports a second failed array");
     int b_again = 0;
     check(try_load(ar, ser20::make_nvp("b", b_again)) && b_again == 7, "the archive is back at the root after both");
+}
+
+void test_light_source_shape_round_trip()
+{
+    begin_test("a local light's source radius / length round-trip; exponent falloff data still loads");
+
+    // The emitter size is saved with the type-specific data, so it must come back for point and
+    // spot lights alike.
+    light saved_light;
+    saved_light.type = light_type::spot;
+    saved_light.source_radius = 0.25f;
+    saved_light.source_length = 1.5f;
+    std::stringstream stream;
+    {
+        ser20::oarchive_associative_t ar(stream);
+        try_save(ar, ser20::make_nvp("light", saved_light));
+    }
+    light loaded_light;
+    {
+        ser20::iarchive_associative_t ar(stream);
+        try_load(ar, ser20::make_nvp("light", loaded_light));
+    }
+    check(loaded_light.type == light_type::spot, "the type loads");
+    check(loaded_light.source_radius == saved_light.source_radius, "the source radius round-trips");
+    check(loaded_light.source_length == saved_light.source_length, "the source length round-trips");
+
+    // Scenes written before the inverse-squared falloff carry the removed exponent falloff and no
+    // emitter size: every field they have loads, and the emitter size keeps the light's value (0, a
+    // point source, for a light loaded fresh).
+    const std::string old_document =
+        R"({"light": {"type": 1, "intensity": 8.0, "point_data": {"range": 20.0, "exponent_falloff": 1.35}}})";
+    std::stringstream old_stream(old_document);
+    light old_light;
+    old_light.source_radius = 9.0f;
+    old_light.source_length = 9.0f;
+    {
+        ser20::iarchive_associative_t ar(old_stream);
+        check(try_load(ar, ser20::make_nvp("light", old_light)), "an old point light loads");
+    }
+    check(old_light.type == light_type::point, "the old light keeps its type");
+    check(old_light.intensity == 8.0f, "the old light keeps its intensity");
+    check(old_light.point_data.range == 20.0f, "the old light keeps its range");
+    check(old_light.source_radius == 9.0f && old_light.source_length == 9.0f,
+          "fields the old data lacks keep their values");
 }
 
 void test_auto_exposure_settings_start_fresh_without_version()
@@ -5564,6 +5609,7 @@ auto run_ecs_serialization_suite(rtti::context& ctx) -> int
         test_output_format_scope();
         test_absent_components_do_not_throw();
         test_failed_load_leaves_siblings_readable();
+        test_light_source_shape_round_trip();
         test_auto_exposure_settings_start_fresh_without_version();
         test_prefab_asset_does_not_store_prefab_component();
 

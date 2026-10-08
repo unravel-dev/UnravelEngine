@@ -411,9 +411,13 @@ auto light_to_json(const light_component& comp, const std::unordered_set<std::st
         const float range = (l.type == light_type::spot) ? l.spot_data.get_range() : l.point_data.range;
         append_prop(json, first, "range", fmt::format("{:.6g}", range));
     }
-    if(wants_key(filter, "exponent_falloff"))
+    if(wants_key(filter, "source_radius"))
     {
-        append_prop(json, first, "exponent_falloff", fmt::format("{:.6g}", l.point_data.exponent_falloff));
+        append_prop(json, first, "source_radius", fmt::format("{:.6g}", l.source_radius));
+    }
+    if(wants_key(filter, "source_length"))
+    {
+        append_prop(json, first, "source_length", fmt::format("{:.6g}", l.source_length));
     }
     if(wants_key(filter, "outer_angle"))
     {
@@ -588,9 +592,19 @@ auto apply_light_properties(light_component& comp, const simdjson::dom::object& 
             light.point_data.range = range;
             result.applied.push_back(key);
         }
-        else if(key == "exponent_falloff")
+        else if(key == "source_radius")
         {
-            if(!parse_number(value, light.point_data.exponent_falloff, error))
+            if(!parse_number(value, light.source_radius, error))
+            {
+                result.ok = false;
+                result.errors.push_back(key + ": " + error);
+                continue;
+            }
+            result.applied.push_back(key);
+        }
+        else if(key == "source_length")
+        {
+            if(!parse_number(value, light.source_length, error))
             {
                 result.ok = false;
                 result.errors.push_back(key + ": " + error);
@@ -3711,7 +3725,8 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     add("Light", "indirect_intensity", "number");
     add("Light", "casts_shadows", "boolean");
     add("Light", "range", "number");
-    add("Light", "exponent_falloff", "number");
+    add("Light", "source_radius", "number");
+    add("Light", "source_length", "number");
     add("Light", "outer_angle", "number");
     add("Light", "inner_angle", "number");
     add("Light", "shadow_bias", "number");

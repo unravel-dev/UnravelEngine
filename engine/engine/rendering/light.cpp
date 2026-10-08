@@ -37,6 +37,15 @@ auto light::compute_world_bounds_sphere(const math::vec3& position, const math::
     return math::bsphere(position + 0.5f * range * direction, radius);
 }
 
+auto light::compute_source_axis(const math::vec3& world_y_axis) const -> math::vec3
+{
+    if(type == light_type::directional)
+    {
+        return math::vec3(0.0f);
+    }
+    return world_y_axis * source_length;
+}
+
 void light::spot::set_range(float r)
 {
     if(r < 0)

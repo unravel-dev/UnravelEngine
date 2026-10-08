@@ -80,25 +80,30 @@ float LumenShadowVisibility(vec3 position, vec3 normal, vec3 to_light, float lig
 	return hit.hit ? 0.0 : 1.0;
 }
 
-/// One light's shadowed Lambert irradiance at a card texel.
+/// One light's shadowed Lambert irradiance at a card texel (UE GetIrradianceForLight): a local
+/// light's capsule gives the inverse-squared falloff and the diffuse cosine, as in the direct pass.
 vec3 LumenCardLightIrradiance(GpuLight light, vec3 position, vec3 normal)
 {
 	vec3 to_light = -light.direction;
 	float attenuation = 1.0;
+	float n_dot_l = saturate(dot(normal, to_light));
 	float light_distance = LUMEN_DIRECTIONAL_SHADOW_DISTANCE;
 	bool is_local = light.type != GPU_LIGHT_TYPE_DIRECTIONAL;
 	if(is_local)
 	{
 		vec3 delta = light.position - position;
-		vec3 over_range = delta / max(light.range, 1e-4);
-		attenuation = light.type == GPU_LIGHT_TYPE_POINT
-		                  ? GpuRadialAttenuation(over_range, light.falloff_exponent)
-		                  : GpuRadialAttenuation(over_range, 1.0) *
-		                        GpuSpotAttenuation(delta, light.direction, light.cos_inner, light.cos_outer);
 		light_distance = length(delta);
 		to_light = light_distance > 1e-6 ? delta / light_distance : vec3(0.0, 1.0, 0.0);
+		float mask = LocalLightRangeMask(delta, 1.0 / max(light.range, 1e-4));
+		if(light.type == GPU_LIGHT_TYPE_SPOT)
+		{
+			mask *= LocalLightSpotMask(to_light, light.direction, GpuSpotAngles(light));
+		}
+		CapsuleIrradiance irradiance =
+			EvaluateCapsuleIrradiance(MakeCapsuleLight(delta, light.source_axis, light.source_radius), normal);
+		attenuation = mask * irradiance.Falloff;
+		n_dot_l = irradiance.NoL;
 	}
-	float n_dot_l = saturate(dot(normal, to_light));
 	if(n_dot_l * attenuation <= 0.0)
 	{
 		return vec3_splat(0.0);

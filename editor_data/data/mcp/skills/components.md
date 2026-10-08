@@ -23,8 +23,15 @@ Script, Particle Emitter, Physics, Animation, Text, Reflection Probe, Bloom.
 ## Light
 
 Spots aim along their forward axis: rotation_euler [90,0,0] points straight
-down. Typical museum-style key light: intensity 5-6, range ~10, outer_angle
-30-60, inner_angle roughly half of outer, casts_shadows true.
+down. Point and spot intensity is luminous intensity with an inverse-square
+falloff: a surface at distance d receives intensity / d^2 (a directional
+light's intensity is that illuminance directly), and range only fades the light
+to zero at its edge. To light a surface d metres away as brightly as a
+directional light of intensity E does, use intensity E * d^2 - e.g. a museum
+key light 3 m above a plinth under a dim sun of 1: intensity ~9-20, range ~10,
+outer_angle 30-60, inner_angle roughly half of outer, casts_shadows true.
+source_radius (sphere) and source_length (tube along the light's local Y axis)
+size the emitter in metres: wider, softer highlights at the same total light.
 
 ## Particle Emitter
 

@@ -17,6 +17,9 @@ uniform vec4 u_light_position;
 uniform vec4 u_light_direction;
 uniform vec4 u_light_color_intensity;
 uniform vec4 u_light_data;
+/// Point and spot lights' emitter (light::source_radius / source_length): xyz = the tube's axis
+/// scaled by its length (world units), w = the sphere radius.
+uniform vec4 u_light_source;
 /// Contact shadows: x = minimum occluder thickness (world units), y = max distance (0 = off),
 /// z = opacity, w = temporal frame index for the dither (0 when no TAA integrates it).
 uniform vec4 u_contact_shadow;
@@ -681,7 +684,6 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 clip = ReconstructClipFromGBufferTexel(gbuf_texel, data.depth, s_tex4);
     vec3 world_position = clipToWorld(u_invViewProj, clip);
     float filtered_roughness = GeometricSpecularAA(data.world_normal, GetLightingRoughness(data.roughness));
-    vec3 lobe_roughness = vec3(0.0f, filtered_roughness, 1.0f);
     vec3 light_color = u_light_color_intensity.xyz;
     float intensity = u_light_color_intensity.w;
     vec3 specular_color = data.specular_color;
@@ -698,20 +700,21 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 V = normalize(u_camera_position.xyz - world_position);
     vec3 L = vector_to_light / sqrt( distance_sqr );
 
-#if POINT_LIGHT
-    vec3 vector_to_light_over_radius = vector_to_light / u_light_data.x;
-    float light_radius_mask = RadialAttenuation(vector_to_light_over_radius, u_light_data.y);
-    float light_falloff = 1.0f;
-#elif SPOT_LIGHT
-    vec3 vector_to_light_over_radius = vector_to_light / u_light_data.x;
-    float light_radius_mask = RadialAttenuation(vector_to_light_over_radius, 1.0f);
-    float light_falloff = SpotAttenuation( vector_to_light_over_radius, normalize(u_light_direction.xyz), vec2(u_light_data.z, 1.0f / (u_light_data.y - u_light_data.z )));
+    // Inverse-squared local lights (UE): the capsule emitter carries the 1 / d^2 falloff and the
+    // diffuse cosine, the range window and the spot cone mask it.
+#if POINT_LIGHT || SPOT_LIGHT
+    float light_mask = LocalLightRangeMask(vector_to_light, 1.0f / u_light_data.x);
+#if SPOT_LIGHT
+    light_mask *= LocalLightSpotMask(L, normalize(u_light_direction.xyz), vec2(u_light_data.z, 1.0f / (u_light_data.y - u_light_data.z)));
+#endif
+    CapsuleLight capsule = MakeCapsuleLight(vector_to_light, u_light_source.xyz, u_light_source.w);
+    AreaLight area_light = MakeCapsuleAreaLight(capsule, filtered_roughness, normalize(N), V);
 #else
-    float light_radius_mask = 1.0f;
-    float light_falloff = 1.0f;
+    float light_mask = 1.0f;
+    AreaLight area_light = MakeDirectionalAreaLight(normalize(N), L);
 #endif
 
-    float NoL = saturate(dot(N, L));
+    float NoL = area_light.NoL;
 
     vec3 colorCoverage = vec3(0.0f, 0.0f, 0.0f);
     // Receiver position uncertainty: the view-space distance one float ulp of the stored depth
@@ -740,14 +743,12 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     surface_shadow *= CloudShadow(world_position, L);
 #endif
     float subsurface_shadow = 1.0f;
-    float base_attenuation = intensity * light_radius_mask * light_falloff;
+    float base_attenuation = intensity * light_mask * area_light.Falloff;
     float surface_attenuation = base_attenuation * surface_shadow;
     float subsurface_attenuation = base_attenuation * subsurface_shadow;
 
-    vec3 energy = AreaLightSpecular(0.0f, 0.0f, normalize(vector_to_light), lobe_roughness, vector_to_light, L, V, N);
-
-    vec3 direct_surface_lighting = StandardShadingDirect(diffuse_color, specular_color, lobe_roughness, energy, L, V, N, data.ambient_occlusion);
-    vec3 subsurface_lighting = SubsurfaceShading(data.subsurface_color, data.subsurface_opacity, data.ambient_occlusion, L, V, N);
+    vec3 direct_surface_lighting = StandardShadingDirect(diffuse_color, specular_color, filtered_roughness, area_light, V, N, data.ambient_occlusion);
+    vec3 subsurface_lighting = SubsurfaceShading(data.subsurface_color, data.subsurface_opacity, data.ambient_occlusion, area_light.DiffuseL, V, N);
     vec3 subsurface_multiplier = (light_color * subsurface_attenuation);
 
     vec3 surface_multiplier = light_color * (NoL * surface_attenuation);

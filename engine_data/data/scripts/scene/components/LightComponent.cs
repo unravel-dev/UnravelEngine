@@ -94,12 +94,23 @@ namespace Unravel.Core
         }
 
         /// <summary>
-        /// Point light exponent falloff.
+        /// Radius of a point or spot light's emitting sphere, in world units. Widens and softens
+        /// the highlight without changing the light emitted. 0 = a point source.
         /// </summary>
-        public float pointExponentFalloff
+        public float sourceRadius
         {
-            get => internal_m2n_light_get_point_exponent_falloff(owner);
-            set => internal_m2n_light_set_point_exponent_falloff(owner, value);
+            get => internal_m2n_light_get_source_radius(owner);
+            set => internal_m2n_light_set_source_radius(owner, value);
+        }
+
+        /// <summary>
+        /// Length of a point or spot light's emitting tube along its local Y axis, in world units.
+        /// 0 = a sphere.
+        /// </summary>
+        public float sourceLength
+        {
+            get => internal_m2n_light_get_source_length(owner);
+            set => internal_m2n_light_set_source_length(owner, value);
         }
 
         [MethodImpl(MethodImplOptions.InternalCall)]
@@ -151,9 +162,15 @@ namespace Unravel.Core
         private static extern void internal_m2n_light_set_spot_inner_angle(Entity eid, float angle);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern float internal_m2n_light_get_point_exponent_falloff(Entity eid);
+        private static extern float internal_m2n_light_get_source_radius(Entity eid);
 
         [MethodImpl(MethodImplOptions.InternalCall)]
-        private static extern void internal_m2n_light_set_point_exponent_falloff(Entity eid, float falloff);
+        private static extern void internal_m2n_light_set_source_radius(Entity eid, float radius);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern float internal_m2n_light_get_source_length(Entity eid);
+
+        [MethodImpl(MethodImplOptions.InternalCall)]
+        private static extern void internal_m2n_light_set_source_length(Entity eid, float length);
     }
 }

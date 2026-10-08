@@ -160,8 +160,6 @@ struct light
     {
         /// The range of the point light.
         float range = 10.0f;
-        /// The exponent falloff for the point light.
-        float exponent_falloff = 1.0f;
 
         /**
          * @brief Struct representing shadow map parameters for point lights.
@@ -206,8 +204,18 @@ struct light
     /// The color of the light. Pure white by default: warmth is an artistic choice
     /// per light, and a tinted default skews every material's perceived albedo.
     math::color color = math::color(255, 255, 255, 255);
-    /// The intensity of the light.
+    /// The intensity of the light. Directional: the illuminance on a surface facing the light.
+    /// Point and spot: the luminous intensity, so the illuminance at distance d (world units) is
+    /// intensity / d^2 (inverse-squared falloff), cut to zero at the range by a smooth window.
     float intensity = 5.0f;
+    /// Radius of a point or spot light's emitting sphere, in world units. A larger source widens
+    /// and softens the highlight, keeping its energy (a wider, dimmer reflection), and wraps the
+    /// diffuse light past the terminator; the light emitted stays the same. 0 = a point source.
+    float source_radius = 0.0f;
+    /// Length of a point or spot light's emitting tube, in world units, along the light's local Y
+    /// axis: the diffuse light integrates the segment and the highlight stretches along it, again
+    /// without changing the light emitted. 0 = a sphere (or a point when the radius is 0 too).
+    float source_length = 0.0f;
     /// The light's scale in the global illumination (UE IndirectLightingIntensity): the surface cache is lit with
     /// intensity x this, so what the light bounces scales with it; 0 leaves the light out of the GI.
     float indirect_intensity = 1.0f;
@@ -227,6 +235,13 @@ struct light
      *         light's sphere off its cone.
      */
     auto compute_world_bounds_sphere(const math::vec3& position, const math::vec3& direction) const -> math::bsphere;
+
+    /**
+     * @brief The emitting tube's segment: its direction scaled by source_length.
+     * @param[in] world_y_axis The light's world Y axis (unit length), which the tube runs along.
+     * @return Zero for a sphere or a point, and for a directional light.
+     */
+    auto compute_source_axis(const math::vec3& world_y_axis) const -> math::vec3;
 
     /**
      * @brief Struct representing common shadow map parameters.

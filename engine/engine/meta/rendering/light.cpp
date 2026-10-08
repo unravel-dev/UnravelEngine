@@ -40,6 +40,16 @@ REFLECT(light)
             }
             return data->type == light_type::spot;
         });
+    auto local_light_predicate_entt = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            auto data = obj.try_cast<light>();
+            if(!data)
+            {
+                return false;
+            }
+            return data->type == light_type::point || data->type == light_type::spot;
+        });
 
     auto casts_shadows_predicate_entt = entt::property_predicate<bool>(
         [](const entt::meta_any& obj)
@@ -166,14 +176,6 @@ REFLECT(light)
             entt::attribute{"pretty_name", "Range"},
             entt::attribute{"min", 0.1f},
             entt::attribute{"tooltip", "Light's range from its origin."},
-        })
-        .data<&light::point::exponent_falloff>("exponent_falloff"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "exponent_falloff"},
-            entt::attribute{"pretty_name", "Exponent Falloff"},
-            entt::attribute{"min", 0.1f},
-            entt::attribute{"max", 10.0f},
-            entt::attribute{"tooltip", "The falloff factor nearing the range edge."},
         });
 
     entt::meta_factory<light::directional_shadowmap_params>{}
@@ -714,6 +716,9 @@ REFLECT(light)
             entt::attribute{"pretty_name", "Intensity"},
             entt::attribute{"min", 0.0f},
             entt::attribute{"step", 0.05f},
+            entt::attribute{"tooltip",
+                            "Directional: illuminance on a surface facing the light. Point / spot: luminous "
+                            "intensity - the illuminance at distance d is intensity / d^2."},
         })
         .data<&light::indirect_intensity>("indirect_intensity"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -748,6 +753,28 @@ REFLECT(light)
             entt::attribute{"pretty_name", "Spot"},
             entt::attribute{"flattable", true},
             entt::attribute{"predicate", spot_predicate_entt}
+        })
+        .data<&light::source_radius>("source_radius"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "source_radius"},
+            entt::attribute{"pretty_name", "Source Radius"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip",
+                            "Radius of the emitting sphere. Widens and softens the highlight without changing "
+                            "the light emitted. 0 = a point source."},
+            entt::attribute{"predicate", local_light_predicate_entt}
+        })
+        .data<&light::source_length>("source_length"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "source_length"},
+            entt::attribute{"pretty_name", "Source Length"},
+            entt::attribute{"min", 0.0f},
+            entt::attribute{"step", 0.01f},
+            entt::attribute{"tooltip",
+                            "Length of the emitting tube along the light's local Y axis. Stretches the "
+                            "highlight and spreads the light along the tube. 0 = a sphere."},
+            entt::attribute{"predicate", local_light_predicate_entt}
         })
         .data<&light::casts_shadows>("casts_shadows"_hs)
         .custom<entt::attributes>(entt::attributes{ 
@@ -820,7 +847,6 @@ SAVE_INSTANTIATE(light::point_shadowmap_params, ser20::oarchive_binary_t);
 SAVE(light::point)
 {
     try_save(ar, ser20::make_nvp("range", obj.range));
-    try_save(ar, ser20::make_nvp("exponent_falloff", obj.exponent_falloff));
 }
 SAVE_INSTANTIATE(light::point, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(light::point, ser20::oarchive_binary_t);
@@ -921,11 +947,15 @@ SAVE(light)
     {
         try_save(ar, ser20::make_nvp("spot_data", obj.spot_data));
         try_save(ar, ser20::make_nvp("spot_shadow_params", obj.spot_shadow_params));
+        try_save(ar, ser20::make_nvp("source_radius", obj.source_radius));
+        try_save(ar, ser20::make_nvp("source_length", obj.source_length));
     }
     else if(obj.type == light_type::point)
     {
         try_save(ar, ser20::make_nvp("point_data", obj.point_data));
         try_save(ar, ser20::make_nvp("point_shadow_params", obj.point_shadow_params));
+        try_save(ar, ser20::make_nvp("source_radius", obj.source_radius));
+        try_save(ar, ser20::make_nvp("source_length", obj.source_length));
     }
     else if(obj.type == light_type::directional)
     {
@@ -963,7 +993,6 @@ LOAD_INSTANTIATE(light::point_shadowmap_params, ser20::oarchive_binary_t);
 LOAD(light::point)
 {
     try_load(ar, ser20::make_nvp("range", obj.range));
-    try_load(ar, ser20::make_nvp("exponent_falloff", obj.exponent_falloff));
 }
 LOAD_INSTANTIATE(light::point, ser20::oarchive_associative_t);
 LOAD_INSTANTIATE(light::point, ser20::oarchive_binary_t);
@@ -1065,11 +1094,15 @@ LOAD(light)
     {
         try_load(ar, ser20::make_nvp("spot_data", obj.spot_data));
         try_load(ar, ser20::make_nvp("spot_shadow_params", obj.spot_shadow_params));
+        try_load(ar, ser20::make_nvp("source_radius", obj.source_radius));
+        try_load(ar, ser20::make_nvp("source_length", obj.source_length));
     }
     else if(obj.type == light_type::point)
     {
         try_load(ar, ser20::make_nvp("point_data", obj.point_data));
         try_load(ar, ser20::make_nvp("point_shadow_params", obj.point_shadow_params));
+        try_load(ar, ser20::make_nvp("source_radius", obj.source_radius));
+        try_load(ar, ser20::make_nvp("source_length", obj.source_length));
     }
     else if(obj.type == light_type::directional)
     {

@@ -34,6 +34,40 @@ auto vec3_from_bx(const bx::Vec3& data) -> math::vec3
     return {data.x, data.y, data.z};
 }
 
+/// Colour of a point or spot light's emitter outline (ABGR), apart from the green range gizmos.
+constexpr uint32_t LIGHT_SOURCE_SHAPE_COLOR = 0xff40c0ff;
+/// Coarse tessellation, as the spot cone gizmos use: the outline only has to read as a shape.
+constexpr uint8_t LIGHT_SOURCE_SHAPE_LOD = 3;
+
+/// Outlines a point or spot light's emitter (light::source_radius / source_length): a sphere, a
+/// tube along the light's local Y axis, or a capsule. Nothing for a point source.
+void draw_light_source_shape(gfx::dd_raii& dd, const light& light_data, const math::transform& world)
+{
+    if(light_data.type == light_type::directional ||
+       (light_data.source_radius <= 0.0f && light_data.source_length <= 0.0f))
+    {
+        return;
+    }
+    DebugDrawEncoderScopePush scope(dd.encoder);
+    dd.encoder.setColor(LIGHT_SOURCE_SHAPE_COLOR);
+    dd.encoder.setWireframe(true);
+    dd.encoder.setLod(LIGHT_SOURCE_SHAPE_LOD);
+    const math::vec3 center = world.get_position();
+    const math::vec3 half_axis = 0.5f * light_data.compute_source_axis(world.y_unit_axis());
+    if(light_data.source_length <= 0.0f)
+    {
+        dd.encoder.draw(bx::Sphere{vec3_to_bx(center), light_data.source_radius});
+        return;
+    }
+    if(light_data.source_radius > 0.0f)
+    {
+        dd.encoder.drawCapsule(vec3_to_bx(center - half_axis), vec3_to_bx(center + half_axis), light_data.source_radius);
+        return;
+    }
+    dd.encoder.moveTo(vec3_to_bx(center - half_axis));
+    dd.encoder.lineTo(vec3_to_bx(center + half_axis));
+}
+
 } // namespace
 
 void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& cam, gfx::dd_raii& dd1, dd_2d_raii& dd_2d)
@@ -136,6 +170,7 @@ void gizmo_entity::draw(rtti::context& ctx, entt::meta_any& var, const camera& c
             bx::Cone cone = {vec3_to_bx(from2), vec3_to_bx(to2), 0.25f};
             dd.encoder.draw(cone);
         }
+        draw_light_source_shape(dd, light, world_transform);
     }
 
     if(e.all_of<reflection_probe_component>() && em.gizmos.show_reflection_probe)

@@ -2191,10 +2191,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
             }
             if(light.type == light_type::point)
             {
-                float light_data[4] = {light.point_data.range,
-                                       light.point_data.exponent_falloff,
-                                       0.0f,
-                                       contact_shadow_distance};
+                float light_data[4] = {light.point_data.range, 0.0f, 0.0f, contact_shadow_distance};
 
                 gfx::set_uniform(lprogram.u_light_position, light_position);
                 gfx::set_uniform(lprogram.u_light_data, light_data);
@@ -2210,6 +2207,13 @@ auto deferred::run_direct_lighting_pass(scene& scn,
                 gfx::set_uniform(lprogram.u_light_direction, light_direction);
                 gfx::set_uniform(lprogram.u_light_position, light_position);
                 gfx::set_uniform(lprogram.u_light_data, light_data);
+            }
+
+            if(light.type != light_type::directional)
+            {
+                const auto source_axis = light.compute_source_axis(world_transform.y_unit_axis());
+                const float light_source[4] = {source_axis.x, source_axis.y, source_axis.z, light.source_radius};
+                gfx::set_uniform(lprogram.u_light_source, light_source);
             }
 
             gfx::set_uniform(lprogram.u_contact_shadow, contact_shadow_uniform);

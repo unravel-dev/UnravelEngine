@@ -107,15 +107,14 @@ void gpu_light_buffer::update(scene& scn)
             world_transform.reset_scale();
             const auto position = world_transform.get_position();
             const auto direction = world_transform.z_unit_axis();
+            const auto source_axis = light.compute_source_axis(world_transform.y_unit_axis());
             const auto type = to_gpu_light_type(light.type);
             float range = 0.0f;
             float cos_inner = 0.0f;
             float cos_outer = 0.0f;
-            float falloff_exponent = 1.0f;
             if(light.type == light_type::point)
             {
                 range = light.point_data.range;
-                falloff_exponent = light.point_data.exponent_falloff;
             }
             else if(light.type == light_type::spot)
             {
@@ -144,9 +143,13 @@ void gpu_light_buffer::update(scene& scn)
             dst[11] = light.intensity * light.indirect_intensity;
             dst[12] = cos_inner;
             dst[13] = cos_outer;
-            dst[14] = falloff_exponent;
+            // The emitter, as the direct pass gets it in u_light_source.
+            dst[14] = light.type == light_type::directional ? 0.0f : light.source_radius;
             // 1 when the light casts shadows: GI traces their visibility, as the direct lighting pass shadows them.
             dst[15] = light.casts_shadows ? 1.0f : 0.0f;
+            dst[16] = source_axis.x;
+            dst[17] = source_axis.y;
+            dst[18] = source_axis.z;
             ++light_count_;
         });
     if(data_.empty())

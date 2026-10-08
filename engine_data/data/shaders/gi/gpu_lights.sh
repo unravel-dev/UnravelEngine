@@ -11,17 +11,18 @@
  * shader -- there is only ever the one light currently bound. The Lumen surface cache needs that
  * question answered at every card texel it lights.
  *
- * The attenuation here is deliberately identical to RadialAttenuation / SpotAttenuation in
- * lighting.sh. If the two drift, indirect light stops agreeing with the direct light it is
- * supposed to be a bounce of, and the mismatch reads as a lighting bug with no obvious source.
+ * The attenuation comes from light_attenuation.sh, the same code the per-light direct shaders
+ * run. If the two drift, indirect light stops agreeing with the direct light it is supposed to
+ * be a bounce of, and the mismatch reads as a lighting bug with no obvious source.
  *
  * RESERVED RESOURCE STAGE 5.
  */
 
 #include "../bgfx_compute.sh"
+#include "../light_attenuation.sh"
 
 /// vec4 elements per light. Mirror of gpu_light_buffer::light_vec4_stride.
-#define GPU_LIGHT_STRIDE 4
+#define GPU_LIGHT_STRIDE 5
 
 #define GPU_LIGHT_TYPE_SPOT        0
 #define GPU_LIGHT_TYPE_POINT       1
@@ -43,9 +44,12 @@ struct GpuLight
 	float intensity;
 	float cos_inner;
 	float cos_outer;
-	float falloff_exponent;
+	/// The emitting sphere's radius (light::source_radius).
+	float source_radius;
 	/// The light casts shadows (light::casts_shadows): an unshadowed light reaches every point in its range.
 	bool casts_shadows;
+	/// The emitting tube's axis scaled by its length (light::source_length; zero for a sphere).
+	vec3 source_axis;
 };
 
 GpuLight GpuLoadLight(int index)
@@ -55,6 +59,7 @@ GpuLight GpuLoadLight(int index)
 	vec4 l1 = b_gpu_lights[base + 1u];
 	vec4 l2 = b_gpu_lights[base + 2u];
 	vec4 l3 = b_gpu_lights[base + 3u];
+	vec4 l4 = b_gpu_lights[base + 4u];
 	GpuLight light;
 	light.position = l0.xyz;
 	light.type = int(l0.w);
@@ -64,24 +69,16 @@ GpuLight GpuLoadLight(int index)
 	light.intensity = l2.w;
 	light.cos_inner = l3.x;
 	light.cos_outer = l3.y;
-	light.falloff_exponent = l3.z;
+	light.source_radius = l3.z;
 	light.casts_shadows = l3.w > 0.0;
+	light.source_axis = l4.xyz;
 	return light;
 }
 
-/// Matches RadialAttenuation in lighting.sh.
-float GpuRadialAttenuation(vec3 light_vector_over_range, float falloff_exponent)
+/// LocalLightSpotMask's SpotAngles for @p light: (cos outer, 1 / (cos inner - cos outer)).
+vec2 GpuSpotAngles(GpuLight light)
 {
-	float normalized_distance_sq = dot(light_vector_over_range, light_vector_over_range);
-	return pow(1.0 - saturate(normalized_distance_sq), falloff_exponent);
-}
-
-/// Matches SpotAttenuation in lighting.sh, whose SpotAngles is (cos_outer, 1 / (cos_inner - cos_outer)).
-float GpuSpotAttenuation(vec3 light_vector, vec3 spot_direction, float cos_inner, float cos_outer)
-{
-	float inv_range = 1.0 / max(cos_inner - cos_outer, 1e-4);
-	float cone = saturate((dot(normalize(light_vector), -spot_direction) - cos_outer) * inv_range);
-	return cone * cone;
+	return vec2(light.cos_outer, 1.0 / max(light.cos_inner - light.cos_outer, 1e-4));
 }
 
 #endif // __GI_GPU_LIGHTS_SH__

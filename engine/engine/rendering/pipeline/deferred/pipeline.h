@@ -456,6 +456,7 @@ private:
             cache_uniform(program.get(), u_light_position, "u_light_position", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_light_direction, "u_light_direction", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_light_data, "u_light_data", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_light_source, "u_light_source", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_contact_shadow, "u_contact_shadow", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_light_color_intensity, "u_light_color_intensity", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_camera_position, "u_camera_position", bgfx::UniformType::Vec4);
@@ -474,6 +475,8 @@ private:
         gfx::program::uniform_ptr u_light_position;
         gfx::program::uniform_ptr u_light_direction;
         gfx::program::uniform_ptr u_light_data;
+        /// Point and spot lights' emitter: xyz = the tube's axis scaled by its length, w = the sphere radius.
+        gfx::program::uniform_ptr u_light_source;
         gfx::program::uniform_ptr u_contact_shadow;
         gfx::program::uniform_ptr u_light_color_intensity;
         gfx::program::uniform_ptr u_camera_position;

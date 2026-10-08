@@ -169,21 +169,40 @@ void internal_m2n_light_set_spot_inner_angle(entt::entity id, float angle)
     }
 }
 
-auto internal_m2n_light_get_point_exponent_falloff(entt::entity id) -> float
+auto internal_m2n_light_get_source_radius(entt::entity id) -> float
 {
     if(auto comp = safe_get_component<light_component>(id))
     {
-        return comp->get_light().point_data.exponent_falloff;
+        return comp->get_light().source_radius;
     }
     return 0.0f;
 }
 
-void internal_m2n_light_set_point_exponent_falloff(entt::entity id, float falloff)
+void internal_m2n_light_set_source_radius(entt::entity id, float radius)
 {
     if(auto comp = safe_get_component<light_component>(id))
     {
         auto l = comp->get_light();
-        l.point_data.exponent_falloff = falloff;
+        l.source_radius = radius;
+        comp->set_light(l);
+    }
+}
+
+auto internal_m2n_light_get_source_length(entt::entity id) -> float
+{
+    if(auto comp = safe_get_component<light_component>(id))
+    {
+        return comp->get_light().source_length;
+    }
+    return 0.0f;
+}
+
+void internal_m2n_light_set_source_length(entt::entity id, float length)
+{
+    if(auto comp = safe_get_component<light_component>(id))
+    {
+        auto l = comp->get_light();
+        l.source_length = length;
         comp->set_light(l);
     }
 }
@@ -218,10 +237,14 @@ void register_light_component_script_bindings()
                           dotnet_internal_call(internal_m2n_light_get_spot_inner_angle));
     reg.add_internal_call("internal_m2n_light_set_spot_inner_angle",
                           dotnet_internal_call(internal_m2n_light_set_spot_inner_angle));
-    reg.add_internal_call("internal_m2n_light_get_point_exponent_falloff",
-                          dotnet_internal_call(internal_m2n_light_get_point_exponent_falloff));
-    reg.add_internal_call("internal_m2n_light_set_point_exponent_falloff",
-                          dotnet_internal_call(internal_m2n_light_set_point_exponent_falloff));
+    reg.add_internal_call("internal_m2n_light_get_source_radius",
+                          dotnet_internal_call(internal_m2n_light_get_source_radius));
+    reg.add_internal_call("internal_m2n_light_set_source_radius",
+                          dotnet_internal_call(internal_m2n_light_set_source_radius));
+    reg.add_internal_call("internal_m2n_light_get_source_length",
+                          dotnet_internal_call(internal_m2n_light_get_source_length));
+    reg.add_internal_call("internal_m2n_light_set_source_length",
+                          dotnet_internal_call(internal_m2n_light_set_source_length));
 }
 
 } // namespace unravel

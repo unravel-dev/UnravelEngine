@@ -2,6 +2,7 @@
 #define __LIGHTING_SH__
 
 #include <bgfx_shader.sh>
+#include "light_attenuation.sh"
 
 // Shared sRGB <-> linear conversion (exact piecewise curve). Guarded so files
 // that also include tonemapping.sh get exactly one definition.
@@ -555,99 +556,6 @@ float PhongShadingPow(float X, float Y)
     return ClampedPow(X, Y);
 }
 
-float RadialAttenuation(vec3 WorldLightVector, float FalloffExponent)
-{
-    float NormalizeDistanceSquared = dot(WorldLightVector, WorldLightVector);
-
-#if 1
-    return pow(1.0f - saturate(NormalizeDistanceSquared), FalloffExponent);
-#else
-    // light less than x % is considered 0
-    const float CutoffPercentage = 30.0f;
-
-    float CutoffFraction = CutoffPercentage * 0.01f;
-
-    // those could be computed on C++ side
-    float PreCompX = 1.0f - CutoffFraction;
-    float PreCompY = CutoffFraction;
-    float PreCompZ = CutoffFraction / PreCompX;
-
-    return (1.0f / ( saturate(NormalizeDistanceSquared) * PreCompX + PreCompY) - 1.0f) * PreCompZ;
-#endif
-
-}
-
-/**
- * Calculates attenuation for a spot light.
- * WorldLightVector is the vector from the position being shaded to the light, divided by the radius of the light.
- * SpotDirection is the direction of the spot light.
- * SpotAngles.x is CosOuterCone, SpotAngles.y is InvCosConeDifference.
- */
-float SpotAttenuation(vec3 WorldLightVector, vec3 SpotDirection, vec2 SpotAngles)
-{
-    float ConeAngleFalloff = Square(saturate((dot(normalize(WorldLightVector), -SpotDirection) - SpotAngles.x) * SpotAngles.y));
-    return ConeAngleFalloff;
-}
-
-// Find representative incoming light direction and energy modification
-vec3 AreaLightSpecular( float SourceRadius, float SourceLength, vec3 LightDirection, vec3 LobeRoughness, inout vec3 ToLight, inout vec3 L, vec3 V, vec3 N )
-{
-    vec3 LobeEnergy = vec3(1.0f, 1.0f, 1.0f);
-
-#if 0
-    vec3 m = LobeRoughness * LobeRoughness;
-    vec3 R = reflect( -V, N );
-    float InvDistToLight = 1.0f / ( dot( ToLight, ToLight ) );
-
-    if( SourceLength > 0.0f )
-    {
-        // Energy conservation
-        // asin(x) is angle to sphere, atan(x) is angle to disk, saturate(x) is free and in the middle
-        float LineAngle = saturate( SourceLength * InvDistToLight );
-        LobeEnergy *= m / saturate( m + 0.5f * LineAngle );
-
-        // Closest point on line segment to ray
-        vec3 L01 = LightDirection * SourceLength;
-        vec3 L0 = ToLight - 0.5f * L01;
-        vec3 L1 = ToLight + 0.5f * L01;
-
-#if 1
-        // Shortest distance
-        float a = Square( SourceLength );
-        float b = dot( R, L01 );
-        float t = saturate( dot( L0, b*R - L01 ) / (a - b*b) );
-#else
-        // Smallest angle
-        float A = Square( SourceLength );
-        float B = 2.0f * dot( L0, L01 );
-        float C = dot( L0, L0 );
-        float D = dot( R, L0 );
-        float E = dot( R, L01 );
-        float t = saturate( (B*D - 2.0f*C*E) / (B*E - 2.0f*A*D) );
-#endif
-
-        ToLight = L0 + t * L01;
-    }
-
-    if( SourceRadius > 0.0f )
-    {
-        // Energy conservation
-        // asin(x) is angle to sphere, atan(x) is angle to disk, saturate(x) is free and in the middle
-        float SphereAngle = saturate( SourceRadius * InvDistToLight );
-        LobeEnergy *= Square( m / saturate( m + 0.5f * SphereAngle ) );
-
-        // Closest point on sphere to ray
-        vec3 ClosestPointOnRay = dot( ToLight, R ) * R;
-        vec3 CenterToRay = ClosestPointOnRay - ToLight;
-        vec3 ClosestPointOnSphere = ToLight + CenterToRay * saturate( SourceRadius / sqrt( dot( CenterToRay, CenterToRay ) ) );
-        ToLight = ClosestPointOnSphere;
-    }
-#endif
-    L = normalize( ToLight );
-
-    return LobeEnergy;
-}
-
 struct BxDFContext
 {
     float NoV;
@@ -718,6 +626,166 @@ void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
     Context.YoV = 0.0f;
     Context.YoL = 0.0f;
     Context.YoH = 0.0f;
+}
+
+/*=============================================================================
+    Area lights: the emitter's shape in the direct lighting (UE 5.8 CapsuleLightIntegrate.ush,
+    ShadingModels.ush, BRDF.ush). Returned by value: shaderc miscompiles out-parameters.
+=============================================================================*/
+
+/// What direct shading needs to know about a light's emitter (UE FAreaLight without the rect
+/// and soft-radius parts).
+struct AreaLight
+{
+    /// Sine of the half angle the emitting sphere subtends, reduced on rough surfaces (UE
+    /// SphereSinAlpha). 0 for a point.
+    float SphereSinAlpha;
+    /// Cosine of the angle the emitting segment subtends (UE LineCosSubtended). 1 without one.
+    float LineCosSubtended;
+    /// Unit direction the diffuse light arrives from.
+    vec3 DiffuseL;
+    /// Unit direction to the emitter point closest to the reflection ray.
+    vec3 SpecularL;
+    /// The clamped cosine the diffuse and specular terms take (horizon-wrapped by a sphere).
+    float NoL;
+    /// Inverse-squared falloff; 1 for a directional light.
+    float Falloff;
+};
+
+/// A directional light: no extent, no falloff.
+AreaLight MakeDirectionalAreaLight(vec3 N, vec3 L)
+{
+    AreaLight Light;
+    Light.SphereSinAlpha = 0.0;
+    Light.LineCosSubtended = 1.0;
+    Light.DiffuseL = L;
+    Light.SpecularL = L;
+    Light.NoL = saturate(dot(N, L));
+    Light.Falloff = 1.0;
+    return Light;
+}
+
+/// UE ClosestPointLineToRay: the point of the segment Line0 - Line1 closest to the ray along the
+/// unit direction @p R.
+vec3 ClosestPointLineToRay(vec3 Line0, vec3 Line1, float Length, vec3 R)
+{
+    vec3 Line01 = Line1 - Line0;
+    float A = Length * Length;
+    float B = dot(R, Line01);
+    // A - B^2 >= 0 for a unit R; it reaches 0 only for a ray parallel to the segment.
+    float t = saturate(dot(Line0, B * R - Line01) / max(A - B * B, 1e-8));
+    return Line0 + t * Line01;
+}
+
+/**
+ * A point or spot light's capsule emitter as direct shading sees it (UE CreateAreaLight).
+ * @param Roughness Perceptual roughness the specular lobe is evaluated at.
+ */
+AreaLight MakeCapsuleAreaLight(CapsuleLight Capsule, float Roughness, vec3 N, vec3 V)
+{
+    CapsuleIrradiance Irradiance = EvaluateCapsuleIrradiance(Capsule, N);
+    AreaLight Light;
+    Light.LineCosSubtended = Irradiance.CosSubtended;
+    Light.DiffuseL = Irradiance.DiffuseL;
+    Light.NoL = Irradiance.NoL;
+    Light.Falloff = Irradiance.Falloff;
+    // The highlight aims at the segment point closest to the reflection ray. A sphere keeps its
+    // centre here; SphereMaxNoH folds its extent into the half vector instead.
+    vec3 ToLight = Capsule.Line0;
+    BRANCH
+    if(Capsule.Length > 0.0)
+    {
+        ToLight = ClosestPointLineToRay(Capsule.Line0, Capsule.Line1, Capsule.Length, reflect(-V, N));
+    }
+    float InvDistance = inversesqrt(dot(ToLight, ToLight));
+    Light.SpecularL = ToLight * InvDistance;
+    // A rough lobe is already wide, so the sphere widens it less (UE's 1 - alpha).
+    float Alpha = Roughness * Roughness;
+    Light.SphereSinAlpha = saturate(Capsule.Radius * InvDistance * (1.0 - Alpha));
+    return Light;
+}
+
+/**
+ * UE SphereMaxNoH with its Newton step [de Carpentier 2017, "Decima Engine: Advances in Lighting
+ * and AA"]: the context of the direction inside the emitting sphere (sine half angle @p SinAlpha)
+ * that maximizes N.H, so the highlight reflects the whole sphere, not its centre. The context is
+ * returned unchanged for a point.
+ */
+BxDFContext SphereMaxNoH(BxDFContext Context, float SinAlpha)
+{
+    BxDFContext Result = Context;
+    if(SinAlpha > 0.0)
+    {
+        float CosAlpha = sqrt(1.0 - SinAlpha * SinAlpha);
+        float RoL = 2.0 * Context.NoL * Context.NoV - Context.VoL;
+        if(RoL >= CosAlpha)
+        {
+            // The reflection ray hits the sphere: the mirror direction is available.
+            Result.NoH = 1.0;
+            Result.VoH = abs(Context.NoV);
+        }
+        else
+        {
+            float InvLengthT = SinAlpha * inversesqrt(1.0 - RoL * RoL);
+            float NoTr = InvLengthT * (Context.NoV - RoL * Context.NoL);
+            float VoTr = InvLengthT * (2.0 * Context.NoV * Context.NoV - 1.0 - RoL * Context.VoL);
+            // dot(cross(N, L), V): the out-of-plane axis of the Newton step.
+            float NxLoV = sqrt(saturate(1.0 - Context.NoL * Context.NoL - Context.NoV * Context.NoV -
+                                        Context.VoL * Context.VoL + 2.0 * Context.NoL * Context.NoV * Context.VoL));
+            float NoBr = InvLengthT * NxLoV;
+            float VoBr = InvLengthT * NxLoV * 2.0 * Context.NoV;
+            float NoLVTr = Context.NoL * CosAlpha + Context.NoV + NoTr;
+            float VoLVTr = Context.VoL * CosAlpha + 1.0 + VoTr;
+            float p = NoBr * VoLVTr;
+            float q = NoLVTr * VoLVTr;
+            float s = VoBr * NoLVTr;
+            float XNum = q * (-0.5 * p + 0.25 * VoBr * NoLVTr);
+            float XDenom = p * p + s * (s - 2.0 * p) +
+                           NoLVTr * ((Context.NoL * CosAlpha + Context.NoV) * VoLVTr * VoLVTr +
+                                     q * (-0.5 * (VoLVTr + Context.VoL * CosAlpha) - 0.5));
+            float TwoX1 = 2.0 * XNum / (XDenom * XDenom + XNum * XNum);
+            float SinTheta = TwoX1 * XDenom;
+            float CosTheta = 1.0 - TwoX1 * XNum;
+            NoTr = CosTheta * NoTr + SinTheta * NoBr;
+            VoTr = CosTheta * VoTr + SinTheta * VoBr;
+            Result.NoL = Context.NoL * CosAlpha + NoTr;
+            Result.VoL = clamp(Context.VoL * CosAlpha + VoTr, -1.0, 1.0);
+            float InvLenH = inversesqrt(max(2.0 + 2.0 * Result.VoL, 1e-8));
+            Result.NoH = saturate((Result.NoL + Context.NoV) * InvLenH);
+            Result.VoH = saturate(InvLenH + InvLenH * Result.VoL);
+        }
+    }
+    return Result;
+}
+
+/// UE New_a2: the GGX alpha^2 of a lobe widened to cover a source of sine half angle @p SinAlpha.
+float New_a2(float a2, float SinAlpha, float VoH)
+{
+    return a2 + 0.25 * SinAlpha * (3.0 * sqrt(a2) + SinAlpha) / (VoH + 0.001);
+}
+
+/**
+ * UE EnergyNormalization: the factor on GGX D (evaluated at @p a2) that keeps a widened highlight's
+ * energy the light's - a larger source spreads the same light over a wider, dimmer highlight
+ * instead of adding light.
+ */
+float EnergyNormalization(float a2, float VoH, AreaLight Light)
+{
+    float SphereA2 = a2;
+    float Energy = 1.0;
+    if(Light.SphereSinAlpha > 0.0)
+    {
+        SphereA2 = New_a2(a2, Light.SphereSinAlpha, VoH);
+        Energy = a2 / SphereA2;
+    }
+    if(Light.LineCosSubtended < 1.0)
+    {
+        float LineCosTwoAlpha = Light.LineCosSubtended;
+        float LineTanAlpha = sqrt((1.0001 - LineCosTwoAlpha) / max(1.0 + LineCosTwoAlpha, 1e-5));
+        float LineA2 = New_a2(SphereA2, LineTanAlpha, VoH);
+        Energy *= sqrt(SphereA2 / max(LineA2, 1e-5));
+    }
+    return Energy;
 }
 
 
@@ -1492,12 +1560,14 @@ vec3 ComputeEnergyConservation(FBxDFEnergyTerms EnergyTerms)
 // probes); for delta lights the standard evaluation is the single-scatter microfacet BRDF (W = 1). See e.g. Kulla-Conty
 // discussion in production PBR notes (W matches environment, not point lights).
 // AO is applied to diffuse; SpecularOcclusion (NoV, Roughness, AO) scales specular (Lagarde).
+// The emitter's shape enters as in UE DefaultLitBxDF: the highlight aims at Light.SpecularL with N.H
+// maximized over the emitting sphere and D energy-normalized for the widened lobe; both terms take
+// Light.NoL. The caller applies Light.NoL and Light.Falloff to the result.
 vec3 StandardShadingDirect(
  vec3 DiffuseColor,
  vec3 SpecularColor,
- vec3 LobeRoughness,
- vec3 LobeEnergy,
- vec3 L,
+ float LightingRoughness,
+ AreaLight Light,
  vec3 V,
  vec3 N,
  float AO )
@@ -1505,13 +1575,17 @@ vec3 StandardShadingDirect(
     // Deferred / filtered G-buffer normals are often not unit length; BRDF half-vector identities require |N|==1.
     N = normalize(N);
     BxDFContext context;
-    Init(context, N, V, L);
+    Init(context, N, V, Light.SpecularL);
+    // The diffuse term keeps the half vector of the emitter's centre (UE).
+    float DiffuseVoH = context.VoH;
+    float DiffuseNoH = context.NoH;
+    context = SphereMaxNoH(context, Light.SphereSinAlpha);
 
-    float Roughness = MakeRoughnessSafe(LobeRoughness[1]);
+    float Roughness = MakeRoughnessSafe(LightingRoughness);
     float RoughnessSq = Roughness * Roughness;
-    // Upper-hemisphere cosines for GGX visibility, diffuse, and occlusion (NoH/VoH stay tied to raw Init).
+    // Upper-hemisphere cosines for GGX visibility, diffuse, and occlusion.
     const float kNoVEpsilon = 1e-5f;
-    float NoL = max(context.NoL, 0.0f);
+    float NoL = Light.NoL;
     float NoV = max(context.NoV, kNoVEpsilon);
 
     float SpecularOcclusion = 1.0f;
@@ -1521,12 +1595,12 @@ vec3 StandardShadingDirect(
 
     // Keep NoH strictly inside (0,1): at exactly 1 the GGX denominator can lose precision for low roughness.
     float NoH_D = min(context.NoH, 1.0f - 1e-5f);
-    float D = Distribution( Roughness, NoH_D ) * LobeEnergy[1];
+    float D = Distribution( Roughness, NoH_D ) * EnergyNormalization( RoughnessSq * RoughnessSq, context.VoH, Light );
     float Vis = Visibility( Roughness, NoV, NoL, context.VoH, context.NoH );
     vec3 F = Fresnel( SpecularColor, context.VoH );
 
 	float RetroReflectivityWeight = 1.0;
-    vec3 DiffuseLighting = Diffuse( DiffuseColor, Roughness, NoV, NoL, context.VoH, context.NoH, RetroReflectivityWeight ) * LobeEnergy[2];
+    vec3 DiffuseLighting = Diffuse( DiffuseColor, Roughness, NoV, NoL, DiffuseVoH, DiffuseNoH, RetroReflectivityWeight );
 
     // Do not apply IBL/multiscatter directional-albedo energy preservation to diffuse under delta lights.
     // ComputeGGXSpecEnergyTerms + ComputeFresnelEnergyTerms can drive W and E to extreme values at grazing
@@ -1538,7 +1612,7 @@ vec3 StandardShadingDirect(
 
     // Specular terminator fade: smoothly attenuate specular near the shadow terminator
     // to prevent the bright fringe artifact caused by D spiking at grazing light angles.
-    float specularTerminatorFade = saturate(context.NoL / 0.04f);
+    float specularTerminatorFade = saturate(NoL / 0.04f);
     specularTerminatorFade = specularTerminatorFade * specularTerminatorFade;
 
 #if APPLY_AO_TO_DIRECT

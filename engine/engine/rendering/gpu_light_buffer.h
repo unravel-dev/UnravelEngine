@@ -30,7 +30,7 @@ class gpu_light_buffer
 {
 public:
     /// vec4 elements per light. Must match GPU_LIGHT_STRIDE in gi/gpu_lights.sh.
-    static constexpr uint32_t light_vec4_stride = 4;
+    static constexpr uint32_t light_vec4_stride = 5;
 
     /// Mirrors light_type; kept explicit because the value is packed into the buffer and read
     /// by shader code that cannot see the C++ enum.
