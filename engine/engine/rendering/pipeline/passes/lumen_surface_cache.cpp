@@ -301,7 +301,27 @@ void lumen_surface_cache::register_viewer(const void* key,
                                           const global_sdf_clipmap* clipmap,
                                           uint64_t frame)
 {
-    viewers_[key] = {viewer, clipmap, frame};
+    viewer_record& record = viewers_[key];
+    record.viewer = viewer;
+    record.frame = frame;
+    record.has_field = clipmap != nullptr;
+    if(clipmap == nullptr)
+    {
+        return;
+    }
+    for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
+    {
+        const auto& lvl = clipmap->get_level(level);
+        field_level_record& copy = record.field_levels[level];
+        copy.compose_serial = lvl.compose_serial;
+        copy.is_unscrolled_partial = lvl.is_partial && lvl.scroll_shift == math::ivec3(0);
+        copy.boxes.clear();
+        for(const auto& box : lvl.partial_boxes)
+        {
+            const math::vec3 box_min = lvl.origin + math::vec3(box.min) * lvl.voxel_size;
+            copy.boxes.emplace_back(box_min, box_min + math::vec3(box.size) * lvl.voxel_size);
+        }
+    }
 }
 
 void lumen_surface_cache::forget_viewer(const void* key)
@@ -319,8 +339,7 @@ auto lumen_surface_cache::claim_update(uint64_t frame) -> bool
     return true;
 }
 
-auto lumen_surface_cache::schedule_viewers(uint64_t frame, std::vector<const global_sdf_clipmap*>& clipmaps)
-    -> std::vector<lumen_scene::viewer>
+auto lumen_surface_cache::schedule_viewers(uint64_t frame) -> std::vector<lumen_scene::viewer>
 {
     // The last schedule's pages of a viewer that did not light them (its camera stopped rendering) are due again.
     for(uint32_t index = 0; index < uint32_t(lit_viewers_.size()); ++index)
@@ -332,7 +351,6 @@ auto lumen_surface_cache::schedule_viewers(uint64_t frame, std::vector<const glo
     }
     std::vector<lumen_scene::viewer> viewers;
     scheduled_viewers_.clear();
-    clipmaps.clear();
     for(auto it = viewers_.begin(); it != viewers_.end();)
     {
         if(it->second.frame + viewer_lifetime_frames < frame)
@@ -342,7 +360,6 @@ auto lumen_surface_cache::schedule_viewers(uint64_t frame, std::vector<const glo
         }
         viewers.push_back(it->second.viewer);
         scheduled_viewers_.push_back(it->first);
-        clipmaps.push_back(it->second.clipmap);
         ++it;
     }
     lit_viewers_.assign(viewers.size(), 0u);
@@ -458,8 +475,7 @@ auto lumen_surface_cache::get_surface_cache_params() const -> math::vec4
             float(scene_.get_instance_table().size() / lumen_scene::instance_stride)};
 }
 
-auto lumen_surface_cache::collect_direct_lighting_changes(const surface_cache_system& gi_scene,
-                                                          const std::vector<const global_sdf_clipmap*>& clipmaps)
+auto lumen_surface_cache::collect_direct_lighting_changes(const surface_cache_system& gi_scene)
     -> lumen_scene::direct_lighting_changes
 {
     lumen_scene::direct_lighting_changes changes;
@@ -519,20 +535,22 @@ auto lumen_surface_cache::collect_direct_lighting_changes(const surface_cache_sy
     previous_cloud_signature_ = cloud_shadow_.signature;
     // The distance fields the viewers light with: what each level recomposed since the last update. A partial
     // recompose rewrote its boxes (each changed instance's reach), a full one or a moved level every voxel. A field
-    // first seen (a new camera) relights everything; the fields of cameras gone are forgotten.
-    std::unordered_map<const global_sdf_clipmap*, std::array<uint64_t, global_sdf_clipmap::level_count>> serials;
-    for(const global_sdf_clipmap* clipmap : clipmaps)
+    // first seen (a new camera, or a camera whose field started over) relights everything; the fields of cameras gone
+    // are forgotten.
+    std::unordered_map<const void*, std::array<uint64_t, global_sdf_clipmap::level_count>> serials;
+    for(const void* key : scheduled_viewers_)
     {
-        if(clipmap == nullptr || serials.count(clipmap) != 0u)
+        const viewer_record& record = viewers_.at(key);
+        if(!record.has_field)
         {
             continue;
         }
-        const auto previous = previous_compose_serials_.find(clipmap);
+        const auto previous = previous_compose_serials_.find(key);
         changes.all = changes.all || previous == previous_compose_serials_.end();
-        auto& current = serials[clipmap];
+        auto& current = serials[key];
         for(uint32_t level = 0; level < global_sdf_clipmap::level_count; ++level)
         {
-            const auto& lvl = clipmap->get_level(level);
+            const field_level_record& lvl = record.field_levels[level];
             const uint64_t serial = lvl.compose_serial;
             const uint64_t previous_serial = previous != previous_compose_serials_.end() ? previous->second[level] : 0u;
             current[level] = serial;
@@ -541,14 +559,9 @@ auto lumen_surface_cache::collect_direct_lighting_changes(const surface_cache_sy
                 continue;
             }
             // Only the last recompose's boxes are known: two since the last update leave the first one's unseen.
-            const bool is_single_partial =
-                lvl.is_partial && lvl.scroll_shift == math::ivec3(0) && serial == previous_serial + 1u;
+            const bool is_single_partial = lvl.is_unscrolled_partial && serial == previous_serial + 1u;
             changes.all = changes.all || !is_single_partial;
-            for(const auto& box : lvl.partial_boxes)
-            {
-                const math::vec3 box_min = lvl.origin + math::vec3(box.min) * lvl.voxel_size;
-                changes.occluders.emplace_back(box_min, box_min + math::vec3(box.size) * lvl.voxel_size);
-            }
+            changes.occluders.insert(changes.occluders.end(), lvl.boxes.begin(), lvl.boxes.end());
         }
     }
     previous_compose_serials_ = std::move(serials);
@@ -611,14 +624,13 @@ void lumen_surface_cache::update(const surface_cache_system& gi_scene,
     }
     scene_.set_card_residency_without_group_gate((experiment_flags_ & experiment_card_residency_without_group_gate) != 0u);
     scene_.set_view_settings(view_settings);
-    std::vector<const global_sdf_clipmap*> clipmaps;
-    const std::vector<lumen_scene::viewer> viewers = schedule_viewers(frame, clipmaps);
+    const std::vector<lumen_scene::viewer> viewers = schedule_viewers(frame);
     if(viewers.empty())
     {
         return;
     }
     scene_.update(sources_, uint32_t(gi_scene.get_instances().size()), viewers);
-    scene_.invalidate_direct_lighting(collect_direct_lighting_changes(gi_scene, clipmaps));
+    scene_.invalidate_direct_lighting(collect_direct_lighting_changes(gi_scene));
     scene_.schedule_lighting(viewers);
     upload_scene_table();
     upload_vec4_table(resample_table_buffer_, scene_.get_resample_table());

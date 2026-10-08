@@ -184,8 +184,9 @@ public:
     /// A camera stops running the GI with it; the last one frees the atlases, the capture target and the cards.
     void remove_user();
 
-    /// Records the viewer @p key (a camera) sees from this frame (@p frame), with its global distance field
-    /// @p clipmap (null: none): update() serves every viewer recorded this frame or the last; older records go.
+    /// Records the viewer @p key (a camera) sees from this frame (@p frame), with what the direct-lighting change test
+    /// needs of its global distance field @p clipmap (null: none; the field itself is not kept): update() serves every
+    /// viewer recorded this frame or the last; older records go.
     void register_viewer(const void* key,
                          const lumen_scene::viewer& viewer,
                          const global_sdf_clipmap* clipmap,
@@ -352,11 +353,24 @@ private:
         gfx::program::uniform_ptr s_lumen_capture_rt3;
     };
 
+    /// What the direct-lighting change test reads of one level of a viewer's distance field, copied when the viewer
+    /// registers: the field lives in the camera's render view, which can go while the record is still scheduled.
+    struct field_level_record
+    {
+        uint64_t compose_serial = 0;
+        ///< The last recompose was partial and in place (no scroll): only its boxes changed.
+        bool is_unscrolled_partial = false;
+        ///< The last recompose's boxes, in world space.
+        std::vector<math::bbox> boxes;
+    };
+
     /// A viewer's latest record (register_viewer).
     struct viewer_record
     {
         lumen_scene::viewer viewer;
-        const global_sdf_clipmap* clipmap = nullptr;
+        ///< Its distance field's levels, when it has one.
+        std::array<field_level_record, global_sdf_clipmap::level_count> field_levels;
+        bool has_field = false;
         uint64_t frame = 0;
     };
 
@@ -374,14 +388,11 @@ private:
      *        instance list, decides: a level takes an instance's move on its own cadence, and a page relit before that
      *        would keep the old shadow.
      */
-    auto collect_direct_lighting_changes(const surface_cache_system& gi_scene,
-                                         const std::vector<const global_sdf_clipmap*>& clipmaps)
-        -> lumen_scene::direct_lighting_changes;
+    auto collect_direct_lighting_changes(const surface_cache_system& gi_scene) -> lumen_scene::direct_lighting_changes;
 
     /// Starts the frame's schedule over the viewers recorded this frame (@p frame) or the last (older records go):
-    /// their keys in scheduled_viewers_, their distance fields in @p clipmaps; returns the viewers.
-    auto schedule_viewers(uint64_t frame, std::vector<const global_sdf_clipmap*>& clipmaps)
-        -> std::vector<lumen_scene::viewer>;
+    /// their keys in scheduled_viewers_; returns the viewers.
+    auto schedule_viewers(uint64_t frame) -> std::vector<lumen_scene::viewer>;
 
     void create_targets();
     /// Frees the atlases and the capture target and starts the card scene over (its pages lived in the atlases).
@@ -441,8 +452,7 @@ private:
     /// The previous update's lights and each viewer's distance field's level recomposes, for
     /// collect_direct_lighting_changes; false before the first update.
     std::vector<float> previous_lights_;
-    std::unordered_map<const global_sdf_clipmap*, std::array<uint64_t, global_sdf_clipmap::level_count>>
-        previous_compose_serials_;
+    std::unordered_map<const void*, std::array<uint64_t, global_sdf_clipmap::level_count>> previous_compose_serials_;
     uint64_t previous_cloud_signature_ = 0;
     bool has_previous_lighting_inputs_ = false;
     /// This frame's cloud shadow (set_cloud_shadow).

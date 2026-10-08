@@ -422,7 +422,8 @@ public:
         return resident_pages_;
     }
 
-    /// Per GI instance: (first card, card count, two-sided, 0); count 0 = no cards.
+    /// Per GI instance: (first card, card count, two-sided, motion since the last update in world units); count 0 = no
+    /// cards.
     auto get_instance_table() const -> const std::vector<math::vec4>&
     {
         return instance_table_;
@@ -544,6 +545,9 @@ private:
         math::vec3 bounds_extent{0.0f};
         math::mat4 placed_transform{0.0f};
         bool has_placed = false;
+        ///< How far a point of the cards' local bounds moved since the last update at most, in world units: the
+        ///< instance table carries it to the probe traces, which mark distance-field hits on it moving.
+        float motion = 0.0f;
         uint64_t last_seen = 0;
         ///< source::material_key at the last capture request.
         uint64_t material_key = 0;
@@ -607,6 +611,8 @@ private:
         uint32_t texels_desired = 0;
         ///< A placement of the chunk moved (its card boxes were placed again).
         bool has_moved = false;
+        ///< A placement's motion changed (stopping included): the instance table carries it.
+        bool has_motion_change = false;
     };
 
     /// Sub-allocated element sizes: 8 to 128 texels per axis.

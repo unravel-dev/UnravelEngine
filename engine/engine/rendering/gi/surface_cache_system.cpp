@@ -609,12 +609,6 @@ void surface_cache_system::upload_instance_grid()
     // grid switched off rather than pointing a tracer at a stale structure -- a tracer that walks
     // last frame's cells finds last frame's instances, which is worse than not culling at all.
     grid_params_.fill(0.0f);
-    if(!grid_.is_valid())
-    {
-        return;
-    }
-    const auto& offsets = grid_.get_cell_offsets();
-    const auto& cell_instances = grid_.get_cell_instances();
     const auto ensure_capacity = [](bgfx::DynamicIndexBufferHandle& buffer,
                                     uint32_t& capacity,
                                     uint32_t required) -> void
@@ -632,6 +626,15 @@ void surface_cache_system::upload_instance_grid()
         capacity = required + required / 2u + 64u;
         buffer = bgfx::createDynamicIndexBuffer(capacity, BGFX_BUFFER_COMPUTE_READ | BGFX_BUFFER_INDEX32);
     };
+    if(!grid_.is_valid())
+    {
+        // The passes bind the grid whether or not it is switched on (as the instance buffer), so
+        // an empty scene still gets a buffer; the zeroed parameters keep every tracer out of it.
+        ensure_capacity(grid_buffer_, grid_capacity_, 1u);
+        return;
+    }
+    const auto& offsets = grid_.get_cell_offsets();
+    const auto& cell_instances = grid_.get_cell_instances();
     // One buffer, one upload: the offsets then the instance list (sdf_common.sh b_sdf_grid).
     grid_upload_.clear();
     grid_upload_.reserve(offsets.size() + cell_instances.size());

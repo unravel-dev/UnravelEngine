@@ -76,7 +76,8 @@ auto taa_pass::create_or_update_temp_fb(gfx::render_view& rview,
     const auto sz = reference_color->get_size();
     const auto fmt = reference_color->get_texture(0)->info.format;
     // Attachment 0 is the displayed resolve (sharpened), attachment 1 the history resolve (never
-    // sharpened): the sharpen must stay out of the history feedback loop (fs_taa.sc).
+    // sharpened): the sharpen must stay out of the history feedback loop (fs_taa.sc). The history's
+    // alpha is the mover memory that keeps pixels a moving object touched out of the still path.
     bool is_recreated = false;
     for(const char* id : {"TAA_TEMP", "TAA_TEMP_HISTORY"})
     {

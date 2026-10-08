@@ -37,6 +37,15 @@ uniform vec4 u_taa_params2;
 // Share of last frame's pixel-centre history in a still pixel's DISPLAYED value while the camera is parked: one half
 // holds the 2-position jitter's swing still (the parked-camera display average in main).
 #define TAA_PARKED_DISPLAY_HISTORY_SHARE 0.5
+// Object-only motion, in pixels, from which a velocity texel starts and fully counts as a moving object.
+#define TAA_OBJECT_MOTION_START_PX 0.5
+#define TAA_OBJECT_MOTION_FULL_PX 1.5
+// The mover memory (history alpha): 1 where a moving object covers or borders the pixel, decaying by this factor per
+// frame after it left. A pixel leaves the still path while its memory is above TAA_MOVER_MEMORY_STILL_END and is fully
+// back below TAA_MOVER_MEMORY_STILL_START: about 6 and 13 frames after the mover left.
+#define TAA_MOVER_MEMORY_DECAY 0.8
+#define TAA_MOVER_MEMORY_STILL_START 0.05
+#define TAA_MOVER_MEMORY_STILL_END 0.25
 
 
 // YCoCg: chroma bounds are much tighter than RGB's, so a variance box built there
@@ -132,6 +141,8 @@ void main()
     // How much of this pixel's motion the camera CANNOT explain (in pixels). Stays 0 on
     // the legacy path and for camera-consistent pixels in velocity mode.
     float object_motion_w = 0.0;
+    // Whether a moving object covers this pixel or one of its 3x3 neighbours this frame.
+    float mover_nearby = 0.0;
     if(u_use_velocity > 0.5)
     {
         // Closest-depth dilation source: the nearest (smallest depth01) texel in the 3x3
@@ -141,12 +152,14 @@ void main()
         // border texel's velocity - a full-screen history drag under camera motion.
         ivec2 src_t = tcent;
         float src_depth = depth01;
+        float nearby_object_px = 0.0;
         for(int y = -1; y <= 1; ++y)
         {
             for(int x = -1; x <= 1; ++x)
             {
                 ivec2 t = clamp(tcent + ivec2(x, y), ivec2(0, 0), ddim - ivec2(1, 1));
                 float d = texelFetch(s_depth, t, 0).x;
+                nearby_object_px = max(nearby_object_px, VelocityObjectMotionPixels(texelFetch(s_velocity, t, 0)));
                 if(d < src_depth)
                 {
                     src_depth = d;
@@ -181,7 +194,8 @@ void main()
         // pass and to this pass within one frame; classification through a recomputed
         // camera velocity therefore misfired screen-wide).
         float object_px = VelocityObjectMotionPixels(vel4);
-        object_motion_w = smoothstep(0.5, 1.5, object_px);
+        object_motion_w = smoothstep(TAA_OBJECT_MOTION_START_PX, TAA_OBJECT_MOTION_FULL_PX, object_px);
+        mover_nearby = smoothstep(TAA_OBJECT_MOTION_START_PX, TAA_OBJECT_MOTION_FULL_PX, nearby_object_px);
         // Genuine object motion reprojects through the dilated velocity (silhouette
         // band included). Camera-only pixels keep the center-depth camera reprojection:
         // exact for them (dither interiors and static silhouettes included), and it
@@ -234,6 +248,12 @@ void main()
     // under camera motion, and at rest it only let the jitter oscillate on every depth edge.
     float reprojection_px = length((uv - prev_uv) * ddimf);
     float still = 1.0 - smoothstep(TAA_STILL_REPROJECTION_PX, 2.0 * TAA_STILL_REPROJECTION_PX, reprojection_px);
+    vec2 half_texel = texel * 0.5;
+    vec2 hist_uv = clamp(prev_uv, half_texel, vec2(1.0, 1.0) - half_texel);
+    // A pixel a moving object covered or bordered is not still while the object's trace fades from it: the still
+    // weight and clip held its anti-aliased edge and the lighting it left behind as trails behind every mover.
+    float mover_memory = max(mover_nearby, saturate(texture2DLod(s_history, hist_uv, 0.0).a) * TAA_MOVER_MEMORY_DECAY);
+    still *= 1.0 - smoothstep(TAA_MOVER_MEMORY_STILL_START, TAA_MOVER_MEMORY_STILL_END, mover_memory);
     float edge_blend = mix(mix(0.6, 1.0, silhouette), 1.0, max(object_motion_w, still));
 
     float k = max(0.75, u_variance_clip_scale) * mix(1.0, TAA_STILL_CLIP_SCALE, still);
@@ -263,8 +283,6 @@ void main()
     vec3 mu_yc = m1 * inv9;
     vec3 sigma_yc = sqrt(max(m2 * inv9 - mu_yc * mu_yc, vec3_splat(1e-8)));
 
-    vec2 half_texel = texel * 0.5;
-    vec2 hist_uv = clamp(prev_uv, half_texel, vec2(1.0, 1.0) - half_texel);
     // The history was written under last frame's pre-exposure (UE HistoryPreExposureCorrection).
     vec3 hist_rgb = TAA_SampleHistoryCatmullRom(hist_uv, texel) * u_history_pre_exposure_correction;
     vec3 hist_yc = TAA_RGBToYCoCg(hist_rgb);
@@ -337,5 +355,5 @@ void main()
     }
 
     gl_FragData[0] = vec4(resolved, curr.a);
-    gl_FragData[1] = vec4(history_resolved, curr.a);
+    gl_FragData[1] = vec4(history_resolved, mover_memory);
 }

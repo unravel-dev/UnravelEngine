@@ -17,7 +17,8 @@
  *  2. Global distance field from the probe lifted LUMEN_SURFACE_BIAS along the ray and the normal, with dithered
  *     transparency where only two-sided meshes are near (lumen_global_sdf.sh; UE LumenScreenProbeTracing.usf:768). A
  *     hit reads the surface cache through the object grid, faded to black within one voxel of the origin against
- *     self-lighting.
+ *     self-lighting. A hit on an instance that moved more than LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED of the probe's
+ *     depth this frame marks the ray moving, as a screen hit does (UE: the mesh distance-field hit's velocity).
  *  3. The radiance cache, interpolated at the probe's position (lumen_radiance_cache_sample.sh); beyond
  *     the cache's reach the distance field runs to the maximum trace distance and a miss reads the sky.
  *
@@ -60,8 +61,9 @@
 #include "lumen/lumen_screen_trace.sh"
 /// This frame's velocity buffer (where moving hit surfaces were last frame).
 #define LUMEN_VELOCITY_STAGE 12
-#include "lumen/lumen_motion.sh"
 #endif
+/// The fast update's switch; the far stages read no velocity.
+#include "lumen/lumen_motion.sh"
 /// The distance-field hits compute their gradient where they are shaded (LumenShadeFieldSurface).
 #define LUMEN_GLOBAL_SDF_DEFER_HIT_NORMAL 1
 /// The global SDF's coverage (gi/sdf_clipmap.sh).
@@ -299,6 +301,21 @@ vec3 LumenShadeFieldSurface(LumenFieldSurface surface)
 		}
 	}
 	return radiance;
+}
+
+/// Whether a distance-field hit marks its ray moving: the instance it hit moved more than
+/// LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED of the probe's depth @p probe_depth this frame (UE IsTraceMoving with a mesh
+/// distance-field hit's velocity; the probe's own motion is not compared here).
+bool LumenIsFieldHitMoving(LumenFieldSurface surface, float probe_depth)
+{
+	BRANCH
+	if(!u_lumen_fast_update)
+	{
+		return false;
+	}
+	vec3 outside = surface.origin + surface.direction * (surface.t + surface.hit_field - 0.5 * surface.voxel);
+	return LumenGlobalSdfHitMotion(outside) / max(probe_depth, LUMEN_TEMPORAL_MOVING_MIN_DEPTH) >
+	       LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED;
 }
 #endif
 
@@ -708,8 +725,9 @@ void main()
 	surface.voxel = uintBitsToFloat(b_lumen_trace_rays[slot + 3u]);
 	// A distance-field hit keeps the near field as its filter distance (LumenTraceFarFieldUnshaded).
 	float keep = u_lumen_keep_stage == 0 || u_lumen_keep_stage == 2 ? 1.0 : 0.0;
+	bool moving = LumenIsFieldHitMoving(surface, ray.record.x);
 	imageStore(i_lumen_trace_radiance, ray.trace_texel,
-	           vec4(LumenShadeFieldSurface(surface) * keep, LumenEncodeTraceDistance(ray.near_field, false)));
+	           vec4(LumenShadeFieldSurface(surface) * keep, LumenEncodeTraceDistance(ray.near_field, moving)));
 }
 #endif
 #else

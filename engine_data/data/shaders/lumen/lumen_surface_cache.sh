@@ -12,7 +12,8 @@
  *    covering them;
  *  - the page table from u_lumen_surface_cache.y, 1 vec4 per virtual page: (atlas bias x, y in texels,
  *    res level x, y) - 0 = unmapped;
- *  - per GI instance from u_lumen_surface_cache.z: (first card, card count, two-sided, 0).
+ *  - per GI instance from u_lumen_surface_cache.z: (first card, card count, two-sided, how far it moved since last
+ *    frame at most, in world units).
  * Cards are world-space boxes (the placement applied on the CPU), so the mesh-space axis masks of UE
  * become a facing test against each card's world axis_z with the same squared-cosine weight.
  *
@@ -71,7 +72,7 @@ LumenCard LumenLoadCard(int index)
 	return card;
 }
 
-/// The cards of a GI instance: x = first card, y = card count, z > 0.5 when two-sided.
+/// The cards of a GI instance: x = first card, y = card count, z > 0.5 when two-sided, w = its motion since last frame.
 vec4 LumenLoadInstanceCards(int instance)
 {
 	if(instance < 0 || float(instance) >= u_lumen_surface_cache.w)
@@ -365,6 +366,14 @@ vec4 LumenSampleGlobalSdfHit(vec3 position, vec3 normal, float voxel_extent, sam
 	accumulated = LumenAccumulateObject(accumulated, ids.z, position, normal, bias, values);
 	accumulated = LumenAccumulateObject(accumulated, ids.w, position, normal, bias, values);
 	return accumulated;
+}
+
+/// How far the instance hit at @p outside (a point just off a global-SDF hit, on the ray's side) moved since last frame
+/// at most: the nearest instance of the object grid cell there (UE's hit velocity of mesh distance-field hits).
+float LumenGlobalSdfHitMotion(vec3 outside)
+{
+	float id = LumenObjectGridInstances(outside).x;
+	return id > 0.5 ? LumenLoadInstanceCards(int(id) - 1).w : 0.0;
 }
 
 #endif // LUMEN_SURFACE_CACHE_OBJECT_GRID

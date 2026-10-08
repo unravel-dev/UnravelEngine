@@ -202,6 +202,22 @@ auto is_same_transform(const math::mat4& a, const math::mat4& b) -> bool
     return std::memcmp(&a, &b, sizeof(math::mat4)) == 0;
 }
 
+/// The farthest a corner of the local box @p bounds moved from @p from to @p to. The displacement is affine in the
+/// point, so the corners bound it over the whole box.
+auto compute_motion_bound(const math::bbox& bounds, const math::mat4& from, const math::mat4& to) -> float
+{
+    float motion = 0.0f;
+    for(uint32_t corner = 0; corner < 8u; ++corner)
+    {
+        const math::vec4 point((corner & 1u) != 0u ? bounds.max.x : bounds.min.x,
+                               (corner & 2u) != 0u ? bounds.max.y : bounds.min.y,
+                               (corner & 4u) != 0u ? bounds.max.z : bounds.min.z,
+                               1.0f);
+        motion = std::max(motion, math::length(math::vec3(to * point) - math::vec3(from * point)));
+    }
+    return motion;
+}
+
 /// Appends a placed card's record (lumen_scene::get_card_table): its box, then @p mip_entry = (size in pages x, y,
 /// res level x, y), then @p reflection_table = the reflections' page table (offset, size in pages x, y, hi-res flag).
 void append_card_record(std::vector<math::vec4>& table,
@@ -860,7 +876,7 @@ void lumen_scene::choose_resolutions(const std::vector<source>& sources,
         requests_.insert(requests_.end(), chunk.requests.begin(), chunk.requests.end());
         stats_.cards += chunk.cards;
         stats_.texels_desired += chunk.texels_desired;
-        are_tables_dirty_ = are_tables_dirty_ || chunk.has_moved || !chunk.frees.empty();
+        are_tables_dirty_ = are_tables_dirty_ || chunk.has_moved || chunk.has_motion_change || !chunk.frees.empty();
     }
 }
 
@@ -875,6 +891,7 @@ void lumen_scene::choose_chunk_resolutions(const std::vector<source>& sources,
     chunk.cards = 0;
     chunk.texels_desired = 0;
     chunk.has_moved = false;
+    chunk.has_motion_change = false;
     const resolution_rule rule = get_resolution_rule();
     const float max_card_distance = get_max_card_distance();
     for(uint32_t a = begin; a < end; ++a)
@@ -882,6 +899,11 @@ void lumen_scene::choose_chunk_resolutions(const std::vector<source>& sources,
         const uint32_t s = active_[a];
         const source& src = sources[s];
         placement& entry = *source_placements_[s];
+        const bool is_moving = entry.has_placed && !is_same_transform(entry.placed_transform, src.local_to_world);
+        const float motion = is_moving ? compute_motion_bound(entry.cards->bounds, entry.placed_transform, src.local_to_world)
+                                       : 0.0f;
+        chunk.has_motion_change = chunk.has_motion_change || motion != entry.motion;
+        entry.motion = motion;
         // Cards are placed once per transform: a static placement reuses its boxes every frame.
         if(!entry.has_placed || !is_same_transform(entry.placed_transform, src.local_to_world))
         {
@@ -1281,7 +1303,7 @@ void lumen_scene::build_tables(const std::vector<source>& sources, uint32_t inst
         instance_table_[src.instance_index] = math::vec4(float(first_card),
                                                          float(entry.card_states.size()),
                                                          entry.cards->is_mostly_two_sided ? 1.0f : 0.0f,
-                                                         0.0f);
+                                                         entry.motion);
         for(uint32_t c = 0; c < uint32_t(entry.card_states.size()); ++c)
         {
             card_state& state = entry.card_states[c];
