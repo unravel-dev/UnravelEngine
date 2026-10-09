@@ -71,7 +71,8 @@ public:
         bool is_two_sided = false;
         ///< The material emits (its emissive luminance reaches GI_EMISSIVE_LIGHT_SOURCE_MIN_LUMINANCE): UE's
         ///< Emissive Light Source, derived here rather than authored. Lumen keeps its cards resident down to one
-        ///< texel and composes it into the global SDF however small.
+        ///< texel and composes it into the global SDF however small. Cleared for an emitter inside its own housing
+        ///< (clear_enclosed_emissive_light_sources).
         bool is_emissive_light_source = false;
     };
 
@@ -441,6 +442,8 @@ private:
      * GPU side has no matrix-convention ambiguity to get wrong. See the note in sdf_common.sh.
      */
     void upload_instances();
+    /// Clears instance::is_emissive_light_source on emitters enclosed by another placement (a bulb in its lamp glass).
+    void clear_enclosed_emissive_light_sources();
 
     sdf_atlas atlas_;
     gpu_light_buffer light_buffer_;
@@ -508,6 +511,8 @@ private:
     /// them. Rebuilt whenever the instance fingerprint changes.
     sdf_instance_grid grid_;
     std::vector<math::bbox> grid_bounds_;
+    /// Non-emissive placement bounds of this frame (clear_enclosed_emissive_light_sources), kept to reuse the allocation.
+    std::vector<math::bbox> enclosure_candidate_bounds_;
     bgfx::DynamicIndexBufferHandle grid_buffer_{bgfx::kInvalidHandle};
     uint32_t grid_capacity_ = 0;
     /// The offsets and instance indices concatenated for the one-buffer upload.

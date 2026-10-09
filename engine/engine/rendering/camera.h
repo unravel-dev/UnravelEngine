@@ -19,33 +19,6 @@ enum class projection_mode : std::uint32_t
 };
 
 /**
- * @brief Subpixel jitter sequence for temporal AA (see camera::set_aa_data).
- */
-enum class taa_jitter_mode : std::uint8_t
-{
-    /// Kronecker / golden-ratio; smooth incommensurable steps (default).
-    progressive_golden = 0,
-    /// Halton(base 2,3) in [-0.5,0.5]; strong low-discrepancy, larger frame-to-frame steps.
-    halton_2_3 = 1,
-    /// R2 / recurrence lattice pair; alternative progressive 2D coverage.
-    r2_low_discrepancy = 2,
-    /// Two-tap antipodal MSAA-style pattern, period 2. Per-axis range ±0.25 px;
-    /// the 2-frame average lands exactly on the pixel center, so the cycle is
-    /// well below the history-blend time constant → visually the most stable.
-    msaa_2_rotating = 3,
-    /// Three-tap equilateral-triangle pattern, period 3, inscribed in a
-    /// radius-0.4 px circle (per-axis range [-0.346, +0.4]). Wider footprint
-    /// than msaa_2 → slightly softer AA, slightly more visible cycling.
-    msaa_3_rotating = 4,
-    /// Four-tap rotated grid (D3D 4× MSAA standard, in 1/16-px units), period 4.
-    /// Per-axis range ±0.375 px. With history_blend ≈ 0.82 the 4-frame cycle
-    /// approaches the temporal filter's time constant, so the pattern can be
-    /// perceptible as a slow wobble — lower jitter_amplitude or raise
-    /// history_blend if it bothers you.
-    msaa_4_rotating = 5,
-};
-
-/**
  * @brief Structure for storing camera related context.
  */
 struct camera_storage
@@ -317,21 +290,17 @@ public:
      * @brief Sets the current jitter value for temporal anti-aliasing.
      *
      * @param viewport_size Viewport size (pixels) for scaling jitter into clip space.
-     * @param temporal_frame_index Monotonic frame counter (e.g. render frame). Drives progressive
-     *        subpixel jitter (no short-period MSAA-style cycling); avoid large discontinuities.
-     * @param temporal_aa_samples Values > 1 enable jitter; count is stored for UI / future tuning.
-     * @param jitter_mode Which subpixel sequence to use (see @c taa_jitter_mode).
-     * @param jitter_amplitude Scales raw subpixel offsets before clip scaling; 1 = full ~±½ pixel.
-     *        Lower values (e.g. 0.5–0.7) reduce visible whole-frame shake at some AA cost.
-     * @param jitter_temporal_phase_scale Multiplies progression speed for golden / Halton / R2 (1 = legacy).
-     *        MSAA rotating modes ignore this and advance one subsample per frame.
+     * The jitter is UE's sequence: Halton(2,3) offsets in [-0.5, 0.5] pixels over a repeating cycle of
+     * @p temporal_aa_samples frames, so every pixel sees the same short, well-spread set of positions.
+     *
+     * @param temporal_frame_index Frame counter (e.g. render frame) that walks the cycle.
+     * @param temporal_aa_samples Values > 1 enable jitter; the cycle length.
+     * @param jitter_amplitude Scales raw subpixel offsets before clip scaling; 1 = full +-0.5 pixel, 0 = no jitter.
      */
     void set_aa_data(const usize32_t& viewport_size,
                      std::uint32_t temporal_frame_index,
                      std::uint32_t temporal_aa_samples,
-                     taa_jitter_mode jitter_mode = taa_jitter_mode::progressive_golden,
-                     float jitter_amplitude = 1.0f,
-                     float jitter_temporal_phase_scale = 1.0f);
+                     float jitter_amplitude = 1.0f);
 
     /**
      * @brief Retrieves the anti-aliasing data.

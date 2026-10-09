@@ -134,12 +134,12 @@ void gpu_light_buffer::update(scene& scn)
             dst[5] = direction.y;
             dst[6] = direction.z;
             dst[7] = range;
-            // Same linear decode as the deferred direct-lighting pass: the surface cache's
-            // lighting and directly-lit pixels must agree on the light's color.
-            const auto light_color_linear = light.color.to_linear();
-            dst[8] = light_color_linear.value.r;
-            dst[9] = light_color_linear.value.g;
-            dst[10] = light_color_linear.value.b;
+            // Same color as the deferred direct-lighting pass: the surface cache's lighting and directly-lit
+            // pixels must agree on the light's color (atmosphere transmittance included).
+            const auto light_color_linear = light_comp.get_linear_color();
+            dst[8] = light_color_linear.x;
+            dst[9] = light_color_linear.y;
+            dst[10] = light_color_linear.z;
             dst[11] = light.intensity * light.indirect_intensity;
             dst[12] = cos_inner;
             dst[13] = cos_outer;

@@ -9,46 +9,6 @@
 namespace unravel
 {
 
-REFLECT_INLINE(taa_jitter_mode)
-{
-    entt::meta_factory<taa_jitter_mode>{}
-        .type("taa_jitter_mode"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "taa_jitter_mode"},
-            entt::attribute{"pretty_name", "TAA Jitter Mode"},
-        })
-        .data<taa_jitter_mode::progressive_golden>("progressive_golden"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "progressive_golden"},
-            entt::attribute{"pretty_name", "Progressive Golden"},
-        })
-        .data<taa_jitter_mode::halton_2_3>("halton_2_3"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "halton_2_3"},
-            entt::attribute{"pretty_name", "Halton 2,3"},
-        })
-        .data<taa_jitter_mode::r2_low_discrepancy>("r2_low_discrepancy"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "r2_low_discrepancy"},
-            entt::attribute{"pretty_name", "R2 Low Discrepancy"},
-        })
-        .data<taa_jitter_mode::msaa_2_rotating>("msaa_2_rotating"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "msaa_2_rotating"},
-            entt::attribute{"pretty_name", "MSAA 2 Rotating"},
-        })
-        .data<taa_jitter_mode::msaa_3_rotating>("msaa_3_rotating"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "msaa_3_rotating"},
-            entt::attribute{"pretty_name", "MSAA 3 Rotating"},
-        })
-        .data<taa_jitter_mode::msaa_4_rotating>("msaa_4_rotating"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "msaa_4_rotating"},
-            entt::attribute{"pretty_name", "MSAA 4 Rotating"},
-        });
-}
-
 REFLECT_INLINE(taa_pass::settings)
 {
     entt::meta_factory<taa_pass::settings>{}
@@ -63,13 +23,7 @@ REFLECT_INLINE(taa_pass::settings)
             entt::attribute{"pretty_name", "Temporal Samples"},
             entt::attribute{"min", 2},
             entt::attribute{"max", 16},
-            entt::attribute{"tooltip", "When >1, enables subpixel jitter (full render frame index). Stored count is for UI / future tuning."},
-        })
-        .data<&taa_pass::settings::jitter_mode>("jitter_mode"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "jitter_mode"},
-            entt::attribute{"pretty_name", "Jitter Sequence"},
-            entt::attribute{"tooltip", "Which subpixel pattern the camera uses for TAA each frame."},
+            entt::attribute{"tooltip", "When >1, enables subpixel jitter. Cycle length of the Halton sequence (UE uses 8)."},
         })
         .data<&taa_pass::settings::jitter_amplitude>("jitter_amplitude"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -78,16 +32,7 @@ REFLECT_INLINE(taa_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 1.5f},
             entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "Scales subpixel camera jitter; lower reduces whole-screen shake (1 = strongest)."},
-        })
-        .data<&taa_pass::settings::jitter_temporal_phase_scale>("jitter_temporal_phase_scale"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "jitter_temporal_phase_scale"},
-            entt::attribute{"pretty_name", "Jitter Temporal Phase Scale"},
-            entt::attribute{"min", 0.03f},
-            entt::attribute{"max", 1.5f},
-            entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "Golden/Halton/R2 only: lower = smaller per-frame jitter steps, easier history tracking (1 = legacy speed)."},
+            entt::attribute{"tooltip", "Scales subpixel camera jitter (1 = full +-0.5 px); lower covers less of the pixel and aliases more."},
         })
         .data<&taa_pass::settings::history_blend>("history_blend"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -105,7 +50,7 @@ REFLECT_INLINE(taa_pass::settings)
             entt::attribute{"min", 0.0f},
             entt::attribute{"max", 2.0f},
             entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "Unsharp response vs current neighborhood (0 = off)."},
+            entt::attribute{"tooltip", "Display-only unsharp against the previous history's neighborhood (0 = off)."},
         })
         .data<&taa_pass::settings::depth_reject_scale>("depth_reject_scale"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -129,10 +74,10 @@ REFLECT_INLINE(taa_pass::settings)
 
 SAVE_INLINE(taa_pass::settings)
 {
+    std::uint32_t version = taa_pass::settings_version;
+    try_save(ar, ser20::make_nvp("settings_version", version));
     try_save(ar, ser20::make_nvp("temporal_sample_count", obj.temporal_sample_count));
-    try_save(ar, ser20::make_nvp("jitter_mode", obj.jitter_mode));
     try_save(ar, ser20::make_nvp("jitter_amplitude", obj.jitter_amplitude));
-    try_save(ar, ser20::make_nvp("jitter_temporal_phase_scale", obj.jitter_temporal_phase_scale));
     try_save(ar, ser20::make_nvp("history_blend", obj.history_blend));
     try_save(ar, ser20::make_nvp("sharpen", obj.sharpen));
     try_save(ar, ser20::make_nvp("depth_reject_scale", obj.depth_reject_scale));
@@ -143,10 +88,16 @@ SAVE_INSTANTIATE(taa_pass::settings, ser20::oarchive_binary_t);
 
 LOAD_INLINE(taa_pass::settings)
 {
+    // Settings saved by an earlier resolve (no version, or an older one) were tuned for different behavior; they
+    // are ignored so the scene picks up the current defaults.
+    std::uint32_t version = 0;
+    try_load(ar, ser20::make_nvp("settings_version", version));
+    if(version != taa_pass::settings_version)
+    {
+        return;
+    }
     try_load(ar, ser20::make_nvp("temporal_sample_count", obj.temporal_sample_count));
-    try_load(ar, ser20::make_nvp("jitter_mode", obj.jitter_mode));
     try_load(ar, ser20::make_nvp("jitter_amplitude", obj.jitter_amplitude));
-    try_load(ar, ser20::make_nvp("jitter_temporal_phase_scale", obj.jitter_temporal_phase_scale));
     try_load(ar, ser20::make_nvp("history_blend", obj.history_blend));
     try_load(ar, ser20::make_nvp("sharpen", obj.sharpen));
     try_load(ar, ser20::make_nvp("depth_reject_scale", obj.depth_reject_scale));
@@ -195,14 +146,6 @@ LOAD(taa_component)
 {
     try_load(ar, ser20::make_nvp("enabled", obj.enabled));
     try_load(ar, ser20::make_nvp("settings", obj.settings));
-    try_load(ar, ser20::make_nvp("temporal_sample_count", obj.settings.temporal_sample_count));
-    try_load(ar, ser20::make_nvp("history_blend", obj.settings.history_blend));
-    try_load(ar, ser20::make_nvp("sharpen", obj.settings.sharpen));
-    try_load(ar, ser20::make_nvp("depth_reject_scale", obj.settings.depth_reject_scale));
-    try_load(ar, ser20::make_nvp("variance_clip_scale", obj.settings.variance_clip_scale));
-    try_load(ar, ser20::make_nvp("jitter_mode", obj.settings.jitter_mode));
-    try_load(ar, ser20::make_nvp("jitter_amplitude", obj.settings.jitter_amplitude));
-    try_load(ar, ser20::make_nvp("jitter_temporal_phase_scale", obj.settings.jitter_temporal_phase_scale));
 }
 LOAD_INSTANTIATE(taa_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(taa_component, ser20::iarchive_binary_t);

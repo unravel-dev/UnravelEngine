@@ -29,6 +29,17 @@ public:
     void set_light(const light& l);
 
     /**
+     * @brief The light's color as shading uses it: the picker color in linear space times the atmosphere
+     * transmittance (1 unless the light is the procedural sky's atmosphere sun).
+     */
+    auto get_linear_color() const -> math::vec3;
+
+    /**
+     * @brief Sets the atmosphere transmittance the skylight system computed for this frame (runtime only).
+     */
+    void set_atmosphere_transmittance(const math::vec3& transmittance);
+
+    /**
      * @brief Gets the bounding box of the light object.
      */
     auto get_bounds() const -> math::bbox;
@@ -70,6 +81,9 @@ private:
      * @brief The light object this component represents.
      */
     light light_;
+
+    /// Sunlight transmittance through the atmosphere for this frame; 1 for every other light.
+    math::vec3 atmosphere_transmittance_{1.0f};
 
     /**
      * @brief The shadow map generator.
@@ -133,6 +147,14 @@ public:
      * @param[in] mode The sky mode to set.
      */
     void set_mode(const sky_mode& mode);
+
+    /**
+     * @brief Whether the directional light of this entity is the procedural sky's sun (UE Atmosphere Sun Light): its
+     * light crosses the atmosphere and is tinted by the transmittance at the sun's elevation (warm by day, red and dim
+     * at the horizon), and its intensity is then the illuminance outside the atmosphere. Perez mode only.
+     */
+    auto get_atmosphere_sun() const noexcept -> bool;
+    void set_atmosphere_sun(bool enabled);
 
     /**
      * @brief Gets the current turbidity value.
@@ -262,8 +284,9 @@ public:
 
     /**
      * @brief Gets the irradiance intensity: a multiplier on the sky ambient. 1 is the
-     * calibrated sky - its horizontal irradiance is perez_sky_to_sun_ratio x the directional
-     * light's luminous intensity (perez_luminance.h); 0 disables the ambient.
+     * calibrated sky - its horizontal irradiance is the atmosphere's sky-to-sun ratio at the
+     * sun's elevation x the directional light's luminous intensity
+     * (compute_atmosphere_sky_to_sun_ratio); 0 disables the ambient.
      * @return The irradiance intensity value.
      */
     auto get_irradiance_intensity() const noexcept -> float;
@@ -374,6 +397,7 @@ private:
      * @brief The current sky mode.
      */
     sky_mode mode_{sky_mode::perez};
+    bool atmosphere_sun_{true};
 
     /**
      * @brief The current turbidity value.

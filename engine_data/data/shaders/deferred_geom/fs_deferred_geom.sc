@@ -12,7 +12,7 @@ SAMPLER2D(s_tex_emissive, 5);
 
 // per frame
 uniform vec4 u_camera_wpos;
-uniform vec4 u_camera_clip_planes; //.x = near, .y = far
+uniform vec4 u_camera_clip_planes; //.x = near, .y = far, .z = material texture mip bias
 
 // per instance
 uniform vec4 u_base_color;
@@ -35,6 +35,8 @@ uniform vec4 u_dither_threshold; //.x = alpha threshold .y = distance threshold
 
 #define u_camear_near u_camera_clip_planes.x
 #define u_camear_far u_camera_clip_planes.y
+// Negative while TAA jitters the view: the jitter integrates the sharper mip's extra detail.
+#define u_material_mip_bias u_camera_clip_planes.z
 
 #define u_dither_alpha_threshold u_dither_threshold.x
 #define u_dither_distance_threshold u_dither_threshold.y
@@ -43,7 +45,7 @@ void main()
 {
 	vec2 texcoords = v_texcoord0.xy * u_tiling.xy;
 
-	vec4 metalness_val = texture2D(s_tex_metalness, texcoords);
+	vec4 metalness_val = texture2DBias(s_tex_metalness, texcoords, u_material_mip_bias);
 	float metalness =  u_surface_metalness;
 	
 	float roughness = u_surface_roughness;
@@ -55,21 +57,21 @@ void main()
 	}
 	else
 	{
-		roughness *= texture2D(s_tex_roughness, texcoords).r;
+		roughness *= texture2DBias(s_tex_roughness, texcoords, u_material_mip_bias).r;
 		metalness *= metalness_val.r;
 	}
 	
 	// The authored roughness: direct lighting applies its own floor (GetLightingRoughness in lighting.sh).
 	roughness = saturate(roughness);
 	
-	float ambient_occlusion = texture2D(s_tex_ao, texcoords).r;
-	vec3 emissive = texture2D(s_tex_emissive, texcoords).rgb;
+	float ambient_occlusion = texture2DBias(s_tex_ao, texcoords, u_material_mip_bias).r;
+	vec3 emissive = texture2DBias(s_tex_emissive, texcoords, u_material_mip_bias).rgb;
 
 	float bumpiness = u_surface_bumpiness;
 	float alpha_test_value = u_surface_alpha_test_value;
 
 	vec3 view_direction = u_camera_wpos.xyz - v_wpos;
-	vec3 tangent_space_normal = getTangentSpaceNormal( s_tex_normal, texcoords, bumpiness, u_surface_normal_reconstruct_z );
+	vec3 tangent_space_normal = getTangentSpaceNormal( s_tex_normal, texcoords, bumpiness, u_surface_normal_reconstruct_z, u_material_mip_bias );
 
 	// A two-sided material's back face turns its normal toward the viewer (UE TwoSidedSign on the tangent frame's
 	// normal axis). The triangle's normal from the position derivatives tells which side the viewer is on and which
@@ -91,7 +93,7 @@ void main()
 	mat3 tangent_to_world_space = constructTangentToWorldSpaceMatrix(normalize(v_wtangent), normalize(v_wbitangent), normalize(vertex_normal));
 
 	vec3 wnormal = normalize( mul( tangent_to_world_space, tangent_space_normal ).xyz );
-	vec4 albedo_color = texture2D(s_tex_color, texcoords) * u_base_color;
+	vec4 albedo_color = texture2DBias(s_tex_color, texcoords, u_material_mip_bias) * u_base_color;
 
 	float distance = length(view_direction) - u_camear_near * 2.0f;
 	float distance_factor = saturate(distance / u_dither_distance_threshold);

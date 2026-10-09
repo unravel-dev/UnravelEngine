@@ -27,22 +27,6 @@ constexpr float perez_horizon_dim = 0.6f;
 /// calibrated sky, so no parity factor is folded in.
 constexpr float sky_ambient_cubemap_parity = 2.0f;
 
-/// The sky's horizontal irradiance as a fraction of the directional light's luminous
-/// intensity: E_sky(up) = ratio x I_sun. A clear sky delivers 10-20 klux against ~100 klux
-/// of direct sun on a normal surface (ratio 0.1-0.2); 0.2 is the bright end. With this the
-/// sun and the sky come from ONE knob, the directional light's intensity: the Perez
-/// exposition is solved per frame so the SH bake's horizontal irradiance lands exactly here
-/// (compute_irradiance_perez_params), and the sky dome and the reflection captures share
-/// that exposition. Without a directional light the fixed
-/// conversion above applies unchanged. Measured 2026-09-12 (audit section 2): the fixed
-/// conversion gave a sun/sky ratio of 19 on the Sponza courtyard, 3-4x darker shade than
-/// daylight, and its value was unrelated to the sun's intensity by construction. The bake
-/// measured 0.21 x I_sun there (linear in the sun, stable under a sun pitch of +-10
-/// degrees): the GPU bake integrates about 5 percent more than the transcription below
-/// for the same sky, cloud coupling off - not root-caused; the transcription is what the
-/// dome follows.
-constexpr float perez_sky_to_sun_ratio = 0.2f;
-
 /// Sun altitude (sine of the elevation) over which the day/night ramp of the sky ambient
 /// rises from 0 at the horizon to 1: about 20 degrees. One ramp for the SH bake's
 /// sun_weight and for the fade of the sun-relative exposition into the fixed conversion.
@@ -86,7 +70,7 @@ struct irradiance_perez_params
     float perez_coeff[5][4];
     /// The bake's horizontal irradiance at unit exposition (compute_perez_horizontal_irradiance).
     float horizontal_irradiance_unit = 0.0f;
-    /// True when @ref exposition follows the directional light (perez_sky_to_sun_ratio); the
+    /// True when @ref exposition follows the directional light (compute_atmosphere_sky_to_sun_ratio); the
     /// ambient path then skips sky_ambient_cubemap_parity.
     bool sun_relative = false;
 };
@@ -103,7 +87,8 @@ auto compute_perez_horizontal_irradiance(const irradiance_perez_params& perez) -
 /**
  * @brief Fills the Perez parameters for the SH bake and the sky dome.
  * @param sun_intensity The directional light's luminous intensity in engine units (0 = no
- *        sun: the fixed conversion). See perez_sky_to_sun_ratio.
+ *        sun: the fixed conversion). The sky then lights a horizontal surface with
+ *        compute_atmosphere_sky_to_sun_ratio(elevation) x this (atmosphere_sky_irradiance.h).
  */
 void compute_irradiance_perez_params(const math::vec3& light_direction,
                                      float turbidity,

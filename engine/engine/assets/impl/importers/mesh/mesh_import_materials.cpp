@@ -980,6 +980,18 @@ private:
         {
             mat_.set_alpha_cutoff(math::clamp(resolved_cutoff, 0.0f, 1.0f));
         }
+        // glTF: a BLEND or MASK material's alpha is the base color texture's times baseColorFactor's alpha (a decal
+        // authored at 0.35); OPAQUE ignores it, so the factor's alpha only lands with a declared non-opaque mode.
+        if(has_declared_alpha_mode && resolved != alpha_mode::opaque)
+        {
+            aiColor4D base_color_factor{1.0f, 1.0f, 1.0f, 1.0f};
+            if(material_->Get(AI_MATKEY_BASE_COLOR, base_color_factor) == AI_SUCCESS)
+            {
+                math::color base_color = mat_.get_base_color();
+                base_color.value.a = math::clamp(base_color_factor.a, 0.0f, 1.0f);
+                mat_.set_base_color(base_color);
+            }
+        }
     }
 
     static constexpr float k_max_emissive_intensity = 100.0f;

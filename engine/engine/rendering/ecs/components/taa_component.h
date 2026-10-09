@@ -33,16 +33,10 @@ public:
         result.depth_reject_scale = std::lerp(result.depth_reject_scale, from.depth_reject_scale, contribution);
         result.variance_clip_scale = std::lerp(result.variance_clip_scale, from.variance_clip_scale, contribution);
         result.jitter_amplitude = std::lerp(result.jitter_amplitude, from.jitter_amplitude, contribution);
-        result.jitter_temporal_phase_scale =
-            std::lerp(result.jitter_temporal_phase_scale, from.jitter_temporal_phase_scale, contribution);
         result.temporal_sample_count =
             static_cast<std::uint32_t>(std::lround(std::lerp(static_cast<float>(result.temporal_sample_count),
                                                             static_cast<float>(from.temporal_sample_count),
                                                             contribution)));
-        if(contribution > 0.5f)
-        {
-            result.jitter_mode = from.jitter_mode;
-        }
     }
 };
 

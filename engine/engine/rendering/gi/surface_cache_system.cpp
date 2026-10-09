@@ -59,6 +59,10 @@ void write_affine_row(float* dst, const ::math::mat4& m, int row)
 /// FNV-1a over the placement identities in order (surface_cache_system::get_instance_order_hash).
 constexpr uint64_t instance_order_hash_seed = 1469598103934665603ull;
 constexpr uint64_t instance_order_hash_prime = 1099511628211ull;
+/// Largest enclosure, relative to the emitter (largest extent over largest extent), that still counts as the emitter's
+/// own housing (clear_enclosed_emissive_light_sources). Sponza's lamp glass is 6-8x its bulb; a room or a building
+/// section around an emitter is two orders of magnitude larger and must not count.
+constexpr float emissive_enclosure_max_extent_ratio = 10.0f;
 } // namespace ANONYMOUS
 } // namespace
 
@@ -660,9 +664,53 @@ void surface_cache_system::upload_instance_grid()
     grid_params_[7] = float(offsets.size());
 }
 
+void surface_cache_system::clear_enclosed_emissive_light_sources()
+{
+    // An emitter inside a placement that houses it (a bulb in its lamp glass: bounds within, at most
+    // emissive_enclosure_max_extent_ratio times its size) shines into that housing, not into the scene. As a light
+    // source its surface-cache cards would stay resident down to one texel, and their radiance leaked through the
+    // housing into the GI (Sponza's vault lit by bulbs behind opaque glass); UE never marks it, as Emissive Light Source
+    // is opt-in there. Open emitters keep the derived flag.
+    APP_SCOPE_PERF("GI/SurfaceCache/Enclosed Emitters");
+    if(std::none_of(instances_.begin(), instances_.end(), [](const instance& inst) { return inst.is_emissive_light_source; }))
+    {
+        return;
+    }
+    enclosure_candidate_bounds_.clear();
+    for(const instance& inst : instances_)
+    {
+        if(!inst.is_emissive_light_source)
+        {
+            enclosure_candidate_bounds_.push_back(inst.world_bounds);
+        }
+    }
+    const auto largest_extent = [](const math::bbox& box)
+    {
+        const math::vec3 size = box.get_dimensions();
+        return math::max(size.x, math::max(size.y, size.z));
+    };
+    const auto houses = [&](const math::bbox& outer, const math::bbox& inner)
+    {
+        return outer.min.x <= inner.min.x && outer.min.y <= inner.min.y && outer.min.z <= inner.min.z &&
+               inner.max.x <= outer.max.x && inner.max.y <= outer.max.y && inner.max.z <= outer.max.z &&
+               largest_extent(outer) <= ANONYMOUS::emissive_enclosure_max_extent_ratio * largest_extent(inner);
+    };
+    for(instance& inst : instances_)
+    {
+        if(inst.is_emissive_light_source &&
+           std::any_of(enclosure_candidate_bounds_.begin(),
+                       enclosure_candidate_bounds_.end(),
+                       [&](const math::bbox& outer) { return houses(outer, inst.world_bounds); }))
+        {
+            inst.is_emissive_light_source = false;
+        }
+    }
+}
+
 void surface_cache_system::upload_instances()
 {
     APP_SCOPE_PERF("GI/SurfaceCache/Upload Instances");
+    clear_enclosed_emissive_light_sources();
     // resize, not assign: every float of every record is written below, so an assign's
     // zero-fill would be fully overwritten every frame.
     instance_data_.resize(size_t(instances_.size()) * instance_vec4_stride * 4u);
@@ -942,8 +990,8 @@ void surface_cache_system::update_global_lighting_state(scene& scn)
             // The first directional light the GI sees (UE skips lights whose indirect lighting scale is 0).
             if(light.type == light_type::directional && light.indirect_intensity > 0.0f && sun <= 0.0f)
             {
-                const auto color = light.color.to_linear();
-                sun = light.intensity * math::max(color.value.r, math::max(color.value.g, color.value.b));
+                const auto color = light_comp.get_linear_color();
+                sun = light.intensity * math::max(color.x, math::max(color.y, color.z));
             }
         });
     float sky = 0.0f;

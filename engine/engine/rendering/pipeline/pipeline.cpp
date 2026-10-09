@@ -330,9 +330,7 @@ auto pipeline::create_run_params(entt::handle camera_ent) const -> rendering::pi
                 cam.set_aa_data(viewport_size,
                                   static_cast<std::uint32_t>(gfx::get_render_frame()),
                                   sample_count,
-                                  c->settings.jitter_mode,
-                                  c->settings.jitter_amplitude,
-                                  c->settings.jitter_temporal_phase_scale);
+                                  c->settings.jitter_amplitude);
             }
         };
     }
@@ -440,9 +438,7 @@ auto pipeline::create_run_params(entt::handle camera_ent, scene* scn, const came
             cam.set_aa_data(viewport_size,
                               static_cast<std::uint32_t>(gfx::get_render_frame()),
                               sample_count,
-                              s.jitter_mode,
-                              s.jitter_amplitude,
-                              s.jitter_temporal_phase_scale);
+                              s.jitter_amplitude);
         };
     }
     if(resolved.has_ssr)

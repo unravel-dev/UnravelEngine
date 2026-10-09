@@ -60,6 +60,31 @@ auto make_cloud_shadow_uniforms(const atmospheric_pass_perez::cloud_shadow_resul
     uniforms.layer = math::vec4(uniforms.is_applied ? 1.0f : 0.0f, shadow.base_world_y, cloud_shadow_border_fade, 0.0f);
     return uniforms;
 }
+/// Material textures filter anisotropically, up to the device maximum (BGFX_RESET_MAXANISOTROPY): trilinear alone
+/// picks the mip from the longer footprint axis and smears surfaces seen at grazing angles, such as distant floors.
+constexpr std::uint32_t material_anisotropic_sampler_flags = BGFX_SAMPLER_MIN_ANISOTROPIC | BGFX_SAMPLER_MAG_ANISOTROPIC;
+
+/// The texture's own sampler state (wrap, border...) with anisotropic filtering, unless it asks for point sampling.
+auto get_material_sampler_flags(const gfx::texture::ptr& texture) -> std::uint32_t
+{
+    if(!texture)
+    {
+        return material_anisotropic_sampler_flags;
+    }
+    const auto own_flags = static_cast<std::uint32_t>(texture->flags & BGFX_SAMPLER_BITS_MASK);
+    const bool is_point = (own_flags & (BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT)) != 0u;
+    return is_point ? own_flags : own_flags | material_anisotropic_sampler_flags;
+}
+/// Material texture mip bias while TAA jitters the view (UE r.ViewTextureMipBias.Offset at 100% screen percentage):
+/// the jitter integrates the slightly sharper mip's extra detail instead of aliasing it.
+constexpr float material_taa_mip_bias = -0.3f;
+
+/// The G-buffer's u_camera_clip_planes: near, far, and the material texture mip bias (TAA jitter active or not).
+auto make_geometry_clip_planes(const camera& view_camera) -> math::vec4
+{
+    const bool is_jittered = view_camera.get_aa_data().y > 1.0f;
+    return {view_camera.get_near_clip(), view_camera.get_far_clip(), is_jittered ? material_taa_mip_bias : 0.0f, 0.0f};
+}
 /// Period of the contact-shadow dither's temporal offset (frames); TAA integrates it.
 constexpr int contact_shadow_dither_frames = 16;
 /// RBUFFER's clear, packed RGBA8 (bgfx converts it for float targets): black with alpha 1 - no
@@ -545,12 +570,12 @@ void deferred::submit_pbr_material(geom_program& program, const pbr_material& ma
     const auto& dither_threshold = mat.get_dither_threshold();
     const auto surface_data2 = mat.get_surface_data2();
 
-    gfx::set_texture(program.s_tex_color, 0, albedo_tex);
-    gfx::set_texture(program.s_tex_normal, 1, normal_tex);
-    gfx::set_texture(program.s_tex_roughness, 2, roughness_tex);
-    gfx::set_texture(program.s_tex_metalness, 3, metalness_tex);
-    gfx::set_texture(program.s_tex_ao, 4, ao_tex);
-    gfx::set_texture(program.s_tex_emissive, 5, emissive_tex);
+    gfx::set_texture(program.s_tex_color, 0, albedo_tex, ANONYMOUS::get_material_sampler_flags(albedo_tex));
+    gfx::set_texture(program.s_tex_normal, 1, normal_tex, ANONYMOUS::get_material_sampler_flags(normal_tex));
+    gfx::set_texture(program.s_tex_roughness, 2, roughness_tex, ANONYMOUS::get_material_sampler_flags(roughness_tex));
+    gfx::set_texture(program.s_tex_metalness, 3, metalness_tex, ANONYMOUS::get_material_sampler_flags(metalness_tex));
+    gfx::set_texture(program.s_tex_ao, 4, ao_tex, ANONYMOUS::get_material_sampler_flags(ao_tex));
+    gfx::set_texture(program.s_tex_emissive, 5, emissive_tex, ANONYMOUS::get_material_sampler_flags(emissive_tex));
 
     math::color premultiplied_emissive{
         emissive_color.value.r * emissive_intensity,
@@ -1218,7 +1243,7 @@ void deferred::run_g_buffer_pass(const visibility_set_models_t& visibility_set,
         }
 
         const auto& world_transform = transform_comp.get_transform_global();
-        const auto clip_planes = math::vec2(camera.get_near_clip(), camera.get_far_clip());
+        const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
 
         const auto current_time = lod_data.current_time;
         const auto current_lod_index = lod_data.current_lod_index;
@@ -1477,7 +1502,7 @@ void deferred::submit_batched_geometry(gfx::render_pass& pass, const camera& cam
 
     // Set up common uniforms
     const auto camera_pos = camera.get_position();
-    const auto clip_planes = math::vec2(camera.get_near_clip(), camera.get_far_clip());
+    const auto clip_planes = ANONYMOUS::make_geometry_clip_planes(camera);
 
     geom_program_instanced_.program->begin();
     gfx::set_uniform(geom_program_instanced_.u_camera_wpos, camera_pos);
@@ -2021,7 +2046,7 @@ auto deferred::run_irradiance_pass(scene& scn, gfx::render_view& rview) -> defer
         // pre-baked in display range. The parity constant (perez_luminance.h) keeps the two
         // source types comparable at the same user-facing intensity slider - on the FIXED
         // conversion only: the sun-relative exposition already lands the slider's 1.0 on the
-        // calibrated sky (perez_sky_to_sun_ratio x the sun), a parity factor would double it.
+        // calibrated sky (the atmosphere's sky-to-sun ratio x the sun), a parity factor would double it.
         // The flat tint-only ambient is already in display range, so it gets no boost -- and
         // that includes the skybox-without-cubemap fallback (use_sky set but the texture
         // missing or still loading), which also renders the flat mode: gating on use_sky
@@ -2226,12 +2251,12 @@ auto deferred::run_direct_lighting_pass(scene& scn,
 
             gfx::set_uniform(lprogram.u_contact_shadow, contact_shadow_uniform);
 
-            // Light colors are picker (sRGB) values; shading needs linear.
-            const auto light_color_linear = light.color.to_linear();
+            // Linear color, atmosphere transmittance included for the sky's sun.
+            const auto light_color_linear = light_comp_ref.get_linear_color();
             // Written with the view's pre-exposure (UE DeferredLightPixelShaders GetExposure).
-            float light_color_intensity[4] = {light_color_linear.value.r,
-                                              light_color_linear.value.g,
-                                              light_color_linear.value.b,
+            float light_color_intensity[4] = {light_color_linear.x,
+                                              light_color_linear.y,
+                                              light_color_linear.z,
                                               light.intensity * get_pre_exposure(rview).value};
 
             gfx::set_uniform(lprogram.u_light_color_intensity, light_color_intensity);

@@ -18,17 +18,17 @@ namespace unravel
 class taa_pass
 {
 public:
+    /// Serialized with the settings. Data saved without it, or with an older value, is ignored on load and the
+    /// settings keep their defaults: version 1 came with the unjittered resolve and UE's Halton cycle, and values
+    /// tuned for the jittered resolve (an MSAA 2 pattern against its shake) do not carry over.
+    static constexpr std::uint32_t settings_version = 1;
+
     struct settings
     {
-        /// Enable jitter when greater than 1 (full render frame index drives the sequence).
+        /// Enable jitter when greater than 1; the Halton sequence's cycle length (UE: 8).
         std::uint32_t temporal_sample_count = 8;
-        /// Subpixel offset sequence (see @c taa_jitter_mode); passed to camera each frame.
-        taa_jitter_mode jitter_mode = taa_jitter_mode::msaa_2_rotating;
-        /// Scales jitter before projection (1 = full ~±½ pixel). Lower = less whole-screen shake, softer AA.
+        /// Scales jitter before projection (1 = full +-0.5 pixel). Lower = less sub-pixel coverage, more aliasing.
         float jitter_amplitude = 1.0f;
-        /// For golden / Halton / R2: multiplies frame index inside the sequence (1 = original step size).
-        /// MSAA rotating modes ignore this. Lower (0.25–0.55) walks the pattern more slowly for smoother TAA.
-        float jitter_temporal_phase_scale = 0.45f;
         /// Blend toward clipped history (lower = less gray cast, slightly more aliasing).
         float history_blend = 0.82f;
         /// Unsharp on the displayed resolve only - never written to the history; keep low.

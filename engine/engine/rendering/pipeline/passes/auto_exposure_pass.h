@@ -73,7 +73,7 @@ public:
         /// is mapped to 0.18 * 2^compensation before grading and the tone curve:
         /// exposure = 0.18 * 2^compensation / L. +1 is UE's default
         /// (r.DefaultFeature.AutoExposure.Bias), which the default tone curve is built around.
-        float compensation = 0.0f;
+        float compensation = 1.0f;
         /// Extra bias in stops as a function of the metered scene brightness (UE Exposure
         /// Compensation Curve): x = metered EV100, y = stops added to the compensation. Keys
         /// sorted by x, linear between them and constant past the ends; empty adds nothing.

@@ -166,6 +166,15 @@ REFLECT(skylight_component)
             entt::attribute{"name", "mode"},
             entt::attribute{"pretty_name", "Mode"},
         })
+        .data<&skylight_component::set_atmosphere_sun, &skylight_component::get_atmosphere_sun>("atmosphere_sun"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "atmosphere_sun"},
+            entt::attribute{"pretty_name", "Atmosphere Sun"},
+            entt::attribute{"tooltip", "The directional light on this entity is the sky's sun: its light is tinted by the "
+                                       "atmosphere it crosses (warm by day, red and dim at the horizon), and its "
+                                       "intensity is the illuminance outside the atmosphere."},
+            entt::attribute{"predicate", perez_predicate_entt},
+        })
         .data<&skylight_component::set_sky_brightness, &skylight_component::get_sky_brightness>("sky_brightness"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "sky_brightness"},
@@ -392,6 +401,7 @@ REFLECT(skylight_component)
 SAVE(skylight_component)
 {
     try_save(ar, ser20::make_nvp("mode", obj.get_mode()));
+    try_save(ar, ser20::make_nvp("atmosphere_sun", obj.get_atmosphere_sun()));
     try_save(ar, ser20::make_nvp("sky_brightness", obj.get_sky_brightness()));
     try_save(ar, ser20::make_nvp("turbidity", obj.get_turbidity()));
     try_save(ar, ser20::make_nvp("cloud_mode", obj.get_cloud_mode()));
@@ -425,6 +435,12 @@ LOAD(skylight_component)
     if(try_load(ar, ser20::make_nvp("mode", mode)))
     {
         obj.set_mode(mode);
+    }
+
+    bool atmosphere_sun{true};
+    if(try_load(ar, ser20::make_nvp("atmosphere_sun", atmosphere_sun)))
+    {
+        obj.set_atmosphere_sun(atmosphere_sun);
     }
 
     float sky_brightness{1.0f};

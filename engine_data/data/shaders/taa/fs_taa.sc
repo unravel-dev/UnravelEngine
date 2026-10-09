@@ -22,21 +22,31 @@ uniform vec4 u_taa_params;
 uniform vec4 u_taa_params2;
 // 1 = reproject through the velocity buffer (uv - velocity); 0 = legacy depth reprojection.
 #define u_use_velocity         u_taa_params2.x
-// 1 while the camera is PARKED (this frame's unjittered view-projection equals last frame's).
-#define u_camera_parked        (u_taa_params2.y > 0.5)
+// This frame's sub-pixel jitter as the NDC offset the projection carries (camera aa_data.zw): scene content moved by it.
+#define u_jitter_ndc           u_taa_params2.yz
 
-// Reprojection motion, in pixels, below which a pixel counts as STILL for the depth-edge damping:
-// the jittered position reprojected through the unjittered previous matrix moves by the jitter
-// alone (msaa_2: at most ~0.35 px), so this sits just above it and fades out over as much again.
+// Reprojection motion, in pixels, below which a pixel counts as STILL for the depth-edge damping. The output lives on
+// the unjittered pixel grid, so a parked camera reprojects by exactly 0; this absorbs slow drift.
 #define TAA_STILL_REPROJECTION_PX 0.5
 // History weight a STILL pixel uses at least (the settings value keeps ruling in motion).
 #define TAA_STILL_HISTORY_BLEND 0.950
 // Variance clip box multiple for a STILL pixel: the jittered 3x3 box moves every frame at rest and a
 // settings-width clip snapped the converging history back to it.
 #define TAA_STILL_CLIP_SCALE 2.000
-// Share of last frame's pixel-centre history in a still pixel's DISPLAYED value while the camera is parked: one half
-// holds the 2-position jitter's swing still (the parked-camera display average in main).
-#define TAA_PARKED_DISPLAY_HISTORY_SHARE 0.5
+// Offset of the HDR weight 1 / (offset + luma) of the current-frame reconstruction taps (UE TemporalAA.usf).
+#define TAA_FILTER_HDR_WEIGHT_OFFSET 4.0
+// Reprojection motion, in pixels, over which a pixel moves from the rest weights to the motion weights below. Every
+// frame of motion resamples the history once more and each resample softens it, so a long history blurs moving
+// detail (UE TSR keeps a double-resolution history for this; UE TAA raises the current weight with velocity).
+#define TAA_MOTION_START_PX 2.0
+#define TAA_MOTION_FULL_PX 10.0
+// History weight a moving pixel uses at most: fewer accumulated resamples keep its detail.
+#define TAA_MOTION_HISTORY_BLEND 0.70
+// Extra display sharpen at full motion, as a multiple of the settings value: it restores what the resamples soften.
+#define TAA_MOTION_SHARPEN_BOOST 1.0
+// Largest per-axis jitter change between two frames, in pixels: at jitter_amplitude 1 every sequence stays within
+// [-0.5, 0.5].
+#define TAA_JITTER_STEP_MAX_PX 1.0
 // Object-only motion, in pixels, from which a velocity texel starts and fully counts as a moving object.
 #define TAA_OBJECT_MOTION_START_PX 0.5
 #define TAA_OBJECT_MOTION_FULL_PX 1.5
@@ -72,6 +82,14 @@ vec3 TAA_ClipToAABB(vec3 value, vec3 center, vec3 extents)
     return center + dir * t_min;
 }
 
+// Reconstruction weight of a tap at squared distance dist2 (pixels) from the unjittered output centre: a
+// Blackman-Harris-like polynomial of radius 1 px, 1 - 1.9 x^2 + 0.905 x^4 (UE TemporalAA.usf ComputeSampleWeigth).
+float TAA_FilterWeight(float dist2)
+{
+    float x2 = saturate(dist2);
+    return (0.905 * x2 - 1.9) * x2 + 1.0;
+}
+
 // 5-fetch Catmull-Rom (Jimenez): bilinear history resampling under sub-pixel jitter
 // low-passes the accumulation every frame, so the history converges blurry no matter
 // how good the rest of the filter is. Bicubic reconstruction keeps it sharp.
@@ -102,7 +120,9 @@ vec3 TAA_SampleHistoryCatmullRom(vec2 uv, vec2 texel_size)
 
 // Reprojects the current pixel into the previous frame. Returns the history UV in
 // xy and the EXPECTED previous depth01 of this surface in z, so disocclusion can
-// compare it against what the previous depth buffer actually stored there.
+// compare it against what the previous depth buffer actually stored there. The pass
+// binds the UNJITTERED projection (u_invProj), so this is the unjittered pixel centre's
+// reprojection: exactly uv for a parked camera, whatever the frame's jitter.
 vec3 TAA_PreviousScreenPos(vec2 uv, float depth01)
 {
     vec3 vs_pos = computeViewSpacePosition(uv, depth01);
@@ -118,12 +138,24 @@ float TAA_LinearViewDepthFrom01(float depth01)
     return screenSpaceToViewSpaceDepth(depth01);
 }
 
+// Absolute linear view depth of the current depth texel at t (clamped to the texture).
+float TAA_LinearViewDepthAt(ivec2 t, ivec2 ddim)
+{
+    ivec2 clamped = clamp(t, ivec2(0, 0), ddim - ivec2(1, 1));
+    return abs(TAA_LinearViewDepthFrom01(texelFetch(s_depth, clamped, 0).x));
+}
+
 
 void main()
 {
     vec2 uv = v_texcoord0;
     ivec2 dim = textureSize(s_curr, 0);
     vec2 texel = vec2(1.0, 1.0) / vec2(float(dim.x), float(dim.y));
+    // The jitter moved scene content by jitter_uv: the input texel at q holds the unjittered scene at q - jitter.
+    // The output is defined on the unjittered grid, so neither the history fetch nor the current-frame
+    // reconstruction moves with the jitter.
+    vec2 jitter_uv = vec2(u_jitter_ndc.x, toClipSpaceY(u_jitter_ndc.y)) * 0.5;
+    vec2 jitter_px = jitter_uv * vec2(float(dim.x), float(dim.y));
 
     ivec2 ddim = textureSize(s_depth, 0);
     vec2 ddimf = vec2(float(ddim.x), float(ddim.y));
@@ -200,7 +232,9 @@ void main()
         // band included). Camera-only pixels keep the center-depth camera reprojection:
         // exact for them (dither interiors and static silhouettes included), and it
         // keeps the expected-previous-depth disocclusion test meaningful.
-        prev_uv = mix(prev_pos.xy, uv - vel, object_motion_w);
+        // The velocity is the jittered current position minus the unjittered previous one; removing this
+        // frame's jitter makes it the unjittered centre's motion.
+        prev_uv = mix(prev_pos.xy, uv - (vel - jitter_uv), object_motion_w);
     }
 
     vec4 curr = texture2D(s_curr, uv);
@@ -223,11 +257,30 @@ void main()
     // the reprojected position cannot detect disocclusion and false-fires on grazing
     // surfaces under camera motion.
     ivec2 tprev = clamp(ivec2(prev_uv * ddimf - vec2_splat(0.499)), ivec2(0, 0), ddim - ivec2(1, 1));
-    float depth01_prev_stored = texelFetch(s_prev_depth, tprev, 0).x;
-
     float z_expected = abs(TAA_LinearViewDepthFrom01(prev_pos.z));
-    float z_stored = abs(TAA_LinearViewDepthFrom01(depth01_prev_stored));
-    float depth_diff = abs(z_expected - z_stored) / max(1.0, z_expected);
+    // Both depth buffers hold jittered samples: across the sub-pixel jitter step a silhouette texel flips between
+    // the two surfaces and a sloped surface changes depth, so a single-texel comparison failed at rest and let the
+    // jittered current frame through on every edge and grazing floor (the image shook with the jitter). The
+    // surface counts as present when any texel of the previous 3x3 holds it; a true disocclusion has none.
+    float z_stored_diff = 1e30;
+    for(int py = -1; py <= 1; ++py)
+    {
+        for(int px = -1; px <= 1; ++px)
+        {
+            ivec2 tn = clamp(tprev + ivec2(px, py), ivec2(0, 0), ddim - ivec2(1, 1));
+            float z_stored = abs(TAA_LinearViewDepthFrom01(texelFetch(s_prev_depth, tn, 0).x));
+            z_stored_diff = min(z_stored_diff, abs(z_expected - z_stored));
+        }
+    }
+    // The remaining sloped-surface difference is the jitter step's worst case (TAA_JITTER_STEP_MAX_PX) times the
+    // surface slope, the smaller one-sided difference per axis so a silhouette does not widen it.
+    float z_centre = TAA_LinearViewDepthAt(tcent, ddim);
+    float slope_x = min(abs(TAA_LinearViewDepthAt(tcent - ivec2(1, 0), ddim) - z_centre),
+                        abs(TAA_LinearViewDepthAt(tcent + ivec2(1, 0), ddim) - z_centre));
+    float slope_y = min(abs(TAA_LinearViewDepthAt(tcent - ivec2(0, 1), ddim) - z_centre),
+                        abs(TAA_LinearViewDepthAt(tcent + ivec2(0, 1), ddim) - z_centre));
+    float jitter_depth_slack = (slope_x + slope_y) * TAA_JITTER_STEP_MAX_PX;
+    float depth_diff = max(z_stored_diff - jitter_depth_slack, 0.0) / max(1.0, z_expected);
     float depth_ok = 1.0 - smoothstep(0.001, 0.035 * max(0.25, u_depth_reject_scale), depth_diff);
 
     // The expected previous depth comes from the camera-only reprojection, so the test is
@@ -264,11 +317,16 @@ void main()
     vec3 m2 = vec3_splat(0.0);
     vec3 nb_min = vec3_splat(1e10);
     vec3 nb_max = vec3_splat(-1e10);
+    // The current frame reconstructed at the unjittered output centre: each tap weighted by its distance
+    // (offset - jitter) and by its HDR weight, so a firefly cannot dominate the reconstruction.
+    vec3 filtered_sum = vec3_splat(0.0);
+    float filtered_weight = 0.0;
     for(int y = -1; y <= 1; ++y)
     {
         for(int x = -1; x <= 1; ++x)
         {
-            vec2 suv = clamp(uv + vec2(float(x), float(y)) * texel, vec2_splat(0.0), vec2_splat(1.0));
+            vec2 offset = vec2(float(x), float(y));
+            vec2 suv = clamp(uv + offset * texel, vec2_splat(0.0), vec2_splat(1.0));
             vec3 c = texture2D(s_curr, suv).rgb;
             vec3 yc = TAA_RGBToYCoCg(c);
             m1_rgb += c;
@@ -276,8 +334,16 @@ void main()
             m2 += yc * yc;
             nb_min = min(nb_min, c);
             nb_max = max(nb_max, c);
+            vec2 to_centre = offset - jitter_px;
+            float tap_weight = TAA_FilterWeight(dot(to_centre, to_centre)) / (TAA_FILTER_HDR_WEIGHT_OFFSET + max(yc.x, 0.0));
+            filtered_sum += c * tap_weight;
+            filtered_weight += tap_weight;
         }
     }
+    vec3 filtered = filtered_sum / max(filtered_weight, 1e-6);
+    // How well this frame's jittered sample covers the output centre: a sample far from it is trusted less
+    // (UE FilteredTemporalWeight; 1 at the centre, ~0.3 at a pixel corner).
+    float sample_alignment = TAA_FilterWeight(dot(jitter_px, jitter_px));
     const float inv9 = 1.0 / 9.0;
     vec3 mu = m1_rgb * inv9;
     vec3 mu_yc = m1 * inv9;
@@ -289,34 +355,23 @@ void main()
     vec3 clipped_yc = TAA_ClipToAABB(hist_yc, mu_yc, sigma_yc * k);
     vec3 clamped_hist = max(TAA_YCoCgToRGB(clipped_yc), vec3_splat(0.0));
 
+    float motion_w = smoothstep(TAA_MOTION_START_PX, TAA_MOTION_FULL_PX, reprojection_px);
     float history_weight = mix(u_history_blend, max(u_history_blend, TAA_STILL_HISTORY_BLEND), still);
+    history_weight = mix(history_weight, min(history_weight, TAA_MOTION_HISTORY_BLEND), motion_w);
+    history_weight = 1.0 - (1.0 - history_weight) * sample_alignment;
     float blend = history_weight * edge_fade * depth_ok * edge_blend * screen_border_w * history_border_w;
     // Karis-weighted resolve: weighting both terms by 1/(1+luma) evaluates the blend in
     // a tonemapped domain, so a single HDR firefly cannot dominate the average and
     // flicker as the jitter walks it on and off a sample position.
     const vec3 taa_luma_w = vec3(0.2126, 0.7152, 0.0722);
-    float w_curr = (1.0 - blend) / (1.0 + dot(curr.rgb, taa_luma_w));
+    float w_curr = (1.0 - blend) / (1.0 + dot(filtered, taa_luma_w));
     float w_hist = blend / (1.0 + dot(clamped_hist, taa_luma_w));
-    vec3 resolved = (curr.rgb * w_curr + clamped_hist * w_hist) / max(w_curr + w_hist, 1e-6);
+    vec3 resolved = (filtered * w_curr + clamped_hist * w_hist) / max(w_curr + w_hist, 1e-6);
     // The HISTORY target takes the resolve before any sharpening. Written back, the unsharp term
     // (computed from the resolved value, which already carries last frame's sharpening) compounded
     // frame after frame - a runaway that only its caps bounded, growing at rest (history 0.95, clip
     // x2) into speckled, blotchy micro-occlusion. Sharpening is a display-only step.
     vec3 history_resolved = resolved;
-    // PARKED-CAMERA DISPLAY AVERAGE. The resolve reprojects the jittered pixel through the unjittered previous
-    // matrix, so the history under a pixel follows each frame's jitter offset and high-contrast detail swings with
-    // the 2-position sequence - in phase with the clip box, so neither a heavier history nor the clipped history
-    // settles it. Last frame's history texel at this pixel's centre holds the opposite offset, and the mean of the
-    // two holds still (lit rest std p95 court 2.03 -> 1.18, hall 1.24 -> 0.89, no detail lost against the no-AA
-    // image). Display only - the history target keeps the plain resolve - and only while the camera is parked: a
-    // moving camera would read that unreprojected texel as lag.
-    if(u_camera_parked)
-    {
-        float history_validity = blend / max(history_weight, 1e-4);
-        vec3 previous_history = texture2DLod(s_history, uv, 0.0).rgb * u_history_pre_exposure_correction;
-        resolved = mix(resolved, previous_history, TAA_PARKED_DISPLAY_HISTORY_SHARE * still * history_validity);
-    }
-
     if(u_sharpen > 0.001)
     {
         const vec3 luma_dir = vec3(0.212656, 0.715158, 0.072186);
@@ -324,11 +379,20 @@ void main()
         float contrast = max(nb_rng.x, max(nb_rng.y, nb_rng.z));
         // Strong attenuation on HDR edges (contrast^2 term); stops black/white ringing from unsharp.
         float sharpen_adapt = rcp(1.0 + contrast * 0.7 + contrast * contrast * 0.12);
-        float sharpen_w = u_sharpen * mix(0.12, 1.0, silhouette) * sharpen_adapt;
+        float sharpen_w = u_sharpen * mix(0.12, 1.0, silhouette) * sharpen_adapt * (1.0 + TAA_MOTION_SHARPEN_BOOST * motion_w);
 
         vec3 pre_sharp = resolved;
-        float y_curr = dot(curr.rgb, luma_dir);
-        float y_mu = dot(mu, luma_dir);
+        float y_curr = dot(filtered, luma_dir);
+        // Blur reference from last frame's resolved history around the reprojected position: it holds still
+        // under the jitter, where this frame's raw 3x3 mean replays each frame's sub-pixel offset into the unsharp
+        // term. Where the history is not trusted the current 3x3 mean stands in.
+        vec3 history_blur = (texture2DLod(s_history, hist_uv + vec2(texel.x, 0.0), 0.0).rgb +
+                             texture2DLod(s_history, hist_uv - vec2(texel.x, 0.0), 0.0).rgb +
+                             texture2DLod(s_history, hist_uv + vec2(0.0, texel.y), 0.0).rgb +
+                             texture2DLod(s_history, hist_uv - vec2(0.0, texel.y), 0.0).rgb) *
+                            (0.25 * u_history_pre_exposure_correction);
+        float history_validity = blend / max(history_weight, 1e-4);
+        float y_mu = mix(dot(mu, luma_dir), dot(history_blur, luma_dir), history_validity);
         float y_res = dot(pre_sharp, luma_dir);
         // Unsharp term from the RESOLVED value, never the jittered centre sample: current minus its
         // 3x3 mean replays the sub-pixel jitter into the output every frame (the TAA study: the

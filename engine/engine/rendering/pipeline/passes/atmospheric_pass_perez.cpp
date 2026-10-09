@@ -1,5 +1,6 @@
 #include "atmospheric_pass_perez.h"
 #include <engine/assets/asset_manager.h>
+#include <engine/rendering/atmosphere_sky_irradiance.h>
 #include <engine/rendering/default_textures.h>
 #include <engine/rendering/perez_luminance.h>
 #include <graphics/render_pass.h>
@@ -905,8 +906,8 @@ void compute_irradiance_perez_params(const math::vec3& light_direction,
     // The one shared Perez -> engine conversion (see perez_luminance.h): the sky dome,
     // the irradiance bake and the flat ambient all inherit this value, so their ratios
     // cannot drift apart. SUN-RELATIVE when a directional light exists: the exposition that
-    // puts the bake's horizontal irradiance at perez_sky_to_sun_ratio x the sun's luminous
-    // intensity, faded into the fixed conversion through the ambient's own day/night ramp -
+    // puts the bake's horizontal irradiance at the atmosphere's sky-to-sun ratio for this sun
+    // elevation (compute_atmosphere_sky_to_sun_ratio) x the sun's luminous intensity, faded into the fixed conversion through the ambient's own day/night ramp -
     // at the horizon the luminance tables collapse and a solved exposition would amplify
     // their residual into a night-time sky.
     const float fixed_exposition = compute_perez_exposition(sun_dir.y);
@@ -914,7 +915,7 @@ void compute_irradiance_perez_params(const math::vec3& light_direction,
     out.sun_relative = false;
     if(sun_intensity > 0.0f && out.horizontal_irradiance_unit > k_perez_min_unit_irradiance)
     {
-        const float solved = perez_sky_to_sun_ratio * sun_intensity / out.horizontal_irradiance_unit;
+        const float solved = compute_atmosphere_sky_to_sun_ratio(sun_dir.y) * sun_intensity / out.horizontal_irradiance_unit;
         out.exposition = bx::lerp(fixed_exposition, solved, compute_perez_sun_weight(sun_dir.y));
         out.sun_relative = true;
     }

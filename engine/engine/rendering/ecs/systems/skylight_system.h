@@ -17,6 +17,9 @@ public:
     void on_play_begin(hpp::span<const entt::handle> entities, delta_t dt);
 
 private:
+    /// Sets each light's atmosphere transmittance for this frame: the sky's atmosphere sun gets it, every other light 1.
+    void update_atmosphere_sun_transmittance(scene& scn);
+
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 };
 } // namespace unravel

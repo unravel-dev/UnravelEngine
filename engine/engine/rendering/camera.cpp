@@ -793,68 +793,13 @@ auto camera::estimate_pick_tolerance(float wire_tolerance,
 void camera::set_aa_data(const usize32_t& viewport_size,
                          std::uint32_t temporal_frame_index,
                          std::uint32_t temporal_aa_samples,
-                         taa_jitter_mode jitter_mode,
-                         float jitter_amplitude,
-                         float jitter_temporal_phase_scale)
+                         float jitter_amplitude)
 {
     if(temporal_aa_samples > 1)
     {
         float SampleX = 0.0f;
         float SampleY = 0.0f;
-        switch(jitter_mode)
-        {
-        case taa_jitter_mode::halton_2_3:
-            math::taa_subpixel_offset_halton(temporal_frame_index,
-                                             SampleX,
-                                             SampleY,
-                                             jitter_temporal_phase_scale);
-            break;
-        case taa_jitter_mode::r2_low_discrepancy:
-            math::taa_subpixel_offset_r2(temporal_frame_index,
-                                         SampleX,
-                                         SampleY,
-                                         jitter_temporal_phase_scale);
-            break;
-        case taa_jitter_mode::msaa_2_rotating:
-        {
-            const float SamplesX[] = {-4.0f / 16.0f, 4.0f / 16.0f};
-            const float SamplesY[] = {4.0f / 16.0f, -4.0f / 16.0f};
-            const std::uint32_t idx = temporal_frame_index % 2u;
-            SampleX = SamplesX[idx];
-            SampleY = SamplesY[idx];
-            break;
-        }
-        case taa_jitter_mode::msaa_3_rotating:
-        {
-            // Equilateral triangle inscribed in a circle of radius 0.4 px,
-            // centered at the pixel center (vertices at 90°/210°/330°). Keeps
-            // all offsets inside the standard [-0.5, +0.5] px convention used
-            // by the progressive / Halton / R2 / msaa_4 modes; side length
-            // r·√3 ≈ 0.69 px gives a per-frame step comparable to msaa_2.
-            const float SamplesX[] = {0.0f, -0.34641016f, 0.34641016f};
-            const float SamplesY[] = {0.4f, -0.2f, -0.2f};
-            const std::uint32_t idx = temporal_frame_index % 3u;
-            SampleX = SamplesX[idx];
-            SampleY = SamplesY[idx];
-            break;
-        }
-        case taa_jitter_mode::msaa_4_rotating:
-        {
-            const float SamplesX[] = {-2.0f / 16.0f, 6.0f / 16.0f, 2.0f / 16.0f, -6.0f / 16.0f};
-            const float SamplesY[] = {-6.0f / 16.0f, -2.0f / 16.0f, 6.0f / 16.0f, 2.0f / 16.0f};
-            const std::uint32_t idx = temporal_frame_index % 4u;
-            SampleX = SamplesX[idx];
-            SampleY = SamplesY[idx];
-            break;
-        }
-        case taa_jitter_mode::progressive_golden:
-        default:
-            math::taa_subpixel_offset_progressive(temporal_frame_index,
-                                                  SampleX,
-                                                  SampleY,
-                                                  jitter_temporal_phase_scale);
-            break;
-        }
+        math::taa_subpixel_offset_halton(temporal_frame_index % temporal_aa_samples, SampleX, SampleY);
 
         const float amp = std::clamp(jitter_amplitude, 0.0f, 1.5f);
         SampleX *= amp;

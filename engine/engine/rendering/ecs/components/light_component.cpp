@@ -11,6 +11,18 @@ void light_component::set_light(const light& l)
     light_ = l;
 }
 
+auto light_component::get_linear_color() const -> math::vec3
+{
+    // Light colors are picker (sRGB) values; shading needs linear.
+    const auto linear = light_.color.to_linear();
+    return math::vec3(linear.value.r, linear.value.g, linear.value.b) * atmosphere_transmittance_;
+}
+
+void light_component::set_atmosphere_transmittance(const math::vec3& transmittance)
+{
+    atmosphere_transmittance_ = transmittance;
+}
+
 auto light_component::get_bounds_sphere() const -> math::bsphere
 {
     // Local space and direction free: a spot light gets its whole range around the origin.
@@ -69,6 +81,16 @@ auto skylight_component::get_mode() const noexcept -> const sky_mode&
 void skylight_component::set_mode(const sky_mode& mode)
 {
     mode_ = mode;
+}
+
+auto skylight_component::get_atmosphere_sun() const noexcept -> bool
+{
+    return atmosphere_sun_;
+}
+
+void skylight_component::set_atmosphere_sun(bool enabled)
+{
+    atmosphere_sun_ = enabled;
 }
 
 auto skylight_component::get_turbidity() const noexcept -> float

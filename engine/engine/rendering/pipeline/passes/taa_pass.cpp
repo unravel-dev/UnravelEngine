@@ -16,29 +16,6 @@ namespace
 {
 /// Avoid WRAP at RT edges when sampling history / scene color in TAA (reduces border streaks).
 constexpr std::uint32_t k_taa_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
-/// Largest per-element difference between this frame's and last frame's unjittered view-projection that still
-/// counts as a PARKED camera (a parked camera rebuilds bit-identical matrices; this only absorbs float noise).
-constexpr float k_taa_parked_matrix_epsilon = 1e-5f;
-
-/// True when the camera did not move since last frame: its unjittered view-projections match per element.
-auto is_camera_parked(const camera& cam) -> bool
-{
-    const auto current = cam.get_view_projection_unjittered();
-    const auto previous = cam.get_prev_view_projection_unjittered();
-    const auto& current_matrix = current.get_matrix();
-    const auto& previous_matrix = previous.get_matrix();
-    for(int column = 0; column < 4; ++column)
-    {
-        for(int row = 0; row < 4; ++row)
-        {
-            if(std::abs(current_matrix[column][row] - previous_matrix[column][row]) > k_taa_parked_matrix_epsilon)
-            {
-                return false;
-            }
-        }
-    }
-    return true;
-}
 } // namespace
 
 auto taa_pass::init(rtti::context& ctx) -> bool
@@ -124,7 +101,9 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
 
     gfx::render_pass pass("TAA/Resolve Pass");
     pass.bind(temp_fbo.get());
-    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
+    // The output lives on the unjittered pixel grid: fs_taa.sc reconstructs positions through the unjittered
+    // projection and resamples the current frame around the unjittered centre with the jitter below.
+    pass.set_view_proj(params.cam->get_view(), params.cam->get_projection_unjittered());
 
     if(!program_.program->begin())
     {
@@ -156,8 +135,9 @@ auto taa_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::fr
                                  params.config.variance_clip_scale};
     gfx::set_uniform(program_.u_taa_params, taa_params);
 
-    // y = 1 while the camera is parked: the shader's display average of still pixels with last frame's history.
-    const float taa_params2[4] = {use_velocity ? 1.0f : 0.0f, is_camera_parked(*params.cam) ? 1.0f : 0.0f, 0.0f, 0.0f};
+    // yz = the frame's jitter as the NDC offset the jittered projection carries (camera aa_data.zw).
+    const auto& aa_data = params.cam->get_aa_data();
+    const float taa_params2[4] = {use_velocity ? 1.0f : 0.0f, aa_data.z, aa_data.w, 0.0f};
     gfx::set_uniform(program_.u_taa_params2, taa_params2);
     gfx::set_uniform(program_.u_pre_exposure, params.pre_exposure.to_uniform().data());
 
