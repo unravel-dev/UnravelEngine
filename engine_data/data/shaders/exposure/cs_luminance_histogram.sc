@@ -7,10 +7,15 @@
  * filtered downsample). Each sample carries a spatial weight (average / center-weighted /
  * spot) and is split linearly between the two bins around its position (UE Histogram.usf),
  * which keeps the metered value continuous as luminance moves across bin boundaries.
+ * Luminance is UE's eye adaptation luminance: uniform RGB weights
+ * (r.AutoExposure.LuminanceMethod 0), so saturated blue or red light meters as UE meters it.
  *
  * Bin layout: bin 0 holds black samples (the average ignores it, like UE's
  * r.EyeAdaptation.BlackHistogramBucketInfluence = 0); bins 1..255 cover the log2 luminance
  * range, with position = t * 254 + 1 for t in [0, 1] and bin i centred at t = (i - 1) / 254.
+ * Black is UE's: anything at or below the bottom of the range. UE's histogram has 64 buckets
+ * and its bucket 0 carries no weight, so a sample within one bucket width of the floor keeps
+ * only the share it splits into bucket 1; the floor ramp below reproduces that.
  *
  * Uses shared memory for a per-workgroup local histogram, then atomically merges into the
  * global histogram buffer.
@@ -49,8 +54,9 @@ uniform vec4 u_metering_cell;
 // Fixed-point scale for fractional sample weights (spatial weight x bin share). 1024 x the
 // 1024x576 grid cap stays below 2^32 even if every sample lands in one bin.
 #define WEIGHT_SCALE 1024.0
-// log2 of the scene luminance below which a sample reads as black (1e-5).
-#define LOG2_BLACK_LUMINANCE -16.609640474
+// UE's histogram bucket count (FHistogramAtomicCS::HistogramSize): the floor ramp spans one of
+// its buckets.
+#define UE_HISTOGRAM_BUCKETS 64.0
 #define FIRST_LUMINANCE_BIN 1.0
 #define LUMINANCE_BIN_SPAN 254.0
 #define LAST_BIN 255u
@@ -107,29 +113,30 @@ void main()
         vec2 cell = vec2(gid) + vec2(0.5, 0.5);
         float spatial_weight = metering_weight(cell / vec2(u_meter_width, u_meter_height));
         vec3 color = sample_cell_color(cell * u_cell_texels);
-        float lum = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        float lum = dot(color, vec3_splat(1.0 / 3.0));
         // NaN or negative lighting reads as black.
         lum = (lum > 0.0) ? lum : 0.0;
-        // Scene luminance: the input may carry the view's pre-exposure.
-        float log_lum = log2(max(lum, 1e-30)) - u_log2_pre_exposure;
+        // Scene luminance: the input may carry the view's pre-exposure. UE floors it at the bottom
+        // of the histogram range (CalculateEyeAdaptationLuminance's LuminanceMin).
+        float log_lum = max(log2(max(lum, 1e-30)) - u_log2_pre_exposure, u_min_log_lum);
         imageStore(i_exposure_log_lum, ivec2(gid), vec4(log_lum, 0.0, 0.0, 0.0));
 
+        float histogram_position = (log_lum - u_min_log_lum) * u_inv_log_range;
+        float metered_share = saturate(histogram_position * (UE_HISTOGRAM_BUCKETS - 1.0));
+        float metered_weight = spatial_weight * metered_share;
         if (spatial_weight > 0.0)
         {
-            if (log_lum < LOG2_BLACK_LUMINANCE)
-            {
-                atomicAdd(shared_histogram[0], uint(spatial_weight * WEIGHT_SCALE + 0.5));
-            }
-            else
-            {
-                float position = saturate((log_lum - u_min_log_lum) * u_inv_log_range) * LUMINANCE_BIN_SPAN + FIRST_LUMINANCE_BIN;
-                float lower_position = floor(position);
-                float upper_share = position - lower_position;
-                uint lower_bin = min(uint(lower_position), LAST_BIN);
-                uint upper_bin = min(lower_bin + 1u, LAST_BIN);
-                atomicAdd(shared_histogram[lower_bin], uint(spatial_weight * (1.0 - upper_share) * WEIGHT_SCALE + 0.5));
-                atomicAdd(shared_histogram[upper_bin], uint(spatial_weight * upper_share * WEIGHT_SCALE + 0.5));
-            }
+            atomicAdd(shared_histogram[0], uint((spatial_weight - metered_weight) * WEIGHT_SCALE + 0.5));
+        }
+        if (metered_weight > 0.0)
+        {
+            float position = saturate(histogram_position) * LUMINANCE_BIN_SPAN + FIRST_LUMINANCE_BIN;
+            float lower_position = floor(position);
+            float upper_share = position - lower_position;
+            uint lower_bin = min(uint(lower_position), LAST_BIN);
+            uint upper_bin = min(lower_bin + 1u, LAST_BIN);
+            atomicAdd(shared_histogram[lower_bin], uint(metered_weight * (1.0 - upper_share) * WEIGHT_SCALE + 0.5));
+            atomicAdd(shared_histogram[upper_bin], uint(metered_weight * upper_share * WEIGHT_SCALE + 0.5));
         }
     }
 

@@ -140,21 +140,23 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
     gfx::set_texture(tonemapping_program_.s_input, 0, input->get_texture());
     gfx::set_texture(tonemapping_program_.s_exposure, 1, params.exposure_texture ? params.exposure_texture : default_textures::get().white_texture());
 
-    // LOCAL EXPOSURE. The lookups are point-fetched (the shader does its own trilinear gather
-    // over the flattened grid), and a 1x1 stand-in keeps the bindings valid while the enable
-    // lane below holds the shader on its no-op path.
+    // LOCAL EXPOSURE. The grid is point-fetched (the shader does its own trilinear gather over
+    // the flattened layout); the blurred level is filtered bilinearly, as UE samples it. A 1x1
+    // stand-in keeps the bindings valid while the enable lane below holds the shader on its
+    // no-op path.
     const auto& local = params.local_exposure;
     const bool local_active = local.is_active();
-    constexpr uint64_t local_sampler_flags = BGFX_SAMPLER_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    constexpr uint64_t grid_sampler_flags = BGFX_SAMPLER_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
+    constexpr uint64_t blurred_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
     const auto stand_in = default_textures::get().black_texture();
     gfx::set_texture(tonemapping_program_.s_local_exposure_grid,
                      2,
                      local_active ? local.grid : stand_in,
-                     local_sampler_flags);
+                     grid_sampler_flags);
     gfx::set_texture(tonemapping_program_.s_local_exposure_blurred,
                      3,
                      local_active ? local.blurred : stand_in,
-                     local_sampler_flags);
+                     blurred_sampler_flags);
     const float local_params[4] = {local.highlight_contrast,
                                    local.shadow_contrast,
                                    local.detail_strength,
@@ -170,6 +172,11 @@ auto tonemapping_pass::run(gfx::render_view& rview, const run_params& params) ->
                                     local.tiles_x,
                                     local.tiles_y};
     gfx::set_uniform(tonemapping_program_.u_local_exposure3, local_params3);
+    const float local_params4[4] = {local.grid_uv_scale.x,
+                                    local.grid_uv_scale.y,
+                                    local.blurred_uv_scale.x,
+                                    local.blurred_uv_scale.y};
+    gfx::set_uniform(tonemapping_program_.u_local_exposure4, local_params4);
     
     irect32_t rect(0, 0, irect32_t::value_type(output_size.width), irect32_t::value_type(output_size.height));
     bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());

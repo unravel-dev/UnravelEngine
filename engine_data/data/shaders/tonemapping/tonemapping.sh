@@ -18,6 +18,7 @@
 #define TONEMAP_AGX 13
 #define TONEMAP_AGX_GOLDEN 14
 #define TONEMAP_AGX_PUNCHY 15
+#define TONEMAP_FILM 16
 
 
 #if BGFX_SHADER_MATRIX_COLUMN_MAJOR
@@ -343,6 +344,188 @@ vec3 tonemap_agx_punchy(vec3 color)
     return agx_core(color, vec3_splat(1.0), vec3_splat(0.0), vec3_splat(1.35), 1.4);
 }
 
+// ============================================================================
+// FILM: UE 5.8's default SDR tone curve ("Filmic"). FilmToneMap (TonemapCommon.ush) with the
+// default film settings, inside the SDR colour path of PostProcessCombineLUTs.usf: gamut
+// expansion, blue correction, the curve in ACEScg (AP1) and back to Rec.709. UE bakes this into
+// a 32^3 LUT; here it runs per pixel. Neutral grading makes UE's colour correction an identity,
+// so it is left out. The matrices are UE's, composed for the sRGB working colour space.
+// ============================================================================
+#define FILM_SLOPE 0.88
+#define FILM_TOE 0.55
+#define FILM_SHOULDER 0.26
+#define FILM_BLACK_CLIP 0.0
+#define FILM_WHITE_CLIP 0.04
+#define FILM_BLUE_CORRECTION 0.6
+#define FILM_EXPAND_GAMUT 1.0
+// log10(x) = log2(x) * FILM_LOG10_OF_2.
+#define FILM_LOG10_OF_2 0.30102999566
+
+vec3 film_ap1_luma_weights()
+{
+    return vec3(0.2722287168, 0.6740817658, 0.0536895174);
+}
+
+// ACES RRT helpers (ACESCommon.ush).
+float film_rgb_to_saturation(vec3 rgb)
+{
+    float min_rgb = min(min(rgb.r, rgb.g), rgb.b);
+    float max_rgb = max(max(rgb.r, rgb.g), rgb.b);
+    return (max(max_rgb, 1e-10) - max(min_rgb, 1e-10)) / max(max_rgb, 1e-2);
+}
+
+float film_rgb_to_yc(vec3 rgb)
+{
+    const float yc_radius_weight = 1.75;
+    float chroma = sqrt(max(rgb.b * (rgb.b - rgb.g) + rgb.g * (rgb.g - rgb.r) + rgb.r * (rgb.r - rgb.b), 0.0));
+    return (rgb.b + rgb.g + rgb.r + yc_radius_weight * chroma) / 3.0;
+}
+
+float film_sigmoid_shaper(float x)
+{
+    float t = max(1.0 - abs(0.5 * x), 0.0);
+    float y = 1.0 + sign(x) * (1.0 - t * t);
+    return 0.5 * y;
+}
+
+float film_glow_forward(float yc_in, float glow_gain, float glow_mid)
+{
+    if(yc_in <= 2.0 / 3.0 * glow_mid)
+    {
+        return glow_gain;
+    }
+    if(yc_in >= 2.0 * glow_mid)
+    {
+        return 0.0;
+    }
+    return glow_gain * (glow_mid / yc_in - 0.5);
+}
+
+float film_rgb_to_hue(vec3 rgb)
+{
+    float hue = 0.0;
+    if(rgb.r != rgb.g || rgb.g != rgb.b)
+    {
+        hue = (180.0 / 3.14159265359) * atan2(sqrt(3.0) * (rgb.g - rgb.b), 2.0 * rgb.r - rgb.g - rgb.b);
+    }
+    if(hue < 0.0)
+    {
+        hue += 360.0;
+    }
+    return clamp(hue, 0.0, 360.0);
+}
+
+float film_center_hue(float hue, float center)
+{
+    float centered = hue - center;
+    if(centered < -180.0)
+    {
+        centered += 360.0;
+    }
+    else if(centered > 180.0)
+    {
+        centered -= 360.0;
+    }
+    return centered;
+}
+
+// FilmToneMap: AP1 in, AP1 out (0.18 maps to 0.18, the shoulder tops out at 1 + white clip).
+vec3 film_tone_map(vec3 color_ap1)
+{
+    CONST(mat3) ap1_to_ap0 = mtxFromRows3(
+        vec3(0.6954522413, 0.1406786965, 0.1638690622),
+        vec3(0.0447945634, 0.8596711184, 0.0955343182),
+        vec3(-0.0055258826, 0.0040252103, 1.0015006722));
+    CONST(mat3) ap0_to_ap1 = mtxFromRows3(
+        vec3(1.4514393161, -0.2365107469, -0.2149285693),
+        vec3(-0.0765537734, 1.1762296998, -0.0996759264),
+        vec3(0.0083161484, -0.0060324498, 0.9977163014));
+    vec3 color_ap0 = mul(ap1_to_ap0, color_ap1);
+    // RRT glow module.
+    const float glow_gain = 0.05;
+    const float glow_mid = 0.08;
+    float saturation = film_rgb_to_saturation(color_ap0);
+    float yc_in = film_rgb_to_yc(color_ap0);
+    float glow_shape = film_sigmoid_shaper((saturation - 0.4) / 0.2);
+    color_ap0 *= 1.0 + film_glow_forward(yc_in, glow_gain * glow_shape, glow_mid);
+    // RRT red modifier.
+    const float red_scale = 0.82;
+    const float red_pivot = 0.03;
+    const float red_hue = 0.0;
+    const float red_width = 135.0;
+    float centered_hue = film_center_hue(film_rgb_to_hue(color_ap0), red_hue);
+    float hue_weight = smoothstep(0.0, 1.0, 1.0 - abs(2.0 * centered_hue / red_width));
+    hue_weight *= hue_weight;
+    color_ap0.r += hue_weight * saturation * (red_pivot - color_ap0.r) * (1.0 - red_scale);
+    vec3 working = max(mul(ap0_to_ap1, color_ap0), vec3_splat(0.0));
+    // Pre desaturate.
+    working = mix(vec3_splat(dot(working, film_ap1_luma_weights())), working, 0.96);
+    const float toe_scale = 1.0 + FILM_BLACK_CLIP - FILM_TOE;
+    const float shoulder_scale = 1.0 + FILM_WHITE_CLIP - FILM_SHOULDER;
+    const float in_match = 0.18;
+    const float out_match = 0.18;
+    // FILM_TOE <= 0.8: 0.18 sits on the toe segment; solve the toe so that 0.18 maps to 0.18.
+    const float toe_bt = (out_match + FILM_BLACK_CLIP) / toe_scale - 1.0;
+    float toe_match = log2(in_match) * FILM_LOG10_OF_2 - 0.5 * log((1.0 + toe_bt) / (1.0 - toe_bt)) * (toe_scale / FILM_SLOPE);
+    float straight_match = (1.0 - FILM_TOE) / FILM_SLOPE - toe_match;
+    float shoulder_match = FILM_SHOULDER / FILM_SLOPE - straight_match;
+    vec3 log_color = log2(max(working, vec3_splat(1e-10))) * FILM_LOG10_OF_2;
+    vec3 straight_color = FILM_SLOPE * (log_color + straight_match);
+    vec3 toe_color = -FILM_BLACK_CLIP + (2.0 * toe_scale) /
+                     (1.0 + exp((-2.0 * FILM_SLOPE / toe_scale) * (log_color - toe_match)));
+    vec3 shoulder_color = (1.0 + FILM_WHITE_CLIP) - (2.0 * shoulder_scale) /
+                          (1.0 + exp((2.0 * FILM_SLOPE / shoulder_scale) * (log_color - shoulder_match)));
+    toe_color = mix(toe_color, straight_color, step(vec3_splat(toe_match), log_color));
+    shoulder_color = mix(shoulder_color, straight_color, step(log_color, vec3_splat(shoulder_match)));
+    vec3 t = saturate((log_color - toe_match) / (shoulder_match - toe_match));
+    t = shoulder_match < toe_match ? vec3_splat(1.0) - t : t;
+    t = (3.0 - 2.0 * t) * t * t;
+    vec3 tone_color = mix(toe_color, shoulder_color, t);
+    // Post desaturate.
+    tone_color = mix(vec3_splat(dot(tone_color, film_ap1_luma_weights())), tone_color, 0.93);
+    return max(tone_color, vec3_splat(0.0));
+}
+
+// Linear Rec.709 in, linear display Rec.709 out (up to 1 + FILM_WHITE_CLIP; the caller encodes).
+vec3 tonemap_film(vec3 color)
+{
+    CONST(mat3) srgb_to_ap1 = mtxFromRows3(
+        vec3(0.6130974024, 0.3395231461, 0.0473794514),
+        vec3(0.0701937225, 0.9163538791, 0.0134523986),
+        vec3(0.0206155929, 0.1095697729, 0.8698146341));
+    CONST(mat3) ap1_to_srgb = mtxFromRows3(
+        vec3(1.7050509926, -0.6217921205, -0.0832588722),
+        vec3(-0.1302564175, 1.1408047365, -0.0105483190),
+        vec3(-0.0240033568, -0.1289689761, 1.1529723328));
+    // Bright saturated colours pushed out toward a gamut between P3 and AP1.
+    CONST(mat3) expand_gamut = mtxFromRows3(
+        vec3(1.3704123718, -0.3292921877, -0.0636831194),
+        vec3(-0.0834334917, 1.0970927480, -0.0108613795),
+        vec3(-0.0257933209, -0.0986257988, 1.2036949526));
+    CONST(mat3) blue_correct = mtxFromRows3(
+        vec3(0.9386393778, 0.0, 0.0613606221),
+        vec3(0.0, 0.8307941329, 0.1692058671),
+        vec3(0.0, 0.0, 1.0));
+    CONST(mat3) blue_correct_inverse = mtxFromRows3(
+        vec3(1.0653748754, 0.0000014468, -0.0653710053),
+        vec3(-0.0000003455, 1.2036635244, -0.2036677199),
+        vec3(0.0000000199, 0.0000000212, 0.9999996001));
+    vec3 color_ap1 = mul(srgb_to_ap1, color);
+    float luma_ap1 = dot(color_ap1, film_ap1_luma_weights());
+    if(luma_ap1 > 0.0)
+    {
+        vec3 chroma_ap1 = color_ap1 / luma_ap1;
+        float chroma_distance_sq = dot(chroma_ap1 - vec3_splat(1.0), chroma_ap1 - vec3_splat(1.0));
+        float expand_amount = (1.0 - exp2(-4.0 * chroma_distance_sq)) *
+                              (1.0 - exp2(-4.0 * FILM_EXPAND_GAMUT * luma_ap1 * luma_ap1));
+        color_ap1 = mix(color_ap1, mul(expand_gamut, color_ap1), expand_amount);
+    }
+    color_ap1 = mix(color_ap1, mul(blue_correct, color_ap1), FILM_BLUE_CORRECTION);
+    color_ap1 = film_tone_map(color_ap1);
+    color_ap1 = mix(color_ap1, mul(blue_correct_inverse, color_ap1), FILM_BLUE_CORRECTION);
+    return max(mul(ap1_to_srgb, color_ap1), vec3_splat(0.0));
+}
+
 // Khronos PBR Neutral Tone Mapper
 vec3 tonemap_neutral(vec3 color)
 {
@@ -442,6 +625,12 @@ vec3 apply_tonemapping(vec3 color, int method, float exposure)
     else if(method == TONEMAP_AGX_PUNCHY)
     {
         tonemapped_color = linear_to_srgb(tonemap_agx_punchy(color));
+    }
+    else if(method == TONEMAP_FILM)
+    {
+        // The shoulder reaches 1 + white clip; the display encode clips it, as UE's 8/10-bit
+        // output does after its LUT.
+        tonemapped_color = linear_to_srgb(saturate(tonemap_film(color)));
     }
     else
     {

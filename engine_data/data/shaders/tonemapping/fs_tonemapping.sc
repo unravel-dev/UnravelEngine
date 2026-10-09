@@ -16,9 +16,10 @@ SAMPLER2D(s_input, 0);
 SAMPLER2D(s_exposure, 1);
 /// LOCAL EXPOSURE (UE's bilateral-grid method). The grid is the flattened 3D atlas
 /// cs_local_exposure_grid.sc writes - texel (tile_x * slices + slice, tile_y), rg = the slice's
-/// sum of log2 luminance and sum of weight per tile cell - and the blurred texture is the
-/// tile-grid Gaussian of the plain tile means. Both are bound as white 1x1 when local exposure
-/// is off, and the enable lane below keeps them unread.
+/// raw sum of log2 luminance and sum of weight - read with texelFetch; the blurred texture is
+/// the 1/32 resolution Gaussian of the log luminance (cs_local_exposure_blur.sc), read with a
+/// bilinear sampler as UE reads it. Both are bound as 1x1 stand-ins when local exposure is off,
+/// and the enable lane below keeps them unread.
 SAMPLER2D(s_local_exposure_grid, 2);
 SAMPLER2D(s_local_exposure_blurred, 3);
 
@@ -30,6 +31,9 @@ uniform vec4 u_local_exposure;
 uniform vec4 u_local_exposure2;
 /// x = 1 / log2 luminance range, y = slice count, z = tiles x, w = tiles y.
 uniform vec4 u_local_exposure3;
+/// xy = screen uv -> tile grid uv scale, zw = screen uv -> blurred texture uv scale: the share of
+/// each the view covers, their last tile / texel being partial (UE BilateralGridUVScale).
+uniform vec4 u_local_exposure4;
 
 #define u_local_highlight_contrast u_local_exposure.x
 #define u_local_shadow_contrast    u_local_exposure.y
@@ -43,12 +47,14 @@ uniform vec4 u_local_exposure3;
 #define u_local_slices             u_local_exposure3.y
 #define u_local_tiles_x            u_local_exposure3.z
 #define u_local_tiles_y            u_local_exposure3.w
+#define u_local_grid_uv_scale      u_local_exposure4.xy
+#define u_local_blurred_uv_scale   u_local_exposure4.zw
 
 // log2(0.18): the pivot the contrast scales turn around sits at middle grey, shifted by the
 // frame's applied exposure bias (AUTO_EXPOSURE.b) and the settings' own bias.
 #define LOG2_MIDDLE_GREY -2.4739311883
-// A slice holding less than this share of its tile's cells is not a measurement; the blurred
-// level answers instead (UE's own fallback rule).
+// A gathered weight below this is no measurement (the grid holds raw cell counts, so this means
+// no cell at all); the blurred level answers instead (UE's own fallback rule).
 #define LOCAL_EXPOSURE_MIN_WEIGHT 0.001
 
 /// One cell of the flattened grid: (sum of log2 luminance, sum of weight) for a tile's slice.
@@ -67,7 +73,7 @@ vec2 sample_local_grid_cell(int tile_x, int tile_y, int slice)
  */
 float compute_local_base_log(vec2 uv, float scene_log_lum, float blurred_log_lum)
 {
-    vec2 tile_coord = uv * vec2(u_local_tiles_x, u_local_tiles_y) - vec2_splat(0.5);
+    vec2 tile_coord = uv * u_local_grid_uv_scale * vec2(u_local_tiles_x, u_local_tiles_y) - vec2_splat(0.5);
     vec2 tile_base = floor(tile_coord);
     vec2 tile_fraction = tile_coord - tile_base;
     ivec2 last_tile = ivec2(int(u_local_tiles_x) - 1, int(u_local_tiles_y) - 1);
@@ -156,10 +162,12 @@ void main()
     float local_exposure = 1.0;
     if (u_local_exposure_enabled)
     {
-        float scene_luminance = max(dot(color, vec3(0.2126, 0.7152, 0.0722)), 1e-30);
+        // The histogram's luminance (uniform weights, floored at the bottom of its range): the
+        // grid was binned on it, and UE's tonemapper measures with the same function.
+        float scene_luminance = max(dot(color, vec3_splat(1.0 / 3.0)), 1e-30);
         // The input carries the view pre-exposure; the grid was binned on scene luminance.
-        float scene_log_lum = log2(scene_luminance) - u_log2_pre_exposure;
-        float blurred_log_lum = texture2DLod(s_local_exposure_blurred, v_texcoord0, 0.0).x;
+        float scene_log_lum = max(log2(scene_luminance) - u_log2_pre_exposure, u_local_min_log_lum);
+        float blurred_log_lum = texture2DLod(s_local_exposure_blurred, v_texcoord0 * u_local_blurred_uv_scale, 0.0).x;
         float base_log_lum = compute_local_base_log(v_texcoord0, scene_log_lum, blurred_log_lum);
         // Into the same display-referred space the pivot lives in: the pixel's own exposure,
         // which is the global exposure with the pre-exposure taken back out.

@@ -1,5 +1,7 @@
 #include "auto_exposure_component.hpp"
 
+#include "engine/meta/core/math/vector.hpp"
+
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
 
@@ -47,6 +49,15 @@ REFLECT_INLINE(auto_exposure_pass::settings)
                 "The metered scene brightness is shown at 18% grey times 2^compensation. "
                 "+1 is twice as bright, -1 is half as bright."},
         })
+        .data<&auto_exposure_pass::settings::compensation_curve>("compensation_curve"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "compensation_curve"},
+            entt::attribute{"pretty_name", "Exposure Compensation Curve"},
+            entt::attribute{"tooltip", "Extra compensation by scene brightness. Each key is "
+                "(metered brightness in EV100, stops added); values between keys blend, "
+                "and past the first and last key the end values hold. "
+                "Empty adds nothing. Example: (-6, -2) and (0, 0) keep night scenes darker."},
+        })
         .data<&auto_exposure_pass::settings::min_ev>("min_ev"_hs)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "min_ev"},
@@ -55,7 +66,7 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"max", 20.0f},
             entt::attribute{"step", 0.5f},
             entt::attribute{"tooltip", "Darkest scene brightness auto exposure adapts to, in EV100. "
-                "Darker scenes stop getting brighter here. How far dark scenes brighten also depends on Dark Adaptation."},
+                "Darker scenes stop getting brighter here."},
         })
         .data<&auto_exposure_pass::settings::max_ev>("max_ev"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -71,8 +82,8 @@ REFLECT_INLINE(auto_exposure_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "low_percentile"},
             entt::attribute{"pretty_name", "Low Percent"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
+            entt::attribute{"min", 0.01f},
+            entt::attribute{"max", 0.99f},
             entt::attribute{"step", 0.01f},
             entt::attribute{"tooltip", "Share of the darkest pixels ignored when metering. "
                 "Higher values let bright areas decide the exposure."},
@@ -81,8 +92,8 @@ REFLECT_INLINE(auto_exposure_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "high_percentile"},
             entt::attribute{"pretty_name", "High Percent"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
+            entt::attribute{"min", 0.01f},
+            entt::attribute{"max", 0.99f},
             entt::attribute{"step", 0.01f},
             entt::attribute{"tooltip", "Share of pixels kept before the brightest are ignored (sun, specular sparks). "
                 "Lower this if small bright spots make the scene too dark."},
@@ -106,16 +117,6 @@ REFLECT_INLINE(auto_exposure_pass::settings)
             entt::attribute{"step", 0.1f},
             entt::attribute{"tooltip", "Adaptation speed in stops per second when the scene gets darker "
                 "(e.g. walking indoors)."},
-        })
-        .data<&auto_exposure_pass::settings::dark_adaptation>("dark_adaptation"_hs)
-        .custom<entt::attributes>(entt::attributes{
-            entt::attribute{"name", "dark_adaptation"},
-            entt::attribute{"pretty_name", "Dark Adaptation"},
-            entt::attribute{"min", 0.0f},
-            entt::attribute{"max", 1.0f},
-            entt::attribute{"step", 0.05f},
-            entt::attribute{"tooltip", "How much dark scenes are brightened. "
-                "1 adapts fully, 0 keeps darkness as it is. Bright scenes are unaffected."},
         })
         .data<&auto_exposure_pass::settings::metering_mode>("metering_mode"_hs)
         .custom<entt::attributes>(entt::attributes{
@@ -203,17 +204,15 @@ SAVE_INLINE(auto_exposure_pass::settings)
     std::uint32_t version = auto_exposure_pass::settings_version;
     try_save(ar, ser20::make_nvp("settings_version", version));
     try_save(ar, ser20::make_nvp("compensation", obj.compensation));
+    try_save(ar, ser20::make_nvp("compensation_curve", obj.compensation_curve));
     try_save(ar, ser20::make_nvp("min_ev", obj.min_ev));
     try_save(ar, ser20::make_nvp("max_ev", obj.max_ev));
     try_save(ar, ser20::make_nvp("low_percentile", obj.low_percentile));
     try_save(ar, ser20::make_nvp("high_percentile", obj.high_percentile));
     try_save(ar, ser20::make_nvp("speed_up", obj.speed_up));
     try_save(ar, ser20::make_nvp("speed_down", obj.speed_down));
-    try_save(ar, ser20::make_nvp("dark_adaptation", obj.dark_adaptation));
     try_save(ar, ser20::make_nvp("metering_mode", obj.metering_mode));
     try_save(ar, ser20::make_nvp("metering_area", obj.metering_area));
-    // Local exposure, appended to version 2: a document written before it simply leaves these
-    // at their neutral defaults, which is the same as not having them.
     try_save(ar, ser20::make_nvp("local_highlight_contrast", obj.local_highlight_contrast));
     try_save(ar, ser20::make_nvp("local_shadow_contrast", obj.local_shadow_contrast));
     try_save(ar, ser20::make_nvp("local_detail_strength", obj.local_detail_strength));
@@ -226,8 +225,8 @@ SAVE_INSTANTIATE(auto_exposure_pass::settings, ser20::oarchive_binary_t);
 
 LOAD_INLINE(auto_exposure_pass::settings)
 {
-    // Settings saved before the UE exposure model (no version) were tuned for different units
-    // and metering; they are ignored so the scene picks up the current defaults.
+    // Settings saved by an earlier exposure model (no version, or an older one) were tuned for
+    // different metering and defaults; they are ignored so the scene picks up the current ones.
     std::uint32_t version = 0;
     try_load(ar, ser20::make_nvp("settings_version", version));
     if(version != auto_exposure_pass::settings_version)
@@ -235,13 +234,13 @@ LOAD_INLINE(auto_exposure_pass::settings)
         return;
     }
     try_load(ar, ser20::make_nvp("compensation", obj.compensation));
+    try_load(ar, ser20::make_nvp("compensation_curve", obj.compensation_curve));
     try_load(ar, ser20::make_nvp("min_ev", obj.min_ev));
     try_load(ar, ser20::make_nvp("max_ev", obj.max_ev));
     try_load(ar, ser20::make_nvp("low_percentile", obj.low_percentile));
     try_load(ar, ser20::make_nvp("high_percentile", obj.high_percentile));
     try_load(ar, ser20::make_nvp("speed_up", obj.speed_up));
     try_load(ar, ser20::make_nvp("speed_down", obj.speed_down));
-    try_load(ar, ser20::make_nvp("dark_adaptation", obj.dark_adaptation));
     try_load(ar, ser20::make_nvp("metering_mode", obj.metering_mode));
     try_load(ar, ser20::make_nvp("metering_area", obj.metering_area));
     try_load(ar, ser20::make_nvp("local_highlight_contrast", obj.local_highlight_contrast));

@@ -32,7 +32,6 @@ public:
         result.high_percentile = std::lerp(result.high_percentile, from.high_percentile, contribution);
         result.speed_up = std::lerp(result.speed_up, from.speed_up, contribution);
         result.speed_down = std::lerp(result.speed_down, from.speed_down, contribution);
-        result.dark_adaptation = std::lerp(result.dark_adaptation, from.dark_adaptation, contribution);
         result.metering_area = std::lerp(result.metering_area, from.metering_area, contribution);
         result.local_highlight_contrast =
             std::lerp(result.local_highlight_contrast, from.local_highlight_contrast, contribution);
@@ -45,10 +44,12 @@ public:
             std::lerp(result.local_blurred_kernel_percent, from.local_blurred_kernel_percent, contribution);
         result.local_middle_grey_bias =
             std::lerp(result.local_middle_grey_bias, from.local_middle_grey_bias, contribution);
-        // Metering mode is discrete and cannot be interpolated; the dominant volume wins.
+        // Metering mode and the compensation curve cannot be interpolated; the dominant volume
+        // wins (UE takes the curve of the last volume that sets it).
         if(contribution >= 0.5f)
         {
             result.metering_mode = from.metering_mode;
+            result.compensation_curve = from.compensation_curve;
         }
     }
 };

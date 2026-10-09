@@ -95,6 +95,11 @@ REFLECT_INLINE(tonemapping_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "agx_punchy"},
             entt::attribute{"pretty_name", "AgX Punchy"},
+        })
+        .data<tonemapping_method::film>("film"_hs)
+        .custom<entt::attributes>(entt::attributes{
+            entt::attribute{"name", "film"},
+            entt::attribute{"pretty_name", "Film"},
         });
 
     // Register tonemapping_pass::settings class with entt

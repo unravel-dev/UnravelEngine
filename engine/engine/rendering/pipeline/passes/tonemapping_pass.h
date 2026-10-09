@@ -25,7 +25,10 @@ enum class tonemapping_method : uint8_t
     neutral,
     agx,
     agx_golden,
-    agx_punchy
+    agx_punchy,
+    /// UE 5.8's default SDR curve (Filmic: ACES-derived toe and shoulder in AP1, blue correction,
+    /// gamut expansion).
+    film
 };
 
 class tonemapping_pass
@@ -34,14 +37,11 @@ public:
     struct settings
     {
         float exposure = 1.0f;
-        /// AgX is the default: hue-robust under bright light (no red->orange /
-        /// blue->cyan skew) and no per-channel clipping. Display-white / punch
-        /// comes from Auto Exposure Compensation (default +1, UE 5.8's own, on
-        /// the UE metering model - measured 2026-09-16 to put a neutral room's
-        /// median at mid grey), not from remapping operators onto each other. AgX Punchy,
-        /// ACES, or grading Contrast add more punch on top. aces/aces_lum give
-        /// the UE-family S-curve at the cost of hue skews.
-        tonemapping_method method = tonemapping_method::agx;
+        /// Film is the default: UE 5.8's own curve, which its default Auto Exposure
+        /// Compensation (+1) is built around - the metered average lands at display 0.67, with
+        /// UE's contrast and saturation. AgX keeps hue more stable under very bright saturated
+        /// light and holds about two more stops of highlights, with lifted shadows.
+        tonemapping_method method = tonemapping_method::film;
 
         // -- Color grading, evaluated in LINEAR space after exposure, before the
         //    tone curve (the same stage UE/Unity grade at).
@@ -92,12 +92,15 @@ public:
     struct local_exposure_params
     {
         /// Flattened bilateral grid: texel (tile_x * slices + slice, tile_y), rg = the slice's
-        /// sum of log2 luminance and of weight per tile cell.
+        /// raw sum of log2 luminance and of weight.
         gfx::texture::ptr grid;
-        /// Tile-grid Gaussian of the plain tile means, the edge-blind level.
+        /// The 1/32 resolution Gaussian of the log luminance, the edge-blind level.
         gfx::texture::ptr blurred;
         float tiles_x = 0.0f;
         float tiles_y = 0.0f;
+        /// Screen uv -> grid / blurred uv: the share of each the view covers.
+        math::vec2 grid_uv_scale{1.0f, 1.0f};
+        math::vec2 blurred_uv_scale{1.0f, 1.0f};
         float slices = 0.0f;
         /// The grid's luminance axis, matching the histogram's.
         float min_log_lum = 0.0f;
@@ -155,6 +158,7 @@ private:
             cache_uniform(program.get(), u_local_exposure, "u_local_exposure", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_local_exposure2, "u_local_exposure2", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_local_exposure3, "u_local_exposure3", bgfx::UniformType::Vec4);
+            cache_uniform(program.get(), u_local_exposure4, "u_local_exposure4", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), s_local_exposure_grid, "s_local_exposure_grid", bgfx::UniformType::Sampler);
             cache_uniform(program.get(),
                           s_local_exposure_blurred,
@@ -174,6 +178,7 @@ private:
         gfx::program::uniform_ptr u_local_exposure;
         gfx::program::uniform_ptr u_local_exposure2;
         gfx::program::uniform_ptr u_local_exposure3;
+        gfx::program::uniform_ptr u_local_exposure4;
         gfx::program::uniform_ptr s_local_exposure_grid;
         gfx::program::uniform_ptr s_local_exposure_blurred;
 

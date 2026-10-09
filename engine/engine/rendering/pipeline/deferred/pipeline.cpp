@@ -1843,18 +1843,26 @@ void deferred::run_assao_pass(const camera& camera,
 
 namespace
 {
+/// The camera moved further than auto_exposure_pass::camera_cut_distance, or turned wider than
+/// auto_exposure_pass::camera_cut_degrees about its right, up or forward axis, since last frame:
+/// a cut, not a move (UE IsLargeCameraMovement).
+auto is_camera_cut(const camera& cam) -> bool
+{
+    // The camera recorded last frame's matrices before this frame's passes ran.
+    const math::transform previous = math::inverse(cam.get_prev_view());
+    const math::transform current = math::inverse(cam.get_view());
+    const float min_axis_cosine = std::cos(math::radians(auto_exposure_pass::camera_cut_degrees));
+    const bool is_large_turn = math::dot(current.x_unit_axis(), previous.x_unit_axis()) < min_axis_cosine ||
+                               math::dot(current.y_unit_axis(), previous.y_unit_axis()) < min_axis_cosine ||
+                               math::dot(current.z_unit_axis(), previous.z_unit_axis()) < min_axis_cosine;
+    return is_large_turn ||
+           math::distance(current.get_position(), previous.get_position()) > auto_exposure_pass::camera_cut_distance;
+}
+
 /// The directional light's luminous intensity in engine units (intensity x the luminance of
 /// its linear colour): the one knob the sun-relative Perez sky follows (perez_luminance.h).
 /// The strongest active directional light wins; 0 when the scene has none, which keeps the
 /// fixed conversion.
-/// The camera moved further than auto_exposure_pass::camera_cut_distance since last frame: a cut, not a move.
-auto is_camera_cut(const camera& cam) -> bool
-{
-    // The camera recorded last frame's matrices before this frame's passes ran.
-    const math::vec3 previous_position = math::inverse(cam.get_prev_view()).get_position();
-    return math::distance(cam.get_position(), previous_position) > auto_exposure_pass::camera_cut_distance;
-}
-
 auto find_sun_luminous_intensity(scene& scn) -> float
 {
     float strongest = 0.0f;
@@ -3040,6 +3048,8 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
             params.local_exposure.blurred = local_view.blurred;
             params.local_exposure.tiles_x = local_view.tiles_x;
             params.local_exposure.tiles_y = local_view.tiles_y;
+            params.local_exposure.grid_uv_scale = local_view.grid_uv_scale;
+            params.local_exposure.blurred_uv_scale = local_view.blurred_uv_scale;
             params.local_exposure.slices = float(auto_exposure_pass::local_exposure_slices);
             params.local_exposure.min_log_lum = auto_exposure_pass::min_log_lum;
             params.local_exposure.log_lum_range =
