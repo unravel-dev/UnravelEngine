@@ -173,7 +173,7 @@ float hardShadowLod(sampler2D _sampler, float lod, vec4 _shadowCoord, float _bia
     }
 #endif
 
-    float receiver = (_shadowCoord.z-_bias)/_shadowCoord.w + receiverPlaneDelta(texCoord, receiverUV, _planeGrad);
+    float receiver = _shadowCoord.z/_shadowCoord.w - _bias + receiverPlaneDelta(texCoord, receiverUV, _planeGrad);
     float occluder = texture2DLod(_sampler, texCoord, lod).x;
 
     float visibility = step(receiver, occluder);
@@ -292,7 +292,7 @@ float transmittanceLod(sampler2D _sampler, float lod, vec4 _shadowCoord, float _
     }
 #endif
 
-    float receiver = (_shadowCoord.z-_bias)/_shadowCoord.w + receiverPlaneDelta(texCoord, receiverUV, _planeGrad);
+    float receiver = _shadowCoord.z/_shadowCoord.w - _bias + receiverPlaneDelta(texCoord, receiverUV, _planeGrad);
     float occluder = texture2DLod(_sampler, texCoord, lod).x;
     return exp(-shadowOccluderDistance(receiver, occluder, _model) * _density);
 }
@@ -345,7 +345,7 @@ float VSM(sampler2D _sampler, vec4 _shadowCoord, float _bias, float _depthMultip
         return 1.0;
     }
 
-    float receiver = (_shadowCoord.z-_bias)/_shadowCoord.w * _depthMultiplier;
+    float receiver = (_shadowCoord.z/_shadowCoord.w - _bias) * _depthMultiplier;
     vec2 occluder = texture2D(_sampler, texCoord).xy * _depthMultiplier;
 
     if (receiver < occluder.x)
@@ -374,7 +374,7 @@ float ESM(sampler2D _sampler, vec4 _shadowCoord, float _bias, float _depthMultip
         return 1.0;
     }
 
-    float receiver = (_shadowCoord.z-_bias)/_shadowCoord.w;
+    float receiver = _shadowCoord.z/_shadowCoord.w - _bias;
     float occluder = texture2D(_sampler, texCoord).x;
 
     float visibility = clamp(exp(_depthMultiplier * (occluder-receiver) ), 0.0, 1.0);

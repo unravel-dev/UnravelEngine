@@ -1892,8 +1892,8 @@ void shadowmap_generator::update_bias_uniforms(bool origin_bottom_left)
         return;
     }
     // Point light: every tetrahedron face covers half the map height; the stencil-packed
-    // vertical faces use their own projection for the depth derivative. The receiver-plane
-    // term stays off (axes zero): each face would need its own basis.
+    // vertical faces use their own projection for the depth derivative. The axes stay zero:
+    // the shader takes each face's receiver plane from its face matrix (omniPlaneGradient).
     persp[0] = persp[2] / (map_size * 0.5f);
     if(settings_.m_stencilPack)
     {

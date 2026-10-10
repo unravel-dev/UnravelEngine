@@ -272,6 +272,9 @@ struct light
         /// the far cascades without retuning per scene. Planar receivers are compared against
         /// their own plane at the texel centre (see fs_pbr_lighting.sh), so the three terms only
         /// cover what that plane does not know: curvature, normal maps and position error.
+        /// 0.5 for each term is the smallest set that keeps curved and normal-mapped receivers
+        /// free of acne for every light type and filter: lower slope and normal values speckle
+        /// them, a lower constant gains no visible contact.
         float bias{0.5f};
         /// Receiver offset along the surface normal, in shadow-map texels, scaled by the sine
         /// of the angle between the normal and the light (zero when facing the light).

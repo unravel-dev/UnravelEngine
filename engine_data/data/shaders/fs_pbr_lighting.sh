@@ -92,7 +92,8 @@ uniform vec4 u_csmTexelWorld;
 /// Spot / point: x = texel world size per unit distance along the light axis,
 /// y / z = map width / height per unit distance.
 uniform vec4 u_perspTexelParams;
-/// World-space unit vectors along +u / +v of the map (zero = receiver-plane term off).
+/// World-space unit vectors along +u / +v of the map (zero for point lights, whose tetrahedron
+/// faces take the receiver plane from the face matrix, see omniPlaneGradient).
 uniform vec4 u_shadowAxisU;
 uniform vec4 u_shadowAxisV;
 
@@ -206,6 +207,53 @@ vec2 shadowPlaneGradient(ShadowReceiver r, vec2 mapExtent, float depthScale)
 {
     return vec2(r.nU, r.nV) * mapExtent * (r.invNdotL * depthScale);
 }
+
+#if SM_OMNI
+// A tetrahedron face spans about 152 x 128 degrees and most receivers sit far off its axis, where
+// the spot light's on-axis plane term (map axes x extent / N.L) is off by up to 1 / cos(76 deg).
+// Point lights derive the receiver plane from the face's own transform instead: the change of map
+// UV and stored depth along a world direction.
+
+// Clip-space change of the face projection for a world-space direction.
+vec4 omniFaceDelta(mat4 faceMtx, vec3 dir)
+{
+    return mul(faceMtx, mul(u_lightMtx, vec4(dir, 0.0)));
+}
+
+// Map UV change at faceClip for the clip-space change faceDelta.
+vec2 omniUvDelta(vec4 faceClip, vec4 faceDelta)
+{
+    return (faceDelta.xy - faceClip.xy * (faceDelta.w / faceClip.w)) / faceClip.w;
+}
+
+// Change of stored depth per unit of map UV along the receiver plane (normal N): exact for 1/z
+// depth, which is linear in UV over a plane, first order for linear depth. maxGrad caps it where
+// the plane turns edge-on to the light.
+vec2 omniPlaneGradient(mat4 faceMtx, vec4 faceClip, vec3 N, float maxGrad)
+{
+    vec3 helper = abs(N.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent0 = normalize(cross(N, helper));
+    vec3 tangent1 = cross(N, tangent0);
+    vec4 d0 = omniFaceDelta(faceMtx, tangent0);
+    vec4 d1 = omniFaceDelta(faceMtx, tangent1);
+    vec2 uv0 = omniUvDelta(faceClip, d0);
+    vec2 uv1 = omniUvDelta(faceClip, d1);
+#if SM_LINEAR
+    vec2 depthDelta = vec2(d0.z, d1.z);
+#else
+    float depth = faceClip.z / faceClip.w;
+    vec2 depthDelta = vec2(d0.z - depth * d0.w, d1.z - depth * d1.w) / faceClip.w;
+#endif
+    // The gradient g maps a UV step to a depth step on the plane: solve J^T g = depthDelta with
+    // J = [uv0 uv1] (UV change per unit step along the two tangents).
+    float det = uv0.x * uv1.y - uv1.x * uv0.y;
+    det = (det < 0.0 ? -1.0 : 1.0) * max(abs(det), 1e-12);
+    vec2 grad = vec2(uv1.y * depthDelta.x - uv0.y * depthDelta.y,
+                     uv0.x * depthDelta.y - uv1.x * depthDelta.x) / det;
+    float gradLength = length(grad);
+    return gradLength > maxGrad ? grad * (maxGrad / gradLength) : grad;
+}
+#endif
 
 float computeVisibility(sampler2D _sampler
                       , vec4 _shadowCoord
@@ -493,8 +541,8 @@ ShadowTerms CalculateShadowTerms(vec3 world_position, vec3 world_normal, vec3 li
     float depthScale = depthNumerator / max(shadowcoord.w * shadowcoord.w, 1e-6);
 #endif
     float bias = shadowDepthBias(receiver, texelWorld, depthScale);
-    // Receiver-plane term is off for point lights (the map axes are zero per face).
-    vec2 planeGrad = vec2_splat(0.0);
+    vec2 planeGrad = omniPlaneGradient(faceMtx, shadowcoord, world_normal,
+                                       SHADOW_MAX_SLOPE * depthScale * texelWorld / u_shadowMapTexelSize);
 
     float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
     colorCoverage = coverageSign * coverage;
