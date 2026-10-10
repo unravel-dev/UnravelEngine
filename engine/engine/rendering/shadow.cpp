@@ -1341,7 +1341,9 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
             rt_shadow_map_[0] = bgfx::createFrameBuffer(BX_COUNTOF(attachments), attachments, true);
         }
 
-        // if(LightType::DirectionalLight == settings_.m_lightType)
+        // Only directional lights have cascades. A spot light renders into map 0, and a point light
+        // packs its four tetrahedron faces into viewports of map 0.
+        const int map_count = (LightType::DirectionalLight == settings_.m_lightType) ? settings_.m_numSplits : 1;
         {
             for(uint8_t ii = 1; ii < ShadowMapRenderTargets::Count; ++ii)
             {
@@ -1351,7 +1353,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
                     rt_shadow_map_[ii] = {bgfx::kInvalidHandle};
                 }
 
-                if(ii < settings_.m_numSplits)
+                if(ii < map_count)
                 {
                     bgfx::TextureHandle fbtextures[] = {
                         bgfx::createTexture2D(current_shadow_map_size_,
@@ -2541,10 +2543,6 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(shadow_batch_co
         }
 
         const auto instance_count = static_cast<uint32_t>(batch->instances.size());
-        if(stats != nullptr)
-        {
-            stats->drawn_submeshes_for_shadows += instance_count;
-        }
 
         const auto mesh_ptr = batch->key.mesh_ptr;
         const auto lod_index = batch->key.lod_index;
@@ -2573,16 +2571,22 @@ void shadowmap_generator::submit_batched_shadow_geometry_cascade(shadow_batch_co
 
         const auto instance_data_size = static_cast<uint16_t>(instance_vertex_data::packed_size());
         
+        // bgfx lowers num to what the frame's transient buffer still holds; draw only those.
         bgfx::InstanceDataBuffer instance_buffer;
         bgfx::allocInstanceDataBuffer(&instance_buffer, instance_count, instance_data_size);
-        if (!instance_buffer.data)
+        if (!instance_buffer.data || instance_buffer.num == 0)
         {
             prog->end();
             continue;
         }
 
+        if(stats != nullptr)
+        {
+            stats->drawn_submeshes_for_shadows += instance_buffer.num;
+        }
+
         auto* buffer_data = reinterpret_cast<instance_vertex_data*>(instance_buffer.data);
-        for (size_t i = 0; i < batch->instances.size(); ++i)
+        for (uint32_t i = 0; i < instance_buffer.num; ++i)
         {
             buffer_data[i] = instance_vertex_data(batch->instances[i]);
         }
