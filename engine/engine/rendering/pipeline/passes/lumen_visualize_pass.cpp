@@ -879,8 +879,10 @@ void lumen_visualize_pass::draw_reflection_trace(const overlay_params& params, u
     const auto radiance = rview.tex_safe_get(lumen_reflection_pass::radiance_texture);
     const auto tiles = rview.tex_safe_get(lumen_reflection_pass::tiles_texture);
     const uint32_t frame = gfx::get_render_frame();
-    const bool is_traced = rview.data_get(lumen_reflection_pass::traced_frame_key, 0u) == frame;
-    const uint32_t downsample = std::max(rview.data_get(lumen_reflection_pass::downsample_key, 1u), 1u);
+    using trace_state = lumen_reflection_pass::trace_state;
+    const auto* trace = rview.data().try_get<trace_state>(trace_state::view_key);
+    const bool is_traced = trace != nullptr && trace->history.has_advanced_on(frame);
+    const uint32_t downsample = std::max(trace != nullptr ? trace->downsample : 1u, 1u);
     const auto trace_size = lumen_reflection_pass::get_trace_size(size, downsample);
     if(!is_cursor_in_view || !is_traced || !ray || !hit || !radiance || !tiles || !program.program ||
        !program.program->is_valid() || !lumen_pass::has_view_size(ray, trace_size))

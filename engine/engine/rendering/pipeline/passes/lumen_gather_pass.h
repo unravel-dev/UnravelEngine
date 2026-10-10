@@ -34,12 +34,20 @@ namespace unravel
 class lumen_gather_pass
 {
 public:
-    /// The render view's screen AO the gather publishes for the lighting composite (lumen_short_range_ao_pass), the
-    /// render frame it was produced on (a texture from an older frame is stale) and the intensity the composite
-    /// applies it with (gi_settings::ambient_occlusion_settings::intensity).
+    /// The render view's screen AO the gather publishes for the lighting composite (lumen_short_range_ao_pass).
     static constexpr const char* screen_ao_texture = "LUMEN_SCREEN_AO";
-    static constexpr const char* screen_ao_frame = "LUMEN_SCREEN_AO_FRAME";
-    static constexpr const char* screen_ao_intensity = "LUMEN_SCREEN_AO_INTENSITY";
+
+    /// What the lighting composite needs to know about the screen AO above.
+    struct screen_ao_state
+    {
+        static constexpr const char* view_key = "LUMEN_SCREEN_AO_STATE";
+
+        /// The render frame the texture was produced on: one from an older frame is stale.
+        uint32_t frame{0};
+        /// The intensity the composite applies it with (gi_settings::ambient_occlusion_settings::intensity).
+        float intensity{1.0f};
+    };
+
     /// The visualized probe's rays, one per texel of its tracing octahedron (at most the
     /// largest tracing resolution's), each visualized_trace_stride vec4s (lumen_visualize.sh
     /// LUMEN_VISUALIZE_TRACE_STRIDE).

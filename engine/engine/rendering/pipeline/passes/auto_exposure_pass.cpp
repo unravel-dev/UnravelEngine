@@ -14,10 +14,16 @@ namespace unravel
 {
 namespace
 {
-/// Set to 1 to force the next clean average dispatch to the target exposure.
-constexpr const char* snap_key = "AUTO_EXPOSURE_SNAP";
-/// Next texel of the exposure history ring.
-constexpr const char* history_index_key = "AUTO_EXPOSURE_HISTORY_INDEX";
+/// The metering bookkeeping of one render view, which only run_average advances.
+struct metering_state
+{
+    static constexpr const char* view_key = "AUTO_EXPOSURE_METERING_STATE";
+
+    /// Forces the next clean average dispatch to converge straight to the target exposure.
+    bool force_snap{false};
+    /// Next texel of the exposure history ring.
+    std::uint32_t history_index{0};
+};
 constexpr const char* exposure_key = "AUTO_EXPOSURE";
 constexpr const char* history_key = "AUTO_EXPOSURE_HISTORY";
 constexpr const char* histogram_key = "AUTO_EXPOSURE_HISTOGRAM";
@@ -233,7 +239,7 @@ void auto_exposure_pass::ensure_resources(gfx::render_view& rview)
         // a clean histogram, so the seed only matters for that short window.
         exposure_tex.reset();
         exposure_tex = create_seeded_row_texture(1, bgfx::TextureFormat::RGBA32F, {1.0f, 1.0f, 0.0f, 1.0f});
-        rview.data_get_or_emplace(snap_key, 1u) = 1u;
+        rview.data().get_or_emplace<metering_state>(metering_state::view_key).force_snap = true;
     }
 
     auto& history_tex = rview.tex_get_or_emplace(history_key);
@@ -243,7 +249,7 @@ void auto_exposure_pass::ensure_resources(gfx::render_view& rview)
         history_tex = create_seeded_row_texture(history_length,
                                                 bgfx::TextureFormat::RGBA32F,
                                                 std::vector<float>(std::size_t(history_length) * 4u, 0.0f));
-        rview.data_get_or_emplace(history_index_key, 0u) = 0u;
+        rview.data().get_or_emplace<metering_state>(metering_state::view_key).history_index = 0u;
     }
 
     auto& histogram_tex = rview.tex_get_or_emplace(histogram_key);
@@ -273,8 +279,8 @@ auto auto_exposure_pass::get_histogram_texture(gfx::render_view& rview) const ->
 
 auto auto_exposure_pass::get_history_index(gfx::render_view& rview) const -> std::uint32_t
 {
-    const auto* index = rview.data().try_get<std::uint32_t>(history_index_key);
-    return index != nullptr ? *index : 0u;
+    const auto* state = rview.data().try_get<metering_state>(metering_state::view_key);
+    return state != nullptr ? state->history_index : 0u;
 }
 
 auto auto_exposure_pass::get_local_exposure_view(gfx::render_view& rview) const -> local_exposure_view
@@ -424,7 +430,7 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
 
     float effective_dt = params.delta_time;
     float force_target = 0.0f;
-    auto& snap = rview.data_get_or_emplace(snap_key, 0u);
+    auto& state = rview.data().get_or_emplace<metering_state>(metering_state::view_key);
     if(!histogram_bins_valid_)
     {
         // First dispatch since the buffer was created: its initial contents are
@@ -438,8 +444,8 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
     }
     else
     {
-        const bool snap_requested = snap != 0u;
-        snap = 0u;
+        const bool snap_requested = state.force_snap;
+        state.force_snap = false;
         // Force the target on camera cuts and when min >= max makes the range a fixed exposure.
         if(snap_requested || params.camera_cut || config.min_ev >= config.max_ev)
         {
@@ -447,9 +453,8 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
         }
     }
 
-    auto& history_index = rview.data_get_or_emplace(history_index_key, 0u);
-    const float history_texel = float(history_index % history_length);
-    history_index = (history_index + 1u) % history_length;
+    const float history_texel = float(state.history_index % history_length);
+    state.history_index = (state.history_index + 1u) % history_length;
 
     gfx::render_pass pass("Auto Exposure/Average");
 
@@ -754,7 +759,7 @@ void auto_exposure_pass::release_resources(gfx::render_view& rview)
     rview.tex_remove(local_blurred_key);
     rview.tex_remove(compensation_curve_key);
     rview.fbo_remove(readback_target_key);
-    rview.data_get_or_emplace(snap_key, 1u) = 1u;
+    rview.data().get_or_emplace<metering_state>(metering_state::view_key).force_snap = true;
     // THIS view's channel only: the pass instance also serves other views' frames.
     if(auto* state = rview.data().try_get<readback_state>(readback_state::view_key))
     {

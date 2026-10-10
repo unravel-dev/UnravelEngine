@@ -166,15 +166,4 @@ void render_view::release_unused(uint32_t current_frame, uint32_t max_idle_frame
     }
 }
 
-auto render_view::data_get_or_emplace(const hpp::string_view& id, uint32_t default_val) -> uint32_t&
-{
-    return data_.get_or_emplace<uint32_t>(id, default_val);
-}
-
-auto render_view::data_get(const hpp::string_view& id, uint32_t default_val) const -> uint32_t
-{
-    const auto* value = data_.try_get<uint32_t>(id);
-    return value != nullptr ? *value : default_val;
-}
-
 } // namespace gfx

@@ -36,6 +36,9 @@ constexpr uint32_t max_probe_downsample = 64;
 constexpr uint64_t bilinear_texture_flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
 /// The rough specular history (cs_lumen_integrate.sc s_lumen_rough_history_out, rg11b10f).
 constexpr bgfx::TextureFormat::Enum rough_history_format = bgfx::TextureFormat::RG11B10F;
+/// The render view's two ping-pongs: the screen probe atlases, and the full-resolution diffuse history.
+constexpr const char* probe_ping_pong_key = "LUMEN_PROBE_PING_PONG";
+constexpr const char* history_ping_pong_key = "LUMEN_HISTORY_PING_PONG";
 /// The fixed jitter index while the traces are visualized: the placement and the rays hold still, and so do the lines.
 constexpr uint32_t visualize_traces_jitter_index = 6;
 /// The trace programs' output stage: the trace radiance, or the visualize variant's rays.
@@ -281,14 +284,10 @@ auto lumen_gather_pass::acquire_probe_targets(gfx::render_view& rview, const fra
     const usize32_t sh_size{layout.probes_x * uint32_t(LUMEN_SH_TEXELS_PER_PROBE), layout.atlas_rows};
     const uint32_t border_resolution = get_probe_border_resolution(layout.trace_resolution);
     // The probe-side ping-pong: this frame writes one set, last frame's set is the sampler's history.
-    auto& parity = rview.data_get_or_emplace("LUMEN_PROBE_PARITY", 0u);
-    const std::string set = (parity & 1u) == 0u ? "_A" : "_B";
-    const std::string prev_set = (parity & 1u) == 0u ? "_B" : "_A";
-    ++parity;
-    auto& written_frame = rview.data_get_or_emplace("LUMEN_PROBE_FRAME", 0u);
-    const uint32_t render_frame = gfx::get_render_frame();
-    const bool continuous = written_frame != 0u && render_frame == written_frame + 1u;
-    written_frame = render_frame;
+    auto& ping_pong = rview.data().get_or_emplace<lumen_pass::ping_pong_state>(probe_ping_pong_key);
+    const auto step = ping_pong.advance(gfx::get_render_frame());
+    const std::string set = step.writes_even ? "_A" : "_B";
+    const std::string prev_set = step.writes_even ? "_B" : "_A";
     probe_targets targets;
     targets.records = ensure_texture(rview, "LUMEN_PROBE_RECORDS" + set, record_size, bgfx::TextureFormat::RGBA32F);
     targets.trace_radiance = ensure_texture(rview, "LUMEN_TRACE_RADIANCE", atlas_size, bgfx::TextureFormat::RGBA16F);
@@ -306,7 +305,8 @@ auto lumen_gather_pass::acquire_probe_targets(gfx::render_view& rview, const fra
     targets.history_records = rview.tex_safe_get("LUMEN_PROBE_RECORDS" + prev_set);
     targets.history_radiance = rview.tex_safe_get("LUMEN_PROBE_FILTERED" + prev_set);
     // Last frame's probes are history only in this frame's layout: the same probe count and tracing resolution.
-    targets.has_probe_history = continuous && (experiments_ & experiment_no_history) == 0u && !starts_history_over_ &&
+    targets.has_probe_history = step.is_continuous && (experiments_ & experiment_no_history) == 0u &&
+                                !starts_history_over_ &&
                                 lumen_pass::has_view_size(targets.history_records, record_size) &&
                                 lumen_pass::has_view_size(targets.history_radiance, atlas_size);
     return targets;
@@ -314,14 +314,12 @@ auto lumen_gather_pass::acquire_probe_targets(gfx::render_view& rview, const fra
 
 auto lumen_gather_pass::get_current_history(gfx::render_view& rview) -> gfx::texture::ptr
 {
-    const uint32_t parity = rview.data_get("LUMEN_HISTORY_PARITY");
-    if(parity == 0u || rview.data_get("LUMEN_HISTORY_FRAME") != gfx::get_render_frame())
+    const auto* ping_pong = rview.data().try_get<lumen_pass::ping_pong_state>(history_ping_pong_key);
+    if(!ping_pong || !ping_pong->has_advanced_on(gfx::get_render_frame()))
     {
         return nullptr;
     }
-    // acquire_history advanced the parity past the half it wrote.
-    const bool wrote_even = ((parity - 1u) & 1u) == 0u;
-    return rview.tex_safe_get(wrote_even ? "LUMEN_HISTORY_A" : "LUMEN_HISTORY_B");
+    return rview.tex_safe_get(ping_pong->has_written_even() ? "LUMEN_HISTORY_A" : "LUMEN_HISTORY_B");
 }
 
 auto lumen_gather_pass::acquire_history(gfx::render_view& rview,
@@ -330,24 +328,20 @@ auto lumen_gather_pass::acquire_history(gfx::render_view& rview,
 {
     // Ping-pong per render view; the read half is history only when it was written on the frame
     // right before this one (the previous depth it is validated against is always that frame's).
-    auto& parity = rview.data_get_or_emplace("LUMEN_HISTORY_PARITY", 0u);
-    const bool even_frame = (parity & 1u) == 0u;
-    ++parity;
-    auto& written_frame = rview.data_get_or_emplace("LUMEN_HISTORY_FRAME", 0u);
-    const uint32_t render_frame = gfx::get_render_frame();
-    const bool continuous = written_frame != 0u && render_frame == written_frame + 1u;
-    written_frame = render_frame;
-    const char* write_name = even_frame ? "LUMEN_HISTORY_A" : "LUMEN_HISTORY_B";
-    const char* read_name = even_frame ? "LUMEN_HISTORY_B" : "LUMEN_HISTORY_A";
-    const char* rough_write_name = even_frame ? "LUMEN_ROUGH_HISTORY_A" : "LUMEN_ROUGH_HISTORY_B";
-    const char* rough_read_name = even_frame ? "LUMEN_ROUGH_HISTORY_B" : "LUMEN_ROUGH_HISTORY_A";
+    auto& ping_pong = rview.data().get_or_emplace<lumen_pass::ping_pong_state>(history_ping_pong_key);
+    const auto step = ping_pong.advance(gfx::get_render_frame());
+    const char* write_name = step.writes_even ? "LUMEN_HISTORY_A" : "LUMEN_HISTORY_B";
+    const char* read_name = step.writes_even ? "LUMEN_HISTORY_B" : "LUMEN_HISTORY_A";
+    const char* rough_write_name = step.writes_even ? "LUMEN_ROUGH_HISTORY_A" : "LUMEN_ROUGH_HISTORY_B";
+    const char* rough_read_name = step.writes_even ? "LUMEN_ROUGH_HISTORY_B" : "LUMEN_ROUGH_HISTORY_A";
     history_targets history;
     history.write = ensure_texture(rview, write_name, size, bgfx::TextureFormat::RGBA16F);
     history.read = rview.tex_safe_get(read_name);
     // R11G11B10: no reader takes the rough specular's alpha.
     history.rough_write = ensure_texture(rview, rough_write_name, size, rough_history_format);
     history.rough_read = rview.tex_safe_get(rough_read_name);
-    history.has_history = continuous && (experiments_ & experiment_no_history) == 0u && !starts_history_over_ && history.read &&
+    history.has_history = step.is_continuous && (experiments_ & experiment_no_history) == 0u &&
+                          !starts_history_over_ && history.read &&
                           history.rough_read && params.prev_depth && history.read->get_size().width == size.width &&
                           history.read->get_size().height == size.height &&
                           history.rough_read->get_size().width == size.width &&
@@ -363,7 +357,7 @@ auto lumen_gather_pass::acquire_history(gfx::render_view& rview,
                        history_warning_frames,
                        history.read ? "present" : "MISSING",
                        params.prev_depth ? "present" : "MISSING",
-                       continuous ? "intact" : "BROKEN");
+                       step.is_continuous ? "intact" : "BROKEN");
     }
     return history;
 }
@@ -766,9 +760,9 @@ void lumen_gather_pass::publish_short_range_ao(gfx::render_view& rview,
                                                const lumen_short_range_ao_pass::frame_targets& short_range_ao)
 {
     rview.tex_get_or_emplace(screen_ao_texture) = short_range_ao.screen;
-    rview.data_get_or_emplace(screen_ao_frame, 0u) = uint32_t(gfx::get_render_frame());
-    const float intensity = std::clamp(params.settings.ambient_occlusion.intensity, 0.0f, 1.0f);
-    rview.data().get_or_emplace<float>(screen_ao_intensity, 1.0f) = intensity;
+    auto& state = rview.data().get_or_emplace<screen_ao_state>(screen_ao_state::view_key);
+    state.frame = uint32_t(gfx::get_render_frame());
+    state.intensity = std::clamp(params.settings.ambient_occlusion.intensity, 0.0f, 1.0f);
 }
 
 auto lumen_gather_pass::run(gfx::render_view& rview, const lumen_run_params& params) -> gfx::texture::ptr

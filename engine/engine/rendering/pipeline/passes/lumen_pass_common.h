@@ -434,6 +434,53 @@ struct motion_uniforms : uniforms_cache
     }
 };
 
+/**
+ * @brief A per-view double-buffered history: which half the current frame writes, and the render frame the last
+ *        write landed on.
+ *
+ * Several passes keep their history in an A/B texture pair and may only continue from the frame right before this
+ * one (the previous depth their reprojection is validated against is always that frame's). @ref advance does both
+ * bookkeeping steps in one call and answers that question.
+ */
+struct ping_pong_state
+{
+    /// Advanced once per acquisition; its low bit selects the half the current frame writes.
+    uint32_t parity{0};
+    /// The render frame of the most recent acquisition; 0 before the first one.
+    uint32_t written_frame{0};
+
+    /// What @ref advance decided for the current frame.
+    struct step
+    {
+        /// The current frame writes the even ("A") half.
+        bool writes_even{};
+        /// The previous acquisition happened on the immediately preceding render frame, so the half this frame
+        /// reads is usable history.
+        bool is_continuous{};
+    };
+
+    /// Picks the half @p render_frame writes and stamps the frame.
+    auto advance(uint32_t render_frame) -> step
+    {
+        const step result{(parity & 1u) == 0u, written_frame != 0u && render_frame == written_frame + 1u};
+        ++parity;
+        written_frame = render_frame;
+        return result;
+    }
+
+    /// Whether the last @ref advance happened on @p render_frame, i.e. the owning pass ran this frame.
+    auto has_advanced_on(uint32_t render_frame) const -> bool
+    {
+        return parity != 0u && written_frame == render_frame;
+    }
+
+    /// Whether the last @ref advance picked the even ("A") half. Only meaningful after one.
+    auto has_written_even() const -> bool
+    {
+        return ((parity - 1u) & 1u) == 0u;
+    }
+};
+
 /// True when @p tex exists at exactly @p size.
 inline auto has_view_size(const gfx::texture::ptr& tex, const usize32_t& size) -> bool
 {

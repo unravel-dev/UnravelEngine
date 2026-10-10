@@ -277,8 +277,16 @@ constexpr int cloud_mode_volumetric = 2;
 // Jitter sequence length uploaded as a float: the golden-ratio fract loses precision past
 // ~2^20, and the sequence only needs to cover the accumulation window.
 constexpr uint32_t cloud_jitter_period = 1024;
-constexpr const char* cloud_frame_count_key = "CLOUD_FRAME_COUNT";
-constexpr const char* cloud_prev_wind_keys[2] = {"CLOUD_PREV_WIND_X", "CLOUD_PREV_WIND_Y"};
+/// The volumetric clouds' temporal state of one render view.
+struct cloud_view_state
+{
+    static constexpr const char* view_key = "CLOUD_VIEW_STATE";
+
+    /// Accumulated frames of the current history; its low bit selects the half this frame writes.
+    uint32_t frame_count{0};
+    /// Last frame's wrapped wind offset, which the history reprojection differences against this frame's.
+    float prev_wind_offset[2]{0.0f, 0.0f};
+};
 constexpr const char* cloud_tex_keys[2] = {"CLOUD_PING", "CLOUD_PONG"};
 constexpr const char* cloud_aux_keys[2] = {"CLOUD_AUX_PING", "CLOUD_AUX_PONG"};
 constexpr const char* cloud_fbo_keys[2] = {"CLOUD_FBO_PING", "CLOUD_FBO_PONG"};
@@ -458,9 +466,7 @@ void atmospheric_pass_perez::release_cloud_resources(gfx::render_view& rview)
         rview.tex_remove(cloud_tex_keys[i]);
         rview.tex_remove(cloud_aux_keys[i]);
     }
-    rview.data_get_or_emplace(cloud_frame_count_key) = 0;
-    rview.data_get_or_emplace(cloud_prev_wind_keys[0]) = 0;
-    rview.data_get_or_emplace(cloud_prev_wind_keys[1]) = 0;
+    rview.data().get_or_emplace<cloud_view_state>(cloud_view_state::view_key) = {};
 }
 
 auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
@@ -480,7 +486,8 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
 
     constexpr uint64_t cloud_tex_flags = BGFX_TEXTURE_RT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
 
-    auto& cloud_frame_count = rview.data_get_or_emplace(cloud_frame_count_key);
+    auto& state = rview.data().get_or_emplace<cloud_view_state>(cloud_view_state::view_key);
+    auto& cloud_frame_count = state.frame_count;
 
     // The wind offset wraps to the noise tile period; the per-frame advance (unwrapped)
     // drives the history reprojection.
@@ -488,11 +495,8 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
     float wind_delta[2] = {0.0f, 0.0f};
     for(int i = 0; i < 2; ++i)
     {
-        auto& prev_bits = rview.data_get_or_emplace(cloud_prev_wind_keys[i]);
-        float prev{};
-        std::memcpy(&prev, &prev_bits, sizeof(float));
         const float cur = params.cloud_wind_offset[i];
-        float delta = cur - prev;
+        float delta = cur - state.prev_wind_offset[i];
         if(delta > 0.5f * wind_period)
         {
             delta -= wind_period;
@@ -502,7 +506,7 @@ auto atmospheric_pass_perez::run_cloud_prepass(const camera& camera,
             delta += wind_period;
         }
         wind_delta[i] = delta;
-        std::memcpy(&prev_bits, &cur, sizeof(float));
+        state.prev_wind_offset[i] = cur;
     }
 
     bool recreated = false;

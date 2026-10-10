@@ -42,15 +42,24 @@ public:
         gfx::texture::ptr probe_output;
     };
 
-    /// The render view's trace targets (lumen_reflection_common.sh: the ray, the trace hit, the trace radiance), the
-    /// render frame they were last traced on and that frame's trace downsample factor (data_get).
+    /// The render view's trace targets (lumen_reflection_common.sh: the ray, the trace hit, the trace radiance).
     static constexpr const char* ray_texture = "LUMEN_REFLECTION_RAY";
     static constexpr const char* hit_texture = "LUMEN_REFLECTION_HIT";
     static constexpr const char* radiance_texture = "LUMEN_REFLECTION_RADIANCE";
     /// This frame's reflection tiles (lumen_reflection_common.sh): a skipped tile's trace texels hold no ray.
     static constexpr const char* tiles_texture = "LUMEN_REFLECTION_TILES";
-    static constexpr const char* traced_frame_key = "LUMEN_REFLECTION_FRAME";
-    static constexpr const char* downsample_key = "LUMEN_REFLECTION_DOWNSAMPLE";
+
+    /// What a reader of the trace targets above needs to date and size them.
+    struct trace_state
+    {
+        static constexpr const char* view_key = "LUMEN_REFLECTION_TRACE_STATE";
+
+        /// The history ping-pong, whose last advance is also the frame the targets were traced on.
+        lumen_pass::ping_pong_state history;
+        /// The trace downsample factor of that frame.
+        uint32_t downsample{1};
+    };
+
     /// The period of the noise sequences and of the downsampled traces' pixel rotation, in frames
     /// (lumen_reflection_common.sh reads frame % this as u_lumen_frame.y).
     static constexpr uint32_t state_frame_period = 8;

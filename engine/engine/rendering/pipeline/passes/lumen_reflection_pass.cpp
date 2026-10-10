@@ -129,15 +129,10 @@ auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview,
 {
     // The history ping-pong continues only from the frame right before this one (the previous depth it is
     // validated against is always that frame's).
-    auto& parity = rview.data_get_or_emplace("LUMEN_REFLECTION_PARITY", 0u);
-    const bool even_frame = (parity & 1u) == 0u;
-    ++parity;
-    auto& written_frame = rview.data_get_or_emplace(traced_frame_key, 0u);
-    const uint32_t render_frame = gfx::get_render_frame();
-    const bool continuous = written_frame != 0u && render_frame == written_frame + 1u;
-    written_frame = render_frame;
-    const std::string write_set = even_frame ? "_A" : "_B";
-    const std::string read_set = even_frame ? "_B" : "_A";
+    auto& state = rview.data().get_or_emplace<trace_state>(trace_state::view_key);
+    const auto step = state.history.advance(gfx::get_render_frame());
+    const std::string write_set = step.writes_even ? "_A" : "_B";
+    const std::string read_set = step.writes_even ? "_B" : "_A";
     frame_targets targets;
     targets.ray = ensure_texture(rview, ray_texture, trace_size, bgfx::TextureFormat::RGBA16F);
     targets.radiance = ensure_texture(rview, radiance_texture, trace_size, bgfx::TextureFormat::RGBA16F);
@@ -153,7 +148,7 @@ auto lumen_reflection_pass::acquire_targets(gfx::render_view& rview,
     targets.tiles_write =
         ensure_texture(rview, "LUMEN_REFLECTION_TILES" + write_set, tile_count, bgfx::TextureFormat::R8);
     targets.tiles_read = rview.tex_safe_get("LUMEN_REFLECTION_TILES" + read_set);
-    targets.has_history = continuous && !camera_cut && has_view_size(targets.history_read, size) &&
+    targets.has_history = step.is_continuous && !camera_cut && has_view_size(targets.history_read, size) &&
                           has_view_size(targets.frames_read, size) && has_view_size(targets.tiles_read, tile_count);
     return targets;
 }
@@ -410,7 +405,7 @@ auto lumen_reflection_pass::run(gfx::render_view& rview, const run_params& param
     }
     downsample_ = lumen_pass::get_reflection_downsample_factor(gather->settings.reflections, gather->reflection_quality);
     trace_size_ = get_trace_size(view_size_, downsample_);
-    rview.data_get_or_emplace(downsample_key, 1u) = downsample_;
+    rview.data().get_or_emplace<trace_state>(trace_state::view_key).downsample = downsample_;
     const auto targets = acquire_targets(rview, view_size_, trace_size_, gather->camera_cut);
     rview.tex_get_or_emplace(tiles_texture) = targets.tiles_write;
     run_screen(params, targets);

@@ -74,9 +74,6 @@ public:
      */
     void touch_prefixed(const hpp::string_view& prefix);
 
-    auto data_get_or_emplace(const hpp::string_view& id, uint32_t default_val = 0) -> uint32_t&;
-    auto data_get(const hpp::string_view& id, uint32_t default_val = 0) const -> uint32_t;
-
     /**
      * @brief Arbitrary per-view state, keyed by name.
      *
@@ -113,8 +110,6 @@ private:
 
     std::map<std::string, slot<texture::ptr>, std::less<>> textures_;
     std::map<std::string, slot<frame_buffer::ptr>, std::less<>> fbos_;
-    /// Backs both the uint32_t accessors above and @ref data. The scalar pair is kept because it
-    /// reads better at its call sites than a templated get would.
     rtti::named_context data_;
 };
 

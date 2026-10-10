@@ -870,10 +870,7 @@ void deferred::run_pipeline(const gfx::frame_buffer::ptr& output,
 {
     auto obuffer = run_pipeline(scn, camera, rview, dt, params, render_mask);
 
-    blit_pass::run_params pass_params;
-    pass_params.input = obuffer;
-    pass_params.output = output;
-    blit_pass_.run(rview, pass_params);
+    blit_to_output(rview, obuffer, output);
 }
 
 void deferred::set_debug_pass(int pass)
@@ -922,7 +919,6 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         stats_ = {};
     }
 
-    visibility_set_models_t visibility_set;
     gfx::frame_buffer::ptr target = nullptr;
 
     const bool build_shadowmaps = (stages & pipeline_steps::shadow_pass) != 0u;
@@ -968,13 +964,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         model_component::request_velocity_recording(gfx::get_render_frame());
     }
 
-    if(stages & pipeline_steps::geometry_pass)
-    {
-        gather_visible_models(scn, &camera, params.vflags, render_mask, dt, [&](entt::handle entity, const lod_data& lod_data)
-        {
-            visibility_set.emplace_back(visibility_data{entity, lod_data});
-        });
-    }
+    const auto visibility_set = collect_visible_models(scn, camera, params, render_mask, dt);
 
     run_g_buffer_pass(visibility_set, camera, rview, dt);
 
@@ -1038,35 +1028,15 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         run_particle_pass(scn, camera, rview, target, pre_exposure);
     }
 
-    // The world-space GI visualizations go into the scene colour like translucency, ahead of the exposure
-    // and the tone map.
-    if(is_camera_run && lumen_visualize_settings_.is_any_in_scene_color())
+    if(is_camera_run)
     {
-        lumen_visualize_pass::world_params world;
-        const auto& lbuffer = rview.fbo_safe_get("LBUFFER");
-        const auto& gbuffer = rview.fbo_safe_get("GBUFFER");
-        world.scene_color = lbuffer ? lbuffer->get_texture(0) : nullptr;
-        world.scene_depth = gbuffer ? gbuffer->get_texture(4) : nullptr;
-        world.rview = &rview;
-        world.cam = &camera;
-        world.surface_cache = &lumen_surface_cache_pass_;
-        world.gi_scene = &engine::context().get_cached<surface_cache_system>();
-        world.radiance_cache = lumen_gather_pass_.get_radiance_cache();
-        world.pre_exposure = pre_exposure.value;
-        world.settings = lumen_visualize_settings_;
-        lumen_visualize_pass_.draw_world(world);
-    }
-    if(is_camera_run && !lumen_visualize_settings_.is_card_generation())
-    {
-        lumen_visualize_pass_.release_card_generation(engine::context().get_cached<surface_cache_system>());
+        run_lumen_visualize_scene_color(camera, rview, pre_exposure);
+        release_lumen_visualize_card_generation();
     }
 
     if(is_probe_capture)
     {
-        blit_pass::run_params pass_params;
-        pass_params.input = target;
-        pass_params.output = output;
-        blit_pass_.run(rview, pass_params);
+        blit_to_output(rview, target, output);
         batch_collector_.clear();
         return;
     }
@@ -1079,14 +1049,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     const bool wants_scene_history =
         is_camera_run &&
         ((reflection_screen_stack_enabled(params) && params.fill_ssr_params) || params.fill_gi_params);
-    if(wants_scene_history)
-    {
-        snapshot_prev_scene_color(rview, target, camera);
-    }
-    else
-    {
-        rview.tex_remove("PREV_SCENE_HDR");
-    }
+    snapshot_prev_scene_color(rview, target, camera, wants_scene_history);
 
     run_auto_exposure_pass(rview, camera, target, params, dt);
 
@@ -1101,52 +1064,13 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     if(is_camera_run)
     {
         run_ui_pass(scn, camera, rview, output);
-        debug_view_labels_.clear();
-
-        if(debug_pass_ == debug_pass_velocity)
-        {
-            run_velocity_debug_pass(camera, rview, output);
-        }
-        else if(debug_pass_ == debug_pass_exposure)
-        {
-            // An overlay over the finished image, so it runs after the UI pass like the others
-            // but keeps what is underneath.
-            run_exposure_debug_pass(rview, output, params);
-        }
-        else if(debug_pass_ == debug_pass_ao_bent_normals)
-        {
-            run_debug_visualization_pass(camera, rview, output, params);
-        }
-        else if(debug_pass_ >= debug_pass_lumen_scene && debug_pass_ <= debug_pass_lumen_performance_overview)
-        {
-            run_lumen_visualize_pass(camera, rview, output, params);
-        }
-        else if(debug_pass_ >= 0 && debug_pass_ < debug_pass_gbuffer_modes)
-        {
-            run_debug_visualization_pass(camera, rview, output, params);
-        }
-
-        if(lumen_visualize_settings_.is_any_overlay())
-        {
-            run_lumen_visualize_overlays(camera, rview, output, params);
-        }
+        run_debug_passes(camera, rview, output, params);
         // Whatever shaders printed this frame (nothing to draw unless one did).
         shader_print_.draw(output);
-    }
-
-    // The temporal-stability instrument measures the finished image (the lit frame or the active
-    // debug view, before the editor draws its overlays) and must read LAST frame's depth, so it
-    // runs before the depth snapshot below. It dispatches nothing unless a tool armed it.
-    if(is_camera_run)
-    {
-        temporal_probe_pass::run_params probe_params;
-        probe_params.color = output->get_texture(0);
-        probe_params.velocity = rview.tex_safe_get("VELOCITY");
-        const auto& probe_gbuffer = rview.fbo_get("GBUFFER");
-        probe_params.depth = probe_gbuffer ? probe_gbuffer->get_texture(4) : nullptr;
-        probe_params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
-        probe_params.cam = &camera;
-        temporal_probe_pass_.run(probe_params);
+        // The temporal-stability instrument measures the finished image (the lit frame or the active
+        // debug view, before the editor draws its overlays) and must read LAST frame's depth, so it
+        // runs before the depth snapshot below.
+        run_temporal_probe_pass(camera, rview, output);
     }
 
     // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path).
@@ -1161,26 +1085,137 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // GTAO is a fourth consumer: its temporal accumulation reprojects against this depth and
     // treats a missing one as "no history" (raw per-frame noise).
     const bool gtao_active = static_cast<bool>(rview.tex_safe_get("GTAO"));
-    if(hiz_active || gi_active || taa_active || gtao_active)
-    {
-        snapshot_prev_depth(rview, viewport_size);
-    }
-    else
-    {
-        // Sole owner of this resource's lifetime, so it is released here rather than by whichever
-        // consumer happens to run first and notice it does not need it.
-        rview.tex_remove("PREV_DEPTH");
-    }
+    snapshot_prev_depth(rview, viewport_size, hiz_active || gi_active || taa_active || gtao_active);
 
     // Clear batch collector for this frame
     batch_collector_.clear();
+}
 
+auto deferred::collect_visible_models(scene& scn,
+                                      const camera& camera,
+                                      const run_params& rparams,
+                                      layer_mask render_mask,
+                                      delta_t dt) -> visibility_set_models_t
+{
+    visibility_set_models_t visibility_set;
+    if((rparams.pflags & pipeline_steps::geometry_pass) == 0u)
+    {
+        return visibility_set;
+    }
+    gather_visible_models(scn,
+                          &camera,
+                          rparams.vflags,
+                          render_mask,
+                          dt,
+                          [&](entt::handle entity, const lod_data& lod_data)
+                          {
+                              visibility_set.emplace_back(visibility_data{entity, lod_data});
+                          });
+    return visibility_set;
+}
+
+void deferred::blit_to_output(gfx::render_view& rview,
+                              const gfx::frame_buffer::ptr& input,
+                              const gfx::frame_buffer::ptr& output)
+{
+    blit_pass::run_params pass_params;
+    pass_params.input = input;
+    pass_params.output = output;
+    blit_pass_.run(rview, pass_params);
+}
+
+void deferred::run_lumen_visualize_scene_color(const camera& camera,
+                                               gfx::render_view& rview,
+                                               const pre_exposure_state& pre_exposure)
+{
+    if(!lumen_visualize_settings_.is_any_in_scene_color())
+    {
+        return;
+    }
+    lumen_visualize_pass::world_params world;
+    const auto& lbuffer = rview.fbo_safe_get("LBUFFER");
+    const auto& gbuffer = rview.fbo_safe_get("GBUFFER");
+    world.scene_color = lbuffer ? lbuffer->get_texture(0) : nullptr;
+    world.scene_depth = gbuffer ? gbuffer->get_texture(4) : nullptr;
+    world.rview = &rview;
+    world.cam = &camera;
+    world.surface_cache = &lumen_surface_cache_pass_;
+    world.gi_scene = &engine::context().get_cached<surface_cache_system>();
+    world.radiance_cache = lumen_gather_pass_.get_radiance_cache();
+    world.pre_exposure = pre_exposure.value;
+    world.settings = lumen_visualize_settings_;
+    lumen_visualize_pass_.draw_world(world);
+}
+
+void deferred::release_lumen_visualize_card_generation()
+{
+    if(lumen_visualize_settings_.is_card_generation())
+    {
+        return;
+    }
+    lumen_visualize_pass_.release_card_generation(engine::context().get_cached<surface_cache_system>());
+}
+
+void deferred::run_debug_passes(const camera& camera,
+                                gfx::render_view& rview,
+                                const gfx::frame_buffer::ptr& output,
+                                const run_params& rparams)
+{
+    debug_view_labels_.clear();
+
+    if(debug_pass_ == debug_pass_velocity)
+    {
+        run_velocity_debug_pass(camera, rview, output);
+    }
+    else if(debug_pass_ == debug_pass_exposure)
+    {
+        // An overlay over the finished image, so it runs after the UI pass like the others
+        // but keeps what is underneath.
+        run_exposure_debug_pass(rview, output, rparams);
+    }
+    else if(debug_pass_ == debug_pass_ao_bent_normals)
+    {
+        run_debug_visualization_pass(camera, rview, output, rparams);
+    }
+    else if(debug_pass_ >= debug_pass_lumen_scene && debug_pass_ <= debug_pass_lumen_performance_overview)
+    {
+        run_lumen_visualize_pass(camera, rview, output, rparams);
+    }
+    else if(debug_pass_ >= 0 && debug_pass_ < debug_pass_gbuffer_modes)
+    {
+        run_debug_visualization_pass(camera, rview, output, rparams);
+    }
+
+    if(lumen_visualize_settings_.is_any_overlay())
+    {
+        run_lumen_visualize_overlays(camera, rview, output, rparams);
+    }
+}
+
+void deferred::run_temporal_probe_pass(const camera& camera,
+                                       gfx::render_view& rview,
+                                       const gfx::frame_buffer::ptr& output)
+{
+    temporal_probe_pass::run_params probe_params;
+    probe_params.color = output->get_texture(0);
+    probe_params.velocity = rview.tex_safe_get("VELOCITY");
+    const auto& probe_gbuffer = rview.fbo_get("GBUFFER");
+    probe_params.depth = probe_gbuffer ? probe_gbuffer->get_texture(4) : nullptr;
+    probe_params.prev_depth = rview.tex_safe_get("PREV_DEPTH");
+    probe_params.cam = &camera;
+    temporal_probe_pass_.run(probe_params);
 }
 
 void deferred::snapshot_prev_scene_color(gfx::render_view& rview,
                                          const gfx::frame_buffer::ptr& source,
-                                         const camera& camera)
+                                         const camera& camera,
+                                         bool has_consumer)
 {
+    if(!has_consumer)
+    {
+        rview.tex_remove("PREV_SCENE_HDR");
+        return;
+    }
     // This frame's G-buffer depth rides along in alpha (scene_history_pass), so the readers
     // can tell a reprojection that still shows its surface from a disoccluded one.
     const auto& gbuffer = rview.fbo_get("GBUFFER");
@@ -1188,8 +1223,13 @@ void deferred::snapshot_prev_scene_color(gfx::render_view& rview,
     scene_history_pass_.run(rview, source, depth, camera);
 }
 
-void deferred::snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size)
+void deferred::snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size, bool has_consumer)
 {
+    if(!has_consumer)
+    {
+        rview.tex_remove("PREV_DEPTH");
+        return;
+    }
     auto depth_src = rview.fbo_get("GBUFFER")->get_texture(4);
     auto& prev_depth = rview.tex_get_or_emplace("PREV_DEPTH");
     if(gfx::needs_recreate(prev_depth, viewport_size))
@@ -2844,12 +2884,12 @@ auto deferred::get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_
     // published with it (no bent normal: the ambient axis stays the normal), the untraced
     // specular the bent cone.
     const auto& lumen_ao = rview.tex_safe_get(lumen_gather_pass::screen_ao_texture);
-    const auto* lumen_ao_frame = rview.data().try_get<uint32_t>(lumen_gather_pass::screen_ao_frame);
-    if(lumen_ao && lumen_ao_frame && *lumen_ao_frame == uint32_t(gfx::get_render_frame()))
+    using screen_ao_state = lumen_gather_pass::screen_ao_state;
+    const auto* lumen_ao_state = rview.data().try_get<screen_ao_state>(screen_ao_state::view_key);
+    if(lumen_ao && lumen_ao_state && lumen_ao_state->frame == uint32_t(gfx::get_render_frame()))
     {
-        const auto* lumen_ao_intensity = rview.data().try_get<float>(lumen_gather_pass::screen_ao_intensity);
         inputs.texture = lumen_ao;
-        inputs.params = {lumen_ao_intensity ? *lumen_ao_intensity : 1.0f, 0.0f, 1.0f, 1.0f};
+        inputs.params = {lumen_ao_state->intensity, 0.0f, 1.0f, 1.0f};
         inputs.multi_bounce_albedo_cap = gi::lumen::LUMEN_SHORT_RANGE_AO_MAX_MULTIBOUNCE_ALBEDO;
         return inputs;
     }

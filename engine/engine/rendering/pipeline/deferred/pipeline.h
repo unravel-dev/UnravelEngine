@@ -71,6 +71,19 @@ public:
                            const run_params& params,
                            layer_mask render_mask = layer_mask{layer_reserved::everything_layer});
 
+    /// This run's visible models, which the G-buffer and velocity passes rasterize. Empty without the
+    /// geometry step, which both passes then render nothing for.
+    auto collect_visible_models(scene& scn,
+                                const camera& camera,
+                                const run_params& rparams,
+                                layer_mask render_mask,
+                                delta_t dt) -> visibility_set_models_t;
+
+    /// Copies @p input into @p output, the pipeline's hand-off to a caller-owned target.
+    void blit_to_output(gfx::render_view& rview,
+                        const gfx::frame_buffer::ptr& input,
+                        const gfx::frame_buffer::ptr& output);
+
     void run_g_buffer_pass(const visibility_set_models_t& visibility_set,
                            const camera& camera,
                            gfx::render_view& rview,
@@ -183,6 +196,18 @@ public:
                                       gfx::render_view& rview,
                                       const gfx::frame_buffer::ptr& output,
                                       const run_params& rparams);
+    /// The world-space GI visualizations (lumen_visualize_pass::draw_world), into the scene colour like
+    /// translucency: ahead of the exposure and the tone map. Draws nothing unless one of them is selected.
+    void run_lumen_visualize_scene_color(const camera& camera,
+                                         gfx::render_view& rview,
+                                         const pre_exposure_state& pre_exposure);
+    /// Frees what the card generation view holds while it is not the selected one.
+    void release_lumen_visualize_card_generation();
+    /// The selected debug view over the finished image, and the GI overlays on top of whichever one it is.
+    void run_debug_passes(const camera& camera,
+                          gfx::render_view& rview,
+                          const gfx::frame_buffer::ptr& output,
+                          const run_params& rparams);
 
     /// Debug pass ids below this one are the G-buffer visualizer shader's own modes; every view with a larger id is
     /// dispatched by an exact match.
@@ -684,15 +709,25 @@ private:
     auto get_probe_layer_inputs(gfx::render_view& rview, const gfx::texture::ptr& pbuffer) const -> probe_layer_inputs;
 
     /// After SSIL/SSR; copies G-buffer depth into @c PREV_DEPTH for next-frame reprojection.
-    void snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size);
+    /// @p has_consumer false releases the texture instead: this pipeline is the sole owner of its
+    /// lifetime, so it is dropped here rather than by whichever consumer happens to run first and
+    /// notice it does not need it.
+    void snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size, bool has_consumer);
 
     /// After TAA; copies the SCENE-REFERRED linear HDR target into @c PREV_SCENE_HDR for
     /// next frame's SSR trace and the GI screen traces. Deliberately pre-bloom/tonemap/UI:
     /// display-encoded values fed back into linear lighting would, with free-floating auto
     /// exposure, form a brightness feedback loop in dark scenes.
+    /// @p has_consumer false releases the texture instead (the sole ownership of snapshot_prev_depth).
     void snapshot_prev_scene_color(gfx::render_view& rview,
                                    const gfx::frame_buffer::ptr& source,
-                                   const camera& camera);
+                                   const camera& camera,
+                                   bool has_consumer);
+
+    /// The temporal-stability instrument over the finished image. Dispatches nothing unless a tool armed it.
+    void run_temporal_probe_pass(const camera& camera,
+                                 gfx::render_view& rview,
+                                 const gfx::frame_buffer::ptr& output);
 
     std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
     int debug_pass_{-1};

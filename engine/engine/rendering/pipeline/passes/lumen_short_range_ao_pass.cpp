@@ -26,6 +26,8 @@ using lumen_pass::has_view_size;
 /// The search's and the accumulation's format: one uint per texel, the bent normal scaled by the visibility in
 /// 11:11:10 bits (lumen_short_range_ao.sh LumenPackShortRangeAO).
 constexpr bgfx::TextureFormat::Enum packed_ao_format = bgfx::TextureFormat::R32U;
+/// The render view's accumulation ping-pong.
+constexpr const char* ping_pong_key = "LUMEN_SHORT_RANGE_AO_PING_PONG";
 
 /// The search grid of a view at @p downsample_factor.
 auto get_search_size(const usize32_t& view_size, uint32_t downsample_factor) -> usize32_t
@@ -80,13 +82,8 @@ auto lumen_short_range_ao_pass::acquire_targets(gfx::render_view& rview,
 {
     // The history ping-pong continues only from the frame right before this one (the previous depth it is
     // validated against is always that frame's).
-    auto& parity = rview.data_get_or_emplace("LUMEN_SHORT_RANGE_AO_PARITY", 0u);
-    const bool even_frame = (parity & 1u) == 0u;
-    ++parity;
-    auto& written_frame = rview.data_get_or_emplace("LUMEN_SHORT_RANGE_AO_FRAME", 0u);
-    const uint32_t render_frame = gfx::get_render_frame();
-    const bool continuous = written_frame != 0u && render_frame == written_frame + 1u;
-    written_frame = render_frame;
+    auto& ping_pong = rview.data().get_or_emplace<lumen_pass::ping_pong_state>(ping_pong_key);
+    const auto step = ping_pong.advance(gfx::get_render_frame());
     frame_targets targets;
     // The search and the accumulation hold the AO packed in one uint (lumen_short_range_ao.sh).
     targets.search = ensure_texture(rview,
@@ -94,13 +91,14 @@ auto lumen_short_range_ao_pass::acquire_targets(gfx::render_view& rview,
                                     get_search_size(size, downsample_factor),
                                     packed_ao_format);
     targets.history_write = ensure_texture(rview,
-                                           even_frame ? "LUMEN_SHORT_RANGE_AO_HISTORY_A" : "LUMEN_SHORT_RANGE_AO_HISTORY_B",
+                                           step.writes_even ? "LUMEN_SHORT_RANGE_AO_HISTORY_A"
+                                                            : "LUMEN_SHORT_RANGE_AO_HISTORY_B",
                                            size,
                                            packed_ao_format);
     targets.history_read =
-        rview.tex_safe_get(even_frame ? "LUMEN_SHORT_RANGE_AO_HISTORY_B" : "LUMEN_SHORT_RANGE_AO_HISTORY_A");
+        rview.tex_safe_get(step.writes_even ? "LUMEN_SHORT_RANGE_AO_HISTORY_B" : "LUMEN_SHORT_RANGE_AO_HISTORY_A");
     targets.screen = ensure_texture(rview, "LUMEN_SHORT_RANGE_AO_SCREEN", size, bgfx::TextureFormat::RGBA8);
-    targets.has_history = continuous && has_view_size(targets.history_read, size);
+    targets.has_history = step.is_continuous && has_view_size(targets.history_read, size);
     return targets;
 }
 

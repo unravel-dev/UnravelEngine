@@ -380,7 +380,7 @@ struct light
         /// Field of view y-axis adjustment.
         float fov_y_adjust = 0.0f;
         /// Whether to use stencil packing.
-        bool stencil_pack = false;
+        bool stencil_pack = true;
 
     } point_shadow_params{};
     
