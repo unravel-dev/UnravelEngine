@@ -1,6 +1,8 @@
 #include "taa_component.hpp"
+#include "component_disables.h"
 #include <engine/ecs/components/basic_component.h>
 #include <engine/rendering/camera.h>
+#include <engine/rendering/ecs/components/fxaa_component.h>
 #include <engine/rendering/pipeline/passes/taa_pass.h>
 
 #include <serialization/associative_archive.h>
@@ -106,6 +108,25 @@ LOAD_INLINE(taa_pass::settings)
 LOAD_INSTANTIATE(taa_pass::settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(taa_pass::settings, ser20::iarchive_binary_t);
 
+namespace
+{
+/// The two anti-aliasing passes are exclusive: FXAA steps aside while TAA runs.
+auto make_taa_disable_rules() -> component_disable_rules
+{
+    const auto is_running = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            const auto* taa = obj.try_cast<taa_component>();
+            return taa != nullptr && taa->enabled;
+        });
+    component_disable_rules rules;
+    rules.push_back(make_component_disable_rule<fxaa_component>(
+        "Temporal AA anti-aliases this view, so FXAA does not run. Turn off Temporal AA to use FXAA instead.",
+        is_running));
+    return rules;
+}
+} // namespace
+
 REFLECT(taa_component)
 {
     entt::meta_factory<taa_component>{}
@@ -114,6 +135,7 @@ REFLECT(taa_component)
             entt::attribute{"name", "taa_component"},
             entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "Temporal AA"},
+            entt::attribute{COMPONENT_DISABLES_ATTRIBUTE, make_taa_disable_rules()},
         })
         .func<&component_meta<taa_component>::exists>("component_exists"_hs)
         .func<&component_meta<taa_component>::add>("component_add"_hs)

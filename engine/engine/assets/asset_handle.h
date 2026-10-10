@@ -216,7 +216,7 @@ struct asset_handle
         return fs::path(id()).extension().string();
     }
 
-    /**
+        /**
      * @brief Gets the shared pointer to the asset.
      * @param wait If true, waits for the task to complete if not ready.
      *
@@ -226,49 +226,22 @@ struct asset_handle
      */
     auto get(bool wait = true) const -> std::shared_ptr<T>
     {
-        update_last_access();
+        return resolve(wait, empty_asset());
+    }
 
-        if(auto cached_asset = peek())
-        {
-            return cached_asset;
-        }
-
-        // Take a stable snapshot. Even if another thread invalidates the link
-        // mid-call, our local `s` keeps the old state alive for the duration.
-        auto s = load_state();
-        if(!s || !s->task.valid())
-        {
-            return empty_asset();
-        }
-
-        if(!s->task.is_submitted())
-        {
-            s->task.submit();
-        }
-
-        const bool ready = s->task.is_ready();
-        const bool should_get = ready || wait;
-        if(!should_get)
-        {
-            return empty_asset();
-        }
-
-        // Copy the task locally; we may need to change priority. task.get()
-        // may block — we must hold no locks here.
-        auto task = s->task;
-        if(!ready)
-        {
-            task.change_priority(tpp::priority::high());
-        }
-
-        auto value = task.get();
-        if(value)
-        {
-            std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
-            link_->weak_asset = value;
-            return value;
-        }
-        return empty_asset();
+    /**
+     * @brief The asset if it is loaded, without waiting: null while it is still on its way (a deferred load is
+     * submitted, as get(false) submits it) or when the handle references no asset; the empty asset when its load
+     * failed, as get() returns it.
+     *
+     * The readiness test for code that must not wait: it touches the asset, so an idle one is not demoted to deferred,
+     * and submits the load that is_ready() alone never starts. get(false) returns the empty asset both while loading
+     * and after a failed load, and is_ready() read after it can see a load that finished in between; this decides
+     * from one snapshot.
+     */
+    auto try_get() const -> std::shared_ptr<T>
+    {
+        return resolve(false, nullptr);
     }
 
     /**
@@ -505,6 +478,57 @@ struct asset_handle
     }
 
 private:
+    /**
+     * @brief The body of get() and try_get(): the asset, waited for when @p wait (a deferred load is submitted first);
+     * @p unresolved when the handle has no task or, without waiting, while the asset still loads; the empty asset when
+     * its load failed.
+     */
+    auto resolve(bool wait, const std::shared_ptr<T>& unresolved) const -> std::shared_ptr<T>
+    {
+        update_last_access();
+
+        if(auto cached_asset = peek())
+        {
+            return cached_asset;
+        }
+
+        // Take a stable snapshot. Even if another thread invalidates the link
+        // mid-call, our local `s` keeps the old state alive for the duration.
+        auto s = load_state();
+        if(!s || !s->task.valid())
+        {
+            return unresolved;
+        }
+
+        if(!s->task.is_submitted())
+        {
+            s->task.submit();
+        }
+
+        const bool ready = s->task.is_ready();
+        const bool should_get = ready || wait;
+        if(!should_get)
+        {
+            return unresolved;
+        }
+
+        // Copy the task locally; we may need to change priority. task.get()
+        // may block - we must hold no locks here.
+        auto task = s->task;
+        if(!ready)
+        {
+            task.change_priority(tpp::priority::high());
+        }
+
+        auto value = task.get();
+        if(value)
+        {
+            std::lock_guard<std::mutex> lock(link_->weak_asset_mtx);
+            link_->weak_asset = value;
+            return value;
+        }
+        return empty_asset();
+    }
     /**
      * @brief Loads the current immutable snapshot of the link's state.
      */

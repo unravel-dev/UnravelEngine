@@ -91,7 +91,7 @@ private:
     ImGuiTextFilter filter_;
     fs::path root_;
     int refresh_{};
-    float scale_ = 0.6f;
+    float scale_ = 0.5f;
 
     /// The entry a focus request asked to show, scrolled to the next time its folder is drawn.
     fs::path reveal_path_;

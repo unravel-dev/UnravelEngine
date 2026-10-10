@@ -1,5 +1,11 @@
 #include "gi_component.hpp"
 
+#include "component_disables.h"
+
+#include <engine/rendering/ecs/components/assao_component.h>
+#include <engine/rendering/ecs/components/gtao_component.h>
+#include <engine/rendering/ecs/components/ssil_component.h>
+#include <engine/rendering/ecs/components/ssr_component.h>
 #include <engine/rendering/gi/global_sdf_clipmap.h>
 
 #include <serialization/associative_archive.h>
@@ -458,6 +464,54 @@ LOAD_INSTANTIATE(gi_settings, ser20::iarchive_binary_t);
 
 // --- Reflection + Serialization: gi_component ---
 
+namespace
+{
+/// Whether the GI runs at all on the entity the inspector reads.
+auto get_running_gi(const entt::meta_any& obj) -> const gi_component*
+{
+    const auto* gi = obj.try_cast<gi_component>();
+    return gi != nullptr && gi->enabled ? gi : nullptr;
+}
+
+/// The screen-space passes the GI takes over from, each with the setting that decides it.
+auto make_gi_disable_rules() -> component_disable_rules
+{
+    component_disable_rules rules;
+    const auto owns_ambient_occlusion = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            const auto* gi = get_running_gi(obj);
+            return gi != nullptr && gi->settings.ambient_occlusion.enabled;
+        });
+    const auto owns_reflections = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            const auto* gi = get_running_gi(obj);
+            return gi != nullptr && gi->settings.reflections.enabled;
+        });
+    const auto owns_indirect_diffuse =
+        entt::property_predicate<bool>([](const entt::meta_any& obj) { return get_running_gi(obj) != nullptr; });
+
+    rules.push_back(make_component_disable_rule<gtao_component>(
+        "Global Illumination provides the ambient occlusion for this view, so GTAO does not run. Turn off its "
+        "Ambient Occlusion to use GTAO instead.",
+        owns_ambient_occlusion));
+    rules.push_back(make_component_disable_rule<assao_component>(
+        "Global Illumination provides the ambient occlusion for this view, so ASSAO does not run. Turn off its "
+        "Ambient Occlusion to use ASSAO instead.",
+        owns_ambient_occlusion));
+    rules.push_back(make_component_disable_rule<ssr_component>(
+        "Global Illumination traces the reflections for this view, so SSR does not run. Turn off its Reflections "
+        "to use SSR instead.",
+        owns_reflections));
+    rules.push_back(make_component_disable_rule<ssil_component>(
+        "Global Illumination provides the indirect diffuse lighting for this view, so SSIL does not run. Screen-space "
+        "indirect lighting would re-sample the already lit frame and count it twice.",
+        owns_indirect_diffuse));
+    return rules;
+}
+} // namespace
+
 REFLECT(gi_component)
 {
     entt::meta_factory<gi_component>{}
@@ -466,6 +520,7 @@ REFLECT(gi_component)
             entt::attribute{"name", "gi_component"},
             entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "Global Illumination"},
+            entt::attribute{COMPONENT_DISABLES_ATTRIBUTE, make_gi_disable_rules()},
         })
         .func<&component_meta<gi_component>::exists>("component_exists"_hs)
         .func<&component_meta<gi_component>::add>("component_add"_hs)

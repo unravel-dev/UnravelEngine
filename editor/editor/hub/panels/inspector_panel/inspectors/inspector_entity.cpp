@@ -13,6 +13,7 @@
 #include <engine/assets/asset_manager.h>
 #include <engine/engine.h>
 #include <engine/meta/ecs/components/all_components.h>
+#include <engine/meta/ecs/components/component_disables.h>
 #include <engine/rendering/font.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 
@@ -49,6 +50,13 @@ constexpr float COMPONENT_MENU_SEARCH_PADDING_Y = 6.0f;
 constexpr float COMPONENT_MENU_MUTED_ALPHA = 0.6f;
 // Drop-target frame drawn around the component list and the "Add Component" button while a script file is dragged.
 constexpr float SCRIPT_DROP_FRAME_THICKNESS = 2.0f;
+
+// Note drawn on a component another component has taken over from (see component_disables.h).
+constexpr ImU32 COMPONENT_NOTE_ICON_COLOR = IM_COL32(255, 190, 60, 255);
+constexpr ImU32 COMPONENT_NOTE_BACKGROUND_COLOR = IM_COL32(255, 190, 60, 26);
+constexpr float COMPONENT_NOTE_ROUNDING = 4.0f;
+/// Between the note's icon and its text, in font sizes.
+constexpr float COMPONENT_NOTE_ICON_GAP_EM = 0.4f;
 
 constexpr float COMPONENT_HEADER_ROUNDING = 4.0f;
 /// Between the icon and the name, in font sizes.
@@ -199,6 +207,9 @@ struct inspect_callbacks
     std::function<bool()> can_merge;
 
     std::string icon;
+    /// What other components on the entity have taken over from this one, shown above its
+    /// properties. Collected from the meta before anything is drawn (@ref collect_disable_notes).
+    std::vector<std::string> disable_notes;
 };
 
 struct component_header_state
@@ -277,6 +288,51 @@ auto draw_component_header(inspector_context& inspector_ctx, const std::string& 
     return header;
 }
 
+/// One note: a warning icon and the wrapped message on a tinted panel. Continuation lines align
+/// under the text, not under the icon.
+void draw_component_disable_note(const std::string& message)
+{
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float icon_width = ImGui::GetFontSize();
+    const float icon_gap = icon_width * COMPONENT_NOTE_ICON_GAP_EM;
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, COMPONENT_NOTE_ROUNDING);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, style.FramePadding);
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, COMPONENT_NOTE_BACKGROUND_COLOR);
+    if(ImGui::BeginChild("##component_note",
+                         ImVec2(0.0f, 0.0f),
+                         ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_AutoResizeY))
+    {
+        const ImVec2 min = ImGui::GetCursorScreenPos();
+        ImGui::RenderIconCentered(ImGui::GetWindowDrawList(),
+                                  ImVec2(min.x + icon_width * 0.5f, min.y + ImGui::GetTextLineHeight() * 0.5f),
+                                  ICON_MDI_INFORMATION_OUTLINE,
+                                  COMPONENT_NOTE_ICON_COLOR);
+        ImGui::SetCursorScreenPos(ImVec2(min.x + icon_width + icon_gap, min.y));
+        ImGui::PushStyleColor(ImGuiCol_Text, imgui_style::get_muted_text_color_u32());
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextUnformatted(message.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopStyleColor();
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+}
+
+void draw_component_disable_notes(const std::vector<std::string>& notes)
+{
+    for(size_t index = 0; index < notes.size(); ++index)
+    {
+        ImGui::PushID(int(index));
+        draw_component_disable_note(notes[index]);
+        ImGui::PopID();
+    }
+    if(!notes.empty())
+    {
+        ImGui::Spacing();
+    }
+}
+
 auto inspect_component(inspector_context& inspector_ctx, const std::string& name, const inspect_callbacks& callbacks)
     -> inspect_result
 {
@@ -302,6 +358,7 @@ auto inspect_component(inspector_context& inspector_ctx, const std::string& name
         ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 8.0f);
         ImGui::TreePush(name.c_str());
 
+        draw_component_disable_notes(callbacks.disable_notes);
         result |= callbacks.on_inspect();
 
         ImGui::TreePop();
@@ -945,6 +1002,117 @@ auto render_entity_header(rtti::context& ctx, entt::handle data, prefab_override
     return result;
 }
 
+/// The messages the components on an entity put on one another, keyed by the entt type hash of the
+/// component each message belongs to.
+using component_disable_notes = std::map<entt::id_type, std::vector<std::string>>;
+
+/// One component taking over from another on the inspected entity: both ends, and what to say on
+/// the end that stops having an effect.
+struct component_disable_edge
+{
+    entt::id_type source{};
+    entt::id_type target{};
+    std::string message;
+};
+
+/// Every rule that holds on the entity right now, read from the meta of the components it carries.
+auto collect_disable_edges(entt::handle data) -> std::vector<component_disable_edge>
+{
+    std::vector<component_disable_edge> edges;
+    hpp::for_each_tuple_type<all_inspectable_components>(
+        [&](auto index)
+        {
+            using ctype = std::tuple_element_t<decltype(index)::value, all_inspectable_components>;
+            auto* component = data.try_get<ctype>();
+            if(component == nullptr)
+            {
+                return;
+            }
+            const auto& rules = get_component_disable_rules(entt::resolve<ctype>());
+            const auto source = entt::forward_as_meta(*component);
+            for(const auto& rule : rules)
+            {
+                if(is_component_disable_rule_active(rule, source))
+                {
+                    edges.push_back({entt::type_id<ctype>().hash(), rule.disabled_type, rule.message});
+                }
+            }
+        });
+    return edges;
+}
+
+/**
+ * @brief Answers which components a set of rules leaves without an effect.
+ *
+ * Only a component that runs takes anything over, so a chain - C takes over from B, B from A -
+ * leaves A with C's message alone: B is not running to take anything over. Memoized over the whole
+ * set; a declaration cycle resolves as "runs" for the component the walk re-enters, so a bad pair
+ * of declarations cannot hang the inspector.
+ */
+class component_disable_resolver
+{
+public:
+    explicit component_disable_resolver(const std::vector<component_disable_edge>& edges) : edges_(edges)
+    {
+    }
+
+    auto is_disabled(entt::id_type type) -> bool
+    {
+        const auto [it, is_new] = states_.emplace(type, state::walking);
+        if(!is_new)
+        {
+            return it->second == state::disabled;
+        }
+        bool disabled = false;
+        for(const auto& edge : edges_)
+        {
+            if(edge.target == type && !is_disabled(edge.source))
+            {
+                disabled = true;
+                break;
+            }
+        }
+        states_[type] = disabled ? state::disabled : state::runs;
+        return disabled;
+    }
+
+private:
+    /// walking marks a component the walk is still resolving, and reads back as "runs".
+    enum class state
+    {
+        walking,
+        runs,
+        disabled
+    };
+
+    const std::vector<component_disable_edge>& edges_;
+    std::map<entt::id_type, state> states_;
+};
+
+/// Reads every component on the entity for the components it takes over from, so the component
+/// drawn first already knows what a component further down the list does to it.
+auto collect_disable_notes(entt::handle data) -> component_disable_notes
+{
+    const auto edges = collect_disable_edges(data);
+    component_disable_resolver resolver(edges);
+    component_disable_notes notes;
+    for(const auto& edge : edges)
+    {
+        if(!resolver.is_disabled(edge.source))
+        {
+            notes[edge.target].push_back(edge.message);
+        }
+    }
+    return notes;
+}
+
+/// The notes collected for one component type, or nothing when it has none.
+auto find_disable_notes(const component_disable_notes& notes, entt::id_type type_hash) -> std::vector<std::string>
+{
+    const auto it = notes.find(type_hash);
+    return it != notes.end() ? it->second : std::vector<std::string>{};
+}
+
 } // namespace
 
 auto get_component_icon(const entt::meta_type& type) -> std::string
@@ -1071,6 +1239,8 @@ auto inspector_entity::inspect(rtti::context& ctx,
             ImGui::PopStyleVar();
         }
 
+        const auto disable_notes = collect_disable_notes(data);
+
         hpp::for_each_tuple_type<all_inspectable_components>(
             [&](auto index)
             {
@@ -1193,6 +1363,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
 
                 
                 callbacks.icon = get_component_icon<ctype>();
+                callbacks.disable_notes = find_disable_notes(disable_notes, entt::type_id<ctype>().hash());
                 
                 result |= inspect_component(inspector_ctx, pretty_name, callbacks);
             });

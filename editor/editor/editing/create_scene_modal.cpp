@@ -23,25 +23,27 @@ const preset_card_info presets[] = {
     {"preset_low",
      ICON_MDI_LIGHTNING_BOLT_OUTLINE,
      "Low End",
-     "Sky lighting, Soft shadows, Tonemapping and FXAA.\n"
+     "Sky lighting, soft shadows, tonemapping and FXAA. No clouds, no reflection bakes.\n"
      "Best for low-end or mobile.",
      defaults::scene_preset::low},
     {"preset_medium",
      ICON_MDI_LAYERS,
      "Standard",
-     "Flat clouds, SSR, TAA, GTAO, Bloom and Auto-Exposure, Soft Shadows.\n"
+     "Flat clouds, soft shadows, tonemapping, TAA and GTAO ambient occlusion.\n"
      "Recommended for most projects.",
      defaults::scene_preset::medium},
     {"preset_high",
      ICON_MDI_DIAMOND_STONE,
      "High End",
-     "Volumetric clouds, dynamic GI and reflections, TAA, Bloom, Auto-Exposure and Contact Shadows.\n"
+     "Volumetric clouds and contact shadows. Dynamic global illumination provides the indirect "
+     "lighting, the reflections and the ambient occlusion; tonemapping, TAA, bloom and "
+     "auto-exposure finish the frame.\n"
      "Best for high-end desktop.",
      defaults::scene_preset::high},
     {"preset_showcase",
      ICON_MDI_GIFT,
      "Showcase",
-     "Volumetric clouds, dynamic GI and reflections, TAA, Bloom, Auto-Exposure and Contact Shadows.\n"
+     "High End with the global illumination at twice the quality and high-resolution shadow maps.\n"
      "Highest quality lighting and shadows. Requires a powerful GPU.",
      defaults::scene_preset::showcase},
 };

@@ -1,5 +1,7 @@
 #include "gtao_component.hpp"
+#include "component_disables.h"
 #include <engine/meta/core/math/vector.hpp>
+#include <engine/rendering/ecs/components/assao_component.h>
 
 #include <serialization/associative_archive.h>
 #include <serialization/binary_archive.h>
@@ -204,6 +206,26 @@ LOAD_INLINE(gtao_pass::settings)
 LOAD_INSTANTIATE(gtao_pass::settings, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(gtao_pass::settings, ser20::iarchive_binary_t);
 
+namespace
+{
+/// Only one screen-space ambient occlusion runs per view, and GTAO takes precedence.
+auto make_gtao_disable_rules() -> component_disable_rules
+{
+    const auto is_running = entt::property_predicate<bool>(
+        [](const entt::meta_any& obj)
+        {
+            const auto* gtao = obj.try_cast<gtao_component>();
+            return gtao != nullptr && gtao->enabled;
+        });
+    component_disable_rules rules;
+    rules.push_back(make_component_disable_rule<assao_component>(
+        "GTAO provides the ambient occlusion for this view, so ASSAO does not run. Turn off GTAO to use ASSAO "
+        "instead.",
+        is_running));
+    return rules;
+}
+} // namespace
+
 REFLECT(gtao_component)
 {
     entt::meta_factory<gtao_component>{}
@@ -212,6 +234,7 @@ REFLECT(gtao_component)
             entt::attribute{"name", "gtao_component"},
             entt::attribute{"category", "Rendering/Post Processing"},
             entt::attribute{"pretty_name", "GTAO"},
+            entt::attribute{COMPONENT_DISABLES_ATTRIBUTE, make_gtao_disable_rules()},
         })
         .func<&component_meta<gtao_component>::exists>("component_exists"_hs)
         .func<&component_meta<gtao_component>::add>("component_add"_hs)

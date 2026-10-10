@@ -614,6 +614,74 @@ void emplace_disabled_volume_effects(entt::handle volume)
 {
     ((volume.emplace<Effects>().enabled = false), ...);
 }
+
+/// Quality scale the showcase preset runs the GI's heaviest stages at; 1 is the component's default.
+constexpr float SHOWCASE_GI_QUALITY = 1.0f;
+
+/// Which post-process effects a quality preset turns on, and the quality the heaviest of them run
+/// at. Every effect a volume can carry is listed, so a preset's result does not depend on the
+/// volume's previous state.
+struct volume_preset_settings
+{
+    bool has_tonemapping{};
+    bool has_fxaa{};
+    bool has_taa{};
+    bool has_auto_exposure{};
+    bool has_bloom{};
+    bool has_gtao{};
+    bool has_assao{};
+    bool has_ssr{};
+    bool has_ssil{};
+    bool has_gi{};
+    /// Quality scales of the GI's heaviest stages (1 = the component's own default).
+    float gi_diffuse_quality{1.0f};
+    float gi_reflection_quality{1.0f};
+    float gi_lighting_quality{1.0f};
+    /// Resolution the screen-space reflections trace at.
+    trace_resolution ssr_resolution{trace_resolution::half};
+};
+
+/// The presets, cheapest first. Tonemapping is the floor of all of them - without it the scene
+/// stays in HDR - and every effect a preset leaves out is switched off by it.
+///
+/// Low stops at FXAA. Medium adds temporal anti-aliasing and screen-space ambient occlusion. High
+/// and showcase hand the indirect lighting, the reflections and the short-range ambient occlusion
+/// to the GI, so they carry neither GTAO nor SSR, and they meter the exposure and bloom the result;
+/// showcase is high at a higher GI quality. SSIL and ASSAO stay a manual opt-in: SSIL must never
+/// run together with the GI, which re-samples the GI-lit frame and counts it twice, and ASSAO is
+/// the manual alternative to GTAO.
+auto get_volume_preset_settings(defaults::scene_preset preset) -> volume_preset_settings
+{
+    volume_preset_settings settings;
+    settings.has_tonemapping = true;
+    switch(preset)
+    {
+        case defaults::scene_preset::low:
+            settings.has_fxaa = true;
+            break;
+        case defaults::scene_preset::medium:
+            settings.has_taa = true;
+            settings.has_gtao = true;
+            break;
+        case defaults::scene_preset::high:
+            settings.has_taa = true;
+            settings.has_auto_exposure = true;
+            settings.has_bloom = true;
+            settings.has_gi = true;
+            break;
+        case defaults::scene_preset::showcase:
+            settings.has_taa = true;
+            settings.has_auto_exposure = true;
+            settings.has_bloom = true;
+            settings.has_gi = true;
+            settings.gi_diffuse_quality = SHOWCASE_GI_QUALITY;
+            settings.gi_reflection_quality = SHOWCASE_GI_QUALITY;
+            settings.gi_lighting_quality = SHOWCASE_GI_QUALITY;
+            settings.ssr_resolution = trace_resolution::full;
+            break;
+    }
+    return settings;
+}
 } // namespace
 
 auto defaults::init(rtti::context& ctx) -> bool
@@ -1174,29 +1242,28 @@ void defaults::create_scene_from_preset(rtti::context& ctx, scene& scn, scene_pr
 
 void defaults::apply_volume_preset(entt::handle volume, scene_preset preset)
 {
-    const bool is_low = preset == scene_preset::low;
-    const bool has_world_gi = preset == scene_preset::high || preset == scene_preset::showcase;
-    // Tonemapping and FXAA are the floor of every preset (FXAA steps aside while TAA runs); the
-    // low preset stops there.
-    set_volume_effect_enabled<tonemapping_component>(volume, true);
-    set_volume_effect_enabled<fxaa_component>(volume, true);
-    set_volume_effect_enabled<taa_component>(volume, !is_low);
-    set_volume_effect_enabled<auto_exposure_component>(volume, !is_low);
-    set_volume_effect_enabled<bloom_component>(volume, !is_low);
-    set_volume_effect_enabled<gtao_component>(volume, !is_low);
-    set_volume_effect_enabled<ssr_component>(volume, !is_low);
-    // The GI owns the indirect diffuse, the reflections and the short-range AO from `high` up;
-    // below it the ambient comes from the environment term alone. SSR serves views where the GI's
-    // reflections are off. SSIL stays a manual opt-in: it must never run together with the GI,
-    // since screen-space indirect re-samples the GI-lit frame and double-counts it. ASSAO is the
-    // manual alternative to GTAO.
-    set_volume_effect_enabled<gi_component>(volume, has_world_gi);
-    set_volume_effect_enabled<ssil_component>(volume, false);
-    set_volume_effect_enabled<assao_component>(volume, false);
+    const auto settings = get_volume_preset_settings(preset);
+    set_volume_effect_enabled<tonemapping_component>(volume, settings.has_tonemapping);
+    set_volume_effect_enabled<fxaa_component>(volume, settings.has_fxaa);
+    set_volume_effect_enabled<taa_component>(volume, settings.has_taa);
+    set_volume_effect_enabled<auto_exposure_component>(volume, settings.has_auto_exposure);
+    set_volume_effect_enabled<bloom_component>(volume, settings.has_bloom);
+    set_volume_effect_enabled<gtao_component>(volume, settings.has_gtao);
+    set_volume_effect_enabled<assao_component>(volume, settings.has_assao);
+    set_volume_effect_enabled<ssr_component>(volume, settings.has_ssr);
+    set_volume_effect_enabled<ssil_component>(volume, settings.has_ssil);
+    set_volume_effect_enabled<gi_component>(volume, settings.has_gi);
+    // The quality of the effects a preset does not run is set as well, so turning one on by hand
+    // later still lands on the quality the preset asked for.
     if(auto* ssr = volume.try_get<ssr_component>())
     {
-        ssr->settings.fidelityfx.resolution =
-            preset == scene_preset::showcase ? trace_resolution::full : trace_resolution::half;
+        ssr->settings.fidelityfx.resolution = settings.ssr_resolution;
+    }
+    if(auto* gi = volume.try_get<gi_component>())
+    {
+        gi->settings.diffuse.quality = settings.gi_diffuse_quality;
+        gi->settings.reflections.quality = settings.gi_reflection_quality;
+        gi->settings.scene.lighting_quality = settings.gi_lighting_quality;
     }
 }
 
