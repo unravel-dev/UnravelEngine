@@ -645,8 +645,8 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
 
     vec2Set(m_uniforms.m_depthUnpackConsts, depthLinearizeMul, depthLinearizeAdd);
 
-    float tanHalfFOVY = 1.0f / proj[1 * 4 + 1]; // = tanf( drawContext.Camera.GetYFOV( ) * 0.5f );
-    float tanHalfFOVX = 1.0F / proj[0];         // = tanHalfFOVY * drawContext.Camera.GetAspect( );
+    float tanHalfFOVY = 1.0f / proj[1 * 4 + 1]; // = tan(vertical fov / 2)
+    float tanHalfFOVX = 1.0F / proj[0];         // = tanHalfFOVY * aspect
 
     // Texel rows run bottom-up where render targets keep their origin at the bottom left
     // (OpenGL and OpenGL ES), so view-space y grows with the texel row there.
@@ -679,8 +679,8 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
     // if the depth precision is switched to 32bit float, this can be set to something closer to 1 (0.9999 is fine)
     m_uniforms.m_depthPrecisionOffsetMod = 0.9992f;
 
-    // used to get average load per pixel; 9.0 is there to compensate for only doing every 9th InterlockedAdd in
-    // PSPostprocessImportanceMapB for performance reasons
+    // used to get average load per pixel; 9.0 is there to compensate for only doing every 9th atomic add in
+    // cs_assao_postprocess_importance_map_b for performance reasons
     m_uniforms.m_loadCounterAvgDiv = 9.0f / (float)(dims.quarterSize[0] * dims.quarterSize[1] * 255.0);
 
     // Special settings for lowest quality level - just nerf the effect a tiny bit
@@ -722,11 +722,9 @@ void assao_pass::update_uniforms(int32_t _pass, const float* view, const float* 
     vec2Set(m_uniforms.m_quarterResPixelSize, 1.0f / (float)dims.quarterSize[0], 1.0f / (float)dims.quarterSize[1]);
 
     float additionalAngleOffset =
-        m_settings.temporal_supersampling_angle_offset; // if using temporal supersampling approach (like "Progressive
-                                                        // Rendering Using Multi-frame Sampling" from GPU Pro 7, etc.)
+        m_settings.temporal_supersampling_angle_offset; // per-frame sample rotation for temporal supersampling
     float additionalRadiusScale =
-        m_settings.temporal_supersampling_radius_offset; // if using temporal supersampling approach (like "Progressive
-                                                         // Rendering Using Multi-frame Sampling" from GPU Pro 7, etc.)
+        m_settings.temporal_supersampling_radius_offset; // per-frame sample radius scale for temporal supersampling
     const int32_t subPassCount = 5;
     for(int32_t subPass = 0; subPass < subPassCount; subPass++)
     {

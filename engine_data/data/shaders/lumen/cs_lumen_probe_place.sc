@@ -1,13 +1,11 @@
 /*
- * Lumen screen probe gather, uniform placement (UE 5.8 ScreenProbeDownsampleDepthUniformCS,
- * LumenScreenProbeGather.usf:83-133): one probe per DOWNSAMPLE x DOWNSAMPLE tile, at exactly one
+ * Screen probe gather, uniform placement: one probe per DOWNSAMPLE x DOWNSAMPLE tile, at exactly one
  * G-buffer pixel - the tile origin plus this frame's screen-wide Hammersley offset (period 8). No
  * probe state carries over between frames.
  *
  * Writes the probe record (lumen_common.sh LumenPackProbe; x = 0: no probe, the sky). Over the atlas rows below
  * the uniform probes it writes records without probe, and it clears the adaptive probes' counter and tile lists
- * (lumen_adaptive_probes.sh; UE clears them before its placement, LumenScreenProbeGather.cpp:2331-2333): the adaptive
- * placement then fills both for this frame.
+ * (lumen_adaptive_probes.sh) ahead of the adaptive placement, which then fills both for this frame.
  */
 
 #include "bgfx_compute.sh"

@@ -20,7 +20,7 @@ constexpr uint32_t compose_group_size = 4u;
 constexpr uint32_t max_bricks_per_row = 32768u;
 /// Must match NUM_THREADS in cs_gi_clipmap_mip.sc.
 constexpr uint32_t mip_group_size = 4u;
-/// Passes of a level's coarse mip, the first reading the level (UE NumPropagationSteps): the distance travels this
+/// Passes of a level's coarse mip, the first reading the level: the distance travels this
 /// many mip texels from the level's surfaces. Odd, so the last pass writes the level's slab.
 constexpr uint32_t mip_propagation_passes = 5u;
 } // namespace
@@ -322,7 +322,7 @@ void gi_clipmap_compose_pass::dispatch_compose_bricks(gfx::render_pass& pass,
     const float reach = clipmap_settings.encode_range * lvl.voxel_size;
     const float compose_params[4] = {float(level), float(resolution), lvl.voxel_size, reach};
     gfx::set_uniform(compose_program_.u_clipmap_compose_params, compose_params);
-    // w = 1: Lumen's cascade, which writes the coverage and leaves small objects out.
+    // w = 1: a GI cascade, which writes the coverage and leaves small objects out.
     const float compose_origin[4] = {lvl.origin.x, lvl.origin.y, lvl.origin.z, 1.0f};
     gfx::set_uniform(compose_program_.u_clipmap_compose_origin, compose_origin);
     const math::vec4 scale(clipmap_settings.object_radius_scale, 0.0f, 0.0f, 0.0f);

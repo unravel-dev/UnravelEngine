@@ -318,8 +318,8 @@ public:
             normal_texture && gfx::normal_map_needs_z_reconstruction(normal_texture->info.format) ? 1.0f : 0.0f;
         // Two-sided (no culling): back faces shade with their normal turned toward the viewer.
         surface_data2[2] = get_cull_type() == cull_type::none ? 1.0f : 0.0f;
-        // Alpha cutout (alpha_mode::mask): the surface cache's card capture keeps the cut-out texels (UE never clips
-        // a masked material's cards).
+        // Alpha cutout (alpha_mode::mask): the surface cache's card capture keeps the cut-out texels (a masked
+        // material's cards are never clipped).
         surface_data2[3] = uses_alpha_cutout() ? 1.0f : 0.0f;
 
         return surface_data2;

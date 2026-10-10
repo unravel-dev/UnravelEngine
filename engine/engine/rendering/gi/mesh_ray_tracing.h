@@ -13,15 +13,15 @@
 
 /**
  * @file mesh_ray_tracing.h
- * @brief Offline ray casting over a mesh's triangles, as UE's Embree scene serves its mesh card build and
- *        its mesh distance field sign: a closest-hit caster on the raytracing library, UE's random stream and
- *        its stratified hemisphere directions.
+ * @brief Offline ray casting over a mesh's triangles for the mesh card build and the mesh distance field's sign
+ *        vote: a closest-hit caster on the raytracing library, a seeded random stream and stratified hemisphere
+ *        directions.
  */
 
 namespace unravel::mesh_ray
 {
 
-/// UE's FRandomStream: a 32-bit LCG whose fraction fills the float mantissa.
+/// A seeded 32-bit LCG whose fraction fills the float mantissa: the same seed draws the same directions every bake.
 class random_stream
 {
 public:
@@ -73,8 +73,8 @@ inline auto sample_uniform_hemisphere(float u1, float u2) -> math::vec3
     return math::vec3(u * lift, v * lift, 1.0f - r2);
 }
 
-/// UE GenerateStratifiedUniformHemisphereSamples: a floor(sqrt(request))^2 jittered grid over the +z
-/// hemisphere, drawing two fractions per sample from @p stream.
+/// A floor(sqrt(request))^2 jittered grid of directions over the +z hemisphere, drawing two fractions per sample
+/// from @p stream.
 inline auto generate_stratified_hemisphere_directions(uint32_t request, random_stream& stream)
     -> std::vector<math::vec3>
 {
@@ -98,11 +98,10 @@ using ray = raytracing::ray;
 using ray_hit = raytracing::ray_hit;
 
 /**
- * @brief Closest-hit ray caster over a triangle soup: the Embree scene of the UE build, on the default
- *        raytracing::backend.
+ * @brief Closest-hit ray caster over a triangle soup, on the default raytracing::backend.
  *
  * Triangles are two-sided for intersection; facing is decided by the caller from @ref get_normal, the outward normal
- * of the triangle's winding (UE: Embree's geometric normal). An enclosed-volume orientation fix would be wrong here:
+ * of the triangle's winding (its geometric normal). An enclosed-volume orientation fix would be wrong here:
  * an open sheet has no volume, and its sum only says which side of the origin the sheet lies on.
  */
 class triangle_ray_caster

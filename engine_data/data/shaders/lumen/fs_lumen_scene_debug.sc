@@ -1,39 +1,37 @@
 $input v_texcoord0
 
 /*
- * Lumen surface cache debug views: UE 5.8's r.Lumen.Visualize scene modes with software ray tracing and Global
- * Tracing (LumenVisualize.usf VisualizeQuadsCS, LumenVisualize.ush LumenVisualizationFinalize and the visualize
- * branches of SurfaceCache/LumenSurfaceCacheSampling.ush), and our card atlas, card coverage and object grid views.
- * The scene views march the global distance field from the camera as UE's visualize does (expansion by the largest
- * distance seen, step factor dithered over [0.8, 1]) and shade each hit from the cards through the object grid,
- * exactly as the gather's rays are; a ray that hits nothing reads the sky (UE ApplySkylightToTraceResult): the
- * environment's radiance SH our rays read.
- * Modes (the debug pass id - 42, UE's r.Lumen.Visualize value in brackets):
- *  0  Lumen Scene [3]: the cards' final lighting, black where no card covers the hit.
+ * Surface cache debug views: the scene views, traced through the global distance field in software, and the card
+ * atlas, card coverage and object grid views.
+ * The scene views march the global distance field from the camera (expansion by the largest distance seen, step
+ * factor dithered over [0.8, 1]) and shade each hit from the cards through the object grid, exactly as the gather's
+ * rays are; a ray that hits nothing reads the sky: the environment's radiance SH our rays read.
+ * Modes (the debug pass id - 42):
+ *  0  GI Scene: the cards' final lighting, black where no card covers the hit.
  *  1  card atlas: the physical albedo atlas, fitted to the viewport.
  *  2  coverage: the placements' mesh distance fields traced from the camera, coloured by why each hit is or is not
  *     covered - green = covered, blue = the placement has no cards, red = no resident card faces the normal, yellow =
  *     a facing card's box misses the hit, cyan = inside a box but the page is not captured, magenta = captured but
  *     the depth test fails.
- *  3  Albedo [8]: the cards' albedo.
- *  4  Surface Cache [5]: as 0 with pink where the object grid lists placements with cards but none covers the hit,
+ *  3  Albedo: the cards' albedo.
+ *  4  Surface Cache: as 0 with pink where the object grid lists placements with cards but none covers the hit,
  *     yellow where it lists none with cards (culled from the surface cache).
  *  5  object grid: the scene views' hits coloured by the furthest card stage over the placements the object grid
  *     lists at the hit, as the coverage view; grey where the grid lists none.
- *  6  Direct Lighting [12], 7 Indirect Lighting [13]: the cards' direct irradiance and radiosity, shown as radiance.
- *  9  Reflection View [4]: as 0, traced as far as the reflections trace.
- *  10 Geometry Normals [6]: the hit's distance field normal.
- *  11 Normals [9]: the cards' normals.
- *  12 Emissive [10]: the cards' emissive.
- *  13 Card Weights [11]: a colour per card, darkened on the lines through its 8x8 atlas tiles' centres.
- *  14 Direct Lighting Updates [16], 15 Indirect Lighting Updates [17]: white where the page was lit this frame, red
+ *  6  Direct Lighting, 7 Indirect Lighting: the cards' direct irradiance and radiosity, shown as radiance.
+ *  9  Reflection View: as 0, traced as far as the reflections trace.
+ *  10 Geometry Normals: the hit's distance field normal.
+ *  11 Normals: the cards' normals.
+ *  12 Emissive: the cards' emissive.
+ *  13 Card Weights: a colour per card, darkened on the lines through its 8x8 atlas tiles' centres.
+ *  14 Direct Lighting Updates, 15 Indirect Lighting Updates: white where the page was lit this frame, red
  *     to blue over the 8 (16) frames since.
- *  16 Radiosity Frames Accumulated [24]: each 8x8 tile's radiosity update count / 4 inside its tile outline, pink
- *     and yellow as 4.
- * The values reach the screen as UE's LumenVisualizationFinalize leaves them: the albedo display encoded, the normals
- * as they are, everything else through the lit image's tone mapping operator - the lighting at the view's exposure,
- * the debug colours at 1 (UE divides them by the pre-exposure before the tone map applies it).
- * In a tile (u_lumen_debug3.xy > 0: UE's overview) the view fills the tile, whose corners are rounded.
+ *  16 Radiosity Frames Accumulated: each 8x8 tile's radiosity update count over its steady value inside its tile
+ *     outline, pink and yellow as 4.
+ * The values reach the screen with the albedo display encoded, the normals as they are, everything else through
+ * the lit image's tone mapping operator - the lighting at the view's exposure, the debug colours at an exposure
+ * of 1, so they read the same whatever the view's exposure.
+ * In a tile (u_lumen_debug3.xy > 0: an overview's tile) the view fills the tile, whose corners are rounded.
  */
 
 #include "../common.sh"
@@ -76,17 +74,17 @@ uniform vec4 u_lumen_debug2;
 uniform vec4 u_lumen_debug3;
 #define u_lumen_debug_show_coverage ((int(u_lumen_debug2.z) & 2) != 0)
 
-/// SampleLumenMeshCards bias for mesh distance-field hits (20 cm).
+/// The card sampling bias for mesh distance-field hits (20 cm).
 #define LUMEN_MESH_SDF_SURFACE_CACHE_BIAS 0.2
 /// SdfTraceInstances step relaxation for the coverage view (plain sphere tracing).
 #define LUMEN_DEBUG_STEP_RELAXATION 1.0
-/// UE's visualize march dithers its step factor between this and 1 (LumenVisualize.usf:72).
+/// The scene views' march dithers its step factor between this and 1.
 #define LUMEN_DEBUG_MIN_STEP_FACTOR 0.8
-/// The lighting updates views reach blue this many frames after a page's update (UE VisScale).
+/// The lighting updates views reach blue this many frames after a page's update.
 #define LUMEN_DEBUG_DIRECT_UPDATES_SCALE 8.0
 #define LUMEN_DEBUG_INDIRECT_UPDATES_SCALE 16.0
 /// The radiosity frames view shows the update count over this: the count's steady value (cs_lumen_radiosity_integrate.sc
-/// LUMEN_RADIOSITY_ACCUMULATED_UPDATES; UE's runs to 4), white once a tile has settled.
+/// LUMEN_RADIOSITY_ACCUMULATED_UPDATES), white once a tile has settled.
 #define LUMEN_DEBUG_RADIOSITY_FRAMES_SCALE 5.0
 /// The card views' atlas grid: one cell per 8x8 tile of the lighting.
 #define LUMEN_DEBUG_CARD_TILE_SIZE 8.0
@@ -144,7 +142,7 @@ LumenDebugHit LumenTraceMeshSdfView(vec2 uv)
 	return result;
 }
 
-/// The global distance field traced from the camera as UE's visualize marches it.
+/// The global distance field traced from the camera, the step factor dithered per pixel.
 LumenDebugHit LumenTraceGlobalSdfView(vec2 uv, vec2 pixel)
 {
 	vec3 origin;
@@ -167,7 +165,7 @@ vec4 LumenDebugToneMap(vec3 radiance)
 	return vec4(apply_tonemapping(radiance * u_lumen_debug2.y, int(u_lumen_debug2.w), 1.0), 1.0);
 }
 
-/// A pre-exposed value as UE's LumenVisualizationFinalize shows it in @p mode.
+/// A pre-exposed value as @p mode shows it: albedo display encoded, normals as they are, the rest tone mapped.
 vec4 LumenDebugFinalize(vec3 value, int mode)
 {
 	if(mode == LUMEN_DEBUG_ALBEDO)
@@ -181,7 +179,7 @@ vec4 LumenDebugFinalize(vec3 value, int mode)
 	return vec4(apply_tonemapping(value, int(u_lumen_debug2.w), 1.0), 1.0);
 }
 
-/// What a camera ray that hits nothing shows in @p mode (UE ApplySkylightToTraceResult, then the mode's finalize).
+/// What a camera ray that hits nothing shows in @p mode: the sky's radiance SH, then the mode's finalize.
 vec4 LumenDebugSky(vec2 uv, int mode)
 {
 	vec3 origin;
@@ -190,7 +188,7 @@ vec4 LumenDebugSky(vec2 uv, int mode)
 	return LumenDebugFinalize(eval_radiance_sh(s_lumen_env_sh, direction) * u_lumen_debug2.y, mode);
 }
 
-/// How one card covers a hit (UE SampleLumenCard before it reads the atlases), as LumenSampleCard computes it (kept
+/// How one card covers a hit, as LumenSampleCard computes it before it reads the atlases (kept
 /// apart so the production sampler compiles as it would without the debug views): the footprint, its texel weights
 /// normalized over the texels that pass the depth test, and the sample's weight - 0 when the card does not cover the
 /// hit.
@@ -245,7 +243,7 @@ LumenCardTap LumenSampleCardTap(int card_index, vec3 position, vec3 normal, floa
 	return tap;
 }
 
-/// UE's card weights colour of card @p card_index at the atlas position @p atlas_coord (texels).
+/// The Card Weights colour of card @p card_index at the atlas position @p atlas_coord (texels).
 vec3 LumenCardWeightsColor(int card_index, vec2 atlas_coord)
 {
 	float index = float(card_index);
@@ -261,7 +259,7 @@ vec3 LumenCardWeightsColor(int card_index, vec2 atlas_coord)
 	return color * mix(0.25, 1.0, saturate(grid.x * grid.y));
 }
 
-/// 1 inside an 8x8 atlas tile, 0 on its outline (UE's radiosity frames grid).
+/// 1 inside an 8x8 atlas tile, 0 on its outline (the radiosity frames view's grid).
 float LumenCardTileOutline(vec2 atlas_coord)
 {
 	vec2 grid = abs(fract(atlas_coord / LUMEN_DEBUG_CARD_TILE_SIZE) * 2.0 - 1.0);
@@ -274,13 +272,13 @@ bool LumenIsCardDebugMode(int mode)
 	return mode == LUMEN_DEBUG_ALBEDO || mode >= LUMEN_DEBUG_NORMALS;
 }
 
-/// The pre-exposed value one card sample contributes in @p mode (UE SampleLumenCard's visualize branch).
+/// The pre-exposed value one card sample contributes in @p mode.
 vec3 LumenCardDebugValue(int mode, int card_index, LumenCardTap tap)
 {
 	BRANCH
 	if(mode == LUMEN_DEBUG_ALBEDO)
 	{
-		// The atlas holds albedo in gamma 2, decoded per card as UE's DecodeSurfaceCacheAlbedo.
+		// The atlas holds albedo in gamma 2: each card's sample is squared back to linear before the cards blend.
 		vec3 encoded = LumenFetchCardAtlas(s_lumen_card_albedo, tap.s, tap.weights);
 		return encoded * encoded;
 	}
@@ -409,7 +407,7 @@ vec4 LumenSampleSceneHit(LumenDebugHit hit, int mode)
 	return cards;
 }
 
-/// The UE scene views (every mode but 1, 2 and 5).
+/// The scene views (every mode but 1, 2 and 5).
 vec4 LumenSceneView(vec2 uv, vec2 pixel, int mode)
 {
 	LumenDebugHit hit = LumenTraceGlobalSdfView(uv, pixel);

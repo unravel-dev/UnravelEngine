@@ -189,9 +189,8 @@ struct color
                 value.w};
     }
 
-    // Convert rgb floats ([0-1],[0-1],[0-1]) to hsv floats ([0-1],[0-1],[0-1]),
-    // from Foley & van Dam p592
-    // Optimized http://lolengine.net/blog/2013/01/13/fast-rgb-to-hsv
+    // Convert rgb floats ([0-1],[0-1],[0-1]) to hsv floats ([0-1],[0-1],[0-1]).
+    // At most two swaps move the largest channel into r; K carries the hue offset they imply.
     static void rgb_to_hsv(float r, float g, float b, float& out_h, float& out_s, float& out_v)
     {
         float K = 0.f;
@@ -216,9 +215,8 @@ struct color
         out_v = r;
     }
 
-    // Convert hsv floats ([0-1],[0-1],[0-1]) to rgb floats ([0-1],[0-1],[0-1]),
-    // from Foley & van Dam p593
-    // also http://en.wikipedia.org/wiki/HSL_and_HSV
+    // Convert hsv floats ([0-1],[0-1],[0-1]) to rgb floats ([0-1],[0-1],[0-1]):
+    // the hue picks one of six sectors, each a fixed arrangement of v, p, q and t.
     static void hsv_to_rgb(float h, float s, float v, float& out_r, float& out_g, float& out_b)
     {
         if(s == 0.0f)

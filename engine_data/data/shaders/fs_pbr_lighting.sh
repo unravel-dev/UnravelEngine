@@ -62,11 +62,11 @@ uniform vec4 u_screen_ao;
 // when the transparent fallback does. The shader cannot derive it: an absent system and a
 // pixel the GI resolved nothing for both read (0,0,0,0). y = 1 when that source is SSIL, which
 // traced the screen-space visibility per pixel; 0 for the GI resolve, which resolves it only
-// at its probe lattice. z = cap of the albedo the multi-bounce fit uses (Lumen's short-range AO:
-// UE's MaxMultibounceAlbedo), 0 = uncapped. w = the GI resolve's scale (the GI intensity): the
-// resolve is the gather's history, E/pi before the intensity, and serves every geometry pixel.
+// at its probe lattice. z = cap of the albedo the multi-bounce fit uses (the GI's short-range AO),
+// 0 = uncapped. w = the GI resolve's scale (the GI intensity): the resolve is the gather's
+// history, E/pi before the intensity, and serves every geometry pixel.
 uniform vec4 u_indirect_params;
-// What s_probe_layer holds: x = 1 for the GI's rough specular history (UpdateProbeLayer), y = its
+// What s_probe_layer holds: x = 1 for the GI's rough specular history (GI_ROUGH_SPECULAR), y = its
 // scale (the GI intensity), z = 1 when that history exists (without it the environment fills the
 // layer); x = 0 for PBUFFER as the probe pass drew it.
 uniform vec4 u_probe_layer_params;
@@ -75,7 +75,7 @@ uniform vec4 u_probe_layer_params;
 /// silhouettes - the midpoint splits them by their majority neighbour.
 #define PBR_GI_SERVED_ALPHA 0.5
 /// The share of the screen-space AO the GI resolve takes on a pixel with a subsurface colour: light scattered
-/// through the material reaches what the screen-space occluders block (UE's foliage occlusion strength).
+/// through the material reaches what the screen-space occluders block.
 #define PBR_SUBSURFACE_SCREEN_AO_STRENGTH 0.7
 uniform vec4 u_params0;
 uniform vec4 u_params1;
@@ -244,10 +244,78 @@ float computeVisibility(sampler2D _sampler
     return visibility;
 }
 
+/// The subsurface transmittance through the same map, coordinates and biases as computeVisibility. PCF and PCSS
+/// maps filter it over a fixed kernel; hard maps take one tap, VSM / ESM maps one tap on their stored (mean) depth.
+/// Squared: the filtered transmittance falls off too softly otherwise.
+float computeTransmittance(sampler2D _sampler
+                         , vec4 _shadowCoord
+                         , float _bias
+                         , vec2 _planeGrad
+                         , vec2 _texelSize
+                         , vec2 _fragCoord
+                         , float _cascadeScale
+                         , ShadowDepthModel _model
+                         , float _density
+                         )
+{
+    float minRadiusUV = SHADOW_MIN_FILTER_RADIUS_TEXELS * u_shadowMapTexelSize;
+
+#if SM_LINEAR
+    vec4 shadowcoord = vec4(_shadowCoord.xy / _shadowCoord.w, _shadowCoord.z, 1.0);
+#else
+    vec4 shadowcoord = _shadowCoord;
+#endif
+
+#if SM_PCF || SM_PCSS
+    float transmittance = transmittancePCF(_sampler, shadowcoord, _bias, _planeGrad, _texelSize, _fragCoord, _cascadeScale, minRadiusUV, _model, _density);
+#else
+    float transmittance = transmittanceLod(_sampler, 0.0, shadowcoord, _bias, _planeGrad, vec2_splat(0.0), _model, _density);
+#endif
+
+    return Square(transmittance);
+}
+
+/// The shadow terms of one light at a receiver: the surface visibility and the transmission - the light that
+/// crossed the material in front of a subsurface receiver (1 for other receivers).
+struct ShadowTerms
+{
+    float surface;
+    float transmission;
+};
+
+ShadowTerms makeShadowTerms(float _surface, float _transmission)
+{
+    ShadowTerms terms;
+    terms.surface = _surface;
+    terms.transmission = _transmission;
+    return terms;
+}
+
+/// Ortho and linear maps: stored depth per world unit; the perspective fields stay unused.
+ShadowDepthModel makeLinearDepthModel(float _scale)
+{
+    ShadowDepthModel model;
+    model.scale = _scale;
+    model.numerator = 0.0;
+    model.receiverZ = 0.0;
+    return model;
+}
+
+/// Perspective 1/z maps (stored = C - numerator / z) at a receiver _receiverZ along the light axis.
+ShadowDepthModel makePerspectiveDepthModel(float _numerator, float _receiverZ)
+{
+    ShadowDepthModel model;
+    model.scale = 0.0;
+    model.numerator = _numerator;
+    model.receiverZ = _receiverZ;
+    return model;
+}
+
 #if SM_CSM
-// One cascade: offset the receiver along its normal by this cascade's texel, project, bias, filter.
-float csmCascadeVisibility(sampler2D _sampler, mat4 _mtx, float _texelWorld, float _cascadeScale, vec2 _texelSize,
-                           vec3 _worldPos, vec3 _N, ShadowReceiver _r, vec2 _fragCoord)
+// One cascade: offset the receiver along its normal by this cascade's texel, project, bias, filter; the
+// transmission only for a subsurface receiver (_density above 0).
+ShadowTerms csmCascadeShadow(sampler2D _sampler, mat4 _mtx, float _texelWorld, float _cascadeScale, vec2 _texelSize,
+                             vec3 _worldPos, vec3 _N, ShadowReceiver _r, vec2 _fragCoord, float _density)
 {
     vec4 wpos = vec4(_worldPos + _N * (u_shadowMapOffset * _texelWorld * _r.sinT), 1.0);
     vec4 shadowcoord = mul(_mtx, wpos);
@@ -258,25 +326,35 @@ float csmCascadeVisibility(sampler2D _sampler, mat4 _mtx, float _texelWorld, flo
     float mapExtent = _texelWorld / u_shadowMapTexelSize;
     float bias = shadowDepthBias(_r, _texelWorld, depthScale);
     vec2 planeGrad = shadowPlaneGradient(_r, vec2_splat(mapExtent), depthScale);
-    return computeVisibility(_sampler
-                           , shadowcoord
-                           , bias
-                           , planeGrad
-                           , u_smSamplingParams
-                           , _texelSize
-                           , u_shadowMapDepthMultiplier
-                           , u_shadowMapMinVariance
-                           , u_shadowMapHardness
-                           , _fragCoord
-                           , _cascadeScale
-                           );
+    ShadowTerms terms = makeShadowTerms(computeVisibility(_sampler
+                                                        , shadowcoord
+                                                        , bias
+                                                        , planeGrad
+                                                        , u_smSamplingParams
+                                                        , _texelSize
+                                                        , u_shadowMapDepthMultiplier
+                                                        , u_shadowMapMinVariance
+                                                        , u_shadowMapHardness
+                                                        , _fragCoord
+                                                        , _cascadeScale
+                                                        ), 1.0);
+    BRANCH
+    if (_density > 0.0)
+    {
+        terms.transmission = computeTransmittance(_sampler, shadowcoord, bias, planeGrad, _texelSize, _fragCoord, _cascadeScale,
+                                                  makeLinearDepthModel(depthScale), _density);
+    }
+    return terms;
 }
 #endif
 
 
-float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_dir, float precisionNormal, vec2 fragCoord, out vec3 colorCoverage)
+/// Surface visibility and subsurface transmission of the current light at a receiver; subsurface_density is the
+/// receiver's extinction per world unit (SubsurfaceDensityFromOpacity), 0 for receivers without a subsurface colour
+/// (the transmission is then not computed). Lights without a shadow map leave both at 1.
+ShadowTerms CalculateShadowTerms(vec3 world_position, vec3 world_normal, vec3 light_dir, float precisionNormal, vec2 fragCoord, float subsurface_density, out vec3 colorCoverage)
 {
-    float visibility = 1.0f;
+    ShadowTerms terms = makeShadowTerms(1.0, 1.0);
     colorCoverage = vec3(0.0f, 0.0f, 0.0f);
 
 #if SM_NOOP
@@ -329,8 +407,8 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
 
         float coverage = texcoordInRange(texcoord1) * 0.4;
         colorCoverage = vec3(-coverage, coverage, -coverage);
-        visibility = csmCascadeVisibility(s_shadowMap0, u_shadowMapMtx0, u_csmTexelWorld.x, cascadeScale, texelSize,
-                                          world_position, world_normal, receiver, fragCoord);
+        terms = csmCascadeShadow(s_shadowMap0, u_shadowMapMtx0, u_csmTexelWorld.x, cascadeScale, texelSize,
+                                 world_position, world_normal, receiver, fragCoord, subsurface_density);
     }
     else if (selection1 && u_numSplits > 1)
     {
@@ -338,8 +416,8 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
 
         float coverage = texcoordInRange(texcoord2) * 0.4;
         colorCoverage = vec3(coverage, coverage, -coverage);
-        visibility = csmCascadeVisibility(s_shadowMap1, u_shadowMapMtx1, u_csmTexelWorld.y, cascadeScale, texelSize/2.0,
-                                          world_position, world_normal, receiver, fragCoord);
+        terms = csmCascadeShadow(s_shadowMap1, u_shadowMapMtx1, u_csmTexelWorld.y, cascadeScale, texelSize/2.0,
+                                 world_position, world_normal, receiver, fragCoord, subsurface_density);
     }
     else if (selection2 && u_numSplits > 2)
     {
@@ -347,8 +425,8 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
 
         float coverage = texcoordInRange(texcoord3) * 0.4;
         colorCoverage = vec3(-coverage, -coverage, coverage);
-        visibility = csmCascadeVisibility(s_shadowMap2, u_shadowMapMtx2, u_csmTexelWorld.z, cascadeScale, texelSize/3.0,
-                                          world_position, world_normal, receiver, fragCoord);
+        terms = csmCascadeShadow(s_shadowMap2, u_shadowMapMtx2, u_csmTexelWorld.z, cascadeScale, texelSize/3.0,
+                                 world_position, world_normal, receiver, fragCoord, subsurface_density);
     }
     else if (selection3 && u_numSplits > 3)
     {
@@ -356,8 +434,8 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
 
         float coverage = texcoordInRange(texcoord4) * 0.4;
         colorCoverage = vec3(coverage, -coverage, -coverage);
-        visibility = csmCascadeVisibility(s_shadowMap3, u_shadowMapMtx3, u_csmTexelWorld.w, cascadeScale, texelSize/4.0,
-                                          world_position, world_normal, receiver, fragCoord);
+        terms = csmCascadeShadow(s_shadowMap3, u_shadowMapMtx3, u_csmTexelWorld.w, cascadeScale, texelSize/4.0,
+                                 world_position, world_normal, receiver, fragCoord, subsurface_density);
     }
 
     // Shadow distance: the last cascade fades out over its outer part instead of ending on the
@@ -367,7 +445,8 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     if (u_numSplits > 2) farLast = u_csmFarDistances.z;
     if (u_numSplits > 3) farLast = u_csmFarDistances.w;
     float distanceFade = smoothstep(farLast * SHADOW_CASCADE_FADE_START, farLast, viewDepth);
-    visibility = mix(visibility, 1.0, distanceFade);
+    terms.surface = mix(terms.surface, 1.0, distanceFade);
+    terms.transmission = mix(terms.transmission, 1.0, distanceFade);
 #elif SM_OMNI
     vec2 texelSize = vec2_splat(u_shadowMapTexelSize/4.0);
 
@@ -420,7 +499,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
     colorCoverage = coverageSign * coverage;
 
-    visibility = computeVisibility(s_shadowMap0
+    terms.surface = computeVisibility(s_shadowMap0
                     , shadowcoord
                     , bias
                     , planeGrad
@@ -432,6 +511,17 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                     , fragCoord
                     , 1.0
                     );
+    BRANCH
+    if (subsurface_density > 0.0)
+    {
+#if SM_LINEAR
+        ShadowDepthModel depthModel = makeLinearDepthModel(depthScale);
+#else
+        ShadowDepthModel depthModel = makePerspectiveDepthModel(depthNumerator, shadowcoord.w);
+#endif
+        terms.transmission = computeTransmittance(s_shadowMap0, shadowcoord, bias, planeGrad, texelSize, fragCoord, 1.0,
+                                                  depthModel, subsurface_density);
+    }
 #else
     vec2 texelSize = vec2_splat(u_shadowMapTexelSize);
 
@@ -452,7 +542,7 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
     float coverage = texcoordInRange(shadowcoord.xy/shadowcoord.w) * 0.3;
     colorCoverage = vec3(coverage, -coverage, -coverage);
 
-    visibility = computeVisibility(s_shadowMap0
+    terms.surface = computeVisibility(s_shadowMap0
                     , shadowcoord
                     , bias
                     , planeGrad
@@ -464,18 +554,28 @@ float CalculateSurfaceShadow(vec3 world_position, vec3 world_normal, vec3 light_
                     , fragCoord
                     , 1.0
                     );
+    BRANCH
+    if (subsurface_density > 0.0)
+    {
+#if SM_LINEAR
+        ShadowDepthModel depthModel = makeLinearDepthModel(depthScale);
+#else
+        ShadowDepthModel depthModel = makePerspectiveDepthModel(u_shadowBiasParams.z, shadowcoord.w);
+#endif
+        terms.transmission = computeTransmittance(s_shadowMap0, shadowcoord, bias, planeGrad, texelSize, fragCoord, 1.0,
+                                                  depthModel, subsurface_density);
+    }
 #endif
 #endif
 
-    return visibility;
+    return terms;
 }
 
 // ---- Contact shadows ----------------------------------------------------------------------
 // Screen-space march along the light through the depth buffer, for the occluders the shadow
-// map cannot resolve (object bases, crevices, fine detail). Same family as Unreal's
-// ShadowRayCast / HDRP's ContactShadows.compute (perspective-correct march in uv + device
-// depth, point-sampled depth, binary hit with a tolerance tied to the per-step depth travel,
-// border vignette, dither integrated by TAA), plus a receiver-plane test that neither has: the
+// map cannot resolve (object bases, crevices, fine detail): a perspective-correct march in uv +
+// device depth, point-sampled depth, binary hit with a tolerance tied to the per-step depth
+// travel, border vignette, dither integrated by TAA, plus a receiver-plane test: the
 // receiver's own plane is rebuilt from its depth neighbours, so a planar receiver never
 // shadows itself at any light elevation, view angle or distance (no N.L mask, no view-
 // dependent bias), and only geometry on the light side of that plane can occlude.
@@ -539,9 +639,11 @@ vec3 contactPlaneAxis(vec3 p_center, float z_center, vec3 d_minus, float z_minus
 /// Returns 1.0 when lit, 0.0 when the march found an occluder (scaled by opacity and fades).
 /// origin_texel / origin_device_depth: the receiver's G-buffer texel; depth_ulp: view-space span
 /// of one depth-buffer ulp at the receiver (pbr_light); light_distance: distance to a spot /
-/// point light (the ray stops there), a large value for directional lights.
+/// point light (the ray stops there), a large value for directional lights; subsurface_density:
+/// the receiver's subsurface extinction per world unit (0 without a subsurface colour).
 float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_depth, float depth_ulp,
-                    vec3 world_light_dir, float ray_length, float light_distance, vec2 screen_pos)
+                    vec3 world_light_dir, float ray_length, float light_distance, vec2 screen_pos,
+                    float subsurface_density)
 {
     // Perspective cameras only: the plane evaluation assumes camera rays through the origin.
     // u_proj[3][3] (0 perspective, 1 orthographic) is a diagonal element and reads the same on
@@ -669,11 +771,17 @@ float ContactShadow(sampler2D depthTex, ivec2 origin_texel, float origin_device_
     if(hit_t < 0.0) return 1.0;
 
     float occlusion = 1.0 - smoothstep(CONTACT_SHADOW_FADE_START, 1.0, hit_t);
-    // Screen-border vignette on the hit position (Unreal's).
+    // Screen-border vignette on the hit position: hits fade out within 1/12 of the screen of each border.
     vec2 hit_ndc = (ss_origin.xy + ss_ray.xy * hit_t) * 2.0 - 1.0;
     vec2 vignette = max(6.0 * abs(hit_ndc) - 5.0, vec2_splat(0.0));
     occlusion *= saturate(1.0 - dot(vignette, vignette));
     occlusion *= distance_fade * saturate(u_contact_shadow.z);
+    // A subsurface receiver's occluder may be its own material, which lets light through with the
+    // distance crossed (the hit distance stands for that thickness).
+    if(subsurface_density > 0.0)
+    {
+        occlusion *= 1.0 - saturate(exp(-subsurface_density * hit_t * ray_len));
+    }
     return 1.0 - occlusion;
 }
 
@@ -700,7 +808,7 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     vec3 V = normalize(u_camera_position.xyz - world_position);
     vec3 L = vector_to_light / sqrt( distance_sqr );
 
-    // Inverse-squared local lights (UE): the capsule emitter carries the 1 / d^2 falloff and the
+    // Inverse-squared local lights: the capsule emitter carries the 1 / d^2 falloff and the
     // diffuse cosine, the range window and the spot cone mask it.
 #if POINT_LIGHT || SPOT_LIGHT
     float light_mask = LocalLightRangeMask(vector_to_light, 1.0f / u_light_data.x);
@@ -724,9 +832,19 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
     float viewDepthProbe = screenSpaceToViewSpaceDepth(data.depth01 * (1.0 + SHADOW_DEPTH_PROBE_STEP));
     float depthUlp = abs(viewDepthProbe - viewDepthHere) * (SHADOW_DEPTH_FLOAT_ULP / SHADOW_DEPTH_PROBE_STEP);
     float precisionNormal = SHADOW_DEPTH_ULPS * depthUlp * abs(dot(N, V));
-    float surface_shadow = CalculateSurfaceShadow(world_position, N, L, precisionNormal, fragCoord, colorCoverage);
+    // Receivers with a subsurface colour also get the light that crossed the material in front of
+    // them, attenuated by its extinction.
+    bool has_subsurface = max(data.subsurface_color.x, max(data.subsurface_color.y, data.subsurface_color.z)) > 0.0;
+    float subsurface_density = 0.0;
+    if(has_subsurface)
+    {
+        subsurface_density = SubsurfaceDensityFromOpacity(data.subsurface_opacity);
+    }
+    ShadowTerms shadow = CalculateShadowTerms(world_position, N, L, precisionNormal, fragCoord, subsurface_density, colorCoverage);
+    float surface_shadow = shadow.surface;
+    float subsurface_shadow = shadow.transmission;
     // Contact shadows: skipped where they cannot change the result (unlit, already fully
-    // shadowed, sky).
+    // shadowed, sky). They shadow the transmission too.
     float contact_shadow_length = u_light_data.w;
     BRANCH
     if(contact_shadow_length > 0.0 && NoL > 0.0 && surface_shadow > CONTACT_SHADOW_SKIP_BELOW && data.depth01 < 1.0)
@@ -736,19 +854,24 @@ vec4 pbr_light(vec2 texcoord0, vec2 fragCoord)
 #else
         float light_distance = sqrt(distance_sqr);
 #endif
-        float contact = ContactShadow(s_tex4, gbuf_texel, data.depth01, depthUlp, L, contact_shadow_length, light_distance, fragCoord);
+        float contact = ContactShadow(s_tex4, gbuf_texel, data.depth01, depthUlp, L, contact_shadow_length, light_distance, fragCoord,
+                                      subsurface_density);
         surface_shadow = min(surface_shadow, contact);
+        subsurface_shadow *= contact;
     }
 #if DIRECTIONAL_LIGHT
-    surface_shadow *= CloudShadow(world_position, L);
+    float cloud_shadow = CloudShadow(world_position, L);
+    surface_shadow *= cloud_shadow;
+    subsurface_shadow *= cloud_shadow;
 #endif
-    float subsurface_shadow = 1.0f;
     float base_attenuation = intensity * light_mask * area_light.Falloff;
     float surface_attenuation = base_attenuation * surface_shadow;
     float subsurface_attenuation = base_attenuation * subsurface_shadow;
 
     vec3 direct_surface_lighting = StandardShadingDirect(diffuse_color, specular_color, filtered_roughness, area_light, V, N, data.ambient_occlusion);
-    vec3 subsurface_lighting = SubsurfaceShading(data.subsurface_color, data.subsurface_opacity, data.ambient_occlusion, area_light.DiffuseL, V, N);
+    // The hue follows the shadow map's transmittance alone; contact and cloud shadows only dim it.
+    vec3 subsurface_lighting = SubsurfaceShading(data.subsurface_color, data.subsurface_opacity, data.ambient_occlusion, area_light.DiffuseL, V, N,
+                                                 shadow.transmission);
     vec3 subsurface_multiplier = (light_color * subsurface_attenuation);
 
     vec3 surface_multiplier = light_color * (NoL * surface_attenuation);
@@ -784,7 +907,7 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     // SSIL traced the screen-space visibility per pixel and takes the material AO alone, and
     // traced reflections only the material AO's cavities, which no tracer's geometry holds.
     // Direct light takes none.
-    // Sky pixels read no occlusion and no GI: Lumen's gather leaves them unwritten (selected, not multiplied away).
+    // Sky pixels read no occlusion and no GI: the GI gather leaves them unwritten (selected, not multiplied away).
     bool is_surface = data.depth < 1.0;
     vec4 screen_ao_sample = is_surface ? texture2D(s_screen_ao, texcoord0) : vec4(0.5, 0.5, 0.5, 1.0);
     float material_ao = data.ambient_occlusion;
@@ -792,8 +915,8 @@ vec4 pbr_indirect(vec2 texcoord0, vec2 fragCoord)
     float visibility = material_ao * screen_ao;
     vec3 occlusion_axis = ScreenSpaceOcclusionAxis(screen_ao_sample, u_screen_ao_has_bent_normal, screen_ao, N);
     // The multi-bounce fit applies once, to the combined visibility, per channel of the diffuse
-    // albedo (uncapped, as UE's base pass, HDRP and Filament use it; capped as UE's Lumen composite
-    // caps it for its short-range AO); the screen term stays plain when GTAO turns its multi-bounce off.
+    // albedo (uncapped, or capped by u_indirect_params.z for the GI's short-range AO); the screen
+    // term stays plain when GTAO turns its multi-bounce off.
     vec3 multi_bounce_albedo = MultiBounceAlbedo(data.diffuse_color, u_indirect_params.z);
     vec3 bounce_gain = MultiBounceAOGain(u_screen_ao_multi_bounce > 0.5 ? visibility : material_ao, multi_bounce_albedo);
 

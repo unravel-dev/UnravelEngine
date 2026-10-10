@@ -1,11 +1,11 @@
 /*
- * UE 5.8 r.Lumen.Reflections.VisualizeTraces (LumenReflectionTracing.usf VisualizeReflectionTracesCS): the reflection
- * ray this frame traced for the pixel under the cursor - from the trace texel the pixel falls in, so from the pixel
- * of its 2 x 2 block that traced at the lowest reflection quality - as lines (lumen_visualize.sh): from the traced
- * pixel out to the trace's distance in the radiance it brought back, and a LUMEN_VISUALIZE_CROSS_SIZE cross in yellow
- * at its end. UE's text: the trace texel ("Pixel", the pixel at full resolution), then the trace's distance and
- * radiance. A trace texel without a ray (UE: no positive tracing depth) writes no lines and only the texel. The text
- * starts at (0.1, 0.1) of the view as UE's does, below the probe counts while they print there too.
+ * Reflection trace visualization: the reflection ray this frame traced for the pixel under the cursor - from the
+ * trace texel the pixel falls in, so from the pixel of its 2 x 2 block that traced at the lowest reflection quality -
+ * as lines (lumen_visualize.sh): from the traced pixel out to the trace's distance in the radiance it brought back,
+ * and a LUMEN_VISUALIZE_CROSS_SIZE cross in yellow at its end. The text: the trace texel ("Pixel", the pixel at full
+ * resolution), then the trace's distance and radiance. A trace texel without a ray (no positive tracing depth) writes
+ * no lines and only the texel. The text starts at (0.1, 0.1) of the view, below the probe counts while they print
+ * there too.
  */
 
 #include "bgfx_compute.sh"
@@ -26,7 +26,7 @@ BUFFER_RW(b_lumen_visualize_lines, vec4, 4);
 /// xy = the full-resolution pixel under the cursor, z = the text line to start at.
 uniform vec4 u_lumen_visualize_reflection;
 
-/// UE AddCrossTWS(HitPoint, 2): three axis lines 2 cm either side of the hit.
+/// The hit marker: three axis lines 2 cm either side of the hit.
 #define LUMEN_VISUALIZE_CROSS_SIZE 0.02
 #define LUMEN_VISUALIZE_REFLECTION_LINES 4
 

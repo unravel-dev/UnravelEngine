@@ -1,16 +1,14 @@
 $output v_sphere, v_world_position, v_probe
 
 /*
- * UE 5.8's probe visualizations as spheres, drawn without vertex buffers: 36 vertices of a cube around each probe
+ * The probe visualizations as spheres, drawn without vertex buffers: 36 vertices of a cube around each probe
  * slot's sphere, which the pixel shader ray-casts.
- *  mode 0, the radiosity probes (r.LumenScene.Radiosity.VisualizeProbes: Radiosity/LumenVisualizeRadiosityProbes.usf
- *          BuildVisualizeProbesCS + VisualizeRadiosityProbesVS): a resident page has a slot per cell of
- *          u_lumen_radiosity_spacing^2 of its texels (lumen_radiosity_common.sh); the probe sits at the mean world
- *          position of the cell's (up to) four middle texels the cards captured. It is valid when the jittered texel
- *          its last radiosity update traced from holds a surface; invalid probes show only on request.
- *  mode 1, the radiance cache probes (r.Lumen.RadianceCache.Visualize 1: LumenVisualizeRadianceCache.usf
- *          BuildProbeVisualizeBufferCS + VisualizeRadianceCacheVS): a slot per cell of the clipmaps drawn; a cell
- *          holding a probe draws it at its lattice point, a sphere of the radius scale x the clipmap's cell size.
+ *  mode 0, the radiosity probes: a resident page has a slot per cell of u_lumen_radiosity_spacing^2 of its texels
+ *          (lumen_radiosity_common.sh); the probe sits at the mean world position of the cell's (up to) four middle
+ *          texels the cards captured. It is valid when the jittered texel its last radiosity update traced from
+ *          holds a surface; invalid probes show only on request.
+ *  mode 1, the radiance cache probes: a slot per cell of the clipmaps drawn; a cell holding a probe draws it at
+ *          its lattice point, a sphere of the radius scale x the clipmap's cell size.
  */
 
 #include "../common.sh"
@@ -73,8 +71,8 @@ void main()
 	int cells_per_row = int(LUMEN_PHYSICAL_PAGE_SIZE) / spacing;
 	ivec2 cell = ivec2(probe - (probe / cells_per_row) * cells_per_row, probe / cells_per_row);
 	ivec2 cells = ivec2(page.zw) / spacing;
-	// A slot without a probe collapses (UE: OutPosition = 0). No early return: bgfx's vertex main returns its
-	// varyings.
+	// A slot without a probe collapses to a zero position: its degenerate triangles draw nothing. No early return:
+	// bgfx's vertex main returns its varyings.
 	vec4 position = vec4_splat(0.0);
 	vec4 sphere = vec4_splat(0.0);
 	vec3 world = vec3_splat(0.0);

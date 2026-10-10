@@ -1,17 +1,16 @@
 /*
- * Histogram average compute shader for auto exposure (UE 5.8 model).
+ * Histogram average compute shader for auto exposure.
  *
  * Reads and zeroes the 256-bin luminance histogram, trims it to the low..high percentile band
  * of the non-black weight, takes the log-average L and adapts the exposure toward
- *   exposure = 0.18 * 2^bias / L                  (S/PostProcessEyeAdaptation.usf:168-200)
+ *   exposure = 0.18 * 2^bias / L
  * with EV100 = log2(L / 0.18) clamped to [min_ev, max_ev], and bias = compensation plus the
  * compensation curve sampled at the unclamped EV100. The adapted exposure stays inside the
- * same EV100 range (UE's SmoothedExposure clamp).
+ * same EV100 range.
  *
- * Adaptation follows UE's ComputeEyeAdaptation (S/PostProcessHistogramCommon.ush:222-249) in
- * log2 space: farther than the transition distance from the target the exposure moves linearly
- * at speed stops per second; closer it settles exponentially with a slope matched to the
- * linear phase. A falling exposure (scene got brighter) uses speed_up.
+ * Adaptation runs in log2 space: farther than the transition distance from the target the
+ * exposure moves linearly at speed stops per second; closer it settles exponentially with a
+ * slope matched to the linear phase. A falling exposure (scene got brighter) uses speed_up.
  *
  * Output AUTO_EXPOSURE: r = adapted exposure, g = target exposure, b = applied bias in stops
  * (compensation plus the curve), a = average local exposure (kept).
@@ -61,7 +60,7 @@ uniform vec4 u_average_params5;
 #define u_local_shadow_contrast    u_average_params4.y
 #define u_local_middle_grey_bias   u_average_params4.z
 
-// EV100 -> compensation curve LUT u (UE GetExposureCompensationCurveLUTScaleBias).
+// EV100 -> compensation curve LUT u (u = EV100 * scale + bias).
 #define u_curve_lut_scale    u_average_params5.x
 #define u_curve_lut_bias     u_average_params5.y
 
@@ -72,7 +71,7 @@ uniform vec4 u_average_params5;
 #define LOG2_MIDDLE_GREY -2.4739311883
 // Exposure values at or above this are treated as garbage storage.
 #define MAX_EXPOSURE 1.0e10
-// UE's percentile limits and the equal-percentile tolerance.
+// The percentile limits and the equal-percentile tolerance.
 #define MIN_PERCENTILE 0.01
 #define MAX_PERCENTILE 0.99
 #define EQUAL_PERCENTILE_EPSILON 0.0001
@@ -92,8 +91,7 @@ void main()
         total += float(s_histogram[i]);
     }
 
-    // UE clamps both percentiles to 1..99 % and the low one to the high one
-    // (GetEyeAdaptationScalarParameters).
+    // Both percentiles are clamped to 1..99 % and the low one to the high one.
     float high_percentile = clamp(u_high_percentile, MIN_PERCENTILE, MAX_PERCENTILE);
     float low_percentile = min(clamp(u_low_percentile, MIN_PERCENTILE, MAX_PERCENTILE), high_percentile);
     float high_count = total * high_percentile;
@@ -134,21 +132,20 @@ void main()
 
     bool has_measurement = weight_sum > 0.0;
     float metered_log_luminance = has_measurement ? weighted_sum / weight_sum : 0.0;
-    // UE's special case for an empty band (ComputeAverageLuminanceWithoutOutlier): equal
-    // percentiles meter a luminance of exactly 1.
+    // The special case for an empty band: equal percentiles meter a luminance of exactly 1.
     if (abs(high_percentile - low_percentile) < EQUAL_PERCENTILE_EPSILON)
     {
         has_measurement = true;
         metered_log_luminance = 0.0;
     }
 
-    // UE takes min(min, max): a min above max pins the range to max.
+    // The range takes min(min, max): a min above max pins the range to max.
     float range_min_ev = min(u_min_ev, u_max_ev);
     float metered_ev = metered_log_luminance - LOG2_MIDDLE_GREY;
     float clamped_ev = clamp(metered_ev, range_min_ev, u_max_ev);
 
-    // The curve reads the metered brightness before the range clamp, as UE samples it at the
-    // average scene luminance.
+    // The curve reads the metered brightness before the range clamp: it keys on the average
+    // scene luminance itself.
     float curve_u = metered_ev * u_curve_lut_scale + u_curve_lut_bias;
     float curve_scale = texture2DLod(s_compensation_curve, vec2(curve_u, 0.5), 0.0).x;
     float applied_bias = u_compensation + log2(max(curve_scale, 1e-6));
@@ -193,7 +190,7 @@ void main()
         target_log_exposure = adapted_log_exposure;
     }
 
-    // AVERAGE LOCAL EXPOSURE (UE ComputeAverageLocalExposure, PostProcessEyeAdaptation.usf:202-228).
+    // AVERAGE LOCAL EXPOSURE: the histogram-weighted mean of the local exposure scale.
     // The pre-exposure multiplies by it, so the scene-color scale follows what the tonemapper
     // will actually do on average instead of drifting from it. Each bin stands for pixels at
     // that luminance; with no spatial term a bin's own level IS its neighbourhood base, so the

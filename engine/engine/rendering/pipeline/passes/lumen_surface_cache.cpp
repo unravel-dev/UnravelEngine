@@ -34,7 +34,8 @@ constexpr uint32_t light_page_stride = 4;
 constexpr uint32_t tile_words_per_vec4 = 4;
 constexpr uint32_t tile_word_page_scale = 256;
 constexpr uint32_t tile_word_column_scale = 16;
-/// MaxRayIntensity of radiosity rays, in pre-exposed units.
+/// The brightest a radiosity ray's radiance may be (its largest channel), in pre-exposed units: brighter rays are
+/// scaled down to it.
 constexpr float radiosity_max_ray_intensity = 40.0f;
 /// Threads of a radiosity trace or filter group (lumen_radiosity_common.sh LUMEN_RADIOSITY_GROUP_THREADS).
 constexpr uint32_t radiosity_group_threads = 64;
@@ -63,13 +64,13 @@ constexpr float debug_surface_bias = 0.5f;
 constexpr uint32_t stats_log_period = 300;
 /// A viewer's record serves the frame it was made in and the next: a camera that rendered last frame still counts.
 constexpr uint64_t viewer_lifetime_frames = 1;
-/// UE's global distance field level 0 in Lumen views (R/LumenScene.cpp:77), 252 voxels like ours:
-/// experiment_ue_card_tolerance measures the card sampling bias of global-SDF hits in its voxel extents.
-constexpr float ue_global_sdf_extent = 50.0f;
+/// A fixed 50 m global distance field level 0, at the layout's 252 voxels per axis: experiment_fixed_card_tolerance
+/// measures the card sampling bias of global-SDF hits in its voxel extents.
+constexpr float fixed_card_tolerance_extent = 50.0f;
 
 using lumen_pass::upload_vec4_table;
 
-/// The Lumen scene settings the project's Global Illumination settings ask for, within the scene's limits.
+/// The GI scene settings the project's Global Illumination settings ask for, within the scene's limits.
 auto make_scene_settings(const gi_project_settings& project) -> lumen_scene::settings
 {
     lumen_scene::settings s;
@@ -88,9 +89,9 @@ auto make_scene_settings(const gi_project_settings& project) -> lumen_scene::set
     return s;
 }
 
-/// The surface cache atlases' formats, UE's (lumen_surface_cache_lighting.sh): lighting and emissive in R11G11B10
-/// float, card depth in R16 unorm, the card-space normal in two unorm channels. The final lighting keeps RGBA16F: its
-/// alpha carries the card depth for the hit tracers.
+/// The surface cache atlases' formats (lumen_surface_cache_lighting.sh): lighting and emissive in R11G11B10 float,
+/// card depth in R16 unorm, the card-space normal in two unorm channels. The final lighting keeps RGBA16F: its alpha
+/// carries the card depth for the hit tracers.
 constexpr auto lighting_atlas_format = bgfx::TextureFormat::RG11B10F;
 constexpr auto depth_atlas_format = bgfx::TextureFormat::R16;
 constexpr auto normal_atlas_format = bgfx::TextureFormat::RG8;
@@ -592,8 +593,8 @@ void lumen_surface_cache::update(const surface_cache_system& gi_scene,
         lumen_pass::get_radiosity_layout(view_settings.lighting_quality, project_settings.global_illumination_quality));
     const auto& lumen_sources = gi_scene.get_lumen_sources();
     experiment_flags_ = gi_scene.get_experiment_flags();
-    card_bias_scale_ = (experiment_flags_ & experiment_ue_card_tolerance) != 0u
-                           ? ue_global_sdf_extent / gi::lumen::LUMEN_GLOBAL_SDF_EXTENT
+    card_bias_scale_ = (experiment_flags_ & experiment_fixed_card_tolerance) != 0u
+                           ? fixed_card_tolerance_extent / gi::lumen::LUMEN_GLOBAL_SDF_EXTENT
                            : 1.0f;
     sources_.clear();
     sources_.reserve(lumen_sources.size());
@@ -785,7 +786,7 @@ auto lumen_surface_cache::compute_capture_view(const lumen_scene::capture& cap) 
     const math::vec3 axis_y(cards[base + 2]);
     const math::vec3 axis_z(cards[base + 3]);
     const math::vec3 extent(cards[base + 1].w, cards[base + 2].w, cards[base + 3].w);
-    // The page's card-local rectangle: u along +axis_x, v along -axis_y (CardUV = (0.5, -0.5) x / extent + 0.5).
+    // The page's card-local rectangle: u along +axis_x, v along -axis_y (card_uv = (0.5, -0.5) x / extent + 0.5).
     const float x0 = (2.0f * cap.card_uv_rect.x - 1.0f) * extent.x;
     const float x1 = (2.0f * cap.card_uv_rect.z - 1.0f) * extent.x;
     const float y_top = (1.0f - 2.0f * cap.card_uv_rect.y) * extent.y;
@@ -1073,7 +1074,7 @@ void lumen_surface_cache::light(const lighting_inputs& inputs, const void* viewe
     {
         return;
     }
-    // Direct lighting and its combine first: the radiosity rays see this frame's direct updates (UE's order).
+    // Direct lighting and its combine first: the radiosity rays see this frame's direct updates.
     const uint32_t direct_end = direct.first + direct.count;
     for(uint32_t first = direct.first; first < direct_end; first += max_groups_per_dispatch)
     {

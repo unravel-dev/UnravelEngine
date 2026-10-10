@@ -2,9 +2,7 @@
 #define __LUMEN_GLOBAL_SDF_SH__
 
 /*
- * Lumen's global distance field march (UE 5.8 GlobalDistanceFieldUtils.ush RayTraceGlobalDistanceField,
- * as the screen probe gather runs it: LumenScreenProbeTracing.usf:712-891) over this engine's clipmap
- * (gi/sdf_clipmap.sh, stage 4 and its uniforms).
+ * The GI's global distance field march over the global SDF clipmap (gi/sdf_clipmap.sh, stage 4 and its uniforms).
  *
  * The surface is expanded by up to LUMEN_GLOBAL_SDF_EXPAND_VOXELS of a voxel, ramping in over
  * LUMEN_GLOBAL_SDF_EXPAND_RAMP_VOXELS of either the ray's travel from its biased start (diffuse rays: errs
@@ -14,20 +12,20 @@
  * estimate, so a reader of a surface store can step onto the surface.
  *
  * Each level has a budget of LUMEN_GLOBAL_SDF_MAX_STEPS: a ray that spends it in one level continues from where it
- * leaves that level (UE's per-clipmap loop, GlobalDistanceFieldUtils.ush:104-191); past the last level it is a miss.
- * Like UE's loop, which fixes the clipmap per iteration, the march keeps the stretch of the ray one level answers
- * unblended (LumenGlobalSdfLevelSpanEnd) and samples that level there without searching for it; the samples are the
- * searched ones exactly, the search and the cross-fade run only at level edges.
- * Where the answering level reads saturated, the ray steps by that level's coarse mip (SDF_CLIPMAP_MIP_STAGE, UE
- * GlobalDistanceFieldMipTexture), which holds the level's own objects, so a step never passes one the level shows;
- * an includer without the mip steps by the level alone.
+ * leaves that level; past the last level it is a miss.
+ * The march keeps the stretch of the ray one level answers unblended (LumenGlobalSdfLevelSpanEnd) and samples that
+ * level there without searching for it; the samples are the searched ones exactly, the search and the cross-fade run
+ * only at level edges.
+ * Where the answering level reads saturated, the ray steps by that level's coarse mip (SDF_CLIPMAP_MIP_STAGE), which
+ * holds the level's own objects, so a step never passes one the level shows; an includer without the mip steps by the
+ * level alone.
  *
- * Coverage (UE GLOBALSDF_USE_COVERAGE_BASED_EXPAND, GlobalDistanceFieldUtils.ush:141-190): where only two-sided meshes are
- * near (coverage 0, gi/sdf_clipmap.sh), the expansion shrinks to LUMEN_GLOBAL_SDF_NOT_COVERED_EXPAND_SCALE, the min step
- * grows by LUMEN_GLOBAL_SDF_NOT_COVERED_MIN_STEP_SCALE, and a dithered trace (the screen probes', the radiance cache's)
- * hits there only when its per-step and per-trace noise pass LUMEN_GLOBAL_SDF_DITHER_STEP_THRESHOLD and
- * LUMEN_GLOBAL_SDF_DITHER_TRACE_THRESHOLD: foliage and curtains let part of the light through. The includer defines
- * SDF_CLIPMAP_COVERAGE_STAGE to bind the coverage; without it everything is covered.
+ * Coverage: where only two-sided meshes are near (coverage 0, gi/sdf_clipmap.sh), the expansion shrinks to
+ * LUMEN_GLOBAL_SDF_NOT_COVERED_EXPAND_SCALE, the min step grows by LUMEN_GLOBAL_SDF_NOT_COVERED_MIN_STEP_SCALE, and a
+ * dithered trace (the screen probes', the radiance cache's) hits there only when its per-step and per-trace noise pass
+ * LUMEN_GLOBAL_SDF_DITHER_STEP_THRESHOLD and LUMEN_GLOBAL_SDF_DITHER_TRACE_THRESHOLD: foliage and curtains let part of
+ * the light through. The includer defines SDF_CLIPMAP_COVERAGE_STAGE to bind the coverage; without it everything is
+ * covered.
  *
  * Needs only the clipmap: stages 0-3 and 12 stay free for the includer.
  */
@@ -43,8 +41,8 @@
 /// rounding of a march position, so every sample inside the span reads the level search's answer.
 #define LUMEN_GLOBAL_SDF_SPAN_MARGIN_VOXELS 0.05
 
-/// A trace's dithered transparency in uncovered space (UE bDitheredTransparency): its noise coordinate (UE
-/// DitherScreenCoord) and frame % 8, or disabled.
+/// A trace's dithered transparency in uncovered space: its noise coordinate (a per-ray texel position) and
+/// frame % 8, or disabled.
 struct LumenSdfDither
 {
 	vec2 coord;
@@ -94,11 +92,10 @@ struct LumenSdfHit
 	float voxel;
 };
 
-/// The one level every sample within @p reach of @p p reads, unblended (UE samples a hit's gradient in the hit's
-/// clipmap alone, GlobalDistanceFieldShared.ush:291-314), or SDF_CLIPMAP_LEVEL_COUNT when a sample there could read
-/// another level or a cross-fade: @p p's finest level holds it deeper than its cross-fade band plus @p reach, and
-/// every finer level's box lies more than @p reach away along some axis. SdfSampleClipmap at those samples is then
-/// SdfSampleClipmapLevel of this level, exactly.
+/// The one level every sample within @p reach of @p p reads, unblended, or SDF_CLIPMAP_LEVEL_COUNT when a sample
+/// there could read another level or a cross-fade: @p p's finest level holds it deeper than its cross-fade band plus
+/// @p reach, and every finer level's box lies more than @p reach away along some axis. SdfSampleClipmap at those
+/// samples is then SdfSampleClipmapLevel of this level, exactly.
 int LumenGlobalSdfSingleLevel(vec3 p, float reach)
 {
 	BRANCH
@@ -137,8 +134,7 @@ int LumenGlobalSdfSingleLevel(vec3 p, float reach)
 	return is_single ? index : SDF_CLIPMAP_LEVEL_COUNT;
 }
 
-/// The unit field gradient at @p p (UE ComputeGlobalDistanceFieldNormal / GlobalDistanceFieldPageCentralDiff,
-/// GlobalDistanceFieldShared.ush:291-312): central differences half a voxel of @p voxel either side along each axis,
+/// The unit field gradient at @p p: central differences half a voxel of @p voxel either side along each axis,
 /// @p fallback where the field is flat. A wider stencil blends a floor's and a wall's gradients a voxel or more from
 /// their corner, and the tilted normal picks and weighs the cards a hit is shaded from.
 vec3 LumenGlobalSdfNormal(vec3 p, float voxel, vec3 fallback)
@@ -266,11 +262,11 @@ float LumenGlobalSdfEmptySpaceStep(SdfClipmapSample field, vec3 p)
 }
 
 /**
- * The march with UE's VoxelSizeRelativeBias and VoxelSizeRelativeRayEndBias, both in voxel extents (half
+ * The march with voxel-relative start and end biases, both in voxel extents (half
  * voxels) of the level answering each sample: the ray starts no earlier than @p voxel_relative_bias extents,
  * ends @p voxel_relative_end_bias extents short of @p t_max, and the ray-time expansion ramps in from the
  * biased start, so a ray leaving a surface at a grazing angle does not find that surface under a full
- * expansion at its first sample. Each step advances @p step_factor times the distance (UE SDFStepFactor), at
+ * expansion at its first sample. Each step advances @p step_factor times the distance, at
  * least LUMEN_GLOBAL_SDF_MIN_STEP_VOXELS.
  */
 LumenSdfHit LumenTraceGlobalSdfDithered(vec3 origin,

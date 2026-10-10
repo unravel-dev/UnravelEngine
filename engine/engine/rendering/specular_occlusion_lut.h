@@ -10,7 +10,7 @@ namespace unravel
 {
 
 /**
- * @brief Specular occlusion table (GTSO, Jimenez et al. 2016): the share of a GGX lobe that
+ * @brief Specular occlusion table (GTSO): the share of a GGX lobe that
  * lies inside the visibility cone of an ambient occlusion value.
  *
  * The visibility model is GTAO's: a cone whose cosine-weighted solid angle equals the

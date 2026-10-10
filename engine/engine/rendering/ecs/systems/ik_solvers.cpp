@@ -196,8 +196,8 @@ auto capture_local_rotations(const ik_vector<transform_component*>& chain) -> ik
 /**
  * @brief Interpolates the solved pose back toward the captured (animated) one.
  *
- * Local rotation space on purpose: this is a pose interpolation, the same thing
- * Unity and Unreal call the IK alpha. The effector therefore does not travel
+ * Local rotation space on purpose: this is a pose interpolation, the usual
+ * meaning of an IK weight (alpha). The effector therefore does not travel
  * linearly toward the target as the weight ramps - it follows the arc between
  * the two poses, which is what reads correctly when IK fades in over animation.
  */

@@ -45,10 +45,10 @@ public:
     /// Linear readback scale of the radiance-valued debug views (pipeline::set_debug_view_scale).
     void set_visualization_scale(float scale);
     auto get_visualization_scale() const -> float;
-    /// UE's world-space Lumen visualizations the panel drives into the scene camera's pipeline every frame.
+    /// The world-space GI visualizations the panel drives into the scene camera's pipeline every frame.
     void set_lumen_visualize(const lumen_visualize_pass::world_settings& settings);
     auto get_lumen_visualize() const -> const lumen_visualize_pass::world_settings&;
-    /// A cursor the Lumen visualizations use instead of the mouse's (negative: the view's centre); empty follows the
+    /// A cursor the GI visualizations use instead of the mouse's (negative: the view's centre); empty follows the
     /// mouse again. An MCP hook for repeatable captures.
     void set_lumen_cursor_override(const std::optional<math::vec2>& cursor);
     auto get_lumen_cursor_override() const -> const std::optional<math::vec2>&;

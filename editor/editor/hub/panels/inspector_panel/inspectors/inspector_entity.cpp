@@ -1031,7 +1031,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
         auto& override_ctx = ctx.get_cached<prefab_override_context>();
         auto& inspector_ctx = ctx.get_cached<inspector_context>();
 
-        // Render Unity-style entity header (active checkbox, icon, name, tag)
+        // Render the entity header (active checkbox, icon, name, tag)
         result |= render_entity_header(ctx, data, override_ctx);
         
         ImGui::Spacing();
@@ -1082,7 +1082,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     return;
                 }
                 
-                // Skip tag_component as it's handled in the Unity-style header
+                // Skip tag_component as it's handled in the entity header
                 if constexpr(std::is_same_v<ctype, tag_component>)
                 {
                     return;

@@ -527,7 +527,7 @@ struct editing_manager
     /// enable wireframe selection
     bool wireframe_selection = true;
     /// Automatically flag reflection probes dirty whenever the scene is modified (while not playing).
-    /// Mirrors Unity's "Auto Generate" lighting workflow: edits to static geometry cause probes to rebuild in the background.
+    /// Edits to static geometry cause probes to rebuild in the background.
     bool auto_rebuild_reflection_probes = true;
     /// current manipulation gizmo operation.
     ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;

@@ -211,7 +211,7 @@ auto ik_set_position_two_bone(entt::handle end_effector,
  * Position solvers only orient the bones that drive the chain, never the
  * effector itself, so the effector's world orientation swings with the limb.
  * Call this after a position solve to pin a foot to a slope or keep an aimed
- * hand level - the same split as Unity's SetIKPosition / SetIKRotation.
+ * hand level: position and rotation goals are set separately.
  */
 auto ik_set_rotation(entt::handle bone, const math::quat& rotation, float weight = 1.0f) -> ik_result;
 

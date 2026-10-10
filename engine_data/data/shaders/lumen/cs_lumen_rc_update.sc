@@ -1,9 +1,8 @@
 /*
- * Radiance cache carry-over (UE 5.8 UpdateCacheForUsedProbesCS, LumenRadianceCacheUpdate.usf:52-167): every
- * probe of last frame's indirection moves to the cell at its world position in this frame's (scrolled)
- * clipmap. It keeps its index and texels when that cell was marked this frame or it was used within
- * LUMEN_RADIANCE_CACHE_KEEP_FRAMES; otherwise - or when it scrolled out - its index goes to the free list.
- * One thread per entry of last frame's indirection.
+ * Radiance cache carry-over: every probe of last frame's indirection moves to the cell at its world position in
+ * this frame's (scrolled) clipmap. It keeps its index and texels when that cell was marked this frame or it was
+ * used within LUMEN_RADIANCE_CACHE_KEEP_FRAMES; otherwise - or when it scrolled out - its index goes to the free
+ * list. One thread per entry of last frame's indirection.
  */
 
 #include "bgfx_compute.sh"

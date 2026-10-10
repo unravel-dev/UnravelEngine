@@ -1,5 +1,5 @@
 /*
- * Zeroes a range of a uint buffer the GPU writes: the counters a frame's passes start from (the Lumen gather's
+ * Zeroes a range of a uint buffer the GPU writes: the counters a frame's passes start from (the GI gather's
  * far-field ray count, the shader print header). bgfx updates no BGFX_BUFFER_COMPUTE_WRITE buffer from the CPU, so the
  * range is cleared by a dispatch ordered before its first reader (buffer_clear.h).
  */

@@ -1,12 +1,12 @@
 /*
- * Lumen surface cache: the lighting history of a reallocated card resampled into the capture atlas (UE 5.8
- * ResampleLightingHistoryToCardCaptureAtlasCS, LumenSceneLighting.usf:553-674), one 8x8 group per captured tile.
+ * Surface cache: the lighting history of a reallocated card resampled into the capture atlas, one 8x8 group per
+ * captured tile.
  *
  * Runs before the copy writes the physical atlases, which still hold the card's previous allocation (the resample
  * table, lumen_scene::get_resample_table, bound as the scene table). Each texel maps its page's card UV onto the
  * previous mip, the card's extent being unchanged, and samples its direct and indirect lighting bilinearly; the tile
- * takes the average radiosity update count of its 64 texels (0 where the previous mip held nothing), rounded to a
- * whole count as UE's 8-bit store rounds it, stored in every texel's direct alpha. The copy (cs_lumen_card_copy.sc)
+ * takes the average radiosity update count of its 64 texels (0 where the previous mip held nothing), rounded to the
+ * nearest whole count, stored in every texel's direct alpha. The copy (cs_lumen_card_copy.sc)
  * moves them into the new pages. Tiles of cards without a previous allocation, and pages refreshed in place (the tile
  * record's flag: the copy keeps their lighting where it is), are left alone.
  */

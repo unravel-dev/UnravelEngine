@@ -27,7 +27,7 @@ class surface_cache_system;
 class surface_cache_view;
 
 /**
- * @brief Lumen's surface cache, GPU side: the physical atlases (albedo, normal, emissive, depth, direct,
+ * @brief The surface cache, GPU side: the physical atlases (albedo, normal, emissive, depth, direct,
  *        indirect, final lighting with the depth in alpha), the capture atlas, the packed scene table
  *        (cards | page table | instances), the capture-to-atlas copy, the card lighting (direct + radiosity + final
  *        combine) and the debug views.
@@ -62,10 +62,10 @@ public:
     {
         ///< Reallocated cards start unlit, as new ones do, instead of inheriting their previous pages' lighting.
         experiment_no_lighting_resample = 1u << 10u,
-        ///< Global-SDF hits sample the cards within UE's absolute tolerance: 3 voxel extents of UE's own layout
-        ///< (50 m level 0) instead of this layout's.
-        experiment_ue_card_tolerance = 1u << 20u,
-        ///< The Lumen Scene views tint hits in uncovered global-SDF space magenta (diagnostic).
+        ///< Global-SDF hits sample the cards within a fixed absolute tolerance: 3 voxel extents of a 50 m level-0
+        ///< layout instead of this layout's.
+        experiment_fixed_card_tolerance = 1u << 20u,
+        ///< The GI scene views tint hits in uncovered global-SDF space magenta (diagnostic).
         experiment_show_sdf_coverage = 1u << 26u,
         ///< Resident cards keep their resolution while the viewer moves (diagnostic).
         experiment_hold_card_resolution = 1u << 28u,
@@ -114,45 +114,45 @@ public:
         const lumen_object_grid* object_grid = nullptr;
         ///< The environment's radiance SH: the sky radiosity rays see on a miss.
         gfx::texture::ptr environment_sh;
-        ///< The view's exposure, which scales Lumen's MaxRayIntensity into cached units.
+        ///< The view's exposure, which scales the radiosity rays' maximum intensity into cached units.
         float view_exposure = 1.0f;
     };
 
-    /// The debug views of fs_lumen_scene_debug.sc: UE's r.Lumen.Visualize scene modes (its value in brackets) and the
-    /// card atlas, coverage and object grid views.
+    /// The debug views of fs_lumen_scene_debug.sc: the scene views, which show the cards at the global distance
+    /// field's hits, and the card atlas, coverage and object grid views.
     enum class debug_mode : int
     {
-        ///< [3] the cards' final lighting at the global distance field's hits.
+        ///< The cards' final lighting at the global distance field's hits.
         lumen_scene = 0,
         ///< The physical albedo atlas, fitted to the viewport.
         card_atlas = 1,
         ///< The placements' mesh distance fields, coloured by how their cards cover each hit.
         card_coverage = 2,
-        ///< [8]
+        ///< The cards' albedo.
         albedo = 3,
-        ///< [5] pink / yellow where the cards miss a hit.
+        ///< The final lighting, pink / yellow where the cards miss a hit.
         surface_cache = 4,
         ///< The object grid's card stages at the global distance field's hits.
         object_grid = 5,
-        ///< [12]
+        ///< The cards' direct lighting.
         direct_lighting = 6,
-        ///< [13]
+        ///< The cards' indirect lighting (radiosity).
         indirect_lighting = 7,
-        ///< [4] the Lumen Scene traced as far as the reflections trace.
+        ///< The GI scene traced as far as the reflections trace.
         reflection_view = 9,
-        ///< [6]
+        ///< The global distance field's own normals.
         geometry_normals = 10,
-        ///< [9]
+        ///< The cards' normals.
         normals = 11,
-        ///< [10]
+        ///< The cards' emissive.
         emissive = 12,
-        ///< [11]
+        ///< Each card in a colour of its index, blended by the cards' weights.
         card_weights = 13,
-        ///< [16]
+        ///< Frames since each page's direct lighting update: white this frame, red to blue as it ages.
         direct_lighting_updates = 14,
-        ///< [17]
+        ///< Frames since each page's radiosity update: white this frame, red to blue as it ages.
         indirect_lighting_updates = 15,
-        ///< [24]
+        ///< The radiosity's accumulated updates per 8x8 tile, white once a tile has settled.
         radiosity_frames = 16,
     };
 
@@ -167,13 +167,13 @@ public:
         debug_mode mode = debug_mode::lumen_scene;
         ///< How far the camera rays trace, in metres.
         float max_trace_distance = 200.0f;
-        ///< The output pixels the view fills (UE's overview tiles); empty = all of it.
+        ///< The output pixels the view fills (an overview's tile); empty = all of it.
         irect32_t tile{};
         ///< The environment's radiance SH: what a ray that hits nothing shows (black while null).
         gfx::texture::ptr environment_sh;
         ///< The view's exposure, applied to the lighting views before the tone map.
         float exposure = 1.0f;
-        ///< The lit image's tone mapping operator, which the views go through as UE's do.
+        ///< The lit image's tone mapping operator, which the views go through so they read like the frame.
         tonemapping_method tonemapping = tonemapping_method::none;
     };
 
@@ -198,7 +198,7 @@ public:
     auto claim_update(uint64_t frame) -> bool;
 
     /// CPU update from this frame's GI instances, the viewers of register_viewer (their distance fields moving change
-    /// the cards' shadows), the updating camera's Lumen scene settings and the project's; uploads the scene table.
+    /// the cards' shadows), the updating camera's GI scene settings and the project's; uploads the scene table.
     /// Other atlas sizes in the project settings start the surface cache over at those sizes.
     void update(const surface_cache_system& gi_scene,
                 uint64_t frame,
@@ -276,8 +276,8 @@ public:
     }
 
     auto get_surface_cache_params() const -> math::vec4;
-    /// The scale of the global-SDF hits' card sampling bias (u_lumen_object_grid_params.y; 1 = UE's rule on this
-    /// layout).
+    /// The scale of the global-SDF hits' card sampling bias (u_lumen_object_grid_params.y; 1 = in this layout's
+    /// voxel extents).
     auto get_card_bias_scale() const -> float
     {
         return card_bias_scale_;
@@ -399,8 +399,8 @@ private:
     void release_targets();
     void upload_scene_table();
     void build_copy_tiles();
-    /// UE ResampleLightingHistoryToCardCaptureAtlasCS: the lighting of reallocated cards' previous pages into the
-    /// capture-sized resample targets, before the copy overwrites the physical atlases.
+    /// Resamples the lighting of reallocated cards' previous pages into the capture-sized resample targets,
+    /// before the copy overwrites the physical atlases.
     void resample_lighting();
     void build_light_tiles();
     void bind_sdf_instances(const surface_cache_system& gi_scene) const;
@@ -443,7 +443,7 @@ private:
     gfx::texture::ptr resample_direct_;
     gfx::texture::ptr resample_indirect_;
     bool is_lit_ = false;
-    ///< Scale of the global-SDF hits' card sampling bias (u_lumen_object_grid_params.y; 1 = UE's rule on this layout).
+    ///< Scale of the global-SDF hits' card sampling bias (u_lumen_object_grid_params.y; 1 = this layout's voxels).
     float card_bias_scale_ = 1.0f;
     /// This frame's experiment toggles (surface_cache_system::get_experiment_flags).
     uint64_t experiment_flags_ = 0;

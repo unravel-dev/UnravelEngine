@@ -124,7 +124,7 @@ float F0RGBToDielectricSpecular(vec3 F0)
     return F0ToDielectricSpecular(F0RGBToF0(F0));
 }
 
-// [Burley, "Extending the Disney BRDF to a BSDF with Integrated Subsurface Scattering"]
+// A dielectric's index of refraction from its F0: the inverse of DielectricIorToF0 (F0 capped at 0.99).
 float DielectricF0ToIor(float F0)
 {
     return 2.0f / (1.0f - sqrt(min(F0, 0.99f))) - 1.0f;
@@ -176,8 +176,6 @@ float GetLightingRoughness(float roughness)
 }
 
 // Geometric Specular Anti-Aliasing.
-// Reference: Tokuyoshi & Kaplanyan, "Improved Geometric Specular Antialiasing" (2019),
-//            Unity HDRP, Frostbite Engine.
 //
 // Uses screen-space derivatives of the world normal to estimate the geometric
 // normal variance within a pixel. Increases roughness proportionally so the NDF
@@ -185,7 +183,7 @@ float GetLightingRoughness(float roughness)
 // (e.g. Fresnel highlights at grazing angles, tiny specular hot-spots).
 //
 // Works in alpha-space (perceptualRoughness^2) to match the GGX parameterisation.
-// Kernel variance / clamp follow the paper's recommended screen-space filter (see Section 5.2).
+// SCREEN_SPACE_VARIANCE scales the measured variance; THRESHOLD^2 caps what it adds to alpha.
 #if BGFX_SHADER_TYPE_FRAGMENT
 float GeometricSpecularAA(vec3 worldNormal, float perceptualRoughness)
 {
@@ -550,8 +548,7 @@ float PhongShadingPow(float X, float Y)
 
     // In order to avoid platform differences and rarely occuring image atrifacts we clamp the base.
 
-    // Note: Clamping the exponent seemed to fix the issue mentioned TTP but we decided to fix the root and accept the
-    // minor performance cost.
+    // Note: clamping the base, not the exponent, fixes the root cause, at a minor performance cost.
 
     return ClampedPow(X, Y);
 }
@@ -571,8 +568,8 @@ struct BxDFContext
     float YoH;
 };
 
-// Matches Unreal BRDF.ush InitBxDFContext: unsaturated NoL/NoV so NoH/VoL stay consistent with
-// N*H = (N*V + N*L) / |V+L|. Clamp cosines only where the microfacet model assumes the upper hemisphere.
+// Unsaturated NoL/NoV so NoH/VoL stay consistent with N*H = (N*V + N*L) / |V+L|. Clamp cosines only
+// where the microfacet model assumes the upper hemisphere.
 void Init( inout BxDFContext Context, vec3 N, vec3 V, vec3 L )
 {
     Context.NoL = dot(N, L);
@@ -629,18 +626,16 @@ void InitMobile(inout BxDFContext Context, vec3 N, vec3 V, vec3 L, float NoL)
 }
 
 /*=============================================================================
-    Area lights: the emitter's shape in the direct lighting (UE 5.8 CapsuleLightIntegrate.ush,
-    ShadingModels.ush, BRDF.ush). Returned by value: shaderc miscompiles out-parameters.
+    Area lights: the emitter's shape in the direct lighting. Returned by value: shaderc
+    miscompiles out-parameters.
 =============================================================================*/
 
-/// What direct shading needs to know about a light's emitter (UE FAreaLight without the rect
-/// and soft-radius parts).
+/// What direct shading needs to know about a light's emitter (sphere and segment extents; no rect emitters).
 struct AreaLight
 {
-    /// Sine of the half angle the emitting sphere subtends, reduced on rough surfaces (UE
-    /// SphereSinAlpha). 0 for a point.
+    /// Sine of the half angle the emitting sphere subtends, reduced on rough surfaces. 0 for a point.
     float SphereSinAlpha;
-    /// Cosine of the angle the emitting segment subtends (UE LineCosSubtended). 1 without one.
+    /// Cosine of the angle the emitting segment subtends. 1 without one.
     float LineCosSubtended;
     /// Unit direction the diffuse light arrives from.
     vec3 DiffuseL;
@@ -665,8 +660,7 @@ AreaLight MakeDirectionalAreaLight(vec3 N, vec3 L)
     return Light;
 }
 
-/// UE ClosestPointLineToRay: the point of the segment Line0 - Line1 closest to the ray along the
-/// unit direction @p R.
+/// The point of the segment Line0 - Line1 closest to the ray along the unit direction @p R.
 vec3 ClosestPointLineToRay(vec3 Line0, vec3 Line1, float Length, vec3 R)
 {
     vec3 Line01 = Line1 - Line0;
@@ -678,7 +672,7 @@ vec3 ClosestPointLineToRay(vec3 Line0, vec3 Line1, float Length, vec3 R)
 }
 
 /**
- * A point or spot light's capsule emitter as direct shading sees it (UE CreateAreaLight).
+ * A point or spot light's capsule emitter as direct shading sees it.
  * @param Roughness Perceptual roughness the specular lobe is evaluated at.
  */
 AreaLight MakeCapsuleAreaLight(CapsuleLight Capsule, float Roughness, vec3 N, vec3 V)
@@ -699,17 +693,16 @@ AreaLight MakeCapsuleAreaLight(CapsuleLight Capsule, float Roughness, vec3 N, ve
     }
     float InvDistance = inversesqrt(dot(ToLight, ToLight));
     Light.SpecularL = ToLight * InvDistance;
-    // A rough lobe is already wide, so the sphere widens it less (UE's 1 - alpha).
+    // A rough lobe is already wide, so the sphere widens it less (by 1 - alpha).
     float Alpha = Roughness * Roughness;
     Light.SphereSinAlpha = saturate(Capsule.Radius * InvDistance * (1.0 - Alpha));
     return Light;
 }
 
 /**
- * UE SphereMaxNoH with its Newton step [de Carpentier 2017, "Decima Engine: Advances in Lighting
- * and AA"]: the context of the direction inside the emitting sphere (sine half angle @p SinAlpha)
- * that maximizes N.H, so the highlight reflects the whole sphere, not its centre. The context is
- * returned unchanged for a point.
+ * The context of the direction inside the emitting sphere (sine half angle @p SinAlpha) that
+ * maximizes N.H, refined by one Newton step, so the highlight reflects the whole sphere, not its
+ * centre. The context is returned unchanged for a point.
  */
 BxDFContext SphereMaxNoH(BxDFContext Context, float SinAlpha)
 {
@@ -758,14 +751,14 @@ BxDFContext SphereMaxNoH(BxDFContext Context, float SinAlpha)
     return Result;
 }
 
-/// UE New_a2: the GGX alpha^2 of a lobe widened to cover a source of sine half angle @p SinAlpha.
+/// The GGX alpha^2 of a lobe widened to cover a source of sine half angle @p SinAlpha.
 float New_a2(float a2, float SinAlpha, float VoH)
 {
     return a2 + 0.25 * SinAlpha * (3.0 * sqrt(a2) + SinAlpha) / (VoH + 0.001);
 }
 
 /**
- * UE EnergyNormalization: the factor on GGX D (evaluated at @p a2) that keeps a widened highlight's
+ * The factor on GGX D (evaluated at @p a2) that keeps a widened highlight's
  * energy the light's - a larger source spreads the same light over a wider, dimmer highlight
  * instead of adding light.
  */
@@ -794,7 +787,6 @@ float EnergyNormalization(float a2, float VoH, AreaLight Light)
 =============================================================================*/
 // Physically based shading model
 // parameterized with the below options
-// [ Karis 2013, "Real Shading in Unreal Engine 4" slide 11 ]
 
 // E = Random sample for BRDF.
 // N = Normal of the macro surface.
@@ -887,9 +879,8 @@ vec3 eval_irradiance_sh(sampler2D coeff_tex, vec3 N)
     return eval_irradiance_sh_scaled(coeff_tex, N, vec3_splat(1.0));
 }
 
-/// Irradiance over a visibility cone (Jimenez et al. 2016; UE's EvaluateSHIrradiance): the
-/// cosine lobe around @p axis restricted to the cone whose cosine-weighted solid angle is
-/// @p visibility, i.e. AO = sin^2(aperture). Relative to the full lobe the zonal factors are
+/// Irradiance over a visibility cone: the cosine lobe around @p axis restricted to the cone
+/// whose cosine-weighted solid angle is @p visibility, i.e. AO = sin^2(aperture). Relative to the full lobe the zonal factors are
 /// Z0 = sin^2 a, Z1 = 1 - cos^3 a and Z2 = sin^2 a (1 + 3 cos^2 a): band 0 carries exactly the
 /// visibility, so a uniform environment returns AO * E, and the higher bands keep more of the
 /// light arriving along the axis than a plain AO multiply does.
@@ -929,8 +920,8 @@ vec3 eval_radiance_sh(sampler2D coeff_tex, vec3 dir)
 }
 
 /// Environment radiance prefiltered by the GGX lobe of perceptual @p roughness around @p dir -
-/// what a reflection sees of the environment where no probe covers it (UE fills that weight
-/// with the sky light). The lobe's zonal factors are those of the GGX reflected-direction
+/// what a reflection sees of the environment where no probe covers it (the sky light fills that
+/// weight). The lobe's zonal factors are those of the GGX reflected-direction
 /// distribution at normal incidence (the split-sum assumption the prefiltered probes make),
 /// measured by importance sampling it (the specular_occlusion_lut lobe) and fitted as rational
 /// functions of alpha: max error 0.004 in band 1, 0.01 in band 2. A mirror reads the SH
@@ -954,8 +945,6 @@ vec3 Diffuse_Lambert( vec3 DiffuseColor )
     return DiffuseColor * RECIP_PI;
 }
 
-// [Burley 2012, "Physically-Based Shading at Disney"]
-// [Lagrade et al. 2014, "Moving Frostbite to Physically Based Rendering"]
 vec3 Diffuse_Burley( vec3 DiffuseColor, float Roughness, float NoV, float NoL, float VoH )
 {
     float FD90 = 0.5f + 2.0f * VoH * VoH * Roughness;
@@ -964,7 +953,6 @@ vec3 Diffuse_Burley( vec3 DiffuseColor, float Roughness, float NoV, float NoL, f
     return DiffuseColor * ( (1.0f / PI) * FdV * FdL );
 }
 
-// [Gotanda 2012, "Beyond a Simple Physically Based Blinn-Phong Model in Real-Time"]
 vec3 Diffuse_OrenNayar( vec3 DiffuseColor, float Roughness, float NoV, float NoL, float VoH )
 {
     float a = Roughness * Roughness;
@@ -977,7 +965,6 @@ vec3 Diffuse_OrenNayar( vec3 DiffuseColor, float Roughness, float NoV, float NoL
     return DiffuseColor / PI * ( C1 + C2 ) * ( 1 + Roughness * 0.5f );
 }
 
-// [Gotanda 2014, "Designing Reflectance Models for New Consoles"]
 vec3 Diffuse_Gotanda( vec3 DiffuseColor, float Roughness, float NoV, float NoL, float VoH )
 {
     float a = Roughness * Roughness;
@@ -1005,13 +992,13 @@ vec3 Diffuse_Gotanda( vec3 DiffuseColor, float Roughness, float NoV, float NoL, 
 #endif
 }
 
-// [Portsmouth et al. 2025, "EON: A Practical Energy-Preserving Rough Diffuse BRDF"]
+// EON: an energy-preserving rough diffuse BRDF built on the Oren-Nayar model.
 vec3 Diffuse_EON( vec3 DiffuseColor, float Roughness, float NoV, float NoL, float VoL )
 {
 	// Albedo inversion for EON model to maintain a consistent color with lambert
 	vec3 Rho = DiffuseColor * (1.0 + (0.189468 - 0.189468 * DiffuseColor) * Roughness);
 
-	// This is the main shaping term from the Oren-Nayar model (with tweaks by Fujii)
+	// This is the main shaping term of the Oren-Nayar model, in its FON (Fujii Oren-Nayar) form
 	float S = VoL - NoV * NoL;
 	float SOverT = max(S * rcp(max(1e-6, max(NoV, NoL))), S);
 	const float constant1_FON = 0.5f - 2.0f / (3.0f * PI);
@@ -1019,12 +1006,12 @@ vec3 Diffuse_EON( vec3 DiffuseColor, float Roughness, float NoV, float NoL, floa
 	float AF = 1 - Roughness * (1 - 1 / (1 + constant1_FON));
 	float f_ss = AF * (1 + Roughness * SOverT);
 
-	// 4th Order approximation from the paper is a bit too heavy, first order seems to work just as well
+	// First order approximation of G / pi: 4th order is a bit too heavy, first order seems to work just as well
 	const float g1 = 0.262048f;
 	float GoverPi_V = g1 - g1 * NoV;
 	// Use (1 - Eo) only as a non-reciprocal approach to energy conservation
 	float f_ms = 1.0f - AF * (1 + Roughness * GoverPi_V);
-	// The Rho_ms term from the paper can be approximated as just Rho^2
+	// The multiple-scattering albedo Rho_ms is approximated as just Rho^2
 	return Rho * (f_ss + Rho * f_ms) * (1.0 / PI);
 }
 
@@ -1044,12 +1031,11 @@ vec3 Diffuse_GGX_Rough( vec3 DiffuseColor, float Roughness, float NoV, float NoL
 	float VoL = 2 * VoH * VoH - 1;		// double angle identity to keep signature above consistent with other models
 	return Diffuse_EON(DiffuseColor, RetroReflectivityWeight * Roughness * 0.4, NoV, NoL, VoL);
 #elif ROUGH_DIFFUSE_BRDF_VERSION == 2
-	// [ Chan 2024, "Multiscattering Diffuse and Specular BRDFs", Unpublished manuscript ]
+	// Multiscattering rough diffuse: a smooth-to-rough single-scattering blend plus a multiple-scattering term.
 	Roughness *= RetroReflectivityWeight;
 	float Alpha = Roughness * Roughness;
-	// The original writeup uses an FSmooth term inspired by Burley diffuse to balance energy between spec/diffuse.
-	// However in our implementation the energy balance between diffuse and spec is handled externally, so we stick
-	// to a plain lambertian for the Roughness=0 limit.
+	// FSmooth is a plain lambertian for the Roughness=0 limit: the energy balance between diffuse and spec is
+	// handled outside this function.
 	float FSmooth = 1;
 	float Scale = max(0.55 - 0.2 * Roughness, 1.25 - 1.6 * Roughness);
 	float Bias = saturate(4 * Alpha);
@@ -1058,8 +1044,8 @@ vec3 Diffuse_GGX_Rough( vec3 DiffuseColor, float Roughness, float NoV, float NoL
 	float DiffuseMS = Alpha * 0.38;
 	return (1 / PI) * DiffuseColor * (DiffuseSS + DiffuseMS);
 #else
-	// [ Chan 2018, "Material Advances in Call of Duty: WWII" ]
-	// It has been extended here to fade out retro reflectivity contribution from area light in order to avoid visual artefacts.
+	// Rough diffuse: a smooth-to-rough response plus a retro reflectivity lobe, faded out for area lights to avoid
+	// visual artefacts.
 	float a2 = Pow4(Roughness);
 	// a2 = 2 / ( 1 + exp2( 18 * g )
 	float g = saturate( (1.0 / 18.0) * log2( 2 * rcp(a2) - 1 ) );
@@ -1107,7 +1093,6 @@ vec3 Diffuse( vec3 DiffuseColor, float Roughness, float NoV, float NoL, float Vo
     BRDF: Distribution functions.
 =============================================================================*/
 
-// [Blinn 1977, "Models of light reflection for computer synthesized pictures"]
 float D_Blinn( float Roughness, float NoH )
 {
     float m = Roughness * Roughness;
@@ -1116,7 +1101,6 @@ float D_Blinn( float Roughness, float NoH )
     return (n+2) / (2.0f*PI) * PhongShadingPow( NoH, n );		// 1 mad, 1 exp, 1 mul, 1 log
 }
 
-// [Beckmann 1963, "The scattering of electromagnetic waves from rough surfaces"]
 float D_Beckmann( float Roughness, float NoH )
 {
     float m = Roughness * Roughness;
@@ -1126,7 +1110,6 @@ float D_Beckmann( float Roughness, float NoH )
 }
 
 // GGX / Trowbridge-Reitz
-// [Walter et al. 2007, "Microfacet models for refraction through rough surfaces"]
 float D_GGX( float Roughness, float NoH )
 {
     float m = Roughness * Roughness;
@@ -1136,7 +1119,6 @@ float D_GGX( float Roughness, float NoH )
 }
 
 // Anisotropic GGX
-// [Burley 2012, "Physically-Based Shading at Disney"]
 float D_GGXaniso( float RoughnessX, float RoughnessY, float NoH, vec3 H, vec3 X, vec3 Y )
 {
     float mx = RoughnessX * RoughnessX;
@@ -1167,21 +1149,18 @@ float Vis_Implicit( )
     return 0.25f;
 }
 
-// [Neumann et al. 1999, "Compact metallic reflectance models"]
 float Vis_Neumann( float NoV, float NoL )
 {
     return 1.0f / ( 4.0f * max( NoL, NoV ) );
 }
 
-// [Kelemen 2001, "A microfacet based coupled specular-matte brdf model with importance sampling"]
 float Vis_Kelemen( float VoH )
 {
-    // +1e-5 to prevent NaN when VoH == 0 (matches UE5 safety guard)
+    // +1e-5 to prevent NaN when VoH == 0
     return rcp( 4.0f * VoH * VoH + 1e-5 );
 }
 
-// Tuned to match behavior of G_Smith
-// [Schlick 1994, "An Inexpensive BRDF Model for Physically-Based Rendering"]
+// Tuned to match behavior of the Smith term (Vis_Smith)
 float Vis_Schlick( float Roughness, float NoV, float NoL )
 {
     float k = Square( Roughness ) * 0.5f;
@@ -1190,9 +1169,7 @@ float Vis_Schlick( float Roughness, float NoV, float NoL )
     return 0.25f / ( Vis_SchlickV * Vis_SchlickL );
 }
 
-// Smith term for GGX modified by Disney to be less "hot" for small roughness values
-// [Smith 1967, "Geometrical shadowing of a random rough surface"]
-// [Burley 2012, "Physically-Based Shading at Disney"]
+// Smith term for GGX, modified to be less "hot" for small roughness values
 float Vis_Smith( float Roughness, float NoV, float NoL )
 {
     float a = Square( Roughness );
@@ -1204,7 +1181,6 @@ float Vis_Smith( float Roughness, float NoV, float NoL )
 }
 
 // Appoximation of joint Smith term for GGX
-// [Heitz 2014, "Understanding the Masking-Shadowing Function in Microfacet-Based BRDFs"]
 float Vis_SmithJointApprox( float Roughness, float NoV, float NoL )
 {
     float a = Square( Roughness );
@@ -1215,7 +1191,7 @@ float Vis_SmithJointApprox( float Roughness, float NoV, float NoL )
 
 float Vis_CookTorrance(float Roughness, float NoV, float NoL, float VoH, float NoH )
 {
-    // Original Cook-Torrance (1982) geometric attenuation.
+    // Original Cook-Torrance geometric attenuation.
     // The G term does not depend on roughness; roughness enters via the NDF (D term).
     // Vis = G / (4 * NoV * NoL) to match the other Vis_* functions.
     // Guard against division by zero at the terminator (NoL=0).
@@ -1229,7 +1205,7 @@ float Vis_Cloth( float NoV, float NoL )
     return rcp( 4 * ( NoL + NoV - NoL * NoV ) );
 }
 
-// [Estevez and Kulla 2017, "Production Friendly Microfacet Sheen BRDF"]
+// The Charlie sheen visibility's fitted L(x) term, its coefficients interpolated over roughness.
 float Vis_Charlie_L(float x, float r)
 {
     r = saturate(r);
@@ -1290,8 +1266,6 @@ vec3 F_None( vec3 SpecularColor )
     return SpecularColor;
 }
 
-// [Schlick 1994, "An Inexpensive BRDF Model for Physically-Based Rendering"]
-// [Lagarde 2012, "Spherical Gaussian approximation for Blinn-Phong, Phong and Fresnel"]
 vec3 F_Schlick( vec3 SpecularColor, float VoH )
 {
     float Fc = Pow5( 1.0f - VoH );					// 1 sub, 3 mul
@@ -1312,8 +1286,7 @@ vec3 F_Fresnel( vec3 SpecularColor, float VoH )
 
 vec3 F_AdobeF82(vec3 F0, vec3 F82, float VoH)
 {
-    // [Kutz et al. 2021, "Novel aspects of the Adobe Standard Material" ]
-    // See Section 2.3 (note the formulas in the paper do not match the code, the code is the correct version)
+    // Schlick Fresnel with an edge tint: F82 is the reflectance near 82 degrees (cos theta = 1/7).
     // The constants below are derived by just constant folding the terms dependent on CosThetaMax=1/7
     float Fc = Pow5(1 - VoH);
     float K = 49.0 / 46656.0;
@@ -1351,11 +1324,10 @@ vec3 EnvBRDF(vec3 F0, vec3 F90, float Roughness, float NoV, sampler2D BRDFIntegr
     return GF;
 }
 
-// [Karis 2013, "Real Shading in Unreal Engine 4" slide 11]
 vec3 EnvBRDF( vec3 SpecularColor, float Roughness, float NoV, sampler2D BRDFIntegrationMap )
 {
     // Anything less than 2% is physically impossible and is instead considered to be shadowing
-    // Note: this is needed for the 'specular' show flag to work, since it uses a SpecularColor of 0
+    // Note: a SpecularColor of 0 then reflects nothing, not even at grazing angles
     float F90 = F0RGBToMicroOcclusion(SpecularColor);
 
     return EnvBRDF(SpecularColor, vec3_splat(F90), Roughness, NoV, BRDFIntegrationMap);
@@ -1364,8 +1336,7 @@ vec3 EnvBRDF( vec3 SpecularColor, float Roughness, float NoV, sampler2D BRDFInte
 
 vec2 EnvBRDFApproxLazarov(float Roughness, float NoV)
 {
-    // [ Lazarov 2013, "Getting More Physical in Call of Duty: Black Ops II" ]
-    // Adaptation to fit our G term.
+    // Analytic fit of the preintegrated environment BRDF (A, B), adapted to fit our G term.
     const vec4 c0 = vec4(-1, -0.0275, -0.572, 0.022);
     const vec4 c1 = vec4(1, 0.0425, 1.04, -0.04);
     vec4 r = Roughness * c0 + c1;
@@ -1385,7 +1356,7 @@ vec3 EnvBRDFApprox(vec3 F0, vec3 F90, float Roughness, float NoV)
 vec3 EnvBRDFApprox( vec3 SpecularColor, float Roughness, float NoV )
 {
     // Anything less than 2% is physically impossible and is instead considered to be shadowing
-    // Note: this is needed for the 'specular' show flag to work, since it uses a SpecularColor of 0
+    // Note: a SpecularColor of 0 then reflects nothing, not even at grazing angles
     float F90 = F0RGBToMicroOcclusion(SpecularColor);
 
     return EnvBRDFApprox(SpecularColor, vec3_splat(F90), Roughness, NoV);
@@ -1456,10 +1427,9 @@ vec2 GGXEnergyLookup(float Roughness, float NoV)
 float DiffuseEnergyLookup(float Roughness, float NoV)
 {
 #if USE_ENERGY_CONSERVATION == 1
-    //return View.ShadingEnergyDiffuseTexture.SampleLevel(View.ShadingEnergySampler, vec2(NoV, Roughness), 0);
-    // For now we do not apply Chan diffuse energy preservation on diffuse ambiant.
-    // This is because Chan is built for F=0.04 and unfortunately this causes ambient to darken a grazing angles.
-    // SUBSTRATE_TODO Apply the inverse of Fresnel with F=0.04 on Chan when building the table.
+    // No diffuse energy table: Chan diffuse energy preservation is not applied on diffuse ambient.
+    // Chan is built for F=0.04, which causes ambient to darken at grazing angles.
+    // TODO: apply the inverse of Fresnel with F=0.04 on Chan when building such a table.
     return 1.0f;
 #elif USE_ENERGY_CONSERVATION == 2
     // TODO
@@ -1492,13 +1462,13 @@ FBxDFEnergyTerms ComputeFresnelEnergyTerms(vec2 E, vec3 InF0, vec3 InF90)
     vec3 F90 = GetF0F90(InF90);
 
     FBxDFEnergyTerms Result;
-    // [2] Eq 16: this restores the missing energy of the bsdf, while also accounting for the fact that the fresnel term causes some energy to be absorbed
+    // This restores the missing energy of the bsdf, while also accounting for the fact that the fresnel term causes some energy to be absorbed
     // NOTE: using F0 here is an approximation, but for schlick fresnel Favg is almost exactly equal to F0
     float Eavg = max(E.x, 1e-3f);
     Result.W = 1.0 + F0 * ((1.0f - E.x) / Eavg);
 
     // Now estimate the amount of energy reflected off this specular lobe so that we can remove it from underlying BxDF layers (like diffuse)
-    // This relies on the split-sum approximation as in [3] Sec 4.
+    // This relies on the split-sum approximation.
     // This term can also be useful to compute the probability of choosing among lobes
     Result.E = Result.W * (E.x * F0 + E.y * (F90 - F0));
     return Result;
@@ -1555,14 +1525,14 @@ vec3 ComputeEnergyConservation(FBxDFEnergyTerms EnergyTerms)
 }
 
 // Direct lighting - analytic (delta) lights.
-// Specular AA: use GeometricSpecularAA on roughness before this path (Tokuyoshi & Kaplanyan 2019; also Unity HDRP / Frostbite).
+// Specular AA: use GeometricSpecularAA on roughness before this path.
 // Multiple-scattering energy weight W from directional-albedo fits is intended for integrated lighting (IBL / prefiltered
-// probes); for delta lights the standard evaluation is the single-scatter microfacet BRDF (W = 1). See e.g. Kulla-Conty
-// discussion in production PBR notes (W matches environment, not point lights).
-// AO is applied to diffuse; SpecularOcclusion (NoV, Roughness, AO) scales specular (Lagarde).
-// The emitter's shape enters as in UE DefaultLitBxDF: the highlight aims at Light.SpecularL with N.H
-// maximized over the emitting sphere and D energy-normalized for the widened lobe; both terms take
-// Light.NoL. The caller applies Light.NoL and Light.Falloff to the result.
+// probes); for delta lights the standard evaluation is the single-scatter microfacet BRDF (W = 1): W matches the
+// environment, not point lights.
+// AO is applied to diffuse; SpecularOcclusion (NoV, Roughness, AO) scales specular.
+// The emitter's shape: the highlight aims at Light.SpecularL with N.H maximized over the emitting sphere
+// and D energy-normalized for the widened lobe; both terms take Light.NoL. The caller applies Light.NoL
+// and Light.Falloff to the result.
 vec3 StandardShadingDirect(
  vec3 DiffuseColor,
  vec3 SpecularColor,
@@ -1576,7 +1546,7 @@ vec3 StandardShadingDirect(
     N = normalize(N);
     BxDFContext context;
     Init(context, N, V, Light.SpecularL);
-    // The diffuse term keeps the half vector of the emitter's centre (UE).
+    // The diffuse term keeps the half vector of the emitter's centre.
     float DiffuseVoH = context.VoH;
     float DiffuseNoH = context.NoH;
     context = SphereMaxNoH(context, Light.SphereSinAlpha);
@@ -1646,14 +1616,14 @@ vec3 ScreenSpaceOcclusionAxis(vec4 ScreenAOSample, float HasBentNormal, float Sc
 }
 
 /// The dominant (off-specular peak) direction of the GGX lobe, from the mirror direction R
-/// toward N as the lobe widens (UE's GetOffSpecularPeakReflectionDir; perceptual roughness).
+/// toward N as the lobe widens (@p Roughness is perceptual).
 vec3 GetSpecularDominantDir(vec3 N, vec3 R, float Roughness)
 {
     float a = Roughness * Roughness;
     return mix(N, R, (1.0 - a) * (sqrt(1.0 - a) + a));
 }
 
-/// Specular occlusion (GTSO, Jimenez et al. 2016): the share of the GGX lobe around
+/// Specular occlusion (GTSO): the share of the GGX lobe around
 /// @p DominantDir (GetSpecularDominantDir) inside the visibility cone of @p Visibility around
 /// @p ConeAxis, read from the table built by specular_occlusion_lut (x = cos(cone axis, dominant
 /// direction) from [-1, 1], y = perceptual roughness, z = visibility, at texel centres).
@@ -1698,11 +1668,10 @@ vec3 StandardShadingIndirect(
          + (IndirectSpecular * EnvBRDFValue);
 }
 
-/// Multi-bounce ambient occlusion (Jimenez et al. 2016, eq. 9) as a gain over the single-bounce
-/// visibility: the fit of a path-traced interreflection ground truth that brightens the
-/// occlusion on light albedos - the light a crevice loses to occlusion partly comes back from
-/// its own walls, and white walls give more of it back than dark ones. Per channel, never
-/// below 1. The fit maps a point's whole visibility, so it applies once, to the combined term.
+/// Multi-bounce ambient occlusion as a gain over the single-bounce visibility: the fit of a
+/// path-traced interreflection ground truth that brightens the occlusion on light albedos - the
+/// light a crevice loses to occlusion partly comes back from its own walls, and white walls give
+/// more of it back than dark ones. Per channel, never below 1. The fit maps a point's whole visibility, so it applies once, to the combined term.
 vec3 MultiBounceAOGain(float visibility, vec3 albedo)
 {
     vec3 a = 2.0404 * albedo - vec3_splat(0.3324);
@@ -1711,8 +1680,8 @@ vec3 MultiBounceAOGain(float visibility, vec3 albedo)
     return max(vec3_splat(1.0), (visibility * a + b) * visibility + c);
 }
 
-/// The albedo the multi-bounce fit uses: the diffuse albedo, capped at @p Cap when it is positive (UE's
-/// MaxMultibounceAlbedo for Lumen's short-range AO).
+/// The albedo the multi-bounce fit uses: the diffuse albedo, capped at @p Cap when it is positive (the
+/// GI's short-range AO sets a cap).
 vec3 MultiBounceAlbedo(vec3 DiffuseColor, float Cap)
 {
     return Cap > 0.0 ? min(DiffuseColor, vec3_splat(Cap)) : DiffuseColor;
@@ -1748,11 +1717,10 @@ float IndirectDiffuseEnergyPreservation(vec3 SpecularColor, float Roughness, vec
 /// The specular occlusion of the two reflection layers (ComposeIndirectSpecular). A trace saw
 /// its occluders, so the traced layers take only the material AO's cavities, which no tracer's
 /// geometry holds (axis N); the untraced layer takes the material AO times the screen-space AO
-/// around the cone axis. Each carries the multi-bounce fit with F0 as the albedo, as UE (the
-/// G-buffer AO), HDRP and Filament apply it: a cavity's walls reflect part of what they occlude
-/// back into the lobe - little for dielectrics, most of it for bright metals. The screen term's
-/// multi-bounce follows GTAO's toggle; the material AO always takes it (the gain then comes from
-/// the material term alone, as on the diffuse).
+/// around the cone axis. Each carries the multi-bounce fit with F0 as the albedo: a cavity's walls
+/// reflect part of what they occlude back into the lobe - little for dielectrics, most of it for
+/// bright metals. The screen term's multi-bounce follows GTAO's toggle; the material AO always
+/// takes it (the gain then comes from the material term alone, as on the diffuse).
 struct IndirectSpecularOcclusion
 {
     vec3 traced;
@@ -1783,9 +1751,8 @@ vec4 ResolveProbeLayer(vec4 Texel, vec4 Params)
 
 /// The untraced reflection layer, completed where it does not cover the pixel: the probes (or the
 /// GI rough tier) premultiplied, their union coverage in alpha, and the rest of the lobe sees the
-/// environment - UE fills its capture weight with the sky light the same way
-/// (ReflectionEnvironmentComposite.ush). @p EnvironmentRadiance: eval_radiance_sh_lobe, in the
-/// buffers' pre-exposed space.
+/// environment (the sky light fills the weight the probes leave). @p EnvironmentRadiance:
+/// eval_radiance_sh_lobe, in the buffers' pre-exposed space.
 vec3 CompleteProbeLayer(vec4 ProbeLayer, vec3 EnvironmentRadiance)
 {
     return ProbeLayer.xyz + EnvironmentRadiance * (1.0 - saturate(ProbeLayer.w));
@@ -1800,25 +1767,82 @@ vec3 ComposeIndirectSpecular(vec4 Traced, vec3 ProbeLayer, IndirectSpecularOcclu
 }
 
 
-vec3 SubsurfaceShading( vec3 SubsurfaceColor, float Opacity, float AO, vec3 L, vec3 V, vec3 N )
-{
-    vec3 Hsum = V + L;
-    vec3 H = Hsum * inversesqrt(max(dot(Hsum, Hsum), 1e-8f));
-    // to get an effect when you see through the material
-    // hard coded pow constant
-    float InScatter = saturate(pow(saturate(dot(L, -V)), 12.0f) * mix(3.0f, 0.1f, Opacity));
-    // wrap around lighting, /(PI*2) to be energy consistent (hack do get some view dependnt and light dependent effect)
-    // Opacity of 0 gives no normal dependent lighting, Opacity of 1 gives strong normal contribution
-    float NormalContribution = saturate(dot(N, H) * Opacity + 1.0f - Opacity);
-    float BackScatter = AO * NormalContribution / (PI * 2.0f);
+/// The thickness, in metres, at which the subsurface colour is read as the material's transmittance,
+/// for the hue light takes on through thick material.
+#define SUBSURFACE_COLOR_TRANSMITTANCE_DISTANCE 0.15
+/// Lower bounds of the transmittance <-> extinction conversion (no log of 0, no division by 0).
+#define PARTICIPATING_MEDIA_MIN_TRANSMITTANCE 1e-12
+#define PARTICIPATING_MEDIA_MIN_MFP_METER 1e-12
 
-    // lerp to never exceed 1 (energy conserving)
-    return SubsurfaceColor * mix(BackScatter, 1.0f, InScatter);
+/// Hue, chroma and value of a linear RGB colour.
+vec3 RGB_2_HCV(vec3 RGB)
+{
+    vec4 P = (RGB.g < RGB.b) ? vec4(RGB.bg, -1.0, 2.0 / 3.0) : vec4(RGB.gb, 0.0, -1.0 / 3.0);
+    vec4 Q = (RGB.r < P.x) ? vec4(P.xyw, RGB.r) : vec4(RGB.r, P.yzx);
+    float Chroma = Q.x - min(Q.w, Q.y);
+    float Hue = abs((Q.w - Q.y) / (6.0 * Chroma + 1e-10) + Q.z);
+    return vec3(Hue, Chroma, Q.x);
+}
+
+vec3 LinearRGB_2_HSV(vec3 RGB)
+{
+    vec3 HCV = RGB_2_HCV(RGB);
+    float Saturation = HCV.y / (HCV.z + 1e-10);
+    return vec3(HCV.x, Saturation, HCV.z);
+}
+
+vec3 HUE_2_LinearRGB(float H)
+{
+    float R = abs(H * 6.0 - 3.0) - 1.0;
+    float G = 2.0 - abs(H * 6.0 - 2.0);
+    float B = 2.0 - abs(H * 6.0 - 4.0);
+    return saturate(vec3(R, G, B));
+}
+
+vec3 HSV_2_LinearRGB(vec3 HSV)
+{
+    vec3 RGB = HUE_2_LinearRGB(HSV.x);
+    return ((RGB - 1.0) * HSV.y + 1.0) * HSV.z;
+}
+
+/// The extinction, per metre, the subsurface shadow gives the material in front of a receiver: opacity 0.5 keeps
+/// 71% of the light through 10 cm and almost none through a metre.
+float SubsurfaceDensityFromOpacity(float Opacity)
+{
+    return -5.0 * log(1.0 - min(Opacity, 0.99));
+}
+
+/// The colour light takes on through thick material: the subsurface colour read as a transmittance over
+/// SUBSURFACE_COLOR_TRANSMITTANCE_DISTANCE and extended to one metre gives the hue and saturation
+/// (Beer-Lambert), the subsurface colour keeps its HSV value.
+vec3 SubsurfaceTransmittedColor(vec3 SubsurfaceColor)
+{
+    vec3 Extinction = -log(clamp(SubsurfaceColor, vec3_splat(PARTICIPATING_MEDIA_MIN_TRANSMITTANCE), vec3_splat(1.0)))
+                    / max(PARTICIPATING_MEDIA_MIN_MFP_METER, SUBSURFACE_COLOR_TRANSMITTANCE_DISTANCE);
+    vec3 RawTransmittedColor = exp(-Extinction);
+    return HSV_2_LinearRGB(vec3(LinearRGB_2_HSV(RawTransmittedColor).xy, LinearRGB_2_HSV(SubsurfaceColor).z));
+}
+
+/// Subsurface transmission, without the light's colour, falloff and transmission shadow (the caller
+/// applies them). Transmittance is the shadow map's subsurface transmittance: 1 where the light crossed little
+/// material (the plain subsurface colour), toward 0 through thick material (the transmitted colour's hue).
+vec3 SubsurfaceShading(vec3 SubsurfaceColor, float Opacity, float AO, vec3 L, vec3 V, vec3 N, float Transmittance)
+{
+    // Seeing the light through the material: a narrow view-dependent lobe, strongest for thin (low opacity)
+    // material. Not clamped: past 1 it lifts the term above the back-scatter.
+    float InScatter = pow(saturate(dot(L, -V)), 12.0) * mix(3.0, 0.1, Opacity);
+    // Wrapped diffuse (w = 0.5, n = 1.5); opacity 0 removes the normal dependence, 1 gives it in full.
+    float WrappedDiffuse = pow(saturate(dot(N, L) * (1.0 / 1.5) + (0.5 / 1.5)), 1.5) * (2.5 / 1.5);
+    float NormalContribution = mix(1.0, WrappedDiffuse, Opacity);
+    // / (2 PI): the scattered light leaves over the whole sphere.
+    float BackScatter = AO * NormalContribution / (PI * 2.0);
+    vec3 TransmittedColor = SubsurfaceTransmittedColor(SubsurfaceColor);
+    return mix(TransmittedColor, SubsurfaceColor, Transmittance) * mix(BackScatter, 1.0, InScatter);
 }
 
 vec3 SubsurfaceShadingTwoSided( vec3 SubsurfaceColor, vec3 L, vec3 V, vec3 N )
 {
-    // http://blog.stevemcauley.com/2011/12/03/energy-conserving-wrapped-diffuse/
+    // Energy-conserving wrapped diffuse on the back face: (N.L + w) / (1 + w)^2.
     float Wrap = 0.5f;
     float NoL = saturate( ( dot(-N, L) + Wrap ) / Square( 1.0f + Wrap ) );
 
@@ -1833,7 +1857,7 @@ vec3 SubsurfaceShadingTwoSided( vec3 SubsurfaceColor, vec3 L, vec3 V, vec3 N )
 
 #define REFLECTION_CAPTURE_ROUGHEST_MIP 1.0
 #define REFLECTION_CAPTURE_ROUGHNESS_MIP_SCALE 1.2
-// UE calibration: roughness<->mip mapping uses a fixed reference mip count, not the
+// Roughness<->mip mapping uses a fixed reference mip count, not the
 // texture's actual mip count. Higher-resolution cubemaps only provide sharper mip 0.
 #define REFLECTION_CAPTURE_REFERENCE_MIPS 7.0
 

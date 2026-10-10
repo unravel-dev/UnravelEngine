@@ -2,10 +2,9 @@
 #define __LUMEN_HISTORY_SH__
 
 /*
- * The per-pixel history of the Lumen gather's temporal (UE 5.8 LumenScreenProbeGatherTemporal.usf:288-583,
- * history validity from StochasticLightingTileClassification.usf:884-1085): last frame's result at a
- * point's reprojection, over the 2x2 bilinear taps whose stored depth agrees with the reprojected depth.
- * The diffuse and the rough specular histories share the taps, as UE's temporal reprojects both with one
+ * The per-pixel history of the GI gather's temporal filter: last frame's result at a point's reprojection, over
+ * the 2x2 bilinear taps whose stored depth agrees with the reprojected depth.
+ * The diffuse and the rough specular histories share the taps: the temporal filter reprojects both with one
  * set of weights. A surface the velocity buffer marks as moving reprojects from where it was last frame
  * (lumen_motion.sh), so its history follows it and its depth test holds.
  *
@@ -97,7 +96,7 @@ struct LumenHistorySample
 	/// rgb = the result corrected into this frame's pre-exposure, a = the frame count it continues (0 when no tap is
 	/// valid).
 	vec4 color_frames;
-	/// The fast update amount it carries (UE FastUpdateModeHistoryValue); 0 when no tap is valid.
+	/// The fast update amount it carries; 0 when no tap is valid.
 	float fast_update;
 };
 

@@ -7,18 +7,16 @@
  * was fired and at what density). Two copies of this maths would drift silently and the
  * resolve's weights would then describe a lobe nobody sampled - hence one header.
  *
- * SAMPLER: visible-normal GGX in the bounded spherical-cap form - the cap parameterisation
- * is Dupuy & Benyoub (HPG 2023) and the `k` bound is Eto & Tokuyoshi (Siggraph Asia 2023),
- * which is what UE 5.8 ships (MonteCarlo.ush:386-471, GGX_BOUNDED_VNDF_SAMPLING on by
- * default). `k` shrinks the sampled cap so a half-vector whose REFLECTION would fall below
- * the horizon is never drawn. The Heitz 2018 disk form has no such bound: at grazing angles
- * it produces below-horizon reflections that a caller can only discard for the mirror
- * direction, which piles probability mass on a single direction and biases exactly the
- * geometry where reflections matter most (floors, wet ground). The cap form is also
- * CHEAPER - one lerp, one sqrt, one sincos, against the disk remap plus its `s` blend.
+ * SAMPLER: visible-normal GGX in the bounded spherical-cap form. `k` shrinks the sampled
+ * cap so a half-vector whose REFLECTION would fall below the horizon is never drawn. The
+ * disk form of visible-normal sampling has no such bound: at grazing angles it produces
+ * below-horizon reflections that a caller can only discard for the mirror direction,
+ * which piles probability mass on a single direction and biases exactly the geometry
+ * where reflections matter most (floors, wet ground). The cap form is also CHEAPER - one
+ * lerp, one sqrt, one sincos, against the disk remap plus its `s` blend.
  *
  * NOISE CONVENTION: u1 drives the azimuth, u2 the polar extent (u2 = 0 is the specular
- * peak), matching UE's E.x / E.y so a Lumen-style sampling bias on u2 stays portable.
+ * peak), so a sampling bias applied to u2 alone acts on the polar extent only.
  *
  * shaderc: NO `out` parameters in this file. They miscompile silently on the HLSL path -
  * everything returns by value, structs included.
@@ -64,9 +62,8 @@ vec3 GiReflectionToWorld(GiReflectionBasis basis, vec3 v)
 	return basis.tangent * v.x + basis.bitangent * v.y + basis.normal * v.z;
 }
 
-/// The spherical-cap bound (Eto & Tokuyoshi 2023, eq. 5). k = 1 restores the unbounded
-/// Dupuy & Benyoub cap; the sampler and the density below must use the SAME k or the
-/// resolve's weights are wrong.
+/// The spherical-cap bound k. k = 1 restores the unbounded spherical cap; the sampler and
+/// the density below must use the SAME k or the resolve's weights are wrong.
 float GiReflectionVndfCapBound(vec3 view_ts, float alpha)
 {
 	float a2 = alpha * alpha;
@@ -110,8 +107,8 @@ float GiReflectionVndfPdf(vec3 view_ts, vec3 half_ts, float alpha)
 
 /// BRDF-over-pdf weight of a sample that arrives along `direction` at a surface whose lobe
 /// is (normal, alpha), given the density `pdf` the sample was actually drawn from. This is
-/// Lumen's resolve weight (LumenReflectionResolve.usf:58-71): it is what turns the
-/// pre-temporal 3x3 from a blur into a reuse of neighbouring rays under this pixel's lobe.
+/// the resolve weight: it is what turns the pre-temporal 3x3 from a blur into a reuse of
+/// neighbouring rays under this pixel's lobe.
 float GiReflectionSampleWeight(vec3 normal, vec3 view, float alpha, vec3 direction, float pdf)
 {
 	vec3 half_vector = view + direction;

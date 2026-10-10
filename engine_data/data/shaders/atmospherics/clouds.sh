@@ -85,7 +85,7 @@ uniform vec4 u_cloudCamera;
 #define CLOUD_HG_BACK              -0.15
 #define CLOUD_HG_BLEND              0.65
 
-// Multiple scattering approximation (Wrenninge 2013, used by Frostbite / UE): octave i scales
+// Multiple scattering approximation (a sum of attenuated scattering octaves): octave i scales
 // extinction by a^i, contribution by b^i and phase eccentricity by c^i. Cloud droplets have
 // albedo ~0.99, so the higher octaves carry a lot of energy: a strong contribution factor and
 // a fast-decaying extinction are what make thick clouds white instead of grey.
@@ -219,7 +219,7 @@ float cloud_height_gradient(float height_fraction)
     return bottom * top;
 }
 
-// Interleaved Gradient Noise (Jimenez 2014): per-pixel jitter that averages out under
+// Interleaved Gradient Noise: per-pixel jitter that averages out under
 // temporal accumulation.
 float cloud_interleaved_gradient_noise(vec2 pixel)
 {

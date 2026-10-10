@@ -8,8 +8,7 @@ namespace unravel
 {
 
 /**
- * @brief Global illumination settings: Lumen's post-process settings (UE 5.8 FPostProcessSettings), one group per
- *        stage. Distances are in metres.
+ * @brief Global illumination settings: the GI's post-process settings, one group per stage. Distances are in metres.
  *
  * Authored on gi_component and blended across post-process volumes by gi_component::merge_into.
  */
@@ -18,72 +17,71 @@ struct gi_settings
     /// The screen probe gather: indirect diffuse lighting, and the rough reflections read from its probes.
     struct diffuse_settings
     {
-        /// Scale of the gathered indirect lighting (UE IndirectLightingIntensity). 1 is physically based.
+        /// Scale of the gathered indirect lighting. 1 is physically based.
         float intensity = 1.0f;
-        /// Scale of the final gather's quality (UE LumenFinalGatherQuality): the rays each screen probe traces
+        /// Scale of the final gather's quality: the rays each screen probe traces
         /// (lumen_pass::get_probe_trace_resolution), the full-resolution jitter and the probe spacing.
         float quality = 1.0f;
-        /// Rays march the depth buffer before the distance field (UE LumenFinalGatherScreenTraces).
+        /// Rays march the depth buffer before the distance field.
         bool screen_traces = true;
-        /// How fast lighting changes reach the gather (UE LumenFinalGatherLightingUpdateSpeed): the temporal
-        /// accumulates fewer frames and the radiance cache re-traces more probes per frame as it rises.
+        /// How fast lighting changes reach the gather: the temporal accumulates fewer frames and the radiance cache
+        /// re-traces more probes per frame as it rises.
         float update_speed = 1.0f;
-        /// The farthest any Lumen ray travels, diffuse and reflection (UE LumenMaxTraceDistance).
+        /// The farthest any GI ray travels, diffuse and reflection.
         float max_trace_distance = gi::lumen::LUMEN_MAX_TRACE_DISTANCE;
 
         auto operator==(const diffuse_settings&) const -> bool = default;
     };
 
-    /// Lumen reflections: one traced ray per smooth pixel, the rough ones read from the gather's probes.
+    /// GI reflections: one traced ray per smooth pixel, the rough ones read from the gather's probes.
     struct reflection_settings
     {
-        /// Lumen owns the view's reflections; off leaves them to the screen-space reflections and the probes.
+        /// The GI owns the view's reflections; off leaves them to the screen-space reflections and the probes.
         bool enabled = true;
-        /// Scale of the reflections' quality (UE LumenReflectionQuality): the rays the resolve reuses per pixel, and
-        /// one traced pixel in four at the lowest quality (lumen_pass::get_reflection_downsample_factor).
+        /// Scale of the reflections' quality: the rays the resolve reuses per pixel, and one traced pixel in four at
+        /// the lowest quality (lumen_pass::get_reflection_downsample_factor).
         float quality = 1.0f;
-        /// Rays march the depth buffer before the distance field (UE LumenReflectionsScreenTraces).
+        /// Rays march the depth buffer before the distance field.
         bool screen_traces = true;
-        /// Pixels below this roughness trace a ray (UE LumenMaxRoughnessToTraceReflections).
+        /// Pixels below this roughness trace a ray.
         float max_roughness_to_trace = gi::lumen::LUMEN_MAX_ROUGHNESS_TO_TRACE;
 
         auto operator==(const reflection_settings&) const -> bool = default;
     };
 
-    /// Lumen's short-range ambient occlusion: the contact detail below the probe spacing.
+    /// The GI's short-range ambient occlusion: the contact detail below the probe spacing.
     struct ambient_occlusion_settings
     {
-        /// Lumen views apply the short-range AO in place of the screen-space AO.
+        /// Views with GI apply the short-range AO in place of the screen-space AO.
         bool enabled = true;
-        /// Strength of the occlusion (UE LumenAmbientOcclusionIntensity): 0 none, 1 full.
+        /// Strength of the occlusion: 0 none, 1 full.
         float intensity = 1.0f;
 
         auto operator==(const ambient_occlusion_settings&) const -> bool = default;
     };
 
-    /// The Lumen scene: the surface cache of cards every distance-field hit reads its lighting from.
+    /// The GI scene: the surface cache of cards every distance-field hit reads its lighting from.
     struct scene_settings
     {
-        /// Scale of the surface cache lighting's quality (UE LumenSceneLightingQuality): the rays and the spacing of
-        /// the radiosity probes (lumen_pass::get_radiosity_layout).
+        /// Scale of the surface cache lighting's quality: the rays and the spacing of the radiosity probes
+        /// (lumen_pass::get_radiosity_layout).
         float lighting_quality = 1.0f;
-        /// Scale of the size of the objects the scene keeps (UE LumenSceneDetail): the cards' minimum resolution and
-        /// the smallest object the global distance field composes.
+        /// Scale of the size of the objects the scene keeps: the cards' minimum resolution and the smallest object
+        /// the global distance field composes.
         float detail = 1.0f;
-        /// How far the Lumen scene reaches (UE LumenSceneViewDistance, 20000 cm by default). UE adds global distance
-        /// field levels beyond 200 m and keeps cards out to the last level; our distance field has a fixed 200 m
-        /// reach, so the cards always cover it and smaller values change nothing.
+        /// How far the GI scene reaches. The cards are kept out to the global distance field's fixed 200 m reach,
+        /// so they always cover it and smaller values change nothing.
         float view_distance = 200.0f;
-        /// How fast lighting changes reach the cards (UE LumenSceneLightingUpdateSpeed): the share of the atlas
-        /// the direct lighting and the radiosity relight per frame.
+        /// How fast lighting changes reach the cards: the share of the atlas the direct lighting and the radiosity
+        /// relight per frame.
         float lighting_update_speed = 1.0f;
-        /// Scale of the cards' texel density and resolution limits (UE LumenSurfaceCacheResolution).
+        /// Scale of the cards' texel density and resolution limits.
         float surface_cache_resolution = 1.0f;
 
         auto operator==(const scene_settings&) const -> bool = default;
     };
 
-    /// The global distance field Lumen traces beyond the screen.
+    /// The global distance field the GI traces beyond the screen.
     struct distance_field_settings
     {
         /// Clipmap levels rebuilt per frame at most, finest first.

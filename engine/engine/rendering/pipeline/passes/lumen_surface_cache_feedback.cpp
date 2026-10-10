@@ -23,12 +23,11 @@ constexpr uint32_t level_shift = 20u;
 constexpr uint32_t u_shift = 24u;
 constexpr uint32_t v_shift = 28u;
 constexpr uint32_t nibble = 0xFu;
-/// log2 of the feedback tile's side (UE r.LumenScene.SurfaceCache.Feedback.TileSize 16): the jitter covers its
-/// 2^(2 x this) texels.
+/// log2 of the feedback tile's side (16 texels): the jitter covers its 2^(2 x this) texels.
 constexpr uint32_t tile_size_log2 = 4u;
 constexpr uint32_t bits_per_uint = 32u;
 
-/// UE ReverseMortonCode2: the even bits of @p x packed together.
+/// Decodes one axis of a 2D Morton code: the even bits of @p x packed together.
 auto reverse_morton_code2(uint32_t x) -> uint32_t
 {
     x &= 0x55555555u;

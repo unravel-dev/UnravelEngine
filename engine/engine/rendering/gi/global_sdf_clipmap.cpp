@@ -539,9 +539,9 @@ auto global_sdf_clipmap::update(const std::vector<global_sdf_instance>& instance
     // it permanently first in line and the coarse levels never rebuild at all, which is
     // indistinguishable from the cascade simply not working at distance.
     //
-    // A level never composed since init is outside the budget, ahead of the others (UE composes every clipmap of a view
-    // whose origins are not initialised, GlobalDistanceField.cpp:1154-1172): a new view's first frame traces the whole
-    // cascade, and the radiance cache's full rebuild on that frame must not see the coarse levels empty.
+    // A level never composed since init is outside the budget, ahead of the others (every level whose origin is not
+    // initialised composes this frame): a new view's first frame traces the whole cascade, and the radiance cache's
+    // full rebuild on that frame must not see the coarse levels empty.
     const auto is_uninitialised = [](const level& lvl) { return lvl.origin.x == std::numeric_limits<float>::max(); };
     const auto needs_full = [&](uint32_t i)
     {

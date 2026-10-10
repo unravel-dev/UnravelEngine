@@ -10,7 +10,7 @@
  * exporter shapes the importer was tuned on, the workflow each is classified as and the slots
  * tried for each engine map, so a heuristic changes only on purpose:
  *   - glTF metallic-roughness, glTF KHR spec-gloss (dual-authored and not), FBX Phong,
- *     Lumberyard Bistro *_BaseColor / *_Specular pairs, CryEngine *_spec packed maps,
+ *     Bistro *_BaseColor / *_Specular pairs, *_spec packed maps,
  *     FBX maps parked in UNKNOWN;
  *   - glTF unlit and KHR_materials_specular materials, 3ds Max glossiness maps;
  *   - double-sided detection, file names made from material / clip names, repeated clip names;

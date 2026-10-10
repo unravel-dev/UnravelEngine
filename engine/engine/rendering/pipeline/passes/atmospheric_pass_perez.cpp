@@ -101,8 +101,7 @@ Color xyzToRgb(const Color& xyz)
     return rgb;
 };
 
-// Precomputed luminance of sunlight in XYZ colorspace.
-// Computed using code from Game Engine Gems, Volume One, chapter 15. Implementation based on Dr. Richard Bird model.
+// Precomputed luminance of sunlight in XYZ colorspace, from the Bird clear-sky model.
 // This table is used for piecewise linear interpolation. Transitions from and to 0.0 at sunset and sunrise are highly
 // inaccurate
 static std::map<float, Color> sunLuminanceXYZTable = {
@@ -122,8 +121,7 @@ static std::map<float, Color> sunLuminanceXYZTable = {
     {20.0f, {0.000000f, 0.000000f, 0.000000f}},
 };
 
-// Precomputed luminance of sky in the zenith point in XYZ colorspace.
-// Computed using code from Game Engine Gems, Volume One, chapter 15. Implementation based on Dr. Richard Bird model.
+// Precomputed luminance of sky in the zenith point in XYZ colorspace, from the Bird clear-sky model.
 // This table is used for piecewise linear interpolation. Day/night transitions are highly inaccurate.
 // The scale of luminance change in Day/night transitions is not preserved.
 // Luminance at night was increased to eliminate need the of HDR render.
@@ -153,8 +151,7 @@ static std::map<float, Color> skyLuminanceXYZTable = {
     {24.0f, bx::mul({0.308f, 0.308f, 0.411f}, 0.0f)},
 };
 
-// Turbidity tables. Taken from:
-// A. J. Preetham, P. Shirley, and B. Smits. A Practical Analytic Model for Daylight. SIGGRAPH '99
+// Turbidity tables of the Preetham daylight model: Perez coefficient = ABCDE_t x turbidity + ABCDE.
 // Coefficients correspond to xyY colorspace.
 static constexpr Color ABCDE[] = {
     {-0.2592f, -0.2608f, -1.4630f},

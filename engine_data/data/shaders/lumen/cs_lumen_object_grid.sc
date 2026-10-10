@@ -1,8 +1,7 @@
 /*
- * Lumen object grid (UE 5.8 GlobalDistanceFieldCompositeObjects.usf CompositeObjectsIntoObjectGridPagesCS:259-367):
- * for every cell of one global SDF clipmap level (2 x 2 x 2 voxels), the four GI instances whose surfaces are
- * nearest the cell centre within reach, nearest first. A global-SDF hit cannot name the mesh it hit; the
- * surface cache shades it through these instances' cards.
+ * The GI object grid: for every cell of one global SDF clipmap level (2 x 2 x 2 voxels), the four GI instances
+ * whose surfaces are nearest the cell centre within reach, nearest first. A global-SDF hit cannot name the mesh it
+ * hit; the surface cache shades it through these instances' cards.
  *
  * One thread per cell. Candidates come from the tracer's instance grid over the cells within reach, the same
  * walk the clipmap compose makes; distances are to the zero-thickness sheet of two-sided fields, as the
@@ -96,8 +95,8 @@ void main()
 							continue;
 						}
 						SdfInstance inst = SdfLoadInstance(index);
-						// The objects the cascade composes at this level (cells are 2 x 2 x 2 voxels): UE builds both
-						// from one culled object list.
+						// Only the objects the cascade composes at this level (cells are 2 x 2 x 2 voxels), so the grid
+						// lists the same objects the field holds.
 						if(!SdfLumenCascadeKeepsInstance(inst,
 						                                 0.5 * cell_size,
 						                                 LUMEN_GLOBAL_SDF_MIN_OBJECT_RADIUS * u_lumen_object_grid_origin.w,

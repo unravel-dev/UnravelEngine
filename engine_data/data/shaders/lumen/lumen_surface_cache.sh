@@ -2,20 +2,19 @@
 #define __LUMEN_SURFACE_CACHE_SH__
 
 /*
- * Lumen's surface cache, sampling side: UE 5.8 ComputeSurfaceCacheSample, SampleLumenCard and
- * SampleLumenMeshCards (SurfaceCache/LumenSurfaceCacheSampling.ush:99-437), over the scene table
+ * The surface cache, sampling side: a hit's cards, their page tables and atlas footprints, over the scene table
  * lumen_scene packs (engine/engine/rendering/gi/lumen_scene.h) into one buffer, b_lumen_scene:
  *  - cards from 0, 6 vec4 each: origin + page-table offset, axis_x + extent x, axis_y + extent y,
  *    axis_z + extent z, (size in pages x, y, res level x, y) - res level 0 = not resident, and the reflections'
  *    page table (offset, size in pages x, y, 1 when it is the card's hi-res mip's): an includer that defines
- *    LUMEN_SURFACE_CACHE_HI_RES samples through it (UE bHiResSurface), whose unmapped pages point at the locked pages
+ *    LUMEN_SURFACE_CACHE_HI_RES samples through it, whose unmapped pages point at the locked pages
  *    covering them;
  *  - the page table from u_lumen_surface_cache.y, 1 vec4 per virtual page: (atlas bias x, y in texels,
  *    res level x, y) - 0 = unmapped;
  *  - per GI instance from u_lumen_surface_cache.z: (first card, card count, two-sided, how far it moved since last
  *    frame at most, in world units).
- * Cards are world-space boxes (the placement applied on the CPU), so the mesh-space axis masks of UE
- * become a facing test against each card's world axis_z with the same squared-cosine weight.
+ * Cards are world-space boxes (the placement applied on the CPU), so a hit picks its cards by a facing test
+ * against each card's world axis_z and weights them by the squared cosine.
  *
  * The final lighting atlas carries the card depth in alpha (0 at the card front, 1 = uncovered), so a
  * sampler needs two bindings. The includer declares b_lumen_scene (BUFFER_RO vec4) and
@@ -31,7 +30,7 @@ uniform vec4 u_lumen_surface_cache;
 #define LUMEN_PHYSICAL_PAGE_SIZE 128.0
 #define LUMEN_SUB_ALLOCATION_RES_LEVEL 7.0
 #define LUMEN_CARD_STRIDE 6
-/// SampleLumenMeshCards: two-sided placements sample with 50 cm more bias.
+/// Two-sided placements sample their cards with 50 cm more bias.
 #define LUMEN_TWO_SIDED_SURFACE_CACHE_BIAS 0.5
 
 struct LumenCard
@@ -117,7 +116,7 @@ struct LumenCardSample
 	vec2 card_uv;
 };
 
-/// ComputeSurfaceCacheSample: card-local xy -> page -> physical atlas footprint.
+/// Card-local xy -> page -> physical atlas footprint.
 LumenCardSample LumenComputeCardSample(LumenCard card, vec2 local_xy)
 {
 	LumenCardSample result;
@@ -174,7 +173,7 @@ float LumenCardTexelVisibility(float texel_depth, float hit_depth, float thresho
 
 #ifndef LUMEN_SURFACE_CACHE_TABLES_ONLY
 
-/// One card at a hit before its value is read (UE SampleLumenCard up to the fetch): the atlas footprint, its weights
+/// One card at a hit before its value is read (LumenSampleCard up to the fetch): the atlas footprint, its weights
 /// times the depth test, their sum, the hit's weight on the card (squared facing x the sum; 0 when the card does not
 /// see the hit) and the card's largest half extent across its face.
 struct LumenCardHit
@@ -284,8 +283,8 @@ vec4 LumenSampleCard(int card_index, vec3 position, vec3 normal, float bias, sam
 	return vec4(value * sample_weight, sample_weight);
 }
 
-/// SampleLumenMeshCards over a GI instance's cards: rgb = weighted sum, a = weight sum (0 = no card
-/// covers the hit, which Lumen shades black).
+/// The surface cache at a hit over a GI instance's cards: rgb = weighted sum, a = weight sum (0 = no card
+/// covers the hit, which callers shade black).
 vec4 LumenSampleInstanceCards(int instance, vec3 position, vec3 normal, float bias, sampler2D values)
 {
 	vec4 accumulated = vec4_splat(0.0);
@@ -304,23 +303,21 @@ vec4 LumenSampleInstanceCards(int instance, vec3 position, vec3 normal, float bi
 #ifdef LUMEN_SURFACE_CACHE_OBJECT_GRID
 
 /*
- * Global-SDF hits through the object grid (UE 5.8 EvaluateGlobalDistanceFieldHit, LumenSoftwareRayTracing.ush:
- * 637-763): the grid cell one voxel extent off the surface lists up to four nearby instances, nearest first;
- * their cards are sampled with a 3 voxel extent depth tolerance until the accumulated weight reaches 0.9. The
- * includer declares s_lumen_object_grid (SAMPLER3D, rgba16 unorm ids + 1 over LUMEN_OBJECT_GRID_MAX_ID) and binds the
- * two uniforms below.
+ * Global-SDF hits through the object grid: the grid cell one voxel extent off the surface lists up to four nearby
+ * instances, nearest first; their cards are sampled with a 3 voxel extent depth tolerance until the accumulated
+ * weight reaches 0.9. The includer declares s_lumen_object_grid (SAMPLER3D, rgba16 unorm ids + 1 over
+ * LUMEN_OBJECT_GRID_MAX_ID) and binds the two uniforms below.
  */
 
 /// Per clipmap level: xyz = the grid's origin, w = its cell size (0 = no grid for the level).
 uniform vec4 u_lumen_object_grid_levels[4];
-/// x = cells per axis, y = scale of LUMEN_GLOBAL_SDF_SURFACE_CACHE_BIAS (1 = UE's rule on this layout).
+/// x = cells per axis, y = scale of LUMEN_GLOBAL_SDF_SURFACE_CACHE_BIAS (1 = the nominal bias).
 uniform vec4 u_lumen_object_grid_params;
 
 #define LUMEN_OBJECT_GRID_LEVELS 4
-/// SampleLumenMeshCards stops once the accumulated weight reaches this.
+/// A global-SDF hit samples no further instances once the accumulated weight reaches this.
 #define LUMEN_OBJECT_GRID_WEIGHT_DONE 0.9
-/// The card sampling bias of global-SDF hits, in voxel extents of the hit level (UE
-/// DISTANCE_FIELD_OBJECT_GRID_CARD_INTERPOLATION_RANGE_IN_VOXELS).
+/// The card sampling bias of global-SDF hits, in voxel extents of the hit level.
 #define LUMEN_GLOBAL_SDF_SURFACE_CACHE_BIAS 3.0
 
 /// The instance ids (+1, 0 = none) of the finest grid cell containing @p p.
@@ -369,7 +366,7 @@ vec4 LumenSampleGlobalSdfHit(vec3 position, vec3 normal, float voxel_extent, sam
 }
 
 /// How far the instance hit at @p outside (a point just off a global-SDF hit, on the ray's side) moved since last frame
-/// at most: the nearest instance of the object grid cell there (UE's hit velocity of mesh distance-field hits).
+/// at most: that of the nearest instance of the object grid cell there, the hit's motion estimate.
 float LumenGlobalSdfHitMotion(vec3 outside)
 {
 	float id = LumenObjectGridInstances(outside).x;

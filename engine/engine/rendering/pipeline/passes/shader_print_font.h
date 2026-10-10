@@ -7,7 +7,7 @@ namespace unravel::shader_print_font
 {
 
 /*
- * The 8x8 glyphs of shader_print's text (UE's ShaderPrint draws with an 8x8 mini font): the printable ASCII of the
+ * The 8x8 glyphs of shader_print's text: the printable ASCII of the
  * IBM VGA 8x8 font as bgfx carries it in deps/3rdparty/bgfx/bgfx/bgfx/src/charset.h (Copyright 2010-2026 Branimir
  * Karadzic, BSD 2-clause, deps/3rdparty/bgfx/bgfx/bgfx/LICENSE). One byte per row, top row first, the most
  * significant bit the leftmost pixel.

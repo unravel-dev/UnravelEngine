@@ -156,24 +156,28 @@ public:
                         const gfx::frame_buffer::ptr& input,
                         const run_params& rparams) -> gfx::frame_buffer::ptr;
 
-    auto run_tonemapping_pass(gfx::render_view& rview, const gfx::frame_buffer::ptr& input, const gfx::frame_buffer::ptr& output,
-                              const run_params& rparams)
-        -> gfx::frame_buffer::ptr;
+    /// @p scene_before_bloom is the scene @p input was composited from by the bloom (the input
+    /// itself without bloom): local exposure measures and scales it, bloom rides on top.
+    auto run_tonemapping_pass(gfx::render_view& rview,
+                              const gfx::frame_buffer::ptr& input,
+                              const gfx::frame_buffer::ptr& scene_before_bloom,
+                              const gfx::frame_buffer::ptr& output,
+                              const run_params& rparams) -> gfx::frame_buffer::ptr;
     /// The lit image's tone mapping operator, which the debug views that read like the frame go through (none
     /// without HDR).
     static auto get_debug_tonemapping(const run_params& rparams) -> tonemapping_method;
     /// The G-buffer visualiser's views; the indirect diffuse view goes through the lit image's tone mapping
-    /// operator (get_debug_tonemapping) as UE's does.
+    /// operator (get_debug_tonemapping), so it reads like the lit frame.
     void run_debug_visualization_pass(const camera& camera,
                                       gfx::render_view& rview,
                                       const gfx::frame_buffer::ptr& output,
                                       const run_params& rparams);
-    /// Lumen's debug views (lumen_visualize_pass), over the finished image; their labels into debug_view_labels_.
+    /// The GI debug views (lumen_visualize_pass), over the finished image; their labels into debug_view_labels_.
     void run_lumen_visualize_pass(const camera& camera,
                                   gfx::render_view& rview,
                                   const gfx::frame_buffer::ptr& output,
                                   const run_params& rparams);
-    /// UE's ShaderPrint visualizations of Lumen (lumen_visualize_pass::draw_overlays) over the finished image,
+    /// The GI overlays (lumen_visualize_pass::draw_overlays: lines and shader_print text) over the finished image,
     /// whatever the debug view.
     void run_lumen_visualize_overlays(const camera& camera,
                                       gfx::render_view& rview,
@@ -188,11 +192,12 @@ public:
     static constexpr int debug_pass_velocity = 29;
     /// The screen-space AO bent normal, through the G-buffer visualization program.
     static constexpr int debug_pass_ao_bent_normals = 31;
-    /// Auto exposure's own state, drawn as a blended panel OVER the finished image (UE's
-    /// Visualize HDR): an overlay, not a replacement image.
+    /// Auto exposure's own state, drawn as a blended panel OVER the finished image
+    /// (fs_exposure_debug.sc): an overlay, not a replacement image.
     static constexpr int debug_pass_exposure = 41;
-    /// Lumen's debug views, ids debug_pass_lumen_scene + lumen_visualize_pass::view (lumen_visualize_pass): UE's
-    /// r.Lumen.Visualize modes, the physical card atlas, the card coverage and the object grid.
+    /// The GI debug views, ids debug_pass_lumen_scene + lumen_visualize_pass::view (lumen_visualize_pass): the
+    /// scene, lighting and update views, the physical card atlas, the card coverage, the object grid, the screen-space
+    /// views and the two overviews.
     static constexpr int debug_pass_lumen_scene = 42;
     static constexpr int debug_pass_lumen_card_atlas = 43;
     static constexpr int debug_pass_lumen_card_coverage = 44;
@@ -216,7 +221,7 @@ public:
     void run_exposure_debug_pass(gfx::render_view& rview,
                                  const gfx::frame_buffer::ptr& output,
                                  const run_params& rparams);
-    /// Lumen surface cache for this frame under the view's @p scene_settings: card placement and resolution,
+    /// The surface cache for this frame under the view's @p scene_settings: card placement and resolution,
     /// captures rasterized with the G-buffer program (one orthographic view per page), copied into the physical
     /// atlases, then lit (direct lighting and the final combine).
     void run_lumen_surface_cache(const camera& camera,
@@ -233,19 +238,19 @@ public:
     /// frame) and this view's global distance field, snapped around the camera and composed on the GPU.
     void run_gi_scene_passes(scene& scn, const camera& camera, gfx::render_view& rview, const run_params& params);
 
-    /// Whether Lumen's reflections own this view's reflection buffers: a camera run with the probe stack and
-    /// float buffers and GI with its reflections enabled. SSR and the reflection probes then step aside (UE
-    /// composites no other specular under Lumen's).
+    /// Whether the GI reflections own this view's reflection buffers: a camera run with the probe stack and
+    /// float buffers and GI with its reflections enabled. SSR and the reflection probes then step aside (no
+    /// other specular composites under the GI's).
     auto lumen_reflections_own_view(const run_params& rparams) -> bool;
-    /// True when Lumen's short-range AO is enabled in this view: it replaces the screen-space AO at any intensity
-    /// (UE applies no SSAO under Lumen GI, r.Lumen.DiffuseIndirect.SSAO 0).
+    /// True when the GI's short-range AO is enabled in this view: it replaces the screen-space AO at any intensity
+    /// (the screen-space AO never stacks on the GI's).
     auto lumen_short_range_ao_owns_view(const run_params& rparams) -> bool;
 
-    /// Lumen's reflections into RBUFFER and PBUFFER after the Lumen gather of @p gather_params; true when they wrote
-    /// both, every pixel.
+    /// The GI reflections into RBUFFER and PBUFFER after the screen probe gather of @p gather_params; true when they
+    /// wrote both, every pixel.
     auto run_lumen_reflection_pass(gfx::render_view& rview, const lumen_run_params& gather_params) -> bool;
 
-    /// Lumen GI for a camera run that asks for it: the surface cache, the screen probe gather (published as
+    /// GI for a camera run that asks for it: the surface cache, the screen probe gather (published as
     /// GI_RESOLVE, its rough specular as GI_ROUGH_SPECULAR) and the reflections.
     /// @return true when the gather produced a result, which also means it needs PREV_DEPTH
     ///         snapshotted this frame for its temporal accumulation.
@@ -255,7 +260,7 @@ public:
     static constexpr const char* gi_resolve_scale = "GI_RESOLVE_SCALE";
     static auto get_gi_resolve_scale(gfx::render_view& rview) -> float;
 
-    /// This view's inputs to the Lumen passes under @p gi.
+    /// This view's inputs to the GI passes under @p gi.
     auto make_lumen_run_params(const camera& camera, gfx::render_view& rview, const gi_settings& gi)
         -> lumen_run_params;
 
@@ -651,8 +656,8 @@ private:
 public:
 
 private:
-    /// The screen-space AO the lighting combines with the material AO: Lumen's short-range AO in
-    /// Lumen views, else GTAO's texture, or ASSAO's when GTAO is off (visibility in alpha either
+    /// The screen-space AO the lighting combines with the material AO: the GI's short-range AO in
+    /// GI views, else GTAO's texture, or ASSAO's when GTAO is off (visibility in alpha either
     /// way), white when none ran.
     struct screen_ao_inputs
     {
@@ -660,14 +665,14 @@ private:
         /// u_screen_ao: x = intensity, y = bent normal strength (GTAO only), z = multi-bounce of
         /// the screen term (GTAO's setting, on otherwise), w = 1 when the texture carries a bent normal.
         std::array<float, 4> params{};
-        /// Cap of the albedo the multi-bounce fit uses (UE's MaxMultibounceAlbedo for the short-range
-        /// AO); 0 leaves it uncapped.
+        /// Cap of the albedo the multi-bounce fit uses (LUMEN_SHORT_RANGE_AO_MAX_MULTIBOUNCE_ALBEDO for the
+        /// short-range AO); 0 leaves it uncapped.
         float multi_bounce_albedo_cap = 0.0f;
     };
     auto get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_inputs;
 
     /// The untraced reflection layer the lighting and the reflection debug views read: the GI's rough specular
-    /// history where Lumen's reflections wrote this run (they composite nothing else under their traced layer),
+    /// history where the GI reflections wrote this run (they composite nothing else under their traced layer),
     /// else @p pbuffer as the probe pass drew it.
     struct probe_layer_inputs
     {
@@ -682,7 +687,7 @@ private:
     void snapshot_prev_depth(gfx::render_view& rview, const usize32_t& viewport_size);
 
     /// After TAA; copies the SCENE-REFERRED linear HDR target into @c PREV_SCENE_HDR for
-    /// next frame's SSR trace and Lumen screen traces. Deliberately pre-bloom/tonemap/UI:
+    /// next frame's SSR trace and the GI screen traces. Deliberately pre-bloom/tonemap/UI:
     /// display-encoded values fed back into linear lighting would, with free-floating auto
     /// exposure, form a brightness feedback loop in dark scenes.
     void snapshot_prev_scene_color(gfx::render_view& rview,
@@ -698,7 +703,7 @@ private:
     math::vec3 clipmap_camera_{};
     bool has_frozen_clipmap_camera_{false};
     /**
-     * @brief UE FViewInfo::UpdatePreExposure: this run's scene-color scale. Camera runs with HDR
+     * @brief This run's pre-exposure, the scene-color scale. Camera runs with HDR
      * output use the manual exposure times the adapted exposure the GPU delivered a few frames
      * ago (1 before the first); probe captures and LDR runs render unscaled. The state is kept
      * PER RENDER VIEW (pre_exposure_state::view_key, the previous value for the history
@@ -711,7 +716,7 @@ private:
     /// step bit + a consumer). Set per run in run_pipeline_impl; also excludes movers from
     /// static-mesh batching so their G-buffer depth matches the velocity pass raster (EQUAL).
     bool velocity_run_active_{false};
-    /// Lumen's reflections wrote RBUFFER and PBUFFER in this run (run_lumen_gi_pass), so RBUFFER needs no clear.
+    /// The GI reflections wrote RBUFFER and PBUFFER in this run (run_lumen_gi_pass), so RBUFFER needs no clear.
     bool lumen_reflections_written_{false};
     /// Render frame of the last velocity pass that drew ANY mover (individual or batched),
     /// stamped inside run_velocity_pass's own visibility walk - the CPU-side signal for SSR's

@@ -2,7 +2,7 @@
  * GTAO depth prefilter: converts the G-buffer depth to view-space depth at the AO
  * resolution (mip 0) and builds four coarser mips with the effect's own falloff-weighted
  * filter (GtaoDepthMipFilter). One 8x8 group produces a 16x16 tile of mip 0 and its
- * 8x8 / 4x4 / 2x2 / 1x1 reductions through group-shared memory - the XeGTAO layout.
+ * 8x8 / 4x4 / 2x2 / 1x1 reductions through group-shared memory.
  */
 
 #include "../bgfx_compute.sh"

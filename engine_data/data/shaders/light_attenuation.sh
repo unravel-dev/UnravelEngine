@@ -2,26 +2,25 @@
 #define LIGHT_ATTENUATION_SH_HEADER_GUARD
 
 /*
- * Local light attenuation and emitter geometry (UE 5.8's inverse-squared model), shared by the
+ * Local light attenuation and emitter geometry (an inverse-squared falloff), shared by the
  * per-light deferred passes (fs_pbr_lighting.sh) and the GI surface-cache lighting
  * (gi/gpu_lights.sh), so the direct light and its bounce cannot drift apart.
  *
  * A point or spot light's intensity is luminous intensity: the illuminance it delivers at
  * distance d (world units) is intensity / d^2, cut to zero at its range by a smooth window. The
  * emitter is a capsule - a sphere of a source radius swept along a source length - whose size
- * changes the light's shape, never how much light it emits (UE keeps intensity constant as the
+ * changes the light's shape, never how much light it emits (the intensity stays constant as the
  * source size changes).
  *
  * Only built-ins here: gi/gpu_lights.sh includes this without lighting.sh.
  */
 
-/// Squared distance added to the light distance in the falloff (UE DistBiasSqr: 1 cm^2, in m^2),
+/// Squared distance added to the light distance in the falloff (1 cm^2, in m^2),
 /// so the falloff stays finite at the light.
 #define LOCAL_LIGHT_DISTANCE_BIAS_SQR 0.0001
 
 /**
- * The window that takes a local light to zero at its range (UE's inverse-squared light mask,
- * DeferredLightingCommon.ush): (1 - (d / range)^4)^2.
+ * The window that takes a local light to zero at its range: (1 - (d / range)^4)^2.
  * @param ToLight Light position minus the shaded position.
  * @param InvRange 1 / range.
  */
@@ -33,7 +32,7 @@ float LocalLightRangeMask(vec3 ToLight, float InvRange)
 }
 
 /**
- * A spot light's cone (UE SpotAttenuation).
+ * A spot light's cone: the squared ramp from the outer to the inner half angle.
  * @param L Unit direction from the shaded position to the light.
  * @param SpotDirection The light's axis (unit).
  * @param SpotAngles (cos outer half angle, 1 / (cos inner half angle - cos outer half angle)).
@@ -44,7 +43,7 @@ float LocalLightSpotMask(vec3 L, vec3 SpotDirection, vec2 SpotAngles)
     return Cone * Cone;
 }
 
-/// A local light's emitter relative to the shaded position (UE FCapsuleLight): a sphere of
+/// A local light's emitter relative to the shaded position: a sphere of
 /// Radius swept along the segment Line0 - Line1. Length 0 is a sphere, Radius 0 too a point.
 struct CapsuleLight
 {
@@ -69,8 +68,7 @@ CapsuleLight MakeCapsuleLight(vec3 ToLight, vec3 Axis, float Radius)
     return Capsule;
 }
 
-/// Diffuse arrival of a capsule's light at a surface (UE LineIrradiance + the diffuse half of
-/// CreateAreaLight).
+/// Diffuse arrival of a capsule's light at a surface: its falloff and the diffuse cosine.
 struct CapsuleIrradiance
 {
     /// Inverse-squared falloff: 1 / (d^2 + bias) for a sphere, the segment's normalized line
@@ -86,7 +84,7 @@ struct CapsuleIrradiance
 };
 
 /**
- * UE SphereHorizonCosWrap (Hermite spline): N.L of a spherical cap of half angle alpha, fairly
+ * N.L of a spherical cap of half angle alpha, wrapped past the horizon by a Hermite spline; fairly
  * accurate while sin(alpha) < 0.8. Zero with zero slope at -sin(alpha), sin(alpha) with slope 1
  * at sin(alpha). @p SinAlphaSqr must be positive.
  */
@@ -102,8 +100,7 @@ float SphereHorizonCosWrap(float NoL, float SinAlphaSqr)
 }
 
 /**
- * The capsule's falloff and diffuse cosine at a surface of normal @p N (UE LineIrradiance and
- * CreateAreaLight, CapsuleLight.ush / CapsuleLightIntegrate.ush).
+ * The capsule's falloff and diffuse cosine at a surface of normal @p N.
  */
 CapsuleIrradiance EvaluateCapsuleIrradiance(CapsuleLight Capsule, vec3 N)
 {

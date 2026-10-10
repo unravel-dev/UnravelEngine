@@ -85,17 +85,13 @@ float luminance(vec3 RGB)
     return 0.2126 * RGB.r + 0.7152 * RGB.g + 0.0722 * RGB.b;
 }
 
-// Reinhard, Hable, Filmic taken from:
-// http://filmicworlds.com/blog/filmic-tonemapping-operators/
-
 // Exponential tone mapping
 vec3 tonemap_exponential(vec3 color)
 {
     return vec3_splat(1.0) - exp(-color);
 }
 
-// Reinhard et al
-// http://www.cs.utah.edu/~reinhard/cdrom/tonemap.pdf
+// Reinhard
 // simple version, desaturates colors
 
 vec3 tonemap_reinhard(vec3 color)
@@ -106,7 +102,6 @@ vec3 tonemap_reinhard(vec3 color)
 // Reinhard, luminance only
 // possibly creates undesirable whites
 // one alternative is to define a pure white point (ideally max luminance in the scene)
-// see original paper and https://imdoingitwrong.wordpress.com/2010/08/19/why-reinhard-desaturates-my-blacks-3/
 
 vec3 tonemap_reinhard_luminance(vec3 color)
 {
@@ -116,15 +111,11 @@ vec3 tonemap_reinhard_luminance(vec3 color)
     return color * (nLum / max(lum, 1e-5));
 }
 
-// Uncharted 2 filmic operator
-// John Hable
-// https://www.gdcvault.com/play/1012351/Uncharted-2-HDR
-// https://www.slideshare.net/ozlael/hable-john-uncharted2-hdr-lighting
+// Hable filmic operator: toe, linear and shoulder segments in one rational curve
 
 vec3 hable_map(vec3 x)
 {
-    // values used are directly from the presentation
-    // comments have the values taken from the website above
+    // a second value in a trailing comment belongs to the alternative parameter set
     const float A = 0.22; // shoulder strength // 0.15
     const float B = 0.30; // linear strength // 0.50
     const float C = 0.10; // linear angle
@@ -137,7 +128,7 @@ vec3 hable_map(vec3 x)
 vec3 tonemap_hable(vec3 color)
 {
     // whiteScale = hable_map(W) with W = 11.2 evaluated with the constants
-    // used in hable_map above (A=0.22, B=0.30, E=0.01). The website variant
+    // used in hable_map above (A=0.22, B=0.30, E=0.01). The alternative set
     // (A=0.15, B=0.50, E=0.02) yields 0.72513 -- using that value with these
     // constants over-brightens by x1.196 and clips whites early.
     const float whiteScale = 0.86730;
@@ -146,8 +137,7 @@ vec3 tonemap_hable(vec3 color)
 }
 
 // Filmic / Hejl-Burgess-Dawson
-// Mimics response curve of Kodak film, Haarm-Pieter Duiker
-// approximation by Hejl/Burgess-Dawson (pow 1/2.2 baked in).
+// Rational fit of a photographic film response curve (pow 1/2.2 baked in).
 // The output is display-encoded; do NOT linearize or re-apply linear_to_srgb.
 vec3 tonemap_filmic(vec3 color)
 {
@@ -156,9 +146,6 @@ vec3 tonemap_filmic(vec3 color)
 }
 
 // Polynomial fit of ACES
-// Stephen Hill
-// Taken from:
-// https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
 vec3 tonemap_aces(vec3 color)
 {
     // sRGB => XYZ => D65_2_D60 => AP1 => RRT_SAT
@@ -176,9 +163,9 @@ vec3 tonemap_aces(vec3 color)
         vec3(-0.07367, -0.00605, 1.07602)
     );
 
-    // The reference (BakingLab/ToneMapping.hlsl) pre-scales input by 1.8 so the
-    // fit matches full ACES brightness. This is internal to ACES, not a remap
-    // onto AgX -- other operators keep their native mid-gray.
+    // The input is pre-scaled by 1.8 so the fit matches full ACES brightness.
+    // This is internal to ACES, not a remap onto AgX -- other operators keep
+    // their native mid-gray.
     color *= 1.8;
     vec3 result = mul(ACESInputMat, color);
 
@@ -204,7 +191,6 @@ float aces_filmic_curve(float x)
 
 // Luminance-preserving ACES fit. The curve is evaluated on luminance,
 // then applied as a scalar to RGB so hue ratios survive the tone map.
-// https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
 vec3 tonemap_aces_luminance(vec3 color)
 {
     float lum = luminance(color);
@@ -213,21 +199,20 @@ vec3 tonemap_aces_luminance(vec3 color)
 }
 
 // Reinhard Extended (with white point)
-// https://github.com/dmnsgn/glsl-tone-map
 vec3 tonemap_reinhard2(vec3 color)
 {
     const float L_white = 4.0;
     return (color * (1.0 + color / (L_white * L_white))) / (1.0 + color);
 }
 
-// Unreal 3, Documentation: "Color Grading"
+// Single rational filmic curve
 // Gamma 2.2 correction is baked in, do not apply linear_to_srgb
 vec3 tonemap_unreal3(vec3 color)
 {
     return color / (color + 0.155) * 1.019;
 }
 
-// Lottes 2016, "Advanced Techniques and Optimization of HDR Color Pipelines"
+// Lottes curve: contrast a, shoulder d, solved so midIn maps to midOut and hdrMax to 1
 vec3 tonemap_lottes(vec3 color)
 {
     vec3 a = vec3_splat(1.6);
@@ -241,7 +226,8 @@ vec3 tonemap_lottes(vec3 color)
 }
 
 
-// Uchimura 2017, "HDR theory and practice"
+// Uchimura curve: toe, linear section and shoulder (P peak, a contrast, m / l linear start / length,
+// c black tightness, b pedestal)
 vec3 tonemap_uchimura(vec3 x, float P, float a, float m, float l, float c, float b)
 {
     float l0 = ((P - m) * l) / a;
@@ -264,10 +250,8 @@ vec3 tonemap_uchimura(vec3 color)
 }
 
 
-// AgX tonemapping (Missing Deadlines / Benjamin Wrensch)
-// https://iolite-engine.com/blog_posts/minimal_agx_implementation
-// https://github.com/sobotka/AgX
-// Matrices from Troy Sobotka's AgX OCIO config
+// AgX tonemapping
+// Polynomial fit of the default AgX contrast sigmoid (log2-encoded input in [0, 1])
 vec3 agx_default_contrast_approx(vec3 x)
 {
     vec3 x2 = x * x;
@@ -345,11 +329,10 @@ vec3 tonemap_agx_punchy(vec3 color)
 }
 
 // ============================================================================
-// FILM: UE 5.8's default SDR tone curve ("Filmic"). FilmToneMap (TonemapCommon.ush) with the
-// default film settings, inside the SDR colour path of PostProcessCombineLUTs.usf: gamut
-// expansion, blue correction, the curve in ACEScg (AP1) and back to Rec.709. UE bakes this into
-// a 32^3 LUT; here it runs per pixel. Neutral grading makes UE's colour correction an identity,
-// so it is left out. The matrices are UE's, composed for the sRGB working colour space.
+// FILM: the default SDR tone curve ("Filmic"): the film curve with the default film settings
+// inside the SDR colour path: gamut expansion, blue correction, the curve in ACEScg (AP1) and
+// back to Rec.709, evaluated per pixel. Neutral grading makes the colour correction an identity,
+// so it is left out. The matrices are composed for the sRGB working colour space.
 // ============================================================================
 #define FILM_SLOPE 0.88
 #define FILM_TOE 0.55
@@ -366,7 +349,7 @@ vec3 film_ap1_luma_weights()
     return vec3(0.2722287168, 0.6740817658, 0.0536895174);
 }
 
-// ACES RRT helpers (ACESCommon.ush).
+// ACES RRT helpers.
 float film_rgb_to_saturation(vec3 rgb)
 {
     float min_rgb = min(min(rgb.r, rgb.g), rgb.b);
@@ -429,7 +412,7 @@ float film_center_hue(float hue, float center)
     return centered;
 }
 
-// FilmToneMap: AP1 in, AP1 out (0.18 maps to 0.18, the shoulder tops out at 1 + white clip).
+// The film curve: AP1 in, AP1 out (0.18 maps to 0.18, the shoulder tops out at 1 + white clip).
 vec3 film_tone_map(vec3 color_ap1)
 {
     CONST(mat3) ap1_to_ap0 = mtxFromRows3(
@@ -628,8 +611,7 @@ vec3 apply_tonemapping(vec3 color, int method, float exposure)
     }
     else if(method == TONEMAP_FILM)
     {
-        // The shoulder reaches 1 + white clip; the display encode clips it, as UE's 8/10-bit
-        // output does after its LUT.
+        // The shoulder reaches 1 + white clip; saturate clips it for the 8/10-bit display encode.
         tonemapped_color = linear_to_srgb(saturate(tonemap_film(color)));
     }
     else

@@ -5,7 +5,7 @@
  * The global SDF clipmap: the cascaded distance field every tracer and every cage reader
  * samples. Its sampler is stage 4 and its uniforms are filled by global_sdf_clipmap_gpu, the
  * single owner. sdf_common.sh includes this for the tracers; a consumer that only needs the
- * cascade (the Lumen global SDF march, lumen_global_sdf.sh) includes this alone and keeps
+ * cascade (the GI global SDF march, lumen_global_sdf.sh) includes this alone and keeps
  * stages 0-3 for its own resources.
  */
 
@@ -31,9 +31,9 @@ SAMPLER3D(s_sdf_clipmap_mip, SDF_CLIPMAP_MIP_STAGE);
 #endif
 
 #ifdef SDF_CLIPMAP_COVERAGE_STAGE
-/// The Lumen coverage of the distance-only clipmap (global_sdf_clipmap_gpu::get_coverage_texture), stacked like the
-/// distance: 0 where only two-sided meshes lie within LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS of a voxel, 1 elsewhere
-/// (UE 5.8 GlobalDistanceFieldCompositeObjects.usf:61-72, 232-238). Texel c holds voxel 2c of its level.
+/// The GI coverage of the distance-only clipmap (global_sdf_clipmap_gpu::get_coverage_texture), stacked like the
+/// distance: 0 where only two-sided meshes lie within LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS of a voxel, 1 elsewhere.
+/// Texel c holds voxel 2c of its level.
 SAMPLER3D(s_sdf_clipmap_coverage, SDF_CLIPMAP_COVERAGE_STAGE);
 #endif
 
@@ -254,8 +254,8 @@ float SdfClipmapLevelExit(int index, vec3 ray_origin, vec3 inverse_direction)
 
 #ifdef SDF_CLIPMAP_MIP_STAGE
 /// Level @p index's coarse mip at a WORLD position the level covers: a world distance that undershoots the level's
-/// own surfaces (UE GlobalDistanceFieldMipTexture). A position whose trilinear taps would leave the level's slab is
-/// read at the nearest safe point, less the distance moved.
+/// own surfaces. A position whose trilinear taps would leave the level's slab is read at the nearest safe point, less
+/// the distance moved.
 float SdfSampleClipmapMip(int index, vec3 world_position)
 {
 	vec4 level = u_sdf_clipmap_levels[index];

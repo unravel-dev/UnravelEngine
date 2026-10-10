@@ -290,7 +290,7 @@ public:
      * @brief Sets the current jitter value for temporal anti-aliasing.
      *
      * @param viewport_size Viewport size (pixels) for scaling jitter into clip space.
-     * The jitter is UE's sequence: Halton(2,3) offsets in [-0.5, 0.5] pixels over a repeating cycle of
+     * The jitter is a Halton(2,3) sequence: offsets in [-0.5, 0.5] pixels over a repeating cycle of
      * @p temporal_aa_samples frames, so every pixel sees the same short, well-spread set of positions.
      *
      * @param temporal_frame_index Frame counter (e.g. render frame) that walks the cycle.

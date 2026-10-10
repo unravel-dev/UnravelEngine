@@ -40,7 +40,7 @@ void skylight_system::update_atmosphere_sun_transmittance(scene& scn)
 {
     scn.registry->view<light_component>().each(
         [&](auto e, auto&& light_comp) { light_comp.set_atmosphere_transmittance(math::vec3(1.0f)); });
-    // UE tints its atmosphere sun light with the sky atmosphere's ground-level transmittance. Here the sun is the
+    // The atmosphere sun light is tinted with the sky atmosphere's ground-level transmittance. The sun is the
     // directional light on the procedural sky's own entity (the light the Perez sky takes its direction from); a
     // cubemap sky has no atmosphere, so its light keeps its own color.
     scn.registry->view<skylight_component, light_component, transform_component, active_component>().each(

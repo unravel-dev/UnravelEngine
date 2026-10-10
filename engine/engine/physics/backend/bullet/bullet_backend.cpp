@@ -554,8 +554,8 @@ auto can_observe_contacts(entt::handle entity) -> bool
  * callbacks reach both participants.
  *
  * A script attached after an overlap has already begun will not receive that overlap's
- * enter, and therefore never its exit either - consistent, and the same rule Unity
- * applies. That is the price of not maintaining state for bodies nobody is watching.
+ * enter, and therefore never its exit either - consistent: enter and exit always pair up.
+ * That is the price of not maintaining state for bodies nobody is watching.
  */
 auto has_contact_listener(entt::handle a, entt::handle b, manifold_type type) -> bool
 {

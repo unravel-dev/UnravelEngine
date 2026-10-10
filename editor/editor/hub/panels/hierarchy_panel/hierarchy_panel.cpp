@@ -69,7 +69,7 @@ constexpr float HIERARCHY_TABLE_NAME_MIN_WIDTH = 12.0f;
 constexpr float HIERARCHY_TABLE_CELL_PADDING_X = 0.25f;
 // Room on either side of the tree arrow.
 constexpr float HIERARCHY_TABLE_ARROW_PADDING_X = 0.2f;
-// Left to right, in Unity's order.
+// The value columns, left to right.
 constexpr std::array<hierarchy_value_column, 3> HIERARCHY_VALUE_COLUMNS{{
     {hierarchy_column::static_flag, "Static", 3.2f},
     {hierarchy_column::layer, "Layer", 5.0f},
@@ -96,7 +96,7 @@ constexpr float HIERARCHY_HIGHLIGHT_ROUNDING = 0.2f;
 constexpr float HIERARCHY_CLEAR_ICON_ALPHA = 0.6f;
 constexpr ImVec4 HIERARCHY_FOCUS_FRAME_COLOR{1.0f, 1.0f, 0.0f, 1.0f};
 
-// A search term after this prefix matches component names only, as in Unity ("t:Light").
+// A search term after this prefix matches component names only ("t:Light").
 constexpr const char* HIERARCHY_COMPONENT_TERM_PREFIX = "t:";
 constexpr const char* HIERARCHY_SEARCH_TOOLTIP = "Finds entities by name and by component.\n"
                                                  "t:Light finds components only, -word leaves names out,\n"

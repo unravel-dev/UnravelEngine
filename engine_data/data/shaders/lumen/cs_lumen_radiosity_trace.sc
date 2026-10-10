@@ -1,11 +1,10 @@
 /*
- * Lumen surface cache radiosity, trace (UE 5.8 LumenRadiosity.usf:81-170): per scheduled card tile, groups of
- * LUMEN_RADIOSITY_GROUP_THREADS over its probes' rays (lumen_radiosity_common.sh), one thread per ray, the group's y
- * the block of the tile's rays. Each ray leaves its probe 5 cm off the surface and along the ray, marches the
- * global SDF from 10 cm to 200 m, and takes the cards' final lighting at the hit through the object grid -
- * faded to zero within two voxel extents of the start (the self-lighting guard) - or the sky on a miss. Rays
- * brighter than MaxRayIntensity are scaled down. That reads the cache as earlier updates left it: each update
- * adds one more bounce.
+ * Surface cache radiosity, trace: per scheduled card tile, groups of LUMEN_RADIOSITY_GROUP_THREADS over its probes'
+ * rays (lumen_radiosity_common.sh), one thread per ray, the group's y the block of the tile's rays. Each ray leaves
+ * its probe 5 cm off the surface and along the ray, marches the global SDF from 10 cm to 200 m, and takes the cards'
+ * final lighting at the hit through the object grid - faded to zero within two voxel extents of the start (the
+ * self-lighting guard) - or the sky on a miss. Rays brighter than the max ray intensity are scaled down. That reads
+ * the cache as earlier updates left it: each update adds one more bounce.
  */
 
 #include "bgfx_compute.sh"

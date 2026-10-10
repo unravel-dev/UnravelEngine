@@ -17,20 +17,19 @@ namespace unravel
 namespace
 {
 
-/// Lumen::MinCardResolution.
+/// The smallest resolution a card is allocated at, in texels.
 constexpr uint32_t k_min_card_resolution = 8;
-/// An emissive light source's minimum visible card resolution (LumenSceneRendering.cpp:737) and the factor on its
-/// minimum face area (LumenMeshCards.cpp:128-132).
+/// An emissive light source's minimum visible card resolution and the factor on its minimum face area.
 constexpr uint32_t k_emissive_min_card_resolution = 1;
 constexpr float k_emissive_min_card_area_scale = 0.2f;
-/// Lumen::NumDistanceBuckets.
+/// The distance bins the card requests are ranked in.
 constexpr uint32_t k_distance_bins = 16;
 /// The viewer distance floor of the resolution rule (100 cm).
 constexpr float k_min_viewer_distance = 1.0f;
-/// UE's floor of a primitive group's distance in the residency gate (1 cm) and the texels added to its projection.
+/// The floor of a placement's distance in its residency gate (1 cm) and the texels added to its projection.
 constexpr float k_min_group_distance = 0.01f;
 constexpr float k_group_resolution_bias = 0.01f;
-/// GetMeshCardDistanceBin: bins start 10 m out, log2 of centimetres.
+/// The distance bins start 10 m out, log2 of centimetres.
 constexpr float k_distance_bin_offset = 10.0f;
 /// A reallocation ranks as if this much farther away than a new card when its level moves by one.
 constexpr float k_realloc_distance_penalty = 25.0f;
@@ -45,18 +44,18 @@ constexpr uint32_t k_lighting_buckets = 16;
 constexpr uint32_t k_skip_bucket = k_lighting_buckets;
 /// The frustum planes the lighting priority tests: left, right, top, bottom and near (not far).
 constexpr uint32_t k_priority_frustum_planes = 5;
-/// The lighting update speed's range (R/LumenSceneLighting.cpp:565).
+/// The lighting update speed's range.
 constexpr float k_min_lighting_update_speed = 0.5f;
 constexpr float k_max_lighting_update_speed = 16.0f;
-/// The surface cache resolution's range (UE FPostProcessSettings::LumenSurfaceCacheResolution).
+/// The surface cache resolution's range.
 constexpr float k_min_surface_cache_resolution = 0.5f;
 constexpr float k_max_surface_cache_resolution = 1.0f;
-/// The scene detail's range for the cards (R/LumenSceneRendering.cpp:2167).
+/// The scene detail's range for the cards.
 constexpr float k_min_scene_detail = 0.125f;
 constexpr float k_max_scene_detail = 8.0f;
-/// The largest minimum card resolution (LumenScene::GetCardMinResolution).
+/// The largest minimum card resolution (get_resolution_rule).
 constexpr uint32_t k_max_card_min_resolution = 1024;
-/// Placements per resolution task (UE r.LumenScene.MeshCardsPerTask is 128 mesh cards).
+/// Placements per resolution task.
 constexpr uint32_t k_placements_per_task = 128;
 /// Resident pages from which a per-page lighting pass runs on the pool: below them the dispatch costs more than the
 /// loop (~0.05 ms). The direct-lighting invalidation tests every change per page, the page speeds walk the viewers and
@@ -65,10 +64,10 @@ constexpr uint32_t k_parallel_invalidation_pages = 1024;
 constexpr uint32_t k_parallel_speed_pages = 4096;
 constexpr uint32_t k_parallel_bucket_pages = 8192;
 /// A hi-res request ranks this much farther than its card, plus as much again scaled by the share of the feedback
-/// samples it did not get (LumenSurfaceCacheFeedback.cpp:362-364).
+/// samples it did not get.
 constexpr float k_hi_res_distance_bias = 25.0f;
 /// Frames a hi-res page stays unasked for before a locked allocation, and before another hi-res page, may take its
-/// place (LumenSceneRendering.cpp:947, 1063: two, and the 16 x 16 feedback tile's pixels).
+/// place: two, and the 16 x 16 feedback tile's pixel count.
 constexpr uint64_t k_hi_res_idle_frames_for_locked = 2;
 constexpr uint64_t k_hi_res_idle_frames_for_hi_res = 256;
 
@@ -310,8 +309,8 @@ auto lumen_scene::apply_settings(const settings& s) -> bool
 
 auto lumen_scene::get_max_card_distance() const -> float
 {
-    // The reach of the global distance field whatever the view distance (UE LumenScene::GetCardMaxDistance): a ray
-    // that hits a surface there must find its cards, or its bounce is black.
+    // The reach of the global distance field whatever the view distance: a ray that hits a surface there must find
+    // its cards, or its bounce is black.
     return settings_.max_card_distance;
 }
 
@@ -330,7 +329,7 @@ auto lumen_scene::get_resolution_rule() const -> resolution_rule
     const float scale = std::clamp(view_settings_.surface_cache_resolution,
                                    k_min_surface_cache_resolution,
                                    k_max_surface_cache_resolution);
-    // UE LumenScene::GetCardMinResolution: the project's minimum over the scene detail, at the cache's resolution.
+    // The minimum card resolution: the project's minimum over the scene detail, at the cache's resolution.
     const float detail = std::clamp(view_settings_.detail, k_min_scene_detail, k_max_scene_detail);
     resolution_rule rule;
     rule.texel_density_scale = settings_.texel_density_scale * scale;
@@ -647,7 +646,7 @@ auto lumen_scene::append_resample_source(const card_state& card, const placed_ca
 {
     const int32_t index = int32_t(resample_cards_.size() / card_stride);
     // The card's box as placed this frame: the resample maps the new pages' card UV onto the previous mip, assuming
-    // the card's extent has not changed (UE ResampleLightingHistoryToCardCaptureAtlasCS).
+    // the card's extent has not changed.
     append_card_record(resample_cards_,
                        placed,
                        uint32_t(resample_pages_.size()),
@@ -934,8 +933,8 @@ void lumen_scene::choose_chunk_resolutions(const std::vector<source>& sources,
                 }
             }
         }
-        // The placement's own gate (UE's primitive-group residency, LumenSceneRendering.cpp:501-514): its largest
-        // extent must project to the minimum card resolution (one texel for an emissive light source) at its distance.
+        // The placement's own residency gate: its largest extent must project to the minimum card resolution (one
+        // texel for an emissive light source) at its distance.
         const float group_distance =
             std::max(nearest_distance_to_box(entry.bounds_center, entry.bounds_extent, viewers), k_min_group_distance);
         const float group_extent = std::max(entry.bounds_extent.x, std::max(entry.bounds_extent.y, entry.bounds_extent.z));
@@ -952,7 +951,7 @@ void lumen_scene::choose_chunk_resolutions(const std::vector<source>& sources,
             const float projected = std::min(rule.texel_density_scale * max_extent / distance,
                                              settings_.max_texel_density * max_extent);
             const uint32_t truncated = std::min(uint32_t(std::max(projected, 0.0f)), rule.max_resolution);
-            // UE RoundUpToPowerOfTwo: 0 rounds up to 1, so a card below one texel stays at the minimum resolution
+            // The power-of-two round up takes 0 to 1, so a card below one texel stays at the minimum resolution
             // wherever its minimum is 1 (an emissive light source, while its placement is in range).
             const uint32_t snapped =
                 truncated == 0 ? (card_residency_without_group_gate_ ? 0u : 1u) : round_up_power_of_two(truncated);
@@ -1053,7 +1052,7 @@ void lumen_scene::set_feedback(const std::vector<feedback_element>& elements,
         }
         card_state& state = it->second.card_states[owner.second];
         const uint32_t level = std::clamp(element.res_level, min_res_level, max_res_level);
-        // Only a page above the locked level (UE: Request.ResLevel > Card.MinAllocatedResLevel).
+        // Only a page above the locked level.
         if(state.res_level == 0 || level <= state.res_level)
         {
             continue;
@@ -1064,7 +1063,7 @@ void lumen_scene::set_feedback(const std::vector<feedback_element>& elements,
             const uint32_t page = get_feedback_page(hi.mip, element.page, level);
             if(hi.is_mapped[page] != 0)
             {
-                // A mapped page the feedback still reads stays (UE UnlockedAllocationHeap.Update).
+                // A mapped page the feedback still reads stays: it counts as used this frame.
                 hi.last_used[page] = frame_;
                 continue;
             }
@@ -1139,7 +1138,7 @@ auto lumen_scene::allocate_hi_res_page(const std::vector<source>& sources, const
     hi.last_used[page] = frame_;
     const source& src = sources[req.source];
     hi_res_pages_.push_back({src.identity, req.card, page});
-    // The page starts from the locked mip's lighting (UE bResampleLastLighting), not dark.
+    // The page starts from the locked mip's lighting, resampled, not dark.
     const int32_t resample_card =
         append_resample_source(state,
                                entry.has_placed && is_same_transform(entry.placed_transform, src.local_to_world)
@@ -1170,7 +1169,7 @@ void lumen_scene::allocate_requests(const std::vector<source>& sources, capture_
                      });
     uint32_t pages_requested = 0;
     std::vector<math::uvec2> capture_offsets;
-    // The hi-res requests within the budget, mapped after every locked one (UE HiResPagesToMap).
+    // The hi-res requests within the budget, mapped after every locked one.
     std::vector<const request*> hi_res;
     for(const auto& req : requests_)
     {
@@ -1380,8 +1379,8 @@ void lumen_scene::build_tables(const std::vector<source>& sources, uint32_t inst
                     ++hi_res_page_count_;
                     continue;
                 }
-                // An unmapped page reads the locked page covering it, in that page's own level (UE's page entries
-                // may point at another mip; LumenSurfaceCacheSampling.ush recomputes the page from the entry).
+                // An unmapped page reads the locked page covering it, in that page's own level: an entry may point
+                // at another mip, and the sampling (lumen_surface_cache.sh) recomputes the page from the entry.
                 const math::uvec2 coord(page % hi_size.x, page / hi_size.x);
                 const math::uvec2 locked_coord = coord * locked_size / hi_size;
                 const auto& locked_slot = state.slots[locked_coord.x + locked_coord.y * locked_size.x];
@@ -1474,7 +1473,7 @@ void lumen_scene::get_visualized_cards(const std::vector<source>& sources,
         const bool is_placed = entry.has_placed && is_same_transform(entry.placed_transform, src.local_to_world);
         for(uint32_t c = 0; c < uint32_t(entry.card_states.size()); ++c)
         {
-            // UE draws the cards that hold an allocation (FLumenCardCullingInfo::bVisible).
+            // Only the cards that hold an allocation are drawn.
             if(entry.card_states[c].res_level == 0)
             {
                 continue;
@@ -1515,8 +1514,7 @@ void lumen_scene::refresh_captures(const std::vector<source>& sources, capture_p
     {
         return;
     }
-    // The refresh's share of the budget: at least one page, and at least one full page of texels
-    // (UE GetCardCaptureRefreshNumPages / GetCardCaptureRefreshNumTexels).
+    // The refresh's share of the budget: at least one page, and at least one full page of texels.
     const uint32_t budget_pages =
         std::clamp(uint32_t(float(settings_.max_captures_per_frame) * fraction), 1u, settings_.max_captures_per_frame);
     const uint32_t pages_left = std::min(budget_pages, settings_.max_captures_per_frame - captured);
@@ -1552,7 +1550,7 @@ void lumen_scene::refresh_captures(const std::vector<source>& sources, capture_p
         {
             break;
         }
-        // The page keeps its lighting: its card's own allocation is the resample source (UE bResampleLastLighting).
+        // The page keeps its lighting: its card's own allocation is the resample source.
         auto resample = std::find_if(refresh_resamples_.begin(),
                                      refresh_resamples_.end(),
                                      [&](const std::pair<uint32_t, int32_t>& entry)

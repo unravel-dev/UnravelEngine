@@ -176,7 +176,7 @@ auto are_in_same_model(entt::registry& registry, entt::handle entity1, entt::han
 }
 
 /**
- * @brief Gets the logical top-level entity following Unity's selection logic.
+ * @brief Gets the logical top-level entity a click on @p entity selects.
  * Walks up the entire parent hierarchy to the root, records depths of markers,
  * then selects based on priority:
  * 1. First priority: Prefab root (prefab_component) - closest to root wins

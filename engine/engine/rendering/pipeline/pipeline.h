@@ -148,8 +148,8 @@ public:
         /// Deferred pipeline only: bitmask of enabled passes (@c deferred::pipeline_steps).
         pipeline_flags pflags = 0xFFFFFFFFu;
 
-        /// The user is editing the scene in this view (a gizmo or a property being dragged in the editor; UE
-        /// FSceneViewFamily::bCurrentlyBeingEdited): GI shortens its histories and traces more of its cache.
+        /// The user is editing the scene in this view (a gizmo or a property being dragged in the editor): GI
+        /// shortens its histories and traces more of its cache.
         bool is_being_edited = false;
 
         /// Forces RGBA16F G/L/R buffers even when @c fill_hdr_params is unset.
@@ -170,7 +170,7 @@ public:
         std::function<void(ssr_pass::run_params& params)> fill_ssr_params;
         std::function<void(ssil_pass::run_params& params)> fill_ssil_params;
         std::function<void(gtao_pass::run_params& params)> fill_gtao_params;
-        /// Global illumination (Lumen). Unset means off, exactly like the hooks above -- the feature runs only
+        /// Global illumination. Unset means off, exactly like the hooks above -- the feature runs only
         /// where a gi_component asks for it.
         std::function<void(gi_settings&)> fill_gi_params;
     };
@@ -247,13 +247,13 @@ public:
 
     virtual void set_debug_pass(int pass) = 0;
 
-    /// UE's world-space Lumen visualizations to draw over the view, whatever the debug pass (the card placement).
+    /// The world-space GI visualizations to draw over the view, whatever the debug pass (the card placement).
     void set_lumen_visualize_settings(const lumen_visualize_pass::world_settings& settings)
     {
         lumen_visualize_settings_ = settings;
     }
 
-    /// Readback scale for the radiance-valued debug views: the indirect-diffuse view (UE's, tone
+    /// Readback scale for the radiance-valued debug views: the indirect-diffuse view (tone
     /// mapped) takes it as an exposure factor ahead of the tone map.
     /// An instrument for the editor's debug-view tooling (viewport_set_debug_view "scale");
     /// 1 = the views as shipped. The lit path never reads it.
@@ -304,7 +304,7 @@ public:
         return stats_;
     }
 
-    /// The text the last frame's debug view puts on the image (UE's visualize labels: the overview tiles' names),
+    /// The text the last frame's debug view puts on the image (the visualize labels: the overview tiles' names),
     /// for the viewport to draw over it.
     auto get_debug_view_labels() const -> const std::vector<debug_view_label>&
     {
@@ -328,11 +328,11 @@ protected:
     gtao_pass gtao_pass_{};
     gi_clipmap_compose_pass gi_clipmap_compose_pass_{}; ///< The global distance field's GPU composition
     temporal_probe_pass temporal_probe_pass_{};
-    lumen_gather_pass lumen_gather_pass_{}; ///< Lumen's screen probe gather: the indirect diffuse
-    lumen_surface_cache_pass lumen_surface_cache_pass_{}; ///< Lumen cards, atlases and captures
-    lumen_reflection_pass lumen_reflection_pass_{}; ///< Lumen's reflections, with the Lumen gather
-    lumen_visualize_pass lumen_visualize_pass_{}; ///< Lumen's debug views
-    shader_print shader_print_{};                 ///< The view's ShaderPrint text
+    lumen_gather_pass lumen_gather_pass_{}; ///< The GI screen probe gather: the indirect diffuse
+    lumen_surface_cache_pass lumen_surface_cache_pass_{}; ///< The surface cache: cards, atlases and captures
+    lumen_reflection_pass lumen_reflection_pass_{}; ///< The GI reflections, with the screen probe gather
+    lumen_visualize_pass lumen_visualize_pass_{}; ///< The GI debug views
+    shader_print shader_print_{};                 ///< The view's shader print text
     scene_history_pass scene_history_pass_{}; ///< PREV_SCENE_HDR, view depth in alpha
 
     std::unique_ptr<gpu_program> particle_program_instanced_{};

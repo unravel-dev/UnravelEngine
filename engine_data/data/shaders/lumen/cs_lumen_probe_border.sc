@@ -1,6 +1,5 @@
 /*
- * Lumen screen probe gather, the filtered probe radiance with an octahedral border (UE 5.8
- * ScreenProbeFixupBordersCS, LumenScreenProbeFiltering.usf:1082-1106, with GLumenScreenProbeGatherNumMips 1):
+ * Screen probe gather, the filtered probe radiance with an octahedral border (a single mip):
  * each probe's LUMEN_PROBE_TRACE_RES^2 texels surrounded by LUMEN_PROBE_RADIANCE_BORDER texels wrapped across
  * the octahedron's folds, so a hardware bilinear lookup in any direction stays inside the probe's own tile. The
  * rough specular reads it (cs_lumen_integrate.sc). One thread per bordered texel; probes on the sky are black.

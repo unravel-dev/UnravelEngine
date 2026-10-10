@@ -75,8 +75,8 @@ auto get_material_sampler_flags(const gfx::texture::ptr& texture) -> std::uint32
     const bool is_point = (own_flags & (BGFX_SAMPLER_MIN_POINT | BGFX_SAMPLER_MAG_POINT)) != 0u;
     return is_point ? own_flags : own_flags | material_anisotropic_sampler_flags;
 }
-/// Material texture mip bias while TAA jitters the view (UE r.ViewTextureMipBias.Offset at 100% screen percentage):
-/// the jitter integrates the slightly sharper mip's extra detail instead of aliasing it.
+/// Material texture mip bias while TAA jitters the view: the jitter integrates the slightly sharper mip's
+/// extra detail instead of aliasing it.
 constexpr float material_taa_mip_bias = -0.3f;
 
 /// The G-buffer's u_camera_clip_planes: near, far, and the material texture mip bias (TAA jitter active or not).
@@ -93,13 +93,13 @@ constexpr uint32_t reflection_traced_clear_rgba = 0x000000ff;
 /// GI experiment flag (surface_cache_system::get_experiment_flags): the global SDF clipmap stays where it was when
 /// the bit was set (no camera re-snaps), to isolate re-snap transients in A/Bs.
 constexpr uint32_t lumen_experiment_freeze_clipmap_origin = 1u << 27u;
-/// The global distance field's level scale in Lumen views: each level doubles the previous one's extent.
+/// The global distance field's level scale for the GI: each level doubles the previous one's extent.
 constexpr float lumen_clipmap_level_scale = 2.0f;
-/// The scene detail's range for the distance field's object radius threshold (UE GlobalDistanceField.cpp:2456).
+/// The scene detail's range; 1 / detail scales the smallest object the distance field keeps.
 constexpr float lumen_clipmap_min_detail = 0.01f;
 constexpr float lumen_clipmap_max_detail = 100.0f;
 
-/// The global distance field Lumen traces (its hits read the surface cache) in Lumen's layout (lumen_constants.h),
+/// The global distance field the GI traces (its hits read the surface cache) in the GI's layout (lumen_constants.h),
 /// with the view's rebuild budget, level blend and the smallest object its scene detail keeps, partially updated
 /// unless @p experiments holds lumen_pass::experiment_no_sdf_partial_updates.
 auto make_lumen_clipmap_settings(const gi_settings& gi, bool compose_on_gpu, uint64_t experiments)
@@ -358,7 +358,7 @@ auto create_or_resize_reflection_buffer(gfx::render_view& rview,
 /// The reflection buffers. RBUFFER holds the traced layers (GI reflections, then SSR),
 /// premultiplied in rgb, with the share they leave uncovered in alpha; PBUFFER holds the
 /// untraced layer (reflection probes, sky, the GI rough tier). The indirect pass occludes the
-/// two differently (ComposeIndirectSpecular in lighting.sh). Lumen's reflections write both
+/// two differently (ComposeIndirectSpecular in lighting.sh). The GI reflections write both
 /// from compute.
 void create_or_resize_reflection_buffers(gfx::render_view& rview,
                                          const usize32_t& viewport_size,
@@ -982,7 +982,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_screen_ao_pass(camera, rview, dt, params);
 
-    // Lumen's reflections write every pixel of RBUFFER when they run, so only other views start it cleared.
+    // The GI reflections write every pixel of RBUFFER when they run, so only other views start it cleared.
     const bool lumen_owns_reflections = is_camera_run && lumen_reflections_own_view(params);
     lumen_reflections_written_ = false;
     if(build_reflection_probes && !lumen_owns_reflections)
@@ -1010,7 +1010,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
     // Direct lighting starts the current frame LBUFFER after SSR has consumed its history source.
     target = run_direct_lighting_pass(scn, camera, rview, build_shadowmaps, dt);
 
-    // Lumen: the surface cache, the screen probe gather and the reflections. Runs after direct lighting, so this
+    // GI: the surface cache, the screen probe gather and the reflections. Runs after direct lighting, so this
     // frame's light buffer is populated, and before the indirect pass, which composites the results.
     bool gi_active = false;
     if(is_camera_run)
@@ -1038,7 +1038,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
         run_particle_pass(scn, camera, rview, target, pre_exposure);
     }
 
-    // UE's world-space Lumen visualizations go into the scene colour like its translucency, ahead of the exposure
+    // The world-space GI visualizations go into the scene colour like translucency, ahead of the exposure
     // and the tone map.
     if(is_camera_run && lumen_visualize_settings_.is_any_in_scene_color())
     {
@@ -1090,9 +1090,11 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     run_auto_exposure_pass(rview, camera, target, params, dt);
 
+    // The scene the exposure pass metered: local exposure measures it, not the bloom composite.
+    const auto scene_before_bloom = target;
     target = run_bloom_pass(rview, target, params);
 
-    target = run_tonemapping_pass(rview, target, output, params);
+    target = run_tonemapping_pass(rview, target, scene_before_bloom, output, params);
 
     run_fxaa_pass(rview, target, output, params);
 
@@ -1149,7 +1151,7 @@ void deferred::run_pipeline_impl(const gfx::frame_buffer::ptr& output,
 
     // After all passes that sample PREV_DEPTH (must follow Hi-Z / SSIL path).
     //
-    // Lumen GI is a second, independent consumer: its temporal accumulation validates
+    // The GI is a second, independent consumer: its temporal accumulation validates
     // reprojected history against this depth and treats a missing one as "no history", so the
     // snapshot cannot be gated on the Hi-Z stack alone.
     // TAA is a third consumer: its disocclusion test compares the reprojected
@@ -1870,7 +1872,7 @@ namespace
 {
 /// The camera moved further than auto_exposure_pass::camera_cut_distance, or turned wider than
 /// auto_exposure_pass::camera_cut_degrees about its right, up or forward axis, since last frame:
-/// a cut, not a move (UE IsLargeCameraMovement).
+/// a cut, not a move: the exposure snaps to its target and the GI histories start over.
 auto is_camera_cut(const camera& cam) -> bool
 {
     // The camera recorded last frame's matrices before this frame's passes ran.
@@ -1882,6 +1884,39 @@ auto is_camera_cut(const camera& cam) -> bool
                                math::dot(current.z_unit_axis(), previous.z_unit_axis()) < min_axis_cosine;
     return is_large_turn ||
            math::distance(current.get_position(), previous.get_position()) > auto_exposure_pass::camera_cut_distance;
+}
+
+/// The local exposure the tonemapper and the bloom apply: the lookups the exposure pass built for
+/// this view this frame and the settings' shape. Inactive when the pass built nothing, which is
+/// exactly when the settings are neutral.
+auto make_local_exposure_params(const auto_exposure_pass& exposure_pass,
+                                gfx::render_view& rview,
+                                const pipeline::run_params& rparams) -> local_exposure_params
+{
+    local_exposure_params params;
+    const auto local_view = exposure_pass.get_local_exposure_view(rview);
+    if(!local_view.grid || !local_view.blurred || !rparams.fill_auto_exposure_params)
+    {
+        return params;
+    }
+    auto_exposure_pass::run_params exposure_params;
+    rparams.fill_auto_exposure_params(exposure_params);
+    const auto& config = exposure_params.config;
+    params.grid = local_view.grid;
+    params.blurred = local_view.blurred;
+    params.tiles_x = local_view.tiles_x;
+    params.tiles_y = local_view.tiles_y;
+    params.grid_uv_scale = local_view.grid_uv_scale;
+    params.blurred_uv_scale = local_view.blurred_uv_scale;
+    params.slices = float(auto_exposure_pass::local_exposure_slices);
+    params.min_log_lum = auto_exposure_pass::min_log_lum;
+    params.log_lum_range = auto_exposure_pass::max_log_lum - auto_exposure_pass::min_log_lum;
+    params.highlight_contrast = config.local_highlight_contrast;
+    params.shadow_contrast = config.local_shadow_contrast;
+    params.detail_strength = config.local_detail_strength;
+    params.blurred_blend = config.local_blurred_blend;
+    params.middle_grey_bias = config.local_middle_grey_bias;
+    return params;
 }
 
 /// The directional light's luminous intensity in engine units (intensity x the luminance of
@@ -2253,7 +2288,7 @@ auto deferred::run_direct_lighting_pass(scene& scn,
 
             // Linear color, atmosphere transmittance included for the sky's sun.
             const auto light_color_linear = light_comp_ref.get_linear_color();
-            // Written with the view's pre-exposure (UE DeferredLightPixelShaders GetExposure).
+            // Written with the view's pre-exposure, like every pass that lights the HDR buffers.
             float light_color_intensity[4] = {light_color_linear.x,
                                               light_color_linear.y,
                                               light_color_linear.z,
@@ -2791,8 +2826,8 @@ auto deferred::get_probe_layer_inputs(gfx::render_view& rview, const gfx::textur
     {
         return inputs;
     }
-    // Lumen's reflections own the view: the gather's rough specular is the whole untraced layer (UE composites no
-    // reflection captures or sky specular under Lumen's), read straight from its history.
+    // The GI reflections own the view: the gather's rough specular is the whole untraced layer (no reflection
+    // probes or sky specular are composited under it), read straight from its history.
     const auto rough_specular = rview.tex_safe_get("GI_ROUGH_SPECULAR");
     inputs.texture = rough_specular ? rough_specular : default_textures::get().black_texture();
     inputs.params = {1.0f, get_gi_resolve_scale(rview), rough_specular ? 1.0f : 0.0f, 0.0f};
@@ -2804,9 +2839,9 @@ auto deferred::get_screen_ao_inputs(gfx::render_view& rview) const -> screen_ao_
     screen_ao_inputs inputs;
     inputs.texture = default_textures::get().white_texture();
     inputs.params = {1.0f, 0.0f, 1.0f, 0.0f};
-    // Lumen's short-range AO when the gather produced it this frame (UE DiffuseIndirectComposite.usf
-    // GetShadingOcclusion): the diffuse takes the visibility through the multi-bounce fit at the post-process
-    // intensity the gather published with it (no bent normal: the ambient axis stays the normal), the untraced
+    // The GI's short-range AO when the gather produced it this frame: the diffuse takes the
+    // visibility through the multi-bounce fit at the post-process intensity the gather
+    // published with it (no bent normal: the ambient axis stays the normal), the untraced
     // specular the bent cone.
     const auto& lumen_ao = rview.tex_safe_get(lumen_gather_pass::screen_ao_texture);
     const auto* lumen_ao_frame = rview.data().try_get<uint32_t>(lumen_gather_pass::screen_ao_frame);
@@ -2975,7 +3010,7 @@ auto deferred::update_pre_exposure(gfx::render_view& rview, const run_params& pa
     float value = 1.0f;
     if(is_camera_run && params.fill_hdr_params)
     {
-        // The manual exposure scale (UE's FixedExposure) times the adapted exposure the
+        // The manual exposure scale (the tonemapper's exposure) times the adapted exposure the
         // occlusion-query channel delivered a few frames ago.
         tonemapping_pass::run_params hdr;
         params.fill_hdr_params(hdr);
@@ -3028,13 +3063,18 @@ auto deferred::run_bloom_pass(gfx::render_view& rview,
     if(rparams.fill_auto_exposure_params)
     {
         params.exposure_texture = auto_exposure_pass_.get_exposure_texture(rview);
+        params.local_exposure = make_local_exposure_params(auto_exposure_pass_, rview, rparams);
     }
+    tonemapping_pass::run_params hdr;
+    rparams.fill_hdr_params(hdr);
+    params.manual_exposure = hdr.config.exposure;
 
     return bloom_pass_.run(rview, params);
 }
 
 auto deferred::run_tonemapping_pass(gfx::render_view& rview,
                                     const gfx::frame_buffer::ptr& input,
+                                    const gfx::frame_buffer::ptr& scene_before_bloom,
                                     const gfx::frame_buffer::ptr& output,
                                     const run_params& rparams) -> gfx::frame_buffer::ptr
 {
@@ -3047,6 +3087,10 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
 
     tonemapping_pass::run_params params;
     params.input = input;
+    if(scene_before_bloom && scene_before_bloom != input)
+    {
+        params.scene_without_bloom = scene_before_bloom->get_texture();
+    }
 
     const bool fxaa_follows = static_cast<bool>(rparams.fill_fxaa_params) && !rparams.fill_taa_params;
     if(!fxaa_follows)
@@ -3061,30 +3105,7 @@ auto deferred::run_tonemapping_pass(gfx::render_view& rview,
     if(rparams.fill_auto_exposure_params)
     {
         params.exposure_texture = auto_exposure_pass_.get_exposure_texture(rview);
-        // Local exposure: the pass built the two lookups this frame exactly when the settings
-        // are not neutral, so a null view IS the off switch.
-        const auto local_view = auto_exposure_pass_.get_local_exposure_view(rview);
-        if(local_view.grid && local_view.blurred)
-        {
-            auto_exposure_pass::run_params exposure_params;
-            rparams.fill_auto_exposure_params(exposure_params);
-            const auto& exposure_config = exposure_params.config;
-            params.local_exposure.grid = local_view.grid;
-            params.local_exposure.blurred = local_view.blurred;
-            params.local_exposure.tiles_x = local_view.tiles_x;
-            params.local_exposure.tiles_y = local_view.tiles_y;
-            params.local_exposure.grid_uv_scale = local_view.grid_uv_scale;
-            params.local_exposure.blurred_uv_scale = local_view.blurred_uv_scale;
-            params.local_exposure.slices = float(auto_exposure_pass::local_exposure_slices);
-            params.local_exposure.min_log_lum = auto_exposure_pass::min_log_lum;
-            params.local_exposure.log_lum_range =
-                auto_exposure_pass::max_log_lum - auto_exposure_pass::min_log_lum;
-            params.local_exposure.highlight_contrast = exposure_config.local_highlight_contrast;
-            params.local_exposure.shadow_contrast = exposure_config.local_shadow_contrast;
-            params.local_exposure.detail_strength = exposure_config.local_detail_strength;
-            params.local_exposure.blurred_blend = exposure_config.local_blurred_blend;
-            params.local_exposure.middle_grey_bias = exposure_config.local_middle_grey_bias;
-        }
+        params.local_exposure = make_local_exposure_params(auto_exposure_pass_, rview, rparams);
     }
 
     return tonemapping_pass_.run(rview, params);
@@ -3205,8 +3226,8 @@ auto deferred::run_lumen_gi_pass(const camera& camera, gfx::render_view& rview, 
         run_lumen_surface_cache(camera, rview, *params.surface_cache, gi.scene);
         result = lumen_gather_pass_.run(rview, params);
         rview.data().get_or_emplace<float>(gi_resolve_scale, 1.0f) = std::max(gi.diffuse.intensity, 0.0f);
-        // Lumen's reflections follow its gather (UE: the screen probe gather, then the reflections), whose
-        // rough specular they composite under the traced layer.
+        // The GI reflections run after the screen probe gather, whose rough specular they composite under the
+        // traced layer.
         if(result && params.has_traced_reflections)
         {
             lumen_reflections_written_ = run_lumen_reflection_pass(rview, params);
@@ -3261,7 +3282,7 @@ auto deferred::make_lumen_run_params(const camera& camera, gfx::render_view& rvi
                                    render_frame - velocity_movers_frame_ <= lumen_mover_frames;
     params.velocity = velocity_run_active_ && has_recent_movers ? rview.tex_safe_get("VELOCITY") : nullptr;
     params.cam = &camera;
-    // Every Lumen target, its history included, is in this run's pre-exposed space.
+    // Every GI target, its history included, is in this run's pre-exposed space.
     params.pre_exposure = get_pre_exposure(rview);
     params.surface_cache = &engine::context().get_cached<surface_cache_system>();
     params.view_cache = rview.data().try_get<surface_cache_view>(surface_cache_view::view_key);
@@ -3348,8 +3369,8 @@ void deferred::capture_lumen_cards(const camera& camera, const surface_cache_sys
     for(const auto& cap : captures)
     {
         const auto& src = sources[cap.source_index];
-        // The LOD the cards were built from (UE captures a reduced LOD too, r.LumenScene.SurfaceCache.
-        // MeshTargetScreenSize): the card planes sit on that surface, and it costs a fraction of LOD 0.
+        // The LOD the cards were built from (LOD 1 unless the asset sets one): the card planes sit on
+        // that surface, and it costs a fraction of LOD 0.
         uint32_t capture_lod = src.owner ? src.owner->get_lumen_cards_lod() : 0u;
         const auto* submesh = src.owner ? src.owner->get_submesh(src.submesh_index, capture_lod) : nullptr;
         if(submesh == nullptr && src.owner)
@@ -3472,7 +3493,7 @@ void deferred::run_debug_visualization_pass(const camera& camera,
 
 static_assert(deferred::debug_pass_lumen_reflection_rays - deferred::debug_pass_lumen_scene ==
                   int(lumen_visualize_pass::view::dedicated_reflection_rays),
-              "a Lumen debug pass id is debug_pass_lumen_scene + its lumen_visualize_pass::view");
+              "a GI debug pass id is debug_pass_lumen_scene + its lumen_visualize_pass::view");
 static_assert(deferred::debug_pass_lumen_performance_overview - deferred::debug_pass_lumen_scene + 1 ==
                   int(lumen_visualize_pass::view::count),
               "every lumen_visualize_pass::view has a debug pass id");
@@ -3523,7 +3544,7 @@ auto deferred::run_hiz_pass(const camera& camera,
                               delta_t dt) -> bool
 {
     (void)dt;
-    // Lumen's screen traces march this same pyramid, so GI with screen traces on is a producer
+    // The GI's screen traces march this same pyramid, so GI with screen traces on is a producer
     // condition of its own, whether or not the screen-space reflection stack runs.
     gi_settings gi;
     const bool gi_wants_hiz = params.run_type == pipeline_run_type::camera && resolve_gi_settings(params, gi) &&
@@ -3536,9 +3557,9 @@ auto deferred::run_hiz_pass(const camera& camera,
     {
         rview.tex_remove("HIZBUFFER");
         // PREV_DEPTH deliberately survives. It is a SHARED history resource with more than one
-        // consumer -- Lumen GI validates reprojected history against it -- and this pass
-        // runs before them, so dropping it here destroyed the next consumer's input before it
-        // ever ran. Its lifetime belongs to the one place that decides whether to produce it,
+        // consumer -- the GI validates reprojected history against it -- and this pass
+        // runs before them, so dropping it here would destroy the next consumer's input before
+        // it runs. Its lifetime belongs to the one place that decides whether to produce it,
         // at the end of the frame.
         return false;
     }

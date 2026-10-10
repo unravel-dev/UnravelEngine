@@ -111,7 +111,6 @@ vec2 rotateSample(vec2 _sample, vec2 _sincos)
 // Produces well-distributed noise that avoids the clustering artifacts of
 // traditional fract(sin(...)) hashes. Converts structured Poisson banding
 // into smooth, perceptually-uniform noise.
-// Source: "Next Generation Post Processing in Call of Duty: AW" (Jimenez 2014)
 float interleavedGradientNoise(vec2 _screenPos)
 {
     vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
@@ -239,6 +238,98 @@ float PCF(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec2 _planeGrad, v
     float angle = interleavedGradientNoise(noiseCoord) * 6.283185;
     vec2 diskRotation = vec2(sin(angle), cos(angle));
     return PCFLod(_sampler, 0.0, vec2(2.0, 2.0), _shadowCoord, _bias, _planeGrad, _pcfParams, _texelSize, diskRotation, _cascadeScale, _minRadiusUV);
+}
+
+// ---- Subsurface transmittance ----------------------------------------------------------------
+// The light that reaches a subsurface receiver through whatever the map stored in front of it: exp(-distance from
+// that occluder to the receiver x density), as if everything between were the receiver's own material. A leaf lit
+// through itself or its neighbours keeps most of the light; a receiver under a roof metres away gets none.
+
+// Filter radius of the transmittance in texels: a fixed small kernel, whatever the surface filter (PCSS
+// penumbrae do not apply to the light that crossed the material).
+#define SUBSURFACE_TRANSMITTANCE_FILTER_TEXELS 2.0
+
+/// How stored depth maps to distance along the light: ortho (CSM) and linear maps store scale x distance plus a
+/// constant; perspective 1/z maps store C - numerator / z.
+struct ShadowDepthModel
+{
+    float scale;      ///< ortho / linear maps: stored depth per world unit
+    float numerator;  ///< perspective maps: the 1/z numerator
+    float receiverZ;  ///< perspective maps: the receiver's distance along the light axis
+};
+
+/// World distance from the occluder the map stored to the receiver, along the light; 0 when the receiver is the
+/// nearest surface (receiver at or in front of the stored depth).
+float shadowOccluderDistance(float _receiverDepth, float _occluderDepth, ShadowDepthModel _model)
+{
+    float delta = max(_receiverDepth - _occluderDepth, 0.0);
+#if SM_CSM || SM_LINEAR
+    return delta / max(_model.scale, 1e-12);
+#else
+    // stored = C - B / z: the occluder lies at z_o = B / (B / z_r + delta).
+    float occluderZ = _model.numerator / (_model.numerator / max(_model.receiverZ, 1e-6) + delta);
+    return max(_model.receiverZ - occluderZ, 0.0);
+#endif
+}
+
+/// One tap of the transmittance; the receiver depth follows its plane exactly as hardShadowLod does.
+float transmittanceLod(sampler2D _sampler, float lod, vec4 _shadowCoord, float _bias, vec2 _planeGrad, vec2 _uvOffset,
+                       ShadowDepthModel _model, float _density)
+{
+    vec2 texCoord = _shadowCoord.xy/_shadowCoord.w;
+    vec2 receiverUV = texCoord - _uvOffset;
+
+#if SM_CSM
+    texCoord = saturate(texCoord);
+#else
+    bool outside = any(greaterThan(texCoord, vec2_splat(1.0)))
+                || any(lessThan   (texCoord, vec2_splat(0.0)))
+                 ;
+
+    if (outside)
+    {
+        return 1.0;
+    }
+#endif
+
+    float receiver = (_shadowCoord.z-_bias)/_shadowCoord.w + receiverPlaneDelta(texCoord, receiverUV, _planeGrad);
+    float occluder = texture2DLod(_sampler, texCoord, lod).x;
+    return exp(-shadowOccluderDistance(receiver, occluder, _model) * _density);
+}
+
+/// The transmittance averaged over the PCF Poisson kernel (with PCF's cascade-edge weights).
+float transmittancePCF(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec2 _planeGrad, vec2 _texelSize,
+                       vec2 _fragCoord, float _cascadeScale, float _minRadiusUV, ShadowDepthModel _model, float _density)
+{
+    float angle = interleavedGradientNoise(_fragCoord) * 6.283185;
+    vec2 diskRotation = vec2(sin(angle), cos(angle));
+    vec2 offset = max(vec2_splat(SUBSURFACE_TRANSMITTANCE_FILTER_TEXELS) * _texelSize * _cascadeScale, vec2_splat(_minRadiusUV)) * _shadowCoord.w;
+    float invW = 1.0 / _shadowCoord.w;
+    float result = 0.0;
+
+#if SM_CSM
+    float totalWeight = 0.0;
+    for ( int i = 0; i < PCF_LOD_OFFSET_NUM_SAMPLES; ++i )
+    {
+        vec2 jitteredOffset = rotateSample(samplePoisson(i), diskRotation) * offset;
+        vec4 sampleCoord = _shadowCoord + vec4(jitteredOffset, 0.0, 0.0);
+        vec2 sampleUV = sampleCoord.xy / sampleCoord.w;
+        float edgeDist = min(min(sampleUV.x, 1.0 - sampleUV.x),
+                             min(sampleUV.y, 1.0 - sampleUV.y));
+        float weight = smoothstep(0.0, 0.02, edgeDist);
+        result += transmittanceLod(_sampler, 0.0, sampleCoord, _bias, _planeGrad, jitteredOffset * invW, _model, _density) * weight;
+        totalWeight += weight;
+    }
+    return (totalWeight > 0.5) ? result / totalWeight
+                               : transmittanceLod(_sampler, 0.0, _shadowCoord, _bias, _planeGrad, vec2_splat(0.0), _model, _density);
+#else
+    for ( int i = 0; i < PCF_LOD_OFFSET_NUM_SAMPLES; ++i )
+    {
+        vec2 jitteredOffset = rotateSample(samplePoisson(i), diskRotation) * offset;
+        result += transmittanceLod(_sampler, 0.0, _shadowCoord + vec4(jitteredOffset, 0.0, 0.0), _bias, _planeGrad, jitteredOffset * invW, _model, _density);
+    }
+    return result / float(PCF_LOD_OFFSET_NUM_SAMPLES);
+#endif
 }
 
 float VSM(sampler2D _sampler, vec4 _shadowCoord, float _bias, float _depthMultiplier, float _minVariance)
@@ -427,7 +518,7 @@ float PCSS(sampler2D _sampler, vec4 _shadowCoord, float _bias, vec2 _planeGrad, 
     }
 
     // -----------------------------------------------------------------------
-    // Step 2: Penumbra Estimation (standard PCSS, Fernando 2005)
+    // Step 2: Penumbra Estimation (standard PCSS)
     //
     //   penumbraWidth = lightSize * (d_receiver - d_blocker) / d_blocker
     //

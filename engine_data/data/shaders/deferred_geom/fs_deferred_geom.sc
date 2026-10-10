@@ -73,7 +73,7 @@ void main()
 	vec3 view_direction = u_camera_wpos.xyz - v_wpos;
 	vec3 tangent_space_normal = getTangentSpaceNormal( s_tex_normal, texcoords, bumpiness, u_surface_normal_reconstruct_z, u_material_mip_bias );
 
-	// A two-sided material's back face turns its normal toward the viewer (UE TwoSidedSign on the tangent frame's
+	// A two-sided material's back face turns its normal toward the viewer (a sign flip of the tangent frame's
 	// normal axis). The triangle's normal from the position derivatives tells which side the viewer is on and which
 	// side the vertex normals face; both products use it, so each backend's screen-axis convention cancels. A card
 	// capture places u_camera_wpos far along its capture direction, which makes the same test hold there.

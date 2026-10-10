@@ -23,7 +23,7 @@ struct global_sdf_instance
 {
     ///< The field being placed. Borrowed; must outlive composition.
     const mesh_sdf* sdf = nullptr;
-    ///< The chain's coarsest level when resident beside a finer @ref sdf, else null. The GPU composes the Lumen
+    ///< The chain's coarsest level when resident beside a finer @ref sdf, else null. The GPU composes the GI
     ///< cascade from it beyond @ref sdf's band; hashed into the level fingerprint so its arrival recomposes.
     const mesh_sdf* coarse_sdf = nullptr;
     ///< World to local, for sampling the field at a world position.
@@ -67,7 +67,7 @@ public:
         ///< Voxels per axis in every level. Memory is level_count * resolution^3 bytes.
         ///
         /// The STRUCT default stays 64 -- the value the CPU composer, the tests and any headless
-        /// consumer can afford, since composition work is cubic in it. The runtime uses Lumen's
+        /// consumer can afford, since composition work is cubic in it. The runtime uses the GI's
         /// layout (lumen_constants.h LUMEN_GLOBAL_SDF_RESOLUTION) with GPU composition.
         uint32_t resolution = 64;
         ///< World-space extent covered by level 0.
@@ -113,18 +113,18 @@ public:
         ///
         /// False HERE because a true default silently leaves every headless consumer -- the tests
         /// above all -- with a cascade nothing composes. The runtime opts in wherever the compose
-        /// program loaded, which is also what makes Lumen's resolution affordable.
+        /// program loaded, which is also what makes the GI's resolution affordable.
         bool compose_on_gpu = false;
         ///< Levels recomposed per update, at most. Composition touches every voxel of a level,
         ///< so recomposing all of them in the frame the camera crosses a voxel boundary would
         ///< hitch. Levels are considered finest first, which is also the order they go stale in
         ///< (level 0 has the smallest voxels, so its origin re-snaps most often).
         uint32_t max_levels_per_update = 1;
-        ///< Scale of the smallest object the GPU's Lumen composition keeps (cs_gi_clipmap_compose.sc,
-        ///< SdfLumenCascadeKeepsInstance): 1 / the scene detail (UE GlobalDistanceField.cpp:2456). It is part of
-        ///< every level's fingerprint, so a change recomposes the levels within the update budget.
+        ///< Scale of the smallest object the GPU's GI cascade composition keeps (cs_gi_clipmap_compose.sc,
+        ///< SdfLumenCascadeKeepsInstance): 1 / the scene detail. It is part of every level's fingerprint, so a
+        ///< change recomposes the levels within the update budget.
         float object_radius_scale = 1.0f;
-        ///< Levels that were composed before update PARTIALLY (level::is_partial; UE r.AOGlobalDistanceFieldPartialUpdates).
+        ///< Levels that were composed before update PARTIALLY (level::is_partial).
         ///< False recomposes whole levels for every change, under the level budget and the edit throttle.
         bool partial_updates = true;
     };
@@ -163,7 +163,7 @@ public:
         uint32_t stale_updates = 0;
         ///< The instances the voxels were composed from, sorted by hash; valid while @ref has_composed_entries (after
         ///< a compose, until a setting changes what is composed). A later update composes only where this set and
-        ///< the current one differ (UE's partial updates, GlobalDistanceField.cpp:1196-1265).
+        ///< the current one differ (a partial update).
         std::vector<composed_entry> composed_entries;
         bool has_composed_entries = false;
         ///< PARTIAL recompose: the last recompose rewrote only part of the window. The composed value of a voxel
@@ -222,7 +222,7 @@ public:
      *
      * A level that was composed before updates PARTIALLY (level::is_partial): only the voxels within reach of an
      * instance that moved, appeared or left, and the slabs a re-snapped origin exposes, on the level's staggered
-     * cadence (is_partial_update_due; UE's partial updates). A level with no composed set, a move past its window,
+     * cadence (is_partial_update_due). A level with no composed set, a move past its window,
      * or changes beyond GI_CLIPMAP_MAX_PARTIAL_INSTANCES or GI_CLIPMAP_MAX_PARTIAL_FRACTION of its voxels
      * recomposes in full, and full recomposes are BUDGETED: composing a level is expensive enough to be a visible
      * hitch. Staleness age drives their order, so no level can starve.
@@ -328,9 +328,9 @@ public:
                                    uint32_t first_brick,
                                    std::vector<math::vec4>& table) -> uint32_t;
 
-    /// True when level @p index takes its partial updates on update @p update_index (UE ShouldUpdateClipmapThisFrame
-    /// with GI_CLIPMAP_PARTIAL_UPDATES_PER_FRAME): the first levels every update, the others at halving frequencies
-    /// with distinct phases.
+    /// True when level @p index takes its partial updates on update @p update_index, staggered so about
+    /// GI_CLIPMAP_PARTIAL_UPDATES_PER_FRAME levels update per frame: the first levels every update, the others at
+    /// halving frequencies with distinct phases.
     static auto is_partial_update_due(uint32_t index, uint64_t update_index) -> bool;
 
     /**
@@ -402,7 +402,7 @@ private:
     auto compute_level_reach(uint32_t index) const -> float;
 
     /// Distance beyond an instance's bounds within which it can change a level's voxels or coverage: the larger of
-    /// the encode range and Lumen's coverage band, in the level's voxels.
+    /// the encode range and the GI cascade's coverage band, in the level's voxels.
     auto compute_level_influence(uint32_t index) const -> float;
 
     /// The instances that compose a level covering @p bounds, sorted by entry hash: sampleable, with bounds within

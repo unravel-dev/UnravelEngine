@@ -248,12 +248,12 @@ inline auto get_format_version<unravel::mesh>() -> uint64_t
     //     bricks on the max side only, so the box cannot be recovered from the field bounds, and the composed
     //     distance's per-axis box bound grew by that slack times the placement's scale.
     // 23: a flat axis centres a sample layer on the sheet. Between two layers an unsigned sheet never read below
-    //     half a voxel, so Lumen's half-voxel surface expand let rays pass through scaled planes (floors).
+    //     half a voxel, so the GI trace's half-voxel surface expand let rays pass through scaled planes (floors).
     // 24: a chain's coarser levels sign open surfaces with the finest level's vote reach. Each level's own reach
     //     (four voxel diagonals) signed a 1.6 m layer behind a vault's back faces inside at 0.4 m voxels, which
-    //     the Lumen cascade's coarse-first distance composed above the floor slab another submesh holds.
-    // 25: Lumen mesh cards are built at compile time, one set per submesh for its imported material's sidedness
-    //     (UE's FCardRepresentationData), from LOD 1 by default, instead of on first use at runtime.
+    //     the GI cascade's coarse-first distance composed above the floor slab another submesh holds.
+    // 25: mesh cards are built at compile time and stored in the mesh asset, one set per submesh for its imported
+    //     material's sidedness, from LOD 1 by default, instead of on first use at runtime.
     //
     // NOTE: the compiled asset is a function of the BAKE ALGORITHM, not only of the source
     // mesh. Any change to mesh_sdf_baker that alters its output needs a bump here, or existing

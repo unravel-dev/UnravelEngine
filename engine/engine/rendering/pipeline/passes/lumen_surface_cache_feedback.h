@@ -17,25 +17,25 @@ namespace unravel
 {
 
 /**
- * @brief The reflections' surface cache feedback, from the GPU to lumen_scene::set_feedback (UE
- *        FLumenSurfaceCacheFeedback). The reflection feedback pass (cs_lumen_reflection_feedback.sc) counts its
- *        elements in a hash table that lasts a window of frames; at the window's end the table is copied into an image
- *        and cleared, the image blitted into a read-back texture in a view of its own (bgfx runs a view's blits before
- *        its dispatches) and read, and once the GPU has delivered it the elements are decoded for the scene.
+ * @brief The reflections' surface cache feedback, from the GPU to lumen_scene::set_feedback. The reflection
+ *        feedback pass (cs_lumen_reflection_feedback.sc) counts its elements in a hash table that lasts a window of
+ *        frames; at the window's end the table is copied into an image and cleared, the image blitted into a
+ *        read-back texture in a view of its own (bgfx runs a view's blits before its dispatches) and read, and once
+ *        the GPU has delivered it the elements are decoded for the scene.
  *
- * UE reads its feedback back every frame, asynchronously. bgfx reads a texture back by draining the GPU (every backend
- * copies and maps at the read), so the feedback is read once per window instead, and the window's hits count as UE's
- * per-frame minimum times its frames. A window starts over (its table cleared) when the card indices move: an element
- * names a card by its index in the card table.
+ * bgfx reads a texture back by draining the GPU (every backend copies and maps at the read), so the feedback is read
+ * once per window rather than every frame, and an element must exceed the per-frame minimum of hits times the
+ * window's frames. A window starts over (its table cleared) when the card indices move: an element names a card by
+ * its index in the card table.
  */
 class lumen_surface_cache_feedback
 {
 public:
-    /// UE r.LumenScene.SurfaceCache.Feedback.MinPageHits, per frame of feedback.
+    /// The hits an element must exceed, per frame of feedback, to keep or ask for its card's hi-res page.
     static constexpr uint32_t min_page_hits_per_frame = 16;
     /// The render frames a window counts before its readback (every camera's feedback of a frame goes in it).
     static constexpr uint32_t window_frames = 16;
-    /// Hash table slots: UE's 1024 unique elements (Feedback.UniqueElements), twice over for the probing.
+    /// Hash table slots: room for 1024 unique elements, twice over for the probing.
     static constexpr uint32_t hash_slots = 2048;
 
     lumen_surface_cache_feedback() = default;
@@ -59,14 +59,14 @@ public:
     void end_frame(uint16_t view_id, uint32_t samples);
 
     /// The last readback once the GPU has delivered it (true, once): its elements, the window's card index revision,
-    /// the hits an element needs (min_page_hits_per_frame per frame of the window) and the feedback texels it counted.
+    /// the hits an element must exceed (min_page_hits_per_frame per frame of the window) and the feedback texels it
+    /// counted.
     auto take(std::vector<lumen_scene::feedback_element>& elements,
               uint64_t& card_index_revision,
               uint32_t& min_hits,
               uint32_t& sample_count) -> bool;
 
-    /// UE GetFeedbackBufferTileJitter: render frame @p frame's texel in every 16 x 16 feedback tile, a reversed-bits
-    /// Morton walk over 256 frames.
+    /// Render frame @p frame's texel in every 16 x 16 feedback tile: a reversed-bits Morton walk over 256 frames.
     static auto get_tile_jitter(uint32_t frame) -> math::uvec2;
 
     /// For the surface cache's stats line: the frames counted, the windows started over and the readbacks taken since

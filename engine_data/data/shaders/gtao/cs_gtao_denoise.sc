@@ -2,7 +2,7 @@
  * GTAO spatial denoise: a 5x5 blur of the visibility and bent normal at the AO resolution,
  * run SEPARABLY - each pass takes 5 taps along one axis (u_gtao_denoise_axis: x, then y),
  * a fifth of the fetches of the square kernel for a near-identical result - weighted by
- * XeGTAO's depth edges (slope-adjusted relative depth differences to the centre) so the
+ * depth edges (slope-adjusted relative depth differences to the centre) so the
  * noise of the stochastic slices averages out within a surface and never across a
  * silhouette. When the shading normal is the receiver normal the G-buffer normal joins the
  * weights: the bump-scale response the normal map produced must survive the blur (with the
@@ -37,7 +37,7 @@ void main()
 		imageStore(i_gtao_out, texel, center);
 		return;
 	}
-	// XeGTAO's edge scale: a relative depth difference of 1.1% of the centre depth is a
+	// Edge scale: a relative depth difference of 1.1% of the centre depth is a
 	// half edge, 1.375% a full edge.
 	float edge_scale = center_depth * 0.011;
 	bool normal_weights = u_gtao_normal_source < 0.5;

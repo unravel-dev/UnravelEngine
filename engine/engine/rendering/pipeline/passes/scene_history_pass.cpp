@@ -61,7 +61,7 @@ auto scene_history_pass::run(gfx::render_view& rview,
     gfx::render_pass pass("History/Prev Scene Color Pass");
     pass.bind(fbo.get());
     // The reconstruction reads u_invViewProj / u_viewProj: the TAA-unjittered pair, which is
-    // the record the readers reproject with next frame (the Lumen passes bind the same).
+    // the record the readers reproject with next frame (the GI passes bind the same).
     pass.set_view_proj(cam.get_view(), cam.get_projection_unjittered());
     if(program_.program->begin())
     {

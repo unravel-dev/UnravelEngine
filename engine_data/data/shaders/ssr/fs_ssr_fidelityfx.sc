@@ -51,12 +51,12 @@ uniform mat4 u_prev_view_proj;
 
 
 /*
- * FidelityFX-inspired SSR Implementation with Cone Tracing
- * Based on AMD's Stochastic Screen-Space Reflections and Will Pearce's Cone Tracing
- * 
+ * Stochastic Screen-Space Reflections with Cone Tracing
+ * GGX-sampled rays marched through the Hi-Z pyramid
+ *
  * CONE TRACING INTEGRATION:
- * This implementation uses Will Pearce's cone tracing algorithm for glossy reflections.
- * Based on "Screen Space Glossy Reflections" article using isosceles triangles to approximate cones.
+ * Glossy reflections are cone traced: isosceles triangles approximate the cone in screen space,
+ * and each step samples the blurred mip whose texel size matches the triangle's incircle.
  * 
  * Required Pipeline Changes:
  * 1. Generate blurred color buffer with mip chain using cs_ssr_blur.sc
@@ -75,11 +75,6 @@ uniform mat4 u_prev_view_proj;
  * - Rough surfaces: Use isosceles triangle cone tracing with multiple samples along the cone
  * - Iterative sampling with visibility accumulation and early termination
  * - Proper mip level selection based on projected cone footprint
- * 
- * References:
- * - https://github.com/GPUOpen-Effects/FidelityFX-SSSR
- * - GPU Pro 5 book chapter 4 by Yasin Uludag
- * - Will Pearce's blog http://roar11.com/2015/07/screen-space-glossy-reflections/
  */
  
 
@@ -135,7 +130,7 @@ vec4 SampleScreenColor(vec2 uv, float z, sampler2D colorSampler, float mipLevel)
     return vec4(prev_color, motion_aware_edge_fade);
 }
 
-// Cone tracing implementation based on Will Pearce's article
+// Cone tracing
 // Uses isosceles triangle to approximate cone in screen space
 
 float IsoscelesTriangleOpposite(float adjacentLength, float coneTheta)
@@ -534,8 +529,8 @@ void main()
 				sample_color = SampleScreenColor(ss_hit_pos.xy, ss_hit_pos.z, s_color, 0.0);
             }
 			
-            // PREV_SCENE_HDR was written under last frame's pre-exposure (UE
-            // PrevSceneColorPreExposureCorrection).
+            // PREV_SCENE_HDR was written under last frame's pre-exposure; the correction
+            // brings it to this frame's.
             sample_color.rgb *= u_brightness * u_history_pre_exposure_correction;
 
             float sample_confidence = max(confidence, 0.0);

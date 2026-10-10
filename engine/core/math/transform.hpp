@@ -21,7 +21,7 @@ using namespace glm;
 #define TRANSFORM_INLINE inline
 #endif
 
-// Big cold bodies (the WebKit matrix decompose, general-path normal math) are
+// Big cold bodies (the matrix decompose, general-path normal math) are
 // pinned out of line: letting them inline into hot loops measurably regressed
 // RelWithDebInfo (decompose 66 -> 93 ns/op in the transform suite bench), while
 // the thin dirty-flag checks around them benefit from inlining.
@@ -164,7 +164,7 @@ public:
     /**
      * @brief Get the rotation component as Euler angles in degrees.
      *
-     * Uses a Unity-style Euler hint so inspector/script edits keep the typed
+     * Uses the stored Euler hint so inspector/script edits keep the typed
      * axes stable across frames (quaternion decomposition is not unique).
      */
     auto get_rotation_euler_degrees() const noexcept -> vec3_t;
@@ -1476,7 +1476,7 @@ TRANSFORM_INLINE auto transform_t<T, Q>::transform_normal(const vec3_t& v) const
     typename transform_t<T, Q>::vec3_t
 {
     // Contract: the direction of the inverse-transpose (normal matrix) with the input's
-    // length preserved. Backs Unity-style TransformDirection, so length must not pick up
+    // length preserved. Backs the script TransformDirection, so length must not pick up
     // the object's scale, and both branches must agree.
     if(can_use_simplified_calculations())
     {
@@ -1613,7 +1613,7 @@ TRANSFORM_INLINE auto transform_t<T, Q>::operator*(const transform_t& t) const n
     // with R2, so T1 R1 S1 T2 R2 S2 = T(p1 + R1 s p2) (R1 R2) (s * S2). The
     // right-hand scale may be non-uniform. This keeps the result's components
     // exact, so a later get_position()/get_rotation() costs nothing - the
-    // matrix fallback instead defers a full WebKit decompose (~10x the cost of
+    // matrix fallback instead defers a full matrix decompose (~10x the cost of
     // the multiply) to the first component read.
     if(can_use_simplified_calculations() && t.can_use_simplified_calculations_without_uniform_scale())
     {
@@ -1829,7 +1829,7 @@ struct compute_to_string<math::transform_t<T, Q>>
 };
 } // namespace detail
 
-// Unity-like LookRotation: +Z = forward, +Y = upwards (approx).
+// Rotation that turns +Z onto forward and +Y toward upwards (approx); backs the script Quaternion.LookRotation.
 inline auto look_rotation(const glm::vec3& forward, const glm::vec3& upwards) -> glm::quat
 {
     // Build the basis directly: +Z = forward by construction, independent of the

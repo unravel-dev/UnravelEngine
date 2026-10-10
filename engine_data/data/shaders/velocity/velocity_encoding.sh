@@ -7,7 +7,7 @@
  *   RG = total motion in uv: uv_curr - uv_prev; consumers reproject as prev_uv = uv - RG.
  *   B  = the object-only part of the motion in pixels: |uv_prev(current pose) - uv_prev(previous pose)| x the
  *        target size, 0 for every pixel the camera alone moved; consumers classify object motion from it.
- *   A  = last frame's view depth of the pixel's surface (the previous clip w; UE's velocity z): the expected
+ *   A  = last frame's view depth of the pixel's surface (the previous clip w): the expected
  *        history depth of a moving surface. 0 when the surface was behind last frame's camera.
  */
 

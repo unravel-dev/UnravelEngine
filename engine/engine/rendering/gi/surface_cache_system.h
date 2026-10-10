@@ -56,8 +56,8 @@ public:
         ///< Index into the atlas header buffer.
         uint32_t header_index = sdf_atlas::invalid_index;
         ///< The chain's coarsest level when it is resident beside a finer @ref header_index, else @ref header_index:
-        ///< the Lumen cascade reads distances beyond the finer level's band from it (UE's always-resident lowest
-        ///< mip, DistanceToMeshSurfaceStandalone).
+        ///< the GI cascade reads distances beyond the finer level's band from it (SdfInstanceStandaloneDistance in
+        ///< gi/sdf_common.sh).
         uint32_t coarse_header_index = sdf_atlas::invalid_index;
         ///< Uniform scale factor applied to distances sampled in local space. Non-uniform
         ///< scale uses the smallest axis, which keeps the field conservative (a sphere trace
@@ -66,17 +66,17 @@ public:
         ///< World length of each local axis: the composed fields bound a non-uniformly scaled
         ///< placement per axis (sample_instance_distance) instead of by the smallest axis alone.
         math::vec3 axis_scale{1.0f};
-        ///< The material renders both faces (cull none; UE bMostlyTwoSided): the Lumen global SDF's coverage leaves
-        ///< space near only such placements uncovered, which the march expands less and dithers through.
+        ///< The material renders both faces (cull none): the GI global SDF's coverage leaves space near only such
+        ///< placements uncovered, which the march expands less and dithers through.
         bool is_two_sided = false;
-        ///< The material emits (its emissive luminance reaches GI_EMISSIVE_LIGHT_SOURCE_MIN_LUMINANCE): UE's
-        ///< Emissive Light Source, derived here rather than authored. Lumen keeps its cards resident down to one
-        ///< texel and composes it into the global SDF however small. Cleared for an emitter inside its own housing
-        ///< (clear_enclosed_emissive_light_sources).
+        ///< The material emits (its emissive luminance reaches GI_EMISSIVE_LIGHT_SOURCE_MIN_LUMINANCE): an
+        ///< emissive light source, derived from the material rather than authored. The GI keeps its cards resident
+        ///< down to one texel and composes it into the global SDF however small. Cleared for an emitter inside its
+        ///< own housing (clear_enclosed_emissive_light_sources).
         bool is_emissive_light_source = false;
     };
 
-    /// What the Lumen surface cache needs to capture one placement, parallel to the instance list
+    /// What the surface cache needs to capture one placement, parallel to the instance list
     /// (the same index is the placement's GPU instance index).
     struct lumen_source
     {
@@ -158,7 +158,7 @@ public:
      *
      * The instance indices the GPU buffers carry are positions in a list rebuilt every frame from a
      * traversal with no guaranteed order, and the content fingerprints deliberately ignore order. A
-     * structure that stores instance indices across frames (the Lumen object grid) is valid only while
+     * structure that stores instance indices across frames (the GI object grid) is valid only while
      * this holds still.
      */
     auto get_instance_order_hash() const -> uint64_t
@@ -205,10 +205,9 @@ public:
     }
 
     /**
-     * @brief This frame's lighting changed globally (UE UpdateGlobalLightingState, LumenSceneRendering.cpp:2471-2540):
-     *        the first directional light's or the sky's brightest channel moved more than
-     *        global_lighting_change_ratio either way since the last world update. Lumen then rebuilds its radiance
-     *        cache and starts its gather history over instead of converging at the budgeted rates.
+     * @brief This frame's lighting changed globally: the first directional light's or the sky's brightest channel
+     *        moved more than global_lighting_change_ratio either way since the last world update. The GI then rebuilds
+     *        its radiance cache and starts its gather history over instead of converging at the budgeted rates.
      */
     auto has_global_lighting_change() const -> bool
     {
@@ -311,16 +310,14 @@ private:
     /**
      * @brief Level a placement deserves, from how far it is from the nearest camera.
      *
-     * UE bands this on ABSOLUTE distance -- its Mip1 box is the outermost global distance field
-     * clipmap extent and its Mip2 box a middle one -- and takes the finest any view wants. That
-     * cannot be copied directly: those extents belong to a view's clipmap, and update_world is
-     * deliberately camera-agnostic. Absolute distances would also be wrong here in a way they are
-     * not for UE, because a project's world scale is not fixed: the same numbers that band a
-     * metre-scale prop put an entire centimetre-scale building in the coarsest level.
+     * Banded on distance RELATIVE TO THE PLACEMENT'S OWN SIZE, not on absolute distance. Absolute
+     * bands would have to come from a view's clipmap extents, and update_world is deliberately
+     * camera-agnostic. They would also depend on the project's world scale, which is not fixed:
+     * the same numbers that band a metre-scale prop put an entire centimetre-scale building in
+     * the coarsest level.
      *
-     * Banded on distance RELATIVE TO THE PLACEMENT'S OWN SIZE instead, which is scale free and
-     * needs no per-project tuning. It also reproduces the part of UE's rule that matters: their
-     * test is box against box and so includes the object's extent, which is exactly why a large
+     * The relative band is scale free and needs no per-project tuning. The distance is measured
+     * to the placement's box and so includes the object's extent, which is exactly why a large
      * object keeps its detail from further away.
      */
     auto compute_wanted_mip(const math::bbox& world_bounds) const -> uint32_t;
@@ -330,8 +327,7 @@ private:
     ///< Residency is SHARED by every camera, so it must not depend on which one is rendering --
     ///< that split is the whole reason update_world takes no camera. Taking the finest level any
     ///< camera wants keeps it a function of the world: the set of cameras is scene state, and two
-    ///< cameras produce one answer rather than fighting over it. Same resolution UE reaches with
-    ///< its InterlockedMax across views.
+    ///< cameras produce one answer rather than fighting over it.
     std::vector<math::vec3> camera_positions_;
 
     /// Drops every field to a coarser level once the atlas has run out, and re-places them.
@@ -471,7 +467,7 @@ private:
 
     std::unordered_map<field_key, mesh_residency, field_key_hash> residency_;
     std::vector<instance> instances_;
-    /// Lumen capture inputs, rebuilt each frame alongside @ref instances_ (same order).
+    /// Surface cache capture inputs, rebuilt each frame alongside @ref instances_ (same order).
     std::vector<lumen_source> lumen_sources_;
     lumen_card_library lumen_cards_;
     /// Clipmap composition input, rebuilt each frame alongside @ref instances_.
@@ -520,7 +516,7 @@ private:
     std::array<float, 4u * gi::GI_SDF_GRID_PARAMS_VEC4> grid_params_{};
     uint64_t experiment_flags_ = 0;
 
-    /// UE's threshold: a change of the sun or sky by more than this factor either way is global.
+    /// A change of the sun or sky by more than this factor either way is global.
     static constexpr float global_lighting_change_ratio = 4.0f;
     /// The floor of the ratio's terms, so a light switching on or off counts as a change.
     static constexpr float global_lighting_epsilon = 1e-5f;

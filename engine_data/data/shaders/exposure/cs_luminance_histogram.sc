@@ -3,19 +3,18 @@
  *
  * Builds a 256-bin histogram of log2(luminance) from the HDR scene buffer on a metering grid
  * of one cell per 4x4 source texels. Each cell averages its block with four bilinear taps on
- * the block's inner corners, so every source texel contributes (UE meters every texel of a
- * filtered downsample). Each sample carries a spatial weight (average / center-weighted /
- * spot) and is split linearly between the two bins around its position (UE Histogram.usf),
+ * the block's inner corners, so every source texel contributes (one point sample per cell
+ * would skip 15 of its 16). Each sample carries a spatial weight (average / center-weighted /
+ * spot) and is split linearly between the two bins around its position,
  * which keeps the metered value continuous as luminance moves across bin boundaries.
- * Luminance is UE's eye adaptation luminance: uniform RGB weights
- * (r.AutoExposure.LuminanceMethod 0), so saturated blue or red light meters as UE meters it.
+ * Luminance weighs R, G and B uniformly, so saturated blue or red light meters brighter than
+ * Rec. 709 luminance weights would make it.
  *
- * Bin layout: bin 0 holds black samples (the average ignores it, like UE's
- * r.EyeAdaptation.BlackHistogramBucketInfluence = 0); bins 1..255 cover the log2 luminance
- * range, with position = t * 254 + 1 for t in [0, 1] and bin i centred at t = (i - 1) / 254.
- * Black is UE's: anything at or below the bottom of the range. UE's histogram has 64 buckets
- * and its bucket 0 carries no weight, so a sample within one bucket width of the floor keeps
- * only the share it splits into bucket 1; the floor ramp below reproduces that.
+ * Bin layout: bin 0 holds black samples (the average ignores it); bins 1..255 cover the log2
+ * luminance range, with position = t * 254 + 1 for t in [0, 1] and bin i centred at
+ * t = (i - 1) / 254. Black is anything at or below the bottom of the range. A sample within
+ * 1 / 63 of the range above the floor keeps only the share t x 63 of its weight and gives the
+ * rest to black, so the metered value fades in instead of stepping at the floor.
  *
  * Uses shared memory for a per-workgroup local histogram, then atomically merges into the
  * global histogram buffer.
@@ -54,9 +53,8 @@ uniform vec4 u_metering_cell;
 // Fixed-point scale for fractional sample weights (spatial weight x bin share). 1024 x the
 // 1024x576 grid cap stays below 2^32 even if every sample lands in one bin.
 #define WEIGHT_SCALE 1024.0
-// UE's histogram bucket count (FHistogramAtomicCS::HistogramSize): the floor ramp spans one of
-// its buckets.
-#define UE_HISTOGRAM_BUCKETS 64.0
+// The floor ramp spans one bucket of a 64-bucket histogram: 1 / 63 of the log2 range.
+#define FLOOR_RAMP_BUCKETS 64.0
 #define FIRST_LUMINANCE_BIN 1.0
 #define LUMINANCE_BIN_SPAN 254.0
 #define LAST_BIN 255u
@@ -116,13 +114,13 @@ void main()
         float lum = dot(color, vec3_splat(1.0 / 3.0));
         // NaN or negative lighting reads as black.
         lum = (lum > 0.0) ? lum : 0.0;
-        // Scene luminance: the input may carry the view's pre-exposure. UE floors it at the bottom
-        // of the histogram range (CalculateEyeAdaptationLuminance's LuminanceMin).
+        // Scene luminance: the input may carry the view's pre-exposure. Floored at the bottom of
+        // the histogram range.
         float log_lum = max(log2(max(lum, 1e-30)) - u_log2_pre_exposure, u_min_log_lum);
         imageStore(i_exposure_log_lum, ivec2(gid), vec4(log_lum, 0.0, 0.0, 0.0));
 
         float histogram_position = (log_lum - u_min_log_lum) * u_inv_log_range;
-        float metered_share = saturate(histogram_position * (UE_HISTOGRAM_BUCKETS - 1.0));
+        float metered_share = saturate(histogram_position * (FLOOR_RAMP_BUCKETS - 1.0));
         float metered_weight = spatial_weight * metered_share;
         if (spatial_weight > 0.0)
         {

@@ -2,8 +2,7 @@
 #define __LUMEN_RADIANCE_CACHE_COMMON_SH__
 
 /*
- * The radiance cache (UE 5.8 Lumen, LumenRadianceCache*.usf / .ush, analysis chapter f): sparse
- * world-space radiance probes on LUMEN_RADIANCE_CACHE_CLIPMAPS camera-centred clipmaps of
+ * The radiance cache: sparse world-space radiance probes on LUMEN_RADIANCE_CACHE_CLIPMAPS camera-centred clipmaps of
  * LUMEN_RADIANCE_CACHE_GRID^3 cells, cell 0 = 2 x LUMEN_RADIANCE_CACHE_EXTENT / GRID, doubling per clipmap.
  * A probe sits at its cell's lattice point (a multiple of the cell size, world-locked) and holds an
  * equal-area octahedral radiance map of u_lumen_rc_probe_res^2 texels plus their hit distances.
@@ -55,9 +54,8 @@ uniform vec4 u_lumen_rc_prev_clipmaps[LUMEN_RADIANCE_CACHE_CLIPMAPS];
 uniform vec4 u_lumen_rc_params;
 /// xyz = camera position.
 uniform vec4 u_lumen_rc_camera;
-/// x = the probes' radiance map resolution in texels per axis, the quality tier's (UE
-/// r.Lumen.ScreenProbeGather.RadianceCache.ProbeResolution: LUMEN_RADIANCE_CACHE_PROBE_RES at Epic, 16 at High; a
-/// multiple of 2 x LUMEN_RC_TILE_RES).
+/// x = the probes' radiance map resolution in texels per axis, the quality tier's (LUMEN_RADIANCE_CACHE_PROBE_RES at
+/// the epic tier, 16 at high; a multiple of 2 x LUMEN_RC_TILE_RES).
 uniform vec4 u_lumen_rc_layout;
 
 #define u_lumen_rc_frame       uint(u_lumen_rc_params.x)
@@ -69,10 +67,10 @@ uniform vec4 u_lumen_rc_layout;
 #define u_lumen_rc_final_res   (u_lumen_rc_probe_res + 2)
 
 /// Probes one frame may trace: LUMEN_RADIANCE_CACHE_MAX_TRACES while the cache continues; every probe of the pool on a
-/// frame that rebuilds it (UE sizes the trace to the whole atlas on a full update, LumenRadianceCache.cpp:1641-1673).
+/// frame that rebuilds it, so a full update traces the whole atlas at once.
 #define u_lumen_rc_trace_cap (u_lumen_rc_persistent ? uint(LUMEN_RADIANCE_CACHE_MAX_TRACES) : uint(LUMEN_RADIANCE_CACHE_MAX_PROBES))
-/// Groups per row of the trace dispatch (UE's 128-wide layout, LumenRadianceCache.usf:671-677): a rebuild traces up to
-/// LUMEN_RADIANCE_CACHE_MAX_PROBES x 16 tiles, past one dispatch dimension's limit.
+/// Groups per row of the 2D trace dispatch: a rebuild traces up to LUMEN_RADIANCE_CACHE_MAX_PROBES x 16 tiles, past
+/// one dispatch dimension's limit.
 #define LUMEN_RC_TRACE_DISPATCH_WIDTH 128u
 
 float LumenRcCellSize(int clipmap)
@@ -118,8 +116,7 @@ ivec4 LumenRcIndirectionCell(uint index)
 }
 
 /// The finest clipmap whose interpolation lattice covers @p position: every axis strictly inside half a
-/// cell of the grid's face (LumenRadianceCacheInterpolation.ush:136-154, dither 0), or
-/// LUMEN_RADIANCE_CACHE_CLIPMAPS.
+/// cell of the grid's face (no dither across clipmap borders), or LUMEN_RADIANCE_CACHE_CLIPMAPS.
 int LumenRcClipmapOf(vec3 position)
 {
 	for(int clipmap = 0; clipmap < LUMEN_RADIANCE_CACHE_CLIPMAPS; ++clipmap)

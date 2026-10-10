@@ -7,10 +7,10 @@ namespace unravel
 /**
  * @brief Velocity based fly movement of the editor camera.
  *
- * Follows UE's FEditorCameraController: the input accelerates a world-space velocity and a linear
- * drag pulls it back to rest, so the camera eases in, eases out and carries its momentum through
- * a turn. UE integrates that per frame (v += a * dt, v -= v * drag * dt), which settles at a
- * frame-rate dependent speed; the step here is the closed-form solution of
+ * The input accelerates a world-space velocity and a linear drag pulls it back to rest, so the
+ * camera eases in, eases out and carries its momentum through a turn. A per-frame integration
+ * (v += a * dt, v -= v * drag * dt) would settle at a frame-rate dependent speed; the step here
+ * is the closed-form solution of
  * dv/dt = drag * (target - v), identical at any frame rate.
  */
 class camera_controller

@@ -396,7 +396,6 @@ private:
      * seeded on the first refresh. This is what whole-model culling uses when the pose
      * refresh is skipped (off-screen gate): it never depends on fresh proxies, so a model
      * whose animation moves it into view is always re-discovered by the frustum test.
-     * Equivalent to Unity's SkinnedMeshRenderer localBounds anchored to rootBone.
      * Reset when the mesh or armature entity set changes.
      */
     math::bbox culling_bounds_local_;

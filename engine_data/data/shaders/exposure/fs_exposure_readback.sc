@@ -8,7 +8,7 @@ $input v_texcoord0
  * pixel survives (the query reads visible) exactly when the requested bit is set. Tag bits
  * come straight from the CPU; code bits encode log2(exposure x average local exposure) from
  * AUTO_EXPOSURE on a fixed range, so the CPU reassembles the value a few frames later - the
- * async eye adaptation readback UE builds its pre-exposure from.
+ * async eye adaptation readback the pipeline's pre-exposure is built from.
  */
 
 #include <bgfx_shader.sh>

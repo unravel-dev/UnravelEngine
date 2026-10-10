@@ -18,9 +18,8 @@ namespace unravel
  * @struct style_sheet
  * @brief Represents a UI style sheet asset (CSS/RCSS document).
  * 
- * This asset contains styling information for UI elements,
- * similar to Unity's USS files. It defines the visual appearance
- * and layout properties of UI elements.
+ * This asset contains styling information for UI elements. It defines
+ * the visual appearance and layout properties of UI elements.
  */
 struct style_sheet
 {

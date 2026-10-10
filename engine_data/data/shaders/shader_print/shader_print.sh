@@ -2,7 +2,7 @@
 #define __SHADER_PRINT_SH__
 
 /*
- * UE 5.8's ShaderPrint for compute shaders (ShaderPrintCommon.ush): text into the view's print buffer, which
+ * Shader print for compute shaders: text into the view's print buffer, which
  * shader_print draws over the finished image. The includer includes bgfx_compute.sh and defines SHADER_PRINT_STAGE,
  * the stage C++ binds the buffer at (shader_print::bind). Each function returns the advanced context:
  *
@@ -11,8 +11,8 @@
  *     ctx = ShaderPrintFloat(ctx, value);
  *     ctx = ShaderPrintNewline(ctx);
  *
- * Symbols are character codes (UE's _A_-style names below). A value takes UE's field of SHADER_PRINT_VALUE_FIELD
- * characters, as UE's columns do.
+ * Symbols are character codes (the _A_-style names below). A value takes a field of SHADER_PRINT_VALUE_FIELD
+ * characters, so values printed one under another line up in columns.
  */
 
 BUFFER_RW(b_shader_print, uint, SHADER_PRINT_STAGE);
@@ -24,14 +24,14 @@ uniform vec4 u_shader_print;
 /// (float bits), its code and its colour (RGBA8).
 #define SHADER_PRINT_HEADER 4
 #define SHADER_PRINT_SYMBOL_STRIDE 4
-/// UE's metrics at r.ShaderPrint.FontSize 8, FontSpacingX 0 and FontSpacingY 8, in pixels.
+/// The pen's advance per symbol and per line in pixels: an 8 pixel font, no gap across, 8 pixels between lines.
 #define SHADER_PRINT_ADVANCE_X 8.0
 #define SHADER_PRINT_ADVANCE_Y 16.0
-/// UE MAX_DIGIT_COUNT and MAX_DECIMAL_COUNT.
+/// A value's field in characters and the most decimals a float prints.
 #define SHADER_PRINT_VALUE_FIELD 12.0
 #define SHADER_PRINT_MAX_DECIMALS 5
 
-/// UE's character names (ShaderPrintCommon.ush).
+/// Character names: the ASCII code of each printable symbol.
 #define _SPC_ 32
 #define _EXCL_ 33
 #define _PLUS_ 43
@@ -113,7 +113,7 @@ struct ShaderPrintContext
 	vec3 color;
 };
 
-/// A context printing white from @p start_uv (fractions of the view, UE InitShaderPrintContext).
+/// A context printing white from @p start_uv (fractions of the view).
 ShaderPrintContext ShaderPrintBegin(vec2 start_uv)
 {
 	ShaderPrintContext ctx;
@@ -169,7 +169,7 @@ ShaderPrintContext ShaderPrintNewline(ShaderPrintContext ctx)
 	return ctx;
 }
 
-/// UE AddUIntSymbols: the digits of @p value.
+/// The digits of @p value, most significant first.
 ShaderPrintContext ShaderPrintDigits(ShaderPrintContext ctx, uint value)
 {
 	uint count = 1u;
@@ -194,7 +194,7 @@ ShaderPrintContext ShaderPrintDigits(ShaderPrintContext ctx, uint value)
 	return ctx;
 }
 
-/// The pen after a value printed from @p field: UE gives every value SHADER_PRINT_VALUE_FIELD characters.
+/// The pen after a value printed from @p field: every value takes SHADER_PRINT_VALUE_FIELD characters.
 ShaderPrintContext ShaderPrintEndValue(ShaderPrintContext ctx, vec2 field)
 {
 	ctx.position = field + vec2(SHADER_PRINT_VALUE_FIELD * SHADER_PRINT_ADVANCE_X, 0.0);
@@ -220,7 +220,7 @@ ShaderPrintContext ShaderPrintInt(ShaderPrintContext ctx, int value)
 	return ShaderPrintEndValue(ctx, field);
 }
 
-/// UE AddFloatSymbols: INF and NAN spelled out, else the sign, the integer part, the point and the decimals up to
+/// INF and NAN spelled out, else the sign, the integer part, the point and the decimals up to
 /// the last non-zero one, at most SHADER_PRINT_MAX_DECIMALS.
 ShaderPrintContext ShaderPrintFloat(ShaderPrintContext ctx, float value)
 {

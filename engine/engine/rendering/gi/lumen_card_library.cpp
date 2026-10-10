@@ -16,7 +16,7 @@ namespace unravel
 namespace
 {
 
-/// UE's default MaxLumenMeshCards (FMeshBuildSettings): the card budget of one mesh.
+/// The card budget of one submesh's card set, the import settings' default max_cards.
 constexpr uint32_t k_max_lumen_mesh_cards = 12;
 
 auto build_submesh_cards(mesh& source, uint32_t submesh_index, bool two_sided, lumen_card_build_debug* debug = nullptr)

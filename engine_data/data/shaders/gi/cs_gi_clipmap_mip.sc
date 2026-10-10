@@ -1,16 +1,15 @@
 /*
- * One pass of a global SDF level's coarse mip (UE 5.8 PropagateMipDistanceCS, GlobalDistanceFieldMip.usf:83-110;
- * GlobalDistanceField.cpp:3106-3178), one thread per mip texel.
+ * One pass of a global SDF level's coarse mip, one thread per mip texel.
  *
  * Mip texel c of a level covers its voxels [c, c + 1) x SDF_CLIPMAP_MIP_FACTOR. The first pass reads the level at
  * every texel's centre (trilinear across the eight voxels there); a reading short of the level's encode range becomes
  * that distance in the mip's encoding, a saturated one "far" (1). Every pass then lowers each texel to the eikonal
- * solution from its six neighbours, one mip texel apart: UE runs five passes, which carries the distance
- * SDF_CLIPMAP_MIP_PROPAGATION_PASSES mip texels away from the surfaces the level holds. The mip therefore holds
+ * solution from its six neighbours, one mip texel apart: five passes (gi_clipmap_compose_pass mip_propagation_passes)
+ * carry the distance five mip texels away from the surfaces the level holds. The mip therefore holds
  * exactly the level's own objects, so stepping by it never skips one the level shows.
  *
  * Encoding: normalised n, distance = (n - 0.5) x 2 x encode range x SDF_CLIPMAP_MIP_FACTOR level voxels; one mip texel
- * is 1 / (2 x encode range) of it (UE Step = 1 / (2 x GLOBAL_DISTANCE_FIELD_INFLUENCE_RANGE_IN_VOXELS)).
+ * is 1 / (2 x encode range) of it (the eikonal updates' step_size).
  */
 
 #include "bgfx_compute.sh"
@@ -40,7 +39,8 @@ float Eikonal1(float x, float step_size)
 }
 
 /// The two- and three-neighbour updates have no solution where the neighbours differ by more than the step allows;
-/// they then answer SDF_CLIPMAP_MIP_NO_SOLUTION, which the minimum ignores (UE's NaN, dropped by min on D3D).
+/// they then answer SDF_CLIPMAP_MIP_NO_SOLUTION, which the minimum ignores (a large value, not a NaN: min need not
+/// drop a NaN on every backend).
 #define SDF_CLIPMAP_MIP_NO_SOLUTION 1e6
 
 float Eikonal2(float x, float y, float step_size)

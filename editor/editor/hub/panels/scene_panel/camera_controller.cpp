@@ -6,7 +6,7 @@ namespace unravel
 {
 namespace
 {
-// UE's MovementVelocityDampingAmount. The velocity closes 63% of the gap to its target every
+// The velocity drag in 1/s. The velocity closes 63% of the gap to its target every
 // 1 / 10 s: full speed and a full stop both take about 0.3 s.
 constexpr float VELOCITY_DAMPING = 10.0f;
 // The rest of a coast at this speed is half a millimetre. Stop there, otherwise the view creeps

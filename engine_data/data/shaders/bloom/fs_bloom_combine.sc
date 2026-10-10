@@ -2,7 +2,6 @@ $input v_texcoord0
 
 /*
  * Bloom combine pass.
- * Reference: BGFX 38-bloom (https://github.com/bkaradzic/bgfx/tree/master/examples/38-bloom)
  * Adds bloom to the original HDR scene. Tonemapping is applied separately.
  */
 

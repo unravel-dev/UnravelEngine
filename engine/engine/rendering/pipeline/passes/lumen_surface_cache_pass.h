@@ -12,7 +12,7 @@ namespace unravel
 {
 
 /**
- * @brief One camera's handle on Lumen's surface cache: the process's shared lumen_surface_cache (cards, atlases,
+ * @brief One camera's handle on the GI surface cache: the process's shared lumen_surface_cache (cards, atlases,
  *        lighting) and the camera's own object grid (lumen_object_grid), which follows the camera's global distance
  *        field.
  *

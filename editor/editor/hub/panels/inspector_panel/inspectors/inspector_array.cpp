@@ -111,7 +111,7 @@ auto is_inline_array_element(rtti::context& ctx, const entt::meta_type& type) ->
 }
 
 /// An element folding out is named after its first property when that is a string with text in
-/// it, as Unity names them. Any other element is named after its position.
+/// it. Any other element is named after its position.
 auto make_array_element_label(entt::meta_any& value, std::size_t index, bool is_foldout, const std::string& element_label)
     -> std::string
 {

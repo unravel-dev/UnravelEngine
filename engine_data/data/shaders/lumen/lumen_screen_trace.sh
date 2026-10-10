@@ -2,10 +2,8 @@
 #define __LUMEN_SCREEN_TRACE_SH__
 
 /*
- * Lumen's hierarchical screen trace (UE 5.8 HZBTracing.ush TraceHZB, as the screen probe gather
- * runs it: LumenScreenProbeTracing.usf:54-366), ported to this engine's Hi-Z: standard (not
- * reversed) device depth, CLOSEST depth per texel (min reduction), mip 0 at full resolution - which
- * is UE's "full-resolution depth as mip -1", so UE's mip m is this pyramid's mip m + 1.
+ * Hierarchical screen trace over this engine's Hi-Z: standard (not reversed) device depth, CLOSEST
+ * depth per texel (min reduction), mip 0 at full resolution.
  *
  * The trace runs in screen uv (xy) and device depth (z). A ray steps out of its start texel without a
  * test, then descends while it is in front of a texel's closest depth and climbs while it skips whole
@@ -14,8 +12,7 @@
  *
  * The helpers below it serve both screen tracers (the probe gather's and the reflections'): the ray origin
  * lifted off its own depth texel, the screen-edge vignette, and the radiance of a hit from last frame's
- * scene colour behind its reprojection and history depth test (UE LumenScreenTracing.ush,
- * LumenReflectionTracing.usf:166-217).
+ * scene colour behind its reprojection and history depth test.
  *
  * The includer declares the samplers and passes them in.
  */
@@ -28,14 +25,14 @@ struct LumenScreenTraceResult
 	bool hit;
 	/// Screen uv and device depth of the hit, or of the last point proved free.
 	vec3 position;
-	/// Screen uv and device depth of the last point proved free (UE LastVisibleHitUVz): where a caller
+	/// Screen uv and device depth of the last point proved free: where a caller
 	/// that rejects the hit resumes.
 	vec3 last_visible;
 	/// True when the trace reached its end or left the screen without a crossing.
 	bool reached_end;
 	/// True when the iteration budget ran out short of an answer: neither a hit nor a free segment.
 	bool uncertain;
-	/// Device depth of the depth buffer where the ray crossed it (UE HitTileZ); valid for a hit.
+	/// Device depth of the depth buffer where the ray crossed it; valid for a hit.
 	float surface_z;
 };
 
@@ -160,8 +157,8 @@ LumenScreenTraceResult LumenTraceHZB(sampler2D hiz,
 }
 
 /// The world point and how far the ray may run: @p origin projected, with the ray's end at most
-/// @p max_distance away and short of the camera plane; valid false when the origin projects off screen (UE
-/// skips the screen trace then).
+/// @p max_distance away and short of the camera plane; valid false when the origin projects off screen (the
+/// screen trace is skipped then).
 struct LumenScreenRaySegment
 {
 	bool valid;
@@ -192,15 +189,15 @@ LumenScreenRaySegment LumenScreenSegment(vec3 origin, vec3 direction, float max_
 }
 
 /// Screen-trace origin: @p position lifted along @p normal by LUMEN_SCREEN_TRACE_BIAS_TEXELS times the world
-/// size of half a pixel at its depth, out of its own depth texel's reach (UE ApplyScreenSpaceRayBias).
+/// size of half a pixel at its depth, out of its own depth texel's reach.
 vec3 LumenScreenTraceOrigin(vec3 position, vec3 normal, vec2 uv, float depth01)
 {
 	vec3 corner = LumenWorldFromDepth(uv + 0.5 * u_lumen_view_texel, depth01);
 	return position + LUMEN_SCREEN_TRACE_BIAS_TEXELS * abs(dot(corner - position, normal)) * normal;
 }
 
-/// Lumen's screen-edge vignette for one screen uv: 1 inside, falling to 0 over the outer tenth of each
-/// screen half (UE ComputeHitVignetteFromScreenPos).
+/// The screen-edge vignette for one screen uv: 1 inside, falling to 0 over the outer tenth of each
+/// screen half.
 float LumenScreenVignette(vec2 uv)
 {
 	vec2 v = saturate(LUMEN_SCREEN_TRACE_VIGNETTE_SCALE * abs(uv * 2.0 - 1.0) - LUMEN_SCREEN_TRACE_VIGNETTE_OFFSET);
@@ -210,8 +207,7 @@ float LumenScreenVignette(vec2 uv)
 /// Last frame's scene colour at a world point seen at screen @p uv this frame (rgb, in this frame's
 /// pre-exposure; a = 1), or a = 0 when it cannot be trusted there: its reprojection is off screen, inside the
 /// stochastic vignette band (of this frame or the last, against @p noise), or last frame's device depth at it
-/// differs from the point's by @p depth_tolerance x lerp(0.5, 2, noise) or more (UE
-/// LumenReflectionTracing.usf:166-217, LumenScreenTracing.ush:78-137).
+/// differs from the point's by @p depth_tolerance x lerp(0.5, 2, noise) or more.
 vec4 LumenScreenHistoryRadiance(sampler2D prev_color,
                                 sampler2D prev_depth,
                                 mat4 prev_view_proj,

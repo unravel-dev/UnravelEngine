@@ -1,6 +1,5 @@
 /*
- * Radiance cache spatial filter + final atlas (UE 5.8 FilterProbeRadianceWithGatherCS,
- * LumenRadianceCache.usf:991-1125, and FixupBordersAndGenerateMipsCS, :1392-1519, merged): for every texel of
+ * Radiance cache spatial filter + final atlas, merged in one pass: for every texel of
  * a traced probe's bordered final tile, the source texel it wraps to (the border mirrors across the
  * octahedron's folds) is averaged with the same texel of the six face-neighbour probes. A neighbour counts
  * only when each probe sees the other's ray point at 2 TMin (no wall between them), weighted by

@@ -3,6 +3,7 @@
 #include <engine/assets/asset_handle.h>
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/passes/local_exposure_binding.h>
 #include <graphics/render_view.h>
 #include <math/color.h>
 
@@ -15,8 +16,8 @@ public:
     struct settings
     {
         /// 0 (default) selects SCATTER mode: no threshold, the pyramid is an
-        /// energy-normalized blur of the whole scene (recursive lerp, Unity/CoD
-        /// style), added on top scaled by `intensity` -- everything blooms in
+        /// energy-normalized blur of the whole scene (recursive lerp
+        /// upsampling), added on top scaled by `intensity` -- everything blooms in
         /// proportion to its energy and the base image stays sharp. The meter
         /// runs before bloom, so scatter intensity is a small global lift
         /// (~0.15 EV at the default) on top of the locked exposure; treat it as
@@ -82,6 +83,13 @@ public:
         gfx::texture::ptr exposure_texture;
         /// The view's scene-color pre-exposure: the input carries it.
         float pre_exposure = 1.0f;
+        /// Local exposure for the bloom source: the first downsample scales the scene by the factor
+        /// the tonemapper gives it, so a highlight it compresses also blooms compressed. Inactive
+        /// when local exposure is off.
+        local_exposure_params local_exposure{};
+        /// The tonemapper's manual exposure scale; with the adapted exposure it places the bloom
+        /// source in the space local exposure works in.
+        float manual_exposure = 1.0f;
     };
 
     auto init(rtti::context& ctx) -> bool;
@@ -107,11 +115,15 @@ private:
             cache_uniform(program.get(), u_params, "u_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), s_tex, "s_tex", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_exposure, "s_exposure", bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), u_bloom_exposure, "u_bloom_exposure", bgfx::UniformType::Vec4);
+            local_exposure.cache_uniforms();
         }
         gfx::program::uniform_ptr u_pixel_size;
         gfx::program::uniform_ptr u_params;
         gfx::program::uniform_ptr s_tex;
         gfx::program::uniform_ptr s_exposure;
+        gfx::program::uniform_ptr u_bloom_exposure;
+        local_exposure_uniforms local_exposure;
         std::unique_ptr<gpu_program> program;
     } downsample_program_;
 

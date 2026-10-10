@@ -149,7 +149,7 @@ public:
     void set_mode(const sky_mode& mode);
 
     /**
-     * @brief Whether the directional light of this entity is the procedural sky's sun (UE Atmosphere Sun Light): its
+     * @brief Whether the directional light of this entity is the procedural sky's sun (the atmosphere sun light): its
      * light crosses the atmosphere and is tinted by the transmittance at the sun's elevation (warm by day, red and dim
      * at the horizon), and its intensity is then the illuminance outside the atmosphere. Perez mode only.
      */

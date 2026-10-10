@@ -14,8 +14,7 @@ namespace unravel
 /// Spatial weighting applied to pixels when building the luminance histogram.
 enum class exposure_metering_mode : std::uint8_t
 {
-    /// Every pixel contributes equally (uniform full-frame metering). Default, like UE without
-    /// a metering mask.
+    /// Every pixel contributes equally (uniform full-frame metering without a mask). Default.
     average = 0,
     /// Smooth radial falloff toward the screen edges (Gaussian).
     center_weighted = 1,
@@ -24,7 +23,7 @@ enum class exposure_metering_mode : std::uint8_t
 };
 
 /**
- * @brief Histogram auto exposure on UE 5.8's model.
+ * @brief Histogram auto exposure with temporal eye adaptation and local exposure.
  *
  * A compute pass meters a luminance histogram of the post-TAA HDR image, a second one trims
  * it to a percentile band, takes the log-average and adapts the exposure toward
@@ -35,7 +34,7 @@ enum class exposure_metering_mode : std::uint8_t
  *
  * The adapted exposure also reaches the CPU, a few frames late and without a GPU sync,
  * through occlusion queries (resolve_exposure_readback): the pipeline's pre-exposure is built
- * from it, as UE builds View.PreExposure from its async eye adaptation readback.
+ * from this late value.
  */
 class auto_exposure_pass
 {
@@ -47,99 +46,90 @@ public:
     }
 
     /// Serialized with the settings. Data saved without it, or with an older value, is ignored
-    /// on load and the settings keep their defaults: version 3 took UE 5.8's defaults and its
-    /// full adaptation (the compensation curve replaced the dark adaptation of version 2), and
-    /// values tuned for an earlier model do not carry over.
+    /// on load and the settings keep their defaults: version 3 is the current default set with
+    /// full adaptation and the compensation curve, and values tuned for an earlier model do not
+    /// carry over.
     static constexpr std::uint32_t settings_version = 3;
 
-    /// The compensation curve is baked into a LUT over this EV100 range, as UE bakes
-    /// AutoExposureBiasCurve (r.EyeAdaptation.ExposureCompensationCurveLUT.MinX / MaxX /
-    /// NumSamples). Metered values outside the range read the end samples.
+    /// The compensation curve is baked into a LUT of compensation_curve_samples samples over
+    /// this EV100 range. Metered values outside the range read the end samples.
     static constexpr float compensation_curve_min_ev = -10.0f;
     static constexpr float compensation_curve_max_ev = 20.0f;
     static constexpr std::uint16_t compensation_curve_samples = 64;
 
     /// A camera move longer than this, or a turn wider than camera_cut_degrees about any of
     /// its axes, in one frame is a cut: the exposure snaps to its target instead of adapting.
-    /// UE's large camera movement (IsLargeCameraMovement, r.CameraCutTranslationThreshold 100 m
-    /// and 75 degrees), which resets the previous transforms and forces the eye adaptation
-    /// target.
+    /// The pipeline's GI gather and reflections start their histories over on a cut too.
     static constexpr float camera_cut_distance = 100.0f;
     static constexpr float camera_cut_degrees = 75.0f;
 
     struct settings
     {
-        /// Exposure bias in stops (UE Exposure Compensation). The metered log-average luminance L
-        /// is mapped to 0.18 * 2^compensation before grading and the tone curve:
-        /// exposure = 0.18 * 2^compensation / L. +1 is UE's default
-        /// (r.DefaultFeature.AutoExposure.Bias), which the default tone curve is built around.
+        /// Exposure bias in stops. The metered log-average luminance L is mapped to
+        /// 0.18 * 2^compensation before grading and the tone curve:
+        /// exposure = 0.18 * 2^compensation / L. +1 is the default, which the default tone
+        /// curve is built around.
         float compensation = 1.0f;
-        /// Extra bias in stops as a function of the metered scene brightness (UE Exposure
-        /// Compensation Curve): x = metered EV100, y = stops added to the compensation. Keys
-        /// sorted by x, linear between them and constant past the ends; empty adds nothing.
+        /// Extra bias in stops as a function of the metered scene brightness: x = metered EV100,
+        /// y = stops added to the compensation. Keys sorted by x, linear between them and
+        /// constant past the ends; empty adds nothing.
         /// The usual use keeps a night scene dark, e.g. (-6, -2), (0, 0).
         std::vector<math::vec2> compensation_curve;
-        /// Lowest metered scene brightness auto exposure adapts to, in EV100 = log2(L / 0.18)
-        /// (UE Min Brightness). Darker scenes stop brightening here.
+        /// Lowest metered scene brightness auto exposure adapts to, in EV100 = log2(L / 0.18).
+        /// Darker scenes stop brightening here.
         float min_ev = -10.0f;
-        /// Highest metered scene brightness auto exposure adapts to, in EV100 (UE Max
-        /// Brightness). Brighter scenes stop darkening here. Min >= max holds a fixed exposure.
+        /// Highest metered scene brightness auto exposure adapts to, in EV100. Brighter scenes
+        /// stop darkening here. Min >= max holds a fixed exposure.
         float max_ev = 20.0f;
-        /// Fraction of the darkest histogram weight excluded from the average (UE Low Percent).
+        /// Fraction of the darkest histogram weight excluded from the average.
         float low_percentile = 0.10f;
-        /// Fraction of the histogram weight kept before the brightest is excluded (UE High
-        /// Percent).
+        /// Fraction of the histogram weight kept before the brightest is excluded.
         float high_percentile = 0.90f;
-        /// Adaptation speed in stops per second while the scene gets brighter (UE Speed Up).
-        /// The exposure moves at this rate until it is within 1.5 stops of the target, then
-        /// settles exponentially.
+        /// Adaptation speed in stops per second while the scene gets brighter. The exposure
+        /// moves at this rate until it is within 1.5 stops of the target, then settles
+        /// exponentially.
         float speed_up = 3.0f;
-        /// Adaptation speed in stops per second while the scene gets darker (UE Speed Down).
+        /// Adaptation speed in stops per second while the scene gets darker.
         float speed_down = 1.0f;
         /// How pixels are spatially weighted when metering scene luminance.
         ///
-        /// Average, as UE meters without a mask. Measured 2026-09-16 (GI_TestSuite): centre
-        /// weighting moved the exposure by 4% outdoors (darker - it meters the bright courtyard
-        /// centre harder) and 1.4% indoors (brighter), so it buys little and makes the meter
-        /// depend on where content happens to sit in frame. Its lower exterior clipping
-        /// (0.0019 against 0.0054) is an exposure-LEVEL difference, which compensation owns.
+        /// Average is the default. Measured on GI_TestSuite, centre weighting moves the
+        /// exposure by 4% outdoors (darker - it meters the bright courtyard centre harder) and
+        /// 1.4% indoors (brighter), so it buys little and makes the meter depend on where
+        /// content happens to sit in frame. Its lower exterior clipping (0.0019 against 0.0054)
+        /// is an exposure-LEVEL difference, which compensation owns.
         exposure_metering_mode metering_mode = exposure_metering_mode::average;
         /// Radius of the metering region relative to half the screen height. Gaussian sigma for
         /// center_weighted, hard cutoff for spot.
         float metering_area = 0.7f;
 
-        // -- LOCAL EXPOSURE (UE's bilateral-grid method, Scene.cpp:525-534). One exposure for
+        // -- LOCAL EXPOSURE (a bilateral grid of the metered log luminance). One exposure for
         //    the whole frame has to choose between a sunlit exterior and the interior around
         //    it; local exposure keeps the global choice and redistributes CONTRAST around each
         //    pixel's own neighbourhood level, so both stay readable without the flat look of a
         //    tone curve pulled down. Neutral (every scale 1) is a no-op and costs nothing.
         //
-        //    The contrast scales default to 0.8 / 0.8, the values UE writes into every new
-        //    project (r.DefaultFeature.LocalExposure.HighlightContrastScale / ShadowContrastScale,
-        //    GameProjectUtils.cpp), so a scene renders as a fresh UE project does. The shadow
-        //    lift also raises whatever little light an unlit room holds.
+        //    The contrast scales default to 0.8 / 0.8, so every scene starts with a mild
+        //    compression of both highlights and shadows. The shadow lift also raises whatever
+        //    little light an unlit room holds.
         /// Contrast scale applied to neighbourhoods ABOVE the middle-grey pivot; below 1
-        /// compresses highlights toward the pivot (UE Highlight Contrast Scale, 0.6-1.0
-        /// recommended). 1 = off.
+        /// compresses highlights toward the pivot (0.6-1.0 recommended). 1 = off.
         float local_highlight_contrast = 0.8f;
-        /// Contrast scale for neighbourhoods BELOW the pivot; below 1 lifts shadows (UE Shadow
-        /// Contrast Scale). 1 = off.
+        /// Contrast scale for neighbourhoods BELOW the pivot; below 1 lifts shadows. 1 = off.
         float local_shadow_contrast = 0.8f;
         /// How much of each pixel's detail (its distance from its neighbourhood level) survives
-        /// the contrast change (UE Detail Strength). 1 keeps detail exactly.
+        /// the contrast change. 1 keeps detail exactly.
         float local_detail_strength = 1.0f;
-        /// Blend from the edge-aware bilateral level toward the plain blurred level (UE Blurred
-        /// Luminance Blend). Higher softens halos at strong edges; lower keeps local contrast.
+        /// Blend from the edge-aware bilateral level toward the plain blurred level. Higher
+        /// softens halos at strong edges; lower keeps local contrast.
         float local_blurred_blend = 0.6f;
-        /// Kernel of the blurred level, as a percentage of the view width (UE Blurred Luminance
-        /// Kernel Size Percent).
+        /// Kernel diameter of the blurred level, as a percentage of the view width.
         float local_blurred_kernel_percent = 50.0f;
-        /// Shifts the pivot the contrast scales turn around, in stops (UE Middle Grey Bias).
+        /// Shifts the pivot the contrast scales turn around, in stops.
         float local_middle_grey_bias = 0.0f;
 
-        /// UE's enable rule (PostProcessing.cpp:799-802): local exposure runs only when a
-        /// contrast scale or the detail strength is not 1. Everything else about it is shape,
-        /// so a neutral setup must cost nothing.
+        /// Local exposure runs only when a contrast scale or the detail strength is not 1.
+        /// Everything else about it is shape, so a neutral setup must cost nothing.
         auto is_local_exposure_enabled() const -> bool
         {
             return local_highlight_contrast != 1.0f || local_shadow_contrast != 1.0f ||
@@ -231,9 +221,8 @@ public:
      *
      * @c grid is the RGBA32F bilateral grid flattened to 2D (tiles x * @ref local_exposure_slices,
      * tiles y), each texel holding sum(log2 luminance) and sum(weight) of the metering cells in
-     * that tile and luminance slice (raw sums, as UE's grid). @c blurred is the R16F Gaussian of
-     * the log luminance at 1/32 of the view resolution (UE's blurred log luminance), sampled
-     * bilinearly.
+     * that tile and luminance slice (raw sums). @c blurred is the R16F Gaussian of the log
+     * luminance at 1/32 of the view resolution, sampled bilinearly.
      */
     struct local_exposure_view
     {
@@ -243,8 +232,7 @@ public:
         float tiles_x = 0.0f;
         float tiles_y = 0.0f;
         /// The share of the tile grid and of the blurred texture the view covers per axis (the
-        /// last tile / texel is partial): screen uv times this addresses them (UE
-        /// GetLocalExposureBilateralGridUVScale).
+        /// last tile / texel is partial): screen uv times this addresses them.
         math::vec2 grid_uv_scale{1.0f, 1.0f};
         math::vec2 blurred_uv_scale{1.0f, 1.0f};
     };
@@ -253,17 +241,17 @@ public:
     /// Luminance slices per bilateral-grid column. Mirrors LOCAL_EXPOSURE_SLICES in
     /// cs_local_exposure_grid.sc.
     static constexpr std::uint32_t local_exposure_slices = 32;
-    /// Metering cells per bilateral-grid tile edge (128 view pixels, UE's 64 half-resolution
-    /// texels). Mirrors LOCAL_EXPOSURE_TILE_CELLS there.
+    /// Metering cells per bilateral-grid tile edge (128 view pixels). Mirrors
+    /// LOCAL_EXPOSURE_TILE_CELLS there.
     static constexpr std::uint32_t local_exposure_tile_cells = 32;
-    /// Metering cells per blurred log luminance texel edge: 32 view pixels, the 1/32 resolution
-    /// UE blurs (its scene downsample chain level). Mirrors LOCAL_EXPOSURE_BLUR_CELLS in
+    /// Metering cells per blurred log luminance texel edge: 32 view pixels, so the blur runs at
+    /// 1/32 of the view resolution. Mirrors LOCAL_EXPOSURE_BLUR_CELLS in
     /// cs_local_exposure_downsample.sc.
     static constexpr std::uint32_t local_exposure_blur_cells = 8;
 
     void release_resources(gfx::render_view& rview);
 
-    /// log2 luminance range covered by the histogram (UE extended-range HistogramLogMin / Max).
+    /// log2 luminance range covered by the histogram.
     static constexpr float min_log_lum = -10.0f;
     static constexpr float max_log_lum = 20.0f;
     static constexpr int histogram_bins = 256;
@@ -272,16 +260,13 @@ public:
 
 private:
     /// Source texels per metering cell along each axis. Four bilinear taps at the cell's inner
-    /// corners average a 4x4 block, so every source texel contributes (UE meters every texel of
-    /// a filtered downsample).
+    /// corners average a 4x4 block, so every source texel contributes.
     static constexpr std::uint32_t metering_cell_texels = 4;
     /// Long-edge cap of the metering grid; larger inputs spread the four taps over bigger cells.
     static constexpr std::uint32_t max_metering_dim = 1024;
-    /// Stops from the target at which adaptation switches from linear to exponential
-    /// (UE r.EyeAdaptation.ExponentialTransitionDistance).
+    /// Stops from the target at which adaptation switches from linear to exponential.
     static constexpr float exponential_transition_stops = 1.5f;
-    /// Frame time at which the exponential phase's slope is matched to the linear phase
-    /// (UE kFrameTimeEps).
+    /// Frame time at which the exponential phase's slope is matched to the linear phase.
     static constexpr float slope_match_frame_time = 1.0f / 60.0f;
 
 
@@ -295,13 +280,12 @@ private:
     /// luminance. Skipped entirely when the settings are neutral; the textures are then
     /// released so the tonemapper takes its own no-op path.
     void run_local_exposure(gfx::render_view& rview, const run_params& params);
-    /// UE's blurred log luminance: the metering grid reduced to 1/32 of the view, then a
-    /// separable Gaussian of UE's kernel (AddLocalExposureBlurredLogLuminancePass).
+    /// The blurred log luminance: the metering grid reduced to 1/32 of the view, then a
+    /// separable Gaussian whose diameter is local_blurred_kernel_percent of the view width.
     void run_local_exposure_blur(gfx::render_view& rview, const settings& config, const usize32_t& meter_size);
     void run_average(gfx::render_view& rview, const run_params& params);
-    /// The view's compensation curve LUT (UE's ExposureCompensationCurveLUT): 2^curve at
-    /// compensation_curve_samples EV100 values, rebaked when the keys change. Null when the
-    /// curve is empty.
+    /// The view's compensation curve LUT: 2^curve at compensation_curve_samples EV100 values,
+    /// rebaked when the keys change. Null when the curve is empty.
     static auto update_compensation_curve(gfx::render_view& rview, const settings& config) -> gfx::texture::ptr;
     void submit_exposure_readback(gfx::render_view& rview);
     static auto ensure_readback_queries(readback_state& state) -> bool;

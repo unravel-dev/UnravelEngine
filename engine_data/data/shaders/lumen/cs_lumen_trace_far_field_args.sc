@@ -1,5 +1,5 @@
 /*
- * The dispatch arguments of the probe trace's far-field and hit passes (UE 5.8 CompactTraces' indirect arguments):
+ * The indirect dispatch arguments of the probe trace's far-field and hit passes:
  * ceil(count / LUMEN_TRACE_FAR_FIELD_GROUP) groups, in rows of LUMEN_TRACE_FAR_FIELD_ROW_GROUPS, over a list whose
  * first uint counts it: the rays the screen pass left, or the hits the far-field pass left (cs_lumen_probe_trace.sc).
  */

@@ -1,11 +1,10 @@
 /*
  * LOCAL EXPOSURE, stage 2a: the log luminance at 1/32 of the view resolution, the input of the
- * blurred luminance (UE PostProcessing.cpp:1430-1435 reads its scene downsample chain at 1/32,
- * PostProcessLocalExposure.usf SetupLogLuminanceCS takes log2 of that level's luminance).
+ * blurred luminance: log2 of the luminance of the scene downsampled to that level.
  *
  * One texel per LOCAL_EXPOSURE_BLUR_CELLS x LOCAL_EXPOSURE_BLUR_CELLS metering cells (each cell
- * is 4 x 4 view pixels): the LINEAR luminance is averaged and its log2 stored, as UE logs a
- * downsampled colour rather than averaging logs.
+ * is 4 x 4 view pixels): the LINEAR luminance is averaged and its log2 stored - the log of a
+ * downsampled colour, not an average of logs, so bright cells keep their linear weight.
  */
 
 #include "bgfx_compute.sh"

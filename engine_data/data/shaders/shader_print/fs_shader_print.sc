@@ -1,7 +1,7 @@
 $input v_color0, v_texcoord0
 
 /*
- * A shader_print glyph (UE ShaderPrintDraw.usf DrawSymbolsPS): the font's coverage at the quad's texel, premultiplied.
+ * A shader_print glyph: the font's coverage at the quad's texel, premultiplied.
  */
 
 #include "../common.sh"

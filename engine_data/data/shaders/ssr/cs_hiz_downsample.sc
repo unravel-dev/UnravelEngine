@@ -4,7 +4,7 @@
  * Input and output mip levels are set by the C++ code via gfx::set_image
  *
  * Each output texel takes the closest depth of every input texel its uv range overlaps. A tracer that maps a
- * screen uv to texel uv x textureSize(mip) (the Lumen screen traces) sees that range reach into a third input
+ * screen uv to texel uv x textureSize(mip) (the GI screen traces) sees that range reach into a third input
  * texel along an odd input dimension; without it the coarse texel would miss geometry the ray then skips.
  */
 

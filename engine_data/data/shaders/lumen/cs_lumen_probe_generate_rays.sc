@@ -1,9 +1,7 @@
 /*
- * Lumen screen probe gather, structured importance sampling: UE 5.8 ScreenProbeGatherScreenDataCS
- * (LumenScreenProbeGatherScreenData.usf:77-310), ScreenProbeComputeLightingProbabilityDensityFunctionCS
- * (LumenScreenProbeImportanceSampling.usf:36-193) and ScreenProbeGenerateRaysCS (:306-495), fused into one
- * group per probe of one thread per octahedral texel, N x N = LUMEN_PROBE_TRACE_RES^2 (an adaptive probe's
- * footprint is centred on its own pixel):
+ * Screen probe gather, structured importance sampling: the footprint data, the lighting PDF and the ray
+ * generation, fused into one group per probe of one thread per octahedral texel, N x N = LUMEN_PROBE_TRACE_RES^2
+ * (an adaptive probe's footprint is centred on its own pixel):
  *  1. BRDF PDF: the mean cosine lobe (SH3) of the 8x8 footprint pixels around the probe that lie on its
  *     plane - the pixels that will read it - and the disocclusion flag: at least 40% of them have fewer than
  *     4 frames of history. The footprint is 8x8 at every resolution: each thread takes its share of it.
@@ -53,7 +51,7 @@ uniform vec4 u_lumen_prev_probe;
 #define u_lumen_cache_valid   (u_lumen_ray_gen.z > 0.0)
 
 #define LUMEN_PROBE_TEXELS (LUMEN_PROBE_TRACE_RES * LUMEN_PROBE_TRACE_RES)
-/// The footprint's pixels per axis (UE gathers 64 pixels per probe whatever its tracing resolution).
+/// The footprint's pixels per axis: a probe gathers 64 pixels whatever its tracing resolution.
 #define LUMEN_FOOTPRINT_EDGE 8
 #define LUMEN_FOOTPRINT_SAMPLES (LUMEN_FOOTPRINT_EDGE * LUMEN_FOOTPRINT_EDGE)
 /// Reduced per thread: 9 SH3 coefficients, the sample count, the young-sample count.
@@ -83,7 +81,7 @@ void LumenStoreFootprint(int index, LumenSH3 sh, float count, float young)
 	s_reduce[base + 10] = young;
 }
 
-/// One footprint sample's contribution (UE ScreenData): x = 1 when the pixel lies on the probe's plane
+/// One footprint sample's contribution: x = 1 when the pixel lies on the probe's plane
 /// (or is the probe's own), y = 1 when it is young, and its normal for the BRDF SH. @p footprint_texel is the
 /// sample's place in the 8x8 footprint.
 vec4 LumenFootprintSample(ivec2 probe_pixel, vec3 probe_position, float probe_depth, ivec2 footprint_texel)

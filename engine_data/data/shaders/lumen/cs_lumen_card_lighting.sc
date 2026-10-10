@@ -1,14 +1,12 @@
 /*
- * Lumen surface cache direct lighting and final combine (UE 5.8 LumenSceneDirectLighting.usf:99-164 and
- * LumenSceneDirectLightingSoftwareRayTracing.usf:72-150, LumenSceneLighting.usf:476-507), one 8x8 group per
- * card tile the lighting scheduler picked for direct lighting.
+ * Surface cache direct lighting and final combine, one 8x8 group per card tile the lighting scheduler picked for
+ * direct lighting.
  *
  * Per covered texel: its world position from the card (page UV rectangle + card depth) and every light's
  * Lambert irradiance with a binary global-SDF shadow ray (start bias (1 + 2 (1 - N.L)) voxel extents of each
  * level the ray samples, the expansion ramping in from there; local lights stop one extent short of the
- * light). Directional lights take the cloud layer's shadow as the deferred light does (UE
- * r.Lumen.DirectLighting.CloudTransmittance, cloud_shadow.sh). With more than LUMEN_CARD_CULL_MIN_LIGHTS lights a
- * tile culls them first (UE LumenSceneDirectLightingCulling.usf): its texels' world bounds, then a bit per light
+ * light). Directional lights take the cloud layer's shadow as the deferred light does (cloud_shadow.sh). With more
+ * than LUMEN_CARD_CULL_MIN_LIGHTS lights a tile culls them first: its texels' world bounds, then a bit per light
  * whose range reaches them; the texels add the marked lights in index order - a culled light adds exactly 0, so the
  * sum is the full loop's. Direct lighting keeps no history: every texel of a
  * scheduled tile is rewritten, and its final lighting is combined with the indirect lighting it holds (the radiosity
@@ -60,12 +58,12 @@ SHARED vec3 s_tile_min[LUMEN_CARD_TILE_TEXELS];
 SHARED vec3 s_tile_max[LUMEN_CARD_TILE_TEXELS];
 SHARED uint s_tile_lights[LUMEN_CARD_CULL_WORDS];
 
-/// r.LumenScene.DirectLighting.GlobalSDF.ShadowRayBias, in voxel extents.
+/// The global SDF shadow ray bias in voxel extents: scales the start offset and is a local light's end offset.
 #define LUMEN_GLOBAL_SDF_SHADOW_RAY_BIAS 1.0
-/// The shadow ray length of directional lights (Lumen's MaxTraceDistance, 200 m).
+/// The shadow ray length of directional lights (the GI's max trace distance, 200 m).
 #define LUMEN_DIRECTIONAL_SHADOW_DISTANCE 200.0
 
-/// GetCardBiasForShadowing, in voxel extents.
+/// The shadow ray's start offset in voxel extents: 1x the bias facing the light, up to 3x at grazing angles.
 float LumenShadowRayBias(vec3 normal, vec3 to_light)
 {
 	return LUMEN_GLOBAL_SDF_SHADOW_RAY_BIAS * (1.0 + 2.0 * saturate(1.0 - dot(normal, to_light)));
@@ -80,7 +78,7 @@ float LumenShadowVisibility(vec3 position, vec3 normal, vec3 to_light, float lig
 	return hit.hit ? 0.0 : 1.0;
 }
 
-/// One light's shadowed Lambert irradiance at a card texel (UE GetIrradianceForLight): a local
+/// One light's shadowed Lambert irradiance at a card texel: a local
 /// light's capsule gives the inverse-squared falloff and the diffuse cosine, as in the direct pass.
 vec3 LumenCardLightIrradiance(GpuLight light, vec3 position, vec3 normal)
 {

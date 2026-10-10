@@ -1,9 +1,9 @@
 $output v_color0, v_texcoord0
 
 /*
- * shader_print's text (UE ShaderPrintDraw.usf DrawSymbolsVS): per printed symbol, two quads the font's size centred
- * on its pen position - its drop shadow in black SHADER_PRINT_SHADOW_OFFSET right and down (UE: a fifth of the font
- * size), then its glyph in its colour. Symbols past the printed count fall outside the view.
+ * shader_print's text: per printed symbol, two quads the font's size centred on its pen position - its drop shadow
+ * in black SHADER_PRINT_SHADOW_OFFSET right and down, then its glyph in its colour. Symbols past the printed count
+ * fall outside the view.
  */
 
 #include "../common.sh"
@@ -28,7 +28,7 @@ void main()
 	int local = gl_VertexID - symbol * SHADER_PRINT_VERTICES_PER_SYMBOL;
 	bool is_shadow = local < SHADER_PRINT_QUAD_VERTICES;
 	int corner = is_shadow ? local : local - SHADER_PRINT_QUAD_VERTICES;
-	// UE's corners: u = ((corner + 1) / 3) & 1, v = corner & 1.
+	// The six corners of the quad's two triangles: u = ((corner + 1) / 3) & 1, v = corner & 1.
 	int u_step = (corner + 1) / 3;
 	vec2 uv = vec2(float(u_step - (u_step / 2) * 2), float(corner - (corner / 2) * 2));
 	uint count = min(b_shader_print[0], uint(u_shader_print.z));

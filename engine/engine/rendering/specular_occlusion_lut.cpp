@@ -57,7 +57,7 @@ auto smith_lambda(double cos_theta, double alpha) -> double
     return 0.5 * (std::sqrt(1.0 + alpha * alpha * tan_squared) - 1.0);
 }
 
-/// The GGX lobe viewed along its normal: visible-normal samples (Heitz 2018; at normal
+/// The GGX lobe viewed along its normal: visible-normal samples (at normal
 /// incidence the visible normals are distributed as D(h) (n.h)), each reflected view weighted by
 /// the height-correlated masking-shadowing over the view's own masking, which is 1 there.
 /// Reflections below the surface carry no weight and are dropped.

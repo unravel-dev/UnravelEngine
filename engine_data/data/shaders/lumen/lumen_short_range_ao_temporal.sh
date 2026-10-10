@@ -2,18 +2,15 @@
 #define __LUMEN_SHORT_RANGE_AO_TEMPORAL_SH__
 
 /*
- * Lumen short-range AO accumulation, inside the gather's temporal as UE 5.8 runs it (ScreenProbeTemporalReprojectionCS,
- * LumenScreenProbeGatherTemporal.usf:288-583, its short-range AO path): per full-resolution pixel, its own AO sample at
- * Epic's full resolution, or at half resolution one sample drawn by UE's stochastic bilinear reconstruction
- * (StochasticLightingTileClassification.usf:279-380 ComputeUpsampleWeights, StochasticLightingUpsample.ush
- * GetStochasticBilinearOffset) - of the four texels around the pixel, each weighted by the triangle filter over the
- * offset to the pixel it was searched from, that pixel's plane distance relative to this pixel's depth and the angle
- * between their normals, one is drawn in proportion to its weight, so the AO never crosses a depth or normal edge and
- * averages to a bilinear upsample over frames - blended with last frame's AO over the gather's 2x2 reprojection taps
- * with the gather's weight 1 / (1 + N) (N after the gather's fast update), after clamping the history into the drawn
- * sample's 3 x 3 neighbourhood mean +- LUMEN_SHORT_RANGE_AO_NEIGHBORHOOD_CLAMP_SCALE deviations (:234-284, :513-519).
- * A pixel no sample reconstructs leans on its history (weight 1 / (1 + LUMEN_TEMPORAL_INVALID_CURRENT_WEIGHT N),
- * :524-528).
+ * Short-range AO accumulation, inside the gather's temporal: per full-resolution pixel, its own AO sample at full
+ * resolution (the Epic tier), or at half resolution one sample drawn by a stochastic bilinear reconstruction - of the
+ * four texels around the pixel, each weighted by the triangle filter over the offset to the pixel it was searched
+ * from, that pixel's plane distance relative to this pixel's depth and the angle between their normals, one is drawn
+ * in proportion to its weight, so the AO never crosses a depth or normal edge and averages to a bilinear upsample over
+ * frames - blended with last frame's AO over the gather's 2x2 reprojection taps with the gather's weight 1 / (1 + N)
+ * (N after the gather's fast update), after clamping the history into the drawn sample's 3 x 3 neighbourhood mean +-
+ * LUMEN_SHORT_RANGE_AO_NEIGHBORHOOD_CLAMP_SCALE deviations. A pixel no sample reconstructs leans on its history
+ * (weight 1 / (1 + LUMEN_TEMPORAL_INVALID_CURRENT_WEIGHT N)).
  *
  * The AO is carried as (unit bent normal, visibility) and stored packed (LumenPackShortRangeAO). The includer declares
  * s_lumen_depth, s_lumen_normal, s_lumen_short_range_ao (this frame's search, cs_lumen_short_range_ao.sc) and
@@ -28,8 +25,7 @@
 /// fetched per pixel. At full resolution: the group's pixels with a one-texel border, every pixel's 3 x 3 clamp
 /// neighbourhood. At half resolution: the 8 x 8 texels from LUMEN_SHORT_RANGE_AO_HALF_TILE_BORDER before the group's
 /// first texel, which hold every texel its pixels draw from with their clamp neighbourhoods, and the position and
-/// normal of the pixel each texel was searched from (UE reads them from a cache of the downsampled depth and normal
-/// the same way, StochasticLightingTileClassification.usf LoadDepthFromCache / LoadNormalFromCache).
+/// normal of the pixel each texel was searched from, so the reconstruction weights read them from group-shared memory.
 #define LUMEN_SHORT_RANGE_AO_GROUP_EDGE 8
 #define LUMEN_SHORT_RANGE_AO_TILE_EDGE (LUMEN_SHORT_RANGE_AO_GROUP_EDGE + 2)
 #define LUMEN_SHORT_RANGE_AO_TILE_TEXELS (LUMEN_SHORT_RANGE_AO_TILE_EDGE * LUMEN_SHORT_RANGE_AO_TILE_EDGE)
@@ -86,8 +82,8 @@ void LumenLoadShortRangeAOTile(ivec2 group_origin, int local_index)
 	s_short_range_ao_source_normal[local_index] = decodeNormalOctahedron(texelFetch(s_lumen_normal, source, 0).xy);
 }
 
-/// The weight half-resolution texel @p texel reconstructs the pixel with (UE ComputeUpsampleWeights), from the tile of
-/// the group whose first pixel is @p group_origin; @p inv_scene_depth = 1 / the pixel's linear depth.
+/// The weight half-resolution texel @p texel reconstructs the pixel with, from the tile of the group whose first pixel
+/// is @p group_origin; @p inv_scene_depth = 1 / the pixel's linear depth.
 float LumenShortRangeAOSampleWeight(ivec2 texel, ivec2 pixel, vec3 position, vec3 normal, float inv_scene_depth,
                                     ivec2 group_origin)
 {

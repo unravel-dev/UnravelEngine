@@ -5,9 +5,9 @@
  *
  * Every entry carries its UNIT and its JUSTIFICATION - one of:
  *   - derived:   follows arithmetically from another value here or from a documented argument;
- *   - published: taken from a shipped system's published value (source named);
+ *   - tuned:     a chosen value; the entry states what it trades off;
  *   - setting:   deliberately exposed on gi_component instead of living here.
- * A constant that fits none of those is a defect. Lumen's own parameters live in lumen_constants.h.
+ * A constant that fits none of those is a defect. The lumen_* passes' own parameters live in lumen_constants.h.
  *
  * The shader mirror is engine_data/data/shaders/gi/gi_constants.sh. shaderc cannot consume this
  * header, so the mirror is plain #defines - and the pair is kept honest by a TEST, not a comment:
@@ -22,10 +22,10 @@
       "vec4s", "derived: u_sdf_grid_params - [0] grid origin + cell size, [1] cell counts + the"   \
       " instance base")                                                                            \
     X(GI_EMISSIVE_LIGHT_SOURCE_MIN_LUMINANCE, 0.05f,                                               \
-      "radiance luminance", "derived: a material emitting at least this marks its placements as"   \
-      " emissive light sources (UE's Emissive Light Source, derived rather than authored), which"  \
-      " the Lumen cascades keep however small; dimmer emission is ordinary surface lighting the"   \
-      " probes find on their own rays")                                                            \
+      "radiance luminance", "tuned: a material emitting at least this marks its placements as"     \
+      " emissive light sources, derived from the material rather than authored, which the GI"      \
+      " keeps however small (cards resident down to one texel, composed into every global SDF"     \
+      " level); dimmer emission is ordinary surface lighting the probes find on their own rays")   \
     /* --- global distance field --- */                                                            \
     X(GI_CLIPMAP_EDIT_THROTTLE_FRAMES, 8,                                                          \
       "frames", "derived: a content change too large for a partial update recomposes the whole"    \
@@ -34,12 +34,14 @@
       " fingerprint diff persists, so the final state lands within one window of release; origin" \
       " re-snaps and partial updates stay immediate)")                                             \
     X(GI_CLIPMAP_PARTIAL_UPDATES_PER_FRAME, 2,                                                     \
-      "levels", "published: r.AOGlobalDistanceFieldClipmapUpdatesPerFrame (GlobalDistanceField.cpp" \
-      ":130): the first level takes its partial updates every frame, the others staggered so"     \
-      " about this many update per frame (GetUpdateFrequencyForClipmap, :712-747)")               \
+      "levels", "tuned: global SDF levels that take their partial updates per frame: at 2,"        \
+      " level 0 every frame and levels 1, 2 and 3 every 2nd, 4th and 4th frame in distinct"        \
+      " phases, one of them per frame (global_sdf_clipmap::is_partial_update_due); more cost"      \
+      " more compose work per frame, fewer delay edits in the coarse levels")                      \
     X(GI_CLIPMAP_MAX_PARTIAL_INSTANCES, 1024,                                                      \
-      "instances", "published: a level whose instance set changed in more places than this"        \
-      " recomposes in full (GlobalDistanceField.cpp:1258, NumCulledPrimitiveModifiedBounds)")      \
+      "instances", "tuned: a level whose instance set differs from its composed set in more"       \
+      " places than this recomposes in full, under the level budget, instead of planning a box"    \
+      " per difference; more keeps larger edits partial at the cost of a longer per-level diff")   \
     X(GI_CLIPMAP_MAX_PARTIAL_BOXES, 64,                                                            \
       "boxes", "derived: a partial update dispatches one compose per box; beyond this many the"    \
       " boxes merge into their bounds, which costs voxels rather than dispatches")                \
@@ -52,12 +54,10 @@
     /* --- exposure --- */                                                                         \
     X(GI_CACHED_LIGHTING_PRE_EXPOSURE, 1.0f,                                                       \
       "scale", "derived: the scale the PERSISTENT stores (the surface cache's lighting atlases,"   \
-      " the radiance cache) hold their lighting at - Lumen's"                                      \
-      " r.EyeAdaptation.CachedLightingPreExposure, which is 4 EV there. It must be a CONSTANT:"    \
-      " the stores outlive any one frame's exposure, so a view-dependent scale would have to"      \
-      " invalidate them on every adaptation step (UE resets its caches when the value changes)."   \
-      " 1 (0 EV) because this engine's light units already sit about 16x under UE's physical"      \
-      " scale, so float16 holds the stored range without an offset; the per-frame side gets its"   \
+      " the radiance cache) hold their lighting at. It must be a CONSTANT: the stores outlive"     \
+      " any one frame's exposure, so a view-dependent scale would have to invalidate them on"      \
+      " every adaptation step. 1 (0 EV) because this engine's light units sit well inside"         \
+      " float16's range, so the stores hold them without an offset; the per-frame side gets its"   \
       " precision from the view pre-exposure instead (gi_pre_exposure.sh)")
 // clang-format on
 

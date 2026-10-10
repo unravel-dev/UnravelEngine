@@ -157,14 +157,14 @@ public:
      *
      * A fixed atlas is a wall: a scene needing more than it holds loses its overflow from global
      * illumination entirely, and no per-field decision can fix that because by the time a field is
-     * refused the space is already spent. Growing is what UE does -- its brick atlas grows in Z and
-     * its documented maximum is a target rather than a cap -- and it is the difference between a
-     * scene that costs more memory and a scene that is quietly wrong.
+     * refused the space is already spent. Growing treats the configured size as a target rather than
+     * a cap, and it is the difference between a scene that costs more memory and a scene that is
+     * quietly wrong.
      *
      * Everything resident is dropped because a slot's position is derived from the atlas dimension
      * (slot -> x + y*dim + z*dim*dim), so every existing slot means something different afterwards.
-     * Re-uploading is bounded by settings::max_upload_bytes_per_frame and costs a short ramp; the
-     * alternative is a GPU copy pass, which UE does and this can adopt later.
+     * Re-uploading is bounded by settings::max_upload_bytes_per_frame and costs a short ramp; a GPU
+     * copy pass that moves the resident bricks would avoid it.
      *
      * The CALLER must drop its own residency records: this cannot know about them.
      *

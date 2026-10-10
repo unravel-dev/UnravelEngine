@@ -45,7 +45,7 @@ public:
         result.local_middle_grey_bias =
             std::lerp(result.local_middle_grey_bias, from.local_middle_grey_bias, contribution);
         // Metering mode and the compensation curve cannot be interpolated; the dominant volume
-        // wins (UE takes the curve of the last volume that sets it).
+        // wins (a contribution of at least half).
         if(contribution >= 0.5f)
         {
             result.metering_mode = from.metering_mode;

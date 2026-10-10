@@ -1,14 +1,11 @@
 /*
  * Radiance cache single-thread bookkeeping, one dispatch per mode (u_lumen_rc_mode):
  *  0 reset: the free list and the probe allocator restart (a frame that does not continue the cache);
- *  1 frame start: the per-frame counters and the priority histogram clear
- *    (UE 5.8 ClearRadianceCacheUpdateResources, LumenRadianceCacheUpdate.usf:189-219);
+ *  1 frame start: the per-frame counters and the priority histogram clear;
  *  2 budget: the highest-priority buckets that fit the trace budget, oldest first; the last one gets only
- *    the remainder (SelectMaxPriorityBucketCS, :393-429);
- *  3 trace list: the allocators clamp back into range and the tile pass's dispatch is written
- *    (SetupProbeIndirectArgsCS, LumenRadianceCache.usf:85-135);
- *  4 tiles: the trace (rows of LUMEN_RC_TRACE_DISPATCH_WIDTH tiles) and filter dispatches are written
- *    (SetupTraceFromProbesCS, :657-692).
+ *    the remainder;
+ *  3 trace list: the allocators clamp back into range and the tile pass's dispatch is written;
+ *  4 tiles: the trace (rows of LUMEN_RC_TRACE_DISPATCH_WIDTH tiles) and filter dispatches are written.
  */
 
 #include "bgfx_compute.sh"

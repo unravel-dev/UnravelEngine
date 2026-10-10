@@ -17,7 +17,7 @@ class ssr_pass
 {
 public:
 
-    /// FidelityFX SSR settings
+    /// Hi-Z traced SSR settings
     struct fidelityfx_ssr_settings
     {
         /// Cone tracing parameters
@@ -86,7 +86,7 @@ public:
     /// Combined SSR settings
     struct ssr_settings
     {
-        fidelityfx_ssr_settings fidelityfx;             ///< FidelityFX SSR settings
+        fidelityfx_ssr_settings fidelityfx;             ///< Hi-Z traced SSR settings
     };
 
     struct run_params
@@ -124,7 +124,7 @@ public:
     /// Releases all GPU resources owned by this pass from the render_view.
     void release_resources(gfx::render_view& rview);
 
-    /// Executes the FidelityFX SSR pass. Returns the actual output framebuffer.
+    /// Executes the Hi-Z traced SSR pass. Returns the actual output framebuffer.
     auto run_fidelityfx(gfx::render_view& rview, const run_params& params) -> gfx::frame_buffer::ptr;
 
     /// Executes the three-pass SSR pipeline (trace, temporal resolve, composite)
@@ -197,7 +197,7 @@ private:
                                          trace_resolution res) -> gfx::frame_buffer::ptr;
 
 
-    // FidelityFX SSR Pixel Shader Program
+    // SSR trace pixel shader program (Hi-Z traversal)
     struct fidelityfx_pixel_program : uniforms_cache
     {
         gpu_program::ptr program;
@@ -215,7 +215,7 @@ private:
 
         void cache_uniforms()
         {
-            // Manual uniform creation for FidelityFX SSR using std::make_shared
+            // Manual uniform creation for the SSR trace program using std::make_shared
             cache_uniform(program.get(), u_ssr_params, "u_ssr_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_hiz_params, "u_hiz_params", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), u_fade_params, "u_fade_params", bgfx::UniformType::Vec4);

@@ -300,7 +300,7 @@ void process_drag_drop_target(const fs::path& absolute_path)
     }
 }
 
-// Unity builds merge the anonymous namespaces of the editor's sources; the grid entry helpers' own
+// A unity build merges the anonymous namespaces of the editor's sources; the grid entry helpers' own
 // namespace keeps their generic names from clashing.
 namespace browser_entry
 {

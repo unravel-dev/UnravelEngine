@@ -50,7 +50,7 @@ constexpr ImU32 PICKER_FIELD_COLOR = IM_COL32(255, 255, 255, 14);
 constexpr ImU32 PICKER_FIELD_HOVERED_COLOR = IM_COL32(255, 255, 255, 24);
 constexpr ImU32 PICKER_FIELD_ACTIVE_COLOR = IM_COL32(255, 255, 255, 30);
 
-/// Tile size in font units, kept for the session as Unity keeps the picker's.
+/// Tile size in font units, kept for the session: every picker opens at the size last chosen.
 float g_tile_size = PICKER_TILE_DEFAULT_SIZE;
 
 auto get_muted_color() -> ImU32

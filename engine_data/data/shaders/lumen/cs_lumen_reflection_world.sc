@@ -1,16 +1,15 @@
 /*
- * Lumen reflections, the distance-field stage (UE 5.8 ReflectionTraceVoxelsCS / TraceVoxels,
- * LumenReflectionTracing.usf:711-902, Global Tracing). Runs for every trace texel the screen trace did not answer,
- * from the pixel it traces (LumenReflectionTracePixel).
+ * Reflections, the global distance-field stage. Runs for every trace texel the screen trace did not answer, from the
+ * pixel it traces (LumenReflectionTracePixel).
  *
  * The ray restarts from the pixel moved LUMEN_SURFACE_BIAS along itself, LUMEN_REFLECTION_SDF_PULLBACK_HALF_VOXELS
  * voxel extents (of the clipmap level where the screen trace ended) before the distance the screen vouched for,
  * so the field's surface expansion starts outside the surface. The expansion grows with the largest distance the
  * ray keeps from any surface, not with its travel, and near-mirror rays dither their step length against
  * stepping artefacts. A hit reads the surface cache (black where no card covers it), then last frame's scene
- * colour instead when the hit is the surface the depth buffer shows (UE SampleSceneColorAtHit). A miss traces the
- * screen once more from where the distance field ends (LumenReflectionDistantScreenTrace: content beyond its reach,
- * on screen), then reads the sky (LumenReflectionSkyRadiance). Radiance is pre-exposed and clamped to
+ * colour instead when the hit is the surface the depth buffer shows (LumenReflectionSceneColorAtHit). A miss traces
+ * the screen once more from where the distance field ends (LumenReflectionDistantScreenTrace: content beyond its
+ * reach, on screen), then reads the sky (LumenReflectionSkyRadiance). Radiance is pre-exposed and clamped to
  * LUMEN_REFLECTION_MAX_RAY_INTENSITY; its alpha is 1 where the ray hit the distance field (the surface cache feedback's
  * texels, cs_lumen_reflection_feedback.sc), 0 elsewhere.
  */
@@ -58,10 +57,9 @@ uniform vec4 u_lumen_hit_lighting;
 #define LUMEN_VELOCITY_STAGE 11
 #include "lumen/lumen_motion.sh"
 
-/// UE SampleSceneColorAtHit (LumenScreenTracing.ush:78-137): last frame's colour at a distance-field hit (rgb,
-/// a = 1) when the hit projects on screen within LUMEN_REFLECTION_SCENE_COLOR_RELATIVE_DEPTH of the depth buffer,
-/// faces the camera within LUMEN_REFLECTION_SCENE_COLOR_NORMAL_COS, and passes the vignette and the history depth
-/// test; a = 0 otherwise.
+/// Last frame's colour at a distance-field hit (rgb, a = 1) when the hit projects on screen within
+/// LUMEN_REFLECTION_SCENE_COLOR_RELATIVE_DEPTH of the depth buffer, faces the camera within
+/// LUMEN_REFLECTION_SCENE_COLOR_NORMAL_COS, and passes the vignette and the history depth test; a = 0 otherwise.
 vec4 LumenReflectionSceneColorAtHit(ivec2 pixel, vec3 hit_world, vec3 hit_normal)
 {
 	vec4 clip = mul(u_viewProj, vec4(hit_world, 1.0));
@@ -92,26 +90,25 @@ vec4 LumenReflectionSceneColorAtHit(ivec2 pixel, vec3 hit_world, vec3 hit_normal
 	                                  LUMEN_REFLECTION_SCENE_COLOR_RELATIVE_DEPTH);
 }
 
-/// UE r.Lumen.Reflections.DistantScreenTraces: the farthest a distant screen trace reaches (MaxTraceDistance, 2 km),
-/// its slope tolerance (DepthThreshold) and its linear steps (LumenScreenTracing.ush DistantScreenTrace).
+/// Distant screen traces: the farthest one reaches (2 km), its slope tolerance and its linear steps
+/// (LumenReflectionDistantScreenTrace).
 #define LUMEN_REFLECTION_DISTANT_TRACE_DISTANCE 2000.0
 #define LUMEN_REFLECTION_DISTANT_TRACE_SLOPE_TOLERANCE 2.0
 #define LUMEN_REFLECTION_DISTANT_TRACE_STEPS 16
-/// UE InitScreenSpaceRayFromWorldSpace: a ray toward the camera ends at this share of the start's view depth.
+/// A ray toward the camera ends at this share of the start's view depth, short of the near plane.
 #define LUMEN_REFLECTION_DISTANT_TRACE_NEAR_STOP 0.95
-/// A history depth tolerance beyond the whole depth range: UE reads a distant hit's history colour without a depth
+/// A history depth tolerance beyond the whole depth range: a distant hit reads its history colour without a depth
 /// test.
 #define LUMEN_REFLECTION_DISTANT_TRACE_NO_DEPTH_TEST 2.0
 
 /// The ray from @p origin along @p direction, @p length long, started where it leaves the global SDF's outermost level
-/// shrunk by one voxel, pulled back into it by the range of a step's jitter (UE ClipRayToStartOutsideGlobalSDF,
-/// GlobalDistanceFieldUtils.ush:202-221): xyz = the start, w = the length left.
+/// shrunk by one voxel, pulled back into it by the range of a step's jitter: xyz = the start, w = the length left.
 vec4 LumenClipRayToOutsideGlobalSdf(vec3 origin, vec3 direction, float length)
 {
 	vec4 level = u_sdf_clipmap_levels[SDF_CLIPMAP_LEVEL_COUNT - 1];
 	vec3 low = level.xyz + vec3_splat(1.5 * level.w);
 	vec3 high = level.xyz + vec3_splat((u_sdf_clipmap_resolution - 1.5) * level.w);
-	// UE LineBoxIntersect: the segment's parameters in [0, 1].
+	// Segment-box intersection: the segment's parameters in [0, 1].
 	vec3 segment = direction * length;
 	vec3 inverse_segment = vec3_splat(1.0) / (sign(segment) * max(abs(segment), vec3_splat(1e-8)) +
 	                                          vec3(equal(segment, vec3_splat(0.0))) * 1e-8);
@@ -131,11 +128,10 @@ vec4 LumenClipRayToOutsideGlobalSdf(vec3 origin, vec3 direction, float length)
 	return vec4(origin, length);
 }
 
-/// UE DistantScreenTrace (LumenScreenTracing.ush:144-213) for a ray from @p origin along @p direction that the distance
-/// field missed: from where the distance field ends, 16 linear steps through this frame's depth (UE marches its
-/// furthest HZB's first mip; here the full-resolution depth) with a jittered offset and UE's slope tolerance. A hit
-/// returns last frame's colour at its velocity reprojection, outside the vignette (rgb pre-exposed, a = 1); a = 0
-/// otherwise.
+/// A distant screen trace for a ray from @p origin along @p direction that the distance field missed: from where the
+/// distance field ends, 16 linear steps through this frame's full-resolution depth with a jittered offset and a slope
+/// tolerance. A hit returns last frame's colour at its velocity reprojection, outside the vignette (rgb pre-exposed,
+/// a = 1); a = 0 otherwise.
 vec4 LumenReflectionDistantScreenTrace(ivec2 pixel, vec3 origin, vec3 direction)
 {
 	vec4 ray = LumenClipRayToOutsideGlobalSdf(origin, direction, LUMEN_REFLECTION_DISTANT_TRACE_DISTANCE);
@@ -149,8 +145,8 @@ vec4 LumenReflectionDistantScreenTrace(ivec2 pixel, vec3 origin, vec3 direction)
 	{
 		return vec4_splat(0.0);
 	}
-	// UE InitScreenSpaceRayFromWorldSpace: the ray in screen uv and device depth, ending short of the near plane, cut at
-	// the screen's edge; the tolerance from the depth change of moving the trace length straight away from the camera.
+	// The ray in screen uv and device depth, ending short of the near plane, cut at the screen's edge; the tolerance
+	// from the depth change of moving the trace length straight away from the camera.
 	float view_depth = mul(u_view, vec4(ray.xyz, 1.0)).z;
 	float view_direction_z = mul(u_view, vec4(direction, 0.0)).z;
 	float trace_length = view_direction_z < 0.0
@@ -182,7 +178,7 @@ vec4 LumenReflectionDistantScreenTrace(ivec2 pixel, vec3 origin, vec3 direction)
 		BRANCH
 		if(abs(difference + tolerance) < tolerance && scene_depth < 1.0)
 		{
-			// The crossing between this sample and the last (UE's line segment intersection).
+			// The crossing between this sample and the last (where the depth difference's linear fit is 0).
 			float crossing = saturate(last_difference / (last_difference - difference));
 			hit_uvz = ray_uvz + step_uvz * (float(i - 1) + crossing);
 			is_hit = true;
@@ -200,9 +196,9 @@ vec4 LumenReflectionDistantScreenTrace(ivec2 pixel, vec3 origin, vec3 direction)
 	                                  LUMEN_REFLECTION_DISTANT_TRACE_NO_DEPTH_TEST);
 }
 
-/// What a ray that misses everything sees, pre-exposed (UE EvaluateSkyRadiance: the sky light cubemap in the ray
-/// direction): this pixel's reflection-probe layer - the environment's and the authored probes' prefiltered cubemaps
-/// in its reflection - with the environment SH along @p direction filling the share no probe covers.
+/// What a ray that misses everything sees, pre-exposed: this pixel's reflection-probe layer - the environment's and
+/// the authored probes' prefiltered cubemaps in its reflection - with the environment SH along @p direction filling
+/// the share no probe covers.
 vec3 LumenReflectionSkyRadiance(ivec2 pixel, vec3 direction)
 {
 	vec4 probe_layer = texelFetch(s_lumen_probe_layer, pixel, 0);
@@ -279,7 +275,7 @@ void main()
 		{
 			distant = LumenReflectionDistantScreenTrace(pixel, origin, direction);
 		}
-		// A distant hit keeps the maximum hit distance (UE): the resolve sees it as far away.
+		// A distant hit keeps the maximum hit distance: the resolve sees it as far away.
 		hit.hit = distant.w > 0.5;
 		radiance = hit.hit ? distant.xyz : LumenReflectionSkyRadiance(pixel, direction);
 		if(u_lumen_reflection_show_trace_types)

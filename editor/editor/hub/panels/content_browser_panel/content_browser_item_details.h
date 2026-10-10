@@ -86,7 +86,7 @@ void collect_asset_details(const asset_handle<T>& /*asset*/, content_item_sectio
 {
 }
 
-/// Geometry, LODs, skinning and memory, then the distance fields and Lumen cards global illumination keeps.
+/// Geometry, LODs, skinning and memory, then the distance fields and mesh cards global illumination keeps.
 void collect_asset_details(const asset_handle<mesh>& asset, content_item_sections& sections);
 /// Resolution, format, mips, layers and GPU memory.
 void collect_asset_details(const asset_handle<gfx::texture>& asset, content_item_sections& sections);

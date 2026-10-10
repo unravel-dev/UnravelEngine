@@ -2,8 +2,7 @@
 #define __LUMEN_ADAPTIVE_PROBES_SH__
 
 /*
- * Adaptive screen probes (UE 5.8 ScreenProbeAdaptivePlacementMarkCS and SpawnCS, LumenScreenProbeGather.usf:1721-1952;
- * CalculateUpsampleInterpolationWeights, :216-310). Each uniform tile tests the tier's grid of candidate pixels
+ * Adaptive screen probes. Each uniform tile tests the tier's grid of candidate pixels
  * (u_lumen_adaptive_samples_x x _y); a candidate the uniform probes cannot interpolate (weights summing below
  * LUMEN_INTERP_MIN_WEIGHT) and no lower-numbered candidate around it covers becomes a probe. Adaptive probe i lives in
  * the probe atlas at (i % probes_x, probes_y + i / probes_x) and is listed in its uniform tile; every per-probe pass
@@ -20,7 +19,7 @@
 
 /// x = the adaptive probe capacity (trunc(uniform probes x LUMEN_ADAPTIVE_ALLOCATION_FRACTION)), y = the texels per
 /// axis of a probe's bordered radiance (cs_lumen_adaptive_args.sc), z / w = the candidates per uniform tile along x / y,
-/// the quality tier's (UE NumAdaptiveProbes: 8 = LUMEN_ADAPTIVE_SAMPLES_X x _Y at Epic, 16 = 4 x 4 at High).
+/// the quality tier's (8 = LUMEN_ADAPTIVE_SAMPLES_X x _Y at Epic, 16 = 4 x 4 at High).
 uniform vec4 u_lumen_adaptive;
 
 #define u_lumen_adaptive_capacity uint(u_lumen_adaptive.x)
@@ -65,7 +64,7 @@ ivec2 LumenAdaptiveAtlasTile(int index)
 	return ivec2(index - row * u_lumen_probe_count.x, u_lumen_probe_count.y + row);
 }
 
-/// Candidate @p sample_index of uniform tile @p tile (UE GetAdaptiveSampleCoord): the uniform probe's pixel plus a
+/// Candidate @p sample_index of uniform tile @p tile: the uniform probe's pixel plus a
 /// Hammersley point over the tile, scrambled per tile and frame.
 ivec2 LumenAdaptiveSamplePixel(ivec2 tile, int sample_index)
 {
@@ -78,8 +77,8 @@ ivec2 LumenAdaptiveSamplePixel(ivec2 tile, int sample_index)
 }
 
 /// The interpolation weights (x = primary, y = fallback) of the adaptive probe at @p probe_pixel (device depth
-/// @p probe_depth01) for @p pixel on the plane (@p position, @p normal) at view depth @p depth (UE
-/// GetAdaptiveProbeInterpolationWeight): the plane weights times a falloff over one tile of the nearer axis distance.
+/// @p probe_depth01) for @p pixel on the plane (@p position, @p normal) at view depth @p depth: the plane weights times
+/// a falloff over one tile of the nearer axis distance.
 vec2 LumenAdaptiveProbeWeights(ivec2 pixel, vec3 position, vec3 normal, float depth, ivec2 probe_pixel, float probe_depth01)
 {
 	ivec2 uv_pixel = min(probe_pixel, ivec2(u_lumen_view_size) - ivec2(1, 1));

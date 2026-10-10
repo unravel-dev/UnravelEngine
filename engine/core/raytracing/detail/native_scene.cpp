@@ -50,7 +50,7 @@ constexpr uint32_t k_packet_rays = 4;
 /// depth at k_max_heuristic_depth plus the 32 levels of median splits a 32-bit reference count can need.
 constexpr uint32_t k_stack_size = 256;
 /// A box's exit distance is widened by 1 + 2 gamma(3), gamma(n) = n u / (1 - n u) for the float unit roundoff u, so
-/// rounding in the slab test never culls a box the ray touches (Ize, Robust BVH Ray Traversal, 2013).
+/// rounding in the slab test never culls a box the ray touches.
 constexpr float k_unit_roundoff = 0.5f * std::numeric_limits<float>::epsilon();
 constexpr float k_box_exit_widening = 1.0f + 2.0f * (3.0f * k_unit_roundoff) / (1.0f - 3.0f * k_unit_roundoff);
 /// The smallest direction component the slab test divides by; smaller ones are taken as this, with their sign.
@@ -196,8 +196,7 @@ void split_triangle(const std::array<math::vec3, 3>& corners,
 }
 
 /**
- * @brief The binary tree over a triangle soup, built by the surface area heuristic with spatial splits (Stich,
- *        Friedrich, Dietrich, Spatial Splits in Bounding Volume Hierarchies, 2009), as Embree's high quality build.
+ * @brief The binary tree over a triangle soup, built by the surface area heuristic with spatial splits.
  *
  * Each node takes the cheaper of the best binned object split and, where that split's two boxes overlap, the best
  * spatial split: a plane that cuts the triangles across it into a reference on each side, each with the box of its
@@ -432,7 +431,7 @@ private:
 
     /**
      * @brief The cheapest spatial split: the node cut into equal bins along each axis, every reference clipped into
-     *        the bins it spans (Embree's SpatialBinInfo::bin2), the plane between two bins.
+     *        the bins it spans, the plane between two bins.
      */
     auto find_spatial_split(const std::vector<reference>& references, const box& bounds) const -> split_choice
     {
@@ -833,9 +832,8 @@ struct block_test
 };
 
 /**
- * @brief Watertight ray-triangle test (Woop, Benthin, Wald, Watertight Ray/Triangle Intersection, 2013), two-sided,
- *        on every triangle of a block at once: this half finds the lanes that may hold a hit, @ref take_block_hits
- *        takes them.
+ * @brief Watertight ray-triangle test, two-sided, on every triangle of a block at once: this half finds the lanes
+ *        that may hold a hit, @ref take_block_hits takes them.
  *
  * In the sheared frame the ray is the z axis, so the ray hits a triangle when the origin lies inside the triangle's
  * projection: when its three edge functions share a sign. Two triangles sharing an edge compute exactly opposite

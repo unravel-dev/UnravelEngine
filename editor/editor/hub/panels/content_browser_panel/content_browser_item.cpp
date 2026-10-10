@@ -14,7 +14,7 @@
 
 namespace unravel
 {
-// Unity builds merge the anonymous namespaces of the editor's sources; the helpers' own namespace keeps their
+// A unity build merges the anonymous namespaces of the editor's sources; the helpers' own namespace keeps their
 // generic names from clashing.
 namespace content_card
 {
@@ -101,7 +101,7 @@ struct type_accent
     ImU32 color;
 };
 
-/// A distinct color per asset type, so cards read at a glance like the type strip Unreal draws under thumbnails.
+/// A distinct color per asset type, so cards read at a glance by the type strip drawn under their thumbnails.
 constexpr std::array<type_accent, 13> TYPE_ACCENTS{{
     {"Texture", IM_COL32(226, 96, 92, 255)},
     {"Material", IM_COL32(86, 180, 168, 255)},

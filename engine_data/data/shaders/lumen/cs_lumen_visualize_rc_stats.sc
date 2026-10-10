@@ -1,9 +1,8 @@
 /*
- * UE 5.8 r.Lumen.RadianceCache.Stats (LumenRadianceCacheDebug.usf RadianceCacheUpdateStatsCS): the radiance cache's
- * update counters as ShaderPrint text - its priority histogram, the bucket the trace budget ran out in, what the
- * update spent, the probes and tiles traced, and the probe atlas's occupancy (red when full: probes then go
- * unallocated and their screen probes trace farther). The counters are this frame's (lumen_radiance_cache_common.sh);
- * red / yellow as UE marks a cost over twice / once the budget.
+ * The radiance cache's update counters as ShaderPrint text - its priority histogram, the bucket the trace budget
+ * ran out in, what the update spent, the probes and tiles traced, and the probe atlas's occupancy (red when full:
+ * probes then go unallocated and their screen probes trace farther). The counters are this frame's
+ * (lumen_radiance_cache_common.sh); red / yellow mark a cost over twice / once the budget.
  */
 
 #include "bgfx_compute.sh"

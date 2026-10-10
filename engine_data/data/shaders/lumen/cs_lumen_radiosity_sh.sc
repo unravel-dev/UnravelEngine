@@ -1,7 +1,7 @@
 /*
- * Lumen surface cache radiosity, spatial filter and SH (UE 5.8 LumenRadiosity.usf:175-385): per scheduled card tile,
- * groups of LUMEN_RADIOSITY_GROUP_THREADS holding the rays of as many whole probes as fit (lumen_radiosity_common.sh),
- * one thread per ray, the group's y the block of the tile's probes.
+ * Surface cache radiosity, spatial filter and SH: per scheduled card tile, groups of LUMEN_RADIOSITY_GROUP_THREADS
+ * holding the rays of as many whole probes as fit (lumen_radiosity_common.sh), one thread per ray, the group's y the
+ * block of the tile's probes.
  *
  * Filter: each trace is averaged with the same trace of the four neighbouring probes of the card (centre
  * weight 2; past a page edge in the card's neighbouring page, LumenResolveRadiosityCell), a neighbour counting only

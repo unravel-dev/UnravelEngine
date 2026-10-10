@@ -19,13 +19,13 @@ class taa_pass
 {
 public:
     /// Serialized with the settings. Data saved without it, or with an older value, is ignored on load and the
-    /// settings keep their defaults: version 1 came with the unjittered resolve and UE's Halton cycle, and values
+    /// settings keep their defaults: version 1 is the unjittered resolve with the 8-sample Halton cycle, and values
     /// tuned for the jittered resolve (an MSAA 2 pattern against its shake) do not carry over.
     static constexpr std::uint32_t settings_version = 1;
 
     struct settings
     {
-        /// Enable jitter when greater than 1; the Halton sequence's cycle length (UE: 8).
+        /// Enable jitter when greater than 1; the Halton sequence's cycle length.
         std::uint32_t temporal_sample_count = 8;
         /// Scales jitter before projection (1 = full +-0.5 pixel). Lower = less sub-pixel coverage, more aliasing.
         float jitter_amplitude = 1.0f;

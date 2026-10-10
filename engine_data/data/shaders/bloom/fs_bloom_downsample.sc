@@ -1,14 +1,13 @@
 $input v_texcoord0
 
 /*
- * Bloom downsample pass with Karis anti-flicker.
- *
- * Reference: "Next Generation Post Processing in Call of Duty: Advanced Warfare"
- *            (Jimenez, SIGGRAPH 2014), Unity HDRP, Unreal Engine 4/5.
+ * Bloom downsample pass with luma-weighted anti-flicker.
  *
  * First pass (u_mip_level == 0):
- *   13-tap downsample with partial Karis average to suppress sub-pixel
- *   specular flicker, plus threshold/soft-knee prefilter.
+ *   13-tap downsample with luma-weighted group averages to suppress sub-pixel
+ *   specular flicker, then local exposure (the factor the tonemapper gives the
+ *   scene here, so a highlight it compresses also blooms compressed), plus the
+ *   threshold/soft-knee prefilter.
  *   Reads full-res, writes half-res.
  *
  * Subsequent passes (u_mip_level != 0):
@@ -18,17 +17,21 @@ $input v_texcoord0
  */
 
 #include "../common.sh"
+#include "../exposure/local_exposure.sh"
 
 SAMPLER2D(s_tex, 0);
 SAMPLER2D(s_exposure, 1);
 
 uniform vec4 u_pixelSize;
 uniform vec4 u_params;
+/// x = log2 of the manual exposure (the tonemapper's exposure scale).
+uniform vec4 u_bloom_exposure;
 
 #define u_threshold  u_params.x
 #define u_soft_knee  u_params.z
 #define u_clamp      u_params.w
 #define u_mip_level  int(u_params.y)
+#define u_log2_manual_exposure u_bloom_exposure.x
 
 float luminance(vec3 c)
 {
@@ -79,7 +82,7 @@ void main()
     if (u_mip_level == 0)
     {
         /*
-         * First downsample with partial Karis average.
+         * First downsample with luma-weighted group averages.
          *
          * 13 taps in source-texel offsets:
          *
@@ -136,13 +139,16 @@ void main()
         float w_sum = corner_weight * (kw0 + kw1 + kw2 + kw3) + center_weight * kw4;
         color /= w_sum;
 
+        vec4 exposure_texel = texture2DLod(s_exposure, vec2(0.5, 0.5), 0.0);
+        float adapted = exposure_texel.r;
+        if ((adapted != adapted) || adapted <= 0.0 || adapted >= 1.0e10)
+        {
+            adapted = 1.0;
+        }
+        color *= compute_local_exposure(color, uv, u_log2_manual_exposure + log2(max(adapted, 1e-5)), exposure_texel.b);
+
         if (u_threshold > 0.0)
         {
-            float adapted = texture2DLod(s_exposure, vec2(0.5, 0.5), 0.0).r;
-            if ((adapted != adapted) || adapted <= 0.0 || adapted >= 1.0e10)
-            {
-                adapted = 1.0;
-            }
             float effective_threshold = u_threshold / max(adapted, 1e-5);
             color = apply_threshold(color, effective_threshold);
         }

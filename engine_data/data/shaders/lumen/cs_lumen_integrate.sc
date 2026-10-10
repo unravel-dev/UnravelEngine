@@ -1,7 +1,6 @@
 /*
- * Lumen screen probe gather, integrate + temporal, fused per full-resolution pixel (UE 5.8
- * ScreenProbeIntegrateCS, LumenScreenProbeGather.usf:1127-1583, and ScreenProbeTemporalReprojectionCS,
- * LumenScreenProbeGatherTemporal.usf:288-583).
+ * Screen probe gather, integrate + temporal, fused per full-resolution pixel: one pass interpolates the probes'
+ * lighting at the pixel and accumulates it into the histories.
  *
  * Integrate: the pixel interpolates the SH3 irradiance of the 2x2 uniform probes around it with an
  * expanded bilinear (never fully on one probe), each corner weighted by how far its probe lies from the
@@ -11,7 +10,7 @@
  * interpolation position is first jittered by up to one probe tile (half from the final gather quality 4) when the
  * jittered pixel lies on the pixel's plane, which turns the probe lattice into noise the temporal averages away.
  *
- * Rough specular (LumenScreenProbeGather.usf:1502-1570): below LUMEN_MAX_ROUGHNESS_TO_EVALUATE_ROUGH_SPECULAR,
+ * Rough specular: below LUMEN_MAX_ROUGHNESS_TO_EVALUATE_ROUGH_SPECULAR,
  * LUMEN_ROUGH_SPECULAR_SAMPLES GGX visible-normal samples of the pixel's lobe (roughness floored at
  * LUMEN_ROUGH_SPECULAR_MIN_ROUGHNESS, E.y squeezed by LUMEN_SPECULAR_SAMPLE_BIAS) look up the same four
  * probes' bordered radiance with the same weights; their mean is taken in the x / (1 + Y) range and fades
@@ -22,13 +21,13 @@
  * from the 2x2 history taps whose stored depth agrees with the reprojected depth (1% x U(0.5, 1.5) / lerp(0.1, 1,
  * NoV) of it), blended with weight 1 / (1 + N), N = the taps' frame count + 1, up to u_lumen_temporal_max_frames;
  * the rough specular history shares the taps and the weight. No neighbourhood clamp: camera motion never shortens
- * the history. Moving lighting does (UE fast update, LumenScreenProbeGatherTemporal.usf:486-499): the probes'
+ * the history. Moving lighting does (the fast update): the probes'
  * moving fractions interpolated like their lighting give the fast update amount saturate((moving /
  * LUMEN_TEMPORAL_FAST_UPDATE_MOVING_FRACTION - 0.2) / 0.8), at most LUMEN_TEMPORAL_FAST_UPDATE_MAX_AMOUNT, held at
  * least at last frame's amount where it was, and N is cut to (1 - amount) x the maximum.
  *
  * Short-range AO (LUMEN_INTEGRATE_SHORT_RANGE_AO): the AO accumulates over the same taps with the same history length
- * (lumen_short_range_ao_temporal.sh), as UE's temporal accumulates it beside the diffuse.
+ * (lumen_short_range_ao_temporal.sh), beside the diffuse in the same pass.
  *
  * Writes the histories (rgb = E / pi and the rough specular, pre-exposed; a = LumenEncodeHistoryAlpha for the
  * diffuse, the stored frame count for the rough specular; zero on the sky), which are also this frame's results: the
@@ -49,7 +48,7 @@ SAMPLER2D(s_lumen_normal, 1);
 SAMPLER2D(s_lumen_probe_records, 2);
 /// The probes' SH3 (cs_lumen_probe_sh.sc; texel 0's alpha = the probe's moving fraction).
 SAMPLER2D(s_lumen_probe_sh, 3);
-/// The rough specular history: R11G11B10 float, as UE stores its lighting (no reader takes an alpha).
+/// The rough specular history: R11G11B10 float (no reader takes an alpha).
 IMAGE2D_WO(s_lumen_rough_history_out, rg11b10f, 4);
 IMAGE2D_WO(s_lumen_history_out, rgba16f, 6);
 #ifdef LUMEN_INTEGRATE_SHORT_RANGE_AO
@@ -78,9 +77,9 @@ BUFFER_RO(b_lumen_adaptive, uint, 12);
 #endif
 
 /// x > 0 when the histories and s_lumen_prev_depth hold last frame, y > 0 draws one probe per pixel instead of blending
-/// the four (UE StochasticInterpolation, on at High), z > 0 computes the rough specular, w > 0 paints the pixels the
+/// the four (stochastic interpolation, on at High), z > 0 computes the rough specular, w > 0 paints the pixels the
 /// uniform probes cannot interpolate into the diffuse history (diagnostic, stored as a fresh history: red = the fallback
-/// depth weights served them, the pixels UE places adaptive probes for; magenta = not even those).
+/// depth weights served them, the pixels adaptive probes are placed for; magenta = not even those).
 uniform vec4 u_lumen_temporal;
 
 #define u_lumen_has_history (u_lumen_temporal.x > 0.0)
@@ -114,7 +113,7 @@ vec3 LumenProbeIrradianceOverPi(ivec2 tile, LumenSH3 transfer)
 	return result;
 }
 
-/// The probe draw's random number per pixel and frame (UE BlueNoiseScalar): interleaved gradient noise along an axis
+/// The probe draw's random number per pixel and frame: interleaved gradient noise along an axis
 /// independent of the full-resolution jitter's two (LumenSpatioTemporalNoise2D), rotated over frames.
 float LumenProbeDrawNoise(ivec2 pixel)
 {
@@ -151,8 +150,8 @@ struct LumenCorner
 };
 
 /// Uniform corner @p tile, or - when its probe weighs below LUMEN_INTERP_MIN_WEIGHT - the adaptive probe of that tile
-/// with the largest primary weight above it (UE CalculateUpsampleInterpolationWeights, LumenScreenProbeGather.usf
-/// :266-305). The adaptive weights see the pixel itself, without the full-resolution jitter.
+/// with the largest primary weight above it. The adaptive weights see the pixel itself, without the full-resolution
+/// jitter.
 LumenCorner LumenInterpolationCorner(ivec2 tile, float bilinear, ivec2 pixel, vec3 position, vec3 normal, float depth)
 {
 	LumenCorner corner;
@@ -180,7 +179,7 @@ LumenCorner LumenInterpolationCorner(ivec2 tile, float bilinear, ivec2 pixel, ve
 }
 
 /// The pixel's four probes (from the corners base, +x, +y, +xy) and their normalized weights; valid false when no
-/// corner passes even the fallback weights (UE FScreenProbeSample).
+/// corner passes even the fallback weights.
 struct LumenProbeSample
 {
 	/// The probes' atlas tiles: tiles01.xy / .zw = corners base / +x, tiles23.xy / .zw = +y / +xy.
@@ -218,8 +217,8 @@ LumenProbeSample LumenInterpolationProbes(ivec2 pixel, vec3 position, vec3 norma
 	return probes;
 }
 
-/// One of @p probes' four probes drawn in proportion to its weight (UE STOCHASTIC_PROBE_INTERPOLATION,
-/// LumenScreenProbeGather.usf:1229-1263): every tile becomes the drawn probe's, its weight 1 (0 when none is valid).
+/// One of @p probes' four probes drawn in proportion to its weight (stochastic interpolation): every tile becomes the
+/// drawn probe's, its weight 1 (0 when none is valid).
 LumenProbeSample LumenDrawProbe(LumenProbeSample probes, ivec2 pixel)
 {
 	vec4 weights = probes.weights;
@@ -264,7 +263,7 @@ float LumenProbeMoving(ivec2 tile)
 	return texelFetch(s_lumen_probe_sh, ivec2(tile.x * LUMEN_SH_TEXELS_PER_PROBE, tile.y), 0).w;
 }
 
-/// The interpolated moving fraction of the probes' lighting (UE LightingIsMoving).
+/// The interpolated moving fraction of the probes' lighting.
 float LumenInterpolateMoving(LumenProbeSample probes)
 {
 	BRANCH
@@ -279,7 +278,7 @@ float LumenInterpolateMoving(LumenProbeSample probes)
 	return dot(probes.weights, moving);
 }
 
-/// This frame's fast update amount from the moving fraction of the pixel's lighting (UE FastUpdateModeAmount).
+/// This frame's fast update amount from the moving fraction of the pixel's lighting.
 float LumenFastUpdateAmount(float moving)
 {
 	float amount = saturate(moving / LUMEN_TEMPORAL_FAST_UPDATE_MOVING_FRACTION);
@@ -287,7 +286,7 @@ float LumenFastUpdateAmount(float moving)
 	                    LUMEN_TEMPORAL_FAST_UPDATE_MAX_AMOUNT));
 }
 
-/// One probe's bordered radiance along @p direction, bilinear (UE InterpolateFromScreenProbes, mip 0).
+/// One probe's bordered radiance along @p direction, bilinear (mip 0).
 vec3 LumenProbeRadiance(ivec2 tile, vec2 probe_uv, vec2 inv_atlas_size)
 {
 	vec2 texel = vec2(tile * LUMEN_PROBE_BORDER_RES) + float(LUMEN_PROBE_RADIANCE_BORDER) +
@@ -310,7 +309,7 @@ vec3 LumenInterpolateRadiance(LumenProbeSample probes, vec3 direction)
 	return radiance;
 }
 
-/// UE RoughReflectionsDiffuseLerp: 1 = the rough specular is E / pi (the traced reflections own the pixel,
+/// The rough specular's lerp to the diffuse: 1 = the rough specular is E / pi (the traced reflections own the pixel,
 /// or the lobe is wide enough), 0 = all GGX samples.
 float LumenRoughDiffuseLerp(float roughness)
 {
@@ -329,7 +328,7 @@ float LumenLuminance(vec3 color)
 }
 
 /// The lobe's mean radiance from the probes (pre-exposed): LUMEN_ROUGH_SPECULAR_SAMPLES visible-normal
-/// samples (UE ComputeIndirectLightingSampleE seeds, BiasBSDFImportantSample), averaged in x / (1 + Y).
+/// samples (Hammersley points with a per-pixel PCG seed, E.y biased), averaged in x / (1 + Y).
 vec3 LumenRoughSpecular(ivec2 pixel, LumenProbeSample probes, vec3 position, vec3 normal, float roughness)
 {
 	float alpha = max(roughness, LUMEN_ROUGH_SPECULAR_MIN_ROUGHNESS);
@@ -411,8 +410,8 @@ void main()
 	BRANCH
 	if(probes.valid)
 	{
-		// UE EvaluateSHIrradiance clamps the interpolated SH's irradiance at zero (SHCommon.ush:340): where it rings
-		// negative the temporal would otherwise average the dip in.
+		// The interpolated SH's irradiance is clamped at zero: where it rings negative the temporal would otherwise
+		// average the dip in.
 		current = max(LumenInterpolateIrradianceOverPi(probes, normal), vec3_splat(0.0));
 		rough_current = current;
 		float diffuse_lerp = LumenRoughDiffuseLerp(roughness);
@@ -464,7 +463,7 @@ void main()
 		history_alpha = 0.0;
 	}
 	imageStore(s_lumen_history_out, pixel, vec4(result, history_alpha));
-	// UE's temporal quantizes its histories with a per-pixel noise scalar (LumenScreenProbeGatherTemporal.usf:355, 572).
+	// The rough specular history's rg11b10f store is dithered by a per-pixel noise scalar (LumenQuantizeForRg11b10f).
 	float quantize_noise = InterleavedGradientNoise(vec2(pixel), mod(u_lumen_frame_index, 8.0));
 	imageStore(s_lumen_rough_history_out, pixel, vec4(LumenQuantizeForRg11b10f(rough_result, quantize_noise), 1.0));
 #ifdef LUMEN_INTEGRATE_SHORT_RANGE_AO

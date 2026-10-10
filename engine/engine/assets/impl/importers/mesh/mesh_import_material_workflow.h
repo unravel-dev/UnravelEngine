@@ -18,7 +18,7 @@ enum class material_workflow
 {
     unknown,
     metallic_roughness,      ///< glTF/FBX PBR MR: base color + metallic/roughness maps/factors
-    khr_specular_glossiness, ///< KHR_materials_pbrSpecularGlossiness: Khronos bake diffuse+spec textures
+    khr_specular_glossiness, ///< KHR_materials_pbrSpecularGlossiness: bake diffuse+spec textures
     phong_specular_gloss,    ///< Legacy Phong/Blinn: diffuse pass-through, shininess -> roughness
 };
 
@@ -56,7 +56,7 @@ auto detect_material_workflow(const aiMaterial* material) -> material_workflow;
  * @brief Texture slots to try, first hit wins, for @p target under @p workflow.
  *
  * KHR and Phong read albedo from DIFFUSE (BASE_COLOR is the MR fallback there); KHR ignores the MR
- * fallback maps entirely; packed CryEngine/Bistro MR is read from SPECULAR; Phong roughness falls back
+ * fallback maps entirely; packed MR (Bistro pairs, *_spec maps) is read from SPECULAR; Phong roughness falls back
  * to a converted shininess map, and a 3ds Max glossiness map in SHININESS converts as 1 - gloss.
  */
 auto get_texture_slot_candidates(const aiMaterial* material, material_workflow workflow, texture_target target)
@@ -66,7 +66,7 @@ auto get_texture_slot_candidates(const aiMaterial* material, material_workflow w
 auto should_reconstruct_base_color_for_spec_gloss_pair(material_workflow workflow, const aiMaterial* material)
     -> bool;
 
-/// Packed metallic-roughness stored in aiTextureType_SPECULAR (Bistro / CryEngine _spec), never glTF.
+/// Packed metallic-roughness stored in aiTextureType_SPECULAR (Bistro pairs / *_spec maps), never glTF.
 auto material_has_packed_mr_in_specular_slot(const aiMaterial* material) -> bool;
 
 /// KHR specular-only fallback: convert one specular map to combined MR (no diffuse pair).

@@ -2,8 +2,7 @@
 #define __LUMEN_RADIANCE_CACHE_SAMPLE_SH__
 
 /*
- * The radiance cache read of the screen-probe hand-off (UE 5.8 SampleRadianceCacheInterpolated,
- * LumenRadianceCacheInterpolation.ush:332-497): radiance along a ray from @p origin, interpolated from the
+ * The radiance cache read of the screen-probe hand-off: radiance along a ray from @p origin, interpolated from the
  * eight lattice probes around the ORIGIN with plain trilinear weights. Each probe is read in the direction
  * from itself to where the ray leaves a sphere of LUMEN_RADIANCE_CACHE_REPROJECTION_RADIUS x TMin around it
  * (parallax), scaled by T^2 / (R^2 cos) so the blend stays energy-preserving to second order. An

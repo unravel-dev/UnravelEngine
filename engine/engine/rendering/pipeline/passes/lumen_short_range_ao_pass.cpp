@@ -23,8 +23,8 @@ using lumen_pass::ensure_texture;
 using lumen_pass::group_edge;
 using lumen_pass::has_view_size;
 
-/// The search's and the accumulation's format: one uint per texel, the AO packed as UE packs it
-/// (lumen_short_range_ao.sh LumenPackShortRangeAO).
+/// The search's and the accumulation's format: one uint per texel, the bent normal scaled by the visibility in
+/// 11:11:10 bits (lumen_short_range_ao.sh LumenPackShortRangeAO).
 constexpr bgfx::TextureFormat::Enum packed_ao_format = bgfx::TextureFormat::R32U;
 
 /// The search grid of a view at @p downsample_factor.

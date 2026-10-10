@@ -14,9 +14,9 @@ namespace unravel
 //------------------------------------------------------------------------------
 enum class combine_mode : int
 {
-    average = 0,  // PhysX default: (eA + eB)/2
+    average = 0,  // (eA + eB)/2
     minimum = 1,  // min(eA, eB)
-    multiply = 2, // Bullet default: eA * eB
+    multiply = 2, // eA * eB
     maximum = 3,  // max(eA, eB)
     count = 4
 };

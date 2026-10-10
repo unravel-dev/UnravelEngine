@@ -62,7 +62,7 @@ vec4 SSIL_SanitizeRgba(vec4 v)
     return mix(v, vec4_splat(0.0), vec4(float(bad.x), float(bad.y), float(bad.z), float(bad.w)));
 }
 
-// 5-tap Catmull-Rom resampler (Karis SIGGRAPH 2014 "High Quality Temporal Supersampling").
+// 5-tap Catmull-Rom resampler.
 // Each tap is a hardware-bilinear sample whose UV is offset so the 5 taps reproduce the
 // energy of a 4x4 bicubic-B-spline footprint (corner weights dropped; the remaining centre
 // + cross taps account for >97% of bicubic weight). Sharper than hardware bilinear without

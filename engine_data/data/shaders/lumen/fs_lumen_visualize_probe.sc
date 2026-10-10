@@ -3,9 +3,9 @@ $input v_sphere, v_world_position, v_probe
 /*
  * The probe spheres: the camera ray against the sphere, shaded at the hit by the sphere normal and written as radiance
  * into the pre-exposed scene colour.
- *  mode 0 (UE VisualizeRadiosityProbesPS): the probe's irradiance SH as a white diffuse surface
+ *  mode 0, the radiosity probes: the probe's irradiance SH as a white diffuse surface
  *         (max(SH . the diffuse transfer of the normal, 0) / pi); an invalid probe pink.
- *  mode 1 (UE VisualizeRadianceCachePS, VISUALIZE_MODE_RADIANCE): the probe's radiance along the normal.
+ *  mode 1, the radiance cache probes: the probe's radiance along the normal.
  */
 
 #include "../common.sh"

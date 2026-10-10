@@ -1,15 +1,12 @@
 /*
- * Lumen surface cache: card capture -> physical atlases (UE 5.8 LumenSurfaceCache.usf CopyCardsToSurfaceCache,
- * LumenCardBasePass.ush:98-148, and LumenSceneLighting.usf CopyCardCaptureLightingToAtlasPS:688-734), one 8x8 group
- * per captured tile.
+ * Surface cache: card capture -> physical atlases, one 8x8 group per captured tile.
  *
  * The capture atlas holds the G-buffer encoding of each captured page (rt0 = sRGB base colour + AO, rt1 =
  * octahedral world normal + metalness + roughness, rt2 = emissive, rt3 = subsurface colour + opacity, depth = the
- * card's linear depth: 0 at its front plane, 1 at its back, cleared to 1). The surface cache stores what Lumen's card
- * base pass outputs:
+ * card's linear depth: 0 at its front plane, 1 at its back, cleared to 1). The surface cache stores per texel:
  *  - albedo: sqrt of the diffuse colour, BaseColor (1 - Metallic) + 0.45 x lerp(0.04, BaseColor, Metallic)
- *    (EnvBRDFApproxFullyRough) + the subsurface colour (black without one: UE adds it for the subsurface, skin,
- *    foliage and cloth models, LumenCardBasePass.ush:121-129), a = 1 where the card sees a surface;
+ *    (the share of the specular colour a fully rough surface scatters diffusely) + the subsurface colour (black for
+ *    a material without one), a = 1 where the card sees a surface;
  *  - normal: the octahedral normal in the card's axes (LumenEncodeCardNormal);
  *  - emissive: linear emissive radiance;
  *  - depth: the card depth, 1 where nothing was captured;
@@ -51,9 +48,9 @@ BUFFER_RO(b_lumen_copy_tiles, vec4, 15);
 /// x = tile count, y = the float4 the tile words start at (lumen_tile_records.sh), z = the frame index.
 uniform vec4 u_lumen_card_copy;
 
-/// UE's default Specular (0.5) as F0: 0.08 x 0.5.
+/// The dielectric F0 at the default specular of 0.5: 0.08 x 0.5.
 #define LUMEN_DIELECTRIC_F0 0.04
-/// EnvBRDFApproxFullyRough: the share of the specular colour a fully rough surface scatters diffusely.
+/// The share of the specular colour a fully rough surface scatters diffusely.
 #define LUMEN_FULLY_ROUGH_SPECULAR 0.45
 
 NUM_THREADS(8, 8, 1)

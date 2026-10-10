@@ -67,8 +67,7 @@ GLM_FUNC_QUALIFIER vec<3, T, Q> scale_fix(vec<3, T, Q> const& scale)
 
 } // namespace detail
 // Recomposes a model matrix from a previously-decomposed matrix
-// http://www.opensource.apple.com/source/WebCore/WebCore-514/platform/graphics/transforms/TransformationMatrix.cpp
-// https://stackoverflow.com/a/75573092/1047040
+// M = perspective * translation * rotation * shear (YZ, XZ, XY) * scale, the inverse of glm_decompose.
 template<typename T, qualifier Q>
 GLM_FUNC_QUALIFIER mat<4, 4, T, Q> recompose_impl(vec<3, T, Q> const& scale,
                                                   qua<T, Q> const& orientation,
@@ -124,7 +123,7 @@ GLM_FUNC_QUALIFIER void glm_recompose(mat<4, 4, T, Q>& model_matrix,
 }
 
 // Matrix decompose
-// http://www.opensource.apple.com/source/WebCore/WebCore-514/platform/graphics/transforms/TransformationMatrix.cpp
+// Isolates perspective, then translation, then scale and shear (orthogonalizing the rows), then the rotation.
 // Decomposes the mode matrix to translations,rotation scale components
 template<typename T, qualifier Q>
 GLM_FUNC_QUALIFIER bool glm_decompose(mat<4, 4, T, Q> const& ModelMatrix,
@@ -182,13 +181,11 @@ GLM_FUNC_QUALIFIER bool glm_decompose(mat<4, 4, T, Q> const& ModelMatrix,
         // rightHandSide by the inverse.  (This is the easiest way, not
         // necessarily the best.)
         mat<4, 4, T, Q> InversePerspectiveMatrix =
-            glm::inverse(PerspectiveMatrix); //   inverse(PerspectiveMatrix, inversePerspectiveMatrix);
+            glm::inverse(PerspectiveMatrix);
         mat<4, 4, T, Q> TransposedInversePerspectiveMatrix =
-            glm::transpose(InversePerspectiveMatrix); //   transposeMatrix4(inversePerspectiveMatrix,
-                                                      //   transposedInversePerspectiveMatrix);
+            glm::transpose(InversePerspectiveMatrix);
 
         Perspective = TransposedInversePerspectiveMatrix * RightHandSide;
-        //  v4MulPointByMatrix(rightHandSide, transposedInversePerspectiveMatrix, perspectivePoint);
 
         // Clear the perspective partition
         LocalMatrix[0][3] = LocalMatrix[1][3] = LocalMatrix[2][3] = static_cast<T>(0);
@@ -212,7 +209,7 @@ GLM_FUNC_QUALIFIER bool glm_decompose(mat<4, 4, T, Q> const& ModelMatrix,
             Row[i][j] = LocalMatrix[i][j];
 
     // Compute X scale factor and normalize first row.
-    Scale.x = detail::length_impl(Row[0]); // v3Length(Row[0]);
+    Scale.x = detail::length_impl(Row[0]);
 
     Row[0] = detail::scale_impl(Row[0], static_cast<T>(1));
 
@@ -240,7 +237,7 @@ GLM_FUNC_QUALIFIER bool glm_decompose(mat<4, 4, T, Q> const& ModelMatrix,
     // At this point, the matrix (in rows[]) is orthonormal.
     // Check for a coordinate system flip.  If the determinant
     // is -1, then negate the matrix and the scaling factors.
-    Pdum3 = cross(Row[1], Row[2]); // v3Cross(row[1], row[2], Pdum3);
+    Pdum3 = cross(Row[1], Row[2]);
     if(dot(Row[0], Pdum3) < 0)
     {
         for(length_t i = 0; i < 3; i++)
@@ -250,13 +247,10 @@ GLM_FUNC_QUALIFIER bool glm_decompose(mat<4, 4, T, Q> const& ModelMatrix,
         }
     }
 
-    // Now, get the rotations out, as described in the gem.
+    // Now, get the rotation out of the orthonormal rows.
 
-    // FIXME - Add the ability to return either quaternions (which are
-    // easier to recompose with) or Euler angles (rx, ry, rz), which
-    // are easier for authors to deal with. The latter will only be useful
-    // when we fix https://bugs.webkit.org/show_bug.cgi?id=23799, so I
-    // will leave the Euler angle code here for now.
+    // The Euler angles (rx, ry, rz) of the same rows, kept for reference; the rotation is
+    // returned as a quaternion, which is easier to recompose with.
 
     // ret.rotateY = asin(-Row[0][2]);
     // if (cos(ret.rotateY) != 0) {

@@ -21,10 +21,9 @@
 #include "lumen/lumen_constants.sh"
 
 IMAGE3D_WO(s_clipmap_out, r8, 5);
-/// The Lumen coverage of a distance-only clipmap (global_sdf_clipmap_gpu::get_coverage_texture), written at the voxels
-/// whose coordinates are all multiples of SDF_CLIPMAP_COVERAGE_DOWNSAMPLE when u_compose_coverage (UE 5.8
-/// GlobalDistanceFieldCompositeObjects.usf:46-75, 223-240): 0 where the instances within LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS
-/// are all two-sided, 1 elsewhere.
+/// The GI coverage of a distance-only clipmap (global_sdf_clipmap_gpu::get_coverage_texture), written at the voxels
+/// whose coordinates are all multiples of SDF_CLIPMAP_COVERAGE_DOWNSAMPLE when u_compose_lumen: 0 where the instances
+/// within LUMEN_GLOBAL_SDF_COVERAGE_BAND_VOXELS are all two-sided, 1 elsewhere.
 IMAGE3D_WO(s_clipmap_coverage_out, r8, 6);
 
 /// x = level index, y = voxels per axis, z = this level's voxel size, w = reach in world units
@@ -37,7 +36,7 @@ uniform vec4 u_clipmap_compose_params;
 #define u_compose_reach      u_clipmap_compose_params.w
 
 /// xyz = this level's world-space origin (its minimum corner, already snapped), w > 0.5 when the dispatch composes a
-/// Lumen cascade: it writes the coverage too and leaves small objects out (SdfLumenCascadeKeepsInstance).
+/// GI cascade: it writes the coverage too and leaves small objects out (SdfLumenCascadeKeepsInstance).
 uniform vec4 u_clipmap_compose_origin;
 #define u_compose_lumen (u_clipmap_compose_origin.w > 0.5)
 
@@ -46,7 +45,7 @@ uniform vec4 u_clipmap_compose_origin;
 /// and composes the exposed slabs and the boxes within reach of the changed instances.
 #define BRICK_DISPATCH_STAGE 7
 #include "gi/brick_dispatch.sh"
-/// x = the scale of the smallest object a Lumen cascade keeps (global_sdf_clipmap::settings::object_radius_scale,
+/// x = the scale of the smallest object a GI cascade keeps (global_sdf_clipmap::settings::object_radius_scale,
 /// 1 / the scene detail); yzw unused.
 uniform vec4 u_clipmap_compose_scale;
 
@@ -143,9 +142,9 @@ void main()
 						// to_bounds is zero inside any bounds and never negative, so once the
 						// voxel is inside some instance this would skip every remaining candidate
 						// and the interior would depend on visit order. A voxel writing the coverage
-						// keeps every candidate within the band, whose sidedness decides it (UE
-						// MaxEarlyOutDistance). Strict: at nearest == 0 (a voxel centre on a face) an
-						// instance containing the voxel reads to_bounds 0 too.
+						// keeps every candidate within the band, whose sidedness decides it. Strict: at
+						// nearest == 0 (a voxel centre on a face) an instance containing the voxel reads
+						// to_bounds 0 too.
 						float reject_distance = writes_coverage ? max(nearest, coverage_band) : nearest;
 						if(nearest >= 0.0 && to_bounds > reject_distance)
 						{
@@ -155,10 +154,9 @@ void main()
 						vec3 local_position =
 						    SdfTransformPoint(inst.world_to_local_rows, world_position);
 						// Two-sided fields compose as zero-thickness sheets (see SdfSheetDistance); a
-						// non-uniformly scaled placement is bounded per axis (SdfInstanceWorldDistance). A Lumen
-						// cascade reads beyond the traced level's band from the chain's coarsest level, as UE
-						// composes its global distance field (SdfInstanceStandaloneDistance); y = the answering
-						// level's exact reach.
+						// non-uniformly scaled placement is bounded per axis (SdfInstanceWorldDistance). A GI
+						// cascade reads beyond the traced level's band from the chain's coarsest level
+						// (SdfInstanceStandaloneDistance); y = the answering level's exact reach.
 						vec2 distance_and_reach = vec2(0.0, 0.0);
 						BRANCH
 						if(u_compose_lumen)
@@ -173,10 +171,10 @@ void main()
 						nearest = min(nearest, world_distance);
 						// A level's sample is its distance only inside its narrow band: beyond it the voxels
 						// saturate and empty bricks report a lower bound. A two-sided field is near where that
-						// lower bound lies within the coverage band (UE's distance would too, or nearly), a
+						// lower bound lies within the coverage band (the exact distance would too, or nearly), a
 						// one-sided field only within the answering level's exact band: a large wall's saturated
 						// reading would otherwise cover all the space inside its bounds. The coarsest level's band
-						// reaches the coverage band, as UE's does.
+						// reaches the coverage band.
 						float near_reach = inst.is_two_sided ? coverage_band : min(coverage_band, distance_and_reach.y);
 						if(writes_coverage && abs(world_distance) < near_reach)
 						{

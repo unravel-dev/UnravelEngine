@@ -350,8 +350,8 @@ void worldSpaceFrustumCorners(
 }
 
 /**
-* Calculate cascade split depths based on view camera frustum using GPU Gems 3 method.
-* Based on: https://developer.nvidia.com/gpugems/GPUGems3/gpugems3_ch10.html
+* Calculate cascade split depths over the view camera's shadow range (parallel-split shadow maps).
+* Each split blends a logarithmic and a uniform split of the range by splitLambda.
 * 
 * @param cascadeSplits Output array of normalized split depths [0..1] for each cascade
 * @param numSplits Number of cascade splits (typically 4)
@@ -1495,7 +1495,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
     else // LightType::DirectionalLight == m_settings.m_lightType
     {
         // ============================================================================
-        // Cascaded Shadow Map calculation based on GPU Gems 3, Chapter 10
+        // Cascaded Shadow Map calculation (parallel-split shadow maps)
         // ============================================================================
 
         const uint8_t maxNumSplits = 4;
@@ -1506,7 +1506,7 @@ void shadowmap_generator::update(const camera& cam, const light& l, const math::
         const float farClip = currentSmSettings->m_far;
         const float clipRange = farClip - nearClip;
 
-        // Calculate cascade split depths using GPU Gems 3 logarithmic/uniform blend
+        // Calculate cascade split depths as a logarithmic/uniform blend
         float cascadeSplits[maxNumSplits];
         calculateCascadeSplits(cascadeSplits, 
                                  uint8_t(settings_.m_numSplits), 

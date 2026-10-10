@@ -1,8 +1,7 @@
 /*
- * Radiance cache trace selection (UE 5.8 AllocateProbeTracesCS, LumenRadianceCacheUpdate.usf:431-530): every
- * probe whose priority bucket is inside the budget is appended to the trace list, up to
- * LUMEN_RADIANCE_CACHE_MAX_TRACES. New probes are always traced; once their running cost passes the
- * budget they trace a quarter of the rays. The last bucket gets only the budget's remainder.
+ * Radiance cache trace selection: every probe whose priority bucket is inside the budget is appended to the
+ * trace list, up to LUMEN_RADIANCE_CACHE_MAX_TRACES. New probes are always traced; once their running cost passes
+ * the budget they trace a quarter of the rays. The last bucket gets only the budget's remainder.
  * One thread per indirection entry.
  */
 

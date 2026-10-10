@@ -11,15 +11,15 @@ namespace unravel
 {
 
 /**
- * @brief Lumen's short-range ambient occlusion (UE 5.8 ScreenSpaceShortRangeAOCS with the horizon search, accumulated
- *        as the screen probe gather's temporal accumulates it): the occlusion detail below the probe lattice, as a bent
- *        normal and a visibility per pixel.
+ * @brief The GI's short-range ambient occlusion (a screen-space horizon search, accumulated as the screen probe
+ *        gather's temporal accumulates it): the occlusion detail below the probe lattice, as a bent normal and a
+ *        visibility per pixel.
  *
- * Lumen views composite it in place of the screen-space AO: UE applies no SSAO to Lumen GI while the short-range AO
- * is on (LumenDiffuseIndirect.cpp ShouldRenderAOWithLumenGI). A horizon search at the tier's downsample factor (every
- * pixel at Epic, half resolution at High) here, then the gather's integrate accumulates it at full resolution over its
- * own reprojection taps and history length (cs_lumen_integrate_ao.sc), as UE's temporal does. The constants and their
- * UE sources are in engine/rendering/gi/lumen_constants.h; the measurements in tasks/lumen_transform.
+ * GI views composite it in place of the screen-space AO, which does not apply while the short-range AO is on. A
+ * horizon search at the tier's downsample factor (every pixel at the epic tier, half resolution at the high tier)
+ * here, then the gather's integrate accumulates it at full resolution over its own reprojection taps and history
+ * length (cs_lumen_integrate_ao.sc). The constants are in engine/rendering/gi/lumen_constants.h; the measurements in
+ * tasks/lumen_transform.
  */
 class lumen_short_range_ao_pass
 {

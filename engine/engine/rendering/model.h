@@ -312,7 +312,7 @@ struct shadow_reach
  * @p nested_cascades the walk STOPS after the first view whose frustum fully contains the
  * bounds: no farther cascade samples that caster, because the lighting shader reads the
  * smallest cascade whose crop contains the receiver (fs_pbr_lighting.sh,
- * CalculateSurfaceShadow). This is the single owner of that rule - the model level and the
+ * CalculateShadowTerms). This is the single owner of that rule - the model level and the
  * submesh level of the shadow submit both go through here.
  *
  * @param frustums The light frustums, @p view_count of them, nearest cascade first.

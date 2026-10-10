@@ -139,7 +139,7 @@ void test_shader_constants_match_cpp()
 #endif
 }
 
-/// The Lumen gather's constants: lumen_constants.h owns them, lumen_constants.sh mirrors them,
+/// The lumen_constants.h table: it owns the constants, lumen_constants.sh mirrors them,
 /// checked in both directions like the GI table.
 void test_lumen_constants_match_cpp()
 {

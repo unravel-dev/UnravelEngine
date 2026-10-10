@@ -1,12 +1,11 @@
 /*
- * Lumen reflections, ray generation and screen trace, fused per trace texel (UE 5.8 ReflectionGenerateRaysCS,
- * LumenReflections.usf:301-436, then ClearTraces and ReflectionTraceScreenTexturesCS, LumenReflectionTracing.usf
- * :34-229). Epic traces every pixel; at the lowest reflection quality one pixel of each 2 x 2 block traces
- * (LumenReflectionTracePixel), and the resolve reconstructs the others.
+ * Reflections, ray generation and screen trace, fused per trace texel. Every pixel traces, except at the lowest
+ * reflection quality or the high tier, where one pixel of each 2 x 2 block traces (LumenReflectionTracePixel) and
+ * the resolve reconstructs the others.
  *
  * A pixel traces when its traced weight (LumenReflectionFadeAlpha) is positive: the mirror direction below
  * LUMEN_REFLECTION_MIRROR_ROUGHNESS, otherwise one GGX visible-normal sample of spatiotemporal noise
- * (LumenSpatioTemporalNoise2D, UE BlueNoiseVec2) whose E.y is scaled by 1 - LUMEN_REFLECTION_GGX_SAMPLING_BIAS; the
+ * (LumenSpatioTemporalNoise2D) whose E.y is scaled by 1 - LUMEN_REFLECTION_GGX_SAMPLING_BIAS; the
  * ray's cone angle is 1 / pdf of the half vector.
  *
  * The ray then walks the Hi-Z from the pixel lifted off its own depth texel. A hit reads last frame's scene

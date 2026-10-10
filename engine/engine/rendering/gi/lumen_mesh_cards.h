@@ -13,12 +13,12 @@ namespace unravel
 struct sdf_source_geometry;
 
 /**
- * @brief One Lumen mesh card: an oriented box, axis-aligned in mesh space, that the surface cache
+ * @brief One mesh card: an oriented box, axis-aligned in mesh space, that the surface cache
  *        captures orthographically looking along -axis_z (into the mesh).
  *
  * The box spans the in-plane extent of the surface it covers and a depth range starting half a
  * cluster voxel in front of the nearest surface it was built for, so a capture depth-tested inside
- * the box sees exactly the layer of the mesh the card represents (Lumen's FLumenCardBuildData).
+ * the box sees exactly the layer of the mesh the card represents.
  */
 struct lumen_card
 {
@@ -35,7 +35,7 @@ struct lumen_card
 };
 
 /**
- * @brief The card set of one submesh (Lumen's FMeshCardsBuildData).
+ * @brief The card set of one submesh.
  */
 struct lumen_mesh_cards
 {
@@ -47,8 +47,8 @@ struct lumen_mesh_cards
 };
 
 /**
- * @brief What a card build saw (UE FLumenCardBuildDebugData, recorded when UE's card build runs in debug mode), for
- *        r.Lumen.Visualize.CardGenerationSurfels and CardGenerationCluster. Mesh local space.
+ * @brief What a card build saw, recorded when the build runs in debug mode, for the card generation surfel and
+ *        cluster views (lumen_visualize_pass). Mesh local space.
  */
 struct lumen_card_build_debug
 {
@@ -91,8 +91,7 @@ struct lumen_card_build_debug
 };
 
 /**
- * @brief Builds a submesh's cards by surfel clustering, a port of UE 5.8's
- *        MeshCardRepresentationUtilities (GenerateCardRepresentationData).
+ * @brief Builds a submesh's cards by surfel clustering.
  *
  * Surfels are found by casting 32 rays per cell into the mesh from each of the six axis-aligned
  * sides of a voxel grid (at most 64 cells per axis, 10 cm target cells); every hit facing the
@@ -101,12 +100,12 @@ struct lumen_card_build_debug
  * layers per side: the outer layer, then (one-sided meshes only) the deeper near plane covering
  * the most remaining weight, repeatedly. The @p max_cards heaviest clusters become cards.
  *
- * Mesh local units are metres; Lumen's centimetre constants are converted.
+ * Mesh local units are metres, and so are the build's length constants.
  *
  * @param geometry  The submesh's triangles (the same soup the SDF bake reads).
  * @param two_sided True when the submesh's material is two-sided: back faces count as front faces.
- * @param max_cards Card budget (Lumen's default MaxLumenMeshCards is 12).
- * @param debug     When set, receives what the build saw (UE's debug mode); the cards are the same either way.
+ * @param max_cards Card budget (the import settings' max_cards, 12 by default).
+ * @param debug     When set, receives what the build saw (debug mode); the cards are the same either way.
  * @return false when the geometry has no triangles.
  */
 auto build_lumen_mesh_cards(const sdf_source_geometry& geometry,

@@ -26,13 +26,13 @@ constexpr uint8_t depth_mip_levels = 5;
 constexpr uint32_t group_size = 8;
 /// The prefilter's group covers a 16x16 tile of mip 0.
 constexpr uint32_t prefilter_tile = 16;
-/// log2 pixel distance below which the horizon search reads mip 0 (XeGTAO's value).
+/// log2 pixel distance below which the horizon search reads mip 0.
 constexpr float depth_mip_sampling_offset = 3.3f;
 /// Relative view-depth sigma of the denoise and upsample edge stops.
 constexpr float depth_sigma = 0.05f;
 /// Normal power of the denoise edge stop.
 constexpr float normal_power = 8.0f;
-/// Exponent that concentrates horizon samples near the pixel (XeGTAO's value).
+/// Exponent that concentrates horizon samples near the pixel.
 constexpr float sample_distribution_power = 2.0f;
 /// The temporal noise index cycles through this many frames.
 constexpr uint32_t noise_period = 64;

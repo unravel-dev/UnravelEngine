@@ -23,7 +23,7 @@ enum class visualization_mode : int
     base_color = 0,
     diffuse_color = 1,
     specular_color = 2,
-    /// The indirect specular radiance: the traced layers in RBUFFER (SSR, or Lumen's reflections) plus
+    /// The indirect specular radiance: the traced layers in RBUFFER (SSR, or the GI reflections) plus
     /// their uncovered share of the probe layer in PBUFFER, each occluded.
     reflections = 3,
     irradiance = 4,
@@ -40,13 +40,13 @@ enum class visualization_mode : int
     reflection_coverage = 13,
     specular_occlusion = 14,
     velocity = 29,
-    /// The screen-space AO bent normal (GTAO, or Lumen's short-range AO).
+    /// The screen-space AO bent normal (GTAO, or the GI's short-range AO).
     ao_bent_normals = 31,
     /// Auto exposure's own state over the lit image: the adaptation trace and this frame's
-    /// metering histogram (UE's Visualize HDR).
+    /// metering histogram.
     exposure = 41,
-    /// Lumen's debug views (lumen_visualize_pass): UE's r.Lumen.Visualize modes, and the physical card atlas, the
-    /// card coverage and the object grid.
+    /// The GI's debug views (lumen_visualize_pass): the scene and screen-space views of the traces, the two
+    /// overviews, and the physical card atlas, the card coverage and the object grid.
     lumen_scene = 42,
     lumen_card_atlas = 43,
     lumen_card_coverage = 44,
@@ -82,7 +82,7 @@ enum class visualization_group : int
     lighting,
     /// Screen-space motion.
     motion,
-    /// Lumen's scene representation: the global distance field and the surface cache of cards.
+    /// The GI scene representation: the global distance field and the surface cache of cards.
     lumen,
     count,
 };

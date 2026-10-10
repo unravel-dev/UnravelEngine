@@ -16,7 +16,7 @@ auto ssr_pass::init(rtti::context& ctx) -> bool
     // Load shaders
     auto vs_clip_quad = am.get_asset<gfx::shader>("engine:/data/shaders/vs_clip_quad.sc");
 
-    // Load FidelityFX SSR shader (trace pass)
+    // Load SSR shader (trace pass)
     auto fs_ssr_fidelityfx = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/fs_ssr_fidelityfx.sc");
 
     // Load temporal resolve shader
@@ -31,7 +31,7 @@ auto ssr_pass::init(rtti::context& ctx) -> bool
     // Load spatial denoise compute shader
     auto cs_ssr_spatial_denoise = am.get_asset<gfx::shader>("engine:/data/shaders/ssr/cs_ssr_spatial_denoise.sc");
 
-    // Create FidelityFX SSR programs
+    // Create SSR trace program
     fidelityfx_pixel_program_.cache_uniforms();
     fidelityfx_pixel_program_.program = std::make_unique<gpu_program>(vs_clip_quad, fs_ssr_fidelityfx);
 

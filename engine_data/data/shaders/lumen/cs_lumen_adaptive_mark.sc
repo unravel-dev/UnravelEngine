@@ -1,9 +1,8 @@
 /*
- * Lumen adaptive screen probes, marking (UE 5.8 ScreenProbeAdaptivePlacementMarkCS, LumenScreenProbeGather.usf
- * :1731-1806). One thread per candidate pixel, the u_lumen_adaptive_samples candidates of a uniform tile adjacent in the
- * group: a candidate on geometry inside the view whose uniform-probe interpolation weights (this frame's records, no
- * full-resolution jitter) sum below LUMEN_INTERP_MIN_WEIGHT sets its bit in the tile's placement mask
- * (lumen_adaptive_probes.sh).
+ * Adaptive screen probes, marking. One thread per candidate pixel, the u_lumen_adaptive_samples candidates of a
+ * uniform tile adjacent in the group: a candidate on geometry inside the view whose uniform-probe interpolation
+ * weights (this frame's records, no full-resolution jitter) sum below LUMEN_INTERP_MIN_WEIGHT sets its bit in the
+ * tile's placement mask (lumen_adaptive_probes.sh).
  */
 
 #include "bgfx_compute.sh"
@@ -19,7 +18,7 @@ BUFFER_RW(b_lumen_adaptive, uint, 3);
 
 SHARED uint s_mask[LUMEN_ADAPTIVE_MAX_GROUP_TILES];
 
-/// Whether the uniform probes cannot interpolate @p pixel (UE: dot(Weights, 1) < MIN_PROBE_INTERPOLATION_WEIGHT).
+/// Whether the uniform probes cannot interpolate @p pixel: their corner weights sum below LUMEN_INTERP_MIN_WEIGHT.
 bool LumenNeedsAdaptiveProbe(ivec2 pixel)
 {
 	float depth01 = texelFetch(s_lumen_depth, pixel, 0).x;

@@ -18,7 +18,7 @@ namespace
 // swatch in the menu matches the pixel on screen. Sources:
 //   engine_data/data/shaders/gbuffer/fs_gbuffer_visualize.sc   (G-Buffer / lighting / GTAO)
 //   engine_data/data/shaders/velocity/fs_velocity_debug.sc     (motion vectors)
-//   engine_data/data/shaders/lumen/fs_lumen_scene_debug.sc     (Lumen views)
+//   engine_data/data/shaders/lumen/fs_lumen_scene_debug.sc     (GI views)
 // Continuous readouts (roughness, depth, ...) carry no legend; their range is stated in the
 // description instead.
 // -----------------------------------------------------------------------------
@@ -54,9 +54,9 @@ constexpr std::array<visualization_swatch, 6> k_legend_exposure = {{
     {{0.85f, 0.15f, 0.10f}, "The min / max EV100 clamps; the metered marker resting on one = held"},
 }};
 
-// Lumen views: engine_data/data/shaders/lumen/fs_lumen_scene_debug.sc (the scene views) and
+// GI views: engine_data/data/shaders/lumen/fs_lumen_scene_debug.sc (the scene views) and
 // engine_data/data/shaders/lumen/fs_lumen_visualize_screen.sc (the dedicated reflection rays, the screen probe
-// frames). The debug colours of the scene views go through the lit image's tone map as UE's do, so on screen they
+// frames). The debug colours of the scene views go through the lit image's tone map, so on screen they
 // read slightly darker than these swatches. A colour the view's label in the viewport names
 // (lumen_visualize_pass.cpp get_view_label) leads its row with the label's words.
 
@@ -312,9 +312,9 @@ constexpr auto k_visualization_modes = std::to_array<visualization_mode_entry>({
      "pixels of motion mapped to full brightness.",
      k_legend_velocity},
 
-    // -- Lumen ----------------------------------------------------------------
-    // UE's Show > Visualize > Lumen menu first, then its console-only r.Lumen.Visualize modes, then ours. The
-    // overviews list the colours their tiles' labels name.
+    // -- Global Illumination --------------------------------------------------
+    // The overviews and the main views first, then the GI Scene channels, the update and accumulation views,
+    // and the card and object grid views. The overviews list the colours their tiles' labels name.
     {visualization_mode::lumen_overview,
      visualization_group::lumen,
      "lumen_overview",

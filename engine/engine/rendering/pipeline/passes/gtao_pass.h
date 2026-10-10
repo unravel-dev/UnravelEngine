@@ -11,8 +11,8 @@ namespace unravel
 {
 
 /**
- * @brief Ground Truth Ambient Occlusion (Jimenez et al. 2016), a horizon-based screen-space
- * visibility integral with bent normals, in the shape of Intel's XeGTAO.
+ * @brief Ground Truth Ambient Occlusion (GTAO), a horizon-based screen-space visibility
+ * integral with bent normals.
  *
  * Standalone replacement for the ASSAO pass, designed to sit under the GI: the GI resolves
  * occlusion at its probe lattice and coarser, so the default radius is short (contact
@@ -32,31 +32,28 @@ public:
         /// Integrate each slice as a 32-sector visibility bitmask (what lies beyond a thin
         /// occluder stays visible) instead of the two-horizon closed form.
         bool visibility_bitmask = false;
-        /// World-space radius of the occlusion search. Contact scale (XeGTAO ships 0.5): the
-        /// GI resolves the room-scale term itself (its screen probes trace from the pixel), so a
-        /// room-scale radius would darken surfaces whose occlusion the gather already integrated.
-        /// Lumen's short-range AO is a few percent of the screen for the same reason: it fills
-        /// only what the probe interpolation misses. The search is capped on screen by
-        /// max_screen_radius.
+        /// World-space radius of the occlusion search, at contact scale: the GI resolves the
+        /// room-scale term itself (its screen probes trace from the pixel), so a room-scale radius
+        /// would darken surfaces whose occlusion the gather already integrated. The GI's
+        /// short-range AO is a few percent of the screen for the same reason: it fills only what
+        /// the probe interpolation misses. The search is capped on screen by max_screen_radius.
         float radius = 0.5f;
         /// Portion of the radius over which an occluder's influence fades to zero. 0.3 keeps
         /// most of the radius at full weight without the pop a hard cutoff shows when an
-        /// occluder crosses the boundary (XeGTAO's 0.615 is softer, 0.2 pops).
+        /// occluder crosses the boundary (0.615 is softer, 0.2 pops).
         float falloff_range = 0.3f;
-        /// Power applied to the visibility (XeGTAO's final value power). 1 = ground truth
-        /// for the depth buffer.
+        /// Power applied to the visibility. 1 = ground truth for the depth buffer.
         float final_power = 2.2f;
         /// Longest horizon search as a fraction of the AO target height. Bounds the cost and
         /// the sample spacing; the world radius shrinks with it so the falloff stays
         /// consistent. 0.05 ~ the 32 px screen-probe spacing, the footprint the GI's probe
-        /// interpolation cannot resolve (0.25 = XeGTAO-like contact scale, 0.4 = the old
-        /// room-scale term, see radius).
+        /// interpolation cannot resolve (0.25 = contact scale, 0.4 = room scale, see radius).
         float max_screen_radius = 0.25f;
         /// Blend between no occlusion (0) and the full visibility (1) at the consumer.
         float intensity = 1.0f;
         /// The bitmask's slab depth as a fraction of the radius.
         float occluder_thickness = 0.25f;
-        /// 0 = low (1 slice x 2 steps), 1 = default (2 x 3), 2 = XeGTAO high (3 x 3),
+        /// 0 = low (1 slice x 2 steps), 1 = default (2 x 3), 2 = high (3 x 3),
         /// 3 = ultra (9 x 3).
         int32_t quality_level = 1;
         /// Resolution the visibility is computed at; the result is upsampled edge-aware.
@@ -74,8 +71,8 @@ public:
         /// How far the diffuse lookups (the GI probes and the environment SH) follow the bent
         /// normal, weighted by the occlusion (an open pixel keeps its normal). 0 = off.
         float bent_normal_strength = 0.0f;
-        /// Multi-bounce approximation (Jimenez 2016) on the GTAO term: brightens the diffuse
-        /// occlusion by the interreflection a crevice gets back from its own walls (per channel
+        /// Multi-bounce approximation on the GTAO term: brightens the diffuse occlusion by the
+        /// interreflection a crevice gets back from its own walls (per channel
         /// of the diffuse albedo) and the specular occlusion by what they reflect (per channel of
         /// F0). The material AO always takes it.
         bool multi_bounce = true;

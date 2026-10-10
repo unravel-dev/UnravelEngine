@@ -1,22 +1,20 @@
 /*
- * LOCAL EXPOSURE, stage 1: the luminance bilateral grid (UE PostProcessHistogram.usf:199-225,
- * PostProcessHistogram.cpp:475-542).
+ * LOCAL EXPOSURE, stage 1: the luminance bilateral grid.
  *
  * The grid is a coarse histogram WITH position: one column per screen tile, LOCAL_EXPOSURE_SLICES
  * luminance slices deep, each holding the sum of log2 luminance and the sum of weights of the
- * cells that landed in it. The sums are raw, as UE's are, so a partial tile at the right or bottom
+ * cells that landed in it. The sums are raw (not normalized), so a partial tile at the right or bottom
  * edge weighs by the cells it really has when the tonemapper interpolates between tiles. The
  * tonemapper samples the column at the PIXEL's own luminance slice and divides, which yields the
  * mean log luminance of the pixels around it that are roughly as bright as it is - an edge-aware
  * local mean, which is exactly what keeps local exposure from haloing across a window frame the
  * way a plain blur does.
  *
- * A tile is 32 x 32 metering cells = 128 x 128 view pixels, UE's 64 x 64 half-resolution texels.
- * One workgroup per tile, as UE dispatches it: every thread splits its cells between two slices
- * into group-shared fixed-point sums (UE packs its shared sums into integers too), and the first
- * LOCAL_EXPOSURE_SLICES threads write the column.
+ * A tile is 32 x 32 metering cells = 128 x 128 view pixels. One workgroup per tile: every thread
+ * splits its cells between two slices into group-shared fixed-point sums (shared atomics take
+ * integers), and the first LOCAL_EXPOSURE_SLICES threads write the column.
  *
- * FLATTENED, not a 3D texture, though UE's is: an image3D of rg32f is rejected outright by the
+ * FLATTENED, not a 3D texture: an image3D of rg32f is rejected outright by the
  * D3D and SPIR-V paths here, and the GL path cannot sample one in a fragment shader
  * (texture3DLod is unresolved at profile 430 - the same wall the cloud shaders hit). The grid
  * is therefore one 2D RGBA32F image, tiles laid out left to right with their slices end to end:

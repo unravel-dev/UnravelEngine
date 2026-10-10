@@ -6,15 +6,14 @@ namespace unravel
 {
 
 /**
- * @brief A view's scene-color pre-exposure for one frame (UE View.PreExposure).
+ * @brief A view's scene-color pre-exposure for one frame.
  *
  * Every pass that writes scene lighting into the frame's HDR buffers multiplies it by
  * @ref value, so those buffers hold values near the displayed range and every threshold that
  * acts on them tracks the exposure. Post-processing divides it back out. Temporal histories
  * were written under the previous frame's scale and are multiplied by
- * @ref get_history_correction when read (UE PrevViewInfo.SceneColorPreExposure). Persistent GI
- * stores keep their own fixed scale (GI_CACHED_LIGHTING_PRE_EXPOSURE, UE
- * r.EyeAdaptation.CachedLightingPreExposure).
+ * @ref get_history_correction when read. Persistent GI stores keep their own fixed scale
+ * (GI_CACHED_LIGHTING_PRE_EXPOSURE), so their contents stay valid when the exposure moves.
  */
 struct pre_exposure_state
 {

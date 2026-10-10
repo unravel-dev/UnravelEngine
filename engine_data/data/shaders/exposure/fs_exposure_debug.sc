@@ -1,8 +1,8 @@
 $input v_texcoord0
 
 /*
- * EXPOSURE DEBUG OVERLAY (UE's Visualize HDR, reduced to what this engine's auto exposure
- * actually owns). Drawn over the finished image as a blended panel, so the lit frame stays
+ * EXPOSURE DEBUG OVERLAY (the auto exposure's adaptation and metering, the state it actually
+ * owns). Drawn over the finished image as a blended panel, so the lit frame stays
  * readable underneath - the pass cannot sample its own output, and a scissored blend needs no
  * copy.
  *

@@ -2,9 +2,9 @@ $input a_position, a_color0
 $output v_color0
 
 /*
- * The Lumen visualizations' primitives (UE's ViewElementPDI lines and FDynamicMeshBuilder meshes of the card placement
- * and the card generation views): positions in the space of the draw's transform (world without one) and linear
- * colours, drawn into the scene colour with its depth.
+ * The GI visualizations' primitives (the lines and meshes of the card placement and the card generation views):
+ * positions in the space of the draw's transform (world without one) and linear colours, drawn into the scene
+ * colour with its depth.
  */
 
 #include "../common.sh"

@@ -2,7 +2,7 @@
 #define GTAO_COMMON_SH_HEADER_GUARD
 
 /*
- * Ground Truth Ambient Occlusion (Jimenez et al. 2016, in the shape of Intel's XeGTAO):
+ * Ground Truth Ambient Occlusion (GTAO):
  * shared constants, uniforms and helpers for the prefilter, main, denoise, temporal and
  * upsample passes. Every pass runs at the AO resolution (full or half of the G-buffer);
  * the upsample writes the full-resolution result the lighting consumes.
@@ -42,24 +42,23 @@ float GtaoFastAcos(float x)
 	result *= sqrt(saturate(1.0 - ax));
 	return x >= 0.0 ? result : GTAO_PI - result;
 }
-/// Lower clamp on the visibility (XeGTAO): a fully black cavity reads as no surface.
+/// Lower clamp on the visibility: a fully black cavity reads as no surface.
 #define GTAO_MIN_VISIBILITY 0.03
 /// The raw per-frame visibility can overshoot 1 (noise); it is stored divided by this scale
 /// so the denoise and temporal average the overshoot out instead of clipping it dark, and
-/// the upsample multiplies it back (XeGTAO's XE_GTAO_OCCLUSION_TERM_SCALE).
+/// the upsample multiplies it back.
 #define GTAO_OCCLUSION_TERM_SCALE 1.5
 /// The receiver is pulled this fraction toward the camera before the horizon search, so
-/// its own surface's depth quantisation never reads as an occluder (XeGTAO, FP32 depth).
+/// its own surface's depth quantisation never reads as an occluder (sized for FP32 depth).
 #define GTAO_DEPTH_BIAS 0.99999
 /// The receiver normal source rides u_gtao_params3.x (settings.generate_normals): 1 = the
 /// geometric normal reconstructed from depth (the default: the horizon integral then matches
 /// the depth it marches and cannot self-occlude on a normal map; the map's crevices come from
 /// the upsample's detail term); 0 = the G-buffer shading normal, normal map included, which
-/// is what Intel recommends when a G-buffer normal exists and gives the bump response
-/// inside the integral itself.
+/// brings the bump response inside the integral itself.
 #define GTAO_NORMAL_SOURCE_GBUFFER 0.0
 #define GTAO_NORMAL_SOURCE_GEOMETRIC 1.0
-/// Width of the procedural Hilbert curve driving the R2 noise (XeGTAO: level 6).
+/// Width of the procedural Hilbert curve driving the R2 noise (a level-6 curve).
 #define GTAO_HILBERT_WIDTH 64
 
 /// xy = AO-resolution size in texels, zw = 1 / size.
@@ -172,7 +171,7 @@ vec3 GtaoWorldNormal(sampler2D normal_tex, ivec2 ao_texel)
 }
 
 /// Index of a pixel along a GTAO_HILBERT_WIDTH x GTAO_HILBERT_WIDTH Hilbert curve
-/// (XeGTAO's HilbertIndex, computed instead of read from a lookup texture).
+/// (computed in the shader instead of read from a lookup texture).
 uint GtaoHilbertIndex(uint pos_x, uint pos_y)
 {
 	uint index = 0u;
@@ -196,7 +195,7 @@ uint GtaoHilbertIndex(uint pos_x, uint pos_y)
 	return index;
 }
 
-/// XeGTAO's spatiotemporal noise: the R2 sequence driven by the Hilbert index of the pixel,
+/// Spatiotemporal noise: the R2 sequence driven by the Hilbert index of the pixel,
 /// advanced per frame - a blue-noise-like distribution over both screen and time, with two
 /// decorrelated lanes (slice angle, step offset).
 vec2 GtaoSpatioTemporalNoise(ivec2 pixel, float temporal_index)
@@ -206,7 +205,7 @@ vec2 GtaoSpatioTemporalNoise(ivec2 pixel, float temporal_index)
 	return fract(vec2_splat(0.5) + float(index) * vec2(0.75487766624669276, 0.5698402909980532));
 }
 
-/// XeGTAO's depth edges of a pixel against its four neighbours (1 = continuous, 0 = edge),
+/// Depth edges of a pixel against its four neighbours (1 = continuous, 0 = edge),
 /// slope-adjusted so a plane seen at a grazing angle is not an edge.
 vec4 GtaoCalculateEdges(float center_z, float left_z, float right_z, float top_z, float bottom_z)
 {
@@ -236,10 +235,10 @@ float GtaoQuadrantWeight(float accepted, vec3 quadrant_normal, vec3 guide)
 	return accepted * pow(saturate(dot(quadrant_normal, guide)), GTAO_NORMAL_GUIDE_POWER);
 }
 
-/// XeGTAO's geometric normal from the four neighbours' view positions, each quadrant
+/// Geometric normal from the four neighbours' view positions, each quadrant
 /// weighted by its two edges so a silhouette neighbour never tilts the plane, and by its
 /// agreement with the G-buffer shading normal (view space). The depth alone cannot tell
-/// which face a pixel on a convex edge belongs to, and XeGTAO's plain quadrant mean gives
+/// which face a pixel on a convex edge belongs to, and a plain quadrant mean gives
 /// such a pixel a normal halfway between the two faces - a line of false occlusion along
 /// every edge and every facet seam. The shading normal knows the face; the depth still
 /// supplies the flat plane, free of the normal map. Zero where no accepted quadrant faces
@@ -273,7 +272,7 @@ vec3 GtaoDecodeNormal(vec4 encoded)
 	return normalize(encoded.xyz * 2.0 - vec3_splat(1.0));
 }
 
-/// XeGTAO's depth MIP filter: a weighted mean in which the depths within the effect's
+/// Depth MIP filter: a weighted mean in which the depths within the effect's
 /// falloff range of the FARTHEST of the four keep their weight and a lone nearer outlier
 /// drops out. A coarse mip therefore never turns a thin near occluder into a wide false
 /// occluder for the receivers behind it (the halo the plain average or a min filter casts);

@@ -2,16 +2,15 @@
 #define __LUMEN_VISUALIZE_SH__
 
 /*
- * Shared by the Lumen debug views: UE's overview tiles (StochasticLightingVisualize.ush IsInsideVisualizeRect) of
- * fs_lumen_scene_debug.sc and fs_lumen_visualize_screen.sc, and the layout of the visualizations' lines
- * (cs_lumen_probe_trace_visualize.sc and cs_lumen_visualize_reflection_trace.sc write them, vs_lumen_visualize_lines.sc
- * draws them).
+ * Shared by the GI debug views: the overview tiles of fs_lumen_scene_debug.sc and fs_lumen_visualize_screen.sc, and
+ * the layout of the visualizations' lines (cs_lumen_probe_trace_visualize.sc and
+ * cs_lumen_visualize_reflection_trace.sc write them, vs_lumen_visualize_lines.sc draws them).
  */
 
 /// The rounding of a tile's corners, in pixels.
 #define LUMEN_VISUALIZE_TILE_BORDER 12.0
-/// vec4s per line (UE LumenVisualizeTraces.ush VISUALIZE_TRACE_DATA_STRIDE): the start's world position, the vector to
-/// the end (a ray's direction times its hit distance), the colour (a ray's pre-exposed radiance).
+/// vec4s per line: the start's world position, the vector to the end (a ray's direction times its hit distance), the
+/// colour (a ray's pre-exposed radiance).
 #define LUMEN_VISUALIZE_TRACE_STRIDE 3
 
 /// True when @p pixel (0 .. @p size - 1) lies inside a tile of @p size pixels with corners rounded over

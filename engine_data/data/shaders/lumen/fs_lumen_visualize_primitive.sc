@@ -1,7 +1,7 @@
 $input v_color0
 
 /*
- * The Lumen visualizations' world-space primitives: the linear colour as radiance (UE's emissive debug material), in
+ * The GI visualizations' world-space primitives: the linear colour as unlit emitted radiance, in
  * the pre-exposed scene colour, with the colour's alpha for the translucent ones.
  */
 

@@ -92,7 +92,7 @@ struct settings
         friend auto operator==(const graphics_settings& lhs, const graphics_settings& rhs) -> bool = default;
     } graphics;
 
-    /// Project-wide global illumination: the Lumen surface cache's budgets and card resolution rule. The renderer
+    /// Project-wide global illumination: the surface cache's budgets and card resolution rule. The renderer
     /// applies them every frame; the per-volume settings live on the Global Illumination component.
     gi_project_settings global_illumination;
 

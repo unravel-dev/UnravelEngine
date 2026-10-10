@@ -39,9 +39,9 @@ void simulation::run_one_frame(bool is_active)
 
         // Two-stage wait: a single coarse sleep that leaves a small safety
         // margin to absorb OS scheduler jitter, then a yield-spin to the
-        // exact deadline. Matches the pacing approach used by Unity/Unreal.
-        // The margin trades a tiny amount of CPU for sub-millisecond timing
-        // accuracy independent of the platform timer resolution.
+        // exact deadline. The margin trades a tiny amount of CPU for
+        // sub-millisecond timing accuracy independent of the platform timer
+        // resolution.
         constexpr auto sleep_safety_margin = std::chrono::milliseconds(2);
 
         const auto deadline = last_frame_timepoint_ + target_duration;

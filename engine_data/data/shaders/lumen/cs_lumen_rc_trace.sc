@@ -1,9 +1,8 @@
 /*
- * Radiance cache probe trace (UE 5.8 TraceFromProbesCS + TraceForProbeTexel, LumenRadianceCache.usf:779-985):
- * one 8x8 group per trace tile. Each probe direction is an equal-area texel centre (fixed, no jitter); the
- * ray marches the global SDF from TMin (the cell diagonal) with the surface expansion ramping in over the
- * distance the ray keeps from surfaces, with dithered transparency where only two-sided meshes are near
- * (lumen_global_sdf.sh; UE LumenRadianceCache.usf:874, the screen probes' cache computes no irradiance). A hit reads
+ * Radiance cache probe trace: one 8x8 group per trace tile. Each probe direction is an equal-area texel centre
+ * (fixed, no jitter); the ray marches the global SDF from TMin (the cell diagonal) with the surface expansion
+ * ramping in over the distance the ray keeps from surfaces, with dithered transparency where only two-sided meshes
+ * are near (lumen_global_sdf.sh; the screen probes' cache computes no irradiance). A hit reads
  * the surface cache through the object grid, black when no card covers it or the ray starts inside geometry; a miss
  * reads the sky. A probe traced at a quarter of the rays fills
  * 2x2 texels per ray. Writes the persistent source atlas (cached lighting) and the hit-distance atlas.
@@ -87,7 +86,7 @@ void main()
 	vec3 direction = LumenEquiAreaSphericalMapping((vec2(texel) + 0.5) / float(directions));
 	ivec2 origin = LumenRcProbeTileOrigin(probe, u_lumen_rc_probe_res);
 	int scale = u_lumen_rc_probe_res / directions;
-	// UE DitherScreenCoord: the probe's atlas tile x its resolution + the ray's texel.
+	// The dither's screen coordinate: the probe's atlas tile x its resolution + the ray's texel.
 	LumenSdfDither dither = LumenSdfMakeDither(vec2(origin + texel * scale), u_lumen_frame_mod);
 	vec4 ray = LumenRcTraceRay(LumenRcProbePosition(cell.xyz, cell.w), direction, LumenRcTMin(cell.w), dither);
 	for(int y = 0; y < scale; ++y)

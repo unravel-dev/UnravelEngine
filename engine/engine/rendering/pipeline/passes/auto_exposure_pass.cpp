@@ -31,8 +31,7 @@ constexpr const char* local_grid_key = "LOCAL_EXPOSURE_GRID";
 constexpr const char* local_downsampled_key = "LOCAL_EXPOSURE_DOWNSAMPLED";
 constexpr const char* local_blur_temp_key = "LOCAL_EXPOSURE_BLUR_TEMP";
 constexpr const char* local_blurred_key = "LOCAL_EXPOSURE_BLURRED";
-/// Largest blur radius in blurred texels: UE clamps its Gaussian radius to its sample budget
-/// (GetClampedKernelRadius, MAX_FILTER_COMPILE_TIME_SAMPLES 32). Mirrors
+/// Largest blur radius in blurred texels: the blur's tap limit (63 taps per axis). Mirrors
 /// LOCAL_EXPOSURE_BLUR_MAX_RADIUS in cs_local_exposure_blur.sc.
 constexpr float local_blur_max_radius = 31.0f;
 /// The layout (tile count, uv scales) of the view's local exposure textures.
@@ -50,7 +49,7 @@ constexpr float min_valid_pre_exposure = 1e-12f;
 
 /**
  * Slope multiplier for the exponential adaptation phase so its speed at the transition matches
- * the linear phase (UE PostProcessEyeAdaptation.cpp, ExponentialUpM / ExponentialDownM).
+ * the linear phase.
  */
 auto compute_slope_match(float speed, float transition_stops, float frame_time) -> float
 {
@@ -96,7 +95,7 @@ auto ensure_compute_target(gfx::render_view& rview, const char* key, const usize
 }
 
 /// The compensation curve in stops at @p ev100: linear between keys sorted by x, constant past
-/// the ends (FRichCurve's default extrapolation).
+/// the ends.
 auto evaluate_compensation_curve(const std::vector<math::vec2>& sorted_keys, float ev100) -> float
 {
     if(ev100 <= sorted_keys.front().x)
@@ -387,7 +386,7 @@ auto auto_exposure_pass::update_compensation_curve(gfx::render_view& rview, cons
     {
         return curve_tex;
     }
-    // UE CreateCurveLUT: 2^curve per sample in R16F, read back with linear filtering.
+    // The curve LUT: 2^curve per sample in R16F, read back with linear filtering.
     std::vector<math::vec2> sorted_keys = config.compensation_curve;
     std::sort(sorted_keys.begin(),
               sorted_keys.end(),
@@ -441,7 +440,7 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
     {
         const bool snap_requested = snap != 0u;
         snap = 0u;
-        // UE forces the target on camera cuts and when min >= max makes the range a fixed exposure.
+        // Force the target on camera cuts and when min >= max makes the range a fixed exposure.
         if(snap_requested || params.camera_cut || config.min_ev >= config.max_ev)
         {
             force_target = 1.0f;
@@ -476,18 +475,17 @@ void auto_exposure_pass::run_average(gfx::render_view& rview, const run_params& 
     const float params3[4] = {slope_up, slope_down, exponential_transition_stops, history_texel};
     gfx::set_uniform(average_program_.u_average_params3, params3);
 
-    // The local exposure shape, for the average local exposure the pre-exposure folds in (UE
-    // ComputeAverageLocalExposure). The detail strength is deliberately absent: with no spatial
-    // term a bin's own luminance IS its base, so detail cancels out of the average.
+    // The local exposure shape, for the average local exposure the pre-exposure folds in. The
+    // detail strength is deliberately absent: with no spatial term a bin's own luminance IS its
+    // base, so detail cancels out of the average.
     const float params4[4] = {config.local_highlight_contrast,
                               config.local_shadow_contrast,
                               config.local_middle_grey_bias,
                               0.0f};
     gfx::set_uniform(average_program_.u_average_params4, params4);
 
-    // The compensation curve LUT, addressed as UE GetExposureCompensationCurveLUTScaleBias does:
-    // texel centres at the sample EV100 values. Without a curve the white texture reads 1 (no
-    // extra stops).
+    // The compensation curve LUT, addressed with texel centres at the sample EV100 values.
+    // Without a curve the white texture reads 1 (no extra stops).
     const auto curve_tex = update_compensation_curve(rview, config);
     const float samples = float(compensation_curve_samples);
     const float lut_scale = (samples - 1.0f) / (samples * (compensation_curve_max_ev - compensation_curve_min_ev));
@@ -594,7 +592,7 @@ void auto_exposure_pass::run_local_exposure_blur(gfx::render_view& rview,
         bgfx::dispatch(pass.id, local_downsample_program_.program->native_handle(), groups_x, groups_y, 1);
         local_downsample_program_.program->end();
     }
-    // UE GetBlurRadius: the kernel size is a DIAMETER as a percentage of the view width.
+    // The kernel size is a DIAMETER as a percentage of the view width.
     const float radius = std::clamp(covered_width * std::max(config.local_blurred_kernel_percent, 0.0f) * 0.01f * 0.5f,
                                     1e-3f,
                                     local_blur_max_radius);
@@ -738,7 +736,7 @@ void auto_exposure_pass::run(gfx::render_view& rview, const run_params& params)
 
     run_histogram(rview, params);
     // Before the average: the average folds the local exposure's mean into AUTO_EXPOSURE.a,
-    // which the pre-exposure readback then carries (UE LastAverageLocalExposure).
+    // which the pre-exposure readback then carries.
     run_local_exposure(rview, params);
     run_average(rview, params);
     submit_exposure_readback(rview);

@@ -23,24 +23,24 @@ namespace unravel
 namespace
 {
 
-/// r.Lumen.Visualize.MaxTraceDistance (100000 cm): how far the visualize's camera rays trace.
+/// How far the visualize's camera rays trace, in metres.
 constexpr float visualize_max_trace_distance = 1000.0f;
 /// The card coverage view's mesh distance-field march reaches this far.
 constexpr float coverage_max_trace_distance = 200.0f;
-/// StochasticLightingVisualize: the overview's tiles per row and the pixels between them.
+/// The overview's tiles per row and the pixels between them.
 constexpr int overview_tiles_per_row = 3;
 constexpr int overview_tile_margin = 4;
-/// UE's labels sit two margins in from a tile's left edge and this many pixels above its bottom (three-line labels
+/// A label sits two margins in from a tile's left edge and this many pixels above its bottom (three-line labels
 /// higher up).
 constexpr float label_offset_y = 20.0f;
 constexpr float label_offset_y_three_lines = 50.0f;
-/// UE draws a card's front face with this opacity over its wire box.
+/// A card's front face is drawn with this opacity over its wire box.
 constexpr float card_face_opacity = 0.25f;
-/// The card's front face: added to the scene colour at card_face_opacity and seen from both sides (UE's
-/// EmissiveMeshMaterial is two-sided and additive).
+/// The card's front face: added to the scene colour at card_face_opacity and seen from both sides (additive, no
+/// culling).
 constexpr uint64_t card_face_state = BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_SRC_ALPHA, BGFX_STATE_BLEND_ONE);
 /// The card box's twelve edges and its front (+z) face's two triangles over its corners (bit 0 = +x, bit 1 = +y,
-/// bit 2 = +z; AddBoxFaceTriangles' face 1).
+/// bit 2 = +z).
 constexpr std::array<std::array<uint32_t, 2>, 12> card_box_edges = {
     {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}}};
 constexpr std::array<uint32_t, 6> card_face_triangles = {4, 7, 5, 4, 6, 7};
@@ -51,20 +51,20 @@ constexpr uint32_t probe_cube_vertices = 36;
 /// vs_lumen_visualize_probe.sc's modes.
 constexpr float probe_mode_radiosity = 0.0f;
 constexpr float probe_mode_radiance_cache = 1.0f;
-/// UE's radiance cache spheres: the radius scale times this many cell sizes (VisualizeRadiusScale * 0.05).
+/// The radiance cache spheres' radius: radiance_cache_radius_scale times this many cell sizes.
 constexpr float radiance_cache_radius_cells = 0.05f;
 /// The radiance cache bindings of the probe program (indirection in the vertex shader, radiance atlas in the pixel
 /// shader; the depth atlas the binding also sets goes unread).
 constexpr uint8_t radiance_cache_indirection_stage = 6;
 constexpr uint8_t radiance_cache_final_stage = 7;
-/// UE DrawSurfels: discs of 2 cm (times CardGenerationSurfelScale), their fan corners (0, k, k + 1) for k = 1-4 as
-/// positions with the corner in x.
+/// The surfel discs: 2 cm in radius (times card_generation_surfel_scale), their fan corners (0, k, k + 1) for k = 1-4
+/// as positions with the corner in x.
 constexpr float surfel_radius = 0.02f;
 constexpr std::array<float, 36> surfel_disc_corners = {0, 0, 0, 1, 0, 0, 2, 0, 0, 0, 0, 0, 2, 0, 0, 3, 0, 0,
                                                        0, 0, 0, 3, 0, 0, 4, 0, 0, 0, 0, 0, 4, 0, 0, 5, 0, 0};
 /// vec4s of instance data per disc.
 constexpr uint32_t surfel_instance_stride = 3;
-/// DrawSurfels' colours: kept / dropped candidates, an earlier card's / an idle surfel, a ray that hit / did not.
+/// The surfel colours: kept / dropped candidates, an earlier card's / an idle surfel, a ray that hit / did not.
 const math::vec4 surfel_valid_color{0.0f, 1.0f, 0.0f, 1.0f};
 const math::vec4 surfel_invalid_color{1.0f, 0.0f, 0.0f, 1.0f};
 const math::vec4 surfel_used_color{0.5f, 0.5f, 0.5f, 1.0f};
@@ -97,9 +97,9 @@ constexpr uint32_t reflection_trace_lines = 4;
 constexpr uint32_t reflection_text_line_below_probe_counts = 4;
 /// vs_lumen_visualize_probe_placement.sc: four lines per probe atlas tile.
 constexpr uint32_t placement_vertices_per_probe = 8;
-/// UE's lines rasterize with MSAA on (its default rasterizer state), which D3D draws as quads 1.4 pixels wide.
+/// The lines rasterize with MSAA on, which D3D draws as quads 1.4 pixels wide.
 constexpr uint64_t line_raster_state = BGFX_STATE_PT_LINES | BGFX_STATE_MSAA;
-/// ShaderPrint's premultiplied composition; the image's alpha stays.
+/// shader_print's premultiplied composition; the image's alpha stays.
 constexpr uint64_t overlay_line_state =
     BGFX_STATE_WRITE_RGB | line_raster_state | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
 /// fs_lumen_visualize_screen.sc's modes.
@@ -119,8 +119,8 @@ auto is_screen_view(lumen_visualize_pass::view mode) -> bool
            mode == lumen_visualize_pass::view::screen_probe_frames;
 }
 
-/// StochasticLightingVisualize::GetTileOutputView: tile @p index of the rows of overview_tiles_per_row along the
-/// view's top, each a third of the view's width and height.
+/// Tile @p index of the rows of overview_tiles_per_row along the view's top, each a third of the view's width and
+/// height.
 auto get_tile_rect(const usize32_t& size, int index) -> irect32_t
 {
     const int column = index % overview_tiles_per_row;
@@ -133,7 +133,7 @@ auto get_tile_rect(const usize32_t& size, int index) -> irect32_t
     return irect32_t(left, top, left + width, top + height);
 }
 
-/// UE's label of a view (VisualizeLumenScene's LabelText); empty for the views UE draws without one.
+/// The label of a view; empty for the views drawn without one.
 auto get_view_label(lumen_visualize_pass::view mode, const gi_settings& gi) -> std::string
 {
     switch(mode)
@@ -164,8 +164,7 @@ auto get_view_label(lumen_visualize_pass::view mode, const gi_settings& gi) -> s
     }
 }
 
-/// UE FLinearColor::MakeFromHSV8(hue, 255, 255): the fully saturated, full-value colour of @p hue (0-255 around the
-/// wheel), linear.
+/// The fully saturated, full-value colour of @p hue (0-255 around the wheel), linear.
 auto make_hue_color(uint8_t hue) -> math::vec3
 {
     const float h = std::fmod(float(hue) * 6.0f / 255.0f, 6.0f);
@@ -188,7 +187,7 @@ auto make_hue_color(uint8_t hue) -> math::vec3
     }
 }
 
-/// UE's cluster colour key: a hash of the card's mesh-space box and its index among the mesh's cards.
+/// A cluster's colour key: a hash of the card's mesh-space box and its index among the mesh's cards.
 auto get_cluster_hash(const lumen_card& card, uint32_t index) -> uint32_t
 {
     const std::array<float, 7> key = {card.origin.x,
@@ -411,7 +410,7 @@ void lumen_visualize_pass::run(const run_params& params, std::vector<debug_view_
     switch(params.mode)
     {
         case view::overview:
-            // The lit image stays; the tiles go over it (UE copies the scene colour first).
+            // The lit image stays; the tiles go over it.
             draw_tile(params, view::geometry_normals, 0, labels);
             draw_tile(params, view::reflection_view, 1, labels);
             draw_tile(params, view::surface_cache, 2, labels);
@@ -481,8 +480,8 @@ void lumen_visualize_pass::draw_view(const run_params& params, view mode, const 
     scene.gi_scene = params.gi_scene;
     scene.view_cache = params.view_cache;
     scene.mode = lumen_surface_cache_pass::debug_mode(int(mode));
-    // The reflection view traces as far as the reflections do (UE Lumen::GetMaxTraceDistance); the others as far as
-    // UE's visualize.
+    // The reflection view traces as far as the reflections do, the card coverage view as far as its march reaches,
+    // the others as far as the visualize's camera rays.
     scene.max_trace_distance = mode == view::reflection_view
                                    ? lumen_pass::get_max_trace_distance(params.gi.diffuse.max_trace_distance)
                                : mode == view::card_coverage ? coverage_max_trace_distance
@@ -553,7 +552,7 @@ void lumen_visualize_pass::draw_card_generation(const world_params& params, cons
     pass.bind(target.get());
     pass.set_view_proj(params.cam->get_view(), params.cam->get_projection());
     line_vertices_.clear();
-    // UE draws the clusters only with the surfels off.
+    // The clusters draw only with the surfels off.
     if(params.settings.card_generation_surfels)
     {
         draw_card_generation_surfels(params, pass.id);
@@ -585,7 +584,7 @@ void lumen_visualize_pass::draw_card_generation_surfels(const world_params& para
             continue;
         }
         const auto& buffers = get_card_generation_buffers(build, *source.cards);
-        // Kept and dropped candidates; UE's surfel rays are never recorded by its build.
+        // Kept and dropped candidates; the build records no rays for them.
         draw_surfels(params, buffers, buffers.candidates[0], source.local_to_world, view_id);
         draw_surfels(params, buffers, buffers.candidates[1], source.local_to_world, view_id);
     }
@@ -719,7 +718,7 @@ void lumen_visualize_pass::draw_surfels(const world_params& params,
     gfx::set_transform(local_to_world);
     bgfx::setVertexBuffer(0, surfel_disc_);
     bgfx::setInstanceDataBuffer(buffers.surfels, range.first, count);
-    // UE's unlit discs: opaque, depth tested and written (into the depth copy), seen from their normal's side only.
+    // Unlit discs: opaque, depth tested and written (into the depth copy), seen from their normal's side only.
     // The fan winds counter-clockwise on screen from that side, so the clockwise side is culled.
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_Z | BGFX_STATE_DEPTH_TEST_LESS | BGFX_STATE_CULL_CW);
     bgfx::submit(view_id, program.program->native_handle());
@@ -731,7 +730,7 @@ void lumen_visualize_pass::add_cluster_bounds(const world_params& params,
                                               const math::vec3& color,
                                               const math::mat4& local_to_world)
 {
-    // DrawSurfels counts the discs it draws of the cluster's own kind and boxes them.
+    // The box covers the discs of the cluster's own kind that draw_surfels draws.
     const uint32_t max_surfels = uint32_t(params.settings.card_generation_max_surfel);
     math::bbox local_bounds;
     local_bounds.reset();
@@ -774,7 +773,7 @@ void lumen_visualize_pass::add_cluster_bounds(const world_params& params,
             line_vertices_.push_back({p.x, p.y, p.z, color.x, color.y, color.z, 1.0f});
         }
     }
-    // UE adds the discs' mean world normal to the box's local centre.
+    // The discs' mean world normal is added to the box's local centre, before local_to_world.
     const math::vec3 center = local_bounds.get_center();
     const math::vec3 start(local_to_world * math::vec4(center, 1.0f));
     const math::vec3 end(local_to_world *
@@ -872,7 +871,7 @@ void lumen_visualize_pass::draw_reflection_trace(const overlay_params& params, u
     auto& rview = *params.rview;
     const auto& cursor = params.settings.cursor;
     const auto size = params.scene_depth->get_size();
-    // UE shows nothing without the cursor, outside the view, or before this frame's reflections traced.
+    // Nothing shows without the cursor, outside the view, or before this frame's reflections traced.
     const bool is_cursor_in_view = cursor.x >= 0.0f && cursor.y >= 0.0f && cursor.x < float(size.width) &&
                                    cursor.y < float(size.height);
     const auto ray = rview.tex_safe_get(lumen_reflection_pass::ray_texture);
@@ -1135,7 +1134,7 @@ void lumen_visualize_pass::draw_card_placement(const world_params& params, const
                          box.axis_y * ((i & 2u) != 0u ? box.extent.y : -box.extent.y) +
                          box.axis_z * ((i & 4u) != 0u ? box.extent.z : -box.extent.z);
         }
-        // DrawWireBox, then the card's projection face translucent (alpha 0.25).
+        // The wire box, then the card's projection face translucent (alpha 0.25).
         for(const auto& edge : card_box_edges)
         {
             for(uint32_t corner : edge)
@@ -1237,7 +1236,7 @@ void lumen_visualize_pass::draw_screen_view(const run_params& params, view mode,
     gfx::texture::ptr scene_color;
     if(is_frames_view)
     {
-        // Without this frame's history UE reads a black stand-in: no frames anywhere.
+        // Without this frame's history the view reads a black stand-in: no frames anywhere.
         history = lumen_gather_pass::get_current_history(*params.rview);
         scene_color = copy_output(params);
     }

@@ -10,7 +10,7 @@ namespace unravel
 {
 
 /**
- * @brief Volume component exposing global illumination (Lumen), blending across post-process volumes like
+ * @brief Volume component exposing global illumination, blending across post-process volumes like
  *        ssil_component.
  */
 class gi_component : public component_crtp<gi_component>

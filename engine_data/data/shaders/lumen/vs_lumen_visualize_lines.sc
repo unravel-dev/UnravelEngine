@@ -1,10 +1,9 @@
 $output v_color0
 
 /*
- * The world-space lines UE's Lumen visualizations draw with ShaderPrint (AddLineWS), two vertices per line of a buffer
- * in lumen_visualize.sh's layout: the start, the vector to the end and a colour. The colour is radiance tone mapped
- * as the image is (UE VisualizeTonemap: r.Lumen.ScreenProbeGather.VisualizeTraces) or a colour taken as it is (the
- * line colours of r.Lumen.Reflections.VisualizeTraces). A zero-length line draws nothing.
+ * The world-space lines of the GI visualizations, two vertices per line of a buffer in lumen_visualize.sh's layout:
+ * the start, the vector to the end and a colour. The colour is radiance tone mapped as the image is (the screen probe
+ * trace view) or a colour taken as it is (the reflection trace view's line colours). A zero-length line draws nothing.
  */
 
 #include "../common.sh"

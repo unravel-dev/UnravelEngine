@@ -1185,8 +1185,8 @@ void defaults::apply_volume_preset(entt::handle volume, scene_preset preset)
     set_volume_effect_enabled<bloom_component>(volume, !is_low);
     set_volume_effect_enabled<gtao_component>(volume, !is_low);
     set_volume_effect_enabled<ssr_component>(volume, !is_low);
-    // Lumen GI owns the indirect diffuse, the reflections and the short-range AO from `high` up;
-    // below it the ambient comes from the environment term alone. SSR serves views where Lumen's
+    // The GI owns the indirect diffuse, the reflections and the short-range AO from `high` up;
+    // below it the ambient comes from the environment term alone. SSR serves views where the GI's
     // reflections are off. SSIL stays a manual opt-in: it must never run together with the GI,
     // since screen-space indirect re-samples the GI-lit frame and double-counts it. ASSAO is the
     // manual alternative to GTAO.

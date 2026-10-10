@@ -1,8 +1,7 @@
 /*
- * UE 5.8 r.Lumen.ScreenProbeGather.Debug (LumenScreenProbeDebug.usf ScreenProbeGatherDebugCS): the gather's screen
- * probe counts as ShaderPrint text - every probe, the uniform ones and the adaptive ones placed this frame (at most
- * the adaptive capacity, UE GetNumAdaptiveScreenProbes). UE prints at (0.8, 0.1) of the view; the text starts at
- * (0.1, 0.1) here, clear of the editor's navigation cube in the top right.
+ * Screen probe gather debug: the gather's screen probe counts as ShaderPrint text - every probe, the uniform ones and
+ * the adaptive ones placed this frame (at most the adaptive capacity). The text starts at (0.1, 0.1) of the view,
+ * clear of the editor's navigation cube in the top right.
  */
 
 #include "bgfx_compute.sh"

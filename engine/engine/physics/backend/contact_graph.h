@@ -35,9 +35,9 @@ struct contact_links
  * @class contact_graph
  * @brief Pooled contact pairs, each linked into both participants' lists.
  *
- * The shape Box2D uses for its contact graph, for the same reason: a per-body question
- * ("what is this body touching", "does removing it owe anyone an event") has to be
- * answerable without scanning the whole contact set, because it is asked on the destroy
+ * Linking each pair into both bodies' lists answers a per-body question
+ * ("what is this body touching", "does removing it owe anyone an event") without
+ * scanning the whole contact set, which matters because it is asked on the destroy
  * path of every body in the scene.
  *
  * Complexity, against the sorted-vector map this replaced:

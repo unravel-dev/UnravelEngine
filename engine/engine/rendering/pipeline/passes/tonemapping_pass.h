@@ -2,6 +2,7 @@
 
 #include <engine/rendering/camera.h>
 #include <engine/rendering/gpu_program.h>
+#include <engine/rendering/pipeline/passes/local_exposure_binding.h>
 #include <graphics/render_view.h>
 #include <math/color.h>
 
@@ -26,8 +27,8 @@ enum class tonemapping_method : uint8_t
     agx,
     agx_golden,
     agx_punchy,
-    /// UE 5.8's default SDR curve (Filmic: ACES-derived toe and shoulder in AP1, blue correction,
-    /// gamut expansion).
+    /// The default SDR curve: a filmic, ACES-derived toe and shoulder in AP1, with blue correction
+    /// and gamut expansion.
     film
 };
 
@@ -37,14 +38,13 @@ public:
     struct settings
     {
         float exposure = 1.0f;
-        /// Film is the default: UE 5.8's own curve, which its default Auto Exposure
-        /// Compensation (+1) is built around - the metered average lands at display 0.67, with
-        /// UE's contrast and saturation. AgX keeps hue more stable under very bright saturated
-        /// light and holds about two more stops of highlights, with lifted shadows.
+        /// Film is the default: the curve the default auto exposure compensation (+1) is built
+        /// around - the metered average lands at display 0.67, with filmic contrast and
+        /// saturation. AgX keeps hue more stable under very bright saturated light and holds
+        /// about two more stops of highlights, with lifted shadows.
         tonemapping_method method = tonemapping_method::film;
 
-        // -- Color grading, evaluated in LINEAR space after exposure, before the
-        //    tone curve (the same stage UE/Unity grade at).
+        // -- Color grading, evaluated in LINEAR space after exposure, before the tone curve.
         /// White balance: warm (+) / cool (-) shift. Range [-1, 1].
         float temperature = 0.0f;
         /// White balance: magenta (+) / green (-) shift. Range [-1, 1].
@@ -82,40 +82,8 @@ public:
         bool dithering = true;
     };
 
-    /**
-     * @brief Everything the per-pixel local exposure needs (auto_exposure_pass owns the two
-     *        lookups and the settings; this pass only applies them).
-     *
-     * Inactive - the default - when the exposure pass did not build a grid, which is exactly
-     * when the settings are neutral (settings::is_local_exposure_enabled).
-     */
-    struct local_exposure_params
-    {
-        /// Flattened bilateral grid: texel (tile_x * slices + slice, tile_y), rg = the slice's
-        /// raw sum of log2 luminance and of weight.
-        gfx::texture::ptr grid;
-        /// The 1/32 resolution Gaussian of the log luminance, the edge-blind level.
-        gfx::texture::ptr blurred;
-        float tiles_x = 0.0f;
-        float tiles_y = 0.0f;
-        /// Screen uv -> grid / blurred uv: the share of each the view covers.
-        math::vec2 grid_uv_scale{1.0f, 1.0f};
-        math::vec2 blurred_uv_scale{1.0f, 1.0f};
-        float slices = 0.0f;
-        /// The grid's luminance axis, matching the histogram's.
-        float min_log_lum = 0.0f;
-        float log_lum_range = 1.0f;
-        float highlight_contrast = 1.0f;
-        float shadow_contrast = 1.0f;
-        float detail_strength = 1.0f;
-        float blurred_blend = 0.6f;
-        float middle_grey_bias = 0.0f;
-
-        auto is_active() const -> bool
-        {
-            return grid && blurred && tiles_x > 0.0f && tiles_y > 0.0f && slices > 0.0f;
-        }
-    };
+    /// The per-pixel local exposure lookups and shape (local_exposure_binding.h).
+    using local_exposure_params = unravel::local_exposure_params;
 
     struct run_params
     {
@@ -123,6 +91,9 @@ public:
         gfx::frame_buffer::ptr output;
         gfx::texture::ptr exposure_texture;
         local_exposure_params local_exposure{};
+        /// The scene before bloom, when bloom composited into @c input: local exposure measures and
+        /// scales it, and the bloom part (input - scene) is added on top. Null without bloom.
+        gfx::texture::ptr scene_without_bloom;
         /// The view's scene-color pre-exposure (it already includes settings::exposure): the
         /// input carries it and the exposure removes it.
         float pre_exposure = 1.0f;
@@ -155,15 +126,8 @@ private:
             cache_uniform(program.get(), u_gain, "u_gain", bgfx::UniformType::Vec4);
             cache_uniform(program.get(), s_input, "s_input", bgfx::UniformType::Sampler);
             cache_uniform(program.get(), s_exposure, "s_exposure", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(), u_local_exposure, "u_local_exposure", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_local_exposure2, "u_local_exposure2", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_local_exposure3, "u_local_exposure3", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), u_local_exposure4, "u_local_exposure4", bgfx::UniformType::Vec4);
-            cache_uniform(program.get(), s_local_exposure_grid, "s_local_exposure_grid", bgfx::UniformType::Sampler);
-            cache_uniform(program.get(),
-                          s_local_exposure_blurred,
-                          "s_local_exposure_blurred",
-                          bgfx::UniformType::Sampler);
+            cache_uniform(program.get(), s_scene, "s_scene", bgfx::UniformType::Sampler);
+            local_exposure.cache_uniforms();
         }
 
         gfx::program::uniform_ptr u_tonemapping;
@@ -175,12 +139,8 @@ private:
         gfx::program::uniform_ptr u_gain;
         gfx::program::uniform_ptr s_input;
         gfx::program::uniform_ptr s_exposure;
-        gfx::program::uniform_ptr u_local_exposure;
-        gfx::program::uniform_ptr u_local_exposure2;
-        gfx::program::uniform_ptr u_local_exposure3;
-        gfx::program::uniform_ptr u_local_exposure4;
-        gfx::program::uniform_ptr s_local_exposure_grid;
-        gfx::program::uniform_ptr s_local_exposure_blurred;
+        gfx::program::uniform_ptr s_scene;
+        local_exposure_uniforms local_exposure;
 
         std::unique_ptr<gpu_program> program;
 

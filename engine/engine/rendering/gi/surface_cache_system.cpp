@@ -71,7 +71,7 @@ namespace unravel
 
 auto surface_cache_system::init(rtti::context& ctx) -> bool
 {
-    // The whole feature is compute-shaped: the clipmap compose and every Lumen pass are
+    // The whole feature is compute-shaped: the clipmap compose and every GI pass are
     // dispatches, and even the debug views read SSBOs. A backend without compute (for example
     // Mesa handing bgfx a GL 3.1 compatibility context) cannot run ANY of it - the dispatches
     // are silently dropped, every volume keeps its allocation garbage, and the views paint
@@ -354,9 +354,8 @@ void surface_cache_system::apply_atlas_pressure()
     }
     acknowledged_rejected_bricks_ = rejected;
     // MEMORY FIRST, RESOLUTION SECOND. A bigger atlas costs VRAM; a coarser field costs the
-    // quality of every occluder in the scene. Growing is also what UE does -- its brick atlas
-    // grows and its documented maximum is a target rather than a cap -- so degradation is the
-    // last resort rather than the first response.
+    // quality of every occluder in the scene. So the brick atlas grows first, and degradation is
+    // the last resort rather than the first response.
     if(atlas_.grow())
     {
         // grow() drops everything resident, because a slot index means a different position in a
@@ -668,9 +667,9 @@ void surface_cache_system::clear_enclosed_emissive_light_sources()
 {
     // An emitter inside a placement that houses it (a bulb in its lamp glass: bounds within, at most
     // emissive_enclosure_max_extent_ratio times its size) shines into that housing, not into the scene. As a light
-    // source its surface-cache cards would stay resident down to one texel, and their radiance leaked through the
-    // housing into the GI (Sponza's vault lit by bulbs behind opaque glass); UE never marks it, as Emissive Light Source
-    // is opt-in there. Open emitters keep the derived flag.
+    // source its surface-cache cards would stay resident down to one texel, and their radiance would leak through the
+    // housing into the GI (Sponza's vault lit by bulbs behind opaque glass), so an enclosed emitter loses the flag.
+    // Open emitters keep the derived flag.
     APP_SCOPE_PERF("GI/SurfaceCache/Enclosed Emitters");
     if(std::none_of(instances_.begin(), instances_.end(), [](const instance& inst) { return inst.is_emissive_light_source; }))
     {
@@ -741,8 +740,8 @@ void surface_cache_system::upload_instances()
             dst[29] = inst.world_bounds.max.y;
             dst[30] = inst.world_bounds.max.z;
             dst[31] = inst.local_to_world_scale;
-            // Lane 8: x = flags (1 two-sided: the Lumen global SDF's coverage; 2 emissive light source: kept by the
-            // Lumen cascade however small), yzw = the world length of each local axis (SdfInstanceWorldDistance's
+            // Lane 8: x = flags (1 two-sided: the global SDF's coverage; 2 emissive light source: kept by the
+            // GI cascade however small), yzw = the world length of each local axis (SdfInstanceWorldDistance's
             // per-axis bounds). MIRROR OF SdfLoadInstance.
             dst[32] = (inst.is_two_sided ? 1.0f : 0.0f) + (inst.is_emissive_light_source ? 2.0f : 0.0f);
             dst[33] = inst.axis_scale.x;
@@ -987,7 +986,7 @@ void surface_cache_system::update_global_lighting_state(scene& scn)
         [&](auto /*entity*/, auto&& light_comp, auto&& /*active*/)
         {
             const auto& light = light_comp.get_light();
-            // The first directional light the GI sees (UE skips lights whose indirect lighting scale is 0).
+            // The first directional light the GI sees (lights whose indirect lighting scale is 0 are skipped).
             if(light.type == light_type::directional && light.indirect_intensity > 0.0f && sun <= 0.0f)
             {
                 const auto color = light_comp.get_linear_color();

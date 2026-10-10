@@ -159,7 +159,7 @@ struct mesh_sdf_bake_settings
     ///< Deliberately far above normal authoring: a handful of parts side by side measures a few x,
     ///< while the cases that break tracing measure in the hundreds or thousands.
     float max_component_spread = 32.0f;
-    ///< The voxel whose band an open surface's backface vote reaches (UE LocalSpaceTraceDistance: encode_range
+    ///< The voxel whose band an open surface's backface vote reaches (the vote signs voxels within encode_range
     ///< voxel diagonals), or 0 for the level's own voxel. A chain's coarser levels vote with its finest level's
     ///< voxel, so every level bakes the same solid: a coarser level's longer reach would sign the space behind a
     ///< submesh's hidden back faces inside well past what the submesh encloses - through a floor slab another
@@ -214,8 +214,7 @@ auto bake_mesh_sdf(const sdf_source_geometry& geometry,
  * Levels are baked INDEPENDENTLY rather than downsampled from the level above. Resampling a
  * stored field would be cheaper, but the stored field is a saturating narrow band and a
  * conservative under-estimate; interpolating it does not reliably stay conservative, and "never
- * over-estimate" is the one property sphere tracing cannot survive losing. UE rebuilds each mip
- * from the source geometry for the same reason.
+ * over-estimate" is the one property sphere tracing cannot survive losing.
  *
  * A level that cannot be produced ends the chain rather than failing the bake, so the result is
  * always usable and never longer than @p mip_count.
@@ -266,15 +265,14 @@ auto sample_mesh_sdf_sheet(const mesh_sdf& sdf, const math::vec3& local_position
 
 /**
  * @brief World distance from a placed field's surface at a LOCAL position, for the composed fields (the global
- *        distance field and the Lumen object grid; UE DistanceToNearestSurfaceForObject,
- *        MeshDistanceFieldCommon.ush). Mirrors SdfInstanceWorldDistance (sdf_common.sh).
+ *        distance field and the GI object grid). Mirrors SdfInstanceWorldDistance (sdf_common.sh).
  *
  * A local distance times one scale is exact only along that scale's axis. With the smallest axis (the conservative
  * choice) a wall scaled (10, 3, 0.2) reads 50x too close past its ends, so stretched primitives swell along their
  * long axes and close the gaps between them. Two per-axis lower bounds keep the result tight and conservative: the
  * world distance to the box the surface lies in (@ref mesh_sdf::get_surface_bounds), and outside the bounds the
  * field at the nearest boundary point less the world distance to it (1-Lipschitz). Inside the bounds the field is
- * converted with the smallest axis scale, and a negative reading there stands as UE's volume-box term lets it: an
+ * converted with the smallest axis scale, and a negative reading there stands without the box bound: an
  * open sheet signed by the bake's vote is solid beyond its own box (a plane is solid below it).
  *
  * @param axis_scale World length of each local axis (the placement's per-axis scale).

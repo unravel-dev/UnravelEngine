@@ -2,12 +2,12 @@
 #define __LUMEN_RADIOSITY_COMMON_SH__
 
 /*
- * Lumen surface cache radiosity, shared layout (UE 5.8 LumenRadiosity.ush / LumenRadiosity.usf, Epic): probes every
- * u_lumen_radiosity_spacing card texels (4; 2 from the surface cache lighting quality 6), each at its cell's texel
+ * Surface cache radiosity, shared layout: probes every u_lumen_radiosity_spacing card texels (4; 2 from the
+ * surface cache lighting quality 6), each at its cell's texel
  * offset by a jitter that cycles over four updates of the page, tracing u_lumen_radiosity_resolution^2 stratified,
  * noise-jittered uniform hemisphere rays (2 x 2 to 8 x 8 with the lighting quality, 4 x 4 at 1;
  * lumen_pass::get_radiosity_layout). A probe's traces fill an R x R tile of the trace atlas at its cell coordinate x R
- * (UE RadiosityProbeTracingAtlas, (atlas / spacing) x R per axis).
+ * (the trace atlas spans (atlas / spacing) x R texels per axis).
  *
  * Work is scheduled in card tiles of LUMEN_RADIOSITY_TILE_TEXELS^2 texels ((8 / spacing)^2 probes); a tile record is
  * 3 vec4: (tile origin in the atlas xy, card index, the page's update index), the page's card UV rectangle, (page
@@ -16,11 +16,10 @@
  *
  * A card larger than one physical page spreads its probes over pages anywhere in the atlas. The filter's neighbours
  * and the integrate's bilinear probes past a page edge are read in the card's neighbouring page, through its page
- * table, with that page's jitter (LumenResolveRadiosityCell, UE LumenRadiosity.usf:184-247, 405-465): the lighting
- * does not step at page edges.
+ * table, with that page's jitter (LumenResolveRadiosityCell): the lighting does not step at page edges.
  */
 
-/// x = the ray clamp in cached units (MaxRayIntensity / the view's pre-exposure; the trace), y = the probe spacing in
+/// x = the ray clamp in cached units (max ray intensity / the view's pre-exposure; the trace), y = the probe spacing in
 /// card texels, z = the rays per axis of a probe's hemisphere, w = the float4 of b_lumen_light_tiles the per-page
 /// update indices start at (lumen_scene::get_page_radiosity_indices), negative when the probes stop at page edges.
 uniform vec4 u_lumen_radiosity;
@@ -33,14 +32,14 @@ uniform vec4 u_lumen_radiosity;
 /// The card tile's edge in texels (the lighting kernels' 8 x 8 tiles) and the threads of a trace or filter group.
 #define LUMEN_RADIOSITY_TILE_TEXELS 8
 #define LUMEN_RADIOSITY_GROUP_THREADS 64
-/// MaxFramesAccumulated with r.LumenScene.Radiosity.Temporal.
+/// The most frames the radiosity history accumulates; the probe jitter cycles over as many updates.
 #define LUMEN_RADIOSITY_MAX_FRAMES 4.0
-/// Ray start offsets: SurfaceBias 5 cm along the normal and the ray, MinTraceDistance 10 cm.
+/// Ray start offsets: a 5 cm surface bias along the normal and the ray, a 10 cm minimum trace distance.
 #define LUMEN_RADIOSITY_SURFACE_BIAS 0.05
 #define LUMEN_RADIOSITY_MIN_TRACE_DISTANCE 0.1
-/// Lumen's MaxTraceDistance (200 m).
+/// The radiosity rays' maximum trace distance (200 m).
 #define LUMEN_RADIOSITY_MAX_TRACE_DISTANCE 200.0
-/// MaxRayIntensity, in pre-exposed units.
+/// The clamp on a ray's radiance (max ray intensity), in pre-exposed units.
 #define LUMEN_RADIOSITY_MAX_RAY_INTENSITY 40.0
 /// The plane test between a probe and a texel or neighbour: exp2(-100 rel^2) > 0.01.
 #define LUMEN_RADIOSITY_PLANE_REJECT 0.01
@@ -48,7 +47,7 @@ uniform vec4 u_lumen_radiosity;
 #define LUMEN_RADIOSITY_PLANE_MIN_REL 0.1
 #define LUMEN_TWO_PI 6.28318531
 
-/// The probe jitter of update @p index (UE GetProbeJitter): Hammersley16(i % 4, 4, (0x4ae4, 0x9bdb)) x the spacing,
+/// The probe jitter of update @p index: Hammersley16(i % 4, 4, (0x4ae4, 0x9bdb)) x the spacing,
 /// truncated - (1, 2), (2, 0), (3, 3), (0, 1) at a spacing of 4.
 ivec2 LumenRadiosityJitter(float index)
 {
@@ -148,7 +147,7 @@ ivec2 LumenRadiosityTraceTexel(ivec2 probe_cell, ivec2 trace_texel)
 	return probe_cell * u_lumen_radiosity_resolution + trace_texel;
 }
 
-/// UE UniformSampleHemisphere: z = cos theta uniform in [0, 1).
+/// A uniform hemisphere sample around +z: z = cos theta uniform in [0, 1).
 vec3 LumenUniformSampleHemisphere(vec2 e)
 {
 	float phi = LUMEN_TWO_PI * e.x;
@@ -188,13 +187,13 @@ bool LumenRadiosityPlaneTest(vec3 position, vec3 normal, vec3 other)
 	return exp2(-LUMEN_RADIOSITY_PLANE_SCALE * rel * rel) > LUMEN_RADIOSITY_PLANE_REJECT;
 }
 
-/// UE SHBasisFunction, two bands.
+/// The real SH basis of two bands at @p d (order 1, y, z, x).
 vec4 LumenSH2Basis(vec3 d)
 {
 	return vec4(0.282095, -0.488603 * d.y, 0.488603 * d.z, -0.488603 * d.x);
 }
 
-/// UE CalcDiffuseTransferSH(N, 1): the basis scaled by the cosine lobe's band factors (pi, 2pi/3).
+/// The cosine lobe around @p n in two SH bands: the basis scaled by the lobe's band factors (pi, 2pi/3).
 vec4 LumenSH2DiffuseTransfer(vec3 n)
 {
 	return LumenSH2Basis(n) * vec4(3.14159265, 2.09439510, 2.09439510, 2.09439510);

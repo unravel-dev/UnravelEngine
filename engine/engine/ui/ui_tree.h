@@ -17,9 +17,8 @@ namespace unravel
  * @struct ui_tree
  * @brief Represents a UI visual tree asset (HTML/RML document).
  * 
- * This asset contains the structure and content of a UI document,
- * similar to Unity's UXML files. It defines the hierarchy and
- * properties of UI elements.
+ * This asset contains the structure and content of a UI document.
+ * It defines the hierarchy and properties of UI elements.
  */
 struct ui_tree
 {

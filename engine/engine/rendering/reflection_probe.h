@@ -32,8 +32,8 @@ enum class reflect_method : std::uint8_t
 /**
  * @brief Enum class describing when a reflection probe refreshes its cubemap.
  *
- * This mirrors the update-policy concept used by Unity (Baked/Realtime+RefreshMode),
- * Unreal (ReflectionCapture bakes on edit) and Godot (UPDATE_ONCE/UPDATE_ALWAYS).
+ * Static probes refresh on request (on_demand) or once after load or an edit; realtime
+ * probes refresh continuously, time-sliced across frames.
  */
 enum class probe_update_mode : std::uint8_t
 {

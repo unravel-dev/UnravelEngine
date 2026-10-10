@@ -1,6 +1,5 @@
 /*
- * Lumen screen probe gather, spatial filter (UE 5.8 ScreenProbeFilterGatherTracesCS,
- * LumenScreenProbeFiltering.usf:292-506), dispatched LUMEN_FILTER_PASSES times with ping-pong atlases.
+ * Screen probe gather, spatial filter, dispatched LUMEN_FILTER_PASSES times with ping-pong atlases.
  * One group per probe, one thread per octahedral texel (LUMEN_PROBE_TRACE_RES^2).
  *
  * Each texel averages itself with the same texel of the four uniform probes beside the probe's uniform tile (an
@@ -12,7 +11,7 @@
  * A texel no ray reached (hit distance < 0) is filled from its neighbours alone and is nobody's
  * neighbour. A probe whose rays saw moving surfaces (moving fraction above LUMEN_FILTER_MOVING_THRESHOLD) filters
  * strongly, as the temporal will shorten its history: eight more neighbours (the axes at 2, the diagonals) and no
- * angle weight (UE bStrongFilter, LumenScreenProbeFiltering.usf:423-483).
+ * angle weight.
  *
  * The neighbours' records and positions are the same for every texel of a probe: the group loads them once.
  *

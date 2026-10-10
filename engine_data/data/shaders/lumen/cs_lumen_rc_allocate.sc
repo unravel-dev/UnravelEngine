@@ -1,5 +1,5 @@
 /*
- * Radiance cache allocation (UE 5.8 AllocateUsedProbesCS, LumenRadianceCacheUpdate.usf:243-391): every cell
+ * Radiance cache allocation: every cell
  * marked this frame with no carried-over probe gets one - from the free list when the cache persists, else
  * from the bump allocator - as never traced; every live probe adds its trace cost to the priority histogram
  * bucket of its age. A pool overflow leaves the cell without a probe (it reads black).

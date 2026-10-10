@@ -1,7 +1,6 @@
 /*
- * Lumen short-range ambient occlusion (UE 5.8 ScreenSpaceShortRangeAOCS with the horizon search:
- * LumenScreenSpaceBentNormal.usf:280-481 CalculateAOHorizonSearch, :643-704): the occlusion detail below the screen
- * probe lattice, which the probes cannot resolve.
+ * Short-range ambient occlusion by a horizon search: the occlusion detail below the screen probe lattice, which the
+ * probes cannot resolve.
  *
  * One thread per texel of the tier's layout (lumen_short_range_ao.sh: every pixel at Epic, half resolution at High)
  * searches from its pixel. Along LUMEN_SHORT_RANGE_AO_SLICE_COUNT screen slices it finds the highest
@@ -9,12 +8,11 @@
  * LUMEN_SHORT_RANGE_AO_STEPS_PER_SLICE depth samples spaced quadratically; a sample further in front of the pixel
  * than LUMEN_SHORT_RANGE_AO_FOREGROUND_REJECT_DISTANCE of its depth fades out of the horizon, shaped by the tier's
  * reject power. The cosine-weighted visibility between the horizons and the bent normal are integrated analytically
- * ("Practical Real-Time Strategies for Accurate Indirect Occlusion", Jimenez et al. 2016, Algorithms 1 and 2),
- * normalized by the projected normal's full-visibility integral.
+ * per slice (the GTAO integrals), normalized by the projected normal's full-visibility integral.
  *
  * Everything is in world space: a slice's direction is toward the point one pixel along it at the pixel's depth,
  * made orthogonal to the view vector, so the horizon math matches the screen samples whatever the view
- * convention. Depth comes from the full-resolution depth buffer (UE's HORIZON_SEARCH_USE_HZB 0 permutation).
+ * convention. Depth comes from the full-resolution depth buffer, not a Hi-Z mip.
  *
  * Writes the unit bent normal (world) and the visibility packed in one uint (LumenPackShortRangeAO); the sky writes
  * +z at visibility 1.
@@ -31,8 +29,8 @@ SAMPLER2D(s_lumen_normal, 1);
 /// The search, packed (LumenPackShortRangeAO).
 UIMAGE2D_WO(s_lumen_short_range_ao_out, r32ui, 2);
 
-/// @p horizon_cos raised to the sample at @p sample_uv (UE UpdateOccludedHorizonForStep): the cosine between the
-/// view vector and the direction to the sample, faded toward @p low_horizon_cos as the sample lies further in front.
+/// @p horizon_cos raised to the sample at @p sample_uv: the cosine between the view vector and the direction to the
+/// sample, faded toward @p low_horizon_cos as the sample lies further in front.
 float LumenUpdateHorizon(vec2 sample_uv,
                          vec3 position,
                          vec3 view_vector,

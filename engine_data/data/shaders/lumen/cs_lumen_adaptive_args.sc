@@ -1,7 +1,6 @@
 /*
- * Lumen screen probes, the per-probe dispatch arguments (UE 5.8 SetupAdaptiveProbeIndirectArgsCS,
- * LumenScreenProbeGather.usf:318-335): the probe atlas rows that hold this frame's probes, the uniform probes' and
- * the adaptive probes' spawned within the capacity, as
+ * Screen probes, the per-probe dispatch arguments: the probe atlas rows that hold this frame's probes, the
+ * uniform probes' and the adaptive probes' spawned within the capacity, as
  *  0 one group per probe (generate rays, trace, composite, filter, SH);
  *  1 8x8 thread groups over the bordered radiance texels (border), u_lumen_adaptive_border_res per probe and axis;
  *  2 8x8 thread groups over the probes.

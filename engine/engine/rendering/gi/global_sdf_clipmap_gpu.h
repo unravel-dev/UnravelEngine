@@ -13,7 +13,7 @@ namespace unravel
 {
 
 /**
- * @brief GPU mirror of a @ref global_sdf_clipmap: the distance volume and its Lumen coverage.
+ * @brief GPU mirror of a @ref global_sdf_clipmap: the distance volume and its coverage.
  *
  * The cascade lives in ONE 3D texture with the levels stacked along Z, rather than one texture
  * per level. bgfx has no 3D texture arrays, and the tracer is already using four of its
@@ -49,14 +49,13 @@ public:
         return texture_;
     }
 
-    /// Voxels per coverage texel along each axis (UE GLOBAL_DISTANCE_FIELD_COVERAGE_DOWNSAMPLE_FACTOR). Mirror of
-    /// SDF_CLIPMAP_COVERAGE_DOWNSAMPLE in gi/sdf_clipmap.sh.
+    /// Voxels per coverage texel along each axis. Mirror of SDF_CLIPMAP_COVERAGE_DOWNSAMPLE in gi/sdf_clipmap.sh.
     static constexpr uint32_t coverage_downsample = 2;
 
     /**
-     * @brief The Lumen coverage: R8, one texel per coverage_downsample^3 voxels, levels stacked along Z like the
+     * @brief The coverage: R8, one texel per coverage_downsample^3 voxels, levels stacked along Z like the
      *        distance; 0 where only two-sided meshes lie near the voxel, 1 elsewhere. The compose writes it with the
-     *        distance (cs_gi_clipmap_compose.sc); the Lumen global SDF march reads it (gi/sdf_clipmap.sh
+     *        distance (cs_gi_clipmap_compose.sc); the global SDF march reads it (gi/sdf_clipmap.sh
      *        SdfSampleClipmapCoverage).
      */
     auto get_coverage_texture() const -> const gfx::texture::ptr&
@@ -64,16 +63,15 @@ public:
         return coverage_texture_;
     }
 
-    /// Level voxels per coarse-mip texel along each axis (UE r.AOGlobalDistanceField.MipFactor). Mirror of
-    /// SDF_CLIPMAP_MIP_FACTOR in gi/sdf_clipmap.sh.
+    /// Level voxels per coarse-mip texel along each axis. Mirror of SDF_CLIPMAP_MIP_FACTOR in gi/sdf_clipmap.sh.
     static constexpr uint32_t mip_factor = 4;
 
     /**
-     * @brief The coarse mip of every level (UE GlobalDistanceFieldMipTexture): R8, one texel per mip_factor^3 voxels,
-     *        levels stacked along Z like the distance, each texel the distance from its centre to the level's own
-     *        surfaces over mip_factor times the level's encode range. Built from each level right after it composes
-     *        (gi_clipmap_compose_pass, cs_gi_clipmap_mip.sc); the global SDF march steps through empty space by it
-     *        (gi/sdf_clipmap.sh SdfSampleClipmapMip). Zero (the most negative distance, no skip) until built.
+     * @brief The coarse mip of every level: R8, one texel per mip_factor^3 voxels, levels stacked along Z like the
+     *        distance, each texel the distance from its centre to the level's own surfaces over mip_factor times the
+     *        level's encode range. Built from each level right after it composes (gi_clipmap_compose_pass,
+     *        cs_gi_clipmap_mip.sc); the global SDF march steps through empty space by it (gi/sdf_clipmap.sh
+     *        SdfSampleClipmapMip). Zero (the most negative distance, no skip) until built.
      */
     auto get_mip_texture() const -> const gfx::texture::ptr&
     {

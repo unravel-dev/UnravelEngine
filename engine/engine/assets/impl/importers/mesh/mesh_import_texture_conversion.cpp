@@ -101,7 +101,7 @@ namespace pixel_transforms
     }
 
     /**
-     * @brief Convert Phong shininess exponent map to roughness (Beckmann/Unity variance mapping).
+     * @brief Convert Phong shininess exponent map to roughness (Beckmann mapping: sqrt(2 / (n + 2))).
      * Texture texels are treated as normalized exponent; scaled to a reference max of 128.
      */
     /**
@@ -178,7 +178,7 @@ namespace pixel_transforms
  * same texture is bound to both the metalness and roughness slots.
  *
  * Prefer the diffuse + specular pair path (`apply_diffuse_to_base_color_conversion`) when
- * a matching albedo texture is available - it uses per-pixel diffuse for the Khronos solve.
+ * a matching albedo texture is available - it uses per-pixel diffuse for the metallic solve.
  */
 void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image)
 {
@@ -237,14 +237,13 @@ void apply_specular_to_metallic_roughness_conversion(bimg::ImageContainer* image
 /**
  * @brief Convert a diffuse/specular pair into PBR metallic-roughness textures.
  *
- * The Khronos spec-gloss -> metal-rough math is performed in sRGB-encoded float space
- * (i.e. 8-bit channels divided by 255), matching the reference Babylon.js / Khronos
- * implementations. The perceptual luminance weighting in solve_metallic only matches
- * when inputs stay in sRGB; do NOT degamma here.
+ * The spec-gloss -> metal-rough math is performed in sRGB-encoded float space
+ * (i.e. 8-bit channels divided by 255). The perceptual luminance weighting in
+ * solve_metallic only holds when inputs stay in sRGB; do NOT degamma here.
  *
  * Per pixel we solve metallic with the proper diffuse luminance (much better than the
  * mid-gray fallback used by `compute_metallic_from_specular`), then reconstruct base
- * color using the official Khronos / Babylon reference identity:
+ * color with the identity:
  *   baseColor = mix(diffuse * (1 - F0) / (1 - metallic * F0),
  *                   specular - F0 * (1 - metallic),
  *                   metallic^2)
@@ -335,13 +334,13 @@ void apply_diffuse_to_base_color_conversion(bimg::ImageContainer* diffuse_image,
         float perc_s = perceived_brightness(sr, sg, sb);
         float metallic = solve_metallic(perc_d, perc_s, one_minus_spec_str);
 
-        // Exact Khronos/Babylon reference formula for base color reconstruction:
+        // Base color reconstruction:
         //   baseColorFromDiffuse  = diffuse * (1 - F0) / (1 - metallic * F0)
         //   baseColorFromSpecular = specular - F0 * (1 - metallic)
         //   baseColor = mix(baseColorFromDiffuse, baseColorFromSpecular, metallic^2)
-        // Earlier we used a `one_minus_spec_str / (1 - metallic)` factor in the diffuse
-        // term, which over-weighted the diffuse for high-metallic pixels and let things
-        // like the rust tones on a metal helm bleed into the final base color.
+        // A `one_minus_spec_str / (1 - metallic)` factor in the diffuse term would
+        // over-weight the diffuse for high-metallic pixels and let things like the rust
+        // tones on a metal helm bleed into the final base color.
         float denom = std::max(1.0f - metallic * dielectric_f0, epsilon);
         float spec_offset = dielectric_f0 * (1.0f - metallic);
         float t = metallic * metallic;
@@ -472,7 +471,6 @@ void process_raw_texture_data(const aiTexture* assimp_tex, const fs::path& outpu
 
 /**
  * @brief Perceived brightness using ITU BT.601 luminance coefficients.
- * Matches the reference Khronos/Babylon.js conversion utilities.
  */
 auto perceived_brightness(float r, float g, float b) -> float
 {
@@ -480,17 +478,15 @@ auto perceived_brightness(float r, float g, float b) -> float
 }
 
 /**
- * @brief Solve for metallic using the official Khronos quadratic formula.
- * Reference: babylon.pbrUtilities.js solveMetallic(), lygia/lighting/toMetallic.glsl
+ * @brief Solve the quadratic for metallic.
  *
  * The PBR identity for specular is: specular = lerp(dielectricF0, baseColor, metallic)
  * Combined with the diffuse identity, this yields a quadratic in metallic that we solve here.
  *
  * IMPORTANT: this routine is intentionally evaluated in sRGB-ENCODED float space (i.e. 8-bit
- * channels divided by 255), matching the reference Khronos/Babylon implementation. The
- * BT.601 perceptual luminance in `perceived_brightness` and the dielectric F0=0.04 are both
- * calibrated for that color space. Do NOT degamma to linear before calling - it will skew
- * the metallic estimate.
+ * channels divided by 255). The BT.601 perceptual luminance in `perceived_brightness` and
+ * the dielectric F0=0.04 are both calibrated for that color space. Do NOT degamma to linear
+ * before calling - it will skew the metallic estimate.
  */
 auto solve_metallic(float perceived_diffuse, float perceived_specular, float one_minus_specular_strength) -> float
 {
@@ -510,9 +506,7 @@ auto solve_metallic(float perceived_diffuse, float perceived_specular, float one
 }
 
 /**
- * @brief Convert specular/gloss to metallic/roughness using official Khronos formulas.
- * Reference: glTF KHR_materials_pbrSpecularGlossiness specification appendix,
- *            babylon.pbrUtilities.js ConvertToMetallicRoughness()
+ * @brief Convert specular/gloss factors to metallic/roughness: {base color, metallic, roughness}.
  */
 auto convert_specular_gloss_to_metallic_roughness(const aiColor3D& diffuse_color,
                                                  const aiColor3D& specular_color,
@@ -529,7 +523,7 @@ auto convert_specular_gloss_to_metallic_roughness(const aiColor3D& diffuse_color
 
     float metallic = solve_metallic(perceived_diffuse, perceived_specular, one_minus_specular_strength);
 
-    // Khronos/Babylon reference formula for base color reconstruction:
+    // Base color reconstruction:
     //   baseColorFromDiffuse  = diffuse * (1 - F0) / (1 - metallic * F0)
     //   baseColorFromSpecular = specular - F0 * (1 - metallic)
     //   baseColor = mix(baseColorFromDiffuse, baseColorFromSpecular, metallic^2)

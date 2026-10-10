@@ -2,18 +2,17 @@
 #define __LUMEN_SURFACE_CACHE_LIGHTING_SH__
 
 /*
- * Lumen surface cache lighting, shared by the capture copy (cs_lumen_card_copy.sc), the lighting resample
+ * Surface cache lighting, shared by the capture copy (cs_lumen_card_copy.sc), the lighting resample
  * (cs_lumen_card_resample.sc) and the radiosity integrate (cs_lumen_radiosity_integrate.sc). The copy and the resample
  * read their tiles through lumen_tile_records.sh (LumenLoadCopyTile).
  *
- * The normal atlas holds card-space normals (UE LumenCardBasePass.ush:136-146, SurfaceCache/LumenSurfaceCache.ush:
- * 26-40): a placement that rotates keeps its captured normals, which every reader turns into world space through the
- * card's current axes.
+ * The normal atlas holds card-space normals: a placement that rotates keeps its captured normals, which every reader
+ * turns into world space through the card's current axes.
  *
- * The atlases are in UE's formats (LumenSurfaceCache.cpp, Lumen.cpp lighting data format 0): albedo RGBA8, normal RG8,
- * depth R16, emissive, direct and indirect lighting R11G11B10 float, stored through LumenQuantizeCardLighting. The
- * final lighting stays RGBA16F with the card depth in alpha: a hit reads its lighting and its depth test from one
- * texel, and the hit tracers have no stage left for a depth atlas of their own.
+ * The atlas formats: albedo RGBA8, normal RG8, depth R16, emissive, direct and indirect lighting R11G11B10 float,
+ * stored through LumenQuantizeCardLighting. The final lighting stays RGBA16F with the card depth in alpha: a hit
+ * reads its lighting and its depth test from one texel, and the hit tracers have no stage left for a depth atlas of
+ * their own.
  */
 
 #include "lumen/lumen_finite.sh"
@@ -40,9 +39,9 @@ int LumenCopyTileIndex(ivec2 group)
 #define LUMEN_CARD_TILE_SIZE 8
 #define LUMEN_INV_PI 0.31830989
 
-/// UE CombineFinalLighting (SurfaceCache/LumenSurfaceCache.ush:44-61): what a ray sees at a card texel, from its
-/// encoded albedo (the square root of the diffuse colour), emissive, direct and indirect lighting. Made finite as in
-/// UE: the final atlas feeds the radiosity back into itself, so a NaN or an infinity would spread through the cache.
+/// What a ray sees at a card texel, from its encoded albedo (the square root of the diffuse colour), emissive, direct
+/// and indirect lighting. Made finite: the final atlas feeds the radiosity back into itself, so a NaN or an infinity
+/// would spread through the cache.
 vec3 LumenCombineFinalLighting(vec3 albedo_encoded, vec3 emissive, vec3 direct, vec3 indirect)
 {
 	vec3 albedo = albedo_encoded * albedo_encoded;

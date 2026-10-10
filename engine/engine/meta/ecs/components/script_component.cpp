@@ -685,8 +685,8 @@ void try_load_mono_collection(Archive& ar, dotnet::object& obj, const Invoker& i
     }
 }
 
-/// The entries of a C# Dictionary as two lists of the same length, keys and values: the form Unity
-/// suggests for serializing a dictionary, and the one lists have here already.
+/// The entries of a C# Dictionary as two lists of the same length, keys and values, so a dictionary
+/// serializes in the form lists have here already.
 struct mono_dictionary_entries
 {
     mono_element_list keys;

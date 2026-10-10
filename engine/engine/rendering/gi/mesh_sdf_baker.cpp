@@ -55,7 +55,7 @@ constexpr size_t k_max_brick_candidates = 64;
 /// while catching the order-of-magnitude phantoms (a rope shelled to 10-20x its diameter).
 constexpr float k_max_shell_floor_ratio = 4.0f;
 
-/// UE's mesh distance field sign (MeshDistanceFieldUtilities.cpp:213-283, 369-382): stratified rays per
+/// The sign vote of an open mesh's distance field (sdf_sign_vote): stratified rays per
 /// hemisphere (7 x 7), both hemispheres traced, and the share of them that must hit a back face for a
 /// point to count as inside.
 constexpr uint32_t k_sign_rays_per_hemisphere = 49;
@@ -98,7 +98,7 @@ struct closest_point_result
 /**
  * @brief Closest point on a triangle to a query point, and which feature it lies on.
  *
- * Voronoi-region formulation (Ericson, Real-Time Collision Detection). The branches are
+ * Voronoi-region formulation. The branches are
  * kept explicit rather than derived from barycentric coordinates afterwards, because
  * classifying by comparing barycentrics against an epsilon misclassifies near-degenerate
  * triangles, and a misclassified feature picks the wrong pseudonormal and flips the sign
@@ -961,10 +961,10 @@ auto compute_front_margin(float pullback, float reach, float coordinate_scale, f
 }
 
 /**
- * @brief UE's sign for an open, one-sided surface: the share of rays from a point that hit a back face.
+ * @brief The sign for an open, one-sided surface: the share of rays from a point that hit a back face.
  *
  * The pseudonormal sign needs a closed surface; on an open one it reports inside for regions that are
- * outside. UE signs its fields by a vote instead: rays in every direction over the band's reach, inside when
+ * outside. A vote signs these fields instead: rays in every direction over the band's reach, inside when
  * more than k_sign_back_face_fraction of them hit the back of a triangle. An opening only loses the votes of
  * the rays that leave through it, so a wall whose underside is open still bakes as a solid, and the sun
  * cannot reach a point behind it by starting a ray past a zero-thickness sheet.
@@ -1207,9 +1207,9 @@ auto is_flat_axis(const math::vec3& surface_extent, int axis, float voxel) -> bo
  * @brief The grid's minimum corner: @p padding below the bounds, except along a flat axis, where a sample layer
  *        sits ON the sheet.
  *
- * UE samples voxel corners, and a plane's bounds land on them; here samples sit at voxel centres, and a sheet
- * between two layers never reads below half a voxel in an unsigned field. A trace that registers a surface within
- * half a global-SDF voxel then passes straight through a floor whose own voxel is coarser than that.
+ * Samples sit at voxel centres, so with the padding alone a plane's bounds would fall between two sample layers,
+ * and a sheet between two layers never reads below half a voxel in an unsigned field. A trace that registers a
+ * surface within half a global-SDF voxel then passes straight through a floor whose own voxel is coarser than that.
  */
 auto compute_field_grid_min(const math::bbox& bounds, float padding, float voxel) -> math::vec3
 {
@@ -1414,7 +1414,7 @@ auto prepare_bake(const sdf_source_geometry& geometry,
     }
     // Only a two-sided surface bakes unsigned (a shell the global field composes as a zero-thickness
     // sheet): one whose material is two-sided, or a doubled sheet. A one-sided surface is signed: a
-    // closed one by the nearest feature's pseudonormal, which is exact there, and an open one by UE's
+    // closed one by the nearest feature's pseudonormal, which is exact there, and an open one by the
     // backface vote (sdf_sign_vote), because the pseudonormal test reports "inside" for regions outside
     // an open surface and would render its bounding box solid. Scanned props and modular walls are
     // frequently open, so this is the common case.
@@ -1573,7 +1573,7 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
             const math::vec3 center =
                 padded_min + (math::vec3(float(bx), float(by), float(bz)) + math::vec3(0.5f)) *
                                  brick_world_size;
-            // Under the vote a brick centre beyond the band is outside, as UE leaves every point it
+            // Under the vote a brick centre beyond the band is outside, as is every point the vote
             // traces no rays from: only the band carries a sign.
             brick_center_distance[brick_index] = accelerator.signed_distance(center, use_unsigned || vote != nullptr);
         });
@@ -1664,7 +1664,7 @@ auto bake_field_with_accelerator(const sdf_source_geometry& geometry,
             const math::bbox stored_region(stored_min, stored_max);
             const float collect_reach =
                 mesh_sdf::encode_range * voxel_size + (use_unsigned ? out.two_sided_thickness : 0.0f);
-            // UE's LocalSpaceTraceDistance: the band in voxel diagonals, of the chain's finest level for a
+            // The vote's trace distance: the band in voxel diagonals, of the chain's finest level for a
             // coarser one (mesh_sdf_bake_settings::sign_vote_voxel_size). The vote signs the voxels within
             // it; the ones beyond stay positive.
             const float vote_voxel = settings.sign_vote_voxel_size > 0.0f ? settings.sign_vote_voxel_size : voxel_size;

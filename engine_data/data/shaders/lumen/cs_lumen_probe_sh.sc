@@ -1,9 +1,8 @@
 /*
- * Lumen screen probe gather, SH3 projection (UE 5.8 ScreenProbeConvertToIrradianceCS,
- * LumenScreenProbeFiltering.usf:597-998, IrradianceFormat 0 at Epic). One group per probe of one thread per
- * texel: the N^2 = LUMEN_PROBE_TRACE_RES^2 filtered radiance texels, at their texel-centre directions (equal solid
- * angle each), project onto the nine SH3 basis functions with uniform 1/N^2 weights - 1/(4 pi) of the true
- * projection, which the integrate's 4 pi undoes.
+ * Screen probe gather, SH3 projection. One group per probe of one thread per texel: the N^2 =
+ * LUMEN_PROBE_TRACE_RES^2 filtered radiance texels, at their texel-centre directions (equal solid angle each),
+ * project onto the nine SH3 basis functions with uniform 1/N^2 weights - 1/(4 pi) of the true projection, which the
+ * integrate's 4 pi undoes.
  *
  * Writes LUMEN_SH_TEXELS_PER_PROBE texels per probe along x: [0] = (c0 rgb, the probe's moving fraction), then per
  * colour channel c: [1 + 2c] = (c1, c2, c3, c4), [2 + 2c] = (c5, c6, c7, c8). Unlit probes write zero coefficients.

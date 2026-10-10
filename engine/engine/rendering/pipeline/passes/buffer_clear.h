@@ -18,7 +18,7 @@ namespace unravel
  *        dynamic), so a frame's counters in one start over by a dispatch ordered before their first reader: earlier in
  *        the same view (bgfx runs a view's dispatches in submission order) or in an earlier view.
  *
- * Users: the Lumen gather's probe trace ray count and shader_print's header (the symbol count).
+ * Users: the GI gather's probe trace ray count (lumen_gather_pass) and shader_print's header (the symbol count).
  */
 class buffer_clear
 {

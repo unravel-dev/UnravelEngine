@@ -14,35 +14,34 @@ namespace unravel
 namespace
 {
 
-// Lumen's card-build constants (MeshCardRepresentationUtilities.cpp, MeshCardRepresentation.cpp),
-// lengths converted from centimetres to metres.
+// The card build's constants, lengths in metres.
 constexpr int k_direction_count = 6;
-///< TargetVoxelSize: the cluster grid aims at 10 cm cells.
+///< The cluster grid aims at 10 cm cells.
 constexpr float k_target_voxel_size = 0.10f;
 ///< Cells per axis at the first attempt; halved while the surfel count exceeds the target.
 constexpr int k_max_voxels = 64;
 constexpr int k_target_surfel_count = 10000;
-///< BuildMeshCards: the bounds grow by 1 cm and are at least 1 cm in half extent.
+///< The bounds grow by 1 cm and are at least 1 cm in half extent.
 constexpr float k_bounds_margin = 0.01f;
-///< SerializeLOD: card depth may exceed the mesh bounds by 10 cm.
+///< Card depth may exceed the mesh bounds by 10 cm.
 constexpr float k_card_margin_z = 0.10f;
 ///< Rays per cell when voxelizing one side.
 constexpr uint32_t k_rays_per_cell = 32;
 ///< Requested hemisphere directions for the surfel visibility test (stratified to 5 x 5 = 25).
 constexpr int k_hemisphere_ray_request = 32;
-///< ComputeSurfelVisibility: visibility rays start 0.1 cm off the surfel.
+///< Visibility rays start 0.1 cm off the surfel.
 constexpr float k_surface_ray_bias = 0.001f;
 ///< Faces closer than this along a ray are one surface (see resolve_coincident_front_face).
 constexpr float k_coincident_face_depth = 0.001f;
-///< r.MeshCardRepresentation.NormalTreshold: a hit must face the side by at least this cosine.
+///< A hit must face the side by at least this cosine.
 constexpr float k_normal_threshold = 0.25f;
-///< r.MeshCardRepresentation.MinDensity, divided by 3 for the per-cluster density test.
+///< The minimum density (coverage per face cell), divided by 3 for the per-cluster density test.
 constexpr float k_min_density = 0.2f;
 constexpr float k_min_cluster_coverage = 15.0f;
 ///< A surfel is inside geometry when over 80% of its visibility rays hit and over 20% hit back faces.
 constexpr float k_inside_hit_fraction = 0.8f;
 constexpr float k_inside_back_face_fraction = 0.2f;
-/// The card build's visibility directions: UE's stratified hemisphere set, seed 0.
+/// The card build's visibility directions: a stratified hemisphere set, seed 0.
 auto generate_hemisphere_directions() -> std::vector<math::vec3>
 {
     mesh_ray::random_stream stream(0u);
@@ -207,8 +206,7 @@ struct build_context
     bool two_sided = false;
 };
 
-/// UE FAxisAlignedDirectionBasis::TransformSurfel: the mesh position of cell @p coord's surfel, centred in-plane on
-/// the cell's front face.
+/// The mesh position of cell @p coord's surfel, centred in-plane on the cell's front face.
 auto get_surfel_position(const direction_basis& basis, const math::ivec3& coord) -> math::vec3
 {
     return basis.to_mesh(math::vec3(float(coord.x) + 0.5f, float(coord.y) + 0.5f, float(coord.z)));
@@ -441,8 +439,8 @@ void generate_surfels_for_direction(const build_context& context,
                 cell_offset[z] = cell_offset[z - 1] + cell_count[z - 1];
             }
             // Each run of equal min_ray_z in a cell spawns one surfel. A run needs at least two of
-            // the cell's rays to start (the loop condition of UE's build), so a lone ray's hit
-            // never makes a surfel.
+            // the cell's rays left to start (run_begin + 1 < count), so a lone ray's hit never
+            // makes a surfel.
             for(int z = 0; z < basis.volume_size.z; ++z)
             {
                 const uint32_t count = cell_count[size_t(z)];
@@ -626,9 +624,9 @@ auto make_card(const surfel_cluster& cluster,
     return card;
 }
 
-/// UE SerializeLOD's debug cluster of a card: the cluster's surfels with a ray down to the near plane each is seen
-/// from, then the side's other surfels, used when an earlier card of the side took them (@p is_in_any_cluster, which
-/// gains this cluster's surfels).
+/// The debug cluster of a card: the cluster's surfels with a ray down to the near plane each is seen from, then the
+/// side's other surfels, used when an earlier card of the side took them (@p is_in_any_cluster, which gains this
+/// cluster's surfels).
 void append_cluster_debug(const surfel_cluster& cluster,
                           const std::vector<surfel>& surfels,
                           const direction_basis& basis,
@@ -692,7 +690,7 @@ auto build_lumen_mesh_cards(const sdf_source_geometry& geometry,
     const build_context context{caster, hemisphere, two_sided};
     clustering_params params;
     std::array<std::vector<surfel>, k_direction_count> surfels;
-    // The last attempt's candidates per side (UE keeps the debug surfels of the grid it settles on).
+    // The last attempt's candidates per side: the debug surfels of the grid the build settles on.
     std::array<std::vector<lumen_card_build_debug::surfel>, k_direction_count> debug_surfels;
     // Dense two-sided meshes make far more surfels than walls; coarsen the grid until the count
     // is affordable.

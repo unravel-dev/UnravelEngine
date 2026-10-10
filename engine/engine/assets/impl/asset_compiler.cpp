@@ -224,7 +224,7 @@ auto is_approximately_equirect_aspect(uint32_t width, uint32_t height) -> bool
 /**
  * @brief Builds default texture importer settings for a newly discovered source.
  *
- * Radiance HDR panoramas almost always feed sky/IBL cubemaps (Unreal-like), so
+ * Radiance HDR panoramas almost always feed sky/IBL cubemaps, so
  * `.hdr` defaults to equirect. EXR is also used for regular HDR maps, so only
  * promote when the image is a ~2:1 lat-long panorama.
  */
@@ -906,7 +906,7 @@ auto get_submesh_face_count(const mesh::load_data& data, uint32_t lod, size_t su
 }
 
 /**
- * @brief Builds the Lumen cards of every submesh that has a distance field (UE's card representation), from LOD
+ * @brief Builds the surface cache cards of every submesh that has a distance field, from LOD
  *        @p lod_index and for the sidedness of the material the submesh imported with.
  *
  * Only a submesh with a field takes part in the GI, so the others get an empty set. A placement whose material
@@ -1257,7 +1257,7 @@ auto compile<mesh>(asset_manager& am, const fs::path& key, const fs::path& outpu
         //
         // Alpha CUTOUT is deliberately absent from this table. A masked surface is opaque wherever
         // it is not discarded -- foliage, fences, grates -- so it occludes and belongs in the field;
-        // only true blending transmits. Same split UE draws (bIncludeTranslucentTriangles).
+        // only true blending transmits.
         std::vector<sdf_material_traits> material_traits(materials.size());
         for(size_t m = 0; m < materials.size(); ++m)
         {

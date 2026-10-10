@@ -587,8 +587,8 @@ void model_component::update_world_bounds(const math::transform& world_transform
 
     // Anchor transform for the conservative culling bounds. Root motion baked into bone
     // animation moves the topmost bone, not the owner, so anchoring to it keeps the
-    // conservative box tracking the character even while the pose refresh is skipped
-    // (Unity's rootBone). Boneless armatures fall back to the owner transform.
+    // conservative box tracking the character even while the pose refresh is skipped.
+    // Boneless armatures fall back to the owner transform.
     math::transform anchor_transform = world_transform;
     if(bounds_anchor_)
     {

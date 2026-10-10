@@ -54,7 +54,7 @@ vec2 Hammersley16(uint idx, uint num_samples, uvec2 rnd)
     return vec2(E1, E2);
 }
 
-/// Spatial Interleaved Gradient Noise (Jorge Jimenez 2014). Screen-space-stationary
+/// Spatial interleaved gradient noise. Screen-space-stationary
 /// blue-noise-like distribution; high-frequency, locally-uniform, no temporal axis.
 /// Use this for spatial dithering. For temporal animation, COMBINE with a separate
 /// per-frame Cranley-Patterson offset (e.g. `HashFrameOffset`) -- DO NOT animate the

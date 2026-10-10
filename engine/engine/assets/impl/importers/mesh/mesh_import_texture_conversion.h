@@ -49,13 +49,13 @@ struct spec_gloss_pbr_result
     std::string mr_relative;         ///< Relative path of the sibling metallic-roughness file (empty if not produced).
 };
 
-/// Perceived brightness using ITU BT.601 luminance coefficients (Khronos/Babylon reference).
+/// Perceived brightness using ITU BT.601 luminance coefficients.
 auto perceived_brightness(float r, float g, float b) -> float;
 
-/// Khronos quadratic solve for metallic from sRGB-encoded diffuse/specular brightness.
+/// Solves the quadratic for metallic from sRGB-encoded diffuse/specular brightness.
 auto solve_metallic(float perceived_diffuse, float perceived_specular, float one_minus_specular_strength) -> float;
 
-/// Khronos spec/gloss -> metal/rough for scalar factors: {base color, metallic, roughness}.
+/// Spec/gloss -> metal/rough for scalar factors: {base color, metallic, roughness}.
 auto convert_specular_gloss_to_metallic_roughness(const aiColor3D& diffuse_color,
                                                   const aiColor3D& specular_color,
                                                   float glossiness_factor) -> std::tuple<aiColor3D, float, float>;

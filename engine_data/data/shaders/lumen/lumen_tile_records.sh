@@ -2,11 +2,10 @@
 #define __LUMEN_TILE_RECORDS_SH__
 
 /*
- * Tile lists of the card passes (lumen_surface_cache_pass build_copy_tiles / build_light_tiles), UE's page records
- * plus one word per tile (LumenSceneRendering.cpp:1908-1921): each page's data once (a record of the pass's stride),
- * then the tiles, four words per vec4 from the dispatch's words base. A word is page x LUMEN_TILE_WORD_PAGE_SCALE +
- * the tile's column x LUMEN_TILE_WORD_COLUMN_SCALE + its row in the page, both in 8-texel tiles: an integer below
- * 2^24, exact as a float.
+ * Tile lists of the card passes (lumen_surface_cache_pass build_copy_tiles / build_light_tiles), page records plus
+ * one word per tile: each page's data once (a record of the pass's stride), then the tiles, four words per vec4
+ * from the dispatch's words base. A word is page x LUMEN_TILE_WORD_PAGE_SCALE + the tile's column x
+ * LUMEN_TILE_WORD_COLUMN_SCALE + its row in the page, both in 8-texel tiles: an integer below 2^24, exact as a float.
  */
 
 #define LUMEN_TILE_WORD_PAGE_SCALE 256u

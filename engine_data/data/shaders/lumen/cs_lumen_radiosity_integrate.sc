@@ -1,14 +1,14 @@
 /*
- * Lumen surface cache radiosity, integrate + temporal + final combine (UE 5.8 LumenRadiosity.usf:475-573 and
- * LumenSceneLighting.usf:476-507): one 8x8 group per scheduled card tile, one thread per texel.
+ * Surface cache radiosity, integrate + temporal + final combine: one 8x8 group per scheduled card tile, one thread
+ * per texel.
  *
  * Each texel interpolates the SH of its four nearest probes of the card with expanded bilinear weights (no weight is
  * ever 0 or 1; past a page edge in the card's neighbouring page, LumenResolveRadiosityCell), dropping probes that are
  * invalid or off its tangent plane, and evaluates the irradiance along its normal. Texels before a card's first probe
  * read it as the nearest. The tile's update count n (capped at LUMEN_RADIOSITY_ACCUMULATED_UPDATES) blends 1 / n into
  * the indirect atlas: a running mean while a page warms up, so its first update stands whole rather than half over
- * the black it starts from, and UE's steady 1 / (1 + 4) after (UE blends 1 / (1 + min(n, 4)) from the first update,
- * 50% / 67% / 75% / 80% of the light after 1-4). The final lighting is recomputed from the new indirect:
+ * the black it starts from, and a steady 1 / (1 + 4) after (1 / (1 + min(n, 4)) from the first update would reach
+ * only 50% / 67% / 75% / 80% of the light after 1-4). The final lighting is recomputed from the new indirect:
  * albedo / pi x (direct + indirect) + emissive, with the card depth in alpha.
  */
 
@@ -41,7 +41,7 @@ BUFFER_RO(b_lumen_scene, vec4, 12);
 /// x = first tile of this dispatch, y = tile count, z = the float4 the tile words start at, w = the frame index.
 uniform vec4 u_lumen_card_lighting;
 
-/// The updates the running mean counts at most: its steady blend is UE's 1 / (1 + MaxFramesAccumulated).
+/// The updates the running mean counts at most: its steady blend is 1 / (1 + LUMEN_RADIOSITY_MAX_FRAMES).
 #define LUMEN_RADIOSITY_ACCUMULATED_UPDATES (LUMEN_RADIOSITY_MAX_FRAMES + 1.0)
 
 SHARED float s_frames;
@@ -117,7 +117,7 @@ void main()
 	vec3 position = LumenTexelPosition(card, uv_rect, page, texel, depth);
 	vec3 normal = LumenDecodeCardNormal(texelFetch(s_lumen_card_normal, texel, 0).xy, card.axis_x, card.axis_y, card.axis_z);
 	ivec2 jitter = LumenRadiosityJitter(t0.w);
-	// Expanded bilinear over the four nearest probes (UE BilinearExpand), in this page's probe grid. Before the page's
+	// Expanded bilinear over the four nearest probes, in this page's probe grid. Before the page's
 	// first probe the previous page's last one is the nearest; before the card's first (or past every page edge when
 	// the probes stop there), the first probe is.
 	int spacing = u_lumen_radiosity_spacing;

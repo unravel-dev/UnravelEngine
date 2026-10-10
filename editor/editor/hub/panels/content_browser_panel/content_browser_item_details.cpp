@@ -15,7 +15,7 @@
 
 namespace unravel
 {
-// Unity builds merge the anonymous namespaces of the editor's sources; the helpers' own namespace keeps their
+// A unity build merges the anonymous namespaces of the editor's sources; the helpers' own namespace keeps their
 // generic names from clashing.
 namespace item_details
 {
@@ -164,7 +164,7 @@ auto make_mesh_section(const mesh& loaded) -> content_item_section
     return section;
 }
 
-/// The distance fields and Lumen cards global illumination keeps for a mesh.
+/// The distance fields and surface cache cards global illumination keeps for a mesh.
 auto make_mesh_gi_section(const mesh& loaded) -> content_item_section
 {
     const mesh::gi_info gi = loaded.get_gi_info();
@@ -187,7 +187,7 @@ auto make_mesh_gi_section(const mesh& loaded) -> content_item_section
         section.add("Surface Bricks", format_grouped_count(gi.surface_bricks));
         section.add("Field Memory", fmt::format("{} ({} finest)", gi.field_memory, gi.finest_field_memory));
     }
-    section.add("Lumen Cards", gi.card_source);
+    section.add("Surface Cache Cards", gi.card_source);
     if(gi.cards > 0)
     {
         section.add("Cards",

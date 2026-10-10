@@ -173,7 +173,7 @@ bool HizHierarchicalRaymarchEx(sampler2D hiz_sampler,
 /// `ss_last_above` receives the last screen position at which the ray was verified ABOVE the
 /// depth surface (the boundary of the last tile it skipped, or the origin): everything between
 /// the origin and that point is in front of the depth buffer, so an SDF march may resume there
-/// instead of re-marching the segment (Lumen's HZB trace writes the same distance on a miss).
+/// instead of re-marching the segment.
 int HizHierarchicalRaymarchCode(sampler2D hiz_sampler,
                                 vec3 ss_ray_origin,
                                 vec3 ss_ray_dir,

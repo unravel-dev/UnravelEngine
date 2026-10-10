@@ -1,5 +1,5 @@
 /*
- * Radiance cache marking (UE 5.8 MarkRadianceProbesUsedByScreenProbesCS, LumenScreenProbeGather.usf:336-366):
+ * Radiance cache marking:
  * every screen probe marks the eight lattice probes around its own position in the finest clipmap that
  * covers it - exactly the probes its rays' hand-off will interpolate. One thread per screen probe of the atlas,
  * uniform and adaptive.

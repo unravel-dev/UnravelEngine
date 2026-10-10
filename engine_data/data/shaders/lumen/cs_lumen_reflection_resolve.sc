@@ -1,11 +1,10 @@
 /*
- * Lumen reflections, resolve (UE 5.8 LumenReflectionResolveCS, LumenReflectionResolve.usf:75-658, spatial
- * reconstruction on), per pixel. A pixel starts from its own ray at full resolution; at the lowest reflection quality,
- * where one pixel of each 2 x 2 block traces (LumenReflectionTracePixel), from the four traces around it blended by
- * the tent weight (2 - |dx|) (2 - |dy|) of their pixels' distance, untraced ones left out, the hit distance and the
- * ray of the heaviest standing for the pixel's (UE DOWNSAMPLE_FACTOR 2). Above
- * LUMEN_REFLECTION_RECONSTRUCTION_MIN_ROUGHNESS it also reuses the rays of the quality's sample count of neighbours
- * (u_lumen_reflection_reconstruction_samples) on a disk of the downsample factor x
+ * Reflections, resolve with spatial reconstruction, per pixel. A pixel starts from its own ray at full
+ * resolution; at the lowest reflection quality, where one pixel of each 2 x 2 block traces
+ * (LumenReflectionTracePixel), from the four traces around it blended by the tent weight (2 - |dx|) (2 - |dy|) of
+ * their pixels' distance, untraced ones left out, the hit distance and the ray of the heaviest standing for the
+ * pixel's. Above LUMEN_REFLECTION_RECONSTRUCTION_MIN_ROUGHNESS it also reuses the rays of the quality's sample count
+ * of neighbours (u_lumen_reflection_reconstruction_samples) on a disk of the downsample factor x
  * LUMEN_REFLECTION_RECONSTRUCTION_KERNEL_RADIUS x saturate(8 roughness) pixels: each neighbour's hit, pulled in to no
  * farther than the pixel's own hit (which keeps contacts and stops background hits from winning), is re-aimed from
  * this pixel, and its radiance weighs in by this pixel's GGX lobe over the density its ray was drawn with - a ratio
@@ -82,9 +81,9 @@ LumenResolveCenter LumenResolveOwnTrace(ivec2 pixel)
 	return center;
 }
 
-/// The four traces around @p pixel at the 2 x 2 downsample (UE LumenReflectionResolveCS, DOWNSAMPLE_FACTOR 2 x 2): the
-/// trace texels whose blocks surround it, each weighed by the tent (2 - |dx|) (2 - |dy|) of its traced pixel's offset
-/// from @p pixel and left out when untraced or outside the traces. Serves the pixel when a weight passes 0.01.
+/// The four traces around @p pixel at the 2 x 2 downsample: the trace texels whose blocks surround it, each weighed
+/// by the tent (2 - |dx|) (2 - |dy|) of its traced pixel's offset from @p pixel and left out when untraced or outside
+/// the traces. Serves the pixel when a weight passes 0.01.
 LumenResolveCenter LumenResolveUpsampledTraces(ivec2 pixel)
 {
 	ivec2 shifted = max(pixel, ivec2(1, 1));
@@ -111,7 +110,7 @@ LumenResolveCenter LumenResolveUpsampledTraces(ivec2 pixel)
 		float weight = (2.0 - abs(float(to_sample.x))) * (2.0 - abs(float(to_sample.y)));
 		radiance += LumenReflectionToDenoiserSpace(texelFetch(s_lumen_reflection_radiance, trace, 0).xyz) * weight;
 		weight_sum += weight;
-		// The heaviest trace, the first on a tie (UE's selection order).
+		// The heaviest trace, the first on a tie.
 		if(weight > best_weight)
 		{
 			best_weight = weight;
@@ -164,7 +163,7 @@ void main()
 	float radius = roughness > LUMEN_REFLECTION_RECONSTRUCTION_MIN_ROUGHNESS
 	                   ? float(downsample) * LUMEN_REFLECTION_RECONSTRUCTION_KERNEL_RADIUS * saturate(roughness * 8.0)
 	                   : 0.0;
-	// UE skips the reconstruction for kernels no wider than a traced block.
+	// The reconstruction is skipped for kernels no wider than a traced block.
 	BRANCH
 	if(radius > float(downsample))
 	{
@@ -196,8 +195,8 @@ void main()
 				neighbours = LumenResolveNeighbour(neighbours, q / downsample, position, normal, view, alpha, center_hit);
 			}
 		}
-		// The neighbours weigh at least the tier's minimum share of the pixel's own ray (UE
-		// ScreenSpaceReconstruction.MinWeight: 0 at Epic, 1 at High).
+		// The neighbours weigh at least the tier's minimum share of the pixel's own ray (0 at the epic tier,
+		// 1 at high).
 		float min_weight = u_lumen_reflection_resolve.x * sum.weight;
 		if(neighbours.weight > 1e-6 && min_weight > neighbours.weight)
 		{

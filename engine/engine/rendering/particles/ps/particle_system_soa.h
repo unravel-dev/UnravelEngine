@@ -4,7 +4,7 @@
 #include "emitter_runtime.h"
 #include "particle_gpu_schema.h"
 #include "particle_types.h"
-
+#include <graphics/graphics.h>
 #include <bgfx/bgfx.h>
 #include <context/context.hpp>
 #include <math/bbox.h>
@@ -121,7 +121,7 @@ auto get_num_particles(emitter_handle handle) -> uint32_t;
  */
 auto render_emitter_batch(const emitter_handle* handles,
                           uint32_t count,
-                          uint8_t view,
+                          bgfx::ViewId view,
                           bgfx::ProgramHandle program,
                           const float* mtx_view,
                           const math::vec3& eye,

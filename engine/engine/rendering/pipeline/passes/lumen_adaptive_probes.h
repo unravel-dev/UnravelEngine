@@ -14,10 +14,10 @@ namespace unravel
 {
 
 /**
- * @brief Lumen's adaptive screen probes (UE 5.8 ScreenProbeAdaptivePlacementMarkCS, ScreenProbeAdaptivePlacementSpawnCS
- *        and SetupAdaptiveProbeIndirectArgsCS): extra screen probes where the uniform probes cannot interpolate a pixel
- *        (thin features, silhouettes, depth discontinuities), placed in the probe atlas rows below the uniform probes,
- *        and the dispatch arguments every per-probe pass runs with over the probes placed this frame.
+ * @brief The adaptive screen probes (cs_lumen_adaptive_mark.sc, cs_lumen_adaptive_spawn.sc, cs_lumen_adaptive_args.sc):
+ *        extra screen probes where the uniform probes cannot interpolate a pixel (thin features, silhouettes, depth
+ *        discontinuities), placed in the probe atlas rows below the uniform probes, and the dispatch arguments every
+ *        per-probe pass runs with over the probes placed this frame.
  *
  * Owned by lumen_gather_pass. The uniform placement clears the adaptive state each frame (cs_lumen_probe_place.sc);
  * run() then marks and spawns this frame's adaptive probes and writes the arguments. The state buffer's layout is
@@ -73,7 +73,7 @@ public:
     /// Dispatches @p program over this frame's probes with the arguments of @p slot.
     void dispatch(bgfx::ViewId view, const gpu_program& program, args_slot slot) const;
 
-    /// The adaptive probes a uniform lattice of @p probes_x x @p probes_y can hold (UE MaxNumAdaptiveProbes).
+    /// The adaptive probes a uniform lattice of @p probes_x x @p probes_y can hold.
     static auto get_capacity(uint32_t probes_x, uint32_t probes_y) -> uint32_t;
 
 private:

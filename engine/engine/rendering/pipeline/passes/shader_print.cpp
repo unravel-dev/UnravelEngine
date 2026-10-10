@@ -130,7 +130,7 @@ void shader_print::draw(const gfx::frame_buffer::ptr& output)
     const math::vec4 print(float(view_size_.width), float(view_size_.height), float(max_symbols), 0.0f);
     gfx::set_uniform(program.u_shader_print, print);
     bgfx::setVertexCount(max_symbols * vertices_per_symbol);
-    // UE's premultiplied composition; the image's alpha stays.
+    // Premultiplied composition over the image; only RGB is written, so the image's alpha stays.
     bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA));
     bgfx::submit(pass.id, program.program->native_handle());
     bgfx::setState(BGFX_STATE_DEFAULT);

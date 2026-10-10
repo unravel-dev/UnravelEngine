@@ -1,6 +1,5 @@
 /*
- * Lumen reflections, temporal accumulation (UE 5.8 LumenReflectionDenoiserTemporalCS,
- * LumenReflectionDenoiserTemporal.usf:132-585), full resolution.
+ * GI reflections, temporal accumulation, full resolution.
  *
  * Two histories compete for each resolved pixel, both read with 2x2 bilinear taps that skip history texels the
  * pass left invalid:
@@ -11,7 +10,7 @@
  *    within LUMEN_REFLECTION_TEMPORAL_DISTANCE_THRESHOLD x U(0.5, 1.5) of the reprojected depth, relaxed by
  *    1 / clamp(NoV, 0.1, 1) against TAA jitter at grazing angles.
  * On a moving surface both points move with it first: back by the surface's motion since last frame
- * (lumen_motion.sh; UE adds the velocity's object part to both reprojections).
+ * (lumen_motion.sh), so both reprojections carry the object's motion on top of the camera's.
  * The one closer to the mean of the 5x5 neighbourhood (corners skipped) of this frame's resolve wins, keeping
  * 20% of the hit history; both are clamped to the neighbourhood mean +- LUMEN_REFLECTION_NEIGHBORHOOD_CLAMP_SCALE
  * standard deviations in YCoCg, and the clamp's distance lowers the confidence, which shortens the frame count:
@@ -66,7 +65,7 @@ struct LumenReflectionHistory
 	float frames;
 };
 
-/// Last frame's accumulation at the reprojection of @p world_point (UE GetLightingHistory).
+/// Last frame's accumulation at the reprojection of @p world_point.
 LumenReflectionHistory LumenReadReflectionHistory(vec3 world_point, bool depth_test, vec3 position, vec3 normal,
                                                   float noise)
 {
@@ -86,7 +85,7 @@ LumenReflectionHistory LumenReadReflectionHistory(vec3 world_point, bool depth_t
 		return history;
 	}
 	vec2 history_size = vec2(textureSize(s_lumen_reflection_history, 0));
-	// Inset by 0.51 texel: the bilinear footprint stays inside the view (UE HistoryGatherUVMinMax).
+	// Inset by 0.51 texel: the bilinear footprint stays inside the view.
 	vec2 guard = vec2_splat(0.51) / history_size;
 	history_uv = clamp(history_uv, guard, vec2_splat(1.0) - guard);
 	vec2 coord = history_uv * history_size - 0.5;

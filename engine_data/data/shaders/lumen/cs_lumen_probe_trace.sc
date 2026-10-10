@@ -1,6 +1,5 @@
 /*
- * Lumen screen probe gather, tracing (UE 5.8 Global Tracing: ScreenProbeTraceScreenTexturesCS, CompactTraces and
- * ScreenProbeTraceVoxelsCS, LumenScreenProbeTracing.usf:54-499 and 712-891). One ray per equal-area octahedral texel of
+ * Screen probe gather, tracing: the screen, then the global distance field. One ray per equal-area octahedral texel of
  * every probe (LUMEN_PROBE_TRACE_RES^2); the directions shift together inside their texels by the probe tile's jitter
  * of this frame (LumenProbeRayJitter).
  *
@@ -12,13 +11,13 @@
  *     frame, lumen_motion.sh), unless it falls in the outer screen band (stochastic vignette) or last frame's
  *     depth there disagrees (occluded or newly revealed); a rejected hit hands the distance field its crossing.
  *     A lit hit whose surface moved against the probe by more than LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED of the
- *     probe's depth this frame marks the ray moving (UE IsTraceMoving): the probe's lighting is changing, and the
- *     filter and the temporal shorten its history (UE's fast update).
+ *     probe's depth this frame marks the ray moving: the probe's lighting is changing, and the filter and the
+ *     temporal shorten its history (the fast update).
  *  2. Global distance field from the probe lifted LUMEN_SURFACE_BIAS along the ray and the normal, with dithered
- *     transparency where only two-sided meshes are near (lumen_global_sdf.sh; UE LumenScreenProbeTracing.usf:768). A
- *     hit reads the surface cache through the object grid, faded to black within one voxel of the origin against
- *     self-lighting. A hit on an instance that moved more than LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED of the probe's
- *     depth this frame marks the ray moving, as a screen hit does (UE: the mesh distance-field hit's velocity).
+ *     transparency where only two-sided meshes are near (lumen_global_sdf.sh). A hit reads the surface cache through
+ *     the object grid, faded to black within one voxel of the origin against self-lighting. A hit on an instance
+ *     that moved more than LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED of the probe's depth this frame marks the ray
+ *     moving, as a screen hit does (the hit instance's own velocity).
  *  3. The radiance cache, interpolated at the probe's position (lumen_radiance_cache_sample.sh); beyond
  *     the cache's reach the distance field runs to the maximum trace distance and a miss reads the sky.
  *
@@ -26,7 +25,7 @@
  * other ray, with the distance the screen vouched for, to b_lumen_trace_rays; compiled with LUMEN_TRACE_FAR_FIELD,
  * the FAR-FIELD pass (cs_lumen_probe_trace_far_field.sc, an indirect dispatch sized by
  * cs_lumen_trace_far_field_args.sc) runs stages 2 and 3 over that dense list, so no distance-field march holds a
- * wave whose other rays the screen answered (UE's CompactTraces). It stores a distance-field hit's march state in the
+ * wave whose other rays the screen answered (the ray compaction). It stores a distance-field hit's march state in the
  * ray's slot instead of its radiance and appends the slot to b_lumen_trace_hits; compiled with LUMEN_TRACE_HIT_SHADE,
  * the HIT pass (cs_lumen_probe_trace_hit_shade.sc, an indirect dispatch over that list) reads the surface cache at
  * those hits. The card lookup needs as many registers as the march, and in one kernel the march ran at the occupancy
@@ -36,8 +35,7 @@
  * hit's distance, the trace length for distance-field hits, the cache probes' hit distance for the
  * hand-off, the maximum trace distance for the sky; encoded with the moving flag (LumenEncodeTraceDistance).
  *
- * cs_lumen_probe_trace_visualize.sc compiles this file with LUMEN_VISUALIZE_TRACES for UE's
- * r.Lumen.ScreenProbeGather.VisualizeTraces (ScreenProbeSetupVisualizeTraces, LumenScreenProbeTracing.usf:893-1060):
+ * cs_lumen_probe_trace_visualize.sc compiles this file with LUMEN_VISUALIZE_TRACES for the probe trace visualization:
  * one group traces every stage of the probe nearest the visualized pixel again, with this frame's inputs - its rays
  * are the gather's own - and writes each ray as a line instead (lumen_visualize.sh), knowing which rays a screen or
  * distance-field hit answered.
@@ -101,7 +99,8 @@ SAMPLER2D(s_lumen_rc_final, 8);
 #if !defined(LUMEN_VISUALIZE_TRACES)
 /// The rays the screen pass leaves to the far-field pass: [0] = their count, then LUMEN_TRACE_RAY_STRIDE uints per ray
 /// - its trace texel (x | y << 16) and the distance the screen vouched for (float bits); the far-field pass replaces
-/// the distance with a distance-field hit's march state for the hit pass (LumenStoreFieldHit), or -1 without one.
+/// the distance with a distance-field hit's march state for the hit pass (t, then the hit field and voxel in the next
+/// two slots), or -1 without one.
 #define LUMEN_TRACE_RAY_STRIDE 4
 #if defined(LUMEN_TRACE_SCREEN_STAGE)
 BUFFER_RW(b_lumen_trace_rays, uint, 3);
@@ -166,7 +165,7 @@ struct LumenScreenRay
 	/// The hit's distance when answered; otherwise how far from the probe the screen vouched for the ray
 	/// (proven free, or crossed by a hit it could not light).
 	float distance;
-	/// The answering hit's surface moved against the probe this frame (UE bFastMoving).
+	/// The answering hit's surface moved against the probe this frame.
 	bool moving;
 };
 
@@ -278,9 +277,9 @@ LumenFieldSurface LumenMarchDistanceField(vec3 position, vec3 normal, vec3 direc
 	return surface;
 }
 
-/// The surface cache at a distance-field hit, faded against self-lighting; a hit no card covers is black, as in
-/// Lumen. The march stops short of the surface by its expansion and the surface cache is a surface store, so the hit
-/// moves onto the surface; its normal is the field's gradient where the march stopped (LumenTraceGlobalSdfDithered's).
+/// The surface cache at a distance-field hit, faded against self-lighting; a hit no card covers is black. The march
+/// stops short of the surface by its expansion and the surface cache is a surface store, so the hit moves onto the
+/// surface; its normal is the field's gradient where the march stopped (LumenTraceGlobalSdfDithered's).
 vec3 LumenShadeFieldSurface(LumenFieldSurface surface)
 {
 	vec3 radiance = vec3_splat(0.0);
@@ -304,8 +303,8 @@ vec3 LumenShadeFieldSurface(LumenFieldSurface surface)
 }
 
 /// Whether a distance-field hit marks its ray moving: the instance it hit moved more than
-/// LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED of the probe's depth @p probe_depth this frame (UE IsTraceMoving with a mesh
-/// distance-field hit's velocity; the probe's own motion is not compared here).
+/// LUMEN_TEMPORAL_MOVING_RELATIVE_SPEED of the probe's depth @p probe_depth this frame (the probe's own motion is not
+/// compared here).
 bool LumenIsFieldHitMoving(LumenFieldSurface surface, float probe_depth)
 {
 	BRANCH
@@ -323,10 +322,10 @@ bool LumenIsFieldHitMoving(LumenFieldSurface surface, float probe_depth)
 #include "lumen/lumen_adaptive_probes.sh"
 #include "lumen/lumen_visualize.sh"
 
-/// x, y = the full-resolution pixel whose probe the traces show (UE View.CursorPosition); x < 0 for the view's centre.
+/// x, y = the full-resolution pixel whose probe the traces show (the cursor's); x < 0 for the view's centre.
 uniform vec4 u_lumen_visualize_traces;
 
-/// UE shows a hit closer than LUMEN_VISUALIZE_SELF_HIT_DISTANCE as a self-intersection, LUMEN_VISUALIZE_SELF_HIT_LENGTH
+/// A hit closer than LUMEN_VISUALIZE_SELF_HIT_DISTANCE shows as a self-intersection, LUMEN_VISUALIZE_SELF_HIT_LENGTH
 /// long and red (1 cm and 5 cm).
 #define LUMEN_VISUALIZE_SELF_HIT_DISTANCE 0.01
 #define LUMEN_VISUALIZE_SELF_HIT_LENGTH 0.05
@@ -335,10 +334,10 @@ uniform vec4 u_lumen_visualize_traces;
 SHARED float s_lumen_visualize_distance[LUMEN_VISUALIZE_GROUP_THREADS];
 SHARED int s_lumen_visualize_index[LUMEN_VISUALIZE_GROUP_THREADS];
 
-/// The probe UE ScreenProbeSetupVisualizeTraces shows: the uniform probe of the screen tile under the query pixel, or
-/// the tile's adaptive probe nearer to the query. The distances are UE's, of unsigned pixel differences (a probe right
-/// of or below the query lies far away). The group's threads share the search of the adaptive records for the tile's
-/// probes; every thread calls this and gets the probe's atlas tile.
+/// The probe the visualization shows: the uniform probe of the screen tile under the query pixel, or the tile's
+/// adaptive probe nearer to the query. The distances are of unsigned pixel differences (a probe right of or below the
+/// query lies far away). The group's threads share the search of the adaptive records for the tile's probes; every
+/// thread calls this and gets the probe's atlas tile.
 ivec2 LumenVisualizeTracesProbe(int thread)
 {
 	uvec2 query = u_lumen_visualize_traces.x >= 0.0 ? uvec2(u_lumen_visualize_traces.xy)
@@ -365,7 +364,7 @@ ivec2 LumenVisualizeTracesProbe(int thread)
 	s_lumen_visualize_distance[thread] = best_distance;
 	s_lumen_visualize_index[thread] = best_index;
 	barrier();
-	// The nearest of the threads' choices, the lower probe index on a tie (UE walks the tile's list in order).
+	// The nearest of the threads' choices, the lower probe index on a tie (the first in the tile's list order).
 	for(int other = 0; other < LUMEN_VISUALIZE_GROUP_THREADS; ++other)
 	{
 		float distance = s_lumen_visualize_distance[other];
@@ -379,7 +378,7 @@ ivec2 LumenVisualizeTracesProbe(int thread)
 	return best_index >= 0 ? LumenAdaptiveAtlasTile(best_index) : ivec2(screen_tile);
 }
 
-/// UE WriteTraceForVisualization: the ray of probe texel @p texel as a line from the probe at @p position along
+/// The ray of probe texel @p texel as a line from the probe at @p position along
 /// @p direction over the filter's distance; a @p hit closer than LUMEN_VISUALIZE_SELF_HIT_DISTANCE shows red.
 void LumenStoreVisualizedTrace(ivec2 texel, vec3 radiance, float filter_distance, vec3 position, vec3 direction,
                                bool hit)
@@ -439,7 +438,7 @@ LumenProbeRay LumenMakeProbeRay(ivec2 tile, ivec2 texel)
 }
 
 /// What a ray found: its radiance, the filter's distance, the moving flag, whether a screen or distance-field hit
-/// answered (UE bHit), which stage answered (the ray-source diagnostic: x screen, y distance field, z radiance cache)
+/// answered, which stage answered (the ray-source diagnostic: x screen, y distance field, z radiance cache)
 /// and the distance-field stage's start over the near field and whether it hit (the start diagnostic).
 struct LumenRayResult
 {
@@ -512,7 +511,7 @@ LumenFarFieldTrace LumenTraceFarFieldUnshaded(LumenProbeRay ray, float vouched)
 	{
 		t_start = max(t_start, 0.5);
 	}
-	// UE DitherScreenCoord: the probe's uniform tile x the tracing resolution + the ray's texel.
+	// The dither's screen coordinate: the probe's uniform tile x the tracing resolution + the ray's texel.
 	LumenSdfDither dither =
 	    LumenSdfMakeDither(vec2(ray.screen_tile * LUMEN_PROBE_TRACE_RES + ray.texel), u_lumen_frame_mod);
 	LumenFarFieldTrace trace;

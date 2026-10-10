@@ -1,12 +1,10 @@
 /*
- * LOCAL EXPOSURE, stage 2b: the blurred log luminance (UE PostProcessLocalExposure.cpp:253-306,
- * AddGaussianBlurPass in PostProcessWeightedSampleSum.cpp).
+ * LOCAL EXPOSURE, stage 2b: the blurred log luminance.
  *
  * One axis of a separable Gaussian over the 1/32 resolution log luminance
- * (cs_local_exposure_downsample.sc); the pass runs twice, x then y. UE's kernel exactly: the
- * radius R is half the kernel size percentage of the view width (GetBlurRadius), taps reach R
- * and weigh exp(-16.7 (d / R)^2) (NormalDistributionUnscaled), normalized, with the texture
- * mirrored at its edges (UseMirrorAddressMode). It is the second, edge-BLIND estimate of the
+ * (cs_local_exposure_downsample.sc); the pass runs twice, x then y. The radius R is half the
+ * kernel size percentage of the view width; taps reach R and weigh exp(-16.7 (d / R)^2),
+ * normalized, with the texture mirrored at its edges. It is the second, edge-BLIND estimate of the
  * local level: the tonemapper mixes it with the bilateral value by `local_blurred_blend` and
  * falls back to it entirely where a pixel's own luminance slice holds no weight.
  */
@@ -26,13 +24,13 @@ uniform vec4 u_local_blur_params;
 #define u_blur_radius  u_local_blur_params.z
 #define u_blur_axis    u_local_blur_params.w
 
-/// UE's tap limit (radius clamped to its 32-sample budget). Mirrors local_blur_max_radius in
+/// The tap limit: the radius is clamped to 31 texels (63 taps per axis). Mirrors local_blur_max_radius in
 /// auto_exposure_pass.cpp.
 #define LOCAL_EXPOSURE_BLUR_MAX_RADIUS 31
-/// UE NormalDistributionUnscaled's LegacyCompatibilityConstant.
-#define UE_GAUSSIAN_FALLOFF -16.7
+/// The Gaussian's scale on (d / R)^2: a tap at the radius weighs exp(-16.7), about 6e-8.
+#define LOCAL_EXPOSURE_BLUR_FALLOFF -16.7
 
-/// UE's mirror address mode on texel indices: -1 reads 0, n reads n - 1.
+/// Mirror address mode on texel indices: -1 reads 0, n reads n - 1.
 int mirror_index(int index, int count)
 {
 	int period = 2 * count;
@@ -65,7 +63,7 @@ void main()
 			continue;
 		}
 		float distance_ratio = float(offset) / radius;
-		float weight = exp(UE_GAUSSIAN_FALLOFF * distance_ratio * distance_ratio);
+		float weight = exp(LOCAL_EXPOSURE_BLUR_FALLOFF * distance_ratio * distance_ratio);
 		int tap_index = mirror_index(center + offset, count);
 		ivec2 tap = along_x ? ivec2(tap_index, texel.y) : ivec2(texel.x, tap_index);
 		sum += texelFetch(s_local_blur_input, tap, 0).x * weight;

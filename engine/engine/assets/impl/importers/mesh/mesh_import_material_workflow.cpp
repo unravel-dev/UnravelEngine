@@ -134,7 +134,7 @@ auto string_ends_with(std::string_view value, std::string_view suffix) -> bool
 }
 
 /**
- * @brief Lumberyard Bistro FBX export: paired *BaseColor* + *Specular* DDS paths (not CryEngine *_spec*).
+ * @brief Bistro FBX export: paired *BaseColor* + *Specular* DDS paths (not the *_spec* naming).
  */
 auto lumberyard_bistro_basecolor_specular_pair(const aiMaterial* material) -> bool
 {
@@ -174,7 +174,7 @@ auto lumberyard_bistro_basecolor_specular_pair(const aiMaterial* material) -> bo
 }
 
 /**
- * @brief CryEngine / Lumberyard Bistro: combined MR+AO is stored in SPECULAR
+ * @brief *_spec* maps and Bistro *_Specular pairs: combined MR+AO is stored in SPECULAR
  * (glTF layout: R=occlusion, G=roughness, B=metallic).
  */
 auto specular_texture_path_looks_like_packed_mr(const aiMaterial* material) -> bool
@@ -333,7 +333,7 @@ auto should_reconstruct_base_color_for_spec_gloss_pair(material_workflow workflo
 }
 
 /**
- * @brief Packed metallic-roughness stored in aiTextureType_SPECULAR (Bistro / CryEngine _spec).
+ * @brief Packed metallic-roughness stored in aiTextureType_SPECULAR (Bistro pairs / *_spec maps).
  * Not KHR spec/gloss and not Phong specular-color maps.
  */
 auto material_has_packed_mr_in_specular_slot(const aiMaterial* material) -> bool
@@ -359,7 +359,7 @@ auto material_has_packed_mr_in_specular_slot(const aiMaterial* material) -> bool
         return false;
     }
 
-    // Path naming is the reliable Bistro/CryEngine signal. Do not require COLOR_SPECULAR ~ white:
+    // Path naming is the reliable packed-map signal. Do not require COLOR_SPECULAR ~ white:
     // Assimp FBX keeps Phong defaults (often ~0.2-0.5) even though the engine multiplies by white.
     return specular_texture_path_looks_like_packed_mr(material);
 }
@@ -473,7 +473,7 @@ auto gather_spec_gloss_factors(const aiMaterial* material) -> spec_gloss_factors
 /**
  * @brief Process material with intelligent property extraction and conversion.
  * First tries to get actual PBR properties, then converts missing ones from available data.
- * KHR spec/gloss factor conversion uses Khronos formulas; Phong uses shininess exponent mapping.
+ * KHR spec/gloss factors go through the metallic solve; Phong uses shininess exponent mapping.
  */
 void process_material_with_workflow_conversion(const aiMaterial* material, 
                                              material_workflow workflow,
@@ -610,7 +610,7 @@ auto is_material_two_sided(const aiMaterial* material) -> bool
         return true;
     }
 
-    // FBX (and some Unity exports) encode double-sided in the material name but
+    // FBX and some other exports encode double-sided in the material name but
     // never set AI_MATKEY_TWOSIDED - Assimp's FBX converter ignores Model::Culling.
     aiString mat_name{};
     if(material->Get(AI_MATKEY_NAME, mat_name) == AI_SUCCESS && mat_name.length > 0)

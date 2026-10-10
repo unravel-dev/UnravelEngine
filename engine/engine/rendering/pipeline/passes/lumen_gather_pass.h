@@ -19,8 +19,8 @@ namespace unravel
 {
 
 /**
- * @brief The Lumen screen probe gather (UE 5.8 Lumen, software ray tracing, Global Tracing, Epic
- *        scalability): stateless uniform screen probes, plus adaptive probes where they cannot interpolate,
+ * @brief The screen probe gather (software ray tracing through the screen and the global distance
+ *        field): stateless uniform screen probes, plus adaptive probes where they cannot interpolate,
  *        traced every frame, composited with an absolute per-ray clamp, filtered in probe space, projected to
  *        SH3, integrated per pixel and accumulated by a per-pixel temporal (10 frames at the default update speed).
  *
@@ -28,8 +28,8 @@ namespace unravel
  * to the radiance cache (lumen_radiance_cache) past a near field the probes trace themselves, and global distance
  * field hits read the surface cache (lumen_surface_cache_pass). The final gather quality
  * (gi_settings::diffuse_settings::quality) sets the rays per probe, the probe spacing and the full-resolution jitter
- * (lumen_pass_common.h). The constants and their UE sources are in engine/rendering/gi/lumen_constants.h; the plan
- * and the measurements in tasks/lumen_transform.
+ * (lumen_pass_common.h). The constants are in engine/rendering/gi/lumen_constants.h; the plan and the measurements
+ * in tasks/lumen_transform.
  */
 class lumen_gather_pass
 {
@@ -40,7 +40,7 @@ public:
     static constexpr const char* screen_ao_texture = "LUMEN_SCREEN_AO";
     static constexpr const char* screen_ao_frame = "LUMEN_SCREEN_AO_FRAME";
     static constexpr const char* screen_ao_intensity = "LUMEN_SCREEN_AO_INTENSITY";
-    /// UE LumenVisualizeTraces.ush: the visualized probe's rays, one per texel of its tracing octahedron (at most the
+    /// The visualized probe's rays, one per texel of its tracing octahedron (at most the
     /// largest tracing resolution's), each visualized_trace_stride vec4s (lumen_visualize.sh
     /// LUMEN_VISUALIZE_TRACE_STRIDE).
     static constexpr uint32_t max_visualized_trace_count =
@@ -62,8 +62,7 @@ public:
      */
     auto run(gfx::render_view& rview, const lumen_run_params& params) -> gfx::texture::ptr;
 
-    /// Whether the gather runs the short-range AO under @p settings: enabled with a positive intensity (UE
-    /// UseShortRangeAmbientOcclusion).
+    /// Whether the gather runs the short-range AO under @p settings: enabled with a positive intensity.
     static auto uses_short_range_ao(const gi_settings::ambient_occlusion_settings& settings) -> bool;
     auto has_short_range_ao() const -> bool;
 
@@ -77,7 +76,7 @@ public:
     }
 
     /// The diffuse history the gather wrote for @p rview this frame (rgb = the result, a = the frames it accumulates,
-    /// quantized to multiples of the maximum / 15: UE's 4-bit count); null when the gather did not run this frame.
+    /// quantized to multiples of the maximum / 15: a 4-bit count); null when the gather did not run this frame.
     static auto get_current_history(gfx::render_view& rview) -> gfx::texture::ptr;
 
     /// The radiance cache this frame's gather updated, or null when it did not run this frame (GI off releases the
@@ -88,7 +87,7 @@ public:
         return is_current ? &radiance_cache_ : nullptr;
     }
 
-    /// The probe atlas a gather placed (UE r.Lumen.ScreenProbeGather.Debug.ProbePlacement draws it).
+    /// The probe atlas a gather placed (lumen_visualize_pass::draw_probe_placement draws it).
     struct probe_placement
     {
         ///< The probe records (lumen_common.sh LumenPackProbe), one texel per atlas tile.
@@ -115,7 +114,7 @@ public:
         adaptive_probes_.bind_state(stage, bgfx::Access::Read);
     }
 
-    /// The rays r.Lumen.ScreenProbeGather.VisualizeTraces draws (cs_lumen_probe_trace_visualize.sc), or an invalid
+    /// The rays the screen probe trace visualization draws (cs_lumen_probe_trace_visualize.sc), or an invalid
     /// handle before a frame recorded any.
     auto get_visualized_traces() const -> bgfx::DynamicVertexBufferHandle
     {
@@ -129,8 +128,8 @@ public:
     }
 
 private:
-    /// The programs whose layout depends on the probes' tracing resolution, compiled once per resolution (UE's
-    /// THREADGROUP_SIZE permutations: cs_lumen_*.sc at 8 x 8 rays, the _res4 / _res16 wrappers at 4 x 4 / 16 x 16).
+    /// The programs whose layout depends on the probes' tracing resolution, compiled once per resolution (thread group
+    /// size permutations: cs_lumen_*.sc at 8 x 8 rays, the _res4 / _res16 wrappers at 4 x 4 / 16 x 16).
     struct probe_programs
     {
         gpu_program::ptr generate_rays;
@@ -217,7 +216,7 @@ private:
         uint32_t atlas_rows{};
         std::array<float, 4> frame{};
         /// frame without the visualized traces' fixed jitter: the radiance cache and the short-range AO keep the
-        /// view's frame (UE View.StateFrameIndex).
+        /// view's own frame index.
         std::array<float, 4> view_frame{};
         std::array<float, 4> probes{};
         std::array<float, 4> view{};
@@ -262,7 +261,7 @@ private:
 
     auto has_programs() const -> bool;
     /// The frame's layout at the final gather quality @p quality; @p is_jitter_fixed holds the placement and ray jitter
-    /// at UE's fixed index while the traces are visualized.
+    /// at a fixed index while the traces are visualized.
     static auto make_frame_layout(const usize32_t& view_size,
                                   float quality,
                                   gi_project_settings::quality_level tier,
@@ -335,7 +334,7 @@ private:
                            const frame_layout& layout,
                            const probe_targets& targets,
                            bool radiance_cache_ready);
-    /// UE ScreenProbeSetupVisualizeTraces: the rays of the probe params.visualize_traces shows, traced again.
+    /// The rays of the probe params.visualize_traces shows, traced again.
     void run_visualize_traces(const lumen_run_params& params,
                               const frame_layout& layout,
                               const probe_targets& targets,

@@ -23,7 +23,7 @@
 
 /**
  * @file lumen_pass_common.h
- * @brief Dispatch and target helpers shared by the Lumen compute passes (the gather, the reflections), and the
+ * @brief Dispatch and target helpers shared by the GI compute passes (the gather, the reflections), and the
  *        values the passes derive from the view's GI settings.
  */
 
@@ -32,77 +32,70 @@ namespace unravel::lumen_pass
 
 /// Threads per group edge of the per-pixel and per-probe dispatches (NUM_THREADS(8, 8, 1)).
 inline constexpr uint32_t group_edge = 8;
-/// The final gather update speed's range for the temporal and for the radiance cache budget
-/// (R/LumenScreenProbeGather.cpp:572, 741).
+/// The final gather update speed's range for the temporal and for the radiance cache budget.
 inline constexpr float min_update_speed = 0.5f;
 inline constexpr float max_temporal_update_speed = 8.0f;
 inline constexpr float max_budget_update_speed = 4.0f;
-/// While the user edits the scene in the view (UE FSceneViewFamily::bCurrentlyBeingEdited: a gizmo or a property being
-/// dragged), the gather's temporal keeps this share of its frames and the radiance cache traces this many times its
-/// probe budget, so the edit shows up sooner.
+/// While the user edits the scene in the view (a gizmo or a property being dragged), the gather's temporal keeps this
+/// share of its frames and the radiance cache traces this many times its probe budget, so the edit shows up sooner.
 inline constexpr float editing_history_scale = 0.5f;
 inline constexpr float editing_trace_budget_scale = 10.0f;
-/// The maximum trace distance's range in metres: UE's 0.01 cm floor and Lumen::MaxTraceDistance
-/// (half UE_OLD_WORLD_MAX, R/LumenDiffuseIndirect.cpp:230).
+/// The maximum trace distance's range in metres: a 0.01 cm floor and a 2^20 cm (10485.76 m) ceiling.
 inline constexpr float min_trace_distance = 0.0001f;
 inline constexpr float max_trace_distance = 10485.76f;
-/// The rays per axis a screen probe traces (R/LumenScreenProbeGather.cpp:452-458): the resolutions the gather's
-/// programs are compiled for (lumen_gather_pass) span this range in powers of two.
+/// The rays per axis a screen probe traces: the resolutions the gather's programs are compiled for
+/// (lumen_gather_pass) span this range in powers of two.
 inline constexpr uint32_t min_probe_trace_resolution = 4;
 inline constexpr uint32_t max_probe_trace_resolution = 16;
-/// The final gather qualities from which the full-resolution jitter halves (R/LumenScreenProbeGather.cpp:546) and the
-/// screen probes are twice as dense (:486).
+/// The final gather qualities from which the full-resolution jitter halves and the screen probes are twice as dense.
 inline constexpr float half_jitter_final_gather_quality = 4.0f;
 inline constexpr float dense_probes_final_gather_quality = 6.0f;
-/// The reflection quality at or below which one pixel of each 2 x 2 block traces (R/LumenReflections.cpp:1271), and the
-/// most neighbouring rays the resolve reuses per pixel (:1502).
+/// The reflection quality at or below which one pixel of each 2 x 2 block traces, and the most neighbouring rays the
+/// resolve reuses per pixel.
 inline constexpr float downsampled_reflection_quality = 0.25f;
 inline constexpr uint32_t max_reflection_reconstruction_samples = 64;
-/// The radiosity probes at Epic (BaseScalability.ini: r.LumenScene.Radiosity.ProbeSpacing 4, HemisphereProbeResolution
-/// 4), the surface cache lighting quality from which they are twice as dense and its range for the rays
-/// (R/LumenRadiosity.cpp:208-224).
+/// The radiosity probes at the Epic tier (a probe every 4 card texels, 4 x 4 rays each), the surface cache lighting
+/// quality from which they are twice as dense and its range for the rays.
 inline constexpr uint32_t radiosity_probe_spacing = 4;
 inline constexpr uint32_t radiosity_hemisphere_resolution = 4;
 inline constexpr float dense_radiosity_lighting_quality = 6.0f;
 inline constexpr float min_radiosity_lighting_quality = 0.5f;
 inline constexpr float max_radiosity_lighting_quality = 4.0f;
 inline constexpr uint32_t max_radiosity_hemisphere_resolution = 16;
-/// UE's High tiers (BaseScalability.ini GlobalIlluminationQuality@2, ReflectionQuality@2): screen probes every 32
-/// pixels, 100 radiance cache probes re-traced per frame, radiosity probes every 8 texels of 3 rays per axis,
-/// reflection traces at 2 x 2 resolved from 3 rays with a minimum neighbour weight of 1 (Epic: 0).
+/// The High tiers of the global illumination and reflection quality: screen probes every 32 pixels, 100 radiance
+/// cache probes re-traced per frame, radiosity probes every 8 texels of 3 rays per axis, reflection traces at 2 x 2
+/// resolved from 3 rays with a minimum neighbour weight of 1 (Epic: 0).
 inline constexpr uint32_t high_probe_downsample_factor = 32;
 inline constexpr uint32_t high_radiance_cache_trace_budget = 100;
 inline constexpr uint32_t high_radiosity_probe_spacing = 8;
 inline constexpr uint32_t high_radiosity_hemisphere_resolution = 3;
 inline constexpr uint32_t high_reflection_reconstruction_samples = 3;
 inline constexpr float high_reflection_reconstruction_min_weight = 1.0f;
-/// UE High's radiance cache probes: 16 x 16 radiance texels (RadianceCache.ProbeResolution; Epic 32).
+/// The High tier's radiance cache probes: 16 x 16 radiance texels (Epic 32).
 inline constexpr uint32_t high_radiance_cache_probe_resolution = 16;
-/// UE High's adaptive probe candidates per uniform probe: 16 as 4 x 4 (NumAdaptiveProbes,
-/// GetNumSamplesPerUniformProbe2D; Epic 8 as LUMEN_ADAPTIVE_SAMPLES_X x _Y).
+/// The High tier's adaptive probe candidates per uniform probe: 16 as 4 x 4 (Epic 8 as
+/// LUMEN_ADAPTIVE_SAMPLES_X x _Y).
 inline constexpr uint32_t high_adaptive_samples_x = 4;
 inline constexpr uint32_t high_adaptive_samples_y = 4;
-/// UE High's card lighting update factors over Epic's (DirectLighting 64 / 32, Radiosity 128 / 64).
+/// The High tier's card lighting update factors over the Epic tier's (direct lighting 64 / 32, radiosity 128 / 64).
 inline constexpr uint32_t high_lighting_update_factor_scale = 2;
-/// UE High's smallest resident card (SurfaceCache.CardMinResolution 4; Epic 2): the floor under the project's value.
+/// The High tier's smallest resident card, in texels: the floor under the project's card_min_resolution (2 by default).
 inline constexpr uint32_t high_card_min_resolution = 4;
-/// UE High's short-range AO (GlobalIlluminationQuality@2 ShortRangeAO.DownsampleFactor 2,
-/// HorizonSearch.ForegroundSampleRejectPower 1.5): searched at half resolution. UE's High also drops the bent normal
-/// (BentNormal 0) for an R8 target; ours packs it into the same uint at no measured cost, so it stays.
+/// The High tier's short-range AO: searched at half resolution, with a steeper foreground fade (exponent 1.5). The bent
+/// normal stays at High: it packs into the same uint as the AO at no measured cost.
 inline constexpr uint32_t high_short_range_ao_downsample_factor = 2;
 inline constexpr float high_short_range_ao_foreground_reject_power = 1.5f;
 
 using quality_level = gi_project_settings::quality_level;
 
-/// The farthest a Lumen ray travels under the setting @p setting (UE Lumen::GetMaxTraceDistance).
+/// The farthest a GI ray travels under the setting @p setting, clamped to the trace distance range.
 inline auto get_max_trace_distance(float setting) -> float
 {
     return std::clamp(setting, min_trace_distance, max_trace_distance);
 }
 
 /// The frames the gather's temporal accumulates at most at the final gather update speed @p update_speed: the
-/// default over the square root of the speed, halved while @p is_being_edited, rounded (UE LumenScreenProbeGather
-/// GetMaxFramesAccumulated).
+/// default over the square root of the speed, halved while @p is_being_edited, rounded.
 inline auto get_temporal_max_frames(float update_speed, bool is_being_edited = false) -> float
 {
     const float speed = std::clamp(update_speed, min_update_speed, max_temporal_update_speed);
@@ -111,7 +104,7 @@ inline auto get_temporal_max_frames(float update_speed, bool is_being_edited = f
 }
 
 /// The radiance cache probes re-traced per frame beyond the new ones at the final gather update speed
-/// @p update_speed, ten times as many while @p is_being_edited (UE NumProbesToTraceBudget, @p tier's).
+/// @p update_speed: @p tier's budget scaled by the speed, ten times as many while @p is_being_edited.
 inline auto get_radiance_cache_trace_budget(float update_speed,
                                             bool is_being_edited = false,
                                             quality_level tier = quality_level::epic) -> uint32_t
@@ -148,33 +141,31 @@ inline auto get_adaptive_probe_layout(quality_level tier) -> adaptive_probe_layo
 }
 
 /// Whether the integrate draws one screen probe per pixel in proportion to its weight instead of blending the four
-/// around it at @p tier (UE StochasticInterpolation: off at Epic, on at High). UE's High also reads octahedral
-/// irradiance maps instead of the SH3 (IrradianceFormat 1): with one probe read per pixel they cost no less here, and a
-/// 6 x 6 map's bilinear reads flatten the irradiance peak, so the SH3 stays.
+/// around it at @p tier: off at Epic, on at High. High keeps the SH3 irradiance rather than octahedral irradiance maps:
+/// with one probe read per pixel the maps cost no less here, and a 6 x 6 map's bilinear reads flatten the irradiance
+/// peak.
 inline auto has_stochastic_probe_interpolation(quality_level tier) -> bool
 {
     return tier == quality_level::high;
 }
 
-/// The roughness below which pixels trace reflection rays under @p settings (UE LumenMaxRoughnessToTraceReflections,
-/// in [0, 1]).
+/// The roughness below which pixels trace reflection rays under @p settings, in [0, 1].
 inline auto get_max_roughness_to_trace(const gi_settings::reflection_settings& settings) -> float
 {
     return std::clamp(settings.max_roughness_to_trace, 0.0f, 1.0f);
 }
 
-/// The reflection traces' downsample factor under @p settings and @p tier (UE LumenReflections' UserDownsampleFactor
-/// times r.Lumen.Reflections.DownsampleFactor): 2, one traced pixel per 2 x 2 block, at or below
-/// downsampled_reflection_quality or at High, else 1. The resolve serves 2 x 2 at most (UE clamps to 4).
+/// The reflection traces' downsample factor under @p settings and @p tier: 2, one traced pixel per 2 x 2 block, at or
+/// below downsampled_reflection_quality or at High, else 1. The resolve serves 2 x 2 at most.
 inline auto get_reflection_downsample_factor(const gi_settings::reflection_settings& settings,
                                              quality_level tier = quality_level::epic) -> uint32_t
 {
     return settings.quality <= downsampled_reflection_quality || tier == quality_level::high ? 2u : 1u;
 }
 
-/// The neighbouring rays the reflection resolve reuses per pixel under @p settings (UE NumReconstructionSamples): the
-/// @p tier's count (Epic LUMEN_REFLECTION_RECONSTRUCTION_SAMPLES, High 3) scaled by the quality and rounded, never
-/// fewer than it nor more than max_reflection_reconstruction_samples.
+/// The neighbouring rays the reflection resolve reuses per pixel under @p settings: the @p tier's count (Epic
+/// LUMEN_REFLECTION_RECONSTRUCTION_SAMPLES, High 3) scaled by the quality and rounded, never fewer than it nor more
+/// than max_reflection_reconstruction_samples.
 inline auto get_reflection_reconstruction_samples(const gi_settings::reflection_settings& settings,
                                                   quality_level tier = quality_level::epic) -> uint32_t
 {
@@ -183,32 +174,30 @@ inline auto get_reflection_reconstruction_samples(const gi_settings::reflection_
     // Bounded before the conversion (any quality from here on lands on the maximum); not-a-number counts as 0.
     const float max_quality = float(max_reflection_reconstruction_samples);
     const float quality = settings.quality > 0.0f ? std::min(settings.quality, max_quality) : 0.0f;
-    // UE FMath::RoundToInt: floor(x + 0.5).
+    // Rounds half up: floor(x + 0.5).
     const auto scaled = uint32_t(std::floor(quality * float(samples) + 0.5f));
     return std::clamp(scaled, samples, max_reflection_reconstruction_samples);
 }
 
-/// The reflection resolve's minimum neighbour weight over the pixel's own at @p tier (UE
-/// ScreenSpaceReconstruction.MinWeight: Epic 0, High 1).
+/// The reflection resolve's minimum neighbour weight over the pixel's own at @p tier (Epic 0, High 1).
 inline auto get_reflection_reconstruction_min_weight(quality_level tier) -> float
 {
     return tier == quality_level::high ? high_reflection_reconstruction_min_weight : 0.0f;
 }
 
-/// The rays per axis each screen probe traces at the final gather quality @p quality (UE
-/// LumenScreenProbeGather::GetTracingOctahedronResolution): sqrt(quality) x 8, truncated, rounded up to a power of two
-/// and clamped - 4 below 0.390625, 8 below 1.265625, 16 beyond.
+/// The rays per axis each screen probe traces at the final gather quality @p quality: sqrt(quality) x 8, truncated,
+/// rounded up to a power of two and clamped - 4 below 0.390625, 8 below 1.265625, 16 beyond.
 inline auto get_probe_trace_resolution(float quality) -> uint32_t
 {
     const float scaled = std::sqrt(std::max(quality, 0.0f)) * float(gi::lumen::LUMEN_PROBE_TRACE_RES);
-    // UE converts to uint32 before rounding up; every value from the maximum on lands on the maximum.
+    // Truncated to uint32 before rounding up; every value from the maximum on lands on the maximum.
     const uint32_t truncated =
         scaled < float(max_probe_trace_resolution) ? uint32_t(scaled) : max_probe_trace_resolution;
     return std::clamp(std::bit_ceil(truncated), min_probe_trace_resolution, max_probe_trace_resolution);
 }
 
-/// The screen probe spacing in pixels at the final gather quality @p quality and @p tier (UE GetScreenDownsampleFactor
-/// before its texture-size clamp, which lumen_gather_pass applies).
+/// The screen probe spacing in pixels at the final gather quality @p quality and @p tier, before the texture-size
+/// clamp lumen_gather_pass applies.
 inline auto get_probe_downsample_factor(float quality, quality_level tier = quality_level::epic) -> uint32_t
 {
     const auto spacing = tier == quality_level::high ? high_probe_downsample_factor
@@ -216,8 +205,8 @@ inline auto get_probe_downsample_factor(float quality, quality_level tier = qual
     return quality >= dense_probes_final_gather_quality ? spacing / 2u : spacing;
 }
 
-/// The integrate's full-resolution jitter in probe tiles at the final gather quality @p quality (UE
-/// GetScreenProbeFullResolutionJitterWidth).
+/// The integrate's full-resolution jitter in probe tiles at the final gather quality @p quality, halved from
+/// half_jitter_final_gather_quality.
 inline auto get_full_res_jitter_width(float quality) -> float
 {
     const float scale = quality >= half_jitter_final_gather_quality ? 0.5f : 1.0f;
@@ -235,10 +224,9 @@ struct radiosity_layout
     auto operator==(const radiosity_layout&) const -> bool = default;
 };
 
-/// The radiosity probes at the surface cache lighting quality @p lighting_quality and @p tier (UE LumenRadiosity
-/// GetRadiosityProbeSpacing, GetHemisphereProbeResolution): the tier's spacing (Epic 4, High 8), halved from
-/// dense_radiosity_lighting_quality, and its rays per axis (Epic 4, High 3) x sqrt(quality), the quality clamped to its
-/// range and the product truncated - 2 x 2 at 0.5, 8 x 8 at 4 for Epic.
+/// The radiosity probes at the surface cache lighting quality @p lighting_quality and @p tier: the tier's spacing
+/// (Epic 4, High 8), halved from dense_radiosity_lighting_quality, and its rays per axis (Epic 4, High 3) x
+/// sqrt(quality), the quality clamped to its range and the product truncated - 2 x 2 at 0.5, 8 x 8 at 4 for Epic.
 inline auto get_radiosity_layout(float lighting_quality, quality_level tier = quality_level::epic) -> radiosity_layout
 {
     const bool is_high = tier == quality_level::high;
@@ -284,7 +272,7 @@ inline auto make_settings_uniform(const gi_settings& settings, bool is_being_edi
             get_max_roughness_to_trace(settings.reflections),
             get_full_res_jitter_width(settings.diffuse.quality)};
 }
-/// The layout of the vec4 tables the Lumen passes upload as buffers (a vertex buffer is read as vec4 by the shaders).
+/// The layout of the vec4 tables the GI passes upload as buffers (a vertex buffer is read as vec4 by the shaders).
 inline auto get_vec4_layout() -> const bgfx::VertexLayout&
 {
     static const bgfx::VertexLayout layout = []()
@@ -315,7 +303,7 @@ inline void upload_vec4_table(bgfx::DynamicVertexBufferHandle& buffer, const std
     bgfx::update(buffer, 0, bgfx::copy(data.data(), uint32_t(data.size() * sizeof(math::vec4))));
 }
 
-/// A Lumen texture read with texelFetch and written as an image.
+/// A GI pass texture read with texelFetch and written as an image.
 inline constexpr uint64_t compute_texture_flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP |
                                                   BGFX_SAMPLER_V_CLAMP | BGFX_SAMPLER_MIN_POINT |
                                                   BGFX_SAMPLER_MAG_POINT;
@@ -333,8 +321,8 @@ inline void bind_image(uint8_t stage,
     bgfx::setImage(stage, tex->native_handle(), 0, access, format);
 }
 
-/// Experiment toggle (gi_set_experiment_flags) every Lumen tracer honours: the global SDF reads as covered everywhere,
-/// two-sided meshes as opaque as one-sided ones (the A/B of UE's coverage).
+/// Experiment toggle (gi_set_experiment_flags) every GI tracer honours: the global SDF reads as covered everywhere,
+/// two-sided meshes as opaque as one-sided ones (the A/B of the global SDF coverage).
 inline constexpr uint32_t experiment_no_sdf_coverage = 1u << 25u;
 /// Experiment toggles (gi_set_experiment_flags) of the global SDF march, through the clipmap's sampling uniform
 /// (global_sdf_clipmap_gpu::set_march_experiments): the empty-space step reads the coarsest covering level instead of
@@ -351,20 +339,20 @@ inline constexpr uint64_t experiment_searched_sdf_march = 1ull << 37u;
 /// neighbouring pages of their card (the A/B of LumenResolveRadiosityCell).
 inline constexpr uint64_t experiment_page_bound_radiosity = 1ull << 38u;
 /// Experiment toggle of the reflections: rays the distance field misses read the sky without tracing the screen again
-/// from where it ends (the A/B of LumenReflectionDistantScreenTrace, UE r.Lumen.Reflections.DistantScreenTraces 0).
+/// from where it ends (the A/B of LumenReflectionDistantScreenTrace).
 inline constexpr uint64_t experiment_no_distant_screen_traces = 1ull << 39u;
 /// Experiment toggle of the surface cache while gi_project_settings::hi_res_reflection_pages is on: no reflection
 /// feedback and no hi-res pages, the reflections read every card's locked mip (the A/B of
-/// lumen_surface_cache_feedback, UE r.LumenScene.SurfaceCache.Feedback 0).
+/// lumen_surface_cache_feedback).
 inline constexpr uint64_t experiment_no_hi_res_pages = 1ull << 40u;
-/// Experiment toggle of the short-range AO at the High tier: Epic's full-resolution search (the A/B of
+/// Experiment toggle of the short-range AO at the High tier: the Epic tier's full-resolution search (the A/B of
 /// get_short_range_ao_layout).
 inline constexpr uint64_t experiment_full_res_short_range_ao = 1ull << 41u;
-/// Experiment toggle of the radiance cache at the High tier: Epic's probe resolution (the A/B of
+/// Experiment toggle of the radiance cache at the High tier: the Epic tier's probe resolution (the A/B of
 /// get_radiance_cache_probe_resolution).
 inline constexpr uint64_t experiment_epic_radiance_cache_probes = 1ull << 42u;
-/// Experiment toggle of the adaptive probes at the High tier: Epic's 4 x 2 candidates per uniform probe (the A/B of
-/// get_adaptive_probe_layout).
+/// Experiment toggle of the adaptive probes at the High tier: the Epic tier's 4 x 2 candidates per uniform probe (the
+/// A/B of get_adaptive_probe_layout).
 inline constexpr uint64_t experiment_epic_adaptive_probes = 1ull << 43u;
 /// Experiment toggle of the screen probe interpolation at the High tier: the four probes blended instead of one drawn
 /// (the A/B of has_stochastic_probe_interpolation).
@@ -389,7 +377,7 @@ inline auto get_sdf_march_experiments(uint64_t experiments) -> uint32_t
            ((experiments & experiment_searched_sdf_march) != 0u ? 8u : 0u);
 }
 
-/// The global SDF coverage a Lumen tracer binds at its SDF_CLIPMAP_COVERAGE_STAGE (gi/sdf_clipmap.sh): the clipmap's,
+/// The global SDF coverage a GI tracer binds at its SDF_CLIPMAP_COVERAGE_STAGE (gi/sdf_clipmap.sh): the clipmap's,
 /// or everything covered when it has none or under experiment_no_sdf_coverage.
 inline auto get_sdf_coverage(const global_sdf_clipmap_gpu& clipmap, uint64_t experiments) -> gfx::texture::ptr
 {
@@ -398,16 +386,16 @@ inline auto get_sdf_coverage(const global_sdf_clipmap_gpu& clipmap, uint64_t exp
     return use_coverage ? coverage : default_textures::get().white_texture_3d();
 }
 
-/// Experiment toggles (gi_set_experiment_flags) of the motion the reprojecting Lumen shaders read (lumen_motion.sh):
+/// Experiment toggles (gi_set_experiment_flags) of the motion the reprojecting GI shaders read (lumen_motion.sh):
 /// every surface reprojects as static (the velocity buffer unread), and no screen hit counts as moving (no fast
 /// update).
 inline constexpr uint64_t experiment_no_velocity = 1ull << 21u;
 inline constexpr uint64_t experiment_no_fast_update = 1ull << 32u;
-/// Experiment toggle (gi_set_experiment_flags, UE r.AOGlobalDistanceFieldPartialUpdates 0): every change to the global
-/// distance field recomposes whole levels, under the level budget and the edit throttle.
+/// Experiment toggle (gi_set_experiment_flags): every change to the global distance field recomposes whole levels, with
+/// no partial updates, under the level budget and the edit throttle.
 inline constexpr uint64_t experiment_no_sdf_partial_updates = 1ull << 33u;
 /// Experiment toggle (gi_set_experiment_flags): the card direct lighting relights pages whose inputs did not change
-/// (lumen_scene::invalidate_direct_lighting marks every page every frame), as Lumen does.
+/// (lumen_scene::invalidate_direct_lighting marks every page every frame).
 inline constexpr uint64_t experiment_no_direct_page_skip = 1ull << 34u;
 /// Experiment toggle (gi_set_experiment_flags): every reflection tile counts as tracing, so no pass skips one
 /// (lumen_reflection_common.sh, the reflection tiles).

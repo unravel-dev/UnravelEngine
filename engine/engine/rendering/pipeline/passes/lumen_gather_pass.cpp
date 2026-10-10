@@ -29,15 +29,14 @@ using lumen_pass::group_edge;
 /// The tracing resolutions of the program sets, in order, and the suffixes of their programs' files.
 constexpr std::array<uint32_t, 3> probe_trace_resolutions = {4u, 8u, 16u};
 constexpr std::array<const char*, 3> probe_program_suffixes = {"_res4", "", "_res16"};
-/// UE GetScreenDownsampleFactor's range of the probe spacing in pixels (R/LumenScreenProbeGather.cpp:488-509).
+/// The range of the screen probe spacing in pixels.
 constexpr uint32_t min_probe_downsample = 4;
 constexpr uint32_t max_probe_downsample = 64;
 /// The bordered probe radiance is read with hardware bilinear filtering.
 constexpr uint64_t bilinear_texture_flags = BGFX_TEXTURE_COMPUTE_WRITE | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
 /// The rough specular history (cs_lumen_integrate.sc s_lumen_rough_history_out, rg11b10f).
 constexpr bgfx::TextureFormat::Enum rough_history_format = bgfx::TextureFormat::RG11B10F;
-/// UE's fixed jitter index while the traces are visualized (LumenScreenProbeGather.cpp FixedJitterIndex 6): the
-/// placement and the rays hold still, and so do the lines.
+/// The fixed jitter index while the traces are visualized: the placement and the rays hold still, and so do the lines.
 constexpr uint32_t visualize_traces_jitter_index = 6;
 /// The trace programs' output stage: the trace radiance, or the visualize variant's rays.
 constexpr uint8_t trace_output_stage = 5;
@@ -50,7 +49,7 @@ constexpr uint8_t trace_args_output_stage = 1;
 /// The uints per ray of b_lumen_trace_rays (cs_lumen_probe_trace.sc LUMEN_TRACE_RAY_STRIDE).
 constexpr uint32_t trace_ray_stride = 4;
 
-/// Hammersley16(index, count, 0) of UE MonteCarlo.ush: (index / count, 16-bit radical inverse of index).
+/// Hammersley16(index, count, 0) of sampling.sh: (index / count, 16-bit radical inverse of index).
 auto hammersley16(uint32_t index, uint32_t count) -> std::array<float, 2>
 {
     uint32_t reversed = 0;
@@ -67,7 +66,7 @@ auto get_probe_border_resolution(uint32_t trace_resolution) -> uint32_t
     return trace_resolution + 2u * uint32_t(LUMEN_PROBE_RADIANCE_BORDER);
 }
 
-/// UE GetScreenDownsampleFactor's clamp: the probe spacing @p downsample grows to the power of two (4 at least) at
+/// Clamps the probe spacing: @p downsample grows to the power of two (4 at least) at
 /// which the bordered probe atlas of a @p view_size view, adaptive rows included, fits the largest texture.
 auto clamp_probe_downsample(uint32_t downsample, const usize32_t& view_size, uint32_t trace_resolution) -> uint32_t
 {
@@ -241,13 +240,13 @@ auto lumen_gather_pass::make_frame_layout(const usize32_t& view_size,
     layout.probes_x = divide_round_up(view_size.width, probe_downsample);
     layout.probes_y = divide_round_up(view_size.height, probe_downsample);
     layout.adaptive_capacity = lumen_adaptive_probes::get_capacity(layout.probes_x, layout.probes_y);
-    // Rows for every adaptive probe the capacity allows (UE's trunc(rows x fraction) can fall one row short).
+    // Rows for every adaptive probe the capacity allows (rounded up: trunc(rows x fraction) can fall one row short).
     layout.atlas_rows = layout.probes_y + divide_round_up(layout.adaptive_capacity, layout.probes_x);
     const uint32_t frame = gfx::get_render_frame();
     const uint32_t view_frame_mod = frame % uint32_t(LUMEN_PROBE_JITTER_PERIOD);
     const uint32_t frame_mod =
         is_jitter_fixed ? visualize_traces_jitter_index % uint32_t(LUMEN_PROBE_JITTER_PERIOD) : view_frame_mod;
-    // One screen-wide placement offset per frame, period 8 (UE LumenScreenProbeCommon.ush:67-76).
+    // One screen-wide placement offset per frame, period 8.
     const auto offset = hammersley16(frame_mod, uint32_t(LUMEN_PROBE_JITTER_PERIOD));
     const uint32_t prev_frame_mod =
         is_jitter_fixed ? frame_mod
@@ -345,7 +344,7 @@ auto lumen_gather_pass::acquire_history(gfx::render_view& rview,
     history_targets history;
     history.write = ensure_texture(rview, write_name, size, bgfx::TextureFormat::RGBA16F);
     history.read = rview.tex_safe_get(read_name);
-    // R11G11B10 as UE stores its lighting: no reader takes the rough specular's alpha.
+    // R11G11B10: no reader takes the rough specular's alpha.
     history.rough_write = ensure_texture(rview, rough_write_name, size, rough_history_format);
     history.rough_read = rview.tex_safe_get(rough_read_name);
     history.has_history = continuous && (experiments_ & experiment_no_history) == 0u && !starts_history_over_ && history.read &&
@@ -728,7 +727,7 @@ void lumen_gather_pass::run_integrate(const lumen_run_params& params,
         short_range_ao_.bind_accumulation(short_range_ao, short_range_ao_params, history.has_history);
     }
     set_layout_uniforms(layout);
-    // Only Lumen's reflections read the rough specular (lumen_run_params::has_traced_reflections).
+    // Only the GI reflections read the rough specular (lumen_run_params::has_traced_reflections).
     const bool rough_specular_enabled =
         (experiments_ & experiment_no_rough_specular) == 0u && params.has_traced_reflections;
     const float temporal[4] = {history.has_history ? 1.0f : 0.0f,
@@ -846,7 +845,7 @@ auto lumen_gather_pass::run(gfx::render_view& rview, const lumen_run_params& par
         run_generate_rays(params, layout, targets, history, radiance_cache_ready);
     }
     run_trace(params, layout, targets, radiance_cache_ready);
-    // UE keeps the recorded rays while frozen, unless none were recorded yet.
+    // The recorded rays are kept while frozen, unless none were recorded yet.
     const auto& visualize_traces = params.visualize_traces;
     if(visualize_traces.enabled && (!visualize_traces.freeze || !has_visualized_traces_))
     {

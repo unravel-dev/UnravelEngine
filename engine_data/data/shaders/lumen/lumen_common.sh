@@ -2,9 +2,8 @@
 #define __LUMEN_COMMON_SH__
 
 /*
- * Shared math of the Lumen-style screen probe gather (lumen_gather_pass): the equal-area octahedral
- * direction mapping, SH3, the probe atlas layout and the per-frame jitter sequences, as UE 5.8 Lumen
- * defines them (tasks/lumen_transform/analysis d_ and e_ chapters).
+ * Shared math of the screen probe gather (lumen_gather_pass): the equal-area octahedral direction mapping,
+ * SH3, the probe atlas layout and the per-frame jitter sequences.
  *
  * Probe atlas layout: probe tile (x, y) owns the LUMEN_PROBE_TRACE_RES^2 texel tile at (x, y) *
  * LUMEN_PROBE_TRACE_RES of every per-probe texture. Rows below the uniform probes' hold the adaptive probes
@@ -20,7 +19,7 @@
 /// dispatch (below the 65535 groups an axis takes).
 #define LUMEN_TRACE_FAR_FIELD_GROUP 64
 #define LUMEN_TRACE_FAR_FIELD_ROW_GROUPS 32768
-/// 2^-64: avoids 0 / 0 in the inverse mapping without changing it (UE MonteCarlo.ush).
+/// 2^-64: avoids 0 / 0 in the inverse mapping without changing it.
 #define LUMEN_INVERSE_MAPPING_EPSILON 5.42101086243e-20
 
 /// x = frame index, y = frame % LUMEN_PROBE_JITTER_PERIOD, zw = this frame's placement jitter in pixels.
@@ -58,16 +57,15 @@ uniform vec4 u_lumen_settings;
 #define u_lumen_max_roughness_to_trace u_lumen_settings.z
 #define u_lumen_full_res_jitter_width  u_lumen_settings.w
 
-/// Two noise values per pixel and frame in the role of UE's spatiotemporal blue noise (BlueNoiseVec2):
-/// SpatioTemporalNoise2D over the frame index, so any window of frames stratifies a pixel's samples.
+/// Two noise values per pixel and frame, the GI passes' spatiotemporal blue noise: SpatioTemporalNoise2D over
+/// the frame index, so any window of frames stratifies a pixel's samples.
 vec2 LumenSpatioTemporalNoise2D(vec2 coord)
 {
 	return SpatioTemporalNoise2D(coord, u_lumen_frame_index);
 }
 
-/// Equal-area octahedral mapping of the unit square onto the sphere [Clarberg 2008]
-/// (UE MonteCarlo.ush EquiAreaSphericalMapping). Every texel of an N x N map covers 4 pi / N^2
-/// steradians. The mapping's pole is world up: UE's z is Unravel's y.
+/// Equal-area octahedral mapping of the unit square onto the sphere. Every texel of an N x N map covers
+/// 4 pi / N^2 steradians. The mapping's pole is world up: the formula's z axis is world y (y and z swapped).
 vec3 LumenEquiAreaSphericalMapping(vec2 uv)
 {
 	uv = 2.0 * uv - 1.0;
@@ -83,7 +81,7 @@ vec3 LumenEquiAreaSphericalMapping(vec2 uv)
 	return vec3(pole_z.x, pole_z.z, pole_z.y);
 }
 
-/// Inverse of LumenEquiAreaSphericalMapping (UE InverseEquiAreaSphericalMapping, with its minimax atan).
+/// Inverse of LumenEquiAreaSphericalMapping, with a minimax polynomial in place of atan.
 vec2 LumenInverseEquiAreaSphericalMapping(vec3 direction)
 {
 	vec3 d = normalize(vec3(direction.x, direction.z, direction.y));
@@ -111,8 +109,7 @@ vec2 LumenInverseEquiAreaSphericalMapping(vec3 direction)
 }
 
 /// Wraps a texel coordinate of a (resolution)^2 map carrying a border of @p border texels across the
-/// octahedron's folds, so bilinear reads and stochastic re-binning stay continuous (UE
-/// OctahedralCommon.ush OctahedralMapWrapBorder). Returns the interior coordinate.
+/// octahedron's folds, so bilinear reads and stochastic re-binning stay continuous. Returns the interior coordinate.
 ivec2 LumenOctahedralMapWrapBorder(ivec2 texel, int resolution, int border)
 {
 	if(texel.x < border)
@@ -138,7 +135,7 @@ ivec2 LumenOctahedralMapWrapBorder(ivec2 texel, int resolution, int border)
 	return texel - ivec2(border, border);
 }
 
-/// Third-order SH basis (UE SHCommon.ush SHBasisFunction3): c[0] = v0.x .. c[8] = v2.
+/// Third-order SH basis: c[0] = v0.x .. c[8] = v2.
 struct LumenSH3
 {
 	vec4 v0;
@@ -156,7 +153,7 @@ LumenSH3 LumenSHBasis3(vec3 n)
 	return sh;
 }
 
-/// The clamped-cosine lobe around @p n in SH3 (UE CalcDiffuseTransferSH3 with exponent 1): band
+/// The clamped-cosine lobe around @p n in SH3 (the diffuse transfer, cosine power 1): band
 /// factors pi, 2 pi / 3, pi / 4.
 LumenSH3 LumenDiffuseTransferSH3(vec3 n)
 {
@@ -174,18 +171,17 @@ float LumenDotSH3(LumenSH3 a, LumenSH3 b)
 }
 
 /// The per-probe-tile ray jitter inside each octahedral texel: one 2D offset per probe tile per frame,
-/// blue noise over tiles, period LUMEN_PROBE_JITTER_PERIOD (UE BlueNoiseVec2(tile, frame % 8)).
+/// blue noise over tiles, period LUMEN_PROBE_JITTER_PERIOD (@p slice = the frame modulo the period).
 vec2 LumenProbeRayJitter(ivec2 tile, float slice)
 {
 	return SpatioTemporalNoise2D(vec2(tile), slice);
 }
 
-/// The composite's re-binning dither of probe tile @p tile, period LUMEN_PROBE_JITTER_PERIOD (UE reads a blue noise
-/// slice half a period from the ray jitter's, S/LumenScreenProbeFiltering.usf:96-100). It must not be a function of
-/// the ray jitter: another slice of LumenProbeRayJitter is the jitter plus a constant, which rounds every ray of a
-/// texel the same way and moves the directions each texel averages off its centre. Interleaved gradient noise on the
-/// two mirrored lattices (independent of the jitter's direct and transposed ones) keeps it blue over tiles, and the
-/// swapped R2 increments make each axis's (jitter, dither) pairs over a period follow the R2 sequence.
+/// The composite's re-binning dither of probe tile @p tile, period LUMEN_PROBE_JITTER_PERIOD. It must not be a
+/// function of the ray jitter: another slice of LumenProbeRayJitter is the jitter plus a constant, which rounds every
+/// ray of a texel the same way and moves the directions each texel averages off its centre. Interleaved gradient
+/// noise on the two mirrored lattices (independent of the jitter's direct and transposed ones) keeps it blue over
+/// tiles, and the swapped R2 increments make each axis's (jitter, dither) pairs over a period follow the R2 sequence.
 vec2 LumenProbeRebinDither(ivec2 tile, float frame_mod)
 {
 	vec2 coord = vec2(tile);
@@ -194,7 +190,7 @@ vec2 LumenProbeRebinDither(ivec2 tile, float frame_mod)
 }
 
 /// Full-resolution pixel of uniform probe @p tile: the tile origin plus this frame's screen-wide
-/// placement jitter, clamped into the view (UE LumenScreenProbeCommon.ush:140-145).
+/// placement jitter, clamped into the view.
 ivec2 LumenProbePixel(ivec2 tile)
 {
 	ivec2 p = tile * int(u_lumen_downsample) + ivec2(u_lumen_placement_jitter);
@@ -207,16 +203,16 @@ float LumenLinearDepth(float depth01)
 	return screenSpaceToViewSpaceDepth(depth01);
 }
 
-/// acos of @p x in [-1, 1] by Eberly's degree-1 polynomial, within 0.01 rad (UE acosFast, FastMathThirdParty.ush:108).
+/// acos of @p x in [-1, 1] by a degree-1 polynomial in |x| times sqrt(1 - |x|), within 0.01 rad.
 float LumenAcosFast(float x)
 {
 	float result = (-0.156583 * abs(x) + 0.5 * LUMEN_PI) * sqrt(1.0 - abs(x));
 	return x >= 0.0 ? result : LUMEN_PI - result;
 }
 
-/// The gather history's alpha (UE PackFastUpdateModeAmountAndNumFramesAccumulated, LumenScreenProbeGatherTemporal.ush:
-/// 72-91): the frame count in LUMEN_TEMPORAL_COUNT_LEVELS steps of @p max_frames, plus (levels + 1) x the fast update
-/// amount in as many steps rounded up, so only "not moving" stores 0. An integer below 256, exact in float16.
+/// The gather history's alpha: the frame count in LUMEN_TEMPORAL_COUNT_LEVELS steps of @p max_frames, plus
+/// (levels + 1) x the fast update amount in as many steps rounded up, so only "not moving" stores 0. An integer below
+/// 256, exact in float16.
 float LumenEncodeHistoryAlpha(float frames, float fast_update, float max_frames)
 {
 	float levels = float(LUMEN_TEMPORAL_COUNT_LEVELS);
@@ -240,7 +236,7 @@ float LumenHistoryAlphaFastUpdate(float alpha)
 	return floor(floor(alpha + 0.5) / (levels + 1.0)) / levels;
 }
 
-/// A probe trace record's alpha (UE EncodeProbeRayDistance's moving bit): the filter distance, or -(distance + 1)
+/// A probe trace record's alpha, a distance with a moving flag in its sign: the filter distance, or -(distance + 1)
 /// when the ray's screen hit moves against the probe.
 float LumenEncodeTraceDistance(float distance, bool is_moving)
 {
@@ -267,7 +263,7 @@ vec3 LumenWorldFromDepth(vec2 uv, float depth01)
 
 /// One probe ray slot: the octahedral texel it traces and its level (1 = a texel of the probe's N x N map,
 /// N = LUMEN_PROBE_TRACE_RES; 0 = a texel of the 2N x 2N map, a quarter of one), packed as
-/// x | y << 6 | level << 12 (UE LumenScreenProbeTracingCommon.ush:67-78).
+/// x | y << 6 | level << 12.
 uint LumenPackRay(ivec2 texel, int level)
 {
 	return uint(texel.x & 63) | (uint(texel.y & 63) << 6u) | (uint(level & 15) << 12u);
@@ -348,7 +344,7 @@ vec3 LumenProbePosition(vec4 record)
 	return LumenWorldFromDepth(LumenPixelUv(LumenProbeRecordPixel(record)), record.w);
 }
 
-/// The uniform tile of the probe at atlas tile @p tile (UE GetScreenTileCoord): its own for a uniform probe, the
+/// The uniform tile of the probe at atlas tile @p tile: its own for a uniform probe, the
 /// tile its pixel lies in for an adaptive one, which shares that tile's ray jitter and filter neighbours.
 ivec2 LumenProbeScreenTile(ivec2 tile, vec4 record)
 {
@@ -359,10 +355,9 @@ ivec2 LumenProbeScreenTile(ivec2 tile, vec4 record)
 	return (LumenProbeRecordPixel(record) - ivec2(u_lumen_placement_jitter)) / int(u_lumen_downsample);
 }
 
-/// The 2x2 uniform probes a full-resolution position interpolates (UE CalculateUniformUpsampleInterpolationWeights):
-/// xy = the base tile, zw = the expanded bilinear fractions towards +x / +y (never fully on one probe). @p coord is
-/// the pixel minus this frame's placement jitter (plus the integrate's jitter), truncated to a whole pixel as UE's
-/// uint conversion does.
+/// The 2x2 uniform probes a full-resolution position interpolates: xy = the base tile, zw = the expanded bilinear
+/// fractions towards +x / +y (never fully on one probe). @p coord is the pixel minus this frame's placement jitter
+/// (plus the integrate's jitter), truncated to a whole pixel.
 vec4 LumenUniformInterpolation(vec2 coord)
 {
 	float downsample = u_lumen_downsample;

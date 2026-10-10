@@ -1,7 +1,7 @@
 #ifndef __LUMEN_FINITE_SH__
 #define __LUMEN_FINITE_SH__
 
-/// @p v, or 0 when it is NaN or infinite (UE MakeFinite: an exponent test, which no float optimisation removes).
+/// @p v, or 0 when it is NaN or infinite (an exponent test, which no float optimisation removes).
 float LumenMakeFinite(float v)
 {
 	return (floatBitsToUint(v) & 0x7F800000u) == 0x7F800000u ? 0.0 : v;

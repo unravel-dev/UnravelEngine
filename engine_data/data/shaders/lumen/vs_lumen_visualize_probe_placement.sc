@@ -1,11 +1,10 @@
 $output v_color0
 
 /*
- * UE 5.8 r.Lumen.ScreenProbeGather.Debug.ProbePlacement (LumenScreenProbeDebug.usf ScreenProbeGatherDebugCS) as its
- * ShaderPrint lines, four per probe atlas tile: modes 1 and 2 outline a square two pixels across at the probe's pixel
- * (DrawPoint: AddQuadSS), in front of everything; mode 3 draws a LUMEN_PLACEMENT_CROSS_SIZE cross at the probe and a
- * LUMEN_PLACEMENT_NORMAL_LENGTH line along the normal, an adaptive probe along its uniform tile probe's normal as UE
- * reads it. Uniform probes yellow (not in mode 2), adaptive ones magenta. UE's text is not drawn.
+ * The screen probe placement view as lines, four per probe atlas tile: modes 1 and 2 outline a square two pixels
+ * across at the probe's pixel, in front of everything; mode 3 draws a LUMEN_PLACEMENT_CROSS_SIZE cross at the probe
+ * and a LUMEN_PLACEMENT_NORMAL_LENGTH line along the normal, an adaptive probe along its uniform tile probe's normal.
+ * Uniform probes yellow (not in mode 2), adaptive ones magenta.
  */
 
 #include "../common.sh"
@@ -19,11 +18,11 @@ uniform vec4 u_lumen_visualize_placement;
 #define LUMEN_PLACEMENT_VERTICES_PER_PROBE 8
 #define LUMEN_PLACEMENT_MODE_ADAPTIVE 2
 #define LUMEN_PLACEMENT_MODE_NORMALS 3
-/// UE AddCrossTWS(Position, 2) and the 10 cm normal line.
+/// The cross's arms reach 2 cm either side of the probe; the normal line is 10 cm long.
 #define LUMEN_PLACEMENT_CROSS_SIZE 0.02
 #define LUMEN_PLACEMENT_NORMAL_LENGTH 0.1
 
-/// Corner @p corner (0-3, around the square) of the square UE's DrawPoint outlines at @p pixel, in pixels.
+/// Corner @p corner (0-3, around the square) of the square outlined at @p pixel, in pixels.
 vec2 LumenPlacementSquareCorner(vec2 pixel, int corner)
 {
 	return pixel + vec2(corner == 1 || corner == 2 ? 1.0 : -1.0, corner >= 2 ? 1.0 : -1.0);

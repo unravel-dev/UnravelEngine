@@ -51,22 +51,22 @@ uniform vec4 u_probe_layer_params;
 #define SPECULAR_OCCLUSION 14
 #define AO_BENT_NORMALS 15
 
-/// The grey albedo the indirect diffuse view lights (UE DiffuseIndirectComposite.usf:565).
+/// The grey albedo the indirect diffuse view lights (18% grey).
 #define VISUALIZE_DIFFUSE_ALBEDO 0.18
 
-/// The screen AO texel at a pixel (s_tex8): no occlusion on the sky, which Lumen's gather leaves unwritten.
+/// The screen AO texel at a pixel (s_tex8): no occlusion on the sky, which the GI gather leaves unwritten.
 vec4 visualize_screen_ao(GBufferData data, vec2 texcoord0)
 {
     return data.depth < 1.0 ? texture2D(s_tex8, texcoord0) : vec4(0.5, 0.5, 0.5, 1.0);
 }
 
-/// UE's indirect diffuse view (r.Lumen.Visualize.IndirectDiffuse, DiffuseIndirectComposite.usf:565): what the indirect
-/// diffuse adds to an 18% grey surface - the GI resolve's (or SSIL's) E / pi times VISUALIZE_DIFFUSE_ALBEDO, the
-/// diffuse occlusion pbr_indirect gives it and the energy the specular layer leaves - at the frame's exposure times
-/// u_params.y (0 = 1), through the lit image's tone mapping operator. Black where neither ran.
+/// The indirect diffuse view: what the indirect diffuse adds to an 18% grey surface - the GI resolve's (or SSIL's)
+/// E / pi times VISUALIZE_DIFFUSE_ALBEDO, the diffuse occlusion pbr_indirect gives it and the energy the specular
+/// layer leaves - at the frame's exposure times u_params.y (0 = 1), through the lit image's tone mapping operator.
+/// Black where neither ran.
 vec3 indirect_diffuse_view(GBufferData data, vec2 texcoord0)
 {
-    // Black on the sky, which Lumen's gather leaves unwritten (SSIL's coverage is 0 there).
+    // Black on the sky, which the GI gather leaves unwritten (SSIL's coverage is 0 there).
     vec4 indirect = data.depth < 1.0 ? texture2D(s_tex7, texcoord0) : vec4_splat(0.0);
     vec3 clip = clipTransform(vec3(texcoord0 * 2.0 - 1.0, data.depth));
     vec3 world_position = clipToWorld(u_invViewProj, clip);

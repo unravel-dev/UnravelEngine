@@ -21,7 +21,7 @@ namespace Rml
 namespace unravel
 {
 
-/// Default pixels per world unit (Unity-style). 100 px = 1 world unit.
+/// Default pixels per world unit: 100 px = 1 world unit.
 constexpr float UI_DEFAULT_PIXELS_PER_WORLD_UNIT = 100.0f;
 
 /// Render mode for the UI document.
@@ -56,7 +56,7 @@ struct ui_document_component : public component_crtp<ui_document_component, owne
 
     /// Document resolution (pixels). For screen-space: viewport size. For world-space: configurable (e.g. 512×512)
     usize32_t size = {512, 512};
-    /// Pixels per world unit for world-space rendering (default: 100, Unity-style)
+    /// Pixels per world unit for world-space rendering (default: 100)
     float pixels_per_world_unit = UI_DEFAULT_PIXELS_PER_WORLD_UNIT;
 
     /// Framebuffer for world-space render-to-texture (owned by component)

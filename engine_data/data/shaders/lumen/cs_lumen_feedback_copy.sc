@@ -1,5 +1,5 @@
 /*
- * Lumen surface cache feedback, readback copy: the feedback hash table (cs_lumen_reflection_feedback.sc) into a
+ * Surface cache feedback, readback copy: the feedback hash table (cs_lumen_reflection_feedback.sc) into a
  * read-back image, one texel per slot: x = the element (0 for an empty slot), y = its count. The CPU decodes it
  * (lumen_surface_cache_pass) a few frames later.
  */

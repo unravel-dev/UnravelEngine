@@ -636,7 +636,7 @@ void test_conservative_empty_bricks_in_a_shell()
 }
 
 /**
- * @brief A large open one-sided submesh bakes as UE bakes it: signed by the backface vote, with no shell
+ * @brief A large open one-sided submesh bakes signed by the backface vote, with no shell
  *        and no thickness, solid behind its faces and empty in front of them.
  */
 void test_large_open_submesh_bakes_signed()
@@ -1247,7 +1247,7 @@ void test_open_mesh_does_not_produce_inside_regions()
     // That is not a cosmetic error. An empty brick flagged inside returns a NEGATIVE distance,
     // the tracer reads any negative sample as a surface hit, and the result is that the field's
     // whole bounding box renders solid -- shaded by the box's own face normals -- instead of
-    // the mesh. The baker signs an open one-sided surface by UE's backface vote instead, which only
+    // the mesh. The baker signs an open one-sided surface by a backface vote instead, which only
     // signs the band around the surface.
     const math::vec3 half(0.5f, 0.5f, 0.5f);
     const auto geometry = make_open_box(half);
@@ -1538,9 +1538,9 @@ auto trace_instance_field(const mesh_sdf& sdf,
 void test_open_sheet_bakes_solid_below()
 {
     std::printf("test_open_sheet_bakes_solid_below\n");
-    // A street-sized one-sided sheet baked with the ASSET IMPORTER'S defaults, as UE bakes it: signed by
-    // the backface vote. Within the band the field is solid below the walkable surface and empty above
-    // it, so nothing born on the surface starts inside a slab of its own geometry.
+    // A street-sized one-sided sheet baked with the ASSET IMPORTER'S defaults: signed by the backface vote. Within the
+    // band the field is solid below the walkable surface and empty above it, so nothing born on the surface starts
+    // inside a slab of its own geometry.
     sdf_source_geometry g;
     const float half = 30.0f;
     add_quad(g, {-half, 0.0f, -half}, {-half, 0.0f, half}, {half, 0.0f, half}, {half, 0.0f, -half});
@@ -1818,8 +1818,8 @@ auto trace_reference_vote_ray(const sdf_source_geometry& geometry,
 }
 
 /**
- * @brief An open surface's field carries the sign UE's vote gives each voxel: tracing all of its rays against every
- *        triangle.
+ * @brief An open surface's field carries the sign the backface vote gives each voxel: tracing all of its rays against
+ *        every triangle.
  *
  * The bake settles a vote as soon as the count is decided, skips the rays of a point that cannot score a back hit,
  * traces in packets and copies borders from the brick that evaluated them; none of that may change a sign. The
@@ -1829,7 +1829,7 @@ auto trace_reference_vote_ray(const sdf_source_geometry& geometry,
 void test_sign_vote_matches_reference_rays()
 {
     std::printf("test_sign_vote_matches_reference_rays\n");
-    // UE's vote as the baker runs it: 7 x 7 stratified rays per hemisphere, inside above a quarter back hits, rays
+    // The vote as the baker runs it: 7 x 7 stratified rays per hemisphere, inside above a quarter back hits, rays
     // over four voxel diagonals, pulled back by a fraction of that.
     constexpr uint32_t rays_per_hemisphere = 49;
     constexpr float back_face_fraction = 0.25f;
@@ -2359,8 +2359,7 @@ void test_clipmap_rotated_room_matches_boxes()
     clipmap.init(clipmap_settings);
     clipmap.update(instances, math::vec3(1.66f, 1.0f, 0.0f));
     // Outside, an over-read is a sphere trace stepping through a wall. Inside, the smallest axis scale reads the
-    // depth shallower than the stretched box's (conservative, as UE's VolumeScale); only a deep point reading
-    // outside would be a hole.
+    // depth shallower than the stretched box's (conservative); only a deep point reading outside would be a hole.
     int under_reads = 0;
     int over_reads = 0;
     int inside_holes = 0;
@@ -2446,7 +2445,7 @@ void test_engine_plane_composes_a_hittable_sheet()
 {
     std::printf("test_engine_plane_composes_a_hittable_sheet\n");
     // test_watcher's floor: the engine plane scaled 2.52, as GI represents it (mesh::create_plane_gi_geometry, the
-    // embedded plane's 10 x 10). Lumen's global-SDF trace registers a surface within half a voxel of the composed
+    // embedded plane's 10 x 10). The GI's global-SDF trace registers a surface within half a voxel of the composed
     // field (its surface expand), so the composed distance must come down to that over the plane, or rays pass
     // through the floor; and the floor's hits need a card that faces up and spans it.
     const sdf_source_geometry geometry = mesh::create_plane_gi_geometry(10.0f, 10.0f, 1, 1);
@@ -2499,9 +2498,9 @@ void test_engine_plane_composes_a_hittable_sheet()
                 worst_instance,
                 worst_composed);
     check(worst_instance < 0.05f * sdf.voxel_size * scale, "the plane's own field reaches zero at the sheet");
-    check(worst_composed <= 0.5f * voxel, "the composed floor comes within Lumen's half-voxel expand");
+    check(worst_composed <= 0.5f * voxel, "the composed floor comes within the half-voxel expand");
     std::printf("  composed %.1f m below the floor: at most %.3f m\n", -below_floor, worst_below);
-    check(worst_below < 0.0f, "the composed floor is solid below, as UE's plane is");
+    check(worst_below < 0.0f, "the composed floor is solid below the plane");
 }
 
 /// The cascade a fresh clipmap composes in full for @p instances around @p camera: the reference every partial update
@@ -2560,13 +2559,13 @@ auto settle_clipmap(global_sdf_clipmap& clipmap,
 }
 
 /**
- * @brief A moved instance updates the cascade PARTIALLY (UE GlobalDistanceField.cpp:1196-1265): only the voxels within
- * reach of its old and new bounds, on each level's staggered cadence (UE ShouldUpdateClipmapThisFrame: the first level
- * every update, the others every 2 / 4 / 4), and the result is byte-identical to composing the cascade afresh.
+ * @brief A moved instance updates the cascade PARTIALLY: only the voxels within reach of its old and new bounds, on
+ * each level's staggered cadence (the first level every update, the others every 2 / 4 / 4), and the result is
+ * byte-identical to composing the cascade afresh.
  *
  * Both halves matter. A moved instance MUST land - an object that leaves its geometry behind goes on occluding and
- * lighting from where it used to be - and it must land without a full recompose, whose cost made the old cascade lag
- * movers by up to eight frames per level.
+ * lighting from where it used to be - and it must land without a full recompose, whose cost would lag movers by up to
+ * eight frames per level.
  */
 void test_clipmap_partial_update_follows_moved_geometry()
 {
@@ -2778,8 +2777,8 @@ void test_clipmap_full_edit_coalescing()
           "the cascade after the drag is byte-identical to a fresh composition");
 }
 
-/// UE GetMaxFramesAccumulated and NumProbesToTraceBudget while the view is being edited: half the history, ten times
-/// the radiance cache's trace budget.
+/// The temporal history and the radiance cache's trace budget while the view is being edited: half the history, ten
+/// times the trace budget.
 void test_editing_scales_history_and_trace_budget()
 {
     std::printf("test_editing_scales_history_and_trace_budget\n");
@@ -2787,13 +2786,13 @@ void test_editing_scales_history_and_trace_budget()
     check(lumen_pass::get_temporal_max_frames(1.0f) == max_frames, "the default speed keeps every frame");
     check(lumen_pass::get_temporal_max_frames(1.0f, true) == std::round(max_frames * 0.5f), "editing halves them");
     check(lumen_pass::get_temporal_max_frames(4.0f, true) == std::round(max_frames / 2.0f * 0.5f),
-          "after the update speed's square root, rounded as UE rounds");
+          "after the update speed's square root, rounded to the nearest frame");
     const uint32_t budget = lumen_pass::get_radiance_cache_trace_budget(1.0f);
     check(lumen_pass::get_radiance_cache_trace_budget(1.0f, true) == budget * 10u, "editing traces ten times the probes");
 }
 
 /**
- * @brief The staggered cadence of partial updates is UE's (GlobalDistanceField.cpp:712-753 with two updates per frame):
+ * @brief The staggered cadence of partial updates, at most GI_CLIPMAP_PARTIAL_UPDATES_PER_FRAME levels per frame:
  * the first level every update, the second every other, the third and fourth every fourth on distinct phases.
  */
 void test_clipmap_partial_cadence_is_staggered()
@@ -4841,11 +4840,10 @@ auto make_slab_pair(const math::vec3& half_extents, float gap) -> sdf_source_geo
     return g;
 }
 
-/// UE composes its global distance field from each mesh's always-resident coarsest level wherever that level reads
-/// more than one of its voxels from the surface, and from the finest resident level nearer
-/// (DistanceToMeshSurfaceStandalone; SdfInstanceStandaloneDistance in gi/sdf_common.sh). The Lumen coverage band
-/// reaches past the traced level's narrow band on a Sponza-scale mesh; this is the rule that keeps the distances in it
-/// exact.
+/// The global distance field composes from each mesh's always-resident coarsest level wherever that level reads more
+/// than one of its voxels from the surface, and from the finest resident level nearer (SdfInstanceStandaloneDistance
+/// in gi/sdf_common.sh). The global SDF's coverage band reaches past the traced level's narrow band on a Sponza-scale
+/// mesh; this is the rule that keeps the distances in it exact.
 void test_coarsest_mip_answers_the_lumen_coverage_band()
 {
     std::printf("test_coarsest_mip_answers_the_lumen_coverage_band\n");
@@ -5709,7 +5707,7 @@ void test_lumen_cards_interior_layers()
     check(same, "the card build is deterministic");
 }
 
-/// Cards are compiled into the mesh asset and read back at load time (UE FCardRepresentationData): every card and
+/// Cards are compiled into the mesh asset and read back at load time: every card and
 /// the sidedness they were built for survive the round trip.
 void test_lumen_cards_serialization_round_trip()
 {
@@ -5770,9 +5768,9 @@ auto make_wall_card_stack(uint32_t card_count) -> std::vector<lumen_scene::sourc
     return sources;
 }
 
-/// UE maps a card's new mip only with physical room beside everything resident and room for every page in this
-/// frame's capture atlas, and the new pages inherit the lighting of the previous allocation
-/// (ProcessLumenSurfaceCacheRequests, bResampleLastLighting): lumen_scene lists that allocation for the resample.
+/// A card's new mip is mapped only with physical room beside everything resident and room for every page in this
+/// frame's capture atlas, and the new pages inherit the lighting of the previous allocation: lumen_scene lists that
+/// allocation for the resample.
 void test_lumen_scene_reallocation_lists_the_previous_mip()
 {
     std::printf("test_lumen_scene_reallocation_lists_the_previous_mip\n");
@@ -5857,9 +5855,8 @@ void test_lumen_scene_reset_leaves_no_cards()
     check(scene.get_resident_pages().empty(), "and no page is resident");
 }
 
-/// UE keeps cards out to the global distance field's reach whatever the view distance (LumenScene::GetCardMaxDistance:
-/// the last clipmap's extent; LumenSceneViewDistance only adds clipmaps): a ray that hits a surface within the field
-/// must find its cards.
+/// Cards are kept out to the global distance field's reach whatever the view distance (half the last clipmap's
+/// extent, lumen_scene::settings::max_card_distance): a ray that hits a surface within the field must find its cards.
 void test_lumen_scene_cards_reach_the_distance_field()
 {
     std::printf("test_lumen_scene_cards_reach_the_distance_field\n");
@@ -5880,10 +5877,9 @@ void test_lumen_scene_cards_reach_the_distance_field()
     check(scene.get_stats().resident_cards == 0, "a card beyond the distance field's reach is not");
 }
 
-/// UE captures resident pages again, the longest-uncaptured first, within CardCaptureRefreshFraction of the frame's
+/// Resident pages are captured again, the longest-uncaptured first, within card_capture_refresh_fraction of the frame's
 /// page and texel budgets, so material changes reach the surface cache; a recaptured page resamples its own card's
-/// lighting in place and the tables stay as they are (LumenSceneRendering.cpp SceneCardCaptureRefresh,
-/// RecaptureCardPage, GetCardCaptureRefreshNumPages / NumTexels).
+/// lighting in place and the tables stay as they are.
 void test_lumen_scene_refresh_recaptures_the_oldest_pages()
 {
     std::printf("test_lumen_scene_refresh_recaptures_the_oldest_pages\n");
@@ -5964,8 +5960,7 @@ void test_lumen_scene_refresh_recaptures_the_oldest_pages()
             }
             newest_refreshed = std::max(newest_refreshed, last_capture[key]);
         }
-        // Oldest first: no page left waiting was captured longer ago than a page refreshed now (ties in any order,
-        // as UE's heap takes them).
+        // Oldest first: no page left waiting was captured longer ago than a page refreshed now (ties in any order).
         for(const auto& entry : refreshes)
         {
             const bool was_refreshed = std::find(captured.begin(), captured.end(), entry.first) != captured.end();
@@ -5997,7 +5992,7 @@ void test_lumen_scene_refresh_recaptures_the_oldest_pages()
     check(is_oldest_first, "the longest-uncaptured first");
     check(resamples_its_own_card, "a refreshed page resamples its own card's allocation");
     check(scene.get_tables_revision() == revision, "and the tables stay as they are");
-    // Fraction 0 turns the refresh off (UE returns no pages and no texels).
+    // Fraction 0 turns the refresh off: no pages and no texels.
     lumen_scene::settings no_refresh;
     no_refresh.card_capture_refresh_fraction = 0.0f;
     lumen_scene still;
@@ -6009,12 +6004,12 @@ void test_lumen_scene_refresh_recaptures_the_oldest_pages()
     check(still.get_captures().empty() && still.get_stats().refreshed == 0u, "a fraction of 0 captures nothing settled");
 }
 
-/// UE's card lighting scheduler: the per-frame tile budgets, the priority buckets, and a scene with more resident
-/// tiles than a frame's budget (R/LumenSceneLighting.cpp:98-126, S/LumenSceneLighting.usf:105-366).
+/// The card lighting scheduler: the per-frame tile budgets, the priority buckets, and a scene with more resident
+/// tiles than a frame's budget.
 void test_lumen_scene_lighting_schedule()
 {
     std::printf("test_lumen_scene_lighting_schedule\n");
-    check(lumen_scene::compute_lighting_tile_budget(4096, 32) == 8281, "Epic's 4096 atlas relights 8281 direct tiles");
+    check(lumen_scene::compute_lighting_tile_budget(4096, 32) == 8281, "a 4096 atlas relights 8281 direct tiles");
     check(lumen_scene::compute_lighting_tile_budget(4096, 64) == 4096, "and 4096 radiosity tiles a frame");
     check(lumen_scene::compute_lighting_tile_budget(2048, 32) == 2116, "a 2048 atlas 2116 direct tiles");
     check(lumen_scene::compute_lighting_tile_budget(256, 1024) == 256, "never less than one full page");
@@ -6024,7 +6019,7 @@ void test_lumen_scene_lighting_schedule()
     check(lumen_scene::compute_lighting_bucket(64, 2.0f) == 6, "64 frames later 6");
     check(lumen_scene::compute_lighting_bucket(100000, 1.0f) == 0, "the most urgent bucket is 0");
     // Twelve wall cards stacked away from the viewer: the near ones take 2 x 2 pages, more tiles than a frame's budget
-    // in UE Medium's 2048 atlas (Epic's 4096 relights this scene whole every frame). The frustum is far away, so only
+    // in a 2048 atlas (the default 4096 atlas relights this scene whole every frame). The frustum is far away, so only
     // distance sets the speeds.
     constexpr uint32_t card_count = 12;
     constexpr uint32_t medium_atlas_size = 2048;
@@ -6098,9 +6093,9 @@ void test_lumen_scene_lighting_schedule()
     check(rate(0) > rate(card_count - 1u), "a page near the viewer is relit more often than a far one");
 }
 
-/// The radiosity's per-page update indices, which a neighbouring page's probes read (UE FLumenCardPageData
-/// IndirectLightingTemporalIndex): -1 until the page's first radiosity update, then its last update's index, in the
-/// page table's order.
+/// The radiosity's per-page update indices, which a neighbouring page's probes read
+/// (lumen_scene::get_page_radiosity_indices): -1 until the page's first radiosity update, then its last update's
+/// index, in the page table's order.
 void test_lumen_scene_page_radiosity_indices()
 {
     std::printf("test_lumen_scene_page_radiosity_indices\n");
@@ -6146,9 +6141,8 @@ auto get_new_page_captures(const lumen_scene& scene) -> std::vector<lumen_scene:
     return out;
 }
 
-/// UE's unlocked hi-res pages (LumenSurfaceCacheFeedback.cpp UpdateSurfaceCacheFeedback, LumenSceneRendering.cpp
-/// 1050-1135): the reflections' feedback maps one page of a finer mip, which inherits the locked mip's lighting; the
-/// reflections' page table points every unmapped page of that mip at the locked page covering it.
+/// The unlocked hi-res pages: the reflections' feedback maps one page of a finer mip, which inherits the locked mip's
+/// lighting; the reflections' page table points every unmapped page of that mip at the locked page covering it.
 void test_lumen_scene_hi_res_pages()
 {
     std::printf("test_lumen_scene_hi_res_pages\n");
@@ -6228,8 +6222,9 @@ void test_lumen_scene_hi_res_pages()
           "a mapped page asked for again stays as it is");
 }
 
-/// UE EvictOldestAllocation: a locked allocation without room takes the place of hi-res pages the feedback has not
-/// asked for in two frames, before it drops a level; a page asked for more recently stays.
+/// Eviction of the oldest hi-res page (lumen_scene::evict_oldest_hi_res_page): a locked allocation without room takes
+/// the place of hi-res pages the feedback has not asked for in two frames, before it drops a level; a page asked for
+/// more recently stays.
 void test_lumen_scene_hi_res_pages_give_way_to_locked_mips()
 {
     std::printf("test_lumen_scene_hi_res_pages_give_way_to_locked_mips\n");

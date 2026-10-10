@@ -33,11 +33,11 @@ uniform vec4 u_taa_params2;
 // Variance clip box multiple for a STILL pixel: the jittered 3x3 box moves every frame at rest and a
 // settings-width clip snapped the converging history back to it.
 #define TAA_STILL_CLIP_SCALE 2.000
-// Offset of the HDR weight 1 / (offset + luma) of the current-frame reconstruction taps (UE TemporalAA.usf).
+// Offset of the HDR weight 1 / (offset + luma) of the current-frame reconstruction taps.
 #define TAA_FILTER_HDR_WEIGHT_OFFSET 4.0
 // Reprojection motion, in pixels, over which a pixel moves from the rest weights to the motion weights below. Every
 // frame of motion resamples the history once more and each resample softens it, so a long history blurs moving
-// detail (UE TSR keeps a double-resolution history for this; UE TAA raises the current weight with velocity).
+// detail: the current frame's weight rises with the motion.
 #define TAA_MOTION_START_PX 2.0
 #define TAA_MOTION_FULL_PX 10.0
 // History weight a moving pixel uses at most: fewer accumulated resamples keep its detail.
@@ -83,14 +83,14 @@ vec3 TAA_ClipToAABB(vec3 value, vec3 center, vec3 extents)
 }
 
 // Reconstruction weight of a tap at squared distance dist2 (pixels) from the unjittered output centre: a
-// Blackman-Harris-like polynomial of radius 1 px, 1 - 1.9 x^2 + 0.905 x^4 (UE TemporalAA.usf ComputeSampleWeigth).
+// Blackman-Harris-like polynomial of radius 1 px, 1 - 1.9 x^2 + 0.905 x^4.
 float TAA_FilterWeight(float dist2)
 {
     float x2 = saturate(dist2);
     return (0.905 * x2 - 1.9) * x2 + 1.0;
 }
 
-// 5-fetch Catmull-Rom (Jimenez): bilinear history resampling under sub-pixel jitter
+// 5-fetch Catmull-Rom: bilinear history resampling under sub-pixel jitter
 // low-passes the accumulation every frame, so the history converges blurry no matter
 // how good the rest of the filter is. Bicubic reconstruction keeps it sharp.
 vec3 TAA_SampleHistoryCatmullRom(vec2 uv, vec2 texel_size)
@@ -342,14 +342,14 @@ void main()
     }
     vec3 filtered = filtered_sum / max(filtered_weight, 1e-6);
     // How well this frame's jittered sample covers the output centre: a sample far from it is trusted less
-    // (UE FilteredTemporalWeight; 1 at the centre, ~0.3 at a pixel corner).
+    // (1 at the centre, ~0.3 at a pixel corner).
     float sample_alignment = TAA_FilterWeight(dot(jitter_px, jitter_px));
     const float inv9 = 1.0 / 9.0;
     vec3 mu = m1_rgb * inv9;
     vec3 mu_yc = m1 * inv9;
     vec3 sigma_yc = sqrt(max(m2 * inv9 - mu_yc * mu_yc, vec3_splat(1e-8)));
 
-    // The history was written under last frame's pre-exposure (UE HistoryPreExposureCorrection).
+    // The history holds last frame's pre-exposure; the correction rescales it to this frame's.
     vec3 hist_rgb = TAA_SampleHistoryCatmullRom(hist_uv, texel) * u_history_pre_exposure_correction;
     vec3 hist_yc = TAA_RGBToYCoCg(hist_rgb);
     vec3 clipped_yc = TAA_ClipToAABB(hist_yc, mu_yc, sigma_yc * k);
@@ -360,7 +360,7 @@ void main()
     history_weight = mix(history_weight, min(history_weight, TAA_MOTION_HISTORY_BLEND), motion_w);
     history_weight = 1.0 - (1.0 - history_weight) * sample_alignment;
     float blend = history_weight * edge_fade * depth_ok * edge_blend * screen_border_w * history_border_w;
-    // Karis-weighted resolve: weighting both terms by 1/(1+luma) evaluates the blend in
+    // Inverse-luma weighted resolve: weighting both terms by 1/(1+luma) evaluates the blend in
     // a tonemapped domain, so a single HDR firefly cannot dominate the average and
     // flicker as the jitter walks it on and off a sample position.
     const vec3 taa_luma_w = vec3(0.2126, 0.7152, 0.0722);
@@ -395,8 +395,8 @@ void main()
         float y_mu = mix(dot(mu, luma_dir), dot(history_blur, luma_dir), history_validity);
         float y_res = dot(pre_sharp, luma_dir);
         // Unsharp term from the RESOLVED value, never the jittered centre sample: current minus its
-        // 3x3 mean replays the sub-pixel jitter into the output every frame (the TAA study: the
-        // sharpen was the largest rest-flicker source); the 9-tap mean barely moves with the jitter.
+        // 3x3 mean replays the sub-pixel jitter into the output every frame (the largest source of
+        // flicker at rest); the 9-tap mean barely moves with the jitter.
         float dy = (y_res - y_mu) * sharpen_w;
         float y_lo = min(min(y_res, y_curr), y_mu);
         float y_hi = max(max(y_res, y_curr), y_mu);

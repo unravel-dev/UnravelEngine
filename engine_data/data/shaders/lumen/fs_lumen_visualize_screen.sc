@@ -1,15 +1,14 @@
 $input v_texcoord0
 
 /*
- * Lumen's screen-space debug views (UE 5.8 r.Lumen.Visualize, value in brackets):
- *  mode 0, Dedicated Reflection Rays [7] (LumenVisualize.ush LumenVisualizationFinalize): the diffuse albedo's
- *          luminance lit from one direction in grey, and in red, brighter the smoother, every pixel Lumen traces
- *          reflection rays for (LumenCombineReflectionsAlpha: below the max roughness to trace, fading over 0.1);
- *          behind the scene, the sky along the camera ray (UE EvaluateSkyRadiance: here the environment's radiance
- *          SH our rays read), tone mapped.
- *  mode 1, ScreenProbeGather Frames Accumulated [23] (LumenVisualize.usf VisualizeBitFieldFloatTexturePS): the
- *          gather history's 4-bit frame count / 15 in red over the grey of the finished image.
- * In a tile (u_lumen_visualize_tile.xy > 0: UE's overview) the view fills the tile, whose corners are rounded.
+ * The GI screen-space debug views:
+ *  mode 0, Dedicated Reflection Rays: the diffuse albedo's luminance lit from one direction in grey, and in red,
+ *          brighter the smoother, every pixel that traces reflection rays (the traced reflections' fade: below the
+ *          max roughness to trace, fading over 0.1); behind the scene, the sky along the camera ray (the
+ *          environment's radiance SH the rays read), tone mapped.
+ *  mode 1, Screen Probe Frames Accumulated: the gather history's 4-bit frame count / 15 in red over the grey of the
+ *          finished image.
+ * In a tile (u_lumen_visualize_tile.xy > 0: the overview views) the view fills the tile, whose corners are rounded.
  */
 
 #include "../common.sh"
@@ -30,7 +29,7 @@ SAMPLER2D(s_lumen_history, 4);
 /// A copy of the finished image.
 SAMPLER2D(s_scene_color, 5);
 
-/// x = mode, y = the roughness below which Lumen traces reflection rays, z = the lit image's tone mapping operator,
+/// x = mode, y = the roughness below which pixels trace reflection rays, z = the lit image's tone mapping operator,
 /// w = the view's exposure.
 uniform vec4 u_lumen_visualize;
 /// xy = the tile's size in pixels (0 = the whole view), z = the gather's maximum frame count.
@@ -38,11 +37,11 @@ uniform vec4 u_lumen_visualize_tile;
 
 #define LUMEN_VISUALIZE_DEDICATED_REFLECTION_RAYS 0
 #define LUMEN_VISUALIZE_SCREEN_PROBE_FRAMES 1
-/// LumenCombineReflectionsAlpha's fade above the max roughness to trace.
+/// The roughness range over which traced reflections fade out, ending at the max roughness to trace.
 #define LUMEN_REFLECTION_ROUGHNESS_FADE_LENGTH 0.1
 /// The history's frame count has 4 bits.
 #define LUMEN_HISTORY_FRAME_LEVELS 15.0
-/// UE draws the frame count over the image at this opacity.
+/// The opacity of the frame count drawn over the image.
 #define LUMEN_VISUALIZE_OVERLAY_OPACITY 0.8
 
 vec3 LumenCameraDirection(vec2 uv)

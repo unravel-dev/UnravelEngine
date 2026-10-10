@@ -23,7 +23,7 @@ REFLECT_INLINE(taa_pass::settings)
             entt::attribute{"pretty_name", "Temporal Samples"},
             entt::attribute{"min", 2},
             entt::attribute{"max", 16},
-            entt::attribute{"tooltip", "When >1, enables subpixel jitter. Cycle length of the Halton sequence (UE uses 8)."},
+            entt::attribute{"tooltip", "When >1, enables subpixel jitter. Cycle length of the Halton sequence (default 8)."},
         })
         .data<&taa_pass::settings::jitter_amplitude>("jitter_amplitude"_hs)
         .custom<entt::attributes>(entt::attributes{

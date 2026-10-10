@@ -1,8 +1,7 @@
 $input v_color0
 
 /*
- * The Lumen visualizations' line pixels as ShaderPrint draws its lines (ShaderPrintDrawPrimitive.usf
- * ShaderDrawDebugPS, r.ShaderPrint.DrawOccludedLines 1): in full in front of the scene depth; behind it at
+ * The GI visualizations' line pixels: in full in front of the scene depth; behind it at
  * LUMEN_VISUALIZE_OCCLUDED_SCALE on every other pixel of a checkerboard. Premultiplied over the finished image.
  */
 
@@ -11,7 +10,7 @@ $input v_color0
 /// The scene's device depth.
 SAMPLER2D(s_scene_depth, 1);
 
-/// ShaderPrint's colour scale of an occluded line pixel.
+/// The colour scale of an occluded line pixel.
 #define LUMEN_VISUALIZE_OCCLUDED_SCALE 0.4
 
 void main()

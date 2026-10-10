@@ -1871,7 +1871,7 @@ struct particle_system_soa
     }
 
     auto draw_gpu_emitter(emitter& em,
-                          uint8_t view,
+                          bgfx::ViewId view,
                           bgfx::ProgramHandle program,
                           const float* view_camera,
                           const float* eye_pos_vec4,
@@ -2262,7 +2262,7 @@ struct particle_system_soa
 
     auto render_cpu_batch(const emitter_handle* handles,
                           uint32_t count,
-                          uint8_t view,
+                          bgfx::ViewId view,
                           bgfx::ProgramHandle program,
                           const float* view_camera,
                           const float* eye_pos_vec4,
@@ -2332,7 +2332,7 @@ struct particle_system_soa
 
     auto render_batch(const emitter_handle* handles,
                       uint32_t count,
-                      uint8_t view,
+                      bgfx::ViewId view,
                       bgfx::ProgramHandle program,
                       const float* mtx_view,
                       const math::vec3& eye,
@@ -2533,7 +2533,7 @@ auto get_num_particles(emitter_handle handle) -> uint32_t
 
 auto render_emitter_batch(const emitter_handle* handles,
                           uint32_t count,
-                          uint8_t view,
+                          bgfx::ViewId view,
                           bgfx::ProgramHandle program,
                           const float* mtx_view,
                           const math::vec3& eye,

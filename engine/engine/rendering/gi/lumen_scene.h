@@ -19,11 +19,11 @@ class mesh;
 class material;
 
 /**
- * @brief Lumen's surface cache, CPU side: card placements, per-card resolution, physical pages and
- *        the pages to capture (UE 5.8 FLumenSceneData, LumenSceneRendering.cpp, LumenMeshCards.cpp).
+ * @brief The GI surface cache, CPU side: card placements, per-card resolution, physical pages and
+ *        the pages to capture.
  *
  * Every GI instance with cards gets its cards placed in the world (oriented boxes). Each frame a card's
- * resolution follows its distance to the viewer exactly as Lumen chooses it (texel density 100 x half
+ * resolution follows its distance to the viewer (texel density 100 x half
  * extent / distance, at most 20 texels per metre and 512 texels, a power of two, aspect-biased per
  * axis; the density and the resolution limits scale with the view's surface cache resolution); a card
  * whose resolution changes is reallocated and recaptured, nearest first, within the capture budget.
@@ -36,22 +36,22 @@ class material;
  *
  * The packed tables are rebuilt every frame; physical allocations persist, so captured content survives until its
  * card changes resolution or leaves. A placement's cards are placed once per transform, the per-card resolution
- * pass runs across the pool (UE r.LumenScene.ParallelUpdate), and the allocator answers space queries in constant
- * time from free counts (UE FLumenSurfaceCacheAllocator), so a full atlas costs nothing per request.
+ * pass runs across the thread pool, and the allocator answers space queries in constant time from free counts, so a
+ * full atlas costs nothing per request.
  *
- * schedule_lighting() picks the pages the card lighting updates each frame as Lumen does: per page and per
+ * schedule_lighting() picks the pages the card lighting updates each frame: per page and per
  * context (direct lighting, radiosity) a priority bucket from the frames since its last update and its speed
  * (distance and frustum), spent bucket by bucket against a tile budget per context that grows with the view's
  * lighting update speed. Direct lighting keeps no history and is a function of the page's capture, placement, the
  * lights and the occluders between them: a page lit once is skipped until one of those changes
  * (invalidate_direct_lighting), so the direct budget goes to the pages whose lighting changed.
  *
- * Beside its locked mip a resident card may map pages of one finer mip on demand (UE's unlocked hi-res pages,
- * LumenSceneRendering.cpp:1050-1135): the reflections' surface cache feedback (set_feedback) asks for the pages their
- * rays hit, ranked behind every locked request; a new hi-res page inherits the locked mip's lighting and is lit like
- * any page. Hi-res pages give way to locked allocations once idle for two frames and to other hi-res pages once idle
- * for 256 (UE EvictOldestAllocation). The reflections read a card through its row 5 page table, whose unmapped hi-res
- * pages fall back to the locked pages covering them; every other reader uses the locked mip.
+ * Beside its locked mip a resident card may map pages of one finer mip on demand (unlocked hi-res pages): the
+ * reflections' surface cache feedback (set_feedback) asks for the pages their rays hit, ranked behind every locked
+ * request; a new hi-res page inherits the locked mip's lighting and is lit like any page. Hi-res pages give way to
+ * locked allocations once idle for two frames and to other hi-res pages once idle for 256 (evict_oldest_hi_res_page).
+ * The reflections read a card through its row 5 page table, whose unmapped hi-res pages fall back to the locked pages
+ * covering them; every other reader uses the locked mip.
  */
 class lumen_scene
 {
@@ -62,26 +62,26 @@ public:
         uint32_t atlas_size = 4096;
         ///< Capture atlas edge in texels: the most texels captured per frame.
         uint32_t capture_atlas_size = 512;
-        ///< r.LumenScene.SurfaceCache.CardCapturesPerFrame.
+        ///< The most card pages captured per frame.
         uint32_t max_captures_per_frame = 300;
         ///< Cards farther than this are never resident, whatever the view distance: the reach of the global distance
         ///< field (half the extent of its last level), beyond which no ray hits them.
         float max_card_distance = 200.0f;
-        ///< r.LumenScene.SurfaceCache.CardTexelDensityScale (texels per unit half-extent / distance).
+        ///< The card texel density scale (texels per unit half-extent / distance).
         float texel_density_scale = 100.0f;
-        ///< r.LumenScene.SurfaceCache.CardMaxTexelDensity, in texels per metre (0.2 per cm).
+        ///< The card texel density limit, in texels per metre (0.2 per cm).
         float max_texel_density = 20.0f;
-        ///< r.LumenScene.SurfaceCache.CardMaxResolution.
+        ///< The largest card resolution, in texels.
         uint32_t card_max_resolution = 512;
-        ///< r.LumenScene.SurfaceCache.CardMinResolution (Epic).
+        ///< The smallest resident card resolution, in texels (the epic tier's value).
         uint32_t card_min_resolution = 2;
-        ///< r.LumenScene.SurfaceCache.MeshCardsMinSize, in metres: a card whose placed face is smaller than this
+        ///< The minimum card size, in metres: a card whose placed face is smaller than this
         ///< squared is never resident.
         float mesh_cards_min_size = 0.1f;
-        ///< r.LumenScene.SurfaceCache.CardCaptureRefreshFraction: the share of the capture budget spent capturing
-        ///< resident pages again, oldest first, so material changes reach the surface cache. 0 disables.
+        ///< The share of the capture budget spent capturing resident pages again, oldest first, so material changes
+        ///< reach the surface cache. 0 disables.
         float card_capture_refresh_fraction = 0.125f;
-        ///< The scalability tier's scale on both card lighting update factors (UE High doubles Epic's).
+        ///< The scalability tier's scale on both card lighting update factors (the high tier doubles the epic tier's).
         uint32_t lighting_update_factor_scale = 1;
 
         friend auto operator==(const settings& lhs, const settings& rhs) -> bool = default;
@@ -96,11 +96,11 @@ public:
         uint32_t instance_index = 0;
         std::shared_ptr<const lumen_mesh_cards> cards;
         math::mat4 local_to_world{1.0f};
-        ///< UE's Emissive Light Source (surface_cache_system::instance::is_emissive_light_source): its cards stay
+        ///< An emissive light source (surface_cache_system::instance::is_emissive_light_source): its cards stay
         ///< resident down to one texel and down to a fifth of the minimum face area.
         bool is_emissive_light_source = false;
         ///< The material as captured (its identity and material::get_revision): a change queues the placement's pages
-        ///< ahead of the refresh (UE recaptures a primitive whose render state changed).
+        ///< for capture ahead of the refresh.
         uint64_t material_key = 0;
     };
 
@@ -118,14 +118,14 @@ public:
         math::uvec2 atlas_offset{0u};
         math::uvec2 size{0u};
         ///< The card's previous allocation in the resample table (get_resample_table), whose lighting the page
-        ///< inherits (UE bResampleLastLighting), or -1 when the card was not resident.
+        ///< inherits, or -1 when the card was not resident.
         int32_t resample_card = -1;
         ///< A refresh of the page in place: it keeps its lighting texel for texel rather than resampling it, so the
         ///< direct lighting, which a clean page does not relight, stays exact.
         bool keeps_lighting = false;
     };
 
-    /// The two card lighting contexts, scheduled apart (UE's direct lighting and radiosity).
+    /// The two card lighting contexts, scheduled apart: direct lighting and radiosity.
     enum lighting_context : uint32_t
     {
         lighting_direct = 0,
@@ -162,7 +162,7 @@ public:
     {
         ///< Index into get_resident_pages().
         uint32_t resident_page = 0;
-        ///< The page's update count in the context (UE's per-page temporal index): the radiosity probes' jitter.
+        ///< The page's update count in the context (its per-page temporal index): the radiosity probes' jitter.
         uint32_t update_index = 0;
         ///< The nearest viewer's index in schedule_lighting()'s list: the camera whose distance field lights the page.
         uint32_t viewer = 0;
@@ -185,7 +185,7 @@ public:
         math::uvec2 mip_size_in_pages{1u};
     };
 
-    /// One element of the reflections' surface cache feedback (UE FLumenSurfaceCacheFeedback, decoded): a card of the
+    /// One decoded element of the reflections' surface cache feedback: a card of the
     /// card table at the feedback's card index revision, the res level its hits want, the page they land on at that
     /// level (on the card's page grid without its aspect bias: 2^(level - 7) pages across from level 8, one below),
     /// and how many feedback samples landed there.
@@ -207,31 +207,31 @@ public:
         math::vec3 extent{0.0f};
     };
 
-    /// A resident card as UE's card placement view draws it (LumenVisualize.cpp VisualizeCardPlacement).
+    /// A resident card as the card placement view draws it.
     struct visualized_card
     {
         placed_card box;
-        ///< The card's index among its mesh's cards (UE IndexInMeshCards).
+        ///< The card's index among its mesh's cards.
         uint32_t index_in_mesh = 0;
-        ///< UE's colour key: a hash of the card's mesh-space box and its index in the card table.
+        ///< The colour key: a hash of the card's mesh-space box and its index in the card table.
         uint32_t hash = 0;
         ///< The placement it belongs to (index into the update's sources).
         uint32_t source_index = 0;
-        ///< The side of the mesh it faces (lumen_card::direction, UE AxisAlignedDirectionIndex).
+        ///< The side of the mesh it faces (lumen_card::direction).
         uint32_t direction = 0;
     };
 
     /// Whether a placement's cards (@p local_bounds at @p local_to_world) come within @p distance of @p view_origin and
-    /// touch @p view_frustum: UE's visualize filters over a primitive group's world bounds.
+    /// touch @p view_frustum: the card placement view filters whole placements by their world bounds.
     static auto is_visualized(const math::bbox& local_bounds,
                               const math::mat4& local_to_world,
                               const math::vec3& view_origin,
                               float distance,
                               const math::frustum& view_frustum) -> bool;
 
-    /// Lumen::PhysicalPageSize.
+    /// The edge of a physical page, in texels.
     static constexpr uint32_t physical_page_size = 128;
-    /// Lumen::MinResLevel / MaxResLevel / SubAllocationResLevel.
+    /// Card res levels (log2 of a mip's texels per axis): the smallest, the largest and the largest sub-allocated.
     static constexpr uint32_t min_res_level = 3;
     static constexpr uint32_t max_res_level = 11;
     static constexpr uint32_t sub_allocation_res_level = 7;
@@ -269,7 +269,7 @@ public:
     void update(const std::vector<source>& sources, uint32_t instance_count, const math::vec3& view_origin);
 
     /**
-     * @brief Picks this frame's pages for each lighting context (UE LumenSceneLighting.usf:105-366), after update().
+     * @brief Picks this frame's pages for each lighting context, after update().
      *
      * A page's speed is 1 / (1 + its distance to the nearest of @p viewers / LUMEN_SCENE_LIGHTING_PRIORITY_DISTANCE),
      * doubled within LUMEN_SCENE_LIGHTING_FRUSTUM_MARGIN of any viewer's frustum; its bucket 15 - ceil(log2(4 x frames
@@ -294,18 +294,18 @@ public:
 
     /**
      * @brief Takes the reflections' surface cache feedback gathered while the card indices were at
-     *        @p card_index_revision (UE FLumenSceneData::UpdateSurfaceCacheFeedback); feedback from other card indices
-     *        is dropped. An element hit more than @p min_hits times keeps its card's hi-res page in use, or asks for it
-     *        when the level it wants is above the card's locked level: the next update() maps it, ranked behind every
-     *        locked request by 25 m plus 25 m x (1 - hits / @p sample_count).
+     *        @p card_index_revision; feedback from other card indices is dropped. An element hit more than @p min_hits
+     *        times keeps its card's hi-res page in use, or asks for it when the level it wants is above the card's
+     *        locked level: the next update() maps it, ranked behind every locked request by 25 m plus 25 m x
+     *        (1 - hits / @p sample_count).
      */
     void set_feedback(const std::vector<feedback_element>& elements,
                       uint64_t card_index_revision,
                       uint32_t min_hits,
                       uint32_t sample_count);
 
-    /// Whether the cards map hi-res pages (on by default, UE r.LumenScene.SurfaceCache.Feedback); turned off, the next
-    /// update() frees every hi-res page and set_feedback() is ignored.
+    /// Whether the cards map hi-res pages (on by default); turned off, the next update() frees every hi-res page and
+    /// set_feedback() is ignored.
     void set_hi_res_pages_enabled(bool enabled)
     {
         are_hi_res_pages_enabled_ = enabled;
@@ -324,16 +324,16 @@ public:
         return lit_pages_[context];
     }
 
-    /// UE's per-frame tile budget: the 8 x 8 tiles of a square of atlas / sqrt(@p update_factor) texels rounded up to
-    /// whole tiles, at least one full page (R/LumenSceneLighting.cpp:98-126).
+    /// The per-frame tile budget: the 8 x 8 tiles of a square of atlas / sqrt(@p update_factor) texels rounded up to
+    /// whole tiles, at least one full page.
     static auto compute_lighting_tile_budget(uint32_t atlas_size, uint32_t update_factor) -> uint32_t;
 
-    /// UE's priority bucket, 0 = most urgent: 15 - ceil(log2(4 x @p frames_since_update x @p speed)) in [0, 15].
+    /// The priority bucket, 0 = most urgent: 15 - ceil(log2(4 x @p frames_since_update x @p speed)) in [0, 15].
     static auto compute_lighting_bucket(uint32_t frames_since_update, float speed) -> uint32_t;
 
     /// Diagnostic: resident cards keep their resolution instead of following the viewer's distance.
-    /// Experiment: a card below one texel drops out and no placement-level gate applies (the residency before UE's
-    /// RoundUpToPowerOfTwo(0) = 1 and primitive-group rules).
+    /// Experiment: a card below one texel drops out and no placement-level gate applies (by default a card below one
+    /// texel rounds up to one, and a placement too small for its distance keeps none of its cards resident).
     void set_card_residency_without_group_gate(bool enabled)
     {
         card_residency_without_group_gate_ = enabled;
@@ -344,8 +344,8 @@ public:
         hold_resident_resolutions_ = hold;
     }
 
-    /// The view's Lumen scene settings (UE LumenSceneViewDistance, LumenSurfaceCacheResolution,
-    /// LumenSceneLightingUpdateSpeed), applied by the update() and schedule_lighting() calls that follow.
+    /// The view's GI scene settings (scene detail, surface cache resolution, lighting update speed), applied by the
+    /// update() and schedule_lighting() calls that follow.
     void set_view_settings(const gi_settings::scene_settings& view_settings)
     {
         view_settings_ = view_settings;
@@ -355,9 +355,9 @@ public:
     /// global distance field.
     auto get_max_card_distance() const -> float;
 
-    /// A lighting context's update factor at the view's lighting update speed (R/LumenSceneLighting.cpp:561-584): the
-    /// context's factor (LUMEN_SCENE_DIRECT_UPDATE_FACTOR, LUMEN_SCENE_RADIOSITY_UPDATE_FACTOR) over the speed clamped
-    /// to [0.5, 16], rounded.
+    /// A lighting context's update factor at the view's lighting update speed: the context's factor
+    /// (LUMEN_SCENE_DIRECT_UPDATE_FACTOR, LUMEN_SCENE_RADIOSITY_UPDATE_FACTOR) over the speed clamped to [0.5, 16],
+    /// rounded.
     auto get_lighting_update_factor(lighting_context context) const -> uint32_t;
 
     auto get_settings() const -> const settings&
@@ -381,8 +381,8 @@ public:
     /// Per virtual page: (atlas bias x, y in texels, res level x, y); res level 0 = unmapped.
     /**
      * @brief Per page-table entry, in get_page_table's order: x = the frames since its direct lighting was last
-     *        updated, y = since its indirect lighting was (UE FLumenCardPageData Last*LightingUpdateFrameIndex against
-     *        the surface cache's update frame), for the lighting updates views. A page never lit counts every frame.
+     *        updated, y = since its indirect lighting was (counted against the surface cache's update frame), for the
+     *        lighting updates views. A page never lit counts every frame.
      */
     void get_page_lighting_ages(std::vector<math::vec4>& out) const;
 
@@ -390,7 +390,7 @@ public:
      * @brief Per page-table entry, in get_page_table's order: the update index of the page's last radiosity update
      *        (lit_page::update_index, this frame's for a page scheduled this frame), -1 while the radiosity has not
      *        updated the page since it was mapped. The radiosity probes of a neighbouring page read its traces and SH
-     *        with that update's jitter (UE FLumenCardPageData IndirectLightingTemporalIndex).
+     *        with that update's jitter.
      */
     void get_page_radiosity_indices(std::vector<float>& out) const;
 
@@ -402,7 +402,7 @@ public:
 
     /**
      * @brief The resident cards of the placements whose world bounds come within @p distance of @p view_origin and
-     *        touch @p view_frustum (UE VisualizeCardPlacement's culling).
+     *        touch @p view_frustum (the card placement view's culling).
      * @param sources The sources of the last update().
      */
     void get_visualized_cards(const std::vector<source>& sources,
@@ -517,7 +517,7 @@ private:
         ///< One per virtual page; is_mapped says which hold a physical page.
         std::vector<physical_slot> slots;
         std::vector<uint8_t> is_mapped;
-        ///< Per virtual page: the frame the feedback last asked for it (UE UnlockedAllocationHeap's key).
+        ///< Per virtual page: the frame the feedback last asked for it (the eviction's age key).
         std::vector<uint64_t> last_used;
     };
 
@@ -618,8 +618,8 @@ private:
     /// Sub-allocated element sizes: 8 to 128 texels per axis.
     static constexpr uint32_t sub_allocation_levels = sub_allocation_res_level - min_res_level + 1u;
 
-    /// A card's resolution rule at the view's surface cache resolution (UE GetCardTexelDensity, GetCardMaxResolution,
-    /// GetCardMinResolution at a Lumen scene detail of 1).
+    /// A card's resolution rule at the view's surface cache resolution and scene detail: the texel density scale and
+    /// the resolution limits.
     struct resolution_rule
     {
         float texel_density_scale = 0.0f;
@@ -640,12 +640,12 @@ private:
     static auto get_feedback_page(const mip_desc& mip, const math::uvec2& page, uint32_t res_level) -> uint32_t;
     /// Whether one page of @p mip fits the physical atlas as it is now.
     auto has_page_space(const mip_desc& mip) const -> bool;
-    /// Frees the hi-res page whose feedback is oldest when it has been idle for @p min_idle_frames or more (UE
-    /// EvictOldestAllocation); returns whether one was freed.
+    /// Frees the hi-res page whose feedback is oldest when it has been idle for @p min_idle_frames or more; returns
+    /// whether one was freed.
     auto evict_oldest_hi_res_page(uint64_t min_idle_frames) -> bool;
     /// update(): the requests set_feedback() left, ranked by the card's distance to @p view_origin.
     void add_hi_res_requests(const std::vector<viewer>& viewers);
-    /// Whether @p mip fits the physical atlas as it is now (UE IsPhysicalSpaceAvailable), in constant time.
+    /// Whether @p mip fits the physical atlas as it is now, in constant time.
     auto has_physical_space(const mip_desc& mip) const -> bool;
     /// The bin of a sub-allocated element size, or null when none was created yet.
     auto find_bin(const math::uvec2& element_size) const -> const sub_allocation_bin*;
@@ -679,13 +679,13 @@ private:
         -> uint32_t;
     /// update(): the packed card, page and instance tables and the resident page list.
     void build_tables(const std::vector<source>& sources, uint32_t instance_count);
-    /// update(): resident pages captured again, oldest first, within the refresh's share of the capture budget (UE
-    /// SceneCardCaptureRefresh). A refreshed page keeps its lighting: its card is its own resample source.
+    /// update(): resident pages captured again, oldest first, within the refresh's share of the capture budget. A
+    /// refreshed page keeps its lighting: its card is its own resample source.
     void refresh_captures(const std::vector<source>& sources, capture_packer& packer);
     /// schedule_lighting(): every resident page's tiles, speed and bucket per lighting context, across the pool; a
     /// direct-lit page that is not dirty takes k_skip_bucket.
     void compute_page_priorities(const std::vector<viewer>& viewers);
-    /// Per resident page: its lighting speed (UE's 1 / (1 + distance / priority distance), doubled near a frustum),
+    /// Per resident page: its lighting speed (1 / (1 + distance / priority distance), doubled near a frustum),
     /// its nearest viewer's index and its 8 x 8 tile count.
     void compute_page_speeds(const std::vector<viewer>& viewers);
     /// Per resident page, the index of its nearest viewer (compute_page_speeds).

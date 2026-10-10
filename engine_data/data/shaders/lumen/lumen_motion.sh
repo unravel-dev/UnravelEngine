@@ -2,11 +2,10 @@
 #define __LUMEN_MOTION_SH__
 
 /*
- * Where the surface seen at a pixel was last frame, for Lumen's reprojections (UE 5.8 LumenPosition.ush
- * GetHistoryScreenPosition and GetPrevTranslatedWorldPosition). A pixel the velocity pass drew with object motion
- * (velocity_encoding.sh B > 0) follows the velocity buffer: last frame's position is the point at last frame's view
- * depth (A) on last frame's camera ray through uv - RG. Every other surface did not move and reprojects through last
- * frame's view projection alone.
+ * Where the surface seen at a pixel was last frame, for the GI's reprojections. A pixel the velocity pass drew with
+ * object motion (velocity_encoding.sh B > 0) follows the velocity buffer: last frame's position is the point at last
+ * frame's view depth (A) on last frame's camera ray through uv - RG. Every other surface did not move and reprojects
+ * through last frame's view projection alone.
  *
  * The includer defines LUMEN_VELOCITY_STAGE to bind the velocity buffer (s_lumen_velocity) at that stage and
  * includes lumen_common.sh; without the stage every surface counts as static.
@@ -18,7 +17,7 @@
 uniform mat4 u_lumen_prev_view_proj;
 uniform mat4 u_lumen_prev_inv_view_proj;
 /// x > 0 when s_lumen_velocity holds this frame's velocity buffer, y > 0 when the probe trace marks screen hits on
-/// surfaces moving against the probe (UE's fast update); z, w unused.
+/// surfaces moving against the probe (the fast update); z, w unused.
 uniform vec4 u_lumen_motion;
 
 #define u_lumen_has_velocity (u_lumen_motion.x > 0.0)

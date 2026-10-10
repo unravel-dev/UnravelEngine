@@ -8,7 +8,7 @@
  *
  * The deferred path draws one fullscreen pass per light with that light's parameters in
  * uniforms, which cannot answer "how much light reaches world point P" from inside a compute
- * shader -- there is only ever the one light currently bound. The Lumen surface cache needs that
+ * shader -- there is only ever the one light currently bound. The GI surface cache needs that
  * question answered at every card texel it lights.
  *
  * The attenuation comes from light_attenuation.sh, the same code the per-light direct shaders

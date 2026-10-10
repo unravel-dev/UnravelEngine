@@ -1,7 +1,6 @@
 /*
  * GTAO main pass: per AO-resolution texel, the cosine-weighted visibility integral over
- * `slice_count` slices through the view vector (Jimenez et al. 2016, "Practical Realtime
- * Strategies for Accurate Indirect Occlusion"; structure after Intel's XeGTAO), each slice
+ * `slice_count` slices through the view vector, each slice
  * searched by `steps_per_slice` samples of the prefiltered
  * view-depth mips along +/- the slice direction. Two integrations of one search:
  *  - the two-horizon closed form (default): the largest horizon angle on
@@ -11,7 +10,7 @@
  *    normal's hemisphere split into GTAO_SECTOR_COUNT sectors, each sample marking the
  *    sectors between its front face and the face one slab depth behind it, so what lies
  *    beyond a thin occluder stays visible; the open sectors give visibility and bent normal.
- * The search extent is a world radius with a distance falloff, capped on screen (XeGTAO).
+ * The search extent is a world radius with a distance falloff, capped on screen.
  *
  * Output (RGBA8): rgb = world-space bent normal * 0.5 + 0.5, a = visibility.
  */
@@ -96,7 +95,7 @@ void main()
 	float z_b = texelFetch(s_gtao_depth_mips, clamp(texel + ivec2(0, 1), ivec2(0, 0), size_max), 0).x;
 	vec4 edges = GtaoCalculateEdges(view_depth, z_l, z_r, z_t, z_b);
 	// Pull the receiver toward the camera by a hair: its own surface's depth noise must never
-	// register as an occluder (XeGTAO; the value for an FP32 depth buffer).
+	// register as an occluder (the value suits an FP32 depth buffer).
 	view_depth *= GTAO_DEPTH_BIAS;
 	vec3 position = GtaoAoViewPosition(uv, view_depth);
 	vec3 view_vec = normalize(-position);
@@ -132,7 +131,7 @@ void main()
 		radius *= max_screen_radius / screen_radius;
 		screen_radius = max_screen_radius;
 	}
-	// Fade toward unoccluded for tiny screen radii (XeGTAO), then stop below a pixel.
+	// Fade toward unoccluded for tiny screen radii, then stop below a pixel.
 	float visibility = saturate((10.0 - screen_radius) / 100.0) * 0.5;
 	if(screen_radius < GTAO_PIXEL_TOO_CLOSE)
 	{
@@ -144,7 +143,7 @@ void main()
 	float falloff_from = radius * (1.0 - u_gtao_falloff_range);
 	float falloff_mul = -1.0 / max(falloff_range, 1e-5);
 	float falloff_add = falloff_from / max(falloff_range, 1e-5) + 1.0;
-	// Noise: Hilbert-curve R2, advanced per frame (XeGTAO's spatiotemporal noise); the slice
+	// Noise: Hilbert-curve R2, advanced per frame (spatiotemporal noise); the slice
 	// angle and the step offset use the two lanes.
 	vec2 noise = GtaoSpatioTemporalNoise(texel, u_gtao_noise_index);
 	float noise_slice = noise.x;
@@ -227,7 +226,7 @@ void main()
 				horizon_cos1 = max(horizon_cos1, shc1);
 			}
 		}
-		// XeGTAO's fudge for a slight over-darkening on steep slopes.
+		// Pull the projected length 5% toward 1: counters a slight over-darkening on steep slopes.
 		projected_length = mix(projected_length, 1.0, 0.05);
 		vec3 slice_dir = normalize(ortho_direction);
 		float sin_n = sin(n);

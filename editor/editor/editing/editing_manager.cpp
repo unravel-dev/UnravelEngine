@@ -1097,8 +1097,8 @@ auto editing_manager::redo() -> std::shared_ptr<editing_action_t>
 
 void editing_manager::on_action_executed(std::shared_ptr<editing_action_t> action)
 {
-    // Auto-rebuild reflection probes on any scene-mutating action while editing. This mirrors the
-    // experience of Unity/Unreal where moving environment geometry refreshes the bakes in the background.
+    // Auto-rebuild reflection probes on any scene-mutating action while editing, so moving environment
+    // geometry refreshes the bakes in the background.
     // We intentionally do nothing in play mode - runtime behavior is governed by probe_update_mode.
     if(action->modifies_scene_content())
     {

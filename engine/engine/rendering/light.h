@@ -207,10 +207,10 @@ struct light
     /// The intensity of the light. Directional: the illuminance on a surface facing the light, outside the
     /// atmosphere when the light is the sky's atmosphere sun (skylight_component::get_atmosphere_sun). Point and spot: the luminous intensity, so the
     /// illuminance at distance d (world units) is intensity / d^2 (inverse-squared falloff), cut to zero at the
-    /// range by a smooth window. The default is UE's directional light (10 lux); new point and spot lights
-    /// get UE's local light default instead (default_local_intensity).
+    /// range by a smooth window. The default suits a directional light (10 lux); new point and spot lights
+    /// get the local light default instead (default_local_intensity).
     float intensity = 10.0f;
-    /// UE's default point / spot intensity: 5000 "unitless" = 8 candela.
+    /// The default point / spot intensity: 8 candela.
     static constexpr float default_local_intensity = 8.0f;
     /// Radius of a point or spot light's emitting sphere, in world units. A larger source widens
     /// and softens the highlight, keeping its energy (a wider, dimmer reflection), and wraps the
@@ -220,7 +220,7 @@ struct light
     /// axis: the diffuse light integrates the segment and the highlight stretches along it, again
     /// without changing the light emitted. 0 = a sphere (or a point when the radius is 0 too).
     float source_length = 0.0f;
-    /// The light's scale in the global illumination (UE IndirectLightingIntensity): the surface cache is lit with
+    /// The light's scale in the global illumination: the surface cache is lit with
     /// intensity x this, so what the light bounces scales with it; 0 leaves the light out of the GI.
     float indirect_intensity = 1.0f;
 

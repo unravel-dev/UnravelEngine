@@ -12,11 +12,10 @@ namespace unravel
 {
 
 /**
- * @brief The Lumen radiance cache (UE 5.8 LumenRadianceCache, analysis chapter f): sparse, world-locked
- *        radiance probes on 4 camera-centred clipmaps of 48^3 cells (1.04 m doubling), marked by the
- *        screen probes that will read them, new probes traced the frame they appear, the rest re-traced
- *        oldest first within a budget that grows with the final gather update speed, filtered over their face
- *        neighbours and stored with an octahedral border for bilinear reads.
+ * @brief The GI radiance cache: sparse, world-locked radiance probes on 4 camera-centred clipmaps of 48^3
+ *        cells (1.04 m doubling), marked by the screen probes that will read them, new probes traced the frame
+ *        they appear, the rest re-traced oldest first within a budget that grows with the final gather update
+ *        speed, filtered over their face neighbours and stored with an octahedral border for bilinear reads.
  *
  * Owned by lumen_gather_pass, which updates it after the probe placement and binds it to the probe trace
  * for the hand-off. The probes' rays read the surface cache at global distance field hits.

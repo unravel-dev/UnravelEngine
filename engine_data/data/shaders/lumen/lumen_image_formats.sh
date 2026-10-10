@@ -17,10 +17,10 @@
 #	define format_rg11b10f format_r11fg11fb10f
 #endif
 
-/// R11G11B10's mantissa precision per channel (UE ComputePixelFormatQuantizationError: 6, 6 and 5 bits).
+/// R11G11B10's relative precision per channel: 6, 6 and 5 mantissa bits, a step of 2^-6, 2^-6 and 2^-5 of the value.
 #define LUMEN_RG11B10F_QUANTIZATION_ERROR vec3(0.015625, 0.015625, 0.03125)
 
-/// @p color ready for an rg11b10f store (UE QuantizeForFloatRenderTarget, Quantization.ush QuantizeFloatColor): up to
+/// @p color ready for an rg11b10f store (dithered quantization): up to
 /// one step of the format's precision at @p color added, scaled by @p e in [0, 1), so the store's truncation rounds
 /// without bias on average. A history blended and stored every frame would otherwise lose part of a step per frame,
 /// which the blend compounds: undithered, the rough specular settled 7% darker.

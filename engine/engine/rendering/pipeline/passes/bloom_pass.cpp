@@ -125,7 +125,7 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         params.exposure_texture ? params.exposure_texture : default_textures::get().white_texture();
 
     // First downsample: full-res input -> half-res MIP_0.
-    // Uses Karis-weighted 13-tap to suppress sub-pixel specular flicker,
+    // Uses a luma-weighted 13-tap to suppress sub-pixel specular flicker,
     // combined with threshold/soft-knee prefilter.
     {
         const auto& mip0_fbo = get_mip_fbo(rview, 0);
@@ -145,13 +145,16 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
         gfx::set_uniform(downsample_program_.u_pixel_size, pixel_size);
 
         // The shader divides the threshold by the adapted exposure to compare it against the
-        // input; the input is pre-exposed, so the threshold carries the pre-exposure too (UE
-        // compares the de-pre-exposed, exposed luminance against BloomThreshold).
+        // input; the input is pre-exposed, so the threshold carries the pre-exposure too, and the
+        // test is the exposed luminance against the threshold whatever the pre-exposure.
         float params_data[4] = {config.threshold * params.pre_exposure, 0.0f, config.soft_knee, config.clamp};
         gfx::set_uniform(downsample_program_.u_params, params_data);
 
         gfx::set_texture(downsample_program_.s_tex, 0, input->get_texture());
         gfx::set_texture(downsample_program_.s_exposure, 1, exposure_texture);
+        const float bloom_exposure[4] = {std::log2(std::max(params.manual_exposure, 1e-12f)), 0.0f, 0.0f, 0.0f};
+        gfx::set_uniform(downsample_program_.u_bloom_exposure, bloom_exposure);
+        downsample_program_.local_exposure.submit(params.local_exposure, params.pre_exposure);
 
         irect32_t rect(0, 0, mip0_size.width, mip0_size.height);
         bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());
@@ -195,6 +198,8 @@ auto bloom_pass::run(gfx::render_view& rview, const run_params& params) -> gfx::
 
         gfx::set_texture(downsample_program_.s_tex, 0, rview.tex_get("BLOOM_MIP_" + std::to_string(i)));
         gfx::set_texture(downsample_program_.s_exposure, 1, exposure_texture);
+        // Only the first downsample applies local exposure; the stand-ins keep the slots valid.
+        downsample_program_.local_exposure.submit({}, params.pre_exposure);
 
         irect32_t rect(0, 0, out_w, out_h);
         bgfx::setScissor(rect.left, rect.top, rect.width(), rect.height());

@@ -1,6 +1,5 @@
 /*
- * Lumen reflections, spatial filter and composite (UE 5.8 LumenReflectionDenoiserSpatialCS,
- * LumenReflectionDenoiserSpatial.usf:56-213, then the specular half of DiffuseIndirectComposite.usf:220-259).
+ * Traced reflections, spatial filter and the specular half of the indirect composite.
  *
  * Filter: a bilateral over LUMEN_REFLECTION_SPATIAL_SAMPLES disk taps of LUMEN_REFLECTION_SPATIAL_KERNEL_RADIUS x
  * saturate(8 roughness) pixels, run only where the temporal variance is still high relative to the signal or the
@@ -13,8 +12,8 @@
  * Composite: the traced layer the indirect pass reads (RBUFFER, ComposeIndirectSpecular) holds the reflections x F,
  * F = the traced weight of the pixel's roughness, with 1 - F left to the untraced layer. The indirect pass takes the
  * untraced layer straight from the screen probe gather's rough specular history (its history times the GI intensity,
- * full coverage; fs_pbr_lighting.sh u_probe_layer_params): Lumen does not composite reflection captures or sky
- * specular under its own (UE DiffuseIndirectComposite.usf:220-259).
+ * full coverage; fs_pbr_lighting.sh u_probe_layer_params): no reflection capture or sky specular is composited
+ * under the GI's reflections.
  */
 
 #include "bgfx_compute.sh"
@@ -31,7 +30,7 @@ SAMPLER2D(s_lumen_depth, 10);
 /// G-buffer target 1: octahedral normal, metalness, roughness.
 SAMPLER2D(s_lumen_normal, 11);
 
-/// UE TonemapLighting: heavier with @p disocclusion against fireflies in revealed areas.
+/// The filter's reversible luminance tonemap: heavier with @p disocclusion against fireflies in revealed areas.
 vec3 LumenSpatialTonemap(vec3 color, float disocclusion)
 {
 	return color / (1.0 + disocclusion * LumenReflectionLuminance(color));
@@ -66,7 +65,7 @@ vec3 LumenFilterReflection(ivec2 pixel, vec4 accumulated, float frames)
 		                   0.5 * LUMEN_PI);
 		int samples = int(mix(float(LUMEN_REFLECTION_SPATIAL_SAMPLES), 2.0 * float(LUMEN_REFLECTION_SPATIAL_SAMPLES),
 		                      disocclusion) + 0.5);
-		// A 2x2 seed keeps neighbouring threads coherent (UE: important for the cost over the whole screen).
+		// A 2x2 seed keeps neighbouring threads coherent, which matters for the cost over the whole screen.
 		uvec2 seed = Rand3DPCG16(ivec3(pixel % 2, int(u_lumen_frame_mod))).xy;
 		ivec2 view_size = ivec2(u_lumen_view_size);
 		LOOP

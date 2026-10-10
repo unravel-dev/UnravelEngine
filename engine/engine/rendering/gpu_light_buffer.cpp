@@ -96,7 +96,7 @@ void gpu_light_buffer::update(scene& scn)
         [&](auto /*entity*/, auto&& transform_comp, auto&& light_comp, auto&& /*active*/)
         {
             const auto& light = light_comp.get_light();
-            // A light the GI leaves out takes no record (UE skips lights whose indirect intensity is 0).
+            // A light the GI leaves out (indirect intensity 0) takes no record.
             if(light.indirect_intensity <= 0.0f)
             {
                 return;

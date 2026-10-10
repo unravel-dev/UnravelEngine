@@ -45,8 +45,7 @@ struct mesh_sdf
     ///
     /// The point is residency, not detail. Without a chain, a scene whose fields do not all fit
     /// the shared atlas loses whole meshes from GI; with one it loses RESOLUTION instead, because
-    /// the atlas can fall back to a level that fits. Three matches UE's DistanceField::NumMips,
-    /// whose coarsest level is always resident for exactly this reason.
+    /// the atlas can fall back to a level that fits, down to the coarsest of the three.
     static constexpr uint32_t mip_count = 3;
 
     /// Voxel distances are stored as R8 unorm covering [-encode_range, +encode_range]

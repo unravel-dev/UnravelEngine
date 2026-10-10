@@ -379,7 +379,7 @@ public:
         std::string index_memory;
     };
 
-    /// What global illumination keeps for this mesh: its distance fields and its Lumen cards.
+    /// What global illumination keeps for this mesh: its distance fields and its surface cache cards.
     struct gi_info
     {
         ///< Submeshes with a distance field.
@@ -538,9 +538,9 @@ public:
         ///< about a quarter of the bricks.
         std::vector<std::vector<mesh_sdf>> submesh_sdf_coarse_mips;
 
-        ///< Lumen card sets built at compile time (UE's FCardRepresentationData), ONE PER SUBMESH and in submesh order,
-        ///< each for the submesh's imported material sidedness; a submesh without a field holds an empty set. Empty
-        ///< when the asset was compiled without cards, which leaves them to the runtime card library.
+        ///< Card sets built at compile time, ONE PER SUBMESH and in submesh order, each for the submesh's imported
+        ///< material sidedness; a submesh without a field holds an empty set. Empty when the asset was compiled
+        ///< without cards, which leaves them to the runtime card library.
         std::vector<lumen_mesh_cards> submesh_cards;
         ///< The import settings turned card generation off: no submesh gets cards, compiled or at runtime.
         bool are_cards_disabled = false;
@@ -653,10 +653,10 @@ public:
     /**
      * @brief The triangles global illumination represents a @ref create_plane plane by: its upward sheet alone.
      *
-     * The plane renders two coincident, oppositely wound sheets so it shows from both sides. GI represents it as UE
-     * represents its plane mesh, by the upward sheet, which bakes signed (solid below). The doubled sheet bakes
-     * unsigned, and between two sample layers of the global SDF an unsigned sheet reads half a voxel, so a trace
-     * that registers surfaces within half a voxel passes through the floor.
+     * The plane renders two coincident, oppositely wound sheets so it shows from both sides. GI represents it by the
+     * upward sheet, which bakes signed (solid below). The doubled sheet bakes unsigned, and between two sample layers
+     * of the global SDF an unsigned sheet reads half a voxel, so a trace that registers surfaces within half a voxel
+     * passes through the floor.
      */
     static auto create_plane_gi_geometry(float width, float height, uint32_t width_segments, uint32_t height_segments)
         -> sdf_source_geometry;
@@ -933,7 +933,7 @@ public:
     auto generate_sdf(const mesh_sdf_bake_settings& settings = runtime_sdf_bake_settings()) -> bool;
 
     /**
-     * @brief The triangles global illumination represents this mesh by (its distance field and Lumen cards) when they
+     * @brief The triangles global illumination represents this mesh by (its distance field and cards) when they
      *        differ from the rendered ones (see @ref create_plane_gi_geometry); nullptr when they are the same.
      */
     auto get_gi_source_geometry() const -> const sdf_source_geometry*;
@@ -969,7 +969,7 @@ public:
     auto get_sdf_count() const -> uint32_t;
 
     /**
-     * @brief The Lumen card set compiled for a submesh, built for its imported material's sidedness.
+     * @brief The card set compiled for a submesh, built for its imported material's sidedness.
      *
      * @return The set, or null when the asset carries none (compiled without cards, or a procedurally created mesh):
      *         the runtime card library builds those.

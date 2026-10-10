@@ -60,9 +60,7 @@ vec3 decodeNormalUint(vec3 _encodedNormal)
 
 vec2 octahedronWrap(vec2 _val)
 {
-	// Reference:
-	// Octahedron normal vector encoding
-	// http://kriscg.blogspot.com/2014/04/octahedron-normal-vector-encoding.html
+	// Octahedral normal encoding: folds a lower-hemisphere point onto the square's outer triangles.
 	return (1.0 - abs(_val.yx) )
 		 * mix(vec2_splat(-1.0), vec2_splat(1.0), vec2(greaterThanEqual(_val.xy, vec2_splat(0.0) ) ) );
 }
@@ -87,9 +85,7 @@ vec3 decodeNormalOctahedron(vec2 _encodedNormal)
 
 vec3 convertRGB2XYZ(vec3 _rgb)
 {
-	// Reference:
-	// RGB/XYZ Matrices
-	// http://www.brucelindbloom.com/index.html?Eqn_RGB_XYZ_Matrix.html
+	// Linear sRGB (D65 white) to CIE XYZ.
 	vec3 xyz;
 	xyz.x = dot(vec3(0.4124564, 0.3575761, 0.1804375), _rgb);
 	xyz.y = dot(vec3(0.2126729, 0.7151522, 0.0721750), _rgb);
@@ -108,16 +104,14 @@ vec3 convertXYZ2RGB(vec3 _xyz)
 
 vec3 convertXYZ2Yxy(vec3 _xyz)
 {
-	// Reference:
-	// http://www.brucelindbloom.com/index.html?Eqn_XYZ_to_xyY.html
+	// CIE XYZ to Yxy: luminance Y, then the chromaticity x, y.
 	float inv = 1.0/dot(_xyz, vec3(1.0, 1.0, 1.0) );
 	return vec3(_xyz.y, _xyz.x*inv, _xyz.y*inv);
 }
 
 vec3 convertYxy2XYZ(vec3 _Yxy)
 {
-	// Reference:
-	// http://www.brucelindbloom.com/index.html?Eqn_xyY_to_XYZ.html
+	// Yxy (luminance, chromaticity) back to CIE XYZ.
 	vec3 xyz;
 	xyz.x = _Yxy.x*_Yxy.y/_Yxy.z;
 	xyz.y = _Yxy.x;
@@ -246,9 +240,7 @@ vec4 toFilmic(vec4 _rgba)
 
 vec3 toAcesFilmic(vec3 _rgb)
 {
-	// Reference:
-	// ACES Filmic Tone Mapping Curve
-	// https://knarkowicz.wordpress.com/2016/01/06/aces-filmic-tone-mapping-curve/
+	// ACES filmic tone mapping curve (a rational fit), clamped to [0, 1].
 	float aa = 2.51f;
 	float bb = 0.03f;
 	float cc = 2.43f;
@@ -367,9 +359,7 @@ float random(vec2 _uv)
 
 vec3 fixCubeLookup(vec3 _v, float _lod, float _topLevelCubeSize)
 {
-	// Reference:
-	// Seamless cube-map filtering
-	// http://the-witness.net/news/2012/02/seamless-cube-map-filtering/
+	// Seamless cube-map filtering: pulls the minor axes in so a face edge maps to the mip's edge texel centres.
 	float ax = abs(_v.x);
 	float ay = abs(_v.y);
 	float az = abs(_v.z);
@@ -381,6 +371,9 @@ vec3 fixCubeLookup(vec3 _v, float _lod, float _topLevelCubeSize)
 	return _v;
 }
 
+#if BGFX_SHADER_TYPE_FRAGMENT
+// Fragment stage only: a mip bias needs the implicit derivatives, and GLSL rejects biased sampling in
+// every other stage even in a function nobody calls.
 vec3 getTangentSpaceNormal( sampler2D bumpTexture, vec2 texCoords, float bumpiness, float reconstructZ, float mipBias )
 {
     vec3 normal = texture2DBias(bumpTexture, texCoords, mipBias).xyz;
@@ -400,6 +393,7 @@ vec3 getTangentSpaceNormal( sampler2D bumpTexture, vec2 texCoords, float bumpine
 
     return normalize(normal);
 }
+#endif // BGFX_SHADER_TYPE_FRAGMENT
 
 float dither5x5(vec2 fragCoord)
 {
@@ -424,7 +418,7 @@ float limit = (bayer_matrix[x + y * 16])/256.0f;
 return limit;
 }
 
-// 16x16 tile of screen-space IGN (Jimenez) at integer pixel offsets - same cost as @c dither16x16
+// 16x16 tile of interleaved gradient noise (IGN) at integer pixel offsets - same cost as @c dither16x16
 // (mod + const lookup). Repeats on screen like Bayer; values match float IGN at (x,y) in 0..15.
 float ign16x16(vec2 fragCoord)
 {

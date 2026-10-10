@@ -38,7 +38,7 @@ public:
      *
      * @param instances Every resident field placement in the world, NOT only the visible ones --
      *        geometry behind the camera still bounces light.
-     * @param clipmap_settings The view's global distance field (Lumen's layout with the volume's distance field
+     * @param clipmap_settings The view's global distance field (the GI clipmap layout with the volume's distance field
      *        settings), applied every update so a knob moved in the inspector takes effect without a restart. Passed
      *        rather than stored because the cascade is downstream of the volume blend, which only the pipeline sees.
      *        @c compose_on_gpu is gated on the compute program having loaded, so a backend that cannot compose on

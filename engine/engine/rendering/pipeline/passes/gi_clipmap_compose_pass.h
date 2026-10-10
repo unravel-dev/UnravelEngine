@@ -117,9 +117,9 @@ private:
     } mip_program_;
 
     /**
-     * @brief Rebuilds @p level's coarse mip from the level just composed (UE's Coarse Clipmap passes,
-     *        GlobalDistanceField.cpp:3106-3178): the first pass reads the level, the rest propagate the distance
-     *        through the level's mip slab and the scratch, ending in the slab.
+     * @brief Rebuilds @p level's coarse mip from the level just composed (cs_gi_clipmap_mip passes): the first pass
+     *        reads the level, the rest propagate the distance through the level's mip slab and the scratch, ending
+     *        in the slab.
      */
     void build_level_mip(const global_sdf_clipmap_gpu& clipmap_gpu, uint32_t level, gfx::render_pass& pass);
 

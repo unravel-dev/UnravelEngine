@@ -1,8 +1,7 @@
 /*
- * Radiance cache trace tiles (UE 5.8 GenerateUniformProbeTraceTilesCS, LumenRadianceCache.usf:370-429): each
- * traced probe appends its 8x8-direction tiles. A probe traces (R / 2) << level directions per axis: level 1
- * (R x R) normally, level 0 (a quarter of the rays) beyond LUMEN_RADIANCE_CACHE_DOWNSAMPLE_DISTANCE or when
- * forced down by the budget. One thread per trace.
+ * Radiance cache trace tiles: each traced probe appends its 8x8-direction tiles. A probe traces (R / 2) << level
+ * directions per axis: level 1 (R x R) normally, level 0 (a quarter of the rays) beyond
+ * LUMEN_RADIANCE_CACHE_DOWNSAMPLE_DISTANCE or when forced down by the budget. One thread per trace.
  */
 
 #include "bgfx_compute.sh"

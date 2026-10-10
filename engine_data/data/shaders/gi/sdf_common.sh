@@ -117,12 +117,11 @@ struct SdfInstance
 	uint header_index;
 	/// Smallest scale axis: converts a local-space distance to a conservative world distance.
 	float local_to_world_scale;
-	/// The submesh's material renders both faces (UE bMostlyTwoSided): the Lumen coverage leaves space near only such
-	/// instances uncovered.
+	/// The submesh's material renders both faces: the GI coverage leaves space near only such instances uncovered.
 	bool is_two_sided;
 	/// World length of each local axis: the per-axis bounds of SdfInstanceWorldDistance.
 	vec3 axis_scale;
-	/// The material emits (UE's Emissive Light Source, derived): the Lumen cascade keeps it however small.
+	/// The material emits (a derived emissive light source): the GI cascade keeps it however small.
 	bool is_emissive_light_source;
 	/// The chain's coarsest resident level, or header_index when that is the coarsest (SdfInstanceStandaloneDistance).
 	uint coarse_header_index;
@@ -255,8 +254,7 @@ float SdfScaledBoxDistance(vec3 offset, vec3 extent, vec3 scale)
 
 /**
  * World distance from an instance's surface at the LOCAL position @p local_position, for the composed fields (the
- * global distance field and the Lumen object grid; UE DistanceToNearestSurfaceForObject, MeshDistanceFieldCommon.ush).
- * MIRROR OF sample_instance_distance (mesh_sdf_baker.cpp).
+ * global distance field and the GI object grid). MIRROR OF sample_instance_distance (mesh_sdf_baker.cpp).
  *
  * A local distance times one scale is exact only along that scale's axis. With the smallest axis (the conservative
  * choice) a wall scaled (10, 3, 0.2) reads 50x too close past its ends, so stretched primitives swell along their
@@ -264,7 +262,7 @@ float SdfScaledBoxDistance(vec3 offset, vec3 extent, vec3 scale)
  * world distance to the box the surface lies in (header lanes 3-4, the baked geometry's box; the field's bounds
  * pad it unevenly), and outside the bounds the field at the nearest boundary point less the world distance to it
  * (1-Lipschitz). Inside the bounds the field is converted with the smallest axis scale, and a negative reading
- * there stands (UE's volume-box term): an open sheet signed by the bake's vote is solid beyond its own box. @p sheet
+ * there stands: an open sheet signed by the bake's vote is solid beyond its own box. @p sheet
  * reads a two-sided field as the zero-thickness sheet it represents (the stored shell plus its half thickness); read
  * as stored, a shell reaches its thickness past the box.
  */
@@ -296,11 +294,10 @@ float SdfInstanceExactReach(SdfInstance inst, SdfHeader header)
 }
 
 /**
- * UE's DistanceToMeshSurfaceStandalone (DistanceFieldLightingShared.ush:452-471) over the two resident levels: the
- * coarsest answers where it reads farther than a quarter of the distance it encodes (one of its voxels), the traced
- * level nearer the surface. The traced level's narrow band saturates short of the Lumen cascade's coverage band; the
- * coarsest level's reaches it. x = the world distance (SdfInstanceWorldDistance), y = the answering level's exact
- * reach (SdfInstanceExactReach).
+ * An instance's distance over its two resident levels: the coarsest answers where it reads farther than a quarter of
+ * the distance it encodes (one of its voxels), the traced level nearer the surface. The traced level's narrow band
+ * saturates short of the GI cascade's coverage band; the coarsest level's reaches it. x = the world distance
+ * (SdfInstanceWorldDistance), y = the answering level's exact reach (SdfInstanceExactReach).
  */
 vec2 SdfInstanceStandaloneDistance(SdfInstance inst, SdfHeader header, vec3 local_position, bool sheet)
 {
@@ -317,7 +314,7 @@ vec2 SdfInstanceStandaloneDistance(SdfInstance inst, SdfHeader header, vec3 loca
 	return vec2(SdfInstanceWorldDistance(inst, header, local_position, sheet), SdfInstanceExactReach(inst, header));
 }
 
-/// World radius of the sphere around the instance's geometry box (UE DFObjectBounds.SphereRadius).
+/// World radius of the sphere around the instance's geometry box.
 float SdfInstanceWorldRadius(SdfInstance inst)
 {
 	uint header_base = inst.header_index * uint(SDF_HEADER_STRIDE);
@@ -326,9 +323,8 @@ float SdfInstanceWorldRadius(SdfInstance inst)
 }
 
 /**
- * Whether a Lumen cascade level of voxel size @p voxel holds the instance (UE CullObjectsToClipmapCS,
- * GlobalDistanceField.usf:125): an object whose bounding sphere is no larger than max(@p min_radius,
- * @p min_radius_voxels voxels) is left out, unless an emissive light source.
+ * Whether a GI cascade level of voxel size @p voxel holds the instance: an object whose bounding sphere is no larger
+ * than max(@p min_radius, @p min_radius_voxels voxels) is left out, unless an emissive light source.
  */
 bool SdfLumenCascadeKeepsInstance(SdfInstance inst, float voxel, float min_radius, float min_radius_voxels)
 {

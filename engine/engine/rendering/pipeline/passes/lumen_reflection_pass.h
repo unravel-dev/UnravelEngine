@@ -11,15 +11,14 @@ namespace unravel
 {
 
 /**
- * @brief Lumen reflections (UE 5.8 Lumen, software ray tracing, Global Tracing, Epic scalability): one ray per
- *        pixel below the trace roughness, the Hi-Z screen trace and then the global distance field with surface
- *        cache hits, the ratio-estimator resolve, the dual-reprojection temporal and the variance-gated bilateral,
- *        composited into the reflection buffers.
+ * @brief GI reflections, traced in software: one ray per pixel below the trace roughness, the Hi-Z screen trace and
+ *        then the global distance field with surface cache hits, the ratio-estimator resolve, the dual-reprojection
+ *        temporal and the variance-gated bilateral, composited into the reflection buffers.
  *
- * Runs after the Lumen gather, whose rough specular fills the untraced layer: the pass owns both reflection
- * buffers, in place of SSR and the reflection probes (UE composites no other specular under Lumen's). The
+ * Runs after the GI gather, whose rough specular fills the untraced layer: the pass owns both reflection
+ * buffers, in place of SSR and the reflection probes (no other specular is composited under the traced one). The
  * reflection quality (gi_settings::reflection_settings::quality) sets the rays the resolve reuses and, at its
- * lowest, traces one pixel of each 2 x 2 block (lumen_pass_common.h). The constants and their UE sources are in
+ * lowest, traces one pixel of each 2 x 2 block (lumen_pass_common.h). The constants are in
  * engine/rendering/gi/lumen_constants.h; the plan and the measurements in tasks/lumen_transform.
  */
 class lumen_reflection_pass
@@ -52,8 +51,8 @@ public:
     static constexpr const char* tiles_texture = "LUMEN_REFLECTION_TILES";
     static constexpr const char* traced_frame_key = "LUMEN_REFLECTION_FRAME";
     static constexpr const char* downsample_key = "LUMEN_REFLECTION_DOWNSAMPLE";
-    /// The period of the noise sequences and of the downsampled traces' pixel rotation, in frames (UE
-    /// ReflectionsStateFrameIndexMod8; lumen_reflection_common.sh reads frame % this as u_lumen_frame.y).
+    /// The period of the noise sequences and of the downsampled traces' pixel rotation, in frames
+    /// (lumen_reflection_common.sh reads frame % this as u_lumen_frame.y).
     static constexpr uint32_t state_frame_period = 8;
 
     /// The trace targets' size for a @p view_size view at the trace downsample factor @p downsample.
@@ -63,16 +62,16 @@ public:
     /// changes one stage for an in-session A/B. Zero in production.
     enum experiment : uint32_t
     {
-        ///< The traces paint their type instead of radiance (UE DEBUG_VISUALIZE_TRACE_TYPES): screen hits red,
-        ///< distance-field hits green (yellow when lit by last frame's scene colour), misses blue.
+        ///< The traces paint their type instead of radiance: screen hits red, distance-field hits green (yellow when
+        ///< lit by last frame's scene colour), misses blue.
         experiment_show_trace_types = 1u << 16u,
     };
 
     auto init(rtti::context& ctx) -> bool;
     auto has_programs() const -> bool;
 
-    /// The roughness below which pixels trace reflection rays under @p settings (UE LumenMaxRoughnessToTraceReflections,
-    /// in [0, 1]); the traced weight fades to zero over LUMEN_ROUGHNESS_FADE_LENGTH below it.
+    /// The roughness below which pixels trace reflection rays under @p settings (in [0, 1]); the traced weight
+    /// fades to zero over LUMEN_ROUGHNESS_FADE_LENGTH below it.
     static auto get_max_roughness_to_trace(const gi_settings::reflection_settings& settings) -> float;
 
     /**

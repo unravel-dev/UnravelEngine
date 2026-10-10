@@ -1,6 +1,6 @@
 /*
- * Lumen adaptive screen probes, spawning (UE 5.8 ScreenProbeAdaptivePlacementSpawnCS, LumenScreenProbeGather.usf
- * :1810-1950). One thread per candidate, laid out as the marking pass. A marked candidate becomes a probe unless the
+ * Adaptive screen probes, spawning.
+ * One thread per candidate, laid out as the marking pass. A marked candidate becomes a probe unless the
  * marked candidates with a lower sample index in the 2x2 uniform tiles around it, taken as adaptive probes (each
  * corner keeping its best), already interpolate it with weights summing to LUMEN_INTERP_MIN_WEIGHT. The group
  * reserves its probes with one atomic on the counter; probes past u_lumen_adaptive_capacity are dropped. A spawned

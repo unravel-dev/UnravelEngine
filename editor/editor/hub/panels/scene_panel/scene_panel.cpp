@@ -286,10 +286,9 @@ const std::array<transform_tool, 5> TRANSFORM_TOOLS = {{
 // Camera Movement Helper Functions
 // ============================================================================
 
-// Navigation follows the UE level viewport. UE's reference point is camera speed 1: a 20 m/s
-// flight (200 m/s^2 against a drag of 10 1/s), a pan of 1 cm per pixel and a 96 cm dolly per wheel
-// notch. Pan and dolly keep those ratios to the fly speed here, so the one speed setting fits the
-// whole navigation to the scale of the scene.
+// The reference point is a 20 m/s flight (200 m/s^2 against a drag of 10 1/s), a pan of 1 cm per
+// pixel and a 96 cm dolly per wheel notch. Pan and dolly keep those ratios to the fly speed, so the
+// one speed setting fits the whole navigation to the scale of the scene.
 constexpr float CAMERA_REFERENCE_FLY_SPEED = 20.0f;
 constexpr float CAMERA_PAN_PER_PIXEL = 0.01f / CAMERA_REFERENCE_FLY_SPEED;
 constexpr float CAMERA_DOLLY_PER_NOTCH = 0.96f / CAMERA_REFERENCE_FLY_SPEED;
@@ -305,9 +304,9 @@ constexpr float CAMERA_FLY_SPEED_HINT_HEIGHT = 0.85f;
 constexpr float CAMERA_ROTATION_SPEED = 0.1f;
 // A hitch must not throw the camera past the point the user was heading for.
 constexpr float CAMERA_MAX_TIME_STEP = 1.0f / 30.0f;
-// The orbit pivot lies on the view axis, like UE's look-at point. UE carries its distance along
-// from the last focus; here it is the depth of the selection, which is the same point right after
-// a focus and needs no bookkeeping in between. Without a selection ahead it falls back to this.
+// The orbit pivot lies on the view axis, at the depth of the selection: the focused point right
+// after a focus, with no distance to carry along in between. Without a selection ahead it falls
+// back to this.
 constexpr float CAMERA_ORBIT_DEFAULT_DISTANCE = 10.0f;
 constexpr float CAMERA_ORBIT_MIN_DISTANCE = 0.1f;
 
@@ -342,7 +341,7 @@ auto collect_fly_direction(const transform_component& transform) -> math::vec3
     const float right = get_key_axis(shortcuts::camera_right, shortcuts::camera_left);
     const float forward = get_key_axis(shortcuts::camera_forward, shortcuts::camera_backward);
     const float up = get_key_axis(shortcuts::camera_up, shortcuts::camera_down);
-    // Up / down stay on the world axis whatever the pitch, the way UE flies.
+    // Up / down stay on the world axis whatever the pitch.
     const math::vec3 world_up{0.0f, 1.0f, 0.0f};
     const math::vec3 direction =
         transform.get_x_axis_global() * right + transform.get_z_axis_global() * forward + world_up * up;
@@ -436,7 +435,7 @@ auto orbit_camera(entt::handle camera, const math::vec3& pivot) -> bool
 
 auto handle_mouse_dolly(entt::handle camera, float fly_speed) -> bool
 {
-    // UE's orbit zoom: right or down moves in, at the pan's distance per pixel.
+    // Orbit zoom: right or down moves in, at the pan's distance per pixel.
     const ImVec2 delta_move = ImGui::GetIO().MouseDelta;
     const float dolly_pixels = delta_move.x + delta_move.y;
     if(dolly_pixels == 0.0f)

@@ -174,7 +174,7 @@ void lumen_reflection_pass::set_frame_uniforms(const run_params& params, const f
     // The screen trace needs last frame's colour and depth beside this frame's Hi-Z.
     const bool screen_traces =
         has_hiz && has_prev_color && gather.prev_depth && gather.settings.reflections.screen_traces;
-    // The distant screen traces follow the screen traces (UE LumenReflections::UseDistantScreenTraces).
+    // The distant screen traces run whenever the screen traces do, unless an experiment turns them off.
     const bool distant_screen_traces =
         screen_traces && (experiments_ & lumen_pass::experiment_no_distant_screen_traces) == 0u;
     const uint32_t reflection_flags = (screen_traces ? 1u : 0u) |

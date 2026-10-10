@@ -8,12 +8,12 @@
 namespace unravel
 {
 
-/// UE 5.8's default Earth atmosphere (USkyAtmosphereComponent constructor), distances in km, coefficients per km.
+/// The default Earth atmosphere, distances in km, coefficients per km.
 namespace atmosphere_defaults
 {
 constexpr float bottom_radius_km = 6360.0f;
 constexpr float top_radius_km = 6420.0f;
-/// The transmittance origin sits this far above the ground (UE GetTransmittanceAtGroundLevel).
+/// The transmittance origin sits this far above the ground.
 constexpr float origin_altitude_km = 0.5f;
 constexpr float rayleigh_scale_height_km = 8.0f;
 constexpr float mie_scale_height_km = 1.2f;
@@ -27,14 +27,14 @@ constexpr float ozone_absorption_b = 0.000085f;
 /// Ozone density: a tent peaking at 1 at this altitude and falling to 0 this far either side of it.
 constexpr float ozone_tip_altitude_km = 25.0f;
 constexpr float ozone_half_width_km = 15.0f;
-/// Optical-depth samples along the ray to the top of the atmosphere (UE uses 15).
+/// Optical-depth samples along the ray to the top of the atmosphere.
 constexpr int transmittance_samples = 15;
 } // namespace atmosphere_defaults
 
 /**
- * @brief Transmittance of sunlight through UE's default atmosphere, seen from the ground (UE
- * FAtmosphereSetup::GetTransmittanceAtGroundLevel). A directional light flagged as the atmosphere sun is
- * multiplied by it, which is what makes UE's sunlight warm, and darker and redder towards the horizon.
+ * @brief Transmittance of sunlight through the default atmosphere, seen from the ground. A directional light
+ * flagged as the atmosphere sun is multiplied by it, which makes the sunlight warm, and darker and redder towards
+ * the horizon.
  * @param direction_to_sun Unit vector towards the sun, +Y up.
  * @return Linear RGB transmittance in [0, 1]; near 0 once the sun is below the horizon.
  */
@@ -53,7 +53,7 @@ inline auto compute_atmosphere_sun_transmittance(const math::vec3& direction_to_
     math::vec3 optical_depth(0.0f);
     for(int i = 0; i < ad::transmittance_samples; ++i)
     {
-        // UE samples at the start of each step.
+        // Samples at the start of each step.
         const float t = step * float(i);
         const float x = origin_x + elevation_cos * t;
         const float y = origin_y + elevation_sin * t;

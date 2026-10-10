@@ -41,8 +41,7 @@ static inline std::vector<float> log_space(std::size_t start, std::size_t end, s
 
 /**
  * Compute the screen bounds of a point light along one axis.
- * Based on http://www.gamasutra.com/features/20021011/lengyel_06.htm
- * and http://sourceforge.net/mailarchive/message.php?msg_id=10501105
+ * The two planes through the eye tangent to the light's sphere touch it where its projection ends.
  */
 // inline bool compute_projected_sphere_shaft(float light_x,
 //                                            float light_z,
@@ -158,8 +157,7 @@ inline T square(const T& t)
 
 /**
  * Compute the screen bounds of a point light along one axis.
- * Based on http://www.gamasutra.com/features/20021011/lengyel_06.htm
- * and http://sourceforge.net/mailarchive/message.php?msg_id=10501105
+ * The two planes through the eye tangent to the light's sphere touch it where its projection ends.
  */
 inline bool compute_projected_sphere_shaft(float light_x,
                                            float light_z,

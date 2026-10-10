@@ -207,7 +207,7 @@ struct editor_actions
     /**
      * @brief Flags every reflection probe across all loaded scenes for rebuild.
      *
-     * Mirrors Unreal's "Build > Build Reflection Captures" menu. When force_full_first_frame
+     * Backs the editor's "Build Reflection Captures" menu item. When force_full_first_frame
      * is true, each probe bakes all six faces in a single frame for instant visible results;
      * when false, bakes are time-sliced to avoid editor hitches.
      *

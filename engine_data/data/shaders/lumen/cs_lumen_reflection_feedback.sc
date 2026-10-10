@@ -1,17 +1,16 @@
 /*
- * Lumen reflections, the surface cache feedback (UE 5.8 LumenSurfaceCacheFeedback: SURFACE_CACHE_FEEDBACK in
- * LumenSurfaceCacheSampling.ush:157-169 and 592-618, GPUFeedbackCompaction.usf). Runs after the distance-field stage:
- * one trace texel per LUMEN_FEEDBACK_TILE x LUMEN_FEEDBACK_TILE tile, at this frame's jitter in the tile, takes the
- * stage's hit where it hit the distance field (its radiance alpha): the point at its hit distance and the field's
- * gradient there. UE writes its feedback from the card lookup of the trace itself; the stage has no stage left for the
- * table, and a march of its own here cost as much as a tenth of the stage. At the hit, the card sample of largest
- * weight asks for the res level its ray cone wants
- * (UE: log2(the card's half extent / max(the cone's radius at the hit, 1 cm)) - 0.5, levels 3 to 11) and the page under
- * its card UV at that level (UE LocalPageCoord; here on the page grid without the card's aspect bias, 2^(level - 7)
- * pages across, which lumen_scene maps into the card's mip).
+ * GI reflections, the surface cache feedback: the card pages reflection hits sample and the resolution they want.
+ * Runs after the distance-field stage: one trace texel per LUMEN_FEEDBACK_TILE x LUMEN_FEEDBACK_TILE tile, at this
+ * frame's jitter in the tile, takes the stage's hit where it hit the distance field (its radiance alpha): the point at
+ * its hit distance and the field's gradient there. The stage itself has no bgfx stage left to bind the table to, and
+ * a march of its own here would cost as much as a tenth of the stage. At the hit, the card sample of largest weight
+ * asks for the res level its ray cone wants
+ * (log2(the card's half extent / max(the cone's radius at the hit, 1 cm)) - 0.5, levels 3 to 11) and the page under
+ * its card UV at that level (on the page grid without the card's aspect bias, 2^(level - 7) pages across, which
+ * lumen_scene maps into the card's mip).
  *
  * The element (card | level << 20 | page x << 24 | page y << 28; never 0, the level is at least 3) is counted in a
- * linear-probing hash table, keys and counts (UE HashTableAdd, MurmurMix), that persists over a feedback window:
+ * linear-probing hash table, keys and counts, that persists over a feedback window:
  * lumen_surface_cache_pass reads it back and clears it.
  */
 
@@ -42,25 +41,25 @@ SAMPLER3D(s_lumen_object_grid, 15);
 /// xy = this frame's texel in each feedback tile, z = the hash table's index mask (its size - 1).
 uniform vec4 u_lumen_feedback;
 
-/// Trace texels per feedback tile side (UE r.LumenScene.SurfaceCache.Feedback.TileSize).
+/// Trace texels per feedback tile side; one texel per tile feeds back each frame.
 #define LUMEN_FEEDBACK_TILE 16
-/// UE r.LumenScene.SurfaceCache.Feedback.ResLevelBias, MIN_RES_LEVEL / MAX_RES_LEVEL and the 1 cm floor of the cone's
-/// radius.
+/// The bias added to the res level a ray cone wants, the range of res levels feedback asks for, and the 1 cm floor of
+/// the cone's radius.
 #define LUMEN_FEEDBACK_RES_LEVEL_BIAS -0.5
 #define LUMEN_FEEDBACK_MIN_RES_LEVEL 3.0
 #define LUMEN_FEEDBACK_MAX_RES_LEVEL 11.0
 #define LUMEN_FEEDBACK_MIN_SAMPLE_RADIUS 0.01
-/// The cone angle tan() is taken at, short of a right angle (UE lets tan() wrap past it, and the wrapped radius asks
-/// for the finest level).
+/// The largest cone angle tan() is taken at, short of a right angle: past it tan() wraps, and the wrapped radius
+/// would ask for the finest level.
 #define LUMEN_FEEDBACK_MAX_CONE_ANGLE 1.5
-/// UE HashTableAdd's longest probe.
+/// The hash table's longest linear probe.
 #define LUMEN_FEEDBACK_MAX_PROBES 32
 /// The card indices an element holds (20 bits).
 #define LUMEN_FEEDBACK_MAX_CARDS 1048576
-/// UE SUB_ALLOCATION_RES_LEVEL: above it a mip has 2^(level - 7) pages across.
+/// The highest res level whose card mip fits in one page: above it a mip has 2^(level - 7) pages across.
 #define LUMEN_FEEDBACK_SUB_ALLOCATION_RES_LEVEL 7.0
 
-/// UE MurmurMix (Hash.ush).
+/// The Murmur3 32-bit finalizer: spreads every bit of the element over the whole key.
 uint LumenMurmurMix(uint hash)
 {
 	hash ^= hash >> 16u;
@@ -97,7 +96,7 @@ vec4 LumenFeedbackInstance(vec4 best, inout float best_extent, float id, vec3 po
 	return best;
 }
 
-/// Counts @p element in the hash table (UE HashTableAdd and its InterlockedAdd of the count).
+/// Counts @p element in the hash table: finds or claims its key by linear probing, then adds 1 to its count.
 void LumenAddFeedback(uint element)
 {
 	uint mask = uint(u_lumen_feedback.z);
@@ -155,7 +154,7 @@ void main()
 	{
 		return;
 	}
-	// UE's ray cone: the eye-to-pixel spread plus the ray's cone angle, its radius at the hit.
+	// The ray cone: the eye-to-pixel spread plus the ray's cone angle, its radius at the hit.
 	float pixel_spread = atan(2.0 / (u_proj[1][1] * u_lumen_view_size.y));
 	float cone = min(pixel_spread + ray.w, LUMEN_FEEDBACK_MAX_CONE_ANGLE);
 	float sample_radius = max(tan(cone) * hit_t, LUMEN_FEEDBACK_MIN_SAMPLE_RADIUS);

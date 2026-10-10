@@ -1,8 +1,7 @@
 /*
- * Radiance cache, start of frame (UE 5.8 ClearProbeIndirectionCS, LumenRadianceCache.usf:24-35, and
- * ClearProbeFreeList, LumenRadianceCacheUpdate.usf:17-47): this frame's indirection becomes all
- * LUMEN_RC_INVALID before the marks. On a frame that does not continue the cache (first frame, reset), last
- * frame's indirection is cleared too, so nothing carries over, and every probe's state restarts.
+ * Radiance cache, start of frame: this frame's indirection becomes all LUMEN_RC_INVALID before the marks. On a
+ * frame that does not continue the cache (first frame, reset), last frame's indirection is cleared too, so nothing
+ * carries over, and every probe's state restarts.
  * One thread per indirection entry.
  */
 

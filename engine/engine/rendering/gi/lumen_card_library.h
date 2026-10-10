@@ -15,10 +15,10 @@ namespace unravel
 class mesh;
 
 /**
- * @brief Lumen card sets per (mesh asset, submesh, two-sidedness).
+ * @brief Surface cache card sets per (mesh asset, submesh, two-sidedness).
  *
  * A card set depends on the submesh's triangles and on whether its material is two-sided, never on a placement, so
- * every placement of a submesh shares one set. Like UE, an imported mesh carries its sets from the compiler (one per
+ * every placement of a submesh shares one set. An imported mesh carries its sets from the compiler (one per
  * submesh, for the material it imported with); the library builds a set on the thread pool only for a mesh without
  * them (procedurally created) or for a placement whose material flips the sidedness.
  */
@@ -36,9 +36,8 @@ public:
         -> std::shared_ptr<const lumen_mesh_cards>;
 
     /**
-     * @brief What the build of the submesh's cards saw (UE FLumenCardBuildDebugData, which UE keeps when its card
-     *        build runs in debug mode), or null while it is being built: the first request builds the submesh's cards
-     *        again on the thread pool, recording it.
+     * @brief What the build of the submesh's cards saw, for the card generation visualization, or null while it is
+     *        being built: the first request builds the submesh's cards again on the thread pool, recording it.
      */
     auto acquire_build_debug(const std::shared_ptr<mesh>& owner, uint32_t submesh_index, bool two_sided)
         -> std::shared_ptr<const lumen_card_build_debug>;

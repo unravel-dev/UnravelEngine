@@ -16,16 +16,18 @@ namespace atmosphere_sky_detail
 namespace ad = atmosphere_defaults;
 
 constexpr float pi = 3.14159265358979f;
-/// UE's default Mie scattering (the extinction in atmosphere_defaults adds the absorption), anisotropy and ground albedo.
+/// The default Mie scattering (the extinction in atmosphere_defaults adds the absorption), anisotropy and ground
+/// albedo.
 constexpr float mie_scattering = 0.003996f;
 constexpr float mie_anisotropy = 0.8f;
 constexpr float ground_albedo = 0.4f;
-/// The sky light's capture height above the ground (UE PlanetRadiusOffset, 5 m).
+/// The sky light's capture height above the ground, 5 m.
 constexpr float observer_altitude_km = 0.005f;
-/// UE's rendered sky lights a horizontal surface with 0.085 x the outside sun at a 50 degree sun (17 directions matched
-/// at a fixed exposure against this engine's sky); this model gives 0.073 there. The factor carries the difference,
-/// mostly UE's brighter sky near the horizon, while the model supplies how the ratio moves with the sun.
-constexpr float ue_sky_irradiance_calibration = 1.16f;
+/// The calibration target: a measured reference sky lights a horizontal surface with 0.085 x the outside sun at a 50
+/// degree sun (17 view directions matched at a fixed exposure against this engine's sky); this model gives 0.073
+/// there. The factor carries the difference, mostly the reference's brighter sky near the horizon, while the model
+/// supplies how the ratio moves with the sun.
+constexpr float sky_irradiance_calibration = 1.16f;
 
 /// Transmittance table over height (squared spacing, denser near the ground) and view zenith cosine.
 constexpr int transmittance_heights = 32;
@@ -181,8 +183,8 @@ private:
         }
     }
 
-    /// Hillaire 2020: second-order light with an isotropic phase, L2, and the transfer f of unit isotropic light;
-    /// the infinite series of higher orders is L2 / (1 - f). The ground reflects the sun with UE's albedo.
+    /// Multiple scattering: second-order light with an isotropic phase, L2, and the transfer f of unit isotropic light;
+    /// the infinite series of higher orders is L2 / (1 - f). The ground reflects the sun with ground_albedo.
     auto integrate_multi_scattering(const math::vec3& origin,
                                     const math::vec3& sun,
                                     const std::vector<math::vec3>& directions) const -> math::vec3
@@ -283,7 +285,7 @@ private:
         {
             // The horizon entry samples just above it: a sun exactly on the horizon is half below the planet's edge.
             const float elevation_sin = std::max(float(i) / float(ratio_entries - 1), 0.01f);
-            ratios_[i] = ue_sky_irradiance_calibration * integrate_horizontal_irradiance(elevation_sin);
+            ratios_[i] = sky_irradiance_calibration * integrate_horizontal_irradiance(elevation_sin);
         }
     }
 

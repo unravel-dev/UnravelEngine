@@ -1,46 +1,20 @@
 /*
- * This example demonstrates:
- * - Usage of Perez sky model [1] to render a dynamic sky.
- * - Rendering a mesh with a lightmap, shading of which is driven by the same parameters as the sky.
+ * The atmospheric pass renders a dynamic sky with the Perez sky model.
  *
  * Typically, the sky is rendered using cubemaps or other environment maps.
  * This approach can provide a high-quality sky, but the downside is that the
  * image is static. To achieve daytime changes in sky appearance, there is a need
  * in a dynamic model.
  *
- * Perez "An All-Weather Model for Sky Luminance Distribution" is a simple,
- * but good enough model which is, in essence, a function that
- * interpolates a sky color. As input, it requires several turbidity
- * coefficients, a color at zenith and direction to the sun.
- * Turbidity coefficients are taken from [2], which are computed using more
- * complex physically based models. Color at zenith depends on daytime and can
- * vary depending on many factors.
+ * The Perez sky model is a simple, but good enough model which is, in essence,
+ * a function that interpolates a sky color. As input, it requires several
+ * turbidity coefficients, a color at zenith and direction to the sun. The
+ * turbidity coefficients are fitted to more complex physically based models.
+ * Color at zenith depends on daytime and can vary depending on many factors.
  *
- * In the code below, there are two tables that contain sky and sun luminance
- * which were computed using code from [3]. Luminance in those tables
- * represents actual scale of light energy that comes from sun compared to
- * the sky.
- *
- * The sky is driven by luminance of the sky, while the material of the
- * landscape is driven by both, the luminance of the sky and the sun. The
- * lightening model is very simple and consists of two parts: directional
- * light and hemisphere light. The first is used for the sun while the second
- * is used for the sky. Additionally, the second part is modulated by a
- * lightmap to achieve ambient occlusion effect.
- *
- * References
- * ==========
- *
- * [1] R. Perez, R. Seals, and J. Michalsky."An All-Weather Model for Sky Luminance Distribution".
- *     Solar Energy, Volume 50, Number 3 (March 1993), pp. 235-245.
- *
- * [2] A. J. Preetham, Peter Shirley, and Brian Smits. "A Practical Analytic Model for Daylight",
- *     Proceedings of the 26th Annual Conference on Computer Graphics and Interactive Techniques,
- *     1999, pp. 91-100.
- *     https://www.cs.utah.edu/~shirley/papers/sunsky/sunsky.pdf
- *
- * [3] E. Lengyel, Game Engine Gems, Volume One. Jones & Bartlett Learning, 2010. pp. 219 - 234
- *
+ * Two tables (atmospheric_pass_perez.cpp) hold the sun's and the zenith sky's
+ * luminance by hour of the day. Luminance in those tables represents actual
+ * scale of light energy that comes from sun compared to the sky.
  */
 
 #pragma once
@@ -62,8 +36,8 @@ namespace detail
 {
 
 // Controls sun position according to time, month, and observer's latitude.
-// Sun position computation based on Earth's orbital elements:
-// https://nssdc.gsfc.nasa.gov/planetary/factsheet/earthfact.html
+// Sun position computation based on Earth's orbital elements: the sun's mean
+// longitude and the obliquity of the ecliptic (23.4 degrees) give its declination.
 class sun_controller
 {
 public:

@@ -17,7 +17,7 @@ class surface_cache_system;
 class surface_cache_view;
 
 /**
- * @brief Lumen's object grid of one camera: per cell of 2 x 2 x 2 voxels of the camera's global distance field clipmap,
+ * @brief The GI object grid of one camera: per cell of 2 x 2 x 2 voxels of the camera's global distance field clipmap,
  *        the four GI instances whose surfaces are nearest within reach (cs_lumen_object_grid.sc), through whose cards
  *        every global-SDF hit sampler shades a hit (lumen_surface_cache.sh).
  *

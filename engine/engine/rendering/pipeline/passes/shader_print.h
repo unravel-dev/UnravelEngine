@@ -17,9 +17,8 @@ namespace unravel
 {
 
 /**
- * @brief UE 5.8's ShaderPrint for compute shaders (ShaderPrint.cpp, ShaderPrintCommon.ush): text a frame's compute
- *        shaders write into this view's print buffer (shader_print/shader_print.sh), drawn over the finished image
- *        with an 8x8 font and UE's drop shadow.
+ * @brief Printing from compute shaders: text a frame's compute shaders write into this view's print buffer
+ *        (shader_print/shader_print.sh), drawn over the finished image with an 8x8 font and a drop shadow.
  *
  * A frame's printing starts with begin_frame(), which empties the buffer by a GPU clear in a view of its own ahead of
  * every printer (the GPU writes the buffer, so no CPU update may). A frame no shader printed in costs nothing: the
@@ -29,7 +28,7 @@ namespace unravel
 class shader_print
 {
 public:
-    /// Symbols a frame can print (UE r.ShaderPrint.MaxCharacters).
+    /// Symbols a frame can print.
     static constexpr uint32_t max_symbols = 4096;
 
     shader_print() = default;

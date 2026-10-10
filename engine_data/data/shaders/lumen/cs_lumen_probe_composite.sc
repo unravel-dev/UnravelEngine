@@ -1,6 +1,5 @@
 /*
- * Lumen screen probe gather, composite (UE 5.8 ScreenProbeCompositeTracesWithScatterCS,
- * LumenScreenProbeFiltering.usf:30-186). One group per probe, one thread per ray (LUMEN_PROBE_TRACE_RES^2).
+ * Screen probe gather, composite. One group per probe, one thread per ray (LUMEN_PROBE_TRACE_RES^2).
  *
  * Each ray's radiance, its max channel clamped to LUMEN_MAX_RAY_INTENSITY (pre-exposed, stateless), is
  * re-binned to ONE of the 2x2 octahedral texels around its jittered direction by a blue-noise bilinear
@@ -10,8 +9,8 @@
  * A texel holds the SUM of the rays that landed in it (all rays shift together, so most texels receive
  * exactly one); a texel no ray reached stores hit distance -1, which the filter reads as "no sample".
  *
- * The probe's moving fraction (UE ScreenProbeCalculateMovingCS, LumenScreenProbeFiltering.usf:1000-1080): the solid
- * angle share of its rays the trace marked moving (LumenEncodeTraceDistance), read by the filter and the temporal.
+ * The probe's moving fraction: the solid angle share of its rays the trace marked moving (LumenEncodeTraceDistance),
+ * read by the filter and the temporal.
  *
  * Writes rgb = radiance, a = the smallest hit distance of the texel's rays, or -1; and the probe's moving fraction.
  */

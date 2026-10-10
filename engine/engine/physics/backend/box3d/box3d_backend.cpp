@@ -2551,8 +2551,7 @@ void push_dynamic_bodies(mover_query& query, const math::vec3& character_velocit
 /**
  * @brief One fixed step of the geometric character mover.
  *
- * Follows the classic step-up / slide / step-down scheme of the Bullet kinematic
- * controller, built on Box3D's mover queries:
+ * A step-up / slide / step-down mover built on Box3D's mover queries:
  *   1. free velocity integration (gravity, terminal speed, damping)
  *   2. sweep up by the step allowance plus any upward motion
  *   3. slide the horizontal move along the collected planes
