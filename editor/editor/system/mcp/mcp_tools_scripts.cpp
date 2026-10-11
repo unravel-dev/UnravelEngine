@@ -15,7 +15,9 @@
 
 #include <chrono>
 #include <fstream>
+#include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -82,6 +84,64 @@ auto protocol_for_path(const fs::path& absolute) -> std::string
     return fs::extract_protocol(key).string();
 }
 
+/**
+ * @brief Script sources written here that no finished build has compiled yet.
+ *
+ * A written file reaches a build only once the asset pipeline has registered it, which can be
+ * after a build already queued has finished without it. So "no build pending" alone does not
+ * mean the edit is built: the wait also needs the last build to have compiled these.
+ */
+struct unbuilt_sources
+{
+    std::mutex mutex;
+    std::set<std::string> paths;
+};
+
+auto get_unbuilt_sources() -> unbuilt_sources&
+{
+    static unbuilt_sources sources;
+    return sources;
+}
+
+/// One spelling per file, so a build's list and a written path compare equal.
+auto normalize_source_path(const fs::path& path) -> std::string
+{
+    return to_lower_ascii(path.lexically_normal().generic_string());
+}
+
+/// Notes a written source the protocol's library builds: a .cs file under its data folder.
+void note_written_source(const fs::path& absolute)
+{
+    const auto key = fs::convert_to_protocol(absolute).generic_string();
+    const auto protocol = fs::extract_protocol(key).string();
+    if(absolute.extension() != ex::get_format<script>() || protocol.empty() || !key.starts_with(protocol + ":/data/"))
+    {
+        return;
+    }
+    auto& sources = get_unbuilt_sources();
+    std::lock_guard<std::mutex> lock(sources.mutex);
+    sources.paths.insert(normalize_source_path(absolute));
+}
+
+/// Drops the noted sources the last build compiled, or that no longer exist; whether any are left.
+auto has_unbuilt_sources(const asset_compiler::script_compilation_result& last) -> bool
+{
+    std::set<std::string> built;
+    for(const auto& file : last.files)
+    {
+        built.insert(normalize_source_path(file));
+    }
+    auto& sources = get_unbuilt_sources();
+    std::lock_guard<std::mutex> lock(sources.mutex);
+    std::erase_if(sources.paths,
+                  [&](const std::string& path)
+                  {
+                      fs::error_code ec;
+                      return built.contains(path) || !fs::exists(fs::path(path), ec);
+                  });
+    return !sources.paths.empty();
+}
+
 } // namespace
 
 void register_script_tools(mcp_tool_registry& registry)
@@ -116,9 +176,9 @@ void register_script_tools(mcp_tool_registry& registry)
              "Whether the project's scripts are building and, for the last build, its errors and "
              "warnings with file, line and message - the compiler's own parsed diagnostics for exactly "
              "one build, not a log search. wait:true first waits for a queued or running build to "
-             "finish (a source edit is picked up on the next scheduled check), up to timeout_ms "
-             "(default 60000). Call it after scripts_set_sources_batch; play mode will not start "
-             "while has_errors is true.",
+             "finish and, when it succeeds, for the editor to load it - new script types can be "
+             "attached as soon as it returns - up to timeout_ms (default 60000). Call it after "
+             "scripts_set_sources_batch; play mode will not start while has_errors is true.",
          .input_schema_json =
              R"json({"type":"object","properties":{"wait":{"type":"boolean"},"timeout_ms":{"type":"integer","minimum":0,"maximum":300000}}})json",
          .handler =
@@ -149,8 +209,9 @@ void register_script_tools(mcp_tool_registry& registry)
                              return {};
                          }
                          const auto& scripts = ctx.get_cached<script_system>();
-                         return {.pending = scripts.is_build_pending(k_protocol),
-                                 .has_errors = scripts.has_compilation_errors()};
+                         const bool pending = scripts.is_build_pending(k_protocol) ||
+                                              has_unbuilt_sources(asset_compiler::get_last_script_compilation(k_protocol));
+                         return {.pending = pending, .has_errors = scripts.has_compilation_errors()};
                      });
              };
 
@@ -371,6 +432,7 @@ void register_script_tools(mcp_tool_registry& registry)
                      results += fmt::format(R"({{"ok":false,"error":{}}})", make_json_string(error));
                      continue;
                  }
+                 note_written_source(absolute);
                  if(recompile && protocol.empty())
                  {
                      protocol = protocol_for_path(absolute);
@@ -469,6 +531,7 @@ void register_script_tools(mcp_tool_registry& registry)
                      results += fmt::format(R"({{"ok":false,"error":{}}})", make_json_string(error));
                      continue;
                  }
+                 note_written_source(dst);
                  if(recompile && protocol.empty())
                  {
                      protocol = protocol_for_path(dst);

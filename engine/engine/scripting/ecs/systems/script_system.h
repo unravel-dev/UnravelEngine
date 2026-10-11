@@ -14,6 +14,7 @@
 #include <dotnetpp/dotnetpp.h>
 
 #include <map>
+#include <set>
 
 namespace unravel
 {
@@ -122,9 +123,9 @@ struct script_system
     auto is_update_called() const -> bool;
     void wait_for_jobs_to_finish(rtti::context& ctx);
     auto has_compilation_errors() const -> bool;
-    /// True while a build of the protocol's library is queued or running - a source edit is
-    /// picked up on the next scheduled check, so "not compiling" alone does not mean "built".
-    /// Main thread.
+    /// True until a source edit's build is in use: while the build is queued or running, and
+    /// after it succeeds until its library is loaded - the editor reloads it a frame or more
+    /// later, and the new types are not there before. Main thread.
     auto is_build_pending(const std::string& protocol) const -> bool;
 
     void on_sensor_enter(entt::handle sensor, entt::handle other, const std::vector<manifold_point>& manifolds);
@@ -249,6 +250,10 @@ private:
     bool is_updating_{};
     ///< Last scheduled library build per protocol.
     std::map<std::string, tpp::future<void>> compilation_jobs_;
+
+    /// Protocols whose successful build has been announced (on_script_recompile) and whose
+    /// library has not been loaded since.
+    std::set<std::string> reloads_pending_;
 
     bool has_compilation_errors_{};
 

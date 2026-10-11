@@ -2264,6 +2264,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
     if(params.files.empty())
     {
         script_system::remove_compiled_lib(output);
+        record_script_compilation(protocol, {.succeeded = protocol != "engine"});
 
         if(protocol == "engine")
         {
@@ -2288,7 +2289,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
     if(!run_process(cmd.cmd, cmd.args, true, error))
     {
         auto parsed_errors = parse_compilation_errors(error);
-        record_script_compilation(protocol, {.succeeded = false, .errors = parsed_errors});
+        record_script_compilation(protocol, {.succeeded = false, .errors = parsed_errors, .files = params.files});
 
         if(!parsed_errors.empty())
         {
@@ -2310,7 +2311,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
         if(protocol != "engine")
         {
             auto parsed_warnings = parse_compilation_warnings(error);
-            record_script_compilation(protocol, {.succeeded = true, .warnings = parsed_warnings});
+            record_script_compilation(protocol, {.succeeded = true, .warnings = parsed_warnings, .files = params.files});
 
             for(const auto& warning : parsed_warnings)
             {

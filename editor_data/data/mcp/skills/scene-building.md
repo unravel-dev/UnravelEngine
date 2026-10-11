@@ -68,6 +68,9 @@ by height. assets_list_embedded_primitives lists every built-in shape.
   prefab reaches every instance of the outer prefab, existing ones included. A
   prefab that removes its own component or script reaches new instances only;
   existing ones keep theirs.
+- When a prefab drops a component that an outer prefab or an instance had
+  removed from it, those removals are dropped too (the outer prefab's file is
+  rewritten), so adding the component back later shows up everywhere.
 
 ## Placing meshes correctly
 

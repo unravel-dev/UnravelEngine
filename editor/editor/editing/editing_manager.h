@@ -123,6 +123,17 @@ struct editing_manager
     void on_script_recompile(rtti::context& ctx, const std::string& protocol, uint64_t version);
     void on_prefab_updated(const asset_handle<prefab>& pfb);
 
+    /**
+     * @brief Rewrites the loaded prefabs nesting `changed`, at any depth, whose statements went
+     *        stale with the change - a removal of a component the nested asset no longer has.
+     *
+     * A replay drops such a statement from the copy it reads, but the file keeps it, and it would
+     * hide the component if the nested asset gained it again. Each candidate is loaded the way
+     * prefab mode loads it and written back only when its load dropped something. The prefab open
+     * in prefab mode is left to its own save; its live copy is pruned by the same replays.
+     */
+    void prune_stale_statements_in_dependents(rtti::context& ctx, const asset_handle<prefab>& changed);
+
     void sync_prefab_entity(rtti::context& ctx, entt::handle entity, const asset_handle<prefab>& pfb);
 
     /**

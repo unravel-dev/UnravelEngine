@@ -5,7 +5,10 @@
 #include "imgui/imgui.h"
 #include "logging/logging.h"
 #include "simulation/simulation.h"
+#include <algorithm>
 #include <chrono>
+#include <set>
+#include <string_view>
 #include <engine/ecs/components/id_component.h>
 #include <engine/ecs/components/prefab_component.h>
 #include <engine/ecs/components/tag_component.h>
@@ -21,6 +24,7 @@
 #include <engine/defaults/defaults.h>
 #include <engine/meta/ecs/entity.hpp>
 
+#include <engine/assets/asset_dependency_graph.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_writer.h>
 #include <editor/events.h>
@@ -461,6 +465,108 @@ void editing_manager::on_prefab_updated(const asset_handle<prefab>& pfb)
         {
             sync_prefab_entity(ctx, entity, pfb);    
         }
+    }
+
+    // After those syncs, which run queued too.
+    queue_action("Prune Stale Prefab Statements",
+                 [this, &ctx, pfb]()
+                 {
+                     prune_stale_statements_in_dependents(ctx, pfb);
+                 });
+}
+
+namespace
+{
+/// Whether a prefab document holds a statement about a whole component - the only kind that goes
+/// stale. A scan of the buffer's text, much cheaper than loading the document to find out.
+auto has_whole_component_statement(const prefab& document) -> bool
+{
+    constexpr std::string_view key = "\"component_path\"";
+    const std::string_view text(reinterpret_cast<const char*>(document.buffer.data.data()), document.buffer.data.size());
+    for(auto at = text.find(key); at != std::string_view::npos; at = text.find(key, at + key.size()))
+    {
+        const auto open = text.find('"', at + key.size() + 1);
+        const auto close = open == std::string_view::npos ? open : text.find('"', open + 1);
+        if(close == std::string_view::npos)
+        {
+            return false;
+        }
+        if(text.substr(open + 1, close - open - 1).find('/') == std::string_view::npos)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+} // namespace
+
+void editing_manager::prune_stale_statements_in_dependents(rtti::context& ctx, const asset_handle<prefab>& changed)
+{
+    auto& am = ctx.get_cached<asset_manager>();
+
+    // Every loaded prefab, read once: what it nests, and whether it could hold a stale statement.
+    // Peeked, never loaded: one that is not loaded is read fresh - and pruned by its replays -
+    // when it is next used.
+    struct candidate
+    {
+        asset_handle<prefab> handle;
+        std::vector<hpp::uuid> references;
+        bool has_whole_statement{};
+    };
+    std::vector<candidate> candidates;
+    for(const auto& handle : am.get_assets<prefab>())
+    {
+        if(const auto loaded = handle.peek(); loaded && handle.uid() != changed.uid())
+        {
+            candidates.push_back({handle, asset_deps::get_referenced_uids(*loaded), has_whole_component_statement(*loaded)});
+        }
+    }
+
+    // Those that nest `changed`, directly or through others.
+    std::set<hpp::uuid> nesting{changed.uid()};
+    std::vector<asset_handle<prefab>> dependents;
+    for(bool grew = true; grew;)
+    {
+        grew = false;
+        for(const auto& entry : candidates)
+        {
+            if(nesting.contains(entry.handle.uid()))
+            {
+                continue;
+            }
+            const bool nests = std::any_of(entry.references.begin(),
+                                           entry.references.end(),
+                                           [&](const hpp::uuid& uid)
+                                           {
+                                               return nesting.contains(uid);
+                                           });
+            if(nests)
+            {
+                nesting.insert(entry.handle.uid());
+                grew = true;
+                if(entry.has_whole_statement)
+                {
+                    dependents.push_back(entry.handle);
+                }
+            }
+        }
+    }
+
+    for(const auto& dependent : dependents)
+    {
+        if(is_prefab_mode() && dependent == edited_prefab)
+        {
+            continue;
+        }
+        scene scratch{"stale_statement_check"};
+        const auto dropped_before = get_dropped_stale_statement_count();
+        auto root = scratch.instantiate(dependent);
+        if(root && get_dropped_stale_statement_count() > dropped_before)
+        {
+            APPLOG_INFO("Dropping statements in {} about content {} no longer has", dependent.id(), changed.id());
+            asset_writer::atomic_save_to_file(fs::resolve_protocol(dependent.id()).string(), root);
+        }
+        scratch.unload();
     }
 }
 

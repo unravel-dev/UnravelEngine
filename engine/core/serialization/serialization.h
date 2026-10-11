@@ -39,6 +39,12 @@ struct path_context
     /// Whether the document being read states a property as a whole. Asked about a property
     /// the document does not have, where it means the document removed it.
     std::function<bool(const std::string&)> is_property_stated_whole_callback;
+    /// Whether a statement here or above keeps a property of the document's own content as a
+    /// whole - one the document then has to be checked for.
+    std::function<bool(const std::string&)> is_property_kept_whole_callback;
+    /// Told about a property kept as a whole that the document no longer has: the statement
+    /// keeping it is stale.
+    std::function<void(const std::string&)> on_stale_property_callback;
     bool recording_enabled = false;
     bool ignore_next_push = false;
 
@@ -72,6 +78,19 @@ struct path_context
     auto is_property_stated_whole(const std::string& property_path) const -> bool
     {
         return is_property_stated_whole_callback && is_property_stated_whole_callback(property_path);
+    }
+
+    auto is_property_kept_whole(const std::string& property_path) const -> bool
+    {
+        return is_property_kept_whole_callback && is_property_kept_whole_callback(property_path);
+    }
+
+    void note_stale_property(const std::string& property_path) const
+    {
+        if(on_stale_property_callback)
+        {
+            on_stale_property_callback(property_path);
+        }
     }
 
 private:

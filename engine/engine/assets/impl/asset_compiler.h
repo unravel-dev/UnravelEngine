@@ -31,6 +31,8 @@ struct script_compilation_result
     bool succeeded{true};
     std::vector<script_compilation_entry> errors;
     std::vector<script_compilation_entry> warnings;
+    /// The sources it compiled, as absolute paths.
+    std::vector<std::string> files;
 };
 
 /**

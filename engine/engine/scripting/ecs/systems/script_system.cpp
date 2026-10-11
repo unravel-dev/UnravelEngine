@@ -407,6 +407,8 @@ auto script_system::load_engine_domain(rtti::context& ctx, bool recompile) -> bo
 {
     APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Load Engine Domain");
 
+    reloads_pending_.erase("engine");
+
     bool is_deploy_mode = ctx.has<deploy>();
 
     if(!is_deploy_mode && recompile)
@@ -493,6 +495,8 @@ void script_system::unload_engine_domain()
 auto script_system::load_app_domain(rtti::context& ctx, bool recompile) -> bool
 {
     APPLOG_TRACE_PERF_NAMED(std::chrono::milliseconds, "Load App Domain");
+
+    reloads_pending_.erase("app");
 
     bool is_deploy_mode = ctx.has<deploy>();
 
@@ -1050,6 +1054,7 @@ void script_system::check_for_recompile(rtti::context& ctx, delta_t dt, bool emi
                                          has_compilation_errors_ = !f.get();
                                          if(!has_compilation_errors_)
                                          {
+                                             reloads_pending_.insert(protocol);
                                              ev.on_script_recompile(ctx, protocol, current_version);
                                          }
                                      });
@@ -1082,7 +1087,7 @@ auto script_system::is_build_pending(const std::string& protocol) const -> bool
             return true;
         }
     }
-    return is_compiling(protocol);
+    return is_compiling(protocol) || reloads_pending_.contains(protocol);
 }
 
 auto script_system::is_compiling(const std::string& protocol) const -> bool

@@ -50,10 +50,11 @@ namespace
         /// The live scripts, for a prefab update; empty otherwise.
         script_component::script_components_t live_scripts;
 
-        /// Scripts of each type read so far, for the slots of scripts saved without one.
+        /// Scripts of each type read so far without a slot, for the slots derived for them.
         std::map<std::string, size_t> type_counts;
 
-        /// Every slot the document lists, whether the replay let it through or not.
+        /// Every slot the document lists, whether the replay let it through or not. Kept for a
+        /// prefab update only, where live scripts the document does not list are checked.
         std::set<hpp::uuid> document_slots;
 
         /// Live scripts the document states as removed.
@@ -1449,20 +1450,30 @@ LOAD(script_component::script_object)
     auto* list_ctx = script_list_ctx;
     if(slot.is_nil())
     {
-        slot = derive_script_slot(type_name, list_ctx != nullptr ? list_ctx->type_counts[type_name] : 0);
+        // A list is written by one save, so a script without a slot is in a list without any:
+        // counting those alone numbers them as a whole list would.
+        auto occurrence = size_t{0};
+        if(list_ctx != nullptr)
+        {
+            occurrence = list_ctx->type_counts[type_name]++;
+        }
+        slot = derive_script_slot(type_name, occurrence);
     }
-    if(list_ctx != nullptr)
+    if(list_ctx != nullptr && !list_ctx->live_scripts.empty())
     {
-        ++list_ctx->type_counts[type_name];
         list_ctx->document_slots.insert(slot);
     }
     obj.slot = slot;
 
     // Held back as a whole: removed here, or not the replayed document's to state.
-    serialization::path_segment_guard slot_guard(script_slot_segment(slot));
-    if(!is_current_path_replayed())
+    serialization::path_segment_guard slot_guard;
+    if(serialization::get_path_context() != nullptr)
     {
-        return;
+        slot_guard.push_segment(script_slot_segment(slot));
+        if(!is_current_path_replayed())
+        {
+            return;
+        }
     }
 
     serialization::path_segment_guard type_guard(script_type.get_fullname());

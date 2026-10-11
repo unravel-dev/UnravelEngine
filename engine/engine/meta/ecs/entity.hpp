@@ -412,6 +412,12 @@ auto collect_replay_statements(entt::handle root) -> replay_statements;
 /// local list states about nested content, and every nested root's local list, re-rooted.
 auto fold_document_statements(entt::handle root) -> prefab_statements;
 
+/// How many statements replays on the calling thread have dropped as stale so far - a whole
+/// component removed that the asset no longer has. A load and the replays of the instances
+/// nested in it run on the thread that loads, so reading it before and after a load counts
+/// that load's drops alone: whether the document's file still carries such statements.
+auto get_dropped_stale_statement_count() -> uint64_t;
+
 /// Clears the local list of every named instance nested under root (root's own is kept).
 void clear_local_statements_below(entt::handle root);
 

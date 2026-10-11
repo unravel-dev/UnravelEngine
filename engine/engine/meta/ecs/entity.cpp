@@ -24,6 +24,8 @@
 
 #include <algorithm>
 #include <charconv>
+#include <set>
+#include <string_view>
 #include <hpp/utility.hpp>
 #include <sstream>
 #include <utility>
@@ -193,6 +195,9 @@ auto instance_path_between(entt::handle outer_root, entt::handle inner_root, std
 
 namespace
 {
+/// Statements replays on this thread have dropped as stale; see get_dropped_stale_statement_count.
+thread_local uint64_t dropped_stale_statements{};
+
 /// Calls fn(ancestor_root, chain) for every instance root above `root`, nearest first, with
 /// the slot chain from that ancestor down to root. Stops at the first ancestor that cannot
 /// address root - an unnamed instance in between - because nothing above it can either.
@@ -294,6 +299,11 @@ auto collect_replay_statements(entt::handle root) -> replay_statements
                                          out.local.merge(nested.get<prefab_component>().local.prefixed(path));
                                      });
     return out;
+}
+
+auto get_dropped_stale_statement_count() -> uint64_t
+{
+    return dropped_stale_statements;
 }
 
 auto fold_document_statements(entt::handle root) -> prefab_statements
@@ -1506,6 +1516,36 @@ inline auto is_stated_removed(const std::string& has_name) -> bool
     return path_ctx->is_property_stated_whole(path_ctx->get_current_path());
 }
 
+/**
+ * @brief Reports a statement that keeps a whole component of the document's own content the
+ *        document no longer has.
+ *
+ * Such a statement removed the component when the asset had it. The asset lost it since, so
+ * it states nothing - and if the asset gains the component again, it is a new one the
+ * statement must not hide. The replay filter held the document's has_<component> back, so it
+ * is read here, past the filter.
+ */
+template<typename Archive>
+void note_if_statement_stale(Archive& ar, const std::string& has_name)
+{
+    auto* path_ctx = serialization::get_path_context();
+    if(path_ctx == nullptr || !path_ctx->is_property_kept_whole_callback)
+    {
+        return;
+    }
+    serialization::path_segment_guard guard(has_name);
+    if(!path_ctx->is_property_kept_whole(path_ctx->get_current_path()))
+    {
+        return;
+    }
+    bool document_has = false;
+    try_serialize_direct(ar, ser20::make_nvp(has_name, document_has));
+    if(!document_has)
+    {
+        path_ctx->note_stale_property(path_ctx->get_current_path());
+    }
+}
+
 template<typename Component>
 auto should_load_component(const entt::handle& obj) -> bool
 {
@@ -1669,6 +1709,10 @@ LOAD(entity_components<entt::handle>)
             else if(obj.entity.all_of<ctype>() && is_stated_removed(keys.has_name))
             {
                 obj.entity.remove<ctype>();
+            }
+            else
+            {
+                note_if_statement_stale(ar, keys.has_name);
             }
             
             if constexpr(std::is_same_v<ctype, id_component>)
@@ -2447,6 +2491,37 @@ auto split_serialization_path(const std::string& serialization_path) -> serializ
     return parts;
 }
 
+/**
+ * @brief Drops a statement that keeps a whole component of `instance`'s own content its asset no
+ *        longer has, wherever it was made.
+ *
+ * The instance's own list, and the lists above it that address it - an outer instance's copy of
+ * its document's statements, an authoring root's adopted list. A document's file keeps it until
+ * that document is saved again; each replay before then drops it again.
+ */
+void drop_stale_statement(entt::handle instance, const hpp::uuid& entity_uuid, const std::string& component_path)
+{
+    const auto drop = [&](prefab_statements& statements, const std::vector<hpp::uuid>& instance_path)
+    {
+        if(statements.has_override(instance_path, entity_uuid, component_path))
+        {
+            statements.remove_override(instance_path, entity_uuid, component_path);
+            ++dropped_stale_statements;
+        }
+    };
+    if(auto* own = instance.try_get<prefab_component>())
+    {
+        drop(own->local, {});
+    }
+    for_each_addressing_ancestor(instance,
+                                 [&](entt::handle ancestor, const std::vector<hpp::uuid>& chain)
+                                 {
+                                     auto& ancestor_prefab = ancestor.get<prefab_component>();
+                                     drop(ancestor_prefab.from_document, chain);
+                                     drop(ancestor_prefab.local, chain);
+                                 });
+}
+
 /// The component path a replay decision is made on: "has_<component>" is decided as the
 /// component itself.
 auto replay_component_path(const serialization_path_parts& parts) -> std::string_view
@@ -2672,6 +2747,24 @@ auto sync_prefab_instance(entt::handle instance) -> bool
     // Slot chains from this instance to each nested owner the filter meets, computed once.
     std::map<entt::entity, std::vector<hpp::uuid>> owner_paths;
 
+    // Statements the replay found stale: entity uid and component path, dropped after the load.
+    std::vector<std::pair<hpp::uuid, std::string>> stale_statements;
+
+    // The components a statement keeps whole in this instance's own content - all a stale check
+    // can concern. Usually none, and then the check is not installed: it would otherwise run for
+    // every component an entity does not have.
+    std::set<std::string, std::less<>> kept_whole_components;
+    for(const auto* statements : {&protect.local, &protect.stated})
+    {
+        for(const auto& override_data : statements->overrides)
+        {
+            if(override_data.instance_path.empty() && override_data.component_path.find('/') == std::string::npos)
+            {
+                kept_whole_components.insert(override_data.component_path);
+            }
+        }
+    }
+
     serialization::path_context path_ctx;
     serialization::path_context* old_ctx = serialization::get_path_context();
     if(needs_override_tracking)
@@ -2772,6 +2865,43 @@ auto sync_prefab_instance(entt::handle instance) -> bool
                    document->has_override_touching(*owner_path, parts.entity_uuid, component_path);
         };
 
+        // This instance's own content, whose document is its source: a statement here or above
+        // that keeps a whole component of it - the check for one gone stale.
+        if(!kept_whole_components.empty())
+        {
+            path_ctx.is_property_kept_whole_callback =
+                [&protect, &kept_whole_components](const std::string& property_path)
+            {
+                // By name first, which settles almost every call without parsing the path.
+                const auto name_start = property_path.rfind('/');
+                auto component = std::string_view(property_path).substr(name_start == std::string::npos ? 0 : name_start + 1);
+                if(component.starts_with("has_"))
+                {
+                    component.remove_prefix(4);
+                }
+                if(!kept_whole_components.contains(component))
+                {
+                    return false;
+                }
+                const auto parts = split_serialization_path(property_path);
+                if(!parts.valid || get_load_context().current_nested_owner)
+                {
+                    return false;
+                }
+                const std::string component_path(replay_component_path(parts));
+                return protect.local.has_override({}, parts.entity_uuid, component_path) ||
+                       protect.stated.has_override({}, parts.entity_uuid, component_path);
+            };
+            path_ctx.on_stale_property_callback = [&stale_statements](const std::string& property_path)
+            {
+                const auto parts = split_serialization_path(property_path);
+                if(parts.valid)
+                {
+                    stale_statements.emplace_back(parts.entity_uuid, std::string(replay_component_path(parts)));
+                }
+            };
+        }
+
         // Only a nested instance's content can be removed by the document: a statement here or
         // above keeps what is live, and this instance's own content is the document itself.
         path_ctx.is_property_stated_whole_callback =
@@ -2825,6 +2955,12 @@ auto sync_prefab_instance(entt::handle instance) -> bool
     if(needs_override_tracking)
     {
         serialization::set_path_context(old_ctx);
+    }
+
+    // Before the cascade, so the nested instances' replays do not meet them either.
+    for(const auto& [entity_uuid, component_path] : stale_statements)
+    {
+        drop_stale_statement(instance, entity_uuid, component_path);
     }
 
     if(loaded && instance)
