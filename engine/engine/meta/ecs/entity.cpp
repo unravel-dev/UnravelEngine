@@ -23,6 +23,7 @@
 #include "uuid/uuid.h"
 
 #include <algorithm>
+#include <charconv>
 #include <hpp/utility.hpp>
 #include <sstream>
 #include <utility>
@@ -409,6 +410,108 @@ void convert_legacy_override_state(entt::registry& registry, entt::handle docume
     }
     load_ctx.legacy_overrides.clear();
 }
+
+namespace
+{
+/// What an override on a script named before scripts were named by slot looks like:
+/// "script_component/script_components[<position>]/...".
+constexpr std::string_view POSITIONAL_SCRIPT_PREFIX = "script_component/script_components[";
+
+/// The position such an override names, and where the rest of its path starts.
+auto parse_script_position(std::string_view component_path, size_t& position, size_t& rest) -> bool
+{
+    if(!component_path.starts_with(POSITIONAL_SCRIPT_PREFIX))
+    {
+        return false;
+    }
+    const auto digits_begin = component_path.data() + POSITIONAL_SCRIPT_PREFIX.size();
+    const auto digits_end = component_path.data() + component_path.size();
+    const auto [last, error] = std::from_chars(digits_begin, digits_end, position);
+    if(error != std::errc{} || last == digits_begin || last == digits_end || *last != ']')
+    {
+        return false;
+    }
+    rest = static_cast<size_t>(last - component_path.data()) + 1;
+    return true;
+}
+
+/// The entity a statement on `holder` is about: its instance, reached by the slot chain, then
+/// the entity by prefab uid.
+auto find_statement_target(entt::handle holder, const std::vector<hpp::uuid>& instance_path, const hpp::uuid& entity_uuid)
+    -> entt::handle
+{
+    entt::handle instance_root = instance_path.empty() ? holder : entt::handle{};
+    if(!instance_root)
+    {
+        std::vector<hpp::uuid> chain;
+        for_each_addressable_nested_root(holder,
+                                         chain,
+                                         [&](entt::handle nested_root, const std::vector<hpp::uuid>& nested_chain)
+                                         {
+                                             if(!instance_root && nested_chain == instance_path)
+                                             {
+                                                 instance_root = nested_root;
+                                             }
+                                         });
+    }
+    return instance_root ? scene::find_entity_by_prefab_uuid(instance_root, entity_uuid) : entt::handle{};
+}
+
+/// Renames one list's script overrides from the script's position to its slot. The position was
+/// the script's place in its entity's list when the override was recorded; the slot of the script
+/// in that place now is what the override meant. One that no longer resolves stays as it is.
+void convert_positional_script_overrides(entt::handle holder, prefab_statements& statements)
+{
+    std::vector<std::pair<prefab_property_override_data, prefab_property_override_data>> renames;
+    for(const auto& override_data : statements.overrides)
+    {
+        size_t position{};
+        size_t rest{};
+        if(!parse_script_position(override_data.component_path, position, rest))
+        {
+            continue;
+        }
+        const auto target = find_statement_target(holder, override_data.instance_path, override_data.entity_uuid);
+        const auto* scripts = target ? target.try_get<script_component>() : nullptr;
+        if(scripts == nullptr || position >= scripts->get_script_components().size())
+        {
+            continue;
+        }
+        auto renamed = override_data;
+        renamed.component_path = "script_component/script_components[" +
+                                 hpp::to_string(scripts->get_script_components()[position].slot) + "]" +
+                                 override_data.component_path.substr(rest);
+        renames.emplace_back(override_data, std::move(renamed));
+    }
+    for(auto& [from, to] : renames)
+    {
+        statements.overrides.erase(from);
+        statements.overrides.insert(std::move(to));
+    }
+}
+
+/// Converts the script overrides of every instance at or under `root` - done once a document
+/// has loaded, when the scripts they name are there to be asked.
+void convert_positional_script_overrides_under(entt::handle root)
+{
+    if(!root)
+    {
+        return;
+    }
+    if(auto* prefab_comp = root.try_get<prefab_component>())
+    {
+        convert_positional_script_overrides(root, prefab_comp->local);
+        convert_positional_script_overrides(root, prefab_comp->from_document);
+    }
+    if(const auto* trans_comp = root.try_get<transform_component>())
+    {
+        for(auto child : trans_comp->get_children())
+        {
+            convert_positional_script_overrides_under(child);
+        }
+    }
+}
+} // namespace
 scoped_instance_frame::scoped_instance_frame()
 {
     get_load_context().instance_stack.emplace_back();
@@ -1390,6 +1493,19 @@ private:
     }
 };
 
+/// Whether the document being replayed removed a component it does not have: it states the
+/// component as a whole. Asked only where the document lacks it.
+inline auto is_stated_removed(const std::string& has_name) -> bool
+{
+    auto* path_ctx = serialization::get_path_context();
+    if(path_ctx == nullptr)
+    {
+        return false;
+    }
+    serialization::path_segment_guard guard(has_name);
+    return path_ctx->is_property_stated_whole(path_ctx->get_current_path());
+}
+
 template<typename Component>
 auto should_load_component(const entt::handle& obj) -> bool
 {
@@ -1549,6 +1665,10 @@ LOAD(entity_components<entt::handle>)
 
                 emit_on_load<ctype>(*obj.entity.registry(), obj.entity.entity());
 
+            }
+            else if(obj.entity.all_of<ctype>() && is_stated_removed(keys.has_name))
+            {
+                obj.entity.remove<ctype>();
             }
             
             if constexpr(std::is_same_v<ctype, id_component>)
@@ -1841,6 +1961,10 @@ void load_from_archive(Archive& ar, entt::registry& reg)
     if(!get_load_context().legacy_overrides.empty())
     {
         convert_legacy_override_state(reg, {}, {});
+    }
+    for(auto& root : roots)
+    {
+        convert_positional_script_overrides_under(root);
     }
 
     pop_load_context(pushed);
@@ -2323,6 +2447,18 @@ auto split_serialization_path(const std::string& serialization_path) -> serializ
     return parts;
 }
 
+/// The component path a replay decision is made on: "has_<component>" is decided as the
+/// component itself.
+auto replay_component_path(const serialization_path_parts& parts) -> std::string_view
+{
+    auto component_path = parts.component_path;
+    if(component_path.starts_with("has_"))
+    {
+        component_path.remove_prefix(4);
+    }
+    return component_path;
+}
+
 /// Whether a component path addresses a nested instance's own prefab bookkeeping - the link
 /// itself rather than the entity's contents, which the document that owns the instance
 /// states outright.
@@ -2540,19 +2676,42 @@ auto sync_prefab_instance(entt::handle instance) -> bool
     serialization::path_context* old_ctx = serialization::get_path_context();
     if(needs_override_tracking)
     {
+        // The slot chain from this instance to a nested one, worked out once per replay.
+        const auto owner_path_of = [&owner_paths, instance](entt::handle owner) -> const std::vector<hpp::uuid>*
+        {
+            if(const auto cached = owner_paths.find(owner.entity()); cached != owner_paths.end())
+            {
+                return &cached->second;
+            }
+            std::vector<hpp::uuid> chain;
+            if(!instance_path_between(instance, owner, chain))
+            {
+                return nullptr;
+            }
+            return &owner_paths.emplace(owner.entity(), std::move(chain)).first->second;
+        };
+
+        // What the replayed document states about the content it nests.
+        const auto document_statements_of = [instance]() -> const prefab_statements*
+        {
+            auto& load_ctx = get_load_context();
+            if(load_ctx.has_document_statements)
+            {
+                return &load_ctx.document_statements;
+            }
+            const auto* own = instance.try_get<prefab_component>();
+            return own != nullptr ? &own->from_document : nullptr;
+        };
+
         path_ctx.should_serialize_property_callback =
-            [&protect, &owner_paths, instance](const std::string& property_path)
+            [&protect, owner_path_of, document_statements_of](const std::string& property_path)
         {
             const auto parts = split_serialization_path(property_path);
             if(!parts.valid)
             {
                 return true;
             }
-            auto component_path = parts.component_path;
-            if(component_path.starts_with("has_"))
-            {
-                component_path.remove_prefix(4);
-            }
+            const auto component_path = replay_component_path(parts);
 
             auto& load_ctx = get_load_context();
             const auto owner = load_ctx.current_nested_owner;
@@ -2577,19 +2736,10 @@ auto sync_prefab_instance(entt::handle instance) -> bool
             {
                 return false;
             }
-            const std::vector<hpp::uuid>* owner_path = nullptr;
-            if(const auto cached = owner_paths.find(owner.entity()); cached != owner_paths.end())
+            const auto* owner_path = owner_path_of(owner);
+            if(owner_path == nullptr)
             {
-                owner_path = &cached->second;
-            }
-            else
-            {
-                std::vector<hpp::uuid> chain;
-                if(!instance_path_between(instance, owner, chain))
-                {
-                    return false;
-                }
-                owner_path = &owner_paths.emplace(owner.entity(), std::move(chain)).first->second;
+                return false;
             }
 
             // Content this document introduced inside the nested instance: its record is the
@@ -2617,17 +2767,33 @@ auto sync_prefab_instance(entt::handle instance) -> bool
                 return true;
             }
 
-            const prefab_statements* document = nullptr;
-            if(load_ctx.has_document_statements)
-            {
-                document = &load_ctx.document_statements;
-            }
-            else if(const auto* own = instance.try_get<prefab_component>())
-            {
-                document = &own->from_document;
-            }
+            const auto* document = document_statements_of();
             return document != nullptr &&
                    document->has_override_touching(*owner_path, parts.entity_uuid, component_path);
+        };
+
+        // Only a nested instance's content can be removed by the document: a statement here or
+        // above keeps what is live, and this instance's own content is the document itself.
+        path_ctx.is_property_stated_whole_callback =
+            [&protect, owner_path_of, document_statements_of](const std::string& property_path)
+        {
+            const auto parts = split_serialization_path(property_path);
+            const auto& load_ctx = get_load_context();
+            const auto owner = load_ctx.current_nested_owner;
+            if(!parts.valid || !owner || load_ctx.current_record_is_own_content || !owner.all_of<prefab_component>())
+            {
+                return false;
+            }
+            const auto component_path = replay_component_path(parts);
+            const auto* owner_path = owner_path_of(owner);
+            const auto* document = document_statements_of();
+            if(owner_path == nullptr || document == nullptr ||
+               protect.local.has_override_on_or_above(*owner_path, parts.entity_uuid, component_path) ||
+               protect.stated.has_override_on_or_above(*owner_path, parts.entity_uuid, component_path))
+            {
+                return false;
+            }
+            return document->has_override(*owner_path, parts.entity_uuid, std::string(component_path));
         };
         path_ctx.enable_recording();
         serialization::set_path_context(&path_ctx);
@@ -2800,6 +2966,7 @@ auto load_from_prefab_out(const asset_handle<prefab>& pfb,
                 pfb_comp.source = pfb;
                 // The document's own statements, replaced wholesale: one author, and this is it.
                 pfb_comp.from_document = std::move(document_statements);
+                convert_positional_script_overrides_under(obj);
 
                 // Same staleness as in load_from_prefab: refresh anything nested against
                 // its own asset rather than trusting this one's snapshot of it - unless the
@@ -2880,6 +3047,7 @@ auto load_from_prefab(const asset_handle<prefab>& pfb, entt::registry& registry)
                 auto& pfb_comp = obj.get_or_emplace<prefab_component>();
                 pfb_comp.source = pfb;
                 pfb_comp.from_document = std::move(document_statements);
+                convert_positional_script_overrides_under(obj);
 
                 // This asset carries a snapshot of anything nested inside it, taken when it
                 // was last saved - so it is stale the moment that inner asset is edited.

@@ -1048,8 +1048,11 @@ void entity_add_script_component_action_t::do_action()
             {
                 script_comp = &ent.emplace<script_component>();
             }
-            auto script_obj = script_comp->add_script_component(script_type);
-            do_was_successful = script_obj.pinned != nullptr;
+            script_component::script_object script_obj(script_type.new_instance());
+            script_obj.slot = added_slot;
+            auto added = script_comp->add_script_component(script_obj);
+            added_slot = added.slot;
+            do_was_successful = added.pinned != nullptr;
         }
     }
 }
@@ -1067,8 +1070,11 @@ void entity_add_script_component_action_t::undo_action()
             auto script_comp = ent.try_get<script_component>();
             if(script_comp)
             {
-                script_comp->remove_script_component(script_type);
-                script_comp->process_pending_deletions();
+                if(auto added = script_comp->get_script_component_by_slot(added_slot); added.pinned)
+                {
+                    script_comp->remove_script_component(added.pinned->get_object());
+                    script_comp->process_pending_deletions();
+                }
             }
         }
     }
@@ -1114,46 +1120,40 @@ void entity_remove_script_component_action_t::do_action()
             if (script_comp)
             {
                 const auto& comps = script_comp->get_script_components();
-                
-                // If index is specified and valid, remove the specific component at that index
-                if (script_index >= 0 && script_index < static_cast<int>(comps.size()))
+                const auto is_target_type = [&](const script_component::script_object& script)
                 {
-                    const auto& script_obj = comps[script_index];
-                    
-                    // Verify this is the correct type
-                    if (script_obj.pinned)
-                    {
-                        auto obj = script_obj.pinned->get_object();
-                        if(obj.get_type().get_fullname() == script_type_name)
-                        {
-                            // Serialize the script object before removing it
-                            removed_script_object_data = {};
-                            save_to_stream(removed_script_object_data, ent, script_obj);
-                            
-                            // Remove the specific script component instance
-                            do_was_successful = script_comp->remove_script_component(obj);
-                            if (do_was_successful)
-                            {
-                                script_comp->process_pending_deletions();
-                            }
-                        }
-                    }
+                    return script.pinned && script.pinned->get_object().get_type().get_fullname() == script_type_name;
+                };
+
+                // The script at the given index, or else the first script of the type.
+                auto target = std::end(comps);
+                if(script_index >= 0 && script_index < static_cast<int>(comps.size()))
+                {
+                    const auto at_index = std::next(std::begin(comps), script_index);
+                    target = is_target_type(*at_index) ? at_index : std::end(comps);
                 }
                 else
                 {
-                    // Fallback to old behavior: remove first component of this type
-                    auto script_obj = script_comp->get_script_component(script_type);
-                    if (script_obj.pinned)
-                    {
-                        // Serialize the script object before removing it
-                        removed_script_object_data = {};
-                        save_to_stream(removed_script_object_data, ent, script_obj);
-                    }
-                    
-                    do_was_successful = script_comp->remove_script_component(script_type);
+                    target = std::find_if(std::begin(comps), std::end(comps), is_target_type);
+                }
+
+                if(target != std::end(comps))
+                {
+                    const auto script_obj = *target;
+                    removed_index = static_cast<size_t>(std::distance(std::begin(comps), target));
+
+                    // Serialize the script object before removing it
+                    removed_script_object_data = {};
+                    save_to_stream(removed_script_object_data, ent, script_obj);
+
+                    do_was_successful = script_comp->remove_script_component(script_obj.pinned->get_object());
                     if (do_was_successful)
                     {
                         script_comp->process_pending_deletions();
+                        prefab_record = prefab_override_context::mark_script_removed(ent,
+                                                                                     script_obj.slot,
+                                                                                     script_type_name,
+                                                                                     removed_index);
                     }
                 }
             }
@@ -1180,8 +1180,8 @@ void entity_remove_script_component_action_t::undo_action()
                     removed_script_object_data.seekg(0);
                     load_from_stream(removed_script_object_data, ent, restored_obj);
 
-                    // Add the restored script object
-                    script_comp.add_script_component(restored_obj);
+                    // Back where it was, with its slot
+                    script_comp.insert_script_component(restored_obj, removed_index);
 
                 }
                 catch(...)
@@ -1195,6 +1195,8 @@ void entity_remove_script_component_action_t::undo_action()
                 // Fallback: create new instance of the type
                 script_comp.add_script_component(script_type);
             }
+            prefab_override_context::restore_overrides(prefab_record);
+            prefab_record = {};
         }
     }
 }
@@ -1213,6 +1215,136 @@ auto entity_remove_script_component_action_t::is_valid() const -> bool
 void entity_remove_script_component_action_t::draw_in_inspector(rtti::context& ctx)
 {
     // Could implement visual representation if needed
+}
+
+entity_reset_component_action_t::entity_reset_component_action_t(entt::handle ent, const entt::meta_type& ctype)
+    : entity(entt::make_uhandle(ent)), component_type(ctype)
+{
+    name = "Reset Component " + entt::get_pretty_name(component_type);
+}
+
+void entity_reset_component_action_t::do_action()
+{
+    if(auto ent = entity.resolve())
+    {
+        state_before = prefab_override_context::save_component_state(ent, component_type);
+        if(state_before.empty())
+        {
+            return;
+        }
+        component_type.invoke("component_remove"_hs, {}, ent);
+        component_type.invoke("component_add"_hs, {}, ent);
+        prefab_record = prefab_override_context::mark_changed_properties(ent, component_type, state_before);
+    }
+}
+
+void entity_reset_component_action_t::undo_action()
+{
+    if(auto ent = entity.resolve(); ent && !state_before.empty())
+    {
+        component_type.invoke("component_remove"_hs, {}, ent);
+        component_type.invoke("component_add"_hs, {}, ent);
+        std::stringstream stream(state_before);
+        component_type.invoke("component_load"_hs, {}, ent, entt::forward_as_meta(stream));
+        prefab_override_context::restore_overrides(prefab_record);
+        prefab_record = {};
+    }
+}
+
+auto entity_reset_component_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    return false;
+}
+
+auto entity_reset_component_action_t::is_valid() const -> bool
+{
+    auto ent = entity.resolve();
+    return ent.valid() && component_type;
+}
+
+void entity_reset_component_action_t::draw_in_inspector(rtti::context& ctx)
+{
+}
+
+entity_reset_script_component_action_t::entity_reset_script_component_action_t(entt::handle ent,
+                                                                               const hpp::uuid& script_slot)
+    : entity(entt::make_uhandle(ent)), slot(script_slot)
+{
+    name = "Reset Script Component";
+}
+
+void entity_reset_script_component_action_t::do_action()
+{
+    auto ent = entity.resolve();
+    auto* script_comp = ent ? ent.try_get<script_component>() : nullptr;
+    if(script_comp == nullptr)
+    {
+        return;
+    }
+    const auto script_obj = script_comp->get_script_component_by_slot(slot);
+    if(!script_obj.pinned)
+    {
+        return;
+    }
+    const auto& comps = script_comp->get_script_components();
+    const auto it = std::find_if(std::begin(comps),
+                                 std::end(comps),
+                                 [&](const auto& script)
+                                 {
+                                     return script.slot == slot;
+                                 });
+    index = static_cast<size_t>(std::distance(std::begin(comps), it));
+    const auto script_type = script_obj.pinned->get_object().get_type();
+    const auto component_type = entt::resolve<script_component>();
+    const auto state_before = prefab_override_context::save_component_state(ent, component_type);
+    script_before = {};
+    save_to_stream(script_before, ent, script_obj);
+
+    script_comp->remove_script_component(script_obj.pinned->get_object());
+    script_comp->process_pending_deletions();
+    script_component::script_object defaults(script_type.new_instance());
+    defaults.slot = slot;
+    script_comp->insert_script_component(defaults, index);
+
+    prefab_record = prefab_override_context::mark_changed_properties(ent, component_type, state_before);
+}
+
+void entity_reset_script_component_action_t::undo_action()
+{
+    auto ent = entity.resolve();
+    auto* script_comp = ent ? ent.try_get<script_component>() : nullptr;
+    if(script_comp == nullptr || script_before.str().empty())
+    {
+        return;
+    }
+    if(auto reset = script_comp->get_script_component_by_slot(slot); reset.pinned)
+    {
+        script_comp->remove_script_component(reset.pinned->get_object());
+        script_comp->process_pending_deletions();
+    }
+    script_component::script_object restored;
+    script_before.seekg(0);
+    if(load_from_stream(script_before, ent, restored) && restored.pinned)
+    {
+        script_comp->insert_script_component(restored, index);
+    }
+    prefab_override_context::restore_overrides(prefab_record);
+    prefab_record = {};
+}
+
+auto entity_reset_script_component_action_t::is_mergeable(const editing_action_t& previous) const -> bool
+{
+    return false;
+}
+
+auto entity_reset_script_component_action_t::is_valid() const -> bool
+{
+    auto ent = entity.resolve();
+    return ent.valid() && ent.all_of<script_component>() && !slot.is_nil();
+}
+
+void entity_reset_script_component_action_t::draw_in_inspector(rtti::context& ctx)
+{
 }
 
 } // namespace unravel

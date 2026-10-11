@@ -1,3 +1,4 @@
+#include "mcp_component_utils.h"
 #include "mcp_meta_properties.h"
 #include "mcp_tools_common.h"
 
@@ -13,6 +14,7 @@
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/scripting/ecs/systems/script_system.h>
 #include <hpp/utility.hpp>
+#include <map>
 #include <math/math.h>
 
 namespace unravel::mcp
@@ -893,9 +895,12 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name = "scene_remove_scripts_batch",
-         .description = "Remove C# ScriptComponent types from many entities by type_name.",
+         .description =
+             "Remove C# ScriptComponent scripts from many entities by type_name; script_index (from 0, "
+             "as scene_get_entities_batch summary lists scripts) picks one of several of a type. On a "
+             "prefab instance the removal is recorded as an override, as the inspector's is.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"type_name":{"type":"string"}},"required":["entity_id","type_name"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"type_name":{"type":"string"},"script_index":{"type":"integer","minimum":0}},"required":["entity_id","type_name"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
              {
@@ -930,7 +935,21 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      {
                          return {.text = "Entity not found: " + entity_id, .is_error = true};
                      }
-                     em.do_action<entity_remove_script_component_action_t>("MCP Remove Script", entity, type_name);
+                     script_selector script{type_name};
+                     if(!read_script_selector(obj, script, error))
+                     {
+                         return {.text = error, .is_error = true};
+                     }
+                     const auto position = find_script_position(entity, script);
+                     if(!position)
+                     {
+                         return {.text = fmt::format("{} has no {} script at script_index {}", entity_id, type_name, script.index),
+                                 .is_error = true};
+                     }
+                     em.do_action<entity_remove_script_component_action_t>("MCP Remove Script",
+                                                                          entity,
+                                                                          position->type_fullname,
+                                                                          static_cast<int>(position->index));
                      ++count;
                  }
                  return {.text = fmt::format(R"({{"ok":true,"count":{}}})", count), .is_error = count == 0};
@@ -1051,6 +1070,7 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                      bool first_script = true;
                      if(auto* sc = entity.try_get<script_component>())
                      {
+                         std::map<std::string, size_t> type_counts;
                          for(const auto& obj : sc->get_script_components())
                          {
                              if(!obj.pinned)
@@ -1064,8 +1084,9 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                              first_script = false;
                              const auto type_name = obj.pinned->get_object().get_type().get_fullname();
                              const auto source = sc->get_script_source_location(obj);
-                             scripts += fmt::format(R"({{"type":{},"source_path":{}}})",
+                             scripts += fmt::format(R"({{"type":{},"script_index":{},"source_path":{}}})",
                                                     make_json_string(type_name),
+                                                    type_counts[type_name]++,
                                                     make_json_string(source));
                          }
                      }

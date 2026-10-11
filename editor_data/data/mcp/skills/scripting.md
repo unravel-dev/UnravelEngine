@@ -34,6 +34,9 @@ script from memory of another engine's API.
    "Script" with script_type set to the full type name -
    scene_get/set_component_properties_batch read and write public instance
    fields by name.
+7. An entity can carry several scripts of one type. script_index (from 0, as
+   scene_list_scripts_batch and the entity summary number them) picks one for
+   the property tools and scene_remove_scripts_batch; it defaults to the first.
 
 ## Do
 

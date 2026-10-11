@@ -201,7 +201,8 @@ auto get_component_icon() -> std::string
 struct inspect_callbacks
 {
     std::function<inspect_result()> on_inspect;
-    std::function<void()> on_add;
+    /// Puts the component back to its defaults where it is.
+    std::function<void()> on_reset;
     std::function<void()> on_remove;
     std::function<bool()> can_remove;
     std::function<bool()> can_merge;
@@ -378,8 +379,7 @@ auto inspect_component(inspector_context& inspector_ctx, const std::string& name
             bool removal_allowed = callbacks.can_remove();
             if(ImGui::MenuItemIcon(ICON_MDI_RESTORE, "Reset", nullptr, removal_allowed))
             {
-                callbacks.on_remove();
-                callbacks.on_add();
+                callbacks.on_reset();
 
                 result.changed = true;
                 result.edit_finished = true;
@@ -1324,12 +1324,13 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     
                 };
 
-                callbacks.on_add = [&]()
+                callbacks.on_reset = [&]()
                 {
-                    // data.emplace<ctype>();
-
-                    auto& em = ctx.get_cached<editing_manager>();
-                    em.do_action<entity_add_component_action_t>({}, data, type);
+                    if(data.all_of<ctype>())
+                    {
+                        auto& em = ctx.get_cached<editing_manager>();
+                        em.do_action<entity_reset_component_action_t>({}, data, type);
+                    }
                 };
 
                 callbacks.on_remove = [&]()
@@ -1374,7 +1375,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
             const auto& comps = script_comp->get_script_components();
 
             int index_to_remove = -1;
-            int index_to_add = -1;
+            int index_to_reset = -1;
             for(size_t i = 0; i < comps.size(); ++i)
             {
                 ImGui::PushID(i);
@@ -1478,9 +1479,9 @@ auto inspector_entity::inspect(rtti::context& ctx,
                     return inspect_res;
                 };
 
-                callbacks.on_add = [&]()
+                callbacks.on_reset = [&]()
                 {
-                    index_to_add = i;
+                    index_to_reset = i;
                 };
 
                 callbacks.on_remove = [&]()
@@ -1507,7 +1508,7 @@ auto inspector_entity::inspect(rtti::context& ctx,
                 // Track component type for prefab override context
                 override_ctx.set_component_type(std::string(script_type_name), script_type_pretty_name);
 
-                std::string segment = fmt::format("script_components[{}]/{}", i, name);
+                std::string segment = fmt::format("script_components{}/{}", script_slot_segment(script.slot), name);
                 std::string pretty_segment = fmt::format("Scripts[{}]/{}", i, pretty_name);
                 override_ctx.push_segment(segment, pretty_segment);
 
@@ -1521,24 +1522,19 @@ auto inspector_entity::inspect(rtti::context& ctx,
             if(index_to_remove != -1)
             {
                 auto comp_to_remove = comps[index_to_remove];
-
-                script_component::script_object comp_to_add;
-
                 auto type = comp_to_remove.pinned->get_object().get_type();
 
                 auto& em = ctx.get_cached<editing_manager>();
                 auto script_type_name = type.get_fullname();
                 em.do_action<entity_remove_script_component_action_t>({}, data, script_type_name, index_to_remove);
 
-                // script_comp->remove_script_component(comp_to_remove.pinned->object);
-                // script_comp->process_pending_deletions();
-
-                if(index_to_add != -1)
-                {
-                    // script_comp->add_script_component(type);
-
-                    em.do_action<entity_add_script_component_action_t>({}, data, script_type_name);
-                }
+                result.changed |= true;
+                result.edit_finished |= true;
+            }
+            else if(index_to_reset != -1)
+            {
+                auto& em = ctx.get_cached<editing_manager>();
+                em.do_action<entity_reset_script_component_action_t>({}, data, comps[index_to_reset].slot);
 
                 result.changed |= true;
                 result.edit_finished |= true;

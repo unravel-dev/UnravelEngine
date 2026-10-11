@@ -6,6 +6,9 @@
 #include <engine/events.h>
 #include <engine/play_mode.h>
 #include <engine/scripting/ecs/systems/script_system.h>
+
+#include <algorithm>
+#include <iterator>
 namespace unravel
 {
 
@@ -488,20 +491,38 @@ auto script_component::add_script_component(const dotnet::object& obj) -> script
 
 auto script_component::add_script_component(const script_object& script_obj, bool process_callbacks) -> script_object
 {
-    script_components_.emplace_back(script_obj);
-    script_components_to_create_.emplace_back(script_obj);
-    script_components_to_start_.emplace_back(script_obj);
+    auto added = script_obj;
+    if(added.slot.is_nil() || get_script_component_by_slot(added.slot).pinned)
+    {
+        added.slot = generate_uuid();
+    }
 
-    auto obj = script_obj.pinned->get_object();
+    script_components_.emplace_back(added);
+    script_components_to_create_.emplace_back(added);
+    script_components_to_start_.emplace_back(added);
+
+    auto obj = added.pinned->get_object();
 
     set_entity(obj, get_owner());
 
     if(process_callbacks)
     {
-        process_pending_actions(script_obj);
+        process_pending_actions(added);
     }
 
-    return script_obj;
+    return added;
+}
+
+auto script_component::insert_script_component(const script_object& script_obj, size_t index) -> script_object
+{
+    auto added = add_script_component(script_obj);
+    const size_t last = script_components_.size() - 1;
+    if(index < last)
+    {
+        const auto first = std::next(std::begin(script_components_), static_cast<std::ptrdiff_t>(index));
+        std::rotate(first, std::next(std::begin(script_components_), static_cast<std::ptrdiff_t>(last)), std::end(script_components_));
+    }
+    return added;
 }
 
 void script_component::add_script_components(const script_components_t& comps)
@@ -511,24 +532,6 @@ void script_component::add_script_components(const script_components_t& comps)
         if(comp.pinned)
         {
             add_script_component(comp, false);
-        }
-    }
-}
-
-void script_component::add_missing_script_components(const script_components_t& comps)
-{
-    for(auto& comp : comps)
-    {
-        if(comp.pinned)
-        {
-            auto obj = comp.pinned->get_object();
-            const auto& type = obj.get_type();
-            if(get_script_component(type).pinned)
-            {
-                continue;
-            }
-
-            add_script_component(obj);
         }
     }
 }
@@ -574,6 +577,23 @@ auto script_component::get_script_component(const dotnet::type& type) -> script_
                                 auto obj = component.pinned->get_object();
                                 const auto& comp_type = obj.get_type();
                                 return comp_type.equals(type) || comp_type.is_derived_from(type);
+                           });
+
+    if(it != std::end(script_components_))
+    {
+        return *it;
+    }
+
+    return {};
+}
+
+auto script_component::get_script_component_by_slot(const hpp::uuid& slot) const -> script_object
+{
+    auto it = std::find_if(std::begin(script_components_),
+                           std::end(script_components_),
+                           [&](const auto& component)
+                           {
+                               return component.slot == slot && !component.is_marked_for_destroy();
                            });
 
     if(it != std::end(script_components_))

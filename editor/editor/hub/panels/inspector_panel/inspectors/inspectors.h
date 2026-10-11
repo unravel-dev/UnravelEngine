@@ -324,8 +324,23 @@ struct prefab_override_context
         -> prefab_override_record;
 
     /**
-     * @brief Puts an override list back as it was before mark_changed_properties or
-     *        mark_component_removed.
+     * @brief Records that an instance no longer has a script its prefab gives it.
+     *
+     * The script as a whole becomes an override, named by its slot, which keeps the replay from
+     * bringing it back; overrides on its fields go. Nothing is recorded for a script the prefab
+     * does not have. Call after the removal.
+     * @param entity Entity the script was removed from
+     * @param slot Slot of the removed script
+     * @param type_name Full name of the script's type, for the changes list
+     * @param index Where the script sat in the entity's list, for the changes list
+     * @return What changed in the override list, for restore_overrides
+     */
+    static auto mark_script_removed(entt::handle entity, const hpp::uuid& slot, const std::string& type_name, size_t index)
+        -> prefab_override_record;
+
+    /**
+     * @brief Puts an override list back as it was before mark_changed_properties,
+     *        mark_component_removed or mark_script_removed.
      *
      * Call on undo, after the values or the component are restored.
      */

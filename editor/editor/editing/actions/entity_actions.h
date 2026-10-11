@@ -255,6 +255,8 @@ struct entity_add_script_component_action_t : crtp_meta_type<entity_add_script_c
 {
     entt::uhandle entity{};
     std::string script_type_name{};
+    /// The slot of the script this added, so undo removes that one and redo brings the same one back.
+    hpp::uuid added_slot{};
 
     bool do_was_successful{false};
 
@@ -276,8 +278,61 @@ struct entity_remove_script_component_action_t : crtp_meta_type<entity_remove_sc
     bool do_was_successful{false};
     // Store the script object data for restoration
     std::stringstream removed_script_object_data{};
+    /// Where the removed script sat, so undo puts it back there.
+    size_t removed_index{};
+    /// What the removal recorded on a prefab instance, so undo can put it back.
+    prefab_override_record prefab_record{};
 
     entity_remove_script_component_action_t(entt::handle ent, const std::string& type_name, int index = -1);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
+
+/**
+ * @brief Puts a component back to its defaults where it is.
+ *
+ * On a prefab instance the fields that change become overrides, as edits would; the component
+ * stays the prefab's rather than becoming a removal and a copy of this scene's.
+ */
+struct entity_reset_component_action_t : crtp_meta_type<entity_reset_component_action_t, editing_action_t>
+{
+    entt::uhandle entity{};
+    entt::meta_type component_type{};
+
+    /// The component as it was, for undo.
+    std::string state_before{};
+    prefab_override_record prefab_record{};
+
+    entity_reset_component_action_t(entt::handle ent, const entt::meta_type& ctype);
+
+    void do_action() override;
+    void undo_action() override;
+    auto is_mergeable(const editing_action_t& previous) const -> bool override;
+    auto is_valid() const -> bool override;
+    void draw_in_inspector(rtti::context& ctx) override;
+};
+
+/**
+ * @brief Puts one script back to its defaults where it is, keeping its slot.
+ *
+ * On a prefab instance the fields that change become overrides, as edits would; the script stays
+ * the prefab's rather than becoming a removal and a script of this scene's.
+ */
+struct entity_reset_script_component_action_t : crtp_meta_type<entity_reset_script_component_action_t, editing_action_t>
+{
+    entt::uhandle entity{};
+    hpp::uuid slot{};
+
+    /// The script as it was, for undo.
+    std::stringstream script_before{};
+    size_t index{};
+    prefab_override_record prefab_record{};
+
+    entity_reset_script_component_action_t(entt::handle ent, const hpp::uuid& script_slot);
 
     void do_action() override;
     void undo_action() override;

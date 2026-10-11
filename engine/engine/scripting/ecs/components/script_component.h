@@ -9,6 +9,7 @@
 #include <engine/scripting/ecs/systems/script_interop.h>
 #include <dotnetpp/dotnetpp.h>
 #include <math/math.h>
+#include <uuid/uuid.h>
 
 namespace unravel
 {
@@ -96,6 +97,10 @@ public:
 
         dotnet::object_pinned_ptr pinned;
         std::shared_ptr<script_object_state> state;
+
+        /// This script's identity on its entity: kept across saves, and the same in a prefab and
+        /// in every instance of it, so an override names the script rather than its position.
+        hpp::uuid slot;
     };
 
     using script_components_t = std::vector<script_object>;
@@ -122,9 +127,11 @@ public:
 
     auto add_script_component(const dotnet::type& type) -> script_object;
     auto add_script_component(const dotnet::object& obj) -> script_object;
+    /// Adds a script, keeping its slot - a new one when it has none or the slot is taken here.
     auto add_script_component(const script_object& obj, bool process_callbacks = true) -> script_object;
+    /// Adds a script at a position in the list, so an undone removal goes back where it was.
+    auto insert_script_component(const script_object& obj, size_t index) -> script_object;
     void add_script_components(const script_components_t& comps);
-    void add_missing_script_components(const script_components_t& comps);
 
     auto add_native_component(const dotnet::type& type) -> script_object;
 
@@ -136,6 +143,8 @@ public:
 
     auto get_script_components(const dotnet::type& type) -> std::vector<dotnet::object>;
     auto get_script_component(const dotnet::type& type) -> script_object;
+    /// The script with this slot, or an empty one. Scripts queued for removal are gone.
+    auto get_script_component_by_slot(const hpp::uuid& slot) const -> script_object;
     auto get_native_component(const dotnet::type& type) -> script_object;
 
     auto get_script_components() const -> const script_components_t&;

@@ -23,6 +23,7 @@
 #include <engine/rendering/ecs/components/model_component.h>
 #include <engine/rendering/ecs/components/text_component.h>
 #include <engine/rendering/ecs/components/light_component.h>
+#include <engine/meta/ecs/components/script_component.hpp>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
 #include <algorithm>
@@ -721,25 +722,24 @@ auto diff_overrides(entt::handle root, const std::set<prefab_property_override_d
     return record;
 }
 
-/// Drops an entity's overrides inside one component - its fields, not the component itself.
-void erase_component_field_overrides(prefab_component& prefab_comp,
-                                     const hpp::uuid& entity_uuid,
-                                     const std::string& component_type_name)
+/// Drops an entity's overrides below a point in its properties - a component's fields, or a
+/// script's - but not the point itself.
+void erase_overrides_below(prefab_component& prefab_comp, const hpp::uuid& entity_uuid, const std::string& component_path)
 {
     auto& overrides = prefab_comp.local.overrides;
-    auto it = overrides.lower_bound(prefab_property_override_data{entity_uuid, component_type_name});
+    auto it = overrides.lower_bound(prefab_property_override_data{entity_uuid, component_path});
     while(it != overrides.end() && it->instance_path.empty() && it->entity_uuid == entity_uuid &&
-          it->component_path.starts_with(component_type_name))
+          it->component_path.starts_with(component_path))
     {
-        const char next = it->component_path.size() > component_type_name.size()
-                              ? it->component_path[component_type_name.size()]
-                              : '\0';
+        const char next =
+            it->component_path.size() > component_path.size() ? it->component_path[component_path.size()] : '\0';
         it = (next == '/' || next == '[') ? overrides.erase(it) : std::next(it);
     }
 }
 
 /// Script fields, one per field, under the path the loader checks: the script's slot, its type, then
-/// the field - the path the inspector records for the same edit.
+/// the field - the path the inspector records for the same edit. Shown by the script's place in
+/// the list, as the inspector shows it.
 void collect_changed_script_fields(const script_component& scripts,
                                    const simdjson::dom::object& before,
                                    const simdjson::dom::object& after,
@@ -766,15 +766,14 @@ void collect_changed_script_fields(const script_component& scripts,
         {
             simdjson::dom::element old_value;
             simdjson::dom::element new_value;
-            if(field.key == SCRIPT_TYPE_KEY ||
+            if(field.key == SCRIPT_TYPE_KEY || field.key == SCRIPT_SLOT_KEY ||
                !is_saved_value_changed(old_fields, new_fields, field.key, old_value, new_value))
             {
                 continue;
             }
             const std::string field_name(field.key);
-            const auto slot = "[" + std::to_string(i) + "]";
-            changed.push_back({"script_components" + slot + "/" + type_name + "/" + field_name,
-                               "Scripts" + slot + "/" + type_name + "/" + field_name});
+            changed.push_back({"script_components" + script_slot_segment(objects[i].slot) + "/" + type_name + "/" + field_name,
+                               "Scripts[" + std::to_string(i) + "]/" + type_name + "/" + field_name});
         }
     }
 }
@@ -856,9 +855,29 @@ auto prefab_override_context::mark_component_removed(entt::handle entity, const 
     }
     // A copy, to compare the list with once the removal is recorded.
     const auto overrides_before = prefab_comp->local.overrides;
-    const auto type_name = entt::get_name(component_type);
-    erase_component_field_overrides(*prefab_comp, entity_uuid, type_name);
+    erase_overrides_below(*prefab_comp, entity_uuid, entt::get_name(component_type));
     mark_property_as_changed(entity, component_type, {});
+    return diff_overrides(root, overrides_before);
+}
+
+auto prefab_override_context::mark_script_removed(entt::handle entity,
+                                                  const hpp::uuid& slot,
+                                                  const std::string& type_name,
+                                                  size_t index) -> prefab_override_record
+{
+    auto root = find_prefab_root_entity(entity);
+    auto* prefab_comp = root ? root.try_get<prefab_component>() : nullptr;
+    const auto entity_uuid = get_entity_prefab_uuid(entity);
+    if(prefab_comp == nullptr || entity_uuid.is_nil() || slot.is_nil())
+    {
+        return {};
+    }
+    // A copy, to compare the list with once the removal is recorded.
+    const auto overrides_before = prefab_comp->local.overrides;
+    const auto script_type = entt::resolve<script_component>();
+    const auto script_path = "script_components" + script_slot_segment(slot);
+    erase_overrides_below(*prefab_comp, entity_uuid, entt::get_name(script_type) + "/" + script_path);
+    mark_property_as_changed(entity, script_type, script_path, "Scripts[" + std::to_string(index) + "]/" + type_name);
     return diff_overrides(root, overrides_before);
 }
 
@@ -1274,15 +1293,11 @@ auto prefab_override_context::exists_in_prefab(scene& cache_scene,
 
     if(etype == entt::resolve<script_component>())
     {
-        auto script_comp = entity.try_get<script_component>();
-        if(script_comp)
+        const auto* script_comp = entity.try_get<script_component>();
+        const auto slot = parse_script_slot(property_path);
+        if(script_comp != nullptr && slot)
         {
-            auto tokens = string_utils::tokenize(property_path, "/");
-            if(tokens.size() > 1 && tokens[0] == "script_components")
-            {
-                auto script_name = tokens[1];
-                return script_comp->has_script_components(script_name);
-            }
+            return script_comp->get_script_component_by_slot(*slot).pinned != nullptr;
         }
     }
 

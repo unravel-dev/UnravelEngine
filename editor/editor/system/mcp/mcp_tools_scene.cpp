@@ -97,18 +97,25 @@ auto describe_scene_presets(rtti::context& ctx) -> std::string
     return fmt::format(R"({{"presets":{}}})", json);
 }
 
-/// The entity summary plus the layers it is on, named from the project's layer settings.
+/// The entity summary plus the layers it is on, named from the project's layer settings, and its
+/// scripts by type and index - the index script_index takes.
 auto summary_with_layers(rtti::context& ctx, entt::handle entity) -> std::string
 {
     auto summary = entity_to_summary_json(entity, 0, 0);
-    const auto* layer = entity.try_get<layer_component>();
-    if(layer == nullptr || summary.empty() || summary.back() != '}')
+    if(summary.empty() || summary.back() != '}')
     {
         return summary;
     }
     summary.pop_back();
-    summary += R"(,"layers":)" + layer_mask_to_json(ctx, layer->layers) + "}";
-    return summary;
+    if(const auto* layer = entity.try_get<layer_component>())
+    {
+        summary += R"(,"layers":)" + layer_mask_to_json(ctx, layer->layers);
+    }
+    if(entity.all_of<script_component>())
+    {
+        summary += R"(,"scripts":)" + scripts_summary_json(entity);
+    }
+    return summary + "}";
 }
 
 
@@ -531,9 +538,10 @@ void register_scene_tools(mcp_tool_registry& registry)
          .description =
              "Read typed properties for supported components (typed:true in "
              "scene_list_component_types). Each item: entity_id, component, optional script_type "
+             "(and script_index, from 0, for the second script of a type and on) "
              "(required for Script), optional properties[] key filter.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"script_type":{"type":"string"},"properties":{"type":"array","items":{"type":"string"}}},"required":["entity_id","component"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"script_type":{"type":"string"},"script_index":{"type":"integer","minimum":0,"description":"Which script of that type, from 0 (default 0)"},"properties":{"type":"array","items":{"type":"string"}}},"required":["entity_id","component"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -563,8 +571,11 @@ void register_scene_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Item requires entity_id and component", .is_error = true};
                  }
-                 std::string script_type;
-                 read_string(obj, "script_type", script_type);
+                 script_selector script;
+                 if(!read_script_selector(obj, script, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
                  std::vector<std::string> property_filter;
                  if(!read_string_array(obj, "properties", property_filter, error, false))
                  {
@@ -593,7 +604,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                      ++count;
                      continue;
                  }
-                 if(component == "Script" && script_type.empty())
+                 if(component == "Script" && script.type.empty())
                  {
                      json += fmt::format(R"({{"ok":false,"entity_id":{},"component":{},"error":{}}})",
                                          make_json_string(entity_id),
@@ -603,7 +614,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                      continue;
                  }
                  const auto* filter_ptr = property_filter.empty() ? nullptr : &property_filter;
-                 auto props = component_properties_to_json(ctx, entity, component, script_type, filter_ptr, error);
+                 auto props = component_properties_to_json(ctx, entity, component, script, filter_ptr, error);
                  if(props.empty())
                  {
                      json += fmt::format(R"({{"ok":false,"entity_id":{},"component":{},"error":{}}})",
@@ -629,13 +640,14 @@ void register_scene_tools(mcp_tool_registry& registry)
         {.name = "scene_set_component_properties_batch",
          .description =
              "Set typed properties on supported components in one undoable action. Each item: "
-             "entity_id, component, properties object; script_type required for Script. Component must "
+             "entity_id, component, properties object; script_type required for Script (script_index, "
+             "from 0, picks the second script of a type and on). Component must "
              "already exist (use scene_add_components_batch / scene_add_scripts_batch first). Hierarchy "
              "parent/children stay on transform tools - not here. On a prefab instance every changed "
              "property becomes an override, as an inspector edit does, so it survives the prefab's "
              "next save.",
          .input_schema_json =
-             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"script_type":{"type":"string"},"properties":{"type":"object"}},"required":["entity_id","component","properties"]}}},"required":["items"]})json",
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"script_type":{"type":"string"},"script_index":{"type":"integer","minimum":0,"description":"Which script of that type, from 0 (default 0)"},"properties":{"type":"object"}},"required":["entity_id","component","properties"]}}},"required":["items"]})json",
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
          {
@@ -655,7 +667,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                  entt::handle entity{};
                  std::string component;
                  entt::meta_type component_type{};
-                 std::string script_type;
+                 script_selector script;
                  std::string new_props_json;
                  std::string old_props_json;
                  /// Shared by the do and undo lambdas, which each hold a copy of the entries.
@@ -663,7 +675,7 @@ void register_scene_tools(mcp_tool_registry& registry)
              };
              auto apply_props_json = [&ctx](entt::handle entity,
                                             const std::string& component,
-                                            const std::string& script_type,
+                                            const script_selector& script,
                                             const std::string& props_json,
                                             std::string& apply_error) -> bool
              {
@@ -680,7 +692,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                      apply_error = "properties must be an object";
                      return false;
                  }
-                 auto result = apply_component_properties(ctx, entity, component, script_type, props);
+                 auto result = apply_component_properties(ctx, entity, component, script, props);
                  if(!result.ok)
                  {
                      apply_error = component_apply_result_to_json(result);
@@ -702,8 +714,11 @@ void register_scene_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Item requires entity_id and component", .is_error = true};
                  }
-                 std::string script_type;
-                 read_string(obj, "script_type", script_type);
+                 script_selector script;
+                 if(!read_script_selector(obj, script, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
                  simdjson::dom::object properties;
                  if(obj["properties"].get(properties))
                  {
@@ -718,7 +733,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "Unsupported component for typed properties: " + component, .is_error = true};
                  }
-                 if(component == "Script" && script_type.empty())
+                 if(component == "Script" && script.type.empty())
                  {
                      return {.text = "script_type is required for Script", .is_error = true};
                  }
@@ -732,7 +747,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                      }
                  }
                  const auto* filter_ptr = changed_keys.empty() ? nullptr : &changed_keys;
-                 auto old_props = component_properties_to_json(ctx, entity, component, script_type, filter_ptr, error);
+                 auto old_props = component_properties_to_json(ctx, entity, component, script, filter_ptr, error);
                  if(old_props.empty())
                  {
                      return {.text = error.empty() ? ("Failed to read properties before set: " + component) : error,
@@ -740,18 +755,18 @@ void register_scene_tools(mcp_tool_registry& registry)
                  }
                  const std::string new_props = std::string(simdjson::minify(obj["properties"]));
                  std::string apply_error;
-                 if(!apply_props_json(entity, component, script_type, new_props, apply_error))
+                 if(!apply_props_json(entity, component, script, new_props, apply_error))
                  {
-                     (void)apply_props_json(entity, component, script_type, old_props, apply_error);
+                     (void)apply_props_json(entity, component, script, old_props, apply_error);
                      return {.text = apply_error.empty() ? ("Failed to apply properties: " + component) : apply_error,
                              .is_error = true};
                  }
-                 (void)apply_props_json(entity, component, script_type, old_props, apply_error);
+                 (void)apply_props_json(entity, component, script, old_props, apply_error);
                  entry e{};
                  e.entity = entity;
                  e.component_type = component_meta_type(component);
                  e.component = std::move(component);
-                 e.script_type = std::move(script_type);
+                 e.script = std::move(script);
                  e.new_props_json = new_props;
                  e.old_props_json = std::move(old_props);
                  entries.push_back(std::move(e));
@@ -769,7 +784,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                      {
                          const auto state = prefab_override_context::save_component_state(e.entity, e.component_type);
                          std::string apply_error;
-                         (void)apply_props_json(e.entity, e.component, e.script_type, e.new_props_json, apply_error);
+                         (void)apply_props_json(e.entity, e.component, e.script, e.new_props_json, apply_error);
                          *e.overrides = prefab_override_context::mark_changed_properties(e.entity, e.component_type, state);
                      }
                  },
@@ -778,7 +793,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                      for(auto it = entries.rbegin(); it != entries.rend(); ++it)
                      {
                          std::string apply_error;
-                         (void)apply_props_json(it->entity, it->component, it->script_type, it->old_props_json, apply_error);
+                         (void)apply_props_json(it->entity, it->component, it->script, it->old_props_json, apply_error);
                          prefab_override_context::restore_overrides(*it->overrides);
                      }
                  });

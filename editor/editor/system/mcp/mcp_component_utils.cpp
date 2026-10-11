@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <map>
 #include <memory>
 #include <optional>
 #include <serialization/associative_archive.h>
@@ -1883,21 +1884,44 @@ auto apply_script_field(dotnet::object& obj,
     return false;
 }
 
+/// The index-th of the entity's scripts of exactly `type` - counted as scripts_summary_json and the
+/// remove action count them - or an empty one with `error` saying how many there are.
+auto find_selected_script(const script_component& comp,
+                          const dotnet::type& type,
+                          const script_selector& script,
+                          std::string& error) -> script_component::script_object
+{
+    size_t seen = 0;
+    for(const auto& candidate : comp.get_script_components())
+    {
+        if(!candidate.pinned || candidate.is_marked_for_destroy() || !candidate.pinned->get_object().get_type().equals(type))
+        {
+            continue;
+        }
+        if(seen++ == script.index)
+        {
+            return candidate;
+        }
+    }
+    error = seen == 0 ? "Script type not present on entity: " + script.type
+                      : fmt::format("script_index {} is past the {} {} script(s) on the entity", script.index, seen, script.type);
+    return {};
+}
+
 auto script_to_json(rtti::context& ctx,
                     script_component& comp,
-                    const std::string& script_type,
+                    const script_selector& script,
                     const std::unordered_set<std::string>* filter,
                     std::string& error) -> std::string
 {
-    auto type = resolve_script_type(ctx, script_type, error);
+    auto type = resolve_script_type(ctx, script.type, error);
     if(!type.valid())
     {
         return {};
     }
-    auto script_obj = comp.get_script_component(type);
+    auto script_obj = find_selected_script(comp, type, script, error);
     if(!script_obj.pinned || !script_obj.pinned->get_object().valid())
     {
-        error = "Script type not present on entity: " + script_type;
         return {};
     }
     auto obj = script_obj.pinned->get_object();
@@ -1929,23 +1953,23 @@ auto script_to_json(rtti::context& ctx,
 
 auto apply_script_properties(rtti::context& ctx,
                              script_component& comp,
-                             const std::string& script_type,
+                             const script_selector& script,
                              const simdjson::dom::object& properties,
                              component_apply_result& result) -> void
 {
     std::string error;
-    auto type = resolve_script_type(ctx, script_type, error);
+    auto type = resolve_script_type(ctx, script.type, error);
     if(!type.valid())
     {
         result.ok = false;
         result.errors.push_back(error);
         return;
     }
-    auto script_obj = comp.get_script_component(type);
+    auto script_obj = find_selected_script(comp, type, script, error);
     if(!script_obj.pinned || !script_obj.pinned->get_object().valid())
     {
         result.ok = false;
-        result.errors.push_back("Script type not present on entity: " + script_type);
+        result.errors.push_back(error);
         return;
     }
     auto obj = script_obj.pinned->get_object();
@@ -4091,6 +4115,7 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
             json += ",";
         }
         json += R"({"component":"Script","name":"script_type","type":"string","description":"Required C# type full name or short name"},)";
+        json += R"({"component":"Script","name":"script_index","type":"integer","description":"Which script of that type, counting from 0; default 0"},)";
         json += R"({"component":"Script","name":"*","type":"any","description":"Public instance fields: number, boolean, string, Vector2/3/4, Color"})";
         first = false;
     }
@@ -4123,7 +4148,7 @@ auto component_meta_type(const std::string& component_pretty_name) -> entt::meta
 auto component_properties_to_json(rtti::context& ctx,
                                   entt::handle entity,
                                   const std::string& component_pretty_name,
-                                  const std::string& script_type,
+                                  const script_selector& script,
                                   const std::vector<std::string>* property_filter,
                                   std::string& error) -> std::string
 {
@@ -4193,7 +4218,7 @@ auto component_properties_to_json(rtti::context& ctx,
             error = component_missing_error("Script");
             return {};
         }
-        return script_to_json(ctx, *comp, script_type, filter_ptr, error);
+        return script_to_json(ctx, *comp, script, filter_ptr, error);
     }
     if(component_pretty_name == "Particle Emitter")
     {
@@ -4325,7 +4350,7 @@ auto component_properties_to_json(rtti::context& ctx,
 auto apply_component_properties(rtti::context& ctx,
                                 entt::handle entity,
                                 const std::string& component_pretty_name,
-                                const std::string& script_type,
+                                const script_selector& script,
                                 const simdjson::dom::object& properties) -> component_apply_result
 {
     component_apply_result result;
@@ -4404,7 +4429,7 @@ auto apply_component_properties(rtti::context& ctx,
             result.errors.push_back(component_missing_error("Script"));
             return result;
         }
-        apply_script_properties(ctx, *comp, script_type, properties, result);
+        apply_script_properties(ctx, *comp, script, properties, result);
         return result;
     }
     if(component_pretty_name == "Particle Emitter")
@@ -4566,7 +4591,7 @@ auto entity_supported_component_properties_json(rtti::context& ctx,
 {
     std::string json = "{";
     bool first = true;
-    auto try_add = [&](const char* pretty, const std::string& script_type = {})
+    auto try_add = [&](const char* pretty)
     {
         if(component_filter && !component_filter->empty())
         {
@@ -4585,7 +4610,7 @@ auto entity_supported_component_properties_json(rtti::context& ctx,
             }
         }
         std::string error;
-        auto props = component_properties_to_json(ctx, entity, pretty, script_type, nullptr, error);
+        auto props = component_properties_to_json(ctx, entity, pretty, {}, nullptr, error);
         if(props.empty())
         {
             return;
@@ -4620,6 +4645,7 @@ auto entity_supported_component_properties_json(rtti::context& ctx,
         }
         if(want_script)
         {
+            std::map<std::string, size_t> type_counts;
             for(const auto& so : script->get_script_components())
             {
                 if(!so.pinned)
@@ -4632,8 +4658,9 @@ auto entity_supported_component_properties_json(rtti::context& ctx,
                     continue;
                 }
                 const auto type_name = obj.get_type().get_fullname();
+                const auto index = type_counts[type_name]++;
                 std::string error;
-                auto props = component_properties_to_json(ctx, entity, "Script", type_name, nullptr, error);
+                auto props = component_properties_to_json(ctx, entity, "Script", {type_name, index}, nullptr, error);
                 if(props.empty())
                 {
                     continue;
@@ -4643,7 +4670,8 @@ auto entity_supported_component_properties_json(rtti::context& ctx,
                     json += ",";
                 }
                 first = false;
-                json += make_json_string(std::string("Script:") + type_name);
+                const auto key = index == 0 ? type_name : fmt::format("{}[{}]", type_name, index);
+                json += make_json_string(std::string("Script:") + key);
                 json += ":";
                 json += props;
             }
@@ -4656,6 +4684,81 @@ auto entity_supported_component_properties_json(rtti::context& ctx,
 auto component_apply_result_to_json(const component_apply_result& result) -> std::string
 {
     return apply_result_to_json(result);
+}
+
+auto read_script_selector(const simdjson::dom::object& item, script_selector& out, std::string& error) -> bool
+{
+    std::string_view type;
+    if(!item["script_type"].get(type))
+    {
+        out.type = std::string(type);
+    }
+    simdjson::dom::element index;
+    if(item["script_index"].get(index))
+    {
+        return true;
+    }
+    uint64_t value{};
+    if(index.get(value))
+    {
+        error = "script_index must be a whole number of 0 or more";
+        return false;
+    }
+    out.index = static_cast<size_t>(value);
+    return true;
+}
+
+auto find_script_position(entt::handle entity, const script_selector& script) -> std::optional<script_position>
+{
+    const auto* scripts = entity.try_get<script_component>();
+    if(scripts == nullptr)
+    {
+        return std::nullopt;
+    }
+    const auto& list = scripts->get_script_components();
+    size_t seen = 0;
+    for(size_t i = 0; i < list.size(); ++i)
+    {
+        if(!list[i].pinned || !list[i].pinned->get_object().valid())
+        {
+            continue;
+        }
+        const auto type = list[i].pinned->get_object().get_type();
+        if(type.get_fullname() != script.type && type.get_name() != script.type)
+        {
+            continue;
+        }
+        if(seen++ == script.index)
+        {
+            return script_position{i, type.get_fullname()};
+        }
+    }
+    return std::nullopt;
+}
+
+auto scripts_summary_json(entt::handle entity) -> std::string
+{
+    const auto* scripts = entity.try_get<script_component>();
+    if(scripts == nullptr)
+    {
+        return "[]";
+    }
+    std::string json = "[";
+    std::map<std::string, size_t> type_counts;
+    for(const auto& script : scripts->get_script_components())
+    {
+        if(!script.pinned || !script.pinned->get_object().valid())
+        {
+            continue;
+        }
+        const auto type_name = script.pinned->get_object().get_type().get_fullname();
+        if(json.size() > 1)
+        {
+            json += ",";
+        }
+        json += fmt::format(R"({{"type":{},"script_index":{}}})", make_json_string(type_name), type_counts[type_name]++);
+    }
+    return json + "]";
 }
 
 } // namespace unravel::mcp

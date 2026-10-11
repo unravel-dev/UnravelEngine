@@ -22,49 +22,73 @@
 #include <engine/meta/animation/animation.hpp>
 #include <engine/meta/audio/audio_clip.hpp>
 #include <engine/meta/ecs/entity.hpp>
+#include <engine/meta/core/common/basetypes.hpp>
 #include <engine/meta/physics/physics_material.hpp>
 #include <engine/meta/layers/layer_mask.hpp>
 #include <graphics/texture.h>
 #include <hpp/finally.hpp>
+#include <uuid/uuid.h>
+
+#include <map>
+#include <set>
+#include <utility>
 
 namespace unravel
 {
 
 namespace
 {
-    struct script_component_loader_context
+    /**
+     * @brief The state of one script list while it loads.
+     *
+     * A prefab update matches each script the document lists to the live script with the same
+     * slot and loads it in place. The document's scripts that match none are added afterwards,
+     * and the live ones the document states as removed go.
+     */
+    struct script_list_load_context
     {
-        std::vector<script_component::script_object> script_objects;
+        /// The live scripts, for a prefab update; empty otherwise.
+        script_component::script_components_t live_scripts;
 
-        auto get_script_object(size_t hash) -> script_component::script_object*
+        /// Scripts of each type read so far, for the slots of scripts saved without one.
+        std::map<std::string, size_t> type_counts;
+
+        /// Every slot the document lists, whether the replay let it through or not.
+        std::set<hpp::uuid> document_slots;
+
+        /// Live scripts the document states as removed.
+        std::vector<hpp::uuid> removed_slots;
+
+        auto find_live(const hpp::uuid& slot) -> script_component::script_object*
         {
-            for(auto& obj : script_objects)
-            {
-                auto mono_obj = obj.pinned->get_object();
-
-                if(!mono_obj.valid())
-                {
-                    APPLOG_ERROR("Script object is invalid for domain version: {}", obj.pinned->get_domain_version());
-                    continue;
-                }
-                const auto& type = mono_obj.get_type();
-                if(!type.valid())
-                {
-                    APPLOG_ERROR("Script object type is invalid for domain version: {}", obj.pinned->get_domain_version());
-                    continue;
-                }
-                if(type.get_hash() == hash)
-                {
-                    return &obj;
-                }
-            }
-            return nullptr;
+            auto it = std::find_if(std::begin(live_scripts),
+                                   std::end(live_scripts),
+                                   [&](const auto& script)
+                                   {
+                                       return script.slot == slot;
+                                   });
+            return it != std::end(live_scripts) ? &(*it) : nullptr;
         }
     };
 
-    thread_local script_component_loader_context* script_component_loader_ctx{};
+    thread_local script_list_load_context* script_list_ctx{};
 
+    /// What precedes a script's slot in a property path below the script component.
+    constexpr std::string_view SCRIPT_LIST_SEGMENT = "script_components[";
 
+    /// A slot for a script saved without one. The k-th script of a type gets the same slot in a
+    /// prefab and in every instance of it, so files written before slots keep matching.
+    auto derive_script_slot(const std::string& type_name, size_t occurrence) -> hpp::uuid
+    {
+        return generate_uuid(type_name + "#" + std::to_string(occurrence));
+    }
+
+    /// Whether the replay filter lets the property at the current path load.
+    auto is_current_path_replayed() -> bool
+    {
+        const auto* path_ctx = serialization::get_path_context();
+        return path_ctx == nullptr || path_ctx->should_serialize_property(path_ctx->get_current_path());
+    }
 }
 
 REFLECT(script_component)
@@ -1401,6 +1425,7 @@ SAVE(script_component::script_object)
     const auto& type = object.get_type();
 
     try_save_mono_type(ar, "type", type);
+    try_save(ar, ser20::make_nvp(SCRIPT_SLOT_KEY, obj.slot));
 
     SAVE_FUNCTION_NAME(ar, object);
 }
@@ -1409,29 +1434,48 @@ SAVE_INSTANTIATE(script_component::script_object, ser20::oarchive_binary_t);
 
 LOAD(script_component::script_object)
 {
-    dotnet::type script_type;
-    try_load_mono_type(ar, "type", script_type);
+    // Which script this is decides what the replay filter is asked, so it is read past it.
+    std::string type_name;
+    try_serialize_direct(ar, ser20::make_nvp("type", type_name));
+    hpp::uuid slot;
+    try_serialize_direct(ar, ser20::make_nvp(SCRIPT_SLOT_KEY, slot));
 
-
+    const auto script_type = get_type_by_fullname(type_name);
     if(!script_type.valid())
     {
         return;
     }
 
+    auto* list_ctx = script_list_ctx;
+    if(slot.is_nil())
+    {
+        slot = derive_script_slot(type_name, list_ctx != nullptr ? list_ctx->type_counts[type_name] : 0);
+    }
+    if(list_ctx != nullptr)
+    {
+        ++list_ctx->type_counts[type_name];
+        list_ctx->document_slots.insert(slot);
+    }
+    obj.slot = slot;
 
-    serialization::path_segment_guard guard(script_type.get_fullname());
+    // Held back as a whole: removed here, or not the replayed document's to state.
+    serialization::path_segment_guard slot_guard(script_slot_segment(slot));
+    if(!is_current_path_replayed())
+    {
+        return;
+    }
 
-    auto* existing_obj = script_component_loader_ctx
-                             ? script_component_loader_ctx->get_script_object(script_type.get_hash())
-                             : nullptr;
+    serialization::path_segment_guard type_guard(script_type.get_fullname());
+
+    auto* existing_obj = list_ctx != nullptr ? list_ctx->find_live(slot) : nullptr;
     if(existing_obj)
     {
         obj = *existing_obj;
     }
     else
     {
-        auto object = script_type.new_instance();
-        obj = script_component::script_object(object);
+        obj = script_component::script_object(script_type.new_instance());
+        obj.slot = slot;
     }
 
     auto pinned_object = obj.pinned->get_object();
@@ -1450,47 +1494,122 @@ SAVE(script_component)
 SAVE_INSTANTIATE(script_component, ser20::oarchive_associative_t);
 SAVE_INSTANTIATE(script_component, ser20::oarchive_binary_t);
 
+namespace
+{
+/// A script list as the loader reads it: saved like any vector, read script by script - no
+/// position in the path and no position-based filtering; each script names itself by its slot.
+struct script_list
+{
+    script_component::script_components_t scripts;
+};
+
+template<typename Archive>
+void LOAD_FUNCTION_NAME(Archive& ar, script_list& list)
+{
+    ser20::size_type size{};
+    ar(ser20::make_size_tag(size));
+    list.scripts.resize(static_cast<std::size_t>(size));
+    for(auto& script : list.scripts)
+    {
+        ar(script);
+    }
+
+    // A document that states a live script as a whole and does not list it removed it.
+    auto* list_ctx = script_list_ctx;
+    const auto* path_ctx = serialization::get_path_context();
+    if(list_ctx == nullptr || path_ctx == nullptr)
+    {
+        return;
+    }
+    for(const auto& live : list_ctx->live_scripts)
+    {
+        if(list_ctx->document_slots.contains(live.slot))
+        {
+            continue;
+        }
+        serialization::path_segment_guard slot_guard(script_slot_segment(live.slot));
+        if(path_ctx->is_property_stated_whole(path_ctx->get_current_path()))
+        {
+            list_ctx->removed_slots.push_back(live.slot);
+        }
+    }
+}
+} // namespace
+
 LOAD(script_component)
 {
+    const bool is_update = get_load_context().is_updating_prefab();
 
-
-    auto& load_ctx = get_load_context();
-    if(load_ctx.is_updating_prefab())
+    script_list_load_context list_ctx;
+    if(is_update)
     {
-
-        script_component_loader_context ctx;
-        ctx.script_objects = obj.get_script_components();
-        
-        script_component_loader_ctx = &ctx;
-
-        auto _ = hpp::finally([&]()
+        list_ctx.live_scripts = obj.get_script_components();
+    }
+    auto* previous_ctx = std::exchange(script_list_ctx, &list_ctx);
+    auto restore_ctx = hpp::finally(
+        [&]()
         {
-            script_component_loader_ctx = nullptr;
+            script_list_ctx = previous_ctx;
         });
 
-
-        script_component::script_components_t comps;
-        if(try_load(ar, ser20::make_nvp("script_components", comps)))
-        {
-            obj.add_missing_script_components(comps);
-        }
-
-    }
-    else
+    script_list list;
+    if(!try_load(ar, ser20::make_nvp("script_components", list)))
     {
-        script_component::script_components_t comps;
-        if(try_load(ar, ser20::make_nvp("script_components", comps)))
+        return;
+    }
+
+    if(!is_update)
+    {
+        obj.add_script_components(list.scripts);
+        return;
+    }
+
+    // Live scripts were loaded in place; the document's scripts that matched none are new to
+    // this instance.
+    for(const auto& script : list.scripts)
+    {
+        if(script.pinned && list_ctx.find_live(script.slot) == nullptr)
         {
-            obj.add_script_components(comps);
+            obj.add_script_component(script);
         }
     }
-    
+
+    for(const auto& slot : list_ctx.removed_slots)
+    {
+        if(auto removed = obj.get_script_component_by_slot(slot); removed.pinned)
+        {
+            obj.remove_script_component(removed.pinned->get_object());
+        }
+    }
+    if(!list_ctx.removed_slots.empty())
+    {
+        obj.process_pending_deletions();
+    }
 }
 LOAD_INSTANTIATE(script_component, ser20::iarchive_associative_t);
 LOAD_INSTANTIATE(script_component, ser20::iarchive_binary_t);
 
 
 
+
+auto script_slot_segment(const hpp::uuid& slot) -> std::string
+{
+    return "[" + hpp::to_string(slot) + "]";
+}
+
+auto parse_script_slot(std::string_view property_path) -> std::optional<hpp::uuid>
+{
+    if(!property_path.starts_with(SCRIPT_LIST_SEGMENT))
+    {
+        return std::nullopt;
+    }
+    const auto close = property_path.find(']', SCRIPT_LIST_SEGMENT.size());
+    if(close == std::string_view::npos)
+    {
+        return std::nullopt;
+    }
+    return hpp::uuid::from_string(property_path.substr(SCRIPT_LIST_SEGMENT.size(), close - SCRIPT_LIST_SEGMENT.size()));
+}
 
 auto save_to_stream(std::ostream& stream, entt::const_handle e, const script_component::script_object& obj) -> bool
 {

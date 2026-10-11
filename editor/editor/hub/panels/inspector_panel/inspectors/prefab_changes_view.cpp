@@ -147,6 +147,22 @@ auto split_path(const std::string& path) -> std::vector<std::string>
     return segments;
 }
 
+/// A name for an override's own row among `children`: `name`, or numbered when another override
+/// already reads the same - two scripts of one type removed in turn from the same place.
+auto free_leaf_name(const std::map<std::string, override_node>& children, const std::string& name) -> std::string
+{
+    auto candidate = name;
+    for(size_t number = 2;; ++number)
+    {
+        const auto it = children.find(candidate);
+        if(it == children.end() || it->second.leaf == nullptr)
+        {
+            return candidate;
+        }
+        candidate = name + " (" + std::to_string(number) + ")";
+    }
+}
+
 /// Which author an override came from. Inherited ones are stated by the documents containing
 /// this instance, and they re-state them every time they are replayed - so they are shown, and
 /// are not the user's to revert here. Local ones were stated in this scene.
@@ -172,9 +188,11 @@ auto build_override_tree(const statements_about_instance& about, entt::handle in
         node->local_count += inherited ? 0u : 1u;
         node->inherited_count += inherited ? 1u : 0u;
 
-        for(const auto& segment : split_path(display_path))
+        const auto segments = split_path(display_path);
+        for(size_t i = 0; i < segments.size(); ++i)
         {
-            node = &node->children[segment];
+            const bool is_last = i + 1 == segments.size();
+            node = &node->children[is_last ? free_leaf_name(node->children, segments[i]) : segments[i]];
             node->local_count += inherited ? 0u : 1u;
             node->inherited_count += inherited ? 1u : 0u;
         }

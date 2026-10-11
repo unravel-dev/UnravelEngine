@@ -7,6 +7,7 @@
 #include <context/context.hpp>
 #include <ser20/external/simdjson/simdjson.h>
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,14 +40,48 @@ auto is_supported_component_pretty_name(const std::string& component_pretty_name
 auto component_meta_type(const std::string& component_pretty_name) -> entt::meta_type;
 
 /**
+ * @brief Which script a Script call addresses: a C# type (full or short name), and which of the
+ *        entity's scripts of that type, counting from 0 in the order the entity lists them.
+ */
+struct script_selector
+{
+    std::string type;
+    size_t index{};
+};
+
+/**
+ * @brief Reads an item's script_type and optional script_index.
+ * @return False with `error` set when script_index is not a whole number of 0 or more
+ */
+auto read_script_selector(const simdjson::dom::object& item, script_selector& out, std::string& error) -> bool;
+
+/**
+ * @brief The entity's scripts as [{"type":...,"script_index":k}], k counting scripts of one type.
+ */
+auto scripts_summary_json(entt::handle entity) -> std::string;
+
+/// Where a selected script sits in its entity's list, and its type's full name.
+struct script_position
+{
+    size_t index{};
+    std::string type_fullname;
+};
+
+/**
+ * @brief Finds the script a selector names, counted as scripts_summary_json counts them.
+ * @return Its position, or nullopt when the entity has no such script
+ */
+auto find_script_position(entt::handle entity, const script_selector& script) -> std::optional<script_position>;
+
+/**
  * @brief Read typed properties for one component on an entity.
- *        For Script, script_type is required (C# type full name or short name).
+ *        For Script, script.type is required (C# type full name or short name).
  *        Optional property_filter limits keys; empty means all supported keys.
  */
 auto component_properties_to_json(rtti::context& ctx,
                                   entt::handle entity,
                                   const std::string& component_pretty_name,
-                                  const std::string& script_type,
+                                  const script_selector& script,
                                   const std::vector<std::string>* property_filter,
                                   std::string& error) -> std::string;
 
@@ -56,7 +91,7 @@ auto component_properties_to_json(rtti::context& ctx,
 auto apply_component_properties(rtti::context& ctx,
                                 entt::handle entity,
                                 const std::string& component_pretty_name,
-                                const std::string& script_type,
+                                const script_selector& script,
                                 const simdjson::dom::object& properties) -> component_apply_result;
 
 /**

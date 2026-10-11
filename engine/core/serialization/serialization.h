@@ -36,6 +36,9 @@ void init(const init_data& data = {});
 struct path_context
 {
     std::function<bool(const std::string&)> should_serialize_property_callback;
+    /// Whether the document being read states a property as a whole. Asked about a property
+    /// the document does not have, where it means the document removed it.
+    std::function<bool(const std::string&)> is_property_stated_whole_callback;
     bool recording_enabled = false;
     bool ignore_next_push = false;
 
@@ -64,6 +67,11 @@ struct path_context
             return should_serialize_property_callback(property_path);
         }
         return true;
+    }
+
+    auto is_property_stated_whole(const std::string& property_path) const -> bool
+    {
+        return is_property_stated_whole_callback && is_property_stated_whole_callback(property_path);
     }
 
 private:

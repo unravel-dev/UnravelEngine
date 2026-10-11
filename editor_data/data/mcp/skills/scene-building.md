@@ -60,11 +60,14 @@ by height. assets_list_embedded_primitives lists every built-in shape.
   properties you left alone still follow the prefab - an instance with its own
   light intensity still takes the prefab's new light color. Undo removes the
   override along with the edit.
-- Components added to or removed from an instance stay that way through prefab
-  saves; undo takes a removal back. A component removed and later added back is
-  the instance's own copy from then on and no longer follows the prefab.
-- A script removed from an instance (scene_remove_scripts_batch) still comes
-  back on the next prefab save. Remove it from the prefab itself instead.
+- Components and scripts added to or removed from an instance stay that way
+  through prefab saves, with several scripts of one type told apart; undo takes
+  a removal back. A component removed and later added back is the instance's own
+  copy from then on and no longer follows the prefab.
+- Removing something from a nested prefab's content while editing the outer
+  prefab reaches every instance of the outer prefab, existing ones included. A
+  prefab that removes its own component or script reaches new instances only;
+  existing ones keep theirs.
 
 ## Placing meshes correctly
 
