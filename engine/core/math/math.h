@@ -7,6 +7,7 @@
 #include "plane.h"
 #include "transform.hpp"
 #include "color.h"
+#include "curve.h"
 #include "gradient.h"
 #include <algorithm>
 #include <cmath>

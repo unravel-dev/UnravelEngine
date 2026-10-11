@@ -45,7 +45,7 @@ constexpr const char* local_layout_key = "LOCAL_EXPOSURE_LAYOUT";
 constexpr std::uint32_t local_point_clamp = BGFX_SAMPLER_POINT | BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
 /// The compensation curve LUT and the hash of the keys it was baked from.
 constexpr const char* compensation_curve_key = "AUTO_EXPOSURE_COMPENSATION_CURVE";
-constexpr const char* compensation_curve_hash_key = "AUTO_EXPOSURE_COMPENSATION_CURVE_HASH";
+constexpr const char* compensation_curve_key_data = "AUTO_EXPOSURE_COMPENSATION_CURVE_DATA";
 
 /// Bilinear, clamped: the metering taps sit on texel corners and average 2x2 blocks.
 constexpr std::uint32_t metering_sampler_flags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
@@ -98,42 +98,6 @@ auto ensure_compute_target(gfx::render_view& rview, const char* key, const usize
                                                  BGFX_TEXTURE_COMPUTE_WRITE);
     }
     return texture;
-}
-
-/// The compensation curve in stops at @p ev100: linear between keys sorted by x, constant past
-/// the ends.
-auto evaluate_compensation_curve(const std::vector<math::vec2>& sorted_keys, float ev100) -> float
-{
-    if(ev100 <= sorted_keys.front().x)
-    {
-        return sorted_keys.front().y;
-    }
-    if(ev100 >= sorted_keys.back().x)
-    {
-        return sorted_keys.back().y;
-    }
-    const auto upper = std::upper_bound(sorted_keys.begin(),
-                                        sorted_keys.end(),
-                                        ev100,
-                                        [](float value, const math::vec2& key) { return value < key.x; });
-    const auto lower = upper - 1;
-    const float span = std::max(upper->x - lower->x, 1e-6f);
-    return math::mix(lower->y, upper->y, (ev100 - lower->x) / span);
-}
-
-/// FNV-1a over the keys' bytes: the LUT is rebaked only when the curve changes.
-auto hash_compensation_curve(const std::vector<math::vec2>& keys) -> std::uint64_t
-{
-    constexpr std::uint64_t fnv_offset = 14695981039346656037ull;
-    constexpr std::uint64_t fnv_prime = 1099511628211ull;
-    std::uint64_t hash = fnv_offset;
-    const auto* bytes = reinterpret_cast<const std::uint8_t*>(keys.data());
-    const std::size_t size = keys.size() * sizeof(math::vec2);
-    for(std::size_t i = 0; i < size; ++i)
-    {
-        hash = (hash ^ bytes[i]) * fnv_prime;
-    }
-    return hash ^ keys.size();
 }
 } // namespace
 
@@ -380,29 +344,26 @@ void auto_exposure_pass::run_histogram(gfx::render_view& rview, const run_params
 auto auto_exposure_pass::update_compensation_curve(gfx::render_view& rview, const settings& config)
     -> gfx::texture::ptr
 {
-    if(config.compensation_curve.empty())
+    if(!config.compensation_curve.is_valid())
     {
         rview.tex_remove(compensation_curve_key);
         return nullptr;
     }
-    const std::uint64_t hash = hash_compensation_curve(config.compensation_curve);
-    auto& baked_hash = rview.data().get_or_emplace<std::uint64_t>(compensation_curve_hash_key);
+    // The curve compares by value, so the baked copy is both the cache key and the record of what
+    // was baked; no hash over the keys' bytes, which could not tell -0 from 0 anyway.
+    auto& baked_curve = rview.data().get_or_emplace<math::curve<float>>(compensation_curve_key_data);
     auto& curve_tex = rview.tex_get_or_emplace(compensation_curve_key);
-    if(curve_tex && baked_hash == hash)
+    if(curve_tex && baked_curve == config.compensation_curve)
     {
         return curve_tex;
     }
     // The curve LUT: 2^curve per sample in R16F, read back with linear filtering.
-    std::vector<math::vec2> sorted_keys = config.compensation_curve;
-    std::sort(sorted_keys.begin(),
-              sorted_keys.end(),
-              [](const math::vec2& a, const math::vec2& b) { return a.x < b.x; });
     std::vector<std::uint16_t> lut(compensation_curve_samples);
     const float step = (compensation_curve_max_ev - compensation_curve_min_ev) / float(compensation_curve_samples - 1);
     for(std::uint16_t i = 0; i < compensation_curve_samples; ++i)
     {
         const float ev100 = compensation_curve_min_ev + step * float(i);
-        lut[i] = bx::halfFromFloat(std::exp2(evaluate_compensation_curve(sorted_keys, ev100)));
+        lut[i] = bx::halfFromFloat(std::exp2(config.compensation_curve.sample(ev100)));
     }
     const bgfx::Memory* payload = bgfx::copy(lut.data(), std::uint32_t(lut.size() * sizeof(std::uint16_t)));
     curve_tex = std::make_shared<gfx::texture>(compensation_curve_samples,
@@ -412,7 +373,7 @@ auto auto_exposure_pass::update_compensation_curve(gfx::render_view& rview, cons
                                                bgfx::TextureFormat::R16F,
                                                BGFX_TEXTURE_NONE,
                                                payload);
-    baked_hash = hash;
+    baked_curve = config.compensation_curve;
     return curve_tex;
 }
 

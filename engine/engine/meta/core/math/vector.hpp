@@ -1,6 +1,7 @@
 #pragma once
 
 #include <math/math.h>
+#include <ser20/types/array.hpp>
 #include <serialization/serialization.h>
 #include <serialization/types/vector.hpp>
 
@@ -41,26 +42,73 @@ inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::color& obj)
 
 
 template<typename Archive, typename T>
-inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::gradient_point<T>& obj)
+inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::curve_point<T>& obj)
 {
     try_serialize(ar, ser20::make_nvp("progress", obj.progress));
     try_serialize(ar, ser20::make_nvp("element", obj.element));
 }
 
+template<typename Archive>
+inline void SERIALIZE_FUNCTION_NAME(Archive& ar, math::curve_key& obj)
+{
+    try_serialize(ar, ser20::make_nvp("position", obj.position));
+    try_serialize(ar, ser20::make_nvp("value", obj.value));
+    try_serialize(ar, ser20::make_nvp("in_tangent", obj.in_tangent));
+    try_serialize(ar, ser20::make_nvp("out_tangent", obj.out_tangent));
+    try_serialize(ar, ser20::make_nvp("interpolation", obj.interpolation));
+    try_serialize(ar, ser20::make_nvp("tangent_mode", obj.tangent_mode));
+}
+
+template<typename Archive>
+inline void SAVE_FUNCTION_NAME(Archive& ar, const math::curve_channel& obj)
+{
+    try_save(ar, ser20::make_nvp("keys", obj.get_keys()));
+}
+
+template<typename Archive>
+inline void LOAD_FUNCTION_NAME(Archive& ar, math::curve_channel& obj)
+{
+    math::curve_channel::keys_t keys;
+    if(try_load(ar, ser20::make_nvp("keys", keys)))
+    {
+        obj.set_keys(std::move(keys));
+    }
+}
+
+/// Written as one key list per channel. Curves saved before channels existed carry a single
+/// `points` list instead, which @ref LOAD_FUNCTION_NAME reads as a linked curve.
+template<typename Archive, typename T>
+inline void SAVE_FUNCTION_NAME(Archive& ar, const math::curve<T>& obj)
+{
+    try_save(ar, ser20::make_nvp("linked", obj.is_linked()));
+    try_save(ar, ser20::make_nvp("channels", obj.get_channels()));
+}
 
 template<typename Archive, typename T>
-inline void SAVE_FUNCTION_NAME(Archive& ar, const math::gradient<T>& obj)
+inline void LOAD_FUNCTION_NAME(Archive& ar, math::curve<T>& obj)
 {
-    const auto& points = obj.get_points();
-    try_save(ar, ser20::make_nvp("points", points));
-}
-template<typename Archive, typename T>
-inline void LOAD_FUNCTION_NAME(Archive& ar, math::gradient<T>& obj)
-{
-    std::vector<typename math::gradient<T>::point_t> points;
+    typename math::curve<T>::channels_t channels;
+    if(try_load(ar, ser20::make_nvp("channels", channels)))
+    {
+        obj.set_channels(channels);
+        bool linked = true;
+        try_load(ar, ser20::make_nvp("linked", linked));
+        // Only unlinking is applied: re-linking here would re-key the channels that were just
+        // read, and a curve saved as linked already is.
+        if(!linked)
+        {
+            obj.set_linked(false);
+        }
+        return;
+    }
+
+    // The shape curves were saved in before channels existed: one key of every channel at the
+    // same position, always interpolating linearly.
+    std::vector<typename math::curve<T>::point_t> points;
     if(try_load(ar, ser20::make_nvp("points", points)))
     {
         obj.set_points(points);
+        obj.set_interpolation(math::curve_interpolation::linear);
     }
 }
 

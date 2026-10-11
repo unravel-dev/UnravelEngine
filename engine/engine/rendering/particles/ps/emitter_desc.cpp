@@ -28,12 +28,12 @@ void emitter_motion_desc::reset()
     velocity_gradient = math::gradient<frange_t>();
     velocity_gradient.add_point(frange_t(0.0f, 1.0f), 0.0f);
     velocity_gradient.add_point(frange_t(2.0f, 3.0f), 1.0f);
-    velocity_gradient.generate_lut(256);
+    velocity_gradient.bake(curve_bake_resolution);
     position_easing = bx::Easing::Linear;
     lifetime_by_emitter_speed_gradient = math::gradient<float>();
     lifetime_by_emitter_speed_gradient.add_point(1.0f, 0.0f);
     lifetime_by_emitter_speed_gradient.add_point(1.0f, 1.0f);
-    lifetime_by_emitter_speed_gradient.generate_lut(1024);
+    lifetime_by_emitter_speed_gradient.bake(lifetime_by_emitter_speed_bake_resolution);
     lifetime_by_emitter_speed_range = frange_t(0.0f, 10.0f);
 }
 
@@ -45,11 +45,11 @@ void emitter_appearance_desc::reset()
     color_gradient.add_point(math::color(0xffffffff), 0.5f);
     color_gradient.add_point(math::color(0xffffffff), 0.75f);
     color_gradient.add_point(math::color(0x00ffffff), 1.0f);
-    color_gradient.generate_lut(256);
+    color_gradient.bake(curve_bake_resolution);
     scale_gradient = math::gradient<frange_t>();
     scale_gradient.add_point(frange_t(0.1f, 0.2f), 0.0f);
     scale_gradient.add_point(frange_t(0.3f, 0.4f), 1.0f);
-    scale_gradient.generate_lut(256);
+    scale_gradient.bake(curve_bake_resolution);
     initial_scale_3d = math::vec3(1.0f, 1.0f, 1.0f);
     opacity = 1.0f;
     color_intensity = 1.0f;
@@ -58,7 +58,7 @@ void emitter_appearance_desc::reset()
     color_by_speed_gradient = math::gradient<math::color>();
     color_by_speed_gradient.add_point(math::color(0xffffffff), 0.0f);
     color_by_speed_gradient.add_point(math::color(0xffffffff), 1.0f);
-    color_by_speed_gradient.generate_lut(256);
+    color_by_speed_gradient.bake(curve_bake_resolution);
     color_by_speed_velocity_range = frange_t(0.0f, 10.0f);
 }
 

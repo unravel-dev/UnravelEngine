@@ -121,7 +121,7 @@ auto make_taa_disable_rules() -> component_disable_rules
         });
     component_disable_rules rules;
     rules.push_back(make_component_disable_rule<fxaa_component>(
-        "Temporal AA anti-aliases this view, so FXAA does not run. Turn off Temporal AA to use FXAA instead.",
+        "Temporal AA anti-aliases, so FXAA does not run.",
         is_running));
     return rules;
 }

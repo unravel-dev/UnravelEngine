@@ -1107,7 +1107,8 @@ void test_auto_exposure_settings_start_fresh_without_version()
     exposure.settings.compensation = 2.5f;
     exposure.settings.speed_up = 7.0f;
     exposure.settings.metering_mode = exposure_metering_mode::spot;
-    exposure.settings.compensation_curve = {math::vec2(-6.0f, -2.0f), math::vec2(0.0f, 0.0f)};
+    exposure.settings.compensation_curve.add_point(-2.0f, -6.0f);
+    exposure.settings.compensation_curve.add_point(0.0f, 0.0f);
     exposure.settings.local_highlight_contrast = 0.7f;
     exposure.settings.local_blurred_kernel_percent = 35.0f;
 
@@ -1121,11 +1122,12 @@ void test_auto_exposure_settings_start_fresh_without_version()
     check(is_close(current.settings.compensation, 2.5f), "a current document keeps its compensation");
     check(is_close(current.settings.speed_up, 7.0f), "a current document keeps its speed");
     check(current.settings.metering_mode == exposure_metering_mode::spot, "a current document keeps its metering mode");
-    check(current.settings.compensation_curve.size() == 2 &&
-              is_close(current.settings.compensation_curve[0].x, -6.0f) &&
-              is_close(current.settings.compensation_curve[0].y, -2.0f) &&
-              is_close(current.settings.compensation_curve[1].x, 0.0f),
+    const auto curve_points = current.settings.compensation_curve.get_points();
+    check(curve_points.size() == 2 && is_close(curve_points[0].progress, -6.0f) &&
+              is_close(curve_points[0].element, -2.0f) && is_close(curve_points[1].progress, 0.0f),
           "a current document keeps its compensation curve");
+    check(is_close(current.settings.compensation_curve.sample(-3.0f), -1.0f),
+          "a loaded compensation curve interpolates across its EV domain");
     check(is_close(current.settings.local_highlight_contrast, 0.7f),
           "a current document keeps its local exposure contrast");
     check(is_close(current.settings.local_blurred_kernel_percent, 35.0f),
@@ -1140,7 +1142,8 @@ void test_auto_exposure_settings_start_fresh_without_version()
     const auto_exposure_pass::settings fresh{};
     check(older.found && !older.enabled, "an older document still loads the component and keeps enabled");
     check(is_close(older.settings.compensation, fresh.compensation), "an older document falls back to the default compensation");
-    check(older.settings.compensation_curve.empty(), "an older document falls back to no compensation curve");
+    check(!older.settings.compensation_curve.is_valid(),
+          "an older document falls back to no compensation curve");
 
     const std::string legacy_document =
         std::regex_replace(current_document, std::regex(R"("settings_version"\s*:\s*[0-9]+\s*,?)"), "");

@@ -48,24 +48,6 @@ struct inspector_color : public crtp_meta_type<inspector_color, inspector>
 };
 REFLECT_INSPECTOR_INLINE(inspector_color, math::color)
 
-struct inspector_gradient_float : public crtp_meta_type<inspector_gradient_float, inspector>
-{
-    auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
-};
-REFLECT_INSPECTOR_INLINE(inspector_gradient_float, math::gradient<float>)
-
-struct inspector_gradient : public crtp_meta_type<inspector_gradient, inspector>
-{
-    auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
-};
-REFLECT_INSPECTOR_INLINE(inspector_gradient, math::gradient<math::color>)
-
-struct inspector_gradient_frange : public crtp_meta_type<inspector_gradient_frange, inspector>
-{
-    auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;
-};
-REFLECT_INSPECTOR_INLINE(inspector_gradient_frange, math::gradient<frange_t>)
-
 struct inspector_quaternion : public crtp_meta_type<inspector_quaternion, inspector>
 {
     auto inspect(rtti::context& ctx, entt::meta_any& var, const meta_any_proxy& var_proxy, const var_info& info, const entt::meta_custom& custom) -> inspect_result override;

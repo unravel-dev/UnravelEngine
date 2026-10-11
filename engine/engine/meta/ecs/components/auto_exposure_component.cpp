@@ -53,10 +53,10 @@ REFLECT_INLINE(auto_exposure_pass::settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "compensation_curve"},
             entt::attribute{"pretty_name", "Exposure Compensation Curve"},
-            entt::attribute{"tooltip", "Extra compensation by scene brightness. Each key is "
-                "(metered brightness in EV100, stops added); values between keys blend, "
-                "and past the first and last key the end values hold. "
-                "Empty adds nothing. Example: (-6, -2) and (0, 0) keep night scenes darker."},
+            entt::attribute{"tooltip", "Extra compensation by scene brightness. A key's position "
+                "is the metered brightness in EV100 and its value the stops added; past the first "
+                "and last key the end values hold. Empty adds nothing. "
+                "Example: a key at (-6, -2) and one at (0, 0) keep night scenes darker."},
         })
         .data<&auto_exposure_pass::settings::min_ev>("min_ev"_hs)
         .custom<entt::attributes>(entt::attributes{

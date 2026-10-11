@@ -12,6 +12,12 @@ namespace unravel
 namespace ps_soa
 {
 
+/// Resolution the emitter's curves are pre-sampled at. Every particle reads them per frame, so
+/// they are baked once per edit rather than evaluated key by key.
+constexpr size_t curve_bake_resolution = 256;
+/// The lifetime curve is read against a speed rather than a 0..1 lifetime, so it is baked finer.
+constexpr size_t lifetime_by_emitter_speed_bake_resolution = 1024;
+
 /**
  * @brief Emission rate, shape, and lifetime cycle authoring.
  */

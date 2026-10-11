@@ -70,11 +70,11 @@ public:
         /// exposure = 0.18 * 2^compensation / L. +1 is the default, which the default tone
         /// curve is built around.
         float compensation = 1.0f;
-        /// Extra bias in stops as a function of the metered scene brightness: x = metered EV100,
-        /// y = stops added to the compensation. Keys sorted by x, linear between them and
-        /// constant past the ends; empty adds nothing.
-        /// The usual use keeps a night scene dark, e.g. (-6, -2), (0, 0).
-        std::vector<math::vec2> compensation_curve;
+        /// Extra bias in stops as a function of the metered scene brightness: the curve's
+        /// position is the metered EV100 and its value the stops added to the compensation.
+        /// Past the first and last key the end values hold; an empty curve adds nothing.
+        /// The usual use keeps a night scene dark, e.g. a key at (-6, -2) and one at (0, 0).
+        math::curve<float> compensation_curve;
         /// Lowest metered scene brightness auto exposure adapts to, in EV100 = log2(L / 0.18).
         /// Darker scenes stop brightening here.
         float min_ev = -10.0f;

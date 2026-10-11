@@ -219,8 +219,7 @@ auto make_gtao_disable_rules() -> component_disable_rules
         });
     component_disable_rules rules;
     rules.push_back(make_component_disable_rule<assao_component>(
-        "GTAO provides the ambient occlusion for this view, so ASSAO does not run. Turn off GTAO to use ASSAO "
-        "instead.",
+        "GTAO provides the ambient occlusion, so ASSAO does not run.",
         is_running));
     return rules;
 }

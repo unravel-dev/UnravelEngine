@@ -493,19 +493,16 @@ auto make_gi_disable_rules() -> component_disable_rules
         entt::property_predicate<bool>([](const entt::meta_any& obj) { return get_running_gi(obj) != nullptr; });
 
     rules.push_back(make_component_disable_rule<gtao_component>(
-        "Global Illumination provides the ambient occlusion for this view, so GTAO does not run. Turn off its "
-        "Ambient Occlusion to use GTAO instead.",
+        "Global Illumination provides the ambient occlusion, so GTAO does not run.",
         owns_ambient_occlusion));
     rules.push_back(make_component_disable_rule<assao_component>(
-        "Global Illumination provides the ambient occlusion for this view, so ASSAO does not run. Turn off its "
-        "Ambient Occlusion to use ASSAO instead.",
+        "Global Illumination provides the ambient occlusion, so ASSAO does not run.",
         owns_ambient_occlusion));
     rules.push_back(make_component_disable_rule<ssr_component>(
-        "Global Illumination traces the reflections for this view, so SSR does not run. Turn off its Reflections "
-        "to use SSR instead.",
+        "Global Illumination traces the reflections, so SSR does not run.",
         owns_reflections));
     rules.push_back(make_component_disable_rule<ssil_component>(
-        "Global Illumination provides the indirect diffuse lighting for this view, so SSIL does not run. Screen-space "
+        "Global Illumination provides the indirect diffuse lighting, so SSIL does not run. Screen-space "
         "indirect lighting would re-sample the already lit frame and count it twice.",
         owns_indirect_diffuse));
     return rules;

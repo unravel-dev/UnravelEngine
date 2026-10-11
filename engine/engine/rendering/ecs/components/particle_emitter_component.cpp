@@ -5,15 +5,6 @@
 #include <graphics/graphics.h>
 #include <logging/logging.h>
 
-namespace math
-{
-template<>
-auto gradient_lerp(const frange_t& start, const frange_t& end, float progress) -> frange_t
-{
-    return frange_t(gradient_lerp(start.min, end.min, progress), gradient_lerp(start.max, end.max, progress));
-}
-}
-
 namespace unravel
 {
 
@@ -211,7 +202,7 @@ auto particle_emitter_component::get_size_by_speed_velocity_range() const -> con
 void particle_emitter_component::set_color_by_speed_gradient(const math::gradient<math::color>& gradient)
 {
     desc_.appearance.color_by_speed_gradient = gradient;
-    desc_.appearance.color_by_speed_gradient.generate_lut(256);
+    desc_.appearance.color_by_speed_gradient.bake(ps_soa::curve_bake_resolution);
 }
 
 auto particle_emitter_component::get_color_by_speed_gradient() const -> const math::gradient<math::color>&
@@ -232,6 +223,7 @@ auto particle_emitter_component::get_color_by_speed_velocity_range() const -> co
 void particle_emitter_component::set_lifetime_by_emitter_speed_gradient(const math::gradient<float>& gradient)
 {
     desc_.motion.lifetime_by_emitter_speed_gradient = gradient;
+    desc_.motion.lifetime_by_emitter_speed_gradient.bake(ps_soa::lifetime_by_emitter_speed_bake_resolution);
 }
 
 auto particle_emitter_component::get_lifetime_by_emitter_speed_gradient() const -> const math::gradient<float>&
@@ -263,7 +255,7 @@ auto particle_emitter_component::get_lifetime() const -> std::chrono::duration<f
 void particle_emitter_component::set_velocity_gradient(const math::gradient<frange_t>& gradient)
 {
     desc_.motion.velocity_gradient = gradient;
-    desc_.motion.velocity_gradient.generate_lut(256);
+    desc_.motion.velocity_gradient.bake(ps_soa::curve_bake_resolution);
 }
 
 auto particle_emitter_component::get_velocity_gradient() const -> const math::gradient<frange_t>&
@@ -274,7 +266,7 @@ auto particle_emitter_component::get_velocity_gradient() const -> const math::gr
 void particle_emitter_component::set_scale_gradient(const math::gradient<frange_t>& gradient)
 {
     desc_.appearance.scale_gradient = gradient;
-    desc_.appearance.scale_gradient.generate_lut(256);
+    desc_.appearance.scale_gradient.bake(ps_soa::curve_bake_resolution);
 }
 
 auto particle_emitter_component::get_scale_gradient() const -> const math::gradient<frange_t>&
@@ -471,7 +463,7 @@ auto particle_emitter_component::get_pivot() const -> math::vec2
 void particle_emitter_component::set_color_gradient(const math::gradient<math::color>& gradient)
 {
     desc_.appearance.color_gradient = gradient;
-    desc_.appearance.color_gradient.generate_lut(256);
+    desc_.appearance.color_gradient.bake(ps_soa::curve_bake_resolution);
 }
 
 auto particle_emitter_component::get_color_gradient() const -> const math::gradient<math::color>&
