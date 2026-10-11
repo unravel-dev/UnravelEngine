@@ -1,6 +1,9 @@
 #include "mcp_component_utils.h"
 
+#include "mcp_meta_properties.h"
 #include "mcp_tools_common.h"
+
+#include <engine/meta/ecs/components/all_components.h>
 
 #include <engine/animation/animation.h>
 #include <engine/animation/ecs/components/animation_component.h>
@@ -2860,10 +2863,58 @@ auto physics_to_json(const physics_component& comp, const std::unordered_set<std
     return json;
 }
 
-auto apply_physics_properties(physics_component& comp,
+/// Physics properties the hand-written handler does not cover, served through the reflection
+/// instead: the setters it binds, its names and its read-only marks.
+auto physics_reflected_keys() -> const std::unordered_set<std::string>&
+{
+    static const std::unordered_set<std::string> keys{"material",
+                                                      "sensor_events",
+                                                      "collision_events",
+                                                      "sensor_exit_on_destroy",
+                                                      "collision_exit_on_destroy",
+                                                      "velocity",
+                                                      "angular_velocity"};
+    return keys;
+}
+
+/// Joins two JSON object texts ("{a}" + "{b}" -> "{a,b}").
+auto join_json_objects(const std::string& lhs, const std::string& rhs) -> std::string
+{
+    const bool lhs_empty = lhs.size() <= 2;
+    const bool rhs_empty = rhs.size() <= 2;
+    if(rhs_empty)
+    {
+        return lhs;
+    }
+    if(lhs_empty)
+    {
+        return rhs;
+    }
+    return lhs.substr(0, lhs.size() - 1) + "," + rhs.substr(1);
+}
+
+auto physics_with_reflected_to_json(rtti::context& ctx,
+                                    physics_component& comp,
+                                    const std::unordered_set<std::string>* filter) -> std::string
+{
+    std::unordered_set<std::string> reflected;
+    for(const auto& key : physics_reflected_keys())
+    {
+        if(wants_key(filter, key.c_str()))
+        {
+            reflected.insert(key);
+        }
+    }
+    auto object = entt::forward_as_meta(comp);
+    return join_json_objects(physics_to_json(comp, filter), meta_properties_to_json(ctx, object, &reflected));
+}
+
+auto apply_physics_properties(rtti::context& ctx,
+                              physics_component& comp,
                               const simdjson::dom::object& properties,
                               component_apply_result& result) -> void
 {
+    std::vector<std::string> delegated;
     for(auto field : properties)
     {
         const std::string key(field.key);
@@ -2923,9 +2974,39 @@ auto apply_physics_properties(physics_component& comp,
         }
         else
         {
-            result.unknown.push_back(key);
+            delegated.push_back(key);
         }
     }
+    if(delegated.empty())
+    {
+        return;
+    }
+    // The rest go through the reflection: the material handle, the contact event flags and the
+    // read-only velocities are all reflected with the component's own setters.
+    std::string delegated_json = "{";
+    bool first = true;
+    for(const auto& key : delegated)
+    {
+        simdjson::dom::element value;
+        (void)properties[key].get(value);
+        if(!first)
+        {
+            delegated_json += ",";
+        }
+        first = false;
+        delegated_json += make_json_string(key) + ":" + std::string(simdjson::minify(value));
+    }
+    delegated_json += "}";
+    simdjson::dom::parser parser;
+    simdjson::dom::object delegated_object;
+    if(parser.parse(delegated_json).get(delegated_object))
+    {
+        result.ok = false;
+        result.errors.push_back("Failed to re-parse delegated physics properties");
+        return;
+    }
+    auto object = entt::forward_as_meta(comp);
+    apply_meta_properties(ctx, object, delegated_object, result, &physics_reflected_keys());
 }
 
 auto animation_to_json(const animation_component& comp, const std::unordered_set<std::string>* filter) -> std::string
@@ -3705,6 +3786,73 @@ auto apply_serialized_component_properties(Component& comp,
     }
 }
 
+/// Names the fix: the component is added first, then configured.
+auto component_missing_error(const std::string& component) -> std::string
+{
+    if(component == "Script")
+    {
+        return "No Script on the entity (attach one with scene_add_scripts_batch)";
+    }
+    return "Component not present on entity: " + component + " (add it with scene_add_components_batch)";
+}
+
+/// The addable component named `pretty_name` on `entity`, as a meta_any referring to it (empty
+/// when the entity lacks it). `known` reports whether the name is an addable component at all.
+/// all_addable_components is the list the Add Component menu offers, so the two always agree.
+auto find_addable_component(entt::handle entity, const std::string& pretty_name, bool& known) -> entt::meta_any
+{
+    entt::meta_any found;
+    known = false;
+    hpp::for_each_tuple_type<all_addable_components>(
+        [&](auto index)
+        {
+            using ctype = std::tuple_element_t<decltype(index)::value, all_addable_components>;
+            if(known || entt::get_pretty_name(entt::resolve<ctype>()) != pretty_name)
+            {
+                return;
+            }
+            known = true;
+            if(auto* comp = entity.try_get<ctype>())
+            {
+                found = entt::forward_as_meta(*comp);
+            }
+        });
+    return found;
+}
+
+/// Pretty names of every addable component, in the Add Component menu's order.
+auto addable_component_pretty_names() -> const std::vector<std::string>&
+{
+    static const auto names = []
+    {
+        std::vector<std::string> result;
+        hpp::for_each_tuple_type<all_addable_components>(
+            [&](auto index)
+            {
+                using ctype = std::tuple_element_t<decltype(index)::value, all_addable_components>;
+                result.push_back(entt::get_pretty_name(entt::resolve<ctype>()));
+            });
+        return result;
+    }();
+    return names;
+}
+
+auto addable_component_type(const std::string& pretty_name) -> entt::meta_type
+{
+    entt::meta_type found;
+    hpp::for_each_tuple_type<all_addable_components>(
+        [&](auto index)
+        {
+            using ctype = std::tuple_element_t<decltype(index)::value, all_addable_components>;
+            auto type = entt::resolve<ctype>();
+            if(!found && entt::get_pretty_name(type) == pretty_name)
+            {
+                found = type;
+            }
+        });
+    return found;
+}
+
 } // namespace
 
 auto list_component_property_schema_json(const std::string& component_filter) -> std::string
@@ -3712,8 +3860,10 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
     const bool all = component_filter.empty();
     std::string json = "[";
     bool first = true;
+    std::unordered_set<std::string> hand_written;
     auto add = [&](const char* component, const char* name, const char* type, const char* extra = nullptr)
     {
+        hand_written.insert(component);
         if(!all && component_filter != component)
         {
             return;
@@ -3921,6 +4071,19 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
             "object",
             R"("description":"The settings object as the scene file stores it; a partial object merges into the current one")");
     }
+    // Physics' reflected extras, then every addable component with no hand-written rows: all of
+    // them come from the reflection, so their names, ranges and enums match the inspector's.
+    if(all || component_filter == "Physics")
+    {
+        append_meta_schema(addable_component_type("Physics"), "Physics", json, first, &physics_reflected_keys());
+    }
+    for(const auto& pretty : addable_component_pretty_names())
+    {
+        if(hand_written.count(pretty) == 0 && (all || component_filter == pretty))
+        {
+            append_meta_schema(addable_component_type(pretty), pretty, json, first);
+        }
+    }
     if(all || component_filter == "Script")
     {
         if(!first)
@@ -3937,15 +4100,24 @@ auto list_component_property_schema_json(const std::string& component_filter) ->
 
 auto is_supported_component_pretty_name(const std::string& component_pretty_name) -> bool
 {
-    return component_pretty_name == "Light" || component_pretty_name == "Skylight" ||
-           component_pretty_name == "Audio Source" || component_pretty_name == "Camera" ||
-           component_pretty_name == "Volume" || component_pretty_name == "Script" ||
-           component_pretty_name == "Particle Emitter" || component_pretty_name == "Physics" ||
-           component_pretty_name == "Animation" || component_pretty_name == "Text" ||
-           component_pretty_name == "Reflection Probe" || component_pretty_name == "Bloom" ||
-           component_pretty_name == "GTAO" || component_pretty_name == "Global Illumination" ||
-           component_pretty_name == "SSR" || component_pretty_name == "Temporal AA" ||
-           component_pretty_name == "Auto Exposure";
+    // Script is not an addable component but carries one field bag per attached type.
+    if(component_pretty_name == "Script")
+    {
+        return true;
+    }
+    // Every addable component is typed when the reflection exposes anything settable on it;
+    // the ones without a hand-written handler go through the reflected setters.
+    const auto type = addable_component_type(component_pretty_name);
+    return type && has_meta_properties(type);
+}
+
+auto component_meta_type(const std::string& component_pretty_name) -> entt::meta_type
+{
+    if(component_pretty_name == "Script")
+    {
+        return entt::resolve<script_component>();
+    }
+    return addable_component_type(component_pretty_name);
 }
 
 auto component_properties_to_json(rtti::context& ctx,
@@ -3968,7 +4140,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<light_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Light";
+            error = component_missing_error("Light");
             return {};
         }
         return light_to_json(*comp, filter_ptr);
@@ -3978,7 +4150,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<skylight_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Skylight";
+            error = component_missing_error("Skylight");
             return {};
         }
         return skylight_to_json(*comp, filter_ptr);
@@ -3988,7 +4160,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<audio_source_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Audio Source";
+            error = component_missing_error("Audio Source");
             return {};
         }
         return audio_to_json(*comp, filter_ptr);
@@ -3998,7 +4170,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<camera_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Camera";
+            error = component_missing_error("Camera");
             return {};
         }
         return camera_to_json(*comp, filter_ptr);
@@ -4008,7 +4180,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<volume_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Volume";
+            error = component_missing_error("Volume");
             return {};
         }
         return volume_to_json(*comp, filter_ptr);
@@ -4018,7 +4190,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<script_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Script";
+            error = component_missing_error("Script");
             return {};
         }
         return script_to_json(ctx, *comp, script_type, filter_ptr, error);
@@ -4028,7 +4200,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<particle_emitter_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Particle Emitter";
+            error = component_missing_error("Particle Emitter");
             return {};
         }
         return particle_to_json(*comp, filter_ptr);
@@ -4038,17 +4210,17 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<physics_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Physics";
+            error = component_missing_error("Physics");
             return {};
         }
-        return physics_to_json(*comp, filter_ptr);
+        return physics_with_reflected_to_json(ctx, *comp, filter_ptr);
     }
     if(component_pretty_name == "Animation")
     {
         auto* comp = entity.try_get<animation_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Animation";
+            error = component_missing_error("Animation");
             return {};
         }
         return animation_to_json(*comp, filter_ptr);
@@ -4058,7 +4230,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<text_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Text";
+            error = component_missing_error("Text");
             return {};
         }
         return text_to_json(*comp, filter_ptr);
@@ -4068,7 +4240,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<reflection_probe_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Reflection Probe";
+            error = component_missing_error("Reflection Probe");
             return {};
         }
         return reflection_probe_to_json(*comp, filter_ptr);
@@ -4078,7 +4250,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<bloom_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Bloom";
+            error = component_missing_error("Bloom");
             return {};
         }
         return bloom_to_json(*comp, filter_ptr);
@@ -4088,7 +4260,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<gtao_component>();
         if(!comp)
         {
-            error = "Component not present on entity: GTAO";
+            error = component_missing_error("GTAO");
             return {};
         }
         return gtao_to_json(*comp, filter_ptr);
@@ -4098,7 +4270,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<gi_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Global Illumination";
+            error = component_missing_error("Global Illumination");
             return {};
         }
         return serialized_component_to_json(*comp, filter_ptr, error);
@@ -4108,7 +4280,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<ssr_component>();
         if(!comp)
         {
-            error = "Component not present on entity: SSR";
+            error = component_missing_error("SSR");
             return {};
         }
         return serialized_component_to_json(*comp, filter_ptr, error);
@@ -4118,7 +4290,7 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<auto_exposure_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Auto Exposure";
+            error = component_missing_error("Auto Exposure");
             return {};
         }
         return serialized_component_to_json(*comp, filter_ptr, error);
@@ -4128,12 +4300,25 @@ auto component_properties_to_json(rtti::context& ctx,
         auto* comp = entity.try_get<taa_component>();
         if(!comp)
         {
-            error = "Component not present on entity: Temporal AA";
+            error = component_missing_error("Temporal AA");
             return {};
         }
         return serialized_component_to_json(*comp, filter_ptr, error);
     }
-    error = "Unsupported component for typed properties: " + component_pretty_name;
+    // No hand-written handler: read it through the reflection, as the inspector does.
+    bool known = false;
+    auto object = find_addable_component(entity, component_pretty_name, known);
+    if(!known)
+    {
+        error = "Unknown component: " + component_pretty_name + " (see scene_list_component_types)";
+        return {};
+    }
+    if(!object)
+    {
+        error = component_missing_error(component_pretty_name);
+        return {};
+    }
+    return meta_properties_to_json(ctx, object, filter_ptr);
     return {};
 }
 
@@ -4156,7 +4341,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Light");
+            result.errors.push_back(component_missing_error("Light"));
             return result;
         }
         apply_light_properties(*comp, properties, result);
@@ -4168,7 +4353,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Skylight");
+            result.errors.push_back(component_missing_error("Skylight"));
             return result;
         }
         apply_skylight_properties(ctx, *comp, properties, result);
@@ -4180,7 +4365,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Audio Source");
+            result.errors.push_back(component_missing_error("Audio Source"));
             return result;
         }
         apply_audio_properties(ctx, *comp, properties, result);
@@ -4192,7 +4377,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Camera");
+            result.errors.push_back(component_missing_error("Camera"));
             return result;
         }
         apply_camera_properties(*comp, properties, result);
@@ -4204,7 +4389,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Volume");
+            result.errors.push_back(component_missing_error("Volume"));
             return result;
         }
         apply_volume_properties(*comp, properties, result);
@@ -4216,7 +4401,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Script");
+            result.errors.push_back(component_missing_error("Script"));
             return result;
         }
         apply_script_properties(ctx, *comp, script_type, properties, result);
@@ -4228,7 +4413,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Particle Emitter");
+            result.errors.push_back(component_missing_error("Particle Emitter"));
             return result;
         }
         apply_particle_properties(ctx, *comp, properties, result);
@@ -4240,10 +4425,10 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Physics");
+            result.errors.push_back(component_missing_error("Physics"));
             return result;
         }
-        apply_physics_properties(*comp, properties, result);
+        apply_physics_properties(ctx, *comp, properties, result);
         return result;
     }
     if(component_pretty_name == "Animation")
@@ -4252,7 +4437,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Animation");
+            result.errors.push_back(component_missing_error("Animation"));
             return result;
         }
         apply_animation_properties(ctx, *comp, properties, result);
@@ -4264,7 +4449,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Text");
+            result.errors.push_back(component_missing_error("Text"));
             return result;
         }
         apply_text_properties(*comp, properties, result);
@@ -4276,7 +4461,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Reflection Probe");
+            result.errors.push_back(component_missing_error("Reflection Probe"));
             return result;
         }
         apply_reflection_probe_properties(*comp, properties, result);
@@ -4288,7 +4473,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Bloom");
+            result.errors.push_back(component_missing_error("Bloom"));
             return result;
         }
         apply_bloom_properties(*comp, properties, result);
@@ -4300,7 +4485,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: GTAO");
+            result.errors.push_back(component_missing_error("GTAO"));
             return result;
         }
         apply_gtao_properties(*comp, properties, result);
@@ -4312,7 +4497,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Global Illumination");
+            result.errors.push_back(component_missing_error("Global Illumination"));
             return result;
         }
         apply_serialized_component_properties(*comp, properties, result);
@@ -4324,7 +4509,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: SSR");
+            result.errors.push_back(component_missing_error("SSR"));
             return result;
         }
         apply_serialized_component_properties(*comp, properties, result);
@@ -4336,7 +4521,7 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Auto Exposure");
+            result.errors.push_back(component_missing_error("Auto Exposure"));
             return result;
         }
         // The settings object merges partially, which is what the exposure sweeps need: one
@@ -4350,14 +4535,28 @@ auto apply_component_properties(rtti::context& ctx,
         if(!comp)
         {
             result.ok = false;
-            result.errors.push_back("Component not present on entity: Temporal AA");
+            result.errors.push_back(component_missing_error("Temporal AA"));
             return result;
         }
         apply_serialized_component_properties(*comp, properties, result);
         return result;
     }
-    result.ok = false;
-    result.errors.push_back("Unsupported component for typed properties: " + component_pretty_name);
+    // No hand-written handler: write it through the reflected setters.
+    bool known = false;
+    auto object = find_addable_component(entity, component_pretty_name, known);
+    if(!known)
+    {
+        result.ok = false;
+        result.errors.push_back("Unknown component: " + component_pretty_name + " (see scene_list_component_types)");
+        return result;
+    }
+    if(!object)
+    {
+        result.ok = false;
+        result.errors.push_back(component_missing_error(component_pretty_name));
+        return result;
+    }
+    apply_meta_properties(ctx, object, properties, result);
     return result;
 }
 
@@ -4400,18 +4599,10 @@ auto entity_supported_component_properties_json(rtti::context& ctx,
         json += ":";
         json += props;
     };
-    try_add("Light");
-    try_add("Skylight");
-    try_add("Audio Source");
-    try_add("Camera");
-    try_add("Volume");
-    try_add("Particle Emitter");
-    try_add("Physics");
-    try_add("Animation");
-    try_add("Text");
-    try_add("Reflection Probe");
-    try_add("Bloom");
-    try_add("GTAO");
+    for(const auto& pretty : addable_component_pretty_names())
+    {
+        try_add(pretty.c_str());
+    }
     // For Script, emit one bag per attached scriptable type.
     if(auto* script = entity.try_get<script_component>())
     {

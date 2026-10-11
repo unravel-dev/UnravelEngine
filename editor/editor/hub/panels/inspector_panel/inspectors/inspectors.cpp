@@ -25,7 +25,12 @@
 #include <engine/rendering/ecs/components/light_component.h>
 #include <engine/scripting/ecs/components/script_component.h>
 #include <engine/ui/ecs/components/ui_document_component.h>
+#include <algorithm>
 #include <functional>
+#include <iterator>
+#include <ser20/external/simdjson/simdjson.h>
+#include <serialization/serialization.h>
+#include <sstream>
 #include <unordered_map>
 #include <vector>
 
@@ -600,6 +605,277 @@ void prefab_override_context::mark_property_as_changed(entt::handle entity,
             mark_property_as_changed(entity, component_type_name, component_pretty_type_name, property_path_global);
         }
     }
+}
+
+namespace
+{
+/// The key a saved script object keeps its type under, beside its fields.
+constexpr std::string_view SCRIPT_TYPE_KEY = "type";
+
+/// A property an edit changed: its path below the component, and the path to show for it
+/// (empty to derive it from the reflected names).
+struct changed_property
+{
+    std::string path;
+    std::string pretty_path;
+};
+
+/// The live component, by reference, from its meta type alone.
+auto get_component_any(entt::handle entity, const entt::meta_type& component_type) -> entt::meta_any
+{
+    auto* storage = entity ? entity.registry()->storage(component_type.info().hash()) : nullptr;
+    if(storage == nullptr || !storage->contains(entity.entity()))
+    {
+        return {};
+    }
+    return component_type.from_void(storage->value(entity.entity()));
+}
+
+/// Whether the inspector edits a value of this type as one field rather than showing its
+/// properties as a group - the depth at which it records an override for an edit inside it.
+auto is_edited_as_one_value(const entt::meta_type& type) -> bool
+{
+    if(!type || type.is_enum() || type.is_sequence_container() || type.is_associative_container())
+    {
+        return true;
+    }
+    if(get_inspector(engine::context(), type))
+    {
+        return true;
+    }
+    return type.data().begin() == type.data().end();
+}
+
+/// Whether a saved value differs between the two states. Absent after the edit means nothing
+/// was saved for it, so there is nothing to override.
+auto is_saved_value_changed(const simdjson::dom::object& before,
+                            const simdjson::dom::object& after,
+                            std::string_view key,
+                            simdjson::dom::element& old_value,
+                            simdjson::dom::element& new_value) -> bool
+{
+    if(after[key].get(new_value))
+    {
+        return false;
+    }
+    return before[key].get(old_value) || simdjson::minify(old_value) != simdjson::minify(new_value);
+}
+
+/**
+ * @brief Collects the reflected properties whose saved value differs, as deep as the inspector goes.
+ *
+ * A property is matched to its saved value by its reflected name, the name the resync matches
+ * an override against; a property saved under another name could not keep an override either.
+ */
+void collect_changed_properties(const entt::meta_any& object,
+                                const simdjson::dom::object& before,
+                                const simdjson::dom::object& after,
+                                const std::string& path,
+                                std::vector<changed_property>& changed)
+{
+    for(auto kvp : object.type().data())
+    {
+        const auto& prop = kvp.second;
+        if(prop.is_const() || !entt::is_property_visible(object, prop) || entt::is_property_readonly(object, prop))
+        {
+            continue;
+        }
+        const auto name = entt::get_name(prop);
+        simdjson::dom::element old_value;
+        simdjson::dom::element new_value;
+        if(!is_saved_value_changed(before, after, name, old_value, new_value))
+        {
+            continue;
+        }
+        const auto property_path = path.empty() ? name : path + "/" + name;
+        auto value = prop.get(object);
+        entt::as_derived(value);
+        simdjson::dom::object old_object;
+        simdjson::dom::object new_object;
+        if(is_edited_as_one_value(value.type()) || old_value.get(old_object) || new_value.get(new_object))
+        {
+            changed.push_back({property_path, {}});
+            continue;
+        }
+        collect_changed_properties(value, old_object, new_object, property_path, changed);
+    }
+}
+
+/// What a call into the override bookkeeping changed in the root's list, both directions.
+auto diff_overrides(entt::handle root, const std::set<prefab_property_override_data>& before) -> prefab_override_record
+{
+    prefab_override_record record;
+    auto* prefab_comp = root ? root.try_get<prefab_component>() : nullptr;
+    if(prefab_comp == nullptr)
+    {
+        return record;
+    }
+    const auto& after = prefab_comp->local.overrides;
+    record.root = entt::make_uhandle(root);
+    std::set_difference(after.begin(), after.end(), before.begin(), before.end(), std::back_inserter(record.added_overrides));
+    std::set_difference(before.begin(), before.end(), after.begin(), after.end(), std::back_inserter(record.removed_overrides));
+    if(!record.added_overrides.empty() || !record.removed_overrides.empty())
+    {
+        prefab_comp->changed = true;
+    }
+    return record;
+}
+
+/// Drops an entity's overrides inside one component - its fields, not the component itself.
+void erase_component_field_overrides(prefab_component& prefab_comp,
+                                     const hpp::uuid& entity_uuid,
+                                     const std::string& component_type_name)
+{
+    auto& overrides = prefab_comp.local.overrides;
+    auto it = overrides.lower_bound(prefab_property_override_data{entity_uuid, component_type_name});
+    while(it != overrides.end() && it->instance_path.empty() && it->entity_uuid == entity_uuid &&
+          it->component_path.starts_with(component_type_name))
+    {
+        const char next = it->component_path.size() > component_type_name.size()
+                              ? it->component_path[component_type_name.size()]
+                              : '\0';
+        it = (next == '/' || next == '[') ? overrides.erase(it) : std::next(it);
+    }
+}
+
+/// Script fields, one per field, under the path the loader checks: the script's slot, its type, then
+/// the field - the path the inspector records for the same edit.
+void collect_changed_script_fields(const script_component& scripts,
+                                   const simdjson::dom::object& before,
+                                   const simdjson::dom::object& after,
+                                   std::vector<changed_property>& changed)
+{
+    simdjson::dom::array old_scripts;
+    simdjson::dom::array new_scripts;
+    if(before["script_components"].get(old_scripts) || after["script_components"].get(new_scripts))
+    {
+        return;
+    }
+    const auto& objects = scripts.get_script_components();
+    const auto count = std::min({objects.size(), old_scripts.size(), new_scripts.size()});
+    for(size_t i = 0; i < count; ++i)
+    {
+        simdjson::dom::object old_fields;
+        simdjson::dom::object new_fields;
+        if(!objects[i].pinned || old_scripts.at(i).get(old_fields) || new_scripts.at(i).get(new_fields))
+        {
+            continue;
+        }
+        const auto type_name = objects[i].pinned->get_object().get_type().get_fullname();
+        for(auto field : new_fields)
+        {
+            simdjson::dom::element old_value;
+            simdjson::dom::element new_value;
+            if(field.key == SCRIPT_TYPE_KEY ||
+               !is_saved_value_changed(old_fields, new_fields, field.key, old_value, new_value))
+            {
+                continue;
+            }
+            const std::string field_name(field.key);
+            const auto slot = "[" + std::to_string(i) + "]";
+            changed.push_back({"script_components" + slot + "/" + type_name + "/" + field_name,
+                               "Scripts" + slot + "/" + type_name + "/" + field_name});
+        }
+    }
+}
+} // namespace
+
+auto prefab_override_context::save_component_state(entt::handle entity, const entt::meta_type& component_type)
+    -> std::string
+{
+    auto exists = component_type.func("component_exists"_hs);
+    auto save = component_type.func("component_save"_hs);
+    if(!entity || !exists || !save || !exists.invoke({}, entity).cast<bool>())
+    {
+        return {};
+    }
+    std::stringstream stream;
+    serialization::scoped_output_format format(serialization::output_format::compact);
+    if(!save.invoke({}, entity, entt::forward_as_meta(stream)).cast<bool>())
+    {
+        return {};
+    }
+    return stream.str();
+}
+
+auto prefab_override_context::mark_changed_properties(entt::handle entity,
+                                                      const entt::meta_type& component_type,
+                                                      const std::string& state_before) -> prefab_override_record
+{
+    prefab_override_record record;
+    auto root = find_prefab_root_entity(entity);
+    const auto* prefab_before = root ? root.try_get<prefab_component>() : nullptr;
+    const auto state_after = save_component_state(entity, component_type);
+    if(prefab_before == nullptr || state_before.empty() || state_after.empty())
+    {
+        return record;
+    }
+    simdjson::dom::parser before_parser;
+    simdjson::dom::parser after_parser;
+    simdjson::dom::object before;
+    simdjson::dom::object after;
+    if(before_parser.parse(state_before)["component"].get(before) ||
+       after_parser.parse(state_after)["component"].get(after))
+    {
+        return record;
+    }
+    std::vector<changed_property> changed;
+    const auto* scripts = entity.try_get<script_component>();
+    if(scripts != nullptr && component_type == entt::resolve<script_component>())
+    {
+        collect_changed_script_fields(*scripts, before, after, changed);
+    }
+    else
+    {
+        collect_changed_properties(get_component_any(entity, component_type), before, after, {}, changed);
+    }
+    if(changed.empty())
+    {
+        return record;
+    }
+    // A copy, to compare the list with once the properties are recorded.
+    const auto overrides_before = prefab_before->local.overrides;
+    const auto type_name = entt::get_name(component_type);
+    const auto pretty_type_name = entt::get_pretty_name(component_type);
+    for(const auto& property : changed)
+    {
+        mark_property_as_changed(entity, type_name, pretty_type_name, property.path, property.pretty_path);
+    }
+    return diff_overrides(root, overrides_before);
+}
+
+auto prefab_override_context::mark_component_removed(entt::handle entity, const entt::meta_type& component_type)
+    -> prefab_override_record
+{
+    auto root = find_prefab_root_entity(entity);
+    auto* prefab_comp = root ? root.try_get<prefab_component>() : nullptr;
+    const auto entity_uuid = get_entity_prefab_uuid(entity);
+    if(prefab_comp == nullptr || entity_uuid.is_nil() || !component_type)
+    {
+        return {};
+    }
+    // A copy, to compare the list with once the removal is recorded.
+    const auto overrides_before = prefab_comp->local.overrides;
+    const auto type_name = entt::get_name(component_type);
+    erase_component_field_overrides(*prefab_comp, entity_uuid, type_name);
+    mark_property_as_changed(entity, component_type, {});
+    return diff_overrides(root, overrides_before);
+}
+
+void prefab_override_context::restore_overrides(const prefab_override_record& record)
+{
+    auto root = record.root.resolve();
+    auto* prefab_comp = root ? root.try_get<prefab_component>() : nullptr;
+    if(prefab_comp == nullptr)
+    {
+        return;
+    }
+    for(const auto& added : record.added_overrides)
+    {
+        prefab_comp->local.overrides.erase(added);
+    }
+    prefab_comp->local.overrides.insert(record.removed_overrides.begin(), record.removed_overrides.end());
+    prefab_comp->changed = true;
 }
 
 namespace

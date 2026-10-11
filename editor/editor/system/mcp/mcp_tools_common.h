@@ -48,7 +48,7 @@ inline auto require_active_scene(rtti::context& ctx, scene*& out_scene, std::str
     out_scene = em.get_active_scene(ctx);
     if(!out_scene || !out_scene->registry)
     {
-        error = "No active scene";
+        error = "No active scene (open one with scene_open, or make one with scene_new_from_preset)";
         return false;
     }
     return true;
@@ -59,7 +59,8 @@ inline auto require_edit_scene(rtti::context& ctx, scene*& out_scene, std::strin
     auto* play = ctx.has<play_mode>() ? &ctx.get_cached<play_mode>() : nullptr;
     if(play && play->is_active())
     {
-        error = "Scene is in play mode; mutating tools are disabled";
+        error = "Scene is in play mode; mutating tools are disabled (stop play with play_set_active "
+                "{\"active\":false})";
         return false;
     }
     return require_active_scene(ctx, out_scene, error);
@@ -590,20 +591,45 @@ inline auto require_not_play_mode(rtti::context& ctx, std::string& error) -> boo
     auto* play = ctx.has<play_mode>() ? &ctx.get_cached<play_mode>() : nullptr;
     if(play && play->is_active())
     {
-        error = "Editor is in play mode; this tool is disabled";
+        error = "Editor is in play mode; this tool is disabled (stop play with play_set_active "
+                "{\"active\":false})";
         return false;
     }
     return true;
+}
+
+/// Whether prefab mode is on, which prefab it edits and whether it has unsaved edits. While it
+/// is on, the scene tools work on the prefab's contents.
+inline auto prefab_mode_status_json(editing_manager& em) -> std::string
+{
+    if(!em.is_prefab_mode())
+    {
+        return R"({"active":false})";
+    }
+    return fmt::format(R"({{"active":true,"prefab":{},"unsaved_changes":{}}})",
+                       em.edited_prefab ? make_json_string(em.edited_prefab.id()) : std::string("null"),
+                       bool_to_json(em.has_unsaved_prefab_changes()));
 }
 
 inline auto require_open_project(rtti::context& ctx, std::string& error) -> bool
 {
     if(!ctx.has<project_manager>() || !ctx.get_cached<project_manager>().has_open_project())
     {
-        error = "No project open";
+        error = "No project open (use project_open or project_create first)";
         return false;
     }
     return true;
+}
+
+/// The open project, or nullptr with `error` set. For tools that go on to read or write
+/// settings rather than just checking that a project is there.
+inline auto get_open_project(rtti::context& ctx, std::string& error) -> project_manager*
+{
+    if(!require_open_project(ctx, error))
+    {
+        return nullptr;
+    }
+    return &ctx.get_cached<project_manager>();
 }
 
 /// Parse transform space: "world" (default) or "local". Returns false on invalid values.

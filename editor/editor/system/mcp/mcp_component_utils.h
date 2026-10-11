@@ -33,6 +33,12 @@ auto list_component_property_schema_json(const std::string& component_filter = {
 auto is_supported_component_pretty_name(const std::string& component_pretty_name) -> bool;
 
 /**
+ * @brief The meta type a typed-properties component name refers to, Script included.
+ * @return The type, or an invalid type for an unknown name
+ */
+auto component_meta_type(const std::string& component_pretty_name) -> entt::meta_type;
+
+/**
  * @brief Read typed properties for one component on an entity.
  *        For Script, script_type is required (C# type full name or short name).
  *        Optional property_filter limits keys; empty means all supported keys.

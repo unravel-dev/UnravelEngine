@@ -95,6 +95,14 @@ struct defaults
                                  scene& scn,
                                  const std::string& key) -> entt::handle;
     /**
+     * @brief The model a mesh entity gets: the mesh as LOD 0 and the mesh's own default materials.
+     *        create_mesh_entity_at builds its entity from this; swapping the mesh of an existing
+     *        entity uses it too, so both look the same.
+     * @param ctx The context for creation.
+     * @param key The key of the mesh.
+     */
+    static auto make_model_from_mesh(rtti::context& ctx, const std::string& key) -> model;
+    /**
      * @brief Creates a mesh entity at a specified position.
      * @param ctx The context for creation.
      * @param scn The scene to create the entity in.

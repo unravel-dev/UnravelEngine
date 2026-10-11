@@ -105,7 +105,7 @@ void register_input_script_bindings()
     reg.add_internal_call("internal_m2n_input_get_analog_value",
                             dotnet_internal_call(internal_m2n_input_get_analog_value));
     reg.add_internal_call("internal_m2n_input_get_digital_value",
-                            dotnet_internal_call(internal_m2n_input_get_analog_value));
+                            dotnet_internal_call(internal_m2n_input_get_digital_value));
     reg.add_internal_call("internal_m2n_input_is_pressed", dotnet_internal_call(internal_m2n_input_is_pressed));
     reg.add_internal_call("internal_m2n_input_is_released", dotnet_internal_call(internal_m2n_input_is_released));
     reg.add_internal_call("internal_m2n_input_is_down", dotnet_internal_call(internal_m2n_input_is_down));

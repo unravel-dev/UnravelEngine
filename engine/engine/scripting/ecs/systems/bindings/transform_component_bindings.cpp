@@ -494,7 +494,7 @@ void register_transform_component_script_bindings()
     // Scale
     reg.add_internal_call("internal_m2n_get_scale_global", dotnet_internal_call(internal_m2n_get_scale_global));
     reg.add_internal_call("internal_m2n_set_scale_global", dotnet_internal_call(internal_m2n_set_scale_global));
-    reg.add_internal_call("internal_m2n_scale_by_global", dotnet_internal_call(internal_m2n_scale_by_local));
+    reg.add_internal_call("internal_m2n_scale_by_global", dotnet_internal_call(internal_m2n_scale_by_global));
 
     reg.add_internal_call("internal_m2n_get_scale_local", dotnet_internal_call(internal_m2n_get_scale_local));
     reg.add_internal_call("internal_m2n_set_scale_local", dotnet_internal_call(internal_m2n_set_scale_local));

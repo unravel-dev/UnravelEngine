@@ -42,6 +42,38 @@ play, so choreograph:
 Two captures a few seconds apart prove motion (dominoes mid-fall, animation
 pose changes) better than one.
 
+## Driving the game: synthesized input
+
+Captures prove rendering. Only input proves gameplay - a player controller, a
+jump, a trigger, a menu button.
+
+1. input_get_state first. input_allowed false means the Game panel is not
+   focused and NOTHING reaches the action map; the input tools focus it for you
+   unless you pass focus_game_panel false.
+2. input_hold_keys {"keys":["w"],"frames":60} holds the keys for exactly that
+   many frames and waits for them to elapse, so the effect is finished when the
+   call returns. input_send_keys with state down/up holds across several calls;
+   state "press" taps for one frame, which is what Input.IsPressed sees.
+3. Key names are the platform's, matched ignoring case, spaces and dashes:
+   "w", "space", "left shift" or "lshift", "f1". A rejected name lists near
+   misses.
+4. Scripts only run in play mode - enter play first or nothing moves.
+5. Pointer: input_set_mouse_position (play mode) drives a virtual pointer that
+   the game, its UI and the editor all follow - the user's real cursor is not
+   moved - then input_send_mouse clicks or scrolls. While it is set the user's
+   mouse does not reach the editor, so clear it (clear:true) as soon as the test
+   is done; it also clears itself when play ends.
+
+Prove it with numbers, not only pixels: scene_find_entities_batch then
+scene_get_bounds_batch (both allowed in play mode) before and after gives a
+measurable delta. A displacement that matches speed x frames x frame time is
+proof; a screenshot that "looks moved" is not.
+
+Actions, not keys: scripts query action names (Input.GetAnalogValue("Horizontal")),
+so a key only does something if an action is bound to it. input_list_actions
+shows the bindings, input_map_action adds one. An action no binding points at
+silently reads zero.
+
 ## Logs and profiling
 
 - logs_get_recent (min_level "warning") after imports, scene loads and play
@@ -65,3 +97,8 @@ pose changes) better than one.
 - Do not leave a debug view or a paused play session active when you finish.
 - Do not treat a quiet log as success for physics/animation - only a capture
   (or two) proves motion.
+- Do not conclude a control scheme works without an unbound control case: hold
+  the key with the action unmapped and confirm nothing moves, then bind it and
+  confirm it does. Without that, a script that reacts to everything looks
+  identical to one that works.
+- Do not leave a virtual pointer set or keys held when you finish.

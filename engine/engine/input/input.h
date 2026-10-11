@@ -4,6 +4,7 @@
 #include <base/basetypes.hpp>
 #include <base/hash.hpp>
 #include <context/context.hpp>
+#include <memory>
 #include <engine/events.h>
 
 #include "action_map/impl/os_input_manager.hpp"
@@ -25,6 +26,13 @@ struct input_system
     static auto get_default_mapping() -> input::action_map;
 
     input::os_input_manager manager;
+
+private:
+    /// A virtual pointer stands in for the editor's mouse too, so it must not outlive the play
+    /// session that set it - the user's mouse would stay dead in the editor.
+    void on_play_end(rtti::context& ctx);
+
+    std::shared_ptr<int> sentinel_ = std::make_shared<int>(0);
 
 };
 

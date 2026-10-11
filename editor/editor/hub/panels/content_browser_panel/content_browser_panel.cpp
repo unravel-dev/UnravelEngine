@@ -1206,16 +1206,11 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
 
         if(ImGui::MenuItem(ex::get_type<physics_material>().c_str()))
         {
-            auto& am = ctx.get_cached<asset_manager>();
-
             auto new_name = fmt::format("New {}", ex::get_type<physics_material>());
             const auto available =
                 get_new_file(target_path, new_name, ex::get_format<physics_material>());
-            const auto key = fs::convert_to_protocol(available).generic_string();
 
-            auto new_mat_future =
-                am.get_asset_from_instance<physics_material>(key, std::make_shared<physics_material>());
-            asset_writer::atomic_save_to_file(new_mat_future.id(), new_mat_future);
+            asset_actions::create_physics_material(ctx, available);
 
             {
                 pending_rename = available;
@@ -1226,24 +1221,11 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
 
         if(ImGui::MenuItem(ex::get_type<ui_tree>().c_str()))
         {
-            auto& am = ctx.get_cached<asset_manager>();
-
             auto new_name = fmt::format("New {}", ex::get_type<ui_tree>());
             const auto available =
                 get_new_file(target_path, new_name, ex::get_format<ui_tree>());
-            const auto key = fs::convert_to_protocol(available).generic_string();
 
-
-            fs::error_code err;
-            asset_writer::atomic_write_file(
-            available,
-            [&](const fs::path& temp)
-            {
-                fs::error_code ec;
-                fs::copy(fs::resolve_protocol("engine:/data/ui/template.rhtml"), available, ec);
-            },
-            err);
-
+            if(asset_actions::create_ui_document(available))
             {
                 pending_rename = available;
             }
@@ -1251,23 +1233,11 @@ void content_browser_panel::context_create_menu(rtti::context& ctx, const fs::pa
 
         if(ImGui::MenuItem(ex::get_type<style_sheet>().c_str()))
         {
-            auto& am = ctx.get_cached<asset_manager>();
-
             auto new_name = fmt::format("New {}", ex::get_type<style_sheet>());
             const auto available =
                 get_new_file(target_path, new_name, ex::get_format<style_sheet>());
-            const auto key = fs::convert_to_protocol(available).generic_string();
 
-            fs::error_code err;
-            asset_writer::atomic_write_file(
-            available,
-            [&](const fs::path& temp)
-            {
-                fs::error_code ec;
-                fs::copy(fs::resolve_protocol("engine:/data/ui/template.rcss"), available, ec);
-            },
-            err);
-
+            if(asset_actions::create_style_sheet(available))
             {
                 pending_rename = available;
             }

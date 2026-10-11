@@ -16,6 +16,12 @@
 #include <engine/ecs/prefab.h>
 #include <engine/rendering/material.h>
 #include <engine/rendering/mesh.h>
+#include <graphics/texture.h>
+#include <engine/ui/ui_tree.h>
+#include <engine/meta/physics/physics_material.hpp>
+#include <engine/physics/physics_material.h>
+#include <engine/audio/audio_clip.h>
+#include <engine/animation/animation.h>
 #include <filesystem/filesystem.h>
 
 #include <algorithm>
@@ -88,61 +94,128 @@ auto matches_asset_extension(const std::string& ext) -> bool
     return lower != ext && ex::is_format<T>(lower);
 }
 
-template<typename T>
-auto poll_handle_ready(asset_manager& am, const std::string& key, std::chrono::milliseconds timeout) -> bool
+enum class asset_readiness
 {
-    auto handle = am.get_asset<T>(key);
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while(std::chrono::steady_clock::now() < deadline)
+    ready,
+    loading,
+    failed,
+    missing,
+};
+
+auto readiness_to_string(asset_readiness state) -> const char*
+{
+    switch(state)
     {
-        if(handle && handle.is_ready())
+        case asset_readiness::ready:
+            return "ready";
+        case asset_readiness::failed:
+            return "failed";
+        case asset_readiness::missing:
+            return "missing";
+        case asset_readiness::loading:
+            break;
+    }
+    return "loading";
+}
+
+auto source_exists(const std::string& key) -> bool
+{
+    fs::error_code ec;
+    return fs::exists(fs::absolute(fs::resolve_protocol(key)), ec);
+}
+
+/// Polls with try_get(), the handle's own readiness test: unlike is_ready() it submits a deferred
+/// load, which nothing else would start while we wait. The handle is fetched again each round
+/// because right after an import the key may not be registered yet.
+template<typename T>
+auto poll_handle_state(asset_manager& am, const std::string& key, std::chrono::milliseconds timeout)
+    -> asset_readiness
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while(true)
+    {
+        if(auto handle = am.get_asset<T>(key))
         {
-            return true;
+            if(auto asset = handle.try_get())
+            {
+                return asset_handle<T>::is_empty(asset) ? asset_readiness::failed : asset_readiness::ready;
+            }
+        }
+        if(std::chrono::steady_clock::now() >= deadline)
+        {
+            return source_exists(key) ? asset_readiness::loading : asset_readiness::missing;
         }
         tpp::this_thread::sleep_for(std::chrono::milliseconds(32));
     }
-    return handle && handle.is_ready();
 }
 
-auto try_wait_asset_ready(rtti::context& ctx, const std::string& key, std::chrono::milliseconds timeout) -> bool
+template<typename... Types>
+struct asset_type_list
+{
+};
+
+/// Dispatches on the key's extension to the asset type that owns it.
+template<typename T, typename... Rest>
+auto poll_by_extension(asset_manager& am,
+                       const std::string& key,
+                       const std::string& ext,
+                       std::chrono::milliseconds timeout,
+                       asset_type_list<T, Rest...>,
+                       asset_readiness& out) -> bool
+{
+    if(matches_asset_extension<T>(ext))
+    {
+        out = poll_handle_state<T>(am, key, timeout);
+        return true;
+    }
+    if constexpr(sizeof...(Rest) > 0)
+    {
+        return poll_by_extension(am, key, ext, timeout, asset_type_list<Rest...>{}, out);
+    }
+    return false;
+}
+
+auto wait_asset_state(rtti::context& ctx, const std::string& key, std::chrono::milliseconds timeout)
+    -> asset_readiness
 {
     tpp::this_thread::register_this_thread();
 
     auto& am = ctx.get_cached<asset_manager>();
     const auto ext = fs::path(key).extension().generic_string();
-    if(matches_asset_extension<material>(ext))
+    asset_readiness state{};
+    if(poll_by_extension(am,
+                         key,
+                         ext,
+                         timeout,
+                         asset_type_list<material,
+                                         mesh,
+                                         prefab,
+                                         scene_prefab,
+                                         gfx::texture,
+                                         audio_clip,
+                                         animation_clip,
+                                         physics_material,
+                                         ui_tree>{},
+                         state))
     {
-        return poll_handle_ready<material>(am, key, timeout);
+        return state;
     }
-    if(matches_asset_extension<mesh>(ext))
-    {
-        return poll_handle_ready<mesh>(am, key, timeout);
-    }
-    if(matches_asset_extension<prefab>(ext))
-    {
-        return poll_handle_ready<prefab>(am, key, timeout);
-    }
-    if(matches_asset_extension<scene_prefab>(ext))
-    {
-        return poll_handle_ready<scene_prefab>(am, key, timeout);
-    }
+
+    // Types with no loadable handle here: registered metadata, or the file itself, is the signal.
     const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while(std::chrono::steady_clock::now() < deadline)
+    while(true)
     {
         auto meta = am.get_metadata_for_key(key);
         if(!meta.location.empty() || !meta.meta.type.empty())
         {
-            return true;
+            return asset_readiness::ready;
         }
-        const auto absolute = fs::absolute(fs::resolve_protocol(key));
-        fs::error_code ec;
-        if(fs::exists(absolute, ec) && fs::file_size(absolute, ec) > 0)
+        if(std::chrono::steady_clock::now() >= deadline)
         {
-            return true;
+            return source_exists(key) ? asset_readiness::loading : asset_readiness::missing;
         }
         tpp::this_thread::sleep_for(std::chrono::milliseconds(32));
     }
-    return false;
 }
 
 auto read_import_timeout_ms(const simdjson::dom::object& args, int64_t default_ms) -> std::chrono::milliseconds
@@ -624,10 +697,10 @@ void register_asset_tools(mcp_tool_registry& registry)
                      {
                          const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
                              ready_deadline - std::chrono::steady_clock::now());
-                         ready = try_wait_asset_ready(
-                             ctx,
-                             key,
-                             remaining.count() > 0 ? remaining : std::chrono::milliseconds(0));
+                         ready = wait_asset_state(ctx,
+                                                  key,
+                                                  remaining.count() > 0 ? remaining : std::chrono::milliseconds(0)) ==
+                                 asset_readiness::ready;
                      }
                      if(ready)
                      {
@@ -862,8 +935,10 @@ void register_asset_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "assets_wait_ready_batch",
          .description =
-             "Wait until many asset keys are loadable/ready (poll). timeout_ms is a shared "
-             "deadline for the whole batch (default 15000, max 60000).",
+             "Wait until assets are loaded and usable. Each key reports a state: ready, loading (still "
+             "compiling or loading at the deadline), failed (the load finished without an asset - see "
+             "logs_get_recent), or missing (no such file). Loads are started if nothing has asked for "
+             "them yet. timeout_ms is a shared deadline for the whole batch (default 15000, max 60000).",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}},"timeout_ms":{"type":"integer","minimum":0,"maximum":60000}},"required":["items"]})json",
          .handler =
@@ -893,17 +968,20 @@ void register_asset_tools(mcp_tool_registry& registry)
                  keys.push_back(std::move(key));
              }
              const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-             std::vector<char> ready_flags(keys.size(), 0);
-             size_t ok_count = 0;
-             // Shared-deadline poll: do not spend the full timeout on each key sequentially.
-             while(ok_count < keys.size() && std::chrono::steady_clock::now() < deadline)
+             std::vector<asset_readiness> states(keys.size(), asset_readiness::loading);
+             auto settled = [](asset_readiness state)
              {
-                 ok_count = 0;
+                 // Waiting longer cannot change a failed load or a file that is not there.
+                 return state != asset_readiness::loading;
+             };
+             // Shared-deadline poll: do not spend the full timeout on each key sequentially.
+             while(std::chrono::steady_clock::now() < deadline &&
+                   !std::all_of(states.begin(), states.end(), settled))
+             {
                  for(size_t i = 0; i < keys.size(); ++i)
                  {
-                     if(ready_flags[i])
+                     if(settled(states[i]))
                      {
-                         ++ok_count;
                          continue;
                      }
                      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -914,41 +992,30 @@ void register_asset_tools(mcp_tool_registry& registry)
                      }
                      // Short slice so other keys keep getting checked under the shared budget.
                      const auto slice = (std::min)(remaining, std::chrono::milliseconds(100));
-                     if(try_wait_asset_ready(ctx, keys[i], slice))
-                     {
-                         ready_flags[i] = 1;
-                         ++ok_count;
-                     }
-                 }
-                 if(ok_count < keys.size() && std::chrono::steady_clock::now() < deadline)
-                 {
-                     tpp::this_thread::sleep_for(std::chrono::milliseconds(32));
+                     states[i] = wait_asset_state(ctx, keys[i], slice);
                  }
              }
              std::string results = "[";
-             bool first = true;
-             ok_count = 0;
+             size_t ok_count = 0;
              for(size_t i = 0; i < keys.size(); ++i)
              {
-                 if(!first)
+                 if(i > 0)
                  {
                      results += ",";
                  }
-                 first = false;
-                 if(ready_flags[i])
-                 {
-                     ++ok_count;
-                 }
-                 results += fmt::format(R"({{"key":{},"ready":{}}})",
+                 const bool ready = states[i] == asset_readiness::ready;
+                 ok_count += ready ? 1 : 0;
+                 results += fmt::format(R"({{"key":{},"ready":{},"state":{}}})",
                                         make_json_string(keys[i]),
-                                        ready_flags[i] ? "true" : "false");
+                                        bool_to_json(ready),
+                                        make_json_string(readiness_to_string(states[i])));
              }
              results += "]";
              return {.text = fmt::format(R"({{"results":{},"count":{},"requested":{},"timeout_ms":{}}})",
-                                        results,
-                                        ok_count,
-                                        keys.size(),
-                                        timeout_ms),
+                                         results,
+                                         ok_count,
+                                         keys.size(),
+                                         timeout_ms),
                      .is_error = ok_count != keys.size()};
          },
          .mutates_scene = false,

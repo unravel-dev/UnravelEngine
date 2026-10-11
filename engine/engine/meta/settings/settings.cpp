@@ -735,6 +735,7 @@ REFLECT_INLINE(settings::physics_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "fixed_timestep"},
             entt::attribute{"pretty_name", "Fixed Timestep"},
+            entt::attribute{"min", 0.001f},
             entt::attribute{"step", 0.001f},
             entt::attribute{"tooltip",
                             "A framerate-independent interval which dictates when physics calculations and "
@@ -744,6 +745,7 @@ REFLECT_INLINE(settings::physics_settings)
         .custom<entt::attributes>(entt::attributes{
             entt::attribute{"name", "max_fixed_steps"},
             entt::attribute{"pretty_name", "Max Fixed Steps"},
+            entt::attribute{"min", 1},
             entt::attribute{"tooltip",
                             "A cap for framerate-independent worst case scenario. No more than this many fixed "
                             "updates per frame."},

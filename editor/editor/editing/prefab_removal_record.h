@@ -68,4 +68,19 @@ struct prefab_removal_record
     std::set<prefab_property_override_data> erased_overrides{};
 };
 
+/**
+ * @brief What prefab_override_context::mark_changed_properties changed in an instance's
+ *        override list, so undo can put the list back as it was.
+ *
+ * Both directions: recording a property drops the overrides above it (the narrower path
+ * replaces them), and an undo that only removed the new entries would lose those.
+ */
+struct prefab_override_record
+{
+    /// The instance whose prefab_component holds the list.
+    entt::uhandle root{};
+    std::vector<prefab_property_override_data> added_overrides{};
+    std::vector<prefab_property_override_data> removed_overrides{};
+};
+
 } // namespace unravel

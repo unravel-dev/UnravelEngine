@@ -45,7 +45,8 @@ public:
     static constexpr int k_max_port = 65535;
     static constexpr size_t k_max_activity_entries = 256;
 
-    /// Registers --mcp-port: editors running side by side (other sessions, agents) need a port each.
+    /// Registers --mcp-port (editors running side by side - other sessions, agents - need a port
+    /// each) and --mcp-profile (which tool surface clients see).
     explicit mcp_manager(cmd_line::parser& parser);
     ~mcp_manager();
 
@@ -62,6 +63,10 @@ public:
     auto get_endpoint_url() const -> std::string;
     auto get_health_url() const -> std::string;
     auto get_tool_count() const -> size_t;
+    /// Tools the active profile exposes; what a client actually sees in tools/list.
+    auto get_visible_tool_count() const -> size_t;
+    auto get_profile() const -> mcp::mcp_profile;
+    auto get_profile_name() const -> const char*;
     auto get_request_count() const -> uint64_t;
     auto get_tool_call_count() const -> uint64_t;
     auto get_error_count() const -> uint64_t;
@@ -117,6 +122,8 @@ private:
                            const std::string& args_json,
                            const std::optional<std::string>& id) -> std::string;
     void log_activity(std::string category, std::string message, bool is_error = false);
+    /// "Unknown tool" plus the nearest real names, so a guessed name corrects itself.
+    auto unknown_tool_message(const std::string& tool_name) const -> std::string;
 
     rtti::context* ctx_{nullptr};
     mcp::mcp_tool_registry registry_;

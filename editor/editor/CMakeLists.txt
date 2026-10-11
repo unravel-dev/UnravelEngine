@@ -25,6 +25,12 @@ unravel_set_default_thread_stack(${target_name})
 add_definitions(-DEDITOR_NAME="unravel-editor")
 add_definitions(-DPLAYER_NAME="unravel-player")
 
+# Default MCP tool surface: debuggable builds expose the engine diagnostics, a shipped
+# editor does not. --mcp-profile overrides it either way.
+target_compile_definitions(${target_name} PRIVATE
+    $<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:UNRAVEL_DEVELOPER_BUILD=1>
+)
+
 set_target_properties(${target_name} PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED YES

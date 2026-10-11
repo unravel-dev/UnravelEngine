@@ -543,6 +543,10 @@ void entity_remove_component_action_t::do_action()
         stream = {};
         component_type.invoke("component_save"_hs, {}, ent, entt::forward_as_meta(stream));
         do_was_successful = component_type.invoke("component_remove"_hs, {}, ent).cast<bool>();
+        if(do_was_successful)
+        {
+            prefab_record = prefab_override_context::mark_component_removed(ent, component_type);
+        }
     }
 }
 
@@ -553,6 +557,8 @@ void entity_remove_component_action_t::undo_action()
         component_type.invoke("component_add"_hs, {}, ent);
         stream.seekg(0);
         component_type.invoke("component_load"_hs, {}, ent, entt::forward_as_meta(stream));
+        prefab_override_context::restore_overrides(prefab_record);
+        prefab_record = {};
     }
 }
 

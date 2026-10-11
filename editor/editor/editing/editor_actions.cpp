@@ -1743,6 +1743,22 @@ void editor_actions::run_project(const fs::path& executable_path)
     subprocess::call(executable_path.string());
 }
 
+auto editor_actions::is_path_inside_project(const fs::path& path) -> bool
+{
+    // A build inside the project would be copied into itself on the next deploy. Canonical
+    // paths, so "..", links and letter case cannot slip past the comparison; works for folders
+    // that do not exist yet.
+    fs::error_code ec;
+    const auto project_root = fs::weakly_canonical(fs::resolve_protocol("app:/"), ec);
+    const auto target = fs::weakly_canonical(path, ec);
+    if(project_root.empty() || target.empty())
+    {
+        return false;
+    }
+    return std::mismatch(project_root.begin(), project_root.end(), target.begin(), target.end()).first ==
+           project_root.end();
+}
+
 auto editor_actions::can_deploy_project(rtti::context& ctx, const deploy_settings& params) -> bool
 {
     return get_deploy_problems(ctx, params).empty();
@@ -1755,6 +1771,10 @@ auto editor_actions::get_deploy_problems(rtti::context& ctx, const deploy_settin
     if(params.deploy_location.empty())
     {
         problems.emplace_back("Choose a folder to deploy to.");
+    }
+    else if(is_path_inside_project(params.deploy_location))
+    {
+        problems.emplace_back("The deploy folder is inside the project; choose one outside it.");
     }
     else if(!fs::is_directory(params.deploy_location, ec))
     {

@@ -1,7 +1,10 @@
 #include "asset_actions.h"
 
+#include <engine/assets/asset_manager.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_writer.h>
+#include <engine/meta/physics/physics_material.hpp>
+#include <engine/physics/physics_material.h>
 
 #include <filesystem/watcher.h>
 #include <logging/logging.h>
@@ -15,6 +18,18 @@
 
 namespace unravel::asset_actions
 {
+
+auto create_physics_material(rtti::context& ctx, const fs::path& absolute_path) -> asset_handle<physics_material>
+{
+    auto& am = ctx.get_cached<asset_manager>();
+    const auto key = fs::convert_to_protocol(absolute_path).generic_string();
+    auto handle = am.get_asset_from_instance<physics_material>(key, std::make_shared<physics_material>());
+    if(!handle || !asset_writer::atomic_save_to_file(handle.id(), handle))
+    {
+        return {};
+    }
+    return handle;
+}
 
 auto resolve_asset_source_path(const std::string& asset_key) -> fs::path
 {
@@ -85,25 +100,57 @@ auto is_valid_csharp_identifier(const std::string& name) -> bool
                        });
 }
 
-auto create_script_from_template(const fs::path& template_path, const fs::path& dst, std::string* error) -> bool
+namespace
 {
-    std::ifstream input(template_path, std::ios::binary);
+auto report_error(std::string* error, const std::string& message) -> bool
+{
+    APPLOG_ERROR("{}", message);
+    if(error)
+    {
+        *error = message;
+    }
+    return false;
+}
+
+auto copy_engine_template(const char* template_key, const fs::path& dst, std::string* error) -> bool
+{
+    fs::error_code ec;
+    const auto source = fs::resolve_protocol(template_key);
+    if(!fs::exists(source, ec))
+    {
+        return report_error(error, std::string("Template not found: ") + template_key);
+    }
+    const auto absolute = fs::absolute(dst);
+    fs::create_directories(absolute.parent_path(), ec);
+    ec.clear();
+    if(!asset_writer::atomic_copy_file(source, absolute, ec) || ec)
+    {
+        return report_error(error,
+                            "Copy failed: " + absolute.generic_string() + (ec ? " (" + ec.message() + ")" : ""));
+    }
+    return true;
+}
+} // namespace
+
+auto read_text_file(const fs::path& path, std::string& out, std::string* error) -> bool
+{
+    std::ifstream input(path, std::ios::binary);
     if(!input.is_open())
     {
-        const auto msg = "Script template not found: " + template_path.generic_string();
-        APPLOG_ERROR("{}", msg);
         if(error)
         {
-            *error = msg;
+            *error = "Failed to open file: " + path.generic_string();
         }
         return false;
     }
-
     std::ostringstream buffer;
     buffer << input.rdbuf();
-    auto content = buffer.str();
-    string_utils::alterable::replace(content, "#SCRIPTNAME#", dst.stem().string());
+    out = buffer.str();
+    return true;
+}
 
+auto write_text_file(const fs::path& dst, const std::string& content, std::string* error) -> bool
+{
     fs::error_code err;
     const auto absolute = fs::absolute(dst);
     fs::create_directories(absolute.parent_path(), err);
@@ -130,27 +177,35 @@ auto create_script_from_template(const fs::path& template_path, const fs::path& 
     }
     catch(const std::exception& ex)
     {
-        const auto msg = std::string(ex.what());
-        APPLOG_ERROR("{}", msg);
-        if(error)
-        {
-            *error = msg;
-        }
-        return false;
+        return report_error(error, ex.what());
     }
 
     if(err)
     {
-        const auto msg = "Atomic write failed: " + absolute.generic_string() + " (" + err.message() + ")";
-        APPLOG_ERROR("{}", msg);
-        if(error)
-        {
-            *error = msg;
-        }
-        return false;
+        return report_error(error, "Atomic write failed: " + absolute.generic_string() + " (" + err.message() + ")");
     }
-
     return true;
+}
+
+auto create_ui_document(const fs::path& dst, std::string* error) -> bool
+{
+    return copy_engine_template("engine:/data/ui/template.rhtml", dst, error);
+}
+
+auto create_style_sheet(const fs::path& dst, std::string* error) -> bool
+{
+    return copy_engine_template("engine:/data/ui/template.rcss", dst, error);
+}
+
+auto create_script_from_template(const fs::path& template_path, const fs::path& dst, std::string* error) -> bool
+{
+    std::string content;
+    if(!read_text_file(template_path, content))
+    {
+        return report_error(error, "Script template not found: " + template_path.generic_string());
+    }
+    string_utils::alterable::replace(content, "#SCRIPTNAME#", dst.stem().string());
+    return write_text_file(dst, content, error);
 }
 
 } // namespace unravel::asset_actions

@@ -1,5 +1,8 @@
 #include "mcp_tools_common.h"
 #include "mcp_component_utils.h"
+#include "mcp_meta_properties.h"
+
+#include <engine/ecs/components/layer_component.h>
 
 #include <editor/editing/actions/actions.h>
 #include <editor/editing/editor_actions.h>
@@ -21,6 +24,93 @@ namespace unravel::mcp
 {
 namespace
 {
+
+/// What each preset creates, read by building it into a scratch scene with the same function
+/// scene_new_from_preset uses - so the description cannot drift from the presets themselves.
+auto describe_scene_presets(rtti::context& ctx) -> std::string
+{
+    const std::vector<std::pair<std::string, std::vector<std::string>>> settings_of_interest{
+        {"Skylight", {"mode", "cloud_mode"}},
+        {"Light", {"type", "shadow_type", "shadow_resolution", "contact_shadow_enabled"}},
+    };
+    std::string json = "[";
+    bool first_preset = true;
+    for(const auto preset : {defaults::scene_preset::low,
+                             defaults::scene_preset::medium,
+                             defaults::scene_preset::high,
+                             defaults::scene_preset::showcase})
+    {
+        scene preview{"mcp_preset_preview"};
+        defaults::create_scene_from_preset(ctx, preview, preset);
+
+        std::string entities = "[";
+        bool first_entity = true;
+        preview.registry->view<tag_component>().each(
+            [&](entt::entity id, tag_component& tag)
+            {
+                auto entity = preview.create_handle(id);
+                simdjson::dom::parser parser;
+                simdjson::dom::object summary;
+                std::string components = "[]";
+                const auto summary_json = entity_to_summary_json(entity, 0, 0);
+                if(!parser.parse(summary_json).get(summary))
+                {
+                    simdjson::dom::element list;
+                    if(!summary["components"].get(list))
+                    {
+                        components = std::string(simdjson::minify(list));
+                    }
+                }
+                std::string settings;
+                for(const auto& [component, keys] : settings_of_interest)
+                {
+                    std::string error;
+                    const auto props = component_properties_to_json(ctx, entity, component, {}, &keys, error);
+                    if(!props.empty())
+                    {
+                        settings += (settings.empty() ? "" : ",") + make_json_string(component) + ":" + props;
+                    }
+                }
+                if(!first_entity)
+                {
+                    entities += ",";
+                }
+                first_entity = false;
+                entities += fmt::format(R"({{"name":{},"components":{}{}}})",
+                                        make_json_string(tag.name),
+                                        components,
+                                        settings.empty() ? std::string{} : R"(,"settings":{)" + settings + "}");
+            });
+        entities += "]";
+        preview.unload();
+
+        if(!first_preset)
+        {
+            json += ",";
+        }
+        first_preset = false;
+        json += fmt::format(R"({{"preset":{},"entities":{}}})",
+                            make_json_string(defaults::scene_preset_to_string(preset)),
+                            entities);
+    }
+    json += "]";
+    return fmt::format(R"({{"presets":{}}})", json);
+}
+
+/// The entity summary plus the layers it is on, named from the project's layer settings.
+auto summary_with_layers(rtti::context& ctx, entt::handle entity) -> std::string
+{
+    auto summary = entity_to_summary_json(entity, 0, 0);
+    const auto* layer = entity.try_get<layer_component>();
+    if(layer == nullptr || summary.empty() || summary.back() != '}')
+    {
+        return summary;
+    }
+    summary.pop_back();
+    summary += R"(,"layers":)" + layer_mask_to_json(ctx, layer->layers) + "}";
+    return summary;
+}
+
 
 auto parse_light_type(const std::string& value, light_type& out) -> bool
 {
@@ -340,11 +430,11 @@ void register_scene_tools(mcp_tool_registry& registry)
                  }
                  else if(detail == "summary")
                  {
-                     json += entity_to_summary_json(entity, 0, 0);
+                     json += summary_with_layers(ctx, entity);
                  }
                  else
                  {
-                     auto summary = entity_to_summary_json(entity, 0, 0);
+                     auto summary = summary_with_layers(ctx, entity);
                      if(!summary.empty() && summary.back() == '}')
                      {
                          summary.pop_back();
@@ -421,9 +511,9 @@ void register_scene_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_list_component_properties",
          .description =
-             "List MCP-editable typed property schema. Optional component filter (Light, Skylight, "
-             "Audio Source, Camera, Volume, Script, Particle Emitter, Physics, Animation, Text, "
-             "Reflection Probe, Bloom). Prefer over leaking ser20 JSON blobs.",
+             "List the typed property schema: names, types, enums, and which properties are "
+             "read-only. Optional component filter; the components that have one are the "
+             "typed:true entries of scene_list_component_types.",
          .input_schema_json =
              R"json({"type":"object","properties":{"component":{"type":"string"}}})json",
          .handler =
@@ -439,10 +529,9 @@ void register_scene_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "scene_get_component_properties_batch",
          .description =
-             "Read typed properties for supported components. Each item: entity_id, component "
-             "(Light|Skylight|Audio Source|Camera|Volume|Script|Particle Emitter|Physics|Animation|"
-             "Text|Reflection Probe|Bloom), optional script_type (required for Script), optional "
-             "properties[] key filter.",
+             "Read typed properties for supported components (typed:true in "
+             "scene_list_component_types). Each item: entity_id, component, optional script_type "
+             "(required for Script), optional properties[] key filter.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"script_type":{"type":"string"},"properties":{"type":"array","items":{"type":"string"}}},"required":["entity_id","component"]}}},"required":["items"]})json",
          .handler =
@@ -542,7 +631,9 @@ void register_scene_tools(mcp_tool_registry& registry)
              "Set typed properties on supported components in one undoable action. Each item: "
              "entity_id, component, properties object; script_type required for Script. Component must "
              "already exist (use scene_add_components_batch / scene_add_scripts_batch first). Hierarchy "
-             "parent/children stay on transform tools — not here.",
+             "parent/children stay on transform tools - not here. On a prefab instance every changed "
+             "property becomes an override, as an inspector edit does, so it survives the prefab's "
+             "next save.",
          .input_schema_json =
              R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"component":{"type":"string"},"script_type":{"type":"string"},"properties":{"type":"object"}},"required":["entity_id","component","properties"]}}},"required":["items"]})json",
          .handler =
@@ -563,9 +654,12 @@ void register_scene_tools(mcp_tool_registry& registry)
              {
                  entt::handle entity{};
                  std::string component;
+                 entt::meta_type component_type{};
                  std::string script_type;
                  std::string new_props_json;
                  std::string old_props_json;
+                 /// Shared by the do and undo lambdas, which each hold a copy of the entries.
+                 std::shared_ptr<prefab_override_record> overrides = std::make_shared<prefab_override_record>();
              };
              auto apply_props_json = [&ctx](entt::handle entity,
                                             const std::string& component,
@@ -655,6 +749,7 @@ void register_scene_tools(mcp_tool_registry& registry)
                  (void)apply_props_json(entity, component, script_type, old_props, apply_error);
                  entry e{};
                  e.entity = entity;
+                 e.component_type = component_meta_type(component);
                  e.component = std::move(component);
                  e.script_type = std::move(script_type);
                  e.new_props_json = new_props;
@@ -672,16 +767,19 @@ void register_scene_tools(mcp_tool_registry& registry)
                  {
                      for(const auto& e : entries)
                      {
+                         const auto state = prefab_override_context::save_component_state(e.entity, e.component_type);
                          std::string apply_error;
                          (void)apply_props_json(e.entity, e.component, e.script_type, e.new_props_json, apply_error);
+                         *e.overrides = prefab_override_context::mark_changed_properties(e.entity, e.component_type, state);
                      }
                  },
                  [entries, apply_props_json]()
                  {
-                     for(const auto& e : entries)
+                     for(auto it = entries.rbegin(); it != entries.rend(); ++it)
                      {
                          std::string apply_error;
-                         (void)apply_props_json(e.entity, e.component, e.script_type, e.old_props_json, apply_error);
+                         (void)apply_props_json(it->entity, it->component, it->script_type, it->old_props_json, apply_error);
+                         prefab_override_context::restore_overrides(*it->overrides);
                      }
                  });
              return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
@@ -829,30 +927,52 @@ void register_scene_tools(mcp_tool_registry& registry)
 
     registry.add(
         {.name="scene_list_component_types",
-         .description="List addable component pretty names for scene_add_components_batch.",
+         .description="List addable component pretty names for scene_add_components_batch. typed:true "
+                      "means its properties can be read and written with "
+                      "scene_get/set_component_properties_batch; a typed:false component can be "
+                      "added but keeps its defaults.",
          .input_schema_json=empty_object_schema(),
          .handler=[](rtti::context&, const simdjson::dom::object&) -> tool_result
          {
-             std::vector<std::string> names;
+             std::string json = "[";
+             bool first = true;
              hpp::for_each_tuple_type<all_addable_components>(
                  [&](auto index)
                  {
                      using ctype = std::tuple_element_t<decltype(index)::value, all_addable_components>;
-                     auto type = entt::resolve<ctype>();
-                     names.emplace_back(entt::get_pretty_name(type));
+                     const auto name = std::string(entt::get_pretty_name(entt::resolve<ctype>()));
+                     if(!first)
+                     {
+                         json += ",";
+                     }
+                     first = false;
+                     json += fmt::format(R"({{"name":{},"typed":{}}})",
+                                         make_json_string(name),
+                                         bool_to_json(is_supported_component_pretty_name(name)));
                  });
-             return {.text = strings_to_json_array(names), .is_error = false};
+             json += "]";
+             return {.text = json, .is_error = false};
          },
          .mutates_scene=false});
 
     registry.add(
         {.name = "scene_list_presets",
-         .description = "List scene presets: low, medium, high, showcase.",
+         .description =
+             "List the scene presets scene_new_from_preset and project_create accept, each with what it "
+             "actually creates - the entities, their components, and the lighting settings that differ "
+             "between presets - read by building the preset the same way those tools do. Pick the "
+             "cheapest preset that has what the game needs, or build from an empty scene instead.",
          .input_schema_json = empty_object_schema(),
          .handler =
-             [](rtti::context&, const simdjson::dom::object&) -> tool_result
+             [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
          {
-             return {.text = R"(["low","medium","high","showcase"])", .is_error = false};
+             // Presets are fixed for a build, so each is built once and described from then on.
+             static std::string cached;
+             if(cached.empty())
+             {
+                 cached = describe_scene_presets(ctx);
+             }
+             return {.text = cached, .is_error = false};
          },
          .mutates_scene = false});
 

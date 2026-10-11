@@ -71,10 +71,18 @@ auto os_input_manager::get_keyboard() const -> const keyboard&
 //  ----------------------------------------------------------------------------
 void os_input_manager::before_events_update()
 {
+    ++input_frame_;
+
     //  Update Pressed and Released states to Down and Up
     keyboard_->update();
 
     mouse_->update();
+
+    if(virtual_mouse_position_)
+    {
+        mouse_->set_position(remap_to_work_zone(*virtual_mouse_position_));
+        return;
+    }
 
     auto pos = os::mouse::get_position();
     mouse_->set_position(remap_to_work_zone({pos.x, pos.y}));
@@ -259,6 +267,43 @@ auto os_input_manager::remap_to_work_zone(coord global_pos) -> coord
     }
 
     return remapped_pos;
+}
+
+auto os_input_manager::remap_from_work_zone(coord work_pos) -> coord
+{
+    auto calc_zone = work_input_zone_ ? work_input_zone_ : window_input_zone_;
+    if(!calc_zone)
+    {
+        return work_pos;
+    }
+
+    const auto& work_zone = *calc_zone;
+
+    coord global_pos = work_pos;
+    if(input_reference_size_ && input_reference_size_->w > 0.0f && input_reference_size_->h > 0.0f)
+    {
+        global_pos.x = int(float(global_pos.x) * float(work_zone.w) / input_reference_size_->w);
+        global_pos.y = int(float(global_pos.y) * float(work_zone.h) / input_reference_size_->h);
+    }
+
+    global_pos.x += work_zone.x;
+    global_pos.y += work_zone.y;
+    return global_pos;
+}
+
+void os_input_manager::set_virtual_mouse_position(const hpp::optional<coord>& position)
+{
+    virtual_mouse_position_ = position;
+}
+
+auto os_input_manager::get_virtual_mouse_position() const -> const hpp::optional<coord>&
+{
+    return virtual_mouse_position_;
+}
+
+auto os_input_manager::get_input_frame() const -> uint64_t
+{
+    return input_frame_;
 }
 
 auto os_input_manager::is_inside_work_zone(coord pos) -> bool

@@ -283,7 +283,54 @@ struct prefab_override_context
                                         const std::string& component_pretty_type_name,
                                         const std::string& property_path,
                                         const std::string& property_pretty_path = {});
-    
+
+    /**
+     * @brief Saves a component for mark_changed_properties to compare against.
+     * @param entity Entity that has the component
+     * @param component_type Meta type of the component
+     * @return The component's saved state, or empty when the entity does not have it
+     */
+    static auto save_component_state(entt::handle entity, const entt::meta_type& component_type) -> std::string;
+
+    /**
+     * @brief Records the overrides implied by an edit made outside the inspector.
+     *
+     * For tools that write a component without walking its properties. Compares the component
+     * with the state saved before the edit and records each property that differs, at the depth
+     * the inspector records the same edit: into nested types it shows as groups of properties,
+     * not into values it edits as one (math types, asset handles, enums, containers). Script
+     * fields are recorded one per field. Call after the edit.
+     * @param entity Entity that was modified
+     * @param component_type Meta type of the component that was modified
+     * @param state_before What save_component_state returned before the edit
+     * @return What changed in the override list, for restore_overrides
+     */
+    static auto mark_changed_properties(entt::handle entity,
+                                        const entt::meta_type& component_type,
+                                        const std::string& state_before) -> prefab_override_record;
+
+    /**
+     * @brief Records that an instance no longer has a component its prefab gives it.
+     *
+     * The component as a whole becomes an override, which keeps the replay from restating it -
+     * the removal survives the prefab's next save. Overrides on its fields go: the whole
+     * component is this scene's now, and a narrower override would keep the broader one out.
+     * Nothing is recorded for a component the prefab does not have. Call after the removal.
+     * @param entity Entity the component was removed from
+     * @param component_type Meta type of the removed component
+     * @return What changed in the override list, for restore_overrides
+     */
+    static auto mark_component_removed(entt::handle entity, const entt::meta_type& component_type)
+        -> prefab_override_record;
+
+    /**
+     * @brief Puts an override list back as it was before mark_changed_properties or
+     *        mark_component_removed.
+     *
+     * Call on undo, after the values or the component are restored.
+     */
+    static void restore_overrides(const prefab_override_record& record);
+
     /**
      * @brief Checks if a property exists in the original prefab
      * @param cache_scene Temporary scene for prefab loading

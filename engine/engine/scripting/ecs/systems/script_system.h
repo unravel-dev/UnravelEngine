@@ -122,6 +122,10 @@ struct script_system
     auto is_update_called() const -> bool;
     void wait_for_jobs_to_finish(rtti::context& ctx);
     auto has_compilation_errors() const -> bool;
+    /// True while a build of the protocol's library is queued or running - a source edit is
+    /// picked up on the next scheduled check, so "not compiling" alone does not mean "built".
+    /// Main thread.
+    auto is_build_pending(const std::string& protocol) const -> bool;
 
     void on_sensor_enter(entt::handle sensor, entt::handle other, const std::vector<manifold_point>& manifolds);
     void on_sensor_exit(entt::handle sensor,

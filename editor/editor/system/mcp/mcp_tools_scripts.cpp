@@ -3,7 +3,9 @@
 #include <editor/assets/asset_actions.h>
 #include <editor/editing/actions/actions.h>
 #include <editor/system/project_manager.h>
+#include <editor/system/mcp_manager.h>
 #include <engine/assets/asset_manager.h>
+#include <engine/assets/impl/asset_compiler.h>
 #include <engine/assets/impl/asset_extensions.h>
 #include <engine/assets/impl/asset_writer.h>
 #include <engine/scripting/ecs/components/script_component.h>
@@ -11,58 +13,17 @@
 #include <engine/scripting/script.h>
 #include <filesystem/filesystem.h>
 
+#include <chrono>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 
 namespace unravel::mcp
 {
 namespace
 {
-
-auto read_text_file(const fs::path& path, std::string& out, std::string& error) -> bool
-{
-    std::ifstream input(path, std::ios::binary);
-    if(!input.is_open())
-    {
-        error = "Failed to open file: " + path.generic_string();
-        return false;
-    }
-    std::ostringstream buffer;
-    buffer << input.rdbuf();
-    out = buffer.str();
-    return true;
-}
-
-auto write_text_file_atomic(const fs::path& path, const std::string& contents, std::string& error) -> bool
-{
-    fs::error_code err;
-    const auto absolute = fs::absolute(path);
-    fs::create_directories(absolute.parent_path(), err);
-    err.clear();
-    asset_writer::atomic_write_file(
-        absolute,
-        [&](const fs::path& temp)
-        {
-            std::ofstream output(temp, std::ios::binary | std::ios::trunc);
-            if(!output.is_open())
-            {
-                throw std::runtime_error("Failed to open temp file for write: " + temp.generic_string());
-            }
-            output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-            if(!output.good())
-            {
-                throw std::runtime_error("Failed writing temp file: " + temp.generic_string());
-            }
-        },
-        err);
-    if(err)
-    {
-        error = "Atomic write failed: " + absolute.generic_string() + " (" + err.message() + ")";
-        return false;
-    }
-    return true;
-}
 
 auto resolve_source_path(const std::string& path_or_key) -> fs::path
 {
@@ -150,6 +111,99 @@ void register_script_tools(mcp_tool_registry& registry)
          .mutates_scene = false});
 
     registry.add(
+        {.name = "scripts_get_compile_status",
+         .description =
+             "Whether the project's scripts are building and, for the last build, its errors and "
+             "warnings with file, line and message - the compiler's own parsed diagnostics for exactly "
+             "one build, not a log search. wait:true first waits for a queued or running build to "
+             "finish (a source edit is picked up on the next scheduled check), up to timeout_ms "
+             "(default 60000). Call it after scripts_set_sources_batch; play mode will not start "
+             "while has_errors is true.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"wait":{"type":"boolean"},"timeout_ms":{"type":"integer","minimum":0,"maximum":300000}}})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             constexpr int64_t k_default_wait_ms = 60000;
+             constexpr int64_t k_max_wait_ms = 300000;
+             constexpr auto k_poll_interval = std::chrono::milliseconds(100);
+             constexpr const char* k_protocol = "app";
+
+             auto& mcp = ctx.get_cached<mcp_manager>();
+             bool wait = false;
+             read_bool(args, "wait", wait);
+             const auto timeout = read_timeout_ms(args, k_default_wait_ms, k_max_wait_ms, "timeout_ms");
+
+             struct build_state
+             {
+                 bool pending{false};
+                 bool has_errors{false};
+             };
+             auto query = [&]() -> std::optional<build_state>
+             {
+                 return mcp.invoke_on_main(
+                     [&ctx]() -> build_state
+                     {
+                         if(!ctx.has<script_system>())
+                         {
+                             return {};
+                         }
+                         const auto& scripts = ctx.get_cached<script_system>();
+                         return {.pending = scripts.is_build_pending(k_protocol),
+                                 .has_errors = scripts.has_compilation_errors()};
+                     });
+             };
+
+             auto state = query();
+             const auto deadline = std::chrono::steady_clock::now() + timeout;
+             while(wait && state && state->pending && std::chrono::steady_clock::now() < deadline)
+             {
+                 std::this_thread::sleep_for(k_poll_interval);
+                 state = query();
+             }
+             if(!state)
+             {
+                 return {.text = "Timed out reaching the editor main thread", .is_error = true};
+             }
+
+             auto diagnostics_json = [](const std::vector<asset_compiler::script_compilation_entry>& entries)
+             {
+                 std::string json = "[";
+                 bool first = true;
+                 for(const auto& entry : entries)
+                 {
+                     if(!first)
+                     {
+                         json += ",";
+                     }
+                     first = false;
+                     json += fmt::format(R"({{"key":{},"file":{},"line":{},"message":{}}})",
+                                         make_json_string(fs::convert_to_protocol(entry.file).generic_string()),
+                                         make_json_string(entry.file),
+                                         entry.line,
+                                         make_json_string(entry.msg));
+                 }
+                 json += "]";
+                 return json;
+             };
+
+             const auto last = asset_compiler::get_last_script_compilation(k_protocol);
+             return {.text = fmt::format(
+                         R"({{"building":{},"has_errors":{},"last_build":{{"ran":{},"succeeded":{},"errors":{},"warnings":{}}}{}}})",
+                         bool_to_json(state->pending),
+                         bool_to_json(state->has_errors),
+                         bool_to_json(last.has_run),
+                         bool_to_json(last.succeeded),
+                         diagnostics_json(last.errors),
+                         diagnostics_json(last.warnings),
+                         state->pending ? R"(,"note":"A build is still queued or running; pass wait:true to wait for it.")"
+                                        : ""),
+                     .is_error = false};
+         },
+         .mutates_scene = false,
+         .requires_main_thread = false});
+
+    registry.add(
         {.name = "scripts_get_source",
          .description =
              "Read C# source for a script. Resolve by path/key, or by entity_id + type_name "
@@ -206,7 +260,7 @@ void register_script_tools(mcp_tool_registry& registry)
              const auto absolute = resolve_source_path(path);
              std::string code;
              std::string error;
-             if(!read_text_file(absolute, code, error))
+             if(!asset_actions::read_text_file(absolute, code, &error))
              {
                  return {.text = error, .is_error = true};
              }
@@ -312,7 +366,7 @@ void register_script_tools(mcp_tool_registry& registry)
                      }
                  }
                  const auto absolute = resolve_source_path(path);
-                 if(!write_text_file_atomic(absolute, code, error))
+                 if(!asset_actions::write_text_file(absolute, code, &error))
                  {
                      results += fmt::format(R"({{"ok":false,"error":{}}})", make_json_string(error));
                      continue;

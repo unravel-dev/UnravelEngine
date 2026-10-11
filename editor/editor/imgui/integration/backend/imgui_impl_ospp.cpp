@@ -42,6 +42,21 @@
 #endif
 
 // OSPP Data
+namespace
+{
+ImGui_ImplOSPP_MouseOverride_Callback g_mouse_override;
+
+auto read_mouse_override(os::point& out) -> bool
+{
+    return g_mouse_override && g_mouse_override(out);
+}
+} // namespace
+
+void ImGui_ImplOSPP_SetMouseOverride(ImGui_ImplOSPP_MouseOverride_Callback callback)
+{
+    g_mouse_override = std::move(callback);
+}
+
 struct ImGui_ImplOSPP_Data
 {
     unravel::render_window* Window{};
@@ -752,6 +767,11 @@ auto ImGui_ImplOSPP_ProcessEvent(os::event& event) -> bool
     {
         case os::events::mouse_motion:
         {
+            os::point overridden;
+            if(read_mouse_override(overridden))
+            {
+                return true;
+            }
             os::point mouse_pos(event.motion.x, event.motion.y);
             if(io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
             {
@@ -1071,10 +1091,26 @@ static void ImGui_ImplOSPP_UpdateMouseData()
     //       value reported by the backend, and use its flawed heuristic to guess the viewport behind.
     // - [X] OSPP backend correctly reports this regardless of another viewport behind focused and dragged
     // from (we need this to find a useful drag and drop target).
+    os::point overridden;
+    const bool is_overridden = read_mouse_override(overridden);
+    if(is_overridden)
+    {
+        if(!(io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable))
+        {
+            const auto window_pos = bd->Window->get_window().get_position();
+            overridden.x -= window_pos.x;
+            overridden.y -= window_pos.y;
+        }
+        io.AddMouseSourceEvent(ImGuiMouseSource_Mouse);
+        io.AddMousePosEvent(float(overridden.x), float(overridden.y));
+    }
+
     if(io.BackendFlags & ImGuiBackendFlags_HasMouseHoveredViewport)
     {
         ImGuiID mouse_viewport_id = 0;
-        if(ImGuiViewport* mouse_viewport = ImGui_ImplOSPP_GetViewportFromWindowId(bd->MouseWindowID))
+        // The window the real cursor is over says nothing about an overridden pointer; 0 lets
+        // ImGui find the viewport from the position.
+        if(ImGuiViewport* mouse_viewport = is_overridden ? nullptr : ImGui_ImplOSPP_GetViewportFromWindowId(bd->MouseWindowID))
         {
             ImGui_ImplOSPP_ViewportData* vd = ImGui_ImplOSPP_GetViewportData(mouse_viewport);
             mouse_viewport_id = mouse_viewport->ID;

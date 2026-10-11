@@ -9,6 +9,11 @@ order: 60
 Scripts are C# classes attached to entities as ScriptComponent instances.
 They run their update logic in play mode only.
 
+This skill covers the tool ordering. For the API itself - which types exist, what
+their methods are, the script lifecycle, and the language traps - fetch the
+`scripting-api` skill and read the engine sources it points at. Do not write a
+script from memory of another engine's API.
+
 ## The lifecycle (order matters)
 
 1. scripts_list_types - full type names currently compiled and attachable.
@@ -18,9 +23,11 @@ They run their update logic in play mode only.
 3. Edit source with scripts_get_source (read first) and
    scripts_set_sources_batch (atomic write; recompile defaults true). Address
    a script by path/key or by entity_id + type_name.
-4. WAIT for the recompile before attaching a NEW type: poll scripts_list_types
-   until the type appears (and check logs_get_recent for compile errors).
-   Attaching a type name that is not compiled yet fails.
+4. WAIT for the build before attaching a NEW type: scripts_get_compile_status
+   {"wait":true} returns when the build that picks up your edit has finished,
+   with that build's errors (key, line, message) - fix those, write again, wait
+   again. Attaching a type name that is not compiled yet fails, and play mode
+   will not start while has_errors is true.
 5. Attach with scene_add_scripts_batch (type_name per entity); inspect with
    scene_list_scripts_batch; detach with scene_remove_scripts_batch.
 6. Configure public fields through the typed component API: component
@@ -30,6 +37,8 @@ They run their update logic in play mode only.
 
 ## Do
 
+- Fetch `scripting-api` first, and copy from `engine:/data/scripts/samples/`
+  rather than starting a gameplay script from scratch.
 - Read existing source before editing it; write whole files, not diffs.
 - Recompile once per batch of source edits (the default), not per file.
 - Test behavior in play mode (verification skill); script update logic does

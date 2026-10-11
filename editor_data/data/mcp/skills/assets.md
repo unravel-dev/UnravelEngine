@@ -36,11 +36,11 @@ inside the project).
 - Skinned mesh imports generate .anim clip assets next to the source (one per
   take) - those keys feed the Animation component.
 - Imports extract one .mat per source material ("[0] Name.mat" ...).
-- assets_wait_ready_batch polls loadability but can keep reporting ready:false
-  after compilation finished. Treat it as advisory: check logs_get_recent for
-  compile lines and simply try the spawn - if it succeeds and the AABB is
-  sane, the asset is ready. Heavy meshes take extra time for distance-field
-  baking.
+- assets_wait_ready_batch reports a state per key: ready, loading (still
+  compiling at the deadline - wait again), failed (the load produced no asset:
+  read logs_get_recent), or missing (no such file - check the key). It starts
+  loads nothing else has asked for yet, so ready means usable. Heavy meshes
+  take extra time for distance-field baking.
 
 ## Materials: shared assets vs per-entity instances
 

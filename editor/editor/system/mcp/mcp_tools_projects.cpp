@@ -199,6 +199,87 @@ void register_project_tools(mcp_tool_registry& registry)
          .requires_main_thread = false});
 
     registry.add(
+        {.name = "project_create",
+         .description =
+             "Create a new project directory and open it. The directory must not exist or must be "
+             "empty. Seeds a scene from preset (default medium) and writes the project's agent "
+             "instructions. Use project_open for a project that already exists.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"path":{"type":"string","description":"Absolute directory for the new project"},"preset":{"type":"string","enum":["low","medium","high","showcase"],"description":"Scene seeded into the new project; default medium"},"force":{"type":"boolean","description":"Discard unsaved changes in the currently open project; default true"}},"required":["path"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+         {
+             auto& mcp = ctx.get_cached<mcp_manager>();
+
+             std::string path_arg;
+             read_string(args, "path", path_arg);
+             std::string preset_str = "medium";
+             read_string(args, "preset", preset_str);
+             bool force = true;
+             read_bool(args, "force", force);
+
+             auto result = mcp.invoke_on_main(
+                 [&ctx, path_arg, preset_str, force]() -> tool_result
+                 {
+                     std::string error;
+                     if(!require_not_play_mode(ctx, error))
+                     {
+                         return {.text = error, .is_error = true};
+                     }
+                     if(!ctx.has<project_manager>())
+                     {
+                         return {.text = "project_manager unavailable", .is_error = true};
+                     }
+                     if(path_arg.empty())
+                     {
+                         return {.text = "Provide path (an absolute directory for the new project)",
+                                 .is_error = true};
+                     }
+
+                     defaults::scene_preset preset{};
+                     if(!defaults::parse_scene_preset(preset_str, preset))
+                     {
+                         return {.text = "Invalid preset (use low|medium|high|showcase)", .is_error = true};
+                     }
+
+                     auto& pm = ctx.get_cached<project_manager>();
+                     auto& em = ctx.get_cached<editing_manager>();
+                     if(em.has_unsaved_changes() && !force)
+                     {
+                         return {.text = "Unsaved scene changes; pass force:true to discard", .is_error = true};
+                     }
+                     if(force)
+                     {
+                         em.clear_unsaved_changes();
+                     }
+
+                     std::string create_error;
+                     if(!pm.create_project(ctx, fs::path(path_arg), &create_error))
+                     {
+                         return {.text = create_error + " (project_open opens an existing project)",
+                                 .is_error = true};
+                     }
+
+                     const bool created_from_preset = create_scene_modal::complete_if_pending(preset);
+                     return {.text = fmt::format(
+                                 R"({{"ok":true,"project":{},"created_scene_from_preset":{},"preset":{}}})",
+                                 project_info_json(pm),
+                                 bool_to_json(created_from_preset),
+                                 make_json_string(preset_str)),
+                             .is_error = false};
+                 },
+                 std::chrono::milliseconds(120000));
+
+             if(!result)
+             {
+                 return {.text = "Timed out creating project on main thread", .is_error = true};
+             }
+             return *result;
+         },
+         .mutates_scene = true,
+         .requires_main_thread = false});
+
+    registry.add(
         {.name = "project_close",
          .description = "Close the current project. force:true (default) discards unsaved scene changes.",
          .input_schema_json =

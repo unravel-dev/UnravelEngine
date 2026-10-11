@@ -362,26 +362,50 @@ auto project_manager::inspect_project(const fs::path& project_path) const -> pro
     return report;
 }
 
-void project_manager::create_project(rtti::context& ctx, const fs::path& project_path)
+auto project_manager::create_project(rtti::context& ctx, const fs::path& project_path, std::string* error) -> bool
 {
-    fs::error_code err;
-    if(fs::exists(project_path, err) && !fs::is_empty(project_path, err))
+    auto fail = [&](const std::string& message) -> bool
     {
-        APPLOG_ERROR("Project directory already exists and is not empty {0}", project_path.string());
-        return;
+        APPLOG_ERROR("{}", message);
+        if(error)
+        {
+            *error = message;
+        }
+        return false;
+    };
+
+    if(!project_path.is_absolute())
+    {
+        return fail(fmt::format("Project path must be absolute: {}", project_path.generic_string()));
+    }
+    fs::error_code err;
+    if(fs::exists(project_path, err))
+    {
+        if(!fs::is_directory(project_path, err))
+        {
+            return fail(fmt::format("Project path exists and is not a directory: {}", project_path.generic_string()));
+        }
+        if(!fs::is_empty(project_path, err))
+        {
+            return fail(fmt::format("Project directory already exists and is not empty: {}",
+                                    project_path.generic_string()));
+        }
     }
 
     fs::create_directories(project_path, err);
 
     if(err)
     {
-        APPLOG_ERROR("Failed to create project directory {0}", project_path.string());
-        return;
+        return fail(fmt::format("Failed to create project directory {}: {}", project_path.generic_string(), err.message()));
     }
 
     fs::add_path_protocol("app", project_path);
 
-    open_project(ctx, project_path);
+    if(!open_project(ctx, project_path))
+    {
+        return fail(fmt::format("Created {} but could not open it", project_path.generic_string()));
+    }
+    return true;
 }
 
 auto project_manager::regenerate_agent_files() -> bool

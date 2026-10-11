@@ -2,6 +2,7 @@
  * Copyright 2014-2015 Daniel Collin. All rights reserved.
  * License: https://github.com/bkaradzic/bgfx/blob/master/LICENSE
  */
+#include <engine/input/input.h>
 #include "imgui.h"
 #include "backend/imgui_impl_ospp.h"
 
@@ -539,6 +540,26 @@ struct OcornutImguiContext
         };
 
         ImGui_ImplOSPP_Init(window, render_callback, swap_callback);
+
+        // Gameplay reads input through the input manager, so its virtual pointer is the one source:
+        // while synthesized input drives it, the editor UI follows it too, as it follows a real cursor
+        // over the Game panel.
+        ImGui_ImplOSPP_SetMouseOverride(
+            [](os::point& screen_position) -> bool
+            {
+                auto& ctx = unravel::engine::context();
+                if(!ctx.has<unravel::input_system>())
+                {
+                    return false;
+                }
+                const auto& virtual_position = ctx.get_cached<unravel::input_system>().manager.get_virtual_mouse_position();
+                if(!virtual_position)
+                {
+                    return false;
+                }
+                screen_position = {virtual_position->x, virtual_position->y};
+                return true;
+            });
     }
 
     void createCubemapProgram()

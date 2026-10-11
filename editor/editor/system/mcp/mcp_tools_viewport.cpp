@@ -774,7 +774,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
                          cursor_text),
                      .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .developer_only = true});
 
     registry.add(
         {.name = "viewport_open_debug_popover",
@@ -800,7 +801,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
              return {.text = fmt::format(R"({{"open":{},"tab":"{}"}})", is_open ? "true" : "false", tab_name),
                      .is_error = false};
          },
-         .mutates_scene = false});
+         .mutates_scene = false,
+         .developer_only = true});
 
     registry.add(
         {.name = "viewport_set_debug_view",
@@ -1195,7 +1197,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
              return {.text = "Timed out waiting for the temporal probe", .is_error = true};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .developer_only = true});
 
     registry.add(
         {.name = "profiler_get_cpu_scopes",
@@ -1287,7 +1290,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
              return {.text = *result, .is_error = false};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .developer_only = true});
 
     registry.add(
         {.name = "gi_sdf_probe",
@@ -1393,7 +1397,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
              return {.text = *result, .is_error = false};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .developer_only = true});
 
     registry.add(
         {.name = "gi_set_experiment_flags",
@@ -1426,7 +1431,8 @@ void register_viewport_tools(mcp_tool_registry& registry)
              return {.text = *result, .is_error = false};
          },
          .mutates_scene = false,
-         .requires_main_thread = false});
+         .requires_main_thread = false,
+         .developer_only = true});
 
     registry.add(
         {.name = "viewport_set_overlays",

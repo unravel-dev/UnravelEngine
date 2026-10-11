@@ -20,7 +20,7 @@ namespace unravel::mcp
 {
 
 /// Poll until `path` exists and is non-empty, or timeout elapses.
-/// Call from an HTTP/worker thread — never from the main/render thread.
+/// Call from an HTTP/worker thread - never from the main/render thread.
 auto wait_for_file(const std::filesystem::path& path,
                    std::chrono::milliseconds timeout = std::chrono::milliseconds(3000),
                    std::chrono::milliseconds poll_interval = std::chrono::milliseconds(32)) -> bool;

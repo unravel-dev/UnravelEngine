@@ -60,6 +60,10 @@
 
 #include <core/base/platform/config.hpp>
 
+#include <mutex>
+
+#include <map>
+
 namespace unravel::asset_compiler
 {
 
@@ -2139,13 +2143,33 @@ auto compile<audio_clip>(asset_manager& am, const fs::path& key, const fs::path&
 
     return true;
 }
-// Struct to hold the parsed error details
-struct script_compilation_entry
+namespace
 {
-    std::string file{}; // Path to the file
-    int line{};         // Line number of the error
-    std::string msg{};  // Full error line
-};
+/// Last build result per script library protocol; builds run on worker threads.
+auto script_compilation_store() -> std::pair<std::mutex&, std::map<std::string, script_compilation_result>&>
+{
+    static std::mutex mutex;
+    static std::map<std::string, script_compilation_result> results;
+    return {mutex, results};
+}
+
+void record_script_compilation(const std::string& protocol, script_compilation_result result)
+{
+    auto [mutex, results] = script_compilation_store();
+    std::lock_guard<std::mutex> lock(mutex);
+    result.has_run = true;
+    results[protocol] = std::move(result);
+}
+
+} // namespace
+
+auto get_last_script_compilation(const std::string& protocol) -> script_compilation_result
+{
+    auto [mutex, results] = script_compilation_store();
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto found = results.find(protocol);
+    return found == results.end() ? script_compilation_result{} : found->second;
+}
 
 /**
  * Parse csc/dotnet diagnostics line-by-line.
@@ -2264,6 +2288,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
     if(!run_process(cmd.cmd, cmd.args, true, error))
     {
         auto parsed_errors = parse_compilation_errors(error);
+        record_script_compilation(protocol, {.succeeded = false, .errors = parsed_errors});
 
         if(!parsed_errors.empty())
         {
@@ -2285,6 +2310,7 @@ auto compile<script_library>(asset_manager& am, const fs::path& key, const fs::p
         if(protocol != "engine")
         {
             auto parsed_warnings = parse_compilation_warnings(error);
+            record_script_compilation(protocol, {.succeeded = true, .warnings = parsed_warnings});
 
             for(const auto& warning : parsed_warnings)
             {

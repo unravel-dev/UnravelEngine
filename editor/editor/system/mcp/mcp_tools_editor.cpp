@@ -1,6 +1,7 @@
 #include "mcp_tools_common.h"
 
 #include <editor/editing/editor_actions.h>
+#include <editor/system/mcp_manager.h>
 #include <editor/system/project_manager.h>
 #include <graphics/graphics.h>
 
@@ -68,6 +69,21 @@ auto parse_min_level(const std::string& name, level::level_enum& out) -> bool
     return false;
 }
 
+/// The tool surface this editor serves, so a client can tell which profile it has
+/// without probing for a tool and reading the refusal.
+auto mcp_status_json(rtti::context& ctx) -> std::string
+{
+    if(!ctx.has<mcp_manager>())
+    {
+        return "null";
+    }
+    const auto& manager = ctx.get_cached<mcp_manager>();
+    return fmt::format(R"({{"profile":{},"tools_exposed":{},"tools_total":{}}})",
+                       make_json_string(manager.get_profile_name()),
+                       manager.get_visible_tool_count(),
+                       manager.get_tool_count());
+}
+
 auto play_state_to_json(const play_state_info& info) -> std::string
 {
     return fmt::format(
@@ -87,17 +103,23 @@ void register_editor_tools(mcp_tool_registry& registry)
     registry.add(
         {.name = "editor_get_status",
          .description =
-             "Bootstrap status: open project, active scene, and play state in one call. Prefer this "
-             "over separate project_get_info + scene_get_info + play_get_state.",
+             "Bootstrap status: open project, active scene, prefab mode, play state and the active MCP "
+             "profile in "
+             "one call. Prefer this over separate project_get_info + scene_get_info + play_get_state.",
          .input_schema_json = empty_object_schema(),
          .handler =
              [](rtti::context& ctx, const simdjson::dom::object&) -> tool_result
              {
                  const auto play_json = play_state_to_json(editor_actions::get_play_state(ctx));
-                 return {.text = fmt::format(R"({{"project":{},"scene":{},"play":{}}})",
+                 const auto prefab_json = ctx.has<editing_manager>()
+                                              ? prefab_mode_status_json(ctx.get_cached<editing_manager>())
+                                              : std::string(R"({"active":false})");
+                 return {.text = fmt::format(R"({{"project":{},"scene":{},"prefab_mode":{},"play":{},"mcp":{}}})",
                                              project_info_json(ctx),
                                              active_scene_status_json(ctx),
-                                             play_json),
+                                             prefab_json,
+                                             play_json,
+                                             mcp_status_json(ctx)),
                          .is_error = false};
              },
          .mutates_scene = false});

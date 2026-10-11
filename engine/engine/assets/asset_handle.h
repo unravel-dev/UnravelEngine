@@ -78,7 +78,7 @@ private:
  *
  * The link's "logical state" (uid, id, task) lives in an immutable `state_t`
  * snapshot held by `std::atomic<std::shared_ptr<state_t>>`. Readers do a
- * single `state.load()` to obtain a coherent snapshot — no torn reads are
+ * single `state.load()` to obtain a coherent snapshot - no torn reads are
  * possible even when another thread is concurrently invalidating or
  * reloading the link.
  *
@@ -174,7 +174,7 @@ struct asset_handle
     /**
      * @brief Gets the string identifier of the asset.
      *
-     * Returns by value — the caller receives a snapshot of the current id.
+     * Returns by value - the caller receives a snapshot of the current id.
      * Binding to `const auto&` is still safe (the temporary's lifetime is
      * extended to the binding's scope).
      */
@@ -190,7 +190,7 @@ struct asset_handle
     /**
      * @brief Gets the unique identifier of the asset.
      *
-     * Returns by value — the caller receives a snapshot of the current uid.
+     * Returns by value - the caller receives a snapshot of the current uid.
      * Binding to `const auto&` is still safe (the temporary's lifetime is
      * extended to the binding's scope).
      */
@@ -242,6 +242,15 @@ struct asset_handle
     auto try_get() const -> std::shared_ptr<T>
     {
         return resolve(false, nullptr);
+    }
+
+    /**
+     * @brief True for the shared empty asset that get() and try_get() return when a load failed or
+     * the handle references no asset - the one way to tell a failed load from a finished one.
+     */
+    static auto is_empty(const std::shared_ptr<T>& asset) -> bool
+    {
+        return asset && asset == empty_asset();
     }
 
     /**
@@ -451,8 +460,8 @@ struct asset_handle
      *
      * Unlike `get()`, this does NOT force-load, does NOT submit deferred
      * tasks, does NOT wait, and does NOT update last-access. Intended for
-     * iteration use cases — e.g. walking the asset manager's loaded set to
-     * build a dependency graph — where we only care about what is already
+     * iteration use cases - e.g. walking the asset manager's loaded set to
+     * build a dependency graph - where we only care about what is already
      * resident and must not have side effects.
      */
     auto peek() const -> std::shared_ptr<T>

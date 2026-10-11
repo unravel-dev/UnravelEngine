@@ -27,6 +27,9 @@ struct mcp_skill
     std::string title;
     std::string description;
     std::string content;
+    /// Optional protocol path appended to the body at load time, so a skill can serve a
+    /// file that ships for another consumer without duplicating it.
+    std::string include;
     int order{1000};
 };
 
@@ -55,6 +58,28 @@ auto trim(std::string_view value) -> std::string_view
         value.remove_suffix(1);
     }
     return value;
+}
+
+/// Reads a skill's `include:` target. A missing or unreadable file degrades to a note
+/// in the served text: the rest of the skill is still worth more than an error.
+auto read_included_file(const std::string& protocol_path) -> std::string
+{
+    fs::error_code ec;
+    const auto resolved = fs::resolve_protocol(protocol_path);
+    if(resolved.empty() || !fs::exists(resolved, ec))
+    {
+        APPLOG_WARNING("MCP skill include missing: {}", protocol_path);
+        return "(The included file " + protocol_path + " is not present in this installation.)";
+    }
+    std::ifstream input(resolved, std::ios::binary);
+    if(!input.is_open())
+    {
+        APPLOG_WARNING("MCP skill include unreadable: {}", protocol_path);
+        return "(The included file " + protocol_path + " could not be read.)";
+    }
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
 }
 
 /// Parse "---\nkey: value\n...---\nbody" into a skill. Returns false when the
@@ -103,6 +128,10 @@ auto parse_skill_file(const fs::path& path, mcp_skill& out) -> bool
         {
             out.description = value;
         }
+        else if(key == "include")
+        {
+            out.include = value;
+        }
         else if(key == "order")
         {
             out.order = std::atoi(value.c_str());
@@ -122,6 +151,10 @@ auto parse_skill_file(const fs::path& path, mcp_skill& out) -> bool
     if(out.title.empty())
     {
         out.title = out.name;
+    }
+    if(!out.include.empty())
+    {
+        out.content += "\n\n" + read_included_file(out.include);
     }
     return !out.content.empty();
 }

@@ -943,8 +943,7 @@ auto defaults::create_prefab_at(rtti::context& ctx,
     return object;
 }
 
-auto defaults::create_mesh_entity_at(rtti::context& ctx, scene& scn, const std::string& key, math::vec3 pos)
-    -> entt::handle
+auto defaults::make_model_from_mesh(rtti::context& ctx, const std::string& key) -> model
 {
     auto& am = ctx.get_cached<asset_manager>();
     auto asset = am.get_asset<mesh>(key);
@@ -966,6 +965,13 @@ auto defaults::create_mesh_entity_at(rtti::context& ctx, scene& scn, const std::
             }
         }
     }
+    return mdl;
+}
+
+auto defaults::create_mesh_entity_at(rtti::context& ctx, scene& scn, const std::string& key, math::vec3 pos)
+    -> entt::handle
+{
+    const auto mdl = make_model_from_mesh(ctx, key);
 
     std::string name = fs::path(key).stem().string();
     auto object = scn.create_entity(name);
@@ -1492,7 +1498,7 @@ void defaults::focus_camera_on_entities(entt::handle camera,
 
 auto defaults::calc_bounds_global(entt::handle entity, int depth) -> math::bbox
 {
-    // 1) Get the “true” union of all models (possibly empty)
+    // 1) Get the "true" union of all models (possibly empty)
     math::bbox bounds;
     calc_bounds_global_impl(bounds, entity, depth);
 

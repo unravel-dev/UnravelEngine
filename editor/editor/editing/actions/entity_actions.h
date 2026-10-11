@@ -106,6 +106,8 @@ struct entity_remove_component_action_t : crtp_meta_type<entity_remove_component
 
     bool do_was_successful{false};
     std::stringstream stream{};
+    /// What the removal recorded on a prefab instance, so undo can put it back.
+    prefab_override_record prefab_record{};
 
     entity_remove_component_action_t(entt::handle ent, const entt::meta_type& ctype);
 

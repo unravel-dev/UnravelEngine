@@ -181,6 +181,8 @@ struct editor_actions
     static auto deploy_project(rtti::context& ctx, const deploy_settings& params)
         -> std::map<std::string, tpp::shared_future<void>>;
     static auto can_deploy_project(rtti::context& ctx, const deploy_settings& params) -> bool;
+    /// True when `path` is the open project's folder or inside it (existing or not).
+    static auto is_path_inside_project(const fs::path& path) -> bool;
     /// What keeps the project from deploying, one sentence each; empty when it can deploy.
     static auto get_deploy_problems(rtti::context& ctx, const deploy_settings& params) -> std::vector<std::string>;
 
@@ -270,7 +272,7 @@ struct editor_actions
      * Resolves item destinations immediately. Copies run as one batch with the filesystem
      * watcher paused so multi-file assets (glTF + .bin + textures) are never observed
      * incomplete. When async is true (default), schedules a single thread-pool job and
-     * returns immediately — call wait_import_jobs before treating destinations as present.
+     * returns immediately - call wait_import_jobs before treating destinations as present.
      * When async is false, copies on the calling thread and returns a ready future.
      * Asset compilation remains asynchronous via the asset watcher after resume.
      */

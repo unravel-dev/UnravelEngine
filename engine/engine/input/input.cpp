@@ -51,7 +51,15 @@ auto input_system::init(rtti::context& ctx) -> bool
     APPLOG_TRACE("{}::{}", hpp::type_name_str(*this), __func__);
     manager.init();
 
+    auto& ev = ctx.get_cached<events>();
+    ev.on_play_end.connect(sentinel_, this, &input_system::on_play_end);
+
     return true;
+}
+
+void input_system::on_play_end(rtti::context& ctx)
+{
+    manager.set_virtual_mouse_position({});
 }
 
 auto input_system::deinit(rtti::context& ctx) -> bool

@@ -48,6 +48,23 @@ by height. assets_list_embedded_primitives lists every built-in shape.
   scene_create_from_prefab_batch instantiates prefabs by asset_key with a
   pose. Use prefabs for anything placed more than a couple of times or shared
   across scenes.
+- Edit a prefab with prefab_open {key}: every scene_* tool then works on the
+  prefab's contents. prefab_save writes it and every instance updates;
+  prefab_close {"save":true|false} returns to the scene (with unsaved edits it
+  requires the choice instead of the editor's dialog). editor_get_status reports
+  prefab_mode.
+- Edits on an instance become prefab overrides, recorded the way the inspector
+  records them: names (including the one scene_create_from_prefab_batch
+  gives), active, parents, transforms, layers, component properties, script
+  fields, materials and mesh swaps. A later prefab save keeps them, and the
+  properties you left alone still follow the prefab - an instance with its own
+  light intensity still takes the prefab's new light color. Undo removes the
+  override along with the edit.
+- Components added to or removed from an instance stay that way through prefab
+  saves; undo takes a removal back. A component removed and later added back is
+  the instance's own copy from then on and no longer follows the prefab.
+- A script removed from an instance (scene_remove_scripts_batch) still comes
+  back on the next prefab save. Remove it from the prefab itself instead.
 
 ## Placing meshes correctly
 
@@ -60,6 +77,16 @@ assets_get_mesh_info for the local AABB, then:
 
 While an asset is still compiling the AABB can read as +-3.4e38 - treat that
 as "not ready", wait and retry.
+
+## Changing what an entity is
+
+- scene_set_models_batch swaps the mesh an entity shows, keeping its transform
+  and other components; the new model gets the mesh's own materials, as at
+  creation. A skinned mesh is reported - add Animation to play its clips.
+- scene_set_layers_batch puts entities on layers (names from the project's
+  layer.layers setting); physics queries and rendering filter on them, and
+  detail summary reports them.
+- Every batch edit is one undo step: edit_undo / edit_redo.
 
 ## Housekeeping
 

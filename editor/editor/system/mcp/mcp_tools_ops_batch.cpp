@@ -1,3 +1,4 @@
+#include "mcp_meta_properties.h"
 #include "mcp_tools_common.h"
 
 #include <editor/editing/actions/actions.h>
@@ -5,6 +6,7 @@
 #include <editor/editing/entity_inspect.h>
 #include <engine/assets/asset_manager.h>
 #include <engine/defaults/defaults.h>
+#include <engine/ecs/components/layer_component.h>
 #include <engine/ecs/components/tag_component.h>
 #include <engine/ecs/components/transform_component.h>
 #include <engine/meta/ecs/components/all_components.h>
@@ -219,12 +221,13 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                              {
                                  continue;
                              }
-                             if(!item.name.empty())
+                             auto* tag = entity.try_get<tag_component>();
+                             if(!item.name.empty() && tag != nullptr && tag->name != item.name)
                              {
-                                 if(auto* tag = entity.try_get<tag_component>())
-                                 {
-                                     tag->name = item.name;
-                                 }
+                                 tag->name = item.name;
+                                 prefab_override_context::mark_property_as_changed(entity,
+                                                                                   entt::resolve<tag_component>(),
+                                                                                   "name");
                              }
                              if(!item.parent_id.empty())
                              {
@@ -398,29 +401,13 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "items array is empty", .is_error = true};
                  }
-                 auto& em = ctx.get_cached<editing_manager>();
-                 em.do_action(
-                     "MCP Batch Set Parents",
-                     [entries]()
-                     {
-                         for(const auto& e : entries)
-                         {
-                             if(e.entity)
-                             {
-                                 e.entity.get<transform_component>().set_parent(e.new_parent, true);
-                             }
-                         }
-                     },
-                     [entries]()
-                     {
-                         for(const auto& e : entries)
-                         {
-                             if(e.entity)
-                             {
-                                 e.entity.get<transform_component>().set_parent(e.old_parent, true);
-                             }
-                         }
-                     });
+                 auto batch = std::make_shared<composite_action_t>();
+                 for(const auto& e : entries)
+                 {
+                     batch->add_sub_action(
+                         std::make_shared<transform_set_parent_action_t>(e.entity, e.old_parent, e.new_parent));
+                 }
+                 ctx.get_cached<editing_manager>().do_action("MCP Batch Set Parents", batch);
                  return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
              },
          .mutates_scene = true});
@@ -475,30 +462,183 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "items array is empty", .is_error = true};
                  }
-                 auto& em = ctx.get_cached<editing_manager>();
-                 em.do_action(
-                     "MCP Batch Set Names",
+                 auto batch = std::make_shared<composite_action_t>();
+                 for(const auto& e : entries)
+                 {
+                     batch->add_sub_action(std::make_shared<entity_set_name_action_t>(e.entity, e.old_name, e.new_name));
+                 }
+                 ctx.get_cached<editing_manager>().do_action("MCP Batch Set Names", batch);
+                 return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
+             },
+         .mutates_scene = true});
+
+    registry.add(
+        {.name = "scene_set_models_batch",
+         .description =
+             "Swap the mesh an existing entity shows, keeping the entity, its transform and its other "
+             "components, in one undoable action. The new model is built exactly as for "
+             "scene_create_meshes_batch: the mesh as LOD 0 with the mesh's own default materials. The "
+             "entity needs a Model component. A skinned mesh is reported, since playing its clips needs "
+             "an Animation component.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"asset_key":{"type":"string","description":"Mesh asset key"}},"required":["entity_id","asset_key"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             {
+                 scene* scn = nullptr;
+                 std::string error;
+                 if(!require_edit_scene(ctx, scn, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 simdjson::dom::array items_arr;
+                 if(!read_required_array(args, "items", items_arr, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 auto& am = ctx.get_cached<asset_manager>();
+                 struct entry_t
+                 {
+                     entt::handle entity{};
+                     model old_model;
+                     model new_model;
+                     /// Shared by the do and undo lambdas, which each hold a copy of the entries.
+                     std::shared_ptr<prefab_override_record> overrides = std::make_shared<prefab_override_record>();
+                 };
+                 std::vector<entry_t> entries;
+                 for(auto el : items_arr)
+                 {
+                     simdjson::dom::object obj;
+                     std::string entity_id;
+                     std::string asset_key;
+                     if(!read_object(el, obj, error) || !read_string(obj, "entity_id", entity_id) ||
+                        !read_string(obj, "asset_key", asset_key))
+                     {
+                         return {.text = "Each item needs entity_id and asset_key", .is_error = true};
+                     }
+                     auto entity = find_entity(*scn, entity_id);
+                     if(!entity)
+                     {
+                         return {.text = "Entity not found: " + entity_id, .is_error = true};
+                     }
+                     auto* model_comp = entity.try_get<model_component>();
+                     if(model_comp == nullptr)
+                     {
+                         return {.text = entity_id + " has no Model component (scene_add_components_batch Model, "
+                                                     "or create it with scene_create_meshes_batch)",
+                                 .is_error = true};
+                     }
+                     if(!am.get_asset<mesh>(asset_key))
+                     {
+                         return {.text = "Mesh not found: " + asset_key + " (assets_find_batch type mesh)",
+                                 .is_error = true};
+                     }
+                     entries.push_back(
+                         {entity, model_comp->get_model(), defaults::make_model_from_mesh(ctx, asset_key)});
+                 }
+                 if(entries.empty())
+                 {
+                     return {.text = "items array is empty", .is_error = true};
+                 }
+                 ctx.get_cached<editing_manager>().do_action(
+                     "MCP Batch Set Models",
                      [entries]()
                      {
+                         const auto type = entt::resolve<model_component>();
                          for(const auto& e : entries)
                          {
-                             if(auto* tag = e.entity.try_get<tag_component>())
+                             if(auto* comp = e.entity ? e.entity.try_get<model_component>() : nullptr)
                              {
-                                 tag->name = e.new_name;
+                                 const auto state = prefab_override_context::save_component_state(e.entity, type);
+                                 comp->set_model(e.new_model);
+                                 *e.overrides = prefab_override_context::mark_changed_properties(e.entity, type, state);
                              }
                          }
                      },
                      [entries]()
                      {
-                         for(const auto& e : entries)
+                         for(auto it = entries.rbegin(); it != entries.rend(); ++it)
                          {
-                             if(auto* tag = e.entity.try_get<tag_component>())
+                             if(auto* comp = it->entity ? it->entity.try_get<model_component>() : nullptr)
                              {
-                                 tag->name = e.old_name;
+                                 comp->set_model(it->old_model);
+                                 prefab_override_context::restore_overrides(*it->overrides);
                              }
                          }
                      });
-                 return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
+
+                 std::vector<std::string> skinned_without_animation;
+                 for(const auto& e : entries)
+                 {
+                     const auto* comp = e.entity.try_get<model_component>();
+                     if(comp != nullptr && comp->is_skinned() && !e.entity.all_of<animation_component>())
+                     {
+                         skinned_without_animation.push_back(entity_id_string(e.entity));
+                     }
+                 }
+                 return {.text = fmt::format(R"({{"ok":true,"count":{},"skinned_without_animation":{}}})",
+                                             entries.size(),
+                                             strings_to_json_array(skinned_without_animation)),
+                         .is_error = false};
+             },
+         .mutates_scene = true});
+
+    registry.add(
+        {.name = "scene_set_layers_batch",
+         .description =
+             "Set which layers entities are on, in one undoable action - the hierarchy's layer picker "
+             "does the same, and records it as a prefab override on prefab instances. layers is an array "
+             "of layer names (the project's layer.layers setting, see settings_get) or indices, or "
+             "\"everything\" / \"nothing\". Physics queries and rendering filter on these; "
+             "scene_get_entities_batch detail summary reports them.",
+         .input_schema_json =
+             R"json({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"entity_id":{"type":"string"},"layers":{"description":"Layer names or indices, or \"everything\" / \"nothing\""}},"required":["entity_id","layers"]}}},"required":["items"]})json",
+         .handler =
+             [](rtti::context& ctx, const simdjson::dom::object& args) -> tool_result
+             {
+                 scene* scn = nullptr;
+                 std::string error;
+                 if(!require_edit_scene(ctx, scn, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 simdjson::dom::array items_arr;
+                 if(!read_required_array(args, "items", items_arr, error))
+                 {
+                     return {.text = error, .is_error = true};
+                 }
+                 auto batch = std::make_shared<composite_action_t>();
+                 for(auto el : items_arr)
+                 {
+                     simdjson::dom::object obj;
+                     std::string entity_id;
+                     simdjson::dom::element layers_el;
+                     if(!read_object(el, obj, error) || !read_string(obj, "entity_id", entity_id) ||
+                        obj["layers"].get(layers_el))
+                     {
+                         return {.text = "Each item needs entity_id and layers", .is_error = true};
+                     }
+                     auto entity = find_entity(*scn, entity_id);
+                     auto* current = entity ? entity.try_get<layer_component>() : nullptr;
+                     if(current == nullptr)
+                     {
+                         return {.text = "Entity not found: " + entity_id, .is_error = true};
+                     }
+                     layer_mask mask{};
+                     if(!parse_layer_mask(ctx, layers_el, mask, error))
+                     {
+                         return {.text = entity_id + ": " + error, .is_error = true};
+                     }
+                     batch->add_sub_action(
+                         std::make_shared<entity_set_layers_action_t>(entity, current->layers.mask, mask.mask));
+                 }
+                 if(batch->sub_actions.empty())
+                 {
+                     return {.text = "items array is empty", .is_error = true};
+                 }
+                 const auto count = batch->sub_actions.size();
+                 ctx.get_cached<editing_manager>().do_action("MCP Batch Set Layers", batch);
+                 return {.text = fmt::format(R"({{"ok":true,"count":{}}})", count), .is_error = false};
              },
          .mutates_scene = true});
 
@@ -552,29 +692,13 @@ void register_ops_batch_tools(mcp_tool_registry& registry)
                  {
                      return {.text = "items array is empty", .is_error = true};
                  }
-                 auto& em = ctx.get_cached<editing_manager>();
-                 em.do_action(
-                     "MCP Batch Set Active",
-                     [entries]()
-                     {
-                         for(const auto& e : entries)
-                         {
-                             if(e.entity)
-                             {
-                                 e.entity.get<transform_component>().set_active(e.new_active);
-                             }
-                         }
-                     },
-                     [entries]()
-                     {
-                         for(const auto& e : entries)
-                         {
-                             if(e.entity)
-                             {
-                                 e.entity.get<transform_component>().set_active(e.old_active);
-                             }
-                         }
-                     });
+                 auto batch = std::make_shared<composite_action_t>();
+                 for(const auto& e : entries)
+                 {
+                     batch->add_sub_action(
+                         std::make_shared<entity_set_active_action_t>(e.entity, e.old_active, e.new_active));
+                 }
+                 ctx.get_cached<editing_manager>().do_action("MCP Batch Set Active", batch);
                  return {.text = fmt::format(R"({{"ok":true,"count":{}}})", entries.size()), .is_error = false};
              },
          .mutates_scene = true});

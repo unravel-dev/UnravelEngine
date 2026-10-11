@@ -224,14 +224,24 @@ auto deploy_panel::is_deploying() const -> bool
     return is_in_progress;
 }
 
+auto deploy_panel::start_deploy(rtti::context& ctx, const deploy_settings& params) -> bool
+{
+    if(is_deploying() || !editor_actions::can_deploy_project(ctx, params))
+    {
+        return false;
+    }
+    deploy_jobs_ = editor_actions::deploy_project(ctx, params);
+    return true;
+}
+
+auto deploy_panel::get_jobs() const -> const std::map<std::string, tpp::shared_future<void>>&
+{
+    return deploy_jobs_;
+}
+
 void deploy_panel::deploy_and_run(rtti::context& ctx, const deploy_settings& params)
 {
-    bool is_in_progress = is_deploying();
-    if(!is_in_progress && editor_actions::can_deploy_project(ctx, params))
-    {
-        deploy_jobs_ = editor_actions::deploy_project(ctx, params);
-    }
-    else
+    if(!start_deploy(ctx, params))
     {
         show(true);
     }

@@ -6,16 +6,107 @@
 #include <version/version.h>
 
 #include <httplib.h>
+// After httplib: it needs winsock2 before anything pulls in the older windows headers.
+#include <editor/editing/editing_manager.h>
 #include <ser20/external/simdjson/simdjson.h>
 
+#include <algorithm>
 #include <utility>
+#include <vector>
 
 namespace unravel
 {
 
+namespace
+{
+/// Developer builds expose the engine diagnostics by default; a shipped editor does not.
+#if defined(UNRAVEL_DEVELOPER_BUILD)
+constexpr auto k_default_profile = mcp::mcp_profile::developer;
+#else
+constexpr auto k_default_profile = mcp::mcp_profile::user;
+#endif
+} // namespace
+
+namespace
+{
+/// Words of a tool name, for matching a near miss against real names.
+auto split_tool_words(const std::string& name) -> std::vector<std::string>
+{
+    std::vector<std::string> words;
+    std::string word;
+    for(const char c : name)
+    {
+        if(c == '_')
+        {
+            if(!word.empty())
+            {
+                words.push_back(word);
+            }
+            word.clear();
+            continue;
+        }
+        word.push_back(c);
+    }
+    if(!word.empty())
+    {
+        words.push_back(word);
+    }
+    return words;
+}
+} // namespace
+
+auto mcp_manager::unknown_tool_message(const std::string& tool_name) const -> std::string
+{
+    // A guessed name usually shares most of its words with the real one
+    // (scene_set_transform -> scene_set_transforms_batch), so rank by shared words.
+    const auto wanted = split_tool_words(tool_name);
+    std::vector<std::pair<size_t, std::string>> scored;
+    for(const auto& tool : registry_.tools())
+    {
+        if(!registry_.is_available(tool))
+        {
+            continue;
+        }
+        size_t shared = 0;
+        for(const auto& word : split_tool_words(tool.name))
+        {
+            for(const auto& want : wanted)
+            {
+                if(word == want || (want.size() >= 4 && word.rfind(want, 0) == 0))
+                {
+                    ++shared;
+                    break;
+                }
+            }
+        }
+        if(shared > 0)
+        {
+            scored.emplace_back(shared, tool.name);
+        }
+    }
+    std::sort(scored.begin(),
+              scored.end(),
+              [](const auto& lhs, const auto& rhs)
+              {
+                  return lhs.first != rhs.first ? lhs.first > rhs.first : lhs.second < rhs.second;
+              });
+    std::string message = "Unknown tool: " + tool_name;
+    constexpr size_t k_max_suggestions = 3;
+    for(size_t i = 0; i < scored.size() && i < k_max_suggestions; ++i)
+    {
+        message += (i == 0 ? ". Did you mean: " : ", ") + scored[i].second;
+    }
+    return message;
+}
+
 mcp_manager::mcp_manager(cmd_line::parser& parser)
 {
     parser.set_optional<int>("", "mcp-port", k_default_port, "Port of the editor MCP server.");
+    parser.set_optional<std::string>("",
+                                     "mcp-profile",
+                                     std::string(mcp::to_string(k_default_profile)),
+                                     "MCP tool surface: user (game authoring) or developer (adds "
+                                     "engine diagnostics).");
 }
 
 mcp_manager::~mcp_manager()
@@ -40,6 +131,19 @@ auto mcp_manager::init(rtti::context& ctx, const cmd_line::parser& parser) -> bo
     {
         port_ = port;
     }
+
+    auto profile = k_default_profile;
+    std::string profile_name;
+    if(parser.try_get("mcp-profile", profile_name) && !profile_name.empty() &&
+       !mcp::parse_mcp_profile(profile_name, profile))
+    {
+        APPLOG_WARNING("Unknown --mcp-profile '{}'; using '{}'",
+                       profile_name,
+                       mcp::to_string(k_default_profile));
+        profile = k_default_profile;
+    }
+    registry_.set_profile(profile);
+
     mcp::register_scene_tools(registry_);
     mcp::register_scene_batch_tools(registry_);
     mcp::register_ops_batch_tools(registry_);
@@ -47,12 +151,28 @@ auto mcp_manager::init(rtti::context& ctx, const cmd_line::parser& parser) -> bo
     mcp::register_viewport_tools(registry_);
     mcp::register_material_tools(registry_);
     mcp::register_project_tools(registry_);
+    mcp::register_settings_tools(registry_);
+    mcp::register_deploy_tools(registry_);
+    mcp::register_input_tools(registry_);
+    mcp::register_input_action_tools(registry_);
+    mcp::register_physics_tools(registry_);
+    mcp::register_ui_tools(registry_);
+    mcp::register_prefab_tools(registry_);
     mcp::register_script_tools(registry_);
     mcp::register_editor_tools(registry_);
     mcp::register_skill_tools(registry_);
 
+    const auto visible = registry_.visible_tool_count();
+    const auto total = registry_.tools().size();
+    APPLOG_INFO("MCP profile '{}': {} of {} tools exposed",
+                mcp::to_string(registry_.get_profile()),
+                visible,
+                total);
     log_activity("lifecycle",
-                 fmt::format("Registered {} tools", registry_.tools().size()));
+                 fmt::format("Registered {} tools ({} exposed on the '{}' profile)",
+                             total,
+                             visible,
+                             mcp::to_string(registry_.get_profile())));
 
     if(enabled_)
     {
@@ -173,6 +293,21 @@ auto mcp_manager::get_tool_count() const -> size_t
     return registry_.tools().size();
 }
 
+auto mcp_manager::get_visible_tool_count() const -> size_t
+{
+    return registry_.visible_tool_count();
+}
+
+auto mcp_manager::get_profile() const -> mcp::mcp_profile
+{
+    return registry_.get_profile();
+}
+
+auto mcp_manager::get_profile_name() const -> const char*
+{
+    return mcp::to_string(registry_.get_profile());
+}
+
 auto mcp_manager::get_request_count() const -> uint64_t
 {
     return request_count_.load();
@@ -289,7 +424,7 @@ auto mcp_manager::dispatch_json_rpc(const std::string& body) -> std::string
 
     if(request.method == "tools/list")
     {
-        log_activity("rpc", fmt::format("tools/list ({} tools)", registry_.tools().size()));
+        log_activity("rpc", fmt::format("tools/list ({} tools)", registry_.visible_tool_count()));
         return mcp::make_json_rpc_result(id, fmt::format(R"({{"tools":{}}})", registry_.list_tools_json()));
     }
 
@@ -333,7 +468,20 @@ auto mcp_manager::dispatch_json_rpc(const std::string& body) -> std::string
         {
             error_count_.fetch_add(1);
             log_activity("tool", "Unknown tool: " + tool_name, true);
-            return mcp::make_json_rpc_error(id, k_method_not_found, "Unknown tool: " + tool_name);
+            return mcp::make_json_rpc_error(id, k_method_not_found, unknown_tool_message(tool_name));
+        }
+
+        if(!registry_.is_available(*tool))
+        {
+            error_count_.fetch_add(1);
+            log_activity("tool", "Tool outside the active profile: " + tool_name, true);
+            return mcp::make_json_rpc_error(
+                id,
+                k_method_not_found,
+                fmt::format("Tool '{}' is developer-only and this editor runs the '{}' MCP profile. "
+                            "Restart the editor with --mcp-profile=developer to expose it.",
+                            tool_name,
+                            mcp::to_string(registry_.get_profile())));
         }
 
         std::string args_json = "{}";
@@ -384,6 +532,31 @@ auto mcp_manager::execute_tool_call(const std::string& tool_name,
     }
 
     tool_call_count_.fetch_add(1);
+    // Editor actions are undoable only inside an undo scope, which the panels open around their own
+    // edits. A tool call runs outside any panel - or, by chance, nested inside one that is waiting
+    // on assets - so without a scope of its own its undo would depend on timing.
+    struct undo_scope
+    {
+        editing_manager* em{};
+        explicit undo_scope(editing_manager* manager) : em(manager)
+        {
+            if(em)
+            {
+                em->push_undo_stack_enabled(true);
+            }
+        }
+        ~undo_scope()
+        {
+            if(em)
+            {
+                em->pop_undo_stack_enabled();
+            }
+        }
+        undo_scope(const undo_scope&) = delete;
+        auto operator=(const undo_scope&) -> undo_scope& = delete;
+    };
+    const bool opens_undo_scope = tool->mutates_scene && tool->requires_main_thread && ctx_->has<editing_manager>();
+    const undo_scope scope(opens_undo_scope ? &ctx_->get_cached<editing_manager>() : nullptr);
     auto result = tool->handler(*ctx_, args);
     if(result.is_error)
     {

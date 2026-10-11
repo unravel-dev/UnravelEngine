@@ -1073,6 +1073,18 @@ void script_system::wait_for_jobs_to_finish(rtti::context& ctx)
     wait_for_compilation_jobs();
 }
 
+auto script_system::is_build_pending(const std::string& protocol) const -> bool
+{
+    {
+        std::lock_guard<std::mutex> lock(container_mutex);
+        if(std::find(needs_to_recompile.begin(), needs_to_recompile.end(), protocol) != needs_to_recompile.end())
+        {
+            return true;
+        }
+    }
+    return is_compiling(protocol);
+}
+
 auto script_system::is_compiling(const std::string& protocol) const -> bool
 {
     auto it = compilation_jobs_.find(protocol);

@@ -60,7 +60,13 @@ public:
 
     void close_project(rtti::context& ctx);
 
-    void create_project(rtti::context& ctx, const fs::path& project_path);
+    /**
+     * @brief Creates a project in `project_path` (absolute; missing, or an empty directory) and
+     *        opens it.
+     * @param error When set, receives one sentence saying why the project was not created.
+     * @return True when the project was created and opened.
+     */
+    auto create_project(rtti::context& ctx, const fs::path& project_path, std::string* error = nullptr) -> bool;
 
     /// Copies editor agent instruction templates into the project root as
     /// `UNRAVEL-AGENTS.md` (overwrites those files). Returns

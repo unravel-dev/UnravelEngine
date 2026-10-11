@@ -34,6 +34,21 @@ order: 10
    and a global post volume).
 4. Persist with scene_save {"key":"app:/data/MyScene.spfb"}; without a key it
    overwrites the scene's current source (errors on an unsaved new scene).
+5. No project at all? project_create makes one and opens it.
+
+## From a scene to a game
+
+Building a scene is not shipping a game. The rest of the chain:
+
+- settings_list_properties / settings_get / settings_set configure the project.
+  standalone.startup_scene (the scene the built game loads) is required before
+  the project can be deployed at all.
+- input_list_actions / input_map_action define the action names scripts query.
+- deploy_get_problems lists what still blocks a build, one sentence each;
+  deploy_set_settings picks the destination folder (outside the project), and
+  project_deploy builds it.
+- Driving and verifying the game needs synthesized input - see the
+  verification skill.
 
 ## Conventions
 

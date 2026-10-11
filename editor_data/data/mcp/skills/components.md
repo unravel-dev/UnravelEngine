@@ -17,8 +17,11 @@ order: 40
 4. Round-trip check with scene_get_component_properties_batch when unsure.
 5. scene_remove_components_batch to take a component off again.
 
-Typed get/set supported: Light, Skylight, Audio Source, Camera, Volume,
-Script, Particle Emitter, Physics, Animation, Text, Reflection Probe, Bloom.
+Which components are typed: scene_list_component_types marks each one with
+typed true/false. Most come straight from the reflection the inspector uses, so
+property names, ranges (minimum/maximum), enum values and descriptions in
+scene_list_component_properties match what a person sees in the Inspector, and
+writes go through the component's own setters.
 
 ## Light
 
@@ -59,15 +62,45 @@ velocity 5-7, gravity_scale 1, small shrinking quads, additive, intensity 10).
 
 - body_type: static (immovable), kinematic (transform driven), dynamic
   (simulated). Dynamic bodies need is_using_gravity true and a mass.
+- A freshly added Physics component has NO shapes, and a body without a shape
+  collides with nothing - things fall straight through it. Always set shapes.
 - shapes is an array: {type:"box",center,extents} | {type:"sphere",center,
-  radius} | {type:"capsule"|"cylinder",center,radius,length}. extents and
-  radius are FULL sizes in local units; with is_autoscaled true (default) they
-  are multiplied by the entity scale - a unit cube primitive scaled to its
-  world size just needs the default box shape.
+  radius} | {type:"capsule"|"cylinder",center,radius,length}. Omitted fields
+  take defaults: box extents [1,1,1] (FULL size - a unit cube), sphere radius
+  0.5 (a real radius - the 1 m Sphere primitive). With is_autoscaled true (the
+  default) they are multiplied by the entity scale, so a scaled Cube primitive
+  needs only [{"type":"box"}] and a Sphere primitive [{"type":"sphere"}].
 - For meshes, set center/extents from the model AABB (assets_get_mesh_info).
 - Nothing simulates in edit mode; test with play mode (verification skill).
 - Domino-style chains: spacing must be less than tilt reach - a 1.4m tall
   domino tilted 30 degrees reaches about 0.7m.
+- Surfaces: a physics material sets bounce (restitution 0..1) and grip
+  (friction, 0 is ice). physics_materials_create_batch makes one,
+  physics_materials_list_properties shows the ranges; assign it with property
+  material on the Physics component. Bodies read it when they are built, so it
+  shows in play mode.
+- Contact events (sensor_events, collision_events, sensor_exit_on_destroy) are
+  ON by default - triggers and collisions already reach scripts. Turn one off
+  only to save cost; collision_exit_on_destroy is the one that starts off.
+- velocity / angular_velocity are read-only: the simulation writes them, so read
+  them in play mode to confirm something moves.
+
+## Character Controller
+
+The component for a walking player or NPC. It is mutually exclusive with
+Physics - an entity has one or the other.
+
+- It is a capsule: radius and height (both caps included) in metres, center
+  offset from the entity origin. Fit it to the character's mesh bounds.
+- step_height is the tallest ledge it climbs without jumping; slope_limit (0-90
+  degrees) the steepest walkable slope.
+- include_layers / exclude_layers take layer names (from the project's
+  layer.layers setting), indices, or "everything" / "nothing".
+- It does not move by itself and forces do not push it: a script drives it with
+  CharacterControllerComponent.move / jump every frame. Start from
+  engine:/data/scripts/samples/SampleCharacterController.cs (scripting-api).
+- is_grounded and velocity are read-only and only meaningful in play mode -
+  read them to check a jump or a fall.
 
 ## Animation
 
